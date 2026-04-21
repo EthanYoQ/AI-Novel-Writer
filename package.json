@@ -37,12 +37,14 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "diff-match-patch": "^1.0.5",
+    "flatbuffers": "^25.9.23",
     "lucide-react": "^1.8.0",
     "monaco-editor": "^0.55.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.9.0",
+    "reflect-metadata": "^0.2.2",
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.5.0",
@@ -91,6 +93,11 @@
       "electron",
       "electron-winstaller",
       "esbuild"
+    ],
+    "extraDependencies": [
+      "apache-arrow",
+      "flatbuffers",
+      "reflect-metadata"
     ]
   }
 }

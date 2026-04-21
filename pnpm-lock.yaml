@@ -71,6 +71,9 @@ importers:
       diff-match-patch:
         specifier: ^1.0.5
         version: 1.0.5
+      flatbuffers:
+        specifier: ^25.9.23
+        version: 25.9.23
       lucide-react:
         specifier: ^1.8.0
         version: 1.8.0(react@19.2.5)
@@ -89,6 +92,9 @@ importers:
       react-resizable-panels:
         specifier: ^4.9.0
         version: 4.9.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      reflect-metadata:
+        specifier: ^0.2.2
+        version: 0.2.2
       rehype-raw:
         specifier: ^7.0.0
         version: 7.0.0
@@ -2719,6 +2725,9 @@ packages:
 
   flatbuffers@24.12.23:
     resolution: {integrity: sha512-dLVCAISd5mhls514keQzmEG6QHmUUsNuWsb4tFafIUwvvgDjXhtfAYSKOzt5SWOy+qByV5pbsDZ+Vb7HUOBEdA==}
+
+  flatbuffers@25.9.23:
+    resolution: {integrity: sha512-MI1qs7Lo4Syw0EOzUl0xjs2lsoeqFku44KpngfIduHBYvzm8h2+7K8YMQh1JtVVVrUvhLpNwqVi4DERegUJhPQ==}
 
   flatted@3.4.2:
     resolution: {integrity: sha512-PjDse7RzhcPkIJwy5t7KPWQSZ9cAbzQXcafsetQoD7sOJRQlGikNbx7yZp2OotDnJyrDcbyRq3Ttb18iYOqkxA==}
@@ -7326,6 +7335,8 @@ snapshots:
       rimraf: 3.0.2
 
   flatbuffers@24.12.23: {}
+
+  flatbuffers@25.9.23: {}
 
   flatted@3.4.2: {}
 
