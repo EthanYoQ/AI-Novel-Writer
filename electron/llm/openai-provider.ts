@@ -2,17 +2,18 @@ import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from 
 import { ModelProfile } from '../../src/shared/ipc-channels'
 
 export class OpenAIProvider implements ILLMProvider {
-  private buildUrl(baseUrl: string, path: string): string {
+  private buildUrl(baseUrl: string): string {
     const base = baseUrl.replace(/\/$/, '')
-    // 如果 baseUrl 已经带了 path（比如官网是 https://api.openai.com/v1/chat），避免重复拼接
-    if (base.endsWith('/v1/chat') || base.endsWith('/v1')) {
-      return `${base}${path}`
+    // 如果 baseUrl 已经带了完整 /v1/chat 路径，直接用
+    if (base.endsWith('/v1/chat')) {
+      return `${base}/completions`
     }
+    // 否则补全完整路径
     return `${base}/v1/chat/completions`
   }
 
   async generate(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMGenerateOptions): Promise<LLMResponse> {
-    const url = this.buildUrl(model.baseUrl, '/completions')
+    const url = this.buildUrl(model.baseUrl)
 
     const body: Record<string, unknown> = {
       model: model.modelName,
@@ -66,7 +67,7 @@ export class OpenAIProvider implements ILLMProvider {
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
     try {
-      const url = this.buildUrl(model.baseUrl, '/completions')
+      const url = this.buildUrl(model.baseUrl)
 
       const body: Record<string, unknown> = {
         model: model.modelName,
