@@ -17,7 +17,8 @@
   "files": [
     "dist",
     "dist-electron",
-    "build"
+    "build",
+    "public/buyme"
   ],
   "mac": {
     "target": ["dmg"],
