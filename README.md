@@ -106,7 +106,7 @@ Vela 不是又一个带对话框的文本编辑器——它是一套深度融合
 # 环境要求：Node.js >= 18, pnpm >= 8
 
 # 1. 克隆项目
-git clone https://github.com/your-username/vela.git
+git clone https://github.com/heider-x/vela.git
 cd vela
 
 # 2. 安装依赖
