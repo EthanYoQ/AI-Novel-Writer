@@ -38,6 +38,7 @@ export default defineConfig({
       input: path.join(__dirname, 'electron/preload.ts')
     }
   }), process.env.NODE_ENV !== 'test' && electronRenderer()],
+  publicDir: 'public',
   server: {
     watch: {
       ignored: ['**/docs/**']
