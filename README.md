@@ -98,12 +98,7 @@ Vela 不是又一个带对话框的文本编辑器——它是一套深度融合
 
 ## 🚀 安装与使用 / Installation
 
-### 方式一：直接下载 / Direct Download
-
-前往 [Releases](https://github.com/your-username/vela/releases) 下载对应操作系统的最新版本：
-- **macOS**: `.dmg` 安装包
-- **Windows**: `.exe` 安装程序 (NSIS)
-- **Linux**: `.AppImage` 可执行文件
+### 方式一：直接下载 / Direct Download （我暂时没构建。。。请使用源码）
 
 ### 方式二：源码构建 / Build from Source
 
