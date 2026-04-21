@@ -3,6 +3,13 @@
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "com.vela.ide",
   "asar": true,
+  "asarUnpack": [
+    "node_modules/apache-arrow/**/*",
+    "node_modules/better-sqlite3/**/*",
+    "node_modules/@lancedb/lancedb-darwin-*/**/*",
+    "node_modules/@lancedb/lancedb-linux-*/**/*",
+    "node_modules/@lancedb/lancedb-win32-*/**/*"
+  ],
   "productName": "Vela",
   "directories": {
     "output": "release/${version}"
