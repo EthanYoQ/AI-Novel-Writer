@@ -35,14 +35,17 @@
         "target": "portable",
         "arch": ["x64"]
       }
-    ],
-    "artifactName": "${productName}-${version}-${target}.${ext}"
+    ]
   },
   "nsis": {
+    "artifactName": "${productName}-${version}-setup.${ext}",
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false
+  },
+  "portable": {
+    "artifactName": "${productName}-${version}-portable.${ext}"
   },
   "linux": {
     "target": ["AppImage"],
