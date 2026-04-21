@@ -100,7 +100,7 @@ Vela 不是又一个带对话框的文本编辑器——它是一套深度融合
 
 ### 方式一：直接下载 / Direct Download
 
-前往 [Releases](https://github.com/your-username/vela/releases) 下载对应操作系统的最新版本：
+前往 [Releases](https://github.com/heider-x/vela/releases) 下载对应操作系统的最新版本：
 - **macOS**: `.dmg` 安装包
 - **Windows**: `.exe` 安装程序 (NSIS)
 
@@ -194,7 +194,7 @@ Vela 开源版由独立开发者利用业余时间热情驱动。如果这个工
 - 🌐 国际化 (i18n) 翻译
 - 📖 文档完善
 
-> 重大功能重构请先在 [Issues](https://github.com/your-username/vela/issues) 中与作者探讨，以避免方向冲突。
+> 重大功能重构请先在 [Issues](https://github.com/heider-x/vela/issues) 中与作者探讨，以避免方向冲突。
 
 ---
 
