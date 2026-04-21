@@ -204,7 +204,7 @@ Vela 开源版由独立开发者利用业余时间热情驱动。如果这个工
 
 <div align="center">
 
-**Crafted with 💡 by [heider](https://github.com/heider)**
+**Crafted with 💡 by [heider-x]([https://github.com/heider](https://github.com/heider-x))**
 
 *Vela — Your AI-powered novel writing companion. Write smarter, not harder.*
 
