@@ -18,6 +18,11 @@ import { cn } from '../../lib/utils'
 import { ipc } from '../../services/ipc-client'
 import { Switch } from '../ui/Switch'
 
+// 打赏/赞助 图片资源（通过 import 让 Vite 处理路径，确保打包后可正常加载）
+import wepayImg from '/buyme/wepay.jpg?url'
+import alipayImg from '/buyme/alipay.jpg?url'
+import wechatImg from '/buyme/wechat.jpg?url'
+
 // ==================== 分类定义 ====================
 
 type SettingsSection = 'llm' | 'embedding' | 'proxy' | 'editor' | 'prompts' | 'about'
@@ -912,8 +917,8 @@ function AboutSection() {
           Vela 开源版由个人开发者利用业余时间热情驱动，如果这个工具有效提升了您的写作效率，或者您看到了它商业化的潜力，欢迎扫码赞助！您的支持是我持续迭代的最大动力 ❤️
         </p>
         <div className="flex gap-4 items-center">
-          <img src="/buyme/wepay.jpg" alt="微信打赏" className="w-[180px] rounded-lg" style={{ border: '1px solid var(--color-border)' }} />
-          <img src="/buyme/alipay.jpg" alt="支付宝打赏" className="w-[180px] rounded-lg" style={{ border: '1px solid var(--color-border)' }} />
+          <img src={wepayImg} alt="微信打赏" className="w-[180px] rounded-lg" style={{ border: '1px solid var(--color-border)' }} />
+          <img src={alipayImg} alt="支付宝打赏" className="w-[180px] rounded-lg" style={{ border: '1px solid var(--color-border)' }} />
         </div>
       </div>
 
@@ -922,7 +927,7 @@ function AboutSection() {
         <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
           如果您对本项目的商业化落地（SaaS 授权）、技术实现细节或 AI 产品方向感兴趣，欢迎随时交流：
         </p>
-        <img src="/buyme/wechat.jpg" alt="个人微信" className="w-[180px] rounded-lg" style={{ border: '1px solid var(--color-border)' }} />
+        <img src={wechatImg} alt="个人微信" className="w-[180px] rounded-lg" style={{ border: '1px solid var(--color-border)' }} />
       </div>
     </div>
   )
