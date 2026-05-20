@@ -215,7 +215,18 @@ export function createCharacterExtractSteps(_projectPath: string, characterDynam
 
         const cleanedCards = stripThinkingTags(fullContent)
         const jsonStr = cleanedCards.replace(/```json?\n?/g, '').replace(/```/g, '').trim()
-        const parsedCards = JSON.parse(jsonStr) as Array<Record<string, unknown>>
+        const parsedData = JSON.parse(jsonStr)
+
+        // 兼容两种格式：直接数组 或 { characters: [...] }
+        const parsedCards: Array<Record<string, unknown>> = Array.isArray(parsedData)
+          ? parsedData
+          : (parsedData && typeof parsedData === 'object' && Array.isArray((parsedData as Record<string, unknown>).characters))
+            ? (parsedData as Record<string, unknown>).characters as Array<Record<string, unknown>>
+            : []
+
+        if (parsedCards.length === 0) {
+          throw new Error('AI 返回的角色数据格式不正确，未提取到有效角色')
+        }
 
         // 构建角色卡数据列表
         const validRoles = ['protagonist', 'antagonist', 'supporting', 'minor']
