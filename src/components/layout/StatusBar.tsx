@@ -82,10 +82,10 @@ export default function StatusBar() {
  * - 无任务时不渲染
  * - 有任务时显示步骤名 + 微型进度条 + 百分比
  * - 多任务时显示 "N个任务运行中"
- * - 完成后短暂显示 ✅ 然后淡出
+ * - 完成后短暂显示完成态然后淡出
  */
 function AITaskCapsule() {
-  // ✅ 使用 selector 精确订阅，避免 globalLogs 等高频字段导致被动重渲染
+  // 使用 selector 精确订阅，避免 globalLogs 等高频字段导致被动重渲染
   const activeRuns = useWorkflowStore(s => s.activeRuns)
   const getActiveStepInfo = useWorkflowStore(s => s.getActiveStepInfo)
   // 使用 string 而非 object，避免引用变化导致不必要的 effect 重触发
@@ -106,7 +106,7 @@ function AITaskCapsule() {
     if (history.length > 0) {
       const latest = history[0]
       if (latest.status === 'completed') {
-        // ✅ 使用函数式更新，只有值实际不同时才触发重渲染
+        // 使用函数式更新，只有值实际不同时才触发重渲染
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setCompletedTitle(prev => {
           const newTitle = latest.title
