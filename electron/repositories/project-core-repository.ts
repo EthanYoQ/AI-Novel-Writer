@@ -101,7 +101,7 @@ export class ProjectCoreRepository {
     /** 更新项目配置（传入部分字段即可） */
     static update(data: Partial<ProjectCoreData>): void {
         const db = getProjectDb()
-        if (!db) return
+        if (!db) throw new Error('项目数据库未打开')
 
         // 构建动态 SET 子句，只更新传入的字段
         const fieldMap: Record<string, string> = {
@@ -143,5 +143,20 @@ export class ProjectCoreRepository {
         db.prepare(`
       UPDATE project_core SET ${setClauses.join(', ')} WHERE id = ?
     `).run(...values)
+    }
+
+    /** 清空由架构/导入/AI 分析生成的创作字段，保留项目名、章节规模与基础偏好 */
+    static resetCreativeFields(): void {
+        ProjectCoreRepository.update({
+            writingStyle: '',
+            referenceWorks: '',
+            globalGuidance: '',
+            goldenFinger: '',
+            premise: '',
+            worldbuilding: '',
+            charactersArch: '',
+            synopsis: '',
+            characterStates: '',
+        })
     }
 }
