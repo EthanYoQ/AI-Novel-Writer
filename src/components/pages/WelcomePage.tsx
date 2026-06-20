@@ -109,10 +109,10 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
               <FileUp size={20} />
             </div>
             <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-              导入小说
+              拆解仿写
             </span>
             <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              导入已有作品续写
+              上传参考小说生成风格约束
             </span>
           </button>
         </div>

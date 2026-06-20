@@ -4,8 +4,9 @@
  * 逆向推演全流程：
  * 步骤1: 写入正文 + 构建知识库
  * 步骤2: 向量采样 + AI 推演全局配置/架构/角色
- * 步骤3: AI 按章推演精准蓝图 + 蓝图入向量库 + 拼装轻量全局摘要
- * 步骤4: 完成后处理（刷新 UI 状态）
+ * 步骤3: AI 从导入正文提取文风
+ * 步骤4: AI 按章推演精准蓝图 + 蓝图入向量库 + 拼装轻量全局摘要
+ * 步骤5: 完成后处理（刷新 UI 状态）
  */
 
 import type { WorkflowDefinition } from '../../stores/workflow-store'
@@ -22,7 +23,7 @@ export interface ImportWorkflowParams {
 export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefinition {
   return {
     type: 'novel_import',
-    title: `📥 导入小说（${params.chapters.length} 章）`,
+    title: `小说拆解与仿写（${params.chapters.length} 章）`,
     steps: [
       // ===== 步骤 1: 写入正文 + 构建知识库 =====
       {
@@ -46,7 +47,22 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
         },
       },
 
-      // ===== 步骤 3: AI 按章推演蓝图 + 蓝图入向量库 + 拼装摘要 =====
+      // ===== 步骤 3: 从导入正文拆解文风与仿写约束 =====
+      {
+        name: 'AI 拆解文风与仿写指南',
+        description: '从导入 TXT/Markdown 正文中提取风格档案和仿写约束，写入小说配置供后续写稿调用',
+        executor: async (step, context, callbacks) => {
+          const { AnalyzeWritingStyleCommand } = await import('./commands/analyze-style.command')
+          const cmd = new AnalyzeWritingStyleCommand({ chapters: params.chapters })
+          const style = await cmd.execute({ step, context, callbacks })
+          if (!style?.trim()) {
+            throw new Error('未提取到可用文风，无法继续建立仿写约束')
+          }
+          return '已提取并保存风格档案与仿写指南'
+        },
+      },
+
+      // ===== 步骤 4: AI 按章推演蓝图 + 蓝图入向量库 + 拼装摘要 =====
       {
         name: 'AI 逐章推演蓝图',
         description: `逐章推演蓝图 + 蓝图要点入向量库 + 拼装全局摘要（共 ${params.chapters.length} 章）`,
@@ -57,12 +73,12 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
         },
       },
 
-      // ===== 步骤 4: 完成后处理 =====
+      // ===== 步骤 5: 完成后处理 =====
       {
         name: '完成后处理',
         description: '刷新项目状态，加载角色卡与蓝图数据',
         executor: async (_step, _context, callbacks) => {
-          callbacks.log('🔄 正在刷新项目数据...')
+          callbacks.log('正在刷新项目数据...')
           callbacks.setProgress(30)
 
           // 刷新文件树
@@ -84,14 +100,14 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
             await useDraftStore.getState().loadAllDrafts()
           } catch { /* 忽略 */ }
 
-          callbacks.log('🎉 小说导入全流程完成！所有数据已就位。')
+          callbacks.log('小说拆解与仿写准备完成，结构化数据已就位。')
           callbacks.setProgress(100)
         },
       },
     ],
     onComplete: {
       mode: 'silent',
-      message: '🎉 小说导入完成！全部结构化数据已生成，可以开始续写了。',
+      message: '小说拆解与仿写准备完成，全部结构化数据已生成，可以开始续写。',
     },
   }
 }
