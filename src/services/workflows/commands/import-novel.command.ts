@@ -13,6 +13,7 @@ import { getPromptTemplate } from '../../prompt-templates'
 import { ImportPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import type { CharacterData } from '../../../../electron/repositories/character-repository'
+import { normalizeCharacterCardsForPersistence } from '../character-card-normalizer'
 
 /** 拆分后的章节数据（从 context.data 中传递） */
 export interface ImportedChapter {
@@ -223,32 +224,14 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
     // ===== 写入角色卡 =====
     if (inferResult.characterCards && Array.isArray(inferResult.characterCards)) {
-      let createdCount = 0
-      const cardsToSave: CharacterData[] = []
-      for (const card of inferResult.characterCards) {
-        if (!card.name) continue
-        const validRoles = ['protagonist', 'antagonist', 'supporting', 'minor']
-        const role = validRoles.includes(card.role as string) ? card.role : 'supporting'
-        cardsToSave.push({
-          name: card.name as string,
-          role: role as 'protagonist' | 'antagonist' | 'supporting' | 'minor',
-          gender: (card.gender as string) || '',
-          age: (card.age as string) || '',
-          appearance: (card.appearance as string) || '',
-          personality: (card.personality as string) || '',
-          background: (card.background as string) || '',
-          abilities: (card.abilities as string) || '',
-          motivation: (card.motivation as string) || '',
-          relationships: (card.relationships as string) || '',
-          arc: (card.arc as string) || '',
-          notes: (card.notes as string) || ''
-        })
-        createdCount++
-      }
+      const cardsToSave: CharacterData[] = normalizeCharacterCardsForPersistence(inferResult.characterCards)
       if (cardsToSave.length > 0) {
-        await ipc.invoke('db:character-save-all', cardsToSave)
+        const saveResult = await ipc.invoke('db:character-save-all', cardsToSave)
+        if (!saveResult.success) {
+          throw new Error(saveResult.error || '角色卡写入数据库失败')
+        }
       }
-      callbacks.log(`已生成 ${createdCount} 张角色卡`)
+      callbacks.log(`已生成 ${cardsToSave.length} 张角色卡`)
     }
 
     callbacks.setProgress(90)

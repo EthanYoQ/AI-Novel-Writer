@@ -2,7 +2,14 @@ import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { DirectoryPromptBuilder } from '../../prompts/prompt-builder'
-import { DirectoryWorkflowParams, ChapterBlueprint, parseTextBlueprints, saveAllBlueprints } from '../directory-workflow'
+import {
+  DirectoryWorkflowParams,
+  ChapterBlueprint,
+  assertBlueprintCoverage,
+  parseTextBlueprintsStrict,
+  saveAllBlueprints,
+  verifyBlueprintsPersisted,
+} from '../directory-workflow'
 
 export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBlueprint[]> {
   constructor(private params: DirectoryWorkflowParams) {
@@ -86,23 +93,28 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
 
       // systemRole 由模板定义，不再硬编码
       const systemRole = getPromptTemplate('chapter_blueprint')?.systemRole || '你是一位经验丰富的网文架构师。'
-      const resultText = await this.callLLM(prompt, systemRole, callbacks, { responseFormat: { type: 'json_object' } })
+      const resultText = await this.callLLM(prompt, systemRole, callbacks, {
+        responseFormat: { type: 'json_object' },
+        thinking: false,
+        maxTokens: Math.min(modelMaxTokens, 4096),
+        temperature: 0.78,
+      })
 
       // ★ 关键修复：接受 AI 返回的从 cursor 到 endChapter 范围内的所有有效章节
       // AI 可能一次性返回超出本批次（batchEnd）的章节，全部保留，避免浪费和重复 LLM 请求
-      const parsed = parseTextBlueprints(resultText, cursor, endChapter)
+      const parsed = parseTextBlueprintsStrict(resultText, cursor, endChapter)
+      const actualMaxChapter = Math.max(...parsed.map(p => p.chapterNumber))
+      assertBlueprintCoverage(parsed, cursor, actualMaxChapter)
       newBlueprints.push(...parsed)
 
       // ==== 批次入库 ====
       if (parsed.length > 0) {
         await saveAllBlueprints(parsed)
+        await verifyBlueprintsPersisted(parsed, { startChapter: cursor, endChapter: actualMaxChapter })
         useProjectStore.getState().refreshFileTree()
       }
 
       // 计算本次实际生成到的最大章节号，推进游标到已生成的最后一章之后
-      const actualMaxChapter = parsed.length > 0
-        ? Math.max(...parsed.map(p => p.chapterNumber))
-        : batchEnd
       callbacks.log(`  ✅ 第 ${cursor}–${actualMaxChapter} 章完成（${parsed.length} 章）并已保存入库`)
 
       cursor = actualMaxChapter + 1

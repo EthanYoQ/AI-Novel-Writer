@@ -29,7 +29,8 @@ function source(file: string) {
 describe('writer console visual fidelity contract', () => {
   it('uses the approved writer console token classes and no pseudo-icons', () => {
     const combined = files.map(source).join('\n')
-    expect(source('src/components/layout/TitleBar.tsx')).toContain('writer-topbar')
+    const titleBar = source('src/components/layout/TitleBar.tsx')
+    expect(titleBar).toContain('writer-topbar')
     expect(source('src/components/layout/TitleBar.tsx')).toContain('writer-command-button')
     expect(source('src/components/panels/sidebar/ProjectTree.tsx')).toContain('writer-project-tree')
     expect(source('src/components/panels/BottomPanel.tsx')).toContain('writer-task-table')
@@ -39,5 +40,15 @@ describe('writer console visual fidelity contract', () => {
     ].join('\n')).toContain('writer-ai-panel')
     expect(combined).not.toMatch(pseudoIconPattern)
     expect(combined).not.toMatch(/<svg\b|<path\b/)
+  })
+
+  it('keeps the custom title bar draggable while controls stay interactive', () => {
+    const titleBar = source('src/components/layout/TitleBar.tsx')
+    const css = source('src/index.css')
+
+    expect(titleBar).toContain("WebkitAppRegion: 'drag'")
+    expect(titleBar).not.toContain("style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}")
+    expect(css).toContain('-webkit-app-region: no-drag')
+    expect(css).toContain('.writer-command-button')
   })
 })

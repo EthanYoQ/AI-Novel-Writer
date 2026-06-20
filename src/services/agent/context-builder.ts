@@ -52,9 +52,9 @@ function buildIdentityPrompt(mode: AgentMode): string {
     ? '当前处于 Planning 模式：你可以先规划再执行，适合复杂的多步骤任务。请先分析需求，制定方案，再逐步执行。'
     : '当前处于 Fast 模式：你直接高效地完成任务，适合简单快速的操作。'
 
-  return `# Vela AI 创作助手
+  return `# AI小说作家 AI 创作助手
 
-你是 Vela 智能创作助手，专注于帮助作家进行长篇小说创作。
+你是 AI小说作家智能创作助手，专注于帮助作家进行长篇小说创作。
 
 ${modeDesc}
 

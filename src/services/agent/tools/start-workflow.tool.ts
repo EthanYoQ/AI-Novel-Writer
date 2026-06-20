@@ -6,7 +6,7 @@ import { useLayoutStore } from '../../../stores/layout-store'
 
 export const startWorkflowTool = buildAgentTool({
   name: 'start_workflow',
-  description: '触发 Vela 创作工作流。支持写稿、修稿、审稿、定稿、生成蓝图等工作流。这将在 AI 输出面板中执行对应的多步骤创作流程。',
+  description: '触发 AI小说作家创作工作流。支持写稿、修稿、审稿、定稿、生成蓝图等工作流。这将在 AI 输出面板中执行对应的多步骤创作流程。',
   source: 'builtin',
   inputSchema: {
     type: 'object',
@@ -58,7 +58,7 @@ export const startWorkflowTool = buildAgentTool({
 
     return {
       success: true,
-      content: `🚀 已切换到 AI 输出面板。请在面板中启动「${displayName}${chapterInfo}」工作流。`,
+      content: `已切换到 AI 输出面板。请在面板中启动「${displayName}${chapterInfo}」工作流。`,
       artifacts: [{ type: 'workflow_started', name: `${displayName}${chapterInfo}` }],
     }
   },

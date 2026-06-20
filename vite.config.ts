@@ -40,6 +40,9 @@ export default defineConfig({
   }), process.env.NODE_ENV !== 'test' && electronRenderer()],
   publicDir: 'public',
   server: {
+    host: '127.0.0.1',
+    port: 5180,
+    strictPort: true,
     watch: {
       ignored: ['**/docs/**']
     }

@@ -5,8 +5,10 @@ import path from 'node:path'
 import { readJsonFile, writeJsonFile, RECENT_PROJECTS_PATH } from '../utils/config-utils'
 import { ProjectData } from '../../src/shared/ipc-channels'
 import { DIR_VELA_INTERNAL, DIR_PROMPTS } from '../../src/shared/project-paths'
-import { initProjectDatabase } from '../database'
+import { closeProjectDatabase, getCurrentProjectPath, initProjectDatabase } from '../database'
+import { closeConnection as closeVectorConnection } from '../vector-store'
 import { ProjectCoreRepository } from '../repositories/project-core-repository'
+import { resolveProjectDir, sanitizeProjectName } from './project-path'
 
 interface RecentProject {
   name: string
@@ -26,6 +28,32 @@ function addRecentProject(project: RecentProject) {
   writeJsonFile(RECENT_PROJECTS_PATH, trimmed)
 }
 
+function removeRecentProject(projectPath: string) {
+  const targetPath = path.resolve(projectPath)
+  const filtered = loadRecentProjects().filter((p) => path.resolve(p.path) !== targetPath)
+  writeJsonFile(RECENT_PROJECTS_PATH, filtered)
+}
+
+function assertDeletableProjectPath(projectPath: string): string {
+  const resolvedPath = path.resolve(projectPath)
+  const rootPath = path.parse(resolvedPath).root
+
+  if (resolvedPath === rootPath) {
+    throw new Error('拒绝删除磁盘根目录')
+  }
+
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error('项目目录不存在')
+  }
+
+  const internalDir = path.join(resolvedPath, DIR_VELA_INTERNAL)
+  if (!fs.existsSync(internalDir) || !fs.statSync(internalDir).isDirectory()) {
+    throw new Error('目标目录不是 AI小说作家项目目录，已拒绝删除')
+  }
+
+  return resolvedPath
+}
+
 export function registerProjectController() {
   // 创建新项目
   ipcMain.handle('project:create', async (_event, config: {
@@ -33,7 +61,8 @@ export function registerProjectController() {
   }) => {
     try {
       const projectId = randomUUID()
-      const projectDir = path.join(config.path, config.name)
+      const projectName = sanitizeProjectName(config.name)
+      const projectDir = resolveProjectDir(config.path, projectName)
 
       // 仅创建必要的系统目录
       fs.mkdirSync(path.join(projectDir, DIR_VELA_INTERNAL), { recursive: true })
@@ -43,7 +72,7 @@ export function registerProjectController() {
       initProjectDatabase(projectDir)
 
       // 初始化 project_core 记录
-      ProjectCoreRepository.init(config.name)
+      ProjectCoreRepository.init(projectName)
       ProjectCoreRepository.update({
         genre: config.genre,
         targetAudience: config.targetAudience,
@@ -52,7 +81,7 @@ export function registerProjectController() {
       // 补充缺失在 DB 初始化时生成所需的数据
       const projectData: ProjectData = {
         id: projectId,
-        name: config.name,
+        name: projectName,
         path: projectDir,
         novelConfig: {
           genre: config.genre,
@@ -204,6 +233,28 @@ export function registerProjectController() {
 
   ipcMain.handle('project:recent-list', async () => {
     return loadRecentProjects()
+  })
+
+  ipcMain.handle('project:delete', async (_event, projectPath: string) => {
+    try {
+      const resolvedPath = assertDeletableProjectPath(projectPath)
+      const currentProjectPath = getCurrentProjectPath()
+      const deletingCurrentProject = currentProjectPath
+        ? path.resolve(currentProjectPath) === resolvedPath
+        : false
+
+      if (deletingCurrentProject) {
+        closeProjectDatabase()
+        closeVectorConnection(resolvedPath)
+      }
+
+      fs.rmSync(resolvedPath, { recursive: true, force: true })
+      removeRecentProject(resolvedPath)
+
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
   })
 
   ipcMain.handle('dialog:select-folder', async () => {

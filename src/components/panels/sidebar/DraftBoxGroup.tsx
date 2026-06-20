@@ -11,6 +11,8 @@ import { confirm } from '../../ui/Confirm'
 import { DRAFT_STATUS_LABEL, DRAFT_STATUS_COLOR } from '../../../shared/draft-status'
 import { showSidebarMenu } from './SidebarShared'
 import { ipc } from '../../../services/ipc-client'
+import { toast } from '../../ui/Toast'
+import { globalEventBus } from '../../../shared/event-bus'
 
 // ===== 草稿箱折叠组 =====
 
@@ -194,15 +196,24 @@ function DraftItem({
     })
   }
 
-  /** 将草稿标记为归档（软删除） */
+  /** 删除草稿 */
   const deleteDraft = async () => {
-    if (isFinalized) return
     const ok = await confirm(
-      `归档草稿 "${chapterTitleText} v${draft.version}" 后可在草稿管理列表中展开已归档列表查看。`,
-      { title: '归档草稿', confirmText: '归档', danger: true }
+      `确认删除 "${chapterTitleText} v${draft.version}"？\n此操作会删除该稿正文记录及关联的审稿/修稿产物，不可撤销。`,
+      { title: '删除这一稿', confirmText: '删除', danger: true }
     )
     if (!ok) return
-    await useDraftStore.getState().markDraftStatus(draft.filePath, draft.chapterNumber, 'archived')
+    const result = await ipc.invoke('db:draft-delete', draft.id)
+    if (!result.success) {
+      toast.error(`删除失败\n\n${result.error ?? '未知错误'}`)
+      return
+    }
+    const editor = useEditorStore.getState()
+    const tab = editor.tabs.find(t => t.id === draft.filePath || t.filePath === draft.filePath)
+    if (tab) editor.closeTab(tab.id)
+    await useDraftStore.getState().loadChapterDrafts(draft.chapterNumber)
+    globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts', 'fileTree'] })
+    toast.success(`已删除 ${chapterTitleText} v${draft.version}`)
   }
 
   const isFinalized = draft.status === 'finalized'
@@ -235,10 +246,9 @@ function DraftItem({
         { key: 'div2', type: 'divider' as const },
         {
           key: 'delete',
-          label: '删除草稿',
+          label: '删除这一稿',
           icon: <Trash2 size={13} />,
           danger: true,
-          disabled: isFinalized,
           onClick: deleteDraft,
         },
       ], e)}
@@ -259,6 +269,18 @@ function DraftItem({
       {isFinalized && (
         <CheckCircle2 size={10} style={{ color: 'var(--color-success)', flexShrink: 0 }} />
       )}
+      <button
+        type="button"
+        className="opacity-70 hover:opacity-100 rounded p-0.5"
+        title="删除这一稿"
+        onClick={(e) => {
+          e.stopPropagation()
+          deleteDraft()
+        }}
+        style={{ color: 'var(--color-text-muted)' }}
+      >
+        <Trash2 size={10} />
+      </button>
     </div>
   )
 }

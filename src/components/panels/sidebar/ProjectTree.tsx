@@ -14,6 +14,8 @@ import { useLayoutStore } from '../../../stores/layout-store'
 import { ipc } from '../../../services/ipc-client'
 import { Button } from '../../ui/Button'
 import { EmptyState } from '../../ui/EmptyState'
+import { confirm } from '../../ui/Confirm'
+import { toast } from '../../ui/Toast'
 import ClearProjectDataDialog from '../../dialogs/ClearProjectDataDialog'
 
 
@@ -149,13 +151,14 @@ export default function ProjectTree() {
         </span>
         <div className="flex flex-shrink-0 items-center gap-0.5">
           <Button
-            variant="ghost"
-            size="icon"
+            variant="outline"
+            size="sm"
             onClick={() => setClearDialogOpen(true)}
             disabled={clearDisabled}
             title={clearDisabled ? '工作流运行中，暂不能清除' : '清除项目生成内容'}
           >
             <Trash2 size={12} />
+            清除全部
           </Button>
           <Button variant="ghost" size="icon" onClick={() => refreshAll()} title="刷新">
             <RefreshCw size={12} />
@@ -201,7 +204,7 @@ export default function ProjectTree() {
       />
 
       {/* 2. 故事架构 — 点击标题行打开编辑器，子文件仍可单独点开 */}
-      <WorldBuildingGroup archStatus={archStatus} archDone={archDone} />
+      <WorldBuildingGroup archStatus={archStatus} archDone={archDone} onCleared={refreshAll} />
 
       {/* 3. 章节蓝图 — 点击打开编辑器页 */}
       <LeafItem
@@ -243,9 +246,11 @@ export default function ProjectTree() {
 function WorldBuildingGroup({
   archStatus,
   archDone,
+  onCleared,
 }: {
   archStatus: Record<string, boolean>
   archDone: number
+  onCleared: () => void | Promise<void>
 }) {
   const [open, setOpen] = useState(true)
 
@@ -298,6 +303,7 @@ function WorldBuildingGroup({
                 f={f}
                 filePath={filePath}
                 isGenerated={isGenerated}
+                onCleared={onCleared}
               />
             )
           })}
@@ -312,11 +318,35 @@ function ArchFileRow({
   f,
   filePath,
   isGenerated,
+  onCleared,
 }: {
   f: { key: string; iconName: string; label: string; desc: string }
   filePath: string
   isGenerated: boolean
+  onCleared: () => void | Promise<void>
 }) {
+  const clearArchFile = async () => {
+    const ok = await confirm(`确认清空「${f.label}」内容？\n此操作会删除该项故事架构文本，不影响其他架构项、蓝图或正文。`, {
+      title: '清空故事架构项',
+      confirmText: '清空',
+      danger: true,
+    })
+    if (!ok) return
+
+    const { writeCoreContent } = await import('../../../services/vela-protocol')
+    const success = await writeCoreContent(filePath, '')
+    if (!success) {
+      toast.error(`清空「${f.label}」失败`)
+      return
+    }
+
+    const store = useEditorStore.getState()
+    store.syncTabContent(filePath, '')
+    store.markTabSaved(filePath)
+    toast.success(`已清空「${f.label}」`)
+    await onCleared()
+  }
+
   return (
     <div
       className="tree-item gap-1.5 cursor-pointer select-none"
@@ -336,6 +366,15 @@ function ArchFileRow({
           icon: <Copy size={13} />,
           onClick: () => navigator.clipboard.writeText(filePath).catch(() => { }),
         },
+        { key: 'div2', type: 'divider' as const },
+        {
+          key: 'delete',
+          label: `清空${f.label}`,
+          icon: <Trash2 size={13} />,
+          danger: true,
+          disabled: !isGenerated,
+          onClick: clearArchFile,
+        },
       ], e)}
       title={f.desc}
     >
@@ -354,6 +393,20 @@ function ArchFileRow({
         <span className="text-[0.7rem] flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
           待生成
         </span>
+      )}
+      {isGenerated && (
+        <button
+          type="button"
+          className="opacity-70 hover:opacity-100 rounded p-0.5"
+          title={`清空${f.label}`}
+          onClick={(e) => {
+            e.stopPropagation()
+            clearArchFile()
+          }}
+          style={{ color: 'var(--color-text-muted)' }}
+        >
+          <Trash2 size={11} />
+        </button>
       )}
     </div>
   )

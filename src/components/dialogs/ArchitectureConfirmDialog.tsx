@@ -3,6 +3,7 @@ import { Wand2, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { guardArchitectureGeneration, guardCharacterRegeneration } from '../../services/workflow-guards'
+import { createDefaultArchitectureSelection } from '../../services/architecture-step-selection'
 import { toast } from '../ui/Toast'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
@@ -43,20 +44,7 @@ export default function ArchitectureConfirmDialog({
 
   // 默认：未生成的全部勾选；或使用 initialSelectedSteps 覆盖
   const [checked, setChecked] = useState<Record<ArchStepKey, boolean>>(() => {
-    if (initialSelectedSteps) {
-      return {
-        premise:      initialSelectedSteps.includes('premise'),
-        characters:   initialSelectedSteps.includes('characters'),
-        worldbuilding: initialSelectedSteps.includes('worldbuilding'),
-        synopsis:     initialSelectedSteps.includes('synopsis'),
-      }
-    }
-    return {
-      premise:      !archStatus.premise,
-      characters:   !archStatus.characters,
-      worldbuilding: !archStatus.worldbuilding,
-      synopsis:     !archStatus.synopsis,
-    }
+    return createDefaultArchitectureSelection(archStatus, initialSelectedSteps)
   })
 
   // 每步的补充指导
@@ -66,21 +54,7 @@ export default function ArchitectureConfirmDialog({
 
   // 每次弹窗打开时重置选中状态
   const resetChecked = () => {
-    if (initialSelectedSteps) {
-      setChecked({
-        premise:      initialSelectedSteps.includes('premise'),
-        characters:   initialSelectedSteps.includes('characters'),
-        worldbuilding: initialSelectedSteps.includes('worldbuilding'),
-        synopsis:     initialSelectedSteps.includes('synopsis'),
-      })
-    } else {
-      setChecked({
-        premise:      !archStatus.premise,
-        characters:   !archStatus.characters,
-        worldbuilding: !archStatus.worldbuilding,
-        synopsis:     !archStatus.synopsis,
-      })
-    }
+    setChecked(createDefaultArchitectureSelection(archStatus, initialSelectedSteps))
   }
 
   const isArchRunning = useWorkflowStore(s => s.isTypeRunning('architecture_generation'))

@@ -17,6 +17,7 @@ import { chunkText, generateEmbeddings } from './embedding'
 import {
   addChunks,
   removeDocument as removeDocFromStore,
+  clearAll as clearKnowledgeStore,
   searchWithScope as storeSearchWithScope,
   listDocuments as storeListDocuments,
   getStats as storeGetStats,
@@ -144,6 +145,13 @@ export function listDocuments(projectPath: string) {
  */
 export async function removeDocument(docId: string, projectPath: string): Promise<boolean> {
   return removeDocFromStore(projectPath, docId)
+}
+
+/**
+ * 清空项目知识库。
+ */
+export async function clearKnowledgeBase(projectPath: string): Promise<boolean> {
+  return clearKnowledgeStore(projectPath)
 }
 
 /**

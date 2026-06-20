@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Database, BookOpen, FileText,
-  Search, RefreshCw, Layers, Zap, Server, Activity,
+  Search, RefreshCw, Layers, Zap, Server, Activity, Trash2,
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -9,9 +9,11 @@ import { EmptyState } from '../ui/EmptyState'
 import { useProjectStore } from '../../stores/project-store'
 import { cn } from '../../lib/utils'
 import { toast } from '../ui/Toast'
+import { confirm } from '../ui/Confirm'
 import { globalEventBus } from '../../shared/event-bus'
 import {
   loadKBData, getVectorlessCount, searchKB, backfillVectors,
+  clearKnowledgeBase,
   type KBDocument, type SearchResult, type KBStatsData,
 } from '../../services/knowledge-service'
 
@@ -28,6 +30,7 @@ export default function KnowledgeOverview() {
   const [topK, setTopK] = useState(10)
   const [vectorlessCount, setVectorlessCount] = useState(0)
   const [backfilling, setBackfilling] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
   const currentProject = useProjectStore(s => s.currentProject)
 
@@ -126,6 +129,38 @@ export default function KnowledgeOverview() {
     }
   }
 
+  /** 清空当前项目知识库 */
+  const handleClearKnowledgeBase = async () => {
+    const ok = await confirm(
+      '确认清空当前项目的全部知识库内容？\n此操作会删除已导入的知识文档与切片，不会删除项目正文、蓝图或故事架构。',
+      {
+        title: '清空知识库',
+        confirmText: '清空知识库',
+        danger: true,
+      },
+    )
+    if (!ok) return
+
+    setClearing(true)
+    try {
+      const result = await clearKnowledgeBase()
+      if (result.success) {
+        setDocuments([])
+        setStats({ documentCount: 0, totalChunks: 0, vectorDimension: 0 })
+        setSearchResults([])
+        setVectorlessCount(0)
+        globalEventBus.emit('REFRESH_RESOURCE', { resources: ['all'] })
+        toast.success('知识库已清空')
+      } else {
+        toast.error(result.error || '清空知识库失败')
+      }
+    } catch (e) {
+      toast.error('清空知识库失败: ' + String(e))
+    } finally {
+      setClearing(false)
+    }
+  }
+
   return (
     <div className="h-full overflow-y-auto" style={{ backgroundColor: 'var(--color-editor-bg)' }}>
       <div className="max-w-4xl mx-auto px-8 py-6">
@@ -144,6 +179,15 @@ export default function KnowledgeOverview() {
               基于 LanceDB 的本地向量数据库，定稿后自动入库，为 AI 写作提供语义检索上下文
             </p>
           </div>
+          <Button
+            variant="outline"
+            className="ml-auto text-xs"
+            onClick={handleClearKnowledgeBase}
+            disabled={clearing || (stats.documentCount === 0 && stats.totalChunks === 0)}
+          >
+            {clearing ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+            清空知识库
+          </Button>
         </div>
 
         {/* ===== 统计卡片 ===== */}

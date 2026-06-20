@@ -246,6 +246,29 @@ export async function removeDocument(
 }
 
 /**
+ * 清空整个项目知识库。
+ */
+export async function clearAll(projectPath: string): Promise<boolean> {
+  try {
+    const db = await getConnection(projectPath)
+    const tableNames = await db.tableNames()
+
+    if (tableNames.includes(TABLE_NAME)) {
+      await db.dropTable(TABLE_NAME)
+    }
+
+    if (tableNames.includes(DOCS_TABLE_NAME)) {
+      await db.dropTable(DOCS_TABLE_NAME)
+    }
+
+    return true
+  } catch (error) {
+    console.error('[Vela VectorStore] 清空知识库失败:', error)
+    return false
+  }
+}
+
+/**
  * 统一检索入口 — 自动选择 FTS / 混合模式
  *
  * @param queryText 搜索关键词/语句

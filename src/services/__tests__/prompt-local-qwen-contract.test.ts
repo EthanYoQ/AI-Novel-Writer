@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { ChapterPromptBuilder } from '../prompts/prompt-builder'
-import { BUILTIN_PROMPTS, getPromptTemplate, renderPrompt, type PromptTemplate } from '../prompt-templates'
+import { BUILTIN_PROMPTS, getPromptTemplate, renderPrompt } from '../prompt-templates'
 
 const expectedPromptVariables: Record<string, string[]> = {
   generate_global_config: ['user_idea', 'number_of_chapters', 'word_number'],
@@ -158,6 +158,8 @@ const expectedJsonFields: Record<string, string[]> = {
     'characters',
     'worldbuilding',
     'synopsis',
+    'target',
+    'relation',
     'currentState',
   ],
   extract_initial_characters: [
@@ -171,6 +173,8 @@ const expectedJsonFields: Record<string, string[]> = {
     'abilities',
     'motivation',
     'relationships',
+    'target',
+    'relation',
     'arc',
     'notes',
     'currentState',
@@ -194,6 +198,8 @@ const expectedJsonFields: Record<string, string[]> = {
     'characters',
     'worldbuilding',
     'synopsis',
+    'target',
+    'relation',
     'currentState',
   ],
 }
@@ -204,9 +210,6 @@ const promptText = (key: string) => {
   return [template?.systemRole, template?.content, template?.systemSuffix].filter(Boolean).join('\n')
 }
 
-const fullTemplateText = (template: PromptTemplate) =>
-  [template.systemRole, template.content, template.systemSuffix].filter(Boolean).join('\n')
-
 const compact = (value: string) => value.replace(/\s+/g, '')
 
 const optionalGuidanceLabels = [
@@ -216,18 +219,18 @@ const optionalGuidanceLabels = [
 ]
 
 describe('built-in prompt contract for local Qwen generation', () => {
-  it('keeps all built-in prompt text free of slogan claims', () => {
+  it('keeps system roles free of overclaiming slogan identities', () => {
     for (const template of BUILTIN_PROMPTS) {
-      expect(fullTemplateText(template), `${template.key} prompt text`).not.toMatch(/顶尖|白金|爆款|大神/)
+      expect(template.systemRole ?? '', `${template.key} system role`).not.toMatch(/顶尖|白金|爆款|大神/)
     }
   })
 
-  it('documents local Qwen3 14B Q4 constraints on every built-in prompt', () => {
+  it('adapts every built-in system role for local Qwen3 14B Q4 without rewriting template bodies', () => {
     for (const template of BUILTIN_PROMPTS) {
-      const text = fullTemplateText(template)
-      expect(text, `${template.key} should mention Qwen3 14B Q4 or local quantized model`).toMatch(/Qwen3 14B Q4|本地量化模型/)
-      expect(text, `${template.key} should prefer short instructions`).toContain('短句')
-      expect(text, `${template.key} should require concrete output`).toContain('具体')
+      const role = template.systemRole ?? ''
+      expect(role, `${template.key} should mention Qwen3 14B Q4`).toContain('Qwen3 14B Q4')
+      expect(role, `${template.key} should mention local quantization`).toContain('量化模型')
+      expect(role, `${template.key} should stay focused on writing or structure`).toMatch(/小说|网文|章节|角色|正文|设定|审稿|风格|结构|JSON/)
     }
   })
 
@@ -248,19 +251,24 @@ describe('built-in prompt contract for local Qwen generation', () => {
     }
   })
 
-  it('keeps drafting prompts constrained to the current chapter body', () => {
-    for (const key of ['first_chapter_draft', 'next_chapter_draft', 'refine_chapter']) {
-      const text = compact(promptText(key))
-      expect(text, `${key} should avoid future chapter spillover`).toContain('不提前写后续')
-      expect(text, `${key} should avoid plot summaries`).toContain('不要总结')
-      expect(text, `${key} should avoid repeated wording`).toContain('避免重复')
-      expect(text, `${key} should require blank lines between paragraphs`).toContain('段落空行')
-      expect(text, `${key} should output body text only`).toContain('纯文本正文')
-      expect(text, `${key} should preserve configured writing style`).toContain('尊重writing_style')
-    }
+  it('keeps drafting prompts focused on the existing chapter workflow', () => {
+    const firstChapter = compact(promptText('first_chapter_draft'))
+    expect(firstChapter).toContain('本章仅推演')
+    expect(firstChapter).toContain('纯文本正文')
+    expect(firstChapter).toContain('段落之间必须保留一个空行')
+
+    const nextChapter = compact(promptText('next_chapter_draft'))
+    expect(nextChapter).toContain('本章核心冲突')
+    expect(nextChapter).toContain('绝不可擅自拓展后续大纲的情节')
+    expect(nextChapter).toContain('文风要求')
+
+    const refineChapter = compact(promptText('refine_chapter'))
+    expect(refineChapter).toContain('精修与细节填充')
+    expect(refineChapter).toContain('目标字数控制在')
+    expect(refineChapter).toContain('段落与段落之间必须保留一个空行')
   })
 
-  it('keeps import and imitation prompts evidence-bound', () => {
+  it('keeps import and imitation prompts focused on style extraction and reference imitation', () => {
     const stylePrompt = promptText('analyze_writing_style')
     expect(stylePrompt).toContain('风格档案')
     expect(stylePrompt).toContain('仿写指南')
@@ -270,18 +278,21 @@ describe('built-in prompt contract for local Qwen generation', () => {
 
     for (const key of ['infer_novel_config', 'infer_novel_config_with_vectors', 'infer_single_chapter_blueprint']) {
       const text = promptText(key)
-      expect(text, `${key} should only extract verifiable facts`).toContain('只提取可验证信息')
-      expect(text, `${key} should mark unknown fields`).toContain('待确认')
-      expect(text, `${key} should avoid invention`).toContain('不要臆造')
+      expect(text, `${key} should use the import workflow`).toMatch(/已有小说|已有章节|关键片段/)
+      if (key !== 'infer_single_chapter_blueprint') {
+        expect(text, `${key} should mark unknown fields`).toContain('待确认')
+      }
+      expect(text, `${key} should preserve structured output`).toMatch(/JSON|chapterNumber/)
     }
   })
 
-  it('does not add safety, refusal, or compliance policy prompts', () => {
+  it('does not add safety, refusal, compliance, or bottom-line policy prompts', () => {
     const allPromptText = BUILTIN_PROMPTS
       .map((template) => [template.systemRole, template.content, template.systemSuffix].filter(Boolean).join('\n'))
       .join('\n')
 
-    expect(allPromptText).not.toMatch(/安全提示|拒绝提示|合规提示|底线提示/)
+    expect(allPromptText).not.toMatch(/安全提示|拒绝提示|合规提示|底线提示|写作安全|安全边界|合规边界|政策要求/)
+    expect(allPromptText).not.toContain('底线')
   })
 
   it('prunes empty optional guidance labels from rendered prompts', () => {

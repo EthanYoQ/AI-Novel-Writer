@@ -23,7 +23,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     prompt: string, 
     systemPrompt: string, 
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean },
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
     context?: WorkflowContext
   ): Promise<string> {
     const llmStore = useLLMStore.getState()
@@ -108,7 +108,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   protected async callLLMWithBuilder(
     builder: BasePromptBuilder,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean },
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
     context?: WorkflowContext
   ): Promise<string> {
     return this.callLLM(builder.build(), builder.getSystemRole(), callbacks, options, context)
@@ -118,7 +118,11 @@ export abstract class BaseWorkflowCommand<TResult = string> {
    * 去除 DeepSeek 等模型的 <think> 标签，保证落盘纯净
    */
   protected stripThinkingTags(text: string): string {
-    return text.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '').trim()
+    return text
+      .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
+      .replace(/^\s*[\s\S]{0,300}<\/think>\s*/i, '')
+      .replace(/<\/?think>/gi, '')
+      .trim()
   }
 
   /**
@@ -154,4 +158,3 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     globalEventBus.emit('REFRESH_RESOURCE', { resources })
   }
 }
-

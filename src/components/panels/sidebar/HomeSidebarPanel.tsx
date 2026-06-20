@@ -2,16 +2,36 @@
  * HomeSidebarPanel — 主页侧边栏：项目管理入口 + 最近项目列表
  */
 
-import { FolderOpen } from 'lucide-react'
+import { FolderOpen, Trash2 } from 'lucide-react'
 import { useProjectStore } from '../../../stores/project-store'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { ipc } from '../../../services/ipc-client'
 import { Button } from '../../ui/Button'
+import { confirm } from '../../ui/Confirm'
+import { toast } from '../../ui/Toast'
 
 export default function HomeSidebarPanel() {
   const currentProject = useProjectStore(s => s.currentProject)
   const recentProjects = useProjectStore(s => s.recentProjects)
   const openProject = useProjectStore(s => s.openProject)
+  const deleteProject = useProjectStore(s => s.deleteProject)
+
+  const handleDeleteProject = async (project: { name: string; path: string }) => {
+    const ok = await confirm(
+      `确认删除项目「${project.name}」？\n此操作会删除该项目目录下的小说正文、故事架构、角色、蓝图、知识库和所有项目数据。`,
+      {
+        title: '删除项目',
+        confirmText: '删除项目',
+        danger: true,
+      },
+    )
+    if (!ok) return
+
+    const success = await deleteProject(project.path)
+    if (success) {
+      toast.success(`项目「${project.name}」已删除`)
+    }
+  }
 
   return (
     <div className="px-3 py-2 text-sm">
@@ -34,6 +54,18 @@ export default function HomeSidebarPanel() {
                 当前项目
               </p>
             </div>
+            <button
+              type="button"
+              title="删除项目"
+              className="writer-command-button"
+              style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-danger)' }}
+              onClick={(e) => {
+                e.stopPropagation()
+                handleDeleteProject(currentProject)
+              }}
+            >
+              <Trash2 size={13} />
+            </button>
           </div>
         </div>
       )}
@@ -94,6 +126,18 @@ export default function HomeSidebarPanel() {
                       {p.path}
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    title="删除项目"
+                    className="writer-command-button opacity-70 hover:opacity-100"
+                    style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-danger)' }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleDeleteProject(p)
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </div>
               ))}
             {recentProjects.filter(p => p.path !== currentProject?.path).length === 0 && (

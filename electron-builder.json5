@@ -10,7 +10,7 @@
     "node_modules/@lancedb/lancedb-linux-*/**/*",
     "node_modules/@lancedb/lancedb-win32-*/**/*"
   ],
-  "productName": "AI Novel Writer",
+  "productName": "AI小说作家",
   "directories": {
     "output": "release/${version}"
   },
@@ -29,10 +29,6 @@
       {
         "target": "nsis",
         "arch": ["x64"]
-      },
-      {
-        "target": "portable",
-        "arch": ["x64"]
       }
     ]
   },
@@ -42,9 +38,6 @@
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false
-  },
-  "portable": {
-    "artifactName": "${productName}-${version}-portable.${ext}"
   },
   "linux": {
     "target": ["AppImage"],

@@ -64,3 +64,8 @@ export async function searchKB(query: string, topK: number): Promise<SearchResul
 export async function backfillVectors(): Promise<{ success: boolean; processed: number; failed: number; error?: string }> {
   return ipc.invoke('kb:backfill-vectors') as Promise<{ success: boolean; processed: number; failed: number; error?: string }>
 }
+
+/** 清空当前项目知识库 */
+export async function clearKnowledgeBase(): Promise<{ success: boolean; error?: string }> {
+  return ipc.invoke('kb:clear-all')
+}

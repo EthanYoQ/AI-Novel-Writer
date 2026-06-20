@@ -106,7 +106,7 @@ const generateHelpText = (): string => {
   const toolCount = toolRegistry.listAll().length
   const skillCount = skillRegistry.listAll().length
   const lines: string[] = [
-    '## Vela AI 助手 — 帮助',
+    '## AI小说作家 AI 助手 — 帮助',
     '',
     '### 可用命令',
     '- `/clear` — 清空当前对话',

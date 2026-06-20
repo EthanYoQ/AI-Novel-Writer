@@ -3,7 +3,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '../com
 import { Button } from '../components/ui/Button'
 
 const meta = {
-  title: 'Vela UI/Tooltip',
+  title: 'AI Novel Writer UI/Tooltip',
   component: Tooltip,
   parameters: {
     docs: {

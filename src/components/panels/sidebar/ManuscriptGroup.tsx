@@ -3,10 +3,15 @@
  */
 
 import { useState, useEffect } from 'react'
-import { ChevronRight, ChevronDown, FileText, FolderOpen, Copy, PenTool } from 'lucide-react'
+import { ChevronRight, ChevronDown, FileText, FolderOpen, Copy, PenTool, Trash2 } from 'lucide-react'
 import type { FileNode } from '../../../shared/ipc-channels'
 import { ipc } from '../../../services/ipc-client'
 import { useProjectStore } from '../../../stores/project-store'
+import { useDraftStore } from '../../../stores/draft-store'
+import { useEditorStore } from '../../../stores/editor-store'
+import { confirm } from '../../ui/Confirm'
+import { toast } from '../../ui/Toast'
+import { globalEventBus } from '../../../shared/event-bus'
 
 import { showSidebarMenu, openChapterFile } from './SidebarShared'
 
@@ -110,6 +115,35 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
   // 只显示正文章节（过滤掉旧的 _notes 文件）
   const chapterFiles = files.filter(f => !f.name.includes('_notes'))
 
+  const deleteManuscriptChapter = async (filePath: string, displayName: string) => {
+    const match = filePath.match(/^vela:\/\/manuscript\/(\d+)$/)
+    if (!match) {
+      toast.error('当前章节路径不支持直接删除')
+      return
+    }
+
+    const ok = await confirm(`确认删除正文「${displayName}」？\n此操作会删除该定稿正文记录及关联的审稿/修稿产物，不会删除蓝图。`, {
+      title: '删除正文',
+      confirmText: '删除',
+      danger: true,
+    })
+    if (!ok) return
+
+    const result = await ipc.invoke('db:draft-delete', Number(match[1]))
+    if (!result.success) {
+      toast.error(`删除失败\n\n${result.error ?? '未知错误'}`)
+      return
+    }
+
+    const editor = useEditorStore.getState()
+    const tab = editor.tabs.find(t => t.id === filePath || t.filePath === filePath)
+    if (tab) editor.closeTab(tab.id)
+    clearChapterTitleCache(filePath)
+    await useDraftStore.getState().loadAllDrafts()
+    globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts', 'fileTree'] })
+    toast.success(`已删除正文「${displayName}」`)
+  }
+
   return (
     <div>
       <div
@@ -158,13 +192,33 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
                       icon: <Copy size={13} />,
                       onClick: () => navigator.clipboard.writeText(f.path).catch(() => { }),
                     },
+                    { key: 'div2', type: 'divider' as const },
+                    {
+                      key: 'delete',
+                      label: '删除正文',
+                      icon: <Trash2 size={13} />,
+                      danger: true,
+                      onClick: () => deleteManuscriptChapter(f.path, displayName),
+                    },
                   ], e)}
                   title={`点击打开 — ${displayName}`}
                 >
                   <FileText size={11} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
-                  <span className="text-sm truncate" style={{ color: 'var(--color-text-secondary)' }}>
+                  <span className="text-sm truncate flex-1" style={{ color: 'var(--color-text-secondary)' }}>
                     {displayName}
                   </span>
+                  <button
+                    type="button"
+                    className="opacity-70 hover:opacity-100 rounded p-0.5"
+                    title="删除正文"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deleteManuscriptChapter(f.path, displayName)
+                    }}
+                    style={{ color: 'var(--color-text-muted)' }}
+                  >
+                    <Trash2 size={10} />
+                  </button>
                 </div>
               )
             })
