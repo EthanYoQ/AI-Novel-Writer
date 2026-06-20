@@ -203,7 +203,7 @@ function MCPSubView({
         <div className="px-3 py-3 text-xs text-center" style={{ color: 'var(--color-text-muted)' }}>
           <div className="mb-1">暂无 MCP 服务器</div>
           <div className="text-[0.68rem] opacity-60">
-            在 ~/.vela/mcp_config.json 中配置
+            在用户配置目录中配置 MCP 服务器
           </div>
         </div>
       ) : (
@@ -301,7 +301,7 @@ function SkillSubView({
         <div className="px-3 py-3 text-xs text-center" style={{ color: 'var(--color-text-muted)' }}>
           <div className="mb-1">暂无可用技能</div>
           <div className="text-[0.68rem] opacity-60">
-            在 ~/.vela/skills/ 目录放入 SKILL.md 文件
+            在用户技能目录放入 SKILL.md 文件
           </div>
         </div>
       ) : (
