@@ -85,6 +85,7 @@ export const BUILTIN_PRESETS: ProviderPreset[] = [
     baseUrl: 'http://localhost:11434',
     protocol: 'openai',
     models: [
+      { name: 'qwen3-14b-abliterated-novel-q4', maxTokens: 8192 },
       { name: 'llama3.3', maxTokens: 4096 },
       { name: 'llama3.2', maxTokens: 4096 },
       { name: 'qwen2.5', maxTokens: 8192 },

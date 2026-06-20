@@ -19,6 +19,22 @@ export interface ConfigChannels {
   }
 }
 
+// ===== 窗口控制 =====
+export interface WindowChannels {
+  'window:minimize': {
+    args: []
+    return: { success: boolean }
+  }
+  'window:toggle-maximize': {
+    args: []
+    return: { success: boolean; maximized?: boolean }
+  }
+  'window:close': {
+    args: []
+    return: { success: boolean }
+  }
+}
+
 export interface GlobalConfig {
   theme: string
   defaultModelId: string | null
@@ -55,6 +71,10 @@ export interface ProjectChannels {
   'project:recent-list': {
     args: []
     return: Array<{ name: string; path: string; updatedAt: string }>
+  }
+  'project:delete': {
+    args: [projectPath: string]
+    return: { success: boolean; error?: string }
   }
   'dialog:select-folder': {
     args: []
@@ -251,6 +271,8 @@ export interface DatabaseChannels {
   'db:blueprint-upsert': { args: [data: BlueprintData]; return: { success: boolean; error?: string } }
   'db:blueprint-upsert-many': { args: [items: BlueprintData[]]; return: { success: boolean; error?: string } }
   'db:blueprint-update-notes': { args: [chapterNumber: number, notes: string]; return: { success: boolean; error?: string } }
+  'db:blueprint-delete': { args: [chapterNumber: number]; return: { success: boolean; error?: string } }
+  'db:blueprint-clear-all': { args: []; return: { success: boolean; error?: string } }
 
   // 3. characters
   'db:character-get-all': { args: []; return: CharacterData[] }
@@ -270,6 +292,7 @@ export interface DatabaseChannels {
   'db:draft-next-version': { args: [chapterNumber: number]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount?: number]; return: { success: boolean; error?: string } }
   'db:draft-update-content': { args: [id: number, content: string, wordCount: number]; return: { success: boolean; error?: string } }
+  'db:draft-delete': { args: [id: number]; return: { success: boolean; error?: string } }
 
   // 5. revisions
   'db:revision-create': { args: [params: { baseDraftId: number; revisionIndex: number; revisionType: 'refine' | 'review-fix'; userPrompt?: string; reviewSourceId?: number; content: string; wordCount: number }]; return: { success: boolean; id?: number; error?: string } }
@@ -312,6 +335,7 @@ export interface KnowledgeBaseChannels {
   'kb:search-with-scope': { args: [query: string, fromChapter: number, toChapter: number, topK?: number]; return: Array<{ text: string; score: number; fileName: string }> }
   'kb:list-documents': { args: []; return: Array<{ id: string; fileName: string; importedAt: string; chunkCount: number; filePath: string }> }
   'kb:remove-document': { args: [docId: string]; return: { success: boolean } }
+  'kb:clear-all': { args: []; return: { success: boolean; error?: string } }
   'kb:stats': { args: []; return: { documentCount: number; totalChunks: number; vectorDimension: number } }
   'dialog:select-files': { args: []; return: string[] | null }
   'dialog:select-import-folder': { args: []; return: string | null }
@@ -347,7 +371,7 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = ConfigChannels & ProjectChannels & FileChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ImportChannels & MCPChannels
+export type AllInvokeChannels = WindowChannels & ConfigChannels & ProjectChannels & FileChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ImportChannels & MCPChannels
 export type AllEventChannels = LLMStreamEvents
 
 /** 提取 invoke 频道名 */

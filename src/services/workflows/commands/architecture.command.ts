@@ -66,7 +66,7 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
     const resultRaw = await this.callLLMWithBuilder(
       promptBuilder,
       callbacks,
-      { responseFormat: { type: 'json_object' }, thinking: true }
+      { responseFormat: { type: 'json_object' }, thinking: false, maxTokens: 4096, temperature: 0.75 }
     )
 
     callbacks.log('解析完成，正在应用到项目配置...')

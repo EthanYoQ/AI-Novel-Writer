@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import {
   importDocument, importFolder, importText, searchKnowledge, searchKnowledgeFTS,
   listDocuments, removeDocument, getKnowledgeStats,
-  getVectorlessCount, backfillVectors,
+  getVectorlessCount, backfillVectors, clearKnowledgeBase,
 } from '../knowledge-base'
 import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_PATH, RECENT_PROJECTS_PATH } from '../utils/config-utils'
 import { GlobalConfig, ModelProfile } from '../../src/shared/ipc-channels'
@@ -88,6 +88,13 @@ export function registerKBController() {
     const projectPath = getCurrentProjectPath()
     if (!projectPath) return { success: false }
     return { success: removeDocument(docId, projectPath) }
+  })
+
+  ipcMain.handle('kb:clear-all', async () => {
+    const projectPath = getCurrentProjectPath()
+    if (!projectPath) return { success: false, error: '未打开项目' }
+    const success = await clearKnowledgeBase(projectPath)
+    return success ? { success: true } : { success: false, error: '清空知识库失败' }
   })
 
   ipcMain.handle('kb:stats', async () => {

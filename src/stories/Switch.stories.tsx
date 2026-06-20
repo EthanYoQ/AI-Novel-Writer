@@ -3,7 +3,7 @@ import { Switch } from '../components/ui/Switch'
 import { useState } from 'react'
 
 const meta = {
-  title: 'Vela UI/Switch',
+  title: 'AI Novel Writer UI/Switch',
   component: Switch,
   tags: ['autodocs'],
   argTypes: {

@@ -77,6 +77,8 @@ interface ProjectState {
   refreshFileTree: () => Promise<void>
   /** 加载最近项目 */
   loadRecentProjects: () => Promise<void>
+  /** 删除项目目录和项目数据 */
+  deleteProject: (projectPath: string) => Promise<boolean>
   /** 关闭项目 */
   closeProject: () => void
   /** 更新角色状态（内存 + 持久化） */
@@ -184,6 +186,31 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   loadRecentProjects: async () => {
     const list = await ipc.invoke('project:recent-list')
     set({ recentProjects: list })
+  },
+
+  deleteProject: async (projectPath) => {
+    set({ loading: true })
+    try {
+      const result = await ipc.invoke('project:delete', projectPath)
+      if (!result.success) {
+        alertError(result.error ?? '未知错误', { title: '删除项目失败' })
+        return false
+      }
+
+      const currentProject = get().currentProject
+      if (currentProject?.path === projectPath) {
+        await callProjectClosed()
+        set({ currentProject: null, fileTree: [] })
+      }
+
+      await get().loadRecentProjects()
+      return true
+    } catch (e) {
+      alertError(String(e), { title: '删除项目异常' })
+      return false
+    } finally {
+      set({ loading: false })
+    }
   },
 
   closeProject: () => {

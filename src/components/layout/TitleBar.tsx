@@ -140,11 +140,8 @@ export default function TitleBar() {
         </div>
       </div>
 
-      <div
-        className="flex items-center gap-2 min-w-0 flex-1"
-        style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-      >
-        <button className="writer-command-button" title="主菜单" onClick={openSettings}>
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <button className="writer-command-button" title="主菜单" onClick={() => openSettings()}>
           <Menu size={17} strokeWidth={1.8} />
         </button>
 
@@ -190,10 +187,7 @@ export default function TitleBar() {
         </button>
       </div>
 
-      <div
-        className="flex items-center gap-1 flex-shrink-0"
-        style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-      >
+      <div className="flex items-center gap-1 flex-shrink-0">
         <button
           onClick={zoomOut}
           title="缩小"
@@ -227,7 +221,7 @@ export default function TitleBar() {
           <ThemeIcon size={13} strokeWidth={1.5} />
         </button>
         <button
-          onClick={openSettings}
+          onClick={() => openSettings()}
           title="设置"
           className="writer-command-button"
           style={{ minHeight: 24, padding: '0 7px' }}
@@ -235,13 +229,28 @@ export default function TitleBar() {
           <Settings size={13} strokeWidth={1.5} />
         </button>
         <div className="h-5 w-px bg-[rgba(255,244,223,0.24)] mx-1" />
-        <button className="writer-command-button" title="最小化窗口由系统标题栏控制" disabled style={{ minHeight: 24, padding: '0 7px' }}>
+        <button
+          className="writer-command-button"
+          title="最小化"
+          onClick={() => ipc.invoke('window:minimize')}
+          style={{ minHeight: 24, padding: '0 7px' }}
+        >
           <Minus size={13} />
         </button>
-        <button className="writer-command-button" title="最大化窗口由系统标题栏控制" disabled style={{ minHeight: 24, padding: '0 7px' }}>
+        <button
+          className="writer-command-button"
+          title="最大化/还原"
+          onClick={() => ipc.invoke('window:toggle-maximize')}
+          style={{ minHeight: 24, padding: '0 7px' }}
+        >
           <Square size={12} />
         </button>
-        <button className="writer-command-button" title="关闭窗口由系统标题栏控制" disabled style={{ minHeight: 24, padding: '0 7px' }}>
+        <button
+          className="writer-command-button"
+          title="关闭"
+          onClick={() => ipc.invoke('window:close')}
+          style={{ minHeight: 24, padding: '0 7px' }}
+        >
           <X size={14} />
         </button>
       </div>

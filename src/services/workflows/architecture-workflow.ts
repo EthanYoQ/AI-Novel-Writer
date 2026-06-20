@@ -5,8 +5,9 @@ import { getPromptTemplate } from '../prompt-templates'
 import { ipc } from '../ipc-client'
 import type { NovelConfig } from '../../shared/ipc-channels'
 import type { CharacterData } from '../../../electron/repositories/character-repository'
+import { parseCharacterCardsFromModelOrSource } from './character-card-normalizer'
 
-import { runPostProcessPipeline, type PostProcessStep, stripThinkingTags } from './workflow-utils'
+import { runPostProcessPipeline, type PostProcessStep } from './workflow-utils'
 
 // ==========================================
 // 1. 类型定义
@@ -209,36 +210,20 @@ export function createCharacterExtractSteps(_projectPath: string, characterDynam
               onError: (err) => reject(new Error(err))
             },
             undefined,
-            { responseFormat: { type: 'json_object' } }
+            { responseFormat: { type: 'json_object' }, thinking: false, maxTokens: 4096, temperature: 0.2 }
           )
         })
 
-        const cleanedCards = stripThinkingTags(fullContent)
-        const jsonStr = cleanedCards.replace(/```json?\n?/g, '').replace(/```/g, '').trim()
-        const parsedData = JSON.parse(jsonStr)
-
-        // 兼容两种格式：直接数组 或 { characters: [...] }
-        const parsedCards: Array<Record<string, unknown>> = Array.isArray(parsedData)
-          ? parsedData
-          : (parsedData && typeof parsedData === 'object' && Array.isArray((parsedData as Record<string, unknown>).characters))
-            ? (parsedData as Record<string, unknown>).characters as Array<Record<string, unknown>>
-            : []
-
-        if (parsedCards.length === 0) {
-          throw new Error('AI 返回的角色数据格式不正确，未提取到有效角色')
-        }
-
-        // 构建角色卡数据列表
-        const validRoles = ['protagonist', 'antagonist', 'supporting', 'minor']
-        const characterDataList: Array<Record<string, unknown>> = []
-        for (const card of parsedCards) {
-          if (!card.name) continue
-          const role = validRoles.includes(card.role as string) ? card.role : 'supporting'
-          characterDataList.push({ ...card, role, name: card.name })
+        const characterDataList = parseCharacterCardsFromModelOrSource(fullContent, characterDynamicsContent)
+        if (characterDataList.length === 0) {
+          throw new Error('未能从 AI 输出或角色图谱中提取到有效角色卡，未写入角色列表')
         }
 
         // 批量写入数据库
-        await ipc.invoke('db:character-save-all', characterDataList as unknown as CharacterData[])
+        const saveResult = await ipc.invoke('db:character-save-all', characterDataList as unknown as CharacterData[])
+        if (!saveResult.success) {
+          throw new Error(saveResult.error || '角色卡写入数据库失败')
+        }
         cb.log(`✅ 角色卡提取完毕（共 ${characterDataList.length} 个角色）`)
       },
     },
@@ -301,4 +286,3 @@ export async function repairArchCharacterCards(projectPath: string): Promise<voi
     ],
   })
 }
-

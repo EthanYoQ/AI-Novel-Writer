@@ -86,6 +86,24 @@ export function registerDatabaseController() {
     }
   })
 
+  ipcMain.handle('db:blueprint-delete', async (_event, chapterNumber: number) => {
+    try {
+      BlueprintRepository.delete(chapterNumber)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:blueprint-clear-all', async () => {
+    try {
+      BlueprintRepository.clearAll()
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
   // ============================================================
   // 3. characters — 角色卡
   // ============================================================
@@ -186,6 +204,15 @@ export function registerDatabaseController() {
   ipcMain.handle('db:draft-update-content', async (_event, id: number, content: string, wordCount: number) => {
     try {
       DraftRepository.updateContent(id, content, wordCount)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:draft-delete', async (_event, id: number) => {
+    try {
+      DraftRepository.delete(id)
       return { success: true }
     } catch (err) {
       return { success: false, error: String(err) }

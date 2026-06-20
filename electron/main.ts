@@ -29,9 +29,8 @@ function createWindow() {
     minHeight: 640,
     title: 'AI小说作家 — AI Novel Writer',
     icon: path.join(process.env.APP_ROOT!, 'build', 'icon.png'),
-    // macOS 使用自定义标题栏
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 12, y: 10 },
+    // 使用应用内自绘标题栏，避免 Windows 原生标题栏与棕色标题栏重复显示。
+    frame: false,
     backgroundColor: '#1e1e1e',
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
