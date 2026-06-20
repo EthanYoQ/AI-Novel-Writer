@@ -1,27 +1,76 @@
 import {
-  FolderOpen, BookOpen, Users,
-  Home, Zap, ScrollText, Cpu,
+  FolderOpen,
+  BookOpen,
+  Users,
+  Home,
+  ListTree,
+  Globe2,
+  Bot,
+  ListChecks,
+  Settings,
+  ScrollText,
+  Cpu,
 } from 'lucide-react'
 import { useLayoutStore, type SidebarView, type BottomTab } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 
 /** 左侧侧边栏视图按钮配置（不含 Home，它单独渲染） */
 const sidebarActivities: Array<{ id: SidebarView; icon: typeof FolderOpen; label: string }> = [
-  { id: 'project', icon: FolderOpen, label: '项目结构' },
-  { id: 'knowledge', icon: BookOpen, label: '知识库' },
-  { id: 'characters', icon: Users, label: '角色管理' },
+  { id: 'project', icon: FolderOpen, label: '项目' },
+  { id: 'knowledge', icon: BookOpen, label: '小说' },
+  { id: 'characters', icon: Users, label: '角色' },
 ]
 
 /** 底部面板 Tab 按钮配置 */
-const bottomTabs: Array<{ id: BottomTab; icon: typeof Zap; label: string }> = [
-  { id: 'tasks', icon: Zap, label: '任务' },
+const bottomTabs: Array<{ id: BottomTab; icon: typeof ListChecks; label: string }> = [
+  { id: 'tasks', icon: ListChecks, label: '任务' },
   { id: 'log', icon: ScrollText, label: '日志' },
-  { id: 'models', icon: Cpu, label: '模型调用' },
+  { id: 'models', icon: Cpu, label: '模型' },
 ]
+
+function LeftNavButton({
+  icon: Icon,
+  label,
+  active,
+  pulse,
+  onClick,
+  title,
+}: {
+  icon: typeof FolderOpen
+  label: string
+  active?: boolean
+  pulse?: boolean
+  onClick: () => void
+  title?: string
+}) {
+  return (
+    <div className="relative w-full px-1">
+      <button
+        onClick={onClick}
+        title={title ?? label}
+        className="left-nav-button"
+        style={{
+          color: active ? 'var(--color-activity-icon-active)' : 'var(--color-activity-icon)',
+          backgroundColor: active ? 'var(--color-active)' : 'transparent',
+          boxShadow: active ? 'inset 2px 0 0 var(--color-activity-indicator)' : 'none',
+        }}
+      >
+        <Icon size={16} strokeWidth={active ? 2 : 1.75} />
+        <span className="left-nav-label">{label}</span>
+      </button>
+      {pulse && (
+        <span
+          className="absolute top-[5px] right-[5px] w-[5px] h-[5px] rounded-full animate-pulse pointer-events-none"
+          style={{ backgroundColor: 'var(--color-accent)' }}
+        />
+      )}
+    </div>
+  )
+}
 
 /**
  * 左侧工具窗口栏（LeftToolWindowBar）
- * JetBrains 风格：36px 宽，全高
+ * JetBrains 风格：带文字标签的左侧主导航，全高
  */
 export default function LeftToolWindowBar() {
   const sidebarView = useLayoutStore(s => s.sidebarView)
@@ -30,10 +79,13 @@ export default function LeftToolWindowBar() {
   const bottomTab = useLayoutStore(s => s.bottomTab)
   const bottomPanelOpen = useLayoutStore(s => s.bottomPanelOpen)
   const setBottomTab = useLayoutStore(s => s.setBottomTab)
+  const openRightPanel = useLayoutStore(s => s.openRightPanel)
+  const openSettings = useLayoutStore(s => s.openSettings)
   const currentRun = useWorkflowStore(s => s.currentRun)
 
   /** Home 按钮是否激活 */
   const homeActive = sidebarOpen && sidebarView === 'home'
+  const aiActive = useLayoutStore(s => s.aiPanelOpen && s.rightView === 'agent')
 
   return (
     <div
@@ -49,18 +101,13 @@ export default function LeftToolWindowBar() {
       <div className="flex flex-col items-center w-full pt-0.5">
 
         {/* Home 按钮 — 点击切换到主页视图 */}
-        <button
+        <LeftNavButton
+          icon={Home}
+          label="首页"
+          active={homeActive}
           onClick={() => setSidebarView('home')}
           title="欢迎页"
-          className="tool-btn"
-          style={{
-            height: 30,
-            boxShadow: homeActive ? 'inset 2px 0 0 var(--color-activity-indicator)' : 'none',
-            color: homeActive ? 'var(--color-activity-icon-active)' : undefined,
-          }}
-        >
-          <Home size={16} strokeWidth={homeActive ? 2 : 1.5} />
-        </button>
+        />
 
         {/* 分割线 */}
         <div className="w-4 my-0.5" style={{ height: 1, backgroundColor: 'var(--color-border)' }} />
@@ -69,20 +116,40 @@ export default function LeftToolWindowBar() {
         {sidebarActivities.map(({ id, icon: Icon, label }) => {
           const isActive = sidebarOpen && sidebarView === id
           return (
-            <button
+            <LeftNavButton
               key={id}
-              onClick={() => setSidebarView(id)}
+              icon={Icon}
+              label={label}
+              active={isActive}
               title={label}
-              className="tool-btn"
-              style={{
-                boxShadow: isActive ? 'inset 2px 0 0 var(--color-activity-indicator)' : 'none',
-                color: isActive ? 'var(--color-activity-icon-active)' : 'var(--color-activity-icon)',
-              }}
-            >
-              <Icon size={17} strokeWidth={isActive ? 2 : 1.5} />
-            </button>
+              onClick={() => setSidebarView(id)}
+            />
           )
         })}
+
+        <div className="w-4 my-0.5" style={{ height: 1, backgroundColor: 'var(--color-border)' }} />
+
+        <LeftNavButton
+          icon={ListTree}
+          label="蓝图"
+          active={sidebarOpen && sidebarView === 'project'}
+          title="章节蓝图"
+          onClick={() => setSidebarView('project')}
+        />
+        <LeftNavButton
+          icon={Globe2}
+          label="世界"
+          active={sidebarOpen && sidebarView === 'knowledge'}
+          title="世界观"
+          onClick={() => setSidebarView('knowledge')}
+        />
+        <LeftNavButton
+          icon={Bot}
+          label="AI"
+          active={aiActive}
+          title="AI 写作助手"
+          onClick={() => openRightPanel('agent')}
+        />
       </div>
 
       {/* 弹性间隔 */}
@@ -98,31 +165,25 @@ export default function LeftToolWindowBar() {
             (currentRun.status === 'running' || currentRun.status === 'waiting')
 
           return (
-            <div key={id} className="relative w-full">
-              <button
-                onClick={() => setBottomTab(id)}
-                title={label}
-                className="tool-btn"
-                style={{
-                  boxShadow: isActive ? 'inset 2px 0 0 var(--color-activity-indicator)' : 'none',
-                  color: isActive ? 'var(--color-activity-icon-active)' : 'var(--color-activity-icon)',
-                }}
-              >
-                <Icon size={15} strokeWidth={isActive ? 2 : 1.5} />
-              </button>
-              {showPulse && (
-                <span
-                  className="absolute top-[4px] right-[4px] w-[5px] h-[5px] rounded-full animate-pulse pointer-events-none"
-                  style={{
-                    backgroundColor: currentRun.status === 'waiting'
-                      ? 'var(--color-warning)'
-                      : 'var(--color-accent)',
-                  }}
-                />
-              )}
-            </div>
+            <LeftNavButton
+              key={id}
+              icon={Icon}
+              label={label}
+              active={isActive}
+              title={label}
+              pulse={!!showPulse}
+              onClick={() => setBottomTab(id)}
+            />
           )
         })}
+
+        <div className="w-4 my-0.5" style={{ height: 1, backgroundColor: 'var(--color-border)' }} />
+
+        <LeftNavButton
+          icon={Settings}
+          label="设置"
+          onClick={openSettings}
+        />
       </div>
     </div>
   )
