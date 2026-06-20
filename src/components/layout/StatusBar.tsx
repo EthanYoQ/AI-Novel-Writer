@@ -4,6 +4,7 @@ import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
+import { APP_BRAND } from '../../shared/brand'
 
 /** 底部状态栏 — JetBrains 风格：22px、深灰底、多分段、hover 可点击感 */
 export default function StatusBar() {
@@ -29,9 +30,9 @@ export default function StatusBar() {
     >
       {/* 左侧 */}
       <div className="flex items-center h-full">
-        <StatusBarSegment title="Vela IDE">
+        <StatusBarSegment title={APP_BRAND.zhName}>
           <BookOpen size={11} />
-          <span className="font-medium brand-gradient">Vela</span>
+          <span className="font-medium brand-gradient">{APP_BRAND.shortName}</span>
           <span className="opacity-80 brand-gradient">v{__APP_VERSION__}</span>
         </StatusBarSegment>
 

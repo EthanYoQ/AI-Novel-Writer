@@ -4,6 +4,7 @@ import { useProjectStore } from '../../stores/project-store'
 import { useThemeStore, type Theme } from '../../stores/theme-store'
 import { useEditorStore } from '../../stores/editor-store'
 import { useLayoutStore } from '../../stores/layout-store'
+import { APP_BRAND } from '../../shared/brand'
 
 /** 检测是否为 macOS */
 const isMac = navigator.userAgent.includes('Mac')
@@ -103,7 +104,7 @@ export default function TitleBar() {
       {/* 左侧：macOS 留出交通灯位置 + 应用名 */}
       <div className="flex items-center flex-shrink-0" style={{ paddingLeft: isMac ? 78 : 12 }}>
         <span className="text-xs font-semibold tracking-wider brand-gradient">
-          Vela
+          {APP_BRAND.shortName}
         </span>
         {projectName && (
           <span className="text-xs ml-2 opacity-50" style={{ color: 'var(--color-titlebar-text)' }}>
