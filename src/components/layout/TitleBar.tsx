@@ -172,9 +172,9 @@ export default function TitleBar() {
           <Archive size={14} strokeWidth={1.75} />
           备份
         </button>
-        <button className="writer-command-button" title="导入小说" onClick={openImportNovel}>
+        <button className="writer-command-button" title="小说拆解与仿写" onClick={openImportNovel}>
           <Import size={14} strokeWidth={1.75} />
-          导入
+          拆解仿写
         </button>
         <button className="writer-command-button" title="导出" onClick={openExport}>
           <Upload size={14} strokeWidth={1.75} />
