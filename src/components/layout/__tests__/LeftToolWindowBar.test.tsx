@@ -11,7 +11,7 @@ describe('LeftToolWindowBar', () => {
     }
   })
 
-  it('does not render old Vela sidebar labels as primary nav labels', () => {
+  it('does not render legacy sidebar labels as primary nav labels', () => {
     const html = renderToString(<LeftToolWindowBar />)
 
     expect(html).not.toContain('项目结构</span>')
