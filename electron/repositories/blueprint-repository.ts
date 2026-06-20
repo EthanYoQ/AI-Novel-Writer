@@ -52,11 +52,16 @@ function rowToData(row: BlueprintRow): BlueprintData {
     }
 }
 
+function requireProjectDb(): NonNullable<ReturnType<typeof getProjectDb>> {
+    const db = getProjectDb()
+    if (!db) throw new Error('项目数据库未打开')
+    return db
+}
+
 export class BlueprintRepository {
     /** 获取所有蓝图（按章节号排序） */
     static getAll(): BlueprintData[] {
-        const db = getProjectDb()
-        if (!db) return []
+        const db = requireProjectDb()
 
         const rows = db.prepare(
             'SELECT * FROM blueprints ORDER BY chapter_number ASC'
@@ -67,8 +72,7 @@ export class BlueprintRepository {
 
     /** 获取单个蓝图 */
     static getByChapter(chapterNumber: number): BlueprintData | null {
-        const db = getProjectDb()
-        if (!db) return null
+        const db = requireProjectDb()
 
         const row = db.prepare(
             'SELECT * FROM blueprints WHERE chapter_number = ?'
@@ -79,8 +83,7 @@ export class BlueprintRepository {
 
     /** 获取蓝图总数 */
     static count(): number {
-        const db = getProjectDb()
-        if (!db) return 0
+        const db = requireProjectDb()
 
         const row = db.prepare(
             'SELECT COUNT(*) as cnt FROM blueprints'
@@ -91,8 +94,7 @@ export class BlueprintRepository {
 
     /** 插入或更新蓝图 */
     static upsert(data: BlueprintData): void {
-        const db = getProjectDb()
-        if (!db) return
+        const db = requireProjectDb()
 
         db.prepare(`
       INSERT INTO blueprints (
@@ -126,8 +128,7 @@ export class BlueprintRepository {
 
     /** 批量插入/更新蓝图（事务） */
     static upsertMany(items: BlueprintData[]): void {
-        const db = getProjectDb()
-        if (!db) return
+        const db = requireProjectDb()
 
         const tx = db.transaction(() => {
             for (const item of items) {
@@ -139,16 +140,21 @@ export class BlueprintRepository {
 
     /** 删除蓝图 */
     static delete(chapterNumber: number): void {
-        const db = getProjectDb()
-        if (!db) return
+        const db = requireProjectDb()
 
         db.prepare('DELETE FROM blueprints WHERE chapter_number = ?').run(chapterNumber)
     }
 
+    /** 删除所有章节蓝图 */
+    static clearAll(): void {
+        const db = requireProjectDb()
+
+        db.prepare('DELETE FROM blueprints').run()
+    }
+
     /** 仅更新 notes 字段 */
     static updateNotes(chapterNumber: number, notes: string): void {
-        const db = getProjectDb()
-        if (!db) return
+        const db = requireProjectDb()
 
         db.prepare(`
       UPDATE blueprints

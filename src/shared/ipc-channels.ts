@@ -219,6 +219,14 @@ export interface ModelProfile {
   purposes: Array<'generation' | 'refinement' | 'summary' | 'embedding'>
 }
 
+export interface ProjectClearOptions {
+  creativeFields?: boolean
+  blueprints?: boolean
+  generatedText?: boolean
+}
+
+export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText'
+
 // ===== 引入 DB 类型 =====
 import type { ProjectCoreData } from '../../electron/repositories/project-core-repository'
 import type { BlueprintData } from '../../electron/repositories/blueprint-repository'
@@ -235,6 +243,7 @@ export interface DatabaseChannels {
   // 1. project_core
   'db:project-core-get': { args: []; return: ProjectCoreData | null }
   'db:project-core-update': { args: [data: Partial<ProjectCoreData>]; return: { success: boolean; error?: string } }
+  'db:project-clear-generated-data': { args: [options: ProjectClearOptions]; return: { success: boolean; cleared?: ProjectClearScope[]; physicalFilesDeleted?: number; error?: string } }
 
   // 2. blueprints
   'db:blueprint-get-all': { args: []; return: BlueprintData[] }

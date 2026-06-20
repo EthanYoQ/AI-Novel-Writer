@@ -13,10 +13,12 @@ const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 import type BetterSqlite3 from 'better-sqlite3'
 
 let projectDb: BetterSqlite3.Database | null = null
+let currentProjectPath: string | null = null
 
 /** 初始化项目数据库（打开项目时调用） */
 export function initProjectDatabase(projectPath: string): void {
   closeProjectDatabase()
+  currentProjectPath = projectPath
 
   const dbPath = path.join(projectPath, '.vela', 'vela.db')
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
@@ -36,11 +38,17 @@ export function closeProjectDatabase(): void {
     projectDb.close()
     projectDb = null
   }
+  currentProjectPath = null
 }
 
 /** 获取当前数据库实例 */
 export function getProjectDb(): BetterSqlite3.Database | null {
   return projectDb
+}
+
+/** 获取当前已打开项目路径 */
+export function getCurrentProjectPath(): string | null {
+  return currentProjectPath
 }
 
 /** 创建完整表结构（9 张核心表 + 2 张沿用表） */

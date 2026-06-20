@@ -210,4 +210,22 @@ export class DraftRepository {
             try { ContentRepository.delete(meta.contentId) } catch { /* 被外键保护 */ }
         }
     }
+
+    /** 清空所有生成正文与派生产物，不删除角色卡或项目配置 */
+    static clearAll(): void {
+        const db = getProjectDb()
+        if (!db) throw new Error('[DraftRepository] 数据库未连接')
+
+        const tx = db.transaction(() => {
+            db.prepare('DELETE FROM post_process_steps').run()
+            db.prepare('DELETE FROM post_process_runs').run()
+            db.prepare('DELETE FROM reviews').run()
+            db.prepare('DELETE FROM revisions').run()
+            db.prepare('DELETE FROM drafts').run()
+            db.prepare('DELETE FROM contents').run()
+            db.prepare('DELETE FROM summary_snapshots').run()
+        })
+
+        tx()
+    }
 }
