@@ -3,6 +3,7 @@ import { closeProjectDatabase } from '../database'
 
 // 导入所有 Repository
 import { ProjectCoreRepository, ProjectCoreData } from '../repositories/project-core-repository'
+import { ProjectClearRepository, ProjectClearOptions } from '../repositories/project-clear-repository'
 import { BlueprintRepository, BlueprintData } from '../repositories/blueprint-repository'
 import { CharacterRepository, CharacterData, CharacterStateData } from '../repositories/character-repository'
 import { DraftRepository } from '../repositories/draft-repository'
@@ -33,6 +34,16 @@ export function registerDatabaseController() {
       return { success: true }
     } catch (err) {
       console.error('[db:project-core-update] 失败:', err)
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:project-clear-generated-data', async (_event, options: ProjectClearOptions) => {
+    try {
+      const result = ProjectClearRepository.clearGeneratedData(options)
+      return { success: true, ...result }
+    } catch (err) {
+      console.error('[db:project-clear-generated-data] 失败:', err)
       return { success: false, error: String(err) }
     }
   })

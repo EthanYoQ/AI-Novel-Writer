@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ChevronRight, ChevronDown, RefreshCw, CheckCircle2, Circle, FolderOpen, Copy, FolderTree } from 'lucide-react'
+import { ChevronRight, ChevronDown, RefreshCw, CheckCircle2, Circle, FolderOpen, Copy, FolderTree, Trash2 } from 'lucide-react'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { useDraftStore } from '../../../stores/draft-store'
@@ -14,6 +14,7 @@ import { useLayoutStore } from '../../../stores/layout-store'
 import { ipc } from '../../../services/ipc-client'
 import { Button } from '../../ui/Button'
 import { EmptyState } from '../../ui/EmptyState'
+import ClearProjectDataDialog from '../../dialogs/ClearProjectDataDialog'
 
 
 
@@ -37,6 +38,7 @@ export default function ProjectTree() {
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   // 章节蓝图数量
   const [blueprintCount, setBlueprintCount] = useState<number>(-1)
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
 
   /** 统一刷新：文件树 + 架构状态 + 草稿列表 + 蓝图数量 */
   // 用 getState() 获取最新的 action，不作为依赖项，避免重建导致 useEffect 循环
@@ -136,18 +138,36 @@ export default function ProjectTree() {
 
   // 故事架构进度
   const archDone = ARCH_FILES.filter(f => archStatus[f.key]).length
+  const clearDisabled = activeRuns.length > 0
 
   return (
     <div className="writer-project-tree min-h-full text-sm py-1">
       {/* 项目名 + 刷新 */}
-      <div className="flex items-center justify-between px-3 py-1.5 mb-0.5">
+      <div className="flex items-center justify-between gap-1 px-3 py-1.5 mb-0.5">
         <span className="font-semibold text-xs truncate" style={{ color: 'var(--color-text)' }}>
           {currentProject.name}
         </span>
-        <Button variant="ghost" size="icon" onClick={() => refreshAll()} title="刷新">
-          <RefreshCw size={12} />
-        </Button>
+        <div className="flex flex-shrink-0 items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setClearDialogOpen(true)}
+            disabled={clearDisabled}
+            title={clearDisabled ? '工作流运行中，暂不能清除' : '清除项目生成内容'}
+          >
+            <Trash2 size={12} />
+          </Button>
+          <Button variant="ghost" size="icon" onClick={() => refreshAll()} title="刷新">
+            <RefreshCw size={12} />
+          </Button>
+        </div>
       </div>
+
+      <ClearProjectDataDialog
+        open={clearDialogOpen}
+        onClose={() => setClearDialogOpen(false)}
+        onCleared={refreshAll}
+      />
 
       {/* 1. 小说配置 */}
       <LeafItem
