@@ -9,7 +9,7 @@ import MarkdownContent from '../ui/MarkdownContent'
  * 参考 Cursor Agent 风格：扁平化、极简文字驱动、可折叠思考区
  */
 export default function AIOutputPanel() {
-  // ✅ 使用 selector 精确订阅，避免 globalLogs 高频更新导致整个面板重渲染
+  // 使用 selector 精确订阅，避免 globalLogs 高频更新导致整个面板重渲染
   const activeRuns = useWorkflowStore(s => s.activeRuns)
   const history = useWorkflowStore(s => s.history)
   const getActiveStreamingRun = useWorkflowStore(s => s.getActiveStreamingRun)
@@ -26,7 +26,7 @@ export default function AIOutputPanel() {
     } else {
       console.log('[AIOutputPanel] mount/useEffect: no activeRun, activeRuns=', activeRuns.map(r => r.id + ':' + r.status), 'history=', history.slice(0, 2).map(r => r.id + ':' + r.status))
     }
-    // ✅ 只依赖 id 字符串，不依赖 activeRun 对象引用
+    // 只依赖 id 字符串，不依赖 activeRun 对象引用
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRun?.id])
 
