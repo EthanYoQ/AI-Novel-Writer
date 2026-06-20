@@ -5,6 +5,7 @@ import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
 import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
 import type { ImportedChapter } from '../../services/workflows/commands/import-novel.command'
+import { inferImportedNovelProjectName } from './import-novel-paths'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
@@ -17,7 +18,7 @@ interface ImportNovelDialogProps {
   onClose: () => void
 }
 
-/** 导入小说向导对话框 */
+/** 小说拆解与仿写向导对话框 */
 export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogProps) {
   const createProject = useProjectStore((s) => s.createProject)
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow)
@@ -50,8 +51,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     // 自动推断项目名称（取第一个文件名去掉后缀）
     if (!name.trim()) {
       const firstFile = files[0]
-      const baseName = firstFile.split('/').pop()?.replace(/\.(txt|md|text)$/i, '') || '导入小说'
-      setName(baseName)
+      setName(inferImportedNovelProjectName(firstFile))
     }
 
     // 自动拆章预览
@@ -120,9 +120,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileUp size={18} className="text-[var(--color-accent)]" />
-            导入已有小说
+            小说拆解与仿写
           </DialogTitle>
-          <DialogDescription>选择小说文件，Vela 将自动拆章并通过 AI 逆向推演全部结构化数据</DialogDescription>
+          <DialogDescription>选择参考小说文件，AI 将执行结构拆解、文风提取、蓝图反推，并生成后续写作可用的仿写约束</DialogDescription>
         </DialogHeader>
 
         <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
@@ -155,7 +155,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
               style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-text-secondary)' }}>
               <div className="animate-spin w-3 h-3 border-2 border-current border-t-transparent rounded-full" />
-              正在分析并拆分章节...
+              正在拆章并准备结构拆解...
             </div>
           )}
 
@@ -206,11 +206,11 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
           {/* ===== 项目信息 ===== */}
           <div>
-            <Label>作品名称</Label>
+            <Label>新项目名称</Label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="导入后的项目名称"
+              placeholder="拆解后创建的新项目名称"
             />
           </div>
 
@@ -263,7 +263,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             disabled={importing || !name.trim() || !savePath.trim() || chapters.length === 0}
           >
             <FileUp size={14} />
-            {importing ? '导入中...' : `开始导入（${chapters.length} 章）`}
+            {importing ? '拆解中...' : `开始拆解仿写（${chapters.length} 章）`}
           </Button>
         </DialogFooter>
       </DialogContent>
