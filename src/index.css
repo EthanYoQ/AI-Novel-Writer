@@ -166,7 +166,7 @@
   /* Logo 核心色：深邃蓝 #0A1628 · 冰蓝 #7EC8E3 · 星空蓝 #5B9ED6
      薰衣草紫 #9B8EC8 · 星辰金 #C9A76C */
   :root {
-    /* ☀️ 浅色主题 — 清冷蓝调（从 Logo 蓝紫色系延伸） */
+    /* 浅色主题 — 清冷蓝调（从 Logo 蓝紫色系延伸） */
 
     /* 背景层次（冷白蓝调，与Logo深蓝形成呼应） */
     --color-bg: #F7F9FC;
@@ -275,7 +275,7 @@
     --font-writing: 'LXGW WenKai', 'Noto Serif SC', serif;
   }
 
-  /* 🌑 星空主题 — Logo 深邃星空（直接取自 Logo 背景色 #0A1628） */
+  /* 星空主题 — Logo 深邃星空（直接取自 Logo 背景色 #0A1628） */
   .galaxy {
     /* 背景层次 — Logo 深蓝背景色为基底，逐层提亮 */
     --color-bg: #0A1628;
@@ -410,7 +410,7 @@
     --shadow-tooltip: 0 4px 12px rgba(46, 38, 29, 0.18);
   }
 
-  /* 🌃 黑夜主题 — VS Code / IDEA 深灰极客风（真正的暗黑模式） */
+  /* 黑夜主题 — VS Code / IDEA 深灰极客风（真正的暗黑模式） */
   .dark {
     --color-bg: #1E1E1E;
     --color-sidebar: #252526;
