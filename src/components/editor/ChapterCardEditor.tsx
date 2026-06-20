@@ -26,6 +26,7 @@ import { cn } from '../../lib/utils'
 import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
 import { globalEventBus } from '../../shared/event-bus'
+import { shouldRefreshBlueprints } from './blueprint-refresh'
 
 const ROLES = ['建置', '铺垫', '发展', '冲突', '高潮', '转折', '收尾']
 
@@ -86,6 +87,14 @@ export default function ChapterCardEditor() {
     })
   }, [loadBlueprints])
 
+  useEffect(() => {
+    return globalEventBus.on('REFRESH_RESOURCE', (payload) => {
+      if (shouldRefreshBlueprints(payload.resources)) {
+        loadBlueprints()
+      }
+    })
+  }, [loadBlueprints])
+
   const selected = blueprints[selectedIdx] ?? null
 
   /** 更新选中章节蓝图的字段 */
@@ -100,20 +109,34 @@ export default function ChapterCardEditor() {
   const handleSaveOne = async () => {
     if (!currentProject || !selected) return
     setSaving(true)
-    await saveChapterBlueprint(selected)
-    setSaving(false)
-    setDirty(false)
-    addLog('info', `✅ 第 ${selected.chapterNumber} 章蓝图已保存`)
+    try {
+      await saveChapterBlueprint(selected)
+      setDirty(false)
+      addLog('info', `✅ 第 ${selected.chapterNumber} 章蓝图已保存`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      addLog('error', `保存第 ${selected.chapterNumber} 章蓝图失败：${message}`)
+      toast.error(`保存失败\n\n${message}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
-  /** 全量保存（每章写入独立 JSON 文件） */
+  /** 全量保存到 SQLite */
   const handleSaveAll = async () => {
     if (!currentProject) return
     setSaving(true)
-    await saveAllBlueprints(blueprints)
-    setSaving(false)
-    setDirty(false)
-    addLog('info', `✅ 已保存全部 ${blueprints.length} 章蓝图`)
+    try {
+      await saveAllBlueprints(blueprints)
+      setDirty(false)
+      addLog('info', `✅ 已保存全部 ${blueprints.length} 章蓝图`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      addLog('error', `保存全部蓝图失败：${message}`)
+      toast.error(`保存失败\n\n${message}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
   /** 新建空章节 */
@@ -145,10 +168,39 @@ export default function ChapterCardEditor() {
       danger: true,
     })
     if (!ok) return
-    const newList = blueprints.filter((_, i) => i !== selectedIdx)
-    setBlueprints(newList)
-    setSelectedIdx(Math.max(0, selectedIdx - 1))
-    setDirty(true)
+    const result = await ipc.invoke('db:blueprint-delete', selected.chapterNumber)
+    if (!result.success) {
+      toast.error(`删除失败\n\n${result.error ?? '未知错误'}`)
+      return
+    }
+    const nextList = blueprints.filter((_, i) => i !== selectedIdx)
+    setBlueprints(nextList)
+    setSelectedIdx(Math.max(0, Math.min(selectedIdx, nextList.length - 1)))
+    setDirty(false)
+    globalEventBus.emit('REFRESH_RESOURCE', { resources: ['blueprints', 'fileTree'] })
+    toast.success(`已删除第 ${selected.chapterNumber} 章蓝图`)
+  }
+
+  /** 清空全部章节蓝图 */
+  const handleClearAllBlueprints = async () => {
+    if (blueprints.length === 0) return
+    const ok = await confirm(`确认清空全部 ${blueprints.length} 章蓝图？\n此操作不可撤销，但不会删除草稿或正文章节。`, {
+      title: '清空全部蓝图',
+      confirmText: '清空全部',
+      danger: true,
+    })
+    if (!ok) return
+
+    const result = await ipc.invoke('db:blueprint-clear-all')
+    if (!result.success) {
+      toast.error(`清空失败\n\n${result.error ?? '未知错误'}`)
+      return
+    }
+    setBlueprints([])
+    setSelectedIdx(0)
+    setDirty(false)
+    globalEventBus.emit('REFRESH_RESOURCE', { resources: ['blueprints', 'fileTree'] })
+    toast.success('已清空全部蓝图')
   }
 
   /** 触发蓝图批量生成（来自 DirectoryConfigDialog 的确认回调） */
@@ -260,6 +312,16 @@ export default function ChapterCardEditor() {
           <Button variant="ghost" size="icon" onClick={handleAddChapter} title="新建章节">
             <Plus size={14} />
           </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleClearAllBlueprints}
+            disabled={saving || blueprints.length === 0}
+            title="清空全部章节蓝图"
+          >
+            <Trash2 size={12} />
+            清空全部蓝图
+          </Button>
           {dirty && (
             <Button variant="outline" size="sm" onClick={handleSaveAll} disabled={saving}>
               <Save size={12} /> {saving ? '保存中...' : '保存全部'}
@@ -360,8 +422,9 @@ export default function ChapterCardEditor() {
                       <PenLine size={12} /> 写作此章
                     </Button>
                   )}
-                  <Button variant="ghost" size="icon" onClick={handleDeleteChapter} title="删除此章">
-                    <Trash2 size={13} style={{ color: 'var(--color-text-muted)' }} />
+                  <Button variant="destructive" size="sm" onClick={handleDeleteChapter} title="删除此章">
+                    <Trash2 size={12} />
+                    删除此章
                   </Button>
                   <Button variant="outline" size="sm" onClick={handleSaveOne} disabled={saving}>
                     <Save size={12} /> {saving ? '保存中...' : '保存'}

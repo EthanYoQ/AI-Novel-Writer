@@ -19,10 +19,9 @@ import { cn } from '../../lib/utils'
 import { ipc } from '../../services/ipc-client'
 import { Switch } from '../ui/Switch'
 import { APP_BRAND } from '../../shared/brand'
+import { useLayoutStore, type SettingsSection } from '../../stores/layout-store'
 
 // ==================== 分类定义 ====================
-
-type SettingsSection = 'llm' | 'embedding' | 'proxy' | 'editor' | 'prompts' | 'about'
 
 interface SectionItem {
   id: SettingsSection
@@ -49,7 +48,14 @@ interface SettingsModalProps {
 
 /** 全屏设置弹窗 */
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
-  const [section, setSection] = useState<SettingsSection>('llm')
+  const requestedSection = useLayoutStore(s => s.settingsSection)
+  const [section, setSection] = useState<SettingsSection>(requestedSection)
+
+  useEffect(() => {
+    if (open) {
+      setSection(requestedSection)
+    }
+  }, [open, requestedSection])
 
   if (!open) return null
 

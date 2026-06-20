@@ -8,6 +8,35 @@ import {
 } from '../../../shared/project-paths'
 import type { ChapterInfo } from '../chapter-workflow'
 
+const CONTINUE_PROMPT_MAX_CHARS = 1600
+const MIN_TARGET_COMPLETION_RATIO = 0.82
+const MAX_AUTO_CONTINUE_ROUNDS = 7
+
+export function countChineseDraftChars(text: string): number {
+  return text.replace(/\s+/g, '').length
+}
+
+export function sanitizeDraftText(text: string): string {
+  const cleaned = text
+    .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
+    .replace(/^\s*[\s\S]{0,300}<\/think>\s*/i, '')
+    .replace(/<\/?think>/gi, '')
+    .replace(/^\s*(?:点我继续生成后续内容|继续生成后续内容|请点击继续|未完待续)\s*$/gmi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  const paragraphs = cleaned.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
+  const seen = new Set<string>()
+  const deduped: string[] = []
+  for (const paragraph of paragraphs) {
+    const key = paragraph.replace(/\s+/g, '')
+    if (key.length >= 40 && seen.has(key)) continue
+    if (key.length >= 40) seen.add(key)
+    deduped.push(paragraph)
+  }
+  return deduped.join('\n\n').trim()
+}
+
 export class GenerateDraftCommand extends BaseWorkflowCommand {
 
   constructor(private chapterInfo: ChapterInfo) {
@@ -108,8 +137,23 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
     callbacks.log('调用 AI 生成章节草稿...')
 
-    const draftText = await this.callLLMWithBuilder(promptBuilder, callbacks)
-    const cleanDraftText = this.stripThinkingTags(draftText)
+    const targetChars = Math.max(0, Number(project.novelConfig.wordsPerChapter) || 0)
+    const draftText = await this.callLLMWithBuilder(promptBuilder, callbacks, {
+      maxTokens: this.getDraftMaxTokens(targetChars),
+      temperature: 0.88,
+      thinking: false,
+    })
+    const cleanDraftText = await this.extendDraftIfNeeded({
+      initialDraft: sanitizeDraftText(this.stripThinkingTags(draftText)),
+      targetChars,
+      callbacks,
+      context,
+      systemRole: promptBuilder.getSystemRole(),
+      chapterInfo: this.chapterInfo,
+      futureBlueprints: futureBlueprintsStr,
+      globalGuidance: mergedGuidance,
+      writingStyle: project.novelConfig.writingStyle || '',
+    })
 
     // 落于数据库
     const nextVersion: number = await ipc.invoke('db:draft-next-version', this.chapterInfo.chapterNumber)
@@ -148,8 +192,84 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       })
     } catch { /* 忽略 */ }
 
-    callbacks.log(`✅ 草稿已自动入库保存为版本 v${nextVersion}（${draftText.length} 字）`)
-    return draftText
+    callbacks.log(`✅ 草稿已自动入库保存为版本 v${nextVersion}（${cleanDraftText.length} 字）`)
+    return cleanDraftText
+  }
+
+  private getDraftMaxTokens(targetChars: number): number {
+    if (targetChars >= 5000) return 2600
+    return 2600
+  }
+
+  private shouldAutoContinue(currentText: string, targetChars: number, rounds: number): boolean {
+    if (targetChars < 4500) return false
+    if (rounds >= MAX_AUTO_CONTINUE_ROUNDS) return false
+    return countChineseDraftChars(currentText) < Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
+  }
+
+  private async extendDraftIfNeeded(params: {
+    initialDraft: string
+    targetChars: number
+    callbacks: CommandExecuteParams['callbacks']
+    context: CommandExecuteParams['context']
+    systemRole: string
+    chapterInfo: ChapterInfo
+    futureBlueprints: string
+    globalGuidance: string
+    writingStyle: string
+  }): Promise<string> {
+    let draft = params.initialDraft
+    let rounds = 0
+
+    while (this.shouldAutoContinue(draft, params.targetChars, rounds)) {
+      if (params.context.cancelled) break
+      rounds += 1
+      const currentChars = countChineseDraftChars(draft)
+      params.callbacks.log(`  自动续写第 ${rounds} 段：当前约 ${currentChars}/${params.targetChars} 字`)
+
+      const remaining = Math.max(1200, params.targetChars - currentChars)
+      const continuationPrompt = `请无缝续写当前章节正文。
+
+【硬性要求】
+- 只输出新增正文，不要复述已写内容。
+- 从“已写正文末尾”自然接下去，保持同一场景逻辑或合理转场。
+- 本次续写约 ${Math.min(2600, remaining)} 字；如果无法达到，停在自然段落末尾。
+- 不要输出标题、解释、总结、Markdown、思考过程或“点我继续”。
+- 避免重复已写正文中的整句、整段、动作链和意象。
+- 不提前写后续章节，只完成本章蓝图允许的内容。
+
+【本章蓝图】
+${JSON.stringify(params.chapterInfo, null, 2)}
+
+【后续章节大纲预告】
+${params.futureBlueprints}
+
+【全局写作要求】
+${params.globalGuidance}
+
+【文风要求】
+${params.writingStyle || '（无）'}
+
+【已写正文末尾】
+${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
+
+      const addition = await this.callLLM(
+        continuationPrompt,
+        params.systemRole,
+        params.callbacks,
+        { maxTokens: this.getDraftMaxTokens(params.targetChars), temperature: 0.88, thinking: false },
+        params.context
+      )
+      const beforeChars = countChineseDraftChars(draft)
+      draft = sanitizeDraftText(`${draft}\n\n${sanitizeDraftText(this.stripThinkingTags(addition))}`)
+      const afterChars = countChineseDraftChars(draft)
+      if (afterChars - beforeChars < 300) {
+        params.callbacks.log('  自动续写增量过短，停止继续请求')
+        break
+      }
+    }
+
+    return draft
   }
 
   // --- 抽取自原文件的辅助方法 ---

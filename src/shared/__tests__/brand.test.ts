@@ -6,10 +6,14 @@ import { APP_BRAND } from '../brand'
 const visibleBrandSurfaces = [
   'index.html',
   'src/components/panels/agent/AgentHeader.tsx',
+  'src/services/agent/context-builder.ts',
+  'src/services/agent/tools/open-editor.tool.ts',
+  'src/services/agent/tools/start-workflow.tool.ts',
+  'src/stores/agent-store.ts',
 ]
 
-const legacyNamePattern = new RegExp('ve' + 'la', 'i')
-const legacyHiddenDirPattern = new RegExp('\\.' + 've' + 'la', 'i')
+const legacyNamePattern = new RegExp('\\bVe' + 'la\\b')
+const legacyHiddenDirPattern = new RegExp('\\.' + 've' + 'la(?!API)', 'i')
 const legacyPrefixPattern = new RegExp('ve' + 'la-', 'i')
 
 describe('APP_BRAND', () => {

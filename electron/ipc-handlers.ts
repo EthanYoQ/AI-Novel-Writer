@@ -7,6 +7,7 @@ import { registerLLMController } from './controllers/llm-controller'
 import { registerDatabaseController } from './controllers/db-controller'
 import { registerKBController } from './controllers/kb-controller'
 import { registerImportController } from './controllers/import-controller'
+import { registerWindowController } from './controllers/window-controller'
 
 /**
  * 注册所有 IPC 通道 — 在主进程启动时调用
@@ -17,6 +18,7 @@ export function registerIPCHandlers() {
   ensureVelaHome()
 
   // 挂载控制器路由
+  registerWindowController()
   registerConfigController()
   registerProjectController()
   registerFSController()

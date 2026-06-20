@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useLayoutStore, type SidebarView, type BottomTab } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
+import { openBuiltinEditor } from '../panels/sidebar/SidebarShared'
 
 /** 左侧侧边栏视图按钮配置（不含 Home，它单独渲染） */
 const sidebarActivities: Array<{ id: SidebarView; icon: typeof FolderOpen; label: string }> = [
@@ -75,19 +76,15 @@ function LeftNavButton({
  * JetBrains 风格：带文字标签的左侧主导航，全高
  */
 export default function LeftToolWindowBar() {
-  const sidebarView = useLayoutStore(s => s.sidebarView)
-  const sidebarOpen = useLayoutStore(s => s.sidebarOpen)
+  const activeRailItem = useLayoutStore(s => s.activeRailItem)
   const setSidebarView = useLayoutStore(s => s.setSidebarView)
-  const bottomTab = useLayoutStore(s => s.bottomTab)
-  const bottomPanelOpen = useLayoutStore(s => s.bottomPanelOpen)
   const setBottomTab = useLayoutStore(s => s.setBottomTab)
-  const openRightPanel = useLayoutStore(s => s.openRightPanel)
   const openSettings = useLayoutStore(s => s.openSettings)
   const currentRun = useWorkflowStore(s => s.currentRun)
 
   /** Home 按钮是否激活 */
-  const homeActive = sidebarOpen && sidebarView === 'home'
-  const aiActive = useLayoutStore(s => s.aiPanelOpen && s.rightView === 'agent')
+  const homeActive = activeRailItem === 'home'
+  const aiActive = activeRailItem === 'ai'
 
   return (
     <div
@@ -114,7 +111,7 @@ export default function LeftToolWindowBar() {
 
         {/* 侧边栏视图按钮 */}
         {sidebarActivities.map(({ id, icon: Icon, label }) => {
-          const isActive = sidebarOpen && sidebarView === id
+          const isActive = activeRailItem === id
           return (
             <LeftNavButton
               key={id}
@@ -132,23 +129,26 @@ export default function LeftToolWindowBar() {
         <LeftNavButton
           icon={ListTree}
           label="蓝图"
-          active={sidebarOpen && sidebarView === 'project'}
+          active={activeRailItem === 'blueprint'}
           title="章节蓝图"
-          onClick={() => setSidebarView('project')}
+          onClick={() => {
+            setSidebarView('project', 'blueprint')
+            openBuiltinEditor('chapter-card-editor', '章节蓝图', 'chapter-card')
+          }}
         />
         <LeftNavButton
           icon={Globe2}
           label="世界"
-          active={sidebarOpen && sidebarView === 'knowledge'}
+          active={activeRailItem === 'world'}
           title="世界观"
-          onClick={() => setSidebarView('knowledge')}
+          onClick={() => setSidebarView('knowledge', 'world')}
         />
         <LeftNavButton
           icon={Bot}
           label="AI"
           active={aiActive}
-          title="AI 写作助手"
-          onClick={() => openRightPanel('agent')}
+          title="配置模型 API"
+          onClick={() => openSettings('llm', 'ai')}
         />
       </div>
 
@@ -160,7 +160,7 @@ export default function LeftToolWindowBar() {
         <div className="writer-nav-divider w-8 mb-1" style={{ height: 1 }} />
 
         {bottomTabs.map(({ id, icon: Icon, label }) => {
-          const isActive = bottomPanelOpen && bottomTab === id
+          const isActive = activeRailItem === id
           const showPulse = id === 'tasks' && currentRun &&
             (currentRun.status === 'running' || currentRun.status === 'waiting')
 
@@ -182,6 +182,7 @@ export default function LeftToolWindowBar() {
         <LeftNavButton
           icon={Settings}
           label="设置"
+          active={activeRailItem === 'settings'}
           onClick={openSettings}
         />
       </div>

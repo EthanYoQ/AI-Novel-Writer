@@ -2,11 +2,25 @@ import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from 
 import { ModelProfile } from '../../src/shared/ipc-channels'
 
 export class OpenAIProvider implements ILLMProvider {
+  private stripThinking(content: string): string {
+    return content
+      .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
+      .replace(/^[\s\S]*?<\/think>\s*/i, '')
+      .replace(/<\/?think>/gi, '')
+      .trim()
+  }
+
   private buildUrl(baseUrl: string): string {
     const base = baseUrl.replace(/\/$/, '')
+    if (base.endsWith('/v1/chat/completions')) {
+      return base
+    }
     // 如果 baseUrl 已经带了完整 /v1/chat 路径，直接用
     if (base.endsWith('/v1/chat')) {
       return `${base}/completions`
+    }
+    if (base.endsWith('/v1')) {
+      return `${base}/chat/completions`
     }
     // 否则补全完整路径
     return `${base}/v1/chat/completions`
@@ -51,8 +65,7 @@ export class OpenAIProvider implements ILLMProvider {
       usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
     }
 
-    let finalContent = data.choices?.[0]?.message?.content ?? ''
-    finalContent = finalContent.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '').trim()
+    const finalContent = this.stripThinking(data.choices?.[0]?.message?.content ?? '')
 
     return {
       success: true,
@@ -166,7 +179,7 @@ export class OpenAIProvider implements ILLMProvider {
         opts.onChunk(closeTag)
       }
 
-      opts.onDone(fullText.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '').trim())
+      opts.onDone(this.stripThinking(fullText))
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
         opts.onError('已取消生成')
