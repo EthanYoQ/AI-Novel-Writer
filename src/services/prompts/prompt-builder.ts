@@ -1,5 +1,5 @@
 import type { PromptTemplate } from '../prompt-templates'
-import { BUILTIN_PROMPTS } from '../prompt-templates'
+import { BUILTIN_PROMPTS, pruneEmptyOptionalPromptSections } from '../prompt-templates'
 
 /**
  * 基础抽象 Prompt 建造者
@@ -38,11 +38,8 @@ export class BasePromptBuilder {
       result = result + '\n\n' + renderedSuffix
     }
 
-    // 空变量段落裁剪：清除可选变量为空时残留的空标签段落
-    result = result
-      .replace(/\n★【[^】]*】★[：:]\s*\n?\s*$/gm, '')
-      .replace(/\n【[^】]*（如有[^）]*）[^】]*】\s*\n?\s*$/gm, '')
-      .replace(/\n{3,}/g, '\n\n')
+    // 空变量段落裁剪：与 renderPrompt 保持同一套规则。
+    result = pruneEmptyOptionalPromptSections(result)
 
     // 防御性校验：检查是否有未处理的模板占位符
     const missing = result.match(/\{\{.*?\}\}/g)
