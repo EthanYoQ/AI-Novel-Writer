@@ -19,7 +19,7 @@ export default function BottomPanel() {
   const bottomPanelOpen = useLayoutStore(s => s.bottomPanelOpen)
   const bottomTab = useLayoutStore(s => s.bottomTab)
   const toggleBottomPanel = useLayoutStore(s => s.toggleBottomPanel)
-  // ✅ 只订阅 activeRuns，不订阅 globalLogs 等高频字段
+  // 只订阅 activeRuns，不订阅 globalLogs 等高频字段
   const activeRuns = useWorkflowStore(s => s.activeRuns)
 
   // A) 懒卸载：面板关闭时保持挂载，仅视觉隐藏，避免切换时的短暂状态错乱
@@ -101,7 +101,7 @@ export default function BottomPanel() {
 }
 
 
-// ===== ⚡ 任务视图（工作流进度主视图）— 支持多任务 =====
+// ===== 任务视图（工作流进度主视图）— 支持多任务 =====
 
 function TaskRunView() {
   const activeRuns = useWorkflowStore(s => s.activeRuns)
