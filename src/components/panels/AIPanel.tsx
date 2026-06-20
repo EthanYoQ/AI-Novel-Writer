@@ -18,13 +18,7 @@ export default function AIPanel() {
   }, [init, loaded])
 
   return (
-    <div
-      className="w-full h-full flex flex-col overflow-hidden"
-      style={{
-        backgroundColor: 'var(--color-sidebar)',
-        borderLeft: '1px solid var(--color-border)',
-      }}
-    >
+    <div className="writer-ai-panel w-full h-full flex flex-col overflow-hidden">
       {/* 顶部工具栏 */}
       <AgentHeader />
 

@@ -18,14 +18,11 @@ export default function StatusBar() {
 
   return (
     <div
-      className="no-select flex items-center justify-between"
+      className="writer-statusbar no-select flex items-center justify-between"
       style={{
-        height: 'var(--height-statusbar)',  /* 22px */
-        backgroundColor: 'var(--color-statusbar)',
-        color: 'var(--color-statusbar-text)',
+        height: 'var(--height-statusbar)',
         fontSize: "0.75rem",
         flexShrink: 0,
-        borderTop: '1px solid var(--color-border)',
       }}
     >
       {/* 左侧 */}
@@ -211,13 +208,13 @@ function StatusBarSegment({
 }) {
   return (
     <div
-      className="flex items-center gap-1 px-2 h-full cursor-default transition-colors"
+      className="writer-statusbar-segment flex items-center gap-1 px-2 h-full cursor-default transition-colors"
       title={title}
       onClick={onClick}
       style={{ cursor: onClick ? 'pointer' : 'default' }}
       onMouseEnter={e => {
         if (onClick) {
-          e.currentTarget.style.backgroundColor = 'rgba(var(--color-accent-rgb), 0.08)'
+          e.currentTarget.style.backgroundColor = 'rgba(255, 244, 223, 0.08)'
         }
       }}
       onMouseLeave={e => {

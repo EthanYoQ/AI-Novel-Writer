@@ -50,12 +50,14 @@ function LeftNavButton({
         title={title ?? label}
         className="left-nav-button"
         style={{
-          color: active ? 'var(--color-activity-icon-active)' : 'var(--color-activity-icon)',
-          backgroundColor: active ? 'var(--color-active)' : 'transparent',
-          boxShadow: active ? 'inset 2px 0 0 var(--color-activity-indicator)' : 'none',
+          color: active ? '#fff8e8' : 'rgba(255, 247, 228, 0.78)',
+          background: active
+            ? 'linear-gradient(180deg, rgba(138, 91, 46, 0.88), rgba(82, 50, 23, 0.88))'
+            : 'transparent',
+          boxShadow: active ? 'inset 3px 0 0 var(--writer-brass-400)' : 'none',
         }}
       >
-        <Icon size={16} strokeWidth={active ? 2 : 1.75} />
+        <Icon size={22} strokeWidth={active ? 2 : 1.75} />
         <span className="left-nav-label">{label}</span>
       </button>
       {pulse && (
@@ -89,11 +91,9 @@ export default function LeftToolWindowBar() {
 
   return (
     <div
-      className="no-select flex flex-col h-full"
+      className="writer-left-rail no-select flex flex-col h-full"
       style={{
-        width: 'var(--width-left-bar)',  /* 36px */
-        backgroundColor: 'var(--color-activity-bar)',
-        borderRight: '1px solid var(--color-border)',
+        width: 'var(--width-left-bar)',
         flexShrink: 0,
       }}
     >
@@ -110,7 +110,7 @@ export default function LeftToolWindowBar() {
         />
 
         {/* 分割线 */}
-        <div className="w-4 my-0.5" style={{ height: 1, backgroundColor: 'var(--color-border)' }} />
+        <div className="writer-nav-divider w-8 my-1" style={{ height: 1 }} />
 
         {/* 侧边栏视图按钮 */}
         {sidebarActivities.map(({ id, icon: Icon, label }) => {
@@ -127,7 +127,7 @@ export default function LeftToolWindowBar() {
           )
         })}
 
-        <div className="w-4 my-0.5" style={{ height: 1, backgroundColor: 'var(--color-border)' }} />
+        <div className="writer-nav-divider w-8 my-1" style={{ height: 1 }} />
 
         <LeftNavButton
           icon={ListTree}
@@ -157,7 +157,7 @@ export default function LeftToolWindowBar() {
 
       {/* ===== 底部：底部面板 Tab 控制 ===== */}
       <div className="flex flex-col items-center w-full pb-1">
-        <div className="w-4 mb-0.5" style={{ height: 1, backgroundColor: 'var(--color-border)' }} />
+        <div className="writer-nav-divider w-8 mb-1" style={{ height: 1 }} />
 
         {bottomTabs.map(({ id, icon: Icon, label }) => {
           const isActive = bottomPanelOpen && bottomTab === id
@@ -177,7 +177,7 @@ export default function LeftToolWindowBar() {
           )
         })}
 
-        <div className="w-4 my-0.5" style={{ height: 1, backgroundColor: 'var(--color-border)' }} />
+        <div className="writer-nav-divider w-8 my-1" style={{ height: 1 }} />
 
         <LeftNavButton
           icon={Settings}
