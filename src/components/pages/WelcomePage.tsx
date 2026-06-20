@@ -1,5 +1,6 @@
 import { Sparkles, FolderOpen, Clock, BookOpen, FileUp } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
+import { APP_BRAND } from '../../shared/brand'
 
 interface WelcomePageProps {
   onNewProject: () => void
@@ -30,10 +31,10 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
             <BookOpen size={36} color="#fff" style={{ position: 'relative', zIndex: 1 }} />
           </div>
           <h1 className="text-2xl font-bold mb-2" style={{ color: 'var(--color-text)' }}>
-            {currentProject ? currentProject.name : '欢迎使用 Vela'}
+            {currentProject ? currentProject.name : `欢迎使用 ${APP_BRAND.zhName}`}
           </h1>
           <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-            {currentProject ? currentProject.path : 'AI 深度驱动的小说创作 IDE'}
+            {currentProject ? currentProject.path : APP_BRAND.tagline}
           </p>
         </div>
 
@@ -94,7 +95,7 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
               打开项目
             </span>
             <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              打开已有 Vela 项目
+              打开已有小说项目
             </span>
           </button>
 
@@ -171,7 +172,7 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
 
         <div className="text-center mt-12">
           <p className="text-xs" style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}>
-            Vela v0.1.0 · 七阶段 AI 驱动创作流水线 · 本地化数据安全
+            {APP_BRAND.zhName} v0.1.0 · 七阶段 AI 驱动创作流水线 · 本地化数据安全
           </p>
         </div>
       </div>

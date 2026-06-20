@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { useAgentStore } from '../../../stores/agent-store'
 import { useLayoutStore } from '../../../stores/layout-store'
+import { APP_BRAND } from '../../../shared/brand'
 import AgentMessage from './AgentMessage'
 import AgentInputBox from './AgentInputBox'
 import { formatRelativeTime } from '../../../utils/time'
@@ -48,7 +49,7 @@ function EmptyState() {
       >
         {/* 标题 */}
         <div className="mb-1 pl-1 text-base font-semibold" style={{ color: 'var(--color-text)' }}>
-          Vela
+          {APP_BRAND.zhName}
         </div>
         {/* 副标题 */}
         <div className="mb-3 pl-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
@@ -340,5 +341,4 @@ function RecentConversationItem({
     </button>
   )
 }
-
 
