@@ -28,9 +28,9 @@ export default function ProjectTree() {
   const currentProject = useProjectStore(s => s.currentProject)
 
   // refreshFileTree / loadAllDrafts 在 refreshAll 内通过 getState() 调用
-  // ✅ 只订阅 activeRuns
+  // 只订阅 activeRuns
   const activeRuns = useWorkflowStore(s => s.activeRuns)
-  // ✅ 精确订阅，避免 loadAllDrafts 执行后引用变化触发 useCallback/useEffect 循环
+  // 精确订阅，避免 loadAllDrafts 执行后引用变化触发 useCallback/useEffect 循环
   const draftsByChapter = useDraftStore(s => s.draftsByChapter)
 
   // 存储各架构文件是否有实际内容（已生成）
@@ -39,7 +39,7 @@ export default function ProjectTree() {
   const [blueprintCount, setBlueprintCount] = useState<number>(-1)
 
   /** 统一刷新：文件树 + 架构状态 + 草稿列表 + 蓝图数量 */
-  // ✅ 用 getState() 获取最新的 action，不作为依赖项，避免重建导致 useEffect 循环
+  // 用 getState() 获取最新的 action，不作为依赖项，避免重建导致 useEffect 循环
   const refreshAll = useCallback(async () => {
 
     useProjectStore.getState().refreshFileTree()
@@ -52,7 +52,7 @@ export default function ProjectTree() {
     ])
     setArchStatus(status)
     setBlueprintCount(count)
-  }, [])  // ✅ 空依赖：内部用 getState() 获取最新 action，不依赖闭包
+  }, [])  // 空依赖：内部用 getState() 获取最新 action，不依赖闭包
 
   // 项目切换时刷新
   useEffect(() => {
@@ -72,7 +72,7 @@ export default function ProjectTree() {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-    // ✅ 依赖 path 字符串而非 currentProject 对象引用
+    // 依赖 path 字符串而非 currentProject 对象引用
     //    避免 updateNovelConfig 改变对象引用后触发不必要的 refreshAll
   }, [workflowKey, currentProject?.path, refreshAll]) // eslint-disable-line react-hooks/exhaustive-deps -- currentProject 对象引用变化不触发，仅 path 变化需响应
 
