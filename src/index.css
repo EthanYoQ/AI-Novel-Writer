@@ -410,6 +410,31 @@
     --shadow-tooltip: 0 4px 12px rgba(46, 38, 29, 0.18);
   }
 
+  /* Writer console visual system — approved AI小说作家 mock */
+  :root,
+  .paper,
+  .light,
+  .dark,
+  .galaxy {
+    --writer-walnut-950: #1b0f06;
+    --writer-walnut-900: #251406;
+    --writer-walnut-850: #2b1708;
+    --writer-walnut-800: #34200f;
+    --writer-walnut-700: #4d3219;
+    --writer-brass-600: #8a5b2e;
+    --writer-brass-500: #a36c35;
+    --writer-brass-400: #c09356;
+    --writer-paper-100: #fff8eb;
+    --writer-paper-150: #fbf1e1;
+    --writer-paper-200: #f4ead8;
+    --writer-paper-250: #eddfc8;
+    --writer-paper-300: #dcc6a8;
+    --writer-ink: #2c2319;
+    --writer-ink-muted: #7a6750;
+    --writer-green: #55a85a;
+    --writer-orange: #f28c2e;
+  }
+
   /* 黑夜主题 — VS Code / IDEA 深灰极客风（真正的暗黑模式） */
   .dark {
     --color-bg: #1E1E1E;
@@ -604,6 +629,193 @@
     background: transparent;
     user-select: none;
     flex-shrink: 0;
+  }
+
+  .writer-topbar {
+    background: linear-gradient(180deg, var(--writer-walnut-850) 0%, var(--writer-walnut-950) 100%);
+    color: #fff8e8;
+    border-bottom: 1px solid rgba(107, 74, 38, 0.72);
+    box-shadow: inset 0 -1px 0 rgba(255, 244, 223, 0.05);
+  }
+
+  .writer-command-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 6px;
+    color: #fff4df;
+    border: 1px solid transparent;
+    background: transparent;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    transition: background var(--transition-fast),
+                border-color var(--transition-fast),
+                color var(--transition-fast),
+                box-shadow var(--transition-fast);
+  }
+
+  .writer-command-button:hover:not(:disabled) {
+    background: rgba(255, 244, 223, 0.08);
+    border-color: rgba(255, 244, 223, 0.18);
+  }
+
+  .writer-command-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .writer-primary-button {
+    background: linear-gradient(180deg, var(--writer-brass-600) 0%, #65401f 100%);
+    color: #fff8e8;
+    border: 1px solid rgba(67, 40, 17, 0.55);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      0 1px 2px rgba(54, 31, 12, 0.24);
+  }
+
+  .writer-project-tree {
+    background: var(--writer-paper-200);
+    border-right: 1px solid var(--writer-paper-300);
+    color: var(--writer-ink);
+  }
+
+  .writer-ai-panel {
+    background: var(--writer-paper-200);
+    border-left: 1px solid var(--writer-paper-300);
+    color: var(--writer-ink);
+  }
+
+  .writer-task-table {
+    background: var(--writer-paper-150);
+    border-top: 1px solid #d2ba98;
+    color: var(--writer-ink);
+  }
+
+  .writer-shell-surface {
+    background:
+      radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.34), transparent 28%),
+      linear-gradient(180deg, var(--writer-paper-100) 0%, var(--writer-paper-150) 100%);
+    color: var(--writer-ink);
+  }
+
+  .writer-panel-card {
+    background: rgba(255, 248, 235, 0.78);
+    border: 1px solid #d6c09f;
+    border-radius: 8px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58), 0 1px 2px rgba(82, 52, 22, 0.08);
+  }
+
+  .writer-topbar .brand-gradient {
+    background: linear-gradient(135deg, #f9e7bd, #c89445);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .writer-topbar .writer-command-button svg,
+  .writer-topbar .icon-btn svg,
+  .writer-statusbar svg {
+    color: currentColor;
+  }
+
+  .writer-statusbar {
+    background: linear-gradient(180deg, var(--writer-walnut-900), var(--writer-walnut-950));
+    color: #efe0c4;
+    border-top: 1px solid rgba(107, 74, 38, 0.72);
+  }
+
+  .writer-statusbar-segment:hover {
+    background: rgba(255, 244, 223, 0.08);
+  }
+
+  .writer-left-rail {
+    background:
+      radial-gradient(circle at 48% 0%, rgba(195, 148, 79, 0.14), transparent 26%),
+      linear-gradient(180deg, var(--writer-walnut-850), var(--writer-walnut-950));
+    border-right: 1px solid rgba(132, 93, 46, 0.72);
+    color: #f4e6ce;
+  }
+
+  .writer-left-rail .left-nav-button {
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    min-height: 66px;
+    padding: 8px 5px;
+    border-radius: 0;
+    color: rgba(255, 247, 228, 0.78);
+  }
+
+  .writer-left-rail .left-nav-button:hover {
+    background: rgba(255, 244, 223, 0.08);
+    color: #fff8e8;
+  }
+
+  .writer-left-rail .left-nav-label {
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .writer-left-rail .writer-nav-divider {
+    background: rgba(255, 244, 223, 0.16);
+  }
+
+  .writer-project-tree .tree-item {
+    height: 28px;
+    margin: 1px 8px;
+    color: var(--writer-ink);
+    border-radius: 6px;
+  }
+
+  .writer-project-tree .tree-item:hover {
+    background: rgba(142, 92, 42, 0.10);
+    transform: none;
+  }
+
+  .writer-project-tree .tree-item.active {
+    background: #ead8bd;
+    box-shadow: inset 3px 0 0 var(--writer-brass-600);
+  }
+
+  .writer-ai-panel .agent-textarea,
+  .writer-ai-panel textarea,
+  .writer-ai-panel input,
+  .writer-shell-surface input,
+  .writer-shell-surface textarea,
+  .writer-shell-surface select {
+    background: rgba(255, 252, 245, 0.78);
+    border-color: #cdb696;
+    color: var(--writer-ink);
+  }
+
+  .writer-ai-panel .icon-btn,
+  .writer-task-table .icon-btn {
+    color: var(--writer-ink-muted);
+  }
+
+  .writer-ai-panel .icon-btn:hover,
+  .writer-task-table .icon-btn:hover {
+    background: rgba(142, 92, 42, 0.10);
+    color: var(--writer-ink);
+    transform: none;
+  }
+
+  .writer-task-table table th {
+    background: rgba(224, 203, 172, 0.34);
+    color: var(--writer-ink-muted);
+  }
+
+  .writer-task-table table tr {
+    border-color: rgba(201, 178, 143, 0.72) !important;
+  }
+
+  .writer-task-table table tr:hover {
+    background: rgba(142, 92, 42, 0.08);
   }
 
   /* ===== 树节点 — 舒适的 26px 行高，带增强悬停效果 ===== */
