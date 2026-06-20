@@ -27,7 +27,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 640,
-    title: 'Vela — AI 小说创作 IDE',
+    title: 'AI小说作家 — AI Novel Writer',
     icon: path.join(process.env.APP_ROOT!, 'build', 'icon.png'),
     // macOS 使用自定义标题栏
     titleBarStyle: 'hiddenInset',
