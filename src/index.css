@@ -345,70 +345,69 @@
     --shadow-tooltip: 0 4px 12px rgba(5, 10, 20, 0.5);
   }
 
-  /* 📜 纸质感主题 — 写作沉浸（温暖牛皮纸色调 + Logo 紫色强调） */
+  /* 纸质感主题 — 写作沉浸（暖纸感写作工作台 + 核桃棕强调） */
   .paper {
-    --color-bg: #F5F0E8;
-    --color-sidebar: #EDE8E0;
-    --color-panel: #EDE8E0;
-    --color-titlebar: #F5F0E8;
-    --color-activity-bar: #E4DDD4;
-    --color-hover: #E8E3DB;
-    --color-active: #DCD5CB;
+    --color-bg: #F8F1E7;
+    --color-sidebar: #EEE2D0;
+    --color-panel: #F5EBDD;
+    --color-titlebar: #E8D8C1;
+    --color-activity-bar: #DDC8AA;
+    --color-hover: #EFE1CD;
+    --color-active: #E1C49A;
 
-    --color-text: #2C2520;
-    --color-text-secondary: #6B6058;
-    --color-text-muted: #A89888;
+    --color-text: #2E261D;
+    --color-text-secondary: #6F5F4A;
+    --color-text-muted: #9A866E;
 
-    --color-border: #DDD8D0;
+    --color-border: #D4BFA4;
 
-    /* 强调色 — Logo 薰衣草紫 #9B8EC8 */
-    --color-accent: #9B8EC8;
-    --color-accent-hover: #8B7EB8;
-    --color-accent-rgb: 155, 142, 200;
+    --color-accent: #7A5732;
+    --color-accent-hover: #684929;
+    --color-accent-rgb: 122, 87, 50;
 
-    --color-gold: #C9A76C;
+    --color-gold: #B68A4A;
 
-    --color-success: #4d9e72;
-    --color-warning: #c8923a;
-    --color-error: #c45b5b;
-    --color-info: #7B92C0;
+    --color-success: #5D8A67;
+    --color-warning: #C68A3A;
+    --color-error: #B94A48;
+    --color-info: #6E7F8F;
 
     --color-tab-bg: transparent;
-    --color-tab-active: #FAF5ED;
+    --color-tab-active: #FFF9EF;
     --color-tab-border: transparent;
-    --color-tab-indicator: #9B8EC8;
+    --color-tab-indicator: #7A5732;
 
-    --color-statusbar: #EDE8E0;
-    --color-statusbar-text: #A09488;
+    --color-statusbar: #E8D8C1;
+    --color-statusbar-text: #6F5F4A;
 
-    --color-titlebar-text: #4A4038;
+    --color-titlebar-text: #2E261D;
 
-    --color-activity-icon: #A09488;
-    --color-activity-icon-active: #2C2520;
-    --color-activity-indicator: #9B8EC8;
+    --color-activity-icon: #7B6A55;
+    --color-activity-icon-active: #2E261D;
+    --color-activity-indicator: #7A5732;
 
-    --color-editor-bg: #F8F3EB;
-    --color-editor-line-highlight: rgba(155, 142, 200, 0.04);
-    --color-editor-selection: rgba(155, 142, 200, 0.12);
+    --color-editor-bg: #FFF9EF;
+    --color-editor-line-highlight: rgba(122, 87, 50, 0.05);
+    --color-editor-selection: rgba(122, 87, 50, 0.16);
 
     --color-sash: transparent;
-    --color-sash-hover: rgba(155, 142, 200, 0.12);
+    --color-sash-hover: rgba(122, 87, 50, 0.16);
 
     /* 语义令牌 */
-    --color-focus-ring: rgba(155, 142, 200, 0.45);
-    --color-backdrop: rgba(44, 37, 32, 0.25);
-    --color-tooltip-bg: #2C2520;
-    --color-tooltip-text: #F5F0E8;
-    --color-skeleton: rgba(0, 0, 0, 0.05);
-    --color-badge-bg: rgba(155, 142, 200, 0.10);
-    --color-badge-text: #9B8EC8;
+    --color-focus-ring: rgba(122, 87, 50, 0.38);
+    --color-backdrop: rgba(46, 38, 29, 0.28);
+    --color-tooltip-bg: #2E261D;
+    --color-tooltip-text: #FFF9EF;
+    --color-skeleton: rgba(122, 87, 50, 0.08);
+    --color-badge-bg: rgba(122, 87, 50, 0.10);
+    --color-badge-text: #7A5732;
 
     /* 阴影 */
-    --shadow-sm: 0 1px 2px rgba(44, 37, 32, 0.06);
-    --shadow-md: 0 4px 12px rgba(44, 37, 32, 0.08);
-    --shadow-lg: 0 12px 32px rgba(44, 37, 32, 0.10);
-    --shadow-popover: 0 16px 40px -8px rgba(44, 37, 32, 0.14), 0 4px 16px -4px rgba(44, 37, 32, 0.08);
-    --shadow-tooltip: 0 4px 12px rgba(44, 37, 32, 0.18);
+    --shadow-sm: 0 1px 2px rgba(46, 38, 29, 0.06);
+    --shadow-md: 0 4px 12px rgba(46, 38, 29, 0.08);
+    --shadow-lg: 0 12px 32px rgba(46, 38, 29, 0.10);
+    --shadow-popover: 0 16px 40px -8px rgba(46, 38, 29, 0.16), 0 4px 16px -4px rgba(46, 38, 29, 0.10);
+    --shadow-tooltip: 0 4px 12px rgba(46, 38, 29, 0.18);
   }
 
   /* 🌃 黑夜主题 — VS Code / IDEA 深灰极客风（真正的暗黑模式） */
@@ -778,7 +777,7 @@
 
   /* ===== 品牌渐变文字 — 统一所有品牌标识使用（Logo 冰蓝→薰衣草紫） ===== */
   .brand-gradient {
-    background: linear-gradient(135deg, #7EC8E3, #9B8EC8);
+    background: linear-gradient(135deg, #7A5732, #B68A4A);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -817,7 +816,7 @@
   /* ===== AI 极光光效按钮 — 所有 AI 功能按钮统一使用（Logo 冰蓝→薰衣草紫） ===== */
   .ai-glow {
     position: relative;
-    background: linear-gradient(135deg, #7EC8E3, #9B8EC8);
+    background: linear-gradient(135deg, #7A5732, #B68A4A);
     color: #fff;
     border: none;
     transition: box-shadow var(--transition-normal),
