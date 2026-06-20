@@ -1,7 +1,7 @@
 // @see - https://www.electron.build/configuration/configuration
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.vela.ide",
+  "appId": "com.ai-novel-writer.app",
   "asar": true,
   "asarUnpack": [
     "node_modules/apache-arrow/**/*",
@@ -10,15 +10,14 @@
     "node_modules/@lancedb/lancedb-linux-*/**/*",
     "node_modules/@lancedb/lancedb-win32-*/**/*"
   ],
-  "productName": "Vela",
+  "productName": "AI Novel Writer",
   "directories": {
     "output": "release/${version}"
   },
   "files": [
     "dist",
     "dist-electron",
-    "build",
-    "public/buyme"
+    "build"
   ],
   "mac": {
     "target": ["dmg"],

@@ -1,8 +1,8 @@
 {
-  "name": "vela",
+  "name": "ai-novel-writer",
   "version": "0.1.0",
-  "description": "Vela - AI 深度驱动的小说创作 IDE",
-  "author": "heider",
+  "description": "AI小说作家 / AI Novel Writer - 本地优先的中文小说创作 IDE",
+  "author": "AI Novel Writer Maintainers",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.js",
