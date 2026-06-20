@@ -46,14 +46,6 @@ export default function StatusBar() {
           </>
         )}
 
-        <StatusBarDivider />
-        <StatusBarSegment
-          title="商业合作与赞助支持"
-          onClick={openSettings}
-        >
-          <span className="font-medium" style={{ color: '#ff4d4f' }}>❤️ 支持作者</span>
-        </StatusBarSegment>
-
       </div>
 
       {/* 右侧：AI 胶囊 + 模型名 */}
