@@ -16,16 +16,15 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
 
   return (
     <div
-      className="w-full h-full overflow-y-auto"
-      style={{ backgroundColor: 'var(--color-editor-bg)' }}
+      className="writer-shell-surface w-full h-full overflow-y-auto"
     >
       <div className="max-w-lg w-full mx-auto px-8 py-16">
         {/* Logo 区域 — 品牌极光光环 */}
         <div className="text-center mb-12">
           <div
-            className="ai-glow inline-flex items-center justify-center w-20 h-20 rounded-2xl mb-5"
+            className="writer-primary-button inline-flex items-center justify-center w-20 h-20 rounded-2xl mb-5"
             style={{
-              boxShadow: '0 8px 32px rgba(126, 200, 227, 0.25), 0 0 60px rgba(155, 142, 200, 0.12)',
+              boxShadow: '0 8px 28px rgba(82, 52, 22, 0.18)',
             }}
           >
             <BookOpen size={36} color="#fff" style={{ position: 'relative', zIndex: 1 }} />
@@ -42,22 +41,18 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
         <div className="grid grid-cols-3 gap-3 mb-10">
           <button
             onClick={onNewProject}
-            className="group flex flex-col items-center gap-2.5 p-5 rounded-xl transition-all hover:scale-[1.02]"
-            style={{
-              backgroundColor: 'var(--color-sidebar)',
-              border: '1px solid var(--color-border)',
-            }}
+            className="writer-panel-card group flex flex-col items-center gap-2.5 p-5 transition-all hover:scale-[1.02]"
             onMouseEnter={e => {
-              e.currentTarget.style.borderColor = 'rgba(126, 200, 227, 0.4)'
-              e.currentTarget.style.boxShadow = '0 4px 20px rgba(126, 200, 227, 0.10)'
+              e.currentTarget.style.borderColor = 'rgba(138, 91, 46, 0.42)'
+              e.currentTarget.style.boxShadow = '0 4px 20px rgba(82, 52, 22, 0.10)'
             }}
             onMouseLeave={e => {
-              e.currentTarget.style.borderColor = 'var(--color-border)'
+              e.currentTarget.style.borderColor = '#d6c09f'
               e.currentTarget.style.boxShadow = 'none'
             }}
           >
             <div
-              className="ai-glow flex items-center justify-center w-10 h-10 rounded-xl transition-transform group-hover:scale-105"
+              className="writer-primary-button flex items-center justify-center w-10 h-10 rounded-xl transition-transform group-hover:scale-105"
             >
               <Sparkles size={20} />
             </div>
@@ -71,17 +66,13 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
 
           <button
             onClick={onOpenProject}
-            className="group flex flex-col items-center gap-2.5 p-5 rounded-xl transition-all hover:scale-[1.02]"
-            style={{
-              backgroundColor: 'var(--color-sidebar)',
-              border: '1px solid var(--color-border)',
-            }}
+            className="writer-panel-card group flex flex-col items-center gap-2.5 p-5 transition-all hover:scale-[1.02]"
             onMouseEnter={e => {
               e.currentTarget.style.borderColor = 'rgba(201, 167, 108, 0.4)'
               e.currentTarget.style.boxShadow = '0 4px 20px rgba(201, 167, 108, 0.08)'
             }}
             onMouseLeave={e => {
-              e.currentTarget.style.borderColor = 'var(--color-border)'
+              e.currentTarget.style.borderColor = '#d6c09f'
               e.currentTarget.style.boxShadow = 'none'
             }}
           >
@@ -101,17 +92,13 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
 
           <button
             onClick={onImportNovel}
-            className="group flex flex-col items-center gap-2.5 p-5 rounded-xl transition-all hover:scale-[1.02]"
-            style={{
-              backgroundColor: 'var(--color-sidebar)',
-              border: '1px solid var(--color-border)',
-            }}
+            className="writer-panel-card group flex flex-col items-center gap-2.5 p-5 transition-all hover:scale-[1.02]"
             onMouseEnter={e => {
               e.currentTarget.style.borderColor = 'rgba(134, 193, 120, 0.4)'
               e.currentTarget.style.boxShadow = '0 4px 20px rgba(134, 193, 120, 0.10)'
             }}
             onMouseLeave={e => {
-              e.currentTarget.style.borderColor = 'var(--color-border)'
+              e.currentTarget.style.borderColor = '#d6c09f'
               e.currentTarget.style.boxShadow = 'none'
             }}
           >

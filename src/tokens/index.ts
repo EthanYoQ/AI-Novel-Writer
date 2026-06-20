@@ -8,6 +8,27 @@
  */
 
 export const tokens = {
+  writer: {
+    color: {
+      walnut950: '#1b0f06',
+      walnut900: '#251406',
+      walnut850: '#2b1708',
+      walnut800: '#34200f',
+      walnut700: '#4d3219',
+      brass600: '#8a5b2e',
+      brass500: '#a36c35',
+      brass400: '#c09356',
+      paper100: '#fff8eb',
+      paper150: '#fbf1e1',
+      paper200: '#f4ead8',
+      paper250: '#eddfc8',
+      paper300: '#dcc6a8',
+      ink: '#2c2319',
+      inkMuted: '#7a6750',
+      green: '#55a85a',
+      orange: '#f28c2e',
+    },
+  },
   light: {
     color: {
       bg: '#F7F9FC',
@@ -57,7 +78,7 @@ export const tokens = {
       statusbar: '28px',
       tab: '36px',
       panelHeader: '36px',
-      leftBar: '44px',
+      leftBar: '72px',
       rightBar: '44px',
       bottomBar: '32px',
     },
@@ -135,7 +156,7 @@ export const tokens = {
       statusbar: '28px',
       tab: '36px',
       panelHeader: '36px',
-      leftBar: '44px',
+      leftBar: '72px',
       rightBar: '44px',
       bottomBar: '32px',
     },
@@ -213,7 +234,7 @@ export const tokens = {
       statusbar: '28px',
       tab: '36px',
       panelHeader: '36px',
-      leftBar: '44px',
+      leftBar: '72px',
       rightBar: '44px',
       bottomBar: '32px',
     },
@@ -291,7 +312,7 @@ export const tokens = {
       statusbar: '28px',
       tab: '36px',
       panelHeader: '36px',
-      leftBar: '44px',
+      leftBar: '72px',
       rightBar: '44px',
       bottomBar: '32px',
     },
@@ -322,5 +343,5 @@ export const tokens = {
   },
 } as const
 
-export type ThemeName = keyof typeof tokens
+export type ThemeName = Exclude<keyof typeof tokens, 'writer'>
 export type TokenCategory = keyof (typeof tokens)['light']

@@ -78,41 +78,43 @@ export default function ProjectTree() {
 
   if (!currentProject) {
     return (
-      <EmptyState
-        icon={<span className="text-4xl opacity-60" style={{ color: 'var(--color-text-muted)' }}><FolderOpen size={36} /></span>}
-        message="未打开项目"
-        className="p-4 pb-[15vh]"
-        opacity={1}
-      >
-        <span
-          className="text-xs text-center mt-0.5"
-          style={{ color: 'var(--color-text-muted)' }}
+      <div className="writer-project-tree h-full">
+        <EmptyState
+          icon={<span className="text-4xl opacity-60" style={{ color: 'var(--color-text-muted)' }}><FolderOpen size={36} /></span>}
+          message="未打开项目"
+          className="p-4 pb-[15vh]"
+          opacity={1}
         >
-          新建或打开一个小说项目开始创作
-        </span>
-        {/* 操作按钮 */}
-        <div className="flex flex-col gap-2 mt-3 w-full">
-          <Button
-            variant="default"
-            className="w-full"
-            onClick={() => useLayoutStore.getState().openNewProject()}
+          <span
+            className="text-xs text-center mt-0.5"
+            style={{ color: 'var(--color-text-muted)' }}
           >
-            新建项目
-          </Button>
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={async () => {
-              const folder = await ipc.invoke('dialog:select-folder')
-              if (folder) {
-                useProjectStore.getState().openProject(folder)
-              }
-            }}
-          >
-            打开项目
-          </Button>
-        </div>
-      </EmptyState>
+            新建或打开一个小说项目开始创作
+          </span>
+          {/* 操作按钮 */}
+          <div className="flex flex-col gap-2 mt-3 w-full">
+            <Button
+              variant="default"
+              className="w-full"
+              onClick={() => useLayoutStore.getState().openNewProject()}
+            >
+              新建项目
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={async () => {
+                const folder = await ipc.invoke('dialog:select-folder')
+                if (folder) {
+                  useProjectStore.getState().openProject(folder)
+                }
+              }}
+            >
+              打开项目
+            </Button>
+          </div>
+        </EmptyState>
+      </div>
     )
   }
 
@@ -136,7 +138,7 @@ export default function ProjectTree() {
   const archDone = ARCH_FILES.filter(f => archStatus[f.key]).length
 
   return (
-    <div className="text-sm">
+    <div className="writer-project-tree min-h-full text-sm py-1">
       {/* 项目名 + 刷新 */}
       <div className="flex items-center justify-between px-3 py-1.5 mb-0.5">
         <span className="font-semibold text-xs truncate" style={{ color: 'var(--color-text)' }}>

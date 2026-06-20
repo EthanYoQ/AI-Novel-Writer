@@ -45,10 +45,8 @@ export default function BottomPanel() {
 
   return (
     <div
-      className="w-full h-full flex flex-col overflow-hidden"
+      className="writer-task-table w-full h-full flex flex-col overflow-hidden"
       style={{
-        backgroundColor: 'var(--color-panel)',
-        borderTop: '1px solid var(--color-border)',
         // A) 懒卸载过渡：关闭时先动画淡出再完全隐藏
         opacity: bottomPanelOpen ? 1 : 0,
         transition: 'opacity 0.25s ease',
