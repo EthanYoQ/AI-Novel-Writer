@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import {
   X, Plus, Trash2, Check, Save, Globe, Cpu, Database,
   Type, Settings2, Zap, Eye, EyeOff, ChevronDown, MessageSquare,
+  Info,
 } from 'lucide-react'
 import PromptSettings from './PromptSettings'
 import { useLLMStore } from '../../stores/llm-store'
@@ -17,11 +18,7 @@ import { NativeSelect } from '../ui/NativeSelect'
 import { cn } from '../../lib/utils'
 import { ipc } from '../../services/ipc-client'
 import { Switch } from '../ui/Switch'
-
-// 打赏/赞助 图片资源（通过 import 让 Vite 处理路径，确保打包后可正常加载）
-import wepayImg from '/buyme/wepay.jpg?url'
-import alipayImg from '/buyme/alipay.jpg?url'
-import wechatImg from '/buyme/wechat.jpg?url'
+import { APP_BRAND } from '../../shared/brand'
 
 // ==================== 分类定义 ====================
 
@@ -40,7 +37,7 @@ const SECTIONS: SectionItem[] = [
   { id: 'proxy', label: '网络代理', icon: <Globe size={16} />, description: '配置 HTTP / SOCKS5 代理，用于访问受限 API' },
   { id: 'editor', label: '编辑器', icon: <Type size={16} />, description: '字体大小、自动保存等编辑器偏好设置' },
   { id: 'prompts', label: '提示词模板', icon: <MessageSquare size={16} />, description: '自定义 AI 创作各环节使用的提示词模板' },
-  { id: 'about', label: '关于与支持', icon: <span style={{ color: '#ff4d4f', fontSize: 14 }}>❤️</span>, description: '商业合作与个人开发赞助' },
+  { id: 'about', label: '关于', icon: <Info size={16} />, description: '版本、定位与本地部署说明' },
 ]
 
 // ==================== 主组件 ====================
@@ -305,7 +302,7 @@ function ModelCard({
         className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-lg"
         style={{ backgroundColor: 'var(--color-hover)' }}
       >
-        {providerEmoji(model.provider)}
+        {providerIcon(model.provider)}
       </div>
 
       {/* 信息 */}
@@ -630,7 +627,7 @@ function ModelForm({
       </div>
       {testResult && (
         <div className={`text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'} break-all`}>
-          {testResult.success ? '✅ 连接成功！' : `❌ 连接失败: ${testResult.error}`}
+          {testResult.success ? '连接成功' : `连接失败: ${testResult.error}`}
         </div>
       )}
     </div>
@@ -900,34 +897,44 @@ function EditorSection() {
   )
 }
 
-// ==================== 关于与支持区 ====================
+// ==================== 关于区 ====================
 
 function AboutSection() {
   return (
     <div className="space-y-6 max-w-[600px] p-2">
-      <div className="flex flex-col items-center justify-center py-8 rounded-xl space-y-2" style={{ backgroundColor: 'var(--color-sidebar)', border: '1px solid var(--color-border)' }}>
-        <h1 className="text-2xl font-bold brand-gradient tracking-wider">Vela IDE</h1>
+      <div
+        className="flex flex-col items-center justify-center py-8 rounded-xl space-y-2"
+        style={{ backgroundColor: 'var(--color-sidebar)', border: '1px solid var(--color-border)' }}
+      >
+        <h1 className="text-2xl font-bold brand-gradient tracking-wider">{APP_BRAND.zhName}</h1>
+        <p className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>{APP_BRAND.enName}</p>
         <p className="text-sm opacity-80" style={{ color: 'var(--color-text)' }}>v{__APP_VERSION__}</p>
-        <p className="text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>Crafted with ❤️ by heider</p>
       </div>
 
-      <div className="space-y-4 pt-2">
-        <h3 className="text-sm font-semibold pb-2" style={{ borderBottom: '1px solid var(--color-border)', color: 'var(--color-text)' }}>☕ 赞助与支持</h3>
+      <div className="space-y-3 pt-2">
+        <h3
+          className="text-sm font-semibold pb-2"
+          style={{ borderBottom: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+        >
+          本地写作工作台
+        </h3>
         <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
-          Vela 开源版由个人开发者利用业余时间热情驱动，如果这个工具有效提升了您的写作效率，或者您看到了它商业化的潜力，欢迎扫码赞助！您的支持是我持续迭代的最大动力 ❤️
+          这是面向中文长篇小说、角色设定、章节蓝图和本地模型生成的桌面写作环境。默认优先使用本机模型与本地项目数据，适合离线创作、风格拆解、章节规划和长文续写。
         </p>
-        <div className="flex gap-4 items-center">
-          <img src={wepayImg} alt="微信打赏" className="w-[180px] rounded-lg" style={{ border: '1px solid var(--color-border)' }} />
-          <img src={alipayImg} alt="支付宝打赏" className="w-[180px] rounded-lg" style={{ border: '1px solid var(--color-border)' }} />
+      </div>
+
+      <div
+        className="grid grid-cols-2 gap-3 pt-2"
+        style={{ color: 'var(--color-text-muted)' }}
+      >
+        <div className="rounded-xl p-3" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-panel)' }}>
+          <div className="text-xs font-semibold mb-1" style={{ color: 'var(--color-text)' }}>核心流程</div>
+          <p className="text-xs leading-relaxed">架构、角色、蓝图、草稿、评审、修订、定稿。</p>
         </div>
-      </div>
-
-      <div className="space-y-4 pt-4">
-        <h3 className="text-sm font-semibold pb-2" style={{ borderBottom: '1px solid var(--color-border)', color: 'var(--color-text)' }}>🤝 商业合作与技术交流</h3>
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
-          如果您对本项目的商业化落地（SaaS 授权）、技术实现细节或 AI 产品方向感兴趣，欢迎随时交流：
-        </p>
-        <img src={wechatImg} alt="个人微信" className="w-[180px] rounded-lg" style={{ border: '1px solid var(--color-border)' }} />
+        <div className="rounded-xl p-3" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-panel)' }}>
+          <div className="text-xs font-semibold mb-1" style={{ color: 'var(--color-text)' }}>模型连接</div>
+          <p className="text-xs leading-relaxed">支持 OpenAI 兼容接口、Ollama、本地与自定义供应商。</p>
+        </div>
       </div>
     </div>
   )
@@ -935,9 +942,23 @@ function AboutSection() {
 
 // ==================== 工具函数 ====================
 
-function providerEmoji(provider: string) {
-  const map: Record<string, string> = {
-    openai: '🤖', deepseek: '🐬', gemini: '✨', ollama: '🦙', bigmodel: '🧠', custom: '⚙️',
+function providerIcon(provider: string) {
+  const commonProps = { size: 18, strokeWidth: 1.8 }
+
+  switch (provider) {
+    case 'openai':
+      return <Zap {...commonProps} />
+    case 'deepseek':
+      return <Database {...commonProps} />
+    case 'gemini':
+      return <Globe {...commonProps} />
+    case 'ollama':
+      return <Cpu {...commonProps} />
+    case 'bigmodel':
+      return <MessageSquare {...commonProps} />
+    case 'custom':
+      return <Settings2 {...commonProps} />
+    default:
+      return <Cpu {...commonProps} />
   }
-  return map[provider] ?? '🔧'
 }
