@@ -1,4 +1,4 @@
-# AI小说作家 / AI Novel Writer - Local-first AI fiction writing IDE
+# AI小说作家 - AI写作与小说创作工具 / AI Novel Writer
 
 <p>
   <img src="https://api.iconify.design/simple-icons:github.svg?color=%23181717" width="28" alt="GitHub" />
@@ -6,11 +6,11 @@
 
 [中文 README](README_zh.md) | [Windows release v0.1.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.1.0) | [GPL-3.0 license](LICENSE)
 
-AI Novel Writer is a GPL-3.0, local-first desktop IDE for AI-assisted fiction writing, especially structured Chinese web-novel and long-form fiction workflows. It keeps novel projects in local folders with SQLite-backed data, then coordinates story architecture, character cards, worldbuilding, chapter blueprints, drafting, review, revision, knowledge retrieval, and reference-style analysis in one workspace.
+AI小说作家是一个本地优先的 AI 写作和小说创作工具，面向中文网文、长篇小说和故事项目作者。它把小说大纲、角色设定、世界观、章节细纲、正文生成、审稿修稿、知识库检索和参考小说拆解放在一个桌面工作台里，让 AI 写小说不再只是一次性聊天。
 
-AI小说作家是一个本地优先的桌面小说创作 IDE。它把设定约束、故事架构、角色图谱、世界观、章节蓝图、正文生成、审稿修稿、知识库检索、参考小说拆解与仿写约束放在同一个工作台里，让 AI 写作不再只是一次性聊天，而是按可追踪的创作流程推进。
+English: AI Novel Writer is a GPL-3.0, local-first desktop IDE for AI-assisted fiction writing, especially structured Chinese web-novel and long-form fiction workflows.
 
-Search intent: `AI novel writer`, `AI-assisted fiction writing`, `fiction writing IDE`, `novel writing IDE`, `local-first writing app`, `AI 小说写作`, `小说创作 IDE`, `AI 网文写作工具`, `Sudowrite alternative direction`.
+Search intent: for users searching for AI写作/AI写小说, 小说创作/网文写作工具, and 本地小说写作软件.
 
 Download the Windows x64 zip from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.1.0). The app is local-first, but configured local model endpoints or external APIs may receive prompt and context data. This project is not an official Sudowrite product and does not claim feature parity or writing-quality equivalence.
 
