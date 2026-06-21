@@ -1,12 +1,18 @@
-# AI小说作家 / AI Novel Writer
+# AI小说作家 / AI Novel Writer - Local-first AI fiction writing IDE
 
 <p>
   <img src="https://api.iconify.design/simple-icons:github.svg?color=%23181717" width="28" alt="GitHub" />
 </p>
 
-AI小说作家是一个本地优先的桌面小说创作 IDE。它把“设定约束、故事架构、角色图谱、世界观、章节蓝图、正文生成、审稿修稿、知识库检索、参考小说拆解与仿写”放在同一个工作台里，让 AI 写作不再只是一次性聊天，而是按可追踪的创作流程推进。
+[中文 README](README_zh.md) | [Windows release v0.1.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.1.0) | [GPL-3.0 license](LICENSE)
 
-AI Novel Writer is a local-first desktop IDE for AI-assisted fiction writing. It turns long-form generation into a structured workflow: constraints, story architecture, character graph, worldbuilding, chapter blueprints, drafting, review, revision, knowledge retrieval, and reference-style analysis.
+AI Novel Writer is a GPL-3.0, local-first desktop IDE for AI-assisted fiction writing, especially structured Chinese web-novel and long-form fiction workflows. It keeps novel projects in local folders with SQLite-backed data, then coordinates story architecture, character cards, worldbuilding, chapter blueprints, drafting, review, revision, knowledge retrieval, and reference-style analysis in one workspace.
+
+AI小说作家是一个本地优先的桌面小说创作 IDE。它把设定约束、故事架构、角色图谱、世界观、章节蓝图、正文生成、审稿修稿、知识库检索、参考小说拆解与仿写约束放在同一个工作台里，让 AI 写作不再只是一次性聊天，而是按可追踪的创作流程推进。
+
+Search intent: `AI novel writer`, `AI-assisted fiction writing`, `fiction writing IDE`, `novel writing IDE`, `local-first writing app`, `AI 小说写作`, `小说创作 IDE`, `AI 网文写作工具`, `Sudowrite alternative direction`.
+
+Download the Windows x64 zip from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.1.0). The app is local-first, but configured local model endpoints or external APIs may receive prompt and context data. This project is not an official Sudowrite product and does not claim feature parity or writing-quality equivalence.
 
 ![AI小说作家主界面](docs/assets/screenshot-main.png)
 
@@ -15,7 +21,7 @@ AI Novel Writer is a local-first desktop IDE for AI-assisted fiction writing. It
 Windows 发布形式是一个 zip 压缩文件夹：
 
 ```text
-AI小说作家-0.1.0-windows-x64.zip
+AI-Novel-Writer-0.1.0-windows-x64.zip
 └─ AI小说作家/
    ├─ AI小说作家.exe
    ├─ resources/
@@ -24,7 +30,7 @@ AI小说作家-0.1.0-windows-x64.zip
 
 使用方式：
 
-1. 下载并解压 `AI小说作家-0.1.0-windows-x64.zip`。
+1. 下载并解压 `AI-Novel-Writer-0.1.0-windows-x64.zip`。
 2. 进入解压后的 `AI小说作家` 文件夹。
 3. 双击 `AI小说作家.exe` 启动软件。
 
