@@ -1,10 +1,10 @@
-# AI小说作家 - 本地优先 AI 小说创作 IDE
+# AI小说作家 - AI写作与小说创作工具
 
 [English README](README.md) | [Windows v0.1.0 发布包](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.1.0) | [GPL-3.0 license](LICENSE)
 
-AI小说作家是 GPL-3.0 的本地优先桌面小说创作 IDE，面向需要把 AI 写作纳入可追踪流程的中文网文和长篇小说创作者。它把设定约束、故事架构、角色卡、世界观、章节蓝图、正文生成、审稿修稿、知识库检索、参考小说拆解与文风仿写约束放在一个工作台里。
+AI小说作家是 GPL-3.0 的本地优先 AI 写作和小说创作工具，面向中文网文、长篇小说和故事项目作者。它把小说大纲、角色设定、世界观、章节细纲、正文生成、审稿修稿、知识库检索和参考小说拆解放在一个桌面工作台里，让 AI 写小说不再只是一次性聊天。
 
-搜索意图：`AI 小说写作`、`AI 小说作家`、`小说创作 IDE`、`AI 网文写作工具`、`本地优先写作软件`、`小说写作 AI 工具`、`local-first writing app`、`fiction writing IDE`、`Sudowrite alternative direction`。
+搜索意图：适合正在找 AI写作/AI写小说、小说创作/网文写作工具、本地小说写作软件 的创作者。
 
 下载入口：[GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.1.0) 提供 Windows x64 zip。项目数据默认保存在本机项目目录和 SQLite 数据库中；如果你配置外部 API 或本地模型服务，提示词和上下文会发送给对应模型端点。本项目不是 Sudowrite 官方产品，也不声明功能等价或写作质量等价。
 
