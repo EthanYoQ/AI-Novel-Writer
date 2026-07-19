@@ -75,17 +75,7 @@ flowchart LR
 
 ![AI 小说作家主界面，展示项目结构树、欢迎页、AI 写作助手和底部任务面板](docs/assets/readme/ui-zh.png)
 
-### 角色管理：角色卡与关系图谱
 
-![角色管理界面，展示角色列表和角色关系图谱](public/screenshot/5.png)
-
-### 章节蓝图：每章的目的、视角、出场、关键事件
-
-![章节蓝图界面，展示章节列表和蓝图详情](public/screenshot/2.png)
-
-### 草稿与修稿：AI 生成 + 审稿驱动
-
-![草稿写作界面，展示 AI 生成的草稿内容和编辑器](public/screenshot/3.png)
 
 ---
 
