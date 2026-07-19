@@ -17,6 +17,7 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import type { ToolCallInfo } from '../../../services/agent/agent-engine'
+import { useLocaleStore } from '../../../stores/locale-store'
 
 interface Props {
   toolCall: ToolCallInfo
@@ -52,6 +53,7 @@ function statusLabel(status: ToolCallInfo['status']): string {
 }
 
 export default function ToolCallBlock({ toolCall }: Props) {
+  const text = useLocaleStore(s => s.text)
   const [expanded, setExpanded] = useState(false)
   const { toolName, arguments: args, status, result, error, source } = toolCall
 
@@ -107,9 +109,9 @@ export default function ToolCallBlock({ toolCall }: Props) {
                   color: 'var(--color-text-secondary)',
                   border: '1px solid var(--color-border)',
                 }}
-                title="复制结果"
+                title={text('复制结果', 'Copy result')}
               >
-                复制
+                {text('复制', 'Copy')}
               </button>
             </div>
           )}
@@ -117,7 +119,7 @@ export default function ToolCallBlock({ toolCall }: Props) {
           {/* 错误 */}
           {error && (
             <div className="tool-call-result" style={{ color: '#ef4444' }}>
-              ❌ {error}
+              <XCircle size={13} className="inline mr-1" />{error}
             </div>
           )}
         </div>

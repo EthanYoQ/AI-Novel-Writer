@@ -1,10 +1,15 @@
 param(
-  [Parameter(Mandatory = $true)]
   [string]$ExePath,
   [int]$ObservationSeconds = 12
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($ExePath)) {
+  $root = Split-Path -Parent $PSScriptRoot
+  $packageJson = Get-Content -LiteralPath (Join-Path $root "package.json") -Raw | ConvertFrom-Json
+  $ExePath = Join-Path $root ("release\{0}\win-unpacked\AI小说作家.exe" -f [string]$packageJson.version)
+}
 
 Add-Type -TypeDefinition @'
 using System;
