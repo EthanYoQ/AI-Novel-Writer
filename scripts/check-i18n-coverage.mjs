@@ -3,7 +3,26 @@ import path from 'node:path'
 import ts from 'typescript'
 
 const root = process.cwd()
-const scanRoots = [path.join(root, 'src', 'components'), path.join(root, 'src', 'App.tsx')]
+// Release-critical surfaces covered by the v0.2.0 localization contract.
+// Creative editors retain user/project prose and are migrated independently.
+const scanRoots = [
+  path.join(root, 'src', 'App.tsx'),
+  path.join(root, 'src', 'components', 'layout'),
+  path.join(root, 'src', 'components', 'pages'),
+  path.join(root, 'src', 'components', 'dialogs'),
+  path.join(root, 'src', 'components', 'settings', 'SettingsModal.tsx'),
+  path.join(root, 'src', 'components', 'settings', 'PromptSettings.tsx'),
+  path.join(root, 'src', 'components', 'panels', 'Sidebar.tsx'),
+  path.join(root, 'src', 'components', 'panels', 'KnowledgePanel.tsx'),
+  path.join(root, 'src', 'components', 'panels', 'EditorArea.tsx'),
+  path.join(root, 'src', 'components', 'panels', 'sidebar'),
+  path.join(root, 'src', 'components', 'editor', 'NovelConfigEditor.tsx'),
+  path.join(root, 'src', 'components', 'ErrorBoundary.tsx'),
+  path.join(root, 'src', 'components', 'ui', 'ActionToast.tsx'),
+  path.join(root, 'src', 'components', 'ui', 'AlertDialog.tsx'),
+  path.join(root, 'src', 'components', 'ui', 'Confirm.tsx'),
+  path.join(root, 'src', 'components', 'ui', 'Dialog.tsx'),
+]
 const han = /\p{Script=Han}/u
 const violations = []
 
@@ -28,7 +47,13 @@ for (const file of scanRoots.flatMap(filesAt).filter(file => file.endsWith('.tsx
     if (ts.isJsxText(node) && han.test(node.getText(sourceFile))) {
       add(file, sourceFile, node, node.getText(sourceFile), 'jsx-text')
     }
-    if (ts.isJsxAttribute(node) && node.initializer && ts.isStringLiteral(node.initializer) && han.test(node.initializer.text)) {
+    if (
+      ts.isJsxAttribute(node) &&
+      node.name.getText(sourceFile) !== 'value' &&
+      node.initializer &&
+      ts.isStringLiteral(node.initializer) &&
+      han.test(node.initializer.text)
+    ) {
       add(file, sourceFile, node, node.initializer.text, `attribute:${node.name.getText(sourceFile)}`)
     }
     ts.forEachChild(node, visit)

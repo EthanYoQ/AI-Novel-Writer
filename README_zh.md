@@ -1,87 +1,123 @@
-# AI小说作家 - AI写作与小说创作工具
+<p align="center">
+  <img src="docs/assets/readme/hero-zh.svg" alt="AI 小说作家——本地优先的长篇小说生产工作台" width="100%" />
+</p>
 
-[English README](README.md) | [Windows v0.1.0 发布包](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.1.0) | [GPL-3.0 license](LICENSE)
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载 Windows 版</a> ·
+  <a href="LICENSE">GPL-3.0</a>
+</p>
 
-AI小说作家是 GPL-3.0 的本地优先 AI 写作和小说创作工具，面向中文网文、长篇小说和故事项目作者。它把小说大纲、角色设定、世界观、章节细纲、正文生成、审稿修稿、知识库检索和参考小说拆解放在一个桌面工作台里，让 AI 写小说不再只是一次性聊天。
+AI 小说作家是一套本地优先的桌面创作工作台，把一个故事灵感推进为可管理的长篇生产流程：故事架构、角色、章节蓝图、草稿、审稿、修订与定稿。
 
-搜索意图：适合正在找 AI写作/AI写小说、小说创作/网文写作工具、本地小说写作软件 的创作者。
+它是编排层，不内置 AI 模型。你可以连接 OpenAI-compatible 或 Gemini 协议，既支持 Ollama、LM Studio 等本地端点，也支持外部 API。
 
-下载入口：[GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.1.0) 提供 Windows x64 zip。项目数据默认保存在本机项目目录和 SQLite 数据库中；如果你配置外部 API 或本地模型服务，提示词和上下文会发送给对应模型端点。本项目不是 Sudowrite 官方产品，也不声明功能等价或写作质量等价。
+![AI 小说作家主界面](docs/assets/screenshot-main.png)
 
-![AI小说作家主界面](docs/assets/screenshot-main.png)
+## 为什么需要它
 
-## Windows 发布包
+聊天窗口适合生成一个片段，长篇小说还需要长期记忆、约束、阶段门禁和可追溯产物。AI 小说作家把这些内容放进同一个项目工作台：
 
-发布形式是一个 zip 压缩文件夹：
+- 故事前提、角色图谱、世界观与情节大纲
+- 可编辑的章节蓝图：目标、事件、角色与悬念钩子
+- 草稿 → 审稿 → 修订 → 定稿流水线
+- 角色卡、关系图谱与逐章状态追踪
+- SQLite 全文检索与可选的 LanceDB 向量检索
+- TXT/Markdown 参考小说导入、结构反推与文风分析
+- 全局与项目级提示词覆盖
+- 简体中文与英文应用界面
+
+## v0.2.0 更新
+
+这个版本重点解决启动可靠性与语言可访问性：
+
+- 新增中英文切换，覆盖应用界面、系统提示和错误信息。首次启动跟随操作系统语言，手动选择会持久保存。
+- 切换语言时不修改内置创作提示词、生成正文和项目数据。
+- Windows 发布包显式包含 LanceDB 原生组件，并在打包后实际验证加载。
+- 知识库改为按需加载；即使可选原生组件异常，也不会再阻止整个应用启动。
+- 发布前自动清理旧产物，并验证可执行文件、`app.asar`、原生模块、进程稳定性和窗口创建。
+
+## Windows 安装
+
+1. 从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载 `AI-Novel-Writer-0.2.0-windows-x64.zip`。
+2. 完整解压 ZIP。
+3. 打开解压后的 `AI-Novel-Writer` 文件夹。
+4. 双击 `AI小说作家.exe`。
+
+不要直接在压缩包内运行 EXE。目前正式发布目标为 Windows x64。
+
+## 小说生产流程
 
 ```text
-AI-Novel-Writer-0.1.0-windows-x64.zip
-└─ AI小说作家/
-   ├─ AI小说作家.exe
-   ├─ resources/
-   └─ Electron runtime files...
-```
-
-使用方式：
-
-1. 下载并解压 `AI-Novel-Writer-0.1.0-windows-x64.zip`。
-2. 进入解压后的 `AI小说作家` 文件夹。
-3. 双击 `AI小说作家.exe` 启动软件。
-
-## 核心能力
-
-- 长篇小说项目管理：项目配置、故事前提、世界观、角色卡、章节蓝图、草稿、修稿、审稿报告和定稿内容保存在本机项目中。
-- 故事架构：按步骤生成故事前提、角色图谱、世界观和情节大纲。
-- 章节蓝图：为每章记录章节目的、叙事功能、出场角色、关键事件和悬念钩子。
-- 正文生成与修稿：读取项目配置、蓝图、角色卡、世界观、文风约束和历史摘要，生成草稿、修稿和定稿。
-- 审稿驱动修复：先生成结构化审稿报告，再用报告驱动修稿，处理剧情连贯性、角色状态、设定冲突和章节逻辑问题。
-- 知识库检索：支持 TXT/Markdown 文档和文件夹导入；有 embedding 配置时走向量检索，缺失时降级到 SQLite FTS 全文检索。
-- 参考小说拆解：导入 TXT/Markdown 小说后拆章、反推全局配置、提取角色卡、生成章节蓝图，并生成文风仿写约束。
-- 模型接入：支持 OpenAI-compatible 和 Gemini 协议，可连接 Ollama、LM Studio、vLLM、KoboldCpp、DeepSeek、Grok、OpenAI、Gemini 等端点。
-
-## 工作流
-
-```text
-创作脑洞 / 项目配置
-        ↓
+创作灵感 / 项目配置
+          │
+          ▼
 故事前提 → 角色图谱 → 世界观 → 情节大纲
-        ↓
-角色卡 / 关系图谱 / 状态追踪
-        ↓
-章节蓝图
-        ↓
-正文草稿 → 审稿报告 → 修稿版本 → 定稿
-        ↓
-知识库回写、角色状态更新、后续章节继续读取
+          │
+          ▼
+       章节蓝图
+          │
+          ▼
+草稿 → 审稿 → 修订 → 定稿
+          │
+          ▼
+知识库回写 + 角色状态更新
 ```
 
-## 本地模型建议
+工作台把全局约束与单章意图分开管理。草稿可以先审稿，再根据报告修订；修订结果可以对比确认后再合并，不必直接覆盖原稿。
+
+## 模型配置
+
+本地 OpenAI-compatible 端点示例：
 
 ```text
-Provider: custom / Ollama
-Protocol: OpenAI-compatible
-Base URL: http://127.0.0.1:11434/v1
-API key: ollama
-Model: your-local-model-name
+服务商：Ollama 或 Custom
+协议：OpenAI-compatible
+Base URL：http://127.0.0.1:11434/v1
+API key：ollama
+模型：你的本地模型名称
 ```
 
-内置提示词已针对本地 Qwen3 14B Q4 级别模型做过收敛：短指令、明确字段、结构化输出、分阶段生成、降低重复、只写本章、保留角色和蓝图约束。
+应用本身不附带模型。配置外部服务商后，提示词和所选项目上下文会按照该服务商的隐私政策发送给它。
 
 ## 开发
 
-```bash
-npm install
-npm run dev
-npm exec tsc -- --noEmit
-npm exec vitest -- run
-```
-
-构建 Windows 文件夹 zip 发布包：
+需要 Node.js 20+、pnpm 11；桌面打包需要 Windows。
 
 ```bash
-npm run build:win-zip
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-## 数据安全
+质量检查：
 
-不要提交本机小说项目、导入的参考小说全文、生成的草稿/修稿/定稿正文、`.env`、API key、本地模型配置、用户目录应用数据、`release/`、`dist/`、`dist-electron/` 或 `node_modules/`。
+```bash
+pnpm run typecheck
+pnpm test
+pnpm run lint
+```
+
+构建并验证 Windows 目录包：
+
+```powershell
+pnpm run build:win-dir
+pnpm run smoke:win-app
+```
+
+生成发布 ZIP 和校验文件：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/package-win-zip.ps1
+```
+
+预期产物：`release/0.2.0/AI-Novel-Writer-0.2.0-windows-x64.zip`。
+
+## 数据与安全
+
+项目文件和应用数据库默认保存在本机。不要提交小说项目、导入的参考小说、API key、`.env`、用户配置或发布目录。
+
+应用可以连接本地或远程模型。“本地优先”指存储和流程编排；连接远程 API 时，数据仍会离开本机。
+
+## 开源协议
+
+本项目使用 [GNU General Public License v3.0](LICENSE)。
