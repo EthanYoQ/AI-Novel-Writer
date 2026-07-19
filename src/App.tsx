@@ -6,6 +6,7 @@ import { useLLMStore } from './stores/llm-store'
 import { useProjectStore } from './stores/project-store'
 import { useMCPStore } from './stores/mcp-store'
 import { useWorkflowStore } from './stores/workflow-store'
+import { useLocaleStore } from './stores/locale-store'
 import { ipc } from './services/ipc-client'
 import TitleBar from './components/layout/TitleBar'
 import StatusBar from './components/layout/StatusBar'
@@ -31,6 +32,7 @@ import { globalEventBus } from './shared/event-bus'
  */
 export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme)
+  const initLocale = useLocaleStore((s) => s.init)
   const sidebarOpen = useLayoutStore(s => s.sidebarOpen)
   const aiPanelOpen = useLayoutStore(s => s.aiPanelOpen)
   const rightView = useLayoutStore(s => s.rightView)
@@ -50,6 +52,7 @@ export default function App() {
 
   // 初始化：主题 + LLM 模型 + 最近项目 + 缩放级别
   useEffect(() => {
+    initLocale()
     initTheme()
     initLLM()
     loadRecentProjects()
@@ -83,7 +86,7 @@ export default function App() {
       }).catch(() => {})
       unsubActionToast()
     }
-  }, [initTheme, initLLM, loadRecentProjects])
+  }, [initLocale, initTheme, initLLM, loadRecentProjects])
 
   // 全局快捷键: Cmd+N 新建项目，Cmd+O 打开项目
   // 注意：Cmd+=/- 缩放已由 TitleBar.tsx 统一处理，此处不重复注册
