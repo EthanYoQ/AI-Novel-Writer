@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  Database, RefreshCw, BookOpen,
+  Database, RefreshCw, BookOpen, AlertTriangle,
 } from 'lucide-react'
 import { ipc } from '../../services/ipc-client'
 import { Button } from '../ui/Button'
@@ -8,6 +8,8 @@ import { EmptyState } from '../ui/EmptyState'
 import { useProjectStore } from '../../stores/project-store'
 import { globalEventBus } from '../../shared/event-bus'
 import { loadKBData, type KBDocument } from '../../services/knowledge-service'
+import { useLocaleStore } from '../../stores/locale-store'
+import { appErrorMessage } from '../../i18n/app-errors'
 
 
 
@@ -18,6 +20,8 @@ export default function KnowledgePanel() {
   const [currentPage, setCurrentPage] = useState(1)
   const pageSize = 20
   const [titleMap, setTitleMap] = useState<Record<string, string>>({})
+  const [loadError, setLoadError] = useState('')
+  const { locale, text } = useLocaleStore()
 
   /** 加载文档列表 + 统计（通过 Service 层） */
   const loadData = useCallback(async () => {
@@ -25,8 +29,11 @@ export default function KnowledgePanel() {
       const { documents: docs, stats: s } = await loadKBData()
       setDocuments(docs)
       setStats(s)
-    } catch { /* 忽略 */ }
-  }, [])
+      setLoadError('')
+    } catch (error) {
+      setLoadError(appErrorMessage(locale, error))
+    }
+  }, [locale])
 
   useEffect(() => { 
     let mounted = true
@@ -84,7 +91,7 @@ export default function KnowledgePanel() {
     return (
       <EmptyState 
         icon={<BookOpen size={36} />} 
-        message="请先打开项目" 
+        message={text('请先打开项目', 'Open a project first')}
         className="pb-[15vh]" 
         opacity={0.4} 
       />
@@ -97,15 +104,15 @@ export default function KnowledgePanel() {
       <div className="flex items-center justify-between px-3 h-9 flex-shrink-0 border-b border-[var(--color-border)]">
         <span className="text-xs font-medium text-[var(--color-text)] flex items-center gap-1.5">
           <Database size={13} />
-          知识库
+          {text('知识库', 'Knowledge base')}
           <span className="text-[0.7rem] text-[var(--color-text-muted)]">
-            ({stats.documentCount} 文档 / {stats.totalChunks} 块)
+            {text(`（${stats.documentCount} 文档 / ${stats.totalChunks} 块）`, `(${stats.documentCount} documents / ${stats.totalChunks} chunks)`)}
           </span>
         </span>
         <Button
           variant="ghost" size="icon"
           onClick={() => loadData()}
-          title="刷新"
+          title={text('刷新', 'Refresh')}
           className="h-6 w-6"
         >
           <RefreshCw size={11} />
@@ -114,15 +121,22 @@ export default function KnowledgePanel() {
 
       <div className="flex-1 overflow-y-auto">
 
+        {loadError && (
+          <div className="m-3 flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/10 p-2 text-xs text-red-500">
+            <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />
+            <span>{loadError}</span>
+          </div>
+        )}
+
         {/* 已入库章节列表 */}
         <div className="px-3 py-1.5 text-[0.7rem] text-[var(--color-text-muted)] font-medium uppercase tracking-wide">
-          已入库章节
+          {text('已入库章节', 'Indexed chapters')}
         </div>
         {documents.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 gap-2 opacity-40">
             <BookOpen size={28} />
-            <span className="text-xs">暂无数据</span>
-            <span className="text-[0.7rem] text-center px-4">定稿后章节内容将自动入库</span>
+            <span className="text-xs">{text('暂无数据', 'No data')}</span>
+            <span className="text-[0.7rem] text-center px-4">{text('定稿后章节内容将自动入库', 'Finalized chapters are indexed automatically.')}</span>
           </div>
         ) : (
           <div className="pb-4">
@@ -139,8 +153,8 @@ export default function KnowledgePanel() {
                       {titleMap[doc.id] || doc.fileName}
                     </div>
                     <div className="flex items-center gap-2 text-[0.7rem] text-[var(--color-text-muted)] mt-0.5">
-                      <span>{doc.chunkCount} 块</span>
-                      <span>{new Date(doc.importedAt).toLocaleDateString('zh-CN')}</span>
+                      <span>{text(`${doc.chunkCount} 块`, `${doc.chunkCount} chunks`)}</span>
+                      <span>{new Date(doc.importedAt).toLocaleDateString(locale)}</span>
                     </div>
                   </div>
                 </div>
@@ -158,7 +172,7 @@ export default function KnowledgePanel() {
                     disabled={currentPage === 1}
                     onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                   >
-                    上一页
+                    {text('上一页', 'Previous')}
                   </Button>
                   <Button
                     variant="outline" size="sm"
@@ -166,7 +180,7 @@ export default function KnowledgePanel() {
                     disabled={currentPage === Math.ceil(documents.length / pageSize)}
                     onClick={() => setCurrentPage(p => Math.min(Math.ceil(documents.length / pageSize), p + 1))}
                   >
-                    下一页
+                    {text('下一页', 'Next')}
                   </Button>
                 </div>
               </div>

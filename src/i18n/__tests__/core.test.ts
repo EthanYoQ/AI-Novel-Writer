@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createTranslator, resolveLocale, translate } from '../core'
+import { createTranslator, localize, resolveLocale, translate } from '../core'
 
 describe('i18n core', () => {
   it.each([
@@ -25,5 +25,12 @@ describe('i18n core', () => {
 
     expect(localTranslate('zh-CN', 'common.open')).toBe('Open')
     expect(localTranslate('en-US', 'missing.key')).toBe('missing.key')
+  })
+
+  it('selects colocated UI copy and interpolates parameters', () => {
+    expect(localize('zh-CN', '已关闭 {count} 个文件', 'Closed {count} files', { count: 3 }))
+      .toBe('已关闭 3 个文件')
+    expect(localize('en-US', '已关闭 {count} 个文件', 'Closed {count} files', { count: 3 }))
+      .toBe('Closed 3 files')
   })
 })

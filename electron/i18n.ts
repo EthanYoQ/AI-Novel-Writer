@@ -1,4 +1,4 @@
-import { resolveLocale, translate, type MessageKey, type MessageParams } from '../src/i18n/core'
+import { localize, resolveLocale, translate, type MessageKey, type MessageParams } from '../src/i18n/core'
 import type { Locale } from '../src/i18n/types'
 import type { GlobalConfig } from '../src/shared/ipc-channels'
 import { DEFAULT_GLOBAL_CONFIG, GLOBAL_CONFIG_PATH, readJsonFile } from './utils/config-utils'
@@ -21,4 +21,13 @@ export function mainT(
   params?: MessageParams,
 ): string {
   return translate(getMainLocale(systemLocale), key, params)
+}
+
+export function mainText(
+  systemLocale: string | undefined,
+  zhCNText: string,
+  enUSText: string,
+  params?: MessageParams,
+): string {
+  return localize(getMainLocale(systemLocale), zhCNText, enUSText, params)
 }

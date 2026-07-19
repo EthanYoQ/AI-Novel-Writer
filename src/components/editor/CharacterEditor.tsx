@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Save, Trash2, Users, Network } from 'lucide-react'
+import { Save, Trash2, Users, Network, ClipboardList } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { confirm } from '../ui/Confirm'
@@ -16,6 +16,7 @@ import { Input } from '../ui/Input'
 import { Textarea } from '../ui/Textarea'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
+import { useLocaleStore } from '../../stores/locale-store'
 
 /**
  * 角色卡编辑器 — 纯编辑区域（角色列表已移至侧栏）
@@ -31,6 +32,7 @@ export default function CharacterEditor() {
   const deleteCharacter = useCharacterStore(s => s.deleteCharacter)
   const saveAll = useCharacterStore(s => s.saveAll)
   const [viewMode, setViewMode] = useState<'edit' | 'state' | 'graph'>('edit')
+  const text = useLocaleStore(s => s.text)
 
   // 数据由 ProjectService 统一加载，组件只消费 store 数据
 
@@ -39,8 +41,8 @@ export default function CharacterEditor() {
   const handleDelete = async () => {
     if (!selectedCard || !currentProject) return
     const ok = await confirm(
-      `确定要删除角色「${selectedCard.name || '未命名'}」吗？此操作不可撤销。`,
-      { title: '删除角色', confirmText: '删除', danger: true }
+      text(`确定要删除角色「${selectedCard.name || '未命名'}」吗？此操作不可撤销。`, `Delete character “${selectedCard.name || 'Untitled'}”? This cannot be undone.`),
+      { title: text('删除角色', 'Delete character'), confirmText: text('删除', 'Delete'), danger: true }
     )
     if (!ok) return
     await deleteCharacter(selectedCard.name, currentProject.path)
@@ -49,7 +51,7 @@ export default function CharacterEditor() {
   const handleSave = async () => {
     if (!currentProject) return
     await saveAll(currentProject.path)
-    addLog('info', `✅ 已保存 ${characters.length} 个角色卡`)
+    addLog('info', text(`已保存 ${characters.length} 个角色卡`, `Saved ${characters.length} character cards`))
   }
 
   // ===== 渲染 =====
@@ -86,8 +88,8 @@ export default function CharacterEditor() {
                   <Users size={12} /> 基础设定
                 </Button>
               ) : (
-                <Button variant="outline" size="sm" onClick={() => setViewMode('state')} title="查看当前进展/状态">
-                  📋 当前状态
+                <Button variant="outline" size="sm" onClick={() => setViewMode('state')} title={text('查看当前进展/状态', 'View current state')}>
+                  <ClipboardList size={13} /> {text('当前状态', 'Current state')}
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={() => setViewMode('graph')} title="查看全员关系网">

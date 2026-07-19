@@ -9,19 +9,21 @@ import { ipc } from '../../../services/ipc-client'
 import { Button } from '../../ui/Button'
 import { confirm } from '../../ui/Confirm'
 import { toast } from '../../ui/Toast'
+import { useLocaleStore } from '../../../stores/locale-store'
 
 export default function HomeSidebarPanel() {
   const currentProject = useProjectStore(s => s.currentProject)
   const recentProjects = useProjectStore(s => s.recentProjects)
   const openProject = useProjectStore(s => s.openProject)
   const deleteProject = useProjectStore(s => s.deleteProject)
+  const text = useLocaleStore(s => s.text)
 
   const handleDeleteProject = async (project: { name: string; path: string }) => {
     const ok = await confirm(
-      `确认删除项目「${project.name}」？\n此操作会删除该项目目录下的小说正文、故事架构、角色、蓝图、知识库和所有项目数据。`,
+      text(`确认删除项目「${project.name}」？\n此操作会删除该项目目录下的小说正文、故事架构、角色、蓝图、知识库和所有项目数据。`, `Delete project “${project.name}”?\nThis removes its manuscripts, architecture, characters, blueprints, knowledge base, and all project data.`),
       {
-        title: '删除项目',
-        confirmText: '删除项目',
+        title: text('删除项目', 'Delete project'),
+        confirmText: text('删除项目', 'Delete project'),
         danger: true,
       },
     )
@@ -29,7 +31,7 @@ export default function HomeSidebarPanel() {
 
     const success = await deleteProject(project.path)
     if (success) {
-      toast.success(`项目「${project.name}」已删除`)
+      toast.success(text(`项目「${project.name}」已删除`, `Project “${project.name}” deleted`))
     }
   }
 
@@ -51,12 +53,12 @@ export default function HomeSidebarPanel() {
                 {currentProject.name}
               </p>
               <p className="text-[0.7rem] truncate mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                当前项目
+          {text('当前项目', 'Current project')}
               </p>
             </div>
             <button
               type="button"
-              title="删除项目"
+              title={text('删除项目', 'Delete project')}
               className="writer-command-button"
               style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-danger)' }}
               onClick={(e) => {
@@ -77,7 +79,7 @@ export default function HomeSidebarPanel() {
           className="w-full"
           onClick={() => useLayoutStore.getState().openNewProject()}
         >
-          新建项目
+          {text('新建项目', 'New project')}
         </Button>
         <Button
           variant="outline"
@@ -89,7 +91,7 @@ export default function HomeSidebarPanel() {
             }
           }}
         >
-          打开项目
+          {text('打开项目', 'Open project')}
         </Button>
       </div>
 
@@ -101,7 +103,7 @@ export default function HomeSidebarPanel() {
             style={{ borderTop: '1px solid var(--color-border)' }}
           >
             <span className="text-xs font-medium" style={{ color: 'var(--color-text-muted)' }}>
-              最近项目
+        {text('最近项目', 'Recent projects')}
             </span>
           </div>
           <div className="space-y-0.5">
@@ -128,7 +130,7 @@ export default function HomeSidebarPanel() {
                   </div>
                   <button
                     type="button"
-                    title="删除项目"
+                  title={text('删除项目', 'Delete project')}
                     className="writer-command-button opacity-70 hover:opacity-100"
                     style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-danger)' }}
                     onClick={(e) => {
@@ -142,7 +144,7 @@ export default function HomeSidebarPanel() {
               ))}
             {recentProjects.filter(p => p.path !== currentProject?.path).length === 0 && (
               <p className="text-xs px-2 py-1 opacity-50" style={{ color: 'var(--color-text-muted)' }}>
-                暂无其他最近项目
+          {text('暂无其他最近项目', 'No other recent projects')}
               </p>
             )}
           </div>

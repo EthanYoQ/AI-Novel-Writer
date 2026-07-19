@@ -12,6 +12,7 @@ import {
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
+import { useLocaleStore } from '../../stores/locale-store'
 
 interface ImportNovelDialogProps {
   open: boolean
@@ -22,6 +23,8 @@ interface ImportNovelDialogProps {
 export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogProps) {
   const createProject = useProjectStore((s) => s.createProject)
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow)
+  const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
 
   // 表单状态
   const [name, setName] = useState('')
@@ -63,14 +66,14 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         setTotalWords(result.totalWords)
         setSplitDone(true)
       } else {
-        setSplitError(result.error || '拆章失败')
+        setSplitError(result.error || text('拆章失败', 'Could not split chapters'))
       }
     } catch (e) {
       setSplitError(String(e))
     } finally {
       setSplitting(false)
     }
-  }, [name])
+  }, [name, text])
 
   /** 选择保存路径 */
   const handleSelectFolder = useCallback(async () => {
@@ -120,15 +123,15 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileUp size={18} className="text-[var(--color-accent)]" />
-            小说拆解与仿写
+            {text('小说拆解与仿写', 'Novel analysis and style study')}
           </DialogTitle>
-          <DialogDescription>选择参考小说文件，AI 将执行结构拆解、文风提取、蓝图反推，并生成后续写作可用的仿写约束</DialogDescription>
+          <DialogDescription>{text('选择参考小说文件，AI 将执行结构拆解、文风提取、蓝图反推，并生成后续写作可用的仿写约束', 'Select a reference novel. AI will analyze its structure and style, infer a blueprint, and create writing constraints for future chapters.')}</DialogDescription>
         </DialogHeader>
 
         <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
           {/* ===== 文件选择 ===== */}
           <div>
-            <Label>选择小说文件</Label>
+            <Label>{text('选择小说文件', 'Reference files')}</Label>
             <div className="flex gap-2">
               <div
                 className="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg text-xs truncate"
@@ -140,12 +143,12 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
               >
                 <BookOpen size={14} style={{ flexShrink: 0 }} />
                 {selectedFiles.length > 0
-                  ? `${selectedFiles.length} 个文件已选择`
-                  : '支持 .txt / .md 文件（单个或多个）'}
+                  ? text(`${selectedFiles.length} 个文件已选择`, `${selectedFiles.length} files selected`)
+                  : text('支持 .txt / .md 文件（单个或多个）', 'Supports one or more .txt / .md files')}
               </div>
               <Button variant="outline" onClick={handleSelectFiles} disabled={splitting}>
                 <FolderOpen size={14} />
-                选择
+                {text('选择', 'Choose')}
               </Button>
             </div>
           </div>
@@ -155,7 +158,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
               style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-text-secondary)' }}>
               <div className="animate-spin w-3 h-3 border-2 border-current border-t-transparent rounded-full" />
-              正在拆章并准备结构拆解...
+              {text('正在拆章并准备结构拆解...', 'Splitting chapters and preparing analysis...')}
             </div>
           )}
 
@@ -174,13 +177,16 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
               <div className="flex items-center gap-4 px-3 py-2"
                 style={{ backgroundColor: 'var(--color-hover)' }}>
                 <span className="text-xs font-medium" style={{ color: 'var(--color-text)' }}>
-                  共 {chapters.length} 章
+                  {text(`共 ${chapters.length} 章`, `${chapters.length} chapters`)}
                 </span>
                 <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  {totalWords.toLocaleString()} 字
+                  {text(`${totalWords.toLocaleString()} 字`, `${totalWords.toLocaleString()} words`)}
                 </span>
                 <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  平均 {Math.round(totalWords / chapters.length).toLocaleString()} 字/章
+                  {text(
+                    `平均 ${Math.round(totalWords / chapters.length).toLocaleString()} 字/章`,
+                    `Average ${Math.round(totalWords / chapters.length).toLocaleString()} words/chapter`,
+                  )}
                 </span>
               </div>
               {/* 章节列表（最多显示 8 行 + 省略） */}
@@ -188,16 +194,16 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 {chapters.slice(0, 8).map((ch) => (
                   <div key={ch.number} className="flex items-center justify-between text-xs">
                     <span style={{ color: 'var(--color-text-secondary)' }}>
-                      第{ch.number}章 {ch.title}
+                      {text(`第${ch.number}章 ${ch.title}`, `Chapter ${ch.number} ${ch.title}`)}
                     </span>
                     <span style={{ color: 'var(--color-text-muted)' }}>
-                      {ch.wordCount.toLocaleString()} 字
+                      {text(`${ch.wordCount.toLocaleString()} 字`, `${ch.wordCount.toLocaleString()} words`)}
                     </span>
                   </div>
                 ))}
                 {chapters.length > 8 && (
                   <div className="text-xs text-center py-1" style={{ color: 'var(--color-text-muted)' }}>
-                    ··· 还有 {chapters.length - 8} 章 ···
+                    {text(`还有 ${chapters.length - 8} 章`, `${chapters.length - 8} more chapters`)}
                   </div>
                 )}
               </div>
@@ -206,26 +212,26 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
           {/* ===== 项目信息 ===== */}
           <div>
-            <Label>新项目名称</Label>
+            <Label>{text('新项目名称', 'New project name')}</Label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="拆解后创建的新项目名称"
+              placeholder={text('拆解后创建的新项目名称', 'Name for the analyzed project')}
             />
           </div>
 
           <div>
-            <Label>保存位置</Label>
+            <Label>{text('保存位置', 'Save location')}</Label>
             <div className="flex gap-2">
               <Input
                 value={savePath}
                 onChange={(e) => setSavePath(e.target.value)}
-                placeholder="选择项目保存目录"
+                placeholder={text('选择项目保存目录', 'Choose a project folder')}
                 className="flex-1"
               />
               <Button variant="outline" onClick={handleSelectFolder}>
                 <FolderOpen size={14} />
-                选择
+                {text('选择', 'Choose')}
               </Button>
             </div>
           </div>
@@ -240,30 +246,39 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
               <div className="flex items-center gap-1.5">
                 <Zap size={13} style={{ color: 'var(--color-accent)' }} />
                 <span className="text-xs font-medium" style={{ color: 'var(--color-text)' }}>
-                  预估 AI 消耗
+                  {text('预估 AI 消耗', 'Estimated AI usage')}
                 </span>
               </div>
               <div className="text-xs space-y-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                {costEstimate.breakdown.split('\n').map((line, i) => (
-                  <div key={i}>{line}</div>
-                ))}
+                {(locale === 'zh-CN'
+                  ? costEstimate.breakdown.split('\n')
+                  : [
+                      `Global analysis: ~15K tokens`,
+                      `Chapter blueprints: ~${Math.max(0, costEstimate.estimatedTokens - 15000) / 1000}K tokens`,
+                      `Total: ~${costEstimate.estimatedTokens / 1000}K tokens`,
+                    ]).map((line, i) => <div key={i}>{line}</div>)}
               </div>
               <div className="flex items-center gap-1 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
                 <Clock size={11} />
-                预计耗时 ~{costEstimate.estimatedMinutes} 分钟（因模型速度而异）
+                {text(
+                  `预计耗时 ~${costEstimate.estimatedMinutes} 分钟（因模型速度而异）`,
+                  `About ${costEstimate.estimatedMinutes} minutes, depending on model speed`,
+                )}
               </div>
             </div>
           )}
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>取消</Button>
+          <Button variant="ghost" onClick={onClose}>{text('取消', 'Cancel')}</Button>
           <Button
             onClick={handleImport}
             disabled={importing || !name.trim() || !savePath.trim() || chapters.length === 0}
           >
             <FileUp size={14} />
-            {importing ? '拆解中...' : `开始拆解仿写（${chapters.length} 章）`}
+            {importing
+              ? text('拆解中...', 'Analyzing...')
+              : text(`开始拆解仿写（${chapters.length} 章）`, `Start analysis (${chapters.length} chapters)`)}
           </Button>
         </DialogFooter>
       </DialogContent>

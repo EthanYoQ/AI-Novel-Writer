@@ -3,6 +3,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { ReviewPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
+import { searchKB } from '../../knowledge-service'
 
 
 export interface ReviewChapterParams {
@@ -33,7 +34,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     try {
       // 从待审内容中提取前 200 字作为检索 query
       const queryText = draft.slice(0, 200)
-      const results = await ipc.invoke('kb:search', queryText, 5)
+      const results = await searchKB(queryText, 5)
       if (results.length > 0) {
         contextSummary = results
           .map((r: { fileName: string; score: number; text: string }, i: number) =>

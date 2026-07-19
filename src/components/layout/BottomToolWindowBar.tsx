@@ -1,12 +1,13 @@
 import { Zap, ScrollText, Cpu } from 'lucide-react'
 import { useLayoutStore, type BottomTab } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
+import { useLocaleStore } from '../../stores/locale-store'
 
 /** 底部工具窗口每个 Tab 对应的按钮配置 */
-const bottomTabs: Array<{ id: BottomTab; icon: typeof Zap; label: string }> = [
-  { id: 'tasks',  icon: Zap,        label: '任务'    },
-  { id: 'log',    icon: ScrollText, label: '日志'    },
-  { id: 'models', icon: Cpu,        label: '模型'    },
+const bottomTabs: Array<{ id: BottomTab; icon: typeof Zap; zh: string; en: string }> = [
+  { id: 'tasks',  icon: Zap,        zh: '任务', en: 'Tasks' },
+  { id: 'log',    icon: ScrollText, zh: '日志', en: 'Logs' },
+  { id: 'models', icon: Cpu,        zh: '模型', en: 'Models' },
 ]
 
 /**
@@ -18,6 +19,7 @@ export default function BottomToolWindowBar() {
   const bottomTab = useLayoutStore(s => s.bottomTab)
   const setBottomTab = useLayoutStore(s => s.setBottomTab)
   const activeRuns = useWorkflowStore(s => s.activeRuns)
+  const text = useLocaleStore(s => s.text)
 
   return (
     <div
@@ -29,7 +31,8 @@ export default function BottomToolWindowBar() {
         flexShrink: 0,
       }}
     >
-      {bottomTabs.map(({ id, icon: Icon, label }) => {
+      {bottomTabs.map(({ id, icon: Icon, zh, en }) => {
+        const label = text(zh, en)
         const isActive = bottomTab === id
         // 任务Tab：任何工作流运行中时显示脉冲小点
         const hasRunning = activeRuns.some(r => r.status === 'running')

@@ -5,6 +5,7 @@ import { useLLMStore } from '../../stores/llm-store'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { APP_BRAND } from '../../shared/brand'
+import { useLocaleStore } from '../../stores/locale-store'
 
 /** 底部状态栏 — JetBrains 风格：22px、深灰底、多分段、hover 可点击感 */
 export default function StatusBar() {
@@ -15,6 +16,7 @@ export default function StatusBar() {
   const defaultModel = models.find(
     (m) => m.id === defaultModelId && m.purposes?.some((p) => p !== 'embedding')
   )
+  const text = useLocaleStore(s => s.text)
 
   return (
     <div
@@ -27,7 +29,7 @@ export default function StatusBar() {
     >
       {/* 左侧 */}
       <div className="flex items-center h-full">
-        <StatusBarSegment title={APP_BRAND.zhName}>
+        <StatusBarSegment title={text(APP_BRAND.zhName, APP_BRAND.enName)}>
           <BookOpen size={11} />
           <span className="font-medium brand-gradient">{APP_BRAND.shortName}</span>
           <span className="opacity-80 brand-gradient">v{__APP_VERSION__}</span>
@@ -52,7 +54,7 @@ export default function StatusBar() {
 
         {defaultModel ? (
           <StatusBarSegment
-            title={`当前模型：${defaultModel.name}`}
+            title={text(`当前模型：${defaultModel.name}`, `Current model: ${defaultModel.name}`)}
             onClick={openSettings}
           >
             <Wifi size={11} />
@@ -60,10 +62,10 @@ export default function StatusBar() {
           </StatusBarSegment>
         ) : (
           <StatusBarSegment
-            title="点击配置模型"
+            title={text('点击配置模型', 'Click to configure a model')}
             onClick={openSettings}
           >
-            <span className="opacity-50">未配置模型</span>
+            <span className="opacity-50">{text('未配置模型', 'No model configured')}</span>
           </StatusBarSegment>
         )}
       </div>
@@ -82,6 +84,7 @@ export default function StatusBar() {
  * - 完成后短暂显示完成态然后淡出
  */
 function AITaskCapsule() {
+  const text = useLocaleStore(s => s.text)
   // 使用 selector 精确订阅，避免 globalLogs 等高频字段导致被动重渲染
   const activeRuns = useWorkflowStore(s => s.activeRuns)
   const getActiveStepInfo = useWorkflowStore(s => s.getActiveStepInfo)
@@ -123,7 +126,9 @@ function AITaskCapsule() {
         onClick={() => useLayoutStore.getState().openRightPanel('ai-output')}
       >
         <CheckCircle2 size={10} />
-        <span className="truncate">{completedTitle.replace(/^[^\s]+\s/, '')} 完成</span>
+        <span className="truncate">
+          {text(`${completedTitle.replace(/^[^\s]+\s/, '')} 完成`, `${completedTitle.replace(/^[^\s]+\s/, '')} complete`)}
+        </span>
       </div>
     )
   }
@@ -139,14 +144,14 @@ function AITaskCapsule() {
       <div
         className="ai-task-capsule"
         onClick={() => useLayoutStore.getState().openRightPanel('ai-output')}
-        title="点击查看任务进度"
+        title={text('点击查看任务进度', 'View task progress')}
       >
         {/* 脉冲圆点 */}
         <span
           className="w-[5px] h-[5px] rounded-full animate-pulse flex-shrink-0"
           style={{ backgroundColor: 'var(--color-accent)' }}
         />
-        <span>{activeRuns.length}个任务运行中...</span>
+        <span>{text(`${activeRuns.length}个任务运行中...`, `${activeRuns.length} tasks running...`)}</span>
       </div>
     )
   }
@@ -157,7 +162,7 @@ function AITaskCapsule() {
     <div
       className="ai-task-capsule"
       onClick={() => useLayoutStore.getState().openRightPanel('ai-output')}
-      title="点击查看 AI 输出详情"
+      title={text('点击查看 AI 输出详情', 'View AI output')}
     >
       {/* 脉冲圆点 */}
       <span

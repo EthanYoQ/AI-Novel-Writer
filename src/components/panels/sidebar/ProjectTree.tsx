@@ -26,9 +26,18 @@ import {
 } from './SidebarShared'
 import DraftBoxGroup from './DraftBoxGroup'
 import ManuscriptGroup from './ManuscriptGroup'
+import { useLocaleStore } from '../../../stores/locale-store'
+
+const ARCH_FILE_EN: Record<string, { label: string; desc: string }> = {
+  premise: { label: 'Premise', desc: 'Core premise and conflict' },
+  characters: { label: 'Character map', desc: 'Character arcs and relationships' },
+  worldbuilding: { label: 'World building', desc: 'World rules and systems' },
+  synopsis: { label: 'Plot synopsis', desc: 'Overall plot structure' },
+}
 
 export default function ProjectTree() {
   const currentProject = useProjectStore(s => s.currentProject)
+  const text = useLocaleStore(s => s.text)
 
   // refreshFileTree / loadAllDrafts 在 refreshAll 内通过 getState() 调用
   // 只订阅 activeRuns
@@ -85,7 +94,7 @@ export default function ProjectTree() {
       <div className="writer-project-tree h-full">
         <EmptyState
           icon={<span className="text-4xl opacity-60" style={{ color: 'var(--color-text-muted)' }}><FolderOpen size={36} /></span>}
-          message="未打开项目"
+          message={text('未打开项目', 'No project open')}
           className="p-4 pb-[15vh]"
           opacity={1}
         >
@@ -93,7 +102,7 @@ export default function ProjectTree() {
             className="text-xs text-center mt-0.5"
             style={{ color: 'var(--color-text-muted)' }}
           >
-            新建或打开一个小说项目开始创作
+            {text('新建或打开一个小说项目开始创作', 'Create or open a novel project to begin.')}
           </span>
           {/* 操作按钮 */}
           <div className="flex flex-col gap-2 mt-3 w-full">
@@ -102,7 +111,7 @@ export default function ProjectTree() {
               className="w-full"
               onClick={() => useLayoutStore.getState().openNewProject()}
             >
-              新建项目
+              {text('新建项目', 'New project')}
             </Button>
             <Button
               variant="outline"
@@ -114,7 +123,7 @@ export default function ProjectTree() {
                 }
               }}
             >
-              打开项目
+              {text('打开项目', 'Open project')}
             </Button>
           </div>
         </EmptyState>
@@ -158,9 +167,9 @@ export default function ProjectTree() {
             title={clearDisabled ? '工作流运行中，暂不能清除' : '清除项目生成内容'}
           >
             <Trash2 size={12} />
-            清除全部
+            {text('清除全部', 'Clear all')}
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => refreshAll()} title="刷新">
+          <Button variant="ghost" size="icon" onClick={() => refreshAll()} title={text('刷新', 'Refresh')}>
             <RefreshCw size={12} />
           </Button>
         </div>
@@ -175,9 +184,9 @@ export default function ProjectTree() {
       {/* 1. 小说配置 */}
       <LeafItem
         iconName="book-open"
-        label="小说配置"
-        desc="基础参数与写作要求"
-        badge={configDone ? '已完成' : '待配置'}
+        label={text('小说配置', 'Novel configuration')}
+        desc={text('基础参数与写作要求', 'Core parameters and writing guidance')}
+        badge={configDone ? text('已完成', 'Complete') : text('待配置', 'Pending')}
         badgeDone={configDone}
         onClick={() => {
           const state = useEditorStore.getState()
@@ -209,9 +218,9 @@ export default function ProjectTree() {
       {/* 3. 章节蓝图 — 点击打开编辑器页 */}
       <LeafItem
         iconName="layout-list"
-        label="章节蓝图"
-        desc="AI 生成的章节目录，可编辑"
-        badge={blueprintCount > 0 ? `${blueprintCount}/${nc.totalChapters} 章` : '待生成'}
+        label={text('章节蓝图', 'Chapter blueprints')}
+        desc={text('AI 生成的章节目录，可编辑', 'Editable AI-generated chapter plans')}
+        badge={blueprintCount > 0 ? text(`${blueprintCount}/${nc.totalChapters} 章`, `${blueprintCount}/${nc.totalChapters} chapters`) : text('待生成', 'Pending')}
         badgeColor={
           blueprintCount >= nc.totalChapters
             ? 'var(--color-success)'
@@ -253,6 +262,7 @@ function WorldBuildingGroup({
   onCleared: () => void | Promise<void>
 }) {
   const [open, setOpen] = useState(true)
+  const text = useLocaleStore(s => s.text)
 
   const allDone = archDone === ARCH_FILES.length
 
@@ -262,8 +272,8 @@ function WorldBuildingGroup({
       <div
         className="tree-item gap-1.5 cursor-pointer select-none"
         style={{ paddingLeft: 10 }}
-        onClick={() => openBuiltinEditor('world-building-editor', '故事架构', 'world-building')}
-        title="打开故事架构编辑器（可生成架构文档）"
+        onClick={() => openBuiltinEditor('world-building-editor', text('故事架构', 'Story architecture'), 'world-building')}
+        title={text('打开故事架构编辑器（可生成架构文档）', 'Open the story architecture editor')}
       >
         <span
           style={{ width: 12, flexShrink: 0, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
@@ -275,7 +285,7 @@ function WorldBuildingGroup({
           }
         </span>
         <FolderTree size={14} style={{ color: 'var(--color-text-muted)' }} />
-        <span className="text-sm font-medium flex-1 min-w-0 truncate" style={{ color: 'var(--color-text)' }}>故事架构</span>
+        <span className="text-sm font-medium flex-1 min-w-0 truncate" style={{ color: 'var(--color-text)' }}>{text('故事架构', 'Story architecture')}</span>
         {/* 进度徽章 */}
         <span
           className="text-[0.7rem] flex-shrink-0 ml-1"
@@ -325,10 +335,13 @@ function ArchFileRow({
   isGenerated: boolean
   onCleared: () => void | Promise<void>
 }) {
+  const text = useLocaleStore(s => s.text)
+  const english = ARCH_FILE_EN[f.key] ?? { label: f.label, desc: f.desc }
+  const label = text(f.label, english.label)
   const clearArchFile = async () => {
-    const ok = await confirm(`确认清空「${f.label}」内容？\n此操作会删除该项故事架构文本，不影响其他架构项、蓝图或正文。`, {
-      title: '清空故事架构项',
-      confirmText: '清空',
+    const ok = await confirm(text(`确认清空「${f.label}」内容？\n此操作会删除该项故事架构文本，不影响其他架构项、蓝图或正文。`, `Clear “${english.label}”?\nThis removes only this architecture section and preserves the other sections, blueprints, and manuscript.`), {
+      title: text('清空故事架构项', 'Clear architecture section'),
+      confirmText: text('清空', 'Clear'),
       danger: true,
     })
     if (!ok) return
@@ -336,14 +349,14 @@ function ArchFileRow({
     const { writeCoreContent } = await import('../../../services/vela-protocol')
     const success = await writeCoreContent(filePath, '')
     if (!success) {
-      toast.error(`清空「${f.label}」失败`)
+      toast.error(text(`清空「${f.label}」失败`, `Could not clear “${english.label}”`))
       return
     }
 
     const store = useEditorStore.getState()
     store.syncTabContent(filePath, '')
     store.markTabSaved(filePath)
-    toast.success(`已清空「${f.label}」`)
+    toast.success(text(`已清空「${f.label}」`, `Cleared “${english.label}”`))
     await onCleared()
   }
 
@@ -351,32 +364,32 @@ function ArchFileRow({
     <div
       className="tree-item gap-1.5 cursor-pointer select-none"
       style={{ paddingLeft: 26 }}
-      onClick={() => openArchFile(filePath, `${f.label}`)}
+      onClick={() => openArchFile(filePath, label)}
       onContextMenu={e => showSidebarMenu([
         {
           key: 'open',
-          label: '打开文件',
+          label: text('打开文件', 'Open file'),
           icon: <FolderOpen size={13} />,
-          onClick: () => openArchFile(filePath, `${f.label}`),
+          onClick: () => openArchFile(filePath, label),
         },
         { key: 'div1', type: 'divider' as const },
         {
           key: 'copy-path',
-          label: '复制文件路径',
+          label: text('复制文件路径', 'Copy file path'),
           icon: <Copy size={13} />,
           onClick: () => navigator.clipboard.writeText(filePath).catch(() => { }),
         },
         { key: 'div2', type: 'divider' as const },
         {
           key: 'delete',
-          label: `清空${f.label}`,
+          label: text(`清空${f.label}`, `Clear ${english.label}`),
           icon: <Trash2 size={13} />,
           danger: true,
           disabled: !isGenerated,
           onClick: clearArchFile,
         },
       ], e)}
-      title={f.desc}
+      title={text(f.desc, english.desc)}
     >
       {isGenerated
         ? <CheckCircle2 size={10} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
@@ -387,18 +400,18 @@ function ArchFileRow({
         className="text-sm flex-1 truncate"
         style={{ color: isGenerated ? 'var(--color-text)' : 'var(--color-text-secondary)' }}
       >
-        {f.label}
+        {label}
       </span>
       {!isGenerated && (
         <span className="text-[0.7rem] flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
-          待生成
+          {text('待生成', 'Pending')}
         </span>
       )}
       {isGenerated && (
         <button
           type="button"
           className="opacity-70 hover:opacity-100 rounded p-0.5"
-          title={`清空${f.label}`}
+          title={text(`清空${f.label}`, `Clear ${english.label}`)}
           onClick={(e) => {
             e.stopPropagation()
             clearArchFile()

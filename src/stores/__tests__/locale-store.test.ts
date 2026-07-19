@@ -47,4 +47,17 @@ describe('locale store', () => {
     expect(setDocumentLanguage).toHaveBeenCalledWith('en-US')
     expect(state.getState().locale).toBe('en-US')
   })
+
+  it('localizes colocated component copy with the active locale', async () => {
+    const state = createStore(createLocaleState({
+      loadConfig: async () => ({}),
+      saveLocale: vi.fn(),
+      systemLocale: () => 'en-US',
+      setDocumentLanguage: vi.fn(),
+    }))
+
+    expect(state.getState().text('中文', 'English')).toBe('English')
+    await state.getState().setLocale('zh-CN')
+    expect(state.getState().text('中文', 'English')).toBe('中文')
+  })
 })

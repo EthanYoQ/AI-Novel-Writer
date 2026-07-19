@@ -1,6 +1,7 @@
 import { Bot, Sparkles } from 'lucide-react'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
+import { useLocaleStore } from '../../stores/locale-store'
 
 /**
  * 右侧工具窗口栏（RightToolWindowBar）
@@ -8,6 +9,7 @@ import { useWorkflowStore } from '../../stores/workflow-store'
  * 支持 Agent 面板和 AI 输出面板之间切换
  */
 export default function RightToolWindowBar() {
+  const text = useLocaleStore(s => s.text)
   const aiPanelOpen = useLayoutStore(s => s.aiPanelOpen)
   const rightView = useLayoutStore(s => s.rightView)
   const toggleAIPanel = useLayoutStore(s => s.toggleAIPanel)
@@ -45,7 +47,7 @@ export default function RightToolWindowBar() {
       {/* AI Agent 面板按钮 */}
       <button
         onClick={() => handleClick('agent')}
-        title="AI Agent 面板"
+        title={text('AI Agent 面板', 'AI agent panel')}
         className="tool-btn"
         style={{
           height: 30,
@@ -63,7 +65,7 @@ export default function RightToolWindowBar() {
       {/* AI 输出面板按钮 */}
       <button
         onClick={() => handleClick('ai-output')}
-        title="AI 输出"
+        title={text('AI 输出', 'AI output')}
         className="tool-btn relative"
         style={{
           height: 30,

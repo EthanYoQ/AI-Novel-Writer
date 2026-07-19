@@ -1,5 +1,7 @@
 import { Component, createContext } from 'react'
 import type { ReactNode, ErrorInfo, ContextType } from 'react'
+import { AlertTriangle } from 'lucide-react'
+import { useLocaleStore } from '../stores/locale-store'
 
 interface Props {
   children: ReactNode
@@ -33,6 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
+      const text = useLocaleStore.getState().text
       return (
         <div
           style={{
@@ -47,9 +50,9 @@ export class ErrorBoundary extends Component<Props, State> {
             color: 'var(--color-text)',
           }}
         >
-          <span style={{ fontSize: 32 }}>⚠️</span>
+          <AlertTriangle size={32} aria-hidden="true" />
           <p style={{ fontWeight: 600, fontSize: 14 }}>
-            {this.props.fallbackLabel || '组件渲染出错'}
+            {this.props.fallbackLabel || text('组件渲染出错', 'Component failed to render')}
           </p>
           <pre
             style={{
@@ -83,7 +86,7 @@ export class ErrorBoundary extends Component<Props, State> {
             }}
             onClick={() => this.setState({ hasError: false, error: null, componentStack: '' })}
           >
-            重试
+            {text('重试', 'Retry')}
           </button>
         </div>
       )

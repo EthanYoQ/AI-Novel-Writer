@@ -28,17 +28,19 @@ import type { Locale } from '../../i18n/types'
 interface SectionItem {
   id: SettingsSection
   label: string
+  labelEn: string
   icon: React.ReactNode
   description: string
+  descriptionEn: string
 }
 
 const SECTIONS: SectionItem[] = [
-  { id: 'llm', label: 'AI 生成模型', icon: <Cpu size={16} />, description: '配置用于文章生成、改写、摘要的语言模型' },
-  { id: 'embedding', label: '向量模型', icon: <Database size={16} />, description: '配置用于知识库检索的 Embedding 模型' },
-  { id: 'proxy', label: '网络代理', icon: <Globe size={16} />, description: '配置 HTTP / SOCKS5 代理，用于访问受限 API' },
-  { id: 'editor', label: '编辑器', icon: <Type size={16} />, description: '字体大小、自动保存等编辑器偏好设置' },
-  { id: 'prompts', label: '提示词模板', icon: <MessageSquare size={16} />, description: '自定义 AI 创作各环节使用的提示词模板' },
-  { id: 'about', label: '关于', icon: <Info size={16} />, description: '版本、定位与本地部署说明' },
+  { id: 'llm', label: 'AI 生成模型', labelEn: 'Generation models', icon: <Cpu size={16} />, description: '配置用于文章生成、改写、摘要的语言模型', descriptionEn: 'Models used for writing, rewriting, and summarization' },
+  { id: 'embedding', label: '向量模型', labelEn: 'Embedding model', icon: <Database size={16} />, description: '配置用于知识库检索的 Embedding 模型', descriptionEn: 'Embedding model used for knowledge retrieval' },
+  { id: 'proxy', label: '网络代理', labelEn: 'Network proxy', icon: <Globe size={16} />, description: '配置 HTTP / SOCKS5 代理，用于访问受限 API', descriptionEn: 'HTTP / SOCKS5 proxy for restricted APIs' },
+  { id: 'editor', label: '编辑器', labelEn: 'Editor', icon: <Type size={16} />, description: '字体大小、自动保存等编辑器偏好设置', descriptionEn: 'Fonts and other editor preferences' },
+  { id: 'prompts', label: '提示词模板', labelEn: 'Prompt templates', icon: <MessageSquare size={16} />, description: '自定义 AI 创作各环节使用的提示词模板', descriptionEn: 'Customize guidance for each AI writing stage' },
+  { id: 'about', label: '关于', labelEn: 'About', icon: <Info size={16} />, description: '版本、定位与本地部署说明', descriptionEn: 'Version, positioning, and local deployment' },
 ]
 
 // ==================== 主组件 ====================
@@ -50,6 +52,7 @@ interface SettingsModalProps {
 
 /** 全屏设置弹窗 */
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
+  const text = useLocaleStore(s => s.text)
   const requestedSection = useLayoutStore(s => s.settingsSection)
   const [section, setSection] = useState<SettingsSection>(requestedSection)
 
@@ -86,7 +89,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           <div className="flex items-center gap-2 px-4 mb-4">
             <Settings2 size={16} style={{ color: 'var(--color-accent)' }} />
             <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
-              设置
+              {text('设置', 'Settings')}
             </span>
           </div>
 
@@ -102,7 +105,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               )}
             >
               {s.icon}
-              {s.label}
+              {text(s.label, s.labelEn)}
             </button>
           ))}
         </aside>
@@ -116,10 +119,10 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           >
             <div>
               <h2 className="text-base font-semibold" style={{ color: 'var(--color-text)' }}>
-                {SECTIONS.find((s) => s.id === section)?.label}
+                {(() => { const item = SECTIONS.find(s => s.id === section); return item ? text(item.label, item.labelEn) : '' })()}
               </h2>
               <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                {SECTIONS.find((s) => s.id === section)?.description}
+                {(() => { const item = SECTIONS.find(s => s.id === section); return item ? text(item.description, item.descriptionEn) : '' })()}
               </p>
             </div>
             <button
@@ -133,8 +136,8 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
 
           {/* 区域内容 */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
-            {section === 'llm' && <LLMSection purposes={['generation', 'refinement', 'summary']} purposeLabel="生成模型" />}
-            {section === 'embedding' && <LLMSection purposes={['embedding']} purposeLabel="向量模型" />}
+            {section === 'llm' && <LLMSection purposes={['generation', 'refinement', 'summary']} purposeLabel={text('生成模型', 'generation models')} />}
+            {section === 'embedding' && <LLMSection purposes={['embedding']} purposeLabel={text('向量模型', 'embedding models')} />}
             {section === 'proxy' && <ProxySection />}
             {section === 'editor' && <EditorSection />}
             {section === 'prompts' && <PromptSettings />}
@@ -155,6 +158,7 @@ function LLMSection({
   purposes: ModelProfile['purposes']
   purposeLabel: string
 }) {
+  const text = useLocaleStore(s => s.text)
   const models = useLLMStore(s => s.models)
   const defaultModelId = useLLMStore(s => s.defaultModelId)
   const defaultEmbeddingModelId = useLLMStore(s => s.defaultEmbeddingModelId)
@@ -239,11 +243,11 @@ function LLMSection({
         <>
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium" style={{ color: 'var(--color-text-muted)' }}>
-              已配置 {filtered.length} 个{purposeLabel}
+              {text(`已配置 ${filtered.length} 个${purposeLabel}`, `${filtered.length} ${purposeLabel} configured`)}
             </span>
             <Button size="sm" onClick={handleAdd}>
               <Plus size={13} />
-              添加{purposeLabel}
+              {text(`添加${purposeLabel}`, `Add ${purposeLabel}`)}
             </Button>
           </div>
 
@@ -254,11 +258,11 @@ function LLMSection({
             >
               <Zap size={28} style={{ color: 'var(--color-text-muted)', opacity: 0.5 }} />
               <span className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-                暂无{purposeLabel}配置
+                {text(`暂无${purposeLabel}配置`, `No ${purposeLabel} configured`)}
               </span>
               <Button size="sm" variant="outline" onClick={handleAdd}>
                 <Plus size={13} />
-                添加第一个{purposeLabel}
+                {text(`添加第一个${purposeLabel}`, `Add first ${purposeLabel}`)}
               </Button>
             </div>
           ) : (
@@ -295,6 +299,7 @@ function ModelCard({
   onEdit: () => void
   onDelete: () => void
 }) {
+  const text = useLocaleStore(s => s.text)
   return (
     <div
       className={cn(
@@ -321,7 +326,7 @@ function ModelCard({
           </span>
           {isDefault && (
             <span className="text-[0.7rem] px-1.5 py-0.5 rounded-full bg-[var(--color-accent)] text-white flex-shrink-0">
-              默认
+              {text('默认', 'Default')}
             </span>
           )}
         </div>
@@ -335,7 +340,7 @@ function ModelCard({
         {!isDefault && (
           <button
             onClick={onSetDefault}
-            title="设为默认"
+            title={text('设为默认', 'Set as default')}
             className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
           >
             <Check size={14} />
@@ -343,14 +348,14 @@ function ModelCard({
         )}
         <button
           onClick={onEdit}
-          title="编辑"
+          title={text('编辑', 'Edit')}
           className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
         >
           <Settings2 size={14} />
         </button>
         <button
           onClick={onDelete}
-          title="删除"
+          title={text('删除', 'Delete')}
           className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-red-400"
         >
           <Trash2 size={14} />
@@ -376,6 +381,7 @@ function ModelForm({
   /** 服务商预设（来自 BUILTIN_PRESETS 常量） */
   presets: ProviderPreset[]
 }) {
+  const text = useLocaleStore(s => s.text)
   const [showKey, setShowKey] = useState(false)
   // 标记"模型标识"是否使用自定义输入模式
   const [customModelName, setCustomModelName] = useState(false)
@@ -457,23 +463,23 @@ function ModelForm({
       style={{ border: '1.5px solid var(--color-accent)', backgroundColor: 'var(--color-panel)' }}
     >
       <h3 className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
-        {model.name ? `编辑：${model.name}` : '新建模型配置'}
+        {model.name ? text(`编辑：${model.name}`, `Edit: ${model.name}`) : text('新建模型配置', 'New model configuration')}
       </h3>
 
       {/* 显示名称 */}
       <div>
-        <Label>显示名称</Label>
+        <Label>{text('显示名称', 'Display name')}</Label>
         <Input
           value={model.name}
           onChange={(e) => up('name', e.target.value)}
-          placeholder="如：DeepSeek 主力 / GPT-4o 备用"
+          placeholder={text('如：DeepSeek 主力 / GPT-4o 备用', 'e.g. DeepSeek primary / GPT-4o backup')}
         />
       </div>
 
       {/* 服务商 + 协议 */}
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <Label>服务商</Label>
+          <Label>{text('服务商', 'Provider')}</Label>
           <NativeSelect
             value={model.provider}
             onChange={(e) => handleProviderChange(e.target.value as ModelProfile['provider'])}
@@ -481,13 +487,13 @@ function ModelForm({
             <option value="openai">OpenAI</option>
             <option value="deepseek">DeepSeek</option>
             <option value="gemini">Google Gemini</option>
-            <option value="ollama">Ollama（本地）</option>
-            <option value="bigmodel">BigModel（智谱）</option>
-            <option value="custom">自定义</option>
+            <option value="ollama">{text('Ollama（本地）', 'Ollama (local)')}</option>
+            <option value="bigmodel">{text('BigModel（智谱）', 'BigModel (Zhipu)')}</option>
+            <option value="custom">{text('自定义', 'Custom')}</option>
           </NativeSelect>
         </div>
         <div>
-          <Label>调用协议</Label>
+          <Label>{text('调用协议', 'Protocol')}</Label>
           <NativeSelect
             value={model.protocol}
             onChange={(e) => up('protocol', e.target.value as 'openai' | 'gemini')}
@@ -501,7 +507,7 @@ function ModelForm({
       {/* 模型标识：有预设时显示下拉，否则纯输入 */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <Label className="mb-0">模型标识</Label>
+          <Label className="mb-0">{text('模型标识', 'Model ID')}</Label>
           {presetModels.length > 0 && (
             <button
               type="button"
@@ -520,7 +526,7 @@ function ModelForm({
               className="text-xs transition-colors"
               style={{ color: 'var(--color-accent)' }}
             >
-              {customModelName ? '← 从列表选择' : '手动输入 →'}
+              {customModelName ? text('从列表选择', 'Choose from list') : text('手动输入', 'Enter manually')}
             </button>
           )}
         </div>
@@ -534,7 +540,7 @@ function ModelForm({
             {presetModels.map((m) => (
               <option key={m.name} value={m.name}>{m.name}</option>
             ))}
-            <option value="__custom__">── 手动输入 ──</option>
+            <option value="__custom__">{text('手动输入', 'Enter manually')}</option>
           </NativeSelect>
         ) : (
           <div>
@@ -550,7 +556,7 @@ function ModelForm({
 
       {/* API 地址 */}
       <div>
-        <Label>API 地址</Label>
+        <Label>{text('API 地址', 'API URL')}</Label>
         <Input
           value={model.baseUrl}
           onChange={(e) => up('baseUrl', e.target.value)}
@@ -558,7 +564,7 @@ function ModelForm({
         />
         {model.provider !== 'custom' && (
           <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
-            已自动填入 {model.provider} 官方地址，如使用中转地址可手动修改
+            {text(`已自动填入 ${model.provider} 官方地址，如使用中转地址可手动修改`, `The official ${model.provider} URL was filled automatically. Edit it when using a gateway.`)}
           </p>
         )}
       </div>
@@ -571,7 +577,7 @@ function ModelForm({
             type={showKey ? 'text' : 'password'}
             value={model.apiKey}
             onChange={(e) => up('apiKey', e.target.value)}
-            placeholder={model.provider === 'ollama' ? '本地部署可留空' : 'sk-...'}
+            placeholder={model.provider === 'ollama' ? text('本地部署可留空', 'Optional for local deployment') : 'sk-...'}
             className="pr-9"
           />
           <button
@@ -588,7 +594,7 @@ function ModelForm({
       {!isEmbedding && (
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label>温度 (Temperature)</Label>
+            <Label>{text('温度', 'Temperature')}</Label>
             <Input
               type="number" min={0} max={2} step={0.1}
               value={model.temperature}
@@ -600,7 +606,7 @@ function ModelForm({
             />
           </div>
           <div>
-            <Label>最大 Tokens</Label>
+            <Label>{text('最大 Tokens', 'Maximum tokens')}</Label>
             <Input
               type="number"
               value={model.maxTokens}
@@ -621,7 +627,7 @@ function ModelForm({
           disabled={testing || !model.baseUrl || (!model.apiKey && model.provider !== 'ollama')}
         >
           <Zap size={13} />
-          {testing ? '测试中...' : '测试连接'}
+          {testing ? text('测试中...', 'Testing...') : text('测试连接', 'Test connection')}
         </Button>
         <Button
           className="flex-1"
@@ -629,13 +635,13 @@ function ModelForm({
           disabled={saving || !model.name || (!model.apiKey && model.provider !== 'ollama')}
         >
           <Save size={13} />
-          {saving ? '保存中...' : '保存配置'}
+          {saving ? text('保存中...', 'Saving...') : text('保存配置', 'Save configuration')}
         </Button>
-        <Button variant="ghost" onClick={onCancel}>取消</Button>
+        <Button variant="ghost" onClick={onCancel}>{text('取消', 'Cancel')}</Button>
       </div>
       {testResult && (
         <div className={`text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'} break-all`}>
-          {testResult.success ? '连接成功' : `连接失败: ${testResult.error}`}
+          {testResult.success ? text('连接成功', 'Connection succeeded') : text(`连接失败：${testResult.error}`, `Connection failed: ${testResult.error}`)}
         </div>
       )}
     </div>
@@ -646,6 +652,7 @@ function ModelForm({
 // ==================== 代理设置 ====================
 
 function ProxySection() {
+  const text = useLocaleStore(s => s.text)
   const [proxy, setProxy] = useState<{
     enabled: boolean; type: 'http' | 'socks5'; host: string; port: number
   }>({ enabled: false, type: 'http', host: '', port: 7890 })
@@ -681,15 +688,15 @@ function ProxySection() {
         style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-panel)' }}
       >
         <div>
-          <p className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>启用代理</p>
+          <p className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{text('启用代理', 'Enable proxy')}</p>
           <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-            所有 AI API 请求将通过代理发送
+            {text('所有 AI API 请求将通过代理发送', 'All AI API requests will be sent through the proxy.')}
           </p>
         </div>
         <Switch
           checked={proxy.enabled}
           onCheckedChange={(checked) => setProxy({ ...proxy, enabled: checked })}
-          aria-label="启用代理"
+          aria-label={text('启用代理', 'Enable proxy')}
         />
       </div>
 
@@ -700,7 +707,7 @@ function ProxySection() {
           style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-panel)' }}
         >
           <div>
-            <Label>代理类型</Label>
+            <Label>{text('代理类型', 'Proxy type')}</Label>
             <NativeSelect
               value={proxy.type}
               onChange={(e) => setProxy({ ...proxy, type: e.target.value as 'http' | 'socks5' })}
@@ -711,7 +718,7 @@ function ProxySection() {
           </div>
           <div className="grid grid-cols-[1fr_120px] gap-3">
             <div>
-              <Label>主机地址</Label>
+              <Label>{text('主机地址', 'Host')}</Label>
               <Input
                 value={proxy.host}
                 onChange={(e) => setProxy({ ...proxy, host: e.target.value })}
@@ -719,7 +726,7 @@ function ProxySection() {
               />
             </div>
             <div>
-              <Label>端口</Label>
+              <Label>{text('端口', 'Port')}</Label>
               <Input
                 type="number"
                 value={proxy.port}
@@ -736,7 +743,7 @@ function ProxySection() {
 
       <Button onClick={handleSave} disabled={saving}>
         {saved ? <Check size={13} /> : <Save size={13} />}
-        {saved ? '已保存' : saving ? '保存中...' : '保存代理配置'}
+        {saved ? text('已保存', 'Saved') : saving ? text('保存中...', 'Saving...') : text('保存代理配置', 'Save proxy settings')}
       </Button>
     </div>
   )
@@ -866,7 +873,7 @@ function FontSelect({
 
 function EditorSection() {
   const { writingFont, setWritingFont, uiFont, setUiFont } = useThemeStore()
-  const { locale, setLocale, t } = useLocaleStore()
+  const { locale, setLocale, t, text } = useLocaleStore()
 
   return (
     <div className="max-w-md space-y-5">
@@ -883,7 +890,7 @@ function EditorSection() {
           value={locale}
           onChange={(event) => void setLocale(event.target.value as Locale)}
         >
-          <option value="zh-CN">简体中文</option>
+          <option value="zh-CN">{text('简体中文', 'Simplified Chinese')}</option>
           <option value="en-US">English</option>
         </NativeSelect>
       </div>
@@ -892,9 +899,9 @@ function EditorSection() {
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>界面字体</p>
+            <p className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>{text('界面字体', 'Interface font')}</p>
             <p className="text-[0.68rem] mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-              左侧栏、菜单、对话框等 UI 区域
+              {text('左侧栏、菜单、对话框等 UI 区域', 'Sidebars, menus, dialogs, and other interface areas')}
             </p>
           </div>
         </div>
@@ -904,9 +911,9 @@ function EditorSection() {
       {/* 写作字体 */}
       <div className="space-y-1.5">
         <div>
-          <p className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>写作字体</p>
+          <p className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>{text('写作字体', 'Writing font')}</p>
           <p className="text-[0.68rem] mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-            草稿、终稿、架构文档等正文区域
+            {text('草稿、终稿、架构文档等正文区域', 'Drafts, manuscripts, and architecture documents')}
           </p>
         </div>
         <FontSelect value={writingFont} onChange={setWritingFont} />
@@ -917,8 +924,8 @@ function EditorSection() {
         className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs"
         style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-text-muted)' }}
       >
-        <span className="flex-shrink-0 mt-0.5" style={{ color: 'var(--color-text-muted)' }}>提示</span>
-        <span>所有字体已内置在应用中，无需网络连接，切换后立即生效。</span>
+        <span className="flex-shrink-0 mt-0.5" style={{ color: 'var(--color-text-muted)' }}>{text('提示', 'Note')}</span>
+        <span>{text('所有字体已内置在应用中，无需网络连接，切换后立即生效。', 'All fonts are bundled with the app and switch immediately without a network connection.')}</span>
       </div>
     </div>
   )
@@ -927,13 +934,14 @@ function EditorSection() {
 // ==================== 关于区 ====================
 
 function AboutSection() {
+  const text = useLocaleStore(s => s.text)
   return (
     <div className="space-y-6 max-w-[600px] p-2">
       <div
         className="flex flex-col items-center justify-center py-8 rounded-xl space-y-2"
         style={{ backgroundColor: 'var(--color-sidebar)', border: '1px solid var(--color-border)' }}
       >
-        <h1 className="text-2xl font-bold brand-gradient tracking-wider">{APP_BRAND.zhName}</h1>
+        <h1 className="text-2xl font-bold brand-gradient tracking-wider">{text(APP_BRAND.zhName, APP_BRAND.enName)}</h1>
         <p className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>{APP_BRAND.enName}</p>
         <p className="text-sm opacity-80" style={{ color: 'var(--color-text)' }}>v{__APP_VERSION__}</p>
       </div>
@@ -943,10 +951,10 @@ function AboutSection() {
           className="text-sm font-semibold pb-2"
           style={{ borderBottom: '1px solid var(--color-border)', color: 'var(--color-text)' }}
         >
-          本地写作工作台
+          {text('本地写作工作台', 'Local writing workspace')}
         </h3>
         <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
-          这是面向中文长篇小说、角色设定、章节蓝图和本地模型生成的桌面写作环境。默认优先使用本机模型与本地项目数据，适合离线创作、风格拆解、章节规划和长文续写。
+          {text('这是面向中文长篇小说、角色设定、章节蓝图和本地模型生成的桌面写作环境。默认优先使用本机模型与本地项目数据，适合离线创作、风格拆解、章节规划和长文续写。', 'A desktop writing environment for long-form fiction, character design, chapter blueprints, and local model generation. It prioritizes local models and project data for offline writing, style analysis, planning, and continuation.')}
         </p>
       </div>
 
@@ -955,12 +963,12 @@ function AboutSection() {
         style={{ color: 'var(--color-text-muted)' }}
       >
         <div className="rounded-xl p-3" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-panel)' }}>
-          <div className="text-xs font-semibold mb-1" style={{ color: 'var(--color-text)' }}>核心流程</div>
-          <p className="text-xs leading-relaxed">架构、角色、蓝图、草稿、评审、修订、定稿。</p>
+          <div className="text-xs font-semibold mb-1" style={{ color: 'var(--color-text)' }}>{text('核心流程', 'Core pipeline')}</div>
+          <p className="text-xs leading-relaxed">{text('架构、角色、蓝图、草稿、评审、修订、定稿。', 'Architecture, characters, blueprints, drafts, reviews, revisions, and final manuscripts.')}</p>
         </div>
         <div className="rounded-xl p-3" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-panel)' }}>
-          <div className="text-xs font-semibold mb-1" style={{ color: 'var(--color-text)' }}>模型连接</div>
-          <p className="text-xs leading-relaxed">支持 OpenAI 兼容接口、Ollama、本地与自定义供应商。</p>
+          <div className="text-xs font-semibold mb-1" style={{ color: 'var(--color-text)' }}>{text('模型连接', 'Model connections')}</div>
+          <p className="text-xs leading-relaxed">{text('支持 OpenAI 兼容接口、Ollama、本地与自定义供应商。', 'Supports OpenAI-compatible APIs, Ollama, local models, and custom providers.')}</p>
         </div>
       </div>
     </div>

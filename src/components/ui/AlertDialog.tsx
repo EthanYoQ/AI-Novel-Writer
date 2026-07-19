@@ -16,6 +16,7 @@ import { createRoot } from 'react-dom/client'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { Button } from './Button'
+import { useLocaleStore } from '../../stores/locale-store'
 
 // ===== 类型定义 =====
 
@@ -34,11 +35,14 @@ interface AlertDialogProps extends AlertOptions {
 // ===== 弹窗组件 =====
 
 function AlertDialog({
-  title = '发生错误',
+  title,
   message,
-  confirmText = '确定',
+  confirmText,
   onClose,
 }: AlertDialogProps) {
+  const text = useLocaleStore(s => s.text)
+  const resolvedTitle = title ?? text('发生错误', 'Error')
+  const resolvedConfirmText = confirmText ?? text('确定', 'OK')
   const [isExiting, setIsExiting] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
 
@@ -127,7 +131,7 @@ function AlertDialog({
               flex: 1,
             }}
           >
-            {title}
+          {resolvedTitle}
           </span>
         </div>
 
@@ -160,7 +164,7 @@ function AlertDialog({
             size="sm"
             onClick={handleClose}
           >
-            {confirmText}
+            {resolvedConfirmText}
           </Button>
         </div>
       </div>

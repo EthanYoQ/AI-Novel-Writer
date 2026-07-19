@@ -20,6 +20,7 @@ import KnowledgeOverview from '../pages/KnowledgeOverview'
 import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore, type EditorTab } from '../../stores/editor-store'
 import { useLayoutStore } from '../../stores/layout-store'
+import { useLocaleStore } from '../../stores/locale-store'
 
 
 import { ipc } from '../../services/ipc-client'
@@ -41,6 +42,7 @@ function ProseEditorWrapper({
   const fileName = tab.name
   // 追踪当前编辑器内容，供保存按钮使用（不触发重渲染）
   const currentContentRef = useRef(tab.content ?? '')
+  const text = useLocaleStore(s => s.text)
 
   const handleSave = async (text: string) => {
     setSaving(true)
@@ -70,7 +72,7 @@ function ProseEditorWrapper({
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {wordCount > 0 && (
             <span className="text-xs tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
-              {wordCount.toLocaleString()} 字
+              {text(`${wordCount.toLocaleString()} 字`, `${wordCount.toLocaleString()} words`)}
             </span>
           )}
           {/* 未保存圆点指示灯 */}
@@ -78,7 +80,7 @@ function ProseEditorWrapper({
             <span
               className="w-1.5 h-1.5 rounded-full"
               style={{ backgroundColor: 'var(--color-warning)' }}
-              title="有未保存的修改"
+              title={text('有未保存的修改', 'Unsaved changes')}
             />
           )}
           {/* 保存按钮（有改动时显示） */}
@@ -88,7 +90,7 @@ function ProseEditorWrapper({
               style={{ width: 24, height: 22 }}
               onClick={() => handleSave(currentContentRef.current)}
               disabled={saving}
-              title="保存（⌘S）"
+              title={text('保存（⌘S）', 'Save (⌘S)')}
             >
               <Save size={13} strokeWidth={1.5} />
             </button>
@@ -124,6 +126,7 @@ interface EditorAreaProps {
 
 /** 中间主编辑区 */
 export default function EditorArea({ onNewProject }: EditorAreaProps) {
+  const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore((s) => s.currentProject)
   const tabs = useEditorStore(s => s.tabs)
   const activeTabId = useEditorStore(s => s.activeTabId)
@@ -145,7 +148,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
       // 从 store 直接取最新值，避免闭包陈旧
       const latestTabs = useEditorStore.getState().tabs
       if (latestTabs.length === 0) {
-        openFile({ id: 'config', name: '小说配置', type: 'config' })
+        openFile({ id: 'config', name: text('小说配置', 'Novel configuration'), type: 'config' })
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,14 +261,14 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
       return [
         {
           key: 'close',
-          label: '关闭',
+          label: text('关闭', 'Close'),
           shortcut: '⌘W',
           disabled: tab?.pinned,
           onClick: () => tryCloseTab(tabId),
         },
         {
           key: 'close-others',
-          label: '关闭其他',
+          label: text('关闭其他', 'Close others'),
           disabled: !hasOthers || tab?.pinned,
           onClick: () => {
             const others = tabs
@@ -276,7 +279,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         },
         {
           key: 'close-right',
-          label: '关闭右侧所有',
+          label: text('关闭右侧所有', 'Close all to the right'),
           disabled: !hasRight,
           onClick: () => {
             const right = tabs
@@ -289,7 +292,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         { key: 'div1', type: 'divider' as const },
         {
           key: 'close-all',
-          label: '关闭所有',
+          label: text('关闭所有', 'Close all'),
           danger: true,
           onClick: () => {
             const all = tabs.filter(t => !t.pinned).map(t => t.id)
@@ -298,7 +301,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         },
       ]
     },
-    [tabs, tryCloseTab, tryBatchClose]
+    [tabs, tryCloseTab, tryBatchClose, text]
   )
 
   /** 构建三个点菜单项（Tab 操作 + 已打开 Tab 列表） */
@@ -312,14 +315,14 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
     return [
       {
         key: 'close-current',
-        label: '关闭',
+        label: text('关闭', 'Close'),
         shortcut: '⌘W',
         disabled: !hasActive || activeTab?.pinned,
         onClick: () => { if (activeTabId) tryCloseTab(activeTabId) },
       },
       {
         key: 'close-others',
-        label: '关闭其他',
+        label: text('关闭其他', 'Close others'),
         disabled: !hasActive || !hasOthers,
         onClick: () => {
           const others = tabs
@@ -330,7 +333,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
       },
       {
         key: 'close-right',
-        label: '关闭右侧所有',
+        label: text('关闭右侧所有', 'Close all to the right'),
         disabled: !hasActive || !hasRight,
         onClick: () => {
           const right = tabs
@@ -343,7 +346,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
       { key: 'div-close', type: 'divider' as const },
       {
         key: 'close-all',
-        label: '关闭所有',
+        label: text('关闭所有', 'Close all'),
         danger: true,
         onClick: () => {
           const all = tabs.filter(t => !t.pinned).map(t => t.id)
@@ -363,7 +366,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         })),
       ] : []),
     ]
-  }, [tabs, activeTabId, tryCloseTab, tryBatchClose, setActiveTab])
+  }, [tabs, activeTabId, tryCloseTab, tryBatchClose, setActiveTab, text])
 
   // ===== 条件渲染 =====
 
@@ -433,7 +436,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           <div className="text-center opacity-40">
             <PenTool size={36} style={{ color: 'var(--color-text-muted)', opacity: 0.5, display: 'block', margin: '0 auto 12px' }} />
             <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-              在左侧项目树中单击文件开始编辑
+              {text('在左侧项目树中单击文件开始编辑', 'Select a file in the project tree to start editing.')}
             </span>
           </div>
         </div>
@@ -519,7 +522,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                 <span
                   className="relative w-3.5 h-3.5 flex items-center justify-center ml-0.5 flex-shrink-0 rounded group/close hover:bg-[var(--color-hover)] cursor-pointer transition-colors"
                   onClick={e => { e.stopPropagation(); tryCloseTab(tab.id) }}
-                  title="有未保存的修改，点击关闭"
+                  title={text('有未保存的修改，点击关闭', 'Unsaved changes; click to close')}
                 >
                   {/* 默认显示实心圆点，颜色与标题栏警示灯一致 */}
                   <span
@@ -552,21 +555,21 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           <button
             className="icon-btn flex-shrink-0"
             onClick={() => switchTab('left')}
-            title="上一个编辑器"
+            title={text('上一个编辑器', 'Previous editor')}
           >
             <ChevronLeft size={14} />
           </button>
           <button
             className="icon-btn flex-shrink-0"
             onClick={() => switchTab('right')}
-            title="下一个编辑器"
+            title={text('下一个编辑器', 'Next editor')}
           >
             <ChevronRight size={14} />
           </button>
           <button
             ref={moreButtonRef}
             className="icon-btn flex-shrink-0"
-            title="已打开的编辑器"
+            title={text('已打开的编辑器', 'Open editors')}
             onClick={() => setMoreMenuOpen(prev => !prev)}
           >
             <MoreHorizontal size={14} />
@@ -611,7 +614,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
               className="text-sm whitespace-pre-wrap font-mono leading-6"
               style={{ color: 'var(--color-text)' }}
             >
-              {activeTab.content || '加载中...'}
+              {activeTab.content || text('加载中...', 'Loading...')}
             </pre>
           </div>
         )}
@@ -665,7 +668,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           >
             <DialogHeader className="px-4 py-0" style={{ height: 38, display: 'flex', alignItems: 'center' }}>
               <DialogTitle className="flex items-center gap-2 text-[0.8rem]">
-                修稿合并 — {activeTab?.name ?? '对比视图'}
+                {text(`修稿合并 — ${activeTab?.name ?? '对比视图'}`, `Revision merge — ${activeTab?.name ?? 'Comparison'}`)}
               </DialogTitle>
             </DialogHeader>
             <div className="flex-1 overflow-hidden" style={{ height: 'calc(85vh - 38px - 1px)' }}>
@@ -692,14 +695,14 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
 
 
                         if (result.success) {
-                          toast.success('✅ 合并完成，草稿已更新')
+                          toast.success(text('合并完成，草稿已更新', 'Merge complete; draft updated'))
                         } else {
-                          toast.error(`合并失败：${result.error}`)
+                          toast.error(text(`合并失败：${result.error}`, `Merge failed: ${result.error}`))
                         }
                       }
                     } catch (e) {
 
-                      toast.error(`合并出错：${e}`)
+                      toast.error(text(`合并出错：${e}`, `Merge error: ${e}`))
                     } finally {
                       useEditorStore.getState().closeTab(activeTab.id)
                     }
@@ -741,14 +744,14 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
       >
         <DialogContent className="max-w-[380px]">
           <DialogHeader>
-            <DialogTitle>关闭未保存的文件</DialogTitle>
+            <DialogTitle>{text('关闭未保存的文件', 'Close unsaved file')}</DialogTitle>
             <DialogDescription>
-              「{tabs.find(t => t.id === closeConfirm)?.name ?? '该文件'}」有未保存的修改。是否放弃修改并关闭？
+              {text(`「${tabs.find(t => t.id === closeConfirm)?.name ?? '该文件'}」有未保存的修改。是否放弃修改并关闭？`, `“${tabs.find(t => t.id === closeConfirm)?.name ?? 'This file'}” has unsaved changes. Discard them and close?`)}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2">
             <Button variant="ghost" onClick={() => setCloseConfirm(null)}>
-              取消
+              {text('取消', 'Cancel')}
             </Button>
             <Button
               variant="destructive"
@@ -757,7 +760,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                 setCloseConfirm(null)
               }}
             >
-              放弃修改
+              {text('放弃修改', 'Discard changes')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -770,7 +773,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
       >
         <DialogContent className="max-w-[400px]">
           <DialogHeader>
-            <DialogTitle>关闭多个文件</DialogTitle>
+            <DialogTitle>{text('关闭多个文件', 'Close multiple files')}</DialogTitle>
             <DialogDescription>
               {(() => {
                 const dirtyCount = (batchCloseConfirm ?? []).filter(
@@ -778,14 +781,14 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                 ).length
                 const total = (batchCloseConfirm ?? []).length
                 return dirtyCount > 0
-                  ? `即将关闭 ${total} 个文件，其中 ${dirtyCount} 个有未保存的修改。是否放弃修改并全部关闭？`
-                  : `即将关闭 ${total} 个文件。`
+                  ? text(`即将关闭 ${total} 个文件，其中 ${dirtyCount} 个有未保存的修改。是否放弃修改并全部关闭？`, `Close ${total} files? ${dirtyCount} have unsaved changes that will be discarded.`)
+                  : text(`即将关闭 ${total} 个文件。`, `Close ${total} files.`)
               })()}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2">
             <Button variant="ghost" onClick={() => setBatchCloseConfirm(null)}>
-              取消
+              {text('取消', 'Cancel')}
             </Button>
             <Button
               variant="destructive"
@@ -796,7 +799,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                 setBatchCloseConfirm(null)
               }}
             >
-              放弃修改并关闭
+              {text('放弃修改并关闭', 'Discard and close')}
             </Button>
           </DialogFooter>
         </DialogContent>

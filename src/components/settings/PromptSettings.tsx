@@ -15,19 +15,35 @@ import {
 import { useProjectStore } from '../../stores/project-store'
 import { Button } from '../ui/Button'
 import { cn } from '../../lib/utils'
+import { useLocaleStore } from '../../stores/locale-store'
 
 // ==================== 来源标签配置 ====================
 
 const SOURCE_CONFIG = {
-  builtin: { label: '内置', color: 'var(--color-text-muted)', bg: 'var(--color-hover)' },
-  global: { label: '全局', color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.1)' },
-  project: { label: '项目', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)' },
+  builtin: { label: '内置', labelEn: 'Built-in', color: 'var(--color-text-muted)', bg: 'var(--color-hover)' },
+  global: { label: '全局', labelEn: 'Global', color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.1)' },
+  project: { label: '项目', labelEn: 'Project', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)' },
 } as const
+
+const PROMPT_META_EN: Record<string, { name: string; description: string }> = {
+  generate_global_config: { name: 'Full configuration', description: 'Generate a complete novel configuration from a short idea' },
+  premise: { name: 'Story premise', description: 'Distill the central hook and chain of conflicts' },
+  character_dynamics: { name: 'Character map', description: 'Build character arcs, relationships, and conflicts' },
+  world_building: { name: 'World building', description: 'Build a world matrix that naturally creates conflict' },
+  synopsis: { name: 'Plot synopsis', description: 'Combine the architecture into a structured plot outline' },
+  first_chapter_draft: { name: 'First chapter draft', description: 'Generate the complete first chapter' },
+  next_chapter_draft: { name: 'Next chapter draft', description: 'Generate the next chapter from context and its blueprint' },
+  refine_chapter: { name: 'Chapter revision', description: 'Improve a draft for clarity, craft, and impact' },
+  consistency_check: { name: 'Consistency review', description: 'Check a chapter for continuity and consistency issues' },
+  analyze_writing_style: { name: 'Style analysis', description: 'Extract an actionable style profile from sample text' },
+  refine_from_review: { name: 'Review-driven revision', description: 'Revise a draft using findings from a review report' },
+}
 
 // ==================== 主组件 ====================
 
 /** 提示词模板设置面板 */
 export default function PromptSettings() {
+  const text = useLocaleStore(s => s.text)
   const project = useProjectStore((s) => s.currentProject)
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   // 强制刷新用（保存/恢复后 getPromptSource 的结果会变）
@@ -56,10 +72,9 @@ export default function PromptSettings() {
         className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs mb-4"
         style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-text-muted)' }}
       >
-        <span className="flex-shrink-0 mt-0.5" style={{ color: 'var(--color-text-muted)' }}>提示</span>
+        <span className="flex-shrink-0 mt-0.5" style={{ color: 'var(--color-text-muted)' }}>{text('提示', 'Note')}</span>
         <span>
-          自定义提示词仅修改 AI 的创作指导策略，输出格式约束（如 JSON schema）会自动追加，不受自定义影响。
-          支持两级覆盖：<strong>全局</strong>（所有小说生效）和<strong>项目</strong>（仅当前小说生效）。
+          {text('自定义提示词仅修改 AI 的创作指导策略，输出格式约束（如 JSON schema）会自动追加，不受自定义影响。支持两级覆盖：全局（所有小说生效）和项目（仅当前小说生效）。', 'Custom prompts change AI writing guidance only. Output constraints such as JSON schemas are appended automatically. Overrides can be global for all novels or project-specific.')}
         </span>
       </div>
 
@@ -104,6 +119,7 @@ function TemplateItem({
   projectPath: string | null
   onSaved: () => void
 }) {
+  const text = useLocaleStore(s => s.text)
   const [editContent, setEditContent] = useState(currentTemplate.content)
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
@@ -157,7 +173,7 @@ function TemplateItem({
     delete (template as Partial<PromptTemplate>).systemSuffix
     const ok = await saveCustomPrompt(template)
     setSaving(false)
-    setSaveResult(ok ? { type: 'success', msg: '已保存到全局配置' } : { type: 'error', msg: '保存失败' })
+    setSaveResult(ok ? { type: 'success', msg: text('已保存到全局配置', 'Saved to global settings') } : { type: 'error', msg: text('保存失败', 'Save failed') })
     if (ok) onSaved()
     setTimeout(() => setSaveResult(null), 3000)
   }
@@ -174,7 +190,7 @@ function TemplateItem({
     delete (template as Partial<PromptTemplate>).systemSuffix
     const ok = await saveProjectCustomPrompt(projectPath, template)
     setSaving(false)
-    setSaveResult(ok ? { type: 'success', msg: '已保存到当前项目' } : { type: 'error', msg: '保存失败' })
+    setSaveResult(ok ? { type: 'success', msg: text('已保存到当前项目', 'Saved to this project') } : { type: 'error', msg: text('保存失败', 'Save failed') })
     if (ok) onSaved()
     setTimeout(() => setSaveResult(null), 3000)
   }
@@ -188,7 +204,7 @@ function TemplateItem({
     await deleteCustomPrompt(builtinTemplate.key)
     setEditContent(builtinTemplate.content)
     setSaving(false)
-    setSaveResult({ type: 'success', msg: '已恢复为内置默认' })
+    setSaveResult({ type: 'success', msg: text('已恢复为内置默认', 'Restored built-in default') })
     onSaved()
     setTimeout(() => setSaveResult(null), 3000)
   }
@@ -214,17 +230,17 @@ function TemplateItem({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-              {builtinTemplate.name}
+              {text(builtinTemplate.name, PROMPT_META_EN[builtinTemplate.key]?.name ?? builtinTemplate.name)}
             </span>
             <span
               className="text-[0.65rem] px-1.5 py-0.5 rounded-full font-medium flex-shrink-0"
               style={{ color: sourceConf.color, backgroundColor: sourceConf.bg }}
             >
-              {sourceConf.label}
+              {text(sourceConf.label, sourceConf.labelEn)}
             </span>
           </div>
           <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--color-text-muted)' }}>
-            {builtinTemplate.description}
+            {text(builtinTemplate.description, PROMPT_META_EN[builtinTemplate.key]?.description ?? builtinTemplate.description)}
           </p>
         </div>
       </button>
@@ -235,7 +251,7 @@ function TemplateItem({
           {/* 变量标签栏 */}
           <div className="pt-3">
             <p className="text-[0.68rem] font-medium mb-1.5" style={{ color: 'var(--color-text-muted)' }}>
-              可用变量（点击插入到光标位置）
+              {text('可用变量（点击插入到光标位置）', 'Available variables (click to insert)')}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(builtinTemplate.variables).map(([varName, desc]) => (
@@ -287,11 +303,11 @@ function TemplateItem({
             >
               <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
               <span>
-                以下变量在原模板中使用但在当前内容中未找到：
+                {text('以下变量在原模板中使用但在当前内容中未找到：', 'Variables used by the built-in template are missing:')}
                 {missingVars.map((v) => (
                   <code key={v} className="mx-1 font-mono">{`{{${v}}}`}</code>
                 ))}
-                ，可能导致渲染时出现未替换的占位符。
+                {text('，可能导致渲染时出现未替换的占位符。', '. This may leave placeholders unresolved.')}
               </span>
             </div>
           )}
@@ -304,30 +320,30 @@ function TemplateItem({
               size="sm"
               onClick={handleSaveGlobal}
               disabled={saving}
-              title="保存到全局配置（所有小说生效）"
+              title={text('保存到全局配置（所有小说生效）', 'Save globally for all novels')}
             >
               <Globe size={12} />
-              保存到全局
+              {text('保存到全局', 'Save globally')}
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={handleSaveProject}
               disabled={saving || !projectPath}
-              title={projectPath ? '保存到当前项目（仅此小说生效）' : '请先打开一个项目'}
+              title={projectPath ? text('保存到当前项目（仅此小说生效）', 'Save for this project only') : text('请先打开一个项目', 'Open a project first')}
             >
               <FolderOpen size={12} />
-              保存到项目
+              {text('保存到项目', 'Save to project')}
             </Button>
             <Button
               variant="ghost"
               size="sm"
               onClick={handleReset}
               disabled={saving || source === 'builtin'}
-              title="恢复为内置默认版本"
+              title={text('恢复为内置默认版本', 'Restore built-in default')}
             >
               <RotateCcw size={12} />
-              恢复默认
+              {text('恢复默认', 'Restore default')}
             </Button>
           </div>
 

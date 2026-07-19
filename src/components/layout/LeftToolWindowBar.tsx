@@ -14,19 +14,20 @@ import {
 import { useLayoutStore, type SidebarView, type BottomTab } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { openBuiltinEditor } from '../panels/sidebar/SidebarShared'
+import { useLocaleStore } from '../../stores/locale-store'
 
 /** 左侧侧边栏视图按钮配置（不含 Home，它单独渲染） */
-const sidebarActivities: Array<{ id: SidebarView; icon: typeof FolderOpen; label: string }> = [
-  { id: 'project', icon: FolderOpen, label: '项目' },
-  { id: 'knowledge', icon: BookOpen, label: '小说' },
-  { id: 'characters', icon: Users, label: '角色' },
+const sidebarActivities: Array<{ id: SidebarView; icon: typeof FolderOpen; zh: string; en: string }> = [
+  { id: 'project', icon: FolderOpen, zh: '项目', en: 'Project' },
+  { id: 'knowledge', icon: BookOpen, zh: '小说', en: 'Novel' },
+  { id: 'characters', icon: Users, zh: '角色', en: 'Cast' },
 ]
 
 /** 底部面板 Tab 按钮配置 */
-const bottomTabs: Array<{ id: BottomTab; icon: typeof ListChecks; label: string }> = [
-  { id: 'tasks', icon: ListChecks, label: '任务' },
-  { id: 'log', icon: ScrollText, label: '日志' },
-  { id: 'models', icon: Cpu, label: '模型' },
+const bottomTabs: Array<{ id: BottomTab; icon: typeof ListChecks; zh: string; en: string }> = [
+  { id: 'tasks', icon: ListChecks, zh: '任务', en: 'Tasks' },
+  { id: 'log', icon: ScrollText, zh: '日志', en: 'Logs' },
+  { id: 'models', icon: Cpu, zh: '模型', en: 'Models' },
 ]
 
 function LeftNavButton({
@@ -81,6 +82,7 @@ export default function LeftToolWindowBar() {
   const setBottomTab = useLayoutStore(s => s.setBottomTab)
   const openSettings = useLayoutStore(s => s.openSettings)
   const currentRun = useWorkflowStore(s => s.currentRun)
+  const text = useLocaleStore(s => s.text)
 
   /** Home 按钮是否激活 */
   const homeActive = activeRailItem === 'home'
@@ -100,17 +102,18 @@ export default function LeftToolWindowBar() {
         {/* Home 按钮 — 点击切换到主页视图 */}
         <LeftNavButton
           icon={Home}
-          label="首页"
+          label={text('首页', 'Home')}
           active={homeActive}
           onClick={() => setSidebarView('home')}
-          title="欢迎页"
+          title={text('欢迎页', 'Welcome')}
         />
 
         {/* 分割线 */}
         <div className="writer-nav-divider w-8 my-1" style={{ height: 1 }} />
 
         {/* 侧边栏视图按钮 */}
-        {sidebarActivities.map(({ id, icon: Icon, label }) => {
+        {sidebarActivities.map(({ id, icon: Icon, zh, en }) => {
+          const label = text(zh, en)
           const isActive = activeRailItem === id
           return (
             <LeftNavButton
@@ -128,26 +131,26 @@ export default function LeftToolWindowBar() {
 
         <LeftNavButton
           icon={ListTree}
-          label="蓝图"
+          label={text('蓝图', 'Plot')}
           active={activeRailItem === 'blueprint'}
-          title="章节蓝图"
+          title={text('章节蓝图', 'Chapter blueprint')}
           onClick={() => {
             setSidebarView('project', 'blueprint')
-            openBuiltinEditor('chapter-card-editor', '章节蓝图', 'chapter-card')
+            openBuiltinEditor('chapter-card-editor', text('章节蓝图', 'Chapter blueprint'), 'chapter-card')
           }}
         />
         <LeftNavButton
           icon={Globe2}
-          label="世界"
+          label={text('世界', 'World')}
           active={activeRailItem === 'world'}
-          title="世界观"
+          title={text('世界观', 'World building')}
           onClick={() => setSidebarView('knowledge', 'world')}
         />
         <LeftNavButton
           icon={Bot}
           label="AI"
           active={aiActive}
-          title="配置模型 API"
+          title={text('配置模型 API', 'Configure model API')}
           onClick={() => openSettings('llm', 'ai')}
         />
       </div>
@@ -159,7 +162,8 @@ export default function LeftToolWindowBar() {
       <div className="flex flex-col items-center w-full pb-1">
         <div className="writer-nav-divider w-8 mb-1" style={{ height: 1 }} />
 
-        {bottomTabs.map(({ id, icon: Icon, label }) => {
+        {bottomTabs.map(({ id, icon: Icon, zh, en }) => {
+          const label = text(zh, en)
           const isActive = activeRailItem === id
           const showPulse = id === 'tasks' && currentRun &&
             (currentRun.status === 'running' || currentRun.status === 'waiting')
@@ -181,7 +185,7 @@ export default function LeftToolWindowBar() {
 
         <LeftNavButton
           icon={Settings}
-          label="设置"
+          label={text('设置', 'Settings')}
           active={activeRailItem === 'settings'}
           onClick={openSettings}
         />

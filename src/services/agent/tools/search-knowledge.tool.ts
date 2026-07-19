@@ -2,7 +2,7 @@
  * search_knowledge — 语义搜索知识库
  */
 import { buildAgentTool } from '../tool-registry'
-import { ipc } from '../../ipc-client'
+import { searchKB } from '../../knowledge-service'
 
 export const searchKnowledgeTool = buildAgentTool({
   name: 'search_knowledge',
@@ -32,7 +32,7 @@ export const searchKnowledgeTool = buildAgentTool({
       return { success: false, content: '', error: '缺少 query 参数' }
     }
 
-    const results = await ipc.invoke('kb:search', query, topK)
+    const results = await searchKB(query, topK)
     if (!results || results.length === 0) {
       return { success: true, content: '未找到相关结果。请尝试使用不同的关键词搜索，或尝试使用 read_architecture、read_characters 等工具直接读取项目数据。' }
     }

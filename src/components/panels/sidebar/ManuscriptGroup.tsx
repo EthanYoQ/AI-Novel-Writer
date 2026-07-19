@@ -12,6 +12,7 @@ import { useEditorStore } from '../../../stores/editor-store'
 import { confirm } from '../../ui/Confirm'
 import { toast } from '../../ui/Toast'
 import { globalEventBus } from '../../../shared/event-bus'
+import { useLocaleStore } from '../../../stores/locale-store'
 
 import { showSidebarMenu, openChapterFile } from './SidebarShared'
 
@@ -77,6 +78,7 @@ async function readChapterTitle(filePath: string, fallback: string, chapterNumbe
 
 export default function ManuscriptGroup({ files }: { files: FileNode[]; projectPath: string }) {
   const [open, setOpen] = useState(true)
+  const text = useLocaleStore(s => s.text)
   // 文件路径 → 显示名称的映射（异步加载）
   const [titleMap, setTitleMap] = useState<Record<string, string>>({})
 
@@ -94,7 +96,7 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
         missing.map(async (f) => {
           const rawName = f.name.replace(/\.[^.]+$/, '')
           const chMatch = rawName.match(/^chapter_(\d+)$/)
-          const fallback = chMatch ? `第${parseInt(chMatch[1], 10)}章` : rawName
+          const fallback = chMatch ? text(`第${parseInt(chMatch[1], 10)}章`, `Chapter ${parseInt(chMatch[1], 10)}`) : rawName
           const chNum = chMatch ? parseInt(chMatch[1], 10) : undefined
           entries[f.path] = await readChapterTitle(f.path, fallback, chNum)
         })
@@ -103,13 +105,13 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
     }
     load()
     return () => { cancelled = true }
-  }, [files, filesDep, titleMap])
+  }, [files, filesDep, titleMap, text])
 
   const getDisplay = (f: FileNode) => {
     if (titleMap[f.path]) return titleMap[f.path]
     const rawName = f.name.replace(/\.[^.]+$/, '')
     const chMatch = rawName.match(/^chapter_(\d+)$/)
-    return chMatch ? `第${parseInt(chMatch[1], 10)}章` : rawName
+    return chMatch ? text(`第${parseInt(chMatch[1], 10)}章`, `Chapter ${parseInt(chMatch[1], 10)}`) : rawName
   }
 
   // 只显示正文章节（过滤掉旧的 _notes 文件）
@@ -118,20 +120,20 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
   const deleteManuscriptChapter = async (filePath: string, displayName: string) => {
     const match = filePath.match(/^vela:\/\/manuscript\/(\d+)$/)
     if (!match) {
-      toast.error('当前章节路径不支持直接删除')
+      toast.error(text('当前章节路径不支持直接删除', 'This chapter path cannot be deleted directly.'))
       return
     }
 
-    const ok = await confirm(`确认删除正文「${displayName}」？\n此操作会删除该定稿正文记录及关联的审稿/修稿产物，不会删除蓝图。`, {
-      title: '删除正文',
-      confirmText: '删除',
+    const ok = await confirm(text(`确认删除正文「${displayName}」？\n此操作会删除该定稿正文记录及关联的审稿/修稿产物，不会删除蓝图。`, `Delete manuscript “${displayName}”?\nThis removes the finalized draft and related review/revision artifacts, but preserves the blueprint.`), {
+      title: text('删除正文', 'Delete manuscript'),
+      confirmText: text('删除', 'Delete'),
       danger: true,
     })
     if (!ok) return
 
     const result = await ipc.invoke('db:draft-delete', Number(match[1]))
     if (!result.success) {
-      toast.error(`删除失败\n\n${result.error ?? '未知错误'}`)
+      toast.error(text(`删除失败\n\n${result.error ?? '未知错误'}`, `Delete failed\n\n${result.error ?? 'Unknown error'}`))
       return
     }
 
@@ -141,7 +143,7 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
     clearChapterTitleCache(filePath)
     await useDraftStore.getState().loadAllDrafts()
     globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts', 'fileTree'] })
-    toast.success(`已删除正文「${displayName}」`)
+    toast.success(text(`已删除正文「${displayName}」`, `Deleted manuscript “${displayName}”`))
   }
 
   return (
@@ -156,10 +158,10 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
           : <ChevronRight size={12} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
         }
         <PenTool size={14} style={{ color: 'var(--color-text-muted)' }} />
-        <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>正文章节</span>
+        <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{text('正文章节', 'Manuscript chapters')}</span>
         {chapterFiles.length > 0 && (
           <span className="ml-auto text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
-            {chapterFiles.length} 章
+            {text(`${chapterFiles.length} 章`, `${chapterFiles.length} chapters`)}
           </span>
         )}
       </div>
@@ -167,7 +169,7 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
         <div>
           {chapterFiles.length === 0 ? (
             <div className="text-xs py-1" style={{ paddingLeft: 34, color: 'var(--color-text-muted)' }}>
-              暂无定稿章节
+              {text('暂无定稿章节', 'No finalized chapters')}
             </div>
           ) : (
             chapterFiles.map(f => {
@@ -181,27 +183,27 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
                   onContextMenu={e => showSidebarMenu([
                     {
                       key: 'open',
-                      label: '打开章节',
+                      label: text('打开章节', 'Open chapter'),
                       icon: <FolderOpen size={13} />,
                       onClick: () => openChapterFile(f.path, displayName),
                     },
                     { key: 'div1', type: 'divider' as const },
                     {
                       key: 'copy-path',
-                      label: '复制文件路径',
+                      label: text('复制文件路径', 'Copy file path'),
                       icon: <Copy size={13} />,
                       onClick: () => navigator.clipboard.writeText(f.path).catch(() => { }),
                     },
                     { key: 'div2', type: 'divider' as const },
                     {
                       key: 'delete',
-                      label: '删除正文',
+                      label: text('删除正文', 'Delete manuscript'),
                       icon: <Trash2 size={13} />,
                       danger: true,
                       onClick: () => deleteManuscriptChapter(f.path, displayName),
                     },
                   ], e)}
-                  title={`点击打开 — ${displayName}`}
+                  title={text(`点击打开 — ${displayName}`, `Open — ${displayName}`)}
                 >
                   <FileText size={11} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
                   <span className="text-sm truncate flex-1" style={{ color: 'var(--color-text-secondary)' }}>
@@ -210,7 +212,7 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
                   <button
                     type="button"
                     className="opacity-70 hover:opacity-100 rounded p-0.5"
-                    title="删除正文"
+                    title={text('删除正文', 'Delete manuscript')}
                     onClick={(e) => {
                       e.stopPropagation()
                       deleteManuscriptChapter(f.path, displayName)

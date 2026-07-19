@@ -3,6 +3,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
+import { searchKB } from '../../knowledge-service'
 import {
   DIR_PROMPTS
 } from '../../../shared/project-paths'
@@ -106,7 +107,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           searchQuery += ` ${this.chapterInfo.knowledgeQueryHint.trim()}`
           callbacks.log(`  📌 追加用户检索关键词：${this.chapterInfo.knowledgeQueryHint.trim()}`)
         }
-        const results = await ipc.invoke('kb:search', searchQuery, 5)
+        const results = await searchKB(searchQuery, 5)
         filteredContext = results.length > 0
           ? results.map((r: { fileName: string; score: number; text: string }, i: number) => `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`).join('\n\n')
           : '（知识库中无相关内容）'

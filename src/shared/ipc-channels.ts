@@ -57,6 +57,14 @@ export type AppErrorCode =
   | 'PROJECT_NOT_OPEN'
   | 'EMBEDDING_MODEL_NOT_CONFIGURED'
 
+export interface AppFailure {
+  success: false
+  errorCode: AppErrorCode
+  error?: string
+}
+
+export type AppResult<T> = T | AppFailure
+
 // ===== 项目管理 =====
 export interface ProjectChannels {
   'project:create': {
@@ -338,15 +346,15 @@ export interface KnowledgeBaseChannels {
   'kb:import-document': { args: [filePath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string } }
   'kb:import-folder': { args: [folderPath: string]; return: { success: boolean; importedCount: number; failedFiles: string[]; error?: string } }
   'kb:import-text': { args: [text: string, fileName: string, projectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string } }
-  'kb:search': { args: [query: string, topK?: number]; return: Array<{ text: string; score: number; fileName: string }> }
-  'kb:search-with-scope': { args: [query: string, fromChapter: number, toChapter: number, topK?: number]; return: Array<{ text: string; score: number; fileName: string }> }
-  'kb:list-documents': { args: []; return: Array<{ id: string; fileName: string; importedAt: string; chunkCount: number; filePath: string }> }
+  'kb:search': { args: [query: string, topK?: number]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
+  'kb:search-with-scope': { args: [query: string, fromChapter: number, toChapter: number, topK?: number]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
+  'kb:list-documents': { args: []; return: AppResult<Array<{ id: string; fileName: string; importedAt: string; chunkCount: number; filePath: string }>> }
   'kb:remove-document': { args: [docId: string]; return: { success: boolean } }
   'kb:clear-all': { args: []; return: { success: boolean; error?: string } }
-  'kb:stats': { args: []; return: { documentCount: number; totalChunks: number; vectorDimension: number } }
+  'kb:stats': { args: []; return: AppResult<{ documentCount: number; totalChunks: number; vectorDimension: number }> }
   'dialog:select-files': { args: []; return: string[] | null }
   'dialog:select-import-folder': { args: []; return: string | null }
-  'kb:get-vectorless-count': { args: []; return: { count: number } }
+  'kb:get-vectorless-count': { args: []; return: AppResult<{ count: number }> }
   'kb:backfill-vectors': { args: []; return: { success: boolean; processed: number; failed: number; error?: string } }
 }
 

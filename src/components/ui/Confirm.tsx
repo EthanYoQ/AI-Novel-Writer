@@ -14,6 +14,7 @@
 import { createRoot } from 'react-dom/client'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from './Button'
+import { useLocaleStore } from '../../stores/locale-store'
 
 // ===== 内部组件 =====
 
@@ -30,13 +31,17 @@ interface ConfirmDialogProps extends ConfirmOptions {
 }
 
 function ConfirmDialog({
-  title = '确认操作',
+  title,
   message,
-  confirmText = '确认',
-  cancelText = '取消',
+  confirmText,
+  cancelText,
   danger = false,
   onResolve,
 }: ConfirmDialogProps) {
+  const text = useLocaleStore(s => s.text)
+  const resolvedTitle = title ?? text('确认操作', 'Confirm action')
+  const resolvedConfirmText = confirmText ?? text('确认', 'Confirm')
+  const resolvedCancelText = cancelText ?? text('取消', 'Cancel')
   const [isExiting, setIsExiting] = useState(false)
   const confirmBtnRef = useRef<HTMLButtonElement>(null)
 
@@ -105,7 +110,7 @@ function ConfirmDialog({
       >
         {/* 标题 */}
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text)', marginBottom: 10 }}>
-          {title}
+          {resolvedTitle}
         </div>
 
         {/* 消息体 */}
@@ -124,7 +129,7 @@ function ConfirmDialog({
         {/* 按钮区 */}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Button variant="ghost" size="sm" onClick={handleCancel}>
-            {cancelText}
+            {resolvedCancelText}
           </Button>
           <Button
             ref={confirmBtnRef}
@@ -132,7 +137,7 @@ function ConfirmDialog({
             size="sm"
             onClick={handleConfirm}
           >
-            {confirmText}
+            {resolvedConfirmText}
           </Button>
         </div>
       </div>
