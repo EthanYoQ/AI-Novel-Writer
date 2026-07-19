@@ -1,70 +1,158 @@
+<div align="center">
+
+**English** | [中文](README.md)
+
+</div>
+
 <p align="center">
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — your AI-driven desktop workspace for long-form fiction" width="100%" />
 </p>
 
-# AI Novel Writer
+<h1 align="center">AI Novel Writer / AI 小说作家</h1>
 
-**中文 README**：[README.md](README.md) · **Download**：[Windows v0.2.0 zip](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.0) · **License**：[GPL-3.0](LICENSE)
+<p align="center">
+  A local-first desktop writing tool for long-form fiction. Turns "premise → characters → world → chapter blueprints → draft → review → revision → final" into a memory-aware production line: the AI writes one chapter at a time, always sees the blueprint, and every chapter gets reviewed.
+</p>
 
-> Local-first desktop workspace for AI long-form fiction. Your story. Your data. Your model.
+<p align="center">
+  Search intent: <strong>AI novel writing</strong>, <strong>AI novel writer</strong>, <strong>local model writing</strong>, <strong>Ollama fiction</strong>, <strong>long-form AI</strong>, <strong>NSFW writing</strong>, <strong>AI writing tool</strong>, <strong>local-first writing</strong>.
+</p>
 
-The hardest part of writing a novel with AI isn't speed — it's **opening chapter 31 and finding that the thread you planted in chapter 5 has vanished**, the protagonist's personality has drifted, a side character disappeared, and the model is now writing fanfiction of itself. **AI Novel Writer** turns "premise → characters → world → chapter blueprints → draft → review → revision → final" into a single memory-aware production line. The model writes one chapter at a time, always sees the blueprint, every chapter gets reviewed. **Runs locally. Plugs into any OpenAI-compatible endpoint.**
+<p align="center">
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/LICENSE"><img src="https://badgen.net/badge/license/GPL-3.0/blue" alt="GPL-3.0 License" /></a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/stargazers"><img src="https://badgen.net/github/stars/EthanYoQ/AI-Novel-Writer" alt="GitHub stars" /></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download latest Windows build</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/readme/ui-en.png" alt="AI Novel Writer main window showing project tree, welcome page, AI writing assistant and task panel" />
+</p>
 
 ---
 
-## Three reasons to try it
+## 🎯 In one sentence
 
-- 🔓 **Local models, uncensored writing** — Plug in Ollama, LM Studio, vLLM, KoboldCpp, or any abliterated / uncensored weights (e.g. Qwen3 14B Q4) and write past the safety guardrails baked into cloud APIs.
-- 🎨 **Decompose a novel. Mimic its voice.** — Drop in a reference novel (TXT or Markdown). It splits chapters, infers the global config, extracts character cards, and outputs a **style constraint** your future writing can reference.
-- 🧩 **Characters, outline, and blueprints that bite together** — Change a character's motivation and every affected blueprint is auto-flagged. Finish a chapter draft and the knowledge base absorbs it. **Drift, contradiction, and out-of-character scenes are caught by structure, not by prompts.**
+AI Novel Writer is not a chatbot, and not a simple AI writing assistant.
+
+It does one thing: **turn the long-form fiction process from "arguing with AI in a chat window" into a structured, memory-aware, review-driven pipeline. You bring the ideas; the AI brings the labor. You change a character's motivation and every affected blueprint is auto-flagged. You finish a chapter and a review report automatically points out what broke.**
+
+Built for these scenarios:
+
+| Scenario | The old way | AI Novel Writer does it for you |
+| --- | --- | --- |
+| 📚 Writing a novel from scratch | Hundreds of chat rounds with ChatGPT; character traits, timelines, and foreshadowing all collapse | Character cards + outline + chapter blueprints interlock; the AI writes only this chapter and never changes established lore |
+| 🔓 Writing restricted content | Cloud APIs refuse even fictional violence; adult/NSFW content is completely blocked | Local models (abliterated / uncensored) directly, including **NSFW / adult-oriented** fiction and any other fictional topic |
+| 🎨 Mimicking a favorite novel | Repeatedly telling AI "make it feel like that book" without knowing the exact recipe | Import any format (TXT / Markdown / EPUB / HTML and more), auto-decompose style, pacing, and character formula; the AI follows the recipe |
+| 🧩 Changing lore mid-project | Manually scrolling back through dozens of chapters to find affected references | Edit a character card → all blueprints that reference it are auto-flagged; edit worldbuilding → all chapters auto-check consistency |
+| 🔧 Revision after drafting | Self-proofing for timeline contradictions and character drift | Auto-generated review report per chapter (character state, timeline, setting conflicts, logic holes) drives a revision pass |
 
 ---
 
-![AI Novel Writer main window](docs/assets/readme/ui-en.png)
+## 🧭 How it works
 
-## Why this stops AI from breaking your long-form novel
+```mermaid
+flowchart LR
+  A["💡 Your story idea"] --> B["🧩 Generate premise + characters + world + outline"]
+  B --> C["📋 Decompose a reference novel → extract style constraints"]
+  C --> D["📑 Draft by chapter blueprint"]
+  D --> E["🔍 Auto-review: character / timeline / logic checks"]
+  E --> F["✏️ Revise against the review report"]
+  F --> G["✅ Finalize and commit to knowledge base"]
+  G --> H["🕘 Knowledge base updated, next chapter ready"]
+```
 
-### 1. Local models. Zero content policy.
+Before each draft, the AI receives: this chapter's blueprint + relevant character cards + worldbuilding snippet + style constraints + history summary. It **never forgets the foreshadowing planted in chapter 5**.
 
-Cloud providers will not make an exception just because you are writing fiction — **your protagonist gets hurt in chapter 4 and the model refuses to continue**. Local models do not have that problem:
+---
+
+## 🖥️ UI preview
+
+### Main window: project tree + welcome page + AI writing assistant
+
+![AI Novel Writer main window showing project tree, welcome page, AI writing assistant and task panel](docs/assets/readme/ui-en.png)
+
+### Character management: character cards and relationship graph
+
+![Character management panel showing character list and relationship graph](public/screenshot/5.png)
+
+### Chapter blueprints: purpose, POV, cast, and key beats per chapter
+
+![Chapter blueprint panel showing chapter list and blueprint details](public/screenshot/2.png)
+
+### Drafting & revision: AI generation + review-driven editing
+
+![Draft writing interface showing AI-generated draft content and editor](public/screenshot/3.png)
+
+---
+
+## ✨ Core capabilities
+
+| Icon | Capability | Problem it solves |
+| --- | --- | --- |
+| 🔓 | Local models + uncensored writing | Direct local model (Ollama / LM Studio / vLLM) connection, bypassing cloud safety guardrails; supports **NSFW / adult-oriented** fiction and any fictional topic |
+| 🎨 | Reference novel decomposition & mimic | Import any format (TXT / Markdown / EPUB / HTML and more), auto-split chapters, infer settings, extract characters, output style constraints; format-agnostic |
+| 🧩 | Character / outline / blueprint interlock | Character cards, worldbuilding, and chapter blueprints cross-reference; edit a card and all linked blueprints auto-flag; structure solves consistency |
+| 📑 | Blueprint-driven drafting | AI writes only this chapter, reading the chapter blueprint + relevant character cards + history summary each time; prevents scope creep |
+| 🔍 | Auto-review reports | After each draft, a structured review report (character state, timeline, setting conflicts, logic holes) is generated and drives a revision pass |
+| 📖 | Knowledge base retrieval | Import TXT / Markdown / EPUB / HTML and more; vector retrieval when an embedding is configured, SQLite FTS fallback otherwise |
+| 🧭 | Story architecture generation | Step-by-step generation of premise, character map, worldbuilding, and plot outline; scaffold a full novel from a single sentence |
+| 🔌 | Model freedom | Any OpenAI-compatible endpoint (local or cloud), including abliterated / uncensored weights |
+| 🌐 | Chinese / English UI | Follows system locale on first launch; manual choice persists |
+
+---
+
+## 🔓 Local models. Zero content policy. (Including NSFW / adult fiction)
+
+Cloud providers will not make an exception just because you are writing fiction — **your protagonist gets hurt in chapter 4, or you write an intimate adult scene, and the model refuses to continue**. Local models do not have that problem:
 
 | Connection | Best for |
 | --- | --- |
-| **Ollama** (recommended) | One-line `ollama pull qwen3:14b-abliterated` and you're set |
-| LM Studio / vLLM / KoboldCpp | Local inference servers, OpenAI-compatible protocol |
-| OpenAI / DeepSeek / Gemini | Cloud fallback when you don't want to run a model locally |
+| **Ollama** (recommended) | One-line `ollama pull qwen3:14b-abliterated` and you're set; supports **NSFW / adult / violent / horror** fiction and any fictional topic |
+| LM Studio / vLLM / KoboldCpp | Local inference servers, OpenAI-compatible protocol; you choose the weights |
+| OpenAI / DeepSeek / Gemini | Cloud fallback when you don't want to run a model locally (still subject to cloud content policies) |
 | Custom OpenAI-compatible endpoint | Corporate proxy, internal inference service, or your own rig |
-
-The built-in prompts are tuned for **Qwen3 14B Q4-class** models: short instructions, explicit fields, structured output, staged generation, lower repetition, single-chapter scope, character + blueprint constraints preserved.
 
 > Set `defaultModelId` in `~/.vela/config.json` to your local model name. Project data lives entirely on disk (SQLite + project folder). **You can write offline.**
 
-### 2. Style study: turn someone else's voice into yours
+---
 
-Pick a novel you love (TXT or Markdown). Run **Style Study**:
+## 🎨 Decompose any format. Mimic its voice.
 
-1. Auto-split into chapters
-2. Infer the global config (genre, POV, pacing)
+Any format. TXT, Markdown, EPUB, HTML… even text copied from a web page. Drop it into **Decompose & Mimic**:
+
+1. Auto-split into chapters (format-aware chapter boundary detection)
+2. Infer global settings (genre, POV, pacing, style)
 3. Extract per-character cards (background, motivation, speech habits)
 4. Generate a blueprint for every chapter (purpose, cast, key beats, hooks)
 5. **Output a style-constraint document** — attach it to your own project and the AI writes *in that voice* from then on
 
-You are not teaching the model from scratch. You are transferring the **feel** of a book into your own generation pipeline.
+You are not teaching the model from scratch. You are transferring the **feel** of a book into your own generation pipeline. Love that book's rhythm? Love that character's dialogue style? Decompose it and turn it into a reusable writing recipe.
 
-### 3. Structured memory. The model never forgets chapter 5.
+---
+
+## 🧩 Structured memory. The model never forgets chapter 5.
 
 The hardest engineering problem in long-form AI fiction is **consistency**. AI Novel Writer's answer is to turn every creative asset into a **referenceable structure**:
 
-```
-Project config
-  ├── Premise
-  ├── Character map (per-character cards + relationship graph)
-  ├── Worldbuilding
-  ├── Plot outline
-  ├── Chapter blueprints (purpose / POV / cast / key beats / hook)
-  ├── Knowledge base (TXT/MD docs, vector + SQLite FTS retrieval)
-  ├── Reference-novel decomposition artifacts
-  └── Draft → Review report → Revision → Final
+```mermaid
+flowchart TB
+  A["📂 Project config"] --> B["💡 Premise"]
+  A --> C["👤 Character map"]
+  A --> D["🌍 Worldbuilding"]
+  A --> E["📋 Plot outline"]
+  A --> F["📑 Chapter blueprints"]
+  A --> G["📖 Knowledge base"]
+  A --> H["🎨 Reference decomposition artifacts"]
+  C --> I["Character cards + relationship graph + state tracking"]
+  F --> J["Per chapter: purpose / POV / cast / key beats / hook"]
+  J --> K["✍️ Draft"]
+  K --> L["🔍 Review report"]
+  L --> M["✏️ Revision"]
+  M --> N["✅ Final"]
 ```
 
 - **Edit a character card** → every blueprint that references them is auto-flagged
@@ -76,40 +164,33 @@ The model only ever sees what it needs to see, but **nothing important gets forg
 
 ---
 
-## Core capabilities
+## 🔐 Data & privacy
 
-- 📚 **Long-form project management** — project config, premise, worldbuilding, character cards, chapter blueprints, drafts, revisions, review reports, and final manuscripts, all on disk
-- 🧭 **Story architecture** — step-by-step generation of premise, character map, worldbuilding, plot outline
-- 🗂️ **Chapter blueprints** — per-chapter purpose, narrative role, cast, key events, suspense hook
-- ✍️ **Drafting and revision** — pull from project config, blueprints, character cards, worldbuilding, style constraints, and history summaries
-- 🧐 **Review-driven repair** — produce a structured review report, then revise against its findings
-- 📖 **Knowledge base** — import TXT/Markdown files and folders; vector retrieval when an embedding is configured, SQLite FTS fallback otherwise
-- 🧬 **Reference analysis** — split, infer config, extract characters, generate blueprints, output style constraints
-- 🔌 **Model freedom** — OpenAI-compatible + Gemini protocols; local or cloud
-- 🌐 **Chinese / English UI** — follows system locale on first launch, manual choice persists
+| Data | Default location / destination |
+| --- | --- |
+| 📂 Novel project data | Local project folder + SQLite database, fully offline |
+| 📖 Imported reference novels | Local project folder, never uploaded |
+| ✍️ Generated drafts / revisions / finals | Local project folder, never uploaded |
+| 🤖 Local model conversations | Sent to local Ollama / LM Studio / vLLM services, never leaves the machine |
+| ☁️ Cloud API conversations | If you configure OpenAI / DeepSeek / Gemini etc., prompts and context are sent to that provider |
+| 🔑 API keys / config | Stored in local `~/.vela/config.json`, deletable manually |
 
-## The writing workflow
+You can switch between local and cloud models at any time in settings. **Local-first. Data stays on your machine.**
 
-```text
-   Story idea / project config
-        │
-        ▼
-   Premise → Character map → Worldbuilding → Plot outline
-        │
-        ▼
-   Character cards / relationship graph / state tracking
-        │
-        ▼
-      Chapter blueprints
-        │
-        ▼
-   Draft → Review report → Revision → Final
-        │
-        ▼
-   Knowledge-base updates, character-state updates, later chapters
-```
+---
 
-## 30-second setup with Ollama
+## ⚙️ Recommended configuration
+
+| Type | Recommendation | Notes |
+| --- | --- | --- |
+| 🤖 Default model (local) | Ollama + qwen3:14b-abliterated | 14B class, fits 6GB VRAM, excellent Chinese writing; abliterated weight supports uncensored creation |
+| 🤖 Alternative model (local) | LM Studio / vLLM | Choose other models; good for users with more VRAM |
+| ☁️ Cloud fallback | DeepSeek / OpenAI / Gemini | When you don't want to run locally; still subject to cloud content policies |
+| 💾 Knowledge base embedding | Default: none needed | Without embedding, SQLite FTS full-text search covers most scenarios |
+
+---
+
+## 🚀 30-second setup with Ollama
 
 ```bash
 # 1) Pull a local model (Qwen3 14B quantized — fits 6GB VRAM)
@@ -127,55 +208,46 @@ ollama pull qwen3:14b
 #    characters / world / blueprints → start chapter 1
 ```
 
-## Windows install
+---
+
+## 📦 Windows install
 
 The release is a zipped application folder:
 
 ```text
 AI-Novel-Writer-0.2.0-windows-x64.zip
 └─ AI-Novel-Writer/
-   ├─ AI小说作家.exe
+   ├─ AI Novel Writer.exe
    ├─ resources/
    └─ Electron runtime files...
 ```
 
 1. Download `AI-Novel-Writer-0.2.0-windows-x64.zip` from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.0)
 2. **Extract it fully** to any directory
-3. Launch `AI小说作家.exe`
+3. Launch `AI Novel Writer.exe`
 
 > ⚠️ Do not double-click the EXE inside the zip — Electron needs the relative `resources/` path. Extract first, then run.
 
-## v0.2.0 highlights
+---
 
-- Fixed Windows startup failures from missing LanceDB native bindings; knowledge base now loads on demand
-- Added persistent Simplified Chinese / English UI switch (follows OS language on first launch)
-- Release pipeline now verifies the packaged EXE, native modules, and main-window startup
+## 🧱 Product boundaries
 
-## Development
+AI Novel Writer deliberately does not do these things:
 
-```bash
-pnpm install --frozen-lockfile
-pnpm dev              # local dev
-pnpm run typecheck    # type check
-pnpm test             # unit tests
+| Not doing | Reason |
+| --- | --- |
+| ❌ Auto-generate an entire book | Does not replace your creativity. The AI writes only "blueprints you approved", never generates full chapters out of thin air |
+| ❌ Online novel platform | Not a publishing/reading community; it's a writing tool |
+| ❌ Chatbot | Not an open-ended chat; it's a structured creation pipeline |
+| ❌ Local ASR-first | Currently text-input focused; voice input is a future extension |
+| ❌ General writing assistant | Focused on long-form fiction (100k+ words), not short essays / emails / blogs |
 
-# Build the Windows ZIP package
-pnpm run build:win-zip
-```
+---
 
-## Data safety
+## ⭐ Star
 
-Do not commit to the repo:
-
-- Local novel projects, imported reference novels
-- Generated drafts, revisions, final manuscripts
-- `.env` files, API keys, local model configuration
-- `release/`, `dist/`, `dist-electron/`, `node_modules/`
-
-Project data is stored in local project folders and SQLite databases by default. If you configure an external API or local model service, prompts and context are sent to that endpoint.
+If this project helps you, give it a Star on GitHub to support continued development.
 
 ## License
 
-[GPL-3.0](LICENSE).
-
-This is not an official Sudowrite product and does not claim feature or quality equivalence.
+[GPL-3.0](LICENSE)
