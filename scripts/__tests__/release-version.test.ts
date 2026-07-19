@@ -11,4 +11,10 @@ describe('v0.2.0 release metadata', () => {
     const releaseConfig = readFileSync('package.json', 'utf8')
     expect(releaseConfig.toLowerCase()).not.toContain('mythpen')
   })
+
+  it('lets the Windows smoke command discover the current release executable', () => {
+    const smokeScript = readFileSync('scripts/smoke-win-app.ps1', 'utf8')
+    expect(smokeScript).toContain('package.json')
+    expect(smokeScript).toContain('AI小说作家.exe')
+  })
 })

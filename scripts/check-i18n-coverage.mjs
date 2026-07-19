@@ -3,8 +3,6 @@ import path from 'node:path'
 import ts from 'typescript'
 
 const root = process.cwd()
-// Release-critical surfaces covered by the v0.2.0 localization contract.
-// Creative editors retain user/project prose and are migrated independently.
 const scanRoots = [
   path.join(root, 'src', 'App.tsx'),
   path.join(root, 'src', 'components', 'layout'),
@@ -12,11 +10,14 @@ const scanRoots = [
   path.join(root, 'src', 'components', 'dialogs'),
   path.join(root, 'src', 'components', 'settings', 'SettingsModal.tsx'),
   path.join(root, 'src', 'components', 'settings', 'PromptSettings.tsx'),
+  path.join(root, 'src', 'components', 'settings', 'ModelSettings.tsx'),
   path.join(root, 'src', 'components', 'panels', 'Sidebar.tsx'),
   path.join(root, 'src', 'components', 'panels', 'KnowledgePanel.tsx'),
   path.join(root, 'src', 'components', 'panels', 'EditorArea.tsx'),
   path.join(root, 'src', 'components', 'panels', 'sidebar'),
+  path.join(root, 'src', 'components', 'panels', 'agent', 'ToolCallBlock.tsx'),
   path.join(root, 'src', 'components', 'editor', 'NovelConfigEditor.tsx'),
+  path.join(root, 'src', 'components', 'editor', 'ThreeWayMerge.tsx'),
   path.join(root, 'src', 'components', 'ErrorBoundary.tsx'),
   path.join(root, 'src', 'components', 'ui', 'ActionToast.tsx'),
   path.join(root, 'src', 'components', 'ui', 'AlertDialog.tsx'),

@@ -9,7 +9,9 @@
  * 布局：左栏原稿（只读）| 中栏合并结果（可编辑）| 右栏修稿（只读）
  */
 import React, { useState, useCallback, useRef, useMemo, useLayoutEffect } from 'react'
+import { ArrowLeft, ArrowRight } from 'lucide-react'
 import { Button } from '../ui/Button'
+import { useLocaleStore } from '../../stores/locale-store'
 import './three-way-merge.css'
 
 // ===== 类型定义 =====
@@ -303,6 +305,7 @@ function EditableCell({ text, onChange }: { text: string; onChange: (t: string) 
 export default function ThreeWayMerge({
   originalContent, modifiedContent, onComplete, onCancel,
 }: ThreeWayMergeProps) {
+  const text = useLocaleStore(s => s.text)
   const segments = useMemo(() => computeSegments(originalContent, modifiedContent),
     [originalContent, modifiedContent])
   const hunks = useMemo(() => segments.filter(s => s.type === 'hunk').map(s => s.hunk!), [segments])
@@ -366,18 +369,18 @@ export default function ThreeWayMerge({
   return (
     <div className="three-way-merge">
       <div className="twm-toolbar">
-        <Button variant="ghost" size="sm" onClick={revertAll}>← 全部原稿</Button>
-        <Button variant="ghost" size="sm" onClick={applyAll}>全部修稿 →</Button>
-        <span className="twm-toolbar-progress">已采用 {processedCount}/{hunks.length} 处变更</span>
-        {onCancel && <Button variant="ghost" size="sm" onClick={onCancel}>取消</Button>}
-        <Button variant="success" size="sm" onClick={() => onComplete(buildMergedText())}>完成合并</Button>
+        <Button variant="ghost" size="sm" onClick={revertAll}><ArrowLeft size={13} />{text('全部原稿', 'Use all original')}</Button>
+        <Button variant="ghost" size="sm" onClick={applyAll}>{text('全部修稿', 'Use all revision')}<ArrowRight size={13} /></Button>
+        <span className="twm-toolbar-progress">{text('已采用 {done}/{total} 处变更', '{done}/{total} changes applied', { done: processedCount, total: hunks.length })}</span>
+        {onCancel && <Button variant="ghost" size="sm" onClick={onCancel}>{text('取消', 'Cancel')}</Button>}
+        <Button variant="success" size="sm" onClick={() => onComplete(buildMergedText())}>{text('完成合并', 'Finish merge')}</Button>
       </div>
 
       {/* 固定表头 */}
       <div className="twm-headers">
-        <div className="twm-header">原稿 <span className="twm-tag readonly">只读</span></div>
-        <div className="twm-header">合并结果 <span className="twm-tag editable">可编辑</span></div>
-        <div className="twm-header">修稿 <span className="twm-tag readonly">只读</span></div>
+        <div className="twm-header">{text('原稿', 'Original')} <span className="twm-tag readonly">{text('只读', 'Read only')}</span></div>
+        <div className="twm-header">{text('合并结果', 'Merged result')} <span className="twm-tag editable">{text('可编辑', 'Editable')}</span></div>
+        <div className="twm-header">{text('修稿', 'Revision')} <span className="twm-tag readonly">{text('只读', 'Read only')}</span></div>
       </div>
 
       {/* 单滚动容器 + CSS Grid 自动行高对齐 */}
@@ -443,4 +446,3 @@ export default function ThreeWayMerge({
     </div>
   )
 }
-

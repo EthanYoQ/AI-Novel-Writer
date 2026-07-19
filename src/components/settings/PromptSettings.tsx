@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { ChevronDown, ChevronRight, Globe, FolderOpen, RotateCcw, AlertTriangle } from 'lucide-react'
+import { ChevronDown, ChevronRight, Globe, FolderOpen, RotateCcw, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react'
 import {
   BUILTIN_PROMPTS,
   EDITABLE_PROMPT_KEYS,
@@ -357,7 +357,9 @@ function TemplateItem({
                   : 'bg-red-500/10 text-red-500 border border-red-500/20'
               )}
             >
-              {saveResult.type === 'success' ? '✅ ' : '❌ '}
+              {saveResult.type === 'success'
+                ? <CheckCircle2 size={13} className="inline mr-1" />
+                : <XCircle size={13} className="inline mr-1" />}
               {saveResult.msg}
             </div>
           )}
