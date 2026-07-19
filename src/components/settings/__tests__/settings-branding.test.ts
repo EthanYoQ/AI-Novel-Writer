@@ -6,7 +6,7 @@ const checkedSources = [
   'src/components/settings/SettingsModal.tsx',
   'electron/main.ts',
   'package.json',
-  'package-lock.json',
+  'pnpm-lock.yaml',
   'electron-builder.json5',
   'README.md',
 ]

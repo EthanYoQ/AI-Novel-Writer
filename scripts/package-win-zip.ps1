@@ -30,13 +30,17 @@ function Get-Sha256Hash {
 Push-Location $root
 try {
   if (-not $SkipBuild) {
-    npm run build:win-dir
+    pnpm run build:win-dir
+    if ($LASTEXITCODE -ne 0) {
+      throw "Windows directory build failed with exit code $LASTEXITCODE"
+    }
   }
 
   $releaseDir = Join-Path $root "release\$version"
   $sourceDir = Join-Path $releaseDir "win-unpacked"
-  $packageDir = Join-Path $releaseDir "AI小说作家"
-  $zipPath = Join-Path $releaseDir "AI小说作家-$version-windows-x64.zip"
+  $packageDir = Join-Path $releaseDir "AI-Novel-Writer"
+  $zipPath = Join-Path $releaseDir "AI-Novel-Writer-$version-windows-x64.zip"
+  $hashPath = Join-Path $releaseDir "SHA256SUMS.txt"
   $exePath = Join-Path $sourceDir "AI小说作家.exe"
 
   if (-not (Test-Path -LiteralPath $sourceDir)) {
@@ -53,6 +57,11 @@ try {
   if (Test-Path -LiteralPath $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force
   }
+  if (Test-Path -LiteralPath $hashPath) {
+    Remove-Item -LiteralPath $hashPath -Force
+  }
+
+  & (Join-Path $PSScriptRoot "smoke-win-app.ps1") -ExePath $exePath -ObservationSeconds 12
 
   New-Item -ItemType Directory -Path $packageDir | Out-Null
   Get-ChildItem -LiteralPath $sourceDir -Force | ForEach-Object {
@@ -61,14 +70,21 @@ try {
 
   Compress-Archive -LiteralPath $packageDir -DestinationPath $zipPath -CompressionLevel Optimal
 
-  $hash = Get-Sha256Hash -Path $zipPath
+  $zipHash = Get-Sha256Hash -Path $zipPath
+  $exeHash = Get-Sha256Hash -Path $exePath
   $sizeMb = [math]::Round((Get-Item -LiteralPath $zipPath).Length / 1MB, 2)
+
+  @(
+    "$zipHash  $(Split-Path -Leaf $zipPath)",
+    "$exeHash  win-unpacked/AI小说作家.exe"
+  ) | Set-Content -LiteralPath $hashPath -Encoding utf8
 
   Write-Host "Windows zip package created:"
   Write-Host "  $zipPath"
   Write-Host "  Size: $sizeMb MB"
-  Write-Host "  SHA256: $hash"
-  Write-Host "  Launcher: AI小说作家\AI小说作家.exe"
+  Write-Host "  SHA256: $zipHash"
+  Write-Host "  Launcher: AI-Novel-Writer\AI小说作家.exe"
+  Write-Host "  Hash manifest: $hashPath"
 }
 finally {
   Pop-Location
