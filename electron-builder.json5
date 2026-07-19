@@ -6,9 +6,11 @@
   "asarUnpack": [
     "node_modules/apache-arrow/**/*",
     "node_modules/better-sqlite3/**/*",
+    "node_modules/@lancedb/lancedb/**/*",
     "node_modules/@lancedb/lancedb-darwin-*/**/*",
     "node_modules/@lancedb/lancedb-linux-*/**/*",
-    "node_modules/@lancedb/lancedb-win32-*/**/*"
+    "node_modules/@lancedb/lancedb-win32-*/**/*",
+    "node_modules/@lancedb/lancedb-win32-x64-msvc/**/*"
   ],
   "productName": "AI小说作家",
   "directories": {
