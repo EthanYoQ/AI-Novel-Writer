@@ -39,3 +39,4 @@ tailwind.config.js.bak
 # 本地工具索引与设计会话
 .codegraph/
 .superpowers/
+.worktrees/
