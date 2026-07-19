@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from 'electron'
 import { registerIPCHandlers } from './ipc-handlers'
 import { registerMCPHandlers } from './mcp/mcp-ipc-bridge'
+import { mainT } from './i18n'
 
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -27,7 +28,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 640,
-    title: 'AI小说作家 — AI Novel Writer',
+    title: mainT(app.getLocale(), 'app.windowTitle'),
     icon: path.join(process.env.APP_ROOT!, 'build', 'icon.png'),
     // 使用应用内自绘标题栏，避免 Windows 原生标题栏与棕色标题栏重复显示。
     frame: false,

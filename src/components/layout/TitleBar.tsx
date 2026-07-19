@@ -5,6 +5,7 @@ import {
   FilePlus2,
   FolderOpen,
   Import,
+  Languages,
   Menu,
   Minus,
   Moon,
@@ -24,6 +25,8 @@ import { useEditorStore } from '../../stores/editor-store'
 import { useLayoutStore } from '../../stores/layout-store'
 import { APP_BRAND } from '../../shared/brand'
 import { ipc } from '../../services/ipc-client'
+import { useLocaleStore } from '../../stores/locale-store'
+import type { MessageKey } from '../../i18n/core'
 
 const isMac = navigator.userAgent.includes('Mac')
 
@@ -34,6 +37,12 @@ const themeIcons: Record<Theme, typeof Sun> = {
   dark: Moon,
 }
 const themeOrder: Theme[] = ['galaxy', 'dark', 'light', 'paper']
+const themeLabelKeys: Record<Theme, MessageKey> = {
+  light: 'theme.light',
+  galaxy: 'theme.galaxy',
+  paper: 'theme.paper',
+  dark: 'theme.dark',
+}
 
 export default function TitleBar() {
   const currentProject = useProjectStore((s) => s.currentProject)
@@ -45,6 +54,7 @@ export default function TitleBar() {
   const openNewProject = useLayoutStore(s => s.openNewProject)
   const openExport = useLayoutStore(s => s.openExport)
   const openImportNovel = useLayoutStore(s => s.openImportNovel)
+  const { locale, toggleLocale, t } = useLocaleStore()
 
   const ThemeIcon = themeIcons[theme] || Sun
   const cycleTheme = (e: MouseEvent) => {
@@ -141,56 +151,56 @@ export default function TitleBar() {
       </div>
 
       <div className="flex items-center gap-2 min-w-0 flex-1">
-        <button className="writer-command-button" title="主菜单" onClick={() => openSettings()}>
+        <button className="writer-command-button" title={t('common.settings')} onClick={() => openSettings()}>
           <Menu size={17} strokeWidth={1.8} />
         </button>
 
-        <span className="text-xs font-semibold opacity-90 whitespace-nowrap">当前项目:</span>
+        <span className="text-xs font-semibold opacity-90 whitespace-nowrap">{t('project.currentLabel')}</span>
         <button
           className="writer-command-button max-w-[280px]"
-          title="切换项目"
+          title={t('project.switch')}
           onClick={handleOpenProject}
         >
-          <span className="truncate">{currentProject?.name ?? '未打开项目'}</span>
+          <span className="truncate">{currentProject?.name ?? t('project.none')}</span>
         </button>
 
         <span
           className="inline-flex items-center gap-1 text-xs font-medium whitespace-nowrap"
-          title={hasDirty ? '有未保存的修改' : '已保存'}
+          title={hasDirty ? t('save.dirty') : t('save.saved')}
           style={{ color: hasDirty ? 'var(--color-warning)' : '#87d27d' }}
         >
           <CheckCircle2 size={14} strokeWidth={1.9} />
-          {hasDirty ? '有修改' : '已保存'}
+          {hasDirty ? t('save.modified') : t('save.saved')}
         </span>
 
         <div className="h-5 w-px bg-[rgba(255,244,223,0.24)]" />
 
-        <button className="writer-command-button" title="备份功能将在后续任务实现" disabled>
+        <button className="writer-command-button" title={t('project.backupUnavailable')} disabled>
           <Archive size={14} strokeWidth={1.75} />
-          备份
+          {t('common.backup')}
         </button>
-        <button className="writer-command-button" title="小说拆解与仿写" onClick={openImportNovel}>
+        <button className="writer-command-button" title={t('project.imitation')} onClick={openImportNovel}>
           <Import size={14} strokeWidth={1.75} />
-          拆解仿写
+          {t('project.imitationShort')}
         </button>
-        <button className="writer-command-button" title="导出" onClick={openExport}>
+        <button className="writer-command-button" title={t('project.export')} onClick={openExport}>
           <Upload size={14} strokeWidth={1.75} />
-          导出
+          {t('common.export')}
         </button>
-        <button className="writer-command-button" title="新建项目" onClick={openNewProject}>
+        <button className="writer-command-button" title={t('project.new')} onClick={openNewProject}>
           <FilePlus2 size={14} strokeWidth={1.75} />
-          新建
+          {t('common.new')}
         </button>
-        <button className="writer-command-button" title="打开项目" onClick={handleOpenProject}>
+        <button className="writer-command-button" title={t('project.open')} onClick={handleOpenProject}>
           <FolderOpen size={14} strokeWidth={1.75} />
-          打开
+          {t('common.open')}
         </button>
       </div>
 
       <div className="flex items-center gap-1 flex-shrink-0">
         <button
           onClick={zoomOut}
-          title="缩小"
+          title={t('zoom.out')}
           className="writer-command-button"
           style={{ minHeight: 24, padding: '0 6px' }}
         >
@@ -198,7 +208,7 @@ export default function TitleBar() {
         </button>
         <button
           onClick={zoomReset}
-          title="重置缩放"
+          title={t('zoom.reset')}
           className="writer-command-button"
           style={{ minHeight: 24, minWidth: 42, padding: '0 6px', fontFamily: 'var(--font-mono)' }}
         >
@@ -206,7 +216,7 @@ export default function TitleBar() {
         </button>
         <button
           onClick={zoomIn}
-          title="放大"
+          title={t('zoom.in')}
           className="writer-command-button"
           style={{ minHeight: 24, padding: '0 6px' }}
         >
@@ -214,15 +224,24 @@ export default function TitleBar() {
         </button>
         <button
           onClick={cycleTheme}
-          title={`主题: ${theme === 'galaxy' ? '星空' : theme === 'paper' ? '纸质' : theme === 'dark' ? '黑夜' : '浅色'}`}
+          title={t('theme.label', { name: t(themeLabelKeys[theme]) })}
           className="writer-command-button"
           style={{ minHeight: 24, padding: '0 7px' }}
         >
           <ThemeIcon size={13} strokeWidth={1.5} />
         </button>
         <button
+          onClick={() => void toggleLocale()}
+          title={t('language.switch')}
+          className="writer-command-button"
+          style={{ minHeight: 24, padding: '0 7px' }}
+        >
+          <Languages size={13} strokeWidth={1.5} />
+          <span>{locale === 'zh-CN' ? 'EN' : '中文'}</span>
+        </button>
+        <button
           onClick={() => openSettings()}
-          title="设置"
+          title={t('common.settings')}
           className="writer-command-button"
           style={{ minHeight: 24, padding: '0 7px' }}
         >
@@ -231,7 +250,7 @@ export default function TitleBar() {
         <div className="h-5 w-px bg-[rgba(255,244,223,0.24)] mx-1" />
         <button
           className="writer-command-button"
-          title="最小化"
+          title={t('common.minimize')}
           onClick={() => ipc.invoke('window:minimize')}
           style={{ minHeight: 24, padding: '0 7px' }}
         >
@@ -239,7 +258,7 @@ export default function TitleBar() {
         </button>
         <button
           className="writer-command-button"
-          title="最大化/还原"
+          title={t('common.maximizeRestore')}
           onClick={() => ipc.invoke('window:toggle-maximize')}
           style={{ minHeight: 24, padding: '0 7px' }}
         >
@@ -247,7 +266,7 @@ export default function TitleBar() {
         </button>
         <button
           className="writer-command-button"
-          title="关闭"
+          title={t('common.close')}
           onClick={() => ipc.invoke('window:close')}
           style={{ minHeight: 24, padding: '0 7px' }}
         >

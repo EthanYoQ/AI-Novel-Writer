@@ -2,6 +2,7 @@
  * IPC 频道定义 — 渲染进程与主进程的类型安全通信契约
  * 所有 IPC 调用都通过此文件定义频道名和参数/返回值类型
  */
+import type { Locale } from '../i18n/types'
 
 // ===== 全局配置 =====
 export interface ConfigChannels {
@@ -37,6 +38,7 @@ export interface WindowChannels {
 
 export interface GlobalConfig {
   theme: string
+  locale?: Locale
   defaultModelId: string | null
   defaultEmbeddingModelId?: string | null
   editorFontSize: number
@@ -49,6 +51,11 @@ export interface GlobalConfig {
     port: number
   }
 }
+
+export type AppErrorCode =
+  | 'KNOWLEDGE_BASE_NATIVE_UNAVAILABLE'
+  | 'PROJECT_NOT_OPEN'
+  | 'EMBEDDING_MODEL_NOT_CONFIGURED'
 
 // ===== 项目管理 =====
 export interface ProjectChannels {

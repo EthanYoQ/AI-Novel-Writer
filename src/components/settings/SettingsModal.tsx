@@ -20,6 +20,8 @@ import { ipc } from '../../services/ipc-client'
 import { Switch } from '../ui/Switch'
 import { APP_BRAND } from '../../shared/brand'
 import { useLayoutStore, type SettingsSection } from '../../stores/layout-store'
+import { useLocaleStore } from '../../stores/locale-store'
+import type { Locale } from '../../i18n/types'
 
 // ==================== 分类定义 ====================
 
@@ -864,9 +866,28 @@ function FontSelect({
 
 function EditorSection() {
   const { writingFont, setWritingFont, uiFont, setUiFont } = useThemeStore()
+  const { locale, setLocale, t } = useLocaleStore()
 
   return (
     <div className="max-w-md space-y-5">
+      <div className="space-y-1.5">
+        <div>
+          <p className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>
+            {t('language.settingLabel')}
+          </p>
+          <p className="text-[0.68rem] mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
+            {t('language.settingDescription')}
+          </p>
+        </div>
+        <NativeSelect
+          value={locale}
+          onChange={(event) => void setLocale(event.target.value as Locale)}
+        >
+          <option value="zh-CN">简体中文</option>
+          <option value="en-US">English</option>
+        </NativeSelect>
+      </div>
+
       {/* 界面字体 */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
