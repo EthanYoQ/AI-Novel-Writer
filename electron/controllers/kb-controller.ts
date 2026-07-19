@@ -1,12 +1,8 @@
 import { ipcMain, dialog } from 'electron'
 import fs from 'node:fs'
-import {
-  importDocument, importFolder, importText, searchKnowledge, searchKnowledgeFTS,
-  listDocuments, removeDocument, getKnowledgeStats,
-  getVectorlessCount, backfillVectors, clearKnowledgeBase,
-} from '../knowledge-base'
 import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_PATH, RECENT_PROJECTS_PATH } from '../utils/config-utils'
 import { GlobalConfig, ModelProfile } from '../../src/shared/ipc-channels'
+import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 
 function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName: string } } | null {
   const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
@@ -36,7 +32,7 @@ export function registerKBController() {
     if (!projectPath) return { success: false, error: '未打开项目' }
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
-    return importDocument(filePath, projectPath, protocol, model)
+    return knowledgeBaseLoader.run((kb) => kb.importDocument(filePath, projectPath, protocol, model))
   })
 
   ipcMain.handle('kb:import-folder', async (_event, folderPath: string) => {
@@ -45,14 +41,14 @@ export function registerKBController() {
     if (!projectPath) return { success: false, error: '未打开项目' }
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
-    return importFolder(folderPath, projectPath, protocol, model)
+    return knowledgeBaseLoader.run((kb) => kb.importFolder(folderPath, projectPath, protocol, model))
   })
 
   ipcMain.handle('kb:import-text', async (_event, text: string, fileName: string, projectPath: string) => {
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
-    return importText(text, fileName, projectPath, protocol, model)
+    return knowledgeBaseLoader.run((kb) => kb.importText(text, fileName, projectPath, protocol, model))
   })
 
   ipcMain.handle('kb:search', async (_event, query: string, topK?: number) => {
@@ -60,10 +56,12 @@ export function registerKBController() {
     const projectPath = getCurrentProjectPath()
     if (!projectPath) return []
 
-    if (embConfig) {
-      return searchKnowledge(query, projectPath, embConfig.protocol, embConfig.model, topK ?? 5)
-    }
-    return searchKnowledgeFTS(query, projectPath, topK ?? 5)
+    return knowledgeBaseLoader.run((kb) => {
+      if (embConfig) {
+        return kb.searchKnowledge(query, projectPath, embConfig.protocol, embConfig.model, topK ?? 5)
+      }
+      return kb.searchKnowledgeFTS(query, projectPath, topK ?? 5)
+    })
   })
 
   ipcMain.handle('kb:search-with-scope', async (_event, query: string, fromChapter: number, toChapter: number, topK?: number) => {
@@ -72,41 +70,45 @@ export function registerKBController() {
     if (!projectPath) return []
 
     const scope: [number, number] = [fromChapter, toChapter]
-    if (embConfig) {
-      return searchKnowledge(query, projectPath, embConfig.protocol, embConfig.model, topK ?? 5, scope)
-    }
-    return searchKnowledgeFTS(query, projectPath, topK ?? 5, scope)
+    return knowledgeBaseLoader.run((kb) => {
+      if (embConfig) {
+        return kb.searchKnowledge(query, projectPath, embConfig.protocol, embConfig.model, topK ?? 5, scope)
+      }
+      return kb.searchKnowledgeFTS(query, projectPath, topK ?? 5, scope)
+    })
   })
 
   ipcMain.handle('kb:list-documents', async () => {
     const projectPath = getCurrentProjectPath()
     if (!projectPath) return []
-    return listDocuments(projectPath)
+    return knowledgeBaseLoader.run((kb) => kb.listDocuments(projectPath))
   })
 
   ipcMain.handle('kb:remove-document', async (_event, docId: string) => {
     const projectPath = getCurrentProjectPath()
     if (!projectPath) return { success: false }
-    return { success: removeDocument(docId, projectPath) }
+    return knowledgeBaseLoader.run((kb) => ({ success: kb.removeDocument(docId, projectPath) }))
   })
 
   ipcMain.handle('kb:clear-all', async () => {
     const projectPath = getCurrentProjectPath()
     if (!projectPath) return { success: false, error: '未打开项目' }
-    const success = await clearKnowledgeBase(projectPath)
-    return success ? { success: true } : { success: false, error: '清空知识库失败' }
+    return knowledgeBaseLoader.run(async (kb) => {
+      const success = await kb.clearKnowledgeBase(projectPath)
+      return success ? { success: true } : { success: false, error: '清空知识库失败' }
+    })
   })
 
   ipcMain.handle('kb:stats', async () => {
     const projectPath = getCurrentProjectPath()
     if (!projectPath) return { documentCount: 0, totalChunks: 0, vectorDimension: 0 }
-    return getKnowledgeStats(projectPath)
+    return knowledgeBaseLoader.run((kb) => kb.getKnowledgeStats(projectPath))
   })
 
   ipcMain.handle('kb:get-vectorless-count', async () => {
     const projectPath = getCurrentProjectPath()
     if (!projectPath) return { count: 0 }
-    return getVectorlessCount(projectPath)
+    return knowledgeBaseLoader.run((kb) => kb.getVectorlessCount(projectPath))
   })
 
   ipcMain.handle('kb:backfill-vectors', async () => {
@@ -114,7 +116,7 @@ export function registerKBController() {
     if (!embConfig) return { success: false, processed: 0, failed: 0, error: '未配置 Embedding 模型' }
     const projectPath = getCurrentProjectPath()
     if (!projectPath) return { success: false, processed: 0, failed: 0, error: '未打开项目' }
-    return backfillVectors(projectPath, embConfig.protocol, embConfig.model)
+    return knowledgeBaseLoader.run((kb) => kb.backfillVectors(projectPath, embConfig.protocol, embConfig.model))
   })
 
   ipcMain.handle('dialog:select-files', async () => {
