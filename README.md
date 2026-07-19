@@ -1,123 +1,97 @@
 <p align="center">
-  <img src="docs/assets/readme/hero-en.svg" alt="AI Novel Writer — local-first fiction production workspace" width="100%" />
+  <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家编辑部写作桌视觉首图" width="100%" />
 </p>
 
-<p align="center">
-  <a href="README_zh.md">简体中文</a> ·
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download for Windows</a> ·
-  <a href="LICENSE">GPL-3.0</a>
-</p>
+# AI小说作家 - AI写作与小说创作工具
 
-AI Novel Writer is a local-first desktop workspace that turns a story idea into a managed long-form production pipeline: architecture, characters, chapter blueprints, drafts, reviews, revisions, and final manuscripts.
+[English README](README_en.md) | [Windows v0.2.0 发布包](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.0) | [GPL-3.0 license](LICENSE)
 
-It is an orchestration layer, not a bundled AI model. Connect an OpenAI-compatible endpoint or Gemini provider; local endpoints such as Ollama and LM Studio are supported alongside external APIs.
+AI小说作家是 GPL-3.0 的本地优先 AI 写作和小说创作工具，面向中文网文、长篇小说和故事项目作者。它把小说大纲、角色设定、世界观、章节细纲、正文生成、审稿修稿、知识库检索和参考小说拆解放在一个桌面工作台里，让 AI 写小说不再只是一次性聊天。
 
-![AI Novel Writer main workspace](docs/assets/screenshot-main.png)
+搜索意图：适合正在找 AI写作/AI写小说、小说创作/网文写作工具、本地小说写作软件 的创作者。
 
-## Why this exists
+下载入口：[GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.0) 提供 Windows x64 zip。项目数据默认保存在本机项目目录和 SQLite 数据库中；如果你配置外部 API 或本地模型服务，提示词和上下文会发送给对应模型端点。本项目不是 Sudowrite 官方产品，也不声明功能等价或写作质量等价。
 
-Chat is good at producing a scene. A novel needs memory, constraints, checkpoints, and durable artifacts. AI Novel Writer keeps those pieces in one project workspace:
+![AI小说作家主界面](docs/assets/screenshot-main.png)
 
-- Story premise, character dynamics, world building, and synopsis
-- Editable per-chapter blueprints with goals, events, cast, and hooks
-- Draft → review → revision → finalization workflow
-- Character cards, relationship graph, and chapter-by-chapter state
-- SQLite full-text retrieval with optional LanceDB vector search
-- TXT/Markdown reference import, structure inference, and style analysis
-- Project-level and global prompt overrides
-- Simplified Chinese and English application interface
+## v0.2.0 更新
 
-## v0.2.0
+- 修复 Windows 发布包中 LanceDB 原生绑定缺失造成的启动失败，并改为按需加载知识库。
+- 新增简体中文与 English 界面切换：首次启动跟随系统语言，手动选择会持久保存；不改动内置创作提示词、生成正文或项目数据。
+- 发布流程会验证打包后的 EXE、原生模块和主窗口启动；下载 `AI-Novel-Writer-0.2.0-windows-x64.zip` 后请完整解压再运行 `AI小说作家.exe`。
 
-This release focuses on reliability and accessibility:
+## Windows 发布包
 
-- Adds a Chinese/English switch for the application interface, system notices, and error messages. The first launch follows the operating-system language; a manual choice is persisted.
-- Keeps creative prompt templates, generated prose, and project data unchanged when switching languages.
-- Packages the Windows LanceDB native binding explicitly and verifies that the packaged app can load it.
-- Loads the knowledge-base subsystem only when it is used, so an optional native failure can no longer prevent the whole application from opening.
-- Cleans release output before packaging and verifies the packaged executable, `app.asar`, native module, process stability, and visible window creation.
-
-## Windows installation
-
-1. Download `AI-Novel-Writer-0.2.0-windows-x64.zip` from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest).
-2. Extract the archive completely.
-3. Open the extracted `AI-Novel-Writer` folder.
-4. Launch `AI小说作家.exe`.
-
-Do not run the executable from inside the ZIP. Windows x64 is the currently published desktop target.
-
-## Production pipeline
+发布形式是一个 zip 压缩文件夹：
 
 ```text
-Story idea / project configuration
-                │
-                ▼
-Premise → Characters → World building → Synopsis
-                │
-                ▼
-        Chapter blueprints
-                │
-                ▼
-Draft → Review → Revision → Final manuscript
-                │
-                ▼
-Knowledge retrieval + character-state updates
+AI-Novel-Writer-0.2.0-windows-x64.zip
+└─ AI-Novel-Writer/
+   ├─ AI小说作家.exe
+   ├─ resources/
+   └─ Electron runtime files...
 ```
 
-The workspace keeps global constraints and chapter-level intent separate. A draft can be reviewed before revision, and a revision can be compared before it replaces the working draft.
+使用方式：
 
-## Model setup
+1. 下载并解压 `AI-Novel-Writer-0.2.0-windows-x64.zip`。
+2. 进入解压后的 `AI-Novel-Writer` 文件夹。
+3. 双击 `AI小说作家.exe` 启动软件。
 
-For a local OpenAI-compatible endpoint:
+## 核心能力
+
+- 长篇小说项目管理：项目配置、故事前提、世界观、角色卡、章节蓝图、草稿、修稿、审稿报告和定稿内容保存在本机项目中。
+- 故事架构：按步骤生成故事前提、角色图谱、世界观和情节大纲。
+- 章节蓝图：为每章记录章节目的、叙事功能、出场角色、关键事件和悬念钩子。
+- 正文生成与修稿：读取项目配置、蓝图、角色卡、世界观、文风约束和历史摘要，生成草稿、修稿和定稿。
+- 审稿驱动修复：先生成结构化审稿报告，再用报告驱动修稿，处理剧情连贯性、角色状态、设定冲突和章节逻辑问题。
+- 知识库检索：支持 TXT/Markdown 文档和文件夹导入；有 embedding 配置时走向量检索，缺失时降级到 SQLite FTS 全文检索。
+- 参考小说拆解：导入 TXT/Markdown 小说后拆章、反推全局配置、提取角色卡、生成章节蓝图，并生成文风仿写约束。
+- 模型接入：支持 OpenAI-compatible 和 Gemini 协议，可连接 Ollama、LM Studio、vLLM、KoboldCpp、DeepSeek、Grok、OpenAI、Gemini 等端点。
+
+## 工作流
 
 ```text
-Provider: Ollama or Custom
+创作脑洞 / 项目配置
+        ↓
+故事前提 → 角色图谱 → 世界观 → 情节大纲
+        ↓
+角色卡 / 关系图谱 / 状态追踪
+        ↓
+章节蓝图
+        ↓
+正文草稿 → 审稿报告 → 修稿版本 → 定稿
+        ↓
+知识库回写、角色状态更新、后续章节继续读取
+```
+
+## 本地模型建议
+
+```text
+Provider: custom / Ollama
 Protocol: OpenAI-compatible
 Base URL: http://127.0.0.1:11434/v1
 API key: ollama
 Model: your-local-model-name
 ```
 
-The application does not ship a model. When you configure an external provider, prompts and selected project context are sent to that provider according to its own privacy terms.
+内置提示词已针对本地 Qwen3 14B Q4 级别模型做过收敛：短指令、明确字段、结构化输出、分阶段生成、降低重复、只写本章、保留角色和蓝图约束。
 
-## Development
-
-Requirements: Node.js 20+, pnpm 11, and Windows for desktop packaging.
+## 开发
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm dev
-```
-
-Quality checks:
-
-```bash
 pnpm run typecheck
 pnpm test
-pnpm run lint
 ```
 
-Build and verify an unpacked Windows app:
+构建 Windows 文件夹 zip 发布包：
 
-```powershell
-pnpm run build:win-dir
-pnpm run smoke:win-app
+```bash
+pnpm run build:win-zip
 ```
 
-Create the release ZIP and checksum:
+## 数据安全
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/package-win-zip.ps1
-```
-
-Expected asset: `release/0.2.0/AI-Novel-Writer-0.2.0-windows-x64.zip`.
-
-## Data and security
-
-Project files and the application database stay on the local machine by default. Never commit project manuscripts, imported reference novels, API keys, `.env` files, user configuration, or generated release directories.
-
-The application can connect to local or remote model endpoints. “Local-first” describes storage and orchestration; it does not make a remote provider local.
-
-## License
-
-Distributed under the [GNU General Public License v3.0](LICENSE).
+不要提交本机小说项目、导入的参考小说全文、生成的草稿/修稿/定稿正文、`.env`、API key、本地模型配置、用户目录应用数据、`release/`、`dist/`、`dist-electron/` 或 `node_modules/`。
