@@ -5,6 +5,7 @@
   "author": "AI Novel Writer Maintainers",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.11.0",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -91,17 +92,7 @@
     "vite-plugin-electron-renderer": "^0.14.5",
     "vitest": "^4.1.4"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "electron",
-      "electron-winstaller",
-      "esbuild"
-    ],
-    "extraDependencies": [
-      "apache-arrow",
-      "flatbuffers",
-      "reflect-metadata"
-    ]
+  "optionalDependencies": {
+    "@lancedb/lancedb-win32-x64-msvc": "0.27.2"
   }
 }

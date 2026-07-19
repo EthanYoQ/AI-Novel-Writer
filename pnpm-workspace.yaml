@@ -3,3 +3,4 @@ allowBuilds:
   electron: true
   electron-winstaller: true
   esbuild: true
+  '@lancedb/lancedb-win32-x64-msvc': true
