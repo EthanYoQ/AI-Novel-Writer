@@ -75,17 +75,7 @@ Before each draft, the AI receives: this chapter's blueprint + relevant characte
 
 ![AI Novel Writer main window showing project tree, welcome page, AI writing assistant and task panel](docs/assets/readme/ui-en.png)
 
-### Character management: character cards and relationship graph
 
-![Character management panel showing character list and relationship graph](public/screenshot/5.png)
-
-### Chapter blueprints: purpose, POV, cast, and key beats per chapter
-
-![Chapter blueprint panel showing chapter list and blueprint details](public/screenshot/2.png)
-
-### Drafting & revision: AI generation + review-driven editing
-
-![Draft writing interface showing AI-generated draft content and editor](public/screenshot/3.png)
 
 ---
 
