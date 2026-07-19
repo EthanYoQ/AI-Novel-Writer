@@ -8,6 +8,7 @@ import {
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
+import { useLocaleStore } from '../../stores/locale-store'
 
 interface NewProjectDialogProps {
   open: boolean
@@ -20,6 +21,7 @@ export default function NewProjectDialog({ open, onClose }: NewProjectDialogProp
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [creating, setCreating] = useState(false)
+  const text = useLocaleStore(s => s.text)
 
   /** 对话框每次打开时重置名称 */
   useEffect(() => {
@@ -57,20 +59,20 @@ export default function NewProjectDialog({ open, onClose }: NewProjectDialogProp
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles size={18} className="text-[var(--color-accent)]" />
-            新建小说项目
+            {text('新建小说项目', 'New novel project')}
           </DialogTitle>
-          <DialogDescription>填写作品名称和保存位置，其余配置在项目内完成</DialogDescription>
+          <DialogDescription>{text('填写作品名称和保存位置，其余配置在项目内完成', 'Enter a title and save location; configure the rest inside the project.')}</DialogDescription>
         </DialogHeader>
 
         {/* 表单 */}
         <div className="px-5 py-4 space-y-4">
           {/* 项目名称 */}
           <div>
-            <Label>作品名称</Label>
+            <Label>{text('作品名称', 'Title')}</Label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="如：斗破苍穹"
+              placeholder={text('如：斗破苍穹', 'e.g. The Glass Observatory')}
               autoFocus
               onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
             />
@@ -78,30 +80,30 @@ export default function NewProjectDialog({ open, onClose }: NewProjectDialogProp
 
           {/* 保存路径 */}
           <div>
-            <Label>保存位置</Label>
+            <Label>{text('保存位置', 'Save location')}</Label>
             <div className="flex gap-2">
               <Input
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
-                placeholder="选择项目保存目录"
+                placeholder={text('选择项目保存目录', 'Choose a project folder')}
                 className="flex-1"
               />
               <Button variant="outline" onClick={handleSelectFolder}>
                 <FolderOpen size={14} />
-                选择
+                {text('选择', 'Choose')}
               </Button>
             </div>
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>取消</Button>
+          <Button variant="ghost" onClick={onClose}>{text('取消', 'Cancel')}</Button>
           <Button
             onClick={handleCreate}
             disabled={creating || !name.trim() || !path.trim()}
           >
             <Sparkles size={14} />
-            {creating ? '创建中...' : '创建项目'}
+            {creating ? text('创建中...', 'Creating...') : text('创建项目', 'Create project')}
           </Button>
         </DialogFooter>
       </DialogContent>

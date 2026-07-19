@@ -1,6 +1,7 @@
 import { Sparkles, FolderOpen, Clock, BookOpen, FileUp } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { APP_BRAND } from '../../shared/brand'
+import { useLocaleStore } from '../../stores/locale-store'
 
 interface WelcomePageProps {
   onNewProject: () => void
@@ -13,6 +14,7 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
   const recentProjects = useProjectStore(s => s.recentProjects)
   const openProject = useProjectStore(s => s.openProject)
   const currentProject = useProjectStore(s => s.currentProject)
+  const text = useLocaleStore(s => s.text)
 
   return (
     <div
@@ -30,7 +32,7 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
             <BookOpen size={36} color="#fff" style={{ position: 'relative', zIndex: 1 }} />
           </div>
           <h1 className="text-2xl font-bold mb-2" style={{ color: 'var(--color-text)' }}>
-            {currentProject ? currentProject.name : `欢迎使用 ${APP_BRAND.zhName}`}
+            {currentProject ? currentProject.name : text(`欢迎使用 ${APP_BRAND.zhName}`, `Welcome to ${APP_BRAND.enName}`)}
           </h1>
           <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
             {currentProject ? currentProject.path : APP_BRAND.tagline}
@@ -57,10 +59,10 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
               <Sparkles size={20} />
             </div>
             <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-              新建项目
+              {text('新建项目', 'New project')}
             </span>
             <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              创建一部新的小说
+              {text('创建一部新的小说', 'Start a new novel')}
             </span>
           </button>
 
@@ -83,10 +85,10 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
               <FolderOpen size={20} />
             </div>
             <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-              打开项目
+              {text('打开项目', 'Open project')}
             </span>
             <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              打开已有小说项目
+              {text('打开已有小说项目', 'Open an existing novel')}
             </span>
           </button>
 
@@ -109,10 +111,10 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
               <FileUp size={20} />
             </div>
             <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-              拆解仿写
+              {text('拆解仿写', 'Style study')}
             </span>
             <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              上传参考小说生成风格约束
+              {text('上传参考小说生成风格约束', 'Analyze a reference novel')}
             </span>
           </button>
         </div>
@@ -123,7 +125,7 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
             <div className="flex items-center gap-1.5 mb-3">
               <Clock size={14} style={{ color: 'var(--color-text-muted)' }} />
               <span className="text-xs font-medium" style={{ color: 'var(--color-text-muted)' }}>
-                最近项目
+                {text('最近项目', 'Recent projects')}
               </span>
             </div>
             <div className="space-y-1">
@@ -159,7 +161,10 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
 
         <div className="text-center mt-12">
           <p className="text-xs" style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}>
-            {APP_BRAND.zhName} v0.1.0 · 七阶段 AI 驱动创作流水线 · 本地化数据安全
+            {text(
+              `${APP_BRAND.zhName} · 七阶段 AI 驱动创作流水线 · 本地数据安全`,
+              `${APP_BRAND.enName} · Seven-stage AI writing pipeline · Local data control`,
+            )}
           </p>
         </div>
       </div>

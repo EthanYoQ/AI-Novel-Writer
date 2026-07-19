@@ -21,6 +21,7 @@
 import { createRoot } from 'react-dom/client'
 import { useEffect, useState, useCallback } from 'react'
 import { X, CheckCircle2, AlertTriangle, Info, Sparkles } from 'lucide-react'
+import { useLocaleStore } from '../../stores/locale-store'
 
 // ===== 类型定义 =====
 
@@ -275,8 +276,9 @@ export const actionToast = {
     ensureContainer()
     const actions: ActionToastAction[] = []
     if (openAction) {
-      actions.push({ label: '打开查看', onClick: openAction })
-      actions.push({ label: '忽略', variant: 'ghost' })
+      const text = useLocaleStore.getState().text
+      actions.push({ label: text('打开查看', 'Open'), onClick: openAction })
+      actions.push({ label: text('忽略', 'Dismiss'), variant: 'ghost' })
     }
     const item: ActionToastItem = {
       id: ++_counter,

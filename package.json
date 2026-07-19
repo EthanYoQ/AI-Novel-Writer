@@ -11,6 +11,7 @@
     "dev": "vite",
     "clean:build": "node scripts/clean-build-output.mjs",
     "typecheck": "tsc --noEmit",
+    "check:i18n": "node scripts/check-i18n-coverage.mjs",
     "test": "vitest run",
     "build": "tsc && vite build && electron-builder",
     "build:win": "tsc && vite build && electron-builder --win --x64",

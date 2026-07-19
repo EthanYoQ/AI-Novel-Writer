@@ -1,6 +1,6 @@
 import { create, type StateCreator } from 'zustand'
 import { ipc } from '../services/ipc-client'
-import { resolveLocale, translate, type MessageKey, type MessageParams } from '../i18n/core'
+import { localize, resolveLocale, translate, type MessageKey, type MessageParams } from '../i18n/core'
 import type { Locale } from '../i18n/types'
 import type { GlobalConfig } from '../shared/ipc-channels'
 
@@ -18,6 +18,7 @@ export interface LocaleState {
   setLocale: (locale: Locale) => Promise<void>
   toggleLocale: () => Promise<void>
   t: (key: MessageKey, params?: MessageParams) => string
+  text: (zhCNText: string, enUSText: string, params?: MessageParams) => string
 }
 
 export function createLocaleState(dependencies: LocaleDependencies): StateCreator<LocaleState> {
@@ -40,6 +41,9 @@ export function createLocaleState(dependencies: LocaleDependencies): StateCreato
     },
     t(key, params) {
       return translate(get().locale, key, params)
+    },
+    text(zhCNText, enUSText, params) {
+      return localize(get().locale, zhCNText, enUSText, params)
     },
   })
 }

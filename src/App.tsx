@@ -33,6 +33,7 @@ import { globalEventBus } from './shared/event-bus'
 export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme)
   const initLocale = useLocaleStore((s) => s.init)
+  const text = useLocaleStore((s) => s.text)
   const sidebarOpen = useLayoutStore(s => s.sidebarOpen)
   const aiPanelOpen = useLayoutStore(s => s.aiPanelOpen)
   const rightView = useLayoutStore(s => s.rightView)
@@ -74,7 +75,7 @@ export default function App() {
       if (!latest) return
       const shortTitle = latest.title.replace(/^[^\s]+\s/, '')
       actionToast.workflowComplete(
-        `✅ 「${shortTitle}」已完成`,
+        text(`「${shortTitle}」已完成`, `“${shortTitle}” completed`),
         () => useLayoutStore.getState().openRightPanel('ai-output')
       )
     })
@@ -86,7 +87,7 @@ export default function App() {
       }).catch(() => {})
       unsubActionToast()
     }
-  }, [initLocale, initTheme, initLLM, loadRecentProjects])
+  }, [initLocale, initTheme, initLLM, loadRecentProjects, text])
 
   // 全局快捷键: Cmd+N 新建项目，Cmd+O 打开项目
   // 注意：Cmd+=/- 缩放已由 TitleBar.tsx 统一处理，此处不重复注册
@@ -138,7 +139,7 @@ export default function App() {
               {sidebarOpen && (
                 <>
                   <Panel id="sidebar" defaultSize={20} minSize={10}>
-                    <ErrorBoundary fallbackLabel="侧边栏渲染失败">
+                    <ErrorBoundary fallbackLabel={text('侧边栏渲染失败', 'Sidebar failed to render')}>
                       <Sidebar />
                     </ErrorBoundary>
                   </Panel>
@@ -148,7 +149,7 @@ export default function App() {
 
               {/* 编辑区 */}
               <Panel id="editor" defaultSize={60} minSize={10}>
-                <ErrorBoundary fallbackLabel="编辑区渲染失败">
+                <ErrorBoundary fallbackLabel={text('编辑区渲染失败', 'Editor failed to render')}>
                   <EditorArea onNewProject={() => useLayoutStore.getState().openNewProject()} />
                 </ErrorBoundary>
               </Panel>
@@ -158,7 +159,7 @@ export default function App() {
                 <>
                   <PanelResizeHandle />
                   <Panel id="ai-panel" defaultSize={20} minSize={10}>
-                    <ErrorBoundary fallbackLabel="AI 面板渲染失败">
+                    <ErrorBoundary fallbackLabel={text('AI 面板渲染失败', 'AI panel failed to render')}>
                       {rightView === 'ai-output' ? <AIOutputPanel /> : <AIPanel />}
                     </ErrorBoundary>
                   </Panel>

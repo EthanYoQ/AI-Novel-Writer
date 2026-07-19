@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Database, BookOpen, FileText,
-  Search, RefreshCw, Layers, Zap, Server, Activity, Trash2,
+  Search, RefreshCw, Layers, Zap, Server, Activity, Trash2, AlertTriangle,
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -16,6 +16,8 @@ import {
   clearKnowledgeBase,
   type KBDocument, type SearchResult, type KBStatsData,
 } from '../../services/knowledge-service'
+import { useLocaleStore } from '../../stores/locale-store'
+import { appErrorMessage } from '../../i18n/app-errors'
 
 /**
  * 知识库概览页面 — LanceDB 向量数据库的管理中心
@@ -31,8 +33,10 @@ export default function KnowledgeOverview() {
   const [vectorlessCount, setVectorlessCount] = useState(0)
   const [backfilling, setBackfilling] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [loadError, setLoadError] = useState('')
 
   const currentProject = useProjectStore(s => s.currentProject)
+  const { locale, text } = useLocaleStore()
 
   const loadData = useCallback(async () => {
     if (!currentProject) return
@@ -40,17 +44,22 @@ export default function KnowledgeOverview() {
       const { documents: docs, stats: s } = await loadKBData()
       setDocuments(docs)
       setStats(s)
-    } catch { /* 忽略 */ }
+      setLoadError('')
+    } catch (error) {
+      setLoadError(appErrorMessage(locale, error))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.path])
+  }, [currentProject?.path, locale])
 
   const checkVectorless = useCallback(async () => {
     if (!currentProject) return
     try {
       setVectorlessCount(await getVectorlessCount())
-    } catch { /* 忽略 */ }
+    } catch (error) {
+      setLoadError(appErrorMessage(locale, error))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.path])
+  }, [currentProject?.path, locale])
 
   useEffect(() => { 
     loadData()
@@ -76,7 +85,7 @@ export default function KnowledgeOverview() {
 
   // 判断检索模式
   const hasVectors = stats.vectorDimension > 0
-  const searchMode = hasVectors ? '混合检索' : 'BM25 全文检索'
+  const searchMode = hasVectors ? text('混合检索', 'Hybrid search') : text('BM25 全文检索', 'BM25 full-text search')
 
   if (!currentProject) {
     return (
@@ -90,12 +99,12 @@ export default function KnowledgeOverview() {
         >
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="text-xs font-medium truncate text-[var(--color-text-secondary)]">
-              知识库
+              {text('知识库', 'Knowledge base')}
             </span>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto relative">
-          <EmptyState icon={<BookOpen size={36} />} message="请先打开项目" opacity={0.4} />
+          <EmptyState icon={<BookOpen size={36} />} message={text('请先打开项目', 'Open a project first')} opacity={0.4} />
         </div>
       </div>
     )
@@ -107,7 +116,9 @@ export default function KnowledgeOverview() {
     try {
       const results = await searchKB(searchQuery, topK)
       setSearchResults(results)
-    } catch { /* 忽略 */ }
+    } catch (error) {
+      toast.error(appErrorMessage(locale, error))
+    }
     setSearching(false)
   }
 
@@ -117,12 +128,12 @@ export default function KnowledgeOverview() {
     try {
       const result = await backfillVectors()
       if (result.success) {
-        toast.success(`向量索引重建完成：已处理 ${result.processed} 块${result.failed > 0 ? `，${result.failed} 块失败` : ''}`)
+        toast.success(text(`向量索引重建完成：已处理 ${result.processed} 块${result.failed > 0 ? `，${result.failed} 块失败` : ''}`, `Vector index rebuilt: ${result.processed} chunks processed${result.failed > 0 ? `, ${result.failed} failed` : ''}`))
       } else {
-        toast.error(result.error || '向量回填失败')
+        toast.error(result.error || text('向量回填失败', 'Vector backfill failed'))
       }
     } catch (e) {
-      toast.error('向量回填失败: ' + String(e))
+      toast.error(appErrorMessage(locale, e))
     } finally {
       setBackfilling(false)
       globalEventBus.emit('REFRESH_RESOURCE', { resources: ['all'] })
@@ -132,10 +143,10 @@ export default function KnowledgeOverview() {
   /** 清空当前项目知识库 */
   const handleClearKnowledgeBase = async () => {
     const ok = await confirm(
-      '确认清空当前项目的全部知识库内容？\n此操作会删除已导入的知识文档与切片，不会删除项目正文、蓝图或故事架构。',
+      text('确认清空当前项目的全部知识库内容？\n此操作会删除已导入的知识文档与切片，不会删除项目正文、蓝图或故事架构。', 'Clear the entire knowledge base for this project?\nImported documents and chunks will be deleted. Manuscripts, blueprints, and story architecture are preserved.'),
       {
-        title: '清空知识库',
-        confirmText: '清空知识库',
+        title: text('清空知识库', 'Clear knowledge base'),
+        confirmText: text('清空知识库', 'Clear knowledge base'),
         danger: true,
       },
     )
@@ -150,12 +161,12 @@ export default function KnowledgeOverview() {
         setSearchResults([])
         setVectorlessCount(0)
         globalEventBus.emit('REFRESH_RESOURCE', { resources: ['all'] })
-        toast.success('知识库已清空')
+        toast.success(text('知识库已清空', 'Knowledge base cleared'))
       } else {
-        toast.error(result.error || '清空知识库失败')
+        toast.error(result.error || text('清空知识库失败', 'Could not clear the knowledge base'))
       }
     } catch (e) {
-      toast.error('清空知识库失败: ' + String(e))
+      toast.error(appErrorMessage(locale, e))
     } finally {
       setClearing(false)
     }
@@ -174,9 +185,9 @@ export default function KnowledgeOverview() {
             <Database size={20} className="text-white" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-[var(--color-text)]">知识库</h2>
+            <h2 className="text-lg font-bold text-[var(--color-text)]">{text('知识库', 'Knowledge base')}</h2>
             <p className="text-xs text-[var(--color-text-muted)]">
-              基于 LanceDB 的本地向量数据库，定稿后自动入库，为 AI 写作提供语义检索上下文
+              {text('基于 LanceDB 的本地向量数据库，定稿后自动入库，为 AI 写作提供语义检索上下文', 'A local LanceDB vector database. Finalized chapters are indexed automatically to provide retrieval context for AI writing.')}
             </p>
           </div>
           <Button
@@ -186,25 +197,32 @@ export default function KnowledgeOverview() {
             disabled={clearing || (stats.documentCount === 0 && stats.totalChunks === 0)}
           >
             {clearing ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
-            清空知识库
+            {text('清空知识库', 'Clear knowledge base')}
           </Button>
         </div>
 
+        {loadError && (
+          <div className="mb-6 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-xs text-red-500">
+            <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" />
+            <span>{loadError}</span>
+          </div>
+        )}
+
         {/* ===== 统计卡片 ===== */}
         <div className="grid grid-cols-4 gap-3 mb-6">
-          <StatCard icon={<FileText size={14} />} label="文档数量" value={stats.documentCount} />
-          <StatCard icon={<Layers size={14} />} label="知识切片" value={stats.totalChunks} />
+          <StatCard icon={<FileText size={14} />} label={text('文档数量', 'Documents')} value={stats.documentCount} />
+          <StatCard icon={<Layers size={14} />} label={text('知识切片', 'Chunks')} value={stats.totalChunks} />
           <StatCard
             icon={<Server size={14} />}
-            label="存储引擎"
+            label={text('存储引擎', 'Storage engine')}
             value="LanceDB"
             accent
           />
           <StatCard
             icon={<Activity size={14} />}
-            label="检索模式"
+            label={text('检索模式', 'Search mode')}
             value={hasVectors ? 'FTS+向量' : 'FTS'}
-            badge={hasVectors ? '混合' : '基础'}
+            badge={hasVectors ? text('混合', 'Hybrid') : text('基础', 'Basic')}
             badgeColor={hasVectors ? '#22c55e' : '#3b82f6'}
           />
         </div>
@@ -221,9 +239,9 @@ export default function KnowledgeOverview() {
                   <Zap size={16} className="text-amber-400" />
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-amber-300">向量索引待升级</div>
+                  <div className="text-sm font-medium text-amber-300">{text('向量索引待升级', 'Vector index upgrade available')}</div>
                   <div className="text-[0.7rem] text-amber-400/70">
-                    {vectorlessCount} 个文本块尚未生成向量嵌入，升级后可启用语义检索增强
+                    {text(`${vectorlessCount} 个文本块尚未生成向量嵌入，升级后可启用语义检索增强`, `${vectorlessCount} text chunks do not have embeddings. Rebuild the index to enable enhanced semantic retrieval.`)}
                   </div>
                 </div>
               </div>
@@ -234,9 +252,9 @@ export default function KnowledgeOverview() {
                 disabled={backfilling}
               >
                 {backfilling ? (
-                  <><RefreshCw size={12} className="animate-spin mr-1.5" />重建中...</>
+                  <><RefreshCw size={12} className="animate-spin mr-1.5" />{text('重建中...', 'Rebuilding...')}</>
                 ) : (
-                  <>重建向量索引</>
+                  <>{text('重建向量索引', 'Rebuild vector index')}</>
                 )}
               </Button>
             </div>
@@ -256,7 +274,7 @@ export default function KnowledgeOverview() {
         >
           <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)]">
             <Search size={14} className="text-[var(--color-accent)] flex-shrink-0" />
-            <span className="text-sm font-semibold text-[var(--color-text)]">语义检索</span>
+            <span className="text-sm font-semibold text-[var(--color-text)]">{text('语义检索', 'Semantic search')}</span>
             {/* 检索模式标签 */}
             <span className={cn(
               'text-[0.65rem] px-1.5 py-0.5 rounded-full font-medium',
@@ -267,14 +285,14 @@ export default function KnowledgeOverview() {
               {searchMode}
             </span>
             <span className="text-[0.7rem] text-[var(--color-text-muted)] ml-auto">
-              {hasVectors ? 'BM25 + 向量近邻融合' : '配置 Embedding 模型后自动升级为混合检索'}
+              {hasVectors ? text('BM25 + 向量近邻融合', 'BM25 + vector nearest-neighbor fusion') : text('配置 Embedding 模型后自动升级为混合检索', 'Configure an embedding model to enable hybrid search')}
             </span>
           </div>
           <div className="px-4 py-3">
             <div className="flex items-center gap-2">
               <Input
                 className="flex-1 h-9"
-                placeholder="输入查询内容，如：主角的能力体系、世界观核心设定..."
+                placeholder={text('输入查询内容，如：主角的能力体系、世界观核心设定...', 'Search for protagonist abilities, core world rules, and more...')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
@@ -296,7 +314,7 @@ export default function KnowledgeOverview() {
                 disabled={searching}
               >
                 {searching ? <RefreshCw size={13} className="animate-spin" /> : <Search size={13} />}
-                检索
+                {text('检索', 'Search')}
               </Button>
             </div>
           </div>
@@ -306,13 +324,13 @@ export default function KnowledgeOverview() {
             <div className="border-t border-[var(--color-border)]">
               <div className="px-4 py-2 flex items-center justify-between">
                 <span className="text-xs font-medium text-[var(--color-text-muted)]">
-                  检索结果 ({searchResults.length} 条)
+                  {text(`检索结果（${searchResults.length} 条）`, `Search results (${searchResults.length})`)}
                 </span>
                 <button
                   className="text-[0.7rem] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
                   onClick={() => setSearchResults([])}
                 >
-                  清除
+                  {text('清除', 'Clear')}
                 </button>
               </div>
               <div className="max-h-[400px] overflow-y-auto">
@@ -332,7 +350,7 @@ export default function KnowledgeOverview() {
                         r.score > 0.6 ? 'bg-yellow-500/20 text-yellow-400' :
                         'bg-[var(--color-hover)] text-[var(--color-text-muted)]'
                       )}>
-                        {r.score === 0.5 ? '全文匹配' : `相似度 ${(r.score * 100).toFixed(1)}%`}
+                        {r.score === 0.5 ? text('全文匹配', 'Text match') : text(`相似度 ${(r.score * 100).toFixed(1)}%`, `${(r.score * 100).toFixed(1)}% similarity`)}
                       </span>
                     </div>
                     <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed whitespace-pre-wrap">

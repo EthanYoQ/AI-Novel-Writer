@@ -1,8 +1,13 @@
-import { ipcMain, dialog } from 'electron'
+import { app, ipcMain, dialog } from 'electron'
 import fs from 'node:fs'
 import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_PATH, RECENT_PROJECTS_PATH } from '../utils/config-utils'
 import { GlobalConfig, ModelProfile } from '../../src/shared/ipc-channels'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
+import { mainText } from '../i18n'
+
+function text(zhCNText: string, enUSText: string): string {
+  return mainText(app.getLocale(), zhCNText, enUSText)
+}
 
 function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName: string } } | null {
   const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
@@ -29,7 +34,7 @@ export function registerKBController() {
   ipcMain.handle('kb:import-document', async (_event, filePath: string) => {
     const embConfig = getEmbeddingConfig()
     const projectPath = getCurrentProjectPath()
-    if (!projectPath) return { success: false, error: '未打开项目' }
+    if (!projectPath) return { success: false, errorCode: 'PROJECT_NOT_OPEN', error: text('未打开项目', 'No project is open') }
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
     return knowledgeBaseLoader.run((kb) => kb.importDocument(filePath, projectPath, protocol, model))
@@ -38,7 +43,7 @@ export function registerKBController() {
   ipcMain.handle('kb:import-folder', async (_event, folderPath: string) => {
     const embConfig = getEmbeddingConfig()
     const projectPath = getCurrentProjectPath()
-    if (!projectPath) return { success: false, error: '未打开项目' }
+    if (!projectPath) return { success: false, errorCode: 'PROJECT_NOT_OPEN', error: text('未打开项目', 'No project is open') }
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
     return knowledgeBaseLoader.run((kb) => kb.importFolder(folderPath, projectPath, protocol, model))
@@ -92,10 +97,10 @@ export function registerKBController() {
 
   ipcMain.handle('kb:clear-all', async () => {
     const projectPath = getCurrentProjectPath()
-    if (!projectPath) return { success: false, error: '未打开项目' }
+    if (!projectPath) return { success: false, errorCode: 'PROJECT_NOT_OPEN', error: text('未打开项目', 'No project is open') }
     return knowledgeBaseLoader.run(async (kb) => {
       const success = await kb.clearKnowledgeBase(projectPath)
-      return success ? { success: true } : { success: false, error: '清空知识库失败' }
+      return success ? { success: true } : { success: false, error: text('清空知识库失败', 'Could not clear the knowledge base') }
     })
   })
 
@@ -113,17 +118,17 @@ export function registerKBController() {
 
   ipcMain.handle('kb:backfill-vectors', async () => {
     const embConfig = getEmbeddingConfig()
-    if (!embConfig) return { success: false, processed: 0, failed: 0, error: '未配置 Embedding 模型' }
+    if (!embConfig) return { success: false, processed: 0, failed: 0, errorCode: 'EMBEDDING_MODEL_NOT_CONFIGURED', error: text('未配置 Embedding 模型', 'No embedding model is configured') }
     const projectPath = getCurrentProjectPath()
-    if (!projectPath) return { success: false, processed: 0, failed: 0, error: '未打开项目' }
+    if (!projectPath) return { success: false, processed: 0, failed: 0, errorCode: 'PROJECT_NOT_OPEN', error: text('未打开项目', 'No project is open') }
     return knowledgeBaseLoader.run((kb) => kb.backfillVectors(projectPath, embConfig.protocol, embConfig.model))
   })
 
   ipcMain.handle('dialog:select-files', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile', 'multiSelections'],
-      title: '选择要导入的文档',
-      filters: [{ name: '文本文件', extensions: ['txt', 'md', 'markdown'] }],
+      title: text('选择要导入的文档', 'Choose documents to import'),
+      filters: [{ name: text('文本文件', 'Text files'), extensions: ['txt', 'md', 'markdown'] }],
     })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths
@@ -132,7 +137,7 @@ export function registerKBController() {
   ipcMain.handle('dialog:select-import-folder', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory'],
-      title: '选择要批量导入的文件夹',
+      title: text('选择要批量导入的文件夹', 'Choose a folder to import'),
     })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]

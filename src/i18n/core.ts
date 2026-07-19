@@ -22,6 +22,23 @@ export function createTranslator(catalogs: Record<Locale, Catalog>) {
 
 const translateMessage = createTranslator(messages)
 
+function interpolate(template: string, params: MessageParams = {}): string {
+  return template.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? `{${name}}`))
+}
+
+/**
+ * Localize short copy that belongs to a single component. Shared language uses
+ * the keyed catalog above; colocating one-off copy keeps the catalog focused.
+ */
+export function localize(
+  locale: Locale,
+  zhCNText: string,
+  enUSText: string,
+  params?: MessageParams,
+): string {
+  return interpolate(locale === 'zh-CN' ? zhCNText : enUSText, params)
+}
+
 export function translate(locale: Locale, key: MessageKey, params?: MessageParams): string {
   return translateMessage(locale, key, params)
 }

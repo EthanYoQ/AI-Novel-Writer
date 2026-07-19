@@ -16,10 +16,12 @@ import {
   registerMenuSetter, unregisterMenuSetter,
   type SidebarMenuState,
 } from './sidebar/SidebarShared'
+import { useLocaleStore } from '../../stores/locale-store'
 
 /** 左侧面板 */
 export default function Sidebar() {
   const sidebarView = useLayoutStore(s => s.sidebarView)
+  const text = useLocaleStore(s => s.text)
   // 全局右键菜单状态
   const [sidebarMenu, setSidebarMenu] = useState<SidebarMenuState | null>(null)
 
@@ -30,10 +32,10 @@ export default function Sidebar() {
   }, [])
 
   const viewTitles: Record<string, string> = {
-    home:       '主页',
-    project:    '项目结构',
-    knowledge:  '知识库',
-    characters: '角色管理',
+    home:       text('主页', 'Home'),
+    project:    text('项目结构', 'Project'),
+    knowledge:  text('知识库', 'Knowledge'),
+    characters: text('角色管理', 'Characters'),
   }
 
   return (

@@ -12,6 +12,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { ImportPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
+import { searchKB } from '../../knowledge-service'
 import type { CharacterData } from '../../../../electron/repositories/character-repository'
 import { normalizeCharacterCardsForPersistence } from '../character-card-normalizer'
 
@@ -122,7 +123,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     const sampledContent: Record<string, string> = {}
     for (const topic of searchTopics) {
       try {
-        const results = await ipc.invoke('kb:search', topic.query, 5)
+        const results = await searchKB(topic.query, 5)
         if (results.length > 0) {
           sampledContent[topic.key] = results
             .map((r: { text: string; score: number; fileName: string }, i: number) =>
