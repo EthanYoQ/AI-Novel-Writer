@@ -204,14 +204,14 @@ ollama pull qwen3:14b
 发布形式是一个 zip 压缩文件夹：
 
 ```text
-AI-Novel-Writer-0.2.0-windows-x64.zip
+AI-Novel-Writer-0.2.1-windows-x64.zip
 └─ AI-Novel-Writer/
    ├─ AI小说作家.exe
    ├─ resources/
    └─ Electron runtime files...
 ```
 
-1. 从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.0) 下载 `AI-Novel-Writer-0.2.0-windows-x64.zip`
+1. 从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.1) 下载 `AI-Novel-Writer-0.2.1-windows-x64.zip`
 2. **完整解压**到任意目录
 3. 双击 `AI小说作家.exe` 启动
 
