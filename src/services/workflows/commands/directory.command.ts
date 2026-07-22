@@ -11,6 +11,16 @@ import {
   verifyBlueprintsPersisted,
 } from '../directory-workflow'
 
+function isBlueprintJsonParseError(error: unknown): error is Error {
+  return error instanceof Error && error.message.startsWith('蓝图 JSON 解析失败：')
+}
+
+function buildBlueprintJsonRepairPrompt(content: string, startChapter: number, endChapter: number): string {
+  return `将下面的章节蓝图输出修复为可被 JSON.parse 解析的 JSON 对象。\n\n`
+    + `要求：仅输出 JSON；不要 Markdown、解释或 <think> 标签；根对象必须包含 blueprints 数组；保留原有章节信息；数组中的章节号必须覆盖第 ${startChapter} 至第 ${endChapter} 章。\n\n`
+    + `待修复输出：\n${content}`
+}
+
 export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBlueprint[]> {
   constructor(private params: DirectoryWorkflowParams) {
     super()
@@ -93,16 +103,31 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
 
       // systemRole 由模板定义，不再硬编码
       const systemRole = getPromptTemplate('chapter_blueprint')?.systemRole || '你是一位经验丰富的网文架构师。'
-      const resultText = await this.callLLM(prompt, systemRole, callbacks, {
+      const jsonOutputOptions = {
         responseFormat: { type: 'json_object' },
         thinking: false,
         maxTokens: Math.min(modelMaxTokens, 4096),
         temperature: 0.78,
-      })
+      }
+      const resultText = await this.callLLM(prompt, systemRole, callbacks, jsonOutputOptions)
 
       // ★ 关键修复：接受 AI 返回的从 cursor 到 endChapter 范围内的所有有效章节
       // AI 可能一次性返回超出本批次（batchEnd）的章节，全部保留，避免浪费和重复 LLM 请求
-      const parsed = parseTextBlueprintsStrict(resultText, cursor, endChapter)
+      let parsed: ChapterBlueprint[]
+      try {
+        parsed = parseTextBlueprintsStrict(resultText, cursor, endChapter)
+      } catch (error) {
+        if (!isBlueprintJsonParseError(error)) throw error
+
+        callbacks.log('  蓝图 JSON 格式异常，正在请求模型修复格式...')
+        const repairedText = await this.callLLM(
+          buildBlueprintJsonRepairPrompt(resultText, cursor, endChapter),
+          '你是严格的 JSON 格式修复器，只输出有效 JSON。',
+          callbacks,
+          { ...jsonOutputOptions, temperature: 0.2 },
+        )
+        parsed = parseTextBlueprintsStrict(repairedText, cursor, endChapter)
+      }
       const actualMaxChapter = Math.max(...parsed.map(p => p.chapterNumber))
       assertBlueprintCoverage(parsed, cursor, actualMaxChapter)
       newBlueprints.push(...parsed)

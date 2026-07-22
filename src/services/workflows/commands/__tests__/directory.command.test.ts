@@ -118,4 +118,33 @@ describe('GenerateDirectoryCommand', () => {
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow(/缺少目标章节/)
     expect(invoke).not.toHaveBeenCalledWith('db:blueprint-upsert-many', expect.anything())
   })
+
+  it('repairs malformed blueprint JSON once before saving it', async () => {
+    const savedBlueprint = {
+      chapterNumber: 1,
+      title: '启程',
+      role: '发展',
+      purpose: '',
+      keyEvents: '主角发现异常',
+      characters: [],
+      suspenseHook: '',
+      userGuidance: '',
+      notes: '',
+      notesUpdatedAt: '',
+    }
+    const invoke = stubIpcInvoke((channel) => {
+      if (channel === 'db:blueprint-upsert-many') return { success: true }
+      if (channel === 'db:blueprint-get') return savedBlueprint
+      return { success: true }
+    })
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 })
+    const callLLM = vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+      .mockResolvedValueOnce('{"blueprints":[{"chapterNumber" 1,"title":"启程"}]}')
+      .mockResolvedValueOnce('[{"chapterNumber":1,"title":"启程","keyEvents":"主角发现异常"}]')
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toEqual([savedBlueprint])
+    expect(callLLM).toHaveBeenCalledTimes(2)
+    expect(invoke).toHaveBeenCalledWith('db:blueprint-upsert-many', [savedBlueprint])
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('正在请求模型修复格式'))
+  })
 })
