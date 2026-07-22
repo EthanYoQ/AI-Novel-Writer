@@ -205,14 +205,14 @@ ollama pull qwen3:14b
 The release is a zipped application folder:
 
 ```text
-AI-Novel-Writer-0.2.0-windows-x64.zip
+AI-Novel-Writer-0.2.1-windows-x64.zip
 └─ AI-Novel-Writer/
    ├─ AI Novel Writer.exe
    ├─ resources/
    └─ Electron runtime files...
 ```
 
-1. Download `AI-Novel-Writer-0.2.0-windows-x64.zip` from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.0)
+1. Download `AI-Novel-Writer-0.2.1-windows-x64.zip` from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.1)
 2. **Extract it fully** to any directory
 3. Launch `AI Novel Writer.exe`
 
