@@ -1,11 +1,14 @@
 {
   "name": "ai-novel-writer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "AI Novel Writer - a local-first production workspace for long-form fiction",
   "author": "AI Novel Writer Maintainers",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.11.0",
+  "engines": {
+    "node": ">=20"
+  },
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
