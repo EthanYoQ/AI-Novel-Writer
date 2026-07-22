@@ -24,12 +24,17 @@ export class GeminiProvider implements ILLMProvider {
 
     const { contents, systemInstruction } = this.toGeminiContents(messages)
 
+    const generationConfig: Record<string, unknown> = {
+      temperature: opts.temperature ?? model.temperature,
+      maxOutputTokens: opts.maxTokens ?? model.maxTokens,
+    }
+    if (opts.responseFormat?.type === 'json_object') {
+      generationConfig.responseMimeType = 'application/json'
+    }
+
     const body: Record<string, unknown> = {
       contents,
-      generationConfig: {
-        temperature: opts.temperature ?? model.temperature,
-        maxOutputTokens: opts.maxTokens ?? model.maxTokens,
-      },
+      generationConfig,
     }
     if (systemInstruction) {
       body.systemInstruction = { parts: [{ text: systemInstruction }] }
@@ -71,12 +76,17 @@ export class GeminiProvider implements ILLMProvider {
 
       const { contents, systemInstruction } = this.toGeminiContents(messages)
 
+      const generationConfig: Record<string, unknown> = {
+        temperature: opts.temperature ?? model.temperature,
+        maxOutputTokens: opts.maxTokens ?? model.maxTokens,
+      }
+      if (opts.responseFormat?.type === 'json_object') {
+        generationConfig.responseMimeType = 'application/json'
+      }
+
       const body: Record<string, unknown> = {
         contents,
-        generationConfig: {
-          temperature: opts.temperature ?? model.temperature,
-          maxOutputTokens: opts.maxTokens ?? model.maxTokens,
-        },
+        generationConfig,
       }
       if (systemInstruction) {
         body.systemInstruction = { parts: [{ text: systemInstruction }] }
