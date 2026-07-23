@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Save, BookOpen, RefreshCw, Plus, Trash2,
-  Sparkles, PenLine
+  Sparkles, PenLine, ListChecks
 } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
@@ -17,6 +17,7 @@ import {
 } from '../../services/workflows/directory-workflow'
 import { guardDirectoryGeneration } from '../../services/workflow-guards'
 import DirectoryConfigDialog from '../dialogs/DirectoryConfigDialog'
+import BatchChapterCreationDialog from '../dialogs/BatchChapterCreationDialog'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Textarea } from '../ui/Textarea'
@@ -27,6 +28,7 @@ import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
 import { globalEventBus } from '../../shared/event-bus'
 import { shouldRefreshBlueprints } from './blueprint-refresh'
+import { useLocaleStore } from '../../stores/locale-store'
 
 const ROLES = ['建置', '铺垫', '发展', '冲突', '高潮', '转折', '收尾']
 
@@ -40,6 +42,7 @@ const ROLE_COLORS: Record<string, string> = {
 
 /** 章节蓝图编辑器 — 读写 directory.json */
 export default function ChapterCardEditor() {
+  const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore(s => s.currentProject)
   // ✅ action 用 getState() 获取，不订阅 workflow store 高频更新
   const startWorkflow = useWorkflowStore.getState().startWorkflow
@@ -54,6 +57,7 @@ export default function ChapterCardEditor() {
 
   // 蓝图生成弹窗（替代原 inline 批量面板）
   const [showBlueprintDialog, setShowBlueprintDialog] = useState(false)
+  const [showBatchCreationDialog, setShowBatchCreationDialog] = useState(false)
 
   const loadBlueprints = useCallback(async () => {
     if (!currentProject) return
@@ -86,6 +90,13 @@ export default function ChapterCardEditor() {
       }
     })
   }, [loadBlueprints])
+
+  // 单章或批量定稿后，都让顶部写作/批量入口立刻指向下一章。
+  useEffect(() => {
+    return globalEventBus.on('FINALIZE_COMPLETE', ({ chapterNumber }) => {
+      setNextWriteChapter((current) => Math.max(current ?? 1, chapterNumber + 1))
+    })
+  }, [])
 
   useEffect(() => {
     return globalEventBus.on('REFRESH_RESOURCE', (payload) => {
@@ -296,6 +307,17 @@ export default function ChapterCardEditor() {
               写作第{nextWriteChapter}章
             </Button>
           )}
+          {nextWriteChapter !== null && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowBatchCreationDialog(true)}
+              title={text('按连续章节蓝图启动受控批量创作任务（最高10章）', 'Start a controlled batch writing task from consecutive chapter blueprints (maximum 10 chapters).')}
+            >
+              <ListChecks size={12} />
+              {text('批量创作', 'Batch write')}
+            </Button>
+          )}
           {/* AI 生成蓝图 → 弹出 DirectoryConfigDialog */}
           <Button
             variant="ai"
@@ -331,12 +353,17 @@ export default function ChapterCardEditor() {
       </div>
 
       {/* 蓝图生成配置弹窗 */}
-      <DirectoryConfigDialog
+        <DirectoryConfigDialog
         isOpen={showBlueprintDialog}
         onClose={() => setShowBlueprintDialog(false)}
         existingCount={blueprints.length}
-        onConfirm={handleBatchGenerate}
-      />
+          onConfirm={handleBatchGenerate}
+        />
+        <BatchChapterCreationDialog
+          isOpen={showBatchCreationDialog}
+          startChapterNumber={nextWriteChapter}
+          onClose={() => setShowBatchCreationDialog(false)}
+        />
 
       {/* 主区域：左侧列表 + 右侧编辑 */}
       <div className="flex-1 flex overflow-hidden">

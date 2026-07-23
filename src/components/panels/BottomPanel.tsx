@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import {
   Trash2, ChevronsDown, Loader2, CheckCircle2, XCircle, Clock,
-  Play, X, ChevronDown, ChevronRight, Zap,
+  Play, Pause, X, ChevronDown, ChevronRight, Zap,
 } from 'lucide-react'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useWorkflowStore, type WorkflowStep, type WorkflowRun } from '../../stores/workflow-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import { Button } from '../ui/Button'
 
 /** 底部面板 Tab 名称映射 */
@@ -42,6 +43,7 @@ export default function BottomPanel() {
   // 任何活跃任务运行中
   const hasRunning = activeRuns.some(r => r.status === 'running')
   const hasWaiting = activeRuns.some(r => r.status === 'waiting')
+  const hasPaused = activeRuns.some(r => r.status === 'paused')
 
   return (
     <div
@@ -72,6 +74,9 @@ export default function BottomPanel() {
           )}
           {activeTab === 'tasks' && hasWaiting && !hasRunning && (
             <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: 'var(--color-warning)' }} />
+          )}
+          {activeTab === 'tasks' && hasPaused && !hasRunning && !hasWaiting && (
+            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--color-warning)' }} />
           )}
           {/* 活跃任务数徽章 */}
           {activeTab === 'tasks' && activeRuns.length > 0 && (
@@ -108,6 +113,8 @@ function TaskRunView() {
   const history = useWorkflowStore(s => s.history)
   const waitingRuns = useWorkflowStore(s => s.waitingRuns)
   const cancelWorkflow = useWorkflowStore(s => s.cancelWorkflow)
+  const pauseWorkflow = useWorkflowStore(s => s.pauseWorkflow)
+  const resumeWorkflow = useWorkflowStore(s => s.resumeWorkflow)
   const confirmContinue = useWorkflowStore(s => s.confirmContinue)
 
   console.log('[BottomPanel] TaskRunView render: activeRuns=', activeRuns.map(r => r.id.slice(0,8) + ':' + r.status + ':' + r.steps.map(s=>s.status).join('/')))
@@ -136,6 +143,8 @@ function TaskRunView() {
                   waitingAfterStepIndex={runWaiting?.waitingAfterStepIndex ?? -1}
                   onConfirm={() => confirmContinue(run.id)}
                   onCancel={() => cancelWorkflow(run.id)}
+                  onPause={() => pauseWorkflow(run.id)}
+                  onResume={() => resumeWorkflow(run.id)}
                 />
               </div>
             )
@@ -189,13 +198,18 @@ function ActiveRunPanel({
   waitingAfterStepIndex,
   onConfirm,
   onCancel,
+  onPause,
+  onResume,
 }: {
   run: WorkflowRun
   waitingForConfirm: boolean
   waitingAfterStepIndex: number
   onConfirm: () => void
   onCancel: () => void
+  onPause: () => void
+  onResume: () => void
 }) {
+  const text = useLocaleStore(s => s.text)
   const [expanded, setExpanded] = useState(true)
 
   // 需要确认时自动展开
@@ -214,7 +228,8 @@ function ActiveRunPanel({
   const totalCount = run.steps.length
   const progress = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0
   const nextStepName = run.steps[waitingAfterStepIndex + 1]?.name
-  const isActive = run.status === 'running' || run.status === 'waiting'
+  const isActive = run.status === 'running' || run.status === 'waiting' || run.status === 'paused'
+  const isBatchTask = run.type === 'batch_generate'
 
   console.log('[BottomPanel] ActiveRunPanel render: run.status=', run.status, 'steps=', run.steps.map(s => s.status).join(','))
 
@@ -232,6 +247,9 @@ function ActiveRunPanel({
           )}
           {run.status === 'waiting' && (
             <Clock size={13} style={{ color: 'var(--color-warning)' }} />
+          )}
+          {run.status === 'paused' && (
+            <Pause size={13} style={{ color: 'var(--color-warning)' }} />
           )}
         </div>
 
@@ -254,8 +272,33 @@ function ActiveRunPanel({
           </div>
         </div>
 
-        {/* 右侧：步骤计数 + 折叠箭头 + 取消 */}
+        {/* 右侧：批量任务控制 + 步骤计数 + 折叠箭头 + 取消 */}
         <div className="flex items-center gap-1 flex-shrink-0">
+          {isBatchTask && run.status === 'running' && !run.pauseRequested && (
+            <button
+              onClick={(event) => { event.stopPropagation(); onPause() }}
+              className="icon-btn"
+              style={{ width: 18, height: 18 }}
+              title={text('暂停（将在当前章节完成后生效）', 'Pause (takes effect after the current chapter finishes)')}
+            >
+              <Pause size={11} />
+            </button>
+          )}
+          {isBatchTask && run.status === 'running' && run.pauseRequested && (
+            <span className="text-[0.62rem] whitespace-nowrap" style={{ color: 'var(--color-warning)' }} title={text('暂停将在当前章节完成后生效', 'Pause takes effect after the current chapter finishes')}>
+              {text('暂停中', 'Pausing')}
+            </span>
+          )}
+          {isBatchTask && run.status === 'paused' && (
+            <button
+              onClick={(event) => { event.stopPropagation(); onResume() }}
+              className="icon-btn"
+              style={{ width: 18, height: 18 }}
+              title={text('继续批量创作', 'Resume batch writing')}
+            >
+              <Play size={11} />
+            </button>
+          )}
           <span className="text-[0.68rem] font-mono" style={{ color: 'var(--color-text-muted)' }}>
             {completedCount}/{totalCount}
           </span>
@@ -545,8 +588,6 @@ function ModelsView() {
     durationMs: number; success: boolean; createdAt: string
   }>>([])
 
-  useEffect(() => { loadData() }, [])
-
   const loadData = async () => {
     try {
       const { loadLLMData } = await import('../../services/stats-service')
@@ -555,6 +596,8 @@ function ModelsView() {
       setHistory(h)
     } catch { /* 忽略 */ }
   }
+
+  useEffect(() => { void Promise.resolve().then(loadData) }, [])
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
