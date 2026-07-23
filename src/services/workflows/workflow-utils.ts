@@ -170,6 +170,8 @@ export interface PipelineOptions {
   retryCount?: number
   /** true = 只重跑失败步骤（修复模式） */
   onlyFailed?: boolean
+  /** true = 任一步骤最终失败后立即停止，不再执行后续后处理 */
+  stopOnFailure?: boolean
 }
 
 /**
@@ -193,6 +195,7 @@ export async function runPostProcessPipeline(
 ): Promise<PostProcessStatus> {
   const retryCount = options?.retryCount ?? 2
   const onlyFailed = options?.onlyFailed ?? false
+  const stopOnFailure = options?.stopOnFailure ?? false
 
   const { sourceType, sourceId } = parseScope(scope)
 
@@ -235,6 +238,9 @@ export async function runPostProcessPipeline(
       await ipc.invoke('db:post-process-mark-step-ok', runId, step.key)
     } else {
       await ipc.invoke('db:post-process-mark-step-failed', runId, step.key, result.error || '未知错误')
+      if (stopOnFailure) {
+        throw new Error(`后处理步骤失败：${step.label} — ${result.error || '未知错误'}`)
+      }
     }
   }
 

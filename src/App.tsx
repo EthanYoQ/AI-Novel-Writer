@@ -82,9 +82,10 @@ export default function App() {
       )
     })
 
-    const unsubAutoOpenNextChapter = globalEventBus.on('FINALIZE_COMPLETE', ({ chapterNumber }) => {
+    const unsubAutoOpenNextChapter = globalEventBus.on('FINALIZE_COMPLETE', ({ chapterNumber, source }) => {
       void (async () => {
         try {
+          if (source === 'batch') return
           const config = await ipc.invoke('config:get')
           if (!config.autoOpenNextChapterAfterFinalize) return
 

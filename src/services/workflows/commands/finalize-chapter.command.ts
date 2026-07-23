@@ -18,6 +18,10 @@ export interface FinalizeChapterParams {
   draftContent: string
   chapterNumber: number
   chapterInfo: ChapterInfo
+  /** 批量任务中任一后处理失败即停止，不再继续后续章节 */
+  stopOnPostProcessFailure?: boolean
+  /** 标记定稿来源，避免批量任务触发单章的自动打开下一章对话框 */
+  eventSource?: 'manual' | 'batch'
 }
 
 // ===== 工具函数：流式调用大模型并返回完整文本 =====
@@ -282,13 +286,27 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
       refinedDraftText,
     )
 
-    await runPostProcessPipeline(project.path, scope, sourceLabel, steps, callbacks)
+    const postProcessStatus = await runPostProcessPipeline(project.path, scope, sourceLabel, steps, callbacks, {
+      stopOnFailure: this.params.stopOnPostProcessFailure,
+    })
+
+    if (this.params.stopOnPostProcessFailure) {
+      const failedLabels = Object.values(postProcessStatus.steps)
+        .filter((step) => !step.ok)
+        .map((step) => step.label)
+      if (failedLabels.length > 0) {
+        throw new Error(`后处理失败，批量创作已停止：${failedLabels.join('、')}`)
+      }
+    }
 
     callbacks.log('\n🎉 第' + this.params.chapterNumber + '章创作全流程彻底完成！')
     useProjectStore.getState().refreshFileTree()
 
     // 通过 EventBus 通知 ProjectService 执行定稿后的统一刷新
     const { globalEventBus } = await import('../../../shared/event-bus')
-    globalEventBus.emit('FINALIZE_COMPLETE', { chapterNumber: this.params.chapterNumber })
+    globalEventBus.emit('FINALIZE_COMPLETE', {
+      chapterNumber: this.params.chapterNumber,
+      source: this.params.eventSource ?? 'manual',
+    })
   }
 }

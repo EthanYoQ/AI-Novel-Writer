@@ -33,6 +33,8 @@ export interface WorkflowRun {
   currentStepIndex: number
   createdAt: string
   completedAt?: string
+  /** 已请求在当前步骤完成后的安全边界暂停 */
+  pauseRequested?: boolean
 }
 
 /** 工作流类型 */
@@ -59,6 +61,8 @@ export interface WorkflowContext {
   data: Record<string, unknown>
   /** 是否已取消 */
   cancelled: boolean
+  /** 是否已请求在当前步骤完成后的安全边界暂停 */
+  pauseRequested?: boolean
 }
 
 /** 步骤回调 */
@@ -134,6 +138,10 @@ interface WorkflowState {
   confirmContinue: (runId?: string) => void
   /** 取消工作流（传 runId 取消指定，不传取消全部） */
   cancelWorkflow: (runId?: string) => void
+  /** 请求在当前步骤完成后的安全边界暂停工作流 */
+  pauseWorkflow: (runId: string) => void
+  /** 继续已暂停或正在等待安全暂停的工作流 */
+  resumeWorkflow: (runId: string) => void
   /** 添加全局日志 */
   addLog: (level: 'info' | 'warn' | 'error', message: string) => void
   /** 清空日志 */
@@ -144,6 +152,8 @@ interface WorkflowState {
 const activeContexts = new Map<string, WorkflowContext>()
 /** 步进模式：存储「等待用户确认」的 Promise resolve（runId → resolve） */
 const continueResolveRefs = new Map<string, () => void>()
+/** 批量任务：存储「等待恢复」的 Promise resolve（runId → resolve） */
+const pauseResolveRefs = new Map<string, () => void>()
 
 /** 计算兼容字段的辅助函数 */
 function computeCompat(activeRuns: WorkflowRun[], waitingRuns: Record<string, { waitingForConfirm: boolean; waitingAfterStepIndex: number }>) {
@@ -169,18 +179,18 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
   waitingAfterStepIndex: -1,
 
   // ===== 便捷查询 =====
-  isTypeRunning: (type) => get().activeRuns.some(r => r.type === type && (r.status === 'running' || r.status === 'waiting')),
+  isTypeRunning: (type) => get().activeRuns.some(r => r.type === type && (r.status === 'running' || r.status === 'waiting' || r.status === 'paused')),
   hasActiveRun: () => get().activeRuns.length > 0,
   activeCount: () => get().activeRuns.length,
 
   getActiveStreamingRun: () => {
     const runs = get().activeRuns
     // 优先返回正在 running 的任务；其次 waiting 的
-    return runs.find(r => r.status === 'running') || runs.find(r => r.status === 'waiting') || null
+    return runs.find(r => r.status === 'running') || runs.find(r => r.status === 'waiting') || runs.find(r => r.status === 'paused') || null
   },
 
   getActiveStepInfo: () => {
-    const run = get().activeRuns.find(r => r.status === 'running' || r.status === 'waiting')
+    const run = get().activeRuns.find(r => r.status === 'running' || r.status === 'waiting' || r.status === 'paused')
     if (!run) return null
     const step = run.steps[run.currentStepIndex] || run.steps[0]
     const completed = run.steps.filter(s => s.status === 'completed').length
@@ -238,11 +248,26 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     import('./layout-store').then(m => m.useLayoutStore.getState().openRightPanel('ai-output')).catch(() => {})
 
     // 创建执行上下文
-    const context: WorkflowContext = { data: {}, cancelled: false }
+    const context: WorkflowContext = { data: {}, cancelled: false, pauseRequested: false }
     activeContexts.set(run.id, context)
+
+    const waitForResumeAtSafeBoundary = async () => {
+      if (!context.pauseRequested || context.cancelled) return
+
+      updateRunById(set, run.id, { status: 'paused', pauseRequested: false })
+      get().addLog('info', `⏸ 工作流「${definition.title}」已在当前步骤完成后暂停`)
+      await new Promise<void>((resolve) => { pauseResolveRefs.set(run.id, resolve) })
+      if (!context.cancelled) {
+        updateRunById(set, run.id, { status: 'running', pauseRequested: false })
+        get().addLog('info', `▶ 工作流「${definition.title}」已继续`)
+      }
+    }
 
     // 逐步执行
     for (let i = 0; i < definition.steps.length; i++) {
+      // 批量任务只在步骤之间暂停，避免中断一次正在进行的模型请求或后处理。
+      await waitForResumeAtSafeBoundary()
+
       // 检查取消
       if (context.cancelled) {
         updateRunById(set, run.id, { status: 'failed' })
@@ -356,6 +381,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     // 清理上下文
     activeContexts.delete(run.id)
     continueResolveRefs.delete(run.id)
+    pauseResolveRefs.delete(run.id)
 
     return run.id
   },
@@ -364,10 +390,15 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     if (runId) {
       // 取消指定工作流
       const ctx = activeContexts.get(runId)
-      if (ctx) ctx.cancelled = true
+      if (ctx) {
+        ctx.cancelled = true
+        ctx.pauseRequested = false
+      }
       // 如果在步进等待，解除 Promise
       const resolve = continueResolveRefs.get(runId)
       if (resolve) { resolve(); continueResolveRefs.delete(runId) }
+      const pauseResolve = pauseResolveRefs.get(runId)
+      if (pauseResolve) { pauseResolve(); pauseResolveRefs.delete(runId) }
       // 移入历史
       set(s => {
         const targetRun = s.activeRuns.find(r => r.id === runId)
@@ -389,8 +420,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       // 取消全部
       for (const [id, ctx] of activeContexts) {
         ctx.cancelled = true
+        ctx.pauseRequested = false
         const resolve = continueResolveRefs.get(id)
         if (resolve) { resolve(); continueResolveRefs.delete(id) }
+        const pauseResolve = pauseResolveRefs.get(id)
+        if (pauseResolve) { pauseResolve(); pauseResolveRefs.delete(id) }
       }
       set(s => {
         const cancelledRuns = s.activeRuns.map(r => ({
@@ -406,6 +440,31 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         }
       })
       get().addLog('warn', '⏹ 所有工作流已取消')
+    }
+  },
+
+  pauseWorkflow: (runId) => {
+    const context = activeContexts.get(runId)
+    const run = get().activeRuns.find(item => item.id === runId)
+    if (!context || !run || context.cancelled || run.status === 'paused') return
+
+    context.pauseRequested = true
+    updateRunById(set, runId, { pauseRequested: true })
+    get().addLog('info', `⏸ 已请求暂停「${run.title}」，将在当前章节完成后生效`)
+  },
+
+  resumeWorkflow: (runId) => {
+    const context = activeContexts.get(runId)
+    const run = get().activeRuns.find(item => item.id === runId)
+    if (!context || !run || context.cancelled) return
+
+    context.pauseRequested = false
+    const resolve = pauseResolveRefs.get(runId)
+    if (resolve) {
+      resolve()
+      pauseResolveRefs.delete(runId)
+    } else {
+      updateRunById(set, runId, { pauseRequested: false })
     }
   },
 

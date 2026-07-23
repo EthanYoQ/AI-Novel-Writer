@@ -46,6 +46,8 @@ export interface EventPayloadMap {
   }
   'FINALIZE_COMPLETE': {
     chapterNumber: number
+    /** 定稿来源；批量任务不应弹出单章的“下一章创作”对话框 */
+    source?: 'manual' | 'batch'
   }
   'PROJECT_CHANGED': {
     projectPath: string
