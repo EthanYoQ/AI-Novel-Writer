@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto'
 import * as lancedb from '@lancedb/lancedb'
 import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Utf8, Schema as ArrowSchema } from 'apache-arrow'
 import { chunkText, generateEmbeddings } from './embedding'
+import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
 import {
   addChunks,
   removeDocument as removeDocFromStore,
@@ -51,7 +52,7 @@ export async function importDocument(
   filePath: string,
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string },
+  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
   onProgress?: (progress: number, message: string) => void,
 ): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string }> {
   try {
@@ -72,7 +73,8 @@ export async function importDocument(
 
     // 2. 分块
     onProgress?.(10, '正在分块...')
-    const chunks = chunkText(content, 500, 50)
+    const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
+    const chunks = chunkText(content, embeddingOptions.chunkSize, embeddingOptions.chunkOverlap)
     const docId = randomUUID()
 
     // 3. 可选：生成向量（如果有 Embedding 配置）
@@ -80,7 +82,7 @@ export async function importDocument(
     if (model.apiKey) {
       try {
         onProgress?.(20, `正在向量化 ${chunks.length} 个块...`)
-        vectors = await generateEmbeddings(chunks, protocol, model)
+        vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
       } catch (e) {
         console.warn('[Vela KB] Embedding 调用失败，降级为 FTS-only:', e)
         // 不影响导入，仅 FTS
@@ -111,7 +113,7 @@ export async function searchKnowledge(
   query: string,
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string },
+  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
   topK: number = 5,
   chapterScope?: [number, number],
 ): Promise<Array<{ text: string; score: number; fileName: string }>> {
@@ -121,7 +123,7 @@ export async function searchKnowledge(
   let queryVector: number[] | undefined
   if (model.apiKey && query.trim()) {
     try {
-      const [vec] = await generateEmbeddings([query], protocol, model)
+      const [vec] = await generateEmbeddings([query], protocol, model, model.embeddingOptions?.batchSize)
       if (vec && vec.length > 0) {
         queryVector = vec
       }
@@ -177,7 +179,7 @@ export async function importFolder(
   folderPath: string,
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string },
+  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
   onProgress?: (current: number, total: number, fileName: string) => void,
 ): Promise<{
   success: boolean
@@ -249,7 +251,7 @@ export async function importText(
   fileName: string,
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string },
+  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
 ): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string }> {
   try {
     if (!text.trim()) return { success: false, error: '文本内容为空' }
@@ -257,7 +259,8 @@ export async function importText(
     await ensureMigration(projectPath)
 
     // 分块
-    const chunks = chunkText(text)
+    const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
+    const chunks = chunkText(text, embeddingOptions.chunkSize, embeddingOptions.chunkOverlap)
     const docId = randomUUID()
 
     // 解析章节元数据（从文件名提取）
@@ -267,7 +270,7 @@ export async function importText(
     let vectors: number[][] | undefined
     if (model.apiKey) {
       try {
-        vectors = await generateEmbeddings(chunks, protocol, model)
+        vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
       } catch (e) {
         console.warn('[Vela KB] importText Embedding 失败，降级 FTS-only:', e)
       }
@@ -308,7 +311,7 @@ export async function getVectorlessCount(projectPath: string): Promise<{ count: 
 export async function backfillVectors(
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string },
+  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
 ): Promise<{ success: boolean; processed: number; failed: number; error?: string }> {
   try {
     const { count: total } = await storeGetChunksWithoutVectors(projectPath)
@@ -343,7 +346,7 @@ export async function backfillVectors(
 
     // 批量生成向量
     const texts = allRecords.map(r => r.text)
-    const vectors = await generateEmbeddings(texts, protocol, model)
+    const vectors = await generateEmbeddings(texts, protocol, model, model.embeddingOptions?.batchSize)
 
     // 构建更新后的完整数据
     const idToVector = new Map<string, number[]>()
