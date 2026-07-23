@@ -25,6 +25,7 @@ import SettingsModal from './components/settings/SettingsModal'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { actionToast } from './components/ui/ActionToast'
 import { globalEventBus } from './shared/event-bus'
+import { getAutoNextChapterPrefill, type NextChapterBlueprint } from './services/auto-next-chapter'
 
 /**
  * Vela 主应用组件
@@ -81,12 +82,37 @@ export default function App() {
       )
     })
 
+    const unsubAutoOpenNextChapter = globalEventBus.on('FINALIZE_COMPLETE', ({ chapterNumber }) => {
+      void (async () => {
+        try {
+          const config = await ipc.invoke('config:get')
+          if (!config.autoOpenNextChapterAfterFinalize) return
+
+          const nextChapterNumber = chapterNumber + 1
+          const [blueprint, existingDraft] = await Promise.all([
+            ipc.invoke('db:blueprint-get', nextChapterNumber),
+            ipc.invoke('db:draft-get-latest', nextChapterNumber),
+          ])
+          const prefill = getAutoNextChapterPrefill(
+            true,
+            chapterNumber,
+            blueprint as NextChapterBlueprint | null,
+            existingDraft !== null,
+          )
+          if (prefill) useLayoutStore.getState().openChapterCreation(prefill)
+        } catch (error) {
+          console.warn('[AutoNextChapter] 无法打开下一章创作窗口:', error)
+        }
+      })()
+    })
+
     return () => {
       // App 卸载时销毁 ProjectService（开发环境 HMR 时会触发）
       import('./services/project-service').then(({ disposeProjectService }) => {
         disposeProjectService()
       }).catch(() => {})
       unsubActionToast()
+      unsubAutoOpenNextChapter()
     }
   }, [initLocale, initTheme, initLLM, loadRecentProjects])
 

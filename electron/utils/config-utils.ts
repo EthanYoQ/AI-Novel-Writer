@@ -41,6 +41,7 @@ export const RECENT_PROJECTS_PATH = path.join(VELA_HOME, 'recent-projects.json')
 export const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   theme: 'dark',
   defaultModelId: null,
+  autoOpenNextChapterAfterFinalize: false,
   editorFontSize: 16,
   editorFontFamily: 'Noto Serif SC',
   autoSaveInterval: 30,

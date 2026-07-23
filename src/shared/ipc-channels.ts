@@ -3,6 +3,7 @@
  * 所有 IPC 调用都通过此文件定义频道名和参数/返回值类型
  */
 import type { Locale } from '../i18n/types'
+import type { EmbeddingOptions } from './embedding-options'
 
 // ===== 全局配置 =====
 export interface ConfigChannels {
@@ -41,6 +42,8 @@ export interface GlobalConfig {
   locale?: Locale
   defaultModelId: string | null
   defaultEmbeddingModelId?: string | null
+  /** 定稿与后处理成功后，打开下一章的创作窗口（默认关闭）。 */
+  autoOpenNextChapterAfterFinalize?: boolean
   editorFontSize: number
   editorFontFamily: string
   autoSaveInterval: number
@@ -252,6 +255,8 @@ export interface ModelProfile {
   temperature: number
   maxTokens: number
   purposes: Array<'generation' | 'refinement' | 'summary' | 'embedding'>
+  /** 仅用于 Embedding 模型；旧配置省略时沿用原有默认行为。 */
+  embeddingOptions?: EmbeddingOptions
 }
 
 export interface ProjectClearOptions {

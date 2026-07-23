@@ -8,6 +8,7 @@ import PromptSettings from './PromptSettings'
 import { useLLMStore } from '../../stores/llm-store'
 import { useThemeStore, FONT_OPTIONS, type FontId } from '../../stores/theme-store'
 import type { ModelProfile } from '../../shared/ipc-channels'
+import { DEFAULT_EMBEDDING_OPTIONS, LOW_VRAM_EMBEDDING_OPTIONS, normalizeEmbeddingOptions } from '../../shared/embedding-options'
 import type { ProviderPreset } from '../../shared/provider-presets'
 import { BUILTIN_PRESETS } from '../../shared/provider-presets'
 import { randomUUID } from '../../utils/id'
@@ -199,6 +200,7 @@ function LLMSection({
       temperature: 0.7,
       maxTokens: openaiPreset?.models[0]?.maxTokens ?? 4096,
       purposes: [...purposes],
+      ...(isEmbedding ? { embeddingOptions: DEFAULT_EMBEDDING_OPTIONS } : {}),
     })
   }
 
@@ -391,6 +393,7 @@ function ModelForm({
   const testConnection = useLLMStore(s => s.testConnection)
 
   const isEmbedding = model.purposes?.includes('embedding')
+  const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
   // 将预设数组转换为以 provider 为键的 Map 方便查找
   const presetMap = new Map(presets.map((p) => [p.provider, p]))
   const preset = presetMap.get(model.provider)
@@ -616,6 +619,39 @@ function ModelForm({
                 if (!v || v < 1) up('maxTokens', 4096)
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {isEmbedding && (
+        <div className="space-y-3 rounded-lg p-3" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-hover)' }}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <Label className="mb-0">{text('向量化高级参数', 'Embedding advanced settings')}</Label>
+              <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
+                {text('按当前向量模型保存。降低批量数可减少本地显存占用；不会影响生成模型。', 'Saved with this embedding model. Lower batches reduce local VRAM use and do not affect generation models.')}
+              </p>
+            </div>
+            <Button type="button" size="sm" variant="outline" onClick={() => up('embeddingOptions', LOW_VRAM_EMBEDDING_OPTIONS)}>
+              {text('应用低显存推荐', 'Use low-VRAM preset')}
+            </Button>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <Label>{text('分块字符数', 'Chunk characters')}</Label>
+              <Input type="number" min={100} max={4000} value={embeddingOptions.chunkSize}
+                onChange={(e) => up('embeddingOptions', normalizeEmbeddingOptions({ ...embeddingOptions, chunkSize: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <Label>{text('重叠字符数', 'Overlap characters')}</Label>
+              <Input type="number" min={0} max={embeddingOptions.chunkSize - 1} value={embeddingOptions.chunkOverlap}
+                onChange={(e) => up('embeddingOptions', normalizeEmbeddingOptions({ ...embeddingOptions, chunkOverlap: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <Label>{text('请求批量', 'Request batch')}</Label>
+              <Input type="number" min={1} max={50} value={embeddingOptions.batchSize}
+                onChange={(e) => up('embeddingOptions', normalizeEmbeddingOptions({ ...embeddingOptions, batchSize: Number(e.target.value) }))} />
+            </div>
           </div>
         </div>
       )}
@@ -874,6 +910,18 @@ function FontSelect({
 function EditorSection() {
   const { writingFont, setWritingFont, uiFont, setUiFont } = useThemeStore()
   const { locale, setLocale, t, text } = useLocaleStore()
+  const [autoOpenNextChapterAfterFinalize, setAutoOpenNextChapterAfterFinalize] = useState(false)
+
+  useEffect(() => {
+    ipc.invoke('config:get').then((config) => {
+      setAutoOpenNextChapterAfterFinalize(config.autoOpenNextChapterAfterFinalize === true)
+    }).catch(() => {})
+  }, [])
+
+  const setAutoOpenNext = (checked: boolean) => {
+    setAutoOpenNextChapterAfterFinalize(checked)
+    void ipc.invoke('config:set', { autoOpenNextChapterAfterFinalize: checked })
+  }
 
   return (
     <div className="max-w-md space-y-5">
@@ -917,6 +965,16 @@ function EditorSection() {
           </p>
         </div>
         <FontSelect value={writingFont} onChange={setWritingFont} />
+      </div>
+
+      <div className="flex items-center justify-between gap-4 rounded-xl p-4" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-panel)' }}>
+        <div>
+          <p className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>{text('定稿后打开下一章', 'Open next chapter after finalizing')}</p>
+          <p className="text-[0.68rem] mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
+            {text('当前章的定稿和后处理全部完成后，自动打开已有蓝图的下一章创作窗口；不会自动生成正文或覆盖已有草稿。', 'After finalization and post-processing finish, opens the next planned chapter. It never starts generation or overwrites an existing draft.')}
+          </p>
+        </div>
+        <Switch checked={autoOpenNextChapterAfterFinalize} onCheckedChange={setAutoOpenNext} aria-label={text('定稿后打开下一章', 'Open next chapter after finalizing')} />
       </div>
 
       {/* 说明 */}

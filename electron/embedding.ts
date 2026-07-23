@@ -8,6 +8,8 @@
  * 本模块仅保留 Embedding API 调用和文本分块功能
  */
 
+import { normalizeEmbeddingOptions } from '../src/shared/embedding-options'
+
 // ===== Embedding API 调用 =====
 
 /** OpenAI Embedding API */
@@ -86,12 +88,16 @@ export async function generateEmbeddings(
   texts: string[],
   protocol: 'openai' | 'gemini',
   model: { baseUrl: string; apiKey: string; modelName?: string },
+  configuredBatchSize?: number,
 ): Promise<number[][]> {
   // 空文本处理
   if (texts.length === 0) return []
 
   // 批量限制：每次最多 50 条
-  const batchSize = protocol === 'gemini' ? 100 : 50
+  // 旧配置未提供 batchSize 时保持原有协议默认值，避免升级后意外改变云端调用。
+  const batchSize = configuredBatchSize === undefined
+    ? (protocol === 'gemini' ? 100 : 50)
+    : normalizeEmbeddingOptions({ batchSize: configuredBatchSize }).batchSize
   const results: number[][] = []
 
   for (let i = 0; i < texts.length; i += batchSize) {
@@ -117,13 +123,30 @@ export function chunkText(
   const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 0)
 
   const chunks: string[] = []
+  const pushWithinLimit = (value: string) => {
+    const normalized = value.trim()
+    if (!normalized) return
+    if (normalized.length <= maxChars) {
+      chunks.push(normalized)
+      return
+    }
+
+    // 单句可能远超分块上限；强制切分，防止本地模型仍收到超长输入。
+    let start = 0
+    while (start < normalized.length) {
+      const end = Math.min(start + maxChars, normalized.length)
+      chunks.push(normalized.slice(start, end))
+      if (end === normalized.length) break
+      start = Math.max(start + 1, end - overlap)
+    }
+  }
   let currentChunk = ''
 
   for (const para of paragraphs) {
     // 如果段落本身就超过 maxChars，按句号分割
     if (para.length > maxChars) {
       if (currentChunk) {
-        chunks.push(currentChunk.trim())
+        pushWithinLimit(currentChunk)
         currentChunk = ''
       }
       // 按句号分割长段落
@@ -131,7 +154,7 @@ export function chunkText(
       let sentenceChunk = ''
       for (const sentence of sentences) {
         if (sentenceChunk.length + sentence.length > maxChars && sentenceChunk.length > 0) {
-          chunks.push(sentenceChunk.trim())
+          pushWithinLimit(sentenceChunk)
           // 保留 overlap
           sentenceChunk = sentenceChunk.slice(-overlap) + sentence
         } else {
@@ -146,7 +169,7 @@ export function chunkText(
 
     // 累积段落
     if (currentChunk.length + para.length > maxChars && currentChunk.length > 0) {
-      chunks.push(currentChunk.trim())
+      pushWithinLimit(currentChunk)
       // 保留 overlap
       currentChunk = currentChunk.slice(-overlap) + '\n\n' + para
     } else {
@@ -155,7 +178,7 @@ export function chunkText(
   }
 
   if (currentChunk.trim()) {
-    chunks.push(currentChunk.trim())
+    pushWithinLimit(currentChunk)
   }
 
   return chunks.length > 0 ? chunks : [text.trim()]
