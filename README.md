@@ -14,8 +14,6 @@
   面向中文创作者的本地优先 AI 长篇小说写作工具：把"前提 → 角色 → 世界观 → 章节蓝图 → 草稿 → 审稿 → 修稿 → 定稿"做成一条带记忆的生产线，让 AI 每次只写本章、每次都看蓝图、每章都过审稿。
 </p>
 
-<p align="center">
-  Tag：<strong>AI 小说写作</strong>、<strong>AI 小说作家</strong>、<strong>本地模型写作</strong>、<strong>Ollama 写小说</strong>、<strong>长篇小说 AI</strong>、<strong>NSFW 写作</strong>、<strong>AI 写小说工具</strong>、<strong>本地部署写作</strong>。
 </p>
 <h2 align="center">如果有帮到你，麻烦动动小手点亮STAR ✨✨</h2>
 </p>
@@ -25,6 +23,9 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/LICENSE"><img src="https://badgen.net/badge/license/GPL-3.0/blue" alt="GPL-3.0 License" /></a>
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/stargazers"><img src="https://badgen.net/github/stars/EthanYoQ/AI-Novel-Writer" alt="GitHub stars" /></a>
 </p>
+
+<p align="center">
+  Tag：<strong>AI 小说写作</strong>、<strong>AI 小说作家</strong>、<strong>本地模型写作</strong>、<strong>Ollama 写小说</strong>、<strong>长篇小说 AI</strong>、<strong>NSFW 写作</strong>、<strong>AI 写小说工具</strong>、<strong>本地部署写作</strong>。
 
 <p align="center">
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新版 Windows 安装包</a>
