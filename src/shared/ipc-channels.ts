@@ -4,6 +4,13 @@
  */
 import type { Locale } from '../i18n/types'
 import type { EmbeddingOptions } from './embedding-options'
+import type {
+  UpdateActionResponse,
+  UpdateCheckResponse,
+  UpdatePreferences,
+  UpdateReminderDelay,
+  UpdateState,
+} from './update-types'
 
 // ===== 全局配置 =====
 export interface ConfigChannels {
@@ -19,6 +26,30 @@ export interface ConfigChannels {
     args: []
     return: string
   }
+}
+
+// ===== 应用更新 =====
+export interface UpdateChannels {
+  'update:get-state': {
+    args: []
+    return: UpdateState
+  }
+  'update:check': {
+    args: []
+    return: UpdateCheckResponse
+  }
+  'update:defer-reminder': {
+    args: [days: UpdateReminderDelay]
+    return: UpdateActionResponse
+  }
+  'update:quit-and-install': {
+    args: []
+    return: UpdateActionResponse
+  }
+}
+
+export interface UpdateStateEvents {
+  'update:state': UpdateState
 }
 
 // ===== 窗口控制 =====
@@ -47,6 +78,8 @@ export interface GlobalConfig {
   editorFontSize: number
   editorFontFamily: string
   autoSaveInterval: number
+  /** 更新检查和提醒延后的本机偏好，持久化到 ~/.vela/config.json。 */
+  updatePreferences?: UpdatePreferences
   proxy?: {
     enabled: boolean
     type: 'http' | 'socks5'
@@ -391,8 +424,8 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = WindowChannels & ConfigChannels & ProjectChannels & FileChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ImportChannels & MCPChannels
-export type AllEventChannels = LLMStreamEvents
+export type AllInvokeChannels = WindowChannels & ConfigChannels & UpdateChannels & ProjectChannels & FileChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ImportChannels & MCPChannels
+export type AllEventChannels = LLMStreamEvents & UpdateStateEvents
 
 /** 提取 invoke 频道名 */
 export type InvokeChannel = keyof AllInvokeChannels

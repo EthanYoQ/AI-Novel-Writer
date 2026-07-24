@@ -204,21 +204,19 @@ ollama pull qwen3:14b
 
 ## 📦 Windows 安装
 
-发布形式是一个 zip 压缩文件夹：
+从 v0.3.0 起，Windows 正式版使用 NSIS 安装程序，并支持在应用内检查后续正式更新：
 
 ```text
-AI-Novel-Writer-0.2.1-windows-x64.zip
-└─ AI-Novel-Writer/
-   ├─ AI小说作家.exe
-   ├─ resources/
-   └─ Electron runtime files...
+ai-novel-writer-setup-<版本号>.exe
 ```
 
-1. 从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.1) 下载 `AI-Novel-Writer-0.2.1-windows-x64.zip`
-2. **完整解压**到任意目录
-3. 双击 `AI小说作家.exe` 启动
+1. 仅从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载最新的 `ai-novel-writer-setup-<版本号>.exe`
+2. 运行安装程序；它不会删除你的小说项目、角色卡或已有设置
+3. 安装后，在欢迎页点击“检查更新”可主动检查新版本；发现新版本时会先下载，再提供“立即重启更新 / 稍后”的选择
 
-> ⚠️ 不要直接在压缩包内双击 EXE——Electron 的相对路径会找不到 `resources/`。解压后运行。
+> 旧版 v0.2.5 及更早的便携 ZIP 无法自行升级。请手动安装一次首个带更新功能的正式安装程序，之后的正式版才可在应用内更新；今后不再发布新的便携 ZIP。
+
+> 当前安装程序尚未进行代码签名。Windows 可能显示发布者或信誉提示；请确认下载页确为本项目的官方 GitHub Release 后再继续。
 
 ---
 

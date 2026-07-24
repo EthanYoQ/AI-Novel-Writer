@@ -202,21 +202,19 @@ ollama pull qwen3:14b
 
 ## 📦 Windows install
 
-The release is a zipped application folder:
+Starting with v0.3.0, the formal Windows release is an NSIS installer and can check for later formal updates from inside the app:
 
 ```text
-AI-Novel-Writer-0.2.1-windows-x64.zip
-└─ AI-Novel-Writer/
-   ├─ AI Novel Writer.exe
-   ├─ resources/
-   └─ Electron runtime files...
+ai-novel-writer-setup-<version>.exe
 ```
 
-1. Download `AI-Novel-Writer-0.2.1-windows-x64.zip` from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.2.1)
-2. **Extract it fully** to any directory
-3. Launch `AI Novel Writer.exe`
+1. Download the latest `ai-novel-writer-setup-<version>.exe` only from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest)
+2. Run the installer; it does not delete existing novel projects, character cards, or settings
+3. After installation, use **Check for updates** on the welcome page. When an update is found, the app downloads it first and then offers **Restart and update / Later**
 
-> ⚠️ Do not double-click the EXE inside the zip — Electron needs the relative `resources/` path. Extract first, then run.
+> v0.2.5 and older portable ZIP builds cannot update themselves. Install the first formal updater-enabled installer manually once; later formal releases can update in-app. No new portable ZIPs will be published.
+
+> The installer is not code-signed yet. Windows may show publisher or reputation warnings; continue only after confirming that the download page is this project's official GitHub Release.
 
 ---
 

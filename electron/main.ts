@@ -1,7 +1,12 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { registerIPCHandlers } from './ipc-handlers'
 import { registerMCPHandlers } from './mcp/mcp-ipc-bridge'
 import { mainT } from './i18n'
+import { registerUpdateController } from './controllers/update-controller'
+import { createElectronUpdaterBackend } from './services/electron-updater-adapter'
+import { GlobalConfigUpdatePreferencesStore } from './services/update-preferences-store'
+import { isWindowsUpdateRuntimeEnabled } from './services/update-runtime'
+import { UpdateService, type UpdateBackend, type UpdateState } from './services/update-service'
 
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -21,6 +26,21 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   : RENDERER_DIST
 
 let win: BrowserWindow | null
+
+function createDisabledUpdateBackend(): UpdateBackend {
+  return {
+    checkForUpdates: async () => null,
+    downloadUpdate: async () => [],
+    quitAndInstall: () => {},
+  }
+}
+
+function publishUpdateState(state: UpdateState): void {
+  for (const target of BrowserWindow.getAllWindows()) {
+    if (target.isDestroyed() || target.webContents.isDestroyed()) continue
+    target.webContents.send('update:state', state)
+  }
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -73,5 +93,15 @@ app.on('activate', () => {
 app.whenReady().then(() => {
   registerIPCHandlers()
   registerMCPHandlers()
+  const updateRuntimeEnabled = isWindowsUpdateRuntimeEnabled(app.isPackaged, VITE_DEV_SERVER_URL)
+  const updateService = new UpdateService({
+    updater: updateRuntimeEnabled ? createElectronUpdaterBackend() : createDisabledUpdateBackend(),
+    currentVersion: app.getVersion(),
+    isPackaged: updateRuntimeEnabled,
+    preferences: new GlobalConfigUpdatePreferencesStore(),
+  })
+  registerUpdateController(updateService, { ipc: ipcMain, publish: publishUpdateState })
   createWindow()
+  // 非 Windows、未打包或开发环境会被服务层禁用，绝不发出真实更新请求。
+  void updateService.checkAutomatically()
 })
