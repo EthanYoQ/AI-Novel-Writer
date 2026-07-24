@@ -2,6 +2,7 @@ import { Sparkles, FolderOpen, Clock, BookOpen, FileUp } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { APP_BRAND } from '../../shared/brand'
 import { useLocaleStore } from '../../stores/locale-store'
+import { UpdateSection } from '../updates/UpdateSection'
 
 interface WelcomePageProps {
   onNewProject: () => void
@@ -118,6 +119,8 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
             </span>
           </button>
         </div>
+
+        <UpdateSection />
 
         {/* 最近项目 */}
         {recentProjects.length > 0 && (

@@ -18,13 +18,29 @@ export function ensureVelaHome() {
   }
 }
 
-export function readJsonFile<T>(filePath: string, fallback: T): T {
+export type JsonFileReadResult<T> =
+  | { status: 'missing' }
+  | { status: 'ok'; value: T }
+  | { status: 'error'; error: unknown }
+
+/**
+ * 区分“文件不存在”与“文件存在但不可读取/不可解析”。
+ * 对全局配置做增量写入的调用方必须在 error 时拒绝覆盖原文件。
+ */
+export function tryReadJsonFile<T>(filePath: string): JsonFileReadResult<T> {
+  if (!fs.existsSync(filePath)) return { status: 'missing' }
   try {
-    if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-    }
+    return { status: 'ok', value: JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T }
   } catch (error) {
-    console.warn(`[Vela] 读取 ${filePath} 失败:`, error)
+    return { status: 'error', error }
+  }
+}
+
+export function readJsonFile<T>(filePath: string, fallback: T): T {
+  const result = tryReadJsonFile<T>(filePath)
+  if (result.status === 'ok') return result.value
+  if (result.status === 'error') {
+    console.warn(`[Vela] 读取 ${filePath} 失败:`, result.error)
   }
   return fallback
 }

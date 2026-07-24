@@ -1,5 +1,5 @@
-/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
+import { configDefaults } from 'vitest/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import electron from 'vite-plugin-electron/simple';
@@ -53,6 +53,15 @@ export default defineConfig({
   },
   optimizeDeps: {
     entries: ['index.html', 'src/**/*.{ts,tsx}']
+  },
+  test: {
+    // 本地历史 worktree 和 pnpm 缓存可能包含旧版本测试；它们不是当前项目源码。
+    exclude: [
+      ...configDefaults.exclude,
+      '**/.worktrees/**',
+      '**/.pnpm-store/**',
+      '**/.workbuddy/**',
+    ],
   },
   build: {
     rollupOptions: {

@@ -32,10 +32,21 @@
         "target": "nsis",
         "arch": ["x64"]
       }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "EthanYoQ",
+        "repo": "AI-Novel-Writer",
+        "channel": "latest",
+        "releaseType": "release",
+        "publishAutoUpdate": true,
+        "tagNamePrefix": "v"
+      }
     ]
   },
   "nsis": {
-    "artifactName": "${productName}-${version}-setup.${ext}",
+    "artifactName": "ai-novel-writer-setup-${version}.${ext}",
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,

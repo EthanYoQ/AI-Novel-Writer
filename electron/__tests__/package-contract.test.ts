@@ -24,4 +24,12 @@ describe('release dependency contract', () => {
     expect(builder).toContain('node_modules/@lancedb/lancedb/**/*')
     expect(builder).toContain('node_modules/@lancedb/lancedb-win32-x64-msvc/**/*')
   })
+
+  it('makes the formal Windows updater build self-verifying and keeps portable ZIPs out of the release workflow', () => {
+    expect(pkg.scripts?.['build:win']).toContain('pnpm run verify:win-update-artifacts')
+    expect(pkg.scripts?.['build:win:artifacts']).toContain('electron-builder --win --x64')
+    expect(pkg.scripts?.['build:win:artifacts']).toContain('--publish never')
+    expect(pkg.scripts?.['build:win-zip']).toBeUndefined()
+    expect(pkg.scripts?.['verify:github-update-release']).toBe('node scripts/verify-github-update-release.mjs')
+  })
 })
