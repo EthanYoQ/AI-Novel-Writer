@@ -163,6 +163,7 @@ const expectedJsonFields: Record<string, string[]> = {
     'currentState',
   ],
   extract_initial_characters: [
+    'characters',
     'name',
     'role',
     'gender',
@@ -219,6 +220,14 @@ const optionalGuidanceLabels = [
 ]
 
 describe('built-in prompt contract for local Qwen generation', () => {
+  it('keeps character-card extraction compatible with JSON-object response mode', () => {
+    const text = promptText('extract_initial_characters')
+
+    expect(text).toContain('【输出格式（JSON 对象）】')
+    expect(text).toContain('"characters": [')
+    expect(text).toContain('返回 {"characters": []}')
+  })
+
   it('keeps system roles free of overclaiming slogan identities', () => {
     for (const template of BUILTIN_PROMPTS) {
       expect(template.systemRole ?? '', `${template.key} system role`).not.toMatch(/顶尖|白金|爆款|大神/)
