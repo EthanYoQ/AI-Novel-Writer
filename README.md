@@ -17,7 +17,7 @@
 <p align="center">
   搜索意图：<strong>AI 小说写作</strong>、<strong>AI 小说作家</strong>、<strong>本地模型写作</strong>、<strong>Ollama 写小说</strong>、<strong>长篇小说 AI</strong>、<strong>NSFW 写作</strong>、<strong>AI 写小说工具</strong>、<strong>本地部署写作</strong>。
 </p>
-<h2 align="center">如果有帮到你，麻烦动动小手点亮STATR ✨✨</h2>
+<h2 align="center">如果有帮到你，麻烦动动小手点亮STAR ✨✨</h2>
 </p>
 
 <p align="center">
