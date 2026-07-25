@@ -44,7 +44,8 @@ export interface UpdateBackend {
 
 export interface UpdatePreferencesStore {
   read(): UpdatePreferences
-  write(preferences: UpdatePreferences): void
+  /** 返回 false 表示偏好未能被安全持久化。 */
+  write(preferences: UpdatePreferences): boolean
 }
 
 export interface UpdateServiceOptions {
@@ -108,7 +109,7 @@ export class UpdateService {
 
   constructor(private readonly options: UpdateServiceOptions) {
     this.now = options.now ?? (() => new Date())
-    const preferences = options.preferences.read()
+    const preferences = this.readPreferences() ?? {}
     this.reminder = preferences.reminder
     const availableUpdate = preferences.availableUpdate
       && isHigherStableVersion(preferences.availableUpdate.version, options.currentVersion)
@@ -154,16 +155,20 @@ export class UpdateService {
 
     const now = this.now()
     const today = localCalendarDate(now)
-    const preferences = this.options.preferences.read()
+    const preferences = this.readPreferences()
+    // 无法读取或保存检查日期时，不自动联网，避免每次重启都绕过“每天一次”的上限。
+    if (!preferences) return this.response({ success: false, checked: false })
     if (preferences.lastAutomaticCheckDate === today) {
       return this.response({ success: true, checked: false })
     }
 
-    this.options.preferences.write({
+    if (!this.writePreferences({
       ...preferences,
       lastCheckedAt: now.toISOString(),
       lastAutomaticCheckDate: today,
-    })
+    })) {
+      return this.response({ success: false, checked: false })
+    }
     return this.performCheck('automatic', now)
   }
 
@@ -171,8 +176,8 @@ export class UpdateService {
     if (!this.options.isPackaged) return this.disabledResponse()
 
     const now = this.now()
-    const preferences = this.options.preferences.read()
-    this.options.preferences.write({
+    const preferences = this.readPreferences() ?? {}
+    this.writePreferences({
       ...preferences,
       lastCheckedAt: now.toISOString(),
     })
@@ -244,8 +249,8 @@ export class UpdateService {
 
     const until = new Date(this.now().getTime() + days * 24 * 60 * 60 * 1000).toISOString()
     this.reminder = { version: this.state.availableVersion, until }
-    const preferences = this.options.preferences.read()
-    this.options.preferences.write({ ...preferences, reminder: this.reminder })
+    const preferences = this.readPreferences() ?? {}
+    this.writePreferences({ ...preferences, reminder: this.reminder })
     this.setState({
       ...this.state,
       reminderUntil: until,
@@ -288,16 +293,35 @@ export class UpdateService {
   }
 
   private rememberAvailableUpdate(update: UpdateReleaseInfo): void {
-    const preferences = this.options.preferences.read()
-    this.options.preferences.write({ ...preferences, availableUpdate: update })
+    const preferences = this.readPreferences() ?? {}
+    this.writePreferences({ ...preferences, availableUpdate: update })
   }
 
   private forgetAvailableUpdate(): void {
-    const preferences = this.options.preferences.read()
+    const preferences = this.readPreferences() ?? {}
     if (!preferences.availableUpdate) return
     const withoutAvailableUpdate = { ...preferences }
     delete withoutAvailableUpdate.availableUpdate
-    this.options.preferences.write(withoutAvailableUpdate)
+    this.writePreferences(withoutAvailableUpdate)
+  }
+
+  private readPreferences(): UpdatePreferences | undefined {
+    try {
+      return this.options.preferences.read()
+    } catch (error) {
+      console.warn('[Vela Update] 无法读取更新偏好，当前会话将使用安全默认值。', error)
+      return undefined
+    }
+  }
+
+  private writePreferences(preferences: UpdatePreferences): boolean {
+    try {
+      return this.options.preferences.write(preferences)
+    } catch (error) {
+      // 写入失败不能让后台更新或手动检查演变为未处理异常。
+      console.warn('[Vela Update] 无法保存更新偏好，已继续本次安全更新操作。', error)
+      return false
+    }
   }
 
   private reminderStateFor(version: string): Pick<UpdateState, 'reminderUntil' | 'isReminderDeferred'> {

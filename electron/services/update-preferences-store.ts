@@ -20,20 +20,20 @@ export class GlobalConfigUpdatePreferencesStore implements UpdatePreferencesStor
       : {}
   }
 
-  write(preferences: UpdatePreferences): void {
+  write(preferences: UpdatePreferences): boolean {
     const result = tryReadJsonFile<unknown>(GLOBAL_CONFIG_PATH)
     if (result.status === 'missing') {
       writeJsonFile(GLOBAL_CONFIG_PATH, {
         ...DEFAULT_GLOBAL_CONFIG,
         updatePreferences: preferences,
       })
-      return
+      return true
     }
 
     if (result.status !== 'ok' || !isConfigRecord(result.value)) {
       // 自动更新不能因为配置损坏而用默认值覆盖用户的模型、语言或代理设置。
       console.warn('[Vela Update] 全局配置不可安全读取，跳过更新偏好写入。')
-      return
+      return false
     }
 
     const config: GlobalConfig = result.value
@@ -41,5 +41,6 @@ export class GlobalConfigUpdatePreferencesStore implements UpdatePreferencesStor
       ...config,
       updatePreferences: preferences,
     })
+    return true
   }
 }

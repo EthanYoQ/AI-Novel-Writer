@@ -14,6 +14,16 @@ describe('Electron main window chrome contract', () => {
     expect(main).not.toMatch(/titleBarStyle:\s*'hiddenInset'/)
   })
 
+  it('uses the narrow Windows GPU-process workaround without weakening the renderer sandbox', () => {
+    const main = source('electron/main.ts')
+
+    expect(main).toContain("app.commandLine.appendSwitch('disable-gpu-sandbox')")
+    expect(main).not.toContain("appendSwitch('no-sandbox')")
+    expect(main).not.toContain("appendSwitch('in-process-gpu')")
+    expect(main).toContain('nodeIntegration: false')
+    expect(main).toContain('contextIsolation: true')
+  })
+
   it('registers window control IPC for frameless minimize maximize and close buttons', () => {
     const ipcHandlers = source('electron/ipc-handlers.ts')
     const ipcChannels = source('src/shared/ipc-channels.ts')

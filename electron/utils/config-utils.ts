@@ -3,7 +3,8 @@ import path from 'node:path'
 import os from 'node:os'
 import { GlobalConfig } from '../../src/shared/ipc-channels'
 
-export const VELA_HOME = path.join(os.homedir(), '.vela')
+/** 测试和受控迁移可提供隔离目录；普通用户始终沿用 ~/.vela。 */
+export const VELA_HOME = process.env.AI_NOVEL_VELA_HOME?.trim() || path.join(os.homedir(), '.vela')
 
 export function ensureVelaHome() {
   const dirs = [

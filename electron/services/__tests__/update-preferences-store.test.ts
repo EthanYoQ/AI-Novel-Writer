@@ -38,7 +38,7 @@ describe('GlobalConfigUpdatePreferencesStore', () => {
       reminder: { version: '0.2.6', until: '2026-08-01T01:00:00.000Z' },
     }
 
-    store.write(preferences)
+    expect(store.write(preferences)).toBe(true)
 
     expect(configUtils.writeJsonFile).toHaveBeenCalledWith(
       configUtils.GLOBAL_CONFIG_PATH,
@@ -56,7 +56,7 @@ describe('GlobalConfigUpdatePreferencesStore', () => {
     })
     const store = new GlobalConfigUpdatePreferencesStore()
 
-    store.write({ lastAutomaticCheckDate: '2026-07-25' })
+    expect(store.write({ lastAutomaticCheckDate: '2026-07-25' })).toBe(false)
 
     expect(configUtils.writeJsonFile).not.toHaveBeenCalled()
   })
@@ -65,7 +65,7 @@ describe('GlobalConfigUpdatePreferencesStore', () => {
     configUtils.tryReadJsonFile.mockReturnValue({ status: 'ok', value: ['not', 'a', 'config'] })
     const store = new GlobalConfigUpdatePreferencesStore()
 
-    store.write({ lastAutomaticCheckDate: '2026-07-25' })
+    expect(store.write({ lastAutomaticCheckDate: '2026-07-25' })).toBe(false)
 
     expect(configUtils.writeJsonFile).not.toHaveBeenCalled()
   })
@@ -75,7 +75,7 @@ describe('GlobalConfigUpdatePreferencesStore', () => {
     const store = new GlobalConfigUpdatePreferencesStore()
     const preferences = { lastAutomaticCheckDate: '2026-07-25' }
 
-    store.write(preferences)
+    expect(store.write(preferences)).toBe(true)
 
     expect(configUtils.writeJsonFile).toHaveBeenCalledWith(
       configUtils.GLOBAL_CONFIG_PATH,

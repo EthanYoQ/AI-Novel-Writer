@@ -58,8 +58,20 @@ function createPreferencesStore(initial: UpdatePreferences = {}): UpdatePreferen
     read: () => preferences,
     write: (next) => {
       preferences = next
+      return true
     },
   }
+}
+
+function createFailingPreferencesStore(): UpdatePreferencesStore {
+  return {
+    read: () => { throw new Error('preferences are locked') },
+    write: () => { throw new Error('preferences are locked') },
+  }
+}
+
+function createNonPersistingPreferencesStore(): UpdatePreferencesStore {
+  return { read: () => ({}), write: () => false }
 }
 
 describe('UpdateService', () => {
@@ -317,6 +329,36 @@ describe('UpdateService', () => {
     expect(JSON.stringify(manualResult)).not.toContain('network details')
     expect(automaticResult.error).toBeUndefined()
     expect(automaticService.getState()).toMatchObject({ status: 'idle' })
+  })
+
+  it('does not reject or bypass the daily automatic-check limit when update preferences cannot be read or written', async () => {
+    const updater = new FakeUpdater()
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createFailingPreferencesStore(),
+      now: () => new Date('2026-07-25T09:00:00+08:00'),
+    })
+
+    await expect(service.checkAutomatically()).resolves.toMatchObject({ success: false, checked: false })
+    expect(updater.checkCalls).toBe(0)
+  })
+
+  it('skips automatic networking when a readable config refuses the safe preference write, while manual checks remain available', async () => {
+    const updater = new FakeUpdater()
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createNonPersistingPreferencesStore(),
+      now: () => new Date('2026-07-25T09:00:00+08:00'),
+    })
+
+    await expect(service.checkAutomatically()).resolves.toMatchObject({ success: false, checked: false })
+    expect(updater.checkCalls).toBe(0)
+    await expect(service.checkManually()).resolves.toMatchObject({ success: true, checked: true })
+    expect(updater.checkCalls).toBe(1)
   })
 
   it('reports a download-specific safe error for a manual download failure', async () => {
