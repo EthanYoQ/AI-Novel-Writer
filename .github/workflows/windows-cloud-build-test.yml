@@ -14,8 +14,6 @@ jobs:
   package-and-qualify:
     runs-on: windows-2022
     timeout-minutes: 60
-    env:
-      AI_NOVEL_PREVIOUS_PORTABLE_ZIP: ${{ runner.temp }}\AI-Novel-Writer-0.2.5-windows-x64.zip
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -40,11 +38,13 @@ jobs:
         run: |
           $portableUrl = 'https://github.com/EthanYoQ/AI-Novel-Writer/releases/download/v0.2.5/AI-Novel-Writer-0.2.5-windows-x64.zip'
           $expectedSha256 = '22b38b7337a456882bf130ccb898f17616fffb85d6c8b8b3d0ee431409f18531'
-          Invoke-WebRequest -Uri $portableUrl -OutFile $env:AI_NOVEL_PREVIOUS_PORTABLE_ZIP
-          $actualSha256 = (Get-FileHash -LiteralPath $env:AI_NOVEL_PREVIOUS_PORTABLE_ZIP -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableZip = Join-Path $env:RUNNER_TEMP 'AI-Novel-Writer-0.2.5-windows-x64.zip'
+          Invoke-WebRequest -Uri $portableUrl -OutFile $portableZip
+          $actualSha256 = (Get-FileHash -LiteralPath $portableZip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actualSha256 -ne $expectedSha256) {
             throw "v0.2.5 portable ZIP SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
           }
+          "AI_NOVEL_PREVIOUS_PORTABLE_ZIP=$portableZip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Run complete Windows release gate
         shell: pwsh
