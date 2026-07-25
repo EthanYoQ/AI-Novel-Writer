@@ -1,7 +1,11 @@
 import type { WorkflowDefinition } from '../../stores/workflow-store'
 import type { DraftMeta } from '../draft-index'
+import { requireIpcSuccess } from '../ipc-result'
+import { ipc } from '../ipc-client'
 
 import type { DraftStatus } from '../../shared/draft-status'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import { sameProjectPathKey } from '../../shared/project-session-context'
 
 // ==========================================
 // 1. 结构与类型导出 (保留对外的向后兼容)
@@ -9,6 +13,7 @@ import type { DraftStatus } from '../../shared/draft-status'
 export type { DraftStatus, DraftMeta }
 
 export interface ChapterInfo {
+  projectPath: string
   chapterNumber: number
   title: string
   role: string
@@ -22,6 +27,7 @@ export interface ChapterInfo {
 }
 
 export interface RefineOnlyParams {
+  projectPath: string
   chapterNumber: number
   chapterTitle: string
   draftPath: string
@@ -30,6 +36,7 @@ export interface RefineOnlyParams {
 }
 
 export interface RefineFromReviewParams {
+  projectPath: string
   chapterNumber: number
   chapterTitle: string
   draftPath: string
@@ -40,6 +47,7 @@ export interface RefineFromReviewParams {
 }
 
 export interface ReviewOnlyParams {
+  projectPath: string
   chapterNumber: number
   chapterTitle: string
   draftPath: string
@@ -49,10 +57,12 @@ export interface ReviewOnlyParams {
 }
 
 export interface FinalizeOnlyParams {
+  projectPath: string
   chapterNumber: number
   chapterTitle: string
   draftPath: string
   draftContent: string
+  snapshot?: import('../finalization-snapshot').FinalizationSnapshot
 }
 
 // ==========================================
@@ -67,14 +77,35 @@ export function getDraftPath(_projectPath: string, chapterNumber: number, versio
   return `vela://draft/ch${chapterNumber}/v${version}`
 }
 
-export async function parseDraftMeta(filePath: string): Promise<DraftMeta | null> {
-  const { ipc } = await import('../ipc-client')
+function workflowProjectSession(
+  projectPath: string,
+  sourceProjectSession: ProjectSessionContext,
+): ProjectSessionContext {
+  if (!sameProjectPathKey(sourceProjectSession.projectPath, projectPath)) {
+    throw new Error('工作流项目会话与目标路径不匹配')
+  }
+  return Object.freeze({ ...sourceProjectSession })
+}
+
+export async function parseDraftMeta(
+  filePath: string,
+  expectedProjectPath: string,
+  projectSession: ProjectSessionContext,
+): Promise<DraftMeta | null> {
+  if (!sameProjectPathKey(projectSession.projectPath, expectedProjectPath)) {
+    throw new Error('读取草稿元数据时项目会话与目标路径不匹配')
+  }
 
   // 优先处理 vela://draft/{id} 纯数字 ID 格式（DB 化后的标准路径）
   const idMatch = filePath.match(/^vela:\/\/(?:draft|manuscript)\/(\d+)$/)
   if (idMatch) {
     const draftId = parseInt(idMatch[1])
-    const dbMeta = await ipc.invoke('db:draft-get-meta', draftId)
+    const dbMeta = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-get-meta',
+      draftId,
+      expectedProjectPath,
+    )
     if (!dbMeta) return null
     return {
       ...dbMeta,
@@ -95,16 +126,35 @@ export async function parseDraftMeta(filePath: string): Promise<DraftMeta | null
   if (!chMatch) return null
   const chapterNumber = parseInt(chMatch[1])
 
-  const drafts = await ipc.invoke('db:draft-list', chapterNumber)
-  const d = (drafts as unknown as Array<Record<string, unknown>>).find((d) => d.version === version)
+  const drafts = await ipc.invokeWithProjectSession(
+    projectSession,
+    'db:draft-list',
+    chapterNumber,
+    expectedProjectPath,
+  )
+  const d = drafts.find((draft) => draft.version === version)
   return d ? (d as unknown as DraftMeta) : null
 }
 
-export async function updateDraftStatus(filePath: string, newStatus: DraftStatus): Promise<void> {
-  const meta = await parseDraftMeta(filePath)
+export async function updateDraftStatus(
+  filePath: string,
+  newStatus: DraftStatus,
+  expectedProjectPath: string,
+  projectSession: ProjectSessionContext,
+): Promise<void> {
+  const meta = await parseDraftMeta(filePath, expectedProjectPath, projectSession)
   if (meta) {
-    const { ipc } = await import('../ipc-client')
-    await ipc.invoke('db:draft-update-status', meta.id, newStatus)
+    requireIpcSuccess(
+      await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:draft-update-status',
+        meta.id,
+        newStatus,
+        undefined,
+        expectedProjectPath,
+      ),
+      '更新草稿状态',
+    )
   }
 }
 
@@ -113,10 +163,15 @@ export async function updateDraftStatus(filePath: string, newStatus: DraftStatus
 // 将原有的 1500 多行核心面条代码剥离为微内核执行器。
 // ==========================================
 
-export function createChapterWorkflow(chapterInfo: ChapterInfo): WorkflowDefinition {
+export function createChapterWorkflow(
+  chapterInfo: ChapterInfo,
+  sourceProjectSession: ProjectSessionContext,
+): WorkflowDefinition {
   return {
     type: 'chapter_creation',
-    title: `✍️ 写稿 — 第 ${chapterInfo.chapterNumber} 章 · ${chapterInfo.title}`,
+    projectPath: chapterInfo.projectPath,
+    projectSession: workflowProjectSession(chapterInfo.projectPath, sourceProjectSession),
+      title: `写稿 — 第 ${chapterInfo.chapterNumber} 章 · ${chapterInfo.title}`,
     steps: [
       {
         name: '写稿',
@@ -128,14 +183,19 @@ export function createChapterWorkflow(chapterInfo: ChapterInfo): WorkflowDefinit
         },
       },
     ],
-    onComplete: { mode: 'open', message: `✅ 第${chapterInfo.chapterNumber}章草稿已生成` },
+      onComplete: { mode: 'open', message: `第${chapterInfo.chapterNumber}章草稿已生成` },
   }
 }
 
-export function createRefineOnlyWorkflow(params: RefineOnlyParams): WorkflowDefinition {
+export function createRefineOnlyWorkflow(
+  params: RefineOnlyParams,
+  sourceProjectSession: ProjectSessionContext,
+): WorkflowDefinition {
   return {
     type: 'chapter_creation',
-    title: `🔧 修稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    projectPath: params.projectPath,
+    projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
+      title: `修稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
         name: '修稿',
@@ -146,7 +206,7 @@ export function createRefineOnlyWorkflow(params: RefineOnlyParams): WorkflowDefi
             draftPath: params.draftPath,
             draftContent: params.draftContent,
             chapterNumber: params.chapterNumber,
-            chapterInfo: { chapterNumber: params.chapterNumber, title: params.chapterTitle, role: '', purpose: '', characters: [], keyEvents: '' },
+            chapterInfo: { projectPath: params.projectPath, chapterNumber: params.chapterNumber, title: params.chapterTitle, role: '', purpose: '', characters: [], keyEvents: '' },
             userRefinePrompt: params.userRefinePrompt,
           })
           return cmd.execute({ step, context, callbacks })
@@ -157,10 +217,15 @@ export function createRefineOnlyWorkflow(params: RefineOnlyParams): WorkflowDefi
   }
 }
 
-export function createRefineFromReviewWorkflow(params: RefineFromReviewParams): WorkflowDefinition {
+export function createRefineFromReviewWorkflow(
+  params: RefineFromReviewParams,
+  sourceProjectSession: ProjectSessionContext,
+): WorkflowDefinition {
   return {
     type: 'chapter_creation',
-    title: `🔧 审稿修复 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    projectPath: params.projectPath,
+    projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
+      title: `审稿修复 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
         name: '审稿驱动修稿',
@@ -183,10 +248,15 @@ export function createRefineFromReviewWorkflow(params: RefineFromReviewParams): 
   }
 }
 
-export function createReviewOnlyWorkflow(params: ReviewOnlyParams): WorkflowDefinition {
+export function createReviewOnlyWorkflow(
+  params: ReviewOnlyParams,
+  sourceProjectSession: ProjectSessionContext,
+): WorkflowDefinition {
   return {
     type: 'chapter_creation',
-    title: `🔍 审稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    projectPath: params.projectPath,
+    projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
+      title: `审稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
         name: '审稿',
@@ -203,15 +273,20 @@ export function createReviewOnlyWorkflow(params: ReviewOnlyParams): WorkflowDefi
         },
       },
     ],
-    onComplete: { mode: 'open', message: `✅ 第${params.chapterNumber}章审稿完成` },
+      onComplete: { mode: 'open', message: `第${params.chapterNumber}章审稿完成` },
   }
 }
 
-export function createFinalizeWorkflow(params: FinalizeOnlyParams): WorkflowDefinition {
-  const chapterInfo = { chapterNumber: params.chapterNumber, title: params.chapterTitle, role: '', purpose: '', characters: [], keyEvents: '' }
+export function createFinalizeWorkflow(
+  params: FinalizeOnlyParams,
+  sourceProjectSession: ProjectSessionContext,
+): WorkflowDefinition {
+  const chapterInfo: ChapterInfo = { projectPath: params.projectPath, chapterNumber: params.chapterNumber, title: params.chapterTitle, role: '', purpose: '', characters: [], keyEvents: '' }
   return {
     type: 'chapter_creation',
-    title: `✅ 定稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    projectPath: params.projectPath,
+    projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
+      title: `定稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
         name: '定稿',
@@ -223,38 +298,15 @@ export function createFinalizeWorkflow(params: FinalizeOnlyParams): WorkflowDefi
             draftContent: params.draftContent,
             chapterNumber: params.chapterNumber,
             chapterInfo,
+            snapshot: params.snapshot,
           })
           return cmd.execute({ step, context, callbacks })
         },
       },
     ],
-    onComplete: {
-      mode: 'open', message: `🎉 第${params.chapterNumber}章已定稿！`, openResult: async () => {
-        const { useEditorStore } = await import('../../stores/editor-store')
-        const { useProjectStore } = await import('../../stores/project-store')
-        const project = useProjectStore.getState().currentProject
-        if (!project) return
-        const { ipc } = await import('../ipc-client')
-        const draftMeta = await ipc.invoke('db:draft-get-finalized', params.chapterNumber)
-        if (draftMeta) {
-          const fullContent = await ipc.invoke('db:draft-get-full', draftMeta.id)
-          // 从数据库蓝图读取正式标题
-          let displayTitle = params.chapterTitle
-          try {
-            const bp = await ipc.invoke('db:blueprint-get', params.chapterNumber)
-            if (bp?.title) displayTitle = bp.title
-          } catch { /* 蓝图读取失败时回退到 params */ }
-          const dbPath = `vela://manuscript/${draftMeta.id}`
-          useEditorStore.getState().openFile({
-            id: dbPath,
-            name: `第${params.chapterNumber}章 ${displayTitle}`,
-            type: 'chapter',
-            filePath: dbPath,
-            content: fullContent?.content || '',
-          })
-        }
-      }
-    },
+    // 定稿界面结算只由携带 immutable snapshot 的 FINALIZE_COMPLETE 完成；不要在
+    // workflow onComplete 中重新读 DB 并打开/覆盖旧 tab。
+      onComplete: { mode: 'silent', message: `第${params.chapterNumber}章已定稿。` },
   }
 }
 
@@ -262,30 +314,46 @@ export function createFinalizeWorkflow(params: FinalizeOnlyParams): WorkflowDefi
  * 修复定稿后处理工作流 — 当定稿后的三路推演失败时可重跑
  * 从 manuscript/ 读取已定稿内容，重新执行 FinalizeChapterCommand 的后处理部分
  */
-export function createRepairFinalizeWorkflow(chapterNumber: number): WorkflowDefinition {
+export function createRepairFinalizeWorkflow(
+  chapterNumber: number,
+  projectPath: string,
+  sourceProjectSession: ProjectSessionContext,
+): WorkflowDefinition {
   return {
     type: 'chapter_creation',
-    title: `🔧 修复后处理 — 第${chapterNumber}章`,
+    projectPath,
+    projectSession: workflowProjectSession(projectPath, sourceProjectSession),
+      title: `修复后处理 — 第${chapterNumber}章`,
     steps: [
       {
         name: '重跑失败步骤',
         description: '仅重新执行失败的后处理步骤（章节要点/角色卡更新等）',
-        executor: async (_step, _context, callbacks) => {
+        executor: async (_step, context, callbacks) => {
           const { useProjectStore } = await import('../../stores/project-store')
           const { ipc } = await import('../ipc-client')
+          const { projectSessionContextFromProject, sameProjectSessionContext } = await import('../../shared/project-session-context')
+          const { requireWorkflowProjectSession } = await import('./workflow-project-session')
+          const projectSession = requireWorkflowProjectSession(context)
           const project = useProjectStore.getState().currentProject
-          if (!project) throw new Error('未打开项目')
+          if (!project || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(project))) {
+            throw new Error('当前项目已切换，修复已停止')
+          }
 
           // 使用数据库定稿源
-          const draftMeta = await ipc.invoke('db:draft-get-finalized', chapterNumber)
+          const draftMeta = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:draft-get-finalized',
+            chapterNumber,
+            projectPath,
+          )
           if (!draftMeta) throw new Error(`第 ${chapterNumber} 章的定稿记录未获取到`)
-          const full = await ipc.invoke('db:draft-get-full', draftMeta.id)
+          const full = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', draftMeta.id, projectPath)
           if (!full) throw new Error(`正文提取失败: ID=${draftMeta.id}`)
 
           // 从数据库蓝图读取正式标题
           let chapterTitle = `第${chapterNumber}章`
           try {
-            const bp = await ipc.invoke('db:blueprint-get', chapterNumber)
+            const bp = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', chapterNumber, projectPath)
             if (bp?.title) chapterTitle = bp.title
           } catch { /* 蓝图读取失败时使用默认标题 */ }
 
@@ -295,14 +363,22 @@ export function createRepairFinalizeWorkflow(chapterNumber: number): WorkflowDef
           const scope = getChapterFinalizeScope(chapterNumber)
           const steps = buildFinalizePostProcessSteps(project, chapterNumber, chapterTitle, full.content)
 
-          await runPostProcessPipeline(project.path, scope, `第${chapterNumber}章定稿`, steps, callbacks, { onlyFailed: true })
+          await runPostProcessPipeline(project.path, scope, `第${chapterNumber}章定稿`, steps, callbacks, {
+            onlyFailed: true,
+            cancellation: context,
+            projectSession,
+          })
 
-          // 通知刷新
+          // 后处理修复不会产生新定稿快照，只请求项目资源刷新。
           const { globalEventBus } = await import('../../shared/event-bus')
-          globalEventBus.emit('FINALIZE_COMPLETE', { chapterNumber })
+          globalEventBus.emit('REFRESH_RESOURCE', {
+            resources: ['fileTree', 'characterCards', 'drafts'],
+            projectPath,
+            projectSession,
+          })
         },
       },
     ],
-    onComplete: { mode: 'open', message: `✅ 第${chapterNumber}章后处理修复完成` },
+      onComplete: { mode: 'open', message: `第${chapterNumber}章后处理修复完成` },
   }
 }

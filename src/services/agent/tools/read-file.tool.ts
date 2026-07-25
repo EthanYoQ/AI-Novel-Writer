@@ -3,8 +3,8 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { useProjectStore } from '../../../stores/project-store'
 import { validatePath } from './safe-path'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 export const readFileTool = buildAgentTool({
   name: 'read_file',
@@ -21,12 +21,9 @@ export const readFileTool = buildAgentTool({
     required: ['file_path'],
   },
   requiresConfirmation: false,
-  execute: async (args) => {
+  execute: async (args, context) => {
     const filePath = args.file_path as string
-    const project = useProjectStore.getState().currentProject
-    if (!project) {
-      return { success: false, content: '', error: '没有打开的项目' }
-    }
+    const { project, projectSession } = requireAgentProject(context)
 
     // 路径安全校验
     const pathCheck = validatePath(project.path, filePath)
@@ -34,7 +31,8 @@ export const readFileTool = buildAgentTool({
       return { success: false, content: '', error: pathCheck.error }
     }
 
-    const result = await ipc.invoke('fs:read-file', pathCheck.fullPath)
+    const result = await ipc.invokeWithProjectSession(projectSession, 'fs:read-file', pathCheck.fullPath, project.path)
+    assertAgentProjectCurrent(context)
     if (!result.success) {
       return { success: false, content: '', error: result.error ?? '文件读取失败' }
     }

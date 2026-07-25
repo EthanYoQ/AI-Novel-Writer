@@ -21,6 +21,12 @@
     "dist-electron",
     "build"
   ],
+  "extraResources": [
+    {
+      "from": "electron/security/windows-safe-file-system.ps1",
+      "to": "security/windows-safe-file-system.ps1"
+    }
+  ],
   "mac": {
     "target": ["dmg"],
     "artifactName": "${productName}-Mac-${version}-Installer.${ext}",

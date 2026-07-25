@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useProjectStore } from '../../../../stores/project-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
-import { InferBlueprintsPerChapterCommand } from '../import-novel.command'
+import { InferBlueprintsPerChapterCommand, InferGlobalSettingsCommand } from '../import-novel.command'
 
 const callbacks: StepCallbacks = {
   log: vi.fn(),
@@ -12,6 +12,13 @@ const callbacks: StepCallbacks = {
 
 function createContext(): WorkflowContext {
   return {
+    runId: 'test-run',
+    projectPath: 'C:\\tmp\\vela-import-test',
+    projectSession: {
+      projectId: 'project-1',
+      leaseId: 'lease-project-1',
+      projectPath: 'C:\\tmp\\vela-import-test',
+    },
     data: {
       novelConfigSummary: '类型: 玄幻',
       chapters: [
@@ -50,6 +57,7 @@ beforeEach(() => {
       id: 'project-1',
       name: '导入项目',
       path: 'C:\\tmp\\vela-import-test',
+      sessionLease: 'lease-project-1',
       novelConfig: {
         genre: '玄幻',
         subGenre: '',
@@ -89,5 +97,25 @@ describe('InferBlueprintsPerChapterCommand', () => {
     )
 
     await expect(command.execute({ step: {}, context: createContext(), callbacks })).rejects.toThrow(/DB 写入失败/)
+  })
+})
+
+describe('InferGlobalSettingsCommand', () => {
+  it('stops and keeps renderer config unchanged when project:save reports failure', async () => {
+    stubIpcInvoke((channel) => {
+      if (channel === 'kb:search') return []
+      if (channel === 'project:save') return { success: false, error: '配置文件写入失败' }
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+    const command = new InferGlobalSettingsCommand()
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+      .mockResolvedValue('{"novelConfig":{"genre":"都市"}}')
+
+    await expect(command.execute({
+      step: {},
+      context: createContext(),
+      callbacks,
+    })).rejects.toThrow(/配置文件写入失败/)
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('玄幻')
   })
 })

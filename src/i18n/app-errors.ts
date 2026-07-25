@@ -4,13 +4,18 @@ import type { AppErrorCode } from '../shared/ipc-channels'
 
 const ERROR_KEYS = {
   KNOWLEDGE_BASE_NATIVE_UNAVAILABLE: 'error.knowledgeBaseNativeUnavailable',
+  LEGACY_VECTOR_MIGRATION_BLOCKED: 'error.legacyVectorMigrationBlocked',
   PROJECT_NOT_OPEN: 'error.projectNotOpen',
   EMBEDDING_MODEL_NOT_CONFIGURED: 'error.embeddingModelNotConfigured',
 } as const
 
 function readCode(error: unknown): AppErrorCode | undefined {
-  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
-  const code = error.code
+  if (typeof error !== 'object' || error === null) return undefined
+  const code = 'code' in error
+    ? error.code
+    : 'errorCode' in error
+      ? error.errorCode
+      : undefined
   return typeof code === 'string' && code in ERROR_KEYS ? code as AppErrorCode : undefined
 }
 

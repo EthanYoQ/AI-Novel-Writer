@@ -17,15 +17,15 @@
 
 ### Issue tracker
 
-规格、PRD 与实施任务使用本仓库的 GitHub Issues 管理；PR 不作为需求分流入口。
+规格、PRD 与实施任务使用本仓库的 GitHub Issues 管理；PR 不作为需求分流入口。详见 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 
-使用以下任务标签：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。
+使用以下任务标签：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。详见 `docs/agents/triage-labels.md`。
 
 ### Domain docs
 
-本仓库采用单一领域上下文：稳定术语写入根目录 `CONTEXT.md`；只有难以逆转、会影响后续设计的决定才写入 `docs/adr/`。探索或修改前应先阅读相关领域文档。
+本仓库采用单一领域上下文：稳定术语写入根目录 `CONTEXT.md`；只有难以逆转、会影响后续设计的决定才写入 `docs/adr/`。探索或修改前应先阅读相关领域文档。详见 `docs/agents/domain.md`。
 
 ### Implementation coordination
 

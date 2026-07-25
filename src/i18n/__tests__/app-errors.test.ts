@@ -7,6 +7,8 @@ describe('localized application errors', () => {
       .toContain('Windows native component')
     expect(appErrorMessage('zh-CN', { code: 'PROJECT_NOT_OPEN' }))
       .toBe('请先打开项目。')
+    expect(appErrorMessage('en-US', { errorCode: 'PROJECT_NOT_OPEN' }))
+      .toBe('Open a project first.')
   })
 
   it('preserves an unknown error as localized diagnostic text', () => {

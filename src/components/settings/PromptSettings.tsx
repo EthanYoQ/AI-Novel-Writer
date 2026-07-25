@@ -5,14 +5,18 @@ import {
   EDITABLE_PROMPT_KEYS,
   getPromptTemplate,
   getPromptSource,
+  getPromptVariableDescription,
   saveCustomPrompt,
   saveProjectCustomPrompt,
   deleteCustomPrompt,
   deleteProjectCustomPrompt,
+  clearProjectCustomPrompts,
   loadProjectCustomPrompts,
   type PromptTemplate,
 } from '../../services/prompt-templates'
 import { useProjectStore } from '../../stores/project-store'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
 import { Button } from '../ui/Button'
 import { cn } from '../../lib/utils'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -45,16 +49,35 @@ const PROMPT_META_EN: Record<string, { name: string; description: string }> = {
 export default function PromptSettings() {
   const text = useLocaleStore(s => s.text)
   const project = useProjectStore((s) => s.currentProject)
+  const projectId = project?.id ?? null
+  const projectPath = project?.path ?? null
+  const projectLease = project?.sessionLease ?? null
+  const projectSession = projectId && projectPath && projectLease
+    ? captureProjectSession({ id: projectId, path: projectPath, sessionLease: projectLease })
+    : null
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   // 强制刷新用（保存/恢复后 getPromptSource 的结果会变）
   const [refreshKey, setRefreshKey] = useState(0)
 
   // 项目变更时重新加载项目级覆盖
   useEffect(() => {
-    if (project?.path) {
-      loadProjectCustomPrompts(project.path).then(() => setRefreshKey((k) => k + 1))
+    const session = projectId && projectPath && projectLease
+      ? captureProjectSession({ id: projectId, path: projectPath, sessionLease: projectLease })
+      : null
+    let disposed = false
+
+    if (!session) {
+      clearProjectCustomPrompts()
+      return () => { disposed = true }
     }
-  }, [project?.path])
+
+    void loadProjectCustomPrompts(session).then(() => {
+      if (!disposed && isProjectSessionCurrent(session)) {
+        setRefreshKey((k) => k + 1)
+      }
+    })
+    return () => { disposed = true }
+  }, [projectId, projectLease, projectPath])
 
   // 获取可编辑的模板列表
   const editableTemplates = BUILTIN_PROMPTS.filter((t) => EDITABLE_PROMPT_KEYS.includes(t.key))
@@ -79,19 +102,19 @@ export default function PromptSettings() {
       </div>
 
       {editableTemplates.map((builtinTemplate) => {
-        const source = getPromptSource(builtinTemplate.key)
-        const currentTemplate = getPromptTemplate(builtinTemplate.key) ?? builtinTemplate
+        const source = getPromptSource(builtinTemplate.key, projectSession ?? undefined)
+        const currentTemplate = getPromptTemplate(builtinTemplate.key, projectSession ?? undefined) ?? builtinTemplate
         const isExpanded = expandedKey === builtinTemplate.key
 
         return (
           <TemplateItem
-            key={builtinTemplate.key}
+            key={`${projectSession?.projectId ?? 'no-project'}:${projectSession?.leaseId ?? 'no-lease'}:${builtinTemplate.key}`}
             builtinTemplate={builtinTemplate}
             currentTemplate={currentTemplate}
             source={source}
             isExpanded={isExpanded}
             onToggle={() => handleToggle(builtinTemplate.key)}
-            projectPath={project?.path ?? null}
+            projectSession={projectSession}
             onSaved={triggerRefresh}
           />
         )
@@ -108,7 +131,7 @@ function TemplateItem({
   source,
   isExpanded,
   onToggle,
-  projectPath,
+  projectSession,
   onSaved,
 }: {
   builtinTemplate: PromptTemplate
@@ -116,7 +139,7 @@ function TemplateItem({
   source: 'builtin' | 'global' | 'project'
   isExpanded: boolean
   onToggle: () => void
-  projectPath: string | null
+  projectSession: ProjectSessionContext | null
   onSaved: () => void
 }) {
   const text = useLocaleStore(s => s.text)
@@ -180,7 +203,8 @@ function TemplateItem({
 
   // 保存到项目
   const handleSaveProject = async () => {
-    if (!projectPath) return
+    if (!projectSession || !isProjectSessionCurrent(projectSession)) return
+    const operationSession = projectSession
     setSaving(true)
     setSaveResult(null)
     const template: PromptTemplate = {
@@ -188,7 +212,10 @@ function TemplateItem({
       content: editContent,
     }
     delete (template as Partial<PromptTemplate>).systemSuffix
-    const ok = await saveProjectCustomPrompt(projectPath, template)
+    const ok = await saveProjectCustomPrompt(operationSession, template)
+    if (!isProjectSessionCurrent(operationSession)) return
+    if (ok) await loadProjectCustomPrompts(operationSession)
+    if (!isProjectSessionCurrent(operationSession)) return
     setSaving(false)
     setSaveResult(ok ? { type: 'success', msg: text('已保存到当前项目', 'Saved to this project') } : { type: 'error', msg: text('保存失败', 'Save failed') })
     if (ok) onSaved()
@@ -197,11 +224,31 @@ function TemplateItem({
 
   // 恢复默认
   const handleReset = async () => {
+    const operationSession = projectSession
     setSaving(true)
     setSaveResult(null)
     // 依次删除项目级和全局级覆盖
-    if (projectPath) await deleteProjectCustomPrompt(projectPath, builtinTemplate.key)
-    await deleteCustomPrompt(builtinTemplate.key)
+    if (operationSession) {
+      if (!isProjectSessionCurrent(operationSession)) return
+      const projectDeleted = await deleteProjectCustomPrompt(operationSession, builtinTemplate.key)
+      if (!isProjectSessionCurrent(operationSession)) return
+      if (!projectDeleted) {
+        setSaving(false)
+        setSaveResult({ type: 'error', msg: text('恢复默认失败', 'Could not restore the default') })
+        return
+      }
+    }
+    const globalDeleted = await deleteCustomPrompt(builtinTemplate.key)
+    if (operationSession && !isProjectSessionCurrent(operationSession)) return
+    if (!globalDeleted) {
+      setSaving(false)
+      setSaveResult({ type: 'error', msg: text('恢复默认失败', 'Could not restore the default') })
+      return
+    }
+    if (operationSession) {
+      await loadProjectCustomPrompts(operationSession)
+      if (!isProjectSessionCurrent(operationSession)) return
+    }
     setEditContent(builtinTemplate.content)
     setSaving(false)
     setSaveResult({ type: 'success', msg: text('已恢复为内置默认', 'Restored built-in default') })
@@ -254,22 +301,25 @@ function TemplateItem({
               {text('可用变量（点击插入到光标位置）', 'Available variables (click to insert)')}
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {Object.entries(builtinTemplate.variables).map(([varName, desc]) => (
-                <button
-                  key={varName}
-                  onClick={() => insertVariable(varName)}
-                  title={desc}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[0.68rem] transition-colors hover:bg-[var(--color-accent)] hover:text-white outline-none focus:outline-none"
-                  style={{
-                    backgroundColor: 'var(--color-hover)',
-                    color: 'var(--color-text-secondary)',
-                    border: '1px solid var(--color-border)',
-                  }}
-                >
-                  <code className="font-mono">{`{{${varName}}}`}</code>
-                  <span className="opacity-60 max-w-[120px] truncate">{desc}</span>
-                </button>
-              ))}
+              {Object.entries(builtinTemplate.variables).map(([varName, desc]) => {
+                const englishDescription = getPromptVariableDescription(builtinTemplate, varName, 'en-US')
+                return (
+                  <button
+                    key={varName}
+                    onClick={() => insertVariable(varName)}
+                    title={text(desc, englishDescription)}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[0.68rem] transition-colors hover:bg-[var(--color-accent)] hover:text-white outline-none focus:outline-none"
+                    style={{
+                      backgroundColor: 'var(--color-hover)',
+                      color: 'var(--color-text-secondary)',
+                      border: '1px solid var(--color-border)',
+                    }}
+                  >
+                    <code className="font-mono">{`{{${varName}}}`}</code>
+                    <span className="opacity-60 max-w-[120px] truncate">{text(desc, englishDescription)}</span>
+                  </button>
+                )
+              })}
             </div>
           </div>
 
@@ -329,8 +379,8 @@ function TemplateItem({
               variant="outline"
               size="sm"
               onClick={handleSaveProject}
-              disabled={saving || !projectPath}
-              title={projectPath ? text('保存到当前项目（仅此小说生效）', 'Save for this project only') : text('请先打开一个项目', 'Open a project first')}
+              disabled={saving || !projectSession}
+              title={projectSession ? text('保存到当前项目（仅此小说生效）', 'Save for this project only') : text('请先打开一个项目', 'Open a project first')}
             >
               <FolderOpen size={12} />
               {text('保存到项目', 'Save to project')}

@@ -58,9 +58,10 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [section, setSection] = useState<SettingsSection>(requestedSection)
 
   useEffect(() => {
-    if (open) {
-      setSection(requestedSection)
-    }
+    if (!open) return
+    // 在提交后同步外部请求，避免 effect 阶段同步 setState 的级联渲染。
+    const syncTimer = window.setTimeout(() => setSection(requestedSection), 0)
+    return () => window.clearTimeout(syncTimer)
   }, [open, requestedSection])
 
   if (!open) return null
@@ -210,14 +211,24 @@ function LLMSection({
   const handleSave = async () => {
     if (!editingModel) return
     setSaving(true)
-    await saveModel(editingModel)
+    const saved = await saveModel(editingModel)
+    if (!saved) {
+      setSaving(false)
+      return
+    }
     // 新增模型后，如果该分类还没有默认则自动设为默认
     const countBefore = filtered.length
     if (countBefore === 0) {
       if (isEmbeddingSection) {
-        setDefaultEmbeddingModel(editingModel.id)
+        if (!await setDefaultEmbeddingModel(editingModel.id)) {
+          setSaving(false)
+          return
+        }
       } else {
-        setDefaultModel(editingModel.id)
+        if (!await setDefaultModel(editingModel.id)) {
+          setSaving(false)
+          return
+        }
       }
     }
     setEditingModel(null)

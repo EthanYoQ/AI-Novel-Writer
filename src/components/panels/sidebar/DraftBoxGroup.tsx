@@ -9,11 +9,17 @@ import { useDraftStore, readDraftBody } from '../../../stores/draft-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { confirm } from '../../ui/Confirm'
 import { DRAFT_STATUS_LABEL, DRAFT_STATUS_COLOR } from '../../../shared/draft-status'
-import { showSidebarMenu } from './SidebarShared'
+import { showSidebarMenu } from './sidebar-menu'
 import { ipc } from '../../../services/ipc-client'
 import { toast } from '../../ui/Toast'
 import { globalEventBus } from '../../../shared/event-bus'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { useProjectStore } from '../../../stores/project-store'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+  isProjectSessionPath,
+} from '../../project-session-gate'
 
 const DRAFT_STATUS_EN: Record<string, string> = {
   draft: 'Draft', revising: 'Revising', reviewed: 'Reviewed', finalized: 'Finalized', archived: 'Archived',
@@ -28,6 +34,8 @@ export default function DraftBoxGroup({
 }) {
   const [open, setOpen] = useState(true)
   const text = useLocaleStore(s => s.text)
+  const projectKey = useProjectStore(s => s.currentProject?.path)
+  if (!projectKey) return null
 
   // 所有章节号排序
   const chapterNums = Object.keys(draftsByChapter)
@@ -76,6 +84,7 @@ export default function DraftBoxGroup({
                 key={chNum}
                 chapterNumber={chNum}
                 drafts={draftsByChapter[chNum] || []}
+                projectKey={projectKey}
               />
             ))
           )}
@@ -90,11 +99,14 @@ export default function DraftBoxGroup({
 function DraftChapterGroup({
   chapterNumber,
   drafts,
+  projectKey,
 }: {
   chapterNumber: number
   drafts: DraftMeta[]
+  projectKey: string
 }) {
   const text = useLocaleStore(s => s.text)
+  const currentProject = useProjectStore(s => s.currentProject)
   const [open, setOpen] = useState(true)
 
   // 将 archived 草稿折叠，只显示活跃草稿（非 archived）
@@ -105,13 +117,15 @@ function DraftChapterGroup({
 
   useEffect(() => {
     let cancelled = false
-    ipc.invoke('db:blueprint-get', chapterNumber).then(bp => {
-      if (!cancelled && bp?.title) {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', chapterNumber, projectKey).then(bp => {
+      if (!cancelled && isProjectSessionCurrent(projectSession) && bp?.title) {
         setBpTitle(bp.title)
       }
     }).catch(() => { })
     return () => { cancelled = true }
-  }, [chapterNumber])
+  }, [chapterNumber, currentProject, projectKey])
 
   // 已定稿的草稿存在时，章节显示绿色标记
   const hasFinalized = drafts.some(d => d.status === 'finalized')
@@ -157,6 +171,7 @@ function DraftChapterGroup({
               key={draft.filePath}
               draft={draft}
               chapterTitleText={displayTitle}
+              projectKey={projectKey}
             />
           ))}
 
@@ -177,6 +192,7 @@ function DraftChapterGroup({
               key={draft.filePath}
               draft={draft}
               chapterTitleText={displayTitle}
+              projectKey={projectKey}
               archived
             />
           ))}
@@ -191,43 +207,74 @@ function DraftChapterGroup({
 function DraftItem({
   draft,
   chapterTitleText,
+  projectKey,
   archived = false,
 }: {
   draft: DraftMeta
   chapterTitleText: string
+  projectKey: string
   archived?: boolean
 }) {
   const text = useLocaleStore(s => s.text)
+  const currentProject = useProjectStore(s => s.currentProject)
   const statusLabel = text(DRAFT_STATUS_LABEL[draft.status] || draft.status, DRAFT_STATUS_EN[draft.status] || draft.status)
   /** 打开草稿到编辑器 */
   const openDraft = async () => {
-    const content = await readDraftBody(draft.filePath)
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    const content = await readDraftBody(draft.filePath, projectKey, projectSession)
+    if (!isProjectSessionCurrent(projectSession)) return
     useEditorStore.getState().openFile({
       id: draft.filePath,
       name: `${chapterTitleText} v${draft.version}`,
       type: 'chapter',
       filePath: draft.filePath,
       content,
+      savedContent: content,
+      draftId: draft.id,
+      chapterNumber: draft.chapterNumber,
+      draftStatus: draft.status,
+      projectKey,
+      projectSessionLease: projectSession.leaseId,
     })
   }
 
   /** 删除草稿 */
   const deleteDraft = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     const ok = await confirm(
       text(`确认删除 "${chapterTitleText} v${draft.version}"？\n此操作会删除该稿正文记录及关联的审稿/修稿产物，不可撤销。`, `Delete “${chapterTitleText} v${draft.version}”?\nThis permanently removes the draft and related review/revision artifacts.`),
       { title: text('删除这一稿', 'Delete draft'), confirmText: text('删除', 'Delete'), danger: true }
     )
-    if (!ok) return
-    const result = await ipc.invoke('db:draft-delete', draft.id)
+    if (!ok || !isProjectSessionCurrent(projectSession)) return
+    const result = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-delete',
+      draft.id,
+      projectKey,
+    )
+    if (!isProjectSessionCurrent(projectSession)) return
     if (!result.success) {
       toast.error(text(`删除失败\n\n${result.error ?? '未知错误'}`, `Delete failed\n\n${result.error ?? 'Unknown error'}`))
       return
     }
     const editor = useEditorStore.getState()
-    const tab = editor.tabs.find(t => t.id === draft.filePath || t.filePath === draft.filePath)
+    const tab = editor.tabs.find(t =>
+      t.projectKey === projectKey && (t.id === draft.filePath || t.filePath === draft.filePath)
+    )
     if (tab) editor.closeTab(tab.id)
-    await useDraftStore.getState().loadChapterDrafts(draft.chapterNumber)
-    globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts', 'fileTree'] })
+    await useDraftStore.getState().loadChapterDrafts(
+      draft.chapterNumber,
+      projectKey,
+      projectSession,
+    )
+    if (!isProjectSessionCurrent(projectSession)) return
+    globalEventBus.emit('REFRESH_RESOURCE', {
+      resources: ['drafts', 'fileTree'],
+      projectPath: projectKey,
+      projectSession,
+    })
     toast.success(text(`已删除 ${chapterTitleText} v${draft.version}`, `Deleted ${chapterTitleText} v${draft.version}`))
   }
 

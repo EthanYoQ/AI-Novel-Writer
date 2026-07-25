@@ -30,7 +30,6 @@ export const Default: StoryObj = {
 }
 
 export const AllPositions: StoryObj = {
-  name: 'All Positions',
   render: () => (
     <TooltipProvider>
       <div className="flex gap-4 flex-wrap">

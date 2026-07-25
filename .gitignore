@@ -36,7 +36,13 @@ Thumbs.db
 dist-ssr
 tailwind.config.js.bak
 
-# 本地工具索引与设计会话
+# 可再生的本地审查、包管理与门禁状态
+.review-temp/
+.pnpm-store/
+.workbuddy/
+.release-gate*.txt
+
+# 本地工具索引与会话
 .codegraph/
 .superpowers/
 .worktrees/

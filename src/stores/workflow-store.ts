@@ -1,5 +1,13 @@
 import { create } from 'zustand'
 import { randomUUID } from '../utils/id'
+import { globalEventBus } from '../shared/event-bus'
+import type { ProjectSessionContext } from '../shared/ipc-channels'
+import {
+  projectSessionContextFromProject,
+  sameProjectPathKey,
+  sameProjectSessionContext,
+} from '../shared/project-session-context'
+import { useProjectStore } from './project-store'
 
 // ===== 工作流数据模型 =====
 
@@ -7,7 +15,14 @@ import { randomUUID } from '../utils/id'
 export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
 
 /** 工作流运行状态 */
-export type WorkflowStatus = 'idle' | 'running' | 'completed' | 'failed' | 'paused' | 'waiting'
+export type WorkflowStatus =
+  | 'idle'
+  | 'running'
+  | 'cancelling'
+  | 'completed'
+  | 'failed'
+  | 'paused'
+  | 'waiting'
 
 /** 工作流步骤 */
 export interface WorkflowStep {
@@ -26,6 +41,10 @@ export interface WorkflowStep {
 /** 工作流运行实例 */
 export interface WorkflowRun {
   id: string
+  /** 工作流启动时冻结的项目身份。 */
+  projectPath: string
+  /** 启动时从当前项目冻结；缺失时该 run 只能失败，不能执行项目级副作用。 */
+  projectSession: ProjectSessionContext | null
   type: WorkflowType
   title: string
   status: WorkflowStatus
@@ -33,6 +52,7 @@ export interface WorkflowRun {
   currentStepIndex: number
   createdAt: string
   completedAt?: string
+  error?: string
   /** 已请求在当前步骤完成后的安全边界暂停 */
   pauseRequested?: boolean
 }
@@ -57,6 +77,12 @@ export type StepExecutor = (
 
 /** 工作流上下文（共享数据） */
 export interface WorkflowContext {
+  /** 本次运行的稳定身份，供事件消费者排除其他并发任务。 */
+  runId: string
+  /** 工作流启动时冻结的项目身份。 */
+  projectPath: string
+  /** 工作流启动时冻结的 IPC 会话，禁止在执行器内重新读取 currentProject。 */
+  projectSession: ProjectSessionContext
   /** 步骤间传递的数据 */
   data: Record<string, unknown>
   /** 是否已取消 */
@@ -88,8 +114,17 @@ export interface WorkflowCompleteAction {
 }
 
 export interface WorkflowDefinition {
+  /** 可由需要同步订阅事件的调用方预先分配。 */
+  runId?: string
   type: WorkflowType
   title: string
+  /** 工作流启动时冻结的项目身份。 */
+  projectPath: string
+  /**
+   * 工作流来源会话。缺失、过期或与项目路径不匹配的定义必须在执行前被拒绝，
+   * 禁止按路径借用当前项目的新 lease。
+   */
+  projectSession: ProjectSessionContext
   steps: Array<{
     name: string
     description: string
@@ -97,6 +132,24 @@ export interface WorkflowDefinition {
   }>
   /** 工作流完成后的通知/跳转动作（可选） */
   onComplete?: WorkflowCompleteAction
+}
+
+function isProjectSessionContext(value: unknown): value is ProjectSessionContext {
+  return !!value && typeof value === 'object'
+    && typeof (value as ProjectSessionContext).projectId === 'string'
+    && typeof (value as ProjectSessionContext).leaseId === 'string'
+    && typeof (value as ProjectSessionContext).projectPath === 'string'
+}
+
+function isCurrentWorkflowSession(
+  projectPath: string,
+  projectSession: ProjectSessionContext,
+): boolean {
+  if (!sameProjectPathKey(projectSession.projectPath, projectPath)) return false
+  return sameProjectSessionContext(
+    projectSession,
+    projectSessionContextFromProject(useProjectStore.getState().currentProject),
+  )
 }
 
 // ===== Store =====
@@ -138,6 +191,8 @@ interface WorkflowState {
   confirmContinue: (runId?: string) => void
   /** 取消工作流（传 runId 取消指定，不传取消全部） */
   cancelWorkflow: (runId?: string) => void
+  /** 取消指定项目的全部工作流，并等待执行器真正退出 activeRuns。 */
+  cancelProjectWorkflowsAndWait: (projectPath: string, timeoutMs?: number) => Promise<void>
   /** 请求在当前步骤完成后的安全边界暂停工作流 */
   pauseWorkflow: (runId: string) => void
   /** 继续已暂停或正在等待安全暂停的工作流 */
@@ -179,18 +234,29 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
   waitingAfterStepIndex: -1,
 
   // ===== 便捷查询 =====
-  isTypeRunning: (type) => get().activeRuns.some(r => r.type === type && (r.status === 'running' || r.status === 'waiting' || r.status === 'paused')),
+  isTypeRunning: (type) => get().activeRuns.some(r =>
+    r.type === type
+    && (r.status === 'running' || r.status === 'waiting' || r.status === 'paused' || r.status === 'cancelling')
+  ),
   hasActiveRun: () => get().activeRuns.length > 0,
   activeCount: () => get().activeRuns.length,
 
   getActiveStreamingRun: () => {
     const runs = get().activeRuns
     // 优先返回正在 running 的任务；其次 waiting 的
-    return runs.find(r => r.status === 'running') || runs.find(r => r.status === 'waiting') || runs.find(r => r.status === 'paused') || null
+    return runs.find(r => r.status === 'running')
+      || runs.find(r => r.status === 'waiting')
+      || runs.find(r => r.status === 'paused')
+      || runs.find(r => r.status === 'cancelling')
+      || null
   },
 
   getActiveStepInfo: () => {
-    const run = get().activeRuns.find(r => r.status === 'running' || r.status === 'waiting' || r.status === 'paused')
+    const run = get().activeRuns.find(r =>
+      r.status === 'running'
+      || r.status === 'waiting'
+      || r.status === 'paused'
+      || r.status === 'cancelling')
     if (!run) return null
     const step = run.steps[run.currentStepIndex] || run.steps[0]
     const completed = run.steps.filter(s => s.status === 'completed').length
@@ -221,8 +287,54 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
   },
 
   startWorkflow: async (definition, stepByStep = false) => {
+    const currentProjectSession = projectSessionContextFromProject(
+      useProjectStore.getState().currentProject,
+    )
+    const suppliedProjectSession = definition.projectSession
+    const projectSession = isProjectSessionContext(suppliedProjectSession)
+      && currentProjectSession
+      && sameProjectSessionContext(suppliedProjectSession, currentProjectSession)
+      && sameProjectPathKey(suppliedProjectSession.projectPath, definition.projectPath)
+      ? Object.freeze({ ...suppliedProjectSession })
+      : null
+    const runId = definition.runId ?? randomUUID()
+
+    // Runtime callers can still deserialize a legacy definition that predates
+    // the required TypeScript field. Reject it before adding an active run or
+    // executing any project-level side effect; never borrow currentProject's
+    // lease based on a matching path.
+    if (!projectSession) {
+      const rejectedRun: WorkflowRun = {
+        id: runId,
+        projectPath: definition.projectPath,
+        projectSession: isProjectSessionContext(suppliedProjectSession)
+          ? Object.freeze({ ...suppliedProjectSession })
+          : null,
+        type: definition.type,
+        title: definition.title,
+        status: 'failed',
+        currentStepIndex: 0,
+        createdAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        error: '工作流缺少有效的冻结项目会话，已拒绝启动',
+        steps: definition.steps.map((step) => ({
+          id: randomUUID(),
+          name: step.name,
+          description: step.description,
+          status: 'pending',
+          logs: [],
+        })),
+      }
+      set(state => ({
+        history: [rejectedRun, ...state.history].slice(0, 50),
+      }))
+      get().addLog('error', `[拒绝] 工作流「${definition.title}」缺少有效冻结项目会话`)
+      return runId
+    }
     const run: WorkflowRun = {
-      id: randomUUID(),
+      id: runId,
+      projectPath: definition.projectPath,
+      projectSession,
       type: definition.type,
       title: definition.title,
       status: 'running',
@@ -242,24 +354,31 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       const newRuns = [...s.activeRuns, run]
       return { activeRuns: newRuns, ...computeCompat(newRuns, s.waitingRuns) }
     })
-    get().addLog('info', `🚀 工作流「${definition.title}」已启动`)
+    get().addLog('info', `[开始] 工作流「${definition.title}」已启动`)
 
     // 自动联动：打开右侧面板的 AI 输出视图（非阻塞 import 避免循环依赖）
     import('./layout-store').then(m => m.useLayoutStore.getState().openRightPanel('ai-output')).catch(() => {})
 
     // 创建执行上下文
-    const context: WorkflowContext = { data: {}, cancelled: false, pauseRequested: false }
+    const context: WorkflowContext = {
+      runId: run.id,
+      projectPath: definition.projectPath,
+      projectSession,
+      data: {},
+      cancelled: false,
+      pauseRequested: false,
+    }
     activeContexts.set(run.id, context)
 
     const waitForResumeAtSafeBoundary = async () => {
       if (!context.pauseRequested || context.cancelled) return
 
       updateRunById(set, run.id, { status: 'paused', pauseRequested: false })
-      get().addLog('info', `⏸ 工作流「${definition.title}」已在当前步骤完成后暂停`)
+      get().addLog('info', `[暂停] 工作流「${definition.title}」已在当前步骤完成后暂停`)
       await new Promise<void>((resolve) => { pauseResolveRefs.set(run.id, resolve) })
       if (!context.cancelled) {
         updateRunById(set, run.id, { status: 'running', pauseRequested: false })
-        get().addLog('info', `▶ 工作流「${definition.title}」已继续`)
+        get().addLog('info', `[继续] 工作流「${definition.title}」已继续`)
       }
     }
 
@@ -270,8 +389,14 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
       // 检查取消
       if (context.cancelled) {
-        updateRunById(set, run.id, { status: 'failed' })
-        get().addLog('warn', `⏹ 工作流「${definition.title}」已取消`)
+        updateRunById(set, run.id, { status: 'failed', error: '工作流已取消' })
+        get().addLog('warn', `[取消] 工作流「${definition.title}」已取消`)
+        break
+      }
+
+      if (!isCurrentWorkflowSession(definition.projectPath, context.projectSession)) {
+        updateRunById(set, run.id, { status: 'failed', error: '项目会话已切换或失效' })
+        get().addLog('error', `[失败] 工作流「${definition.title}」已停止：项目会话已切换或失效`)
         break
       }
 
@@ -280,7 +405,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       // 标记当前步骤为运行中
       updateStepById(set, run.id, i, { status: 'running', startedAt: new Date().toISOString() })
       updateRunById(set, run.id, { currentStepIndex: i })
-      get().addLog('info', `▶ [${definition.title}] 执行步骤: ${stepDef.name}`)
+      get().addLog('info', `[执行] [${definition.title}] 步骤: ${stepDef.name}`)
 
       // 创建步骤回调
       const callbacks: StepCallbacks = {
@@ -302,13 +427,19 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
       try {
         const result = await stepDef.executor(run.steps[i], context, callbacks)
+        if (context.cancelled) {
+          throw new Error('工作流已取消')
+        }
+        if (!isCurrentWorkflowSession(definition.projectPath, context.projectSession)) {
+          throw new Error('项目会话已切换或失效，工作流已停止以避免跨项目写入')
+        }
         updateStepById(set, run.id, i, {
           status: 'completed',
           completedAt: new Date().toISOString(),
           progress: 100,
           result: result || get().activeRuns.find(r => r.id === run.id)?.steps[i].result,
         })
-        get().addLog('info', `✅ [${definition.title}] 步骤完成: ${stepDef.name}`)
+        get().addLog('info', `[完成] [${definition.title}] 步骤: ${stepDef.name}`)
 
         // 步进模式：非最后一步，且未取消 → 暂停等待用户确认
         if (stepByStep && i < definition.steps.length - 1 && !context.cancelled) {
@@ -317,7 +448,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
             const newWaiting = { ...s.waitingRuns, [run.id]: { waitingForConfirm: true, waitingAfterStepIndex: i } }
             return { waitingRuns: newWaiting, ...computeCompat(s.activeRuns, newWaiting) }
           })
-          get().addLog('info', `⏸ [${definition.title}] 等待确认继续第 ${i + 2} 步：${definition.steps[i + 1].name}`)
+          get().addLog('info', `[暂停] [${definition.title}] 等待确认继续第 ${i + 2} 步：${definition.steps[i + 1].name}`)
           await new Promise<void>((resolve) => { continueResolveRefs.set(run.id, resolve) })
           if (context.cancelled) break
           updateRunById(set, run.id, { status: 'running' })
@@ -329,22 +460,46 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           error: errorMsg,
           completedAt: new Date().toISOString(),
         })
-        updateRunById(set, run.id, { status: 'failed' })
-        get().addLog('error', `❌ [${definition.title}] 步骤失败: ${stepDef.name} — ${errorMsg}`)
+        updateRunById(set, run.id, { status: 'failed', error: errorMsg })
+        get().addLog('error', `[失败] [${definition.title}] 步骤: ${stepDef.name} — ${errorMsg}`)
         break
       }
     }
 
     // 检查是否全部完成
-    const finalRun = get().activeRuns.find(r => r.id === run.id)
+    let finalRun = get().activeRuns.find(r => r.id === run.id)
+    if (finalRun?.status === 'cancelling' || context.cancelled) {
+      updateRunById(set, run.id, {
+        status: 'failed',
+        error: '工作流已取消',
+        completedAt: new Date().toISOString(),
+      })
+      finalRun = get().activeRuns.find(r => r.id === run.id)
+    }
+    if (finalRun && finalRun.status === 'running' && !isCurrentWorkflowSession(
+      definition.projectPath,
+      context.projectSession,
+    )) {
+      updateRunById(set, run.id, {
+        status: 'failed',
+        error: '项目会话已切换或失效，未提交工作流完成结果',
+        completedAt: new Date().toISOString(),
+      })
+      finalRun = get().activeRuns.find(r => r.id === run.id)
+    }
     if (finalRun && finalRun.status === 'running') {
+      const projectSession = context.projectSession
       updateRunById(set, run.id, { status: 'completed', completedAt: new Date().toISOString() })
-      get().addLog('info', `🎉 工作流「${definition.title}」已完成`)
+      get().addLog('info', `[完成] 工作流「${definition.title}」已完成`)
 
-      // 通过 EventBus 广播工作流完成事件（替代 window.dispatchEvent）
-      import('../shared/event-bus').then(m => {
-        m.globalEventBus.emit('WORKFLOW_COMPLETE', { type: definition.type })
-      }).catch(() => {})
+      // 同步广播，并且必须发生在 activeRuns 清理之前。
+      // 消费者可用 runId/projectPath 精确识别本次完成，且不会因动态 import 延迟丢失事件。
+      globalEventBus.emit('WORKFLOW_COMPLETE', {
+        type: definition.type,
+        projectPath: definition.projectPath,
+        projectSession,
+        runId: run.id,
+      })
 
       // ===== 执行 onComplete 通知/跳转 =====
       if (definition.onComplete) {
@@ -356,7 +511,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           }
           // silent 模式不做额外操作
         } catch (e) {
-          get().addLog('warn', `⚠️ onComplete 执行失败: ${e}`)
+          get().addLog('warn', `[警告] onComplete 执行失败: ${e}`)
         }
       }
     }
@@ -390,6 +545,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     if (runId) {
       // 取消指定工作流
       const ctx = activeContexts.get(runId)
+      const targetRun = get().activeRuns.find(r => r.id === runId)
+      if (!ctx || !targetRun || targetRun.status === 'completed' || targetRun.status === 'failed') {
+        return
+      }
       if (ctx) {
         ctx.cancelled = true
         ctx.pauseRequested = false
@@ -399,26 +558,25 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       if (resolve) { resolve(); continueResolveRefs.delete(runId) }
       const pauseResolve = pauseResolveRefs.get(runId)
       if (pauseResolve) { pauseResolve(); pauseResolveRefs.delete(runId) }
-      // 移入历史
+      // 保留在活跃列表中，直到当前执行器真正退出。项目切换/清空门禁据此继续生效。
       set(s => {
-        const targetRun = s.activeRuns.find(r => r.id === runId)
-        const newRuns = s.activeRuns.filter(r => r.id !== runId)
         const newWaiting = { ...s.waitingRuns }
         delete newWaiting[runId]
-        const newHistory = targetRun
-          ? [{ ...targetRun, status: 'failed' as const, completedAt: new Date().toISOString() }, ...s.history].slice(0, 50)
-          : s.history
+        const newRuns = s.activeRuns.map(r => r.id === runId
+          ? { ...r, status: 'cancelling' as const, error: '正在取消，等待当前操作安全退出' }
+          : r)
         return {
           activeRuns: newRuns,
-          history: newHistory,
           waitingRuns: newWaiting,
           ...computeCompat(newRuns, newWaiting),
         }
       })
-      get().addLog('warn', '⏹ 工作流已取消')
+      get().addLog('warn', '[取消] 取消请求已提交，等待当前操作安全退出')
     } else {
       // 取消全部
       for (const [id, ctx] of activeContexts) {
+        const run = get().activeRuns.find(item => item.id === id)
+        if (!run || run.status === 'completed' || run.status === 'failed') continue
         ctx.cancelled = true
         ctx.pauseRequested = false
         const resolve = continueResolveRefs.get(id)
@@ -427,19 +585,40 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         if (pauseResolve) { pauseResolve(); pauseResolveRefs.delete(id) }
       }
       set(s => {
-        const cancelledRuns = s.activeRuns.map(r => ({
-          ...r, status: 'failed' as const, completedAt: new Date().toISOString(),
+        const cancellingRuns = s.activeRuns.map(r => ({
+          ...r,
+          ...(r.status === 'completed' || r.status === 'failed'
+            ? {}
+            : {
+                status: 'cancelling' as const,
+                error: '正在取消，等待当前操作安全退出',
+              }),
         }))
         return {
-          activeRuns: [],
+          activeRuns: cancellingRuns,
           waitingRuns: {},
-          history: [...cancelledRuns, ...s.history].slice(0, 50),
-          currentRun: null,
-          waitingForConfirm: false,
-          waitingAfterStepIndex: -1,
+          ...computeCompat(cancellingRuns, {}),
         }
       })
-      get().addLog('warn', '⏹ 所有工作流已取消')
+      get().addLog('warn', '[取消] 所有取消请求已提交，等待当前操作安全退出')
+    }
+  },
+
+  cancelProjectWorkflowsAndWait: async (projectPath, timeoutMs = 30_000) => {
+    const targetIds = get().activeRuns
+      .filter(run => sameProjectPathKey(run.projectPath, projectPath))
+      .map(run => run.id)
+    for (const runId of targetIds) {
+      get().cancelWorkflow(runId)
+    }
+    if (targetIds.length === 0) return
+
+    const deadline = Date.now() + timeoutMs
+    while (get().activeRuns.some(run => sameProjectPathKey(run.projectPath, projectPath))) {
+      if (Date.now() >= deadline) {
+        throw new Error('等待后台任务停止超时，项目保持打开状态')
+      }
+      await new Promise<void>(resolve => setTimeout(resolve, 50))
     }
   },
 
@@ -450,7 +629,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
     context.pauseRequested = true
     updateRunById(set, runId, { pauseRequested: true })
-    get().addLog('info', `⏸ 已请求暂停「${run.title}」，将在当前章节完成后生效`)
+    get().addLog('info', `[暂停] 已请求暂停「${run.title}」，将在当前章节完成后生效`)
   },
 
   resumeWorkflow: (runId) => {

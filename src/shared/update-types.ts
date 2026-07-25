@@ -34,7 +34,7 @@ export type UpdateReminderDelay = 7 | 30
 
 export type UpdateStatus = 'idle' | 'checking' | 'not-available' | 'available' | 'downloading' | 'downloaded' | 'error' | 'disabled'
 
-export type UpdateErrorCode = 'UPDATES_DISABLED' | 'CHECK_FAILED' | 'DOWNLOAD_FAILED' | 'INSTALL_NOT_READY' | 'INSTALL_FAILED' | 'REMINDER_NOT_AVAILABLE' | 'INVALID_REMINDER_DELAY'
+export type UpdateErrorCode = 'UPDATES_DISABLED' | 'CHECK_FAILED' | 'DOWNLOAD_FAILED' | 'INSTALL_NOT_READY' | 'INSTALL_FAILED' | 'REMINDER_NOT_AVAILABLE' | 'REMINDER_SAVE_FAILED' | 'INVALID_REMINDER_DELAY'
 
 export interface UpdateError {
   code: UpdateErrorCode

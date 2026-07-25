@@ -5,6 +5,12 @@ import { clearProjectData, type ClearProjectDataOptions } from '../../services/p
 import { alertError } from '../ui/AlertDialog'
 import { Button } from '../ui/Button'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useProjectStore } from '../../stores/project-store'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+} from '../project-session-gate'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
 
 interface ClearProjectDataDialogProps {
   open: boolean
@@ -53,12 +59,22 @@ export default function ClearProjectDataDialog({
   onClose,
   onCleared,
 }: ClearProjectDataDialogProps) {
+  if (!open) return null
+
+  return <ClearProjectDataDialogContents onClose={onClose} onCleared={onCleared} />
+}
+
+function ClearProjectDataDialogContents({
+  onClose,
+  onCleared,
+}: Omit<ClearProjectDataDialogProps, 'open'>) {
   const [selected, setSelected] = useState<Record<ClearKey, boolean>>({
     creativeFields: true,
     blueprints: true,
     generatedText: true,
   })
-  const [clearing, setClearing] = useState(false)
+  const currentProject = useProjectStore(s => s.currentProject)
+  const [clearingSession, setClearingSession] = useState<ProjectSessionContext | null>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
   const text = useLocaleStore(s => s.text)
 
@@ -66,36 +82,39 @@ export default function ClearProjectDataDialog({
     () => OPTIONS.filter(option => selected[option.key]).length,
     [selected],
   )
+  const clearing = !!clearingSession && isProjectSessionCurrent(clearingSession)
 
   useEffect(() => {
-    if (open) {
-      setSelected({ creativeFields: true, blueprints: true, generatedText: true })
-      setClearing(false)
-      setTimeout(() => cancelRef.current?.focus(), 0)
-    }
-  }, [open])
+    const focusTimer = window.setTimeout(() => cancelRef.current?.focus(), 0)
+    return () => window.clearTimeout(focusTimer)
+  }, [])
 
   useEffect(() => {
-    if (!open) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !clearing) onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [clearing, onClose, open])
-
-  if (!open) return null
+  }, [clearing, onClose])
 
   const handleClear = async () => {
     if (selectedCount === 0) return
-    setClearing(true)
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+
+    setClearingSession(projectSession)
     try {
-      await clearProjectData(selected)
+      await clearProjectData(selected, projectSession)
+      if (!isProjectSessionCurrent(projectSession)) return
       await onCleared?.()
+      if (!isProjectSessionCurrent(projectSession)) return
+      setClearingSession(null)
       onClose()
     } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return
       await alertError(String(error), { title: text('清除失败', 'Clear failed') })
-      setClearing(false)
+      if (!isProjectSessionCurrent(projectSession)) return
+      setClearingSession(null)
     }
   }
 

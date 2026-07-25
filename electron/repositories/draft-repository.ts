@@ -168,6 +168,14 @@ export class DraftRepository {
     static updateStatus(id: number, status: string, wordCount?: number): void {
         const db = getProjectDb()
         if (!db) return
+        const meta = DraftRepository.getMeta(id)
+        if (!meta) return
+        if (meta.status === 'finalized' && status !== 'finalized') {
+            throw new Error('已定稿正文为不可变事实；如需再编辑，请创建新草稿或处理定稿冲突')
+        }
+        if (meta.status !== 'finalized' && status === 'finalized') {
+            throw new Error('定稿必须通过原子定稿提交，不能单独更新草稿状态')
+        }
 
         if (wordCount !== undefined) {
             db.prepare(`
@@ -186,6 +194,9 @@ export class DraftRepository {
     static updateContent(id: number, content: string, wordCount: number): void {
         const meta = DraftRepository.getMeta(id)
         if (!meta) return
+        if (meta.status === 'finalized') {
+            throw new Error('已定稿正文为不可变事实；如需再编辑，请创建新草稿或处理定稿冲突')
+        }
 
         ContentRepository.updateBody(meta.contentId, content)
 

@@ -8,6 +8,17 @@ const baseState = {
 } as const
 
 describe('getUpdatePresentation', () => {
+  it('keeps the update button disabled while an automatic check is running', () => {
+    expect(getUpdatePresentation({
+      state: { ...baseState, status: 'checking' },
+      manualCheckRequested: false,
+    })).toMatchObject({
+      kind: 'hidden',
+      visible: false,
+      canCheck: false,
+    })
+  })
+
   it('keeps automatic checks silent when no update is available or a background failure is reported', () => {
     expect(getUpdatePresentation({
       state: { ...baseState, status: 'not-available' },

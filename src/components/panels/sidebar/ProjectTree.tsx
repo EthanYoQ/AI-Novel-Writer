@@ -20,13 +20,25 @@ import ClearProjectDataDialog from '../../dialogs/ClearProjectDataDialog'
 
 
 
+import { LeafItem } from './SidebarShared'
+import { ARCH_FILES } from './sidebar-arch-files'
 import {
-  ARCH_FILES, LeafItem, renderIcon, showSidebarMenu,
-  openArchFile, openBuiltinEditor,
-} from './SidebarShared'
+  confirmCurrentProjectSession,
+  openArchFile,
+  openBuiltinEditor,
+} from './sidebar-file-openers'
+import { renderIcon } from './sidebar-icons'
+import { showSidebarMenu } from './sidebar-menu'
+import { createProjectArchTabId } from '../../editor/arch-file-refresh-policy'
 import DraftBoxGroup from './DraftBoxGroup'
 import ManuscriptGroup from './ManuscriptGroup'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { LatestRequestGate } from '../../editor/latest-request-gate'
+import { beginProjectTreeIdentityTransition } from './project-tree-refresh-policy'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+} from '../../project-session-gate'
 
 const ARCH_FILE_EN: Record<string, { label: string; desc: string }> = {
   premise: { label: 'Premise', desc: 'Core premise and conflict' },
@@ -37,6 +49,7 @@ const ARCH_FILE_EN: Record<string, { label: string; desc: string }> = {
 
 export default function ProjectTree() {
   const currentProject = useProjectStore(s => s.currentProject)
+  const projectSessionEpoch = useProjectStore(s => s.projectSessionEpoch)
   const text = useLocaleStore(s => s.text)
 
   // refreshFileTree / loadAllDrafts 在 refreshAll 内通过 getState() 调用
@@ -49,28 +62,86 @@ export default function ProjectTree() {
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   // 章节蓝图数量
   const [blueprintCount, setBlueprintCount] = useState<number>(-1)
+  const [refreshing, setRefreshing] = useState(false)
   const [clearDialogOpen, setClearDialogOpen] = useState(false)
+  const refreshRequestGate = useRef(new LatestRequestGate())
 
   /** 统一刷新：文件树 + 架构状态 + 草稿列表 + 蓝图数量 */
   // 用 getState() 获取最新的 action，不作为依赖项，避免重建导致 useEffect 循环
   const refreshAll = useCallback(async () => {
-
-    useProjectStore.getState().refreshFileTree()
-    useDraftStore.getState().loadAllDrafts()
-    // 通过 Service 层获取架构状态和蓝图数量（避免直接 IPC）
-    const { checkArchStatus, getBlueprintCount } = await import('../../../services/architecture-service')
-    const [status, count] = await Promise.all([
-      checkArchStatus(),
-      getBlueprintCount(),
-    ])
-    setArchStatus(status)
-    setBlueprintCount(count)
-  }, [])  // 空依赖：内部用 getState() 获取最新 action，不依赖闭包
+    const projectState = useProjectStore.getState()
+    const projectSession = captureProjectSession(projectState.currentProject)
+    const projectPath = projectSession?.projectPath
+    const expectedProjectSessionEpoch = projectState.projectSessionEpoch
+    if (!projectPath || !projectSession) {
+      refreshRequestGate.current.begin()
+      return
+    }
+    const requestId = refreshRequestGate.current.begin()
+    setRefreshing(true)
+    try {
+      // 通过服务层获取架构状态和蓝图数量（避免直接进行进程通信）
+      const { checkArchStatus, getBlueprintCount } = await import('../../../services/architecture-service')
+      const [, , status, count] = await Promise.all([
+        useProjectStore.getState().refreshFileTree(projectPath, expectedProjectSessionEpoch, projectSession),
+        useDraftStore.getState().loadAllDrafts(projectPath, projectSession),
+        checkArchStatus(projectSession),
+        getBlueprintCount(projectSession),
+      ])
+      if (
+        !refreshRequestGate.current.isLatest(requestId)
+        || !isProjectSessionCurrent(projectSession)
+        || useProjectStore.getState().projectSessionEpoch !== expectedProjectSessionEpoch
+      ) return
+      setArchStatus(status)
+      setBlueprintCount(count)
+    } catch (error) {
+      if (
+        refreshRequestGate.current.isLatest(requestId)
+        && isProjectSessionCurrent(projectSession)
+        && useProjectStore.getState().projectSessionEpoch === expectedProjectSessionEpoch
+      ) {
+        toast.error(text(
+          `项目资源刷新失败：${String(error)}`,
+          `Could not refresh project resources: ${String(error)}`,
+        ))
+      }
+    } finally {
+      if (refreshRequestGate.current.isLatest(requestId)) setRefreshing(false)
+    }
+  }, [text])
 
   // 项目切换时刷新
   useEffect(() => {
-    if (currentProject) refreshAll()
-  }, [currentProject?.path, refreshAll]) // eslint-disable-line react-hooks/exhaustive-deps -- currentProject 对象引用变化不每次都需重跑
+    const transition = beginProjectTreeIdentityTransition(
+      refreshRequestGate.current,
+      currentProject?.path,
+      projectSessionEpoch,
+    )
+    if (!transition.hasProject) {
+      queueMicrotask(() => {
+        if (
+          refreshRequestGate.current.isLatest(transition.requestId)
+          && !useProjectStore.getState().currentProject
+        ) {
+          setArchStatus({})
+          setBlueprintCount(-1)
+          setRefreshing(false)
+          setClearDialogOpen(false)
+        }
+      })
+      return
+    }
+    const projectPath = currentProject!.path
+    queueMicrotask(() => {
+      if (
+        !refreshRequestGate.current.isLatest(transition.requestId)
+        || useProjectStore.getState().currentProject?.path !== projectPath
+        || useProjectStore.getState().projectSessionEpoch !== transition.projectSessionEpoch
+      ) return
+      void refreshAll()
+    })
+  }, [currentProject?.path, projectSessionEpoch, refreshAll]) // eslint-disable-line react-hooks/exhaustive-deps -- currentProject 对象引用变化不每次都需重跑
 
   // 工作流步骤状态或整体状态变化时刷新侧边栏（适配多任务）
   // 合并为单一 effect + 防抖，避免一次步骤完成同时触发多次刷新
@@ -169,7 +240,13 @@ export default function ProjectTree() {
             <Trash2 size={12} />
             {text('清除全部', 'Clear all')}
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => refreshAll()} title={text('刷新', 'Refresh')}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => { void refreshAll() }}
+            title={text('刷新', 'Refresh')}
+            disabled={refreshing}
+          >
             <RefreshCw size={12} />
           </Button>
         </div>
@@ -190,11 +267,18 @@ export default function ProjectTree() {
         badgeDone={configDone}
         onClick={() => {
           const state = useEditorStore.getState()
-          const configTab = state.tabs.find(t => t.type === 'config')
+          const configTab = state.tabs.find(t => (
+            t.type === 'config' && t.projectKey === currentProject?.path
+          ))
           if (configTab) {
             state.setActiveTab(configTab.id)
           } else {
-            state.openFile({ id: 'config', name: '小说配置', type: 'config' })
+            state.openFile({
+              id: 'config',
+              name: '小说配置',
+              type: 'config',
+              projectKey: currentProject?.path,
+            })
           }
         }}
         onContextMenu={e => showSidebarMenu([
@@ -204,9 +288,16 @@ export default function ProjectTree() {
             icon: <FolderOpen size={13} />,
             onClick: () => {
               const state = useEditorStore.getState()
-              const configTab = state.tabs.find(t => t.type === 'config')
+              const configTab = state.tabs.find(t => (
+                t.type === 'config' && t.projectKey === currentProject?.path
+              ))
               if (configTab) state.setActiveTab(configTab.id)
-              else state.openFile({ id: 'config', name: '小说配置', type: 'config' })
+              else state.openFile({
+                id: 'config',
+                name: '小说配置',
+                type: 'config',
+                projectKey: currentProject?.path,
+              })
             },
           },
         ], e)}
@@ -339,25 +430,32 @@ function ArchFileRow({
   const english = ARCH_FILE_EN[f.key] ?? { label: f.label, desc: f.desc }
   const label = text(f.label, english.label)
   const clearArchFile = async () => {
-    const ok = await confirm(text(`确认清空「${f.label}」内容？\n此操作会删除该项故事架构文本，不影响其他架构项、蓝图或正文。`, `Clear “${english.label}”?\nThis removes only this architecture section and preserves the other sections, blueprints, and manuscript.`), {
-      title: text('清空故事架构项', 'Clear architecture section'),
-      confirmText: text('清空', 'Clear'),
-      danger: true,
-    })
-    if (!ok) return
+    const projectSession = await confirmCurrentProjectSession(
+      useProjectStore.getState().currentProject,
+      () => confirm(text(`确认清空「${f.label}」内容？\n此操作会删除该项故事架构文本，不影响其他架构项、蓝图或正文。`, `Clear “${english.label}”?\nThis removes only this architecture section and preserves the other sections, blueprints, and manuscript.`), {
+        title: text('清空故事架构项', 'Clear architecture section'),
+        confirmText: text('清空', 'Clear'),
+        danger: true,
+      }),
+    )
+    if (!projectSession) return
+    const projectKey = projectSession.projectPath
 
     const { writeCoreContent } = await import('../../../services/vela-protocol')
-    const success = await writeCoreContent(filePath, '')
+    const success = await writeCoreContent(filePath, '', projectSession)
+    if (!isProjectSessionCurrent(projectSession)) return
     if (!success) {
       toast.error(text(`清空「${f.label}」失败`, `Could not clear “${english.label}”`))
       return
     }
 
     const store = useEditorStore.getState()
-    store.syncTabContent(filePath, '')
-    store.markTabSaved(filePath)
-    toast.success(text(`已清空「${f.label}」`, `Cleared “${english.label}”`))
+    const tabId = createProjectArchTabId(projectKey, filePath)
+    store.syncTabContent(tabId, '')
+    store.markTabSaved(tabId, '')
     await onCleared()
+    if (!isProjectSessionCurrent(projectSession)) return
+    toast.success(text(`已清空「${f.label}」`, `Cleared “${english.label}”`))
   }
 
   return (

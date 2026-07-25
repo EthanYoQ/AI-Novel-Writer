@@ -36,4 +36,27 @@ describe('Electron main window chrome contract', () => {
     }
     expect(titleBar).not.toContain('最小化窗口由系统标题栏控制')
   })
+
+  it('keeps the official homepage as a fixed trusted intent and prevents renderer navigation', () => {
+    const main = source('electron/main.ts')
+    const ipcHandlers = source('electron/ipc-handlers.ts')
+    const ipcChannels = source('src/shared/ipc-channels.ts')
+
+    expect(ipcHandlers).toContain('registerOfficialHomepageController')
+    expect(ipcChannels).toContain("'official-homepage:open'")
+    expect(main).toContain('setWindowOpenHandler(createOfficialHomepageWindowOpenHandler')
+    expect(main).toContain("on('will-navigate', preventRendererNavigation)")
+  })
+
+  it('runs the packaged vector qualification through the real Electron main process without opening a window', () => {
+    const main = source('electron/main.ts')
+
+    expect(main).toContain("from './services/release-vector-smoke'")
+    expect(main).toContain('releaseVectorSmokeWasRequested(process.argv)')
+    expect(main).toContain('claimReleaseVectorSmokeInvocation(process.argv, process.env)')
+    expect(main).toContain('runReleaseVectorSmoke(releaseVectorSmokeInvocation.token)')
+    expect(main).toContain("process.stdout.write(`${JSON.stringify(evidence)}\\n`)")
+    expect(main).toContain('app.exit(0)')
+    expect(main).toContain('app.exit(1)')
+  })
 })

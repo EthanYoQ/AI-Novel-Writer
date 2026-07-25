@@ -10,9 +10,20 @@
  */
 
 import type { WorkflowDefinition } from '../../stores/workflow-store'
+import { useProjectStore } from '../../stores/project-store'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import {
+  projectSessionContextFromProject,
+  sameProjectPathKey,
+  sameProjectSessionContext,
+} from '../../shared/project-session-context'
 import type { ImportedChapter } from './commands/import-novel.command'
+import { requireWorkflowProjectSession } from './workflow-project-session'
 
 export interface ImportWorkflowParams {
+  projectPath: string
+  /** UI 在异步导入完成前冻结的完整项目会话。 */
+  projectSession: ProjectSessionContext
   /** 拆分后的章节数据 */
   chapters: ImportedChapter[]
 }
@@ -21,9 +32,23 @@ export interface ImportWorkflowParams {
  * 创建导入小说工作流
  */
 export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefinition {
+  const project = useProjectStore.getState().currentProject
+  const currentProjectSession = projectSessionContextFromProject(project)
+  if (
+    !project
+    || !currentProjectSession
+    || !sameProjectPathKey(project.path, params.projectPath)
+    || !sameProjectSessionContext(params.projectSession, currentProjectSession)
+  ) {
+    throw new Error('当前项目已切换，无法启动导入工作流')
+  }
+  // 导入正文 payload 与后处理均属于这个 lease；同路径重新打开也必须失效。
+  const projectSession = Object.freeze({ ...params.projectSession })
   return {
     type: 'novel_import',
     title: `小说拆解与仿写（${params.chapters.length} 章）`,
+    projectPath: params.projectPath,
+    projectSession,
     steps: [
       // ===== 步骤 1: 写入正文 + 构建知识库 =====
       {
@@ -77,27 +102,34 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
       {
         name: '完成后处理',
         description: '刷新项目状态，加载角色卡与蓝图数据',
-        executor: async (_step, _context, callbacks) => {
+        executor: async (_step, context, callbacks) => {
+          const workflowProjectSession = requireWorkflowProjectSession(context)
           callbacks.log('正在刷新项目数据...')
           callbacks.setProgress(30)
 
           // 刷新文件树
-          const { useProjectStore } = await import('../../stores/project-store')
-          await useProjectStore.getState().refreshFileTree()
+          await useProjectStore.getState().refreshFileTree(
+            workflowProjectSession.projectPath,
+            undefined,
+            workflowProjectSession,
+          )
 
           // 加载角色卡
           try {
             const { useCharacterStore } = await import('../../stores/character-store')
-            const project = useProjectStore.getState().currentProject
-            if (project) {
-              await useCharacterStore.getState().loadCharacters(project.path)
-            }
+            await useCharacterStore.getState().loadCharacters(
+              workflowProjectSession.projectPath,
+              workflowProjectSession,
+            )
           } catch { /* 忽略 */ }
 
           // 加载草稿索引
           try {
             const { useDraftStore } = await import('../../stores/draft-store')
-            await useDraftStore.getState().loadAllDrafts()
+            await useDraftStore.getState().loadAllDrafts(
+              workflowProjectSession.projectPath,
+              workflowProjectSession,
+            )
           } catch { /* 忽略 */ }
 
           callbacks.log('小说拆解与仿写准备完成，结构化数据已就位。')

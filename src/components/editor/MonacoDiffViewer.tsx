@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { DiffEditor, type DiffOnMount } from '@monaco-editor/react'
-import { Check, X, Columns2, AlignJustify } from 'lucide-react'
+import { Check, X, Columns2, AlignJustify, ArrowRight } from 'lucide-react'
 import { useThemeStore } from '../../stores/theme-store'
 
 interface MonacoDiffViewerProps {
@@ -79,8 +79,8 @@ export default function MonacoDiffViewer({
           <span className="text-xs font-medium" style={{ color: 'var(--color-text)' }}>
             文本对比
           </span>
-          <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            {originalLabel} → {modifiedLabel}
+          <span className="inline-flex items-center gap-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            {originalLabel}<ArrowRight size={12} aria-hidden="true" />{modifiedLabel}
           </span>
           <span className="text-xs">
             <span style={{ color: 'var(--color-success)' }}>+{stats.additions}</span>

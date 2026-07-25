@@ -34,11 +34,13 @@ export function initProjectDatabase(projectPath: string): void {
 
 /** 关闭项目数据库 */
 export function closeProjectDatabase(): void {
-  if (projectDb) {
-    projectDb.close()
-    projectDb = null
-  }
+  // Clear the process-visible identity before closing the native handle. If
+  // the close itself throws, callers still fail closed instead of treating a
+  // half-closed database as the active project.
+  const closingDatabase = projectDb
+  projectDb = null
   currentProjectPath = null
+  closingDatabase?.close()
 }
 
 /** 获取当前数据库实例 */
@@ -158,6 +160,30 @@ function createTables(db: BetterSqlite3.Database) {
       ON drafts(chapter_number, version);
 
     -- ============================================================
+    -- 5b. finalization_outbox — 定稿实体稿发布投影
+    -- SQLite 中的正文与定稿状态先在同一事务提交；根目录实体稿由此 outbox
+    -- 异步发布，失败保持 pending 并可根据冻结快照精确重试。
+    -- ============================================================
+    CREATE TABLE IF NOT EXISTS finalization_outbox (
+      finalization_id TEXT PRIMARY KEY,
+      draft_id INTEGER NOT NULL UNIQUE,
+      chapter_number INTEGER NOT NULL,
+      chapter_title TEXT NOT NULL DEFAULT '',
+      content_hash TEXT NOT NULL,
+      content_revision INTEGER NOT NULL,
+      content_snapshot TEXT NOT NULL DEFAULT '',
+      target_file_name TEXT NOT NULL,
+      publication_status TEXT NOT NULL DEFAULT 'pending',
+      last_error TEXT NOT NULL DEFAULT '',
+      published_at TEXT DEFAULT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (draft_id) REFERENCES drafts(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_finalization_outbox_status
+      ON finalization_outbox(publication_status);
+
+    -- ============================================================
     -- 6. revisions — 修稿（派生自 draft）
     -- ============================================================
     CREATE TABLE IF NOT EXISTS revisions (
@@ -256,6 +282,29 @@ function createTables(db: BetterSqlite3.Database) {
     -- 索引
     CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls(created_at);
   `)
+
+  // 兼容早期 #23 预览数据库：该表一旦已经存在，CREATE TABLE IF NOT EXISTS
+  // 不会补列。正文快照必须留在 outbox，重试时不能再从可变 contents.body 回读。
+  const outboxColumns = db.prepare('PRAGMA table_info(finalization_outbox)').all() as Array<{ name: string }>
+  const addedContentSnapshotColumn = !outboxColumns.some(column => column.name === 'content_snapshot')
+  if (addedContentSnapshotColumn) {
+    db.exec(`
+      ALTER TABLE finalization_outbox
+      ADD COLUMN content_snapshot TEXT NOT NULL DEFAULT ''
+    `)
+    // 只在本次确实新增列时回填旧行。之后空正文也可能是合法冻结快照，绝不能在
+    // 每次项目重开时又把它替换为可变 contents.body。
+    db.exec(`
+      UPDATE finalization_outbox
+      SET content_snapshot = COALESCE((
+        SELECT contents.body
+        FROM drafts
+        JOIN contents ON contents.id = drafts.content_id
+        WHERE drafts.id = finalization_outbox.draft_id
+      ), '')
+      WHERE content_snapshot = ''
+    `)
+  }
 
   // 兼容旧库：将「无 currentState」的哨兵 0 迁移为 NULL（chapter 0 合法状态不受影响）
   try {

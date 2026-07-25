@@ -16,6 +16,11 @@ import { useProjectStore } from '../../stores/project-store'
 import { readPostProcessStatus, type PostProcessStatus } from '../../services/workflows/workflow-utils'
 import { cn } from '../../lib/utils'
 import { globalEventBus } from '../../shared/event-bus'
+import { sameProjectSessionContext } from '../../shared/project-session-context'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+} from '../project-session-gate'
 
 interface PostProcessStatusPanelProps {
   /** 状态文件 scope 标识，如 'chapter_1_finalize' */
@@ -44,8 +49,10 @@ export function PostProcessStatusPanel({
 
   // 加载状态文件
   const loadStatus = useCallback(async () => {
-    if (!project) return
-    const s = await readPostProcessStatus(project.path, scope)
+    const projectSession = captureProjectSession(project)
+    if (!projectSession) return
+    const s = await readPostProcessStatus(projectSession.projectPath, scope, projectSession)
+    if (!isProjectSessionCurrent(projectSession)) return
     setStatus(s)
     setLoading(false)
   }, [project, scope])
@@ -54,10 +61,11 @@ export function PostProcessStatusPanel({
   useEffect(() => {
     let mounted = true
     const init = async () => {
-      if (!project) return
+      const projectSession = captureProjectSession(project)
+      if (!projectSession) return
       setLoading(true)
-      const s = await readPostProcessStatus(project.path, scope)
-      if (mounted) {
+      const s = await readPostProcessStatus(projectSession.projectPath, scope, projectSession)
+      if (mounted && isProjectSessionCurrent(projectSession)) {
         setStatus(s)
         setLoading(false)
       }
@@ -68,10 +76,18 @@ export function PostProcessStatusPanel({
 
   // 监听 EventBus 事件，自动刷新后处理状态
   useEffect(() => {
-    const unsub1 = globalEventBus.on('FINALIZE_COMPLETE', () => { loadStatus() })
-    const unsub2 = globalEventBus.on('WORKFLOW_COMPLETE', () => { loadStatus() })
+    const matchesCurrentProject = (eventSession: Parameters<typeof sameProjectSessionContext>[0]) => {
+      const projectSession = captureProjectSession(project)
+      return !!projectSession && sameProjectSessionContext(projectSession, eventSession)
+    }
+    const unsub1 = globalEventBus.on('FINALIZE_COMPLETE', ({ projectSession }) => {
+      if (matchesCurrentProject(projectSession)) void loadStatus()
+    })
+    const unsub2 = globalEventBus.on('WORKFLOW_COMPLETE', ({ projectSession }) => {
+      if (matchesCurrentProject(projectSession)) void loadStatus()
+    })
     return () => { unsub1(); unsub2() }
-  }, [loadStatus])
+  }, [loadStatus, project])
 
   // 状态变化时回调给父组件
   useEffect(() => {

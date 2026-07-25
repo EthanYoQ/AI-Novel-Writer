@@ -33,6 +33,11 @@ export interface CharacterData {
     currentState?: CharacterStateData
 }
 
+export interface CharacterRenameData {
+    originalName: string
+    newName: string
+}
+
 function rowToData(row: Record<string, unknown>): CharacterData {
     const data: CharacterData = {
         name: row.name as string,
@@ -168,12 +173,110 @@ export class CharacterRepository {
     }
 
     /** 批量保存角色（事务） */
-    static saveAll(characters: CharacterData[]): void {
+    static saveAll(characters: CharacterData[], renames: CharacterRenameData[] = []): void {
         const db = getProjectDb()
-        if (!db) return
+        if (!db) throw new Error('项目数据库未打开')
 
         const tx = db.transaction(() => {
-            for (const char of characters) {
+            const normalizedCharacters = characters.map(character => ({
+                ...character,
+                name: character.name.trim(),
+            }))
+            const names = normalizedCharacters.map(character => character.name)
+            if (names.some(name => !name)) throw new Error('角色名不能为空')
+            if (new Set(names).size !== names.length) throw new Error('角色名必须唯一')
+
+            const normalizedRenames = renames
+                .map(rename => ({ originalName: rename.originalName, newName: rename.newName.trim() }))
+                .filter(rename => rename.originalName !== rename.newName)
+            if (normalizedRenames.some(rename => !rename.originalName || !rename.newName)) {
+                throw new Error('角色改名的原名和新名不能为空')
+            }
+            const originalNames = normalizedRenames.map(rename => rename.originalName)
+            const targetNames = normalizedRenames.map(rename => rename.newName)
+            if (
+                new Set(originalNames).size !== originalNames.length
+                || new Set(targetNames).size !== targetNames.length
+            ) {
+                throw new Error('角色改名目标必须唯一')
+            }
+
+            for (const rename of normalizedRenames) {
+                const original = db.prepare('SELECT 1 FROM characters WHERE name = ?').get(rename.originalName)
+                if (!original) throw new Error(`角色「${rename.originalName}」不存在，无法改名`)
+                const conflict = db.prepare('SELECT 1 FROM characters WHERE name = ?').get(rename.newName)
+                if (conflict && !originalNames.includes(rename.newName)) {
+                    throw new Error(`角色名「${rename.newName}」已存在`)
+                }
+                if (
+                    !names.includes(rename.newName)
+                    || (!targetNames.includes(rename.originalName) && names.includes(rename.originalName))
+                ) {
+                    throw new Error(`角色改名「${rename.originalName} → ${rename.newName}」与保存内容不一致`)
+                }
+            }
+
+            // 两阶段改名先将全部原名移到事务内临时键，允许 A↔B 交换与
+            // A→B、C→A 等链式改名，同时避免 SQLite 主键唯一约束中途冲突。
+            const temporaryRenames = normalizedRenames.map((rename, index) => {
+                let temporaryName = `__vela_rename_${Date.now()}_${index}__`
+                while (
+                    names.includes(temporaryName)
+                    || targetNames.includes(temporaryName)
+                    || db.prepare('SELECT 1 FROM characters WHERE name = ?').get(temporaryName)
+                ) {
+                    temporaryName += '_'
+                }
+                return { ...rename, temporaryName }
+            })
+            for (const rename of temporaryRenames) {
+                db.prepare(`
+                    UPDATE characters
+                    SET name = ?, updated_at = datetime('now')
+                    WHERE name = ?
+                `).run(rename.temporaryName, rename.originalName)
+            }
+            for (const rename of temporaryRenames) {
+                db.prepare(`
+                    UPDATE characters
+                    SET name = ?, updated_at = datetime('now')
+                    WHERE name = ?
+                `).run(rename.newName, rename.temporaryName)
+            }
+
+            if (normalizedRenames.length > 0) {
+                const renameByOriginal = new Map(
+                    normalizedRenames.map(rename => [rename.originalName, rename.newName]),
+                )
+                const blueprints = db.prepare(
+                    'SELECT chapter_number, characters FROM blueprints'
+                ).all() as Array<{ chapter_number: number; characters: string }>
+                const updateBlueprint = db.prepare(`
+                    UPDATE blueprints
+                    SET characters = ?, updated_at = datetime('now')
+                    WHERE chapter_number = ?
+                `)
+                for (const blueprint of blueprints) {
+                    let characterNames: unknown
+                    try {
+                        characterNames = JSON.parse(blueprint.characters)
+                    } catch {
+                        throw new Error(`第 ${blueprint.chapter_number} 章蓝图角色列表损坏`)
+                    }
+                    if (
+                        !Array.isArray(characterNames)
+                        || !characterNames.every(name => typeof name === 'string')
+                    ) {
+                        throw new Error(`第 ${blueprint.chapter_number} 章蓝图角色列表格式错误`)
+                    }
+                    const renamed = characterNames.map(name => renameByOriginal.get(name) ?? name)
+                    if (renamed.some((name, index) => name !== characterNames[index])) {
+                        updateBlueprint.run(JSON.stringify(renamed), blueprint.chapter_number)
+                    }
+                }
+            }
+
+            for (const char of normalizedCharacters) {
                 CharacterRepository.upsert(char)
             }
         })

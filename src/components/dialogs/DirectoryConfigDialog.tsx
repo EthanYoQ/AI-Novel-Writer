@@ -12,6 +12,10 @@ import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
 import { Textarea } from '../ui/Textarea'
 import type { DirectoryWorkflowParams } from '../../services/workflows/directory-workflow'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+} from '../project-session-gate'
 
 interface Props {
   isOpen: boolean
@@ -43,6 +47,14 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   const total = currentProject.novelConfig.totalChapters
 
   const handleConfirm = () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) {
+      toast.warning(text(
+        '项目会话已切换，已取消生成蓝图。',
+        'The project session changed, so blueprint generation was cancelled.',
+      ))
+      return
+    }
     // 防重复：同类型工作流正在运行
     if (isBatchRunning) {
       toast.warning(text('已有蓝图生成任务正在执行，请等待完成后再试', 'A blueprint generation task is already running. Please wait for it to finish.'))
@@ -81,6 +93,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
       params = { mode: 'append', startChapter: start, count: Math.max(1, end - start + 1) }
     }
 
+    if (!isProjectSessionCurrent(projectSession)) return
     onConfirm({ ...params, pacingGuidance: pacingGuidance.trim() || undefined })
     onClose()
     toast.info(text('已提交：正在生成章节蓝图...', 'Submitted: generating chapter blueprints...'))

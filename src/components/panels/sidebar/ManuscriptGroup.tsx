@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react'
 import { ChevronRight, ChevronDown, FileText, FolderOpen, Copy, PenTool, Trash2 } from 'lucide-react'
-import type { FileNode } from '../../../shared/ipc-channels'
+import type { FileNode, ProjectSessionContext } from '../../../shared/ipc-channels'
 import { ipc } from '../../../services/ipc-client'
 import { useProjectStore } from '../../../stores/project-store'
 import { useDraftStore } from '../../../stores/draft-store'
@@ -13,22 +13,15 @@ import { confirm } from '../../ui/Confirm'
 import { toast } from '../../ui/Toast'
 import { globalEventBus } from '../../../shared/event-bus'
 import { useLocaleStore } from '../../../stores/locale-store'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+  isProjectSessionPath,
+} from '../../project-session-gate'
 
-import { showSidebarMenu, openChapterFile } from './SidebarShared'
-
-// ===== 章节标题缓存 =====
-
-/** 章节标题内存缓存：path → 显示名（进程内常驻，避免大量重复 IPC 读取） */
-export const chapterTitleCache = new Map<string, string>()
-
-/** 清除特定文件的章节标题缓存 */
-export function clearChapterTitleCache(filePath?: string) {
-  if (filePath) {
-    chapterTitleCache.delete(filePath)
-  } else {
-    chapterTitleCache.clear()
-  }
-}
+import { openChapterFile } from './sidebar-file-openers'
+import { showSidebarMenu } from './sidebar-menu'
+import { chapterTitleCache, clearChapterTitleCache } from './manuscript-title-cache'
 
 /**
  * 优先从蓝图 JSON 读取章节标题，fallback 到文件首行
@@ -37,20 +30,30 @@ export function clearChapterTitleCache(filePath?: string) {
  * @param fallback    兜底显示名（如 "第1章"）
  * @param chapterNumber 章节号（用于定位蓝图文件）
  */
-async function readChapterTitle(filePath: string, fallback: string, chapterNumber?: number): Promise<string> {
-  if (chapterTitleCache.has(filePath)) return chapterTitleCache.get(filePath)!
+async function readChapterTitle(
+  filePath: string,
+  fallback: string,
+  projectSession: ProjectSessionContext,
+  chapterNumber?: number,
+): Promise<string | null> {
+  if (!isProjectSessionCurrent(projectSession)) return null
+  const cacheKey = `${projectSession.projectPath}\u0000${filePath}`
+  if (chapterTitleCache.has(cacheKey)) return chapterTitleCache.get(cacheKey)!
 
   // 优先从蓝图 JSON 读取标题
   if (chapterNumber) {
     try {
-      const project = useProjectStore.getState().currentProject
-      if (project) {
-        const bpResult = await ipc.invoke('db:blueprint-get', chapterNumber)
-        if (bpResult) {
-          const display = `第${chapterNumber}章 ${bpResult.title}`
-          chapterTitleCache.set(filePath, display)
-          return display
-        }
+      const bpResult = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:blueprint-get',
+        chapterNumber,
+        projectSession.projectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return null
+      if (bpResult) {
+        const display = `第${chapterNumber}章 ${bpResult.title}`
+        chapterTitleCache.set(cacheKey, display)
+        return display
       }
     } catch { /* 蓝图读取失败时 fallback 到文件首行 */ }
   }
@@ -59,26 +62,34 @@ async function readChapterTitle(filePath: string, fallback: string, chapterNumbe
   let fileContent = ''
   if (filePath.startsWith('vela://')) {
     const { readVelaContent } = await import('../../../services/vela-protocol')
-    fileContent = await readVelaContent(filePath)
+    fileContent = await readVelaContent(filePath, projectSession)
   } else {
-    const result = await ipc.invoke('fs:read-file', filePath)
+    const result = await ipc.invokeWithProjectSession(
+      projectSession,
+      'fs:read-file',
+      filePath,
+      projectSession.projectPath,
+    )
     if (result.success) fileContent = result.content
   }
+
+  if (!isProjectSessionCurrent(projectSession)) return null
 
   if (!fileContent) return fallback
   const firstLine = fileContent.split('\n').find((l: string) => l.trim())
   if (!firstLine) return fallback
   const title = firstLine.replace(/^#+\s*/, '').trim()
   const display = title || fallback
-  chapterTitleCache.set(filePath, display)
+  chapterTitleCache.set(cacheKey, display)
   return display
 }
 
 // ===== 正文章节组件 =====
 
-export default function ManuscriptGroup({ files }: { files: FileNode[]; projectPath: string }) {
+export default function ManuscriptGroup({ files, projectPath }: { files: FileNode[]; projectPath: string }) {
   const [open, setOpen] = useState(true)
   const text = useLocaleStore(s => s.text)
+  const currentProject = useProjectStore(s => s.currentProject)
   // 文件路径 → 显示名称的映射（异步加载）
   const [titleMap, setTitleMap] = useState<Record<string, string>>({})
 
@@ -86,6 +97,8 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
   const filesDep = files.map(f => f.path).join(',')
   useEffect(() => {
     if (files.length === 0) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectPath)) return
     let cancelled = false
     const load = async () => {
       // 只读取当前 state 中还没有的路径（增量更新，避免重复 IPC 调用）
@@ -98,14 +111,21 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
           const chMatch = rawName.match(/^chapter_(\d+)$/)
           const fallback = chMatch ? text(`第${parseInt(chMatch[1], 10)}章`, `Chapter ${parseInt(chMatch[1], 10)}`) : rawName
           const chNum = chMatch ? parseInt(chMatch[1], 10) : undefined
-          entries[f.path] = await readChapterTitle(f.path, fallback, chNum)
+          try {
+            const title = await readChapterTitle(f.path, fallback, projectSession, chNum)
+            if (title !== null) entries[f.path] = title
+          } catch {
+            // 读取失败时保留界面上的兜底名称；不把失败当成空正文或缓存结果。
+          }
         })
       )
-      if (!cancelled) setTitleMap(prev => ({ ...prev, ...entries }))
+      if (!cancelled && isProjectSessionCurrent(projectSession)) {
+        setTitleMap(prev => ({ ...prev, ...entries }))
+      }
     }
-    load()
+    void load()
     return () => { cancelled = true }
-  }, [files, filesDep, titleMap, text])
+  }, [files, filesDep, projectPath, titleMap, text, currentProject])
 
   const getDisplay = (f: FileNode) => {
     if (titleMap[f.path]) return titleMap[f.path]
@@ -118,6 +138,8 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
   const chapterFiles = files.filter(f => !f.name.includes('_notes'))
 
   const deleteManuscriptChapter = async (filePath: string, displayName: string) => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectPath)) return
     const match = filePath.match(/^vela:\/\/manuscript\/(\d+)$/)
     if (!match) {
       toast.error(text('当前章节路径不支持直接删除', 'This chapter path cannot be deleted directly.'))
@@ -129,20 +151,33 @@ export default function ManuscriptGroup({ files }: { files: FileNode[]; projectP
       confirmText: text('删除', 'Delete'),
       danger: true,
     })
-    if (!ok) return
+    if (!ok || !isProjectSessionCurrent(projectSession)) return
 
-    const result = await ipc.invoke('db:draft-delete', Number(match[1]))
+    const result = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-delete',
+      Number(match[1]),
+      projectPath,
+    )
+    if (!isProjectSessionCurrent(projectSession)) return
     if (!result.success) {
       toast.error(text(`删除失败\n\n${result.error ?? '未知错误'}`, `Delete failed\n\n${result.error ?? 'Unknown error'}`))
       return
     }
 
     const editor = useEditorStore.getState()
-    const tab = editor.tabs.find(t => t.id === filePath || t.filePath === filePath)
+    const tab = editor.tabs.find(t =>
+      t.projectKey === projectPath && (t.id === filePath || t.filePath === filePath)
+    )
     if (tab) editor.closeTab(tab.id)
     clearChapterTitleCache(filePath)
-    await useDraftStore.getState().loadAllDrafts()
-    globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts', 'fileTree'] })
+    await useDraftStore.getState().loadAllDrafts(projectPath, projectSession)
+    if (!isProjectSessionCurrent(projectSession)) return
+    globalEventBus.emit('REFRESH_RESOURCE', {
+      resources: ['drafts', 'fileTree'],
+      projectPath,
+      projectSession,
+    })
     toast.success(text(`已删除正文「${displayName}」`, `Deleted manuscript “${displayName}”`))
   }
 

@@ -14,6 +14,8 @@ export function getUpdateErrorMessage(code: UpdateErrorCode | undefined, text: U
       return text('无法启动更新安装。请稍后再试。', 'The update installer could not be started. Please try again later.')
     case 'REMINDER_NOT_AVAILABLE':
       return text('当前没有可延后的更新提醒。', 'There is no update reminder to postpone right now.')
+    case 'REMINDER_SAVE_FAILED':
+      return text('无法保存提醒时间，请检查配置目录后重试。', 'Could not save the reminder. Check the configuration folder and try again.')
     case 'INVALID_REMINDER_DELAY':
       return text('提醒时间无效，请重新选择。', 'That reminder period is unavailable. Please choose again.')
     case 'CHECK_FAILED':

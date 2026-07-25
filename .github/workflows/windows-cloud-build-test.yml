@@ -1,0 +1,111 @@
+name: Windows cloud package qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-cloud-build-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package-and-qualify:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      AI_NOVEL_PREVIOUS_PORTABLE_ZIP: ${{ runner.temp }}\AI-Novel-Writer-0.2.5-windows-x64.zip
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: 11.11.0
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download verified v0.2.5 portable migration input
+        shell: pwsh
+        run: |
+          $portableUrl = 'https://github.com/EthanYoQ/AI-Novel-Writer/releases/download/v0.2.5/AI-Novel-Writer-0.2.5-windows-x64.zip'
+          $expectedSha256 = '22b38b7337a456882bf130ccb898f17616fffb85d6c8b8b3d0ee431409f18531'
+          Invoke-WebRequest -Uri $portableUrl -OutFile $env:AI_NOVEL_PREVIOUS_PORTABLE_ZIP
+          $actualSha256 = (Get-FileHash -LiteralPath $env:AI_NOVEL_PREVIOUS_PORTABLE_ZIP -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "v0.2.5 portable ZIP SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
+          }
+
+      - name: Run complete Windows release gate
+        shell: pwsh
+        run: pnpm run build:win
+
+      - name: Record verified toolchain
+        if: ${{ success() }}
+        shell: pwsh
+        run: |
+          $pnpmVersion = (pnpm --version).Trim()
+          if ($pnpmVersion -ne '11.11.0') {
+            throw "Expected pnpm 11.11.0, got $pnpmVersion"
+          }
+          $nodeVersion = (node --version).Trim().TrimStart('v')
+          if ($nodeVersion -ne '22.23.1') {
+            throw "Expected Node 22.23.1, got $nodeVersion"
+          }
+          "AI_NOVEL_CLOUD_BUILD_PNPM_VERSION=$pnpmVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Generate reproducibility manifest
+        if: ${{ success() }}
+        shell: pwsh
+        run: node scripts/generate-cloud-build-manifest.mjs
+
+      - name: Collect Windows build diagnostics
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $diagnosticsRoot = Join-Path $env:RUNNER_TEMP 'ai-novel-cloud-build-diagnostics'
+          New-Item -ItemType Directory -Path $diagnosticsRoot -Force | Out-Null
+          @(
+            "commit=$env:GITHUB_SHA"
+            "node=$(node --version)"
+            "pnpm=$(pnpm --version)"
+            "runnerImage=$env:ImageOS $env:ImageVersion"
+          ) | Set-Content -LiteralPath (Join-Path $diagnosticsRoot 'environment.txt') -Encoding utf8
+          Get-ChildItem -Path ([System.IO.Path]::GetTempPath()) -Directory -Filter 'ai-novel-release-gate-*' -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $diagnosticsRoot $_.Name) -Recurse -Force -ErrorAction Continue
+          }
+
+      - name: Upload runtime-verified Windows package
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-cloud-build-runtime-verified
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            release/*/ai-novel-writer-setup-*.exe
+            release/*/ai-novel-writer-setup-*.exe.blockmap
+            release/*/latest.yml
+            release/*/manifest.json
+            release/*/SHA256SUMS.txt
+            release/*/qualification/packaged-vector-smoke.json
+
+      - name: Upload Windows build diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-cloud-build-diagnostics
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}\ai-novel-cloud-build-diagnostics

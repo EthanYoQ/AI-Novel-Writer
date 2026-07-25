@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { useProjectStore } from '../../../stores/project-store'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 
 export const readArchitectureTool = buildAgentTool({
@@ -20,16 +20,14 @@ export const readArchitectureTool = buildAgentTool({
     },
   },
   requiresConfirmation: false,
-  execute: async (args) => {
-    const project = useProjectStore.getState().currentProject
-    if (!project) {
-      return { success: false, content: '', error: '没有打开的项目' }
-    }
+  execute: async (args, context) => {
+    const { project, projectSession } = requireAgentProject(context)
 
     const fileName = args.file_name as string | undefined
 
     try {
-      const core = await ipc.invoke('db:project-core-get')
+      const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', project.path)
+      assertAgentProjectCurrent(context)
       if (!core) {
         return { success: false, content: '', error: '项目架构未初始化' }
       }

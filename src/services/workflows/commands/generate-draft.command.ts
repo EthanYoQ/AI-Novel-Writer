@@ -3,7 +3,10 @@ import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
-import { searchKB } from '../../knowledge-service'
+import { unwrapKnowledgeValue } from '../../knowledge-service'
+import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
+import type { ProjectSessionContext } from '../../../shared/ipc-channels'
+import { requireWorkflowProjectSession } from '../workflow-project-session'
 import {
   DIR_PROMPTS
 } from '../../../shared/project-paths'
@@ -45,20 +48,28 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const expectedProjectPath = this.chapterInfo.projectPath
+    const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
-    if (!project) throw new Error('未打开项目')
+    if (!project || !sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(project),
+    )) {
+      throw new Error('当前项目已切换，章节生成已停止')
+    }
+    const novelConfig = Object.freeze({ ...project.novelConfig })
 
     callbacks.log('拼装章节上下文 (强类型注入中)...')
 
-    const architecture = await this.readArchitecture(project.path)
-    const projectPrompts = await this.readProjectPrompts(project.path)
-    const mergedGuidance = [project.novelConfig.globalGuidance || '', projectPrompts].filter(Boolean).join('\n\n')
+    const architecture = await this.readArchitecture(expectedProjectPath, projectSession)
+    const projectPrompts = await this.readProjectPrompts(expectedProjectPath, projectSession)
+    const mergedGuidance = [novelConfig.globalGuidance || '', projectPrompts].filter(Boolean).join('\n\n')
 
-    const characterState = await this.readCharacterStates(project.path)
+    const characterState = await this.readCharacterStates(expectedProjectPath, projectSession)
     let futureBlueprintsStr = '（无后续蓝图）'
     try {
       const { loadDirectoryBlueprints } = await import('../directory-workflow')
-      const allBlueprints = await loadDirectoryBlueprints()
+      const allBlueprints = await loadDirectoryBlueprints(expectedProjectPath, projectSession)
       const futureBlueprintsArr = allBlueprints.filter(
         b => b.chapterNumber > this.chapterInfo.chapterNumber && b.chapterNumber <= this.chapterInfo.chapterNumber + 5
       )
@@ -69,7 +80,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
     const isFirstChapter = this.chapterInfo.chapterNumber === 1
     const templateKey = isFirstChapter ? 'first_chapter_draft' : 'next_chapter_draft'
-    const template = getPromptTemplate(templateKey)
+    const template = getPromptTemplate(templateKey, projectSession)
     if (!template) throw new Error(`未找到模板: ${templateKey}`)
 
     // ==========================================
@@ -80,21 +91,21 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       // ---- 缓存命中区（跨章稳定，前缀对齐）----
       .withArchitecture(architecture)
       .withGlobalGuidance(mergedGuidance)
-      .withWritingStyle(project.novelConfig.writingStyle || '')
-      .withNovelConfig(project.novelConfig)
-      .withWordNumber(project.novelConfig.wordsPerChapter)
+      .withWritingStyle(novelConfig.writingStyle || '')
+      .withNovelConfig(novelConfig)
+      .withWordNumber(novelConfig.wordsPerChapter)
 
     if (!isFirstChapter) {
       // 从蓝图 JSON 的 notes 字段读取章节要点时间线（按序拼装，利于前缀缓存）
-      const chapterTimeline = await this.readChapterNotesTimeline(project.path, this.chapterInfo.chapterNumber)
+      const chapterTimeline = await this.readChapterNotesTimeline(expectedProjectPath, this.chapterInfo.chapterNumber, projectSession)
       callbacks.log(`  📋 已加载章节要点时间线（${chapterTimeline.length} 字）`)
 
       let previousEnding = ''
       try {
         const prevNum = this.chapterInfo.chapterNumber - 1
-        const meta = await ipc.invoke('db:draft-get-finalized', prevNum)
+        const meta = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-finalized', prevNum, expectedProjectPath)
         if (meta) {
-          const full = await ipc.invoke('db:draft-get-full', meta.id)
+          const full = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', meta.id, expectedProjectPath)
           if (full?.content) previousEnding = full.content.slice(-1000)
         }
       } catch { /* 忽略 */ }
@@ -107,7 +118,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           searchQuery += ` ${this.chapterInfo.knowledgeQueryHint.trim()}`
           callbacks.log(`  📌 追加用户检索关键词：${this.chapterInfo.knowledgeQueryHint.trim()}`)
         }
-        const results = await searchKB(searchQuery, 5)
+        const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
+          projectSession,
+          'kb:search',
+          searchQuery,
+          5,
+          expectedProjectPath,
+        ))
         filteredContext = results.length > 0
           ? results.map((r: { fileName: string; score: number; text: string }, i: number) => `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`).join('\n\n')
           : '（知识库中无相关内容）'
@@ -138,12 +155,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
     callbacks.log('调用 AI 生成章节草稿...')
 
-    const targetChars = Math.max(0, Number(project.novelConfig.wordsPerChapter) || 0)
+    const targetChars = Math.max(0, Number(novelConfig.wordsPerChapter) || 0)
     const draftText = await this.callLLMWithBuilder(promptBuilder, callbacks, {
       maxTokens: this.getDraftMaxTokens(targetChars),
       temperature: 0.88,
       thinking: false,
-    })
+    }, context)
+    this.assertNotCancelled(context)
     const cleanDraftText = await this.extendDraftIfNeeded({
       initialDraft: sanitizeDraftText(this.stripThinkingTags(draftText)),
       targetChars,
@@ -153,18 +171,36 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       chapterInfo: this.chapterInfo,
       futureBlueprints: futureBlueprintsStr,
       globalGuidance: mergedGuidance,
-      writingStyle: project.novelConfig.writingStyle || '',
+      writingStyle: novelConfig.writingStyle || '',
     })
+    this.assertNotCancelled(context)
 
     // 落于数据库
-    const nextVersion: number = await ipc.invoke('db:draft-next-version', this.chapterInfo.chapterNumber)
-    const createResult = await ipc.invoke('db:draft-create', {
+    if (!sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(useProjectStore.getState().currentProject),
+    )) {
+      throw new Error('当前项目已切换，已拒绝保存章节草稿')
+    }
+    this.assertNotCancelled(context)
+    const nextVersion: number = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-next-version',
+      this.chapterInfo.chapterNumber,
+      expectedProjectPath,
+    )
+    this.assertNotCancelled(context)
+    const createResult = await ipc.invokeWithProjectSession(projectSession, 'db:draft-create', {
       chapterNumber: this.chapterInfo.chapterNumber,
       version: nextVersion,
       source: 'write',
       content: cleanDraftText,
       wordCount: cleanDraftText.length,
-    })
+    }, expectedProjectPath)
+    if (!createResult.success || !createResult.id) {
+      throw new Error(createResult.error || '章节草稿保存失败')
+    }
+    this.assertNotCancelled(context)
 
     const pseudoPath = createResult.id ? `vela://draft/${createResult.id}` : `vela://draft/ch${this.chapterInfo.chapterNumber}/v${nextVersion}`
 
@@ -176,13 +212,17 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     context.data.mergedGuidance = mergedGuidance
     context.data.shortSummary = ''
 
-    useProjectStore.getState().refreshFileTree()
+    await useProjectStore.getState().refreshFileTree(expectedProjectPath, undefined, projectSession)
     try {
       const { useDraftStore } = await import('../../../stores/draft-store')
-      await useDraftStore.getState().loadAllDrafts()
+      await useDraftStore.getState().loadAllDrafts(expectedProjectPath, projectSession)
     } catch { /* 忽略 */ }
 
     try {
+      if (!sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(useProjectStore.getState().currentProject),
+      )) throw new Error('当前项目已切换，已拒绝打开旧草稿')
       const { useEditorStore } = await import('../../../stores/editor-store')
       useEditorStore.getState().openFile({
         id: pseudoPath,
@@ -190,6 +230,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         type: 'chapter',
         filePath: pseudoPath,
         content: cleanDraftText,
+        savedContent: cleanDraftText,
+        projectKey: expectedProjectPath,
       })
     } catch { /* 忽略 */ }
 
@@ -261,6 +303,7 @@ ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
         { maxTokens: this.getDraftMaxTokens(params.targetChars), temperature: 0.88, thinking: false },
         params.context
       )
+      this.assertNotCancelled(params.context)
       const beforeChars = countChineseDraftChars(draft)
       draft = sanitizeDraftText(`${draft}\n\n${sanitizeDraftText(this.stripThinkingTags(addition))}`)
       const afterChars = countChineseDraftChars(draft)
@@ -274,9 +317,8 @@ ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
   }
 
   // --- 抽取自原文件的辅助方法 ---
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private async readArchitecture(_projectPath: string): Promise<string> {
-    const core = await ipc.invoke('db:project-core-get')
+  private async readArchitecture(projectPath: string, projectSession: ProjectSessionContext): Promise<string> {
+    const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath)
     const parts: string[] = []
     if (core?.premise) parts.push(core.premise.trim())
     if (core?.charactersArch) parts.push(core.charactersArch.trim())
@@ -285,14 +327,19 @@ ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
     return parts.join('\n\n---\n\n')
   }
 
-  private async readProjectPrompts(projectPath: string): Promise<string> {
+  private async readProjectPrompts(projectPath: string, projectSession: ProjectSessionContext): Promise<string> {
     try {
-      const files = await ipc.invoke('fs:list-dir', `${projectPath}/${DIR_PROMPTS}`)
+      const files = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:list-dir',
+        `${projectPath}/${DIR_PROMPTS}`,
+        projectPath,
+      )
       const mdFiles = files.filter((f: { isDir: boolean; name: string }) => !f.isDir && f.name.endsWith('.md'))
       if (mdFiles.length === 0) return ''
       const parts: string[] = []
       for (const f of mdFiles) {
-        const result = await ipc.invoke('fs:read-file', f.path)
+        const result = await ipc.invokeWithProjectSession(projectSession, 'fs:read-file', f.path, projectPath)
         if (result.success && result.content.trim()) {
           parts.push(`## 项目专属指导（${f.name.replace(/\.md$/, '')}）\n${result.content.trim()}`)
         }
@@ -301,10 +348,9 @@ ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
     } catch { return '' }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private async readCharacterStates(_projectPath: string): Promise<string> {
+  private async readCharacterStates(projectPath: string, projectSession: ProjectSessionContext): Promise<string> {
     try {
-      const allChars = await ipc.invoke('db:character-get-all')
+      const allChars = await ipc.invokeWithProjectSession(projectSession, 'db:character-get-all', projectPath)
       const states: string[] = []
       for (const card of allChars) {
         if (card.name && card.currentState) {
@@ -329,14 +375,18 @@ ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
    * 近 5 章完整收录；更早期仅保留标题行，控制总量 ≤ 3000 字。
    * 按序拼装保证前缀稳定，最大化 LLM 上下文缓存命中。
    */
-  private async readChapterNotesTimeline(_projectPath: string, currentChapter: number): Promise<string> {
+  private async readChapterNotesTimeline(
+    projectPath: string,
+    currentChapter: number,
+    projectSession: ProjectSessionContext,
+  ): Promise<string> {
     const FULL_WINDOW = 5  // 近 N 章完整收录
     const MAX_CHARS = 3000 // 总量上限
     const lines: string[] = []
 
     for (let i = 1; i < currentChapter; i++) {
       try {
-        const bp = await ipc.invoke('db:blueprint-get', i)
+        const bp = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', i, projectPath)
         if (!bp) continue
         const isRecent = i >= currentChapter - FULL_WINDOW
 

@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { countChineseDraftChars, sanitizeDraftText } from '../generate-draft.command'
+import { useProjectStore } from '../../../../stores/project-store'
+import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
+import { GenerateDraftCommand, countChineseDraftChars, sanitizeDraftText } from '../generate-draft.command'
 
 describe('generate draft command text cleanup', () => {
   it('removes thinking residue and continue UI prompts from draft text', () => {
@@ -44,5 +46,84 @@ ${repeated}`)
     expect(text).toContain('林岚已经写下第一段正文')
     expect(text).toContain('周砚推门走进监控室')
     expect(text).not.toContain('</think>')
+  })
+})
+
+describe('GenerateDraftCommand cancellation boundary', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    useProjectStore.setState({ currentProject: null })
+  })
+
+  it('does not query a version or persist a draft after the main LLM request is cancelled', async () => {
+    const projectPath = 'C:\\novels\\A'
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:project-core-get') {
+        return { premise: '故事前提', charactersArch: '', worldbuilding: '', synopsis: '' }
+      }
+      if (channel === 'fs:list-dir' || channel === 'db:character-get-all' || channel === 'db:blueprint-get-all') {
+        return []
+      }
+      throw new Error(`unexpected IPC write/read: ${channel}`)
+    })
+    vi.stubGlobal('window', {
+      velaAPI: {
+        invoke,
+        on: vi.fn(),
+        once: vi.fn(),
+        send: vi.fn(),
+        setZoomLevel: vi.fn(),
+        setZoomFactor: vi.fn(),
+        getZoomLevel: vi.fn(),
+      },
+    })
+    useProjectStore.setState({
+      currentProject: {
+        id: 'main',
+        name: 'A',
+        path: projectPath,
+        sessionLease: 'lease-main',
+        novelConfig: {
+          totalChapters: 10,
+          wordsPerChapter: 3000,
+        },
+      } as never,
+    })
+    const context: WorkflowContext = {
+      runId: 'draft-cancel',
+      projectPath,
+      projectSession: { projectId: 'main', leaseId: 'lease-main', projectPath },
+      data: {},
+      cancelled: false,
+    }
+    const callbacks: StepCallbacks = {
+      log: vi.fn(),
+      setProgress: vi.fn(),
+      appendText: vi.fn(),
+    }
+    let resolveLlm: ((value: string) => void) | undefined
+    const command = new GenerateDraftCommand({
+      projectPath,
+      chapterNumber: 1,
+      title: '第一章',
+      role: '开端',
+      purpose: '建立冲突',
+      keyEvents: '开端',
+      characters: [],
+    })
+    vi.spyOn(
+      command as unknown as { callLLMWithBuilder: () => Promise<string> },
+      'callLLMWithBuilder',
+    ).mockImplementation(() => new Promise<string>((resolve) => { resolveLlm = resolve }))
+
+    const execution = command.execute({ step: {}, context, callbacks })
+    await vi.waitFor(() => expect(resolveLlm).toBeTypeOf('function'))
+    context.cancelled = true
+    resolveLlm!('不应保存的正文')
+
+    await expect(execution).rejects.toThrow('工作流已取消')
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-next-version', expect.anything(), expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   })
 })

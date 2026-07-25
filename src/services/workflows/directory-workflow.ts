@@ -1,8 +1,15 @@
 import type { WorkflowDefinition } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import {
+  projectSessionContextFromProject,
+  sameProjectPathKey,
+  sameProjectSessionContext,
+} from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
 import type { BlueprintData } from '../../../electron/repositories/blueprint-repository'
 import { stripThinkingTags } from './workflow-utils'
+import { requireWorkflowProjectSession } from './workflow-project-session'
 
 // ==========================================
 // 1. 结构与类型导出 (保留对外的向后兼容)
@@ -29,6 +36,15 @@ export interface DirectoryWorkflowParams {
   count?: number
   /** 节奏/风格指导（可选） */
   pacingGuidance?: string
+}
+
+export interface DirectoryWorkflowProjectSnapshot {
+  expectedProjectPath: string
+  novelConfig: Readonly<{
+    totalChapters: number
+    globalGuidance?: string
+    genre?: string
+  }>
 }
 
 // ==========================================
@@ -141,13 +157,12 @@ export function assertBlueprintCoverage(
   }
 }
 
-export async function loadDirectoryBlueprints(): Promise<ChapterBlueprint[]> {
-  try {
-    const blueprints = await ipc.invoke('db:blueprint-get-all')
-    return blueprints.sort((a, b) => a.chapterNumber - b.chapterNumber)
-  } catch {
-    return []
-  }
+export async function loadDirectoryBlueprints(
+  expectedProjectPath: string,
+  projectSession: ProjectSessionContext,
+): Promise<ChapterBlueprint[]> {
+  const blueprints = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get-all', expectedProjectPath)
+  return blueprints.sort((a, b) => a.chapterNumber - b.chapterNumber)
 }
 
 function assertIpcSuccess(result: { success: boolean; error?: string }, action: string): void {
@@ -156,26 +171,37 @@ function assertIpcSuccess(result: { success: boolean; error?: string }, action: 
   }
 }
 
-export async function saveChapterBlueprint(blueprint: ChapterBlueprint): Promise<void> {
-  const result = await ipc.invoke('db:blueprint-upsert', blueprint)
+export async function saveChapterBlueprint(
+  blueprint: ChapterBlueprint,
+  expectedProjectPath: string,
+  projectSession: ProjectSessionContext,
+): Promise<void> {
+  const result = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-upsert', blueprint, expectedProjectPath)
   assertIpcSuccess(result, '保存章节蓝图')
 }
 
-export async function saveAllBlueprints(blueprints: ChapterBlueprint[]): Promise<void> {
-  const result = await ipc.invoke('db:blueprint-upsert-many', blueprints)
+export async function saveAllBlueprints(
+  blueprints: ChapterBlueprint[],
+  expectedProjectPath: string,
+  projectSession: ProjectSessionContext,
+): Promise<void> {
+  const result = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-upsert-many', blueprints, expectedProjectPath)
   assertIpcSuccess(result, '保存章节蓝图')
 }
 
 export async function verifyBlueprintsPersisted(
   blueprints: ChapterBlueprint[],
+  expectedProjectPath: string,
   expectedRange?: { startChapter: number; endChapter: number },
+  projectSession?: ProjectSessionContext,
 ): Promise<void> {
+  if (!projectSession) throw new Error('验证章节蓝图时缺少冻结项目会话')
   if (expectedRange) {
     assertBlueprintCoverage(blueprints, expectedRange.startChapter, expectedRange.endChapter)
   }
 
   for (const blueprint of blueprints) {
-    const saved = await ipc.invoke('db:blueprint-get', blueprint.chapterNumber)
+    const saved = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', blueprint.chapterNumber, expectedProjectPath)
     if (!saved) {
       throw new Error(`蓝图保存后验证失败：第 ${blueprint.chapterNumber} 章未写入数据库`)
     }
@@ -191,9 +217,12 @@ export async function verifyBlueprintsPersisted(
   }
 }
 
-export async function getBlueprintCount(): Promise<number> {
+export async function getBlueprintCount(
+  expectedProjectPath: string,
+  projectSession: ProjectSessionContext,
+): Promise<number> {
   try {
-    const blueprints = await ipc.invoke('db:blueprint-get-all')
+    const blueprints = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get-all', expectedProjectPath)
     return blueprints.length
   } catch {
     return 0
@@ -204,20 +233,48 @@ export async function getBlueprintCount(): Promise<number> {
 // 3. 工作流定义映射工厂 (Command 调度层)
 // ==========================================
 
-export function createDirectoryWorkflow(params: DirectoryWorkflowParams = { mode: 'full' }): WorkflowDefinition {
+export function createDirectoryWorkflow(
+  params: DirectoryWorkflowParams,
+  expectedProjectPath: string,
+  sourceProjectSession: ProjectSessionContext,
+): WorkflowDefinition {
+  const projectAtStart = useProjectStore.getState().currentProject
+  const currentProjectSession = projectSessionContextFromProject(projectAtStart)
+  if (
+    !projectAtStart
+    || !currentProjectSession
+    || !sameProjectPathKey(projectAtStart.path, expectedProjectPath)
+    || !sameProjectSessionContext(sourceProjectSession, currentProjectSession)
+  ) {
+    throw new Error('项目已切换，无法启动章节蓝图生成')
+  }
+  const projectSession = Object.freeze({ ...sourceProjectSession })
+  const projectSnapshot: DirectoryWorkflowProjectSnapshot = {
+    expectedProjectPath,
+    novelConfig: {
+      totalChapters: projectAtStart.novelConfig.totalChapters,
+      globalGuidance: projectAtStart.novelConfig.globalGuidance,
+      genre: projectAtStart.novelConfig.genre,
+    },
+  }
+
   return {
     type: 'directory',
-    title: params.mode === 'append' ? `📋 续写章节蓝图${params.startChapter ? `（从第 ${params.startChapter} 章）` : ''}` : '📋 生成章节蓝图（全量）',
+      title: params.mode === 'append' ? `续写章节蓝图${params.startChapter ? `（从第 ${params.startChapter} 章）` : ''}` : '生成章节蓝图（全量）',
+    projectPath: expectedProjectPath,
+    projectSession,
     steps: [
       {
         name: '读取架构',
         description: `从 SQLite 加载项目架构信息`,
         executor: async (_step, context, callbacks) => {
-          const project = useProjectStore.getState().currentProject
-          if (!project) throw new Error('未打开项目')
-
           callbacks.log('读取项目架构信息...')
-          const core = await ipc.invoke('db:project-core-get')
+          const projectSession = requireWorkflowProjectSession(context)
+          const core = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:project-core-get',
+            expectedProjectPath,
+          )
           if (!core) throw new Error('项目核心数据未初始化')
 
           const parts: string[] = []
@@ -232,7 +289,7 @@ export function createDirectoryWorkflow(params: DirectoryWorkflowParams = { mode
           // 注入节奏指导到 context，供 Command 读取
           if (params.pacingGuidance) context.data.pacingGuidance = params.pacingGuidance
           if (params.mode === 'append') {
-            const existing = await loadDirectoryBlueprints()
+            const existing = await loadDirectoryBlueprints(expectedProjectPath, projectSession)
             context.data.existingBlueprints = existing
             callbacks.log(`已加载 ${existing.length} 章已有蓝图`)
           }
@@ -244,7 +301,7 @@ export function createDirectoryWorkflow(params: DirectoryWorkflowParams = { mode
         description: '基于架构文件生成全书章节蓝图',
         executor: async (_step, context, callbacks) => {
           const { GenerateDirectoryCommand } = await import('./commands/directory.command')
-          const cmd = new GenerateDirectoryCommand(params)
+          const cmd = new GenerateDirectoryCommand(params, projectSnapshot)
           const blueprints = await cmd.execute({ step: _step, context, callbacks })
           // 返回可读摘要字符串（step.result 必须是 string，否则 AIOutputPanel 渲染会崩溃）
           return `已生成 ${blueprints.length} 章蓝图`
@@ -254,11 +311,9 @@ export function createDirectoryWorkflow(params: DirectoryWorkflowParams = { mode
         name: '保存蓝图',
         description: `将章节蓝图批量写入 SQLite 数据库`,
         executor: async (_step, context, callbacks) => {
-          const project = useProjectStore.getState().currentProject
-          if (!project) throw new Error('未打开项目')
-
+          const projectSession = requireWorkflowProjectSession(context)
           const newBlueprints = context.data.newBlueprints as ChapterBlueprint[]
-          const existingBlueprints = context.data.existingBlueprints as ChapterBlueprint[]
+          const existingBlueprints = (context.data.existingBlueprints || []) as ChapterBlueprint[]
 
           callbacks.log('保存蓝图到数据库...')
 
@@ -273,15 +328,28 @@ export function createDirectoryWorkflow(params: DirectoryWorkflowParams = { mode
             merged = Array.from(existingMap.values()).sort((a, b) => a.chapterNumber - b.chapterNumber)
           }
 
-          await saveAllBlueprints(merged)
-          useProjectStore.getState().refreshFileTree()
+          await saveAllBlueprints(merged, expectedProjectPath, projectSession)
+          if (sameProjectSessionContext(
+            projectSession,
+            projectSessionContextFromProject(useProjectStore.getState().currentProject),
+          )) {
+            try {
+              await useProjectStore.getState().refreshFileTree(
+                expectedProjectPath,
+                undefined,
+                projectSession,
+              )
+            } catch (error) {
+              callbacks.log(`文件树刷新失败，可稍后手动刷新：${String(error)}`)
+            }
+          }
           return '已保存蓝图'
         },
       },
     ],
     onComplete: {
       mode: 'silent',
-      message: params.mode === 'append' ? '✅ 续写蓝图生成完成' : '✅ 全书章节蓝图已生成完成！',
+      message: params.mode === 'append' ? '续写蓝图生成完成' : '全书章节蓝图已生成完成。',
     },
   }
 }
