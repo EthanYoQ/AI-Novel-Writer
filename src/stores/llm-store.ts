@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { ipc } from '../services/ipc-client'
+import { requireIpcSuccess } from '../services/ipc-result'
+import { alertError } from '../components/ui/AlertDialog'
 import type { ModelProfile, LLMResponse, TokenUsage } from '../shared/ipc-channels'
 
 /** 流式生成的回调 */
@@ -31,9 +33,9 @@ interface LLMState {
   /** 删除模型 */
   deleteModel: (modelId: string) => Promise<boolean>
   /** 设置默认生成模型（持久化到 ~/.vela/config.json） */
-  setDefaultModel: (modelId: string) => void
+  setDefaultModel: (modelId: string) => Promise<boolean>
   /** 设置默认向量模型（持久化到 ~/.vela/config.json） */
-  setDefaultEmbeddingModel: (modelId: string) => void
+  setDefaultEmbeddingModel: (modelId: string) => Promise<boolean>
   /** 非流式生成 */
   generate: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
@@ -85,36 +87,49 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     const result = await ipc.invoke('llm:save-model', model)
     if (result.success) {
       await get().loadModels()
+    } else {
+      alertError('保存模型失败', { title: '模型设置保存失败' })
     }
     return result.success
   },
 
   deleteModel: async (modelId) => {
     const result = await ipc.invoke('llm:delete-model', modelId)
-    if (result.success) {
-      await get().loadModels()
-      // 如果删除的是默认生成模型，清空默认
-      if (get().defaultModelId === modelId) {
-        set({ defaultModelId: null })
-        ipc.invoke('llm:set-default-model', null)
-      }
-      // 如果删除的是默认向量模型，清空默认
-      if (get().defaultEmbeddingModelId === modelId) {
-        set({ defaultEmbeddingModelId: null })
-        ipc.invoke('llm:set-default-embedding-model', null)
-      }
+    if (!result.success) {
+      alertError(result.error || '删除模型失败', { title: '模型删除失败' })
+      return false
     }
-    return result.success
+    await get().loadModels()
+    set({
+      defaultModelId: result.defaultModelId ?? null,
+      defaultEmbeddingModelId: result.defaultEmbeddingModelId ?? null,
+    })
+    return true
   },
 
-  setDefaultModel: (modelId) => {
-    set({ defaultModelId: modelId })
-    ipc.invoke('llm:set-default-model', modelId)
+  setDefaultModel: async (modelId) => {
+    try {
+      requireIpcSuccess(await ipc.invoke('llm:set-default-model', modelId), '保存默认模型')
+      set({ defaultModelId: modelId })
+      return true
+    } catch (error) {
+      alertError(String(error), { title: '模型设置保存失败' })
+      return false
+    }
   },
 
-  setDefaultEmbeddingModel: (modelId) => {
-    set({ defaultEmbeddingModelId: modelId })
-    ipc.invoke('llm:set-default-embedding-model', modelId)
+  setDefaultEmbeddingModel: async (modelId) => {
+    try {
+      requireIpcSuccess(
+        await ipc.invoke('llm:set-default-embedding-model', modelId),
+        '保存默认向量模型',
+      )
+      set({ defaultEmbeddingModelId: modelId })
+      return true
+    } catch (error) {
+      alertError(String(error), { title: '模型设置保存失败' })
+      return false
+    }
   },
 
   generate: async (messages, modelId, options) => {

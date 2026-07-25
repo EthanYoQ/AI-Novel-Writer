@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { useProjectStore } from '../../../stores/project-store'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 
 export const readCharactersTool = buildAgentTool({
@@ -20,16 +20,14 @@ export const readCharactersTool = buildAgentTool({
     },
   },
   requiresConfirmation: false,
-  execute: async (args) => {
-    const project = useProjectStore.getState().currentProject
-    if (!project) {
-      return { success: false, content: '', error: '没有打开的项目' }
-    }
+  execute: async (args, context) => {
+    const { project, projectSession } = requireAgentProject(context)
 
     const charName = args.character_name as string | undefined
 
     try {
-      const charsResult = await ipc.invoke('db:character-get-all')
+      const charsResult = await ipc.invokeWithProjectSession(projectSession, 'db:character-get-all', project.path)
+      assertAgentProjectCurrent(context)
       const chars = (Array.isArray(charsResult) ? charsResult : []) as unknown as Array<Record<string, unknown>>
       if (!chars || chars.length === 0) {
         return { success: true, content: '⚠️ 角色池为空，暂无角色卡。建议先创建角色卡。' }

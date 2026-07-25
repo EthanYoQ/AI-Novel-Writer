@@ -1,8 +1,9 @@
 /**
  * start_workflow — 触发创作工作流
  */
-import { buildAgentTool } from '../tool-registry'
+import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { useLayoutStore } from '../../../stores/layout-store'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 export const startWorkflowTool = buildAgentTool({
   name: 'start_workflow',
@@ -25,13 +26,15 @@ export const startWorkflowTool = buildAgentTool({
   },
   requiresConfirmation: true,
   isReadOnly: false,
-  execute: async (args) => {
+  execute: async (args, context) => {
     const workflow = args.workflow as string
     const chapterNumber = args.chapter_number as number | undefined
 
     if (!workflow) {
       return { success: false, content: '', error: '缺少 workflow 参数' }
     }
+    const { project, projectSession } = requireAgentProject(context)
+    const projectPath = project.path
 
     // 需要章节号的工作流
     const chapterWorkflows = ['generate_draft', 'review', 'refine', 'finalize']
@@ -41,6 +44,7 @@ export const startWorkflowTool = buildAgentTool({
 
     // 打开右侧面板到 AI 输出视图
     useLayoutStore.getState().openRightPanel('ai-output')
+    assertAgentProjectCurrent(context)
 
     // 注意：实际的工作流触发需要通过 workflow-store
     // 这里返回指导信息，让用户可以从 AI 输出面板操作
@@ -59,7 +63,12 @@ export const startWorkflowTool = buildAgentTool({
     return {
       success: true,
       content: `已切换到 AI 输出面板。请在面板中启动「${displayName}${chapterInfo}」工作流。`,
-      artifacts: [{ type: 'workflow_started', name: `${displayName}${chapterInfo}` }],
+      artifacts: [createToolArtifact({
+        type: 'workflow_started',
+        name: `${displayName}${chapterInfo}`,
+        projectPath,
+        projectSession,
+      })],
     }
   },
 })

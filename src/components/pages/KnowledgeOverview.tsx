@@ -12,12 +12,18 @@ import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
 import { globalEventBus } from '../../shared/event-bus'
 import {
-  loadKBData, getVectorlessCount, searchKB, backfillVectors,
-  clearKnowledgeBase,
-  type KBDocument, type SearchResult, type KBStatsData,
+  unwrapKnowledgeValue,
+  type KBDocument, type SearchResult, type KBStatsData, type VectorRebuildStatus,
 } from '../../services/knowledge-service'
 import { useLocaleStore } from '../../stores/locale-store'
 import { appErrorMessage } from '../../i18n/app-errors'
+import { ipc } from '../../services/ipc-client'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+} from '../project-session-gate'
+import { sameProjectSessionContext } from '../../shared/project-session-context'
+import { getVectorRebuildPresentation } from './knowledge-rebuild-presentation'
 
 /**
  * 知识库概览页面 — LanceDB 向量数据库的管理中心
@@ -30,7 +36,7 @@ export default function KnowledgeOverview() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [topK, setTopK] = useState(10)
-  const [vectorlessCount, setVectorlessCount] = useState(0)
+  const [vectorRebuildStatus, setVectorRebuildStatus] = useState<VectorRebuildStatus | null>(null)
   const [backfilling, setBackfilling] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [loadError, setLoadError] = useState('')
@@ -39,53 +45,93 @@ export default function KnowledgeOverview() {
   const { locale, text } = useLocaleStore()
 
   const loadData = useCallback(async () => {
-    if (!currentProject) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    const expectedProjectPath = projectSession.projectPath
     try {
-      const { documents: docs, stats: s } = await loadKBData()
+      const [documentsResult, statsResult] = await Promise.all([
+        ipc.invokeWithProjectSession(projectSession, 'kb:list-documents', expectedProjectPath),
+        ipc.invokeWithProjectSession(projectSession, 'kb:stats', expectedProjectPath),
+      ])
+      if (!isProjectSessionCurrent(projectSession)) return
+      const docs = unwrapKnowledgeValue(documentsResult)
+      const s = unwrapKnowledgeValue(statsResult)
       setDocuments(docs)
       setStats(s)
       setLoadError('')
     } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return
       setLoadError(appErrorMessage(locale, error))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.path, locale])
+  }, [currentProject, locale])
 
-  const checkVectorless = useCallback(async () => {
-    if (!currentProject) return
+  const loadVectorRebuildStatus = useCallback(async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    const expectedProjectPath = projectSession.projectPath
     try {
-      setVectorlessCount(await getVectorlessCount())
+      const result = await ipc.invokeWithProjectSession(
+        projectSession,
+        'kb:get-vector-rebuild-status',
+        expectedProjectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
+      setVectorRebuildStatus(unwrapKnowledgeValue(result))
     } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return
       setLoadError(appErrorMessage(locale, error))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.path, locale])
+  }, [currentProject, locale])
 
-  useEffect(() => { 
-    loadData()
-    checkVectorless()
-  }, [loadData, checkVectorless])
+  useEffect(() => {
+    let mounted = true
+    Promise.resolve().then(() => {
+      const projectSession = captureProjectSession(currentProject)
+      if (!mounted || !projectSession) return
+      setDocuments([])
+      setStats({ documentCount: 0, totalChunks: 0, vectorDimension: 0 })
+      setSearchResults([])
+      setVectorRebuildStatus(null)
+      setLoadError('')
+      setSearching(false)
+      setBackfilling(false)
+      setClearing(false)
+      loadData()
+      loadVectorRebuildStatus()
+    })
+    return () => { mounted = false }
+  }, [currentProject, loadData, loadVectorRebuildStatus])
 
-  useEffect(() => { checkVectorless() }, [checkVectorless, documents])
+  useEffect(() => {
+    Promise.resolve().then(() => loadVectorRebuildStatus())
+  }, [loadVectorRebuildStatus, documents])
 
   // 通过 EventBus 监听资源刷新和定稿完成事件
   useEffect(() => {
-    const unsub1 = globalEventBus.on('REFRESH_RESOURCE', (payload: { resources: string[] }) => {
-      if (payload.resources.includes('all') || payload.resources.includes('fileTree')) {
+    const unsub1 = globalEventBus.on('REFRESH_RESOURCE', (payload) => {
+      const projectSession = captureProjectSession(currentProject)
+      if (
+        projectSession
+        && sameProjectSessionContext(projectSession, payload.projectSession)
+        && (payload.resources.includes('all') || payload.resources.includes('fileTree'))
+      ) {
         loadData()
-        checkVectorless()
+        loadVectorRebuildStatus()
       }
     })
-    const unsub2 = globalEventBus.on('FINALIZE_COMPLETE', () => {
+    const unsub2 = globalEventBus.on('FINALIZE_COMPLETE', ({ projectSession: eventSession }) => {
+      const projectSession = captureProjectSession(currentProject)
+      if (!projectSession || !sameProjectSessionContext(projectSession, eventSession)) return
       loadData()
-      checkVectorless()
+      loadVectorRebuildStatus()
     })
     return () => { unsub1(); unsub2() }
-  }, [loadData, checkVectorless])
+  }, [currentProject, loadData, loadVectorRebuildStatus])
 
   // 判断检索模式
   const hasVectors = stats.vectorDimension > 0
   const searchMode = hasVectors ? text('混合检索', 'Hybrid search') : text('BM25 全文检索', 'BM25 full-text search')
+  const rebuildPresentation = getVectorRebuildPresentation(vectorRebuildStatus)
 
   if (!currentProject) {
     return (
@@ -112,36 +158,70 @@ export default function KnowledgeOverview() {
 
   /** 语义检索 */
   const handleSearch = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    const expectedProjectPath = projectSession.projectPath
     setSearching(true)
     try {
-      const results = await searchKB(searchQuery, topK)
-      setSearchResults(results)
+      const result = await ipc.invokeWithProjectSession(
+        projectSession,
+        'kb:search',
+        searchQuery,
+        topK,
+        expectedProjectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
+      setSearchResults(unwrapKnowledgeValue(result))
     } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return
       toast.error(appErrorMessage(locale, error))
+    } finally {
+      if (isProjectSessionCurrent(projectSession)) {
+        setSearching(false)
+      }
     }
-    setSearching(false)
   }
 
   /** 向量回填 */
   const handleBackfill = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    const expectedProjectPath = projectSession.projectPath
     setBackfilling(true)
     try {
-      const result = await backfillVectors()
+      const result = await ipc.invokeWithProjectSession(
+        projectSession,
+        'kb:backfill-vectors',
+        expectedProjectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
       if (result.success) {
-        toast.success(text(`向量索引重建完成：已处理 ${result.processed} 块${result.failed > 0 ? `，${result.failed} 块失败` : ''}`, `Vector index rebuilt: ${result.processed} chunks processed${result.failed > 0 ? `, ${result.failed} failed` : ''}`))
+        toast.success(result.processed === 0
+          ? text('向量索引检查完成，当前模型无需重建', 'Vector index check complete; the current model does not need a rebuild')
+          : text(`向量索引重建完成：已处理 ${result.processed} 块${result.failed > 0 ? `，${result.failed} 块失败` : ''}`, `Vector index rebuilt: ${result.processed} chunks processed${result.failed > 0 ? `, ${result.failed} failed` : ''}`))
       } else {
         toast.error(result.error || text('向量回填失败', 'Vector backfill failed'))
       }
     } catch (e) {
+      if (!isProjectSessionCurrent(projectSession)) return
       toast.error(appErrorMessage(locale, e))
     } finally {
-      setBackfilling(false)
-      globalEventBus.emit('REFRESH_RESOURCE', { resources: ['all'] })
+      if (isProjectSessionCurrent(projectSession)) {
+        setBackfilling(false)
+        globalEventBus.emit('REFRESH_RESOURCE', {
+          resources: ['all'],
+          projectPath: expectedProjectPath,
+          projectSession,
+        })
+      }
     }
   }
 
   /** 清空当前项目知识库 */
   const handleClearKnowledgeBase = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    const expectedProjectPath = projectSession.projectPath
     const ok = await confirm(
       text('确认清空当前项目的全部知识库内容？\n此操作会删除已导入的知识文档与切片，不会删除项目正文、蓝图或故事架构。', 'Clear the entire knowledge base for this project?\nImported documents and chunks will be deleted. Manuscripts, blueprints, and story architecture are preserved.'),
       {
@@ -151,24 +231,40 @@ export default function KnowledgeOverview() {
       },
     )
     if (!ok) return
+    if (!isProjectSessionCurrent(projectSession)) {
+      toast.error(text('项目已切换，本次清空操作已取消', 'The project changed, so the clear operation was cancelled'))
+      return
+    }
 
     setClearing(true)
     try {
-      const result = await clearKnowledgeBase()
+      const result = await ipc.invokeWithProjectSession(
+        projectSession,
+        'kb:clear-all',
+        expectedProjectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
       if (result.success) {
         setDocuments([])
         setStats({ documentCount: 0, totalChunks: 0, vectorDimension: 0 })
         setSearchResults([])
-        setVectorlessCount(0)
-        globalEventBus.emit('REFRESH_RESOURCE', { resources: ['all'] })
+        setVectorRebuildStatus(null)
+        globalEventBus.emit('REFRESH_RESOURCE', {
+          resources: ['all'],
+          projectPath: expectedProjectPath,
+          projectSession,
+        })
         toast.success(text('知识库已清空', 'Knowledge base cleared'))
       } else {
         toast.error(result.error || text('清空知识库失败', 'Could not clear the knowledge base'))
       }
     } catch (e) {
+      if (!isProjectSessionCurrent(projectSession)) return
       toast.error(appErrorMessage(locale, e))
     } finally {
-      setClearing(false)
+      if (isProjectSessionCurrent(projectSession)) {
+        setClearing(false)
+      }
     }
   }
 
@@ -227,41 +323,79 @@ export default function KnowledgeOverview() {
           />
         </div>
 
-        {/* ===== 向量回填卡片 ===== */}
-        {vectorlessCount > 0 && (
+        {/* ===== 向量检查与重建卡片 ===== */}
+        {rebuildPresentation && (
           <div
-            className="rounded-xl border border-amber-500/20 mb-6 overflow-hidden"
-            style={{ backgroundColor: 'rgba(245, 158, 11, 0.06)' }}
+            className={cn(
+              'rounded-xl border mb-6 overflow-hidden',
+              rebuildPresentation.kind === 'missing-vectors'
+                ? 'border-amber-500/20'
+                : 'border-blue-500/20',
+            )}
+            style={{
+              backgroundColor: rebuildPresentation.kind === 'missing-vectors'
+                ? 'rgba(245, 158, 11, 0.06)'
+                : 'rgba(59, 130, 246, 0.06)',
+            }}
           >
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-amber-500/15 flex items-center justify-center">
-                  <Zap size={16} className="text-amber-400" />
+                <div className={cn(
+                  'w-8 h-8 rounded-lg flex items-center justify-center',
+                  rebuildPresentation.kind === 'missing-vectors' ? 'bg-amber-500/15' : 'bg-blue-500/15',
+                )}>
+                  <Zap size={16} className={rebuildPresentation.kind === 'missing-vectors' ? 'text-amber-400' : 'text-blue-400'} />
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-amber-300">{text('向量索引待升级', 'Vector index upgrade available')}</div>
-                  <div className="text-[0.7rem] text-amber-400/70">
-                    {text(`${vectorlessCount} 个文本块尚未生成向量嵌入，升级后可启用语义检索增强`, `${vectorlessCount} text chunks do not have embeddings. Rebuild the index to enable enhanced semantic retrieval.`)}
+                  <div className={cn(
+                    'text-sm font-medium',
+                    rebuildPresentation.kind === 'missing-vectors' ? 'text-amber-300' : 'text-blue-300',
+                  )}>
+                    {text(rebuildPresentation.title.zhCN, rebuildPresentation.title.enUS)}
+                  </div>
+                  <div className={cn(
+                    'text-[0.7rem]',
+                    rebuildPresentation.kind === 'missing-vectors' ? 'text-amber-400/70' : 'text-blue-400/70',
+                  )}>
+                    {rebuildPresentation.kind === 'missing-vectors'
+                      ? text(
+                          `${vectorRebuildStatus!.vectorlessCount} 个文本块尚未生成向量嵌入；检查后会安全补全或重建索引。`,
+                          `${vectorRebuildStatus!.vectorlessCount} text chunks have no embeddings. The check safely completes or rebuilds the index.`,
+                        )
+                      : text(
+                          `将用一条本地文本块检查当前模型的实际向量维度；如维度变化，会先完整建立新索引，再切换检索。当前索引为 ${vectorRebuildStatus!.activeVectorDimension || 'FTS'}。`,
+                          `One local text chunk checks the current model's actual vector dimension. If it changed, a complete new index is built before search switches. Current index: ${vectorRebuildStatus!.activeVectorDimension || 'FTS'}.`,
+                        )}
                   </div>
                 </div>
               </div>
               <Button
                 variant="outline"
-                className="text-xs border-amber-500/30 text-amber-400 hover:bg-amber-500/20"
+                className={cn(
+                  'text-xs',
+                  rebuildPresentation.kind === 'missing-vectors'
+                    ? 'border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
+                    : 'border-blue-500/30 text-blue-400 hover:bg-blue-500/20',
+                )}
                 onClick={handleBackfill}
                 disabled={backfilling}
               >
                 {backfilling ? (
-                  <><RefreshCw size={12} className="animate-spin mr-1.5" />{text('重建中...', 'Rebuilding...')}</>
+                  <><RefreshCw size={12} className="animate-spin mr-1.5" />{text('检查与重建中...', 'Checking and rebuilding...')}</>
                 ) : (
-                  <>{text('重建向量索引', 'Rebuild vector index')}</>
+                  <>{text(rebuildPresentation.action.zhCN, rebuildPresentation.action.enUS)}</>
                 )}
               </Button>
             </div>
             {/* 进度条（回填时显示） */}
             {backfilling && (
-              <div className="h-1 w-full bg-amber-500/10">
-                <div className="h-full bg-gradient-to-r from-amber-500 to-amber-300 animate-pulse rounded-full w-full" />
+              <div className={cn('h-1 w-full', rebuildPresentation.kind === 'missing-vectors' ? 'bg-amber-500/10' : 'bg-blue-500/10')}>
+                <div className={cn(
+                  'h-full animate-pulse rounded-full w-full',
+                  rebuildPresentation.kind === 'missing-vectors'
+                    ? 'bg-gradient-to-r from-amber-500 to-amber-300'
+                    : 'bg-gradient-to-r from-blue-500 to-blue-300',
+                )} />
               </div>
             )}
           </div>

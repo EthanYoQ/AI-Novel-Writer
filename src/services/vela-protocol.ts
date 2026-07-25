@@ -5,6 +5,7 @@
  * 新增架构字段或路径协议时只需修改此文件。
  */
 
+import type { ProjectSessionContext } from '../shared/ipc-channels'
 import { ipc } from './ipc-client'
 
 // ===== vela://core/ 架构字段映射 =====
@@ -25,10 +26,17 @@ export function parseCoreField(velaPath: string): string | null {
 }
 
 /** 从 DB 读取 vela://core/ 路径对应的内容 */
-export async function readCoreContent(velaPath: string): Promise<string> {
+export async function readCoreContent(
+    velaPath: string,
+    projectSession: ProjectSessionContext,
+): Promise<string> {
     const key = velaPath.replace('vela://core/', '')
-    const core = await ipc.invoke('db:project-core-get')
-    if (!core) return ''
+    const core = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:project-core-get',
+        projectSession.projectPath,
+    )
+    if (!core) throw new Error('无法读取故事架构内容')
     const fieldMap: Record<string, string> = {
         premise: core.premise || '',
         worldbuilding: core.worldbuilding || '',
@@ -39,38 +47,68 @@ export async function readCoreContent(velaPath: string): Promise<string> {
 }
 
 /** 将内容写入 vela://core/ 对应的 DB 字段 */
-export async function writeCoreContent(velaPath: string, content: string): Promise<boolean> {
+export async function writeCoreContent(
+    velaPath: string,
+    content: string,
+    projectSession: ProjectSessionContext,
+): Promise<boolean> {
     const dbField = parseCoreField(velaPath)
     if (!dbField) return false
-    const res = await ipc.invoke('db:project-core-update', { [dbField]: content })
-    return res.success !== false
+    const res = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:project-core-update',
+        { [dbField]: content },
+        projectSession.projectPath,
+    )
+    return res.success === true
 }
 
 // ===== vela://draft/ | vela://revision/ | vela://review/ 内容读取 =====
 
 /** 读取 vela:// 伪协议路径的内容（统一入口） */
-export async function readVelaContent(filePath: string): Promise<string> {
+export async function readVelaContent(
+    filePath: string,
+    projectSession: ProjectSessionContext,
+): Promise<string> {
     if (filePath.startsWith('vela://draft/') || filePath.startsWith('vela://manuscript/')) {
         const prefix = filePath.startsWith('vela://draft/') ? 'vela://draft/' : 'vela://manuscript/'
         const draftId = parseInt(filePath.replace(prefix, ''))
-        const full = await ipc.invoke('db:draft-get-full', draftId)
-        return full?.content ?? ''
+        const full = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:draft-get-full',
+            draftId,
+            projectSession.projectPath,
+        )
+        if (!full) throw new Error('虚拟草稿不存在或无法读取')
+        return full.content
     }
 
     if (filePath.startsWith('vela://revision/')) {
         const revId = parseInt(filePath.replace('vela://revision/', ''))
-        const full = await ipc.invoke('db:revision-get-full', revId)
-        return full?.content ?? ''
+        const full = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:revision-get-full',
+            revId,
+            projectSession.projectPath,
+        )
+        if (!full) throw new Error('虚拟修稿不存在或无法读取')
+        return full.content
     }
 
     if (filePath.startsWith('vela://review/')) {
         const revId = parseInt(filePath.replace('vela://review/', ''))
-        const full = await ipc.invoke('db:review-get-full', revId)
-        return full?.content ?? ''
+        const full = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:review-get-full',
+            revId,
+            projectSession.projectPath,
+        )
+        if (!full) throw new Error('虚拟审稿不存在或无法读取')
+        return full.content
     }
 
     if (filePath.startsWith('vela://core/')) {
-        return readCoreContent(filePath)
+        return readCoreContent(filePath, projectSession)
     }
 
     console.warn('[readVelaContent] 不支持的路径协议:', filePath)

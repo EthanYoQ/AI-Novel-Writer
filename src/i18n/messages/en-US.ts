@@ -14,6 +14,7 @@ export const enUS = {
   'language.settingLabel': 'Application language',
   'language.switch': 'Switch interface language',
   'error.knowledgeBaseNativeUnavailable': 'The knowledge base is unavailable because its Windows native component could not be loaded. Reinstall or download the complete release package.',
+  'error.legacyVectorMigrationBlocked': 'Legacy knowledge-base data must be repaired before continuing. Fix vectors.json in the project, then try again.',
   'error.projectNotOpen': 'Open a project first.',
   'error.embeddingModelNotConfigured': 'Configure an embedding model first.',
   'error.unknown': 'Something went wrong: {message}',

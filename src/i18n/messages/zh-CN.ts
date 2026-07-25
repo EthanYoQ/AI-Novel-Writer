@@ -16,6 +16,7 @@ export const zhCN = {
   'language.settingLabel': '应用语言',
   'language.switch': '切换界面语言',
   'error.knowledgeBaseNativeUnavailable': '知识库不可用：Windows 原生组件加载失败。请重新安装或下载完整发布包。',
+  'error.legacyVectorMigrationBlocked': '旧版知识库数据需要先修复后才能继续。请修正项目中的 vectors.json，然后重试。',
   'error.projectNotOpen': '请先打开项目。',
   'error.embeddingModelNotConfigured': '请先配置向量模型。',
   'error.unknown': '发生错误：{message}',

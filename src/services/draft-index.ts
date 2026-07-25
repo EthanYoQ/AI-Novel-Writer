@@ -5,6 +5,7 @@
  * 保留原有函数名和数据接口结构，以便减少对 UI 层 (DraftEditor) 的破坏性修改。
  */
 import { ipc } from './ipc-client'
+import { requireIpcSuccess } from './ipc-result'
 import type { DraftStatus } from '../shared/draft-status'
 
 // 导入后端的类型定义
@@ -94,8 +95,8 @@ function mapReviewEntry(dbMeta: DB_ReviewMeta, baseVersion: number): ReviewEntry
 }
 
 // Helper: 查出 draftId
-async function getDraftId(chapterNumber: number, version: number): Promise<number | null> {
-  const drafts = await ipc.invoke('db:draft-list', chapterNumber)
+async function getDraftId(chapterNumber: number, version: number, expectedProjectPath: string): Promise<number | null> {
+  const drafts = await ipc.invoke('db:draft-list', chapterNumber, expectedProjectPath)
   const match = drafts.find((d: DB_DraftMeta) => d.version === version)
   return match?.id ?? null
 }
@@ -116,6 +117,7 @@ export async function updateDraftStatus(
   chapterDir: string,
   version: number,
   status: DraftStatus,
+  expectedProjectPath: string,
   wordCount?: number,
 ): Promise<void> {
   // 从 chapterDir 倒推 chapterNumber（假设格式为 .../chNNN）
@@ -123,39 +125,45 @@ export async function updateDraftStatus(
   if (!match) return
   const chapterNumber = parseInt(match[1])
 
-  const draftId = await getDraftId(chapterNumber, version)
+  const draftId = await getDraftId(chapterNumber, version, expectedProjectPath)
   if (!draftId) return
 
-  await ipc.invoke('db:draft-update-status', draftId, status, wordCount)
+  requireIpcSuccess(
+    await ipc.invoke('db:draft-update-status', draftId, status, wordCount, expectedProjectPath),
+    '更新草稿状态',
+  )
 
   if (status === 'finalized') {
     // DB 并没有自动把其他草稿归档，这里我们可以手动查出其他同章并归档
-    const list = await ipc.invoke('db:draft-list', chapterNumber)
+    const list = await ipc.invoke('db:draft-list', chapterNumber, expectedProjectPath)
     for (const d of list as DB_DraftMeta[]) {
       if (d.version !== version && (d.status === 'draft' || d.status === 'revised')) {
-        await ipc.invoke('db:draft-update-status', d.id, 'archived')
+        requireIpcSuccess(
+          await ipc.invoke('db:draft-update-status', d.id, 'archived', undefined, expectedProjectPath),
+          '归档旧草稿',
+        )
       }
     }
   }
 }
 
-export async function getNextDraftVersion(chapterDir: string): Promise<number> {
+export async function getNextDraftVersion(chapterDir: string, expectedProjectPath: string): Promise<number> {
   const match = chapterDir.match(/ch(\d+)$/)
   if (!match) return 1
   const chapterNumber = parseInt(match[1])
 
-  return await ipc.invoke('db:draft-next-version', chapterNumber)
+  return await ipc.invoke('db:draft-next-version', chapterNumber, expectedProjectPath)
 }
 
-export async function getDraftMeta(chapterDir: string, version: number): Promise<DraftMeta | null> {
+export async function getDraftMeta(chapterDir: string, version: number, expectedProjectPath: string): Promise<DraftMeta | null> {
   const match = chapterDir.match(/ch(\d+)$/)
   if (!match) return null
   const chapterNumber = parseInt(match[1])
 
-  const draftId = await getDraftId(chapterNumber, version)
+  const draftId = await getDraftId(chapterNumber, version, expectedProjectPath)
   if (!draftId) return null
 
-  const dbMeta: DB_DraftMeta | null = await ipc.invoke('db:draft-get-meta', draftId)
+  const dbMeta: DB_DraftMeta | null = await ipc.invoke('db:draft-get-meta', draftId, expectedProjectPath)
   if (!dbMeta) return null
   return mapDraftMeta(dbMeta)
 }
@@ -164,29 +172,30 @@ export async function getDraftMeta(chapterDir: string, version: number): Promise
 // 修稿操作
 // ==========================================
 
-export async function getNextRevisionIndex(chapterDir: string, baseVersion: number): Promise<number> {
+export async function getNextRevisionIndex(chapterDir: string, baseVersion: number, expectedProjectPath: string): Promise<number> {
   const match = chapterDir.match(/ch(\d+)$/)
   if (!match) return 1
   const chapterNumber = parseInt(match[1])
 
-  const draftId = await getDraftId(chapterNumber, baseVersion)
+  const draftId = await getDraftId(chapterNumber, baseVersion, expectedProjectPath)
   if (!draftId) return 1
 
-  return await ipc.invoke('db:revision-next-index', draftId)
+  return await ipc.invoke('db:revision-next-index', draftId, expectedProjectPath)
 }
 
 export async function getPendingRevisions(
   chapterDir: string,
   baseVersion: number,
+  expectedProjectPath: string,
 ): Promise<RevisionEntry[]> {
   const match = chapterDir.match(/ch(\d+)$/)
   if (!match) return []
   const chapterNumber = parseInt(match[1])
 
-  const draftId = await getDraftId(chapterNumber, baseVersion)
+  const draftId = await getDraftId(chapterNumber, baseVersion, expectedProjectPath)
   if (!draftId) return []
 
-  const list: DB_RevisionMeta[] = await ipc.invoke('db:revision-get-pending', draftId)
+  const list: DB_RevisionMeta[] = await ipc.invoke('db:revision-get-pending', draftId, expectedProjectPath)
   return list.map(m => mapRevisionEntry(m, baseVersion))
 }
 
@@ -194,6 +203,7 @@ export async function markRevisionMerged(
   chapterDir: string,
   revisionFileName: string, // "v1_r1.md" 或 pura db id (如 "42")
   mergedToFileName: string, // "draft_v1.md" (旧/新) 或 pure db id (如 "15")
+  expectedProjectPath: string,
 ): Promise<void> {
 
   const revIdMatch = revisionFileName.match(/^\d+$/)
@@ -201,7 +211,10 @@ export async function markRevisionMerged(
 
   if (revIdMatch && targetIdMatch) {
     // 全新 DB 化路径传来的纯数字 ID
-    await ipc.invoke('db:revision-mark-merged', parseInt(revIdMatch[0]), parseInt(targetIdMatch[0]))
+    requireIpcSuccess(
+      await ipc.invoke('db:revision-mark-merged', parseInt(revIdMatch[0]), parseInt(targetIdMatch[0]), expectedProjectPath),
+      '标记修订稿已合并',
+    )
     return
   }
 
@@ -215,10 +228,10 @@ export async function markRevisionMerged(
   const baseVersion = parseInt(matchRev[1])
   const revisionIndex = parseInt(matchRev[2])
 
-  const baseDraftId = await getDraftId(chapterNumber, baseVersion)
+  const baseDraftId = await getDraftId(chapterNumber, baseVersion, expectedProjectPath)
   if (!baseDraftId) return
 
-  const list: DB_RevisionMeta[] = await ipc.invoke('db:revision-list', baseDraftId)
+  const list: DB_RevisionMeta[] = await ipc.invoke('db:revision-list', baseDraftId, expectedProjectPath)
   const rev = list.find(r => r.revisionIndex === revisionIndex)
   if (!rev) return
 
@@ -227,39 +240,43 @@ export async function markRevisionMerged(
   const matchDraft = mergedToFileName.match(/v(\d+)/)
   if (matchDraft) {
     const mergedVersion = parseInt(matchDraft[1])
-    targetDraftId = await getDraftId(chapterNumber, mergedVersion) ?? baseDraftId
+    targetDraftId = await getDraftId(chapterNumber, mergedVersion, expectedProjectPath) ?? baseDraftId
   }
 
-  await ipc.invoke('db:revision-mark-merged', rev.id, targetDraftId)
+  requireIpcSuccess(
+    await ipc.invoke('db:revision-mark-merged', rev.id, targetDraftId, expectedProjectPath),
+    '标记修订稿已合并',
+  )
 }
 
 // ==========================================
 // 审稿操作
 // ==========================================
 
-export async function getNextReviewIndex(chapterDir: string, baseVersion: number): Promise<number> {
+export async function getNextReviewIndex(chapterDir: string, baseVersion: number, expectedProjectPath: string): Promise<number> {
   const matchCh = chapterDir.match(/ch(\d+)$/)
   if (!matchCh) return 1
   const chapterNumber = parseInt(matchCh[1])
 
-  const baseDraftId = await getDraftId(chapterNumber, baseVersion)
+  const baseDraftId = await getDraftId(chapterNumber, baseVersion, expectedProjectPath)
   if (!baseDraftId) return 1
 
-  return await ipc.invoke('db:review-next-index', baseDraftId)
+  return await ipc.invoke('db:review-next-index', baseDraftId, expectedProjectPath)
 }
 
 export async function getLatestReview(
   chapterDir: string,
   baseVersion: number,
+  expectedProjectPath: string,
 ): Promise<ReviewEntry | null> {
   const matchCh = chapterDir.match(/ch(\d+)$/)
   if (!matchCh) return null
   const chapterNumber = parseInt(matchCh[1])
 
-  const baseDraftId = await getDraftId(chapterNumber, baseVersion)
+  const baseDraftId = await getDraftId(chapterNumber, baseVersion, expectedProjectPath)
   if (!baseDraftId) return null
 
-  const review: DB_ReviewMeta | null = await ipc.invoke('db:review-get-latest', baseDraftId)
+  const review: DB_ReviewMeta | null = await ipc.invoke('db:review-get-latest', baseDraftId, expectedProjectPath)
   if (!review) return null
 
   return mapReviewEntry(review, baseVersion)
@@ -268,15 +285,16 @@ export async function getLatestReview(
 export async function getReviewsForVersion(
   chapterDir: string,
   baseVersion: number,
+  expectedProjectPath: string,
 ): Promise<ReviewEntry[]> {
   const matchCh = chapterDir.match(/ch(\d+)$/)
   if (!matchCh) return []
   const chapterNumber = parseInt(matchCh[1])
 
-  const baseDraftId = await getDraftId(chapterNumber, baseVersion)
+  const baseDraftId = await getDraftId(chapterNumber, baseVersion, expectedProjectPath)
   if (!baseDraftId) return []
 
-  const list: DB_ReviewMeta[] = await ipc.invoke('db:review-list', baseDraftId)
+  const list: DB_ReviewMeta[] = await ipc.invoke('db:review-list', baseDraftId, expectedProjectPath)
   return list.map(m => mapReviewEntry(m, baseVersion)).sort((a, b) => a.reviewIndex - b.reviewIndex)
 }
 

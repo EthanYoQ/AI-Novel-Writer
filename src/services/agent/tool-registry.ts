@@ -10,6 +10,8 @@
  * 3. source 字段标识来源 — 方便 UI 渲染不同的视觉标记
  */
 
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+
 // ===== JSON Schema 简化类型 =====
 
 /** 简化的 JSON Schema 描述（用于 Tool 参数定义） */
@@ -28,11 +30,22 @@ export interface ToolInputSchema {
 
 /** Tool 执行产物（Agent 创建/修改的文件等） */
 export interface ToolArtifact {
-  type: 'file_created' | 'file_modified' | 'workflow_started' | 'tab_opened'
+  readonly type: 'file_created' | 'file_modified' | 'workflow_started' | 'tab_opened'
+  /** 工具执行时冻结的来源项目路径，仅用于显示和一致性检查，不单独授予权限。 */
+  readonly projectPath: string
+  /** 产物必须绑定产生时的完整项目会话；旧 lease 产物不能在重开后复用。 */
+  readonly projectSession: ProjectSessionContext
   /** 文件路径或资源标识 */
-  path?: string
+  readonly path?: string
   /** 显示名称 */
-  name: string
+  readonly name: string
+}
+
+export function createToolArtifact(artifact: ToolArtifact): ToolArtifact {
+  return Object.freeze({
+    ...artifact,
+    projectSession: Object.freeze({ ...artifact.projectSession }),
+  })
 }
 
 /** Tool 执行结果 */
@@ -45,6 +58,15 @@ export interface ToolResult {
   artifacts?: ToolArtifact[]
   /** 错误信息（失败时） */
   error?: string
+}
+
+/**
+ * Immutable project identity captured before an agent loop or direct tool call.
+ * Built-in project tools must use this context instead of looking up a new
+ * renderer active lease while they are executing.
+ */
+export interface AgentExecutionContext {
+  readonly projectSession: ProjectSessionContext | null
 }
 
 // ===== Tool 定义 =====
@@ -67,7 +89,10 @@ export interface AgentTool {
   /** 是否为只读操作 */
   isReadOnly: boolean
   /** 执行函数 */
-  execute: (args: Record<string, unknown>) => Promise<ToolResult>
+  execute: (
+    args: Record<string, unknown>,
+    context?: AgentExecutionContext,
+  ) => Promise<ToolResult>
   /** 可选的用户友好名称（UI 显示用，比 name 更可读） */
   userFacingName?: string
 }

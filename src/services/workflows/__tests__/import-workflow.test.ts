@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createImportWorkflow } from '../import-workflow'
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
+import { useProjectStore } from '../../../stores/project-store'
 
 const styleMocks = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -24,8 +25,17 @@ const callbacks: StepCallbacks = {
 }
 
 const context: WorkflowContext = {
+  runId: 'test-run',
+  projectPath: 'C:/NovelA',
+  projectSession: { projectId: 'NovelA', leaseId: 'lease-NovelA', projectPath: 'C:/NovelA' },
   data: {},
   cancelled: false,
+}
+
+const importProjectSession = {
+  projectId: 'test-project',
+  leaseId: 'lease-test-project',
+  projectPath: 'C:\\test-project',
 }
 
 function source(file: string) {
@@ -40,11 +50,29 @@ const pseudoIconPattern = new RegExp([
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useProjectStore.setState({
+    currentProject: {
+      id: 'test-project',
+      sessionLease: 'lease-test-project',
+      name: '测试项目',
+      path: 'C:\\test-project',
+      novelConfig: {} as never,
+      characterStates: '',
+      createdAt: '',
+      updatedAt: '',
+    },
+  })
+})
+
+afterEach(() => {
+  useProjectStore.setState({ currentProject: null })
 })
 
 describe('createImportWorkflow', () => {
   it('extracts writing style from imported chapters before inferring blueprints', () => {
     const workflow = createImportWorkflow({
+      projectPath: 'C:\\test-project',
+      projectSession: importProjectSession,
       chapters: [
         {
           number: 1,
@@ -57,6 +85,10 @@ describe('createImportWorkflow', () => {
 
     const stepNames = workflow.steps.map((step) => step.name)
 
+    expect(workflow.projectSession).toMatchObject({
+      projectId: 'test-project',
+      leaseId: 'lease-test-project',
+    })
     expect(stepNames).toContain('AI 拆解文风与仿写指南')
     expect(stepNames.indexOf('AI 拆解文风与仿写指南')).toBeLessThan(stepNames.indexOf('AI 逐章推演蓝图'))
   })
@@ -64,6 +96,8 @@ describe('createImportWorkflow', () => {
   it('fails the workflow when style imitation extraction fails', async () => {
     styleMocks.execute.mockRejectedValue(new Error('style failed'))
     const workflow = createImportWorkflow({
+      projectPath: 'C:\\test-project',
+      projectSession: importProjectSession,
       chapters: [{ number: 1, title: '启程', content: '雨声很急。', wordCount: 5 }],
     })
 
@@ -74,6 +108,8 @@ describe('createImportWorkflow', () => {
   it('fails the workflow when style imitation extraction returns empty output', async () => {
     styleMocks.execute.mockResolvedValue('')
     const workflow = createImportWorkflow({
+      projectPath: 'C:\\test-project',
+      projectSession: importProjectSession,
       chapters: [{ number: 1, title: '启程', content: '雨声很急。', wordCount: 5 }],
     })
 

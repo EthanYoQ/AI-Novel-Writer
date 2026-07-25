@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { useProjectStore } from '../../../stores/project-store'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 export const updateConfigTool = buildAgentTool({
   name: 'update_config',
@@ -28,7 +28,7 @@ export const updateConfigTool = buildAgentTool({
   },
   requiresConfirmation: true,
   isReadOnly: false,
-  execute: async (args) => {
+  execute: async (args, context) => {
     const field = args.field as string
     const value = args.value as string
 
@@ -36,17 +36,15 @@ export const updateConfigTool = buildAgentTool({
       return { success: false, content: '', error: '缺少 field 或 value 参数' }
     }
 
-    const project = useProjectStore.getState().currentProject
-    if (!project) {
-      return { success: false, content: '', error: '没有打开的项目' }
-    }
+    const { project, projectSession } = requireAgentProject(context)
 
     // 构造更新数据
     const updateData = {
       novelConfig: { ...project.novelConfig, [field]: value },
     }
 
-    const result = await ipc.invoke('project:update-config', project.id, updateData)
+    const result = await ipc.invokeWithProjectSession(projectSession, 'project:update-config', project.id, updateData, project.path)
+    assertAgentProjectCurrent(context)
     if (!result.success) {
       return { success: false, content: '', error: result.error ?? '配置更新失败' }
     }

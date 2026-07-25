@@ -3,6 +3,8 @@ import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { BasePromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
+import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
+import { requireWorkflowProjectSession } from '../workflow-project-session'
 import type { ImportedChapter } from './import-novel.command'
 
 export interface AnalyzeWritingStyleOptions {
@@ -21,9 +23,13 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     super()
   }
 
-  async execute({ callbacks }: CommandExecuteParams): Promise<string> {
+  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
-    if (!project) throw new Error('未打开项目')
+    if (!project || !sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(project),
+    )) throw new Error('当前项目已切换，文风分析已停止')
 
     const sampleTexts = this.collectProvidedSamples()
 
@@ -34,7 +40,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
 
       // 采样策略：取最近 5 章的正文（从数据库查询）
       try {
-        const maxChap = await ipc.invoke('db:draft-get-max-finalized-chapter')
+        const maxChap = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-max-finalized-chapter', context.projectPath)
         if (maxChap <= 0) {
           callbacks.log('无已写章节，无法分析文风')
           return ''
@@ -42,9 +48,9 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
 
         const startChap = Math.max(1, maxChap - 4)
         for (let c = maxChap; c >= startChap; c--) {
-          const meta = await ipc.invoke('db:draft-get-finalized', c)
+          const meta = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-finalized', c, context.projectPath)
           if (meta) {
-            const full = await ipc.invoke('db:draft-get-full', meta.id)
+            const full = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', meta.id, context.projectPath)
             if (full?.content?.trim()) {
               sampleTexts.push(full.content.trim().slice(0, 2000))
             }
@@ -62,7 +68,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       return ''
     }
 
-    const template = getPromptTemplate('analyze_writing_style')
+    const template = getPromptTemplate('analyze_writing_style', projectSession)
     if (!template) throw new Error('未找到文风分析模板')
 
     const sampleText = sampleTexts.join('\n\n---\n\n')
@@ -76,7 +82,10 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       finalPrompt,
       template.systemRole || '你是一位资深的文学评论家和网文研究者。',
       callbacks,
+      undefined,
+      context,
     )
+    this.assertNotCancelled(context)
 
     const cleanResult = this.stripThinkingTags(result).trim()
     if (!cleanResult) {
@@ -85,12 +94,25 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     }
 
     // 先持久化，成功后再更新内存态，避免 DB 保存失败时 UI 残留未落库的文风。
-    const saveResult = await ipc.invoke('db:project-core-update', { writingStyle: cleanResult })
+    this.assertNotCancelled(context)
+    const saveResult = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:project-core-update',
+      { writingStyle: cleanResult },
+      context.projectPath,
+    )
     if (!saveResult.success) {
       throw new Error(saveResult.error || '文风特征保存失败')
     }
+    if (!sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(useProjectStore.getState().currentProject),
+    )) {
+      throw new Error('当前项目已切换，文风分析结果未应用到界面')
+    }
+    this.assertNotCancelled(context)
     const { updateNovelConfig } = useProjectStore.getState()
-    updateNovelConfig({ writingStyle: cleanResult })
+    updateNovelConfig({ writingStyle: cleanResult }, projectSession)
     callbacks.log('文风特征已保存到小说配置')
 
     return cleanResult

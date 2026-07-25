@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import {
   Trash2, ChevronsDown, Loader2, CheckCircle2, XCircle, Clock,
   Play, Pause, X, ChevronDown, ChevronRight, Zap,
@@ -6,7 +6,14 @@ import {
 import { useLayoutStore } from '../../stores/layout-store'
 import { useWorkflowStore, type WorkflowStep, type WorkflowRun } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useProjectStore } from '../../stores/project-store'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import {
+  projectSessionContextFromProject,
+  sameProjectSessionContext,
+} from '../../shared/project-session-context'
 import { Button } from '../ui/Button'
+import { LLMDataRequestGate } from './llm-data-request-gate'
 
 /** 底部面板 Tab 名称映射 */
 const TAB_LABELS: Record<string, string> = {
@@ -44,6 +51,7 @@ export default function BottomPanel() {
   const hasRunning = activeRuns.some(r => r.status === 'running')
   const hasWaiting = activeRuns.some(r => r.status === 'waiting')
   const hasPaused = activeRuns.some(r => r.status === 'paused')
+  const hasCancelling = activeRuns.some(r => r.status === 'cancelling')
 
   return (
     <div
@@ -77,6 +85,9 @@ export default function BottomPanel() {
           )}
           {activeTab === 'tasks' && hasPaused && !hasRunning && !hasWaiting && (
             <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--color-warning)' }} />
+          )}
+          {activeTab === 'tasks' && hasCancelling && !hasRunning && !hasWaiting && !hasPaused && (
+            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: 'var(--color-warning)' }} />
           )}
           {/* 活跃任务数徽章 */}
           {activeTab === 'tasks' && activeRuns.length > 0 && (
@@ -228,7 +239,7 @@ function ActiveRunPanel({
   const totalCount = run.steps.length
   const progress = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0
   const nextStepName = run.steps[waitingAfterStepIndex + 1]?.name
-  const isActive = run.status === 'running' || run.status === 'waiting' || run.status === 'paused'
+  const isActive = run.status === 'running' || run.status === 'waiting' || run.status === 'paused' || run.status === 'cancelling'
   const isBatchTask = run.type === 'batch_generate'
 
   console.log('[BottomPanel] ActiveRunPanel render: run.status=', run.status, 'steps=', run.steps.map(s => s.status).join(','))
@@ -251,13 +262,18 @@ function ActiveRunPanel({
           {run.status === 'paused' && (
             <Pause size={13} style={{ color: 'var(--color-warning)' }} />
           )}
+          {run.status === 'cancelling' && (
+            <Loader2 size={13} className="animate-spin" style={{ color: 'var(--color-warning)' }} />
+          )}
         </div>
 
         {/* 标题 + 进度条 */}
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5 mb-1">
             <p className="text-xs font-medium truncate" style={{ color: 'var(--color-text)' }}>
-              {runningStep && isActive ? runningStep.name : run.title}
+              {run.status === 'cancelling'
+                ? text('正在取消，等待当前操作退出', 'Cancelling; waiting for the current operation to exit')
+                : runningStep && isActive ? runningStep.name : run.title}
             </p>
             <span className="text-[0.68rem] font-mono flex-shrink-0" style={{ color: 'var(--color-accent)' }}>
               {progress}%
@@ -307,14 +323,16 @@ function ActiveRunPanel({
             : <ChevronRight size={11} style={{ color: 'var(--color-text-muted)' }} />
           }
           {/* 取消按钮——阻止冒泡到折叠点击 */}
-          <button
-            onClick={(e) => { e.stopPropagation(); onCancel() }}
-            className="icon-btn"
-            style={{ width: 18, height: 18 }}
-            title="取消任务"
-          >
-            <X size={11} />
-          </button>
+          {run.status !== 'cancelling' && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onCancel() }}
+              className="icon-btn"
+              style={{ width: 18, height: 18 }}
+              title={text('取消任务', 'Cancel task')}
+            >
+              <X size={11} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -578,26 +596,52 @@ function LogsView() {
 // ===== 模型调用视图 =====
 
 function ModelsView() {
-  const [stats, setStats] = useState<{
-    totalCalls: number; totalTokens: number
-    totalPromptTokens: number; totalCompletionTokens: number
+  const currentProject = useProjectStore(s => s.currentProject)
+  const projectSession = useMemo(
+    () => projectSessionContextFromProject(currentProject),
+    [currentProject],
+  )
+  const [requestGate] = useState(() => new LLMDataRequestGate())
+  const [data, setData] = useState<{
+    projectSession: ProjectSessionContext
+    stats: {
+      totalCalls: number; totalTokens: number
+      totalPromptTokens: number; totalCompletionTokens: number
+    }
+    history: Array<{
+      id: number; modelName: string; purpose: string
+      promptTokens: number; completionTokens: number; totalTokens: number
+      durationMs: number; success: boolean; createdAt: string
+    }>
   } | null>(null)
-  const [history, setHistory] = useState<Array<{
-    id: number; modelName: string; purpose: string
-    promptTokens: number; completionTokens: number; totalTokens: number
-    durationMs: number; success: boolean; createdAt: string
-  }>>([])
 
-  const loadData = async () => {
-    try {
-      const { loadLLMData } = await import('../../services/stats-service')
-      const { stats: s, history: h } = await loadLLMData(30)
-      setStats(s)
-      setHistory(h)
-    } catch { /* 忽略 */ }
-  }
+  // 即使旧请求尚未返回，也绝不向新会话展示其统计；数据与 lease 一起渲染。
+  const visibleData = data && sameProjectSessionContext(data.projectSession, projectSession)
+    ? data
+    : null
+  const stats = visibleData?.stats ?? null
+  const history = visibleData?.history ?? []
 
-  useEffect(() => { void Promise.resolve().then(loadData) }, [])
+  useEffect(() => {
+    if (!projectSession) {
+      requestGate.invalidate()
+      return
+    }
+
+    const ticket = requestGate.begin(projectSession)
+    void import('../../services/stats-service')
+      .then(({ loadLLMData }) => loadLLMData(projectSession, 30))
+      .then(({ stats: loadedStats, history: loadedHistory }) => {
+        const currentSession = projectSessionContextFromProject(
+          useProjectStore.getState().currentProject,
+        )
+        if (!requestGate.isCurrent(ticket, currentSession)) return
+        setData({ projectSession: ticket.projectSession, stats: loadedStats, history: loadedHistory })
+      })
+      .catch(() => {
+        // IPC 失败时保持清空状态；旧请求也不能反向写入 UI。
+      })
+  }, [projectSession, requestGate])
 
   return (
     <div className="h-full flex flex-col overflow-hidden">

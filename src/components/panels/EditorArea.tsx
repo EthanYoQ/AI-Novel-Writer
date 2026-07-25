@@ -1,4 +1,4 @@
-import { X, FileText, Settings, Users, ArrowLeftRight, MoreHorizontal, BookOpen, History, ClipboardCheck, Globe, Save, ChevronLeft, ChevronRight, PenTool } from 'lucide-react'
+import { X, FileText, Settings, Users, ArrowLeftRight, MoreHorizontal, BookOpen, History, ClipboardCheck, Globe, Save, ChevronLeft, ChevronRight, PenTool, Check } from 'lucide-react'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { ContextMenu, type ContextMenuEntry } from '../ui/ContextMenu'
 import {
@@ -19,14 +19,20 @@ import WelcomePage from '../pages/WelcomePage'
 import KnowledgeOverview from '../pages/KnowledgeOverview'
 import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore, type EditorTab } from '../../stores/editor-store'
+import { discardAndCloseEditorTab } from '../../stores/editor-discard'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
 
 
 import { ipc } from '../../services/ipc-client'
 import { toast } from '../ui/Toast'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+  isProjectSessionPath,
+} from '../project-session-gate'
 
-import { clearChapterTitleCache } from './Sidebar'
+import { savePhysicalChapterForSession } from './editor-area-physical-save'
 import '../editor/novel-editor.css'
 
 // ─── 正文章节编辑器包装层（含字数信息栏） ─────────────────────────────────────────────
@@ -139,20 +145,19 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
 
   // ===== 所有 Hooks 必须在条件 return 之前 =====
 
-  // 打开项目后自动打开配置 Tab
-  // 依赖 currentProject?.id + tabs.length：
-  //   - id 变化（切换项目）时触发
-  //   - tabs 被清空（clearTabs）时触发
+  // 打开或切换项目后，激活该项目自己的配置 Tab。
+  // project.id 对所有项目都可能相同，因此必须以绝对路径作为切换身份。
+  // openFile 会复用同项目的现有配置 Tab，同时保留其他项目的未保存 Tab。
   useEffect(() => {
-    if (currentProject && tabs.length === 0) {
-      // 从 store 直接取最新值，避免闭包陈旧
-      const latestTabs = useEditorStore.getState().tabs
-      if (latestTabs.length === 0) {
-        openFile({ id: 'config', name: text('小说配置', 'Novel configuration'), type: 'config' })
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.id, tabs.length])
+    const projectPath = currentProject?.path
+    if (!projectPath) return
+    openFile({
+      id: 'config',
+      name: useLocaleStore.getState().text('小说配置', 'Novel configuration'),
+      type: 'config',
+      projectKey: projectPath,
+    })
+  }, [currentProject?.path, openFile])
 
   // 防御性兜底：tabs 有内容但 activeTabId 无效时，激活第一个 tab
   const activeTab = tabs.find((t) => t.id === activeTabId)
@@ -187,7 +192,37 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
 
   // ===== 三个点菜单状态 =====
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [moreMenuPosition, setMoreMenuPosition] = useState<{ x: number; y: number } | null>(null)
   const moreButtonRef = useRef<HTMLButtonElement>(null)
+
+  // ===== Tab 右键菜单状态 =====
+  const [tabMenu, setTabMenu] = useState<{
+    tabId: string
+    position: { x: number; y: number }
+  } | null>(null)
+
+  // ===== 关闭确认弹窗状态 =====
+  const [closeConfirm, setCloseConfirm] = useState<string | null>(null) // 单个待关闭的 tabId
+  // 批量关闭确认：待关闭的 tabId 列表（含 dirty 的）
+  const [batchCloseConfirm, setBatchCloseConfirm] = useState<string[] | null>(null)
+
+  const closeMoreMenu = useCallback(() => {
+    setMoreMenuOpen(false)
+    setMoreMenuPosition(null)
+  }, [setMoreMenuOpen, setMoreMenuPosition])
+
+  const toggleMoreMenu = useCallback(() => {
+    if (moreMenuOpen) {
+      closeMoreMenu()
+      return
+    }
+
+    const rect = moreButtonRef.current?.getBoundingClientRect()
+    if (!rect) return
+
+    setMoreMenuPosition({ x: rect.right - 200, y: rect.bottom + 4 })
+    setMoreMenuOpen(true)
+  }, [closeMoreMenu, moreMenuOpen, setMoreMenuOpen, setMoreMenuPosition])
 
   // 绑定 ⌘W 快捷键：关闭当前 Tab（带 dirty 检查）
   useEffect(() => {
@@ -209,18 +244,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
-
-  // ===== Tab 右键菜单状态 =====
-  const [tabMenu, setTabMenu] = useState<{
-    tabId: string
-    position: { x: number; y: number }
-  } | null>(null)
-
-  // ===== 关闭确认弹窗状态 =====
-  const [closeConfirm, setCloseConfirm] = useState<string | null>(null) // 单个待关闭的 tabId
-  // 批量关闭确认：待关闭的 tabId 列表（含 dirty 的）
-  const [batchCloseConfirm, setBatchCloseConfirm] = useState<string[] | null>(null)
+  }, [setCloseConfirm])
 
   /** 尝试关闭 Tab：如果有未保存修改则弹确认对话框 */
   const tryCloseTab = useCallback((tabId: string) => {
@@ -233,7 +257,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
     } else {
       closeTab(tabId)
     }
-  }, [tabs, closeTab])
+  }, [tabs, closeTab, setCloseConfirm])
 
   /** 尝试批量关闭 Tab：收集待关闭列表，若其中有 dirty tab 则弹确认弹窗 */
   const tryBatchClose = useCallback((tabIds: string[]) => {
@@ -248,7 +272,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
     } else {
       cleanIds.forEach(id => closeTab(id))
     }
-  }, [tabs, closeTab])
+  }, [tabs, closeTab, setBatchCloseConfirm])
 
   /** 构建 Tab 右键菜单项 */
   const buildTabMenuItems = useCallback(
@@ -360,7 +384,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           key: `goto-${t.id}`,
           label: t.name,
           icon: t.id === activeTabId
-            ? <span style={{ color: 'var(--color-accent)', fontWeight: 'bold' }}>●</span>
+            ? <Check size={14} strokeWidth={2} aria-hidden="true" style={{ color: 'var(--color-accent)' }} />
             : undefined,
           onClick: () => setActiveTab(t.id),
         })),
@@ -397,7 +421,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         className="w-full h-full flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--color-editor-bg)' }}
       >
-        <CharacterEditor />
+        <CharacterEditor projectKey={currentProject?.path ?? ''} />
       </div>
     )
   }
@@ -570,7 +594,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
             ref={moreButtonRef}
             className="icon-btn flex-shrink-0"
             title={text('已打开的编辑器', 'Open editors')}
-            onClick={() => setMoreMenuOpen(prev => !prev)}
+            onClick={toggleMoreMenu}
           >
             <MoreHorizontal size={14} />
           </button>
@@ -581,15 +605,22 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
 
       {/* 编辑区主体 */}
       <div className="flex-1 overflow-hidden">
-        {activeTab?.type === 'chapter' && activeTab.filePath?.startsWith('vela://draft/') && (
+        {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path && (
+          activeTab.filePath?.startsWith('vela://draft/')
+          || activeTab.filePath?.startsWith('vela://manuscript/')
+        ) && (
           // 草稿文件：使用 DraftEditor（工具栏含修稿/审稿/定稿按鈕）
           <DraftEditor
             key={activeTab.id}
+            tabId={activeTab.id}
             filePath={activeTab.filePath}
             content={activeTab.content ?? ''}
+            projectKey={activeTab.projectKey}
           />
         )}
-        {activeTab?.type === 'chapter' && !activeTab.filePath?.startsWith('vela://draft/') && (
+        {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path
+          && !activeTab.filePath?.startsWith('vela://draft/')
+          && !activeTab.filePath?.startsWith('vela://manuscript/') && (
           // 【DB 迁移备注】：终稿目前作为物理文件保存在 manuscript/ 目录是合理的（用于外部阅读器或最终打包编译导出）
           // 终稿文件（manuscript/）：用 ProseEditorWrapper（含字数信息栏）
           <ProseEditorWrapper
@@ -597,16 +628,22 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
             tab={activeTab}
             onSave={async (text) => {
               if (!activeTab.filePath) return
-              await ipc.invoke('fs:write-file', activeTab.filePath, text)
-              // 清除 dirty 标记 + 同步内容 + 刷新章节名缓存
-              useEditorStore.getState().markTabSaved(activeTab.id)
-              useEditorStore.getState().syncTabContent(activeTab.id, text)
-              clearChapterTitleCache(activeTab.filePath)
+              const projectSession = captureProjectSession(currentProject)
+              if (
+                !projectSession
+                || !isProjectSessionPath(projectSession, activeTab.projectKey)
+              ) return
+              await savePhysicalChapterForSession({
+                tabId: activeTab.id,
+                filePath: activeTab.filePath,
+                content: text,
+                projectSession,
+              })
             }}
           />
         )}
-        {activeTab?.type === 'config' && (
-          <NovelConfigEditor />
+        {activeTab?.type === 'config' && activeTab.projectKey && (
+          <NovelConfigEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
         {activeTab?.type === 'outline' && (
           <div className="h-full overflow-y-auto p-6">
@@ -618,36 +655,45 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
             </pre>
           </div>
         )}
-        {activeTab?.type === 'character' && (
-          <CharacterEditor />
+        {activeTab?.type === 'character' && activeTab.projectKey && (
+          <CharacterEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
-        {activeTab?.type === 'chapter-card' && (
-          <ChapterCardEditor />
+        {activeTab?.type === 'chapter-card' && activeTab.projectKey && (
+          <ChapterCardEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
-        {activeTab?.type === 'world-building' && (
-          <WorldBuildingEditor />
+        {activeTab?.type === 'world-building' && activeTab.projectKey && (
+          <WorldBuildingEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
-        {activeTab?.type === 'arch-file' && activeTab.filePath && (
+        {activeTab?.type === 'arch-file' && activeTab.filePath && activeTab.projectKey && (
           <ArchFileViewer
             key={activeTab.id}
+            tabId={activeTab.id}
             filePath={activeTab.filePath}
+            projectKey={activeTab.projectKey}
             content={activeTab.content ?? ''}
+            savedContent={activeTab.savedContent ?? activeTab.content ?? ''}
           />
         )}
-        {activeTab?.type === 'version-history' && (
-          <VersionHistory />
+        {activeTab?.type === 'version-history' && activeTab.projectKey === currentProject.path && (
+          <VersionHistory projectKey={activeTab.projectKey} />
         )}
-        {activeTab?.type === 'review-report' && activeTab.content && (
+        {activeTab?.type === 'review-report' && activeTab.projectKey === currentProject.path && activeTab.content && (
           <ReviewReport
             reportText={activeTab.content}
             draftPath={activeTab.filePath}
             chapterNumber={activeTab.chapterNumber}
             chapterDir={activeTab.chapterDir}
+            projectKey={activeTab.projectKey}
           />
         )}
         {/* diff 合并视图 — 统一使用弹出式 Dialog（与 DraftEditor 一致） */}
         <Dialog
-          open={activeTab?.type === 'diff' && !!activeTab.originalContent && !!activeTab.content}
+          open={
+            activeTab?.type === 'diff'
+            && activeTab.projectKey === currentProject.path
+            && !!activeTab.originalContent
+            && !!activeTab.content
+          }
           onOpenChange={(v) => {
             if (!v && activeTab?.type === 'diff') {
               useEditorStore.getState().closeTab(activeTab.id)
@@ -672,27 +718,41 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
               </DialogTitle>
             </DialogHeader>
             <div className="flex-1 overflow-hidden" style={{ height: 'calc(85vh - 38px - 1px)' }}>
-              {activeTab?.type === 'diff' && activeTab.originalContent && activeTab.content && (
+              {activeTab?.type === 'diff'
+                && activeTab.projectKey === currentProject.path
+                && activeTab.originalContent
+                && activeTab.content && (
                 <ThreeWayMerge
                   originalContent={activeTab.originalContent}
                   modifiedContent={activeTab.content}
                   onComplete={async (mergedText) => {
+                    const mergeTab = activeTab
+                    const projectSession = captureProjectSession(currentProject)
+                    if (!mergeTab || !projectSession || !isProjectSessionPath(projectSession, mergeTab.projectKey)) {
+                      toast.error(text('项目会话已失效，未合并修订内容', 'The project session is no longer active; the revision was not merged.'))
+                      return
+                    }
+
                     try {
-                      const chapterDir = activeTab.chapterDir
-                      const filePath = activeTab.filePath
-                      const revPath = activeTab.revisionPath
-                      const chapterNum = activeTab.chapterNumber
+                      const chapterDir = mergeTab.chapterDir
+                      const filePath = mergeTab.filePath
+                      const revPath = mergeTab.revisionPath
+                      const chapterNum = mergeTab.chapterNumber
 
                       if (chapterDir && filePath && revPath) {
                         const { useDraftStore } = await import('../../stores/draft-store')
+                        if (!isProjectSessionCurrent(projectSession)) return
+
                         const result = await useDraftStore.getState().applyMergedRevision(
                           chapterDir,
                           chapterNum,
                           filePath,
                           revPath,
-                          mergedText
+                          mergedText,
+                          projectSession.projectPath,
+                          projectSession,
                         )
-
+                        if (!isProjectSessionCurrent(projectSession)) return
 
                         if (result.success) {
                           toast.success(text('合并完成，草稿已更新', 'Merge complete; draft updated'))
@@ -701,10 +761,12 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                         }
                       }
                     } catch (e) {
-
+                      if (!isProjectSessionCurrent(projectSession)) return
                       toast.error(text(`合并出错：${e}`, `Merge error: ${e}`))
                     } finally {
-                      useEditorStore.getState().closeTab(activeTab.id)
+                      if (isProjectSessionCurrent(projectSession)) {
+                        useEditorStore.getState().closeTab(mergeTab.id)
+                      }
                     }
                   }}
                   onCancel={() => useEditorStore.getState().closeTab(activeTab.id)}
@@ -726,16 +788,13 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
       )}
 
       {/* 三个点菜单（已打开的编辑器列表 + Tab 操作） */}
-      {moreMenuOpen && moreButtonRef.current && (() => {
-        const rect = moreButtonRef.current!.getBoundingClientRect()
-        return (
-          <ContextMenu
-            items={buildMoreMenuItems()}
-            position={{ x: rect.right - 200, y: rect.bottom + 4 }}
-            onClose={() => setMoreMenuOpen(false)}
-          />
-        )
-      })()}
+      {moreMenuOpen && moreMenuPosition && (
+        <ContextMenu
+          items={buildMoreMenuItems()}
+          position={moreMenuPosition}
+          onClose={closeMoreMenu}
+        />
+      )}
 
       {/* 关闭未保存 Tab 确认弹窗 */}
       <Dialog
@@ -756,7 +815,10 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
             <Button
               variant="destructive"
               onClick={() => {
-                if (closeConfirm) closeTab(closeConfirm)
+                const projectSession = captureProjectSession(currentProject)
+                if (closeConfirm && projectSession && isProjectSessionCurrent(projectSession)) {
+                  discardAndCloseEditorTab(closeConfirm, projectSession)
+                }
                 setCloseConfirm(null)
               }}
             >
@@ -793,8 +855,9 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
             <Button
               variant="destructive"
               onClick={() => {
-                if (batchCloseConfirm) {
-                  batchCloseConfirm.forEach(id => closeTab(id))
+                const projectSession = captureProjectSession(currentProject)
+                if (batchCloseConfirm && projectSession && isProjectSessionCurrent(projectSession)) {
+                  batchCloseConfirm.forEach(id => discardAndCloseEditorTab(id, projectSession))
                 }
                 setBatchCloseConfirm(null)
               }}

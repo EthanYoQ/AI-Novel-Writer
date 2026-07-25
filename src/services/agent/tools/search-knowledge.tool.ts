@@ -2,7 +2,9 @@
  * search_knowledge — 语义搜索知识库
  */
 import { buildAgentTool } from '../tool-registry'
-import { searchKB } from '../../knowledge-service'
+import { ipc } from '../../ipc-client'
+import { unwrapKnowledgeValue } from '../../knowledge-service'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 export const searchKnowledgeTool = buildAgentTool({
   name: 'search_knowledge',
@@ -24,7 +26,7 @@ export const searchKnowledgeTool = buildAgentTool({
     required: ['query'],
   },
   requiresConfirmation: false,
-  execute: async (args) => {
+  execute: async (args, context) => {
     const query = args.query as string
     const topK = (args.top_k as number) ?? 5
 
@@ -32,7 +34,16 @@ export const searchKnowledgeTool = buildAgentTool({
       return { success: false, content: '', error: '缺少 query 参数' }
     }
 
-    const results = await searchKB(query, topK)
+    const { project, projectSession } = requireAgentProject(context)
+    const projectPath = project.path
+    const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
+      projectSession,
+      'kb:search',
+      query,
+      topK,
+      projectPath,
+    ))
+    assertAgentProjectCurrent(context)
     if (!results || results.length === 0) {
       return { success: true, content: '未找到相关结果。请尝试使用不同的关键词搜索，或尝试使用 read_architecture、read_characters 等工具直接读取项目数据。' }
     }
@@ -41,6 +52,7 @@ export const searchKnowledgeTool = buildAgentTool({
       `### 结果 ${i + 1} (相似度: ${r.score.toFixed(2)})\n来源: ${r.fileName}\n\n${r.text}`
     ).join('\n\n---\n\n')
 
+    assertAgentProjectCurrent(context)
     return { success: true, content: `找到 ${results.length} 条相关结果：\n\n${formatted}` }
   },
 })

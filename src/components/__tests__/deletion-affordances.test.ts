@@ -47,7 +47,11 @@ describe('generated content deletion affordances', () => {
     const ipcChannels = source('src/shared/ipc-channels.ts')
 
     expect(knowledgePage).toContain('清空知识库')
-    expect(knowledgePage).toContain('clearKnowledgeBase')
+    expect(knowledgePage).toContain('const handleClearKnowledgeBase = async () =>')
+    expect(knowledgePage).toContain('captureProjectSession(currentProject)')
+    expect(knowledgePage).toContain('isProjectSessionCurrent(projectSession)')
+    expect(knowledgePage).toContain("'kb:clear-all'")
+    expect(knowledgePage).toContain('ipc.invokeWithProjectSession(\n        projectSession,')
     expect(knowledgeService).toContain('kb:clear-all')
     expect(kbController).toContain("'kb:clear-all'")
     expect(ipcChannels).toContain("'kb:clear-all'")

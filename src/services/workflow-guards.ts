@@ -10,6 +10,12 @@
 
 import { useProjectStore } from '../stores/project-store'
 import { ipc } from './ipc-client'
+import type { ProjectData, ProjectSessionContext } from '../shared/ipc-channels'
+import {
+  projectSessionContextFromProject,
+  sameProjectPathKey,
+  sameProjectSessionContext,
+} from '../shared/project-session-context'
 
 import { readPostProcessStatus, getChapterFinalizeScope, getFailedStepLabels } from './workflows/workflow-utils'
 
@@ -19,6 +25,21 @@ export interface GuardResult {
   message?: string
   /** 用于跳转引导的目标动作标识 */
   action?: 'open-config' | 'open-world-building' | 'open-blueprint'
+}
+
+function captureGuardProject(
+  expectedProjectPath?: string,
+  expectedProjectSession?: ProjectSessionContext,
+): { project: ProjectData; projectPath: string; projectSession: ProjectSessionContext } | null {
+  const project = useProjectStore.getState().currentProject
+  const projectSession = projectSessionContextFromProject(project)
+  if (
+    !project
+    || !projectSession
+    || (expectedProjectPath && !sameProjectPathKey(project.path, expectedProjectPath))
+    || (expectedProjectSession && !sameProjectSessionContext(expectedProjectSession, projectSession))
+  ) return null
+  return { project, projectPath: expectedProjectPath ?? project.path, projectSession }
 }
 
 // ===== Guard 1：生成故事架构前 → 校验小说配置 =====
@@ -60,13 +81,17 @@ export function guardArchitectureGeneration(): GuardResult {
  * 要求至少有 1 个架构信息（故事前提）已生成，
  * 建议 4 个都完成，但允许继续（仅提示警告）。
  */
-export async function guardDirectoryGeneration(): Promise<GuardResult> {
-  const project = useProjectStore.getState().currentProject
-  if (!project) {
+export async function guardDirectoryGeneration(
+  expectedProjectPath?: string,
+  expectedProjectSession?: ProjectSessionContext,
+): Promise<GuardResult> {
+  const captured = captureGuardProject(expectedProjectPath, expectedProjectSession)
+  if (!captured) {
     return { ok: false, message: '请先打开或新建一个项目。' }
   }
 
-  const core = await ipc.invoke('db:project-core-get')
+  const { projectPath, projectSession } = captured
+  const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath)
   const missing: string[] = []
 
   const checkHasContent = (text: string | null | undefined) => text && text.length > 50 && !text.includes('> 待生成')
@@ -94,7 +119,7 @@ export async function guardDirectoryGeneration(): Promise<GuardResult> {
   }
 
   // 检查角色卡是否存在（不变量 1 的反向约束）
-  const chars = await ipc.invoke('db:character-get-all')
+  const chars = await ipc.invokeWithProjectSession(projectSession, 'db:character-get-all', projectPath)
   if (chars.length === 0) {
     return {
       ok: false,
@@ -112,13 +137,18 @@ export async function guardDirectoryGeneration(): Promise<GuardResult> {
  * 1. 要求 blueprints/ 目录中存在至少一个章节蓝图 JSON 文件。
  * 2. 如果指定了章节号且 > 1，要求前一章已定稿（存在于 manuscript/ 中），否则上下文会断裂。
  */
-export async function guardChapterWriting(targetChapterNumber?: number): Promise<GuardResult> {
-  const project = useProjectStore.getState().currentProject
-  if (!project) {
+export async function guardChapterWriting(
+  targetChapterNumber?: number,
+  expectedProjectPath?: string,
+  expectedProjectSession?: ProjectSessionContext,
+): Promise<GuardResult> {
+  const captured = captureGuardProject(expectedProjectPath, expectedProjectSession)
+  if (!captured) {
     return { ok: false, message: '请先打开或新建一个项目。' }
   }
 
-  const blueprints = await ipc.invoke('db:blueprint-get-all')
+  const { projectPath, projectSession } = captured
+  const blueprints = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get-all', projectPath)
   if (blueprints.length === 0) {
     return {
       ok: false,
@@ -128,7 +158,7 @@ export async function guardChapterWriting(targetChapterNumber?: number): Promise
   }
 
   // 检查角色卡是否存在（不变量 1 的反向约束：无角色卡则阻断写稿）
-  const chars = await ipc.invoke('db:character-get-all')
+  const chars = await ipc.invokeWithProjectSession(projectSession, 'db:character-get-all', projectPath)
   if (chars.length === 0) {
     return {
       ok: false,
@@ -139,7 +169,7 @@ export async function guardChapterWriting(targetChapterNumber?: number): Promise
   // 如果指定了且不是第一章，则必须保证前一章已经存在正文库（定稿状态）
   if (targetChapterNumber && targetChapterNumber > 1) {
     const prevChapter = targetChapterNumber - 1
-    const prevDraftMeta = await ipc.invoke('db:draft-get-finalized', prevChapter)
+    const prevDraftMeta = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-finalized', prevChapter, projectPath)
     if (!prevDraftMeta) {
       return {
         ok: false,
@@ -149,7 +179,7 @@ export async function guardChapterWriting(targetChapterNumber?: number): Promise
 
     // 不变量 2 的反向约束：前一章定稿后处理必须全部通过
     const prevScope = getChapterFinalizeScope(prevChapter)
-    const prevStatus = await readPostProcessStatus(project.path, prevScope)
+    const prevStatus = await readPostProcessStatus(projectPath, prevScope, projectSession)
     if (prevStatus && !prevStatus.allCriticalPassed) {
       const failedLabels = getFailedStepLabels(prevStatus)
       return {
@@ -170,13 +200,19 @@ export async function guardChapterWriting(targetChapterNumber?: number): Promise
  * 不变量 1：角色卡仅允许在蓝图目录为空时重新生成，
  * 否则会破坏已有蓝图/章节的角色状态链。
  */
-export async function guardCharacterRegeneration(): Promise<GuardResult> {
-  const project = useProjectStore.getState().currentProject
-  if (!project) {
+export async function guardCharacterRegeneration(
+  expectedProjectSession?: ProjectSessionContext,
+): Promise<GuardResult> {
+  const captured = captureGuardProject(undefined, expectedProjectSession)
+  if (!captured) {
     return { ok: false, message: '请先打开或新建一个项目。' }
   }
 
-  const blueprints = await ipc.invoke('db:blueprint-get-all')
+  const blueprints = await ipc.invokeWithProjectSession(
+    captured.projectSession,
+    'db:blueprint-get-all',
+    captured.projectPath,
+  )
   if (blueprints.length > 0) {
     return {
       ok: false,
@@ -194,14 +230,22 @@ export async function guardCharacterRegeneration(): Promise<GuardResult> {
  * 不变量 2：后处理只允许在最新定稿章节上执行，
  * 回溯重跑历史章节会覆盖后续章节的角色状态。
  */
-export async function guardRepairPostProcess(chapterNumber: number): Promise<GuardResult> {
-  const project = useProjectStore.getState().currentProject
-  if (!project) {
+export async function guardRepairPostProcess(
+  chapterNumber: number,
+  expectedProjectPath?: string,
+  expectedProjectSession?: ProjectSessionContext,
+): Promise<GuardResult> {
+  const captured = captureGuardProject(expectedProjectPath, expectedProjectSession)
+  if (!captured) {
     return { ok: false, message: '请先打开或新建一个项目。' }
   }
 
   // 从数据库获取最大的定稿章节号
-  const maxFinalized = await ipc.invoke('db:draft-get-max-finalized-chapter')
+  const maxFinalized = await ipc.invokeWithProjectSession(
+    captured.projectSession,
+    'db:draft-get-max-finalized-chapter',
+    captured.projectPath,
+  )
 
   if (maxFinalized === 0) {
     return { ok: false, message: '尚无已定稿章节，无法执行修复操作。' }
