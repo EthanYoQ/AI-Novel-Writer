@@ -7,6 +7,7 @@ const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = path.resolve(testDirectory, '..', '..')
 const workflowPath = path.join(repositoryRoot, '.github', 'workflows', 'windows-cloud-build-test.yml')
 const manifestScriptPath = path.join(repositoryRoot, 'scripts', 'generate-cloud-build-manifest.mjs')
+const forbiddenJobEnvContextPattern = /\$\{\{\s*runner(?:\.|\[)/i
 
 function readRequiredFile(file: string) {
   expect(existsSync(file), `Missing required cloud-build contract file: ${file}`).toBe(true)
@@ -19,6 +20,52 @@ function namedStep(source: string, name: string) {
   const remainder = source.slice(start)
   const nextStep = remainder.search(/\r?\n\s{6}- name:/)
   return nextStep < 0 ? remainder : remainder.slice(0, nextStep)
+}
+
+function jobLevelEnvBlocks(source: string) {
+  const lines = source.split(/\r?\n/)
+  const blocks: string[] = []
+  let inJobs = false
+  let inJob = false
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+    const trimmed = line.trim()
+    const indentation = line.length - line.trimStart().length
+
+    if (!inJobs) {
+      if (/^jobs:\s*(?:#.*)?$/.test(line)) inJobs = true
+      continue
+    }
+    if (trimmed === '' || trimmed.startsWith('#')) continue
+    if (indentation === 0) {
+      inJobs = false
+      inJob = false
+      continue
+    }
+    if (indentation === 2 && /^ {2}[^\s:#][^:]*:\s*(?:#.*)?$/.test(line)) {
+      inJob = true
+      continue
+    }
+    if (!inJob) continue
+
+    const env = line.match(/^ {4}env:(?<inline>.*)$/)
+    if (!env) continue
+
+    const block = [env.groups?.inline ?? '']
+    let nestedIndex = index + 1
+    for (; nestedIndex < lines.length; nestedIndex += 1) {
+      const nestedLine = lines[nestedIndex]
+      const nestedTrimmed = nestedLine.trim()
+      const nestedIndentation = nestedLine.length - nestedLine.trimStart().length
+      if (nestedTrimmed !== '' && !nestedTrimmed.startsWith('#') && nestedIndentation <= 4) break
+      block.push(nestedLine)
+    }
+    blocks.push(block.join('\n'))
+    index = nestedIndex - 1
+  }
+
+  return blocks
 }
 
 describe('Windows cloud build workflow contract', () => {
@@ -53,6 +100,10 @@ describe('Windows cloud build workflow contract', () => {
     expect(workflow).toContain('AI_NOVEL_PREVIOUS_PORTABLE_ZIP')
     expect(workflow).toContain('node scripts/generate-cloud-build-manifest.mjs')
 
+    const portableDownload = namedStep(workflow, 'Download verified v0.2.5 portable migration input')
+    expect(portableDownload).toContain("$portableZip = Join-Path $env:RUNNER_TEMP 'AI-Novel-Writer-0.2.5-windows-x64.zip'")
+    expect(portableDownload).toContain('"AI_NOVEL_PREVIOUS_PORTABLE_ZIP=$portableZip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8')
+
     expect(manifestScript).toContain("gateLevel: 'RUNTIME_VERIFIED'")
     expect(manifestScript).toContain('releaseCreated: false')
     expect(manifestScript).toContain('lockfileSha256')
@@ -74,5 +125,40 @@ describe('Windows cloud build workflow contract', () => {
     expect(failedArtifact).not.toMatch(/success\(\)/)
 
     expect(workflow).not.toMatch(/\b(?:gh\s+release|softprops\/action-gh-release|actions\/(?:create-release|upload-release-asset)|git\s+tag|git\s+push\s+.*(?:tag|refs\/tags)|create-release|upload-release|npm\s+publish|signtool|codesign)\b/i)
+  })
+
+  it('does not interpolate runner context in job-level environment variables', () => {
+    const workflow = readRequiredFile(workflowPath)
+
+    expect(jobLevelEnvBlocks(workflow).join('\n')).not.toMatch(forbiddenJobEnvContextPattern)
+  })
+
+  it.each([
+    [
+      'block mapping',
+      [
+        'jobs:',
+        '  package:',
+        '    runs-on: windows-2022',
+        '    env:',
+        '      INPUT: "${{ runner.temp }}/input.zip"',
+        '    steps: []',
+      ].join('\n'),
+    ],
+    [
+      'inline mapping',
+      [
+        'jobs:',
+        '  package:',
+        '    runs-on: windows-2022',
+        '    env: { INPUT: "${{ runner.temp }}/input.zip" }',
+        '    steps: []',
+      ].join('\n'),
+    ],
+  ])('recognizes runner context in a job-level %s', (_mappingStyle, fixture) => {
+    const blocks = jobLevelEnvBlocks(fixture)
+
+    expect(blocks).toHaveLength(1)
+    expect(blocks.join('\n')).toMatch(forbiddenJobEnvContextPattern)
   })
 })
