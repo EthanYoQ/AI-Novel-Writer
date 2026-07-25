@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProjectData } from '../../shared/ipc-channels'
 import { useEditorStore } from '../editor-store'
+import { useLocaleStore } from '../locale-store'
 import { useProjectStore } from '../project-store'
 import { useWorkflowStore } from '../workflow-store'
 
@@ -86,6 +87,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({
     currentProject: project('A'),
     fileTree: [{ name: 'A', path: 'A', isDir: true }],
