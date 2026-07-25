@@ -1,0 +1,316 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
+import { useEditorStore } from '../../../../stores/editor-store'
+import { useLLMStore } from '../../../../stores/llm-store'
+import { useProjectStore } from '../../../../stores/project-store'
+import { buildFinalizePostProcessSteps, FinalizeChapterCommand } from '../finalize-chapter.command'
+import { RefineDraftCommand } from '../refine-draft.command'
+import { RefineFromReviewCommand } from '../refine-from-review.command'
+import { ReviewChapterCommand } from '../review-chapter.command'
+import { savePartialData } from '../architecture.command'
+
+const finalizationClient = vi.hoisted(() => ({
+  commitFinalizationSnapshot: vi.fn(),
+}))
+
+vi.mock('../../../finalization-client', () => finalizationClient)
+
+const PROJECT_PATH = 'C:\\novels\\A'
+
+function callbacks(): StepCallbacks {
+  return {
+    log: vi.fn(),
+    setProgress: vi.fn(),
+    appendText: vi.fn(),
+  }
+}
+
+function context(): WorkflowContext {
+  return {
+    runId: 'mutation-boundary',
+    projectPath: PROJECT_PATH,
+    projectSession: { projectId: 'A', leaseId: 'lease-A', projectPath: PROJECT_PATH },
+    data: {},
+    cancelled: false,
+  }
+}
+
+function chapterInfo() {
+  return {
+    projectPath: PROJECT_PATH,
+    chapterNumber: 1,
+    title: '第一章',
+    role: '开端',
+    purpose: '建立冲突',
+    keyEvents: '事件',
+    characters: [],
+  }
+}
+
+function stubLlm(command: object, response: string): void {
+  vi.spyOn(
+    command as { callLLMWithBuilder: () => Promise<string> },
+    'callLLMWithBuilder',
+  ).mockResolvedValue(response)
+}
+
+beforeEach(() => {
+  finalizationClient.commitFinalizationSnapshot.mockReset()
+  useProjectStore.setState({
+    currentProject: {
+      id: 'A',
+      name: 'A',
+      path: PROJECT_PATH,
+      sessionLease: 'lease-A',
+      novelConfig: {
+        globalGuidance: '',
+        wordsPerChapter: 3000,
+      },
+    } as never,
+  })
+  useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  useProjectStore.setState({ currentProject: null })
+  useLLMStore.setState({ defaultModelId: null })
+})
+
+describe('workflow mutation failure boundaries', () => {
+  it('treats committed-but-pending manuscript publication as a failed finalization step', async () => {
+    finalizationClient.commitFinalizationSnapshot.mockResolvedValue({
+      success: false,
+      committed: true,
+      finalizationId: 'finalization-1',
+      contentHash: 'snapshot-hash',
+      contentRevision: 8,
+      draftId: 1,
+      publicationStatus: 'pending',
+      error: '定稿已提交、实体稿待发布：disk unavailable',
+    })
+    const command = new FinalizeChapterCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: '旧参数正文不得被读取',
+      chapterNumber: 1,
+      chapterInfo: chapterInfo(),
+      snapshot: Object.freeze({
+        tabId: 'draft-1',
+        projectPath: PROJECT_PATH,
+        projectSession: Object.freeze({
+          projectId: 'A',
+          leaseId: 'lease-A',
+          projectPath: PROJECT_PATH,
+        }),
+        draftId: 1,
+        chapterNumber: 1,
+        chapterTitle: '第一章',
+        content: '编辑器冻结正文',
+        contentRevision: 8,
+      }),
+    })
+
+    await expect(command.execute({
+      step: {},
+      context: context(),
+      callbacks: callbacks(),
+    })).rejects.toThrow('实体稿待发布')
+    expect(finalizationClient.commitFinalizationSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '编辑器冻结正文', contentRevision: 8 }),
+    )
+  })
+
+  it('rejects an architecture checkpoint write reported as success=false', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'fs:write-json') return { success: false, error: 'checkpoint rejected' }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    vi.stubGlobal('window', { velaAPI: { invoke } })
+
+    await expect(savePartialData(PROJECT_PATH, { premise_result: 'premise' }, context().projectSession!))
+      .rejects.toThrow('checkpoint rejected')
+  })
+
+  it('stops finalization when the atomic SQLite commit reports success=false', async () => {
+    finalizationClient.commitFinalizationSnapshot.mockResolvedValue({
+      success: false,
+      committed: false,
+      error: 'atomic finalization rejected',
+    })
+    const command = new FinalizeChapterCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: '旧参数正文不得被读取',
+      chapterNumber: 1,
+      chapterInfo: chapterInfo(),
+      snapshot: Object.freeze({
+        tabId: 'draft-1',
+        projectPath: PROJECT_PATH,
+        projectSession: Object.freeze({
+          projectId: 'A',
+          leaseId: 'lease-A',
+          projectPath: PROJECT_PATH,
+        }),
+        draftId: 1,
+        chapterNumber: 1,
+        chapterTitle: '第一章',
+        content: '编辑器冻结正文',
+        contentRevision: 8,
+      }),
+    })
+    const stepCallbacks = callbacks()
+
+    await expect(command.execute({
+      step: {},
+      context: context(),
+      callbacks: stepCallbacks,
+    })).rejects.toThrow('atomic finalization rejected')
+    expect(finalizationClient.commitFinalizationSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '编辑器冻结正文', contentRevision: 8 }),
+    )
+    expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('发布实体稿'))
+  })
+
+  it('stops the chapter-notes post-process step when blueprint persistence fails', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:blueprint-update-notes') {
+        return { success: false, error: 'notes rejected' }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    vi.stubGlobal('window', { velaAPI: { invoke } })
+    useLLMStore.setState({
+      defaultModelId: 'model',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        streamCallbacks.onDone?.('章节要点')
+        return 'request-1'
+      }),
+    })
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      '第一章',
+      '正文',
+    ).find(candidate => candidate.key === 'chapter_notes')
+    expect(step).toBeDefined()
+    const stepCallbacks = callbacks()
+
+    await expect(step!.executor(stepCallbacks, context()))
+      .rejects.toThrow('notes rejected')
+    expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('剧情要点提取完成'))
+  })
+
+  it.each([
+    {
+      failureChannel: 'db:character-update-state',
+      allCharacters: [{ name: '林岚', role: 'protagonist', currentState: {} }],
+      llmResponse: JSON.stringify({
+        updates: [{ name: '林岚', currentState: { location: '车站' } }],
+        newCharacters: [],
+      }),
+    },
+    {
+      failureChannel: 'db:character-upsert',
+      allCharacters: [],
+      llmResponse: JSON.stringify({
+        updates: [],
+        newCharacters: [{ name: '周砚', role: 'supporting', currentState: {} }],
+      }),
+    },
+  ])('stops character-card post-processing when $failureChannel reports failure', async ({
+    failureChannel,
+    allCharacters,
+    llmResponse,
+  }) => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:character-get-all') return allCharacters
+      if (channel === failureChannel) return { success: false, error: `${failureChannel} rejected` }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    vi.stubGlobal('window', { velaAPI: { invoke } })
+    useLLMStore.setState({
+      defaultModelId: 'model',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        streamCallbacks.onDone?.(llmResponse)
+        return 'request-1'
+      }),
+    })
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      '第一章',
+      '正文',
+    ).find(candidate => candidate.key === 'character_cards')
+    expect(step).toBeDefined()
+    const stepCallbacks = callbacks()
+
+    await expect(step!.executor(stepCallbacks, context()))
+      .rejects.toThrow(`${failureChannel} rejected`)
+    expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('自动提取并登记'))
+  })
+
+  it.each([
+    ['ordinary refinement', () => new RefineDraftCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: '原稿',
+      chapterNumber: 1,
+      chapterInfo: chapterInfo(),
+    })],
+    ['review refinement', () => new RefineFromReviewCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: '原稿',
+      reviewReport: '{}',
+      chapterNumber: 1,
+    })],
+  ])('does not open a diff when %s revision creation fails', async (_label, makeCommand) => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:draft-get-meta') {
+        return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      }
+      if (channel === 'db:revision-get-pending') return []
+      if (channel === 'db:revision-create') {
+        return { success: false, error: 'revision rejected' }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    vi.stubGlobal('window', { velaAPI: { invoke } })
+    const command = makeCommand()
+    stubLlm(command, '修订正文')
+
+    await expect(command.execute({
+      step: {},
+      context: context(),
+      callbacks: callbacks(),
+    })).rejects.toThrow('revision rejected')
+    expect(useEditorStore.getState().tabs).toEqual([])
+  })
+
+  it('does not open a review report when review persistence fails', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'kb:search') return []
+      if (channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:draft-get-meta') {
+        return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: false, error: 'review rejected' }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    vi.stubGlobal('window', { velaAPI: { invoke } })
+    const command = new ReviewChapterCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: '待审正文',
+      chapterNumber: 1,
+    })
+    stubLlm(command, '{"summary":"ok","items":[]}')
+
+    await expect(command.execute({
+      step: {},
+      context: context(),
+      callbacks: callbacks(),
+    })).rejects.toThrow('review rejected')
+    expect(useEditorStore.getState().tabs).toEqual([])
+  })
+})

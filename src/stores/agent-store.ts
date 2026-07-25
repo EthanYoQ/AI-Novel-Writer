@@ -7,6 +7,7 @@ import { skillRegistry } from '../services/agent/skill-registry'
 import { parseSlashCommand, parseMentions, mentionsToToolCalls } from '../services/agent/intent-router'
 import { toolRegistry } from '../services/agent/tool-registry'
 import type { ToolArtifact } from '../services/agent/tool-registry'
+import { createAgentExecutionContext } from '../services/agent/tools/project-context'
 
 // ===== 类型定义 =====
 
@@ -368,8 +369,10 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         return
       }
 
-      // 构建系统提示词（包含项目上下文 + Tool 列表）
-      const systemPrompt = buildAgentSystemPrompt(currentConv.mode)
+      // @ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
+      const executionContext = createAgentExecutionContext()
+      // 系统提示词、@ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
+      const systemPrompt = buildAgentSystemPrompt(currentConv.mode, executionContext)
 
       // ===== P1-5: @ 提及预取 =====
       let enrichedUserMessage = content.trim()
@@ -381,7 +384,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           const tool = toolRegistry.get(call.toolName)
           if (tool) {
             try {
-              const result = await tool.execute(call.args)
+              const result = await tool.execute(call.args, executionContext)
               if (result.success && result.content) {
                 prefetchResults.push(`[预加载上下文 @${call.toolName}]\n${result.content}`)
               }
@@ -505,6 +508,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           },
         },
         abortController.signal,
+        executionContext,
       )
     } catch (error) {
       updateAssistantMsg(m => ({

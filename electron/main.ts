@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { registerIPCHandlers } from './ipc-handlers'
 import { registerMCPHandlers } from './mcp/mcp-ipc-bridge'
 import { mainT } from './i18n'
@@ -7,7 +7,16 @@ import { createElectronUpdaterBackend } from './services/electron-updater-adapte
 import { GlobalConfigUpdatePreferencesStore } from './services/update-preferences-store'
 import { isWindowsUpdateRuntimeEnabled } from './services/update-runtime'
 import { startUpdateRuntime } from './services/update-startup'
+import {
+  claimReleaseVectorSmokeInvocation,
+  releaseVectorSmokeWasRequested,
+  runReleaseVectorSmoke,
+} from './services/release-vector-smoke'
 import type { UpdateState } from './services/update-service'
+import {
+  createOfficialHomepageWindowOpenHandler,
+  preventRendererNavigation,
+} from './services/official-homepage-navigation'
 
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -32,6 +41,14 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   : RENDERER_DIST
 
 let win: BrowserWindow | null
+
+// The installed-package vector qualification is deliberately opt-in and
+// fail-closed. A command-line request without the matching environment token
+// must never turn into a normal interactive application launch.
+const releaseVectorSmokeRequested = releaseVectorSmokeWasRequested(process.argv)
+const releaseVectorSmokeInvocation = releaseVectorSmokeRequested
+  ? claimReleaseVectorSmokeInvocation(process.argv, process.env)
+  : undefined
 
 function publishUpdateState(state: UpdateState): void {
   for (const target of BrowserWindow.getAllWindows()) {
@@ -66,6 +83,16 @@ function createWindow() {
   // 隐藏默认菜单栏（Windows/Linux）
   win.setMenuBarVisibility(false)
 
+  // 所有新窗口都留在应用外；仅精确匹配的官方仓库可交给系统浏览器。
+  win.webContents.setWindowOpenHandler(createOfficialHomepageWindowOpenHandler({
+    openExternal: url => shell.openExternal(url),
+    onOpenExternalError: error => {
+      console.warn('[AI Novel Writer] Unable to open official homepage from a window request.', error)
+    },
+  }))
+  // 渲染进程不能把现有主窗口导航到外部内容。
+  win.webContents.on('will-navigate', preventRendererNavigation)
+
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL)
   } else {
@@ -83,12 +110,23 @@ app.on('window-all-closed', () => {
 
 // macOS: 点击 dock 图标重新创建窗口
 app.on('activate', () => {
+  if (releaseVectorSmokeRequested) return
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow()
   }
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (releaseVectorSmokeRequested) {
+    if (!releaseVectorSmokeInvocation) {
+      throw new Error('Invalid packaged vector smoke invocation: the environment and one-time CLI token must match')
+    }
+    const evidence = await runReleaseVectorSmoke(releaseVectorSmokeInvocation.token)
+    process.stdout.write(`${JSON.stringify(evidence)}\n`)
+    app.exit(0)
+    return
+  }
+
   // 先让本地工作区可用；更新功能失败不能阻断作者进入应用。
   createWindow()
   registerIPCHandlers()
@@ -107,5 +145,9 @@ app.whenReady().then(() => {
   })
 }).catch((error: unknown) => {
   console.error('[Vela] Electron 启动失败。', error)
+  if (releaseVectorSmokeRequested) {
+    app.exit(1)
+    return
+  }
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
 })

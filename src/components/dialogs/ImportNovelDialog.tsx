@@ -3,6 +3,7 @@ import { FileUp, FolderOpen, BookOpen, Zap, Clock, AlertTriangle } from 'lucide-
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
+import type { ExternalFileGrant } from '../../shared/ipc-channels'
 import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
 import type { ImportedChapter } from '../../services/workflows/commands/import-novel.command'
 import { inferImportedNovelProjectName } from './import-novel-paths'
@@ -13,6 +14,7 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
 import { useLocaleStore } from '../../stores/locale-store'
+import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
 
 interface ImportNovelDialogProps {
   open: boolean
@@ -29,7 +31,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   // 表单状态
   const [name, setName] = useState('')
   const [savePath, setSavePath] = useState('')
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([])
+  const [selectedFiles, setSelectedFiles] = useState<ExternalFileGrant[]>([])
 
   // 拆章结果
   const [chapters, setChapters] = useState<ImportedChapter[]>([])
@@ -54,13 +56,13 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     // 自动推断项目名称（取第一个文件名去掉后缀）
     if (!name.trim()) {
       const firstFile = files[0]
-      setName(inferImportedNovelProjectName(firstFile))
+      setName(inferImportedNovelProjectName(firstFile.displayName))
     }
 
     // 自动拆章预览
     setSplitting(true)
     try {
-      const result = await ipc.invoke('import:split-chapters', files)
+      const result = await ipc.invoke('import:split-chapters', files.map(file => file.grantId))
       if (result.success) {
         setChapters(result.chapters)
         setTotalWords(result.totalWords)
@@ -101,10 +103,14 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       }
 
       // 2. 启动导入工作流
-      const workflow = createImportWorkflow({ chapters })
+      const currentProject = useProjectStore.getState().currentProject
+      const projectSession = captureProjectSession(currentProject)
+      const projectPath = currentProject?.path
+      if (!projectPath || !projectSession) throw new Error('新项目未成功打开，无法启动导入工作流')
+      const workflow = createImportWorkflow({ chapters, projectPath, projectSession })
       await startWorkflow(workflow, true) // 步进模式，方便用户观察
 
-      onClose()
+      if (isProjectSessionCurrent(projectSession)) onClose()
     } catch (e) {
       console.error('[ImportNovel] 导入失败:', e)
     } finally {

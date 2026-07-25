@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { useProjectStore } from '../../../stores/project-store'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 
 export const readDraftsTool = buildAgentTool({
@@ -27,18 +27,16 @@ export const readDraftsTool = buildAgentTool({
     required: ['chapter_number'],
   },
   requiresConfirmation: false,
-  execute: async (args) => {
-    const project = useProjectStore.getState().currentProject
-    if (!project) {
-      return { success: false, content: '', error: '没有打开的项目' }
-    }
+  execute: async (args, context) => {
+    const { project, projectSession } = requireAgentProject(context)
 
     const chapterNum = args.chapter_number as number
     const draftType = (args.draft_type as string) ?? 'latest'
 
     try {
       // 从数据库获取章节的草稿列表
-      const draftsResult = await ipc.invoke('db:draft-list', chapterNum)
+      const draftsResult = await ipc.invokeWithProjectSession(projectSession, 'db:draft-list', chapterNum, project.path)
+      assertAgentProjectCurrent(context)
       const drafts = (Array.isArray(draftsResult) ? draftsResult : []) as unknown as Array<Record<string, unknown>>
       if (!drafts || drafts.length === 0) {
         return { success: true, content: `第 ${chapterNum} 章暂无草稿。` }
@@ -67,7 +65,8 @@ export const readDraftsTool = buildAgentTool({
         targetName = `v${target.version as number}`
       }
 
-      const fullDraft = await ipc.invoke('db:draft-get-full', targetId as number) as { content?: string } | null
+      const fullDraft = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', targetId as number, project.path) as { content?: string } | null
+      assertAgentProjectCurrent(context)
       if (!fullDraft) {
         return { success: false, content: '', error: `读取草稿内容失败：id ${targetId}` }
       }

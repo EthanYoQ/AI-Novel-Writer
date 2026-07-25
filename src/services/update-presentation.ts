@@ -64,15 +64,17 @@ export function getUpdatePresentation(input: UpdatePresentationInput): UpdatePre
     }
   }
 
+  if (state.status === 'checking') {
+    return input.manualCheckRequested
+      ? visiblePresentation('checking', { canCheck: false })
+      : { ...hiddenPresentation, canCheck: false }
+  }
+
   if (input.manualActionError || (input.manualCheckRequested && state.status === 'error')) {
     return visiblePresentation('manual-error', {
       canDefer: Boolean(state.availableVersion) && !state.isReminderDeferred,
       canInstall: state.status === 'downloaded',
     })
-  }
-
-  if (input.manualCheckRequested && state.status === 'checking') {
-    return visiblePresentation('checking', { canCheck: false })
   }
 
   if (input.manualCheckRequested && state.status === 'not-available') {
@@ -98,6 +100,7 @@ export function getUpdatePresentation(input: UpdatePresentationInput): UpdatePre
 
   if (state.status === 'downloaded') {
     return visiblePresentation('downloaded', {
+      canCheck: false,
       canDefer,
       canInstall: true,
     })

@@ -2,8 +2,8 @@
  * read_project_state — 读取项目全局状态
  */
 import { buildAgentTool } from '../tool-registry'
-import { useProjectStore } from '../../../stores/project-store'
 import { ipc } from '../../ipc-client'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 
 export const readProjectStateTool = buildAgentTool({
@@ -26,11 +26,8 @@ export const readProjectStateTool = buildAgentTool({
     },
   },
   requiresConfirmation: false,
-  execute: async (args) => {
-    const project = useProjectStore.getState().currentProject
-    if (!project) {
-      return { success: false, content: '', error: '没有打开的项目' }
-    }
+  execute: async (args, context) => {
+    const { project, projectSession } = requireAgentProject(context)
 
     const includeConfig = (args.include_config as boolean) !== false
     const includeSummary = (args.include_summary as boolean) !== false
@@ -40,7 +37,8 @@ export const readProjectStateTool = buildAgentTool({
     if (includeConfig) {
       // 读取小说配置
       try {
-        const core = await ipc.invoke('db:project-core-get')
+        const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', project.path)
+        assertAgentProjectCurrent(context)
         if (core) {
           parts.push(`## 小说配置\n\`\`\`json\n${JSON.stringify({
             projectName: core.projectName,
@@ -64,7 +62,8 @@ export const readProjectStateTool = buildAgentTool({
       // 读取最近 5 章蓝图的 notes 字段作为进度摘要
       const notesParts: string[] = []
       try {
-        const bps = await ipc.invoke('db:blueprint-get-all')
+        const bps = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get-all', project.path)
+        assertAgentProjectCurrent(context)
         if (bps && Array.isArray(bps)) {
           // 倒序遍历
           const sorted = bps.sort((a, b) => b.chapterNumber - a.chapterNumber)
@@ -84,7 +83,7 @@ export const readProjectStateTool = buildAgentTool({
       }
     }
 
+    assertAgentProjectCurrent(context)
     return { success: true, content: parts.join('\n\n') }
   },
 })
-

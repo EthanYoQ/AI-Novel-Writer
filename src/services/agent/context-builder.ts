@@ -13,7 +13,11 @@ import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore } from '../../stores/editor-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import type { AgentMode } from '../../stores/agent-store'
-import { toolRegistry } from './tool-registry'
+import { toolRegistry, type AgentExecutionContext } from './tool-registry'
+import {
+  projectSessionContextFromProject,
+  sameProjectSessionContext,
+} from '../../shared/project-session-context'
 
 // ===== 上下文构建 =====
 
@@ -23,18 +27,21 @@ import { toolRegistry } from './tool-registry'
  * 这是 Agent 每次对话时的系统提示词入口。
  * 将项目上下文、编辑器状态、可用 Tool 列表整合为一份完整的系统提示。
  */
-export function buildAgentSystemPrompt(mode: AgentMode): string {
+export function buildAgentSystemPrompt(
+  mode: AgentMode,
+  executionContext?: AgentExecutionContext,
+): string {
   const sections: string[] = []
 
   // 1. Agent 身份与行为指导
   sections.push(buildIdentityPrompt(mode))
 
   // 2. L0 — 始终注入的项目上下文
-  const l0 = buildL0ProjectContext()
+  const l0 = buildL0ProjectContext(executionContext)
   if (l0) sections.push(l0)
 
   // 3. L1 — 编辑器感知上下文
-  const l1 = buildL1EditorContext()
+  const l1 = buildL1EditorContext(executionContext)
   if (l1) sections.push(l1)
 
   // 4. Tool 系统提示词
@@ -76,9 +83,15 @@ ${modeDesc}
  * L0 — 始终注入的项目上下文
  * 约 300-500 token，每次对话都注入
  */
-function buildL0ProjectContext(): string | null {
+function buildL0ProjectContext(executionContext?: AgentExecutionContext): string | null {
   const project = useProjectStore.getState().currentProject
-  if (!project) return null
+  if (
+    !project
+    || (executionContext?.projectSession && !sameProjectSessionContext(
+      executionContext.projectSession,
+      projectSessionContextFromProject(project),
+    ))
+  ) return null
 
   const cfg = project.novelConfig
   const parts: string[] = [
@@ -128,14 +141,26 @@ function buildL0ProjectContext(): string | null {
  * L1 — 编辑器感知上下文
  * 约 200-500 token，注入当前打开的 Tab 信息和工作流状态
  */
-function buildL1EditorContext(): string | null {
+function buildL1EditorContext(executionContext?: AgentExecutionContext): string | null {
   const parts: string[] = []
 
   // 当前打开的编辑器 Tab
   const editorState = useEditorStore.getState()
-  if (editorState.tabs.length > 0) {
-    const activeTab = editorState.tabs.find(t => t.id === editorState.activeTabId)
-    const tabSummaries = editorState.tabs.map(t => {
+  const currentProject = useProjectStore.getState().currentProject
+  if (
+    executionContext?.projectSession
+    && !sameProjectSessionContext(
+      executionContext.projectSession,
+      projectSessionContextFromProject(currentProject),
+    )
+  ) return null
+  const currentProjectPath = currentProject?.path
+  const projectTabs = currentProjectPath
+    ? editorState.tabs.filter(tab => tab.projectKey === currentProjectPath)
+    : []
+  if (projectTabs.length > 0) {
+    const activeTab = projectTabs.find(t => t.id === editorState.activeTabId)
+    const tabSummaries = projectTabs.map(t => {
       const active = t.id === editorState.activeTabId ? ' [当前活跃]' : ''
       const dirty = t.dirty ? ' [未保存]' : ''
       return `  - ${t.name} (${t.type})${active}${dirty}`
@@ -155,7 +180,7 @@ function buildL1EditorContext(): string | null {
   // 当前工作流状态
   const workflowState = useWorkflowStore.getState()
   if (workflowState.hasActiveRun()) {
-    const run = workflowState.currentRun
+    const run = workflowState.activeRuns.find(item => item.projectPath === currentProjectPath)
     if (run) {
       parts.push(`## 工作流状态\n当前有工作流正在运行：${run.title}（进度：${run.currentStepIndex + 1}/${run.steps.length}）`)
     }

@@ -12,9 +12,12 @@ import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { ImportPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
-import { searchKB } from '../../knowledge-service'
+import { requireIpcSuccess } from '../../ipc-result'
+import { unwrapKnowledgeValue } from '../../knowledge-service'
 import type { CharacterData } from '../../../../electron/repositories/character-repository'
 import { normalizeCharacterCardsForPersistence } from '../character-card-normalizer'
+import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
+import { requireWorkflowProjectSession } from '../workflow-project-session'
 
 /** 拆分后的章节数据（从 context.data 中传递） */
 export interface ImportedChapter {
@@ -34,24 +37,30 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
+    const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
-    if (!project) throw new Error('未打开项目')
+    if (!project || !sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(project),
+    )) throw new Error('当前项目已切换，导入已停止')
 
     callbacks.log(`开始作为定稿导入 ${this.chapters.length} 章正文到数据库...`)
     callbacks.setProgress(5)
 
     // 1. 批量创建草稿并标记为 finalized
     for (let i = 0; i < this.chapters.length; i++) {
+      this.assertNotCancelled(context)
       const ch = this.chapters[i]
 
       // 直接调用 DB 写库（来源设为 write）
-      await ipc.invoke('db:draft-create', {
+      const result = await ipc.invokeWithProjectSession(projectSession, 'db:draft-create', {
         chapterNumber: ch.number,
         version: 1,
         content: ch.content,
         wordCount: ch.wordCount,
         source: 'write'
-      })
+      }, context.projectPath)
+      if (!result.success) throw new Error(result.error || `第 ${ch.number} 章导入失败`)
 
       if (i % 10 === 0) {
         callbacks.setProgress(5 + Math.round((i / this.chapters.length) * 40))
@@ -66,12 +75,19 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
     let successCount = 0
     let failCount = 0
     for (let i = 0; i < this.chapters.length; i++) {
+      this.assertNotCancelled(context)
       const ch = this.chapters[i]
       try {
         const fileName = ch.title
           ? `第${ch.number}章 ${ch.title}.txt`
           : `chapter_${ch.number}.txt`
-        const result = await ipc.invoke('kb:import-text', ch.content, fileName, project.path) as { success: boolean; error?: string }
+        const result = await ipc.invokeWithProjectSession(
+          projectSession,
+          'kb:import-text',
+          ch.content,
+          fileName,
+          context.projectPath,
+        ) as { success: boolean; error?: string }
         if (result.success) {
           successCount++
         } else {
@@ -89,11 +105,12 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
     callbacks.setProgress(90)
 
     // 将章节数据存入 context 供后续步骤使用
+    this.assertNotCancelled(context)
     context.data.chapters = this.chapters
     context.data.totalChapters = this.chapters.length
 
     // 刷新文件树
-    useProjectStore.getState().refreshFileTree()
+    await useProjectStore.getState().refreshFileTree(context.projectPath, undefined, projectSession)
   }
 }
 
@@ -103,8 +120,13 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
 
 export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
   async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
+    const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
-    if (!project) throw new Error('未打开项目')
+    if (!project || !sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(project),
+    )) throw new Error('当前项目已切换，导入推演已停止')
+    const projectSnapshot = Object.freeze({ ...project, novelConfig: Object.freeze({ ...project.novelConfig }) })
 
     const chapters = context.data.chapters as ImportedChapter[]
     if (!chapters || chapters.length === 0) throw new Error('无章节数据')
@@ -122,8 +144,16 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
     const sampledContent: Record<string, string> = {}
     for (const topic of searchTopics) {
+      this.assertNotCancelled(context)
       try {
-        const results = await searchKB(topic.query, 5)
+        const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
+          projectSession,
+          'kb:search',
+          topic.query,
+          5,
+          context.projectPath,
+        ))
+        this.assertNotCancelled(context)
         if (results.length > 0) {
           sampledContent[topic.key] = results
             .map((r: { text: string; score: number; fileName: string }, i: number) =>
@@ -142,8 +172,8 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
     // ===== 构建 Prompt =====
     // 优先使用向量增强版 Prompt
-    const template = getPromptTemplate('infer_novel_config_with_vectors')
-      || getPromptTemplate('infer_novel_config')
+    const template = getPromptTemplate('infer_novel_config_with_vectors', projectSession)
+      || getPromptTemplate('infer_novel_config', projectSession)
     if (!template) throw new Error('未找到推演 Prompt 模板')
 
     const firstChapter = chapters[0]?.content?.slice(0, 3000) || '（第一章内容不可用）'
@@ -168,8 +198,10 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       prompt,
       template.systemRole || '你是一位顶级网文主编和资深阅读分析师。',
       callbacks,
-      { responseFormat: { type: 'json_object' } }
+      { responseFormat: { type: 'json_object' } },
+      context,
     )
+    this.assertNotCancelled(context)
 
     callbacks.setProgress(70)
     callbacks.log('正在解析 AI 返回结果并写入项目...')
@@ -184,28 +216,44 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     // ===== 写入小说配置 =====
     if (inferResult.novelConfig) {
       const novelConfig = {
-        ...project.novelConfig,
+        ...projectSnapshot.novelConfig,
         ...inferResult.novelConfig,
         totalChapters: chapters.length,
         wordsPerChapter: Math.round(chapters.reduce((s, c) => s + c.wordCount, 0) / chapters.length),
       }
-      // 更新内存
-      useProjectStore.getState().updateNovelConfig(novelConfig)
-      // 持久化到 config 文件
-      const updatedProject = useProjectStore.getState().currentProject
-      if (updatedProject) {
-        // 仅提取 ProjectData 字段，防止 structured clone 序列化异常
-        const plainData = {
-          id: updatedProject.id,
-          name: updatedProject.name,
-          path: updatedProject.path,
-          novelConfig: { ...updatedProject.novelConfig },
-          characterStates: updatedProject.characterStates,
-          createdAt: updatedProject.createdAt,
-          updatedAt: updatedProject.updatedAt,
-        }
-        await ipc.invoke('project:save', plainData.id, plainData)
+      if (!sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(useProjectStore.getState().currentProject),
+      )) {
+        throw new Error('当前项目已切换，导入配置结果未应用')
       }
+      this.assertNotCancelled(context)
+      const updatedProject = { ...projectSnapshot, novelConfig }
+      const plainData = {
+        id: updatedProject.id,
+        name: updatedProject.name,
+        path: updatedProject.path,
+        novelConfig: { ...updatedProject.novelConfig },
+        characterStates: updatedProject.characterStates,
+        createdAt: updatedProject.createdAt,
+        updatedAt: updatedProject.updatedAt,
+      }
+      const saveResult = await ipc.invokeWithProjectSession(
+        projectSession,
+        'project:save',
+        plainData.id,
+        plainData,
+        context.projectPath,
+      )
+      requireIpcSuccess(saveResult, '保存推演后的小说配置')
+      this.assertNotCancelled(context)
+      if (!sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(useProjectStore.getState().currentProject),
+      )) {
+        throw new Error('当前项目已切换，导入配置结果未应用')
+      }
+      useProjectStore.setState({ currentProject: updatedProject })
       callbacks.log('小说配置已更新')
 
       // 生成配置摘要供后续步骤使用
@@ -214,12 +262,14 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
     // ===== 写入架构信息 =====
     if (inferResult.architectureFiles) {
-      await ipc.invoke('db:project-core-update', {
+      this.assertNotCancelled(context)
+      const coreResult = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-update', {
         premise: inferResult.architectureFiles.premise,
         charactersArch: inferResult.architectureFiles.characters,
         worldbuilding: inferResult.architectureFiles.worldbuilding,
         synopsis: inferResult.architectureFiles.synopsis,
-      })
+      }, context.projectPath)
+      if (!coreResult.success) throw new Error(coreResult.error || '故事架构写入失败')
       callbacks.log('四段式故事架构已持久化到数据库')
     }
 
@@ -227,7 +277,14 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     if (inferResult.characterCards && Array.isArray(inferResult.characterCards)) {
       const cardsToSave: CharacterData[] = normalizeCharacterCardsForPersistence(inferResult.characterCards)
       if (cardsToSave.length > 0) {
-        const saveResult = await ipc.invoke('db:character-save-all', cardsToSave)
+        this.assertNotCancelled(context)
+        const saveResult = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:character-save-all',
+          cardsToSave,
+          undefined,
+          context.projectPath,
+        )
         if (!saveResult.success) {
           throw new Error(saveResult.error || '角色卡写入数据库失败')
         }
@@ -236,7 +293,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     }
 
     callbacks.setProgress(90)
-    this.notifyRefresh(['fileTree', 'characterCards'])
+    this.notifyRefresh(['fileTree', 'characterCards'], context.projectPath, requireWorkflowProjectSession(context))
   }
 }
 
@@ -250,14 +307,18 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
   private static readonly CONCURRENCY_LIMIT = 3
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
+    const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
-    if (!project) throw new Error('未打开项目')
+    if (!project || !sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(project),
+    )) throw new Error('当前项目已切换，蓝图推演已停止')
 
     const chapters = context.data.chapters as ImportedChapter[]
     const configSummary = (context.data.novelConfigSummary as string) || '（配置概要不可用）'
     if (!chapters || chapters.length === 0) throw new Error('无章节数据')
 
-    const template = getPromptTemplate('infer_single_chapter_blueprint')
+    const template = getPromptTemplate('infer_single_chapter_blueprint', projectSession)
     if (!template) throw new Error('未找到单章蓝图推演 Prompt 模板')
 
     callbacks.log(`开始逐章推演蓝图（共 ${chapters.length} 章，并发限制 ${InferBlueprintsPerChapterCommand.CONCURRENCY_LIMIT}）...`)
@@ -270,18 +331,26 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     // 限流并发执行器
     const runWithConcurrency = async (tasks: (() => Promise<void>)[], limit: number) => {
       const executing = new Set<Promise<void>>()
-      for (const task of tasks) {
-        const p = task().then(() => { executing.delete(p) })
-        executing.add(p)
-        if (executing.size >= limit) {
-          await Promise.race(executing)
+      let schedulingError: unknown
+      try {
+        for (const task of tasks) {
+          this.assertNotCancelled(context)
+          const p = task().finally(() => { executing.delete(p) })
+          executing.add(p)
+          if (executing.size >= limit) {
+            await Promise.race(executing)
+          }
         }
+      } catch (error) {
+        schedulingError = error
       }
-      await Promise.all(executing)
+      await Promise.allSettled(Array.from(executing))
+      if (schedulingError) throw schedulingError
     }
 
     const tasks = chapters.map((ch) => async () => {
       try {
+        this.assertNotCancelled(context)
         const prompt = new ImportPromptBuilder(template)
           .withChapterContent(ch.content.slice(0, 6000)) // 限制单章 Prompt 长度
           .withChapterNumber(ch.number)
@@ -293,8 +362,10 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
           prompt,
           template.systemRole || '你是一位专业的网文结构分析师。',
           callbacks,
-          { responseFormat: { type: 'json_object' } }
+          { responseFormat: { type: 'json_object' } },
+          context,
         )
+        this.assertNotCancelled(context)
 
         const blueprint = this.parseJSON<Record<string, unknown>>(rawResult)
 
@@ -312,7 +383,13 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
           notesUpdatedAt: '',
         }
 
-        const saveResult = await ipc.invoke('db:blueprint-upsert', finalBlueprint)
+        this.assertNotCancelled(context)
+        const saveResult = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:blueprint-upsert',
+          finalBlueprint,
+          context.projectPath,
+        )
         if (!saveResult.success) {
           throw new Error(saveResult.error || `第 ${ch.number} 章蓝图保存失败`)
         }
@@ -320,6 +397,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
         completedCount++
         callbacks.log(`  第 ${ch.number} 章蓝图已生成`)
       } catch (err) {
+        if (context.cancelled) throw err
         failedCount++
         const message = err instanceof Error ? err.message : String(err)
         errors.push(`第 ${ch.number} 章：${message}`)
@@ -340,12 +418,12 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
 
     if (failedCount > 0) {
       if (completedCount > 0) {
-        this.notifyRefresh(['fileTree', 'blueprints'])
+        this.notifyRefresh(['fileTree', 'blueprints'], context.projectPath, requireWorkflowProjectSession(context))
       }
       throw new Error(`蓝图推演失败 ${failedCount} 章：${errors.slice(0, 3).join('；')}`)
     }
 
     callbacks.setProgress(100)
-    this.notifyRefresh(['fileTree', 'blueprints'])
+    this.notifyRefresh(['fileTree', 'blueprints'], context.projectPath, requireWorkflowProjectSession(context))
   }
 }

@@ -12,10 +12,26 @@ const callbacks: StepCallbacks = {
 }
 
 const context: WorkflowContext = {
+  runId: 'test-run',
+  projectPath: 'C:\\tmp\\vela-test',
+  projectSession: {
+    projectId: 'project-1',
+    leaseId: 'lease-project-1',
+    projectPath: 'C:\\tmp\\vela-test',
+  },
   data: {
     architecture: '故事前提'.repeat(30),
   },
   cancelled: false,
+}
+
+const projectSnapshot = {
+  expectedProjectPath: 'C:\\tmp\\vela-test',
+  novelConfig: {
+    totalChapters: 3,
+    globalGuidance: '',
+    genre: '玄幻',
+  },
 }
 
 function stubIpcInvoke(handler: (channel: string, ...args: unknown[]) => unknown) {
@@ -41,6 +57,7 @@ beforeEach(() => {
       id: 'project-1',
       name: '测试项目',
       path: 'C:\\tmp\\vela-test',
+      sessionLease: 'lease-project-1',
       novelConfig: {
         genre: '玄幻',
         subGenre: '',
@@ -87,7 +104,7 @@ afterEach(() => {
 describe('GenerateDirectoryCommand', () => {
   it('fails when a generated batch parses to no blueprints', async () => {
     stubIpcInvoke(() => ({ success: true }))
-    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 })
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
     vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue('[]')
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow(/未解析到/)
@@ -99,18 +116,18 @@ describe('GenerateDirectoryCommand', () => {
       if (channel === 'db:blueprint-get') return null
       return { success: true }
     })
-    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 })
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
     vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
       '[{"chapterNumber":1,"title":"启程","keyEvents":"主角发现异常"}]',
     )
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow(/保存后验证/)
-    expect(invoke).toHaveBeenCalledWith('db:blueprint-get', 1)
+    expect(invoke).toHaveBeenCalledWith('db:blueprint-get', 1, projectSnapshot.expectedProjectPath, context.projectSession)
   })
 
   it('fails when generated blueprints skip required target chapters', async () => {
     const invoke = stubIpcInvoke(() => ({ success: true }))
-    const command = new GenerateDirectoryCommand({ mode: 'full', count: 3 })
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 3 }, projectSnapshot)
     vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
       '[{"chapterNumber":3,"title":"错位","keyEvents":"只返回第三章"}]',
     )
@@ -137,14 +154,61 @@ describe('GenerateDirectoryCommand', () => {
       if (channel === 'db:blueprint-get') return savedBlueprint
       return { success: true }
     })
-    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 })
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
     const callLLM = vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
       .mockResolvedValueOnce('{"blueprints":[{"chapterNumber" 1,"title":"启程"}]}')
       .mockResolvedValueOnce('[{"chapterNumber":1,"title":"启程","keyEvents":"主角发现异常"}]')
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toEqual([savedBlueprint])
     expect(callLLM).toHaveBeenCalledTimes(2)
-    expect(invoke).toHaveBeenCalledWith('db:blueprint-upsert-many', [savedBlueprint])
+    expect(invoke).toHaveBeenCalledWith(
+      'db:blueprint-upsert-many',
+      [savedBlueprint],
+      projectSnapshot.expectedProjectPath,
+      context.projectSession,
+    )
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('正在请求模型修复格式'))
+  })
+
+  it('keeps the frozen project path after an LLM response returns following a project switch', async () => {
+    let resolveLlm!: (value: string) => void
+    const llmResult = new Promise<string>((resolve) => {
+      resolveLlm = resolve
+    })
+    const invoke = stubIpcInvoke((channel, ...args) => {
+      if (
+        (channel === 'db:blueprint-upsert-many' || channel === 'db:blueprint-get')
+        && args[1] !== projectSnapshot.expectedProjectPath
+      ) {
+        throw new Error('unexpected project path')
+      }
+      if (channel === 'db:blueprint-upsert-many') {
+        return useProjectStore.getState().currentProject?.path === args[1]
+          ? { success: true }
+          : { success: false, error: '项目上下文已切换' }
+      }
+      return { success: true }
+    })
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+      .mockReturnValue(llmResult)
+
+    const execution = command.execute({ step: {}, context, callbacks })
+    await Promise.resolve()
+    useProjectStore.setState((state) => ({
+      currentProject: state.currentProject
+        ? { ...state.currentProject, id: 'project-2', path: 'C:\\tmp\\project-b' }
+        : null,
+    }))
+    resolveLlm('[{"chapterNumber":1,"title":"启程","keyEvents":"主角发现异常"}]')
+
+    await expect(execution).rejects.toThrow(/项目上下文已切换/)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:blueprint-upsert-many',
+      [expect.objectContaining({ chapterNumber: 1 })],
+      projectSnapshot.expectedProjectPath,
+      context.projectSession,
+    )
+    expect(invoke.mock.calls.some(([, ...args]) => args.includes('C:\\tmp\\project-b'))).toBe(false)
   })
 })

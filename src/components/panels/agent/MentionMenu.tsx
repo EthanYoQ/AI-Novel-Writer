@@ -4,7 +4,25 @@
  * 用户输入 @ 时弹出的上下文资源选择面板。
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
+import {
+  BookOpen,
+  ClipboardCheck,
+  FileStack,
+  FileText,
+  Map,
+  Users,
+  type LucideIcon,
+} from 'lucide-react'
 import { searchMentionTargets, type MentionTarget } from '../../../services/agent/intent-router'
+
+const mentionTargetIcons = {
+  architecture: Map,
+  character: Users,
+  blueprint: ClipboardCheck,
+  knowledge: BookOpen,
+  chapter: FileStack,
+  file: FileText,
+} satisfies Record<MentionTarget['type'], LucideIcon>
 
 interface Props {
   /** 搜索关键词（@ 后面的文字） */
@@ -73,21 +91,26 @@ export default function MentionMenu({ query, onSelect, onClose, position }: Prop
       <div className="text-[0.68rem] px-3 py-1" style={{ color: 'var(--color-text-muted)' }}>
         引用上下文
       </div>
-      {results.map((target, i) => (
-        <button
-          key={target.value}
-          onClick={() => onSelect(target)}
-          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors"
-          style={{
-            backgroundColor: i === selectedIndex ? 'var(--color-hover)' : 'transparent',
-            color: 'var(--color-text)',
-          }}
-          onMouseEnter={() => setSelectedIndex(i)}
-        >
-          <span className="text-sm">{target.icon}</span>
-          <span className="font-medium">{target.displayName}</span>
-        </button>
-      ))}
+      {results.map((target, i) => {
+        const TargetIcon = mentionTargetIcons[target.type]
+        return (
+          <button
+            key={target.value}
+            onClick={() => onSelect(target)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors"
+            style={{
+              backgroundColor: i === selectedIndex ? 'var(--color-hover)' : 'transparent',
+              color: 'var(--color-text)',
+            }}
+            onMouseEnter={() => setSelectedIndex(i)}
+          >
+            <span className="flex-shrink-0" style={{ color: 'var(--color-text-muted)' }} aria-hidden="true">
+              <TargetIcon size={14} strokeWidth={1.8} />
+            </span>
+            <span className="font-medium">{target.displayName}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }

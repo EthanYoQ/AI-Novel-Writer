@@ -5,6 +5,7 @@
  * 使用场景：Sidebar、WorldBuildingEditor
  */
 
+import type { ProjectSessionContext } from '../shared/ipc-channels'
 import { ipc } from './ipc-client'
 
 export type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
@@ -25,7 +26,9 @@ export const ARCH_FILES: Array<{
  * 检查所有架构块的生成状态
  * @returns key → boolean 映射，true 表示该块已有有效内容
  */
-export async function checkArchStatus(): Promise<Record<string, boolean>> {
+export async function checkArchStatus(
+  projectSession: ProjectSessionContext,
+): Promise<Record<string, boolean>> {
   const status: Record<string, boolean> = {
     premise: false,
     characters: false,
@@ -33,7 +36,11 @@ export async function checkArchStatus(): Promise<Record<string, boolean>> {
     synopsis: false,
   }
 
-  const core = await ipc.invoke('db:project-core-get')
+  const core = await ipc.invokeWithProjectSession(
+    projectSession,
+    'db:project-core-get',
+    projectSession.projectPath,
+  )
   if (!core) return status
 
   // 长度 > 50 才算真正已生成，前端可以直接用长度判断
@@ -48,14 +55,18 @@ export async function checkArchStatus(): Promise<Record<string, boolean>> {
 /**
  * 检查架构状态（包含字数统计）
  */
-export async function checkArchStatusWithWordCount(): Promise<{
+export async function checkArchStatusWithWordCount(projectSession: ProjectSessionContext): Promise<{
   status: Record<string, boolean>
   wordCounts: Record<string, number>
 }> {
   const status: Record<string, boolean> = { premise: false, characters: false, worldbuilding: false, synopsis: false }
   const wordCounts: Record<string, number> = { premise: 0, characters: 0, worldbuilding: 0, synopsis: 0 }
 
-  const core = await ipc.invoke('db:project-core-get')
+  const core = await ipc.invokeWithProjectSession(
+    projectSession,
+    'db:project-core-get',
+    projectSession.projectPath,
+  )
   if (!core) return { status, wordCounts }
 
   const check = (key: ArchStepKey, content: string | undefined | null) => {
@@ -76,9 +87,13 @@ export async function checkArchStatusWithWordCount(): Promise<{
 /**
  * 获取蓝图数量
  */
-export async function getBlueprintCount(): Promise<number> {
+export async function getBlueprintCount(projectSession: ProjectSessionContext): Promise<number> {
   try {
-    const blueprints = await ipc.invoke('db:blueprint-get-all')
+    const blueprints = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:blueprint-get-all',
+      projectSession.projectPath,
+    )
     return blueprints.length
   } catch {
     return 0
@@ -88,9 +103,16 @@ export async function getBlueprintCount(): Promise<number> {
 /**
  * 获取具体架构块的内容
  */
-export async function readArchFile(key: ArchStepKey): Promise<{ success: boolean; content: string }> {
+export async function readArchFile(
+  key: ArchStepKey,
+  projectSession: ProjectSessionContext,
+): Promise<{ success: boolean; content: string }> {
   try {
-    const core = await ipc.invoke('db:project-core-get')
+    const core = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:project-core-get',
+      projectSession.projectPath,
+    )
     if (!core) return { success: false, content: '' }
 
     let content = ''

@@ -1,18 +1,40 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Save, RefreshCw, Sparkles, Loader2, AlertTriangle, FileText } from 'lucide-react'
-import { renderIcon } from '../panels/sidebar/SidebarShared'
+import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
 import { useEditorStore } from '../../stores/editor-store'
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
-import { readCoreContent, writeCoreContent } from '../../services/vela-protocol'
+import { requireIpcSuccess } from '../../services/ipc-result'
+import { parseCoreField } from '../../services/vela-protocol'
 import CodeMirrorEditor from './CodeMirrorEditor'
 import { useProjectStore } from '../../stores/project-store'
 import { useCharacterStore } from '../../stores/character-store'
 import { runArchCharacterExtract, createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
+import {
+  ARCH_REFRESH_BLOCKED_MESSAGE,
+  ARCH_PROJECT_MISMATCH_MESSAGE,
+  ArchReloadGate,
+  archEditStoreAction,
+  decideArchExternalRefresh,
+  didArchSaveSettle,
+  hasUnsavedArchEdit,
+  isArchProjectCurrent,
+  reassertBlockedArchEdit,
+  shouldRefreshArchOnWorkflowComplete,
+  writeArchEditState,
+} from './arch-file-refresh-policy'
+import { isCharacterExtractionReady } from './character-extraction-policy'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+  isProjectSessionPath,
+} from '../project-session-gate'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import { sameProjectSessionContext } from '../../shared/project-session-context'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -34,8 +56,11 @@ function detectStepKey(filePath: string): ArchStepKey | null {
 }
 
 interface Props {
+  tabId: string
   filePath: string
+  projectKey: string
   content: string
+  savedContent: string
 }
 
 /**
@@ -43,12 +68,32 @@ interface Props {
  * - 使用 CodeMirrorEditor（document 模式）+ hideStatusBar，底部栏信息整合到本组件工具栏
  * - 脏状态通过比较内容字符串判断，不依赖 onChange 时机
  */
-export default function ArchFileViewer({ filePath, content: initialContent }: Props) {
+export default function ArchFileViewer(props: Props) {
+  const currentProject = useProjectStore(s => s.currentProject)
+  const projectSession = captureProjectSession(currentProject)
+  const sessionKey = projectSession && isProjectSessionPath(projectSession, props.projectKey)
+    ? `${projectSession.projectId}:${projectSession.leaseId}`
+    : `inactive:${props.projectKey}`
+
+  // 同一路径重新打开会产生新 lease；重挂载可隔离旧会话的编辑器临时状态。
+  return <ArchFileViewerSession key={sessionKey} {...props} />
+}
+
+function ArchFileViewerSession({
+  tabId,
+  filePath,
+  projectKey,
+  content: initialContent,
+  savedContent: initialSavedContent,
+}: Props) {
   const stepKey = detectStepKey(filePath)
   const meta = stepKey ? ARCH_META[stepKey] : null
+  const currentProject = useProjectStore(s => s.currentProject)
+  const currentProjectKey = currentProject?.path
+  const projectMatches = isArchProjectCurrent(projectKey, currentProjectKey)
 
   // 磁盘上的内容（已保存的基准）
-  const savedContentRef = useRef(initialContent)
+  const savedContentRef = useRef(initialSavedContent)
   // 编辑器当前内容（用 ref 而非 state，避免每次键入都重渲染导致光标跳末尾）
   const currentContentRef = useRef(initialContent)
   // 传给 CodeMirrorEditor 的初始内容（只有『外部重载』时才更新，不随用户键入变化）
@@ -60,150 +105,366 @@ export default function ArchFileViewer({ filePath, content: initialContent }: Pr
   const [checkingArch, setCheckingArch] = useState(false)
   const [fullArchStatus, setFullArchStatus] = useState<Record<string, boolean>>({})
   const [extracting, setExtracting] = useState(false)
+  const extractingRunIdRef = useRef<string | null>(null)
+  const extractingSessionRef = useRef<ProjectSessionContext | null>(null)
+  const extractingListenerCleanupRef = useRef<(() => void) | null>(null)
+  const lastCompletedArchitectureRunRef = useRef<string | null>(null)
+  const [refreshBlockedMessage, setRefreshBlockedMessage] = useState<string | null>(null)
+  const reloadGateRef = useRef(new ArchReloadGate())
 
   const characterCount = useCharacterStore(s => s.characters.length)
+  const characterDataProjectKey = useCharacterStore(s => s.dataProjectKey)
+  const characterLoadingProjectKey = useCharacterStore(s => s.loadingProjectKey)
+  const characterLoadError = useCharacterStore(s => s.lastError)
+  const characterExtractionReady = isCharacterExtractionReady({
+    projectKey,
+    dataProjectKey: characterDataProjectKey,
+    loadingProjectKey: characterLoadingProjectKey,
+    lastError: characterLoadError,
+    characterCount,
+  })
   const isArchRunning = useWorkflowStore(s => s.isTypeRunning('architecture_generation'))
 
   // 中文字数（由 CodeMirrorEditor 回调更新）
   const [charCount, setCharCount] = useState(0)
 
   // 脚状态（独立 state，不跟着 content 走）
-  const [isDirty, setIsDirty] = useState(false)
+  const [isDirty, setIsDirty] = useState(initialContent !== initialSavedContent)
+  const visibleBlockedMessage = projectMatches
+    ? refreshBlockedMessage
+    : ARCH_PROJECT_MISMATCH_MESSAGE
 
   // 外部内容更新时的热重载（拦截 store.syncTabContent 带来的 props.content 更新）
   useEffect(() => {
-    if (initialContent !== savedContentRef.current && initialContent !== currentContentRef.current) {
+    if (!projectMatches) return
+    const decision = decideArchExternalRefresh({
+      savedContent: savedContentRef.current,
+      currentContent: currentContentRef.current,
+    }, initialContent)
+    if (decision.kind === 'blocked') {
+      reassertBlockedArchEdit(
+        useEditorStore.getState(),
+        tabId,
+        currentContentRef.current,
+      )
+      setRefreshBlockedMessage(ARCH_REFRESH_BLOCKED_MESSAGE)
+      return
+    }
+    if (decision.kind === 'apply') {
+      reloadGateRef.current.recordContentChange()
+      setLoading(false)
       savedContentRef.current = initialContent
       currentContentRef.current = initialContent
       setEditorContent(initialContent)
       setIsDirty(false)
+      setRefreshBlockedMessage(null)
     }
-  }, [initialContent])
+  }, [initialContent, projectMatches, tabId])
 
 
   // 内容变化回调：更新 ref，不触发重渲染，避免 content prop 回传导致光标跳末尾
   const handleChange = useCallback((md: string) => {
+    reloadGateRef.current.recordContentChange()
+    setLoading(false)
     currentContentRef.current = md
-    const dirty = md !== savedContentRef.current
+    const storeAction = archEditStoreAction({
+      savedContent: savedContentRef.current,
+      currentContent: md,
+    })
+    const dirty = storeAction === 'update-dirty'
     setIsDirty(dirty)
     // 同步 editor-store 的 tab.dirty，供标题栏警示灯、Tab 圆点、关闭确认使用
-    if (dirty) {
-      useEditorStore.getState().updateTabContent(filePath, md)
-    } else {
-      useEditorStore.getState().syncTabContent(filePath, md)
-    }
-  }, [filePath])
+    writeArchEditState(useEditorStore.getState(), tabId, md, storeAction)
+  }, [tabId])
 
   /** 保存（统一走 vela://core/ DB 路径） */
   const handleSave = useCallback(async (md: string) => {
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      return
+    }
+    reloadGateRef.current.invalidate()
+    setLoading(false)
     setSaving(true)
     try {
-      let success = true
       if (filePath.startsWith('vela://core/')) {
-        success = await writeCoreContent(filePath, md)
+        const dbField = parseCoreField(filePath)
+        if (!dbField) return
+        requireIpcSuccess(await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:project-core-update',
+          { [dbField]: md },
+          projectSession.projectPath,
+        ), '保存架构文件')
       } else {
         // DB 化后架构文件不应有物理路径；如果意外触发，尝试 FS 写入兜底
         console.warn('[ArchFileViewer] 非预期的物理路径保存:', filePath)
-        const res = await ipc.invoke('fs:write-file', filePath, md)
-        success = res.success !== false
+        requireIpcSuccess(
+          await ipc.invokeWithProjectSession(
+            projectSession,
+            'fs:write-file',
+            filePath,
+            md,
+            projectSession.projectPath,
+          ),
+          '保存架构文件',
+        )
       }
-      if (success) {
+      if (isProjectSessionCurrent(projectSession)) {
+        reloadGateRef.current.invalidate()
+        setLoading(false)
         savedContentRef.current = md
-        setIsDirty(false)
-        useEditorStore.getState().markTabSaved(filePath)
+        if (didArchSaveSettle(md, currentContentRef.current)) {
+          setIsDirty(false)
+          setRefreshBlockedMessage(null)
+          useEditorStore.getState().markTabSaved(tabId, md)
+        } else {
+          setIsDirty(true)
+          useEditorStore.getState().updateTabContent(tabId, currentContentRef.current)
+        }
       }
     } finally {
-      setSaving(false)
+      if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
-  }, [filePath])
+  }, [filePath, projectKey, tabId])
 
   /** 从 DB 重新加载（AI 生成后刷新用） */
   const handleReload = useCallback(async () => {
-    setLoading(true)
-    let newContent = ''
-    if (filePath.startsWith('vela://core/')) {
-      newContent = await readCoreContent(filePath)
-    } else {
-      // DB 化后架构文件不应有物理路径
-      console.warn('[ArchFileViewer] 非预期的物理路径刷新:', filePath)
-      const res = await ipc.invoke('fs:read-file', filePath)
-      if (res.success) newContent = res.content
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      return
     }
-    savedContentRef.current = newContent
-    currentContentRef.current = newContent
-    setEditorContent(newContent)
-    setIsDirty(false)
-    useEditorStore.getState().markTabSaved(filePath)
-    setLoading(false)
-  }, [filePath])
+    if (hasUnsavedArchEdit({
+      savedContent: savedContentRef.current,
+      currentContent: currentContentRef.current,
+    })) {
+      reassertBlockedArchEdit(
+        useEditorStore.getState(),
+        tabId,
+        currentContentRef.current,
+      )
+      setRefreshBlockedMessage(ARCH_REFRESH_BLOCKED_MESSAGE)
+      return
+    }
+
+    const reloadToken = reloadGateRef.current.begin()
+    setLoading(true)
+    try {
+      let newContent = ''
+      if (filePath.startsWith('vela://core/')) {
+        const core = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:project-core-get',
+          projectSession.projectPath,
+        )
+        const dbField = parseCoreField(filePath)
+        newContent = dbField && core
+          ? String(core[dbField as keyof typeof core] ?? '')
+          : ''
+      } else {
+        // 数据库存储后，架构文件不应再有物理路径。
+        console.warn('[ArchFileViewer] 非预期的物理路径刷新:', filePath)
+        const res = await ipc.invokeWithProjectSession(
+          projectSession,
+          'fs:read-file',
+          filePath,
+          projectSession.projectPath,
+        )
+        if (res.success) newContent = res.content
+      }
+      const currentTab = useEditorStore.getState().tabs.find(tab => tab.id === tabId)
+      if (
+        !reloadGateRef.current.isCurrent(reloadToken)
+        || !isProjectSessionCurrent(projectSession)
+        || currentTab?.projectKey !== projectKey
+      ) {
+        return
+      }
+      const decision = decideArchExternalRefresh({
+        savedContent: savedContentRef.current,
+        currentContent: currentContentRef.current,
+      }, newContent)
+      if (decision.kind === 'blocked') {
+        reassertBlockedArchEdit(
+          useEditorStore.getState(),
+          tabId,
+          currentContentRef.current,
+        )
+        setRefreshBlockedMessage(ARCH_REFRESH_BLOCKED_MESSAGE)
+        return
+      }
+      if (decision.kind === 'apply') {
+        savedContentRef.current = decision.content
+        currentContentRef.current = decision.content
+        setEditorContent(decision.content)
+        setIsDirty(false)
+        setRefreshBlockedMessage(null)
+        useEditorStore.getState().markTabSaved(tabId, decision.content)
+      }
+    } catch (error) {
+      if (
+        reloadGateRef.current.isCurrent(reloadToken)
+        && isProjectSessionCurrent(projectSession)
+      ) {
+        console.warn('[ArchFileViewer] 架构文档刷新失败:', error)
+      }
+    } finally {
+      if (reloadGateRef.current.isCurrent(reloadToken) && isProjectSessionCurrent(projectSession)) {
+        setLoading(false)
+      }
+    }
+  }, [filePath, projectKey, tabId])
+
+  useEffect(() => {
+    const reloadGate = reloadGateRef.current
+    return () => {
+      reloadGate.invalidate()
+      extractingListenerCleanupRef.current?.()
+      extractingListenerCleanupRef.current = null
+      extractingRunIdRef.current = null
+      extractingSessionRef.current = null
+    }
+  }, [])
 
   // 监听架构生成完成事件，自动刷新当前页面
   useEffect(() => {
     return globalEventBus.on('WORKFLOW_COMPLETE', (payload) => {
-      if (payload.type === 'architecture_generation') {
-        handleReload()
-      }
+      const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+      if (!projectSession || !isProjectSessionCurrent(projectSession)) return
+      if (!shouldRefreshArchOnWorkflowComplete(
+        payload,
+        projectSession,
+        lastCompletedArchitectureRunRef.current,
+      )) return
+      lastCompletedArchitectureRunRef.current = payload.runId
+      void handleReload()
     })
-  }, [handleReload])
+  }, [handleReload, projectKey])
 
   /** 确认后启动架构生成工作流 */
   const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
-    useWorkflowStore.getState().startWorkflow(createArchitectureWorkflow({ selectedSteps, stepGuidance }))
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      return
+    }
+    if (!isProjectSessionCurrent(projectSession)) return
+    useWorkflowStore.getState().startWorkflow(createArchitectureWorkflow({
+      projectPath: projectSession.projectPath,
+      projectSession,
+      selectedSteps,
+      stepGuidance,
+    }))
   }
 
   const handleOpenDialog = async () => {
-    if (!stepKey) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!stepKey || !projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      return
+    }
     setCheckingArch(true)
-    const core = await ipc.invoke('db:project-core-get')
-    const status: Record<string, boolean> = {
-      premise: !!core?.premise && core.premise.length > 50 && !core.premise.includes('待生成'),
-      characters: !!core?.charactersArch && core.charactersArch.length > 50 && !core.charactersArch.includes('待生成'),
-      worldbuilding: !!core?.worldbuilding && core.worldbuilding.length > 50 && !core.worldbuilding.includes('待生成'),
-      synopsis: !!core?.synopsis && core.synopsis.length > 50 && !core.synopsis.includes('待生成'),
-    }
+    try {
+      const core = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:project-core-get',
+        projectSession.projectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
+      const status: Record<string, boolean> = {
+        premise: !!core?.premise && core.premise.length > 50 && !core.premise.includes('待生成'),
+        characters: !!core?.charactersArch && core.charactersArch.length > 50 && !core.charactersArch.includes('待生成'),
+        worldbuilding: !!core?.worldbuilding && core.worldbuilding.length > 50 && !core.worldbuilding.includes('待生成'),
+        synopsis: !!core?.synopsis && core.synopsis.length > 50 && !core.synopsis.includes('待生成'),
+      }
 
-    // 对于当前文件，如果编辑器内已修改但未保存，也暂时以前面的基准为准即可
-    const EditorContentLen = currentContentRef.current.length;
-    if (EditorContentLen > 50 && !currentContentRef.current.includes('待生成')) {
-      status[stepKey] = true
+      // 对于当前文件，如果编辑器内已修改但未保存，也暂时以前面的基准为准即可
+      const EditorContentLen = currentContentRef.current.length;
+      if (EditorContentLen > 50 && !currentContentRef.current.includes('待生成')) {
+        status[stepKey] = true
+      }
+      setFullArchStatus(status)
+      setShowDialog(true)
+    } catch (error) {
+      if (isProjectSessionCurrent(projectSession)) {
+        console.warn('[ArchFileViewer] 检查架构状态失败:', error)
+      }
+    } finally {
+      if (isProjectSessionCurrent(projectSession)) setCheckingArch(false)
     }
-    setFullArchStatus(status)
-    setCheckingArch(false)
-    setShowDialog(true)
   }
 
   const generated = initialContent.length > 50 && !initialContent.includes('待生成')
 
   const handleExtractCharacters = useCallback(async () => {
     const project = useProjectStore.getState().currentProject
-    if (!project || extracting) return
+    const projectSession = captureProjectSession(project)
+    if (!project || !projectSession || !isProjectSessionPath(projectSession, projectKey) || extracting) {
+      return
+    }
     setExtracting(true)
     try {
-      const core = await ipc.invoke('db:project-core-get')
+      const core = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:project-core-get',
+        projectSession.projectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
       const charArch = core?.charactersArch ?? ''
       if (charArch.length < 50) {
-        setExtracting(false)
+        if (isProjectSessionCurrent(projectSession)) setExtracting(false)
         return
       }
-      runArchCharacterExtract(project.path, charArch, project.novelConfig.genre)
+      if (!isProjectSessionCurrent(projectSession)) return
+      extractingSessionRef.current = projectSession
+      extractingRunIdRef.current = runArchCharacterExtract(
+        projectSession.projectPath,
+        charArch,
+        project.novelConfig.genre,
+        projectSession,
+      )
 
-      // 通过 EventBus 监听提取完成事件
-      const unsub1 = globalEventBus.on('ARCH_POSTPROCESS_UPDATED', () => {
-        setExtracting(false)
+      // 通过 EventBus 监听提取完成事件；卸载或会话切换时必须解除监听。
+      let unsub1: () => void = () => {}
+      let unsub2: () => void = () => {}
+      const clearListeners = () => {
         unsub1()
         unsub2()
+        if (extractingListenerCleanupRef.current === clearListeners) {
+          extractingListenerCleanupRef.current = null
+        }
+      }
+      extractingListenerCleanupRef.current?.()
+      extractingListenerCleanupRef.current = clearListeners
+      unsub1 = globalEventBus.on('ARCH_POSTPROCESS_UPDATED', (payload) => {
+        if (
+          !isProjectSessionCurrent(projectSession)
+          || !sameProjectSessionContext(projectSession, payload.projectSession)
+          || payload.runId !== extractingRunIdRef.current
+        ) return
+        extractingRunIdRef.current = null
+        extractingSessionRef.current = null
+        setExtracting(false)
+        clearListeners()
       })
-      const unsub2 = globalEventBus.on('CHARACTER_EXTRACT_FAILED', () => {
+      unsub2 = globalEventBus.on('CHARACTER_EXTRACT_FAILED', (payload) => {
+        if (
+          !isProjectSessionCurrent(projectSession)
+          || !sameProjectSessionContext(projectSession, payload.projectSession)
+          || payload.runId !== extractingRunIdRef.current
+        ) return
+        extractingRunIdRef.current = null
+        extractingSessionRef.current = null
         setExtracting(false)
-        unsub1()
-        unsub2()
+        clearListeners()
       })
 
     } catch (e) {
-      console.error('角色卡提取失败', e)
-      setExtracting(false)
+      if (isProjectSessionCurrent(projectSession)) {
+        console.error('角色卡提取失败', e)
+        extractingSessionRef.current = null
+        setExtracting(false)
+      }
     }
-  }, [extracting])
+  }, [extracting, projectKey])
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -252,7 +513,7 @@ export default function ArchFileViewer({ filePath, content: initialContent }: Pr
             size="icon"
             onClick={handleReload}
             title="从磁盘重新加载（AI 生成完成后可点击刷新）"
-            disabled={loading}
+            disabled={loading || !projectMatches}
           >
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </Button>
@@ -263,7 +524,7 @@ export default function ArchFileViewer({ filePath, content: initialContent }: Pr
               variant="outline"
               size="sm"
               onClick={() => handleSave(currentContentRef.current)}
-              disabled={saving}
+              disabled={saving || !projectMatches}
               title="保存（Cmd+S）"
             >
               <Save size={12} />
@@ -272,10 +533,10 @@ export default function ArchFileViewer({ filePath, content: initialContent }: Pr
           )}
 
           {/* 角色卡提取按钮（仅角色图谱页面显式且为空时、且不在架构生成中时才显示） */}
-          {stepKey === 'characters' && generated && characterCount === 0 && !isArchRunning && (
+          {stepKey === 'characters' && generated && characterExtractionReady && !isArchRunning && (
             <Button
               size="sm"
-              disabled={extracting}
+              disabled={extracting || !projectMatches}
               onClick={handleExtractCharacters}
               className="gap-1.5 bg-gradient-to-r from-red-500 to-orange-500 text-white shadow-sm hover:from-red-600 hover:to-orange-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
               title="角色档案为空，可能是因为上一次生成失败或被删除。点击重新提取"
@@ -294,7 +555,7 @@ export default function ArchFileViewer({ filePath, content: initialContent }: Pr
               variant="ai"
               size="sm"
               onClick={handleOpenDialog}
-              disabled={checkingArch}
+              disabled={checkingArch || !projectMatches}
               title={`AI ${generated ? '重新生成' : '生成'}「${meta?.label}」`}
             >
               {checkingArch ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
@@ -303,6 +564,21 @@ export default function ArchFileViewer({ filePath, content: initialContent }: Pr
           )}
         </div>
       </div>
+
+      {visibleBlockedMessage && (
+        <div
+          role="status"
+          className="flex items-center gap-2 px-3 py-2 text-xs"
+          style={{
+            color: 'var(--color-warning)',
+            backgroundColor: 'var(--color-editor-bg)',
+            borderBottom: '1px solid var(--color-border)',
+          }}
+        >
+          <AlertTriangle size={13} className="flex-shrink-0" />
+          <span>{visibleBlockedMessage}</span>
+        </div>
+      )}
 
       {/* CodeMirrorEditor document 模式，隐藏底部栏（信息已整合到上方工具栏） */}
       <div className="flex-1 overflow-hidden">

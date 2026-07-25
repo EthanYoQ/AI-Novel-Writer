@@ -5,6 +5,9 @@ import { Button } from '../ui/Button'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
+import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../project-session-gate'
+import { useProjectStore } from '../../stores/project-store'
+import { useLocaleStore } from '../../stores/locale-store'
 
 /** 审稿问题条目（JSON 格式） */
 interface ReviewIssue {
@@ -35,6 +38,8 @@ interface ReviewReportProps {
   chapterNumber?: number
   /** 章节目录 */
   chapterDir?: string
+  /** 审稿与草稿所属项目。 */
+  projectKey: string
 }
 
 // ===== 解析器 =====
@@ -68,14 +73,14 @@ function extractJSON(text: string): string | null {
 }
 
 /** 解析审稿报告（优先 JSON，回退到旧版文本解析） */
-function parseReport(text: string): { issues: ReviewIssue[]; summary: string } {
+function parseReport(text: string, fallbackCategory: string): { issues: ReviewIssue[]; summary: string } {
   const jsonStr = extractJSON(text)
   if (jsonStr) {
     try {
       const data = JSON.parse(jsonStr) as ReviewJSON
       if (data.items && Array.isArray(data.items)) {
         const issues: ReviewIssue[] = data.items.map(item => ({
-          category: item.category || '综合检查',
+          category: item.category || fallbackCategory,
           severity: normalizeSeverity(item.severity),
           description: item.description || '',
           quote: item.quote || undefined,
@@ -88,14 +93,14 @@ function parseReport(text: string): { issues: ReviewIssue[]; summary: string } {
   }
 
   // 回退：旧版 markdown 文本解析（兼容历史数据）
-  return parseLegacyReport(text)
+  return parseLegacyReport(text, fallbackCategory)
 }
 
 /** 旧版文本解析器（兼容历史审稿报告） */
-function parseLegacyReport(text: string): { issues: ReviewIssue[]; summary: string } {
+function parseLegacyReport(text: string, fallbackCategory: string): { issues: ReviewIssue[]; summary: string } {
   const issues: ReviewIssue[] = []
   const lines = text.split('\n')
-  let currentCategory = '综合检查'
+  let currentCategory = fallbackCategory
   const summaryLines: string[] = []
   let inSummary = false
 
@@ -145,42 +150,63 @@ function parseLegacyReport(text: string): { issues: ReviewIssue[]; summary: stri
 // ===== 视觉配置 =====
 
 const SEVERITY_META: Record<ReviewIssue['severity'], {
-  label: string
-  emoji: string
-  actionLabel: string
   colorClass: string
   bgClass: string
   borderClass: string
 }> = {
   error: {
-    label: '严重问题',
-    emoji: '🔴',
-    actionLabel: '强烈建议修复',
     colorClass: 'text-red-400',
     bgClass: 'bg-red-500/10',
     borderClass: 'border-red-500/30',
   },
   warning: {
-    label: '改进建议',
-    emoji: '🟡',
-    actionLabel: '建议酌情修复',
     colorClass: 'text-yellow-400',
     bgClass: 'bg-yellow-500/10',
     borderClass: 'border-yellow-500/30',
   },
   pass: {
-    label: '检查通过',
-    emoji: '🟢',
-    actionLabel: '无需处理',
     colorClass: 'text-green-400',
     bgClass: 'bg-green-500/10',
     borderClass: 'border-green-500/30',
   },
 }
 
+function severityCopy(
+  severity: ReviewIssue['severity'],
+  text: (zhCNText: string, enUSText: string) => string,
+) {
+  switch (severity) {
+    case 'error':
+      return {
+        label: text('严重问题', 'Critical issue'),
+        actionLabel: text('强烈建议修复', 'Strongly recommended to fix'),
+        countLabel: text('严重', 'critical'),
+      }
+    case 'warning':
+      return {
+        label: text('改进建议', 'Improvement'),
+        actionLabel: text('建议酌情修复', 'Consider fixing'),
+        countLabel: text('建议', 'suggestions'),
+      }
+    default:
+      return {
+        label: text('检查通过', 'Passed'),
+        actionLabel: text('无需处理', 'No action needed'),
+        countLabel: text('通过', 'passed'),
+      }
+  }
+}
+
+function SeverityIcon({ severity }: { severity: ReviewIssue['severity'] }) {
+  if (severity === 'error') return <AlertTriangle size={14} className="text-red-400 flex-shrink-0" />
+  if (severity === 'warning') return <AlertTriangle size={14} className="text-yellow-400 flex-shrink-0" />
+  return <CheckCircle size={14} className="text-green-400 flex-shrink-0" />
+}
+
 /** 审稿报告查看器 */
-export default function ReviewReport({ reportText, draftPath, chapterNumber, chapterDir }: ReviewReportProps) {
-  const { issues, summary } = parseReport(reportText)
+export default function ReviewReport({ reportText, draftPath, chapterNumber, chapterDir, projectKey }: ReviewReportProps) {
+  const text = useLocaleStore(s => s.text)
+  const { issues, summary } = parseReport(reportText, text('综合检查', 'General review'))
   const [showRefineDialog, setShowRefineDialog] = useState(false)
   const [userRefinePrompt, setUserRefinePrompt] = useState('')
   const [processing, setProcessing] = useState(false)
@@ -198,20 +224,31 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
   const errorCount = issues.filter((i) => i.severity === 'error').length
   const warningCount = issues.filter((i) => i.severity === 'warning').length
   const passCount = issues.filter((i) => i.severity === 'pass').length
+  const errorCopy = severityCopy('error', text)
+  const warningCopy = severityCopy('warning', text)
+  const passCopy = severityCopy('pass', text)
 
   /** 根据审稿意见修稿 */
   const doRefineFromReview = async () => {
     if (!draftPath || !chapterDir) return
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     setProcessing(true)
     setShowRefineDialog(false)
     try {
       const { useWorkflowStore } = await import('../../stores/workflow-store')
+      if (!isProjectSessionCurrent(projectSession)) return
 
       const { createRefineFromReviewWorkflow } = await import('../../services/workflows/chapter-workflow')
       const { getLatestReview } = await import('../../services/draft-index')
       const { readDraftBody } = await import('../../stores/draft-store')
 
-      const draftContent = await readDraftBody(draftPath)
+      const draftContent = await readDraftBody(
+        draftPath,
+        projectSession.projectPath,
+        projectSession,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
       if (!draftContent) return
 
       // 提取版本信息
@@ -220,15 +257,22 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
       const chapterNum = chapterNumber || 0
 
       // 获取最新审稿文件名（用于关联）
-      const latestReview = await getLatestReview(chapterDir, baseVersion)
+      const latestReview = await getLatestReview(
+        chapterDir,
+        baseVersion,
+        projectSession.projectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
       const reviewFileName = latestReview?.fileName || ''
 
       // 从 index.json 读取章节标题
       const { readDraftIndex } = await import('../../services/draft-index')
       const index = await readDraftIndex()
+      if (!isProjectSessionCurrent(projectSession)) return
       const chapterTitle = index.chapterTitle || `第${chapterNum}章`
 
       useWorkflowStore.getState().startWorkflow(createRefineFromReviewWorkflow({
+        projectPath: projectSession.projectPath,
         chapterNumber: chapterNum,
         chapterTitle,
         draftPath,
@@ -236,16 +280,10 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
         reviewReport: reportText,
         reviewFileName,
         userRefinePrompt: userRefinePrompt.trim() || undefined,
-      }), false)
+      }, projectSession), false)
     } finally {
       setProcessing(false)
     }
-  }
-
-  const SeverityIcon = ({ severity }: { severity: string }) => {
-    if (severity === 'error') return <AlertTriangle size={14} className="text-red-400 flex-shrink-0" />
-    if (severity === 'warning') return <AlertTriangle size={14} className="text-yellow-400 flex-shrink-0" />
-    return <CheckCircle size={14} className="text-green-400 flex-shrink-0" />
   }
 
   // 是否可以触发修稿（有草稿路径和章节信息时）
@@ -256,27 +294,27 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
       <div className="max-w-2xl mx-auto px-6 py-4">
         {/* 统计栏 */}
         <div className="flex items-center gap-4 mb-4 pb-3 border-b border-[var(--color-border)]">
-          <h3 className="text-base font-bold text-[var(--color-text)]"> 审稿报告</h3>
+          <h3 className="text-base font-bold text-[var(--color-text)]">{text('审稿报告', 'Review report')}</h3>
           <div className="flex items-center gap-3 text-xs ml-auto">
             {errorCount > 0 && (
               <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/20 text-red-400">
-                🔴 {errorCount} 严重
+                <SeverityIcon severity="error" /> {errorCount} {errorCopy.countLabel}
               </span>
             )}
             {warningCount > 0 && (
               <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400">
-                🟡 {warningCount} 建议
+                <SeverityIcon severity="warning" /> {warningCount} {warningCopy.countLabel}
               </span>
             )}
             <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-500/20 text-green-400">
-              🟢 {passCount} 通过
+              <SeverityIcon severity="pass" /> {passCount} {passCopy.countLabel}
             </span>
             {/* 图例帮助按钮 */}
             <button
               className="flex items-center justify-center rounded-full hover:bg-[var(--color-hover)] transition-colors"
               style={{ width: 22, height: 22 }}
               onClick={() => setShowLegend(!showLegend)}
-              title="颜色说明"
+              title={text('颜色说明', 'Color legend')}
             >
               <HelpCircle size={14} style={{ color: 'var(--color-text-muted)' }} />
             </button>
@@ -292,19 +330,20 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
               borderColor: 'var(--color-border)',
             }}
           >
-            <div className="font-medium text-[var(--color-text)] mb-1.5">颜色标记说明</div>
+            <div className="font-medium text-[var(--color-text)] mb-1.5">{text('颜色标记说明', 'Color legend')}</div>
             {(['error', 'warning', 'pass'] as const).map(sev => {
               const meta = SEVERITY_META[sev]
+              const copy = severityCopy(sev, text)
               return (
                 <div key={sev} className="flex items-center gap-2">
                   <span className={cn(
                     'inline-flex items-center gap-1 px-2 py-0.5 rounded',
                     meta.bgClass, meta.colorClass
                   )}>
-                    {meta.emoji} {meta.label}
+                    <SeverityIcon severity={sev} /> {copy.label}
                   </span>
                   <span style={{ color: 'var(--color-text-secondary)' }}>
-                    — {meta.actionLabel}
+                    — {copy.actionLabel}
                   </span>
                 </div>
               )
@@ -322,7 +361,7 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
               color: 'var(--color-text)',
             }}
           >
-            <span className="font-medium">总体评价：</span>
+            <span className="font-medium">{text('总体评价：', 'Overall assessment:')}</span>
             <span style={{ color: 'var(--color-text-secondary)' }}>{summary}</span>
           </div>
         )}
@@ -331,7 +370,7 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
         {issues.length === 0 ? (
           <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
             <CheckCircle size={32} className="mx-auto mb-2 text-green-400" />
-            审稿通过，未发现问题
+            {text('审稿通过，未发现问题', 'Review passed. No issues found.')}
           </div>
         ) : (
           <div className="space-y-4">
@@ -344,6 +383,7 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
                 <div className="space-y-1.5 pl-1">
                   {items.map((item, i) => {
                     const meta = SEVERITY_META[item.severity]
+                    const copy = severityCopy(item.severity, text)
                     return (
                       <div
                         key={i}
@@ -359,7 +399,7 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
                             <span
                               className={cn('ml-2 text-[0.65rem] opacity-70', meta.colorClass)}
                             >
-                              [{meta.actionLabel}]
+                              [{copy.actionLabel}]
                             </span>
                           </div>
                         </div>
@@ -388,14 +428,14 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
         {/* 原始文本折叠 */}
         <details className="mt-6">
           <summary className="text-xs text-[var(--color-text-muted)] cursor-pointer hover:text-[var(--color-text)]">
-            查看原始审稿文本
+            {text('查看原始审稿文本', 'View original review text')}
           </summary>
           <pre className="mt-2 text-xs whitespace-pre-wrap font-mono leading-5 text-[var(--color-text-secondary)] bg-[var(--color-sidebar)] rounded-md p-3 border border-[var(--color-border)]">
             {reportText}
           </pre>
         </details>
 
-        {/* 🔧 根据审稿意见修稿 — 核心循环入口 */}
+        {/* Revise from review feedback */}
         {canRefine && (
           <div className="mt-6 pt-6 border-t border-[var(--color-border)] flex flex-col items-center">
             <Button
@@ -405,10 +445,10 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
               disabled={processing}
             >
               <Sparkles size={14} className="mr-1" />
-              AI 一键修稿
+              {text('AI 一键修稿', 'AI revise')}
             </Button>
             <p className="text-[0.7rem] text-center mt-3" style={{ color: 'var(--color-text-muted)' }}>
-              AI 将根据上方审稿报告中发现的问题精准修复草稿，并为您生成对比视图
+              {text('AI 将根据上方审稿报告中发现的问题精准修复草稿，并为您生成对比视图', 'AI will address issues from this review and generate a comparison view.')}
             </p>
           </div>
         )}
@@ -420,20 +460,20 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Sparkles size={15} className="text-[var(--color-accent)]" />
-              根据审稿意见修稿
+              {text('根据审稿意见修稿', 'Revise from review feedback')}
             </DialogTitle>
             <DialogDescription>
-              AI 将根据审稿报告中的问题精准修复草稿
+              {text('AI 将根据审稿报告中的问题精准修复草稿', 'AI will address the issues identified in the review report.')}
             </DialogDescription>
           </DialogHeader>
           <div className="px-5 py-2 text-sm space-y-1.5" style={{ color: 'var(--color-text-secondary)' }}>
-            <div className="font-medium text-[var(--color-text)]">本次【审稿修稿】范围：</div>
-            <div>1. 重点修复审稿报告中指出的「严重问题」与「改进建议」。</div>
-            <div>2. 可在下方指定的额外修稿要求。</div>
+            <div className="font-medium text-[var(--color-text)]">{text('本次【审稿修稿】范围：', 'This review-driven revision will:')}</div>
+            <div>{text('1. 重点修复审稿报告中指出的「严重问题」与「改进建议」。', '1. Focus on critical issues and improvement suggestions from the review report.')}</div>
+            <div>{text('2. 可在下方指定的额外修稿要求。', '2. Follow any additional revision guidance below.')}</div>
           </div>
           <div className="px-5 pb-2">
             <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
-              额外修稿指导（可选）：
+              {text('额外修稿指导（可选）：', 'Additional revision guidance (optional):')}
             </label>
             <textarea
               className="w-full px-3 py-2 rounded-md text-sm"
@@ -445,15 +485,18 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
                 resize: 'vertical',
                 outline: 'none',
               }}
-              placeholder="例如：优先修复角色对白不一致的问题；忽略报告中关于节奏的建议，保持原有节奏..."
+              placeholder={text(
+                '例如：优先修复角色对白不一致的问题；忽略报告中关于节奏的建议，保持原有节奏...',
+                'For example: prioritize inconsistent character dialogue; ignore pacing suggestions and keep the existing pace...',
+              )}
               value={userRefinePrompt}
               onChange={e => setUserRefinePrompt(e.target.value)}
             />
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowRefineDialog(false)}>取消</Button>
+            <Button variant="ghost" onClick={() => setShowRefineDialog(false)}>{text('取消', 'Cancel')}</Button>
             <Button variant="ai" onClick={doRefineFromReview}>
-              确认修稿
+              {text('确认修稿', 'Revise')}
             </Button>
           </DialogFooter>
         </DialogContent>

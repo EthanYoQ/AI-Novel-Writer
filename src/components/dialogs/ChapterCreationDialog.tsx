@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Sparkles, Play, AlertCircle, Loader2 } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
@@ -7,6 +7,7 @@ import { useWorkflowStore } from '../../stores/workflow-store'
 import { createChapterWorkflow } from '../../services/workflows/chapter-workflow'
 import { guardChapterWriting } from '../../services/workflow-guards'
 import { ipc } from '../../services/ipc-client'
+import { requireIpcSuccess } from '../../services/ipc-result'
 import { toast } from '../ui/Toast'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
@@ -17,6 +18,15 @@ import { Textarea } from '../ui/Textarea'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 import { useLocaleStore } from '../../stores/locale-store'
+import {
+  ChapterCreationLoadGate,
+  type ChapterCreationLoadToken,
+} from './chapter-creation-load-gate'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+} from '../project-session-gate'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
 
 const CHAPTER_ROLES = [
   { value: '开篇', en: 'Opening' },
@@ -59,6 +69,7 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
   const [loadedFromBlueprint, setLoadedFromBlueprint] = useState(false)
   const [guardError, setGuardError] = useState<string | null>(null)
   const isChapterRunning = useWorkflowStore(s => s.isTypeRunning('chapter_creation'))
+  const loadGate = useRef(new ChapterCreationLoadGate())
 
 
   // 如果是在这弹窗里发起的任务，一旦跑完，isChapterRunning 会变成 false，此时自动关闭弹窗
@@ -75,10 +86,24 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
   }, [isOpen, onClose])
 
   /** 从项目本地 .vela/chapter_creation_log.json 读取上次参数 */
-  const loadLastParams = useCallback(async () => {
-    if (!currentProject) return
+  const loadLastParams = useCallback(async (
+    projectSession: ProjectSessionContext,
+    defaultWordsTarget: number,
+    requestToken: ChapterCreationLoadToken,
+  ) => {
+    const projectPath = projectSession.projectPath
+    const isCurrentRequest = () => loadGate.current.isCurrent(
+      requestToken,
+      useProjectStore.getState().currentProject?.path,
+    ) && isProjectSessionCurrent(projectSession)
     try {
-      const result = await ipc.invoke('fs:read-json', `${currentProject.path}/${CREATION_LOG_REL}`)
+      const result = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:read-json',
+        `${projectPath}/${CREATION_LOG_REL}`,
+        projectPath,
+      )
+      if (!isCurrentRequest()) return
       if (result.success && result.data) {
         const log = result.data as {
           lastUsed?: {
@@ -97,24 +122,34 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
           setKeyEvents(last.keyEvents || '')
           setCharacters(last.characters || '')
           setUserGuidance(last.userGuidance || '')
-          setWordsTarget(last.wordsTarget || currentProject.novelConfig.wordsPerChapter || 3000)
+          setWordsTarget(last.wordsTarget || defaultWordsTarget)
           setLoadedFromHistory(true)
           return
         }
       }
     } catch { /* 文件不存在，使用默认值 */ }
+    if (!isCurrentRequest()) return
     // 默认值：根据已有稿件数量推断下一章节号
-    setWordsTarget(currentProject.novelConfig.wordsPerChapter || 3000)
+    setWordsTarget(defaultWordsTarget)
     setChapterNumber(1)
     setLoadedFromHistory(false)
-  }, [currentProject])
+  }, [])
 
   // 每次打开时：prefill 优先，其次尝试从历史恢复
   useEffect(() => {
     if (!isOpen || !currentProject) return
-    let mounted = true
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    const projectPath = projectSession.projectPath
+    const defaultWordsTarget = currentProject.novelConfig.wordsPerChapter || 3000
+    const gate = loadGate.current
+    const requestToken = gate.begin(projectPath)
+    const isCurrentRequest = () => gate.isCurrent(
+      requestToken,
+      useProjectStore.getState().currentProject?.path,
+    ) && isProjectSessionCurrent(projectSession)
     Promise.resolve().then(() => {
-      if (!mounted) return
+      if (!isCurrentRequest()) return
       if (prefill) {
         // 使用章节蓝图预填数据
         setChapterNumber(Number(prefill.chapterNumber) || 1)
@@ -124,38 +159,55 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
         setKeyEvents(String(prefill.keyEvents || ''))
         setCharacters(String(prefill.characters || ''))
         setUserGuidance(String(prefill.userGuidance || ''))
-        setWordsTarget(currentProject.novelConfig.wordsPerChapter || 3000)
+        setWordsTarget(defaultWordsTarget)
         setLoadedFromBlueprint(true)
         setLoadedFromHistory(false)
       } else {
         setLoadedFromBlueprint(false)
-        loadLastParams()
+        void loadLastParams(projectSession, defaultWordsTarget, requestToken)
       }
     })
-    return () => { mounted = false }
+    return () => {
+      gate.invalidate(requestToken)
+    }
   }, [isOpen, currentProject, prefill, loadLastParams])
 
 
 
   /** 保存当前参数到持久化文件 */
-  const saveParams = async () => {
-    if (!currentProject) return
+  const saveParams = async (projectSession: ProjectSessionContext) => {
+    const projectPath = projectSession.projectPath
+    const params = { chapterNumber, title, role, purpose, keyEvents, characters, userGuidance, wordsTarget }
     try {
       // 读取已有 log
       let log: { lastUsed?: object; history?: object[] } = {}
-      const existing = await ipc.invoke('fs:read-json', `${currentProject.path}/${CREATION_LOG_REL}`)
+      const existing = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:read-json',
+        `${projectPath}/${CREATION_LOG_REL}`,
+        projectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
       if (existing.success && existing.data) {
         log = existing.data as typeof log
       }
 
-      const params = { chapterNumber, title, role, purpose, keyEvents, characters, userGuidance, wordsTarget }
       log.lastUsed = params
       log.history = [
         { ...params, createdAt: new Date().toISOString() },
         ...((log.history || []) as object[]).slice(0, 49), // 最多保留 50 条历史
       ]
 
-      await ipc.invoke('fs:write-json', `${currentProject.path}/${CREATION_LOG_REL}`, log)
+      requireIpcSuccess(
+        await ipc.invokeWithProjectSession(
+          projectSession,
+          'fs:write-json',
+          `${projectPath}/${CREATION_LOG_REL}`,
+          log,
+          projectPath,
+        ),
+        '保存章节创作记录',
+      )
     } catch (e) {
       console.warn('[ChapterCreation] 参数持久化失败:', e)
     }
@@ -166,7 +218,9 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
       addLog('error', text('请先配置 AI 模型', 'Configure an AI model first.'))
       return
     }
-    if (!currentProject) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    const projectPath = projectSession.projectPath
 
     // 防重复：同类型工作流正在运行
     if (isChapterRunning) {
@@ -176,7 +230,8 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
 
     // 前置校验：章节蓝图是否已生成，以及（若篇章>1）前一章是否已定稿
     const targetChapter = Number(chapterNumber) || 1
-    const guard = await guardChapterWriting(targetChapter)
+    const guard = await guardChapterWriting(targetChapter, projectPath, projectSession)
+    if (!isProjectSessionCurrent(projectSession)) return
     if (!guard.ok) {
       setGuardError(guard.message || text('前置条件未满足', 'Prerequisites are not met.'))
       return
@@ -184,9 +239,11 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
     setGuardError(null)
 
     // 持久化本次参数
-    await saveParams()
+    await saveParams(projectSession)
+    if (!isProjectSessionCurrent(projectSession)) return
 
     const workflow = createChapterWorkflow({
+      projectPath,
       chapterNumber: Number(chapterNumber) || 1,
       title: title || `第${chapterNumber || 1}章`,
       role,
@@ -195,9 +252,10 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
       keyEvents,
       userGuidance,
       knowledgeQueryHint: knowledgeHint.trim() || undefined,
-    })
+    }, projectSession)
 
     // 启动任务后关闭设定弹窗，由全局 Overlay 接管展示
+    if (!isProjectSessionCurrent(projectSession)) return
     startWorkflow(workflow, false)
     onClose()
   }

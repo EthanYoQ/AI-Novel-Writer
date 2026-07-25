@@ -1,5 +1,12 @@
 import { ipcMain, BrowserWindow } from 'electron'
-import { readJsonFile, writeJsonFile, MODELS_CONFIG_PATH, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG } from '../utils/config-utils'
+import {
+  readJsonFile,
+  tryReadJsonFile,
+  writeJsonFile,
+  MODELS_CONFIG_PATH,
+  GLOBAL_CONFIG_PATH,
+  DEFAULT_GLOBAL_CONFIG,
+} from '../utils/config-utils'
 import { ModelProfile, GlobalConfig } from '../../src/shared/ipc-channels'
 import { LLMFactory } from '../llm/llm-factory'
 
@@ -115,10 +122,48 @@ export function registerLLMController() {
   })
 
   ipcMain.handle('llm:delete-model', async (_event, modelId: string) => {
+    let originalConfig: GlobalConfig | undefined
+    let configChanged = false
     try {
-      const models = loadModelConfigs().filter((m) => m.id !== modelId)
-      saveModelConfigs(models)
-      return { success: true }
+      const modelsRead = tryReadJsonFile<ModelProfile[]>(MODELS_CONFIG_PATH)
+      if (modelsRead.status === 'error') throw modelsRead.error
+      const originalModels = modelsRead.status === 'ok' ? modelsRead.value : []
+      const configRead = tryReadJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH)
+      if (configRead.status === 'error') throw configRead.error
+      originalConfig = configRead.status === 'ok'
+        ? configRead.value
+        : { ...DEFAULT_GLOBAL_CONFIG }
+
+      const nextConfig = { ...originalConfig }
+      if (nextConfig.defaultModelId === modelId) {
+        nextConfig.defaultModelId = null
+        configChanged = true
+      }
+      if (nextConfig.defaultEmbeddingModelId === modelId) {
+        nextConfig.defaultEmbeddingModelId = null
+        configChanged = true
+      }
+
+      // 先清除引用，再删除被引用对象。若第二个文件写入失败，回滚配置；
+      // 即使回滚也失败，配置中只会缺少默认值，不会悬空指向已删除模型。
+      if (configChanged) writeJsonFile(GLOBAL_CONFIG_PATH, nextConfig)
+      try {
+        saveModelConfigs(originalModels.filter(model => model.id !== modelId))
+      } catch (error) {
+        if (configChanged) {
+          try {
+            writeJsonFile(GLOBAL_CONFIG_PATH, originalConfig)
+          } catch (rollbackError) {
+            throw new Error(`${String(error)}；恢复默认模型配置失败：${String(rollbackError)}`)
+          }
+        }
+        throw error
+      }
+      return {
+        success: true,
+        defaultModelId: nextConfig.defaultModelId,
+        defaultEmbeddingModelId: nextConfig.defaultEmbeddingModelId ?? null,
+      }
     } catch (error) {
       return { success: false, error: String(error) }
     }

@@ -7,9 +7,14 @@ import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { useProjectStore } from '../../stores/project-store'
 import { globalEventBus } from '../../shared/event-bus'
-import { loadKBData, type KBDocument } from '../../services/knowledge-service'
+import { unwrapKnowledgeValue, type KBDocument } from '../../services/knowledge-service'
 import { useLocaleStore } from '../../stores/locale-store'
 import { appErrorMessage } from '../../i18n/app-errors'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+} from '../project-session-gate'
+import { sameProjectSessionContext } from '../../shared/project-session-context'
 
 
 
@@ -22,36 +27,63 @@ export default function KnowledgePanel() {
   const [titleMap, setTitleMap] = useState<Record<string, string>>({})
   const [loadError, setLoadError] = useState('')
   const { locale, text } = useLocaleStore()
+  const currentProject = useProjectStore(s => s.currentProject)
 
   /** 加载文档列表 + 统计（通过 Service 层） */
   const loadData = useCallback(async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    const expectedProjectPath = projectSession.projectPath
     try {
-      const { documents: docs, stats: s } = await loadKBData()
+      const [documentsResult, statsResult] = await Promise.all([
+        ipc.invokeWithProjectSession(projectSession, 'kb:list-documents', expectedProjectPath),
+        ipc.invokeWithProjectSession(projectSession, 'kb:stats', expectedProjectPath),
+      ])
+      if (!isProjectSessionCurrent(projectSession)) return
+      const docs = unwrapKnowledgeValue(documentsResult)
+      const s = unwrapKnowledgeValue(statsResult)
       setDocuments(docs)
       setStats(s)
       setLoadError('')
     } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return
       setLoadError(appErrorMessage(locale, error))
     }
-  }, [locale])
+  }, [currentProject, locale])
 
-  useEffect(() => { 
+  useEffect(() => {
     let mounted = true
-    Promise.resolve().then(() => { if (mounted) loadData() })
+    Promise.resolve().then(() => {
+      if (!mounted || !captureProjectSession(currentProject)) return
+      setDocuments([])
+      setStats({ documentCount: 0, totalChunks: 0 })
+      setTitleMap({})
+      setCurrentPage(1)
+      setLoadError('')
+      loadData()
+    })
     return () => { mounted = false }
-  }, [loadData])
+  }, [currentProject, loadData])
 
   // 通过 EventBus 监听资源刷新和定稿完成事件
   useEffect(() => {
-    const unsub1 = globalEventBus.on('REFRESH_RESOURCE', () => { loadData() })
-    const unsub2 = globalEventBus.on('FINALIZE_COMPLETE', () => { loadData() })
+    const unsub1 = globalEventBus.on('REFRESH_RESOURCE', ({ projectSession: eventSession }) => {
+      const projectSession = captureProjectSession(currentProject)
+      if (projectSession && sameProjectSessionContext(projectSession, eventSession)) loadData()
+    })
+    const unsub2 = globalEventBus.on('FINALIZE_COMPLETE', ({ projectSession: eventSession }) => {
+      const projectSession = captureProjectSession(currentProject)
+      if (projectSession && sameProjectSessionContext(projectSession, eventSession)) loadData()
+    })
     return () => { unsub1(); unsub2() }
-  }, [loadData])
+  }, [currentProject, loadData])
 
   useEffect(() => {
     let cancelled = false
     const loadTitles = async () => {
-      if (documents.length === 0) return
+      const projectSession = captureProjectSession(currentProject)
+      if (!projectSession || documents.length === 0) return
+      const expectedProjectPath = projectSession.projectPath
       const missing = documents.filter(d => d.filePath && !titleMap[d.id])
       if (missing.length === 0) return
 
@@ -68,7 +100,12 @@ export default function KnowledgePanel() {
           }
 
           try {
-            const res = await ipc.invoke('fs:read-file', doc.filePath)
+            const res = await ipc.invokeWithProjectSession(
+              projectSession,
+              'fs:read-file',
+              doc.filePath,
+              expectedProjectPath,
+            )
             if (res.success && res.content) {
               const firstLine = res.content.split('\n').find((l: string) => l.trim())
               if (firstLine) {
@@ -79,13 +116,13 @@ export default function KnowledgePanel() {
           newTitles[doc.id] = title
         })
       )
-      if (!cancelled) setTitleMap(prev => ({ ...prev, ...newTitles }))
+      if (!cancelled && isProjectSessionCurrent(projectSession)) {
+        setTitleMap(prev => ({ ...prev, ...newTitles }))
+      }
     }
     loadTitles()
     return () => { cancelled = true }
-  }, [documents]) // eslint-disable-line react-hooks/exhaustive-deps -- titleMap 不需要作为依赖：内部通过 prev => 合并即可获取最新值
-
-  const currentProject = useProjectStore(s => s.currentProject)
+  }, [currentProject, documents]) // eslint-disable-line react-hooks/exhaustive-deps -- titleMap 不需要作为依赖：内部通过 prev => 合并即可获取最新值
 
   if (!currentProject) {
     return (

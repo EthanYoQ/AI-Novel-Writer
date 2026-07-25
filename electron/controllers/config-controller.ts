@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { readJsonFile, writeJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, VELA_HOME } from '../utils/config-utils'
+import { readJsonFile, writeJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG } from '../utils/config-utils'
 import { GlobalConfig } from '../../src/shared/ipc-channels'
 
 export function registerConfigController() {
@@ -18,10 +18,5 @@ export function registerConfigController() {
     } catch (error) {
       return { success: false, error: String(error) }
     }
-  })
-
-  /** 获取 ~/.vela 路径 */
-  ipcMain.handle('config:get-vela-home', async () => {
-    return VELA_HOME
   })
 }

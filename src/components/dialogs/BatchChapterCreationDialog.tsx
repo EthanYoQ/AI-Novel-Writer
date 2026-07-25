@@ -12,6 +12,10 @@ import { Button } from '../ui/Button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/Dialog'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+} from '../project-session-gate'
 
 interface Props {
   isOpen: boolean
@@ -20,7 +24,18 @@ interface Props {
 }
 
 /** 配置并启动受控批量创作任务（最多十章）。 */
-export default function BatchChapterCreationDialog({ isOpen, startChapterNumber, onClose }: Props) {
+export default function BatchChapterCreationDialog(props: Props) {
+  const currentProject = useProjectStore(s => s.currentProject)
+  const projectSession = captureProjectSession(currentProject)
+  const sessionKey = projectSession
+    ? `${projectSession.projectId}:${projectSession.leaseId}`
+    : 'inactive'
+
+  // 同一路径重新打开会创建新 lease；重挂载不会让旧会话的对话框状态沿用到新会话。
+  return <BatchChapterCreationDialogSession key={sessionKey} {...props} />
+}
+
+function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose }: Props) {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
@@ -37,7 +52,9 @@ export default function BatchChapterCreationDialog({ isOpen, startChapterNumber,
   const end = start + normalizedCount - 1
 
   const handleStart = async () => {
-    if (!currentProject) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    const projectPath = projectSession.projectPath
     if (!defaultModelId) {
       setError(text('请先配置默认 AI 模型。', 'Configure a default AI model first.'))
       return
@@ -49,14 +66,23 @@ export default function BatchChapterCreationDialog({ isOpen, startChapterNumber,
 
     setStarting(true)
     try {
-      const guard = await guardChapterWriting(start)
+      const guard = await guardChapterWriting(start, projectPath, projectSession)
+      if (!isProjectSessionCurrent(projectSession)) return
       if (!guard.ok) {
         setError(guard.message || text('前置条件未满足。', 'Prerequisites are not met.'))
         return
       }
 
       const chapterNumbers = Array.from({ length: normalizedCount }, (_, index) => start + index)
-      const blueprints = await Promise.all(chapterNumbers.map((chapterNumber) => ipc.invoke('db:blueprint-get', chapterNumber)))
+      const blueprints = await Promise.all(
+        chapterNumbers.map((chapterNumber) => ipc.invokeWithProjectSession(
+          projectSession,
+          'db:blueprint-get',
+          chapterNumber,
+          projectPath,
+        )),
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
       const missingChapter = blueprints.findIndex((blueprint) => !blueprint)
       if (missingChapter >= 0) {
         const chapterNumber = chapterNumbers[missingChapter]
@@ -67,7 +93,10 @@ export default function BatchChapterCreationDialog({ isOpen, startChapterNumber,
         return
       }
 
+      if (!isProjectSessionCurrent(projectSession)) return
       startWorkflow(createBatchChapterWorkflow({
+        projectPath,
+        projectSession,
         startChapterNumber: start,
         chapterCount: normalizedCount,
         locale,
@@ -79,10 +108,11 @@ export default function BatchChapterCreationDialog({ isOpen, startChapterNumber,
       ))
       onClose()
     } catch (cause) {
+      if (!isProjectSessionCurrent(projectSession)) return
       const message = cause instanceof Error ? cause.message : String(cause)
       setError(message)
     } finally {
-      setStarting(false)
+      if (isProjectSessionCurrent(projectSession)) setStarting(false)
     }
   }
 

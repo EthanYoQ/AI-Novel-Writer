@@ -4,11 +4,15 @@ import {
   assertBlueprintCoverage,
   parseTextBlueprints,
   parseTextBlueprintsStrict,
+  createDirectoryWorkflow,
   saveAllBlueprints,
   saveChapterBlueprint,
   verifyBlueprintsPersisted,
   type ChapterBlueprint,
 } from '../directory-workflow'
+import { useProjectStore } from '../../../stores/project-store'
+import type { ProjectData } from '../../../shared/ipc-channels'
+import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 
 const blueprint: ChapterBlueprint = {
   chapterNumber: 1,
@@ -42,7 +46,44 @@ function stubIpcInvoke(result: unknown) {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  useProjectStore.setState({ currentProject: null })
 })
+
+function project(path: string): ProjectData {
+  return {
+    id: path,
+    name: path,
+    path,
+    sessionLease: `lease-${path}`,
+    novelConfig: {
+      genre: '玄幻',
+      subGenre: '',
+      targetAudience: '全龄',
+      totalChapters: 3,
+      wordsPerChapter: 3000,
+      plotStructure: 'three_act',
+      narrativePOV: 'third_limited',
+      coreOutline: '',
+      worldSetting: '',
+      goldenFinger: '',
+      protagonistProfile: '',
+      globalGuidance: '',
+    },
+    characterStates: '',
+    createdAt: '',
+    updatedAt: '',
+  }
+}
+
+function workflowStep(name: string) {
+  return {
+    id: name,
+    name,
+    description: name,
+    status: 'running' as const,
+    logs: [],
+  }
+}
 
 describe('parseTextBlueprints', () => {
   it('parses object responses with a blueprints array', () => {
@@ -186,28 +227,94 @@ describe('assertBlueprintCoverage', () => {
 })
 
 describe('blueprint persistence helpers', () => {
+  const session = { projectId: 'NovelA', leaseId: 'lease-NovelA', projectPath: 'C:/NovelA' }
+
   it('throws when saving one blueprint returns an IPC failure', async () => {
     stubIpcInvoke({ success: false, error: 'DB 未打开' })
 
-    await expect(saveChapterBlueprint(blueprint)).rejects.toThrow('DB 未打开')
+    await expect(saveChapterBlueprint(blueprint, 'C:/NovelA', session)).rejects.toThrow('DB 未打开')
   })
 
   it('throws when saving many blueprints returns an IPC failure', async () => {
     stubIpcInvoke({ success: false, error: '写入失败' })
 
-    await expect(saveAllBlueprints([blueprint])).rejects.toThrow('写入失败')
+    await expect(saveAllBlueprints([blueprint], 'C:/NovelA', session)).rejects.toThrow('写入失败')
   })
 
   it('resolves when the IPC save succeeds', async () => {
     const invoke = stubIpcInvoke({ success: true })
 
-    await expect(saveAllBlueprints([blueprint])).resolves.toBeUndefined()
-    expect(invoke).toHaveBeenCalledWith('db:blueprint-upsert-many', [blueprint])
+    await expect(saveAllBlueprints([blueprint], 'C:/NovelA', session)).resolves.toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith('db:blueprint-upsert-many', [blueprint], 'C:/NovelA', session)
   })
 
   it('throws when persisted blueprint content does not match the generated result', async () => {
     stubIpcInvoke({ ...blueprint, title: '旧标题' })
 
-    await expect(verifyBlueprintsPersisted([blueprint], { startChapter: 1, endChapter: 1 })).rejects.toThrow(/内容与本次生成结果不一致/)
+    await expect(verifyBlueprintsPersisted(
+      [blueprint],
+      'C:/NovelA',
+      { startChapter: 1, endChapter: 1 },
+      session,
+    )).rejects.toThrow(/内容与本次生成结果不一致/)
+  })
+})
+
+describe('directory workflow project context', () => {
+  it('freezes the launch project and lets the main-process guard reject a later cross-project save', async () => {
+    const projectA = project('C:\\novels\\A')
+    const projectB = project('C:\\novels\\B')
+    useProjectStore.setState({ currentProject: projectA })
+    const invoke = stubIpcInvoke({ success: true })
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:project-core-get') {
+        return {
+          premise: '故事前提'.repeat(30),
+          charactersArch: '',
+          worldbuilding: '',
+          synopsis: '',
+        }
+      }
+      if (channel === 'db:blueprint-upsert-many') {
+        return useProjectStore.getState().currentProject?.path === args[1]
+          ? { success: true }
+          : { success: false, error: '项目上下文已切换' }
+      }
+      return []
+    })
+    const workflow = createDirectoryWorkflow({ mode: 'full' }, projectA.path, {
+      projectId: projectA.id,
+      leaseId: projectA.sessionLease!,
+      projectPath: projectA.path,
+    })
+    const context: WorkflowContext = {
+      runId: 'test-run',
+      projectPath: projectA.path,
+      projectSession: {
+        projectId: projectA.id,
+        leaseId: projectA.sessionLease!,
+        projectPath: projectA.path,
+      },
+      data: {
+        newBlueprints: [blueprint],
+        existingBlueprints: [],
+      },
+      cancelled: false,
+    }
+    const callbacks: StepCallbacks = {
+      log: vi.fn(),
+      setProgress: vi.fn(),
+      appendText: vi.fn(),
+    }
+
+    await expect(workflow.steps[0].executor(workflowStep('读取架构'), context, callbacks))
+      .resolves.toContain('架构加载完成')
+    expect(invoke).toHaveBeenCalledWith('db:project-core-get', projectA.path, context.projectSession)
+
+    useProjectStore.setState({ currentProject: projectB })
+    await expect(workflow.steps[2].executor(workflowStep('保存蓝图'), context, callbacks))
+      .rejects.toThrow(/项目上下文已切换/)
+    expect(invoke).toHaveBeenCalledWith('db:blueprint-upsert-many', [blueprint], projectA.path, context.projectSession)
+    expect(invoke.mock.calls.some(([, ...args]) => args.includes(projectB.path))).toBe(false)
   })
 })

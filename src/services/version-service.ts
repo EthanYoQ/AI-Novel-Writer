@@ -6,6 +6,7 @@
  */
 
 import { ipc } from './ipc-client'
+import { requireIpcSuccess } from './ipc-result'
 
 /** 章节元数据（从数据库返回） */
 export interface ChapterRecord {
@@ -27,8 +28,8 @@ export interface VersionRecord {
 }
 
 /** 获取项目的所有章节 (现在从蓝图获取) */
-export async function getChapters(): Promise<ChapterRecord[]> {
-  const blueprints = (await ipc.invoke('db:blueprint-get-all')) as unknown as Array<Record<string, unknown>>
+export async function getChapters(expectedProjectPath: string): Promise<ChapterRecord[]> {
+  const blueprints = (await ipc.invoke('db:blueprint-get-all', expectedProjectPath)) as unknown as Array<Record<string, unknown>>
   return blueprints.map(bp => ({
     chapter_id: String(bp.chapterNumber),
     file_path: '',
@@ -40,10 +41,10 @@ export async function getChapters(): Promise<ChapterRecord[]> {
 }
 
 /** 获取章节的版本列表 (草稿列表) */
-export async function getChapterVersions(chapterId: string): Promise<VersionRecord[]> {
+export async function getChapterVersions(chapterId: string, expectedProjectPath: string): Promise<VersionRecord[]> {
   const chapterNumber = parseInt(chapterId)
   if (isNaN(chapterNumber)) return []
-  const drafts = (await ipc.invoke('db:draft-list', chapterNumber)) as unknown as Array<Record<string, unknown>>
+  const drafts = (await ipc.invoke('db:draft-list', chapterNumber, expectedProjectPath)) as unknown as Array<Record<string, unknown>>
   return drafts.map(d => ({
     id: d.id as number,
     version: d.version as number,
@@ -54,28 +55,29 @@ export async function getChapterVersions(chapterId: string): Promise<VersionReco
 }
 
 /** 获取版本内容 */
-export async function getVersionContent(versionId: number): Promise<string | null> {
-  const draft = (await ipc.invoke('db:draft-get-full', versionId)) as { content?: string } | null
+export async function getVersionContent(versionId: number, expectedProjectPath: string): Promise<string | null> {
+  const draft = (await ipc.invoke('db:draft-get-full', versionId, expectedProjectPath)) as { content?: string } | null
   return draft?.content || null
 }
 
 /** 获取章节最新内容（取代之前的文件读取） */
-export async function getChapterLatestContent(chapterNumber: number): Promise<string> {
-  const draft = (await ipc.invoke('db:draft-get-latest', chapterNumber)) as { id?: number } | null
+export async function getChapterLatestContent(chapterNumber: number, expectedProjectPath: string): Promise<string> {
+  const draft = (await ipc.invoke('db:draft-get-latest', chapterNumber, expectedProjectPath)) as { id?: number } | null
   if (!draft || draft.id === undefined) return '（章节尚无内容）'
-  const full = (await ipc.invoke('db:draft-get-full', draft.id)) as { content?: string } | null
+  const full = (await ipc.invoke('db:draft-get-full', draft.id, expectedProjectPath)) as { content?: string } | null
   return full?.content || '（内容被错误截断）'
 }
 
 /** 回退到某个历史版本，创建新草稿 */
-export async function revertToVersion(chapterNumber: number, content: string): Promise<boolean> {
-  const nextVer: number = await ipc.invoke('db:draft-next-version', chapterNumber)
+export async function revertToVersion(chapterNumber: number, content: string, expectedProjectPath: string): Promise<boolean> {
+  const nextVer: number = await ipc.invoke('db:draft-next-version', chapterNumber, expectedProjectPath)
   const res = await ipc.invoke('db:draft-create', {
     chapterNumber,
     version: nextVer,
     source: 'rewrite',
     content,
     wordCount: content.length,
-  })
-  return res.success
+  }, expectedProjectPath)
+  requireIpcSuccess(res, '创建回滚草稿')
+  return true
 }

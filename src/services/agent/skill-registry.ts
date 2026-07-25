@@ -12,7 +12,12 @@
 
 import { ipc } from '../ipc-client'
 import { useProjectStore } from '../../stores/project-store'
-import { toolRegistry, type AgentTool } from './tool-registry'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import {
+  projectSessionContextFromProject,
+  sameProjectSessionContext,
+} from '../../shared/project-session-context'
+import { toolRegistry, type AgentExecutionContext, type AgentTool } from './tool-registry'
 
 // ===== 类型定义 =====
 
@@ -51,12 +56,15 @@ export interface LoadedSkill {
   baseDir: string
   /** SKILL.md 文件路径 */
   filePath: string
+  /** 项目级 Skill 必须绑定其加载时的完整项目 lease。 */
+  projectSession?: ProjectSessionContext
 }
 
 // ===== Skill Registry =====
 
 class SkillRegistryImpl {
   private skills: Map<string, LoadedSkill> = new Map()
+  private loadSequence = 0
 
   /** 注册一个 Skill */
   register(skill: LoadedSkill): void {
@@ -88,27 +96,85 @@ class SkillRegistryImpl {
     this.skills.clear()
   }
 
-  /**
-   * 从目录加载 Skills
-   *
-   * 扫描指定目录下的 skill-name/SKILL.md 格式
-   */
-  async loadFromDirectory(dir: string, source: SkillSource): Promise<number> {
+  /** 从主进程管理的用户 Skill 目录加载，渲染进程不接触 VELA_HOME 路径。 */
+  private async loadUserSkills(loadSequence: number): Promise<number> {
     let count = 0
     try {
-      const entries = await ipc.invoke('fs:list-dir', dir)
+      const entries = await ipc.invoke('skills:list-user')
       for (const entry of entries) {
+        if (loadSequence !== this.loadSequence) return count
+        const skill = parseSkillMd(entry.content, entry.name, 'user', entry.baseDir, entry.filePath)
+        if (!skill) continue
+        this.register(skill)
+        count++
+      }
+    } catch {
+      // 用户目录不可用时不影响内置或项目 Skill。
+    }
+    return count
+  }
+
+  /**
+   * 从当前项目边界内加载 Skills。
+   *
+   * 项目路径仍须通过项目会话在主进程重新校验。
+   */
+  private async loadProjectSkills(
+    dir: string,
+    projectPath: string,
+    projectSession: ProjectSessionContext,
+    loadSequence: number,
+  ): Promise<number> {
+    let count = 0
+    try {
+      const entries = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:list-dir',
+        dir,
+        projectPath,
+      )
+      if (
+        loadSequence !== this.loadSequence
+        || !sameProjectSessionContext(
+          projectSession,
+          projectSessionContextFromProject(useProjectStore.getState().currentProject),
+        )
+      ) return count
+      for (const entry of entries) {
+        if (
+          loadSequence !== this.loadSequence
+          || !sameProjectSessionContext(
+            projectSession,
+            projectSessionContextFromProject(useProjectStore.getState().currentProject),
+          )
+        ) return count
         if (!entry.isDir) continue
 
         const skillFile = `${entry.path}/SKILL.md`
         try {
-          const exists = await ipc.invoke('fs:check-exists', skillFile)
-          if (!exists) continue
-
-          const result = await ipc.invoke('fs:read-file', skillFile)
+          const result = await ipc.invokeWithProjectSession(
+            projectSession,
+            'fs:read-file',
+            skillFile,
+            projectPath,
+          )
+          if (
+            loadSequence !== this.loadSequence
+            || !sameProjectSessionContext(
+              projectSession,
+              projectSessionContextFromProject(useProjectStore.getState().currentProject),
+            )
+          ) return count
           if (!result.success) continue
 
-          const skill = parseSkillMd(result.content, entry.name, source, entry.path, skillFile)
+          const skill = parseSkillMd(
+            result.content,
+            entry.name,
+            'project',
+            entry.path,
+            skillFile,
+            projectSession,
+          )
           if (skill) {
             this.register(skill)
             count++
@@ -127,28 +193,38 @@ class SkillRegistryImpl {
    * 加载所有 Skill（内置 + 用户 + 项目）
    */
   async loadAll(): Promise<void> {
+    const loadSequence = ++this.loadSequence
+    const projectSession = projectSessionContextFromProject(
+      useProjectStore.getState().currentProject,
+    )
     this.clear()
 
     // 注册内置 Skill
     registerBuiltinSkills(this)
 
-    // 加载用户 Skill（~/.vela/skills/）
-    try {
-      const velaHome = await ipc.invoke('config:get-vela-home')
-      const userSkillsDir = `${velaHome}/skills`
-      const userCount = await this.loadFromDirectory(userSkillsDir, 'user')
-      if (userCount > 0) {
-        console.log(`[Skills] 加载了 ${userCount} 个用户 Skill`)
-      }
-    } catch {
-      // 静默处理
+    // 用户 Skill 路径只能由主进程的固定应用数据服务访问。
+    const userCount = await this.loadUserSkills(loadSequence)
+    if (loadSequence !== this.loadSequence) return
+    if (userCount > 0) {
+      console.log(`[Skills] 加载了 ${userCount} 个用户 Skill`)
     }
 
     // 加载项目 Skill（项目/.vela/skills/）
-    const project = useProjectStore.getState().currentProject
-    if (project) {
-      const projectSkillsDir = `${project.path}/.vela/skills`
-      const projectCount = await this.loadFromDirectory(projectSkillsDir, 'project')
+    if (
+      projectSession
+      && sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(useProjectStore.getState().currentProject),
+      )
+    ) {
+      const projectSkillsDir = `${projectSession.projectPath}/.vela/skills`
+      const projectCount = await this.loadProjectSkills(
+        projectSkillsDir,
+        projectSession.projectPath,
+        projectSession,
+        loadSequence,
+      )
+      if (loadSequence !== this.loadSequence) return
       if (projectCount > 0) {
         console.log(`[Skills] 加载了 ${projectCount} 个项目 Skill`)
       }
@@ -184,7 +260,17 @@ class SkillRegistryImpl {
         requiresConfirmation: false,
         isReadOnly: true,
         userFacingName: skill.metadata.displayName ?? skill.metadata.name,
-        execute: async (toolArgs) => {
+        execute: async (toolArgs, context?: AgentExecutionContext) => {
+          if (
+            skill.projectSession
+            && !sameProjectSessionContext(skill.projectSession, context?.projectSession)
+          ) {
+            return {
+              success: false,
+              content: '',
+              error: '项目 Skill 的加载会话已失效，请重新加载当前项目 Skill',
+            }
+          }
           const userArgs = (toolArgs.args as string) ?? ''
           // 变量替换
           let content = skill.content
@@ -232,6 +318,7 @@ function parseSkillMd(
   source: SkillSource,
   baseDir: string,
   filePath: string,
+  projectSession?: ProjectSessionContext,
 ): LoadedSkill | null {
   // 解析 frontmatter
   const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n/)
@@ -278,6 +365,7 @@ function parseSkillMd(
     source,
     baseDir,
     filePath,
+    projectSession,
   }
 }
 

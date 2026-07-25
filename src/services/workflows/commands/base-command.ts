@@ -1,6 +1,7 @@
 import type { WorkflowContext, StepCallbacks } from '../../../stores/workflow-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { globalEventBus, EventPayloadMap } from '../../../shared/event-bus'
+import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { BasePromptBuilder } from '../../prompts/prompt-builder'
 
 export interface CommandExecuteParams {
@@ -26,6 +27,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
     context?: WorkflowContext
   ): Promise<string> {
+    this.assertNotCancelled(context)
     const llmStore = useLLMStore.getState()
     if (!llmStore.defaultModelId) throw new Error('未配置默认 AI 模型')
 
@@ -114,6 +116,13 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     return this.callLLM(builder.build(), builder.getSystemRole(), callbacks, options, context)
   }
 
+  /** 在所有异步边界与落盘前复查取消，避免已取消请求继续污染项目。 */
+  protected assertNotCancelled(context?: WorkflowContext): void {
+    if (context?.cancelled) {
+      throw new Error('工作流已取消')
+    }
+  }
+
   /**
    * 去除 DeepSeek 等模型的 <think> 标签，保证落盘纯净
    */
@@ -154,7 +163,11 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   /**
    * 解耦的事件驱动：通知 UI 层去更新资产树，而无需去 import Zustand Store
    */
-  protected notifyRefresh(resources: EventPayloadMap['REFRESH_RESOURCE']['resources']) {
-    globalEventBus.emit('REFRESH_RESOURCE', { resources })
+  protected notifyRefresh(
+    resources: EventPayloadMap['REFRESH_RESOURCE']['resources'],
+    projectPath: string,
+    projectSession: ProjectSessionContext,
+  ) {
+    globalEventBus.emit('REFRESH_RESOURCE', { resources, projectPath, projectSession })
   }
 }

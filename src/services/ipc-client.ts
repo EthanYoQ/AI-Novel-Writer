@@ -11,6 +11,8 @@ import type {
   InvokeChannel,
   EventChannel,
 } from '../shared/ipc-channels'
+import type { ProjectSessionContext } from '../shared/ipc-channels'
+import { getActiveProjectSessionContext } from '../shared/project-session-context'
 
 /** 从 preload 暴露的 velaAPI */
 interface VelaAPI {
@@ -42,6 +44,43 @@ function getAPI(): VelaAPI {
   return api
 }
 
+/**
+ * 这些请求的授权来自用户选择后由主进程签发的 grant，或固定 app-data 边界；
+ * 它们绝不能借用、也不需要当前项目会话。
+ */
+function isCapabilityOrAppDataChannel(channel: string): boolean {
+  return channel.startsWith('fs:grant-')
+    || channel.startsWith('dialog:select-')
+    || channel.startsWith('prompt:')
+    || channel === 'skills:list-user'
+    || channel === 'import:split-chapters'
+}
+
+function isProjectScopedChannel(channel: string): boolean {
+  if (isCapabilityOrAppDataChannel(channel)) return false
+  return channel.startsWith('db:')
+    || channel.startsWith('kb:')
+    || channel.startsWith('fs:')
+    || channel === 'project:save'
+    || channel === 'project:update-config'
+    || channel === 'project:delete'
+}
+
+function invokeWithSession<C extends InvokeChannel>(
+  channel: C,
+  args: AllInvokeChannels[C]['args'],
+  context?: ProjectSessionContext,
+): Promise<AllInvokeChannels[C]['return']> {
+  if (!isProjectScopedChannel(channel)) {
+    return getAPI().invoke(channel, ...args) as Promise<AllInvokeChannels[C]['return']>
+  }
+  const projectSession = context ?? getActiveProjectSessionContext()
+  if (!projectSession) {
+    throw new Error('缺少当前项目会话，已拒绝项目数据访问')
+  }
+  return getAPI().invoke(channel, ...args, projectSession) as Promise<AllInvokeChannels[C]['return']>
+}
+
 /** 类型安全的 IPC 客户端 */
 export const ipc = {
   /**
@@ -55,9 +94,21 @@ export const ipc = {
     ...args: AllInvokeChannels[C]['args']
   ): Promise<AllInvokeChannels[C]['return']> => {
     console.log('[ipc-client.invoke] 调用通道:', channel, '参数数量:', args.length)
-    const result = await getAPI().invoke(channel, ...args) as Promise<AllInvokeChannels[C]['return']>
+    const result = await invokeWithSession(channel, args)
     console.log('[ipc-client.invoke] 调用完成:', channel)
     return result
+  },
+
+  /** 工作流/工具在启动处冻结会话后，必须使用此入口而不是重新读取 currentProject。 */
+  invokeWithProjectSession: async <C extends InvokeChannel>(
+    context: ProjectSessionContext,
+    channel: C,
+    ...args: AllInvokeChannels[C]['args']
+  ): Promise<AllInvokeChannels[C]['return']> => {
+    if (!isProjectScopedChannel(channel)) {
+      throw new Error(`通道不属于项目会话范围：${channel}`)
+    }
+    return invokeWithSession(channel, args, context)
   },
 
   /**

@@ -1,10 +1,10 @@
 /**
  * write_file — 写入或修改项目文件
  */
-import { buildAgentTool } from '../tool-registry'
+import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { useProjectStore } from '../../../stores/project-store'
 import { validatePath } from './safe-path'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 export const writeFileTool = buildAgentTool({
   name: 'write_file',
@@ -26,7 +26,7 @@ export const writeFileTool = buildAgentTool({
   },
   requiresConfirmation: true,
   isReadOnly: false,
-  execute: async (args) => {
+  execute: async (args, context) => {
     const filePath = args.file_path as string
     const content = args.content as string
 
@@ -34,10 +34,7 @@ export const writeFileTool = buildAgentTool({
       return { success: false, content: '', error: '缺少 file_path 或 content 参数' }
     }
 
-    const project = useProjectStore.getState().currentProject
-    if (!project) {
-      return { success: false, content: '', error: '没有打开的项目' }
-    }
+    const { project, projectSession } = requireAgentProject(context)
 
     // 路径安全校验
     const pathCheck = validatePath(project.path, filePath)
@@ -45,7 +42,14 @@ export const writeFileTool = buildAgentTool({
       return { success: false, content: '', error: pathCheck.error }
     }
 
-    const result = await ipc.invoke('fs:write-file', pathCheck.fullPath, content)
+    const result = await ipc.invokeWithProjectSession(
+      projectSession,
+      'fs:write-file',
+      pathCheck.fullPath,
+      content,
+      project.path,
+    )
+    assertAgentProjectCurrent(context)
     if (!result.success) {
       return { success: false, content: '', error: result.error ?? '写入失败' }
     }
@@ -53,7 +57,13 @@ export const writeFileTool = buildAgentTool({
     return {
       success: true,
       content: `✅ 文件已写入：${filePath}（${content.length} 字符）`,
-      artifacts: [{ type: 'file_modified', path: pathCheck.fullPath, name: filePath }],
+      artifacts: [createToolArtifact({
+        type: 'file_modified',
+        path: pathCheck.fullPath,
+        name: filePath,
+        projectPath: project.path,
+        projectSession,
+      })],
     }
   },
 })

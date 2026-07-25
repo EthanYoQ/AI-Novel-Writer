@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useRef, useState } from 'react'
 import { Save, Sparkles, Info, Loader2 } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
@@ -11,6 +11,11 @@ import { Textarea } from '../ui/Textarea'
 import { NativeSelect } from '../ui/NativeSelect'
 import GenerateConfigDialog from '../dialogs/GenerateConfigDialog'
 import { useLocaleStore } from '../../stores/locale-store'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+  isProjectSessionPath,
+} from '../project-session-gate'
 
 const GENRE_EN: Record<string, string> = {
   玄幻: 'Eastern fantasy', 仙侠: 'Xianxia', 都市: 'Urban', 科幻: 'Science fiction', 历史: 'Historical', 军事: 'Military',
@@ -19,7 +24,18 @@ const GENRE_EN: Record<string, string> = {
 }
 
 /** 小说配置编辑器 — Tab 内的可视化配置面板 */
-export default function NovelConfigEditor() {
+export default function NovelConfigEditor({ projectKey }: { projectKey: string }) {
+  const currentProject = useProjectStore(s => s.currentProject)
+  const projectSession = captureProjectSession(currentProject)
+  const sessionKey = projectSession && isProjectSessionPath(projectSession, projectKey)
+    ? `${projectSession.projectId}:${projectSession.leaseId}`
+    : `inactive:${projectKey}`
+
+  // 同路径项目重新打开时强制重挂载，避免旧会话的保存/生成状态泄漏到新 lease。
+  return <NovelConfigEditorSession key={sessionKey} projectKey={projectKey} />
+}
+
+function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
   // ✅ 用 selector 精确订阅：只有 currentProject 变化时才重新渲染
   //    不订阅 fileTree、recentProjects 等无关字段
   const currentProject = useProjectStore(s => s.currentProject)
@@ -32,50 +48,67 @@ export default function NovelConfigEditor() {
   const [saving, setSaving] = useState(false)
   const [showGenerateConfig, setShowGenerateConfig] = useState(false)
   const text = useLocaleStore(s => s.text)
+  const [generateSession, setGenerateSession] = useState<ReturnType<typeof captureProjectSession>>(null)
 
   // 各区块的独立生成状态
   const [generatingField, setGeneratingField] = useState<GeneratableField | null>(null)
 
   // 直接从 Store 读取配置 — 单一数据源，无需 local state 镜像
-  const config = currentProject?.novelConfig ?? null
+  const projectMatches = currentProject?.path === projectKey
+  const config = projectMatches ? currentProject.novelConfig : null
 
   if (!config) return (
     <div className="h-full flex items-center justify-center" style={{ color: 'var(--color-text-muted)' }}>
-      <span className="text-sm opacity-50">{text('加载配置中...', 'Loading configuration...')}</span>
+      <span className="text-sm opacity-50">
+        {projectMatches
+          ? text('加载配置中...', 'Loading configuration...')
+          : text('此标签属于另一个项目，请切回原项目后继续。', 'This tab belongs to another project. Switch back to continue.')}
+      </span>
     </div>
   )
 
   // 直接写 Store — 消除双向同步风险
   const update = <K extends keyof NovelConfig>(key: K, value: NovelConfig[K]) => {
-    updateNovelConfig({ [key]: value })
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    updateNovelConfig({ [key]: value }, projectSession)
   }
 
   /** 保存配置 — Store 已是最新数据，仅需持久化到磁盘 */
   const handleSave = async () => {
-    if (!config || saving) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!config || saving || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     setSaving(true)
     try {
-      await saveProject()
+      const saved = await saveProject(projectSession)
+      if (!isProjectSessionCurrent(projectSession)) return
+      if (!saved) throw new Error(text('项目配置未能写入磁盘', 'The project configuration could not be written to disk.'))
       addLog('info', text('小说配置已保存', 'Novel configuration saved'))
     } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return
       console.error('[NovelConfigEditor] 保存失败:', error)
       addLog('error', text(`保存失败：${error}`, `Save failed: ${error}`))
     } finally {
-      setSaving(false)
+      if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
   }
 
   /** AI 生成配置 — 打开弹框 */
   const handleAIGenerate = () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     if (!defaultModelId) {
       addLog('error', text('请先在设置中配置 AI 模型', 'Configure an AI model in Settings first.'))
       return
     }
+    setGenerateSession(projectSession)
     setShowGenerateConfig(true)
   }
 
   /** 单字段 AI 生成 */
   const handleFieldGenerate = async (fieldKey: GeneratableField) => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     if (!defaultModelId) {
       addLog('error', text('请先在设置中配置 AI 模型', 'Configure an AI model in Settings first.'))
       return
@@ -85,10 +118,17 @@ export default function NovelConfigEditor() {
     setGeneratingField(fieldKey)
     try {
       const { GenerateFieldCommand } = await import('../../services/workflows/commands/generate-field.command')
+      if (!isProjectSessionCurrent(projectSession)) return
       const cmd = new GenerateFieldCommand(fieldKey)
       await cmd.execute({
         step: { id: '', commandId: '', name: '', params: {} },
-        context: { data: {}, cancelled: false },
+        context: {
+          runId: 'config-field',
+          projectPath: projectSession.projectPath,
+          projectSession,
+          data: {},
+          cancelled: false,
+        },
         callbacks: {
           log: (msg: string) => useWorkflowStore.getState().addLog('info', msg),
           setProgress: () => { },
@@ -96,9 +136,10 @@ export default function NovelConfigEditor() {
         },
       })
     } catch (e) {
+      if (!isProjectSessionCurrent(projectSession)) return
       addLog('error', text(`生成失败：${e}`, `Generation failed: ${e}`))
     } finally {
-      setGeneratingField(null)
+      if (isProjectSessionCurrent(projectSession)) setGeneratingField(null)
     }
   }
 
@@ -307,10 +348,15 @@ export default function NovelConfigEditor() {
       {/* AI 生成配置弹框 */}
       <GenerateConfigDialog
         isOpen={showGenerateConfig}
-        onClose={() => setShowGenerateConfig(false)}
+        onClose={() => {
+          setGenerateSession(null)
+          setShowGenerateConfig(false)
+        }}
         onGenerated={(parsed) => {
-          // 直接写 Store，组件自动重新渲染
-          updateNovelConfig(parsed)
+          const projectSession = generateSession
+          if (!isProjectSessionCurrent(projectSession)) return
+          // 只允许开启对话框时冻结的会话提交生成结果。
+          updateNovelConfig(parsed, projectSession)
         }}
       />
     </div>

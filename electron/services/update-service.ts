@@ -105,7 +105,9 @@ export class UpdateService {
   private readonly now: () => Date
   private state: UpdateState
   private reminder?: UpdateReminder
+  private downloadedVersion?: string
   private readonly listeners = new Set<(state: UpdateState) => void>()
+  private checkQueue: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: UpdateServiceOptions) {
     this.now = options.now ?? (() => new Date())
@@ -152,6 +154,9 @@ export class UpdateService {
 
   async checkAutomatically(): Promise<UpdateCheckResponse> {
     if (!this.options.isPackaged) return this.disabledResponse()
+    if (this.downloadedVersion) {
+      return this.response({ success: true, checked: false, updateAvailable: true })
+    }
 
     const now = this.now()
     const today = localCalendarDate(now)
@@ -169,11 +174,14 @@ export class UpdateService {
     })) {
       return this.response({ success: false, checked: false })
     }
-    return this.performCheck('automatic', now)
+    return this.enqueueCheck(() => this.performCheck('automatic', now))
   }
 
   async checkManually(): Promise<UpdateCheckResponse> {
     if (!this.options.isPackaged) return this.disabledResponse()
+    if (this.downloadedVersion) {
+      return this.response({ success: true, checked: false, updateAvailable: true })
+    }
 
     const now = this.now()
     const preferences = this.readPreferences() ?? {}
@@ -181,7 +189,13 @@ export class UpdateService {
       ...preferences,
       lastCheckedAt: now.toISOString(),
     })
-    return this.performCheck('manual', now)
+    return this.enqueueCheck(() => this.performCheck('manual', now))
+  }
+
+  private enqueueCheck(operation: () => Promise<UpdateCheckResponse>): Promise<UpdateCheckResponse> {
+    const queued = this.checkQueue.then(operation, operation)
+    this.checkQueue = queued.then(() => undefined, () => undefined)
+    return queued
   }
 
   private async performCheck(mode: 'automatic' | 'manual', now: Date): Promise<UpdateCheckResponse> {
@@ -232,6 +246,7 @@ export class UpdateService {
     } catch {
       return this.handleFailure(mode, 'DOWNLOAD_FAILED', 'available')
     }
+    this.downloadedVersion = update.version
     this.setState({ ...this.state, status: 'downloaded' })
     return this.response({ success: true, checked: true, updateAvailable: true })
   }
@@ -248,9 +263,12 @@ export class UpdateService {
     }
 
     const until = new Date(this.now().getTime() + days * 24 * 60 * 60 * 1000).toISOString()
-    this.reminder = { version: this.state.availableVersion, until }
+    const reminder = { version: this.state.availableVersion, until }
     const preferences = this.readPreferences() ?? {}
-    this.writePreferences({ ...preferences, reminder: this.reminder })
+    if (!this.writePreferences({ ...preferences, reminder })) {
+      return this.actionResponse(false, { code: 'REMINDER_SAVE_FAILED' })
+    }
+    this.reminder = reminder
     this.setState({
       ...this.state,
       reminderUntil: until,
@@ -264,7 +282,10 @@ export class UpdateService {
     if (!this.options.isPackaged) {
       return this.actionResponse(false, { code: 'UPDATES_DISABLED' })
     }
-    if (this.state.status !== 'downloaded') {
+    if (
+      !this.downloadedVersion
+      || this.state.availableVersion !== this.downloadedVersion
+    ) {
       return this.actionResponse(false, { code: 'INSTALL_NOT_READY' })
     }
 

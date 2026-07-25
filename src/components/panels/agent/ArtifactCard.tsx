@@ -6,8 +6,7 @@
  */
 import { FileText, FolderOpen, Play, ExternalLink } from 'lucide-react'
 import type { ToolArtifact } from '../../../services/agent/tool-registry'
-import { useEditorStore } from '../../../stores/editor-store'
-import { ipc } from '../../../services/ipc-client'
+import { openArtifactInEditor } from './artifact-open'
 
 interface Props {
   artifact: ToolArtifact
@@ -41,29 +40,9 @@ function typeLabel(type: ToolArtifact['type']): string {
 }
 
 export default function ArtifactCard({ artifact }: Props) {
-  const { type, name, path } = artifact
+  const { type, name } = artifact
 
-  const handleClick = async () => {
-    if (path && (type === 'file_created' || type === 'file_modified' || type === 'tab_opened')) {
-      // 先读取文件内容，再打开编辑器（避免空白 Tab）
-      let content = ''
-      try {
-        const result = await ipc.invoke('fs:read-file', path)
-        if (result.success) {
-          content = result.content
-        }
-      } catch {
-        // 读取失败时仍然打开，显示空白
-      }
-      useEditorStore.getState().openFile({
-        id: `artifact-${Date.now()}`,
-        name,
-        type: 'chapter',
-        filePath: path,
-        content,
-      })
-    }
-  }
+  const handleClick = () => { void openArtifactInEditor(artifact) }
 
   return (
     <div className="artifact-card" onClick={handleClick}>

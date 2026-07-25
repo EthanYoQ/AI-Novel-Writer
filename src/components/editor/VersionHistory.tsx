@@ -4,10 +4,14 @@ import { useEditorStore } from '../../stores/editor-store'
 import { useProjectStore } from '../../stores/project-store'
 import { Button } from '../ui/Button'
 import { cn } from '../../lib/utils'
+import type { VersionRecord } from '../../services/version-service'
+import { ipc } from '../../services/ipc-client'
+import { requireIpcSuccess } from '../../services/ipc-result'
 import {
-  getChapters, getChapterVersions, getVersionContent, getChapterLatestContent, revertToVersion,
-  type VersionRecord,
-} from '../../services/version-service'
+  captureProjectSession,
+  isProjectSessionCurrent,
+  isProjectSessionPath,
+} from '../project-session-gate'
 
 /** 章节元数据 */
 interface ChapterMeta {
@@ -18,7 +22,7 @@ interface ChapterMeta {
 }
 
 /** 版本历史面板 — 查看章节版本并与当前内容对比 */
-export default function VersionHistory() {
+export default function VersionHistory({ projectKey }: { projectKey: string }) {
   const currentProject = useProjectStore(s => s.currentProject)
   const [chapters, setChapters] = useState<ChapterMeta[]>([])
   const [selectedChapter, setSelectedChapter] = useState<string | null>(null)
@@ -26,55 +30,105 @@ export default function VersionHistory() {
   const [loading, setLoading] = useState(true)
 
   const loadChapters = useCallback(async () => {
-    if (!currentProject) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     setLoading(true)
     try {
-      const dbChapters = await getChapters()
-      setChapters(dbChapters.map(c => ({
-        id: c.chapter_id,
-        chapter_number: c.chapter_number,
-        title: c.file_name,
-        status: c.status || 'draft',
+      const blueprints = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:blueprint-get-all',
+        projectSession.projectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
+      setChapters(blueprints.map(c => ({
+        id: String(c.chapterNumber),
+        chapter_number: c.chapterNumber,
+        title: c.title || `第 ${c.chapterNumber} 章`,
+        status: 'draft',
       })))
-    } catch { setChapters([]) }
-    setLoading(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.id])
+    } catch {
+      if (isProjectSessionCurrent(projectSession)) setChapters([])
+    } finally {
+      if (isProjectSessionCurrent(projectSession)) setLoading(false)
+    }
+  }, [currentProject, projectKey])
 
   // 加载章节列表
   useEffect(() => {
     let mounted = true
     Promise.resolve().then(() => { if (mounted) loadChapters() })
     return () => { mounted = false }
-  }, [currentProject?.id, loadChapters])
+  }, [currentProject, loadChapters])
 
   // 加载版本列表
-  const loadVersions = async (chapterId: string) => {
+  const loadVersions = useCallback(async (chapterId: string) => {
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     try {
-      const vers = await getChapterVersions(chapterId)
-      setVersions(vers)
-    } catch { setVersions([]) }
-  }
+      const chapterNumber = Number.parseInt(chapterId, 10)
+      if (!Number.isFinite(chapterNumber)) return
+      const drafts = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:draft-list',
+        chapterNumber,
+        projectSession.projectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
+      setVersions(drafts.map(draft => ({
+        id: draft.id,
+        version: draft.version,
+        type: draft.status === 'finalized' ? 'final' : (draft.status === 'revised' ? 'refined' : 'draft'),
+        word_count: draft.wordCount || 0,
+        created_at: draft.createdAt,
+      })))
+    } catch {
+      if (isProjectSessionCurrent(projectSession)) setVersions([])
+    }
+  }, [projectKey])
 
   useEffect(() => {
     if (!selectedChapter) return
     let mounted = true
     Promise.resolve().then(() => { if (mounted) loadVersions(selectedChapter) })
     return () => { mounted = false }
-  }, [selectedChapter])
+  }, [loadVersions, selectedChapter])
 
   /** 查看版本内容（Diff 对比） */
   const handleDiff = async (versionId: number, versionLabel: string) => {
-    if (!currentProject || !selectedChapter) return
-
-    const oldContent = await getVersionContent(versionId)
-    if (!oldContent) return
-
-    const chapter = chapters.find((c) => c.id === selectedChapter)
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey) || !selectedChapter) return
+    const chapter = chapters.find((candidate) => candidate.id === selectedChapter)
     if (!chapter) return
 
+    const oldContent = (await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-get-full',
+      versionId,
+      projectSession.projectPath,
+    ))?.content
+    if (!isProjectSessionCurrent(projectSession)) return
+    if (!oldContent) return
+
     // 获取最新草稿内容进行比对
-    const currentContent = await getChapterLatestContent(chapter.chapter_number)
+    const latestDraft = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-get-latest',
+      chapter.chapter_number,
+      projectSession.projectPath,
+    )
+    if (!isProjectSessionCurrent(projectSession)) return
+    const latestContent = latestDraft?.id === undefined
+      ? null
+      : await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:draft-get-full',
+          latestDraft.id,
+          projectSession.projectPath,
+        )
+    if (!isProjectSessionCurrent(projectSession)) return
+    const currentContent = latestDraft?.id === undefined
+      ? '（章节尚无内容）'
+      : (latestContent?.content || '（内容被错误截断）')
 
     useEditorStore.getState().openFile({
       id: `diff-version-${versionId}`,
@@ -83,20 +137,46 @@ export default function VersionHistory() {
       originalContent: oldContent,
       content: currentContent,
       filePath: `vela://draft/ch${chapter.chapter_number}`, // 不再指向实体文件
+      projectKey,
     })
   }
 
   /** 回退到历史版本 */
   const handleRevert = async (versionId: number) => {
-    if (!currentProject || !selectedChapter) return
-
-    const content = await getVersionContent(versionId)
-    if (!content) return
-
-    const chapter = chapters.find((c) => c.id === selectedChapter)
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey) || !selectedChapter) return
+    const chapter = chapters.find((candidate) => candidate.id === selectedChapter)
     if (!chapter) return
 
-    await revertToVersion(chapter.chapter_number, content)
+    const content = (await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-get-full',
+      versionId,
+      projectSession.projectPath,
+    ))?.content
+    if (!isProjectSessionCurrent(projectSession)) return
+    if (!content) return
+
+    const nextVersion = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-next-version',
+      chapter.chapter_number,
+      projectSession.projectPath,
+    )
+    if (!isProjectSessionCurrent(projectSession)) return
+    requireIpcSuccess(await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-create',
+      {
+        chapterNumber: chapter.chapter_number,
+        version: nextVersion,
+        source: 'rewrite',
+        content,
+        wordCount: content.length,
+      },
+      projectSession.projectPath,
+    ), '创建回滚草稿')
+    if (!isProjectSessionCurrent(projectSession)) return
 
     // 重新加载版本列表以显示新生成的回滚草稿
     await loadVersions(selectedChapter)

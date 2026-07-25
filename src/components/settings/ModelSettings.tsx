@@ -47,7 +47,11 @@ export default function ModelSettings() {
   const handleSave = async () => {
     if (!editingModel) return
     setSaving(true)
-    await saveModel(editingModel)
+    const saved = await saveModel(editingModel)
+    if (!saved) {
+      setSaving(false)
+      return
+    }
     setEditingModel(null)
     setSaving(false)
   }

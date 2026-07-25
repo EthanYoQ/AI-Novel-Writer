@@ -9,6 +9,14 @@ import {
   type UpdateState,
 } from '../update-service'
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((accept) => {
+    resolve = accept
+  })
+  return { promise, resolve }
+}
+
 class FakeUpdater implements UpdateBackend {
   checkCalls = 0
   downloadCalls = 0
@@ -106,6 +114,85 @@ describe('UpdateService', () => {
     await service.checkManually()
 
     expect(updater.checkCalls).toBe(2)
+  })
+
+  it('serializes automatic and manual check-download operations without joining the manual check', async () => {
+    const automaticCheck = deferred<UpdateCheckResult | null>()
+    const manualCheck = deferred<UpdateCheckResult | null>()
+    const manualDownload = deferred<string[]>()
+    const checks = [automaticCheck, manualCheck]
+    const events: string[] = []
+    let activeOperations = 0
+    let maxConcurrency = 0
+    let checkIndex = 0
+    const updater: UpdateBackend = {
+      checkForUpdates: async () => {
+        const currentIndex = checkIndex
+        checkIndex += 1
+        events.push(`check-${currentIndex + 1}-start`)
+        activeOperations += 1
+        maxConcurrency = Math.max(maxConcurrency, activeOperations)
+        const result = await checks[currentIndex].promise
+        activeOperations -= 1
+        events.push(`check-${currentIndex + 1}-end`)
+        return result
+      },
+      downloadUpdate: async () => {
+        events.push('download-2-start')
+        activeOperations += 1
+        maxConcurrency = Math.max(maxConcurrency, activeOperations)
+        const result = await manualDownload.promise
+        activeOperations -= 1
+        events.push('download-2-end')
+        return result
+      },
+      quitAndInstall: () => undefined,
+    }
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore(),
+      now: () => new Date('2026-07-25T09:00:00+08:00'),
+    })
+
+    const automaticResult = service.checkAutomatically()
+    const manualResult = service.checkManually()
+    await Promise.resolve()
+    expect(events).toEqual(['check-1-start'])
+    expect(maxConcurrency).toBe(1)
+
+    automaticCheck.resolve(null)
+    await automaticResult
+    await Promise.resolve()
+    expect(events).toEqual(['check-1-start', 'check-1-end', 'check-2-start'])
+
+    manualCheck.resolve({ updateInfo: { version: '0.2.6' } })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(events.at(-1)).toBe('download-2-start')
+    expect(maxConcurrency).toBe(1)
+
+    manualDownload.resolve([])
+    await expect(manualResult).resolves.toMatchObject({
+      success: true,
+      checked: true,
+      updateAvailable: true,
+    })
+    expect(events).toEqual([
+      'check-1-start',
+      'check-1-end',
+      'check-2-start',
+      'check-2-end',
+      'download-2-start',
+      'download-2-end',
+    ])
+    expect(checkIndex).toBe(2)
+    expect(maxConcurrency).toBe(1)
+    expect(service.getState()).toMatchObject({
+      status: 'downloaded',
+      availableVersion: '0.2.6',
+    })
   })
 
   it('downloads a newer stable update and exposes its downloaded state', async () => {
@@ -244,19 +331,39 @@ describe('UpdateService', () => {
     })
   })
 
-  it('clears a deferred reminder from state when the release is no longer available', async () => {
-    const updater = new FakeUpdater({ updateInfo: { version: '0.2.6' } })
+  it('does not claim a reminder was deferred when preferences cannot be persisted', async () => {
     const service = new UpdateService({
-      updater,
+      updater: new FakeUpdater({ updateInfo: { version: '0.2.6' } }),
       currentVersion: '0.2.5',
       isPackaged: true,
-      preferences: createPreferencesStore(),
+      preferences: createNonPersistingPreferencesStore(),
       now: () => new Date('2026-07-25T09:00:00+08:00'),
     })
 
     await service.checkManually()
+    const result = await service.deferReminder(7)
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: 'REMINDER_SAVE_FAILED' },
+      state: { isReminderDeferred: false },
+    })
+    expect(service.getState().reminderUntil).toBeUndefined()
+  })
+
+  it('clears a deferred reminder from state when the release is no longer available', async () => {
+    const updater = new FakeUpdater(null)
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore({
+        availableUpdate: { version: '0.2.6' },
+      }),
+      now: () => new Date('2026-07-25T09:00:00+08:00'),
+    })
+
     await service.deferReminder(30)
-    updater.setResult(null)
     await service.checkManually()
 
     expect(service.getState()).toMatchObject({
@@ -305,6 +412,30 @@ describe('UpdateService', () => {
       downloadProgress: { percent: 42, transferred: 420, total: 1000, bytesPerSecond: 100 },
     }))
     expect(await service.requestInstall()).toMatchObject({ success: true })
+    expect(updater.quitCalls).toBe(1)
+  })
+
+  it('keeps an already downloaded update installable and skips redundant network checks', async () => {
+    const updater = new FakeUpdater({ updateInfo: { version: '0.2.6' } })
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore(),
+      now: () => new Date('2026-07-25T09:00:00+08:00'),
+    })
+
+    await service.checkManually()
+    updater.checkError = new Error('offline after download')
+    const redundantCheck = await service.checkManually()
+
+    expect(redundantCheck).toMatchObject({
+      success: true,
+      checked: false,
+      state: { status: 'downloaded', availableVersion: '0.2.6' },
+    })
+    expect(updater.checkCalls).toBe(1)
+    await expect(service.requestInstall()).resolves.toMatchObject({ success: true })
     expect(updater.quitCalls).toBe(1)
   })
 

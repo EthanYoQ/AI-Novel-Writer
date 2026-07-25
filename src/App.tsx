@@ -25,6 +25,10 @@ import SettingsModal from './components/settings/SettingsModal'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { actionToast } from './components/ui/ActionToast'
 import { globalEventBus } from './shared/event-bus'
+import {
+  projectSessionContextFromProject,
+  sameProjectSessionContext,
+} from './shared/project-session-context'
 import { getAutoNextChapterPrefill, type NextChapterBlueprint } from './services/auto-next-chapter'
 
 /**
@@ -70,30 +74,56 @@ export default function App() {
     }).catch(e => console.warn('[ProjectService] 初始化失败:', e))
 
     // C) 工作流完成时弹出 ActionToast 通知（不依赖任何面板状态）
-    const unsubActionToast = globalEventBus.on('WORKFLOW_COMPLETE', () => {
+    const unsubActionToast = globalEventBus.on('WORKFLOW_COMPLETE', ({ projectSession, runId }) => {
+      if (!sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(useProjectStore.getState().currentProject),
+      )) return
       const text = useLocaleStore.getState().text
-      const { history } = useWorkflowStore.getState()
-      const latest = history.find(r => r.status === 'completed')
-      if (!latest) return
-      const shortTitle = latest.title.replace(/^[^\s]+\s/, '')
+      const { activeRuns, history } = useWorkflowStore.getState()
+      const completedRun = activeRuns.find(r => r.id === runId)
+        ?? history.find(r => r.id === runId)
+      if (!completedRun) return
+      const shortTitle = completedRun.title.replace(/^[^\s]+\s/, '')
       actionToast.workflowComplete(
         text(`「${shortTitle}」已完成`, `“${shortTitle}” completed`),
         () => useLayoutStore.getState().openRightPanel('ai-output')
       )
     })
 
-    const unsubAutoOpenNextChapter = globalEventBus.on('FINALIZE_COMPLETE', ({ chapterNumber, source }) => {
+    const unsubAutoOpenNextChapter = globalEventBus.on('FINALIZE_COMPLETE', ({
+      chapterNumber,
+      projectSession,
+      source,
+    }) => {
       void (async () => {
         try {
           if (source === 'batch') return
+          const isCurrentProjectSession = () => sameProjectSessionContext(
+            projectSession,
+            projectSessionContextFromProject(useProjectStore.getState().currentProject),
+          )
+          if (!isCurrentProjectSession()) return
           const config = await ipc.invoke('config:get')
+          if (!isCurrentProjectSession()) return
           if (!config.autoOpenNextChapterAfterFinalize) return
 
           const nextChapterNumber = chapterNumber + 1
           const [blueprint, existingDraft] = await Promise.all([
-            ipc.invoke('db:blueprint-get', nextChapterNumber),
-            ipc.invoke('db:draft-get-latest', nextChapterNumber),
+            ipc.invokeWithProjectSession(
+              projectSession,
+              'db:blueprint-get',
+              nextChapterNumber,
+              projectSession.projectPath,
+            ),
+            ipc.invokeWithProjectSession(
+              projectSession,
+              'db:draft-get-latest',
+              nextChapterNumber,
+              projectSession.projectPath,
+            ),
           ])
+          if (!isCurrentProjectSession()) return
           const prefill = getAutoNextChapterPrefill(
             true,
             chapterNumber,
@@ -116,6 +146,17 @@ export default function App() {
       unsubAutoOpenNextChapter()
     }
   }, [initLocale, initTheme, initLLM, loadRecentProjects])
+
+  useEffect(() => {
+    if (!ipc.isElectron) return
+    void ipc.invoke('project:smoke-open-request').then(async (request) => {
+      if (!request) return
+      const opened = await useProjectStore.getState().openProject(request.projectPath)
+      if (!opened) throw new Error('烟测项目打开失败')
+      const confirmed = await ipc.invoke('project:smoke-open-confirm', request.projectPath)
+      if (!confirmed.success) throw new Error(confirmed.error || '烟测项目确认失败')
+    }).catch(error => console.error('[SmokeProjectOpen]', error))
+  }, [])
 
   // 全局快捷键: Cmd+N 新建项目，Cmd+O 打开项目
   // 注意：Cmd+=/- 缩放已由 TitleBar.tsx 统一处理，此处不重复注册

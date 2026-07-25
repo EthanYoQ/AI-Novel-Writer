@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { UpdateSection } from '../../src/components/updates/UpdateSection'
 import { useEditorStore } from '../../src/stores/editor-store'
 import { useLocaleStore } from '../../src/stores/locale-store'
+import { useWorkflowStore, type WorkflowStatus } from '../../src/stores/workflow-store'
 import type { UpdateState } from '../../src/services/update-presentation'
 
 type StateListener = (state: UpdateState) => void
@@ -21,6 +22,10 @@ interface UpdateHarness {
   installCalls: number
   deferCalls: number[]
   checkCalls: number
+  officialHomepageRequests: Array<{ channel: string; args: unknown[] }>
+  setActiveWorkflowStatuses(statuses: WorkflowStatus[]): void
+  setLocale(locale: 'zh-CN' | 'en-US'): void
+  setOfficialHomepageFailure(shouldFail: boolean): void
 }
 
 declare global {
@@ -36,10 +41,39 @@ let state: UpdateState = {
   isReminderDeferred: false,
 }
 const listeners = new Set<StateListener>()
+let officialHomepageShouldFail = false
 const harness: UpdateHarness = {
   installCalls: 0,
   deferCalls: [],
   checkCalls: 0,
+  officialHomepageRequests: [],
+  setActiveWorkflowStatuses(statuses) {
+    const activeRuns = statuses.map((status, index) => ({
+      id: `workflow-${index}`,
+      type: 'chapter_creation' as const,
+      title: `创作任务 ${index + 1}`,
+      status,
+      steps: [{
+        id: `step-${index}`,
+        name: '生成章节',
+        description: '生成章节内容',
+        status: status === 'completed' ? 'completed' as const : 'running' as const,
+        logs: [],
+      }],
+      currentStepIndex: 0,
+      createdAt: '2026-07-25T00:00:00.000Z',
+    }))
+    useWorkflowStore.setState({
+      activeRuns,
+      currentRun: activeRuns[0] ?? null,
+    })
+  },
+  setLocale(locale) {
+    useLocaleStore.setState({ locale, initialized: true })
+  },
+  setOfficialHomepageFailure(shouldFail) {
+    officialHomepageShouldFail = shouldFail
+  },
 }
 
 function publish(nextState: UpdateState): void {
@@ -69,6 +103,11 @@ const api: HarnessApi = {
       case 'update:quit-and-install':
         harness.installCalls += 1
         return { success: true, state }
+      case 'official-homepage:open':
+        harness.officialHomepageRequests.push({ channel, args })
+        return officialHomepageShouldFail
+          ? { success: false, error: 'Fixture browser unavailable' }
+          : { success: true }
       default:
         return { success: true, state }
     }

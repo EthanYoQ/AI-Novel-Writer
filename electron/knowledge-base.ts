@@ -11,10 +11,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import * as lancedb from '@lancedb/lancedb'
-import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Utf8, Schema as ArrowSchema } from 'apache-arrow'
 import { chunkText, generateEmbeddings } from './embedding'
 import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
+import {
+  LEGACY_VECTOR_MIGRATION_BLOCKED,
+  LegacyVectorMigrationBlockedError,
+} from './services/knowledge-base-migration-error'
 import {
   addChunks,
   removeDocument as removeDocFromStore,
@@ -24,21 +26,68 @@ import {
   getStats as storeGetStats,
   migrateFromJSON,
   getChunksWithoutVectors as storeGetChunksWithoutVectors,
+  getCanonicalChunksForEmbeddingRebuild,
+  planEmbeddingRebuild,
+  activatePlannedEmbeddingSpace,
+  rebuildPlannedEmbeddingSpace,
+  type EmbeddingSpaceIdentity,
 } from './vector-store'
 
 // ===== 迁移状态跟踪 =====
 
 /** 已执行过迁移检查的项目路径集合 */
 const migratedProjects = new Set<string>()
+const migrationChecksInFlight = new Map<string, Promise<void>>()
+
+export { LEGACY_VECTOR_MIGRATION_BLOCKED, LegacyVectorMigrationBlockedError }
 
 /** 确保旧数据已迁移 */
 async function ensureMigration(projectPath: string): Promise<void> {
-  if (migratedProjects.has(projectPath)) return
-  migratedProjects.add(projectPath)
+  const key = path.resolve(projectPath)
+  if (migratedProjects.has(key)) return
+  const existing = migrationChecksInFlight.get(key)
+  if (existing) return await existing
 
-  const jsonPath = path.join(projectPath, '.vela', 'vectors.json')
-  if (fs.existsSync(jsonPath)) {
-    await migrateFromJSON(projectPath)
+  const attempt = (async () => {
+    const jsonPath = path.join(projectPath, '.vela', 'vectors.json')
+    if (fs.existsSync(jsonPath)) {
+      const result = await migrateFromJSON(projectPath)
+      if (!result.success) {
+        const error = result.error ?? '旧 vectors.json 无法安全迁移'
+        console.warn('[Vela KB] 旧向量迁移已阻断知识库操作:', error)
+        throw new LegacyVectorMigrationBlockedError(error)
+      }
+    }
+    migratedProjects.add(key)
+  })()
+  migrationChecksInFlight.set(key, attempt)
+  try {
+    await attempt
+  } finally {
+    if (migrationChecksInFlight.get(key) === attempt) {
+      migrationChecksInFlight.delete(key)
+    }
+  }
+}
+
+function migrationFailureDetails(error: unknown): { error: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED } {
+  if (error instanceof LegacyVectorMigrationBlockedError) {
+    return { error: error.message, errorCode: error.code }
+  }
+  // IPC callers display this value directly. Preserve an Error's user-facing
+  // message rather than leaking the JavaScript-only "Error:" wrapper; unknown
+  // throwables still have a deterministic fallback.
+  return { error: error instanceof Error ? error.message : String(error) }
+}
+
+function embeddingSpaceFor(
+  protocol: 'openai' | 'gemini',
+  model: { baseUrl: string; modelName?: string },
+): EmbeddingSpaceIdentity {
+  // 只持久化可公开比较的模型身份，绝不写入 API key。
+  return {
+    modelFingerprint: `${protocol}|${model.baseUrl.trim().replace(/\/+$/, '')}|${model.modelName?.trim() || 'default'}`,
+    distanceMetric: 'l2',
   }
 }
 
@@ -54,7 +103,7 @@ export async function importDocument(
   protocol: 'openai' | 'gemini',
   model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
   onProgress?: (progress: number, message: string) => void,
-): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string }> {
+): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
   try {
     await ensureMigration(projectPath)
 
@@ -91,7 +140,16 @@ export async function importDocument(
 
     // 4. 写入 LanceDB（text + 元数据 + 可选向量）
     onProgress?.(80, '正在保存...')
-    const result = await addChunks(projectPath, docId, fileName, chunks, vectors, filePath)
+    const result = await addChunks(
+      projectPath,
+      docId,
+      fileName,
+      chunks,
+      vectors,
+      filePath,
+      undefined,
+      embeddingSpaceFor(protocol, model),
+    )
 
     if (!result.success) {
       return { success: false, error: result.error }
@@ -100,7 +158,7 @@ export async function importDocument(
     onProgress?.(100, `✅ 已导入 ${fileName}（${chunks.length} 个块）`)
     return { success: true, docId, chunkCount: chunks.length }
   } catch (error) {
-    return { success: false, error: String(error) }
+    return { success: false, ...migrationFailureDetails(error) }
   }
 }
 
@@ -132,20 +190,28 @@ export async function searchKnowledge(
     }
   }
 
-  return storeSearchWithScope(projectPath, query, queryVector, topK, chapterScope)
+  return storeSearchWithScope(
+    projectPath,
+    query,
+    queryVector,
+    topK,
+    chapterScope,
+    embeddingSpaceFor(protocol, model),
+  )
 }
 
 /**
  * 列出已导入文档
  */
 export function listDocuments(projectPath: string) {
-  return storeListDocuments(projectPath)
+  return ensureMigration(projectPath).then(() => storeListDocuments(projectPath))
 }
 
 /**
  * 删除文档
  */
 export async function removeDocument(docId: string, projectPath: string): Promise<boolean> {
+  await ensureMigration(projectPath)
   return removeDocFromStore(projectPath, docId)
 }
 
@@ -153,6 +219,7 @@ export async function removeDocument(docId: string, projectPath: string): Promis
  * 清空项目知识库。
  */
 export async function clearKnowledgeBase(projectPath: string): Promise<boolean> {
+  await ensureMigration(projectPath)
   return clearKnowledgeStore(projectPath)
 }
 
@@ -164,6 +231,7 @@ export async function getKnowledgeStats(projectPath: string): Promise<{
   totalChunks: number
   vectorDimension: number
 }> {
+  await ensureMigration(projectPath)
   const stats = await storeGetStats(projectPath)
   return {
     documentCount: stats.documentCount,
@@ -186,17 +254,31 @@ export async function importFolder(
   importedCount: number
   failedFiles: string[]
   error?: string
+  errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED
 }> {
   try {
-    // 递归收集所有 .txt / .md 文件
+    await ensureMigration(projectPath)
+    // 递归收集所有 .txt / .md 文件。文件夹授权在入口处已完成一次
+    // canonical 校验；这里仍要跳过 symlink/junction，避免递归期间逃逸。
+    const rootPath = fs.realpathSync.native(folderPath)
+    const isContainedInRoot = (candidate: string): boolean => {
+      const relative = path.relative(rootPath, candidate)
+      return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+    }
     const collectFiles = (dir: string): string[] => {
       const result: string[] = []
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const fullPath = path.join(dir, entry.name)
+        if (entry.isSymbolicLink()) continue
         if (entry.isDirectory()) {
-          result.push(...collectFiles(fullPath))
+          const canonicalChild = fs.realpathSync.native(fullPath)
+          if (!isContainedInRoot(canonicalChild)) continue
+          result.push(...collectFiles(canonicalChild))
         } else if (/\.(txt|md|markdown)$/i.test(entry.name)) {
-          result.push(fullPath)
+          const canonicalFile = fs.realpathSync.native(fullPath)
+          if (isContainedInRoot(canonicalFile) && fs.statSync(canonicalFile).isFile()) {
+            result.push(canonicalFile)
+          }
         }
       }
       return result
@@ -223,7 +305,7 @@ export async function importFolder(
 
     return { success: true, importedCount, failedFiles }
   } catch (error) {
-    return { success: false, importedCount: 0, failedFiles: [], error: String(error) }
+    return { success: false, importedCount: 0, failedFiles: [], ...migrationFailureDetails(error) }
   }
 }
 
@@ -252,7 +334,7 @@ export async function importText(
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
-): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string }> {
+): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
   try {
     if (!text.trim()) return { success: false, error: '文本内容为空' }
 
@@ -276,22 +358,31 @@ export async function importText(
       }
     }
 
-    // 先删除同名旧文档（幂等性由 vector-store 的 addChunks 内部处理 documents 表）
-    // 但 chunks 表需要手动清理旧的同名文档块
+    // 记录同名旧文档，但绝不能在 addChunks 的空间兼容性检查之前删除它。
+    // 否则新模型返回 reindex_required 时会损坏仍可用的旧代际。
     const existingDocs = await storeListDocuments(projectPath)
     const existingDoc = existingDocs.find(d => d.fileName === fileName)
+
+    const result = await addChunks(
+      projectPath,
+      docId,
+      fileName,
+      chunks,
+      vectors,
+      undefined,
+      chapterMeta,
+      embeddingSpaceFor(protocol, model),
+    )
+    if (!result.success) {
+      return { success: false, error: result.error }
+    }
     if (existingDoc) {
       await removeDocFromStore(projectPath, existingDoc.id)
     }
 
-    const result = await addChunks(projectPath, docId, fileName, chunks, vectors, undefined, chapterMeta)
-    if (!result.success) {
-      return { success: false, error: result.error }
-    }
-
     return { success: true, docId, chunkCount: chunks.length }
   } catch (error) {
-    return { success: false, error: String(error) }
+    return { success: false, ...migrationFailureDetails(error) }
   }
 }
 
@@ -301,6 +392,7 @@ export async function importText(
  * 获取缺少向量的块数量
  */
 export async function getVectorlessCount(projectPath: string): Promise<{ count: number }> {
+  await ensureMigration(projectPath)
   return storeGetChunksWithoutVectors(projectPath)
 }
 
@@ -312,100 +404,100 @@ export async function backfillVectors(
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
-): Promise<{ success: boolean; processed: number; failed: number; error?: string }> {
+): Promise<{
+  success: boolean
+  processed: number
+  failed: number
+  error?: string
+  errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED
+}> {
   try {
-    const { count: total } = await storeGetChunksWithoutVectors(projectPath)
-    if (total === 0) return { success: true, processed: 0, failed: 0 }
-
-    // 全量加载所有需要向量的块
-    const { getConnection } = await import('./vector-store')
-    const db = await getConnection(projectPath)
-    const tableNames = await db.tableNames()
-    if (!tableNames.includes('chunks')) {
-      return { success: false, processed: 0, failed: total, error: 'chunks 表不存在' }
+    await ensureMigration(projectPath)
+    if (!model.apiKey.trim() || !model.baseUrl.trim()) {
+      return { success: false, processed: 0, failed: 0, error: '未配置 Embedding 模型' }
     }
-
-    const table = await db.openTable('chunks')
-    const schema = await table.schema()
-    const hasVectorCol = schema.fields.some(f => f.name === 'vector')
-
-    let allRecords: Array<{ id: string; text: string; vector?: number[] }> = []
-    if (hasVectorCol) {
-      const rows = await table.query().select(['id', 'text', 'vector']).toArray()
-      allRecords = rows.filter((r: { id: string; text: string; vector?: number[] }) =>
-        !r.vector || !Array.isArray(r.vector) || r.vector.length === 0
-      )
-    } else {
-      const rows = await table.query().select(['id', 'text']).toArray()
-      allRecords = rows.map((r: { id: string; text: string }) => ({ id: r.id, text: r.text }))
-    }
-
-    if (allRecords.length === 0) {
+    const space = embeddingSpaceFor(protocol, model)
+    const canonical = await getCanonicalChunksForEmbeddingRebuild(projectPath)
+    if (canonical.length === 0) {
       return { success: true, processed: 0, failed: 0 }
     }
 
-    // 批量生成向量
-    const texts = allRecords.map(r => r.text)
-    const vectors = await generateEmbeddings(texts, protocol, model, model.embeddingOptions?.batchSize)
-
-    // 构建更新后的完整数据
-    const idToVector = new Map<string, number[]>()
-    allRecords.forEach((r, i) => {
-      if (vectors[i] && vectors[i].length > 0) {
-        idToVector.set(r.id, vectors[i])
+    // Do not select a generation from fingerprint/metric alone.  A real
+    // response for one canonical row establishes the only safe dimension for
+    // this operation before any table or registry write may happen.
+    const probeVectors = await generateEmbeddings(
+      [canonical[0].text],
+      protocol,
+      model,
+      model.embeddingOptions?.batchSize,
+    )
+    if (probeVectors.length !== 1) {
+      return {
+        success: false,
+        processed: 0,
+        failed: canonical.length,
+        error: `Embedding 探测返回数量不匹配：期望 1，实际 ${probeVectors.length}`,
       }
-    })
-
-    // 全量读出 + 合并更新
-    const fullTable = await db.openTable('chunks')
-    const allRows = await fullTable.query().toArray()
-    const updatedRows = allRows.map((r: { [key: string]: unknown }) => {
-      const v = idToVector.get(r.id as string)
-      return v ? { ...r, vector: v } : r
-    })
-
-    // 使用显式 Arrow Schema 确保 vector 列正确持久化
-    // LanceDB 自动推断无法正确识别 number[] 为 FixedSizeList 向量类型
-    const VECTOR_DIM = 2048
-    const vectorField = new Field('vector', new ArrowFixedSizeList(VECTOR_DIM, new Field('item', new Float32())), true)
-    const arrowSchema = new ArrowSchema([
-      new Field('id', new Utf8()),
-      new Field('docId', new Utf8()),
-      new Field('fileName', new Utf8()),
-      new Field('chapterNumber', new Int32(), true),
-      new Field('chapterTitle', new Utf8(), true),
-      new Field('text', new Utf8()),
-      vectorField,
-      new Field('chunkIndex', new Int32()),
-      new Field('totalChunks', new Int32()),
-      new Field('importedAt', new Utf8()),
-    ])
-
-    // 删除旧表，用带显式 schema 的 createTable 重新写入
-    await db.dropTable('chunks')
-    await db.createTable('chunks', updatedRows, { schema: arrowSchema })
-    // 重建 FTS 索引
-    const newTable = await db.openTable('chunks')
-    try {
-      await newTable.createIndex('text', { config: lancedb.Index.fts() })
-    } catch { /* 索引可能已存在 */ }
-
-    // 验证
-    const verifyRows = await newTable.query().select(['id', 'vector']).limit(5).toArray()
-    const withVectors = verifyRows.filter((r: { vector?: unknown }) => {
-      if (!r.vector) return false
-      const vec = r.vector as { length?: number; toArray?: () => unknown[] }
-      if (typeof vec.toArray === 'function') return vec.toArray().length > 0
-      return (vec.length ?? 0) > 0
-    }).length
-    if (withVectors === 0) {
-      return { success: false, processed: 0, failed: total, error: '回填后记录向量为空，可能是 LanceDB schema 写入失败' }
+    }
+    const planned = await planEmbeddingRebuild(projectPath, space, probeVectors[0])
+    if (!planned.success) {
+      return { success: false, processed: 0, failed: canonical.length, error: planned.error }
     }
 
-    return { success: true, processed: idToVector.size, failed: total - idToVector.size }
+    const { plan } = planned
+    if (plan.mode === 'up-to-date') {
+      return { success: true, processed: 0, failed: 0 }
+    }
+    if (plan.mode === 'activate') {
+      const activated = await activatePlannedEmbeddingSpace(projectPath, plan)
+      return activated.success
+        ? { success: true, processed: 0, failed: 0 }
+        : { success: false, processed: 0, failed: 0, error: activated.error }
+    }
+
+    const vectorsById = new Map<string, number[]>()
+    const probeTarget = plan.chunks.find(chunk => chunk.id === canonical[0].id)
+    if (probeTarget) vectorsById.set(probeTarget.id, probeVectors[0])
+    const remaining = plan.chunks.filter(chunk => !vectorsById.has(chunk.id))
+    if (remaining.length > 0) {
+      const vectors = await generateEmbeddings(
+        remaining.map(chunk => chunk.text),
+        protocol,
+        model,
+        model.embeddingOptions?.batchSize,
+      )
+      if (vectors.length !== remaining.length) {
+        return {
+          success: false,
+          processed: 0,
+          failed: plan.chunks.length,
+          error: `Embedding 返回数量不匹配：期望 ${remaining.length}，实际 ${vectors.length}`,
+        }
+      }
+      for (const [index, vector] of vectors.entries()) vectorsById.set(remaining[index].id, vector)
+    }
+
+    const result = await rebuildPlannedEmbeddingSpace(
+      projectPath,
+      plan,
+      plan.chunks.map(chunk => ({ id: chunk.id, vector: vectorsById.get(chunk.id)! })),
+    )
+    if (!result.success) {
+      return { success: false, processed: 0, failed: plan.chunks.length, error: result.error }
+    }
+    return {
+      success: true,
+      processed: result.count,
+      failed: 0,
+    }
   } catch (error) {
     console.error('[Vela KB] 向量回填异常:', error)
-    return { success: false, processed: 0, failed: 0, error: String(error) }
+    return {
+      success: false,
+      processed: 0,
+      failed: 0,
+      ...migrationFailureDetails(error),
+    }
   }
 }
 

@@ -1,11 +1,11 @@
 /**
  * open_editor — 在编辑器中打开文件
  */
-import { buildAgentTool } from '../tool-registry'
+import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { useEditorStore } from '../../../stores/editor-store'
-import { useProjectStore } from '../../../stores/project-store'
 import { ipc } from '../../ipc-client'
 import { validatePath } from './safe-path'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 export const openEditorTool = buildAgentTool({
   name: 'open_editor',
@@ -29,7 +29,7 @@ export const openEditorTool = buildAgentTool({
   },
   requiresConfirmation: true,
   isReadOnly: false,
-  execute: async (args) => {
+  execute: async (args, context) => {
     const filePath = args.file_path as string
     const tabType = (args.tab_type as string) ?? 'chapter'
 
@@ -37,10 +37,7 @@ export const openEditorTool = buildAgentTool({
       return { success: false, content: '', error: '缺少 file_path 参数' }
     }
 
-    const project = useProjectStore.getState().currentProject
-    if (!project) {
-      return { success: false, content: '', error: '没有打开的项目' }
-    }
+    const { project, projectSession } = requireAgentProject(context)
 
     const fullPath_check = validatePath(project.path, filePath)
     if (!fullPath_check.valid) {
@@ -49,7 +46,8 @@ export const openEditorTool = buildAgentTool({
     const fullPath = fullPath_check.fullPath
 
     // 读取文件内容
-    const result = await ipc.invoke('fs:read-file', fullPath)
+    const result = await ipc.invokeWithProjectSession(projectSession, 'fs:read-file', fullPath, project.path)
+    assertAgentProjectCurrent(context)
     if (!result.success) {
       return { success: false, content: '', error: `文件读取失败：${result.error}` }
     }
@@ -62,12 +60,20 @@ export const openEditorTool = buildAgentTool({
       type: tabType as 'chapter' | 'outline' | 'character' | 'config' | 'arch-file',
       filePath: fullPath,
       content: result.content,
+      savedContent: result.content,
+      projectKey: project.path,
     })
 
     return {
       success: true,
       content: `已在编辑器中打开：${fileName}`,
-      artifacts: [{ type: 'tab_opened', path: fullPath, name: fileName }],
+      artifacts: [createToolArtifact({
+        type: 'tab_opened',
+        path: fullPath,
+        name: fileName,
+        projectPath: project.path,
+        projectSession,
+      })],
     }
   },
 })

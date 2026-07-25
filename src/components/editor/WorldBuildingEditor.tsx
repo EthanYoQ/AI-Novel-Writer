@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Sparkles, CheckCircle2, Circle, RefreshCw, FileText, BookOpen, AlertTriangle, FolderTree } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useCharacterStore } from '../../stores/character-store'
-import { renderIcon } from '../panels/sidebar/SidebarShared'
+import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 
@@ -13,6 +13,20 @@ import { ipc } from '../../services/ipc-client'
 import { ARCH_CHARACTER_SCOPE, runArchCharacterExtract, createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
 import { readPostProcessStatus, type PostProcessStatus } from '../../services/workflows/workflow-utils'
 import { globalEventBus } from '../../shared/event-bus'
+import {
+  createProjectArchTabId,
+  shouldRefreshArchOnWorkflowComplete,
+  shouldSyncProjectArchTab,
+} from './arch-file-refresh-policy'
+import { LatestRequestGate } from './latest-request-gate'
+import { isCharacterExtractionReady } from './character-extraction-policy'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+  isProjectSessionPath,
+} from '../project-session-gate'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import { sameProjectSessionContext } from '../../shared/project-session-context'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -30,126 +44,261 @@ const ARCH_FILES: Array<{
   ]
 
 /** 故事架构编辑器 — 显示四个架构文件状态，并提供 AI 生成入口 */
-export default function WorldBuildingEditor() {
+export default function WorldBuildingEditor({ projectKey }: { projectKey: string }) {
   // ✅ 精确订阅，避免 novelConfig 等变化导致不必要的 loadStatus 重建
   const currentProject = useProjectStore(s => s.currentProject)
+  const projectMatches = currentProject?.path === projectKey
   const characters = useCharacterStore(s => s.characters)
+  const characterDataProjectKey = useCharacterStore(s => s.dataProjectKey)
+  const characterLoadingProjectKey = useCharacterStore(s => s.loadingProjectKey)
+  const characterLoadError = useCharacterStore(s => s.lastError)
   // 角色数据由 ProjectService 统一加载，组件只消费
   const characterCount = characters.length
+  const characterExtractionReady = isCharacterExtractionReady({
+    projectKey,
+    dataProjectKey: characterDataProjectKey,
+    loadingProjectKey: characterLoadingProjectKey,
+    lastError: characterLoadError,
+    characterCount,
+  })
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [showArchDialog, setShowArchDialog] = useState(false)
   const [extracting, setExtracting] = useState(false)
+  const extractingRunIdRef = useRef<string | null>(null)
+  const extractingSessionRef = useRef<ProjectSessionContext | null>(null)
+  const lastCompletedArchitectureRunRef = useRef<string | null>(null)
   // 用于强制刷新 PostProcessStatusPanel 的 key
   const [, setPostProcessKey] = useState(0)
   // 角色卡后处理状态（用于控制卡片边框颜色）
   const [charExtractStatus, setCharExtractStatus] = useState<PostProcessStatus | null>(null)
+  const archStatusRequestGate = useRef(new LatestRequestGate())
+  const characterStatusRequestGate = useRef(new LatestRequestGate())
 
   /** 加载各架构文件状态（通过 Service 层获取，不直接调 IPC） */
   const loadStatus = useCallback(async () => {
-    if (!currentProject) return
+    await Promise.resolve()
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      archStatusRequestGate.current.begin()
+      setArchStatus({})
+      setWordCounts({})
+      setLoading(false)
+      return
+    }
+    const projectPath = projectSession.projectPath
+    const requestId = archStatusRequestGate.current.begin()
     setLoading(true)
-    const { checkArchStatusWithWordCount } = await import('../../services/architecture-service')
-    const { status, wordCounts: counts } = await checkArchStatusWithWordCount()
+    const core = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:project-core-get',
+      projectPath,
+    )
+    const status: Record<string, boolean> = {
+      premise: (core?.premise?.length ?? 0) > 50,
+      characters: (core?.charactersArch?.length ?? 0) > 50,
+      worldbuilding: (core?.worldbuilding?.length ?? 0) > 50,
+      synopsis: (core?.synopsis?.length ?? 0) > 50,
+    }
+    const counts: Record<string, number> = {
+      premise: status.premise ? (core?.premise?.length ?? 0) : 0,
+      characters: status.characters ? (core?.charactersArch?.length ?? 0) : 0,
+      worldbuilding: status.worldbuilding ? (core?.worldbuilding?.length ?? 0) : 0,
+      synopsis: status.synopsis ? (core?.synopsis?.length ?? 0) : 0,
+    }
+    if (
+      !archStatusRequestGate.current.isLatest(requestId)
+      || !isProjectSessionCurrent(projectSession)
+    ) return
     setArchStatus(status)
     setWordCounts(counts)
     setLoading(false)
     // ✅ 只依赖 path 字符串，避免 novelConfig 等变化导致 loadStatus 重建
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.path])
+  }, [currentProject, projectKey, projectMatches])
 
-  useEffect(() => { loadStatus() }, [loadStatus])
+  useEffect(() => {
+    const timer = setTimeout(() => { void loadStatus() }, 0)
+    return () => clearTimeout(timer)
+  }, [loadStatus])
 
   /** 加载角色卡后处理状态 */
   const loadCharExtractStatus = useCallback(async () => {
-    if (!currentProject) return
-    const s = await readPostProcessStatus(currentProject.path, ARCH_CHARACTER_SCOPE)
+    await Promise.resolve()
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      characterStatusRequestGate.current.begin()
+      setCharExtractStatus(null)
+      return
+    }
+    const projectPath = projectSession.projectPath
+    const requestId = characterStatusRequestGate.current.begin()
+    const s = await readPostProcessStatus(projectPath, ARCH_CHARACTER_SCOPE, projectSession)
+    if (
+      !characterStatusRequestGate.current.isLatest(requestId)
+      || !isProjectSessionCurrent(projectSession)
+    ) return
     setCharExtractStatus(s)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.path])
+  }, [currentProject, projectKey, projectMatches])
 
-  useEffect(() => { loadCharExtractStatus() }, [loadCharExtractStatus])
+  useEffect(() => {
+    const timer = setTimeout(() => { void loadCharExtractStatus() }, 0)
+    return () => clearTimeout(timer)
+  }, [loadCharExtractStatus])
 
   // 监听 EventBus 事件，刷新后处理状态面板
   useEffect(() => {
-    const unsub1 = globalEventBus.on('ARCH_POSTPROCESS_UPDATED', () => {
+    const eventMatchesProjectRun = (payload: {
+      projectSession: ProjectSessionContext
+      runId: string
+    }) =>
+      (() => {
+        const projectSession = captureProjectSession(currentProject)
+        return !!projectSession
+          && isProjectSessionCurrent(projectSession)
+          && sameProjectSessionContext(projectSession, payload.projectSession)
+      })()
+      && payload.runId.length > 0
+    const unsub1 = globalEventBus.on('ARCH_POSTPROCESS_UPDATED', (payload) => {
+      if (!eventMatchesProjectRun(payload)) return
       setPostProcessKey(k => k + 1)
       loadCharExtractStatus()
-      setExtracting(false)
+      if (
+        extractingRunIdRef.current === payload.runId
+        && isProjectSessionCurrent(extractingSessionRef.current)
+      ) {
+        extractingRunIdRef.current = null
+        extractingSessionRef.current = null
+        setExtracting(false)
+      }
     })
-    const unsub2 = globalEventBus.on('CHARACTER_EXTRACT_FAILED', () => {
+    const unsub2 = globalEventBus.on('CHARACTER_EXTRACT_FAILED', (payload) => {
+      if (!eventMatchesProjectRun(payload)) return
       setPostProcessKey(k => k + 1)
       loadCharExtractStatus()
-      setExtracting(false)
+      if (
+        extractingRunIdRef.current === payload.runId
+        && isProjectSessionCurrent(extractingSessionRef.current)
+      ) {
+        extractingRunIdRef.current = null
+        extractingSessionRef.current = null
+        setExtracting(false)
+      }
     })
     // 每步架构文件写完后实时刷新状态
-    const unsub3 = globalEventBus.on('ARCH_FILE_UPDATED', () => {
+    const unsub3 = globalEventBus.on('ARCH_FILE_UPDATED', (payload) => {
+      if (!eventMatchesProjectRun(payload)) return
       loadStatus()
     })
     // 整个工作流完成后也刷新一次
     const unsub4 = globalEventBus.on('WORKFLOW_COMPLETE', (payload) => {
-      if (payload.type === 'architecture_generation') {
-        loadStatus()
-      }
+      const projectSession = captureProjectSession(currentProject)
+      if (!projectSession || !isProjectSessionCurrent(projectSession)) return
+      if (!shouldRefreshArchOnWorkflowComplete(
+        payload,
+        projectSession,
+        lastCompletedArchitectureRunRef.current,
+      )) return
+      lastCompletedArchitectureRunRef.current = payload.runId
+      loadStatus()
     })
     return () => { unsub1(); unsub2(); unsub3(); unsub4() }
-  }, [loadCharExtractStatus, loadStatus])
+  }, [currentProject, loadCharExtractStatus, loadStatus, projectKey])
 
 
 
   /** 从角色图谱提取角色卡（首次提取 / 重新提取） */
   const handleExtractCharacters = useCallback(async () => {
-    if (!currentProject || extracting) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey) || extracting) return
     setExtracting(true)
     try {
-      const core = await ipc.invoke('db:project-core-get')
+      const core = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:project-core-get',
+        projectSession.projectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
       const charArch = core?.charactersArch ?? ''
       if (charArch.length < 50) {
         console.error('角色图谱不存在或内容不完整')
         setExtracting(false)
         return
       }
-      runArchCharacterExtract(currentProject.path, charArch, currentProject.novelConfig.genre)
+      if (!isProjectSessionCurrent(projectSession)) return
+      extractingSessionRef.current = projectSession
+      extractingRunIdRef.current = runArchCharacterExtract(
+        projectSession.projectPath,
+        charArch,
+        currentProject.novelConfig.genre,
+        projectSession,
+      )
     } catch (e) {
+      if (!isProjectSessionCurrent(projectSession)) return
       console.error('角色卡提取失败', e)
+      extractingSessionRef.current = null
       setExtracting(false)
     }
-  }, [currentProject, extracting])
+  }, [currentProject, extracting, projectKey, projectMatches])
 
   /** 打开单个架构文件（arch-file 类型；若 tab 已存在则刷新磁盘内容） */
   const openArchFile = async (f: typeof ARCH_FILES[number]) => {
-    if (!currentProject) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     const filePath = `vela://core/${f.key}`
-    const core = (await ipc.invoke('db:project-core-get')) as Record<string, unknown> | null
+    const tabId = createProjectArchTabId(projectKey, filePath)
+    let core: Record<string, unknown> | null
+    try {
+      core = (await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:project-core-get',
+        projectSession.projectPath,
+      )) as Record<string, unknown> | null
+    } catch {
+      return
+    }
+    if (!isProjectSessionCurrent(projectSession)) return
     const propertyKey = f.key === 'characters' ? 'charactersArch' : f.key
     const content = (core && (core[propertyKey] as string)) || ''
 
     const { useEditorStore } = await import('../../stores/editor-store')
+    if (!isProjectSessionCurrent(projectSession)) return
     const store = useEditorStore.getState()
-    const existingTab = store.tabs.find(t => t.id === filePath)
+    const existingTab = store.tabs.find(t => t.id === tabId)
     if (existingTab) {
-      // tab 已存在：切换 + 静默刷新磁盘内容（不标记脚数据）
-      store.setActiveTab(filePath)
-      store.syncTabContent(filePath, content)
+      store.setActiveTab(tabId)
+      if (shouldSyncProjectArchTab(existingTab, projectKey)) {
+        store.syncTabContent(tabId, content)
+        store.markTabSaved(tabId, content)
+      }
     } else {
       store.openFile({
-        id: filePath,
+        id: tabId,
         name: `${f.label}`,
         type: 'arch-file',
         filePath,
         content,
+        savedContent: content,
+        projectKey,
       })
     }
   }
 
   /** 确认后启动架构工作流 */
   const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     const { useWorkflowStore } = await import('../../stores/workflow-store')
-    useWorkflowStore.getState().startWorkflow(createArchitectureWorkflow({ selectedSteps, stepGuidance }))
+    if (!isProjectSessionCurrent(projectSession)) return
+    useWorkflowStore.getState().startWorkflow(createArchitectureWorkflow({
+      projectPath: projectSession.projectPath,
+      projectSession,
+      selectedSteps,
+      stepGuidance,
+    }))
   }
 
-  if (!currentProject) {
+  if (!projectMatches) {
     return (
       <div className="h-full flex flex-col overflow-hidden bg-[var(--color-bg)]">
         <div
@@ -279,7 +428,7 @@ export default function WorldBuildingEditor() {
                     </span>
                   )}
                   {/* 角色图谱已生成但角色卡为空时，显示重新提取按钮（带质感的警告色） */}
-                  {isCharacters && generated && !loading && characterCount === 0 && (
+                  {isCharacters && generated && !loading && characterExtractionReady && (
                     <Button
                       size="sm"
                       disabled={extracting}
@@ -298,7 +447,7 @@ export default function WorldBuildingEditor() {
                     </Button>
                   )}
                   {/* 查看箭头提示 */}
-                  {generated && !(isCharacters && !loading && characterCount === 0) && (
+                  {generated && !(isCharacters && !loading && characterExtractionReady) && (
                     <span className="text-[0.7rem] flex items-center gap-0.5" style={{ color: 'var(--color-text-muted)' }}>
                       <FileText size={10} /> 点击查看
                     </span>

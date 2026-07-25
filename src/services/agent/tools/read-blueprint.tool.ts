@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { useProjectStore } from '../../../stores/project-store'
+import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 
 export const readBlueprintTool = buildAgentTool({
@@ -20,17 +20,15 @@ export const readBlueprintTool = buildAgentTool({
     },
   },
   requiresConfirmation: false,
-  execute: async (args) => {
-    const project = useProjectStore.getState().currentProject
-    if (!project) {
-      return { success: false, content: '', error: '没有打开的项目' }
-    }
+  execute: async (args, context) => {
+    const { project, projectSession } = requireAgentProject(context)
 
     const chapterNum = args.chapter_number as number | undefined
 
     if (chapterNum !== undefined) {
       // 读取指定章节蓝图
-      const bp = await ipc.invoke('db:blueprint-get', chapterNum)
+      const bp = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', chapterNum, project.path)
+      assertAgentProjectCurrent(context)
       if (!bp) {
         return { success: false, content: '', error: `第 ${chapterNum} 章蓝图不存在或读取失败` }
       }
@@ -39,7 +37,8 @@ export const readBlueprintTool = buildAgentTool({
 
     // 列出所有蓝图文件
     try {
-      const bps = await ipc.invoke('db:blueprint-get-all')
+      const bps = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get-all', project.path)
+      assertAgentProjectCurrent(context)
       if (!bps || bps.length === 0) {
         return { success: true, content: '⚠️ 蓝图为空。建议先通过工作流生成章节蓝图。' }
       }

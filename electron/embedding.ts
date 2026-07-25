@@ -10,6 +10,45 @@
 
 import { normalizeEmbeddingOptions } from '../src/shared/embedding-options'
 
+const RELEASE_SMOKE_BASE_URL_PREFIX = 'vela-release-smoke://'
+
+/**
+ * This is deliberately not a user-selectable embedding provider. It exists
+ * solely for the installed-package qualification process, which requires both
+ * a launch-time environment gate and a matching one-time token in the model.
+ */
+function releaseSmokeEmbeddings(
+  texts: string[],
+  model: { baseUrl: string; apiKey: string; modelName?: string; releaseSmokeDimension?: 768 | 1536 },
+): number[][] | undefined {
+  const token = process.env.AI_NOVEL_RELEASE_SMOKE_TOKEN
+  const commandArgument = token ? `--ai-novel-release-smoke=${token}` : ''
+  const dimension = model.releaseSmokeDimension ?? Number(/^release-smoke-(768|1536)$/.exec(model.modelName ?? '')?.[1])
+  if (
+    process.env.AI_NOVEL_RELEASE_SMOKE !== '1'
+    || !token
+    || !/^[a-f0-9]{32,128}$/i.test(token)
+    || process.argv.filter(argument => argument === commandArgument).length !== 1
+    || model.apiKey !== token
+    || model.baseUrl !== `${RELEASE_SMOKE_BASE_URL_PREFIX}${token}`
+    || (dimension !== 768 && dimension !== 1536)
+  ) {
+    return undefined
+  }
+
+  const size = dimension
+  return texts.map((text) => {
+    let state = 2166136261
+    for (let index = 0; index < text.length; index += 1) {
+      state = Math.imul(state ^ text.charCodeAt(index), 16777619) >>> 0
+    }
+    return Array.from({ length: size }, (_value, index) => {
+      state = Math.imul(state ^ (index + 1), 16777619) >>> 0
+      return (state / 0xffffffff) * 2 - 1
+    })
+  })
+}
+
 // ===== Embedding API 调用 =====
 
 /** OpenAI Embedding API */
@@ -92,6 +131,8 @@ export async function generateEmbeddings(
 ): Promise<number[][]> {
   // 空文本处理
   if (texts.length === 0) return []
+  const smokeEmbeddings = releaseSmokeEmbeddings(texts, model)
+  if (smokeEmbeddings) return smokeEmbeddings
 
   // 批量限制：每次最多 50 条
   // 旧配置未提供 batchSize 时保持原有协议默认值，避免升级后意外改变云端调用。
