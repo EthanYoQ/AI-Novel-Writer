@@ -1,5 +1,4 @@
 import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
-import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { DirectoryPromptBuilder } from '../../prompts/prompt-builder'
 import {
@@ -9,7 +8,9 @@ import {
   parseTextBlueprintsStrict,
   saveAllBlueprints,
   verifyBlueprintsPersisted,
+  type DirectoryWorkflowProjectSnapshot,
 } from '../directory-workflow'
+import { requireWorkflowProjectSession } from '../workflow-project-session'
 
 function isBlueprintJsonParseError(error: unknown): error is Error {
   return error instanceof Error && error.message.startsWith('蓝图 JSON 解析失败：')
@@ -22,20 +23,22 @@ function buildBlueprintJsonRepairPrompt(content: string, startChapter: number, e
 }
 
 export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBlueprint[]> {
-  constructor(private params: DirectoryWorkflowParams) {
+  constructor(
+    private params: DirectoryWorkflowParams,
+    private projectSnapshot: DirectoryWorkflowProjectSnapshot,
+  ) {
     super()
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<ChapterBlueprint[]> {
-    const project = useProjectStore.getState().currentProject
-    if (!project) throw new Error('未打开项目')
-
+    const projectSession = requireWorkflowProjectSession(context)
     const architecture = context.data.architecture as string
     const existingBlueprints = (context.data.existingBlueprints || []) as ChapterBlueprint[]
 
-    const totalChapters = project.novelConfig.totalChapters
-    const globalGuidance = project.novelConfig.globalGuidance || ''
-    const genre = project.novelConfig.genre || ''
+    const { expectedProjectPath, novelConfig } = this.projectSnapshot
+    const totalChapters = novelConfig.totalChapters
+    const globalGuidance = novelConfig.globalGuidance || ''
+    const genre = novelConfig.genre || ''
 
     let startChapter = 1
     let endChapter = totalChapters
@@ -64,14 +67,14 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     let cursor = startChapter
 
     while (cursor <= endChapter) {
-      if (context.cancelled) { callbacks.log('已取消'); break }
+      this.assertNotCancelled(context)
 
       const batchEnd = Math.min(cursor + batchSize - 1, endChapter)
       callbacks.log(`  正在生成第 ${cursor}–${batchEnd} 章...`)
 
       let prompt: string
       if (cursor === 1 && this.params.mode === 'full') {
-        const template = getPromptTemplate('chapter_blueprint')
+        const template = getPromptTemplate('chapter_blueprint', projectSession)
         if (!template) throw new Error('模板丢失')
         prompt = new DirectoryPromptBuilder(template)
           .withNovelArchitecture(architecture)
@@ -81,7 +84,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           .withPacingGuidance((context.data.pacingGuidance as string) || '')
           .build()
       } else {
-        const template = getPromptTemplate('chapter_blueprint_chunk')
+        const template = getPromptTemplate('chapter_blueprint_chunk', projectSession)
         if (!template) throw new Error('模板丢失')
 
         const prevAll = [...existingBlueprints, ...newBlueprints]
@@ -102,14 +105,15 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       callbacks.setProgress(Math.round(((cursor - startChapter) / (endChapter - startChapter + 1)) * 90))
 
       // systemRole 由模板定义，不再硬编码
-      const systemRole = getPromptTemplate('chapter_blueprint')?.systemRole || '你是一位经验丰富的网文架构师。'
+      const systemRole = getPromptTemplate('chapter_blueprint', projectSession)?.systemRole || '你是一位经验丰富的网文架构师。'
       const jsonOutputOptions = {
         responseFormat: { type: 'json_object' },
         thinking: false,
         maxTokens: Math.min(modelMaxTokens, 4096),
         temperature: 0.78,
       }
-      const resultText = await this.callLLM(prompt, systemRole, callbacks, jsonOutputOptions)
+      const resultText = await this.callLLM(prompt, systemRole, callbacks, jsonOutputOptions, context)
+      this.assertNotCancelled(context)
 
       // ★ 关键修复：接受 AI 返回的从 cursor 到 endChapter 范围内的所有有效章节
       // AI 可能一次性返回超出本批次（batchEnd）的章节，全部保留，避免浪费和重复 LLM 请求
@@ -125,7 +129,9 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           '你是严格的 JSON 格式修复器，只输出有效 JSON。',
           callbacks,
           { ...jsonOutputOptions, temperature: 0.2 },
+          context,
         )
+        this.assertNotCancelled(context)
         parsed = parseTextBlueprintsStrict(repairedText, cursor, endChapter)
       }
       const actualMaxChapter = Math.max(...parsed.map(p => p.chapterNumber))
@@ -134,9 +140,15 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
 
       // ==== 批次入库 ====
       if (parsed.length > 0) {
-        await saveAllBlueprints(parsed)
-        await verifyBlueprintsPersisted(parsed, { startChapter: cursor, endChapter: actualMaxChapter })
-        useProjectStore.getState().refreshFileTree()
+        this.assertNotCancelled(context)
+        await saveAllBlueprints(parsed, expectedProjectPath, context.projectSession)
+        this.assertNotCancelled(context)
+        await verifyBlueprintsPersisted(
+          parsed,
+          expectedProjectPath,
+          { startChapter: cursor, endChapter: actualMaxChapter },
+          context.projectSession,
+        )
       }
 
       // 计算本次实际生成到的最大章节号，推进游标到已生成的最后一章之后
@@ -145,6 +157,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       cursor = actualMaxChapter + 1
     }
 
+    this.assertNotCancelled(context)
     context.data.newBlueprints = newBlueprints
     context.data.existingBlueprints = existingBlueprints
 

@@ -15,6 +15,7 @@ import { Input } from '../ui/Input'
 import { Textarea } from '../ui/Textarea'
 import type { NovelConfig } from '../../shared/ipc-channels'
 import { useLocaleStore } from '../../stores/locale-store'
+import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
 
 interface Props {
   isOpen: boolean
@@ -68,6 +69,8 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
 
   const handleGenerate = async () => {
     if (!idea.trim() || isSubmittingRef.current) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
     if (!defaultModelId) {
       addLog('error', text('请先在设置中配置 AI 模型', 'Configure an AI model in Settings first.'))
       return
@@ -94,8 +97,10 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
           { title: text('配置已存在', 'Configuration exists'), confirmText: text('继续覆盖', 'Overwrite'), cancelText: text('取消', 'Cancel') }
         )
         setConfirming(false)
-        if (!ok) return
+        if (!ok || !isProjectSessionCurrent(projectSession)) return
       }
+
+      if (!isProjectSessionCurrent(projectSession)) return
 
       // 覆盖确认通过后，立即关闭弹窗
       onClose()
@@ -105,6 +110,8 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
       // 后台执行 LLM 调用（由 WorkflowEngine 接管并显示全局状态面板）
       startWorkflow(
         createConfigGenerationWorkflow({
+          projectPath: projectSession.projectPath,
+          projectSession,
           idea,
           totalChapters: totalChapters || 100,
           wordsPerChapter: wordsPerChapter || 3000,

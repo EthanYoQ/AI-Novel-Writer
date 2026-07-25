@@ -33,8 +33,6 @@ export interface MentionTarget {
   displayName: string
   /** 提及值（传递给 Tool） */
   value: string
-  /** 图标 emoji */
-  icon: string
 }
 
 /** 提及解析结果 */
@@ -145,12 +143,12 @@ export function parseSlashCommand(input: string): {
  */
 export function getAllMentionTargets(): MentionTarget[] {
   return [
-    { type: 'architecture', displayName: '故事架构', value: 'architecture', icon: '📐' },
-    { type: 'character', displayName: '角色卡', value: 'characters', icon: '👤' },
-    { type: 'blueprint', displayName: '章节蓝图', value: 'blueprints', icon: '📋' },
-    { type: 'knowledge', displayName: '知识库', value: 'knowledge', icon: '📚' },
-    { type: 'chapter', displayName: '当前章节', value: 'current_chapter', icon: '📝' },
-    { type: 'file', displayName: '项目文件', value: 'file', icon: '📄' },
+    { type: 'architecture', displayName: '故事架构', value: 'architecture' },
+    { type: 'character', displayName: '角色卡', value: 'characters' },
+    { type: 'blueprint', displayName: '章节蓝图', value: 'blueprints' },
+    { type: 'knowledge', displayName: '知识库', value: 'knowledge' },
+    { type: 'chapter', displayName: '当前章节', value: 'current_chapter' },
+    { type: 'file', displayName: '项目文件', value: 'file' },
   ]
 }
 

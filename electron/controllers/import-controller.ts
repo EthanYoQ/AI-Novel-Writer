@@ -1,6 +1,11 @@
-import { ipcMain, dialog } from 'electron'
-import fs from 'node:fs'
+import { app, ipcMain, dialog } from 'electron'
 import path from 'node:path'
+import { externalFileGrants } from '../services/external-file-grant-service'
+import { mainText } from '../i18n'
+import {
+  windowsSafeFileSystem,
+  type WindowsSafeFileSystem,
+} from '../security/windows-safe-file-system'
 
 /**
  * 导入小说控制器 — 处理文件选择与章节拆分
@@ -25,6 +30,12 @@ const RE_MD_HEADING = /^#{1,3}\s+(?:第[一二三四五六七八九十百千零\
 
 /** 所有候选正则 */
 const CHAPTER_PATTERNS = [RE_CN_CHAPTER, RE_EN_CHAPTER, RE_MD_HEADING]
+
+const IMPORT_GRANT_TTL_MS = 5 * 60 * 1000
+
+function text(zhCNText: string, enUSText: string): string {
+  return mainText(app.getLocale(), zhCNText, enUSText)
+}
 
 /** 中文数字到阿拉伯数字的映射 */
 function chineseNumToArabic(str: string): number {
@@ -157,30 +168,51 @@ function hasChapterHeadings(content: string): boolean {
   return lines.some(line => isChapterHeading(line))
 }
 
-export function registerImportController() {
+export function registerImportController(
+  fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
+) {
   // ===== 文件选择对话框 =====
-  ipcMain.handle('dialog:select-novel-files', async () => {
+  ipcMain.handle('dialog:select-novel-files', async (event) => {
     const result = await dialog.showOpenDialog({
-      title: '选择要导入的小说文件',
+      title: text('选择要导入的小说文件', 'Choose novel files to import'),
       filters: [
-        { name: '小说文本', extensions: ['txt', 'md', 'text'] },
-        { name: '所有文件', extensions: ['*'] },
+        { name: text('小说文本', 'Novel text'), extensions: ['txt', 'md', 'text'] },
+        { name: text('所有文件', 'All files'), extensions: ['*'] },
       ],
       properties: ['openFile', 'multiSelections'],
     })
     if (result.canceled || result.filePaths.length === 0) return null
-    return result.filePaths
+    return result.filePaths.map((filePath) => {
+      const grant = externalFileGrants.issueFile({
+        webContentsId: event.sender.id,
+        filePath,
+        operations: ['read'],
+        ttlMs: IMPORT_GRANT_TTL_MS,
+        maxUses: 1,
+      })
+      event.sender.once('destroyed', () => externalFileGrants.revoke(grant.grantId))
+      return { grantId: grant.grantId, displayName: path.basename(filePath) }
+    })
   })
 
   // ===== 读取并拆分章节 =====
-  ipcMain.handle('import:split-chapters', async (_event, filePaths: string[]) => {
+  ipcMain.handle('import:split-chapters', async (event, grantIds: string[]) => {
     try {
       const allChapters: ParsedChapter[] = []
+      if (!Array.isArray(grantIds) || grantIds.length === 0) {
+        throw new Error(text('未选择可导入的小说文件', 'No novel files were selected for import'))
+      }
+      const fileCapabilities = grantIds.map((grantId) => externalFileGrants.resolve({
+        grantId,
+        webContentsId: event.sender.id,
+        operation: 'read',
+      }))
 
-      if (filePaths.length === 1) {
+      if (fileCapabilities.length === 1) {
         // ===== 单文件模式 =====
-        const filePath = filePaths[0]
-        const content = fs.readFileSync(filePath, 'utf-8')
+        const fileCapability = fileCapabilities[0]
+        const content = await fileSystem.readText(fileCapability)
+        const fileName = path.basename(fileCapability.relativePath)
 
         if (hasChapterHeadings(content)) {
           // 文件内含章节标题 → 正则拆章
@@ -190,7 +222,7 @@ export function registerImportController() {
           // 无章节标题 → 整文件视为一章
           allChapters.push({
             number: 1,
-            title: path.basename(filePath, path.extname(filePath)),
+            title: path.basename(fileName, path.extname(fileName)),
             content: content.trim(),
             wordCount: content.trim().length,
           })
@@ -198,15 +230,15 @@ export function registerImportController() {
       } else {
         // ===== 多文件模式 =====
         // 按文件名自然排序
-        const sorted = [...filePaths].sort((a, b) => {
-          const nameA = path.basename(a)
-          const nameB = path.basename(b)
+        const sorted = [...fileCapabilities].sort((a, b) => {
+          const nameA = path.basename(a.relativePath)
+          const nameB = path.basename(b.relativePath)
           return nameA.localeCompare(nameB, 'zh-CN', { numeric: true })
         })
 
         for (let i = 0; i < sorted.length; i++) {
-          const filePath = sorted[i]
-          const content = fs.readFileSync(filePath, 'utf-8').trim()
+          const fileCapability = sorted[i]
+          const content = (await fileSystem.readText(fileCapability)).trim()
           if (!content) continue
 
           // 尝试从文件内容中检测章节标题
@@ -216,7 +248,8 @@ export function registerImportController() {
             allChapters.push(...chapters)
           } else {
             // 文件内无章节标题 → 整文件视为一章
-            const fileName = path.basename(filePath, path.extname(filePath))
+            const sourceFileName = path.basename(fileCapability.relativePath)
+            const fileName = path.basename(sourceFileName, path.extname(sourceFileName))
             const num = extractChapterNumber(fileName) || (allChapters.length + 1)
             allChapters.push({
               number: num,
@@ -241,12 +274,12 @@ export function registerImportController() {
         chapters: renumbered,
         totalWords,
       }
-    } catch (error) {
+    } catch {
       return {
         success: false,
         chapters: [],
         totalWords: 0,
-        error: String(error),
+        error: text('无法读取所选文件；请重新选择后再试。', 'Could not read the selected files. Please choose them again.'),
       }
     }
   })

@@ -14,21 +14,20 @@ export default function AIOutputPanel() {
   const history = useWorkflowStore(s => s.history)
   const getActiveStreamingRun = useWorkflowStore(s => s.getActiveStreamingRun)
   const activeRun = getActiveStreamingRun()
+  const activeRunId = activeRun?.id
   const [viewRunId, setViewRunId] = useState<string | null>(null)
 
   console.log('[AIOutputPanel] render: viewRunId=', viewRunId, 'activeRun=', activeRun?.id, activeRun?.status, 'activeRuns.len=', activeRuns.length)
 
   // 自动跟随最新活跃任务
   useEffect(() => {
-    if (activeRun) {
-      console.log('[AIOutputPanel] mount/useEffect activeRun:', activeRun.id, activeRun.status, 'steps:', activeRun.steps.map(s => s.status))
-      setViewRunId(prev => prev === activeRun.id ? prev : activeRun.id)
-    } else {
-      console.log('[AIOutputPanel] mount/useEffect: no activeRun, activeRuns=', activeRuns.map(r => r.id + ':' + r.status), 'history=', history.slice(0, 2).map(r => r.id + ':' + r.status))
-    }
-    // 只依赖 id 字符串，不依赖 activeRun 对象引用
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRun?.id])
+    if (!activeRunId) return
+    // 异步安排状态同步，避免在 effect 提交阶段触发级联渲染。
+    const syncTimer = window.setTimeout(() => {
+      setViewRunId(previousRunId => previousRunId === activeRunId ? previousRunId : activeRunId)
+    }, 0)
+    return () => window.clearTimeout(syncTimer)
+  }, [activeRunId])
 
   const viewRun: WorkflowRun | undefined =
     activeRuns.find(r => r.id === viewRunId) ||
@@ -121,7 +120,8 @@ function ActiveRunView({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
-  const isActive = run.status === 'running' || run.status === 'waiting'
+  const isActive = run.status === 'running' || run.status === 'waiting' || run.status === 'paused' || run.status === 'cancelling'
+  const canCancel = run.status !== 'cancelling'
   const cancelWorkflow = useWorkflowStore.getState().cancelWorkflow
   const prevLenRef = useRef(0)
 
@@ -240,7 +240,7 @@ function ActiveRunView({
       </div>
 
       {/* 固定在底部的操作悬浮区 */}
-      {isActive && (
+      {isActive && canCancel && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10">
           <button
             onClick={() => cancelWorkflow(run.id)}

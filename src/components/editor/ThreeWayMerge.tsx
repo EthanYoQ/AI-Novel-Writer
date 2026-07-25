@@ -9,7 +9,7 @@
  * 布局：左栏原稿（只读）| 中栏合并结果（可编辑）| 右栏修稿（只读）
  */
 import React, { useState, useCallback, useRef, useMemo, useLayoutEffect } from 'react'
-import { ArrowLeft, ArrowRight } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { useLocaleStore } from '../../stores/locale-store'
 import './three-way-merge.css'
@@ -430,7 +430,9 @@ export default function ThreeWayMerge({
                     <button className={`twm-adopt ${isApplied ? 'adopted' : ''}`}
                       onClick={() => toggleHunk(hunk.index)}
                       title={isApplied ? '恢复原稿' : '采用修稿'}>
-                      {isApplied ? '✓' : '«'}
+                      {isApplied
+                        ? <Check size={14} aria-hidden="true" />
+                        : <ArrowLeft size={14} aria-hidden="true" />}
                     </button>
                     <div className="twm-hunk-text">
                       <HunkLines lines={hunk.modifiedLines} padCount={rightPad} cls="twm-line-added"

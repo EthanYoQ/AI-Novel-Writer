@@ -22,6 +22,12 @@ describe('batch chapter workflow limits', () => {
 
   it('creates one complete chapter step per requested chapter and caps the count at ten', () => {
     const workflow = createBatchChapterWorkflow({
+      projectPath: 'C:\\test-project',
+      projectSession: {
+        projectId: 'test-project',
+        leaseId: 'lease-test-project',
+        projectPath: 'C:\\test-project',
+      },
       startChapterNumber: 4,
       chapterCount: 99,
     })

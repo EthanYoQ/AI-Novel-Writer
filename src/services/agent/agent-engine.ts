@@ -11,7 +11,13 @@
  * 但简化为 Vela 的 Electron + React 架构。
  */
 
-import { toolRegistry, type ToolResult, type ToolArtifact } from './tool-registry'
+import {
+  toolRegistry,
+  type AgentExecutionContext,
+  type ToolResult,
+  type ToolArtifact,
+} from './tool-registry'
+import { createAgentExecutionContext } from './tools/project-context'
 
 // ===== 常量 =====
 
@@ -86,9 +92,13 @@ export async function runAgentLoop(
   generateFn: LLMGenerateFn,
   callbacks: AgentEngineCallbacks,
   abortSignal?: AbortSignal,
+  providedExecutionContext?: AgentExecutionContext,
 ): Promise<void> {
   const allToolCalls: ToolCallInfo[] = []
   const allArtifacts: ToolArtifact[] = []
+  // One agent run gets one immutable project identity. Tool calls later in the
+  // loop must not silently borrow a lease issued after a same-path reopen.
+  const executionContext = providedExecutionContext ?? createAgentExecutionContext()
 
   // 构建消息列表
   const messages: LLMMessage[] = [
@@ -195,7 +205,12 @@ export async function runAgentLoop(
       callbacks.onToolCallStart(toolCallInfo)
 
       try {
-        const result = await executeToolWithTimeout(tool.execute, tc.arguments, TOOL_TIMEOUT_MS)
+        const result = await executeToolWithTimeout(
+          tool.execute,
+          tc.arguments,
+          executionContext,
+          TOOL_TIMEOUT_MS,
+        )
 
         // 截断过长的结果
         const truncatedContent = truncateResult(result.content, TOOL_RESULT_MAX_CHARS)
@@ -321,12 +336,16 @@ export function parseToolCalls(text: string): {
  * 带超时的 Tool 执行
  */
 async function executeToolWithTimeout(
-  executeFn: (args: Record<string, unknown>) => Promise<ToolResult>,
+  executeFn: (
+    args: Record<string, unknown>,
+    context?: AgentExecutionContext,
+  ) => Promise<ToolResult>,
   args: Record<string, unknown>,
+  context: AgentExecutionContext,
   timeoutMs: number,
 ): Promise<ToolResult> {
   return Promise.race([
-    executeFn(args),
+    executeFn(args, context),
     new Promise<ToolResult>((_, reject) =>
       setTimeout(() => reject(new Error(`工具执行超时（${timeoutMs / 1000}s）`)), timeoutMs)
     ),

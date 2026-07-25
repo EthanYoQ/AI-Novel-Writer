@@ -5,6 +5,8 @@
  * 事件由 ProjectService 统一消费，驱动 Store 更新，组件只需订阅 Store 数据。
  */
 
+import type { ProjectSessionContext } from './ipc-channels'
+
 // ===== 事件类型定义 =====
 
 export type GlobalEventType =
@@ -28,29 +30,65 @@ export type GlobalEventType =
 export interface EventPayloadMap {
   'REFRESH_RESOURCE': {
     resources: Array<'fileTree' | 'characterCards' | 'drafts' | 'blueprints' | 'all'>
+    /** 事件生产者开始操作时冻结的项目路径（只作显示/定位，不是身份）。 */
+    projectPath: string
+    /** 完整冻结身份；同路径重新打开后旧事件必须被丢弃。 */
+    projectSession: ProjectSessionContext
   }
   'WORKFLOW_COMPLETE': {
     type: string
+    /** 启动工作流时冻结的项目路径（只作显示/定位，不是身份）。 */
+    projectPath: string
+    /** 启动工作流时冻结的完整项目会话。 */
+    projectSession: ProjectSessionContext
+    /** 唯一工作流运行身份，用于排除同项目内的其他并发任务。 */
+    runId: string
   }
   'WORKFLOW_ERROR': {
     title: string
     error: string
     stack?: string
   }
-  'ARCH_POSTPROCESS_UPDATED': Record<string, never>
+  'ARCH_POSTPROCESS_UPDATED': {
+    projectPath: string
+    projectSession: ProjectSessionContext
+    runId: string
+  }
   'CHARACTER_EXTRACT_FAILED': {
+    projectPath: string
+    projectSession: ProjectSessionContext
+    runId: string
     error?: string
   }
   'ARCH_FILE_UPDATED': {
     fileName: string
+    projectPath: string
+    projectSession: ProjectSessionContext
+    runId: string
   }
   'FINALIZE_COMPLETE': {
+    /** 触发定稿的编辑器 Tab；完成事件只能结算这个冻结目标。 */
+    tabId: string
     chapterNumber: number
+    chapterTitle: string
+    /** 定稿工作流启动时冻结的项目路径。 */
+    projectPath: string
+    /** 触发定稿时冻结的项目会话，防止同路径重开后的旧结果落到新会话。 */
+    projectSession: ProjectSessionContext
+    /** SQLite 事务中提交的草稿和定稿身份。 */
+    draftId: number
+    finalizationId: string
+    contentHash: string
+    contentRevision: number
+    /** 绝不从数据库回读来替换编辑器；只用这个不可变快照结算。 */
+    snapshotContent: string
+    publicationStatus: 'pending' | 'published'
     /** 定稿来源；批量任务不应弹出单章的“下一章创作”对话框 */
     source?: 'manual' | 'batch'
   }
   'PROJECT_CHANGED': {
     projectPath: string
+    projectSession: ProjectSessionContext
   }
   'SYSTEM_NOTICE': {
     level: 'info' | 'success' | 'warn' | 'error'

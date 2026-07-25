@@ -8,6 +8,10 @@ import { registerDatabaseController } from './controllers/db-controller'
 import { registerKBController } from './controllers/kb-controller'
 import { registerImportController } from './controllers/import-controller'
 import { registerWindowController } from './controllers/window-controller'
+import { registerOfficialHomepageController } from './controllers/official-homepage-controller'
+import { registerFinalizationController } from './controllers/finalization-controller'
+import { registerExternalFileGrantController } from './controllers/external-file-grant-controller'
+import { registerAppDataController } from './controllers/app-data-controller'
 
 /**
  * 注册所有 IPC 通道 — 在主进程启动时调用
@@ -19,11 +23,15 @@ export function registerIPCHandlers() {
 
   // 挂载控制器路由
   registerWindowController()
+  registerOfficialHomepageController()
   registerConfigController()
+  registerAppDataController()
   registerProjectController()
   registerFSController()
+  registerExternalFileGrantController()
   registerLLMController()
   registerDatabaseController()
+  registerFinalizationController()
   registerKBController()
   registerImportController()
 

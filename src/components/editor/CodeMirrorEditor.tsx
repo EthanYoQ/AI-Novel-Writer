@@ -5,7 +5,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
 import { EditorState } from '@codemirror/state'
 import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
-import { Sparkles, Bold } from 'lucide-react'
+import { Sparkles, Bold, Check } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
 /** 统计字数（简单字符数统计，包含空格换行等格式符） */
@@ -397,13 +397,13 @@ export default function CodeMirrorEditor({
                   onClick={handleRejectAI}
                 >取消</button>
                 <button
-                  className="px-2.5 py-1 text-xs rounded-md font-medium transition-colors"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md font-medium transition-colors"
                   style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
                   onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
                   onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
                   disabled={aiResult === ''}
                   onClick={handleAcceptAI}
-                >✓ 替换</button>
+                ><Check size={12} aria-hidden="true" />替换</button>
               </div>
             </div>
           ) : (

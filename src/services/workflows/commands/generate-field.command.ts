@@ -1,6 +1,11 @@
 import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
 import type { NovelConfig } from '../../../shared/ipc-channels'
+import {
+  projectSessionContextFromProject,
+  sameProjectSessionContext,
+} from '../../../shared/project-session-context'
+import { requireWorkflowProjectSession } from '../workflow-project-session'
 
 /**
  * 支持的单字段生成 Key
@@ -33,9 +38,18 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
     super()
   }
 
-  async execute({ callbacks }: CommandExecuteParams): Promise<string> {
+  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
-    if (!project) throw new Error('未打开项目')
+    if (
+      !project
+      || !sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(project),
+      )
+    ) {
+      throw new Error('当前项目已切换，字段生成已停止')
+    }
 
     const config = project.novelConfig
     const label = FIELD_LABELS[this.fieldKey]
@@ -43,12 +57,13 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
     callbacks.log(`🧠 正在为「${label}」生成内容...`)
 
     // 构建上下文摘要（已填写的字段作为参考）
-    const context = this.buildContext(config)
+    const contextSummary = this.buildContext(config)
     // 构建针对性 prompt
-    const prompt = this.buildPrompt(config, context)
+    const prompt = this.buildPrompt(config, contextSummary)
     const systemPrompt = '你是一位入行十年的顶尖网文主编与白金大神作家，擅长精准设计小说的各项核心配置。'
 
-    const result = await this.callLLM(prompt, systemPrompt, callbacks)
+    const result = await this.callLLM(prompt, systemPrompt, callbacks, undefined, context)
+    this.assertNotCancelled(context)
     const cleanResult = this.stripThinkingTags(result).trim()
 
     if (!cleanResult) {
@@ -56,10 +71,38 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
       return ''
     }
 
-    // 写入 NovelConfig
-    const { updateNovelConfig, saveProject } = useProjectStore.getState()
-    updateNovelConfig({ [this.fieldKey]: cleanResult })
-    await saveProject()
+    // LLM 返回后再次核对冻结项目，禁止把旧项目上下文写入后来切换的项目。
+    let projectState = useProjectStore.getState()
+    if (!sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(projectState.currentProject),
+    )) {
+      throw new Error('当前项目已切换，字段生成结果未保存')
+    }
+
+    // updateNovelConfig 是同步操作，此处检查与修改之间不会让出事件循环。
+    this.assertNotCancelled(context)
+    const { updateNovelConfig, saveProject } = projectState
+    updateNovelConfig({ [this.fieldKey]: cleanResult }, projectSession)
+    if (!sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(useProjectStore.getState().currentProject),
+    )) {
+      throw new Error('当前项目已切换，字段生成结果未保存')
+    }
+    this.assertNotCancelled(context)
+    const saved = await saveProject(projectSession)
+    this.assertNotCancelled(context)
+    projectState = useProjectStore.getState()
+    if (!saved) {
+      throw new Error('字段生成结果保存失败')
+    }
+    if (!sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(projectState.currentProject),
+    )) {
+      throw new Error('当前项目已切换，字段生成已停止')
+    }
     callbacks.log(`✅ 「${label}」已生成并保存`)
 
     return cleanResult

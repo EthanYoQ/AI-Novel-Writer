@@ -3,6 +3,10 @@ import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
+import { requireIpcSuccess } from '../../ipc-result'
+import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
+import { readWorkflowDraftMeta } from '../workflow-draft-meta'
+import { requireWorkflowProjectSession } from '../workflow-project-session'
 
 import type { ChapterInfo } from '../chapter-workflow'
 
@@ -22,18 +26,23 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
-    if (!project) throw new Error('未打开项目')
+    if (!project || !sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(project),
+    )) throw new Error('当前项目已切换，修稿已停止')
+    const novelConfig = Object.freeze({ ...project.novelConfig })
 
     const draft = this.params.draftContent
     if (!draft) throw new Error('无草稿内容')
 
     callbacks.log('正在进行大神级修稿...')
 
-    const template = getPromptTemplate('refine_chapter')
+    const template = getPromptTemplate('refine_chapter', projectSession)
     if (!template) throw new Error('未找到修稿模板')
 
-    const mergedGuidance = this.params.mergedGuidance || project.novelConfig.globalGuidance || ''
+    const mergedGuidance = this.params.mergedGuidance || novelConfig.globalGuidance || ''
     const userPromptBlock = this.params.userRefinePrompt?.trim()
       ? `★【用户额外修稿指导（绝对优先级）】★：\n${this.params.userRefinePrompt}`
       : ''
@@ -44,31 +53,41 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
       .withGlobalGuidance(mergedGuidance)
       .withGlobalSummary(this.params.shortSummary || '')
       .withShortSummary(this.params.shortSummary || '')
-      .withWordNumber(project.novelConfig.wordsPerChapter)
+      .withWordNumber(novelConfig.wordsPerChapter)
       .withUserRefinePrompt(userPromptBlock)
 
-    const refined = await this.callLLMWithBuilder(promptBuilder, callbacks)
+    const refined = await this.callLLMWithBuilder(promptBuilder, callbacks, undefined, context)
+    this.assertNotCancelled(context)
     const cleanRefined = this.stripThinkingTags(refined)
 
-    const { parseDraftMeta } = await import('../chapter-workflow')
-    const baseDraft = await parseDraftMeta(this.params.draftPath)
+    const baseDraft = await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
     if (!baseDraft) throw new Error('找不到基准草稿版本')
 
     // 清理该草稿下已有的 pending 状态修稿，保证只保留最新的一条
-    const pendingRevs = await ipc.invoke('db:revision-get-pending', baseDraft.id)
+    const pendingRevs = await ipc.invokeWithProjectSession(projectSession, 'db:revision-get-pending', baseDraft.id, context.projectPath)
     for (const rev of pendingRevs) {
-      await ipc.invoke('db:revision-mark-discarded', rev.id)
+      this.assertNotCancelled(context)
+      const discardResult = await ipc.invokeWithProjectSession(projectSession, 'db:revision-mark-discarded', rev.id, context.projectPath)
+      requireIpcSuccess(discardResult, '清理旧修订稿')
     }
 
-    const createRes = await ipc.invoke('db:revision-create', {
+    this.assertNotCancelled(context)
+    const createRes = await ipc.invokeWithProjectSession(projectSession, 'db:revision-create', {
       baseDraftId: baseDraft.id,
       revisionType: 'refine',
       content: cleanRefined,
       wordCount: cleanRefined.length,
-    }) as { success: boolean; id: number; revisionIndex?: number }
+    }, context.projectPath)
+    requireIpcSuccess(createRes, '创建修订稿')
+    if (createRes.id === undefined) throw new Error('创建修订稿失败：未返回修订稿编号')
 
     const revIndex = createRes.revisionIndex ?? 0
 
+    this.assertNotCancelled(context)
+    if (!sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(useProjectStore.getState().currentProject),
+    )) throw new Error('当前项目已切换，已拒绝打开旧修订稿')
     const { useEditorStore } = await import('../../../stores/editor-store')
     useEditorStore.getState().openFile({
       id: `diff-${this.params.draftPath}-${createRes.id}`,
@@ -80,6 +99,7 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
       revisionPath: String(createRes.id),
       chapterNumber: this.params.chapterNumber,
       chapterDir: `vela://draft/ch${this.params.chapterNumber}`,
+      projectKey: context.projectPath,
     })
 
     context.data.refined = cleanRefined

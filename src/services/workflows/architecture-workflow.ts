@@ -1,13 +1,23 @@
 import type { WorkflowDefinition, WorkflowContext, StepCallbacks } from '../../stores/workflow-store'
 import { useLLMStore } from '../../stores/llm-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
 import { getPromptTemplate } from '../prompt-templates'
 import { ipc } from '../ipc-client'
 import type { NovelConfig } from '../../shared/ipc-channels'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import {
+  projectSessionContextFromProject,
+  sameProjectPathKey,
+  sameProjectSessionContext,
+} from '../../shared/project-session-context'
 import type { CharacterData } from '../../../electron/repositories/character-repository'
 import { parseCharacterCardsFromModelOrSource } from './character-card-normalizer'
+import { randomUUID } from '../../utils/id'
 
 import { runPostProcessPipeline, type PostProcessStep } from './workflow-utils'
+import { requireWorkflowProjectSession } from './workflow-project-session'
+import type { ArchitectureProjectSnapshot } from './commands/architecture.command'
 
 // ==========================================
 // 1. 类型定义
@@ -22,12 +32,19 @@ export interface PartialArchData {
 }
 
 export interface ArchitectureWorkflowParams {
+  /** 启动工作流时所属的项目路径；后续所有步骤均绑定此项目 */
+  projectPath: string
+  /** UI 在异步确认前冻结的完整项目会话。 */
+  projectSession: ProjectSessionContext
   selectedSteps?: Array<'premise' | 'characters' | 'worldbuilding' | 'synopsis'>
   /** 每步的补充指导（如 { premise: "多强调金手指的限制" }） */
   stepGuidance?: Record<string, string>
 }
 
 export interface ConfigGenerationWorkflowParams {
+  projectPath: string
+  /** UI 在异步确认前冻结的完整项目会话。 */
+  projectSession: ProjectSessionContext
   idea: string
   totalChapters: number
   wordsPerChapter: number
@@ -38,51 +55,71 @@ export interface ConfigGenerationWorkflowParams {
 // 2. 工作流定义
 // ==========================================
 
-export function createArchitectureWorkflow(params: ArchitectureWorkflowParams = {}): WorkflowDefinition {
+export function createArchitectureWorkflow(params: ArchitectureWorkflowParams): WorkflowDefinition {
+  const text = useLocaleStore.getState().text
   const sel = params.selectedSteps ?? ['premise', 'characters', 'worldbuilding', 'synopsis']
-  const stepDesc = (key: string, defaultDesc: string) => sel.includes(key as never) ? defaultDesc : `（跳过，保留已有内容）`
+  const expectedProjectPath = params.projectPath
+  const project = useProjectStore.getState().currentProject
+  const currentProjectSession = projectSessionContextFromProject(project)
+  if (
+    !project
+    || !currentProjectSession
+    || !sameProjectPathKey(project.path, expectedProjectPath)
+    || !sameProjectSessionContext(params.projectSession, currentProjectSession)
+  ) {
+    throw new Error(text('当前项目已切换，无法启动架构生成', 'The project changed, so architecture generation cannot start.'))
+  }
+  // 工厂在捕获配置快照的同一时刻绑定 lease，防止同路径重新打开后复用旧快照。
+  const projectSession = Object.freeze({ ...params.projectSession })
+  const projectSnapshot: ArchitectureProjectSnapshot = Object.freeze({
+    expectedProjectPath,
+    novelConfig: Object.freeze({ ...project.novelConfig }),
+  })
+  const stepDesc = (key: string, zhCNDesc: string, enUSDesc: string) => sel.includes(key as never)
+    ? text(zhCNDesc, enUSDesc)
+    : text('（跳过，保留已有内容）', '(Skipped; existing content is retained)')
   // 闭包捕获逐步指导，executor 中注入到 context.data
   const guidance = params.stepGuidance || {}
 
   const allSteps = [
     {
-      name: '故事前提',
+      name: text('故事前提', 'Story premise'),
       key: 'premise',
-      description: stepDesc('premise', '提炼故事前提与核心卖点'),
+      description: stepDesc('premise', '提炼故事前提与核心卖点', 'Refine the story premise and its core appeal'),
       executor: async (step: unknown, context: WorkflowContext, callbacks: StepCallbacks) => {
         context.data.stepGuidance = guidance
         const { GenerateCoreSeedCommand } = await import('./commands/architecture.command')
-        return new GenerateCoreSeedCommand().execute({ step, context, callbacks })
+        return new GenerateCoreSeedCommand(projectSnapshot).execute({ step, context, callbacks })
       },
     },
     {
-      name: '角色图谱',
+      name: text('角色图谱', 'Character dynamics'),
       key: 'characters',
-      description: stepDesc('characters', '构建核心角色关系网与角色弧光'),
+      description: stepDesc('characters', '构建核心角色关系网与角色弧光', 'Build core character relationships and arcs'),
       executor: async (step: unknown, context: WorkflowContext, callbacks: StepCallbacks) => {
         context.data.stepGuidance = guidance
         const { GenerateCharactersCommand } = await import('./commands/architecture.command')
-        return new GenerateCharactersCommand().execute({ step, context, callbacks })
+        return new GenerateCharactersCommand(projectSnapshot).execute({ step, context, callbacks })
       },
     },
     {
-      name: '世界观',
+      name: text('世界观', 'World building'),
       key: 'worldbuilding',
-      description: stepDesc('worldbuilding', '构建自带冲突引擎的世界观矩阵'),
+      description: stepDesc('worldbuilding', '构建自带冲突引擎的世界观矩阵', 'Build a world matrix with its own conflict engine'),
       executor: async (step: unknown, context: WorkflowContext, callbacks: StepCallbacks) => {
         context.data.stepGuidance = guidance
         const { GenerateWorldBuildingCommand } = await import('./commands/architecture.command')
-        return new GenerateWorldBuildingCommand().execute({ step, context, callbacks })
+        return new GenerateWorldBuildingCommand(projectSnapshot).execute({ step, context, callbacks })
       },
     },
     {
-      name: '情节大纲',
+      name: text('情节大纲', 'Plot outline'),
       key: 'synopsis',
-      description: stepDesc('synopsis', '整合所有碎片，按选定结构模式生成情节大纲'),
+      description: stepDesc('synopsis', '整合所有碎片，按选定结构模式生成情节大纲', 'Integrate all inputs into a plot outline using the selected structure'),
       executor: async (step: unknown, context: WorkflowContext, callbacks: StepCallbacks) => {
         context.data.stepGuidance = guidance
         const { GeneratePlotArchitectureCommand } = await import('./commands/architecture.command')
-        return new GeneratePlotArchitectureCommand(sel).execute({ step, context, callbacks })
+        return new GeneratePlotArchitectureCommand(sel, projectSnapshot).execute({ step, context, callbacks })
       },
     },
   ]
@@ -91,28 +128,52 @@ export function createArchitectureWorkflow(params: ArchitectureWorkflowParams = 
 
   return {
     type: 'architecture_generation',
-    title: '🏗️ 生成故事架构',
+    title: text('生成故事架构', 'Generate story architecture'),
+    projectPath: expectedProjectPath,
+    projectSession,
     steps: finalSteps,
-    onComplete: { mode: 'silent', message: '🏗️ 故事架构已生成完成！前往侧边栏「故事架构」查看' },
+    onComplete: { mode: 'silent', message: text('故事架构已生成完成！前往侧边栏「故事架构」查看', 'Story architecture is ready. Open Story Architecture from the sidebar.') },
   }
 }
 
 export function createConfigGenerationWorkflow(params: ConfigGenerationWorkflowParams): WorkflowDefinition {
+  const text = useLocaleStore.getState().text
+  const project = useProjectStore.getState().currentProject
+  const currentProjectSession = projectSessionContextFromProject(project)
+  if (
+    !project
+    || !currentProjectSession
+    || !sameProjectPathKey(project.path, params.projectPath)
+    || !sameProjectSessionContext(params.projectSession, currentProjectSession)
+  ) {
+    throw new Error(text('当前项目已切换，无法启动配置生成', 'The project changed, so configuration generation cannot start.'))
+  }
+  const projectSession = Object.freeze({ ...params.projectSession })
   return {
     type: 'config_generation',
-    title: '🧠 AI 生成小说配置',
+    title: text('AI 生成小说配置', 'Generate novel configuration with AI'),
+    projectPath: params.projectPath,
+    projectSession,
     steps: [
       {
-        name: '智能分析并填充配置',
-        description: `根据创作脑洞生成小说配置（全书规划约 ${params.totalChapters} 章）`,
+        name: text('智能分析并填充配置', 'Analyze and fill the configuration'),
+        description: text(
+          `根据创作脑洞生成小说配置（全书规划约 ${params.totalChapters} 章）`,
+          `Generate a novel configuration from the idea (about ${params.totalChapters} chapters total)`,
+        ),
         executor: async (step, context, callbacks) => {
           const { GenerateConfigCommand } = await import('./commands/architecture.command')
-          const cmd = new GenerateConfigCommand(params.idea, params.totalChapters, params.wordsPerChapter, params.onGenerated)
+          const cmd = new GenerateConfigCommand(
+            params.idea,
+            params.totalChapters,
+            params.wordsPerChapter,
+            params.onGenerated,
+          )
           return cmd.execute({ step, context, callbacks })
         },
       },
     ],
-    onComplete: { mode: 'silent', message: '✅ 小说配置已自动生成完毕，请查阅确认。' },
+    onComplete: { mode: 'silent', message: text('小说配置已自动生成完毕，请查阅确认。', 'Novel configuration is ready. Please review it.') },
   }
 }
 
@@ -181,105 +242,223 @@ export function getNarrativePOVLabel(pov: string): string {
 
 export const ARCH_CHARACTER_SCOPE = 'arch_characters'
 
-export function createCharacterExtractSteps(_projectPath: string, characterDynamicsContent: string, genre: string): PostProcessStep[] {
+export function createCharacterExtractSteps(projectPath: string, characterDynamicsContent: string, genre: string): PostProcessStep[] {
+  const text = useLocaleStore.getState().text
   return [
     {
       key: 'extract_character_cards',
-      label: '📇 提取初始角色卡',
+      label: text('提取初始角色卡', 'Extract initial character cards'),
       critical: true,
-      executor: async (cb) => {
+      executor: async (cb, context) => {
+        if (context?.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
+        if (!context) throw new Error(text('工作流缺少冻结项目会话', 'The workflow is missing its frozen project session.'))
+        const projectSession = requireWorkflowProjectSession(context)
         const { ArchitecturePromptBuilder } = await import('../prompts/prompt-builder')
-        const template = getPromptTemplate('extract_initial_characters')
-        if (!template) throw new Error('未找到 extract_initial_characters')
+        const template = getPromptTemplate('extract_initial_characters', projectSession)
+        if (!template) throw new Error(text('未找到 extract_initial_characters', 'Could not find extract_initial_characters'))
         const extractPrompt = new ArchitecturePromptBuilder(template).withCharacterDynamics(characterDynamicsContent).withGenre(genre).build()
         const systemRole = template.systemRole || '你是一位专业的小说数据结构化专家。'
 
         const llmStore = useLLMStore.getState()
-        cb.appendText('🔍 正在调用 AI 提取角色卡片...\n')
+        cb.appendText(text('正在调用 AI 提取角色卡片...\n', 'Calling AI to extract character cards...\n'))
 
         let fullContent = ''
         await new Promise<void>((resolve, reject) => {
+          let streamRequestId = ''
+          let cancelCheckTimer: ReturnType<typeof setInterval> | null = null
+          const cleanup = () => {
+            if (cancelCheckTimer) {
+              clearInterval(cancelCheckTimer)
+              cancelCheckTimer = null
+            }
+          }
+          if (context) {
+            cancelCheckTimer = setInterval(() => {
+              if (context.cancelled && streamRequestId) {
+                cleanup()
+                llmStore.cancelGeneration(streamRequestId).catch(() => {})
+                reject(new Error(text('工作流已取消', 'Workflow cancelled')))
+              }
+            }, 200)
+          }
           llmStore.generateStream(
             [
               { role: 'system', content: systemRole },
               { role: 'user', content: extractPrompt }
             ],
             {
-              onChunk: (chunk) => { fullContent += chunk; cb.appendText(chunk) },
-              onDone: () => resolve(),
-              onError: (err) => reject(new Error(err))
+              onChunk: (chunk) => {
+                if (context?.cancelled) return
+                fullContent += chunk
+                cb.appendText(chunk)
+              },
+              onDone: () => {
+                cleanup()
+                if (context?.cancelled) {
+                  reject(new Error(text('工作流已取消', 'Workflow cancelled')))
+                  return
+                }
+                resolve()
+              },
+              onError: (err) => {
+                cleanup()
+                reject(new Error(err))
+              }
             },
             undefined,
             { responseFormat: { type: 'json_object' }, thinking: false, maxTokens: 4096, temperature: 0.2 }
-          )
+          ).then((requestId) => {
+            streamRequestId = requestId
+            if (context?.cancelled) {
+              llmStore.cancelGeneration(requestId).catch(() => {})
+              cleanup()
+              reject(new Error(text('工作流已取消', 'Workflow cancelled')))
+            }
+          }).catch((error) => {
+            cleanup()
+            reject(error)
+          })
         })
+        if (context?.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
 
         const characterDataList = parseCharacterCardsFromModelOrSource(fullContent, characterDynamicsContent)
         if (characterDataList.length === 0) {
-          throw new Error('未能从 AI 输出或角色图谱中提取到有效角色卡，未写入角色列表')
+          throw new Error(text('未能从 AI 输出或角色图谱中提取到有效角色卡，未写入角色列表', 'No valid character cards could be extracted from the AI output or character dynamics. Nothing was saved.'))
         }
 
         // 批量写入数据库
-        const saveResult = await ipc.invoke('db:character-save-all', characterDataList as unknown as CharacterData[])
+        if (context?.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
+        if (!context) throw new Error(text('角色卡后处理缺少冻结工作流上下文', 'Character-card post-processing is missing its frozen workflow context.'))
+        const saveResult = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:character-save-all',
+          characterDataList as unknown as CharacterData[],
+          undefined,
+          projectPath,
+        )
         if (!saveResult.success) {
-          throw new Error(saveResult.error || '角色卡写入数据库失败')
+          throw new Error(saveResult.error || text('角色卡写入数据库失败', 'Could not save character cards to the database.'))
         }
-        cb.log(`✅ 角色卡提取完毕（共 ${characterDataList.length} 个角色）`)
+        cb.log(text(`角色卡提取完毕（共 ${characterDataList.length} 个角色）`, `Character-card extraction complete (${characterDataList.length} characters).`))
       },
     },
   ]
 }
 
-export function runArchCharacterExtract(projectPath: string, characterDynamicsContent: string, genre: string): void {
+export function runArchCharacterExtract(
+  projectPath: string,
+  characterDynamicsContent: string,
+  genre: string,
+  sourceProjectSession: ProjectSessionContext,
+): string {
+  const text = useLocaleStore.getState().text
+  const runId = randomUUID()
   const steps = createCharacterExtractSteps(projectPath, characterDynamicsContent, genre)
   import('../../stores/workflow-store').then(async ({ useWorkflowStore }) => {
     await useWorkflowStore.getState().startWorkflow({
+      runId,
       type: 'post_process',
-      title: '📋 后处理：角色卡提取',
+      title: text('后处理：角色卡提取', 'Post-processing: character-card extraction'),
+      projectPath,
+      projectSession: sourceProjectSession,
       steps: [
         {
-          name: '提取角色卡片',
-          description: '从角色图谱中提取并生成角色卡片数据',
-          executor: async (_step, _ctx, callbacks) => {
+          name: text('提取角色卡片', 'Extract character cards'),
+          description: text('从角色图谱中提取并生成角色卡片数据', 'Extract and create character-card data from character dynamics'),
+          executor: async (_step, context, callbacks) => {
             const { globalEventBus } = await import('../../shared/event-bus')
-            const archStatus = await runPostProcessPipeline(projectPath, ARCH_CHARACTER_SCOPE, '架构-角色图谱', steps, callbacks)
+            const archStatus = await runPostProcessPipeline(
+              projectPath,
+              ARCH_CHARACTER_SCOPE,
+              text('架构-角色图谱', 'Architecture — character dynamics'),
+              steps,
+              callbacks,
+              { cancellation: context, projectSession: requireWorkflowProjectSession(context) },
+            )
+            if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
             if (archStatus.allCriticalPassed) {
               // 角色卡提取成功 → 通过 EventBus 通知 ProjectService 刷新
-              globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {})
+              globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {
+                projectPath,
+                projectSession: requireWorkflowProjectSession(context),
+                runId: context.runId,
+              })
             } else {
-              globalEventBus.emit('CHARACTER_EXTRACT_FAILED', { error: archStatus.steps.extract_character_cards?.error })
-              globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {})
+              globalEventBus.emit('CHARACTER_EXTRACT_FAILED', {
+                projectPath,
+                projectSession: requireWorkflowProjectSession(context),
+                runId: context.runId,
+                error: archStatus.steps.extract_character_cards?.error,
+              })
+              globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {
+                projectPath,
+                projectSession: requireWorkflowProjectSession(context),
+                runId: context.runId,
+              })
             }
           },
         },
       ],
     })
   })
+  return runId
 }
 
 export async function repairArchCharacterCards(projectPath: string): Promise<void> {
-  const core = await ipc.invoke('db:project-core-get')
-  if (!core?.charactersArch || core.charactersArch.length < 50) throw new Error('无法提取角色卡')
-
+  const text = useLocaleStore.getState().text
   const project = useProjectStore.getState().currentProject
-  if (!project) throw new Error('未打开项目')
+  const projectSession = projectSessionContextFromProject(project)
+  if (!project || !projectSession || !sameProjectPathKey(project.path, projectPath)) {
+    throw new Error(text('当前项目已切换，请在原项目中重试', 'The project changed. Return to the original project and try again.'))
+  }
+  const projectSnapshot = Object.freeze({ ...project.novelConfig })
+  const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath)
+  if (!core?.charactersArch || core.charactersArch.length < 50) throw new Error(text('无法提取角色卡', 'Could not extract character cards.'))
+  if (!sameProjectSessionContext(
+    projectSession,
+    projectSessionContextFromProject(useProjectStore.getState().currentProject),
+  )) throw new Error(text('当前项目已切换，请在原项目中重试', 'The project changed. Return to the original project and try again.'))
 
-  const steps = createCharacterExtractSteps(projectPath, core.charactersArch, project.novelConfig.genre)
+  const steps = createCharacterExtractSteps(projectPath, core.charactersArch, projectSnapshot.genre)
   const { useWorkflowStore } = await import('../../stores/workflow-store')
+  const runId = randomUUID()
   await useWorkflowStore.getState().startWorkflow({
+    runId,
     type: 'post_process',
-    title: '🔧 修复：角色卡提取',
+    title: text('修复：角色卡提取', 'Repair: character-card extraction'),
+    projectPath,
+    projectSession,
     steps: [
       {
-        name: '重试角色卡提取',
-        description: '重试失败的角色卡提取步骤',
-        executor: async (_step, _ctx, callbacks) => {
+        name: text('重试角色卡提取', 'Retry character-card extraction'),
+        description: text('重试失败的角色卡提取步骤', 'Retry failed character-card extraction steps'),
+        executor: async (_step, context, callbacks) => {
           const { globalEventBus } = await import('../../shared/event-bus')
-          const archStatus = await runPostProcessPipeline(projectPath, ARCH_CHARACTER_SCOPE, '架构-角色图谱', steps, callbacks, { onlyFailed: true })
+          const archStatus = await runPostProcessPipeline(
+            projectPath,
+            ARCH_CHARACTER_SCOPE,
+              text('架构-角色图谱', 'Architecture — character dynamics'),
+            steps,
+              callbacks,
+              {
+                onlyFailed: true,
+                cancellation: context,
+                projectSession: requireWorkflowProjectSession(context),
+              },
+          )
+          if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
           if (archStatus.allCriticalPassed) {
-            globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {})
+            globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {
+              projectPath,
+              projectSession: requireWorkflowProjectSession(context),
+              runId: context.runId,
+            })
           } else {
-            globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {})
+            globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {
+              projectPath,
+              projectSession: requireWorkflowProjectSession(context),
+              runId: context.runId,
+            })
           }
         },
       },

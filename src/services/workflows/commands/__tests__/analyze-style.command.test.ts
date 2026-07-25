@@ -11,6 +11,9 @@ const callbacks: StepCallbacks = {
 }
 
 const context: WorkflowContext = {
+  runId: 'test-run',
+  projectPath: 'C:\\tmp\\vela-style-test',
+  projectSession: { projectId: 'project-1', leaseId: 'lease-project-1', projectPath: 'C:\\tmp\\vela-style-test' },
   data: {},
   cancelled: false,
 }
@@ -41,6 +44,7 @@ beforeEach(() => {
       id: 'project-1',
       name: '导入项目',
       path: 'C:\\tmp\\vela-style-test',
+      sessionLease: 'lease-project-1',
       novelConfig: {
         genre: '玄幻',
         subGenre: '',
@@ -83,7 +87,12 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
 
     expect(result).toBe('节奏偏快，动作描写密集，对话短促有压迫感。')
     expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe(result)
-    expect(invoke).toHaveBeenCalledWith('db:project-core-update', { writingStyle: result })
+    expect(invoke).toHaveBeenCalledWith(
+      'db:project-core-update',
+      { writingStyle: result },
+      context.projectPath,
+      context.projectSession,
+    )
   })
 
   it('uses imported chapters as style samples without reading finalized drafts', async () => {
@@ -119,5 +128,50 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('项目数据库未打开')
     expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('')
+  })
+
+  it('does not apply the persisted result to a newly switched project', async () => {
+    let resolveSave: ((value: { success: boolean }) => void) | undefined
+    const invoke = vi.fn((channel: string) => {
+      if (channel === 'db:project-core-update') {
+        return new Promise<{ success: boolean }>((resolve) => { resolveSave = resolve })
+      }
+      return Promise.resolve(null)
+    })
+    vi.stubGlobal('window', {
+      velaAPI: {
+        invoke,
+        on: vi.fn(),
+        once: vi.fn(),
+        send: vi.fn(),
+        setZoomLevel: vi.fn(),
+        setZoomFactor: vi.fn(),
+        getZoomLevel: vi.fn(),
+      },
+    })
+    const command = new AnalyzeWritingStyleCommand({
+      sampleTexts: ['短句密集，动作推进快。'],
+    })
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+      .mockResolvedValue('旧项目分析出的文风')
+
+    const execution = command.execute({ step: {}, context, callbacks })
+    await vi.waitFor(() => expect(resolveSave).toBeTypeOf('function'))
+    useProjectStore.setState({
+      currentProject: {
+        ...useProjectStore.getState().currentProject!,
+        id: 'project-2',
+        path: 'C:\\tmp\\other-project',
+        novelConfig: {
+          ...useProjectStore.getState().currentProject!.novelConfig,
+          writingStyle: '新项目原有文风',
+        },
+      },
+    })
+    resolveSave!({ success: true })
+
+    await expect(execution).rejects.toThrow('当前项目已切换')
+    expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle)
+      .toBe('新项目原有文风')
   })
 })

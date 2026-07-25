@@ -1,7 +1,11 @@
 import { useState } from 'react'
 import { CheckCircle2, Download, FileText, Files, Type, XCircle } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
-import { exportNovel, type ExportFormat } from '../../services/export-service'
+import {
+  exportNovel,
+  type ExportFormat,
+  type ExportProjectSnapshot,
+} from '../../services/export-service'
 import { ipc } from '../../services/ipc-client'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
@@ -9,10 +13,21 @@ import {
 import { Button } from '../ui/Button'
 import { cn } from '../../lib/utils'
 import { useLocaleStore } from '../../stores/locale-store'
+import {
+  captureProjectSession,
+  isProjectSessionCurrent,
+} from '../project-session-gate'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
 
 interface Props {
   isOpen: boolean
   onClose: () => void
+}
+
+interface ExportTaskState {
+  session: ProjectSessionContext
+  exporting: boolean
+  result: { success: boolean; path?: string; error?: string } | null
 }
 
 /** 导出对话框 — 使用 shadcn/ui */
@@ -20,20 +35,38 @@ export default function ExportDialog({ isOpen, onClose }: Props) {
   const currentProject = useProjectStore(s => s.currentProject)
   const [format, setFormat] = useState<ExportFormat>('merged-md')
   const [includeOutline, setIncludeOutline] = useState(true)
-  const [exporting, setExporting] = useState(false)
-  const [result, setResult] = useState<{ success: boolean; path?: string; error?: string } | null>(null)
+  const [taskState, setTaskState] = useState<ExportTaskState | null>(null)
   const text = useLocaleStore(s => s.text)
+  const activeTask = taskState && isProjectSessionCurrent(taskState.session) ? taskState : null
+  const exporting = activeTask?.exporting ?? false
+  const result = activeTask?.result ?? null
 
   const handleExport = async () => {
-    if (!currentProject) return
-    const dir = await ipc.invoke('dialog:select-folder')
-    if (!dir) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!currentProject || !projectSession) return
+    const projectSnapshot: ExportProjectSnapshot = Object.freeze({
+      id: projectSession.projectId,
+      sessionLease: projectSession.leaseId,
+      path: projectSession.projectPath,
+      name: currentProject.name,
+      novelConfig: Object.freeze({
+        genre: currentProject.novelConfig.genre,
+        targetAudience: currentProject.novelConfig.targetAudience,
+      }),
+    })
+    const destination = await ipc.invoke('dialog:select-export-directory')
+    if (!destination || !isProjectSessionCurrent(projectSession)) return
 
-    setExporting(true)
-    setResult(null)
-    const res = await exportNovel({ format, outputDir: dir, includeOutline })
-    setResult(res)
-    setExporting(false)
+    setTaskState({ session: projectSession, exporting: true, result: null })
+    const res = await exportNovel({ format, grantId: destination.grantId, includeOutline }, projectSnapshot, projectSession)
+    if (!isProjectSessionCurrent(projectSession)) return
+    setTaskState({
+      session: projectSession,
+      exporting: false,
+      result: res.success && res.path
+        ? { ...res, path: `${destination.displayName}/${res.path}` }
+        : res,
+    })
   }
 
   const FORMAT_OPTIONS: Array<{ value: ExportFormat; label: string; desc: string; icon: React.ReactNode }> = [

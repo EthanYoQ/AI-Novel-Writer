@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { useLayoutStore, type SidebarView, type BottomTab } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
-import { openBuiltinEditor } from '../panels/sidebar/SidebarShared'
+import { openBuiltinEditor } from '../panels/sidebar/sidebar-file-openers'
 import { useLocaleStore } from '../../stores/locale-store'
 
 /** 左侧侧边栏视图按钮配置（不含 Home，它单独渲染） */
