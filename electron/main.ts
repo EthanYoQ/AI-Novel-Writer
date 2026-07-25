@@ -6,11 +6,17 @@ import { registerUpdateController } from './controllers/update-controller'
 import { createElectronUpdaterBackend } from './services/electron-updater-adapter'
 import { GlobalConfigUpdatePreferencesStore } from './services/update-preferences-store'
 import { isWindowsUpdateRuntimeEnabled } from './services/update-runtime'
-import { UpdateService, type UpdateBackend, type UpdateState } from './services/update-service'
+import { startUpdateRuntime } from './services/update-startup'
+import type { UpdateState } from './services/update-service'
 
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
+// Electron 41 在部分 Windows 环境中无法启动受限 GPU 子进程（0xC0000135），
+// 随后会触发 Chromium 的致命检查。仅放宽 GPU 子进程，保持 renderer 隔离策略不变。
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-gpu-sandbox')
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -26,14 +32,6 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   : RENDERER_DIST
 
 let win: BrowserWindow | null
-
-function createDisabledUpdateBackend(): UpdateBackend {
-  return {
-    checkForUpdates: async () => null,
-    downloadUpdate: async () => [],
-    quitAndInstall: () => {},
-  }
-}
 
 function publishUpdateState(state: UpdateState): void {
   for (const target of BrowserWindow.getAllWindows()) {
@@ -91,17 +89,23 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(() => {
+  // 先让本地工作区可用；更新功能失败不能阻断作者进入应用。
+  createWindow()
   registerIPCHandlers()
   registerMCPHandlers()
-  const updateRuntimeEnabled = isWindowsUpdateRuntimeEnabled(app.isPackaged, VITE_DEV_SERVER_URL)
-  const updateService = new UpdateService({
-    updater: updateRuntimeEnabled ? createElectronUpdaterBackend() : createDisabledUpdateBackend(),
+  startUpdateRuntime({
+    updateRuntimeEnabled: isWindowsUpdateRuntimeEnabled(app.isPackaged, VITE_DEV_SERVER_URL),
     currentVersion: app.getVersion(),
-    isPackaged: updateRuntimeEnabled,
-    preferences: new GlobalConfigUpdatePreferencesStore(),
+    createBackend: createElectronUpdaterBackend,
+    createPreferences: () => new GlobalConfigUpdatePreferencesStore(),
+    registerController: updateService => {
+      registerUpdateController(updateService, { ipc: ipcMain, publish: publishUpdateState })
+    },
+    reportFailure: (operation, error) => {
+      console.warn(`[Vela Update] ${operation}失败，已降级并继续启动应用。`, error)
+    },
   })
-  registerUpdateController(updateService, { ipc: ipcMain, publish: publishUpdateState })
-  createWindow()
-  // 非 Windows、未打包或开发环境会被服务层禁用，绝不发出真实更新请求。
-  void updateService.checkAutomatically()
+}).catch((error: unknown) => {
+  console.error('[Vela] Electron 启动失败。', error)
+  if (BrowserWindow.getAllWindows().length === 0) createWindow()
 })

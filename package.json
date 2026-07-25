@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writer",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "AI Novel Writer - a local-first production workspace for long-form fiction",
   "author": "AI Novel Writer Maintainers",
   "private": true,
@@ -24,6 +24,8 @@
     "verify:win-update-artifacts": "node scripts/verify-win-update-artifacts.mjs",
     "verify:github-update-release": "node scripts/verify-github-update-release.mjs",
     "smoke:win-app": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-win-app.ps1",
+    "smoke:win-installer": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-win-installer.ps1",
+    "smoke:win-v025-upgrade": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-win-v025-upgrade.ps1",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
