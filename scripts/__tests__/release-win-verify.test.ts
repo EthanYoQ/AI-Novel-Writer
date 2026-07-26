@@ -308,10 +308,10 @@ Start-Sleep -Milliseconds 180`,
       `${JSON.stringify({ sequence: 2, state: 'step-complete', step: 'short-lived-descendant-fault' })}\n`,
       'utf8',
     )
-    const completed = await waitForGateStatus(statusPath, 'step-completed', 30_000)
+    const failed = await waitForGateStatus(statusPath, 'failed', 30_000)
     const eventPath = join(evidencePath, 'process-events.jsonl')
     return {
-      ...completed,
+      ...failed,
       processEvents: existsSync(eventPath)
         ? readFileSync(eventPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
         : [],
@@ -928,12 +928,12 @@ finally {
     }
   }, 10_000)
 
-  windowsIt('records a 60ms nonzero descendant without overriding its successful root step', async () => {
+  windowsIt('fails closed when a 60ms descendant exits nonzero after its root launcher succeeds', async () => {
     const result = await runShortLivedDescendantFaultScenario()
     const events = result.processEvents as Array<Record<string, unknown>>
 
-    expect(result.state).toBe('step-completed')
-    expect(result.failure).toBe('')
+    expect(result.state).toBe('failed')
+    expect(result.failure).toContain('nonzero exit code 37')
     expect(result.monitorStartedAt).toEqual(expect.any(String))
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -941,11 +941,8 @@ finally {
         exitCode: 37,
       }),
       expect.objectContaining({
-        kind: 'job-empty',
-      }),
-      expect.objectContaining({
         kind: 'process-tree',
-        reason: 'step-completed-after-quiet-period',
+        reason: 'monitor-failure',
       }),
     ]))
   }, 60_000)

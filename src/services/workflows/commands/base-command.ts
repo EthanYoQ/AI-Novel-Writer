@@ -1,13 +1,18 @@
 import type { WorkflowContext, StepCallbacks } from '../../../stores/workflow-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { globalEventBus, EventPayloadMap } from '../../../shared/event-bus'
-import type { ProjectSessionContext } from '../../../shared/ipc-channels'
+import type { LLMFinishReason, ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { BasePromptBuilder } from '../../prompts/prompt-builder'
 
 export interface CommandExecuteParams {
   step: unknown
   context: WorkflowContext
   callbacks: StepCallbacks
+}
+
+export interface LLMCompletion {
+  content: string
+  finishReason: LLMFinishReason
 }
 
 /**
@@ -27,13 +32,32 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
     context?: WorkflowContext
   ): Promise<string> {
+    const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
+    if (completion.finishReason !== 'stop') {
+      throw this.createIncompleteCompletionError(completion.finishReason)
+    }
+    return completion.content
+  }
+
+  /**
+   * Returns partial text together with the provider end state. Commands that
+   * have a bounded continuation policy (draft generation) may consume a
+   * `length` result; all other workflow commands should use callLLM instead.
+   */
+  protected async callLLMResult(
+    prompt: string,
+    systemPrompt: string,
+    callbacks: StepCallbacks,
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
+    context?: WorkflowContext,
+  ): Promise<LLMCompletion> {
     this.assertNotCancelled(context)
     const llmStore = useLLMStore.getState()
     if (!llmStore.defaultModelId) throw new Error('未配置默认 AI 模型')
 
     callbacks.setProgress(10)
 
-    return new Promise((resolve, reject) => {
+    return new Promise<LLMCompletion>((resolve, reject) => {
       let fullContent = ''
       let streamRequestId = ''
 
@@ -69,7 +93,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
             fullContent += chunk
             callbacks.appendText(chunk)
           },
-          onDone: (text) => {
+          onDone: (text, _usage, finishReason) => {
             cleanup()
             // 取消后不 resolve，让 reject 生效
             if (context?.cancelled) {
@@ -79,7 +103,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
             callbacks.setProgress(90)
             const raw = text || fullContent
             const cleaned = this.stripThinkingTags(raw)
-            resolve(cleaned)
+            resolve({ content: cleaned, finishReason: finishReason ?? 'stop' })
           },
           onError: (err) => {
             cleanup()
@@ -103,6 +127,19 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     })
   }
 
+  protected createIncompleteCompletionError(finishReason: LLMFinishReason): Error {
+    switch (finishReason) {
+      case 'length':
+        return new Error('AI 输出达到模型最大长度，结果不完整。请提高模型最大输出 Tokens 或缩短本次任务后重试。')
+      case 'content_filter':
+        return new Error('AI 输出因内容限制而未完成，结果未被保存。')
+      case 'cancelled':
+        return new Error('AI 生成已取消，结果未被保存。')
+      default:
+        return new Error('AI 未正常完成生成，结果未被保存。')
+    }
+  }
+
   /**
    * 使用 Builder 的 systemRole + prompt 一键调用 LLM
    * 角色定位由模板自带，command 不再需要硬编码 system message
@@ -114,6 +151,15 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     context?: WorkflowContext
   ): Promise<string> {
     return this.callLLM(builder.build(), builder.getSystemRole(), callbacks, options, context)
+  }
+
+  protected async callLLMResultWithBuilder(
+    builder: BasePromptBuilder,
+    callbacks: StepCallbacks,
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
+    context?: WorkflowContext,
+  ): Promise<LLMCompletion> {
+    return this.callLLMResult(builder.build(), builder.getSystemRole(), callbacks, options, context)
   }
 
   /** 在所有异步边界与落盘前复查取消，避免已取消请求继续污染项目。 */
