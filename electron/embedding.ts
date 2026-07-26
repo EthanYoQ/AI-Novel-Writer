@@ -12,6 +12,90 @@ import { normalizeEmbeddingOptions } from '../src/shared/embedding-options'
 
 const RELEASE_SMOKE_BASE_URL_PREFIX = 'vela-release-smoke://'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function invalidEmbeddingResponse(provider: 'OpenAI' | 'Gemini', details: string): never {
+  throw new Error(`${provider} Embedding 响应无效：${details}`)
+}
+
+function validateOpenAIEmbeddings(data: unknown, batchLength: number): number[][] {
+  if (!isRecord(data) || !Array.isArray(data.data)) {
+    invalidEmbeddingResponse('OpenAI', 'data 不是数组')
+  }
+
+  const responseItems = data.data
+  const errors: string[] = []
+  if (responseItems.length !== batchLength) {
+    errors.push(`数量 ${responseItems.length}，期望 ${batchLength}`)
+  }
+
+  const seenIndexes = new Set<number>()
+  const embeddingsByIndex: Array<number[] | undefined> = Array.from({ length: batchLength })
+  for (const item of responseItems) {
+    if (!isRecord(item) || !Array.isArray(item.embedding)) {
+      errors.push('data 项缺少 embedding 数组')
+      continue
+    }
+
+    const rawIndex = item.index
+    if (typeof rawIndex !== 'number' || !Number.isInteger(rawIndex)) {
+      errors.push(`index ${String(rawIndex)} 不是整数`)
+      continue
+    }
+    const index = rawIndex
+    if (index < 0 || index >= batchLength) {
+      errors.push(`index ${index} 超出范围 0..${Math.max(batchLength - 1, 0)}`)
+      continue
+    }
+    if (seenIndexes.has(index)) {
+      errors.push(`index ${index} 重复`)
+      continue
+    }
+
+    seenIndexes.add(index)
+    embeddingsByIndex[index] = item.embedding as number[]
+  }
+
+  const missingIndexes = Array.from({ length: batchLength }, (_value, index) => index)
+    .filter(index => !seenIndexes.has(index))
+  if (missingIndexes.length > 0) {
+    errors.push(`index 覆盖不完整，缺少 ${missingIndexes.join(', ')}`)
+  }
+  if (errors.length > 0) {
+    invalidEmbeddingResponse('OpenAI', errors.join('；'))
+  }
+
+  return embeddingsByIndex as number[][]
+}
+
+function validateGeminiEmbeddings(data: unknown, batchLength: number): number[][] {
+  if (!isRecord(data) || !Array.isArray(data.embeddings)) {
+    invalidEmbeddingResponse('Gemini', 'embeddings 不是数组')
+  }
+
+  const responseItems = data.embeddings
+  const errors: string[] = []
+  if (responseItems.length !== batchLength) {
+    errors.push(`数量 ${responseItems.length}，期望 ${batchLength}`)
+  }
+
+  const embeddings: number[][] = []
+  for (const item of responseItems) {
+    if (!isRecord(item) || !Array.isArray(item.values)) {
+      errors.push('embeddings 项缺少 values 数组')
+      continue
+    }
+    embeddings.push(item.values as number[])
+  }
+  if (errors.length > 0) {
+    invalidEmbeddingResponse('Gemini', errors.join('；'))
+  }
+
+  return embeddings
+}
+
 /**
  * This is deliberately not a user-selectable embedding provider. It exists
  * solely for the installed-package qualification process, which requires both
@@ -75,14 +159,8 @@ export async function embedOpenAI(
     throw new Error(`OpenAI Embedding 调用失败 (${res.status}): ${text}`)
   }
 
-  const data = await res.json() as {
-    data: Array<{ embedding: number[]; index: number }>
-  }
-
-  // 按 index 排序确保顺序一致
-  return data.data
-    .sort((a, b) => a.index - b.index)
-    .map((d) => d.embedding)
+  const data = await res.json() as unknown
+  return validateOpenAIEmbeddings(data, texts.length)
 }
 
 /** Gemini Embedding API */
@@ -115,11 +193,8 @@ export async function embedGemini(
     throw new Error(`Gemini Embedding 调用失败 (${res.status}): ${text}`)
   }
 
-  const data = await res.json() as {
-    embeddings: Array<{ values: number[] }>
-  }
-
-  return data.embeddings.map((e) => e.values)
+  const data = await res.json() as unknown
+  return validateGeminiEmbeddings(data, texts.length)
 }
 
 /** 统一的 Embedding 调用接口 */

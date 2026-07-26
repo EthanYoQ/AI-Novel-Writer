@@ -169,7 +169,7 @@ describeWithChrome('UpdateSection browser interactions', () => {
       harness.setOfficialHomepageFailure(true)
     })
 
-    await page.getByRole('button', { name: 'Official homepage' }).click()
+    await page.getByRole('button', { name: 'Official Website' }).click()
     expect(await page.getByText('Unable to open the official homepage. Please try again later.').isVisible()).toBe(true)
     await page.close()
   }, 15_000)

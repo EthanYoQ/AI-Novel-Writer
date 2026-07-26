@@ -3,6 +3,18 @@ import type { ProjectData, ProjectSessionContext } from './ipc-channels'
 let activeProjectSessionContext: ProjectSessionContext | null = null
 
 /**
+ * Runtime boundary for a frozen project session transported across IPC and
+ * workflow state. Authorization remains the responsibility of ProjectAccess.
+ */
+export function isProjectSessionContext(value: unknown): value is ProjectSessionContext {
+  if (!value || typeof value !== 'object') return false
+  const context = value as Partial<ProjectSessionContext>
+  return typeof context.projectId === 'string'
+    && typeof context.leaseId === 'string'
+    && typeof context.projectPath === 'string'
+}
+
+/**
  * Renderer 侧的 Windows 路径身份键。
  *
  * 这里刻意不访问文件系统：它只消除 UI 状态中大小写、分隔符、`.`/`..` 与尾部分隔符

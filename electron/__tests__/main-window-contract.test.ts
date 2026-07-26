@@ -59,4 +59,18 @@ describe('Electron main window chrome contract', () => {
     expect(main).toContain('app.exit(0)')
     expect(main).toContain('app.exit(1)')
   })
+
+  it('runs the packaged official-homepage qualification through a hidden local preload window', () => {
+    const main = source('electron/main.ts')
+
+    expect(main).toContain("from './services/release-official-homepage-smoke'")
+    expect(main).toContain('releaseOfficialHomepageSmokeWasRequested(process.argv)')
+    expect(main).toContain('claimReleaseOfficialHomepageSmokeInvocation(process.argv, process.env)')
+    expect(main).toContain('runPackagedOfficialHomepageSmoke(releaseHomepageSmokeInvocation!.token)')
+    expect(main).toContain("'release-homepage-smoke.html'")
+    expect(main).toContain('show: false')
+    expect(main).toContain('contextIsolation: true')
+    expect(main).toContain('const requestedSmokeModeCount = Number(releaseVectorSmokeRequested)')
+    expect(main).toContain('requestedSmokeModeCount !== 1 || invocationCount !== 1')
+  })
 })

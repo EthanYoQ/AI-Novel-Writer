@@ -16,6 +16,17 @@ function sha256(value: string | Buffer) {
   return createHash('sha256').update(value).digest('hex')
 }
 
+function environmentWithOverrides(
+  inherited: NodeJS.ProcessEnv,
+  overrides: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const overriddenNames = new Set(Object.keys(overrides).map(name => name.toLowerCase()))
+  return Object.fromEntries([
+    ...Object.entries(inherited).filter(([name]) => !overriddenNames.has(name.toLowerCase())),
+    ...Object.entries(overrides),
+  ])
+}
+
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-cloud-build-manifest-'))
   fixtures.push(root)
@@ -27,6 +38,27 @@ afterEach(() => {
 })
 
 describe('cloud Windows build manifest', () => {
+  it('removes inherited environment keys before overriding them case-insensitively', () => {
+    expect(environmentWithOverrides(
+      {
+        ImageVersion: 'runner-image-version',
+        IMAGEOS: 'runner-image-os',
+        github_sha: 'runner-commit',
+        KEEP_ME: 'unrelated',
+      },
+      {
+        ImageVersion: 'fixture-image-version',
+        ImageOS: 'fixture-image-os',
+        GITHUB_SHA: 'fixture-commit',
+      },
+    )).toEqual({
+      ImageVersion: 'fixture-image-version',
+      ImageOS: 'fixture-image-os',
+      GITHUB_SHA: 'fixture-commit',
+      KEEP_ME: 'unrelated',
+    })
+  })
+
   it('records the runtime-qualified package files and reproducibility inputs with SHA-256 sums', () => {
     const releaseDir = fixture()
     const installerName = `ai-novel-writer-setup-${packageMetadata.version}.exe`
@@ -40,13 +72,12 @@ describe('cloud Windows build manifest', () => {
     const commit = 'a'.repeat(40)
     const result = spawnSync(process.execPath, [manifestScript, '--release-dir', releaseDir], {
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: environmentWithOverrides(process.env, {
         GITHUB_SHA: commit,
         AI_NOVEL_CLOUD_BUILD_PNPM_VERSION: '11.11.0',
         ImageOS: 'win22',
         ImageVersion: '20260726.1',
-      },
+      }),
       encoding: 'utf8',
     })
 

@@ -15,10 +15,23 @@ describe('embedding request controls', () => {
   })
 
   it('uses the configured batch size for OpenAI-compatible embedding requests', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [{ embedding: [0.1] }] }),
-    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [{ embedding: [0.1], index: 0 }, { embedding: [0.2], index: 1 }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [{ embedding: [0.3], index: 0 }, { embedding: [0.4], index: 1 }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [{ embedding: [0.5], index: 0 }] }),
+      })
     vi.stubGlobal('fetch', fetchMock)
 
     await generateEmbeddings(

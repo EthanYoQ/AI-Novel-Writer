@@ -3,6 +3,7 @@ import { randomUUID } from '../utils/id'
 import { globalEventBus } from '../shared/event-bus'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import {
+  isProjectSessionContext,
   projectSessionContextFromProject,
   sameProjectPathKey,
   sameProjectSessionContext,
@@ -132,13 +133,6 @@ export interface WorkflowDefinition {
   }>
   /** 工作流完成后的通知/跳转动作（可选） */
   onComplete?: WorkflowCompleteAction
-}
-
-function isProjectSessionContext(value: unknown): value is ProjectSessionContext {
-  return !!value && typeof value === 'object'
-    && typeof (value as ProjectSessionContext).projectId === 'string'
-    && typeof (value as ProjectSessionContext).leaseId === 'string'
-    && typeof (value as ProjectSessionContext).projectPath === 'string'
 }
 
 function isCurrentWorkflowSession(
