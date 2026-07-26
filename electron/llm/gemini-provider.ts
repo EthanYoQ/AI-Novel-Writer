@@ -1,7 +1,18 @@
 import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
-import { ModelProfile } from '../../src/shared/ipc-channels'
+import type { LLMFinishReason, ModelProfile } from '../../src/shared/ipc-channels'
 
 export class GeminiProvider implements ILLMProvider {
+  private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
+    // Some Gemini-compatible endpoints omit finishReason. Their completed HTTP
+    // response remains compatible with a normal STOP completion.
+    if (reason === undefined || reason === null || reason === 'STOP') return 'stop'
+    if (reason === 'MAX_TOKENS') return 'length'
+    if (['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT'].includes(reason)) {
+      return 'content_filter'
+    }
+    return 'unknown'
+  }
+
   private toGeminiContents(messages: Array<{ role: string; content: string }>) {
     let systemInstruction: string | undefined
     const contents: Array<{ role: string; parts: Array<{ text: string }> }> = []
@@ -56,18 +67,29 @@ export class GeminiProvider implements ILLMProvider {
       }
 
       const data = await res.json() as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+        candidates?: Array<{
+          content?: { parts?: Array<{ text?: string }> }
+          finishReason?: string | null
+        }>
         usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
       }
 
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+      const finishReason = this.normalizeFinishReason(data.candidates?.[0]?.finishReason)
+      const complete = finishReason === 'stop'
       const usage = data.usageMetadata ? {
         promptTokens: data.usageMetadata.promptTokenCount ?? 0,
         completionTokens: data.usageMetadata.candidatesTokenCount ?? 0,
         totalTokens: data.usageMetadata.totalTokenCount ?? 0,
       } : undefined
 
-      return { success: true, content: text, usage }
+      return {
+        success: complete,
+        content: text,
+        usage,
+        finishReason,
+        error: complete ? undefined : 'Gemini API 返回的文本未正常完成',
+      }
     } catch (error) {
       return { success: false, content: '', error: String(error) }
     }
@@ -122,44 +144,57 @@ export class GeminiProvider implements ILLMProvider {
       let fullText = ''
       let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined
       let buffer = ''
+      let finishReason: LLMFinishReason = 'stop'
 
-      const hasMore = true
-      while (hasMore) {
+      const processLine = (line: string) => {
+        if (!line.startsWith('data: ')) return
+        const json = line.slice(6).trim()
+        if (!json) return
+        try {
+          const parsed = JSON.parse(json) as {
+            candidates?: Array<{
+              content?: { parts?: Array<{ text?: string }> }
+                finishReason?: string | null
+            }>
+            usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
+          }
+          const candidate = parsed.candidates?.[0]
+          if (candidate?.finishReason !== undefined) {
+            finishReason = this.normalizeFinishReason(candidate.finishReason)
+          }
+          const chunk = candidate?.content?.parts?.[0]?.text
+          if (chunk) {
+            fullText += chunk
+            opts.onChunk(chunk)
+          }
+          if (parsed.usageMetadata) {
+            usage = {
+              promptTokens: parsed.usageMetadata.promptTokenCount ?? 0,
+              completionTokens: parsed.usageMetadata.candidatesTokenCount ?? 0,
+              totalTokens: parsed.usageMetadata.totalTokenCount ?? 0,
+            }
+          }
+        } catch {
+          // Ignore non-data SSE lines and malformed keepalives.
+        }
+      }
+
+      let streamEnded = false
+      while (!streamEnded) {
         const { done, value } = await reader.read()
-        if (done) break
+        streamEnded = done
+        if (done) continue
 
         buffer += decoder.decode(value, { stream: true })
         const segments = buffer.split('\n')
         buffer = segments.pop() ?? ''
-        const lines = segments.filter((l) => l.startsWith('data: '))
-
-        for (const line of lines) {
-          const json = line.slice(6).trim()
-          if (!json) continue
-          try {
-            const parsed = JSON.parse(json) as {
-              candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
-              usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
-            }
-            const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text
-            if (chunk) {
-              fullText += chunk
-              opts.onChunk(chunk)
-            }
-            if (parsed.usageMetadata) {
-              usage = {
-                promptTokens: parsed.usageMetadata.promptTokenCount ?? 0,
-                completionTokens: parsed.usageMetadata.candidatesTokenCount ?? 0,
-                totalTokens: parsed.usageMetadata.totalTokenCount ?? 0,
-              }
-            }
-          } catch {
-            // ignore
-          }
-        }
+        for (const line of segments) processLine(line)
       }
 
-      opts.onDone(fullText, usage)
+      buffer += decoder.decode()
+      if (buffer.trim()) processLine(buffer)
+
+      opts.onDone(fullText, usage, finishReason)
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
         opts.onError('已取消生成')

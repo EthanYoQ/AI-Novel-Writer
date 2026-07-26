@@ -46,6 +46,18 @@ function text(zhCNText: string, enUSText: string): string {
   return mainText(undefined, zhCNText, enUSText)
 }
 
+function isMissingFileError(error: unknown): boolean {
+  const code = typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined
+  const message = error instanceof Error ? error.message : ''
+  return code === 'ENOENT'
+    || code === 'SECURE_FS_NOT_FOUND'
+    || message === 'SECURE_FS_NOT_FOUND'
+}
+
 /** Do not expose filesystem paths or raw Node errors across the IPC boundary. */
 function projectFilesystemFailure(channel: string, error: unknown): unknown {
   const internalMessage = error instanceof Error ? error.message : ''
@@ -78,7 +90,17 @@ function projectFilesystemFailure(channel: string, error: unknown): unknown {
   }
   const accessMessage = projectAccessMessage()
   if (channel === 'fs:read-file') {
-    return { success: false, content: '', error: accessMessage ?? text('无法读取项目文件。', 'Could not read the project file.') }
+    const missingFileMessage = isMissingFileError(error)
+      ? text(
+        '项目文件不存在。请检查文件路径；故事架构保存在项目数据中，请使用 read_architecture 工具读取。',
+        'The project file does not exist. Check the file path; story architecture is stored in project data and must be read with the read_architecture tool.',
+      )
+      : undefined
+    return {
+      success: false,
+      content: '',
+      error: accessMessage ?? missingFileMessage ?? text('无法读取项目文件。', 'Could not read the project file.'),
+    }
   }
   if (channel === 'fs:read-json') {
     return { success: false, data: null, error: accessMessage ?? text('无法读取项目数据。', 'Could not read the project data.') }

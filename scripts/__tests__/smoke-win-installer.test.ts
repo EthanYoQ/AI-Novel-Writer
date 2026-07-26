@@ -52,6 +52,16 @@ describe('Windows PowerShell smoke script encoding', () => {
       expect(readFileSync(script).subarray(0, utf8Bom.length)).toEqual(utf8Bom)
     }
   })
+
+  it('decodes packaged Electron JSON evidence from explicit UTF-8 bytes and preserves failed raw evidence', () => {
+    const installer = readFileSync(installerScript, 'utf8')
+
+    expect(installer).toContain('function Get-AiNovelUtf8NonEmptyLines')
+    expect(installer).toContain('[System.IO.File]::ReadAllBytes($Path)')
+    expect(installer).toContain('[System.Text.UTF8Encoding]::new($false, $true)')
+    expect(installer).toContain("$result.failedOpenExternal.rendererError.zhCN -eq '无法打开官方主页，请稍后重试。'")
+    expect(installer).toContain('if ($evidenceSucceeded)')
+  })
 })
 
 function quotePowerShell(value: string): string {
@@ -225,6 +235,7 @@ describe('Windows installer smoke contract', () => {
     expect(script.match(/Get-AiNovelStartupBlockingErrorWindows/g)?.length).toBe(2)
     expect(script).toContain('Installer smoke cannot start while an existing product error dialog is open')
     expect(script).toContain('Add-AiNovelTrackedProcessTree')
+    expect(script).toContain('-RequireSuccessfulTerminalRefresh')
     expect(script).toContain('Take one final desktop snapshot')
     expect(script).toContain('Invoke-AiNovelUpgradeDataFixture')
     expect(script).toContain('upgrade-data-fixture.mjs')
@@ -267,6 +278,8 @@ describe('Windows installer smoke contract', () => {
     expect(appSmoke).toContain('Application smoke cannot start while an existing product error dialog is open')
     expect(appSmoke).toContain('project-opened.json')
     expect(appSmoke).toContain('renderer did not open and confirm the upgrade fixture project')
+    expect(appSmoke).toContain('Application root exited during smoke test after terminal lineage refresh')
+    expect(appSmoke).toContain('Could not complete terminal process lineage refresh')
     const appSource = readFileSync('src/App.tsx', 'utf8')
     const projectController = readFileSync('electron/controllers/project-controller.ts', 'utf8')
     expect(appSource).toContain("ipc.invoke('project:smoke-open-request')")
@@ -310,6 +323,7 @@ describe('Windows installer smoke contract', () => {
     expect(releaseMonitor).toContain('$targetNameSnapshot = [string[]]@(')
     expect(releaseMonitor).toContain('-TargetNames $targetNameSnapshot')
     expect(releaseMonitor).toContain('Get-AiNovelStartupBlockingErrorWindows')
+    expect(releaseMonitor).toContain('Assert-AiNovelGateProcessExitSucceeded')
     expect(releaseMonitor.indexOf('Get-AiNovelStartupBlockingErrorWindows')).toBeLessThan(
       releaseMonitor.indexOf("Write-AiNovelGateStatus -State 'ready'"),
     )
@@ -912,6 +926,68 @@ try {
     })
   }, 25_000)
 
+  windowsIt('decodes Electron UTF-8 JSON evidence exactly in Windows PowerShell 5.1 with and without a BOM', () => {
+    const output = runInstallerLibrary(`
+$probeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-utf8-evidence-' + [guid]::NewGuid().ToString('N'))
+try {
+  New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+  $payload = '{"failedOpenExternal":{"rendererError":{"zhCN":"无法打开官方主页，请稍后重试。","enUS":"Unable to open the official homepage. Please try again later."}}}'
+  $withoutBom = Join-Path $probeRoot 'electron-no-bom.jsonl'
+  $withBom = Join-Path $probeRoot 'electron-with-bom.jsonl'
+  [System.IO.File]::WriteAllText($withoutBom, $payload, [System.Text.UTF8Encoding]::new($false))
+  [System.IO.File]::WriteAllText($withBom, $payload, [System.Text.UTF8Encoding]::new($true))
+  $withoutBomEvidence = (Get-AiNovelUtf8NonEmptyLines -Path $withoutBom | Select-Object -Last 1 | ConvertFrom-Json)
+  $withBomEvidence = (Get-AiNovelUtf8NonEmptyLines -Path $withBom | Select-Object -Last 1 | ConvertFrom-Json)
+  [pscustomobject]@{
+    PowerShellMajor = $PSVersionTable.PSVersion.Major
+    NoBomZhCN = $withoutBomEvidence.failedOpenExternal.rendererError.zhCN
+    WithBomZhCN = $withBomEvidence.failedOpenExternal.rendererError.zhCN
+    NoBomEnUS = $withoutBomEvidence.failedOpenExternal.rendererError.enUS
+    WithBomEnUS = $withBomEvidence.failedOpenExternal.rendererError.enUS
+  } | ConvertTo-Json -Compress
+} finally {
+  Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result.PowerShellMajor).toBeGreaterThanOrEqual(5)
+    expect(result.NoBomZhCN).toBe('无法打开官方主页，请稍后重试。')
+    expect(result.WithBomZhCN).toBe('无法打开官方主页，请稍后重试。')
+    expect(result.NoBomEnUS).toBe('Unable to open the official homepage. Please try again later.')
+    expect(result.WithBomEnUS).toBe('Unable to open the official homepage. Please try again later.')
+  })
+
+  windowsIt('fails the release gate for every nonzero or abnormal job-contained descendant exit', () => {
+    const output = runReleaseMonitorLibrary(`
+function Get-GateExitFailure {
+  param($Event)
+  try {
+    Assert-AiNovelGateProcessExitSucceeded -Step 'synthetic-step' -Event $Event
+    return ''
+  } catch {
+    return $_.Exception.Message
+  }
+}
+$success = Get-GateExitFailure ([pscustomobject]@{ ProcessId = 701; ExitCode = 0; ExitCodeCaptured = $true; JobMessage = 7 })
+$nonzero = Get-GateExitFailure ([pscustomobject]@{ ProcessId = 702; ExitCode = 19; ExitCodeCaptured = $true; JobMessage = 7 })
+$abnormal = Get-GateExitFailure ([pscustomobject]@{ ProcessId = 703; ExitCode = 0; ExitCodeCaptured = $true; JobMessage = 8 })
+$uncaptured = Get-GateExitFailure ([pscustomobject]@{ ProcessId = 704; ExitCode = $null; ExitCodeCaptured = $false; JobMessage = 7 })
+[pscustomobject]@{
+  Success = $success
+  Nonzero = $nonzero
+  Abnormal = $abnormal
+  Uncaptured = $uncaptured
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result.Success).toBe('')
+    expect(result.Nonzero).toContain('nonzero exit code 19')
+    expect(result.Abnormal).toContain('abnormal exit')
+    expect(result.Uncaptured).toContain('could not capture the exit code')
+  })
+
   windowsIt('does not treat a reused process ID as the process originally tracked by the release gate', () => {
     const output = runReleaseMonitorLibrary(`
 $ids = [System.Collections.Generic.HashSet[int]]::new()
@@ -1053,6 +1129,133 @@ $addReused = Add-AiNovelTrackedProcess -ProcessIds $tracked -StartTimeTicks $tra
       AcceptedMismatchedIdentity: false,
     })
   })
+
+  windowsIt('refreshes an exited root lineage once and fails closed when the terminal child query is unavailable', () => {
+    const output = runProbeLibrary(`
+$rootStart = [DateTime]::UtcNow.Ticks
+$childStart = $rootStart + 10000
+$identityProvider = {
+  param([int]$ProcessId)
+  if ($ProcessId -eq 778) { return $childStart }
+  # Root PID 777 has exited. Its historical start time was retained by the
+  # smoke monitor and must still be used for one terminal child query.
+  return $null
+}
+$childrenProvider = {
+  param([int]$ParentProcessId)
+  if ($ParentProcessId -eq 777) {
+    return [pscustomobject]@{
+      ProcessId = 778
+      CreationDate = [DateTime]::new($childStart, [DateTimeKind]::Utc)
+    }
+  }
+  return @()
+}
+$treeParameters = @{
+  RootProcessId = 777
+  RootStartTimeTicks = $rootStart
+  ProcessStartTimeProvider = $identityProvider
+  ProcessChildrenProvider = $childrenProvider
+  RequireSuccessfulTerminalRefresh = $true
+}
+$tree = @(Get-AiNovelProcessTreeIds @treeParameters)
+$queryFailure = ''
+try {
+  $failureParameters = @{
+    RootProcessId = 777
+    RootStartTimeTicks = $rootStart
+    ProcessStartTimeProvider = $identityProvider
+    ProcessChildrenProvider = { param([int]$ParentProcessId) throw 'synthetic CIM failure' }
+    RequireSuccessfulTerminalRefresh = $true
+  }
+  Get-AiNovelProcessTreeIds @failureParameters | Out-Null
+} catch {
+  $queryFailure = $_.Exception.Message
+}
+[pscustomobject]@{
+  RootRetained = $tree -contains 777
+  ExitedRootChildTracked = $tree -contains 778
+  QueryFailure = $queryFailure
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result.RootRetained).toBe(true)
+    expect(result.ExitedRootChildTracked).toBe(true)
+    expect(result.QueryFailure).toContain('Could not complete terminal process lineage refresh')
+    expect(result.QueryFailure).toContain('synthetic CIM failure')
+  })
+
+  windowsIt('does not accept an empty process tree when an exited root has a live terminal child', () => {
+    const output = runProbeLibrary(`
+$rootProcess = $null
+$childProcess = $null
+try {
+  $rootProcess = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Milliseconds 80; exit 0') -PassThru
+  $rootStart = $rootProcess.StartTime.ToUniversalTime().Ticks
+  $childProcess = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 30') -PassThru
+  $childStart = $childProcess.StartTime.ToUniversalTime().Ticks
+  [void]$rootProcess.WaitForExit(5000)
+  $rootProcess.Refresh()
+
+  $processIds = [System.Collections.Generic.HashSet[int]]::new()
+  [void]$processIds.Add($rootProcess.Id)
+  $startTimeTicks = @{ ([string]$rootProcess.Id) = $rootStart }
+  $script:terminalRootProcessId = $rootProcess.Id
+  $script:terminalChildProcessId = $childProcess.Id
+  $script:terminalChildStart = $childStart
+  $terminalChildren = {
+    param([int]$ParentProcessId)
+    if ($ParentProcessId -eq $script:terminalRootProcessId) {
+      return [pscustomobject]@{
+        ProcessId = $script:terminalChildProcessId
+        CreationDate = [DateTime]::new($script:terminalChildStart, [DateTimeKind]::Utc)
+      }
+    }
+    return @()
+  }
+  $failure = ''
+  try {
+    $assertionParameters = @{
+      ProcessIds = $processIds
+      StartTimeTicks = $startTimeTicks
+      RootProcessId = $rootProcess.Id
+      ProcessChildrenProvider = $terminalChildren
+      TimeoutSeconds = 1
+    }
+    Assert-AiNovelProcessTreeExited @assertionParameters
+  } catch {
+    $failure = $_.Exception.Message
+  }
+  $childProcess.Refresh()
+  [pscustomobject]@{
+    RootExitedBeforeRefresh = $rootProcess.HasExited
+    ChildTracked = $processIds.Contains($childProcess.Id)
+    ChildAliveAfterRefresh = -not $childProcess.HasExited
+    Failure = $failure
+  } | ConvertTo-Json -Compress
+} finally {
+  foreach ($candidate in @($rootProcess, $childProcess)) {
+    if ($null -eq $candidate) { continue }
+    try {
+      $candidate.Refresh()
+      if (-not $candidate.HasExited) {
+        Stop-Process -Id $candidate.Id -Force -ErrorAction SilentlyContinue
+        [void]$candidate.WaitForExit(5000)
+      }
+    } finally {
+      $candidate.Dispose()
+    }
+  }
+}
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result.RootExitedBeforeRefresh).toBe(true)
+    expect(result.ChildTracked).toBe(true)
+    expect(result.ChildAliveAfterRefresh).toBe(true)
+    expect(result.Failure).toContain('Application process tree did not terminate')
+  }, 15_000)
 
   windowsIt('waits at least five seconds after the application process tree is terminated', () => {
     const output = runProbeLibrary(`

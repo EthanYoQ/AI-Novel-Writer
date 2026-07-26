@@ -51,7 +51,9 @@ function Get-AiNovelProcessTreeIds {
     [Parameter(Mandatory = $true)][int]$RootProcessId,
     [long]$RootStartTimeTicks = 0,
     [scriptblock]$ProcessStartTimeProvider,
-    [hashtable]$DiscoveredStartTimeTicks
+    [hashtable]$DiscoveredStartTimeTicks,
+    [switch]$RequireSuccessfulTerminalRefresh,
+    [scriptblock]$ProcessChildrenProvider
   )
 
   if ($null -eq $ProcessStartTimeProvider) {
@@ -74,6 +76,9 @@ function Get-AiNovelProcessTreeIds {
   if ($RootStartTimeTicks -le 0) {
     $rootIdentity = & $ProcessStartTimeProvider $RootProcessId
     if ($null -eq $rootIdentity) {
+      if ($RequireSuccessfulTerminalRefresh) {
+        throw "Cannot refresh terminal process lineage for root PID $RootProcessId without its original start time."
+      }
       return @($processIds)
     }
     $RootStartTimeTicks = [long]$rootIdentity
@@ -91,16 +96,47 @@ function Get-AiNovelProcessTreeIds {
     $parent = $pending.Dequeue()
     $parentProcessId = [int]$parent.ProcessId
     $currentParentStartTimeTicks = & $ProcessStartTimeProvider $parentProcessId
+    $isExitedRootTerminalRefresh = (
+      $RequireSuccessfulTerminalRefresh -and
+      $parentProcessId -eq $RootProcessId -and
+      $null -eq $currentParentStartTimeTicks
+    )
+    if ($null -eq $currentParentStartTimeTicks -and -not $isExitedRootTerminalRefresh) {
+      # ParentProcessId is only meaningful for the exact process instance.
+      # If that instance exited, ordinary polling must not guess at children.
+      continue
+    }
     if (
-      $null -eq $currentParentStartTimeTicks -or
+      $null -ne $currentParentStartTimeTicks -and
       [long]$currentParentStartTimeTicks -ne [long]$parent.StartTimeTicks
     ) {
       # ParentProcessId is only meaningful for the exact process instance.
-      # If that instance exited (or Windows reused its PID), never follow the
-      # replacement process's children into the application tree.
+      # If Windows reused the PID, never follow the replacement process's
+      # children into the application tree, including during terminal refresh.
+      if ($RequireSuccessfulTerminalRefresh -and $parentProcessId -eq $RootProcessId) {
+        throw "Could not complete terminal process lineage refresh for root PID $RootProcessId because Windows reused its PID."
+      }
       continue
     }
-    $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $parentProcessId" -ErrorAction SilentlyContinue
+    try {
+      if ($null -ne $ProcessChildrenProvider) {
+        $children = @(& $ProcessChildrenProvider $parentProcessId)
+      }
+      elseif ($RequireSuccessfulTerminalRefresh) {
+        # A terminal refresh is a proof obligation: an unavailable CIM query is
+        # not evidence that the exited root had no descendants.
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $parentProcessId" -ErrorAction Stop)
+      }
+      else {
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $parentProcessId" -ErrorAction SilentlyContinue)
+      }
+    }
+    catch {
+      if ($RequireSuccessfulTerminalRefresh) {
+        throw "Could not complete terminal process lineage refresh for parent PID ${parentProcessId}: $($_.Exception.Message)"
+      }
+      continue
+    }
     foreach ($child in $children) {
       try {
         $childStartTimeTicks = ([DateTime]$child.CreationDate).ToUniversalTime().Ticks
@@ -528,17 +564,31 @@ function Add-AiNovelTrackedProcessTree {
   param(
     [Parameter(Mandatory = $true)][int]$RootProcessId,
     [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.HashSet[int]]$ProcessIds,
-    [Parameter(Mandatory = $true)][hashtable]$StartTimeTicks
+    [Parameter(Mandatory = $true)][hashtable]$StartTimeTicks,
+    [switch]$RequireSuccessfulTerminalRefresh,
+    [scriptblock]$ProcessChildrenProvider
   )
-  if (-not (Test-AiNovelTrackedProcessAlive -ProcessId $RootProcessId -StartTimeTicks $StartTimeTicks)) {
+  $rootStartTimeKey = [string]$RootProcessId
+  if (-not $StartTimeTicks.ContainsKey($rootStartTimeKey)) {
+    if ($RequireSuccessfulTerminalRefresh) {
+      throw "Cannot refresh terminal process lineage for untracked root PID $RootProcessId."
+    }
     return
   }
-  $rootStartTimeTicks = [long]$StartTimeTicks[[string]$RootProcessId]
+  if (
+    -not $RequireSuccessfulTerminalRefresh -and
+    -not (Test-AiNovelTrackedProcessAlive -ProcessId $RootProcessId -StartTimeTicks $StartTimeTicks)
+  ) {
+    return
+  }
+  $rootStartTimeTicks = [long]$StartTimeTicks[$rootStartTimeKey]
   $discoveredStartTimeTicks = @{}
   foreach ($processId in @(Get-AiNovelProcessTreeIds `
       -RootProcessId $RootProcessId `
       -RootStartTimeTicks $rootStartTimeTicks `
-      -DiscoveredStartTimeTicks $discoveredStartTimeTicks)) {
+      -DiscoveredStartTimeTicks $discoveredStartTimeTicks `
+      -RequireSuccessfulTerminalRefresh:$RequireSuccessfulTerminalRefresh `
+      -ProcessChildrenProvider $ProcessChildrenProvider)) {
     [void](Add-AiNovelTrackedProcess `
       -ProcessIds $ProcessIds `
       -StartTimeTicks $StartTimeTicks `
@@ -578,11 +628,30 @@ function Assert-AiNovelProcessTreeExited {
   param(
     [Parameter(Mandatory = $true)][System.Collections.Generic.HashSet[int]]$ProcessIds,
     [Parameter(Mandatory = $true)][hashtable]$StartTimeTicks,
-    [int]$TimeoutSeconds = 5
+    [int]$TimeoutSeconds = 5,
+    [int]$RootProcessId = 0,
+    [scriptblock]$ProcessChildrenProvider
   )
 
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  $terminalLineageRefreshed = $false
   do {
+    if (
+      $RootProcessId -gt 0 -and
+      -not $terminalLineageRefreshed -and
+      -not (Test-AiNovelTrackedProcessAlive -ProcessId $RootProcessId -StartTimeTicks $StartTimeTicks)
+    ) {
+      # Do not accept an empty historical set merely because the root exited
+      # between ordinary child scans. This one strict refresh is deliberately
+      # before the alive=0 success branch below.
+      Add-AiNovelTrackedProcessTree `
+        -RootProcessId $RootProcessId `
+        -ProcessIds $ProcessIds `
+        -StartTimeTicks $StartTimeTicks `
+        -RequireSuccessfulTerminalRefresh `
+        -ProcessChildrenProvider $ProcessChildrenProvider
+      $terminalLineageRefreshed = $true
+    }
     $alive = [System.Collections.Generic.List[int]]::new()
     foreach ($processId in $ProcessIds) {
       if (Test-AiNovelTrackedProcessAlive -ProcessId $processId -StartTimeTicks $StartTimeTicks) {
@@ -690,7 +759,11 @@ function Close-AiNovelProcessTreeGracefully {
     -StartTimeTicks $StartTimeTicks `
     -ProcessProvider $ProcessProvider `
     -CloseMainWindowProvider $CloseMainWindowProvider
-  Assert-AiNovelProcessTreeExited -ProcessIds $ProcessIds -StartTimeTicks $StartTimeTicks -TimeoutSeconds $TimeoutSeconds
+  Assert-AiNovelProcessTreeExited `
+    -ProcessIds $ProcessIds `
+    -StartTimeTicks $StartTimeTicks `
+    -TimeoutSeconds $TimeoutSeconds `
+    -RootProcessId $Process.Id
 }
 
 function Save-AiNovelSmokeFailureEvidence {
@@ -859,6 +932,22 @@ try {
         }
       }
     }
+    else {
+      # The root can create a child between normal polls and then exit. Refresh
+      # its historical lineage once, fail closed if that query is unavailable,
+      # and retain any live child for diagnostics and cleanup.
+      Add-AiNovelTrackedProcessTree `
+        -RootProcessId $process.Id `
+        -ProcessIds $appProcessIds `
+        -StartTimeTicks $appProcessStartTimeTicks `
+        -RequireSuccessfulTerminalRefresh
+      foreach ($processId in $appProcessIds) {
+        if (Test-AiNovelTrackedProcessAlive -ProcessId $processId -StartTimeTicks $appProcessStartTimeTicks) {
+          [void]$observedProcessIds.Add([int]$processId)
+          $observedProcessStartTimeTicks[[string]$processId] = $appProcessStartTimeTicks[[string]$processId]
+        }
+      }
+    }
     $liveObservedProcessIds = Get-AiNovelLiveTrackedProcessIds -ProcessIds $observedProcessIds -StartTimeTicks $observedProcessStartTimeTicks
     $liveAppProcessIds = Get-AiNovelLiveTrackedProcessIds -ProcessIds $appProcessIds -StartTimeTicks $appProcessStartTimeTicks
 
@@ -874,6 +963,10 @@ try {
     }
 
     if ($process.HasExited) {
+      $liveDescendantProcessIds = @($liveAppProcessIds | Where-Object { [int]$_ -ne $process.Id })
+      if ($liveDescendantProcessIds.Count -gt 0) {
+        throw "Application root exited during smoke test after terminal lineage refresh; live descendant PID(s): $($liveDescendantProcessIds -join ', ')"
+      }
       throw "Application exited during smoke test with code $($process.ExitCode)"
     }
 

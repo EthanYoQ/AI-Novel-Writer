@@ -2,12 +2,12 @@ import { create } from 'zustand'
 import { ipc } from '../services/ipc-client'
 import { requireIpcSuccess } from '../services/ipc-result'
 import { alertError } from '../components/ui/AlertDialog'
-import type { ModelProfile, LLMResponse, TokenUsage } from '../shared/ipc-channels'
+import type { LLMFinishReason, ModelProfile, LLMResponse, TokenUsage } from '../shared/ipc-channels'
 
 /** 流式生成的回调 */
 interface StreamCallbacks {
   onChunk?: (chunk: string) => void
-  onDone?: (fullText: string, usage?: TokenUsage) => void
+  onDone?: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => void
   onError?: (error: string) => void
 }
 
@@ -163,7 +163,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
 
     const unsubDone = ipc.on('llm:stream-done', (data) => {
       if (data.requestId === requestId) {
-        callbacks.onDone?.(data.fullText, data.usage)
+        callbacks.onDone?.(data.fullText, data.usage, data.finishReason)
         cleanup()
       }
     })

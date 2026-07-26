@@ -8,6 +8,8 @@ import { parseSlashCommand, parseMentions, mentionsToToolCalls } from '../servic
 import { toolRegistry } from '../services/agent/tool-registry'
 import type { ToolArtifact } from '../services/agent/tool-registry'
 import { createAgentExecutionContext } from '../services/agent/tools/project-context'
+import { requireCompleteAgentResponse } from '../services/agent/agent-completion'
+import type { LLMResponse } from '../shared/ipc-channels'
 
 // ===== 类型定义 =====
 
@@ -409,15 +411,10 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         const request = {
           modelId: mid,
           messages: messages.map(m => ({ role: m.role, content: m.content })),
-          maxTokens: 4096,     // Agent 需要足够 Token 空间来输出推理 + tool_call
           temperature: 0.7,    // 创作场景适度随机
         }
         const response = await (window as unknown as { velaAPI: { invoke: (ch: string, ...args: unknown[]) => Promise<unknown> } }).velaAPI.invoke('llm:generate', request)
-        const res = response as { success: boolean; content: string; error?: string }
-        if (!res.success) {
-          throw new Error(res.error ?? 'LLM 生成失败')
-        }
-        return res.content
+        return requireCompleteAgentResponse(response as Pick<LLMResponse, 'success' | 'content' | 'error' | 'finishReason'>)
       }
 
       // AbortController 用于取消（P1-7: 提升到模块级变量以便 cancelGeneration 访问）
