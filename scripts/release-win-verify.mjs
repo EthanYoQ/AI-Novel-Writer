@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -14,9 +15,13 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { restoreNativeWithIndependentFallback } from './release-native-restore.mjs'
 
+export const releasePreMonitorSteps = [
+  'test:release-monitor-selftest',
+]
+
 export const releaseVerificationSteps = [
   'prepare:native-node',
-  'test',
+  'test:release-workload',
   'clean:build',
   'build:win:artifacts',
   'verify:win-update-artifacts',
@@ -34,7 +39,11 @@ export const releaseFinalizationSteps = [
 
 if (process.argv.includes('--print-plan')) {
   process.stdout.write(
-    `${JSON.stringify([...releaseVerificationSteps, ...releaseFinalizationSteps])}\n`,
+    `${JSON.stringify([
+      ...releasePreMonitorSteps,
+      ...releaseVerificationSteps,
+      ...releaseFinalizationSteps,
+    ])}\n`,
   )
   process.exit(0)
 }
@@ -57,11 +66,13 @@ const monitorRoot = resolve(
 const controlPath = join(monitorRoot, 'control.jsonl')
 const statusPath = join(monitorRoot, 'status.json')
 const evidencePath = join(monitorRoot, 'evidence')
+const monitorProcessPath = join(monitorRoot, 'monitor-process.json')
 const monitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const launchGateScript = resolve('scripts/release-win-launch-gate.mjs')
 let controlSequence = 0
 let launchSequence = 0
 let gateSucceeded = false
+let releaseFinalizationRequired = false
 let monitor
 let monitorSpawnError
 const childSettlements = new WeakMap()
@@ -182,6 +193,24 @@ function observeChild(child) {
     }))
   }
   return child
+}
+
+async function waitForObservedChildToSettleWithin(child, timeoutMilliseconds) {
+  observeChild(child)
+  let timeout
+  try {
+    return await Promise.race([
+      childSettlements.get(child),
+      new Promise((_, rejectPromise) => {
+        timeout = setTimeout(
+          () => rejectPromise(new Error(`Process ${child.pid ?? 'unknown'} did not settle in time`)),
+          timeoutMilliseconds,
+        )
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
 }
 
 function getWindowsProcessStartTimeTicks(processId) {
@@ -358,7 +387,12 @@ async function waitForChildToSettle(child, timeoutMilliseconds = 120_000) {
 }
 
 function canUseMonitor() {
-  return Boolean(monitor && !monitorSpawnError && monitor.exitCode === null)
+  return Boolean(
+    monitor
+    && !monitorSpawnError
+    && monitor.exitCode === null
+    && monitor.signalCode === null,
+  )
 }
 
 async function runMonitoredNodeProcess(step, args) {
@@ -429,7 +463,13 @@ async function waitForFinalQuietPeriod() {
   await waitForMonitorState(['step-completed'], 10_000, step)
 }
 
-async function main() {
+async function runPreMonitorSteps() {
+  for (const step of releasePreMonitorSteps) {
+    await runNodeProcess([pnpmCli, 'run', step])
+  }
+}
+
+async function startReleaseMonitor() {
   mkdirSync(monitorRoot, { recursive: true })
   monitor = spawn(
     'powershell.exe',
@@ -452,9 +492,55 @@ async function main() {
       windowsHide: true,
     },
   )
+  observeChild(monitor)
   monitor.once('error', error => {
     monitorSpawnError = error
   })
+
+  const monitorProcessTemporaryPath = `${monitorProcessPath}.${process.pid}.tmp`
+  try {
+    if (!Number.isInteger(monitor.pid) || monitor.pid <= 0) {
+      throw new Error('Windows release monitor did not expose a valid process ID')
+    }
+    writeFileSync(
+      monitorProcessTemporaryPath,
+      `${JSON.stringify({
+        processId: monitor.pid,
+        startedAt: new Date().toISOString(),
+      })}\n`,
+      'utf8',
+    )
+    renameSync(monitorProcessTemporaryPath, monitorProcessPath)
+  } catch (markerPublicationError) {
+    let monitorShutdownError
+    try {
+      if (
+        Number.isInteger(monitor.pid)
+        && monitor.pid > 0
+        && monitor.exitCode === null
+        && monitor.signalCode === null
+      ) {
+        monitor.kill()
+      }
+      await waitForObservedChildToSettleWithin(monitor, 5_000)
+    } catch (error) {
+      monitorShutdownError = error
+    }
+    rmSync(monitorProcessTemporaryPath, { force: true })
+    if (monitorShutdownError) {
+      throw new AggregateError(
+        [markerPublicationError, monitorShutdownError],
+        'Windows release monitor marker publication failed and the monitor did not settle',
+      )
+    }
+    throw markerPublicationError
+  }
+}
+
+async function main() {
+  await runPreMonitorSteps()
+  await startReleaseMonitor()
+  releaseFinalizationRequired = true
 
   await waitForMonitorState(['ready'], 10_000)
 
@@ -515,93 +601,95 @@ try {
   console.error(`Windows release-gate diagnostics preserved at: ${evidencePath}`)
   process.exitCode = 1
 } finally {
-  let nativeRestoreSucceeded = false
-  try {
-    // Packaging deliberately rebuilds the shared native module for Electron ABI 145.
-    // Always return the worktree to Node ABI 141, including every failure path.
-    const restoreResult = await restoreNativeWithIndependentFallback({
-      restoreMonitored: async () => {
-        await restoreAndVerifyNodeNativeAbi({ monitored: true })
-      },
-      // This fallback is deliberately unconditional. A monitor can publish
-      // "failed" before its process exit becomes observable; process liveness
-      // must never suppress the independent, idempotent ABI restoration.
-      restoreIndependent: async () => {
-        await restoreAndVerifyNodeNativeAbi({ monitored: false })
-      },
-    })
-    if (restoreResult.usedIndependentFallback) {
-      gateSucceeded = false
-      process.exitCode = 1
-      preserveGateFailureEvidence(
-        'native-restore-validation-monitored',
-        restoreResult.monitoredError,
-      )
-      console.error(
-        restoreResult.monitoredError instanceof Error
-          ? restoreResult.monitoredError.message
-          : restoreResult.monitoredError,
-      )
-    }
-    nativeRestoreSucceeded = true
-  } catch (error) {
-    gateSucceeded = false
-    process.exitCode = 1
-    preserveGateFailureEvidence('native-restore-validation-fallback', error)
-    console.error(error instanceof Error ? error.message : error)
-  }
-
-  let finalQuietSucceeded = false
-  if (canUseMonitor()) {
+  if (releaseFinalizationRequired) {
+    let nativeRestoreSucceeded = false
     try {
-      await waitForFinalQuietPeriod()
-      finalQuietSucceeded = true
+      // Packaging deliberately rebuilds the shared native module for Electron ABI 145.
+      // Once monitored release work may start, always return the worktree to Node ABI 141.
+      const restoreResult = await restoreNativeWithIndependentFallback({
+        restoreMonitored: async () => {
+          await restoreAndVerifyNodeNativeAbi({ monitored: true })
+        },
+        // This fallback is deliberately unconditional. A monitor can publish
+        // "failed" before its process exit becomes observable; process liveness
+        // must never suppress the independent, idempotent ABI restoration.
+        restoreIndependent: async () => {
+          await restoreAndVerifyNodeNativeAbi({ monitored: false })
+        },
+      })
+      if (restoreResult.usedIndependentFallback) {
+        gateSucceeded = false
+        process.exitCode = 1
+        preserveGateFailureEvidence(
+          'native-restore-validation-monitored',
+          restoreResult.monitoredError,
+        )
+        console.error(
+          restoreResult.monitoredError instanceof Error
+            ? restoreResult.monitoredError.message
+            : restoreResult.monitoredError,
+        )
+      }
+      nativeRestoreSucceeded = true
     } catch (error) {
       gateSucceeded = false
       process.exitCode = 1
-      preserveGateFailureEvidence('final-quiet', error)
+      preserveGateFailureEvidence('native-restore-validation-fallback', error)
       console.error(error instanceof Error ? error.message : error)
     }
-  } else {
-    gateSucceeded = false
-    process.exitCode = 1
-    const error = new Error(
-      'Windows release monitor was not available for the required final quiet period',
-    )
-    preserveGateFailureEvidence('final-quiet', error)
-    console.error(error.message)
-  }
 
-  let monitorStopFailure
-  if (canUseMonitor()) {
-    sendMonitorControl({ state: 'stop' })
-    try {
-      await waitForMonitorState(['stopped'], 10_000)
-    } catch (error) {
-      monitorStopFailure = error
-      monitor.kill()
+    let finalQuietSucceeded = false
+    if (canUseMonitor()) {
+      try {
+        await waitForFinalQuietPeriod()
+        finalQuietSucceeded = true
+      } catch (error) {
+        gateSucceeded = false
+        process.exitCode = 1
+        preserveGateFailureEvidence('final-quiet', error)
+        console.error(error instanceof Error ? error.message : error)
+      }
+    } else {
+      gateSucceeded = false
+      process.exitCode = 1
+      const error = new Error(
+        'Windows release monitor was not available for the required final quiet period',
+      )
+      preserveGateFailureEvidence('final-quiet', error)
+      console.error(error.message)
     }
-  } else if (monitor && monitor.exitCode !== 0) {
-    monitorStopFailure = new Error(
-      `Windows release monitor exited with code ${monitor.exitCode}`,
-    )
-  }
-  if (monitorStopFailure) {
-    gateSucceeded = false
-    process.exitCode = 1
-    preserveGateFailureEvidence('monitor-stop', monitorStopFailure)
-    console.error(
-      monitorStopFailure instanceof Error
-        ? monitorStopFailure.message
-        : monitorStopFailure,
-    )
-    console.error(`Windows release-gate diagnostics preserved at: ${evidencePath}`)
-  }
-  if (!nativeRestoreSucceeded || !finalQuietSucceeded) {
-    gateSucceeded = false
-    process.exitCode = 1
-  }
-  if (gateSucceeded) {
-    rmSync(monitorRoot, { recursive: true, force: true })
+
+    let monitorStopFailure
+    if (canUseMonitor()) {
+      sendMonitorControl({ state: 'stop' })
+      try {
+        await waitForMonitorState(['stopped'], 10_000)
+      } catch (error) {
+        monitorStopFailure = error
+        monitor.kill()
+      }
+    } else if (monitor && monitor.exitCode !== 0) {
+      monitorStopFailure = new Error(
+        `Windows release monitor exited with code ${monitor.exitCode}`,
+      )
+    }
+    if (monitorStopFailure) {
+      gateSucceeded = false
+      process.exitCode = 1
+      preserveGateFailureEvidence('monitor-stop', monitorStopFailure)
+      console.error(
+        monitorStopFailure instanceof Error
+          ? monitorStopFailure.message
+          : monitorStopFailure,
+      )
+      console.error(`Windows release-gate diagnostics preserved at: ${evidencePath}`)
+    }
+    if (!nativeRestoreSucceeded || !finalQuietSucceeded) {
+      gateSucceeded = false
+      process.exitCode = 1
+    }
+    if (gateSucceeded) {
+      rmSync(monitorRoot, { recursive: true, force: true })
+    }
   }
 }
