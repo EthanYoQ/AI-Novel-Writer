@@ -464,7 +464,7 @@ describe('Windows release verification orchestration', () => {
     }
   }, 7_000)
 
-  windowsIt('stops after a failed pre-monitor self-test without starting release or finalization work', async () => {
+  windowsIt('stops after a failed full test preflight without starting release or finalization work', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-premonitor-failure-'))
     const isolatedTemp = join(root, 'temp')
     const fakePnpmCli = join(root, 'fake-pnpm.cjs')
@@ -478,7 +478,7 @@ describe('Windows release verification orchestration', () => {
         'const { appendFileSync } = require("node:fs")',
         'const [command, step] = process.argv.slice(2)',
         'appendFileSync(process.env.AI_NOVEL_RELEASE_STEP_MARKER, `${command} ${step}\\n`, "utf8")',
-        'process.exitCode = step === "test:release-monitor-selftest" ? 1 : 0',
+        'process.exitCode = step === "test" ? 1 : 0',
       ].join('\n'),
       'utf8',
     )
@@ -554,9 +554,9 @@ describe('Windows release verification orchestration', () => {
       expect(existsSync(join(evidencePath, 'monitor-control-log.jsonl'))).toBe(false)
 
       const steps = readFileSync(stepMarker, 'utf8').trim().split(/\r?\n/).filter(Boolean)
-      expect(steps).toEqual(['run test:release-monitor-selftest'])
+      expect(steps).toEqual(['run test'])
       expect(steps.join('\n')).not.toMatch(
-        /prepare:native-node|test:release-workload|build:win:artifacts|restore:native-node|verify:native-node/,
+        /prepare:native-node|build:win:artifacts|restore:native-node|verify:native-node/,
       )
 
       const entrypoints = readFileSync(entrypointMarker, 'utf8')
@@ -587,7 +587,7 @@ describe('Windows release verification orchestration', () => {
         'const { appendFileSync } = require("node:fs")',
         'const [command, step] = process.argv.slice(2)',
         'appendFileSync(process.env.AI_NOVEL_RELEASE_STEP_MARKER, `${command} ${step}\\n`, "utf8")',
-        'process.exitCode = step === "test:release-monitor-selftest" ? 0 : 98',
+        'process.exitCode = step === "test" ? 0 : 98',
       ].join('\n'),
       'utf8',
     )
@@ -684,7 +684,7 @@ describe('Windows release verification orchestration', () => {
       })
 
       const steps = readFileSync(stepMarker, 'utf8').trim().split(/\r?\n/).filter(Boolean)
-      expect(steps).toEqual(['run test:release-monitor-selftest'])
+      expect(steps).toEqual(['run test'])
       const entrypoints = readFileSync(entrypointMarker, 'utf8')
       expect(entrypoints).not.toMatch(
         /prepare-native-for-node\.mjs|node_modules[\\/]vitest[\\/]vitest\.mjs|release-win-launch-gate\.mjs/,
