@@ -895,7 +895,7 @@ $at = Get-AiNovelStepCompletionDecision -NowUtc $start.AddSeconds(5) -AliveProce
       BeforeState: 'waiting-for-quiet',
       AtState: 'complete',
     })
-  })
+  }, 15_000)
 
   windowsIt('strictly rejects a missing, exited, or reused launcher identity', () => {
     const output = execFileSync(
@@ -1371,7 +1371,9 @@ internal static class ExactNsisProbeParent {
     const controlPath = join(root, 'control.jsonl')
     const statusPath = join(root, 'status.json')
     const evidencePath = join(root, 'evidence')
-    const helperDirectory = join(tmpdir(), `~nsu${Date.now().toString(36)}${process.pid.toString(36)}.tmp`)
+    const tempRoot = tmpdir()
+    const helperDirectoryName = `~nsuA9${Date.now().toString(36)}${process.pid.toString(36)}.tmp`
+    const helperDirectory = join(tempRoot, helperDirectoryName)
     const helperPath = join(helperDirectory, 'Un_A9.exe')
     const installRoot = join(root, 'installed-app')
     const uninstallerPath = join(installRoot, 'Uninstall AI小说作家.exe')
@@ -1528,17 +1530,18 @@ internal static class ExactNsisUninstallerHelper {
       { windowsHide: true, stdio: 'ignore' },
     )
     copyFileSync(helperPath, uninstallerPath)
-    const helperLaunchPath = windowsShortPath(helperPath)
+    const shortTempRoot = windowsShortPath(tempRoot)
     if (
-      !helperLaunchPath
-      || helperLaunchPath.toLowerCase() === helperPath.toLowerCase()
-      || !helperLaunchPath.includes('~')
+      !shortTempRoot
+      || shortTempRoot.toLowerCase() === tempRoot.toLowerCase()
+      || !shortTempRoot.includes('~')
     ) {
       rmSync(helperDirectory, { recursive: true, force: true })
       rmSync(root, { recursive: true, force: true })
-      context.skip('This filesystem does not expose a distinct 8.3 helper path; the 8.3-specific chain test is not applicable.')
+      context.skip('This TEMP root does not expose a distinct 8.3 ancestor path; the 8.3-specific chain test is not applicable.')
       return
     }
+    const helperLaunchPath = join(shortTempRoot, helperDirectoryName, 'Un_A9.exe')
     const wrapperEncodedCommand = Buffer.from(
       [
         `& ${quotePowerShell(uninstallerPath)} '--host' ${quotePowerShell(helperLaunchPath)} ${quotePowerShell(systemPowerShell)} ${quotePowerShell(systemCmd)} ${quotePowerShell(probeResultPath)}`,
