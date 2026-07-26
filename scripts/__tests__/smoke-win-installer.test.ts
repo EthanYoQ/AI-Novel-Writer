@@ -1114,6 +1114,93 @@ $abnormal = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured =
     expect(result.MissingParentMetadata).toBe(false)
   })
 
+  windowsIt('accepts only the NSIS System32 to SysWOW64 command-image redirect aliases', () => {
+    const output = runReleaseMonitorLibrary(`
+$system32PowerShell = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+$sysWow64PowerShell = Join-Path $env:SystemRoot 'SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe'
+$system32Cmd = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+$sysWow64Cmd = Join-Path $env:SystemRoot 'SysWOW64\\cmd.exe'
+$system32Find = Join-Path $env:SystemRoot 'System32\\find.exe'
+$sysWow64Find = Join-Path $env:SystemRoot 'SysWOW64\\find.exe'
+$system32Where = Join-Path $env:SystemRoot 'System32\\where.exe'
+$sysWow64Where = Join-Path $env:SystemRoot 'SysWOW64\\where.exe'
+$installerPath = 'C:\\temp\\ai-novel-writer-setup-0.4.0.exe'
+$installer = [pscustomobject]@{
+  processId = 700
+  startTimeTicks = '638900000000000000'
+  executablePath = $installerPath
+  identityCaptured = $true
+}
+$event = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$availabilityCommand = '"' + $system32PowerShell + '" -C "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"'
+$cmdCommand = '"' + $system32Cmd + '" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI小说作家.exe" /FO CSV | "' + $system32Find + '" "AI小说作家.exe"'
+$findCommand = '"' + $system32Find + '"  "AI小说作家.exe"'
+$powerShell = [pscustomobject]@{
+  processId = 701
+  startTimeTicks = '638900000000000100'
+  executablePath = $sysWow64PowerShell
+  commandLine = $availabilityCommand
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = 700
+  parentProcessStartTimeTicks = $installer.startTimeTicks
+  parentExecutablePath = $installerPath
+}
+$cmd = [pscustomobject]@{
+  processId = 702
+  startTimeTicks = '638900000000000200'
+  executablePath = $sysWow64Cmd
+  commandLine = $cmdCommand
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = 700
+  parentProcessStartTimeTicks = $installer.startTimeTicks
+  parentExecutablePath = $installerPath
+}
+$find = [pscustomobject]@{
+  processId = 703
+  startTimeTicks = '638900000000000300'
+  executablePath = $sysWow64Find
+  commandLine = $findCommand
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = $cmd.processId
+  parentProcessStartTimeTicks = $cmd.startTimeTicks
+  parentExecutablePath = $sysWow64Cmd
+}
+$verifiedFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+[void]$verifiedFindParentKeys.Add((Get-AiNovelGateProcessIdentityKey -ProcessIdentity $cmd))
+$wrongFileCommand = $availabilityCommand.Replace($system32PowerShell, $system32Cmd)
+$wrongDirectoryCommand = $availabilityCommand.Replace($system32PowerShell, (Join-Path $env:SystemRoot 'SystemOther\\WindowsPowerShell\\v1.0\\powershell.exe'))
+$sameBasenameElsewhereCommand = $availabilityCommand.Replace($system32PowerShell, 'C:\\temp\\powershell.exe')
+$relativeArgvZeroCommand = 'System32\\WindowsPowerShell\\v1.0\\powershell.exe -C "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"'
+[pscustomobject]@{
+  System32PowerShellArgvZeroSysWow64Actual = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $powerShell -ParentIdentity $installer
+  System32CmdArgvZeroSysWow64Actual = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParentKeys
+  System32FindArgvZeroSysWow64Actual = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $installer
+  WrongFileIsNotAlias = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity ([pscustomobject]@{ processId = 701; startTimeTicks = '638900000000000100'; executablePath = $sysWow64PowerShell; commandLine = $wrongFileCommand; commandLineCaptured = $true; identityCaptured = $true; parentProcessId = 700; parentProcessStartTimeTicks = $installer.startTimeTicks; parentExecutablePath = $installerPath }) -ParentIdentity $installer
+  WrongDirectoryIsNotAlias = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity ([pscustomobject]@{ processId = 701; startTimeTicks = '638900000000000100'; executablePath = $sysWow64PowerShell; commandLine = $wrongDirectoryCommand; commandLineCaptured = $true; identityCaptured = $true; parentProcessId = 700; parentProcessStartTimeTicks = $installer.startTimeTicks; parentExecutablePath = $installerPath }) -ParentIdentity $installer
+  SameBasenameElsewhereIsNotAlias = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity ([pscustomobject]@{ processId = 701; startTimeTicks = '638900000000000100'; executablePath = $sysWow64PowerShell; commandLine = $sameBasenameElsewhereCommand; commandLineCaptured = $true; identityCaptured = $true; parentProcessId = 700; parentProcessStartTimeTicks = $installer.startTimeTicks; parentExecutablePath = $installerPath }) -ParentIdentity $installer
+  RelativeArgvZeroIsNotAlias = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity ([pscustomobject]@{ processId = 701; startTimeTicks = '638900000000000100'; executablePath = $sysWow64PowerShell; commandLine = $relativeArgvZeroCommand; commandLineCaptured = $true; identityCaptured = $true; parentProcessId = 700; parentProcessStartTimeTicks = $installer.startTimeTicks; parentExecutablePath = $installerPath }) -ParentIdentity $installer
+  UnlistedSystemExecutableIsNotAlias = Test-AiNovelGateSameBoundSystemExecutablePath -Left $system32Where -Right $sysWow64Where
+  ExactNonSystemPathStillBinds = (Get-AiNovelGateBoundCommandArguments -CommandLine '"C:\\temp\\custom.exe" --check' -ImagePath 'C:\\temp\\custom.exe') -eq ' --check'
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      System32PowerShellArgvZeroSysWow64Actual: true,
+      System32CmdArgvZeroSysWow64Actual: true,
+      System32FindArgvZeroSysWow64Actual: true,
+      WrongFileIsNotAlias: false,
+      WrongDirectoryIsNotAlias: false,
+      SameBasenameElsewhereIsNotAlias: false,
+      RelativeArgvZeroIsNotAlias: false,
+      UnlistedSystemExecutableIsNotAlias: false,
+      ExactNonSystemPathStillBinds: true,
+    })
+  })
+
   windowsIt('exempts only the exact NSIS cmd and find no-process fallback chain', () => {
     const output = runReleaseMonitorLibrary(`
 $cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'

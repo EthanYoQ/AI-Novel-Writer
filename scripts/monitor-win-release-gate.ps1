@@ -1150,6 +1150,62 @@ function Test-AiNovelGateSameAbsolutePath {
   }
 }
 
+function Test-AiNovelGateSameBoundSystemExecutablePath {
+  param(
+    [AllowEmptyString()][string]$Left,
+    [AllowEmptyString()][string]$Right
+  )
+
+  # The command line must normally bind argv[0] to the exact image path
+  # captured from the process. A 32-bit NSIS stub is the narrow exception:
+  # $SYSDIR can be recorded as System32 while QueryFullProcessImageName sees
+  # the redirected SysWOW64 image. Do not turn this into a basename match.
+  if (Test-AiNovelGateSameAbsolutePath -Left $Left -Right $Right) {
+    return $true
+  }
+  if (
+    [string]::IsNullOrWhiteSpace($Left) -or
+    [string]::IsNullOrWhiteSpace($Right) -or
+    $Left -notmatch '^[A-Za-z]:\\' -or
+    $Right -notmatch '^[A-Za-z]:\\'
+  ) {
+    return $false
+  }
+  try {
+    $systemRoot = [System.Environment]::GetEnvironmentVariable('SystemRoot')
+    if ([string]::IsNullOrWhiteSpace($systemRoot) -or $systemRoot -notmatch '^[A-Za-z]:\\') {
+      return $false
+    }
+    $windowsRoot = [System.IO.Path]::GetFullPath($systemRoot)
+    $leftFullPath = [System.IO.Path]::GetFullPath($Left)
+    $rightFullPath = [System.IO.Path]::GetFullPath($Right)
+    $allowedRelativeExecutablePaths = @(
+      'cmd.exe',
+      'find.exe',
+      'WindowsPowerShell\v1.0\powershell.exe'
+    )
+    foreach ($relativeExecutablePath in $allowedRelativeExecutablePaths) {
+      $system32Path = [System.IO.Path]::GetFullPath((Join-Path $windowsRoot (Join-Path 'System32' $relativeExecutablePath)))
+      $sysWow64Path = [System.IO.Path]::GetFullPath((Join-Path $windowsRoot (Join-Path 'SysWOW64' $relativeExecutablePath)))
+      $isSystem32ToSysWow64 = (
+        [string]::Equals($leftFullPath, $system32Path, [System.StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals($rightFullPath, $sysWow64Path, [System.StringComparison]::OrdinalIgnoreCase)
+      )
+      $isSysWow64ToSystem32 = (
+        [string]::Equals($leftFullPath, $sysWow64Path, [System.StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals($rightFullPath, $system32Path, [System.StringComparison]::OrdinalIgnoreCase)
+      )
+      if ($isSystem32ToSysWow64 -or $isSysWow64ToSystem32) {
+        return $true
+      }
+    }
+    return $false
+  }
+  catch {
+    return $false
+  }
+}
+
 function Get-AiNovelGateBoundCommandArguments {
   param(
     [AllowEmptyString()][string]$CommandLine,
@@ -1180,7 +1236,7 @@ function Get-AiNovelGateBoundCommandArguments {
     $argvZero = $CommandLine.Substring(0, $firstWhitespace.Index)
     $arguments = $CommandLine.Substring($firstWhitespace.Index)
   }
-  if (-not (Test-AiNovelGateSameAbsolutePath -Left $argvZero -Right $ImagePath)) {
+  if (-not (Test-AiNovelGateSameBoundSystemExecutablePath -Left $argvZero -Right $ImagePath)) {
     return $null
   }
   return [string]$arguments
@@ -1240,7 +1296,7 @@ function Test-AiNovelGateKnownNsisCmdProcessCheckCommand {
       return $false
     }
     $findPath = $arguments.Substring($prefix.Length, $findPathLength)
-    return Test-AiNovelGateSameAbsolutePath -Left $findPath -Right $expectedFindPath
+    return Test-AiNovelGateSameBoundSystemExecutablePath -Left $findPath -Right $expectedFindPath
   }
   catch {
     return $false
