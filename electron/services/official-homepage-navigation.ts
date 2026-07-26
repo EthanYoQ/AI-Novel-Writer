@@ -1,4 +1,6 @@
-export const OFFICIAL_HOMEPAGE_URL = 'https://github.com/EthanYoQ/AI-Novel-Writer'
+import { OFFICIAL_HOMEPAGE_URL } from '../../src/shared/official-homepage'
+
+export { OFFICIAL_HOMEPAGE_URL } from '../../src/shared/official-homepage'
 
 type OpenExternal = (url: string) => Promise<void>
 

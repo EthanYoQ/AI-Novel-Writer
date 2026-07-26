@@ -27,6 +27,7 @@ if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
 
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $script:aiNovelPackagedVectorEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-vector-smoke.json" -f [string]$packageJson.version)
+$script:aiNovelPackagedOfficialHomepageEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-official-homepage-smoke.json" -f [string]$packageJson.version)
 $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-installer-smoke-' + [guid]::NewGuid().ToString('N'))
 $installRoot = Join-Path $smokeRoot 'installed-app'
 $velaHome = Join-Path $smokeRoot 'vela-home'
@@ -370,6 +371,88 @@ function Invoke-AiNovelPackagedVectorSmoke {
   }
 }
 
+function Invoke-AiNovelPackagedOfficialHomepageSmoke {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  # The installed executable receives only a fresh one-time token. The
+  # packaged main process substitutes its shell.openExternal dependency, so the
+  # probe cannot launch a browser or depend on network availability.
+  $token = [guid]::NewGuid().ToString('N')
+  $stdoutPath = Join-Path $smokeRoot 'packaged-official-homepage-smoke.stdout'
+  $stderrPath = Join-Path $smokeRoot 'packaged-official-homepage-smoke.stderr'
+  $previousReleaseHomepageSmoke = $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE
+  $previousReleaseHomepageSmokeToken = $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN
+
+  try {
+    $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE = '1'
+    $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN = $token
+    Invoke-AiNovelMonitoredExecutable `
+      -Path $Path `
+      -Arguments @("--ai-novel-release-homepage-smoke=$token") `
+      -Operation 'Packaged official homepage qualification' `
+      -StandardOutputPath $stdoutPath `
+      -StandardErrorPath $stderrPath `
+      -HideWindow
+
+    $resultLine = @(
+      Get-Content -LiteralPath $stdoutPath -ErrorAction Stop |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -Last 1
+    )
+    if ($resultLine.Count -ne 1) {
+      throw 'Packaged official homepage qualification did not produce exactly one JSON evidence line.'
+    }
+    try {
+      $result = $resultLine[0] | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+      throw "Packaged official homepage qualification produced invalid JSON evidence: $($_.Exception.Message)"
+    }
+    $validEvidence = (
+      $result.schemaVersion -eq 1 -and
+      $result.kind -eq 'packaged-official-homepage-smoke' -and
+      $null -ne $result.trustedIntent -and
+      $result.trustedIntent.channel -eq 'official-homepage:open' -and
+      $result.trustedIntent.requestArgumentCount -eq 0 -and
+      $result.trustedIntent.url -eq 'https://github.com/EthanYoQ/AI-Novel-Writer' -and
+      $result.trustedIntent.success -eq $true -and
+      $result.trustedIntent.shellOpenExternalCalls -eq 1 -and
+      $null -ne $result.failedOpenExternal -and
+      $result.failedOpenExternal.success -eq $false -and
+      $result.failedOpenExternal.shellOpenExternalCalls -eq 1 -and
+      $result.failedOpenExternal.controllerError -eq 'Unable to open the official homepage.' -and
+      $result.failedOpenExternal.rendererError.zhCN -eq '无法打开官方主页，请稍后重试。' -and
+      $result.failedOpenExternal.rendererError.enUS -eq 'Unable to open the official homepage. Please try again later.'
+    )
+    if (-not $validEvidence) {
+      throw 'Packaged official homepage qualification returned incomplete or unexpected evidence.'
+    }
+
+    $evidenceDirectory = Split-Path -Parent $script:aiNovelPackagedOfficialHomepageEvidencePath
+    New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
+    $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $script:aiNovelPackagedOfficialHomepageEvidencePath -Encoding utf8
+    Write-Host "Packaged official homepage smoke evidence: $script:aiNovelPackagedOfficialHomepageEvidencePath"
+  }
+  catch {
+    $stderr = if (Test-Path -LiteralPath $stderrPath) {
+      (Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue) -join [Environment]::NewLine
+    }
+    else {
+      ''
+    }
+    if ([string]::IsNullOrWhiteSpace($stderr)) {
+      throw
+    }
+    throw "Packaged official homepage qualification failed: $($_.Exception.Message)$([Environment]::NewLine)$stderr"
+  }
+  finally {
+    $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE = $previousReleaseHomepageSmoke
+    $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN = $previousReleaseHomepageSmokeToken
+    Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Install-Silently {
   param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -464,6 +547,7 @@ try {
     throw "Installed application is missing: $exePath"
   }
   Invoke-AiNovelPackagedVectorSmoke -Path $exePath
+  Invoke-AiNovelPackagedOfficialHomepageSmoke -Path $exePath
   $appSmokeParameters = @{
     ExePath = $exePath
     ObservationSeconds = $ObservationSeconds

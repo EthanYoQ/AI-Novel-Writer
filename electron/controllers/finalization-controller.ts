@@ -4,16 +4,10 @@ import { getCurrentProjectPath } from '../database'
 import { projectAccess } from '../services/project-access'
 import { FinalizationService } from '../services/finalization-service'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import type { FinalizationSnapshot } from '../../src/services/finalization-snapshot'
 
 const finalizationService = new FinalizationService()
-
-function isProjectSessionContext(value: unknown): value is ProjectSessionContext {
-  return !!value && typeof value === 'object'
-    && typeof (value as ProjectSessionContext).projectId === 'string'
-    && typeof (value as ProjectSessionContext).leaseId === 'string'
-    && typeof (value as ProjectSessionContext).projectPath === 'string'
-}
 
 function isFinalizationSnapshot(value: unknown): value is FinalizationSnapshot {
   if (!value || typeof value !== 'object') return false

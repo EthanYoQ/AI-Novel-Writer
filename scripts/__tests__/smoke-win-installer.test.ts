@@ -27,6 +27,21 @@ describe('packaged vector qualification wiring', () => {
     expect(installer).toContain('Assert-NoNewInstallerErrorWindow')
     expect(installer).toContain('RedirectStandardOutput')
   })
+
+  it('runs an offline dual-gated packaged official-homepage probe and preserves its JSON evidence', () => {
+    const installer = readFileSync(installerScript, 'utf8')
+
+    expect(installer).toContain('Invoke-AiNovelPackagedOfficialHomepageSmoke')
+    expect(installer).toContain("$env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE = '1'")
+    expect(installer).toContain('AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN')
+    expect(installer).toContain('--ai-novel-release-homepage-smoke=')
+    expect(installer).toContain('packaged-official-homepage-smoke.json')
+    expect(installer).toContain("$result.kind -eq 'packaged-official-homepage-smoke'")
+    expect(installer).toContain("$result.trustedIntent.url -eq 'https://github.com/EthanYoQ/AI-Novel-Writer'")
+    expect(installer).toContain('$result.trustedIntent.success -eq $true')
+    expect(installer).toContain('$result.failedOpenExternal.success -eq $false')
+    expect(installer).toContain('$result.failedOpenExternal.rendererError.enUS -eq \'Unable to open the official homepage. Please try again later.\'')
+  })
 })
 
 describe('Windows PowerShell smoke script encoding', () => {
