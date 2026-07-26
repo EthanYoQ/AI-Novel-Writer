@@ -1,5 +1,5 @@
-import { execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -55,6 +55,131 @@ async function waitForFile(path: string, timeoutMilliseconds = 3_000): Promise<v
     await new Promise(resolvePromise => setTimeout(resolvePromise, 20))
   }
   throw new Error(`Timed out waiting for file ${path}`)
+}
+
+function releaseGateRoots(tempRoot: string): string[] {
+  if (!existsSync(tempRoot)) return []
+  return readdirSync(tempRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && entry.name.startsWith('ai-novel-release-gate-'))
+    .map(entry => join(tempRoot, entry.name))
+}
+
+function readMonitorProcessId(processMarkerPath: string): number | undefined {
+  if (!existsSync(processMarkerPath)) return undefined
+  const marker = JSON.parse(readFileSync(processMarkerPath, 'utf8')) as {
+    processId?: unknown
+    startedAt?: unknown
+  }
+  if (
+    !Number.isInteger(marker.processId)
+    || Number(marker.processId) <= 0
+    || typeof marker.startedAt !== 'string'
+    || Number.isNaN(Date.parse(marker.startedAt))
+  ) {
+    throw new Error(`Invalid release monitor process marker: ${processMarkerPath}`)
+  }
+  return Number(marker.processId)
+}
+
+function isProcessRunning(processId: number): boolean {
+  try {
+    process.kill(processId, 0)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
+    throw error
+  }
+}
+
+async function waitForMonitorStoppedOrExited(
+  statusPath: string,
+  processId: number,
+  timeoutMilliseconds: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMilliseconds
+  while (Date.now() < deadline) {
+    if (readJsonWhenAvailable(statusPath)?.state === 'stopped' || !isProcessRunning(processId)) {
+      return true
+    }
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 20))
+  }
+  return readJsonWhenAvailable(statusPath)?.state === 'stopped' || !isProcessRunning(processId)
+}
+
+async function forceStopMonitorProcess(
+  processId: number,
+  statusPath: string,
+  timeoutMilliseconds: number,
+): Promise<void> {
+  try {
+    process.kill(processId)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+  }
+  if (await waitForMonitorStoppedOrExited(statusPath, processId, 500)) return
+
+  const taskkill = spawnSync(
+    'taskkill.exe',
+    ['/PID', String(processId), '/T', '/F'],
+    { encoding: 'utf8', windowsHide: true },
+  )
+  if (taskkill.error && isProcessRunning(processId)) throw taskkill.error
+  if (!await waitForMonitorStoppedOrExited(statusPath, processId, timeoutMilliseconds)) {
+    throw new Error(`Release monitor process ${processId} did not stop`)
+  }
+}
+
+async function waitForUnmarkedMonitorTerminalState(
+  statusPath: string,
+  timeoutMilliseconds: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMilliseconds
+  while (Date.now() < deadline) {
+    const state = readJsonWhenAvailable(statusPath)?.state
+    if (state === 'stopped' || state === 'failed') return true
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 20))
+  }
+  const state = readJsonWhenAvailable(statusPath)?.state
+  return state === 'stopped' || state === 'failed'
+}
+
+async function stopUnexpectedReleaseMonitors(releaseRoots: string[]): Promise<string[]> {
+  const unresolvedRoots: string[] = []
+  for (const releaseRoot of releaseRoots) {
+    const controlPath = join(releaseRoot, 'control.jsonl')
+    const statusPath = join(releaseRoot, 'status.json')
+    const processId = readMonitorProcessId(join(releaseRoot, 'monitor-process.json'))
+    const status = readJsonWhenAvailable(statusPath)
+    if (processId === undefined && (status?.state === 'stopped' || status?.state === 'failed')) {
+      continue
+    }
+    if (processId === undefined && !existsSync(controlPath) && !existsSync(statusPath)) continue
+    appendFileSync(
+      controlPath,
+      `${JSON.stringify({ sequence: 2_000_000_000, state: 'stop' })}\n`,
+      'utf8',
+    )
+    if (processId === undefined) {
+      if (!await waitForUnmarkedMonitorTerminalState(statusPath, 500)) {
+        unresolvedRoots.push(releaseRoot)
+      }
+      continue
+    }
+    if (await waitForMonitorStoppedOrExited(statusPath, processId, 5_000)) continue
+    await forceStopMonitorProcess(processId, statusPath, 5_000)
+  }
+  return unresolvedRoots
+}
+
+async function cleanupReleaseFixture(
+  fixtureRoot: string,
+  releaseRoots: string[],
+): Promise<void> {
+  const unresolvedRoots = await stopUnexpectedReleaseMonitors(releaseRoots)
+  if (unresolvedRoots.length > 0) {
+    throw new Error(`Unresolved release monitor roots: ${unresolvedRoots.join(', ')}`)
+  }
+  rmSync(fixtureRoot, { recursive: true, force: true })
 }
 
 async function settle(child: ReturnType<typeof spawn>): Promise<{ code: number | null, signal: NodeJS.Signals | null }> {
@@ -227,6 +352,363 @@ describe('Windows release verification orchestration', () => {
       'await restoreAndVerifyNodeNativeAbi({ monitored: false })',
     )
   })
+
+  windowsIt('stops a marker-only release monitor before status and control initialization', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-monitor-cleanup-'))
+    const controlPath = join(root, 'control.jsonl')
+    const processMarkerPath = join(root, 'monitor-process.json')
+    const readyPath = join(root, 'child-ready')
+    const child = spawn(
+      process.execPath,
+      [
+        '-e',
+        [
+          'const { existsSync, readFileSync, writeFileSync } = require("node:fs")',
+          'const [controlPath, readyPath] = process.argv.slice(1)',
+          'writeFileSync(readyPath, "ready", "utf8")',
+          'const deadline = setTimeout(() => process.exit(12), 10_000)',
+          'const poll = setInterval(() => {',
+          '  if (!existsSync(controlPath)) return',
+          `  if (!readFileSync(controlPath, "utf8").includes('"state":"stop"')) return`,
+          '  clearInterval(poll)',
+          '  clearTimeout(deadline)',
+          '  process.exit(0)',
+          '}, 10)',
+        ].join('\n'),
+        controlPath,
+        readyPath,
+      ],
+      { stdio: 'ignore', windowsHide: true },
+    )
+
+    try {
+      const childProcessId = child.pid
+      expect(Number.isInteger(childProcessId) && Number(childProcessId) > 0).toBe(true)
+      await waitForFile(readyPath)
+      writeFileSync(
+        processMarkerPath,
+        `${JSON.stringify({ processId: childProcessId, startedAt: new Date().toISOString() })}\n`,
+        'utf8',
+      )
+
+      await stopUnexpectedReleaseMonitors([root])
+
+      expect(existsSync(controlPath)).toBe(true)
+      const controlRecords = readFileSync(controlPath, 'utf8')
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(line => JSON.parse(line) as { sequence: number, state: string })
+      expect(controlRecords.at(-1)).toEqual({ sequence: 2_000_000_000, state: 'stop' })
+      expect(await settleWithin(child)).toEqual({ code: 0, signal: null })
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill()
+      await settleWithin(child).catch(() => undefined)
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 10_000)
+
+  it('accepts a failed no-marker monitor root without waiting for a stopped state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-monitor-failed-'))
+    const statusPath = join(root, 'status.json')
+    const controlPath = join(root, 'control.jsonl')
+    writeFileSync(
+      statusPath,
+      `${JSON.stringify({ state: 'failed', failure: 'synthetic terminal failure' })}\n`,
+      'utf8',
+    )
+
+    const startedAt = Date.now()
+    try {
+      await stopUnexpectedReleaseMonitors([root])
+      expect(Date.now() - startedAt).toBeLessThan(500)
+      expect(existsSync(controlPath)).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 7_000)
+
+  it('marks a control-only no-marker root unresolved and preserves its fixture', async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'ai-novel-release-monitor-unresolved-'))
+    const releaseRoot = join(fixtureRoot, 'temp', 'ai-novel-release-gate-control-only')
+    const controlPath = join(releaseRoot, 'control.jsonl')
+    mkdirSync(releaseRoot, { recursive: true })
+    writeFileSync(
+      controlPath,
+      `${JSON.stringify({ sequence: 1, state: 'ready' })}\n`,
+      'utf8',
+    )
+
+    const startedAt = Date.now()
+    try {
+      let cleanupError: Error | undefined
+      try {
+        await cleanupReleaseFixture(fixtureRoot, [releaseRoot])
+      } catch (error) {
+        cleanupError = error as Error
+      }
+      expect(Date.now() - startedAt).toBeLessThan(2_000)
+      expect(cleanupError?.message).toContain('Unresolved release monitor roots')
+      expect(cleanupError?.message).toContain(releaseRoot)
+      expect(existsSync(fixtureRoot)).toBe(true)
+      const controls = readFileSync(controlPath, 'utf8')
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(line => JSON.parse(line) as { sequence: number, state: string })
+      expect(controls.at(-1)).toEqual({ sequence: 2_000_000_000, state: 'stop' })
+    } finally {
+      // The fixture has no process by construction; remove it only after proving
+      // the production-style cleanup path preserved the unresolved control root.
+      rmSync(fixtureRoot, { recursive: true, force: true })
+    }
+  }, 7_000)
+
+  windowsIt('stops after a failed pre-monitor self-test without starting release or finalization work', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-premonitor-failure-'))
+    const isolatedTemp = join(root, 'temp')
+    const fakePnpmCli = join(root, 'fake-pnpm.cjs')
+    const processObserver = join(root, 'observe-node-entrypoints.cjs')
+    const stepMarker = join(root, 'pnpm-steps.txt')
+    const entrypointMarker = join(root, 'node-entrypoints.jsonl')
+    mkdirSync(isolatedTemp)
+    writeFileSync(
+      fakePnpmCli,
+      [
+        'const { appendFileSync } = require("node:fs")',
+        'const [command, step] = process.argv.slice(2)',
+        'appendFileSync(process.env.AI_NOVEL_RELEASE_STEP_MARKER, `${command} ${step}\\n`, "utf8")',
+        'process.exitCode = step === "test:release-monitor-selftest" ? 1 : 0',
+      ].join('\n'),
+      'utf8',
+    )
+    writeFileSync(
+      processObserver,
+      [
+        'const { appendFileSync } = require("node:fs")',
+        'const marker = process.env.AI_NOVEL_RELEASE_ENTRYPOINT_MARKER',
+        'if (marker) appendFileSync(marker, `${JSON.stringify(process.argv.slice(1))}\\n`, "utf8")',
+        'if (process.argv.some(argument => argument.includes("prepare-native-for-node.mjs"))) process.exit(97)',
+      ].join('\n'),
+      'utf8',
+    )
+
+    const startedAt = Date.now()
+    let observedReleaseRoots: string[] = []
+    try {
+      const overriddenEnvironmentKeys = new Set([
+        'npm_execpath',
+        'node_options',
+        'temp',
+        'tmp',
+      ])
+      const isolatedEnvironment = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !overriddenEnvironmentKeys.has(key.toLowerCase())),
+      ) as NodeJS.ProcessEnv
+      const release = spawnSync(process.execPath, [releaseScript], {
+        cwd: process.cwd(),
+        env: {
+          ...isolatedEnvironment,
+          npm_execpath: fakePnpmCli,
+          AI_NOVEL_RELEASE_STEP_MARKER: stepMarker,
+          AI_NOVEL_RELEASE_ENTRYPOINT_MARKER: entrypointMarker,
+          NODE_OPTIONS: `--require=${processObserver}`,
+          TEMP: isolatedTemp,
+          TMP: isolatedTemp,
+        },
+        windowsHide: true,
+        stdio: 'ignore',
+        timeout: 5_000,
+      })
+
+      expect(release.error, release.error?.message).toBeUndefined()
+      expect(release.status).toBe(1)
+      expect(release.signal).toBeNull()
+      expect(Date.now() - startedAt).toBeLessThan(5_000)
+
+      observedReleaseRoots = releaseGateRoots(isolatedTemp)
+      expect(observedReleaseRoots).toHaveLength(1)
+      const releaseRoot = observedReleaseRoots[0]!
+      const evidencePath = join(releaseRoot, 'evidence')
+      const orchestratorFailuresPath = join(evidencePath, 'orchestrator-failures.jsonl')
+      expect(existsSync(orchestratorFailuresPath)).toBe(true)
+      const orchestratorFailures = readFileSync(orchestratorFailuresPath, 'utf8')
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(line => JSON.parse(line) as {
+          phase: string
+          error: string
+          monitorStatus: unknown
+        })
+      expect(orchestratorFailures).toHaveLength(1)
+      expect(orchestratorFailures[0]).toMatchObject({
+        phase: 'release-steps',
+        monitorStatus: null,
+        error: expect.stringContaining('code 1'),
+      })
+      expect(existsSync(join(releaseRoot, 'monitor-process.json'))).toBe(false)
+      expect(existsSync(join(releaseRoot, 'status.json'))).toBe(false)
+      expect(existsSync(join(releaseRoot, 'control.jsonl'))).toBe(false)
+      expect(existsSync(join(evidencePath, 'monitor-status.json'))).toBe(false)
+      expect(existsSync(join(evidencePath, 'monitor-control-log.jsonl'))).toBe(false)
+
+      const steps = readFileSync(stepMarker, 'utf8').trim().split(/\r?\n/).filter(Boolean)
+      expect(steps).toEqual(['run test:release-monitor-selftest'])
+      expect(steps.join('\n')).not.toMatch(
+        /prepare:native-node|test:release-workload|build:win:artifacts|restore:native-node|verify:native-node/,
+      )
+
+      const entrypoints = readFileSync(entrypointMarker, 'utf8')
+      expect(entrypoints).not.toContain('prepare-native-for-node.mjs')
+      expect(entrypoints).not.toContain('node_modules/vitest/vitest.mjs')
+      expect(entrypoints).not.toContain('release-win-launch-gate.mjs')
+    } finally {
+      const releaseRoots = [...new Set([
+        ...observedReleaseRoots,
+        ...releaseGateRoots(isolatedTemp),
+      ])]
+      await cleanupReleaseFixture(root, releaseRoots)
+    }
+  }, 10_000)
+
+  windowsIt('stops after monitor marker rename failure without running release finalization', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-marker-failure-'))
+    const isolatedTemp = join(root, 'temp')
+    const fakePnpmCli = join(root, 'fake-pnpm.cjs')
+    const fileSystemPreload = join(root, 'fail-monitor-marker-rename.cjs')
+    const stepMarker = join(root, 'pnpm-steps.txt')
+    const entrypointMarker = join(root, 'node-entrypoints.jsonl')
+    const monitorCapture = join(root, 'monitor-process-capture.json')
+    mkdirSync(isolatedTemp)
+    writeFileSync(
+      fakePnpmCli,
+      [
+        'const { appendFileSync } = require("node:fs")',
+        'const [command, step] = process.argv.slice(2)',
+        'appendFileSync(process.env.AI_NOVEL_RELEASE_STEP_MARKER, `${command} ${step}\\n`, "utf8")',
+        'process.exitCode = step === "test:release-monitor-selftest" ? 0 : 98',
+      ].join('\n'),
+      'utf8',
+    )
+    writeFileSync(
+      fileSystemPreload,
+      [
+        'const fs = require("node:fs")',
+        'const path = require("node:path")',
+        'const { syncBuiltinESMExports } = require("node:module")',
+        'const originalRenameSync = fs.renameSync.bind(fs)',
+        'fs.renameSync = (source, destination) => {',
+        '  const target = String(destination)',
+        '  if (path.basename(target).toLowerCase() === "monitor-process.json" && target.includes("ai-novel-release-gate-")) {',
+        '    const marker = JSON.parse(fs.readFileSync(source, "utf8"))',
+        '    fs.writeFileSync(process.env.AI_NOVEL_RELEASE_MONITOR_CAPTURE, `${JSON.stringify(marker)}\\n`, "utf8")',
+        '    const error = new Error("synthetic monitor marker rename failure")',
+        '    error.code = "EACCES"',
+        '    throw error',
+        '  }',
+        '  return originalRenameSync(source, destination)',
+        '}',
+        'syncBuiltinESMExports()',
+        'const entrypointMarker = process.env.AI_NOVEL_RELEASE_ENTRYPOINT_MARKER',
+        'if (entrypointMarker) fs.appendFileSync(entrypointMarker, `${JSON.stringify(process.argv.slice(1))}\\n`, "utf8")',
+        'if (process.argv.some(argument => argument.includes("prepare-native-for-node.mjs"))) process.exit(97)',
+      ].join('\n'),
+      'utf8',
+    )
+
+    const startedAt = Date.now()
+    let observedReleaseRoots: string[] = []
+    let monitorProcessId: number | undefined
+    let cleanupFailure: unknown
+    try {
+      const overriddenEnvironmentKeys = new Set([
+        'npm_execpath',
+        'node_options',
+        'temp',
+        'tmp',
+      ])
+      const isolatedEnvironment = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !overriddenEnvironmentKeys.has(key.toLowerCase())),
+      ) as NodeJS.ProcessEnv
+      const release = spawnSync(process.execPath, [releaseScript], {
+        cwd: process.cwd(),
+        env: {
+          ...isolatedEnvironment,
+          npm_execpath: fakePnpmCli,
+          AI_NOVEL_RELEASE_STEP_MARKER: stepMarker,
+          AI_NOVEL_RELEASE_ENTRYPOINT_MARKER: entrypointMarker,
+          AI_NOVEL_RELEASE_MONITOR_CAPTURE: monitorCapture,
+          NODE_OPTIONS: `--require=${fileSystemPreload}`,
+          TEMP: isolatedTemp,
+          TMP: isolatedTemp,
+        },
+        windowsHide: true,
+        stdio: 'ignore',
+        timeout: 5_000,
+      })
+
+      expect(release.error, release.error?.message).toBeUndefined()
+      expect(release.status).toBe(1)
+      expect(release.signal).toBeNull()
+      expect(Date.now() - startedAt).toBeLessThan(5_000)
+
+      observedReleaseRoots = releaseGateRoots(isolatedTemp)
+      expect(observedReleaseRoots).toHaveLength(1)
+      const releaseRoot = observedReleaseRoots[0]!
+      expect(existsSync(monitorCapture)).toBe(true)
+      const capturedMonitor = JSON.parse(readFileSync(monitorCapture, 'utf8')) as {
+        processId: number
+        startedAt: string
+      }
+      monitorProcessId = capturedMonitor.processId
+      expect(Number.isInteger(monitorProcessId) && monitorProcessId > 0).toBe(true)
+      expect(isProcessRunning(monitorProcessId)).toBe(false)
+      expect(existsSync(join(releaseRoot, 'monitor-process.json'))).toBe(false)
+      expect(
+        readdirSync(releaseRoot).filter(name => name.startsWith('monitor-process.json.') && name.endsWith('.tmp')),
+      ).toEqual([])
+
+      const failures = readFileSync(
+        join(releaseRoot, 'evidence', 'orchestrator-failures.jsonl'),
+        'utf8',
+      )
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(line => JSON.parse(line) as { phase: string, error: string })
+      expect(failures).toHaveLength(1)
+      expect(failures[0]).toMatchObject({
+        phase: 'release-steps',
+        error: 'synthetic monitor marker rename failure',
+      })
+
+      const steps = readFileSync(stepMarker, 'utf8').trim().split(/\r?\n/).filter(Boolean)
+      expect(steps).toEqual(['run test:release-monitor-selftest'])
+      const entrypoints = readFileSync(entrypointMarker, 'utf8')
+      expect(entrypoints).not.toMatch(
+        /prepare-native-for-node\.mjs|node_modules[\\/]vitest[\\/]vitest\.mjs|release-win-launch-gate\.mjs/,
+      )
+    } finally {
+      if (monitorProcessId === undefined && existsSync(monitorCapture)) {
+        monitorProcessId = (JSON.parse(readFileSync(monitorCapture, 'utf8')) as { processId: number }).processId
+      }
+      const releaseRoots = [...new Set([
+        ...observedReleaseRoots,
+        ...releaseGateRoots(isolatedTemp),
+      ])]
+      try {
+        await cleanupReleaseFixture(root, releaseRoots)
+      } catch (cleanupError) {
+        if (monitorProcessId !== undefined && !isProcessRunning(monitorProcessId)) {
+          rmSync(root, { recursive: true, force: true })
+        } else {
+          cleanupFailure = cleanupError
+        }
+      }
+    }
+    if (cleanupFailure) throw cleanupFailure
+  }, 10_000)
 
   it('preserves orchestrator and monitor evidence on every finalization failure path', () => {
     const script = readFileSync(releaseScript, 'utf8')
