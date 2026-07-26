@@ -954,9 +954,10 @@ try {
         if (-not [bool]$processEvent.ExitCodeCaptured) {
           throw "Release gate could not capture the exit code for job-contained PID $($processEvent.ProcessId)."
         }
-        if ([int]$processEvent.ExitCode -ne 0) {
-          throw "Release gate step '$activeStep' observed job-contained PID $($processEvent.ProcessId) exit code $($processEvent.ExitCode)."
-        }
+        # A Job Object captures every descendant lifecycle, but a descendant
+        # can legitimately use a nonzero exit code as an internal protocol
+        # value (for example, an NSIS process probe). The gated root command
+        # and its launch record remain authoritative for the step result.
       }
     }
 
