@@ -159,7 +159,7 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
       .rejects.toThrow('SECURE_FS_REPARSE_POINT')
     expect(fs.existsSync(path.join(outsideRoot, 'new-folder'))).toBe(false)
     expect(fs.existsSync(path.join(outsideRoot, 'result.txt'))).toBe(false)
-  })
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
 
   it('keeps ordinary non-reparse reads, recursive mkdir, atomic writes, and enumeration working', async () => {
     const fixture = fixtureRoot()

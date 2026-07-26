@@ -223,7 +223,12 @@ async function stopGateMonitor(controlPath: string, monitor: ReturnType<typeof s
   }
 }
 
-async function startArmedCommand(root: string, targetSource: string, environment: NodeJS.ProcessEnv = {}): Promise<{
+async function startArmedExecutable(
+  root: string,
+  targetExecutable: string,
+  targetArguments: string[],
+  environment: NodeJS.ProcessEnv = {},
+): Promise<{
   armedPath: string
   releasePath: string
   resultPath: string
@@ -240,14 +245,17 @@ async function startArmedCommand(root: string, targetSource: string, environment
       '--release-path', releasePath,
       '--result-path', resultPath,
       '--',
-      process.execPath,
-      '-e',
-      targetSource,
+      targetExecutable,
+      ...targetArguments,
     ],
     { windowsHide: true, stdio: 'ignore', env: { ...process.env, ...environment } },
   )
   await waitForFile(armedPath)
   return { armedPath, releasePath, resultPath, child }
+}
+
+async function startArmedCommand(root: string, targetSource: string, environment: NodeJS.ProcessEnv = {}) {
+  return await startArmedExecutable(root, process.execPath, ['-e', targetSource], environment)
 }
 
 async function runShortLivedDescendantFaultScenario(): Promise<Record<string, unknown>> {
@@ -865,7 +873,7 @@ $missing = Initialize-AiNovelGateRootIdentity -RootProcessId 2147483646 -RootPro
       Missing: false,
     })
     expect(Number(result.Stored)).toBeGreaterThan(0)
-  })
+  }, 15_000)
 
   windowsIt('keeps cross-process window events on the dedicated WinEventHook message loop', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-window-event-'))
@@ -942,10 +950,332 @@ finally {
       }),
       expect.objectContaining({
         kind: 'process-tree',
-        reason: 'monitor-failure',
+        reason: 'deferred-process-failure',
       }),
     ]))
   }, 60_000)
+
+  windowsIt('preserves an armed launch result before failing closed for a nonzero PowerShell descendant', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-preserve-result-'))
+    const controlPath = join(root, 'control.jsonl')
+    const statusPath = join(root, 'status.json')
+    const evidencePath = join(root, 'evidence')
+    const monitor = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        releaseMonitorScript,
+        '-ControlPath',
+        controlPath,
+        '-StatusPath',
+        statusPath,
+        '-EvidencePath',
+        evidencePath,
+      ],
+      { windowsHide: true, stdio: 'ignore' },
+    )
+    let gate: Awaited<ReturnType<typeof startArmedCommand>> | undefined
+
+    try {
+      await waitForGateStatus(statusPath, 'ready')
+      gate = await startArmedCommand(
+        root,
+        "const { spawnSync } = require('node:child_process'); const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', 'Start-Sleep -Seconds 1; exit 37'], { stdio: 'ignore' }); process.exit(result.status ?? 1)",
+      )
+      if (gate.child.pid == null) throw new Error('The armed gate did not expose a PID')
+      appendFileSync(
+        controlPath,
+        `${JSON.stringify({
+          sequence: 1,
+          state: 'running',
+          step: 'preserve-launch-result-after-powershell-failure',
+          rootProcessId: gate.child.pid,
+          rootProcessStartTimeTicks: windowsProcessStartTimeTicks(gate.child.pid),
+          relatedTargetNames: ['node', 'powershell'],
+        })}\n`,
+        'utf8',
+      )
+      await waitForGateStatus(statusPath, 'monitoring')
+      writeFileSync(gate.releasePath, 'release', 'utf8')
+
+      expect(await settleWithin(gate.child, 15_000)).toEqual({ code: 37, signal: null })
+      expect(readJsonWhenAvailable(gate.resultPath)).toMatchObject({
+        state: 'completed',
+        targetExitCode: 37,
+        targetSignal: null,
+      })
+
+      appendFileSync(
+        controlPath,
+        `${JSON.stringify({
+          sequence: 2,
+          state: 'step-complete',
+          step: 'preserve-launch-result-after-powershell-failure',
+        })}\n`,
+        'utf8',
+      )
+      const failed = await waitForGateStatus(statusPath, 'failed', 15_000)
+      const events = readFileSync(join(evidencePath, 'process-events.jsonl'), 'utf8')
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+      const powerShellFailure = events.find(event => {
+        const identity = event.processIdentity as Record<string, unknown> | null
+        return event.kind === 'process-exit'
+          && event.exitCode === 37
+          && identity?.processName === 'powershell'
+      })
+
+      expect(failed.failure).toContain('nonzero exit code 37')
+      expect(readFileSync(join(evidencePath, 'process-events.jsonl'), 'utf8')).not.toContain('exit 37')
+      expect(powerShellFailure).toEqual(expect.objectContaining({
+        step: 'preserve-launch-result-after-powershell-failure',
+        processIdentity: expect.objectContaining({
+          identityCaptured: true,
+          commandLineCaptured: true,
+          commandLineRedacted: true,
+        }),
+      }))
+      expect((powerShellFailure?.processIdentity as Record<string, unknown>)).not.toHaveProperty('commandLine')
+    } finally {
+      if (gate) {
+        gate.child.kill()
+        await settleWithin(gate.child).catch(() => undefined)
+      }
+      await stopGateMonitor(controlPath, monitor)
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 45_000)
+
+  windowsIt('accepts the three exact electron-builder probes from one captured installer instance', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-nsis-probes-'))
+    const controlPath = join(root, 'control.jsonl')
+    const statusPath = join(root, 'status.json')
+    const evidencePath = join(root, 'evidence')
+    const sourcePath = join(root, 'ExactNsisProbeParent.cs')
+    const installerPath = join(root, 'ai-novel-writer-setup-0.4.0.exe')
+    const probeResultPath = join(root, 'probe-results.txt')
+    const systemPowerShell = join(
+      process.env.SystemRoot ?? 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    )
+    writeFileSync(sourcePath, String.raw`
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+
+internal static class ExactNsisProbeParent {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  private struct StartupInfo {
+    public int cb;
+    public string lpReserved;
+    public string lpDesktop;
+    public string lpTitle;
+    public int dwX;
+    public int dwY;
+    public int dwXSize;
+    public int dwYSize;
+    public int dwXCountChars;
+    public int dwYCountChars;
+    public int dwFillAttribute;
+    public int dwFlags;
+    public short wShowWindow;
+    public short cbReserved2;
+    public IntPtr lpReserved2;
+    public IntPtr hStdInput;
+    public IntPtr hStdOutput;
+    public IntPtr hStdError;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct ProcessInformation {
+    public IntPtr hProcess;
+    public IntPtr hThread;
+    public uint dwProcessId;
+    public uint dwThreadId;
+  }
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool CreateProcess(
+    string applicationName,
+    StringBuilder commandLine,
+    IntPtr processAttributes,
+    IntPtr threadAttributes,
+    bool inheritHandles,
+    uint creationFlags,
+    IntPtr environment,
+    string currentDirectory,
+    ref StartupInfo startupInfo,
+    out ProcessInformation processInformation
+  );
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool CloseHandle(IntPtr handle);
+
+  private static int RunProbe(string powerShellPath, string payload) {
+    StartupInfo startupInfo = new StartupInfo();
+    startupInfo.cb = Marshal.SizeOf(startupInfo);
+    ProcessInformation processInformation;
+    StringBuilder commandLine = new StringBuilder(
+      "\"" + powerShellPath + "\" -C \"" + payload + "\""
+    );
+    if (!CreateProcess(
+      powerShellPath,
+      commandLine,
+      IntPtr.Zero,
+      IntPtr.Zero,
+      false,
+      0x08000000,
+      IntPtr.Zero,
+      null,
+      ref startupInfo,
+      out processInformation
+    )) return -Marshal.GetLastWin32Error();
+    try {
+      if (WaitForSingleObject(processInformation.hProcess, 30000) != 0) return -9001;
+      uint exitCode;
+      if (!GetExitCodeProcess(processInformation.hProcess, out exitCode)) return -Marshal.GetLastWin32Error();
+      return unchecked((int)exitCode);
+    }
+    finally {
+      CloseHandle(processInformation.hThread);
+      CloseHandle(processInformation.hProcess);
+    }
+  }
+
+  public static int Main(string[] args) {
+    string[] payloads = new[] {
+      "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }",
+      "if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }",
+      "if ((Get-CimInstance -ClassName Win32_Process | ? {$_.Path -and $_.Path.StartsWith('C:\\ai-novel-release-probe-empty', 'CurrentCultureIgnoreCase')}).Count -gt 0) { exit 0 } else { exit 1 }"
+    };
+    int[] results = new int[payloads.Length];
+    for (int index = 0; index < payloads.Length; index++) {
+      results[index] = RunProbe(args[0], payloads[index]);
+    }
+    File.WriteAllText(args[1], String.Join(",", results));
+    return 0;
+  }
+}
+`, 'utf8')
+    execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `Add-Type -Path ${quotePowerShell(sourcePath)} -OutputAssembly ${quotePowerShell(installerPath)} -OutputType ConsoleApplication`,
+      ],
+      { windowsHide: true, stdio: 'ignore' },
+    )
+    const monitor = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        releaseMonitorScript,
+        '-ControlPath',
+        controlPath,
+        '-StatusPath',
+        statusPath,
+        '-EvidencePath',
+        evidencePath,
+      ],
+      { windowsHide: true, stdio: 'ignore' },
+    )
+    let gate: Awaited<ReturnType<typeof startArmedExecutable>> | undefined
+
+    try {
+      await waitForGateStatus(statusPath, 'ready')
+      gate = await startArmedExecutable(root, installerPath, [systemPowerShell, probeResultPath])
+      if (gate.child.pid == null) throw new Error('The armed gate did not expose a PID')
+      appendFileSync(
+        controlPath,
+        `${JSON.stringify({
+          sequence: 1,
+          state: 'running',
+          step: 'smoke:win-installer',
+          rootProcessId: gate.child.pid,
+          rootProcessStartTimeTicks: windowsProcessStartTimeTicks(gate.child.pid),
+          relatedTargetNames: ['ai-novel-writer-setup-0.4.0', 'powershell'],
+        })}\n`,
+        'utf8',
+      )
+      await waitForGateStatus(statusPath, 'monitoring')
+      writeFileSync(gate.releasePath, 'release', 'utf8')
+      expect(await settleWithin(gate.child, 30_000)).toEqual({ code: 0, signal: null })
+      const probeResults = readFileSync(probeResultPath, 'utf8').split(',').map(Number)
+      expect(probeResults).toHaveLength(3)
+      expect(probeResults.every(exitCode => exitCode === 0 || exitCode === 1)).toBe(true)
+      expect(probeResults.at(-1)).toBe(1)
+
+      appendFileSync(
+        controlPath,
+        `${JSON.stringify({ sequence: 2, state: 'step-complete', step: 'smoke:win-installer' })}\n`,
+        'utf8',
+      )
+      await waitForGateStatus(statusPath, 'step-completed', 30_000)
+      const rawEvidence = readFileSync(join(evidencePath, 'process-events.jsonl'), 'utf8')
+      const events = rawEvidence.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
+      const powerShellExits = events.filter(event => {
+        const identity = event.processIdentity as Record<string, unknown> | undefined
+        return event.kind === 'process-exit' && identity?.processName === 'powershell'
+      })
+
+      expect(powerShellExits).toHaveLength(3)
+      expect(powerShellExits.map(event => event.exitClassification)).toEqual(
+        probeResults.map(exitCode => exitCode === 0 ? 'succeeded' : 'expected-nsis-powershell-probe'),
+      )
+      for (const event of powerShellExits) {
+        const identity = event.processIdentity as Record<string, unknown>
+        expect(identity).toMatchObject({
+          parentExecutablePath: installerPath,
+          commandLineCaptured: true,
+          commandLineRedacted: true,
+        })
+        expect(identity.parentProcessStartTimeTicks).toEqual(expect.any(String))
+        expect(identity).not.toHaveProperty('commandLine')
+      }
+      expect(rawEvidence).not.toContain('Get-CimInstance')
+    } finally {
+      if (gate) {
+        gate.child.kill()
+        await settleWithin(gate.child).catch(() => undefined)
+      }
+      await stopGateMonitor(controlPath, monitor)
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it('persists a minimal capture-failure event before failing closed', () => {
+    const monitor = readFileSync(releaseMonitorScript, 'utf8')
+    const captureGuard = monitor.indexOf('if (-not [bool]$processEvent.CaptureEstablished)')
+    const evidenceWrite = monitor.indexOf('Write-AiNovelGateProcessEventEvidence', captureGuard)
+    const captureClassification = monitor.indexOf("-ExitClassification 'capture-failure'", captureGuard)
+    const failClosed = monitor.indexOf('throw "Release gate could not retain a process handle', captureGuard)
+
+    expect(captureGuard).toBeGreaterThanOrEqual(0)
+    expect(evidenceWrite).toBeGreaterThan(captureGuard)
+    expect(captureClassification).toBeGreaterThan(evidenceWrite)
+    expect(failClosed).toBeGreaterThan(captureClassification)
+  })
 
   windowsIt('keeps a real command dormant when the monitor acknowledgement fails', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-no-ack-'))
