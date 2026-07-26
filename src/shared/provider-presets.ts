@@ -41,6 +41,14 @@ export const BUILTIN_PRESETS: ProviderPreset[] = [
     embeddingModels: ['text-embedding-3-small', 'text-embedding-3-large', 'text-embedding-ada-002'],
   },
   {
+    provider: 'novelai',
+    displayName: 'NovelAI',
+    baseUrl: 'https://text.novelai.net/oa',
+    protocol: 'openai',
+    models: [],
+    embeddingModels: [],
+  },
+  {
     provider: 'deepseek',
     displayName: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com',
@@ -82,7 +90,7 @@ export const BUILTIN_PRESETS: ProviderPreset[] = [
   {
     provider: 'ollama',
     displayName: 'Ollama（本地）',
-    baseUrl: 'http://localhost:11434',
+    baseUrl: 'http://localhost:11434/v1',
     protocol: 'openai',
     models: [
       { name: 'qwen3-14b-abliterated-novel-q4', maxTokens: 8192 },

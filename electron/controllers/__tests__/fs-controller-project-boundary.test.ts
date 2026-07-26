@@ -225,6 +225,23 @@ describe('project-scoped filesystem boundary', () => {
     )).rejects.toThrow()
   })
 
+  it('returns actionable guidance for a missing project file without creating it or exposing its path', async () => {
+    const missingPath = path.join(projectAPath, '02_architecture', '世界观.md')
+
+    const result = await handler('fs:read-file')(
+      {},
+      missingPath,
+      projectAPath,
+    )
+
+    expect(result).toMatchObject({ success: false, content: '' })
+    const error = (result as { error?: string }).error ?? ''
+    expect(error).toContain('read_architecture')
+    expect(error).toMatch(/项目文件不存在|does not exist/)
+    expect(error).not.toContain(missingPath)
+    expect(fs.existsSync(missingPath)).toBe(false)
+  })
+
   it('rejects a delayed same-path read when the project is reopened with a new lease', async () => {
     const target = path.join(projectAPath, 'chapter.md')
     fs.writeFileSync(target, 'old content', 'utf8')

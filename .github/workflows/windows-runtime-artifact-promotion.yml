@@ -1,0 +1,151 @@
+name: Promote runtime-verified Windows artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      qualification_run_id:
+        description: Successful Windows cloud package qualification run ID
+        required: true
+        type: string
+      expected_sha:
+        description: Full commit SHA qualified by that run
+        required: true
+        type: string
+      tag:
+        description: New final release tag (for example v0.4.0)
+        required: true
+        type: string
+      confirmation:
+        description: Type PROMOTE_RUNTIME_VERIFIED_WINDOWS_RELEASE exactly
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: windows-runtime-artifact-release-promotion
+  cancel-in-progress: false
+
+jobs:
+  verify-runtime-artifact:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.plan.outputs.artifact_id }}
+    steps:
+      - name: Require dispatch from the default branch
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo "Promotion workflow must be dispatched from the default branch." >&2
+            exit 1
+          fi
+
+      - name: Check out trusted promotion code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: promotion-source
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.1
+
+      - name: Verify qualification run and select its immutable artifact
+        id: plan
+        working-directory: promotion-source
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PROMOTION_CONFIRMATION: ${{ inputs.confirmation }}
+        run: >-
+          node scripts/promote-windows-runtime-artifact.mjs plan
+          --repository "$GITHUB_REPOSITORY"
+          --qualification-run-id "$QUALIFICATION_RUN_ID"
+          --expected-sha "$EXPECTED_SHA"
+          --tag "$RELEASE_TAG"
+          --confirmation "$PROMOTION_CONFIRMATION"
+          --output ../qualification-source-plan.json
+
+      - name: Check out the qualified commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: qualified-source
+          persist-credentials: false
+
+      - name: Download the selected cross-run artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ steps.plan.outputs.artifact_id }}
+          path: qualification-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.qualification_run_id }}
+
+      - name: Verify runtime manifest, evidence, and every artifact byte
+        working-directory: promotion-source
+        run: >-
+          node scripts/promote-windows-runtime-artifact.mjs verify
+          --artifact-root ../qualification-artifact
+          --qualified-source ../qualified-source
+          --plan ../qualification-source-plan.json
+          --output ../promotion-ready
+
+      - name: Preserve only the verified promotion package for this run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-release-promotion-ready-${{ github.run_id }}
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+          path: promotion-ready/
+
+  publish-final-release:
+    needs: verify-runtime-artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      release_url: ${{ steps.publish.outputs.release_url }}
+    steps:
+      - name: Check out trusted promotion code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: promotion-source
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.1
+
+      - name: Download this run's verified promotion package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: windows-release-promotion-ready-${{ github.run_id }}
+          path: promotion-ready
+
+      - name: Create draft, verify remote assets, then publish final Release
+        id: publish
+        working-directory: promotion-source
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: >-
+          node scripts/promote-windows-runtime-artifact.mjs publish
+          --ready-root ../promotion-ready
+          --repository "$GITHUB_REPOSITORY"
+          --tag "$RELEASE_TAG"

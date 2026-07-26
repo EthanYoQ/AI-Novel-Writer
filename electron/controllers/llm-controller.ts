@@ -7,7 +7,7 @@ import {
   GLOBAL_CONFIG_PATH,
   DEFAULT_GLOBAL_CONFIG,
 } from '../utils/config-utils'
-import { ModelProfile, GlobalConfig } from '../../src/shared/ipc-channels'
+import type { LLMFinishReason, ModelProfile, GlobalConfig, TokenUsage } from '../../src/shared/ipc-channels'
 import { LLMFactory } from '../llm/llm-factory'
 
 const activeStreams = new Map<string, AbortController>()
@@ -83,8 +83,8 @@ export function registerLLMController() {
       thinking: request.thinking,
       signal: abortController.signal,
       onChunk: (chunk: string) => win?.webContents.send('llm:stream-chunk', { requestId, chunk }),
-      onDone: (fullText: string, usage?: { promptTokens: number; completionTokens: number; totalTokens: number }) => {
-        win?.webContents.send('llm:stream-done', { requestId, fullText, usage })
+      onDone: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => {
+        win?.webContents.send('llm:stream-done', { requestId, fullText, usage, finishReason })
         activeStreams.delete(requestId)
       },
       onError: (error: string) => {

@@ -77,6 +77,35 @@ function Get-AiNovelFileSha256 {
   }
 }
 
+function Get-AiNovelUtf8NonEmptyLines {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return @()
+  }
+
+  # Windows PowerShell 5.1 treats UTF-8 without a BOM as the active ANSI code
+  # page when Get-Content has no explicit encoding. Electron writes UTF-8 JSON
+  # without a BOM, so decode its bytes ourselves and explicitly strip an
+  # optional UTF-8 BOM before ConvertFrom-Json sees the evidence.
+  [byte[]]$bytes = [System.IO.File]::ReadAllBytes($Path)
+  $offset = if (
+    $bytes.Length -ge 3 -and
+    $bytes[0] -eq 0xEF -and
+    $bytes[1] -eq 0xBB -and
+    $bytes[2] -eq 0xBF
+  ) { 3 } else { 0 }
+  try {
+    $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    $text = $utf8.GetString($bytes, $offset, $bytes.Length - $offset)
+  }
+  catch {
+    throw "Could not decode UTF-8 smoke evidence at ${Path}: $($_.Exception.Message)"
+  }
+
+  return @($text -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
 function Invoke-AiNovelUpgradeDataFixture {
   param(
     [Parameter(Mandatory = $true)][ValidateSet('seed', 'validate')][string]$Mode,
@@ -112,8 +141,8 @@ function Invoke-AiNovelUpgradeDataFixture {
       -WindowStyle Hidden `
       -Wait `
       -PassThru
-    $output = if (Test-Path -LiteralPath $stdoutPath) { @(Get-Content -LiteralPath $stdoutPath) } else { @() }
-    $errorOutput = if (Test-Path -LiteralPath $stderrPath) { @(Get-Content -LiteralPath $stderrPath) } else { @() }
+    $output = Get-AiNovelUtf8NonEmptyLines -Path $stdoutPath
+    $errorOutput = Get-AiNovelUtf8NonEmptyLines -Path $stderrPath
     if ($process.ExitCode -ne 0) {
       throw "Upgrade data fixture $Mode failed with code $($process.ExitCode): $($errorOutput -join [Environment]::NewLine)"
     }
@@ -239,7 +268,16 @@ function Invoke-AiNovelMonitoredExecutable {
   try {
     while ($true) {
       $process.Refresh()
-      Add-AiNovelTrackedProcessTree -RootProcessId $process.Id -ProcessIds $operationProcessIds -StartTimeTicks $operationProcessStartTimeTicks
+      if ($process.HasExited) {
+        Add-AiNovelTrackedProcessTree `
+          -RootProcessId $process.Id `
+          -ProcessIds $operationProcessIds `
+          -StartTimeTicks $operationProcessStartTimeTicks `
+          -RequireSuccessfulTerminalRefresh
+      }
+      else {
+        Add-AiNovelTrackedProcessTree -RootProcessId $process.Id -ProcessIds $operationProcessIds -StartTimeTicks $operationProcessStartTimeTicks
+      }
       foreach ($processId in $operationProcessIds) {
         if (Test-AiNovelTrackedProcessAlive -ProcessId $processId -StartTimeTicks $operationProcessStartTimeTicks) {
           [void]$script:observedProcessIds.Add([int]$processId)
@@ -310,6 +348,7 @@ function Invoke-AiNovelPackagedVectorSmoke {
   $stderrPath = Join-Path $smokeRoot 'packaged-vector-smoke.stderr'
   $previousReleaseSmoke = $env:AI_NOVEL_RELEASE_SMOKE
   $previousReleaseSmokeToken = $env:AI_NOVEL_RELEASE_SMOKE_TOKEN
+  $evidenceSucceeded = $false
 
   try {
     $env:AI_NOVEL_RELEASE_SMOKE = '1'
@@ -322,11 +361,7 @@ function Invoke-AiNovelPackagedVectorSmoke {
       -StandardErrorPath $stderrPath `
       -HideWindow
 
-    $resultLine = @(
-      Get-Content -LiteralPath $stdoutPath -ErrorAction Stop |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Select-Object -Last 1
-    )
+    $resultLine = @(Get-AiNovelUtf8NonEmptyLines -Path $stdoutPath | Select-Object -Last 1)
     if ($resultLine.Count -ne 1) {
       throw 'Packaged vector qualification did not produce exactly one JSON evidence line.'
     }
@@ -361,10 +396,11 @@ function Invoke-AiNovelPackagedVectorSmoke {
     New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
     $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $script:aiNovelPackagedVectorEvidencePath -Encoding utf8
     Write-Host "Packaged vector smoke evidence: $script:aiNovelPackagedVectorEvidencePath"
+    $evidenceSucceeded = $true
   }
   catch {
     $stderr = if (Test-Path -LiteralPath $stderrPath) {
-      (Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue) -join [Environment]::NewLine
+      (Get-AiNovelUtf8NonEmptyLines -Path $stderrPath) -join [Environment]::NewLine
     }
     else {
       ''
@@ -377,8 +413,10 @@ function Invoke-AiNovelPackagedVectorSmoke {
   finally {
     $env:AI_NOVEL_RELEASE_SMOKE = $previousReleaseSmoke
     $env:AI_NOVEL_RELEASE_SMOKE_TOKEN = $previousReleaseSmokeToken
-    Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    if ($evidenceSucceeded) {
+      Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 
@@ -393,6 +431,7 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
   $stderrPath = Join-Path $smokeRoot 'packaged-official-homepage-smoke.stderr'
   $previousReleaseHomepageSmoke = $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE
   $previousReleaseHomepageSmokeToken = $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN
+  $evidenceSucceeded = $false
 
   try {
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE = '1'
@@ -405,11 +444,7 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
       -StandardErrorPath $stderrPath `
       -HideWindow
 
-    $resultLine = @(
-      Get-Content -LiteralPath $stdoutPath -ErrorAction Stop |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Select-Object -Last 1
-    )
+    $resultLine = @(Get-AiNovelUtf8NonEmptyLines -Path $stdoutPath | Select-Object -Last 1)
     if ($resultLine.Count -ne 1) {
       throw 'Packaged official homepage qualification did not produce exactly one JSON evidence line.'
     }
@@ -443,10 +478,11 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
     New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
     $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $script:aiNovelPackagedOfficialHomepageEvidencePath -Encoding utf8
     Write-Host "Packaged official homepage smoke evidence: $script:aiNovelPackagedOfficialHomepageEvidencePath"
+    $evidenceSucceeded = $true
   }
   catch {
     $stderr = if (Test-Path -LiteralPath $stderrPath) {
-      (Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue) -join [Environment]::NewLine
+      (Get-AiNovelUtf8NonEmptyLines -Path $stderrPath) -join [Environment]::NewLine
     }
     else {
       ''
@@ -459,8 +495,10 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
   finally {
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE = $previousReleaseHomepageSmoke
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN = $previousReleaseHomepageSmokeToken
-    Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    if ($evidenceSucceeded) {
+      Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 

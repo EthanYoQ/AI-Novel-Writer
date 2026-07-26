@@ -1,7 +1,16 @@
 import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
-import { ModelProfile } from '../../src/shared/ipc-channels'
+import type { LLMFinishReason, ModelProfile } from '../../src/shared/ipc-channels'
 
 export class OpenAIProvider implements ILLMProvider {
+  private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
+    // A number of OpenAI-compatible servers omit finish_reason entirely while
+    // still sending a normal [DONE] marker. Preserve that compatibility.
+    if (reason === undefined || reason === null || reason === 'stop') return 'stop'
+    if (reason === 'length') return 'length'
+    if (reason === 'content_filter') return 'content_filter'
+    return 'unknown'
+  }
+
   private stripThinking(content: string): string {
     return content
       .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
@@ -26,26 +35,43 @@ export class OpenAIProvider implements ILLMProvider {
     return `${base}/v1/chat/completions`
   }
 
+  private buildRequestBody(
+    model: ModelProfile,
+    messages: Array<{ role: string; content: string }>,
+    opts: LLMGenerateOptions,
+    stream: boolean,
+  ): Record<string, unknown> {
+    const isNovelAI = model.provider === 'novelai'
+    const body: Record<string, unknown> = {
+      model: model.modelName,
+      messages,
+      max_tokens: opts.maxTokens ?? model.maxTokens,
+      stream,
+    }
+
+    // 思考模式下 temperature/top_p 等参数不生效（DeepSeek 会静默忽略），仅在非思考模式下传递。
+    if (opts.thinking) {
+      if (isNovelAI) {
+        body.enable_thinking = true
+      } else {
+        // thinking 参数直接放在请求体顶层（非 extra_body，那是 OpenAI SDK 层概念）
+        body.thinking = { type: 'enabled' }
+      }
+    } else {
+      body.temperature = opts.temperature ?? model.temperature
+    }
+
+    if (opts.responseFormat && !isNovelAI) {
+      body.response_format = opts.responseFormat
+    }
+
+    return body
+  }
+
   async generate(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMGenerateOptions): Promise<LLMResponse> {
     try {
       const url = this.buildUrl(model.baseUrl)
-
-      const body: Record<string, unknown> = {
-        model: model.modelName,
-        messages,
-        max_tokens: opts.maxTokens ?? model.maxTokens,
-        stream: false,
-      }
-
-      // 思考模式下 temperature/top_p 等参数不生效（DeepSeek 会静默忽略），仅在非思考模式下传递
-      if (opts.thinking) {
-        // thinking 参数直接放在请求体顶层（非 extra_body，那是 OpenAI SDK 层概念）
-        body.thinking = { type: 'enabled' }
-      } else {
-        body.temperature = opts.temperature ?? model.temperature
-      }
-
-      if (opts.responseFormat) body.response_format = opts.responseFormat
+      const body = this.buildRequestBody(model, messages, opts, false)
 
       const res = await fetch(url, {
         method: 'POST',
@@ -62,15 +88,22 @@ export class OpenAIProvider implements ILLMProvider {
       }
 
       const data = await res.json() as {
-        choices: Array<{ message: { content: string; reasoning_content?: string } }>
+        choices: Array<{
+          message: { content: string; reasoning_content?: string }
+          finish_reason?: string | null
+        }>
         usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
       }
 
       const finalContent = this.stripThinking(data.choices?.[0]?.message?.content ?? '')
+      const finishReason = this.normalizeFinishReason(data.choices?.[0]?.finish_reason)
+      const complete = finishReason === 'stop'
 
       return {
-        success: true,
+        success: complete,
         content: finalContent,
+        finishReason,
+        error: complete ? undefined : 'API 返回的文本未正常完成',
         usage: data.usage ? {
           promptTokens: data.usage.prompt_tokens,
           completionTokens: data.usage.completion_tokens,
@@ -85,22 +118,7 @@ export class OpenAIProvider implements ILLMProvider {
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
     try {
       const url = this.buildUrl(model.baseUrl)
-
-      const body: Record<string, unknown> = {
-        model: model.modelName,
-        messages,
-        max_tokens: opts.maxTokens ?? model.maxTokens,
-        stream: true,
-      }
-
-      // 思考模式下 temperature/top_p 等参数不生效（DeepSeek 会静默忽略），仅在非思考模式下传递
-      if (opts.thinking) {
-        body.thinking = { type: 'enabled' }
-      } else {
-        body.temperature = opts.temperature ?? model.temperature
-      }
-
-      if (opts.responseFormat) body.response_format = opts.responseFormat
+      const body = this.buildRequestBody(model, messages, opts, true)
 
       const res = await fetch(url, {
         method: 'POST',
@@ -128,56 +146,82 @@ export class OpenAIProvider implements ILLMProvider {
       let fullText = ''
       let isThinking = false
       let buffer = ''
+      let sawDone = false
+      let finishReason: LLMFinishReason = 'stop'
 
-      const hasMore = true
-      while (hasMore) {
+      const processLine = (line: string) => {
+        if (!line.startsWith('data: ')) return
+        const json = line.slice(6).trim()
+        if (json === '[DONE]') {
+          sawDone = true
+          return
+        }
+        if (!json) return
+        try {
+          const parsed = JSON.parse(json) as {
+            choices: Array<{
+              delta: { content?: string, reasoning_content?: string }
+              finish_reason?: string | null
+            }>
+          }
+          const choice = parsed.choices?.[0]
+          if (choice?.finish_reason !== undefined && choice.finish_reason !== null) {
+            finishReason = this.normalizeFinishReason(choice.finish_reason)
+          }
+          const delta = choice?.delta
+
+          let emitChunk = ''
+
+          // 如果存在思维链内容
+          if (delta?.reasoning_content) {
+            if (!isThinking) {
+              isThinking = true
+              emitChunk += '<think>\n'
+            }
+            emitChunk += delta.reasoning_content
+          }
+
+          // 如果开始输出正文
+          if (delta?.content !== undefined && delta?.content !== null) {
+            if (isThinking) {
+              isThinking = false
+              emitChunk += '\n</think>\n\n'
+            }
+            if (delta?.content) {
+              emitChunk += delta.content
+            }
+          }
+
+          if (emitChunk) {
+            fullText += emitChunk
+            opts.onChunk(emitChunk)
+          }
+        } catch {
+          // Ignore non-data SSE lines and malformed keepalives. A normal
+          // completion still requires the explicit [DONE] marker below.
+        }
+      }
+
+      let streamEnded = false
+      while (!streamEnded) {
         const { done, value } = await reader.read()
-        if (done) break
+        streamEnded = done
+        if (done) continue
 
         buffer += decoder.decode(value, { stream: true })
         const segments = buffer.split('\n')
         buffer = segments.pop() ?? ''
-        const lines = segments.filter((l) => l.startsWith('data: '))
+        for (const line of segments) processLine(line)
+      }
 
-        for (const line of lines) {
-          const json = line.slice(6).trim()
-          if (json === '[DONE]') continue
-          try {
-            const parsed = JSON.parse(json) as {
-              choices: Array<{ delta: { content?: string, reasoning_content?: string } }>
-            }
-            const delta = parsed.choices?.[0]?.delta
+      buffer += decoder.decode()
+      if (buffer.trim()) {
+        processLine(buffer)
+      }
 
-            let emitChunk = ''
-
-            // 如果存在思维链内容
-            if (delta?.reasoning_content) {
-              if (!isThinking) {
-                isThinking = true
-                emitChunk += '<think>\n'
-              }
-              emitChunk += delta.reasoning_content
-            } 
-            
-            // 如果开始输出正文
-            if (delta?.content !== undefined && delta?.content !== null) {
-              if (isThinking) {
-                isThinking = false
-                emitChunk += '\n</think>\n\n'
-              }
-              if (delta?.content) {
-                emitChunk += delta.content
-              }
-            }
-
-            if (emitChunk) {
-              fullText += emitChunk
-              opts.onChunk(emitChunk)
-            }
-          } catch {
-            // ignore
-          }
-        }
+      if (!sawDone) {
+        opts.onError('响应流在完成标记前结束，生成结果不完整')
+        return
       }
 
       if (isThinking) {
@@ -186,7 +230,7 @@ export class OpenAIProvider implements ILLMProvider {
         opts.onChunk(closeTag)
       }
 
-      opts.onDone(this.stripThinking(fullText))
+      opts.onDone(this.stripThinking(fullText), undefined, finishReason)
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
         opts.onError('已取消生成')

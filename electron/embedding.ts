@@ -135,13 +135,35 @@ function releaseSmokeEmbeddings(
 
 // ===== Embedding API 调用 =====
 
+const KNOWN_OPENAI_COMPATIBLE_ROOTS = new Set([
+  'https://api.openai.com',
+  'https://api.deepseek.com',
+  'http://localhost:11434',
+  'http://127.0.0.1:11434',
+])
+
+function buildOpenAIEmbeddingUrl(baseUrl: string): string {
+  const base = baseUrl.replace(/\/+$/, '')
+  if (base.endsWith('/embeddings')) {
+    return base
+  }
+  if (/\/v\d+(?:[a-z0-9.-]*)$/i.test(base)) {
+    return `${base}/embeddings`
+  }
+  if (KNOWN_OPENAI_COMPATIBLE_ROOTS.has(base.toLowerCase())) {
+    return `${base}/v1/embeddings`
+  }
+  // A user-provided /api path is not an inferred OpenAI-compatible root.
+  return `${base}/embeddings`
+}
+
 /** OpenAI Embedding API */
 export async function embedOpenAI(
   texts: string[],
   model: { baseUrl: string; apiKey: string; modelName?: string },
 ): Promise<number[][]> {
   const embeddingModel = model.modelName || 'text-embedding-3-small'
-  const url = model.baseUrl.replace(/\/$/, '') + '/embeddings'
+  const url = buildOpenAIEmbeddingUrl(model.baseUrl)
   const res = await fetch(url, {
     method: 'POST',
     headers: {

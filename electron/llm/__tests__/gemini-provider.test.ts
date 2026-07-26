@@ -16,6 +16,16 @@ const model: ModelProfile = {
   purposes: ['generation'],
 }
 
+function sseReader(...messages: string[]) {
+  const encoder = new TextEncoder()
+  const reads: Array<{ done: boolean; value?: Uint8Array }> = messages.map(message => ({
+    done: false,
+    value: encoder.encode(message),
+  }))
+  reads.push({ done: true, value: undefined })
+  return { read: vi.fn(async () => reads.shift()) }
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -61,5 +71,64 @@ describe('GeminiProvider', () => {
     expect(JSON.parse(String(request.body))).toMatchObject({
       generationConfig: { responseMimeType: 'application/json' },
     })
+  })
+
+  it('maps Gemini MAX_TOKENS to a structured length completion state', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: '被截断' }] }, finishReason: 'MAX_TOKENS' }],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(new GeminiProvider().generate(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+    })).resolves.toMatchObject({
+      success: false,
+      content: '被截断',
+      finishReason: 'length',
+    })
+  })
+
+  it('forwards Gemini stream MAX_TOKENS while treating omitted finishReason as compatible STOP', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => sseReader(
+          'data: {"candidates":[{"content":{"parts":[{"text":"正文"}]}}]}\n',
+          'data: {"candidates":[{"finishReason":"MAX_TOKENS"}]}\n',
+        ),
+      },
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onDone = vi.fn()
+
+    await new GeminiProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone,
+      onError: vi.fn(),
+    })
+
+    expect(onDone).toHaveBeenCalledWith('正文', undefined, 'length')
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      body: { getReader: () => sseReader('data: {"candidates":[{"content":{"parts":[{"text":"完整"}]}}]}\n') },
+    })
+    const compatibleOnDone = vi.fn()
+    await new GeminiProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone: compatibleOnDone,
+      onError: vi.fn(),
+    })
+    expect(compatibleOnDone).toHaveBeenCalledWith('完整', undefined, 'stop')
   })
 })

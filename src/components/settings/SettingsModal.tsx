@@ -499,6 +499,7 @@ function ModelForm({
             onChange={(e) => handleProviderChange(e.target.value as ModelProfile['provider'])}
           >
             <option value="openai">OpenAI</option>
+            <option value="novelai">NovelAI</option>
             <option value="deepseek">DeepSeek</option>
             <option value="gemini">Google Gemini</option>
             <option value="ollama">{text('Ollama（本地）', 'Ollama (local)')}</option>
@@ -1052,6 +1053,8 @@ function providerIcon(provider: string) {
   switch (provider) {
     case 'openai':
       return <Zap {...commonProps} />
+    case 'novelai':
+      return <MessageSquare {...commonProps} />
     case 'deepseek':
       return <Database {...commonProps} />
     case 'gemini':
