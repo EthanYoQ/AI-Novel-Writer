@@ -1764,6 +1764,7 @@ internal static class ExactNsisUninstallerHelper {
     const statusPath = join(root, 'status.json')
     const evidencePath = join(root, 'evidence')
     const markerPath = join(root, 'real-command-started')
+    const targetExitPath = join(root, 'allow-normal-command-exit')
     const monitor = spawn(
       'powershell.exe',
       [
@@ -1787,8 +1788,21 @@ internal static class ExactNsisUninstallerHelper {
       await waitForGateStatus(statusPath, 'ready')
       gate = await startArmedCommand(
         root,
-        "require('node:fs').writeFileSync(process.env.AI_NOVEL_GATE_TEST_MARKER, 'started')",
-        { AI_NOVEL_GATE_TEST_MARKER: markerPath },
+        [
+          "const { existsSync, writeFileSync } = require('node:fs')",
+          "writeFileSync(process.env.AI_NOVEL_GATE_TEST_MARKER, String(process.pid), 'utf8')",
+          'const deadline = Date.now() + 15_000',
+          'const waitForTestRelease = () => {',
+          '  if (existsSync(process.env.AI_NOVEL_GATE_TEST_EXIT)) process.exit(0)',
+          '  if (Date.now() >= deadline) process.exit(42)',
+          '  setTimeout(waitForTestRelease, 10)',
+          '}',
+          'waitForTestRelease()',
+        ].join('\n'),
+        {
+          AI_NOVEL_GATE_TEST_MARKER: markerPath,
+          AI_NOVEL_GATE_TEST_EXIT: targetExitPath,
+        },
       )
       if (gate.child.pid == null) throw new Error('The armed gate did not expose a PID')
       appendFileSync(
@@ -1805,6 +1819,32 @@ internal static class ExactNsisUninstallerHelper {
       )
       await waitForGateStatus(statusPath, 'monitoring')
       writeFileSync(gate.releasePath, 'release', 'utf8')
+      await waitForFile(markerPath, 10_000)
+      const targetProcessId = Number(readFileSync(markerPath, 'utf8'))
+      expect(Number.isInteger(targetProcessId)).toBe(true)
+      const targetCaptureDeadline = Date.now() + 10_000
+      let targetCaptured = false
+      while (Date.now() < targetCaptureDeadline) {
+        const eventPath = join(evidencePath, 'process-events.jsonl')
+        if (existsSync(eventPath)) {
+          const capturedStart = readFileSync(eventPath, 'utf8')
+            .trim()
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .map(line => JSON.parse(line) as Record<string, unknown>)
+            .find(event => event.kind === 'process-start' && event.processId === targetProcessId)
+          if (capturedStart?.captureEstablished === true) {
+            targetCaptured = true
+            break
+          }
+          if (capturedStart?.captureEstablished === false) {
+            throw new Error(`Normal gated command ${targetProcessId} was not captured by the release monitor`)
+          }
+        }
+        await new Promise(resolvePromise => setTimeout(resolvePromise, 20))
+      }
+      expect(targetCaptured).toBe(true)
+      writeFileSync(targetExitPath, 'exit', 'utf8')
       expect(await settle(gate.child)).toEqual({ code: 0, signal: null })
       const quietStartedAt = Date.now()
       appendFileSync(
