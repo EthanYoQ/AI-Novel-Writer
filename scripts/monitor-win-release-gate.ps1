@@ -1552,11 +1552,70 @@ function Test-AiNovelGateCapturedInstallerParent {
   )
 }
 
+function Test-AiNovelGateIdentityAncestryToArmedRoot {
+  param(
+    [AllowNull()]$StartIdentity,
+    [AllowNull()]$TrackedProcessIdentities,
+    [AllowNull()]$ArmedRootIdentity,
+    [ValidateRange(1, 64)][int]$MaxDepth = 16
+  )
+
+  # The release launcher can add shell wrappers before it starts the NSIS
+  # uninstaller. Walk the captured parent identities rather than assuming that
+  # the named uninstaller is a direct child of the armed Node root. Every edge
+  # remains bound to PID, creation time, and absolute image path; a missing
+  # record, PID reuse, cycle, or excessive ancestry depth fails closed.
+  if (
+    $null -eq $StartIdentity -or
+    $null -eq $TrackedProcessIdentities -or
+    $null -eq $ArmedRootIdentity
+  ) {
+    return $false
+  }
+
+  try {
+    $seenIdentityKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $currentIdentity = $StartIdentity
+    for ($depth = 0; $depth -lt $MaxDepth; $depth += 1) {
+      $currentIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $currentIdentity
+      if ($null -eq $currentIdentityKey -or -not $seenIdentityKeys.Add($currentIdentityKey)) {
+        return $false
+      }
+
+      if (Test-AiNovelGateCapturedParentIdentity `
+        -ChildIdentity $currentIdentity `
+        -ParentIdentity $ArmedRootIdentity) {
+        return $true
+      }
+
+      if (
+        $null -eq $currentIdentity.parentProcessId -or
+        -not $TrackedProcessIdentities.ContainsKey([int]$currentIdentity.parentProcessId)
+      ) {
+        return $false
+      }
+      $parentIdentity = $TrackedProcessIdentities[[int]$currentIdentity.parentProcessId]
+      if (-not (Test-AiNovelGateCapturedParentIdentity `
+        -ChildIdentity $currentIdentity `
+        -ParentIdentity $parentIdentity)) {
+        return $false
+      }
+      $currentIdentity = $parentIdentity
+    }
+  }
+  catch {
+    return $false
+  }
+
+  return $false
+}
+
 function Test-AiNovelGateCapturedNsisUninstallerHelperParent {
   param(
     [AllowNull()]$HelperIdentity,
     [AllowNull()]$UninstallerIdentity,
-    [AllowNull()]$ArmedRootIdentity
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities
   )
 
   # electron-builder's NSIS uninstaller first copies itself into the current
@@ -1569,12 +1628,13 @@ function Test-AiNovelGateCapturedNsisUninstallerHelperParent {
       -ChildIdentity $HelperIdentity `
       -ParentIdentity $UninstallerIdentity) -and
     (Test-AiNovelGateNsisUninstallerImage -ImagePath ([string]$UninstallerIdentity.executablePath)) -and
-    # The named uninstaller is a child of the armed Node release-gate root;
-    # it is not itself that root. Bind this final edge to reject an unrelated
-    # same-named NSIS chain that happens to be inside the Job Object.
-    (Test-AiNovelGateCapturedParentIdentity `
-      -ChildIdentity $UninstallerIdentity `
-      -ParentIdentity $ArmedRootIdentity)
+    # The named uninstaller is not itself the armed Node release-gate root.
+    # Its complete captured ancestry must terminate at that exact root so an
+    # unrelated same-named NSIS chain inside the Job Object cannot qualify.
+    (Test-AiNovelGateIdentityAncestryToArmedRoot `
+      -StartIdentity $UninstallerIdentity `
+      -TrackedProcessIdentities $TrackedProcessIdentities `
+      -ArmedRootIdentity $ArmedRootIdentity)
   )
 }
 
@@ -1583,7 +1643,8 @@ function Test-AiNovelGateCapturedNsisProbeParent {
     [AllowNull()]$ChildIdentity,
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
-    [AllowNull()]$ArmedRootIdentity
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities
   )
 
   # Keep the original direct-installer check intact. The only additional
@@ -1598,7 +1659,8 @@ function Test-AiNovelGateCapturedNsisProbeParent {
     ((Test-AiNovelGateCapturedNsisUninstallerHelperParent `
         -HelperIdentity $ParentIdentity `
         -UninstallerIdentity $GrandParentIdentity `
-        -ArmedRootIdentity $ArmedRootIdentity) -and
+        -ArmedRootIdentity $ArmedRootIdentity `
+        -TrackedProcessIdentities $TrackedProcessIdentities) -and
       (Test-AiNovelGateCapturedParentIdentity `
         -ChildIdentity $ChildIdentity `
         -ParentIdentity $ParentIdentity))
@@ -1642,7 +1704,8 @@ function Test-AiNovelGateExpectedNsisPowerShellProbeExit {
     [AllowNull()]$ProcessIdentity,
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
-    [AllowNull()]$ArmedRootIdentity
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities
   )
 
   # electron-builder's NSIS template deliberately treats exit 1 from these
@@ -1672,7 +1735,8 @@ function Test-AiNovelGateExpectedNsisPowerShellProbeExit {
     -ChildIdentity $ProcessIdentity `
     -ParentIdentity $ParentIdentity `
     -GrandParentIdentity $GrandParentIdentity `
-    -ArmedRootIdentity $ArmedRootIdentity
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities
 }
 
 function Test-AiNovelGateNsisCmdProcessCheckCandidate {
@@ -1682,7 +1746,8 @@ function Test-AiNovelGateNsisCmdProcessCheckCandidate {
     [AllowNull()]$ProcessIdentity,
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
-    [AllowNull()]$ArmedRootIdentity
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities
   )
 
   if (-not (Test-AiNovelGateExpectedExitOne -Step $Step -Event $Event)) {
@@ -1705,7 +1770,8 @@ function Test-AiNovelGateNsisCmdProcessCheckCandidate {
     -ChildIdentity $ProcessIdentity `
     -ParentIdentity $ParentIdentity `
     -GrandParentIdentity $GrandParentIdentity `
-    -ArmedRootIdentity $ArmedRootIdentity
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities
 }
 
 function Test-AiNovelGateExpectedNsisCmdProcessCheckExit {
@@ -1716,6 +1782,7 @@ function Test-AiNovelGateExpectedNsisCmdProcessCheckExit {
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
     [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities,
     [AllowNull()]$VerifiedFindParentKeys
   )
 
@@ -1725,7 +1792,8 @@ function Test-AiNovelGateExpectedNsisCmdProcessCheckExit {
     -ProcessIdentity $ProcessIdentity `
     -ParentIdentity $ParentIdentity `
     -GrandParentIdentity $GrandParentIdentity `
-    -ArmedRootIdentity $ArmedRootIdentity)) {
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities)) {
     return $false
   }
   $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $ProcessIdentity
@@ -1915,7 +1983,8 @@ function Test-AiNovelGateExpectedNsisFindNoMatchExit {
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
     [AllowNull()]$GreatGrandParentIdentity,
-    [AllowNull()]$ArmedRootIdentity
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities
   )
 
   if (-not (Test-AiNovelGateExpectedExitOne -Step $Step -Event $Event)) {
@@ -1949,7 +2018,8 @@ function Test-AiNovelGateExpectedNsisFindNoMatchExit {
     -ChildIdentity $ParentIdentity `
     -ParentIdentity $GrandParentIdentity `
     -GrandParentIdentity $GreatGrandParentIdentity `
-    -ArmedRootIdentity $ArmedRootIdentity
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities
 }
 
 function ConvertTo-AiNovelGateProcessEvidenceIdentity {
@@ -2331,7 +2401,8 @@ try {
           -ProcessIdentity $processIdentity `
           -ParentIdentity $parentIdentity `
           -GrandParentIdentity $grandParentIdentity `
-          -ArmedRootIdentity $armedRootIdentity) {
+          -ArmedRootIdentity $armedRootIdentity `
+          -TrackedProcessIdentities $trackedProcessIdentities) {
           $exitClassification = 'expected-nsis-powershell-probe'
         }
         elseif (Test-AiNovelGateExpectedNsisFindNoMatchExit `
@@ -2341,7 +2412,8 @@ try {
           -ParentIdentity $parentIdentity `
           -GrandParentIdentity $grandParentIdentity `
           -GreatGrandParentIdentity $greatGrandParentIdentity `
-          -ArmedRootIdentity $armedRootIdentity) {
+          -ArmedRootIdentity $armedRootIdentity `
+          -TrackedProcessIdentities $trackedProcessIdentities) {
           $parentProcessIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $parentIdentity
           if ($null -eq $parentProcessIdentityKey) {
             $exitClassification = 'failure'
@@ -2363,6 +2435,7 @@ try {
           -ParentIdentity $parentIdentity `
           -GrandParentIdentity $grandParentIdentity `
           -ArmedRootIdentity $armedRootIdentity `
+          -TrackedProcessIdentities $trackedProcessIdentities `
           -VerifiedFindParentKeys $verifiedNsisFindParentKeys) {
           $exitClassification = 'expected-nsis-cmd-process-check'
         }
@@ -2372,7 +2445,8 @@ try {
           -ProcessIdentity $processIdentity `
           -ParentIdentity $parentIdentity `
           -GrandParentIdentity $grandParentIdentity `
-          -ArmedRootIdentity $armedRootIdentity) {
+          -ArmedRootIdentity $armedRootIdentity `
+          -TrackedProcessIdentities $trackedProcessIdentities) {
           $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $processIdentity
           if (Add-AiNovelGatePendingNsisCmdExitFailure `
             -PendingNsisCmdExitFailures $pendingNsisCmdExitFailures `
