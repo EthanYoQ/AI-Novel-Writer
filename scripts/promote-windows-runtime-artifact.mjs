@@ -16,6 +16,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { canonicalPnpmLockfileSha256 } from './canonical-pnpm-lockfile-hash.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const EXPECTED_WORKFLOW_NAME = 'Windows cloud package qualification'
@@ -221,7 +222,7 @@ export function verifyDownloadedQualification({ artifactRoot, qualifiedSource, s
   assert(String(sourceCommit ?? '').toLowerCase() === sourcePlan.expectedSha, 'Qualified source checkout does not match expected_sha')
   const packageMetadata = jsonFile(path.join(qualifiedSource, 'package.json'), 'qualified package.json')
   assert(packageMetadata?.version === sourcePlan.version, `Qualified source version ${packageMetadata?.version ?? '(missing)'} does not match ${sourcePlan.tag}`)
-  assert(sha256(path.join(qualifiedSource, 'pnpm-lock.yaml')) !== '', 'Qualified source lockfile could not be hashed')
+  assert(canonicalPnpmLockfileSha256(path.join(qualifiedSource, 'pnpm-lock.yaml')) !== '', 'Qualified source lockfile could not be hashed')
 
   const allArtifactFiles = listRegularFiles(artifactRoot)
   assert(!allArtifactFiles.some(file => file.toLowerCase().endsWith('.zip')), 'Portable ZIP files are forbidden in formal promotion input')
@@ -237,7 +238,7 @@ export function verifyDownloadedQualification({ artifactRoot, qualifiedSource, s
   assert(manifest.gateLevel === 'RUNTIME_VERIFIED', 'Runtime verification manifest gateLevel is not RUNTIME_VERIFIED')
   assert(manifest.releaseCreated === false, 'Qualification manifest unexpectedly claims that a Release was created')
   assert(String(manifest.commit ?? '').toLowerCase() === sourcePlan.expectedSha, 'Runtime verification manifest commit does not match expected_sha')
-  assert(manifest.lockfileSha256 === sha256(path.join(qualifiedSource, 'pnpm-lock.yaml')), 'Runtime verification manifest lockfile hash does not match qualified source')
+  assert(manifest.lockfileSha256 === canonicalPnpmLockfileSha256(path.join(qualifiedSource, 'pnpm-lock.yaml')), 'Runtime verification manifest lockfile hash does not match qualified source')
 
   const installer = `ai-novel-writer-setup-${sourcePlan.version}.exe`
   const blockmap = `${installer}.blockmap`

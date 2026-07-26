@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { canonicalPnpmLockfileSha256 } from './canonical-pnpm-lockfile-hash.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '..')
@@ -60,7 +61,7 @@ function main() {
   const manifest = {
     schemaVersion: 1,
     commit: requiredEnvironment('GITHUB_SHA'),
-    lockfileSha256: sha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
+    lockfileSha256: canonicalPnpmLockfileSha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
     nodeVersion: process.versions.node,
     pnpmVersion: requiredEnvironment('AI_NOVEL_CLOUD_BUILD_PNPM_VERSION'),
     runnerImage: {
