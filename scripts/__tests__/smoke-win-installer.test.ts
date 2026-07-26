@@ -1007,6 +1007,7 @@ $availabilityPayload = 'if (Get-Command Get-CimInstance -ErrorAction SilentlyCon
 $policyPayload = 'if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }'
 $runningProcessPayload = 'if ((Get-CimInstance -ClassName Win32_Process | ? {$_.Path -and $_.Path.StartsWith(''C:\\temp\\installed'', ''CurrentCultureIgnoreCase'')}).Count -gt 0) { exit 0 } else { exit 1 }'
 $availabilityCommand = $system32Prefix + $availabilityPayload + '"'
+$unquotedAvailabilityCommand = $system32 + ' -C "' + $availabilityPayload + '"'
 $policyCommand = $system32Prefix + $policyPayload + '"'
 $runningProcessCommand = $sysWow64Prefix + $runningProcessPayload + '"'
 $arbitraryCommand = $system32Prefix + 'Write-Error ''not an NSIS probe''; exit 1"'
@@ -1060,6 +1061,7 @@ $abnormal = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured =
 
 [pscustomobject]@{
   InstallerAvailability = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity $validAvailability -Parent $parent
+  UnquotedInstallerAvailability = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $unquotedAvailabilityCommand) -Parent $parent
   UpgradePolicy = Test-SyntheticNsisProbe -Step 'smoke:win-v025-upgrade' -Event $event -Identity $validPolicy -Parent $parent
   SysWow64RunningProcess = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity $validRunningProcess -Parent $parent
   PathCaseOnly = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $pathCaseCommand) -Parent $parent
@@ -1087,6 +1089,7 @@ $abnormal = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured =
     const result = parseLastJsonLine(output)
 
     expect(result.InstallerAvailability).toBe(true)
+    expect(result.UnquotedInstallerAvailability).toBe(true)
     expect(result.UpgradePolicy).toBe(true)
     expect(result.SysWow64RunningProcess).toBe(true)
     expect(result.PathCaseOnly).toBe(true)
@@ -1109,6 +1112,309 @@ $abnormal = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured =
     expect(result.MissingIdentity).toBe(false)
     expect(result.MissingCommandLine).toBe(false)
     expect(result.MissingParentMetadata).toBe(false)
+  })
+
+  windowsIt('exempts only the exact NSIS cmd and find no-process fallback chain', () => {
+    const output = runReleaseMonitorLibrary(`
+$cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+$findPath = Join-Path $env:SystemRoot 'System32\\find.exe'
+$installerPath = 'C:\\temp\\ai-novel-writer-setup-0.4.0.exe'
+$installerStart = '638900000000000000'
+$cmdStart = '638900000000000100'
+$event = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$installer = [pscustomobject]@{
+  processId = 700
+  startTimeTicks = $installerStart
+  executablePath = $installerPath
+  identityCaptured = $true
+}
+$cmdArguments = ' /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI小说作家.exe" /FO CSV | "' + $findPath + '" "AI小说作家.exe"'
+$cmdCommand = '"' + $cmdPath + '"' + $cmdArguments
+$unquotedCmdCommand = $cmdPath + $cmdArguments
+$findCommand = '"' + $findPath + '"  "AI小说作家.exe"'
+
+function New-CmdIdentity {
+  param(
+    [string]$CommandLine = $cmdCommand,
+    [string]$ParentStart = $installerStart,
+    [string]$ParentPath = $installerPath
+  )
+  return [pscustomobject]@{
+    processId = 701
+    startTimeTicks = $cmdStart
+    processName = 'cmd'
+    executablePath = $cmdPath
+    commandLine = $CommandLine
+    commandLineCaptured = $true
+    identityCaptured = $true
+    parentProcessId = 700
+    parentProcessStartTimeTicks = $ParentStart
+    parentExecutablePath = $ParentPath
+  }
+}
+
+function New-FindIdentity {
+  param(
+    [string]$CommandLine = $findCommand,
+    [string]$ParentStart = $cmdStart,
+    [string]$ParentPath = $cmdPath
+  )
+  return [pscustomobject]@{
+    processId = 702
+    startTimeTicks = '638900000000000200'
+    processName = 'find'
+    executablePath = $findPath
+    commandLine = $CommandLine
+    commandLineCaptured = $true
+    identityCaptured = $true
+    parentProcessId = 701
+    parentProcessStartTimeTicks = $ParentStart
+    parentExecutablePath = $ParentPath
+  }
+}
+
+$cmd = New-CmdIdentity
+$find = New-FindIdentity
+$exitTwo = [pscustomobject]@{ ProcessId = 701; ExitCode = 2; ExitCodeCaptured = $true; JobMessage = 7 }
+$unrelatedInstaller = [pscustomobject]@{ processId = 700; startTimeTicks = $installerStart; executablePath = 'C:\\temp\\unrelated.exe'; identityCaptured = $true }
+$unverifiedFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$verifiedFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+[void]$verifiedFindParentKeys.Add((Get-AiNovelGateProcessIdentityKey -ProcessIdentity $cmd))
+[pscustomobject]@{
+  CmdSystemImage = Test-AiNovelGateSystemUtilityImage -ImagePath $cmdPath -FileName 'cmd.exe'
+  CmdCommand = Test-AiNovelGateKnownNsisCmdProcessCheckCommand -CommandLine $cmdCommand -CmdImagePath $cmdPath
+  CmdParent = Test-AiNovelGateCapturedInstallerParent -ChildIdentity $cmd -ParentIdentity $installer
+  FindSystemImage = Test-AiNovelGateSystemUtilityImage -ImagePath $findPath -FileName 'find.exe'
+  FindCommand = Test-AiNovelGateKnownNsisFindNoMatchCommand -CommandLine $findCommand -FindImagePath $findPath
+  FindParent = Test-AiNovelGateCapturedParentIdentity -ChildIdentity $find -ParentIdentity $cmd
+  CmdCandidate = Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $installer
+  CmdWithoutFindEvent = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $installer -VerifiedFindParentKeys $unverifiedFindParentKeys
+  CmdAfterVerifiedFind = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParentKeys
+  CmdUnquoted = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity (New-CmdIdentity -CommandLine $unquotedCmdCommand) -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParentKeys
+  FindExact = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $installer
+  CmdExtraCommand = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity (New-CmdIdentity -CommandLine ($cmdCommand + ' & exit 1')) -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParentKeys
+  CmdWrongProduct = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity (New-CmdIdentity -CommandLine $cmdCommand.Replace('AI小说作家.exe', 'other.exe')) -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParentKeys
+  CmdReusedParent = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity (New-CmdIdentity -ParentStart '638899999999999999') -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParentKeys
+  CmdWrongParent = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $unrelatedInstaller -VerifiedFindParentKeys $verifiedFindParentKeys
+  FindExtraArgument = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity (New-FindIdentity -CommandLine ($findCommand + ' extra')) -ParentIdentity $cmd -GrandParentIdentity $installer
+  FindReusedCmdParent = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity (New-FindIdentity -ParentStart '638899999999999999') -ParentIdentity $cmd -GrandParentIdentity $installer
+  FindWrongGrandParent = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $unrelatedInstaller
+  OtherStep = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'other-step' -Event $event -ProcessIdentity $cmd -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParentKeys
+  ExitTwo = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $exitTwo -ProcessIdentity $cmd -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParentKeys
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toMatchObject({
+      CmdSystemImage: true,
+      CmdCommand: true,
+      CmdParent: true,
+      FindSystemImage: true,
+      FindCommand: true,
+      FindParent: true,
+      CmdCandidate: true,
+      CmdWithoutFindEvent: false,
+      CmdAfterVerifiedFind: true,
+      CmdUnquoted: true,
+      FindExact: true,
+      CmdExtraCommand: false,
+      CmdWrongProduct: false,
+      CmdReusedParent: false,
+      CmdWrongParent: false,
+      FindExtraArgument: false,
+      FindReusedCmdParent: false,
+      FindWrongGrandParent: false,
+      OtherStep: false,
+      ExitTwo: false,
+    })
+  })
+
+  windowsIt('defers a NSIS cmd exit until the matching find no-match event is verified', () => {
+    const output = runReleaseMonitorLibrary(`
+$cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+$findPath = Join-Path $env:SystemRoot 'System32\\find.exe'
+$installerPath = 'C:\\temp\\ai-novel-writer-setup-0.4.0.exe'
+$installer = [pscustomobject]@{
+  processId = 700
+  startTimeTicks = '638900000000000000'
+  executablePath = $installerPath
+  identityCaptured = $true
+}
+$cmd = [pscustomobject]@{
+  processId = 701
+  startTimeTicks = '638900000000000100'
+  executablePath = $cmdPath
+  commandLine = '"' + $cmdPath + '" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI小说作家.exe" /FO CSV | "' + $findPath + '" "AI小说作家.exe"'
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = 700
+  parentProcessStartTimeTicks = $installer.startTimeTicks
+  parentExecutablePath = $installerPath
+}
+$find = [pscustomobject]@{
+  processId = 702
+  startTimeTicks = '638900000000000200'
+  executablePath = $findPath
+  commandLine = '"' + $findPath + '"  "AI小说作家.exe"'
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = 701
+  parentProcessStartTimeTicks = $cmd.startTimeTicks
+  parentExecutablePath = $cmdPath
+}
+$event = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$verifiedFindParents = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$pendingCmdFailures = @{}
+$cmdKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $cmd
+$cmdCandidate = Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $installer
+$storedPending = if ($cmdCandidate) {
+  Add-AiNovelGatePendingNsisCmdExitFailure -PendingNsisCmdExitFailures $pendingCmdFailures -ProcessIdentityKey $cmdKey -Failure (Get-AiNovelGateProcessExitFailure -Step 'smoke:win-installer' -Event $event)
+} else { $false }
+$beforeFind = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParents
+$pendingBeforeFind = Get-AiNovelGatePendingNsisCmdExitFailure -PendingNsisCmdExitFailures $pendingCmdFailures
+$noFindDeferredFailure = $pendingBeforeFind
+$findVerified = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $installer
+$resolvedPending = if ($findVerified) {
+  Register-AiNovelGateVerifiedNsisFindParent -VerifiedFindParentKeys $verifiedFindParents -PendingNsisCmdExitFailures $pendingCmdFailures -ParentProcessIdentityKey (Get-AiNovelGateProcessIdentityKey -ProcessIdentity $cmd)
+} else { $false }
+$afterFind = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $installer -VerifiedFindParentKeys $verifiedFindParents
+$reusedPidCmd = [pscustomobject]@{
+  processId = $cmd.processId
+  startTimeTicks = '638900000000000999'
+  executablePath = $cmdPath
+  identityCaptured = $true
+}
+$unrelatedPending = @{}
+[void](Add-AiNovelGatePendingNsisCmdExitFailure -PendingNsisCmdExitFailures $unrelatedPending -ProcessIdentityKey $cmdKey -Failure 'synthetic pending cmd failure')
+$reusedPidResolved = Register-AiNovelGateVerifiedNsisFindParent -VerifiedFindParentKeys $verifiedFindParents -PendingNsisCmdExitFailures $unrelatedPending -ParentProcessIdentityKey (Get-AiNovelGateProcessIdentityKey -ProcessIdentity $reusedPidCmd)
+[pscustomobject]@{
+  CmdCandidate = $cmdCandidate
+  StoredPending = $storedPending
+  BeforeFind = $beforeFind
+  PendingBeforeFind = -not [string]::IsNullOrWhiteSpace($pendingBeforeFind)
+  NoFindDeferredFailure = $noFindDeferredFailure -like '*nonzero exit code 1*'
+  FindVerified = $findVerified
+  ResolvedPending = $resolvedPending
+  AfterFind = $afterFind
+  PendingCountAfterFind = $pendingCmdFailures.Count
+  ReusedPidResolved = $reusedPidResolved
+  ReusedPidPendingCount = $unrelatedPending.Count
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      CmdCandidate: true,
+      StoredPending: true,
+      BeforeFind: false,
+      PendingBeforeFind: true,
+      NoFindDeferredFailure: true,
+      FindVerified: true,
+      ResolvedPending: true,
+      AfterFind: true,
+      PendingCountAfterFind: 0,
+      ReusedPidResolved: false,
+      ReusedPidPendingCount: 1,
+    })
+  })
+
+  windowsIt('keeps a promoted NSIS cmd failure reversible across the next Drain only for its matching find identity', () => {
+    const output = runReleaseMonitorLibrary(`
+$cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+$findPath = Join-Path $env:SystemRoot 'System32\\find.exe'
+$installerPath = 'C:\\temp\\ai-novel-writer-setup-0.4.0.exe'
+$installer = [pscustomobject]@{
+  processId = 700
+  startTimeTicks = '638900000000000000'
+  executablePath = $installerPath
+  identityCaptured = $true
+}
+$cmd = [pscustomobject]@{
+  processId = 701
+  startTimeTicks = '638900000000000100'
+  executablePath = $cmdPath
+  commandLine = '"' + $cmdPath + '" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI小说作家.exe" /FO CSV | "' + $findPath + '" "AI小说作家.exe"'
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = 700
+  parentProcessStartTimeTicks = $installer.startTimeTicks
+  parentExecutablePath = $installerPath
+}
+$find = [pscustomobject]@{
+  processId = 702
+  startTimeTicks = '638900000000000200'
+  executablePath = $findPath
+  commandLine = '"' + $findPath + '"  "AI小说作家.exe"'
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = 701
+  parentProcessStartTimeTicks = $cmd.startTimeTicks
+  parentExecutablePath = $cmdPath
+}
+$event = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$now = [DateTime]::Parse('2026-07-27T00:00:00.0000000Z').ToUniversalTime()
+$cmdKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $cmd
+$verifiedFindParents = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$pending = @{}
+[void](Add-AiNovelGatePendingNsisCmdExitFailure -PendingNsisCmdExitFailures $pending -ProcessIdentityKey $cmdKey -Failure (Get-AiNovelGateProcessExitFailure -Step 'smoke:win-installer' -Event $event))
+$state = New-AiNovelGateDeferredNsisCmdExitFailureState
+
+# Drain 41: cmd.exe exits, then JobObjectMsgActiveProcessZero arrives. The
+# missing find.exe is now deferred, but it must not terminate this iteration.
+$promotedOnJobEmpty = Promote-AiNovelGatePendingNsisCmdExitFailure -State $state -PendingEntry (Get-AiNovelGatePendingNsisCmdExitFailureEntry -PendingNsisCmdExitFailures $pending) -NowUtc $now -CurrentDrain 41
+$firstDrainDoesNotTerminate = -not (Test-AiNovelGateDeferredNsisCmdExitFailureReady -State $state -NowUtc $now.AddSeconds(5) -CurrentDrain 41)
+
+# Drain 42: the completion port delivers the matching find.exe exit. It must
+# revoke the previously promoted cmd.exe failure rather than merely remove the
+# pending-map entry.
+$findVerified = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $installer
+$registeredFind = if ($findVerified) {
+  Register-AiNovelGateVerifiedNsisFindParent -VerifiedFindParentKeys $verifiedFindParents -PendingNsisCmdExitFailures $pending -ParentProcessIdentityKey $cmdKey
+} else { $false }
+$resolvedPromotedFailure = Resolve-AiNovelGateDeferredNsisCmdExitFailure -State $state -ProcessIdentityKey $cmdKey
+$secondDrainAfterFindDoesNotTerminate = -not (Test-AiNovelGateDeferredNsisCmdExitFailureReady -State $state -NowUtc $now.AddSeconds(5) -CurrentDrain 42)
+
+# A mismatched find identity may not clear the promoted failure; without a
+# verified matching find after the short grace it remains fail-closed.
+$noFindPending = @{}
+[void](Add-AiNovelGatePendingNsisCmdExitFailure -PendingNsisCmdExitFailures $noFindPending -ProcessIdentityKey $cmdKey -Failure 'synthetic pending cmd failure')
+$noFindState = New-AiNovelGateDeferredNsisCmdExitFailureState
+$noFindPromoted = Promote-AiNovelGatePendingNsisCmdExitFailure -State $noFindState -PendingEntry (Get-AiNovelGatePendingNsisCmdExitFailureEntry -PendingNsisCmdExitFailures $noFindPending) -NowUtc $now -CurrentDrain 51
+$wrongKeyDoesNotResolve = -not (Resolve-AiNovelGateDeferredNsisCmdExitFailure -State $noFindState -ProcessIdentityKey ($cmdKey + '-other'))
+$noFindFirstDrainDoesNotTerminate = -not (Test-AiNovelGateDeferredNsisCmdExitFailureReady -State $noFindState -NowUtc $now.AddSeconds(5) -CurrentDrain 51)
+$noFindGraceBlocksImmediateFailure = -not (Test-AiNovelGateDeferredNsisCmdExitFailureReady -State $noFindState -NowUtc $now.AddMilliseconds(100) -CurrentDrain 52)
+$noFindFailsClosedAfterGrace = Test-AiNovelGateDeferredNsisCmdExitFailureReady -State $noFindState -NowUtc $now.AddSeconds(2) -CurrentDrain 52
+[pscustomobject]@{
+  PromotedOnJobEmpty = $promotedOnJobEmpty
+  FirstDrainDoesNotTerminate = $firstDrainDoesNotTerminate
+  FindVerified = $findVerified
+  RegisteredFind = $registeredFind
+  ResolvedPromotedFailure = $resolvedPromotedFailure
+  PendingCountAfterFind = $pending.Count
+  SecondDrainAfterFindDoesNotTerminate = $secondDrainAfterFindDoesNotTerminate
+  NoFindPromoted = $noFindPromoted
+  WrongKeyDoesNotResolve = $wrongKeyDoesNotResolve
+  NoFindFirstDrainDoesNotTerminate = $noFindFirstDrainDoesNotTerminate
+  NoFindGraceBlocksImmediateFailure = $noFindGraceBlocksImmediateFailure
+  NoFindFailsClosedAfterGrace = $noFindFailsClosedAfterGrace
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      PromotedOnJobEmpty: true,
+      FirstDrainDoesNotTerminate: true,
+      FindVerified: true,
+      RegisteredFind: true,
+      ResolvedPromotedFailure: true,
+      PendingCountAfterFind: 0,
+      SecondDrainAfterFindDoesNotTerminate: true,
+      NoFindPromoted: true,
+      WrongKeyDoesNotResolve: true,
+      NoFindFirstDrainDoesNotTerminate: true,
+      NoFindGraceBlocksImmediateFailure: true,
+      NoFindFailsClosedAfterGrace: true,
+    })
   })
 
   windowsIt('keeps command-line secrets in memory and redacts them from process evidence', () => {
@@ -1565,7 +1871,7 @@ try {
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 
   windowsIt('rejects corruption in every extended v0.2.5 upgrade table', () => {
     const cases = [
