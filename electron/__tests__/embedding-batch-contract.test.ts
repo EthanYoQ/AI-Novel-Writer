@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { embedOpenAI, generateEmbeddings } from '../embedding'
+import { BUILTIN_PRESETS } from '../../src/shared/provider-presets'
 
 const model = {
   baseUrl: 'https://embedding.example/v1',
@@ -93,5 +94,63 @@ describe('embedding batch response contract', () => {
       [0.1],
       [0.2],
     ])
+  })
+})
+
+describe('OpenAI embedding endpoint construction', () => {
+  it.each([
+    ['localhost', 'http://localhost:11434/api', 'http://localhost:11434/v1'],
+    ['127.0.0.1', 'http://127.0.0.1:11434/api/', 'http://127.0.0.1:11434/v1'],
+  ])('explains how to replace the Ollama native /api base for %s', async (_name, baseUrl, recommendedBaseUrl) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(embedOpenAI(['第一段'], { ...model, baseUrl })).rejects.toThrow(
+      `本应用使用 OpenAI-compatible Embedding API，请将 Base URL 改为 ${recommendedBaseUrl}。 `
+      + `This app uses the OpenAI-compatible Embedding API; change the Base URL to ${recommendedBaseUrl}.`,
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a complete endpoint', 'https://embedding.example/v1/embeddings', 'https://embedding.example/v1/embeddings'],
+    ['a v1 base', 'https://embedding.example/v1', 'https://embedding.example/v1/embeddings'],
+    ['a versioned compatible base', 'https://open.bigmodel.cn/api/paas/v4', 'https://open.bigmodel.cn/api/paas/v4/embeddings'],
+    ['the OpenAI root', 'https://api.openai.com', 'https://api.openai.com/v1/embeddings'],
+    ['the Ollama root', 'http://localhost:11434', 'http://localhost:11434/v1/embeddings'],
+  ])('uses the expected endpoint for %s', async (_name, baseUrl, expectedUrl) => {
+    const fetchMock = vi.fn().mockResolvedValue(successfulResponse({
+      data: [openAIEmbedding(0)],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await embedOpenAI(['第一段'], { ...model, baseUrl })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(expectedUrl)
+  })
+
+  it('keeps the Ollama preset aligned with the OpenAI-compatible embedding endpoint', async () => {
+    const ollamaPreset = BUILTIN_PRESETS.find((preset) => preset.provider === 'ollama')
+    expect(ollamaPreset?.baseUrl).toBe('http://localhost:11434/v1')
+
+    const fetchMock = vi.fn().mockResolvedValue(successfulResponse({
+      data: [openAIEmbedding(0)],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await embedOpenAI(['第一段'], { ...model, baseUrl: ollamaPreset!.baseUrl })
+
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:11434/v1/embeddings')
+  })
+
+  it('does not infer a v1 path for a user-configured /api base', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(successfulResponse({
+      data: [openAIEmbedding(0)],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await embedOpenAI(['第一段'], { ...model, baseUrl: 'https://gateway.example/api' })
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://gateway.example/api/embeddings')
   })
 })

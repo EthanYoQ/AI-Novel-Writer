@@ -1,4 +1,4 @@
-import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
+import { BaseWorkflowCommand, CommandExecuteParams, type LLMCompletion } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
 import { getPromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
@@ -156,14 +156,14 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     callbacks.log('调用 AI 生成章节草稿...')
 
     const targetChars = Math.max(0, Number(novelConfig.wordsPerChapter) || 0)
-    const draftText = await this.callLLMWithBuilder(promptBuilder, callbacks, {
-      maxTokens: this.getDraftMaxTokens(targetChars),
+    const initialCompletion = await this.callLLMResultWithBuilder(promptBuilder, callbacks, {
       temperature: 0.88,
       thinking: false,
     }, context)
     this.assertNotCancelled(context)
     const cleanDraftText = await this.extendDraftIfNeeded({
-      initialDraft: sanitizeDraftText(this.stripThinkingTags(draftText)),
+      initialDraft: sanitizeDraftText(this.stripThinkingTags(initialCompletion.content)),
+      initialFinishReason: initialCompletion.finishReason,
       targetChars,
       callbacks,
       context,
@@ -239,19 +239,25 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     return cleanDraftText
   }
 
-  private getDraftMaxTokens(targetChars: number): number {
-    if (targetChars >= 5000) return 2600
-    return 2600
-  }
-
-  private shouldAutoContinue(currentText: string, targetChars: number, rounds: number): boolean {
-    if (targetChars < 4500) return false
+  private shouldAutoContinue(
+    currentText: string,
+    targetChars: number,
+    rounds: number,
+    finishReason: LLMCompletion['finishReason'],
+  ): boolean {
     if (rounds >= MAX_AUTO_CONTINUE_ROUNDS) return false
+    // Explicit length termination is a stronger signal than the historical
+    // character-ratio heuristic: a 5,000/6,000-char draft can still be cut
+    // off even though it already exceeds the 82% threshold.
+    if (finishReason === 'length') return true
+    if (finishReason !== 'stop') return false
+    if (targetChars < 4500) return false
     return countChineseDraftChars(currentText) < Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
   }
 
   private async extendDraftIfNeeded(params: {
     initialDraft: string
+    initialFinishReason: LLMCompletion['finishReason']
     targetChars: number
     callbacks: CommandExecuteParams['callbacks']
     context: CommandExecuteParams['context']
@@ -263,8 +269,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
   }): Promise<string> {
     let draft = params.initialDraft
     let rounds = 0
+    let lastFinishReason = params.initialFinishReason
 
-    while (this.shouldAutoContinue(draft, params.targetChars, rounds)) {
+    while (this.shouldAutoContinue(draft, params.targetChars, rounds, lastFinishReason)) {
       if (params.context.cancelled) break
       rounds += 1
       const currentChars = countChineseDraftChars(draft)
@@ -276,7 +283,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 【硬性要求】
 - 只输出新增正文，不要复述已写内容。
 - 从“已写正文末尾”自然接下去，保持同一场景逻辑或合理转场。
-- 本次续写约 ${Math.min(2600, remaining)} 字；如果无法达到，停在自然段落末尾。
+- 本次续写尽可能完成剩余约 ${remaining} 字；如果无法达到，停在自然段落末尾。
 - 不要输出标题、解释、总结、Markdown、思考过程或“点我继续”。
 - 避免重复已写正文中的整句、整段、动作链和意象。
 - 不提前写后续章节，只完成本章蓝图允许的内容。
@@ -296,21 +303,26 @@ ${params.writingStyle || '（无）'}
 【已写正文末尾】
 ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
 
-      const addition = await this.callLLM(
+      const addition = await this.callLLMResult(
         continuationPrompt,
         params.systemRole,
         params.callbacks,
-        { maxTokens: this.getDraftMaxTokens(params.targetChars), temperature: 0.88, thinking: false },
+        { temperature: 0.88, thinking: false },
         params.context
       )
       this.assertNotCancelled(params.context)
+      lastFinishReason = addition.finishReason
       const beforeChars = countChineseDraftChars(draft)
-      draft = sanitizeDraftText(`${draft}\n\n${sanitizeDraftText(this.stripThinkingTags(addition))}`)
+      draft = sanitizeDraftText(`${draft}\n\n${sanitizeDraftText(this.stripThinkingTags(addition.content))}`)
       const afterChars = countChineseDraftChars(draft)
       if (afterChars - beforeChars < 300) {
         params.callbacks.log('  自动续写增量过短，停止继续请求')
         break
       }
+    }
+
+    if (lastFinishReason !== 'stop') {
+      throw this.createIncompleteCompletionError(lastFinishReason)
     }
 
     return draft

@@ -296,7 +296,13 @@ export interface LLMChannels {
 
 export interface LLMStreamEvents {
   'llm:stream-chunk': { requestId: string; chunk: string }
-  'llm:stream-done': { requestId: string; fullText: string; usage?: TokenUsage }
+  'llm:stream-done': {
+    requestId: string
+    fullText: string
+    usage?: TokenUsage
+    /** Provider-normalized completion state. Missing values from older peers are treated as `stop`. */
+    finishReason?: LLMFinishReason
+  }
   'llm:stream-error': { requestId: string; error: string }
 }
 
@@ -376,7 +382,21 @@ export interface LLMResponse {
   content: string
   usage?: TokenUsage
   error?: string
+  /** Structured end state, including incomplete but inspectable partial text. */
+  finishReason?: LLMFinishReason
 }
+
+/**
+ * Provider-neutral end state for generated text. `stop` is the only state
+ * that downstream workflows and the Agent may treat as a complete response.
+ */
+export type LLMFinishReason =
+  | 'stop'
+  | 'length'
+  | 'content_filter'
+  | 'cancelled'
+  | 'error'
+  | 'unknown'
 
 export interface TokenUsage {
   promptTokens: number
@@ -387,7 +407,7 @@ export interface TokenUsage {
 export interface ModelProfile {
   id: string
   name: string
-  provider: 'openai' | 'gemini' | 'deepseek' | 'ollama' | 'bigmodel' | 'custom'
+  provider: 'openai' | 'gemini' | 'deepseek' | 'ollama' | 'bigmodel' | 'novelai' | 'custom'
   protocol: 'openai' | 'gemini'
   modelName: string
   apiKey: string

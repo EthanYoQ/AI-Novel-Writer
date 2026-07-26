@@ -8,14 +8,14 @@ import { assertAgentProjectCurrent, requireAgentProject } from './project-contex
 
 export const readFileTool = buildAgentTool({
   name: 'read_file',
-  description: '读取项目内指定文件的内容。支持读取架构文件、蓝图、角色卡、草稿、配置等任意文本文件。',
+  description: '读取项目目录中实际存在的文本文件。故事架构保存在项目数据中，请使用 read_architecture 工具读取，不要假定存在架构文件路径。',
   source: 'builtin',
   inputSchema: {
     type: 'object',
     properties: {
       file_path: {
         type: 'string',
-        description: '相对于项目根目录的文件路径，例如 "02_architecture/世界观.md"',
+        description: '相对于项目根目录且已存在的文件路径，例如 ".vela/project.json" 或用户已创建的文本文件。故事架构请使用 read_architecture。',
       },
     },
     required: ['file_path'],

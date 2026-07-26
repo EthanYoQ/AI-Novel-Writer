@@ -1,4 +1,11 @@
-import { ModelProfile } from '../../src/shared/ipc-channels'
+import type {
+  LLMFinishReason,
+  LLMResponse as SharedLLMResponse,
+  ModelProfile,
+  TokenUsage,
+} from '../../src/shared/ipc-channels'
+
+export type LLMResponse = SharedLLMResponse
 
 export interface LLMGenerateOptions {
   temperature: number
@@ -10,15 +17,8 @@ export interface LLMGenerateOptions {
 export interface LLMStreamOptions extends LLMGenerateOptions {
   signal: AbortSignal
   onChunk: (chunk: string) => void
-  onDone: (fullText: string, usage?: { promptTokens: number; completionTokens: number; totalTokens: number }) => void
+  onDone: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => void
   onError: (error: string) => void
-}
-
-export interface LLMResponse {
-  success: boolean
-  content: string
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
-  error?: string
 }
 
 export interface ILLMProvider {

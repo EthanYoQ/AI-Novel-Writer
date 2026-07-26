@@ -641,6 +641,23 @@ function Get-AiNovelStepCompletionDecision {
   }
 }
 
+function Assert-AiNovelGateProcessExitSucceeded {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [Parameter(Mandatory = $true)]$Event
+  )
+
+  if (-not [bool]$Event.ExitCodeCaptured -or $null -eq $Event.ExitCode) {
+    throw "Release gate could not capture the exit code for job-contained PID $($Event.ProcessId)."
+  }
+  if ([uint32]$Event.JobMessage -eq 8) {
+    throw "Release gate step '$Step' observed an abnormal exit for job-contained PID $($Event.ProcessId) with code $($Event.ExitCode)."
+  }
+  if ([int]$Event.ExitCode -ne 0) {
+    throw "Release gate step '$Step' observed a nonzero exit code $($Event.ExitCode) for job-contained PID $($Event.ProcessId)."
+  }
+}
+
 function New-AiNovelGateAtomicMonitor {
   $jobMonitor = $null
   try {
@@ -951,13 +968,10 @@ try {
         }
       }
       elseif ([string]$processEvent.Kind -eq 'process-exit') {
-        if (-not [bool]$processEvent.ExitCodeCaptured) {
-          throw "Release gate could not capture the exit code for job-contained PID $($processEvent.ProcessId)."
-        }
-        # A Job Object captures every descendant lifecycle, but a descendant
-        # can legitimately use a nonzero exit code as an internal protocol
-        # value (for example, an NSIS process probe). The gated root command
-        # and its launch record remain authoritative for the step result.
+        # Job Object membership is the atomic boundary. A nonzero or abnormal
+        # exit from any descendant is a release-gate failure, even when the
+        # launcher's own command record happens to report success.
+        Assert-AiNovelGateProcessExitSucceeded -Step $activeStep -Event $processEvent
       }
     }
 
