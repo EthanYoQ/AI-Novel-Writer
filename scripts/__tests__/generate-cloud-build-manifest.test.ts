@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
+import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = path.resolve(testDirectory, '..', '..')
@@ -87,7 +88,7 @@ describe('cloud Windows build manifest', () => {
     expect(manifest).toMatchObject({
       schemaVersion: 1,
       commit,
-      lockfileSha256: sha256(readFileSync(path.join(repositoryRoot, 'pnpm-lock.yaml'))),
+      lockfileSha256: canonicalPnpmLockfileSha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
       nodeVersion: process.versions.node,
       pnpmVersion: '11.11.0',
       runnerImage: {
