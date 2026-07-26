@@ -29,6 +29,16 @@ describe('packaged vector qualification wiring', () => {
   })
 })
 
+describe('Windows PowerShell smoke script encoding', () => {
+  it('uses a UTF-8 BOM for scripts directly executed by Windows PowerShell', () => {
+    const utf8Bom = Buffer.from([0xef, 0xbb, 0xbf])
+
+    for (const script of [probeScript, installerScript]) {
+      expect(readFileSync(script).subarray(0, utf8Bom.length)).toEqual(utf8Bom)
+    }
+  })
+})
+
 function quotePowerShell(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
@@ -990,7 +1000,7 @@ try {
         rmSync(fixtureRoot, { recursive: true, force: true })
       }
     }
-  })
+  }, 30_000)
 
   windowsIt('runs the SQLite seeder and validator through the project Electron runtime', () => {
     const output = runInstallerLibrary(`

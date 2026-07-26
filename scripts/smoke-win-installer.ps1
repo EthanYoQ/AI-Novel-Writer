@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$InstallerPath,
   [string]$PreviousInstallerPath,
   [string]$PreviousPortableZipPath,
