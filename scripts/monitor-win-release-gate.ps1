@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$ControlPath,
   [string]$StatusPath,
   [string]$EvidencePath,
