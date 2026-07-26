@@ -22,6 +22,8 @@ const scriptPath = fileURLToPath(import.meta.url)
 const EXPECTED_WORKFLOW_NAME = 'Windows cloud package qualification'
 const EXPECTED_WORKFLOW_PATH = '.github/workflows/windows-cloud-build-test.yml'
 const EXPECTED_ARTIFACT_NAME = 'windows-cloud-build-runtime-verified'
+const TAG_VISIBILITY_ATTEMPTS = 10
+const TAG_VISIBILITY_DELAY_MS = 1000
 export const PROMOTION_CONFIRMATION = 'PROMOTE_RUNTIME_VERIFIED_WINDOWS_RELEASE'
 
 function assert(condition, message) {
@@ -74,8 +76,36 @@ function workflowPath(pathWithRef) {
   return String(pathWithRef ?? '').split('@', 1)[0]
 }
 
-function assertAbsentResponse(status, label) {
-  assert(status === 404, `${label} already exists or its absence could not be proven (HTTP ${status})`)
+function promotionReleaseBody(qualificationRunId) {
+  return `Windows runtime-verified release promoted from qualification run ${qualificationRunId}.`
+}
+
+function promotionRecoveryCandidate(remotePromotion, { tag, expectedSha, qualificationRunId }) {
+  assert(remotePromotion && typeof remotePromotion === 'object', 'Remote promotion state could not be determined')
+  const tagCommitSha = remotePromotion.tagCommitSha
+  const release = remotePromotion.release
+  const tagIsAbsent = tagCommitSha === null
+  const releaseIsAbsent = release === null
+  assert(tagIsAbsent === releaseIsAbsent, 'Remote promotion is partially occupied; both the Git tag and draft Release must be absent or must form one exact recovery candidate')
+  if (tagIsAbsent) return { mode: 'CREATE' }
+
+  assert(typeof tagCommitSha === 'string' && /^[a-f0-9]{40}$/i.test(tagCommitSha), 'Existing Git tag SHA is invalid')
+  assert(tagCommitSha.toLowerCase() === expectedSha, `Existing Git tag ${tag} does not resolve to expected_sha`)
+  assert(Number.isInteger(release?.id) && release.id > 0, 'Existing draft Release ID is invalid')
+  assert(release.draft === true && release.prerelease === false, 'Existing Release is not an unpublished final-release draft')
+  assert(release.tag_name === tag, 'Existing draft Release has the wrong tag')
+  assert(String(release.target_commitish ?? '').toLowerCase() === expectedSha, 'Existing draft Release target_commitish does not match expected_sha')
+  assert(release.name === tag, 'Existing draft Release name is inconsistent')
+  assert(release.body === promotionReleaseBody(qualificationRunId), 'Existing draft Release provenance is inconsistent')
+  assert(Array.isArray(release.assets), 'Existing draft Release assets response is invalid')
+  return { mode: 'RESUME_DRAFT', releaseId: release.id }
+}
+
+function assertPromotionRecoveryPlan(recovery) {
+  assert(recovery?.mode === 'CREATE' || recovery?.mode === 'RESUME_DRAFT', 'Promotion recovery plan is invalid')
+  if (recovery.mode === 'RESUME_DRAFT') {
+    assert(Number.isInteger(recovery.releaseId) && recovery.releaseId > 0, 'Promotion recovery draft Release ID is invalid')
+  }
 }
 
 export function validateQualificationSource({
@@ -85,8 +115,7 @@ export function validateQualificationSource({
   run,
   comparison,
   artifactsResponse,
-  tagRefStatus,
-  releaseStatus,
+  remotePromotion,
   now = new Date(),
 }) {
   assert(inputs?.confirmation === PROMOTION_CONFIRMATION, `confirmation must exactly equal ${PROMOTION_CONFIRMATION}`)
@@ -130,8 +159,11 @@ export function validateQualificationSource({
     assert(String(artifact.workflow_run.head_sha ?? '').toLowerCase() === expectedSha, 'Qualification artifact head SHA is inconsistent')
   }
 
-  assertAbsentResponse(tagRefStatus, `Git tag ${inputs.tag}`)
-  assertAbsentResponse(releaseStatus, `GitHub Release ${inputs.tag}`)
+  const promotionRecovery = promotionRecoveryCandidate(remotePromotion, {
+    tag: inputs.tag,
+    expectedSha,
+    qualificationRunId: Number(inputs.qualificationRunId),
+  })
 
   return {
     schemaVersion: 1,
@@ -142,6 +174,7 @@ export function validateQualificationSource({
     expectedSha,
     tag: inputs.tag,
     version,
+    promotionRecovery,
     workflow: { id: workflow.id, name: workflow.name, path: EXPECTED_WORKFLOW_PATH },
     artifact: {
       id: artifact.id,
@@ -219,6 +252,7 @@ function assertEmptyOrMissingDirectory(directory) {
 
 export function verifyDownloadedQualification({ artifactRoot, qualifiedSource, sourceCommit, sourcePlan, outputDirectory }) {
   assert(sourcePlan?.schemaVersion === 1 && sourcePlan?.state === 'SOURCE_VERIFIED', 'Source verification plan is invalid')
+  assertPromotionRecoveryPlan(sourcePlan.promotionRecovery)
   assert(String(sourceCommit ?? '').toLowerCase() === sourcePlan.expectedSha, 'Qualified source checkout does not match expected_sha')
   const packageMetadata = jsonFile(path.join(qualifiedSource, 'package.json'), 'qualified package.json')
   assert(packageMetadata?.version === sourcePlan.version, `Qualified source version ${packageMetadata?.version ?? '(missing)'} does not match ${sourcePlan.tag}`)
@@ -307,6 +341,7 @@ export function verifyDownloadedQualification({ artifactRoot, qualifiedSource, s
 export function verifyStagedPromotion(readyRoot) {
   const plan = jsonFile(path.join(readyRoot, 'promotion-plan.json'), 'promotion plan')
   assert(plan?.schemaVersion === 1 && plan?.state === 'RUNTIME_ARTIFACT_VERIFIED', 'Promotion plan is not runtime-verified')
+  assertPromotionRecoveryPlan(plan.promotionRecovery)
   parseFinalTag(plan.tag)
   const actualFiles = listRegularFiles(path.join(readyRoot, 'bundle'))
   const expectedFiles = plan.verifiedFiles?.map(record => record.file).sort()
@@ -376,24 +411,34 @@ function apiBase(repository) {
   return `https://api.github.com/repos/${repository}`
 }
 
-async function proveTagAndReleaseAbsent(token, repository, tag, fetcher = globalThis.fetch) {
+async function findReleaseByTag({ token, repository, tag, fetcher = globalThis.fetch }) {
   const base = apiBase(repository)
-  const tagResult = await apiRequest({ token, url: `${base}/git/ref/tags/${encodeURIComponent(tag)}`, allow: [404], fetcher })
   const releaseResult = await apiRequest({ token, url: `${base}/releases/tags/${encodeURIComponent(tag)}`, allow: [404], fetcher })
-  let listedReleaseStatus = 404
+  if (releaseResult.response.status === 200) {
+    assert(releaseResult.data?.tag_name === tag, 'GitHub Release tag lookup returned the wrong Release')
+    return releaseResult.data
+  }
+
+  let matchingRelease = null
   for (let page = 1; page <= 100; page += 1) {
     const { data: releases } = await apiRequest({ token, url: `${base}/releases?per_page=100&page=${page}`, fetcher })
     assert(Array.isArray(releases), 'GitHub Release listing is invalid')
-    if (releases.some(release => release?.tag_name === tag)) {
-      listedReleaseStatus = 200
+    const matches = releases.filter(release => release?.tag_name === tag)
+    assert(matches.length <= 1, `GitHub Release listing contains duplicate entries for ${tag}`)
+    if (matches.length === 1) {
+      matchingRelease = matches[0]
       break
     }
     if (releases.length < 100) break
     assert(page < 100, 'GitHub Release listing exceeded the fail-closed pagination limit')
   }
+  return matchingRelease
+}
+
+async function inspectRemotePromotionState({ token, repository, tag, fetcher = globalThis.fetch }) {
   return {
-    tagRefStatus: tagResult.response.status,
-    releaseStatus: releaseResult.response.status === 200 || listedReleaseStatus === 200 ? 200 : 404,
+    tagCommitSha: await resolveTagCommitShaIfPresent({ token, repository, tag, fetcher }),
+    release: await findReleaseByTag({ token, repository, tag, fetcher }),
   }
 }
 
@@ -407,19 +452,22 @@ export async function createSourcePlan({ token, inputs, fetcher = globalThis.fet
   const expectedSha = encodeURIComponent(inputs.expectedSha)
   const { data: comparison } = await apiRequest({ token, url: `${base}/compare/${expectedSha}...${defaultBranch}`, fetcher })
   const { data: artifactsResponse } = await apiRequest({ token, url: `${base}/actions/runs/${inputs.qualificationRunId}/artifacts?per_page=100`, fetcher })
-  const absence = await proveTagAndReleaseAbsent(token, inputs.repository, inputs.tag, fetcher)
-  return validateQualificationSource({ inputs, repository, workflow, run, comparison, artifactsResponse, ...absence })
+  const remotePromotion = await inspectRemotePromotionState({ token, repository: inputs.repository, tag: inputs.tag, fetcher })
+  return validateQualificationSource({ inputs, repository, workflow, run, comparison, artifactsResponse, remotePromotion })
 }
 
-export async function resolveTagCommitSha({ token, repository, tag, fetcher = globalThis.fetch }) {
+async function resolveTagCommitShaIfPresent({ token, repository, tag, fetcher = globalThis.fetch }) {
   parseFinalTag(tag)
   const base = apiBase(repository)
   const expectedRef = `refs/tags/${tag}`
-  const { data: reference } = await apiRequest({
+  const result = await apiRequest({
     token,
     url: `${base}/git/ref/tags/${encodeURIComponent(tag)}`,
+    allow: [404],
     fetcher,
   })
+  if (result.response.status === 404) return null
+  const { data: reference } = result
   assert(reference?.ref === expectedRef, `Git tag API returned the wrong reference for ${tag}`)
   let object = reference.object
   const visited = new Set()
@@ -441,13 +489,53 @@ export async function resolveTagCommitSha({ token, repository, tag, fetcher = gl
   throw new Error(`Git tag ${tag} exceeds the maximum annotated-tag peel depth`)
 }
 
+export async function resolveTagCommitSha({ token, repository, tag, fetcher = globalThis.fetch }) {
+  const resolvedSha = await resolveTagCommitShaIfPresent({ token, repository, tag, fetcher })
+  assert(resolvedSha !== null, `Git tag ${tag} is not visible`)
+  return resolvedSha
+}
+
 async function assertTagCommit({ token, repository, tag, expectedSha, fetcher }) {
   const resolvedSha = await resolveTagCommitSha({ token, repository, tag, fetcher })
   assert(resolvedSha === expectedSha, `Git tag ${tag} resolves to ${resolvedSha}, expected ${expectedSha}`)
   return resolvedSha
 }
 
-export async function claimLightweightTag({ token, repository, tag, expectedSha, fetcher = globalThis.fetch }) {
+function waitForTagVisibility(delayMilliseconds) {
+  return new Promise(resolve => setTimeout(resolve, delayMilliseconds))
+}
+
+async function assertTagCommitEventually({
+  token,
+  repository,
+  tag,
+  expectedSha,
+  fetcher,
+  visibilityAttempts = TAG_VISIBILITY_ATTEMPTS,
+  waitForVisibility = waitForTagVisibility,
+}) {
+  assert(Number.isInteger(visibilityAttempts) && visibilityAttempts > 0, 'Tag visibility retry count is invalid')
+  assert(typeof waitForVisibility === 'function', 'Tag visibility wait callback is invalid')
+  for (let attempt = 1; attempt <= visibilityAttempts; attempt += 1) {
+    const resolvedSha = await resolveTagCommitShaIfPresent({ token, repository, tag, fetcher })
+    if (resolvedSha !== null) {
+      assert(resolvedSha === expectedSha, `Git tag ${tag} resolves to ${resolvedSha}, expected ${expectedSha}`)
+      return resolvedSha
+    }
+    if (attempt < visibilityAttempts) await waitForVisibility(TAG_VISIBILITY_DELAY_MS)
+  }
+  throw new Error(`Git tag ${tag} did not become visible after ${visibilityAttempts} read attempts`)
+}
+
+export async function claimLightweightTag({
+  token,
+  repository,
+  tag,
+  expectedSha,
+  fetcher = globalThis.fetch,
+  visibilityAttempts = TAG_VISIBILITY_ATTEMPTS,
+  waitForVisibility = waitForTagVisibility,
+}) {
   parseFinalTag(tag)
   assert(/^[a-f0-9]{40}$/i.test(expectedSha ?? ''), 'Expected tag commit must be a full 40-character SHA')
   const normalizedSha = expectedSha.toLowerCase()
@@ -484,7 +572,15 @@ export async function claimLightweightTag({ token, repository, tag, expectedSha,
   assert(result.data?.ref === `refs/tags/${tag}`, 'Created Git tag reference has the wrong name')
   assert(result.data?.object?.type === 'commit', 'Created Git tag reference is not lightweight')
   assert(String(result.data?.object?.sha ?? '').toLowerCase() === normalizedSha, 'Created Git tag reference points to the wrong commit')
-  await assertTagCommit({ token, repository, tag, expectedSha: normalizedSha, fetcher })
+  await assertTagCommitEventually({
+    token,
+    repository,
+    tag,
+    expectedSha: normalizedSha,
+    fetcher,
+    visibilityAttempts,
+    waitForVisibility,
+  })
   return normalizedSha
 }
 
@@ -551,16 +647,53 @@ export async function finalizeVerifiedDraft({ verifyTag, publishRelease, restore
   return published
 }
 
+async function finalizePromotionDraft({ token, base, draft, plan, fetcher }) {
+  const published = await finalizeVerifiedDraft({
+    verifyTag: () => assertTagCommit({
+      token,
+      repository: plan.repository,
+      tag: plan.tag,
+      expectedSha: plan.expectedSha,
+      fetcher,
+    }),
+    publishRelease: async () => {
+      const result = await apiRequest({
+        token,
+        url: `${base}/releases/${draft.id}`,
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draft: false, prerelease: false }),
+        fetcher,
+      })
+      assert(result.data?.draft === false && result.data?.prerelease === false, 'GitHub did not publish a final non-prerelease Release')
+      assert(result.data?.tag_name === plan.tag, 'Published Release tag is inconsistent')
+      return result.data
+    },
+    restoreDraft: () => restoreDraftRelease({ token, base, draft, fetcher }),
+  })
+  return { releaseId: draft.id, url: published.html_url, tag: plan.tag }
+}
+
 export async function publishPromotion({ token, readyRoot, expectedRepository, expectedTag, fetcher = globalThis.fetch }) {
   const plan = verifyStagedPromotion(readyRoot)
   assert(plan.repository === expectedRepository, 'Promotion package repository does not match the workflow repository')
   assert(plan.tag === expectedTag, 'Promotion package tag does not match the dispatched tag')
-  await proveTagAndReleaseAbsent(token, plan.repository, plan.tag, fetcher).then(({ tagRefStatus, releaseStatus }) => {
-    assertAbsentResponse(tagRefStatus, `Git tag ${plan.tag}`)
-    assertAbsentResponse(releaseStatus, `GitHub Release ${plan.tag}`)
+  const remotePromotion = await inspectRemotePromotionState({
+    token,
+    repository: plan.repository,
+    tag: plan.tag,
+    fetcher,
   })
+  const currentRecovery = promotionRecoveryCandidate(remotePromotion, plan)
+  assert(currentRecovery.mode === plan.promotionRecovery.mode, 'Remote promotion state changed after qualification planning')
 
   const base = apiBase(plan.repository)
+  if (currentRecovery.mode === 'RESUME_DRAFT') {
+    assert(currentRecovery.releaseId === plan.promotionRecovery.releaseId, 'Existing draft Release changed after qualification planning')
+    verifyRemoteReleaseAssets(remotePromotion.release, plan.releaseAssets)
+    return finalizePromotionDraft({ token, base, draft: remotePromotion.release, plan, fetcher })
+  }
+
   let draft
   try {
     const created = await apiRequest({
@@ -572,7 +705,7 @@ export async function publishPromotion({ token, readyRoot, expectedRepository, e
         tag_name: plan.tag,
         target_commitish: plan.expectedSha,
         name: plan.tag,
-        body: `Windows runtime-verified release promoted from qualification run ${plan.qualificationRunId}.`,
+        body: promotionReleaseBody(plan.qualificationRunId),
         draft: true,
         prerelease: false,
       }),
@@ -581,6 +714,8 @@ export async function publishPromotion({ token, readyRoot, expectedRepository, e
     draft = created.data
     assert(draft?.id && draft?.draft === true && draft?.prerelease === false, 'GitHub did not create the expected draft Release')
     assert(draft.tag_name === plan.tag, 'Created draft Release has the wrong tag')
+    assert(String(draft.target_commitish ?? '').toLowerCase() === plan.expectedSha, 'Created draft Release target_commitish does not match expected_sha')
+    assert(draft.name === plan.tag && draft.body === promotionReleaseBody(plan.qualificationRunId), 'Created draft Release provenance is inconsistent')
     const uploadBase = String(draft.upload_url ?? '').replace(/\{.*$/, '')
     assert(uploadBase.startsWith('https://uploads.github.com/'), 'Draft Release has an invalid upload URL')
     await assertTagAbsent({ token, repository: plan.repository, tag: plan.tag, fetcher })
@@ -606,30 +741,7 @@ export async function publishPromotion({ token, readyRoot, expectedRepository, e
       expectedSha: plan.expectedSha,
       fetcher,
     })
-    const published = await finalizeVerifiedDraft({
-      verifyTag: () => assertTagCommit({
-        token,
-        repository: plan.repository,
-        tag: plan.tag,
-        expectedSha: plan.expectedSha,
-        fetcher,
-      }),
-      publishRelease: async () => {
-        const result = await apiRequest({
-          token,
-          url: `${base}/releases/${draft.id}`,
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ draft: false, prerelease: false }),
-          fetcher,
-        })
-        assert(result.data?.draft === false && result.data?.prerelease === false, 'GitHub did not publish a final non-prerelease Release')
-        assert(result.data?.tag_name === plan.tag, 'Published Release tag is inconsistent')
-        return result.data
-      },
-      restoreDraft: () => restoreDraftRelease({ token, base, draft, fetcher }),
-    })
-    return { releaseId: draft.id, url: published.html_url, tag: plan.tag }
+    return finalizePromotionDraft({ token, base, draft, plan, fetcher })
   } catch (error) {
     if (draft?.id) {
       console.error(`Promotion failed after draft creation. Release ${draft.id} was intentionally retained without deleting its tag, Release, or assets: ${draft.html_url ?? '(no URL)'}`)

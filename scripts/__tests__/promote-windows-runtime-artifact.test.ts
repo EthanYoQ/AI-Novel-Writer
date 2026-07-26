@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   PROMOTION_CONFIRMATION,
   claimLightweightTag,
+  createSourcePlan,
   finalizeVerifiedDraft,
+  publishPromotion,
   resolveTagCommitSha,
   validateQualificationSource,
   verifyDownloadedQualification,
@@ -32,6 +34,21 @@ afterEach(() => {
 
 function hash(file: string) {
   return createHash('sha256').update(readFileSync(file)).digest('hex')
+}
+
+function recoveryDraft(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 360126743,
+    draft: true,
+    prerelease: false,
+    tag_name: 'v0.4.0',
+    target_commitish: SHA,
+    name: 'v0.4.0',
+    body: 'Windows runtime-verified release promoted from qualification run 123.',
+    html_url: 'https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.4.0',
+    assets: [],
+    ...overrides,
+  }
 }
 
 function metadata(overrides: Record<string, unknown> = {}) {
@@ -70,8 +87,7 @@ function metadata(overrides: Record<string, unknown> = {}) {
         workflow_run: { id: 123, head_sha: SHA },
       }],
     },
-    tagRefStatus: 404,
-    releaseStatus: 404,
+    remotePromotion: { tagCommitSha: null, release: null },
     now: new Date('2029-01-01T00:00:00Z'),
     ...overrides,
   }
@@ -193,14 +209,54 @@ function qualificationFixture({
   return { root, source, artifactRoot: path.dirname(artifact), bundle: artifact }
 }
 
+function stagedPromotionFixture(sourceVerificationPlan = sourcePlan()) {
+  const fixture = qualificationFixture()
+  const readyRoot = path.join(fixture.root, 'ready')
+  verifyDownloadedQualification({
+    artifactRoot: fixture.artifactRoot,
+    qualifiedSource: fixture.source,
+    sourceCommit: SHA,
+    sourcePlan: sourceVerificationPlan,
+    outputDirectory: readyRoot,
+  })
+  return { ...fixture, readyRoot, plan: verifyStagedPromotion(readyRoot) }
+}
+
 describe('runtime artifact promotion source validation', () => {
   it('accepts one successful artifact from the expected default-branch workflow', () => {
     expect(sourcePlan()).toMatchObject({
       state: 'SOURCE_VERIFIED',
       expectedSha: SHA,
       tag: 'v0.4.0',
+      promotionRecovery: { mode: 'CREATE' },
       artifact: { id: 456, name: 'windows-cloud-build-runtime-verified' },
     })
+  })
+
+  it('records an exact existing draft and tag as a recovery candidate', () => {
+    expect(validateQualificationSource(metadata({
+      remotePromotion: { tagCommitSha: SHA, release: recoveryDraft() },
+    }))).toMatchObject({
+      promotionRecovery: { mode: 'RESUME_DRAFT', releaseId: 360126743 },
+    })
+  })
+
+  it('reads an exact existing draft and tag into a resumable source plan', async () => {
+    const input = metadata()
+    const fetcher = queuedFetcher([
+      { method: 'GET', path: '/repos/EthanYoQ/AI-Novel-Writer', status: 200, data: input.repository },
+      { method: 'GET', path: '/actions/workflows/windows-cloud-build-test.yml', status: 200, data: input.workflow },
+      { method: 'GET', path: '/actions/runs/123', status: 200, data: input.run },
+      { method: 'GET', path: `/compare/${SHA}...master`, status: 200, data: input.comparison },
+      { method: 'GET', path: '/actions/runs/123/artifacts?per_page=100', status: 200, data: input.artifactsResponse },
+      { method: 'GET', path: '/git/ref/tags/v0.4.0', status: 200, data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } } },
+      { method: 'GET', path: '/releases/tags/v0.4.0', status: 200, data: recoveryDraft() },
+    ])
+    await expect(createSourcePlan({ token: 'token', inputs: input.inputs, fetcher })).resolves.toMatchObject({
+      state: 'SOURCE_VERIFIED',
+      promotionRecovery: { mode: 'RESUME_DRAFT', releaseId: 360126743 },
+    })
+    fetcher.assertDrained()
   })
 
   it.each([
@@ -208,7 +264,12 @@ describe('runtime artifact promotion source validation', () => {
     ['wrong workflow', () => metadata({ workflow: { ...metadata().workflow, name: 'Other workflow' } }), 'workflow name'],
     ['wrong SHA', () => metadata({ run: { ...metadata().run, head_sha: 'b'.repeat(40) } }), 'head SHA'],
     ['invalid tag', () => metadata({ inputs: { ...metadata().inputs, tag: 'v0.4.0-beta.1' } }), 'final v-prefixed'],
-    ['duplicate Release', () => metadata({ releaseStatus: 200 }), 'already exists'],
+    ['tag without Release', () => metadata({ remotePromotion: { tagCommitSha: SHA, release: null } }), 'partially occupied'],
+    ['Release without tag', () => metadata({ remotePromotion: { tagCommitSha: null, release: recoveryDraft() } }), 'partially occupied'],
+    ['wrong existing tag target', () => metadata({ remotePromotion: { tagCommitSha: OTHER_SHA, release: recoveryDraft() } }), 'does not resolve to expected_sha'],
+    ['wrong existing draft target', () => metadata({ remotePromotion: { tagCommitSha: SHA, release: recoveryDraft({ target_commitish: OTHER_SHA }) } }), 'target_commitish'],
+    ['published existing Release', () => metadata({ remotePromotion: { tagCommitSha: SHA, release: recoveryDraft({ draft: false }) } }), 'not an unpublished'],
+    ['wrong existing draft provenance', () => metadata({ remotePromotion: { tagCommitSha: SHA, release: recoveryDraft({ body: 'untrusted provenance' }) } }), 'provenance'],
   ])('rejects %s', (_label, makeInput, message) => {
     expect(() => validateQualificationSource(makeInput())).toThrow(message)
   })
@@ -342,6 +403,84 @@ describe('remote Release asset verification', () => {
   })
 })
 
+describe('idempotent draft recovery', () => {
+  function recoverySourcePlan() {
+    return validateQualificationSource(metadata({
+      remotePromotion: { tagCommitSha: SHA, release: recoveryDraft() },
+    }))
+  }
+
+  function uploadedAssets(plan: { releaseAssets: Array<{ file: string; sizeBytes: number; sha256: string }> }) {
+    return plan.releaseAssets.map(asset => ({
+      name: asset.file,
+      size: asset.sizeBytes,
+      digest: `sha256:${asset.sha256}`,
+      state: 'uploaded',
+    }))
+  }
+
+  it('re-verifies an exact retained draft and publishes it without re-uploading assets', async () => {
+    const fixture = stagedPromotionFixture(recoverySourcePlan())
+    const draft = recoveryDraft({ assets: uploadedAssets(fixture.plan) })
+    const requests: MockRequest[] = []
+    const fetcher = queuedFetcher([
+      { method: 'GET', path: '/git/ref/tags/v0.4.0', status: 200, data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } } },
+      { method: 'GET', path: '/releases/tags/v0.4.0', status: 200, data: draft },
+      { method: 'GET', path: '/git/ref/tags/v0.4.0', status: 200, data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } } },
+      { method: 'PATCH', path: '/releases/360126743', status: 200, data: { ...draft, draft: false, prerelease: false } },
+      { method: 'GET', path: '/git/ref/tags/v0.4.0', status: 200, data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } } },
+    ], requests)
+
+    await expect(publishPromotion({
+      token: 'token',
+      readyRoot: fixture.readyRoot,
+      expectedRepository: 'EthanYoQ/AI-Novel-Writer',
+      expectedTag: 'v0.4.0',
+      fetcher,
+    })).resolves.toMatchObject({ releaseId: 360126743, tag: 'v0.4.0' })
+    expect(requests.map(request => request.method)).toEqual(['GET', 'GET', 'GET', 'PATCH', 'GET'])
+    fetcher.assertDrained()
+  })
+
+  it('fails closed without publishing when retained draft assets are not exact', async () => {
+    const fixture = stagedPromotionFixture(recoverySourcePlan())
+    const requests: MockRequest[] = []
+    const fetcher = queuedFetcher([
+      { method: 'GET', path: '/git/ref/tags/v0.4.0', status: 200, data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } } },
+      { method: 'GET', path: '/releases/tags/v0.4.0', status: 200, data: recoveryDraft() },
+    ], requests)
+
+    await expect(publishPromotion({
+      token: 'token',
+      readyRoot: fixture.readyRoot,
+      expectedRepository: 'EthanYoQ/AI-Novel-Writer',
+      expectedTag: 'v0.4.0',
+      fetcher,
+    })).rejects.toThrow('Remote Release has 0 assets')
+    expect(requests.map(request => request.method)).toEqual(['GET', 'GET'])
+    fetcher.assertDrained()
+  })
+
+  it('fails closed when the retained tag changes after source planning', async () => {
+    const fixture = stagedPromotionFixture(recoverySourcePlan())
+    const requests: MockRequest[] = []
+    const fetcher = queuedFetcher([
+      { method: 'GET', path: '/git/ref/tags/v0.4.0', status: 200, data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: OTHER_SHA } } },
+      { method: 'GET', path: '/releases/tags/v0.4.0', status: 200, data: recoveryDraft({ assets: uploadedAssets(fixture.plan) }) },
+    ], requests)
+
+    await expect(publishPromotion({
+      token: 'token',
+      readyRoot: fixture.readyRoot,
+      expectedRepository: 'EthanYoQ/AI-Novel-Writer',
+      expectedTag: 'v0.4.0',
+      fetcher,
+    })).rejects.toThrow('does not resolve to expected_sha')
+    expect(requests.map(request => request.method)).toEqual(['GET', 'GET'])
+    fetcher.assertDrained()
+  })
+})
+
 describe('atomic tag claim and commit peeling', () => {
   it('atomically creates a lightweight tag and confirms its commit', async () => {
     const fetcher = queuedFetcher([
@@ -365,6 +504,36 @@ describe('atomic tag claim and commit peeling', () => {
       expectedSha: SHA,
       fetcher,
     })).resolves.toBe(SHA)
+    fetcher.assertDrained()
+  })
+
+  it('retries a short read-after-create 404 before accepting the new tag', async () => {
+    const pauses: number[] = []
+    const fetcher = queuedFetcher([
+      {
+        method: 'POST',
+        path: '/git/refs',
+        status: 201,
+        data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } },
+      },
+      { method: 'GET', path: '/git/ref/tags/v0.4.0', status: 404 },
+      {
+        method: 'GET',
+        path: '/git/ref/tags/v0.4.0',
+        status: 200,
+        data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } },
+      },
+    ])
+    await expect(claimLightweightTag({
+      token: 'token',
+      repository: 'EthanYoQ/AI-Novel-Writer',
+      tag: 'v0.4.0',
+      expectedSha: SHA,
+      visibilityAttempts: 2,
+      waitForVisibility: async (milliseconds: number) => { pauses.push(milliseconds) },
+      fetcher,
+    })).resolves.toBe(SHA)
+    expect(pauses).toHaveLength(1)
     fetcher.assertDrained()
   })
 
