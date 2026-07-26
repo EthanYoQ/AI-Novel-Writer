@@ -1527,22 +1527,40 @@ $unrelatedArmedRoot = [pscustomobject]@{
   executablePath = $armedRootPath
   identityCaptured = $true
 }
-$uninstallerStart = '638900000000000000'
-$uninstaller = [pscustomobject]@{
+$wrapperCmd = [pscustomobject]@{
   processId = 700
-  startTimeTicks = $uninstallerStart
-  executablePath = $uninstallerPath
+  startTimeTicks = '638900000000000000'
+  executablePath = $cmdPath
   identityCaptured = $true
   parentProcessId = $armedRoot.processId
   parentProcessStartTimeTicks = $armedRoot.startTimeTicks
   parentExecutablePath = $armedRoot.executablePath
 }
-$helper = [pscustomobject]@{
+$wrapperPowerShell = [pscustomobject]@{
   processId = 701
-  startTimeTicks = '638900000000000100'
+  startTimeTicks = '638900000000000050'
+  executablePath = $powerShellPath
+  identityCaptured = $true
+  parentProcessId = $wrapperCmd.processId
+  parentProcessStartTimeTicks = $wrapperCmd.startTimeTicks
+  parentExecutablePath = $wrapperCmd.executablePath
+}
+$uninstallerStart = '638900000000000100'
+$uninstaller = [pscustomobject]@{
+  processId = 702
+  startTimeTicks = $uninstallerStart
+  executablePath = $uninstallerPath
+  identityCaptured = $true
+  parentProcessId = $wrapperPowerShell.processId
+  parentProcessStartTimeTicks = $wrapperPowerShell.startTimeTicks
+  parentExecutablePath = $wrapperPowerShell.executablePath
+}
+$helper = [pscustomobject]@{
+  processId = 703
+  startTimeTicks = '638900000000000200'
   executablePath = $helperPath
   identityCaptured = $true
-  parentProcessId = 700
+  parentProcessId = $uninstaller.processId
   parentProcessStartTimeTicks = $uninstallerStart
   parentExecutablePath = $uninstallerPath
 }
@@ -1550,8 +1568,8 @@ $availabilityCommand = '"' + $powerShellPath + '" -C "if (Get-Command Get-CimIns
 $cmdCommand = '"' + $cmdPath + '" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI小说作家.exe" /FO CSV | "' + $findPath + '" "AI小说作家.exe"'
 $findCommand = '"' + $findPath + '"  "AI小说作家.exe"'
 $powerShell = [pscustomobject]@{
-  processId = 702
-  startTimeTicks = '638900000000000200'
+  processId = 704
+  startTimeTicks = '638900000000000300'
   executablePath = $powerShellPath
   commandLine = $availabilityCommand
   commandLineCaptured = $true
@@ -1561,8 +1579,8 @@ $powerShell = [pscustomobject]@{
   parentExecutablePath = $helperPath
 }
 $cmd = [pscustomobject]@{
-  processId = 703
-  startTimeTicks = '638900000000000300'
+  processId = 705
+  startTimeTicks = '638900000000000400'
   executablePath = $cmdPath
   commandLine = $cmdCommand
   commandLineCaptured = $true
@@ -1572,8 +1590,8 @@ $cmd = [pscustomobject]@{
   parentExecutablePath = $helperPath
 }
 $find = [pscustomobject]@{
-  processId = 704
-  startTimeTicks = '638900000000000400'
+  processId = 706
+  startTimeTicks = '638900000000000500'
   executablePath = $findPath
   commandLine = $findCommand
   commandLineCaptured = $true
@@ -1582,7 +1600,10 @@ $find = [pscustomobject]@{
   parentProcessStartTimeTicks = $cmd.startTimeTicks
   parentExecutablePath = $cmdPath
 }
-$event = [pscustomobject]@{ ProcessId = 702; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$trackedProcessIdentities = @{}
+$trackedProcessIdentities[[int]$wrapperCmd.processId] = $wrapperCmd
+$trackedProcessIdentities[[int]$wrapperPowerShell.processId] = $wrapperPowerShell
+$event = [pscustomobject]@{ ProcessId = $powerShell.processId; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
 $verifiedFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 [void]$verifiedFindParentKeys.Add((Get-AiNovelGateProcessIdentityKey -ProcessIdentity $cmd))
 $wrongNamedUninstaller = [pscustomobject]@{
@@ -1620,36 +1641,70 @@ $reusedHelperPowerShell = [pscustomobject]@{
   parentProcessStartTimeTicks = '638899999999999998'
   parentExecutablePath = $helper.executablePath
 }
+$missingWrapperTracked = @{}
+$missingWrapperTracked[[int]$wrapperCmd.processId] = $wrapperCmd
+$reusedWrapperCmd = [pscustomobject]@{
+  processId = $wrapperCmd.processId
+  startTimeTicks = '638899999999999998'
+  executablePath = $wrapperCmd.executablePath
+  identityCaptured = $true
+  parentProcessId = $armedRoot.processId
+  parentProcessStartTimeTicks = $armedRoot.startTimeTicks
+  parentExecutablePath = $armedRoot.executablePath
+}
+$reusedWrapperTracked = @{}
+$reusedWrapperTracked[[int]$wrapperCmd.processId] = $reusedWrapperCmd
+$reusedWrapperTracked[[int]$wrapperPowerShell.processId] = $wrapperPowerShell
+$cycleCmd = [pscustomobject]@{
+  processId = $wrapperCmd.processId
+  startTimeTicks = $wrapperCmd.startTimeTicks
+  executablePath = $wrapperCmd.executablePath
+  identityCaptured = $true
+  parentProcessId = $wrapperPowerShell.processId
+  parentProcessStartTimeTicks = $wrapperPowerShell.startTimeTicks
+  parentExecutablePath = $wrapperPowerShell.executablePath
+}
+$cycleTracked = @{}
+$cycleTracked[[int]$wrapperCmd.processId] = $cycleCmd
+$cycleTracked[[int]$wrapperPowerShell.processId] = $wrapperPowerShell
 [pscustomobject]@{
   HelperImage = Test-AiNovelGateNsisUninstallerHelperImage -ImagePath $helperPath
-  UninstallerParent = Test-AiNovelGateCapturedParentIdentity -ChildIdentity $uninstaller -ParentIdentity $armedRoot
-  HelperParent = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $helper -UninstallerIdentity $uninstaller -ArmedRootIdentity $armedRoot
-  PowerShellChain = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $powerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
-  CmdCandidateChain = Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
-  CmdVerifiedChain = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot -VerifiedFindParentKeys $verifiedFindParentKeys
-  FindFourLevelChain = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $helper -GreatGrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
-  SameNamedCompleteChainWrongArmedRoot = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $powerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $unrelatedArmedRoot
-  OtherStep = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'other-step' -Event $event -ProcessIdentity $powerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
-  OrphanHelper = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $helper -UninstallerIdentity $null -ArmedRootIdentity $armedRoot
+  UninstallerAncestry = Test-AiNovelGateIdentityAncestryToArmedRoot -StartIdentity $uninstaller -TrackedProcessIdentities $trackedProcessIdentities -ArmedRootIdentity $armedRoot
+  HelperParent = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $helper -UninstallerIdentity $uninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
+  PowerShellChain = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $powerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
+  CmdCandidateChain = Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
+  CmdVerifiedChain = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities -VerifiedFindParentKeys $verifiedFindParentKeys
+  FindFourLevelChain = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $helper -GreatGrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
+  SameNamedCompleteChainWrongArmedRoot = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $powerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $unrelatedArmedRoot -TrackedProcessIdentities $trackedProcessIdentities
+  MissingWrapperRecord = Test-AiNovelGateIdentityAncestryToArmedRoot -StartIdentity $uninstaller -TrackedProcessIdentities $missingWrapperTracked -ArmedRootIdentity $armedRoot
+  ReusedWrapperPid = Test-AiNovelGateIdentityAncestryToArmedRoot -StartIdentity $uninstaller -TrackedProcessIdentities $reusedWrapperTracked -ArmedRootIdentity $armedRoot
+  CycleFailsClosed = Test-AiNovelGateIdentityAncestryToArmedRoot -StartIdentity $uninstaller -TrackedProcessIdentities $cycleTracked -ArmedRootIdentity $armedRoot
+  DepthFailsClosed = Test-AiNovelGateIdentityAncestryToArmedRoot -StartIdentity $uninstaller -TrackedProcessIdentities $trackedProcessIdentities -ArmedRootIdentity $armedRoot -MaxDepth 2
+  OtherStep = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'other-step' -Event $event -ProcessIdentity $powerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
+  OrphanHelper = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $helper -UninstallerIdentity $null -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
   NestedHelperDirectory = Test-AiNovelGateNsisUninstallerHelperImage -ImagePath $nestedHelperPath
   WrongHelperFile = Test-AiNovelGateNsisUninstallerHelperImage -ImagePath $wrongFileHelperPath
-  WrongUninstallerName = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $wrongNamedHelper -UninstallerIdentity $wrongNamedUninstaller -ArmedRootIdentity $armedRoot
-  ReusedUninstallerPid = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $reusedUninstallerHelper -UninstallerIdentity $uninstaller -ArmedRootIdentity $armedRoot
-  ReusedHelperPid = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $reusedHelperPowerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
-  FindWrongGreatGrandParent = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $helper -GreatGrandParentIdentity $wrongNamedUninstaller -ArmedRootIdentity $armedRoot
+  WrongUninstallerName = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $wrongNamedHelper -UninstallerIdentity $wrongNamedUninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
+  ReusedUninstallerPid = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $reusedUninstallerHelper -UninstallerIdentity $uninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
+  ReusedHelperPid = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $reusedHelperPowerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
+  FindWrongGreatGrandParent = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $helper -GreatGrandParentIdentity $wrongNamedUninstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $trackedProcessIdentities
 } | ConvertTo-Json -Compress
 `)
     const result = parseLastJsonLine(output)
 
     expect(result).toEqual({
       HelperImage: true,
-      UninstallerParent: true,
+      UninstallerAncestry: true,
       HelperParent: true,
       PowerShellChain: true,
       CmdCandidateChain: true,
       CmdVerifiedChain: true,
       FindFourLevelChain: true,
       SameNamedCompleteChainWrongArmedRoot: false,
+      MissingWrapperRecord: false,
+      ReusedWrapperPid: false,
+      CycleFailsClosed: false,
+      DepthFailsClosed: false,
       OtherStep: false,
       OrphanHelper: false,
       NestedHelperDirectory: false,
