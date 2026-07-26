@@ -1504,6 +1504,163 @@ $noFindFailsClosedAfterGrace = Test-AiNovelGateDeferredNsisCmdExitFailureReady -
     })
   })
 
+  windowsIt('accepts only the complete NSIS uninstaller helper chain for expected process-check exits', () => {
+    const output = runReleaseMonitorLibrary(`
+$powerShellPath = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+$cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+$findPath = Join-Path $env:SystemRoot 'System32\\find.exe'
+$tempRoot = [System.IO.Path]::GetTempPath()
+$helperPath = Join-Path (Join-Path $tempRoot '~nsuA9.tmp') 'Un_A9.exe'
+$nestedHelperPath = Join-Path (Join-Path (Join-Path $tempRoot '~nsuA9.tmp') 'nested') 'Un_A9.exe'
+$wrongFileHelperPath = Join-Path (Join-Path $tempRoot '~nsuA9.tmp') 'Un_A9-.exe'
+$uninstallerPath = 'C:\\temp\\installed-app\\Uninstall AI小说作家.exe'
+$armedRootPath = 'C:\\tools\\node.exe'
+$armedRoot = [pscustomobject]@{
+  processId = 699
+  startTimeTicks = '638899999999999900'
+  executablePath = $armedRootPath
+  identityCaptured = $true
+}
+$unrelatedArmedRoot = [pscustomobject]@{
+  processId = 698
+  startTimeTicks = '638899999999999800'
+  executablePath = $armedRootPath
+  identityCaptured = $true
+}
+$uninstallerStart = '638900000000000000'
+$uninstaller = [pscustomobject]@{
+  processId = 700
+  startTimeTicks = $uninstallerStart
+  executablePath = $uninstallerPath
+  identityCaptured = $true
+  parentProcessId = $armedRoot.processId
+  parentProcessStartTimeTicks = $armedRoot.startTimeTicks
+  parentExecutablePath = $armedRoot.executablePath
+}
+$helper = [pscustomobject]@{
+  processId = 701
+  startTimeTicks = '638900000000000100'
+  executablePath = $helperPath
+  identityCaptured = $true
+  parentProcessId = 700
+  parentProcessStartTimeTicks = $uninstallerStart
+  parentExecutablePath = $uninstallerPath
+}
+$availabilityCommand = '"' + $powerShellPath + '" -C "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"'
+$cmdCommand = '"' + $cmdPath + '" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI小说作家.exe" /FO CSV | "' + $findPath + '" "AI小说作家.exe"'
+$findCommand = '"' + $findPath + '"  "AI小说作家.exe"'
+$powerShell = [pscustomobject]@{
+  processId = 702
+  startTimeTicks = '638900000000000200'
+  executablePath = $powerShellPath
+  commandLine = $availabilityCommand
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = $helper.processId
+  parentProcessStartTimeTicks = $helper.startTimeTicks
+  parentExecutablePath = $helperPath
+}
+$cmd = [pscustomobject]@{
+  processId = 703
+  startTimeTicks = '638900000000000300'
+  executablePath = $cmdPath
+  commandLine = $cmdCommand
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = $helper.processId
+  parentProcessStartTimeTicks = $helper.startTimeTicks
+  parentExecutablePath = $helperPath
+}
+$find = [pscustomobject]@{
+  processId = 704
+  startTimeTicks = '638900000000000400'
+  executablePath = $findPath
+  commandLine = $findCommand
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = $cmd.processId
+  parentProcessStartTimeTicks = $cmd.startTimeTicks
+  parentExecutablePath = $cmdPath
+}
+$event = [pscustomobject]@{ ProcessId = 702; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$verifiedFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+[void]$verifiedFindParentKeys.Add((Get-AiNovelGateProcessIdentityKey -ProcessIdentity $cmd))
+$wrongNamedUninstaller = [pscustomobject]@{
+  processId = $uninstaller.processId
+  startTimeTicks = $uninstaller.startTimeTicks
+  executablePath = 'C:\\temp\\installed-app\\Uninstall other.exe'
+  identityCaptured = $true
+}
+$wrongNamedHelper = [pscustomobject]@{
+  processId = $helper.processId
+  startTimeTicks = $helper.startTimeTicks
+  executablePath = $helperPath
+  identityCaptured = $true
+  parentProcessId = $uninstaller.processId
+  parentProcessStartTimeTicks = $uninstaller.startTimeTicks
+  parentExecutablePath = $wrongNamedUninstaller.executablePath
+}
+$reusedUninstallerHelper = [pscustomobject]@{
+  processId = $helper.processId
+  startTimeTicks = $helper.startTimeTicks
+  executablePath = $helperPath
+  identityCaptured = $true
+  parentProcessId = $uninstaller.processId
+  parentProcessStartTimeTicks = '638899999999999999'
+  parentExecutablePath = $uninstaller.executablePath
+}
+$reusedHelperPowerShell = [pscustomobject]@{
+  processId = $powerShell.processId
+  startTimeTicks = $powerShell.startTimeTicks
+  executablePath = $powerShell.executablePath
+  commandLine = $powerShell.commandLine
+  commandLineCaptured = $true
+  identityCaptured = $true
+  parentProcessId = $helper.processId
+  parentProcessStartTimeTicks = '638899999999999998'
+  parentExecutablePath = $helper.executablePath
+}
+[pscustomobject]@{
+  HelperImage = Test-AiNovelGateNsisUninstallerHelperImage -ImagePath $helperPath
+  UninstallerParent = Test-AiNovelGateCapturedParentIdentity -ChildIdentity $uninstaller -ParentIdentity $armedRoot
+  HelperParent = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $helper -UninstallerIdentity $uninstaller -ArmedRootIdentity $armedRoot
+  PowerShellChain = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $powerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
+  CmdCandidateChain = Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
+  CmdVerifiedChain = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $cmd -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot -VerifiedFindParentKeys $verifiedFindParentKeys
+  FindFourLevelChain = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $helper -GreatGrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
+  SameNamedCompleteChainWrongArmedRoot = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $powerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $unrelatedArmedRoot
+  OtherStep = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'other-step' -Event $event -ProcessIdentity $powerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
+  OrphanHelper = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $helper -UninstallerIdentity $null -ArmedRootIdentity $armedRoot
+  NestedHelperDirectory = Test-AiNovelGateNsisUninstallerHelperImage -ImagePath $nestedHelperPath
+  WrongHelperFile = Test-AiNovelGateNsisUninstallerHelperImage -ImagePath $wrongFileHelperPath
+  WrongUninstallerName = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $wrongNamedHelper -UninstallerIdentity $wrongNamedUninstaller -ArmedRootIdentity $armedRoot
+  ReusedUninstallerPid = Test-AiNovelGateCapturedNsisUninstallerHelperParent -HelperIdentity $reusedUninstallerHelper -UninstallerIdentity $uninstaller -ArmedRootIdentity $armedRoot
+  ReusedHelperPid = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $reusedHelperPowerShell -ParentIdentity $helper -GrandParentIdentity $uninstaller -ArmedRootIdentity $armedRoot
+  FindWrongGreatGrandParent = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'smoke:win-installer' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $helper -GreatGrandParentIdentity $wrongNamedUninstaller -ArmedRootIdentity $armedRoot
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      HelperImage: true,
+      UninstallerParent: true,
+      HelperParent: true,
+      PowerShellChain: true,
+      CmdCandidateChain: true,
+      CmdVerifiedChain: true,
+      FindFourLevelChain: true,
+      SameNamedCompleteChainWrongArmedRoot: false,
+      OtherStep: false,
+      OrphanHelper: false,
+      NestedHelperDirectory: false,
+      WrongHelperFile: false,
+      WrongUninstallerName: false,
+      ReusedUninstallerPid: false,
+      ReusedHelperPid: false,
+      FindWrongGreatGrandParent: false,
+    })
+  })
+
   windowsIt('keeps command-line secrets in memory and redacts them from process evidence', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-evidence-redaction-'))
     const secret = 'super-secret-cli-token'

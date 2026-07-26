@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -11,6 +11,50 @@ const windowsIt = process.platform === 'win32' ? it : it.skip
 
 function quotePowerShell(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
+}
+
+const windowsShortPathFixtureSource = String.raw`
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class AiNovelTestShortPath {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern uint GetShortPathName(
+    string longPath,
+    StringBuilder shortPath,
+    uint cchBuffer
+  );
+
+  public static string Get(string path) {
+    if (String.IsNullOrWhiteSpace(path)) return null;
+    uint required = GetShortPathName(path, null, 0);
+    if (required == 0) return null;
+    StringBuilder buffer = new StringBuilder(unchecked((int)required + 1));
+    uint written = GetShortPathName(path, buffer, unchecked((uint)buffer.Capacity));
+    if (written == 0 || written >= buffer.Capacity) return null;
+    return buffer.ToString();
+  }
+}
+`
+
+function windowsShortPath(path: string): string | undefined {
+  try {
+    const output = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `Add-Type -TypeDefinition ${quotePowerShell(windowsShortPathFixtureSource)}; [AiNovelTestShortPath]::Get(${quotePowerShell(path)})`,
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    ).trim()
+    return output || undefined
+  } catch {
+    return undefined
+  }
 }
 
 function windowsProcessStartTimeTicks(processId: number): string {
@@ -1305,6 +1349,271 @@ internal static class ExactNsisProbeParent {
         await settleWithin(gate.child).catch(() => undefined)
       }
       await stopGateMonitor(controlPath, monitor)
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  windowsIt('accepts the real 8.3-path NSIS uninstaller helper process-check chain only after its identity-bound TEMP host is observed', async (context) => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-nsis-uninstaller-'))
+    const controlPath = join(root, 'control.jsonl')
+    const statusPath = join(root, 'status.json')
+    const evidencePath = join(root, 'evidence')
+    const helperDirectory = join(tmpdir(), `~nsu${Date.now().toString(36)}${process.pid.toString(36)}.tmp`)
+    const helperPath = join(helperDirectory, 'Un_A9.exe')
+    const installRoot = join(root, 'installed-app')
+    const uninstallerPath = join(installRoot, 'Uninstall AI小说作家.exe')
+    const sourcePath = join(root, 'ExactNsisUninstallerHelper.cs')
+    const probeResultPath = join(root, 'probe-results.txt')
+    const systemPowerShell = join(
+      process.env.SystemRoot ?? 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    )
+    const systemCmd = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe')
+    mkdirSync(helperDirectory, { recursive: true })
+    mkdirSync(installRoot, { recursive: true })
+    writeFileSync(sourcePath, String.raw`
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+
+internal static class ExactNsisUninstallerHelper {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  private struct StartupInfo {
+    public int cb;
+    public string lpReserved;
+    public string lpDesktop;
+    public string lpTitle;
+    public int dwX;
+    public int dwY;
+    public int dwXSize;
+    public int dwYSize;
+    public int dwXCountChars;
+    public int dwYCountChars;
+    public int dwFillAttribute;
+    public int dwFlags;
+    public short wShowWindow;
+    public short cbReserved2;
+    public IntPtr lpReserved2;
+    public IntPtr hStdInput;
+    public IntPtr hStdOutput;
+    public IntPtr hStdError;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct ProcessInformation {
+    public IntPtr hProcess;
+    public IntPtr hThread;
+    public uint dwProcessId;
+    public uint dwThreadId;
+  }
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool CreateProcess(
+    string applicationName,
+    StringBuilder commandLine,
+    IntPtr processAttributes,
+    IntPtr threadAttributes,
+    bool inheritHandles,
+    uint creationFlags,
+    IntPtr environment,
+    string currentDirectory,
+    ref StartupInfo startupInfo,
+    out ProcessInformation processInformation
+  );
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool CloseHandle(IntPtr handle);
+
+  private static int RunCommand(string executablePath, string commandLineValue) {
+    StartupInfo startupInfo = new StartupInfo();
+    startupInfo.cb = Marshal.SizeOf(startupInfo);
+    ProcessInformation processInformation;
+    StringBuilder commandLine = new StringBuilder(commandLineValue);
+    if (!CreateProcess(
+      executablePath,
+      commandLine,
+      IntPtr.Zero,
+      IntPtr.Zero,
+      false,
+      0x08000000,
+      IntPtr.Zero,
+      null,
+      ref startupInfo,
+      out processInformation
+    )) return -Marshal.GetLastWin32Error();
+    try {
+      if (WaitForSingleObject(processInformation.hProcess, 30000) != 0) return -9001;
+      uint exitCode;
+      if (!GetExitCodeProcess(processInformation.hProcess, out exitCode)) return -Marshal.GetLastWin32Error();
+      return unchecked((int)exitCode);
+    }
+    finally {
+      CloseHandle(processInformation.hThread);
+      CloseHandle(processInformation.hProcess);
+    }
+  }
+
+  private static string QuoteArgument(string value) {
+    return "\"" + value + "\"";
+  }
+
+  private static int RunHost(string helperPath, string powerShellPath, string cmdPath, string outputPath) {
+    ProcessStartInfo startInfo = new ProcessStartInfo();
+    startInfo.FileName = helperPath;
+    startInfo.Arguments = QuoteArgument(powerShellPath) + " " + QuoteArgument(cmdPath) + " " + QuoteArgument(outputPath);
+    startInfo.UseShellExecute = false;
+    startInfo.CreateNoWindow = true;
+    using (Process helper = Process.Start(startInfo)) {
+      helper.WaitForExit();
+      return helper.ExitCode;
+    }
+  }
+
+  private static int RunHelper(string powerShellPath, string cmdPath, string outputPath) {
+    string probePayload = "if ((Get-CimInstance -ClassName Win32_Process | ? {$_.Path -and $_.Path.StartsWith('C:\\ai-novel-release-probe-empty', 'CurrentCultureIgnoreCase')}).Count -gt 0) { exit 0 } else { exit 1 }";
+    string powerShellCommand = "\"" + powerShellPath + "\" -C \"" + probePayload + "\"";
+    string findPath = Path.Combine(Path.GetDirectoryName(cmdPath), "find.exe");
+    string cmdCommand =
+      "\"" + cmdPath + "\" /C tasklist /FI \"USERNAME eq %USERNAME%\" /FI \"IMAGENAME eq AI小说作家.exe\" /FO CSV | \"" +
+      findPath +
+      "\" \"AI小说作家.exe\"";
+    int powerShellExit = RunCommand(powerShellPath, powerShellCommand);
+    int cmdExit = RunCommand(cmdPath, cmdCommand);
+    File.WriteAllText(outputPath, powerShellExit + "," + cmdExit);
+    return 0;
+  }
+
+  public static int Main(string[] args) {
+    if (args.Length == 5 && String.Equals(args[0], "--host", StringComparison.Ordinal)) {
+      return RunHost(args[1], args[2], args[3], args[4]);
+    }
+    if (args.Length == 3) return RunHelper(args[0], args[1], args[2]);
+    return 64;
+  }
+}
+`, 'utf8')
+    execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `Add-Type -Path ${quotePowerShell(sourcePath)} -OutputAssembly ${quotePowerShell(helperPath)} -OutputType ConsoleApplication`,
+      ],
+      { windowsHide: true, stdio: 'ignore' },
+    )
+    copyFileSync(helperPath, uninstallerPath)
+    const helperLaunchPath = windowsShortPath(helperPath)
+    if (
+      !helperLaunchPath
+      || helperLaunchPath.toLowerCase() === helperPath.toLowerCase()
+      || !helperLaunchPath.includes('~')
+    ) {
+      rmSync(helperDirectory, { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
+      context.skip('This filesystem does not expose a distinct 8.3 helper path; the 8.3-specific chain test is not applicable.')
+      return
+    }
+    const monitor = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        releaseMonitorScript,
+        '-ControlPath',
+        controlPath,
+        '-StatusPath',
+        statusPath,
+        '-EvidencePath',
+        evidencePath,
+      ],
+      { windowsHide: true, stdio: 'ignore' },
+    )
+    let gate: Awaited<ReturnType<typeof startArmedExecutable>> | undefined
+
+    try {
+      await waitForGateStatus(statusPath, 'ready')
+      gate = await startArmedExecutable(
+        root,
+        uninstallerPath,
+        ['--host', helperLaunchPath, systemPowerShell, systemCmd, probeResultPath],
+      )
+      if (gate.child.pid == null) throw new Error('The armed uninstaller gate did not expose a PID')
+      appendFileSync(
+        controlPath,
+        `${JSON.stringify({
+          sequence: 1,
+          state: 'running',
+          step: 'smoke:win-installer',
+          rootProcessId: gate.child.pid,
+          rootProcessStartTimeTicks: windowsProcessStartTimeTicks(gate.child.pid),
+          relatedTargetNames: ['Uninstall AI小说作家', 'Un_A9', 'powershell'],
+        })}\n`,
+        'utf8',
+      )
+      await waitForGateStatus(statusPath, 'monitoring')
+      writeFileSync(gate.releasePath, 'release', 'utf8')
+      expect(await settleWithin(gate.child, 30_000)).toEqual({ code: 0, signal: null })
+      expect(readFileSync(probeResultPath, 'utf8').split(',').map(Number)).toEqual([1, 1])
+
+      appendFileSync(
+        controlPath,
+        `${JSON.stringify({ sequence: 2, state: 'step-complete', step: 'smoke:win-installer' })}\n`,
+        'utf8',
+      )
+      await waitForGateStatus(statusPath, 'step-completed', 30_000)
+      const rawEvidence = readFileSync(join(evidencePath, 'process-events.jsonl'), 'utf8')
+      const events = rawEvidence.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
+      const expectedPowerShell = events.find(event => event.kind === 'process-exit'
+        && event.exitClassification === 'expected-nsis-powershell-probe')
+      const expectedCmd = events.find(event => event.kind === 'process-exit'
+        && event.exitClassification === 'expected-nsis-cmd-process-check')
+      const expectedFind = events.find(event => event.kind === 'process-exit'
+        && event.exitClassification === 'expected-nsis-find-no-match')
+      const helperStart = events.find(event => {
+        const identity = event.processIdentity as Record<string, unknown> | undefined
+        return event.kind === 'process-start' && identity?.processName === 'Un_A9'
+      })
+      const uninstallerStart = events.find(event => {
+        const identity = event.processIdentity as Record<string, unknown> | undefined
+        return event.kind === 'process-start' && identity?.processName === 'Uninstall AI小说作家'
+      })
+
+      expect(expectedPowerShell).toMatchObject({ exitCode: 1 })
+      expect(expectedCmd).toMatchObject({ exitCode: 1 })
+      expect(expectedFind).toMatchObject({ exitCode: 1 })
+      expect(helperStart).toBeDefined()
+      expect(uninstallerStart).toBeDefined()
+      expect(events.some(event => event.kind === 'process-exit' && event.exitClassification === 'failure')).toBe(false)
+      expect(rawEvidence).not.toContain('tasklist /FI')
+      expect(rawEvidence).not.toContain('Get-CimInstance')
+    } catch (error) {
+      const eventPath = join(evidencePath, 'process-events.jsonl')
+      const diagnostics = existsSync(eventPath)
+        ? readFileSync(eventPath, 'utf8').trim().split(/\r?\n/).slice(-30).join('\n')
+        : 'process-events.jsonl was not created'
+      throw new Error(`${String(error)}\nRecent redacted process events:\n${diagnostics}`)
+    } finally {
+      if (gate) {
+        gate.child.kill()
+        await settleWithin(gate.child).catch(() => undefined)
+      }
+      await stopGateMonitor(controlPath, monitor)
+      rmSync(helperDirectory, { recursive: true, force: true })
       rmSync(root, { recursive: true, force: true })
     }
   }, 60_000)
