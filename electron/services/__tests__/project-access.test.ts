@@ -179,7 +179,9 @@ describe('ProjectAccessService project session seam', () => {
 
     const created = access.createProject(home, 'home-child')
 
-    expect(created.rootPath).toBe(path.join(home, 'home-child'))
+    // Windows may canonicalize a temporary parent from its short (8.3) form
+    // to its long form. Project identity is the canonical root, not spelling.
+    expect(access.sameCanonicalProjectRoot(created.rootPath, path.join(home, 'home-child'))).toBe(true)
     expect(() => access.probeExistingProject(home)).toThrow('用户主目录')
   })
 

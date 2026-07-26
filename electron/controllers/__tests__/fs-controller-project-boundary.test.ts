@@ -107,6 +107,21 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+/**
+ * Project-boundary failures are deliberately localized by the main process.
+ * Keep the exact security outcome under test while allowing either supported
+ * user-facing locale, rather than accidentally coupling this safety suite to
+ * the developer machine's persisted locale.
+ */
+function expectLocalizedSecurityFailure(
+  result: unknown,
+  messages: readonly [string, string],
+): void {
+  expect(result).toMatchObject({ success: false })
+  expect(result).toHaveProperty('error')
+  expect(messages).toContain((result as { error?: unknown }).error)
+}
+
 beforeAll(() => {
   registerFSController(testFileSystem)
 })
@@ -141,13 +156,15 @@ describe('project-scoped filesystem boundary', () => {
   })
 
   it('rejects project file access when the renderer omits project identity', async () => {
-    await expect(rawHandler('fs:read-file')(
+    const result = await rawHandler('fs:read-file')(
       {},
       path.join(projectAPath, 'chapter.md'),
-    )).resolves.toMatchObject({
-      success: false,
-      error: expect.stringContaining('缺少项目会话上下文'),
-    })
+    )
+
+    expectLocalizedSecurityFailure(result, [
+      '缺少项目会话上下文，已拒绝操作。',
+      'Project session context is missing; the operation was rejected.',
+    ])
   })
 
   it('rejects a matching filesystem path when its project session is omitted', async () => {
@@ -157,44 +174,47 @@ describe('project-scoped filesystem boundary', () => {
       projectAPath,
     )
 
-    expect(result).toMatchObject({
-      success: false,
-      error: expect.stringContaining('项目会话'),
-    })
+    expectLocalizedSecurityFailure(result, [
+      '缺少项目会话上下文，已拒绝操作。',
+      'Project session context is missing; the operation was rejected.',
+    ])
   })
 
   it('rejects traversal and unrelated absolute paths before read or write', async () => {
-    await expect(handler('fs:read-file')(
+    const traversalResult = await handler('fs:read-file')(
       {},
       path.join(projectAPath, '..', 'B', 'secret.md'),
       projectAPath,
-    )).resolves.toMatchObject({
-      success: false,
-      error: expect.stringContaining('超出当前项目'),
-    })
+    )
+    expectLocalizedSecurityFailure(traversalResult, [
+      '目标超出当前项目范围，已拒绝操作。',
+      'The target is outside the current project; the operation was rejected.',
+    ])
 
-    await expect(handler('fs:write-file')(
+    const unrelatedWriteResult = await handler('fs:write-file')(
       {},
       path.join(projectBPath, 'secret.md'),
       'content',
       projectAPath,
-    )).resolves.toMatchObject({
-      success: false,
-      error: expect.stringContaining('超出当前项目'),
-    })
+    )
+    expectLocalizedSecurityFailure(unrelatedWriteResult, [
+      '目标超出当前项目范围，已拒绝操作。',
+      'The target is outside the current project; the operation was rejected.',
+    ])
   })
 
   it('rejects a project identity that no longer matches the active database', async () => {
     mocks.currentProjectPath = projectBPath
 
-    await expect(handler('fs:read-file')(
+    const result = await handler('fs:read-file')(
       {},
       path.join(projectAPath, 'chapter.md'),
       projectAPath,
-    )).resolves.toMatchObject({
-      success: false,
-      error: expect.stringContaining('跨项目读写'),
-    })
+    )
+    expectLocalizedSecurityFailure(result, [
+      '检测到跨项目读写，已拒绝操作。',
+      'Cross-project file access was rejected.',
+    ])
   })
 
   it('propagates directory enumeration failures instead of returning an empty tree', async () => {
@@ -221,10 +241,10 @@ describe('project-scoped filesystem boundary', () => {
     mocks.activeLeaseId = 'lease-B'
     pendingRead.resolve('stale content')
 
-    await expect(resultPromise).resolves.toMatchObject({
-      success: false,
-      error: expect.stringContaining('租约已失效'),
-    })
+    expectLocalizedSecurityFailure(await resultPromise, [
+      '项目租约已失效，已拒绝操作。',
+      'The project lease has expired; the operation was rejected.',
+    ])
   })
 
   it('rejects a delayed same-path write before it can replace the target after reopen', async () => {
@@ -246,10 +266,10 @@ describe('project-scoped filesystem boundary', () => {
     mocks.activeLeaseId = 'lease-B'
     pendingWrite.resolve()
 
-    await expect(resultPromise).resolves.toMatchObject({
-      success: false,
-      error: expect.stringContaining('租约已失效'),
-    })
+    expectLocalizedSecurityFailure(await resultPromise, [
+      '项目租约已失效，已拒绝操作。',
+      'The project lease has expired; the operation was rejected.',
+    ])
     expect(mkdirSpy).toHaveBeenCalledOnce()
     expect(renameSpy).not.toHaveBeenCalled()
     expect(fs.readFileSync(target, 'utf8')).toBe('original')
