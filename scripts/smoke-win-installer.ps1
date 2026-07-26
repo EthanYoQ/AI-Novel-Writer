@@ -224,6 +224,11 @@ function Invoke-AiNovelMonitoredExecutable {
     $startParameters.WindowStyle = 'Hidden'
   }
   $process = Start-Process @startParameters
+  # Windows PowerShell can discard the native process handle after an
+  # unobserved child exits, leaving ExitCode empty even after WaitForExit().
+  # Materialize the handle while the child is alive so finalization below can
+  # read the actual exit status.
+  [void]$process.Handle
   $operationProcessIds = [System.Collections.Generic.HashSet[int]]::new()
   $operationProcessStartTimeTicks = @{}
   [void](Add-AiNovelTrackedProcess -ProcessIds $operationProcessIds -StartTimeTicks $operationProcessStartTimeTicks -ProcessId $process.Id)
@@ -270,8 +275,14 @@ function Invoke-AiNovelMonitoredExecutable {
       -TargetProcessStartTimeTicks $operationProcessStartTimeTicks `
       -TargetNames $targetNames `
       -Operation $Operation
-    if ($process.ExitCode -ne 0) {
-      throw "$Operation failed with code $($process.ExitCode): $Path"
+    [void]$process.WaitForExit()
+    $process.Refresh()
+    $exitCode = $process.ExitCode
+    if ($null -eq $exitCode) {
+      throw "$Operation exited without an available exit code after finalization: $Path"
+    }
+    if ($exitCode -ne 0) {
+      throw "$Operation failed with code ${exitCode}: $Path"
     }
   }
   catch {
