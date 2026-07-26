@@ -80,6 +80,13 @@ function promotionReleaseBody(qualificationRunId) {
   return `Windows runtime-verified release promoted from qualification run ${qualificationRunId}.`
 }
 
+function promotionRecoveryIntent(remoteTagCommitSha, { tag, expectedSha }) {
+  if (remoteTagCommitSha === null) return { mode: 'CREATE' }
+  assert(typeof remoteTagCommitSha === 'string' && /^[a-f0-9]{40}$/i.test(remoteTagCommitSha), 'Existing Git tag SHA is invalid')
+  assert(remoteTagCommitSha.toLowerCase() === expectedSha, `Existing Git tag ${tag} does not resolve to expected_sha`)
+  return { mode: 'RESUME_DRAFT' }
+}
+
 function promotionRecoveryCandidate(remotePromotion, { tag, expectedSha, qualificationRunId }) {
   assert(remotePromotion && typeof remotePromotion === 'object', 'Remote promotion state could not be determined')
   const tagCommitSha = remotePromotion.tagCommitSha
@@ -103,9 +110,6 @@ function promotionRecoveryCandidate(remotePromotion, { tag, expectedSha, qualifi
 
 function assertPromotionRecoveryPlan(recovery) {
   assert(recovery?.mode === 'CREATE' || recovery?.mode === 'RESUME_DRAFT', 'Promotion recovery plan is invalid')
-  if (recovery.mode === 'RESUME_DRAFT') {
-    assert(Number.isInteger(recovery.releaseId) && recovery.releaseId > 0, 'Promotion recovery draft Release ID is invalid')
-  }
 }
 
 export function validateQualificationSource({
@@ -115,7 +119,7 @@ export function validateQualificationSource({
   run,
   comparison,
   artifactsResponse,
-  remotePromotion,
+  remoteTagCommitSha,
   now = new Date(),
 }) {
   assert(inputs?.confirmation === PROMOTION_CONFIRMATION, `confirmation must exactly equal ${PROMOTION_CONFIRMATION}`)
@@ -159,10 +163,9 @@ export function validateQualificationSource({
     assert(String(artifact.workflow_run.head_sha ?? '').toLowerCase() === expectedSha, 'Qualification artifact head SHA is inconsistent')
   }
 
-  const promotionRecovery = promotionRecoveryCandidate(remotePromotion, {
+  const promotionRecovery = promotionRecoveryIntent(remoteTagCommitSha, {
     tag: inputs.tag,
     expectedSha,
-    qualificationRunId: Number(inputs.qualificationRunId),
   })
 
   return {
@@ -452,8 +455,11 @@ export async function createSourcePlan({ token, inputs, fetcher = globalThis.fet
   const expectedSha = encodeURIComponent(inputs.expectedSha)
   const { data: comparison } = await apiRequest({ token, url: `${base}/compare/${expectedSha}...${defaultBranch}`, fetcher })
   const { data: artifactsResponse } = await apiRequest({ token, url: `${base}/actions/runs/${inputs.qualificationRunId}/artifacts?per_page=100`, fetcher })
-  const remotePromotion = await inspectRemotePromotionState({ token, repository: inputs.repository, tag: inputs.tag, fetcher })
-  return validateQualificationSource({ inputs, repository, workflow, run, comparison, artifactsResponse, remotePromotion })
+  // This job intentionally has contents: read. Draft Releases can be hidden from
+  // that token, so only the visible tag state is planned here; the write-capable
+  // publish job re-reads and validates the full draft and its assets.
+  const remoteTagCommitSha = await resolveTagCommitShaIfPresent({ token, repository: inputs.repository, tag: inputs.tag, fetcher })
+  return validateQualificationSource({ inputs, repository, workflow, run, comparison, artifactsResponse, remoteTagCommitSha })
 }
 
 async function resolveTagCommitShaIfPresent({ token, repository, tag, fetcher = globalThis.fetch }) {
@@ -689,7 +695,6 @@ export async function publishPromotion({ token, readyRoot, expectedRepository, e
 
   const base = apiBase(plan.repository)
   if (currentRecovery.mode === 'RESUME_DRAFT') {
-    assert(currentRecovery.releaseId === plan.promotionRecovery.releaseId, 'Existing draft Release changed after qualification planning')
     verifyRemoteReleaseAssets(remotePromotion.release, plan.releaseAssets)
     return finalizePromotionDraft({ token, base, draft: remotePromotion.release, plan, fetcher })
   }
