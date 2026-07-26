@@ -108,6 +108,66 @@ function parseLastJsonLine(output: string): Record<string, unknown> {
   return JSON.parse(line) as Record<string, unknown>
 }
 
+function runWinFormsGracefulCloseProbe(rejectClose: boolean, timeoutSeconds: number): Record<string, unknown> {
+  const rejectCloseHandler = rejectClose
+    ? '$form.add_FormClosing({ param($sender, $eventArgs) $eventArgs.Cancel = $true })'
+    : ''
+  const output = runProbeLibrary(`
+$childScript = @'
+Add-Type -AssemblyName System.Windows.Forms
+$form = [System.Windows.Forms.Form]::new()
+$form.Text = 'AI Novel Writer graceful-close test'
+${rejectCloseHandler}
+$form.Show()
+[System.Windows.Forms.Application]::Run($form)
+'@
+$encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($childScript))
+$process = $null
+try {
+  $process = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-Sta', '-EncodedCommand', $encoded) -PassThru
+  $deadline = [DateTime]::UtcNow.AddSeconds(5)
+  do {
+    Start-Sleep -Milliseconds 100
+    $process.Refresh()
+  } while ($process.MainWindowTitle -ne 'AI Novel Writer graceful-close test' -and [DateTime]::UtcNow -lt $deadline)
+  if ($process.MainWindowTitle -ne 'AI Novel Writer graceful-close test') {
+    throw 'WinForms test process did not expose its main window.'
+  }
+  $processIds = [System.Collections.Generic.HashSet[int]]::new()
+  [void]$processIds.Add($process.Id)
+  $startTimeTicks = @{ ([string]$process.Id) = $process.StartTime.ToUniversalTime().Ticks }
+  $windows = @([pscustomobject]@{
+    ProcessId = $process.Id
+    Visible = $true
+    ClassName = 'Chrome_WidgetWin_1'
+    Title = 'AI Novel Writer graceful-close test'
+  })
+  $failure = ''
+  try {
+    Close-AiNovelProcessTreeGracefully -Process $process -ProcessIds $processIds -StartTimeTicks $startTimeTicks -Windows $windows -TimeoutSeconds ${timeoutSeconds}
+  } catch {
+    $failure = $_.Exception.Message
+  }
+  $process.Refresh()
+  [pscustomobject]@{
+    Failure = $failure
+    Exited = $process.HasExited
+    ExitCode = if ($process.HasExited) { $process.ExitCode } else { $null }
+  } | ConvertTo-Json -Compress
+} finally {
+  if ($process) {
+    $process.Refresh()
+    if (-not $process.HasExited) {
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      [void]$process.WaitForExit(5000)
+    }
+    $process.Dispose()
+  }
+}
+`)
+  return parseLastJsonLine(output)
+}
+
 function runUpgradeFixture(mode: 'seed' | 'validate', projectRoot: string): Record<string, unknown> {
   const output = execFileSync(
     electronNodeRunner,
@@ -554,6 +614,130 @@ $visibleTarget = [pscustomobject]@{ ProcessId = 505; Visible = $true }
       VisibleTargetAccepted: true,
     })
   })
+
+  it('keeps forceful process cleanup out of the successful application smoke path', () => {
+    const appSmoke = readFileSync(probeScript, 'utf8')
+    const outerCatch = appSmoke.search(/\r?\ncatch \{\r?\n {2}Save-AiNovelSmokeFailureEvidence/)
+    const outerTry = appSmoke.lastIndexOf('try {', outerCatch)
+    const outerFinally = appSmoke.indexOf('finally {', outerCatch)
+
+    expect(outerTry).toBeGreaterThanOrEqual(0)
+    expect(outerCatch).toBeGreaterThan(outerTry)
+    expect(outerFinally).toBeGreaterThan(outerCatch)
+    expect(appSmoke.slice(outerTry, outerCatch)).toContain('Close-AiNovelProcessTreeGracefully')
+    expect(appSmoke.slice(outerTry, outerCatch)).not.toContain('Stop-AiNovelProcessTree')
+    const finallyBlock = appSmoke.slice(outerFinally)
+    expect(finallyBlock).toContain('if ($process) {')
+    expect(finallyBlock).not.toContain('$process.HasExited')
+    expect(finallyBlock).toContain('Stop-AiNovelProcessTree')
+  })
+
+  windowsIt('cleans a live tracked child after the root process has already exited', () => {
+    const output = runProbeLibrary(`
+$parentProcess = $null
+$childProcess = $null
+try {
+  $parentProcess = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Milliseconds 250; exit 0') -PassThru
+  $parentStartTimeTicks = $parentProcess.StartTime.ToUniversalTime().Ticks
+  $childProcess = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 30') -PassThru
+  $childStartTimeTicks = $childProcess.StartTime.ToUniversalTime().Ticks
+  [void]$parentProcess.WaitForExit(5000)
+  $parentProcess.Refresh()
+
+  $processIds = [System.Collections.Generic.HashSet[int]]::new()
+  [void]$processIds.Add($parentProcess.Id)
+  [void]$processIds.Add($childProcess.Id)
+  $startTimeTicks = @{
+    ([string]$parentProcess.Id) = $parentStartTimeTicks
+    ([string]$childProcess.Id) = $childStartTimeTicks
+  }
+  $parentExitedBeforeCleanup = $parentProcess.HasExited
+  Stop-AiNovelProcessTree -Process $parentProcess -ProcessIds $processIds -StartTimeTicks $startTimeTicks
+  [void]$childProcess.WaitForExit(5000)
+  $childProcess.Refresh()
+
+  [pscustomobject]@{
+    ParentExitedBeforeCleanup = $parentExitedBeforeCleanup
+    ChildExitedAfterCleanup = $childProcess.HasExited
+  } | ConvertTo-Json -Compress
+} finally {
+  foreach ($candidate in @($parentProcess, $childProcess)) {
+    if ($null -eq $candidate) { continue }
+    try {
+      $candidate.Refresh()
+      if (-not $candidate.HasExited) {
+        Stop-Process -Id $candidate.Id -Force -ErrorAction SilentlyContinue
+        [void]$candidate.WaitForExit(5000)
+      }
+    } finally {
+      $candidate.Dispose()
+    }
+  }
+}
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      ParentExitedBeforeCleanup: true,
+      ChildExitedAfterCleanup: true,
+    })
+  }, 15_000)
+
+  windowsIt('closes a real WinForms process through the default CloseMainWindow path', () => {
+    const result = runWinFormsGracefulCloseProbe(false, 5)
+
+    expect(result).toEqual({
+      Failure: '',
+      Exited: true,
+      ExitCode: 0,
+    })
+  }, 15_000)
+
+  windowsIt('fails closed before invoking providers when a tracked start time no longer matches', () => {
+    const output = runProbeLibrary(`
+$processIds = [System.Collections.Generic.HashSet[int]]::new()
+[void]$processIds.Add($PID)
+$startTimeTicks = @{ ([string]$PID) = 0 }
+$windows = @([pscustomobject]@{
+  ProcessId = $PID
+  Visible = $true
+  ClassName = 'Chrome_WidgetWin_1'
+  Title = 'AI Novel Writer graceful-close test'
+})
+$providerCalls = 0
+$closeCalls = 0
+$failure = ''
+try {
+  $parameters = @{
+    Windows = $windows
+    ProcessIds = $processIds
+    StartTimeTicks = $startTimeTicks
+    ProcessProvider = { param($processId) $script:providerCalls += 1; [System.Diagnostics.Process]::GetProcessById($processId) }
+    CloseMainWindowProvider = { param($process) $script:closeCalls += 1; $true }
+  }
+  Request-AiNovelGracefulMainWindowClose @parameters
+} catch {
+  $failure = $_.Exception.Message
+}
+[pscustomobject]@{
+  ProviderCalls = $providerCalls
+  CloseCalls = $closeCalls
+  Failure = $failure
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result.ProviderCalls).toBe(0)
+    expect(result.CloseCalls).toBe(0)
+    expect(result.Failure).toContain('current tracked process')
+  })
+
+  windowsIt('fails when a graceful close is accepted but the current process tree does not exit', () => {
+    const result = runWinFormsGracefulCloseProbe(true, 1)
+
+    expect(result.Failure).toContain('Application process tree did not terminate')
+    expect(result.Exited).toBe(false)
+  }, 15_000)
 
   windowsIt('accepts only the visible, titled Chromium product main window', () => {
     const output = runProbeLibrary(`

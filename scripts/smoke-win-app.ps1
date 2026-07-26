@@ -598,6 +598,101 @@ function Assert-AiNovelProcessTreeExited {
   throw "Application process tree did not terminate before post-exit monitoring: $($alive -join ', ')"
 }
 
+function Request-AiNovelGracefulMainWindowClose {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Windows,
+    [Parameter(Mandatory = $true)][System.Collections.Generic.HashSet[int]]$ProcessIds,
+    [Parameter(Mandatory = $true)][hashtable]$StartTimeTicks,
+    [scriptblock]$ProcessProvider,
+    [scriptblock]$CloseMainWindowProvider
+  )
+
+  $visibleMainWindows = @($Windows | Where-Object {
+    Test-AiNovelVisibleMainWindow -Window $_ -TargetProcessIds $ProcessIds
+  })
+  if ($visibleMainWindows.Count -ne 1) {
+    throw "Application must expose exactly one visible product main window before graceful close; found $($visibleMainWindows.Count)."
+  }
+
+  $mainWindowProcessId = [int]$visibleMainWindows[0].ProcessId
+  $startTimeKey = [string]$mainWindowProcessId
+  if (
+    -not $ProcessIds.Contains($mainWindowProcessId) -or
+    -not $StartTimeTicks.ContainsKey($startTimeKey) -or
+    -not (Test-AiNovelTrackedProcessAlive -ProcessId $mainWindowProcessId -StartTimeTicks $StartTimeTicks)
+  ) {
+    throw 'Application main-window owner is not the current tracked process.'
+  }
+
+  $candidate = $null
+  try {
+    $candidate = if ($null -eq $ProcessProvider) {
+      [System.Diagnostics.Process]::GetProcessById($mainWindowProcessId)
+    }
+    else {
+      & $ProcessProvider $mainWindowProcessId
+    }
+    if ($candidate -isnot [System.Diagnostics.Process]) {
+      throw 'Application main-window owner could not be verified as the current tracked process.'
+    }
+
+    $candidate.Refresh()
+    $expectedStartTimeTicks = [long]$StartTimeTicks[$startTimeKey]
+    if (
+      $candidate.HasExited -or
+      $candidate.Id -ne $mainWindowProcessId -or
+      $candidate.StartTime.ToUniversalTime().Ticks -ne $expectedStartTimeTicks
+    ) {
+      throw 'Application main-window owner is not the current tracked process.'
+    }
+
+    $closeAccepted = if ($null -eq $CloseMainWindowProvider) {
+      $candidate.CloseMainWindow()
+    }
+    else {
+      & $CloseMainWindowProvider $candidate
+    }
+    if (-not $closeAccepted) {
+      throw 'Application rejected graceful main-window close request.'
+    }
+  }
+  catch {
+    if ($_.Exception.Message -like 'Application *') {
+      throw
+    }
+    throw "Application main-window owner could not be verified as the current tracked process: $($_.Exception.Message)"
+  }
+  finally {
+    if ($null -ne $candidate) {
+      $candidate.Dispose()
+    }
+  }
+}
+
+function Close-AiNovelProcessTreeGracefully {
+  param(
+    [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+    [Parameter(Mandatory = $true)][System.Collections.Generic.HashSet[int]]$ProcessIds,
+    [Parameter(Mandatory = $true)][hashtable]$StartTimeTicks,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Windows,
+    [int]$TimeoutSeconds = 5,
+    [scriptblock]$ProcessProvider,
+    [scriptblock]$CloseMainWindowProvider
+  )
+
+  if ($TimeoutSeconds -lt 1) {
+    throw 'Graceful process-tree shutdown timeout must be at least one second.'
+  }
+  Add-AiNovelTrackedProcessTree -RootProcessId $Process.Id -ProcessIds $ProcessIds -StartTimeTicks $StartTimeTicks
+  Request-AiNovelGracefulMainWindowClose `
+    -Windows $Windows `
+    -ProcessIds $ProcessIds `
+    -StartTimeTicks $StartTimeTicks `
+    -ProcessProvider $ProcessProvider `
+    -CloseMainWindowProvider $CloseMainWindowProvider
+  Assert-AiNovelProcessTreeExited -ProcessIds $ProcessIds -StartTimeTicks $StartTimeTicks -TimeoutSeconds $TimeoutSeconds
+}
+
 function Save-AiNovelSmokeFailureEvidence {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
@@ -858,8 +953,11 @@ try {
     }
   }
 
-  Stop-AiNovelProcessTree -Process $process -ProcessIds $appProcessIds -StartTimeTicks $appProcessStartTimeTicks
-  Assert-AiNovelProcessTreeExited -ProcessIds $appProcessIds -StartTimeTicks $appProcessStartTimeTicks
+  Close-AiNovelProcessTreeGracefully `
+    -Process $process `
+    -ProcessIds $appProcessIds `
+    -StartTimeTicks $appProcessStartTimeTicks `
+    -Windows $lastWindowSnapshot
   foreach ($processId in $appProcessIds) {
     [void]$observedProcessIds.Add([int]$processId)
     $observedProcessStartTimeTicks[[string]$processId] = $appProcessStartTimeTicks[[string]$processId]
@@ -884,7 +982,7 @@ catch {
   throw
 }
 finally {
-  if ($process -and -not $process.HasExited) {
+  if ($process) {
     Stop-AiNovelProcessTree -Process $process -ProcessIds $appProcessIds -StartTimeTicks $appProcessStartTimeTicks
   }
   $env:AI_NOVEL_VELA_HOME = $previousVelaHome
