@@ -13,6 +13,11 @@ function quotePowerShell(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
 
+function sameWindowsPath(left: unknown, right: string): boolean {
+  return typeof left === 'string'
+    && left.replaceAll('/', '\\').toLowerCase() === right.replaceAll('/', '\\').toLowerCase()
+}
+
 const windowsShortPathFixtureSource = String.raw`
 using System;
 using System.Runtime.InteropServices;
@@ -1526,6 +1531,13 @@ internal static class ExactNsisUninstallerHelper {
       context.skip('This filesystem does not expose a distinct 8.3 helper path; the 8.3-specific chain test is not applicable.')
       return
     }
+    const wrapperEncodedCommand = Buffer.from(
+      [
+        `& ${quotePowerShell(uninstallerPath)} '--host' ${quotePowerShell(helperLaunchPath)} ${quotePowerShell(systemPowerShell)} ${quotePowerShell(systemCmd)} ${quotePowerShell(probeResultPath)}`,
+        'exit $LASTEXITCODE',
+      ].join('\r\n'),
+      'utf16le',
+    ).toString('base64')
     const monitor = spawn(
       'powershell.exe',
       [
@@ -1549,8 +1561,12 @@ internal static class ExactNsisUninstallerHelper {
       await waitForGateStatus(statusPath, 'ready')
       gate = await startArmedExecutable(
         root,
-        uninstallerPath,
-        ['--host', helperLaunchPath, systemPowerShell, systemCmd, probeResultPath],
+        systemCmd,
+        [
+          '/D',
+          '/C',
+          `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${wrapperEncodedCommand}`,
+        ],
       )
       if (gate.child.pid == null) throw new Error('The armed uninstaller gate did not expose a PID')
       appendFileSync(
@@ -1592,12 +1608,30 @@ internal static class ExactNsisUninstallerHelper {
         const identity = event.processIdentity as Record<string, unknown> | undefined
         return event.kind === 'process-start' && identity?.processName === 'Uninstall AI小说作家'
       })
+      const wrapperCmdStart = events.find(event => {
+        const identity = event.processIdentity as Record<string, unknown> | undefined
+        return event.kind === 'process-start'
+          && sameWindowsPath(identity?.executablePath, systemCmd)
+          && identity?.parentProcessId === gate?.child.pid
+      })
+      const wrapperCmdIdentity = wrapperCmdStart?.processIdentity as Record<string, unknown> | undefined
+      const wrapperPowerShellStart = events.find(event => {
+        const identity = event.processIdentity as Record<string, unknown> | undefined
+        return event.kind === 'process-start'
+          && sameWindowsPath(identity?.executablePath, systemPowerShell)
+          && identity?.parentProcessId === wrapperCmdIdentity?.processId
+      })
+      const wrapperPowerShellIdentity = wrapperPowerShellStart?.processIdentity as Record<string, unknown> | undefined
+      const uninstallerIdentity = uninstallerStart?.processIdentity as Record<string, unknown> | undefined
 
       expect(expectedPowerShell).toMatchObject({ exitCode: 1 })
       expect(expectedCmd).toMatchObject({ exitCode: 1 })
       expect(expectedFind).toMatchObject({ exitCode: 1 })
+      expect(wrapperCmdStart).toBeDefined()
+      expect(wrapperPowerShellStart).toBeDefined()
       expect(helperStart).toBeDefined()
       expect(uninstallerStart).toBeDefined()
+      expect(uninstallerIdentity?.parentProcessId).toBe(wrapperPowerShellIdentity?.processId)
       expect(events.some(event => event.kind === 'process-exit' && event.exitClassification === 'failure')).toBe(false)
       expect(rawEvidence).not.toContain('tasklist /FI')
       expect(rawEvidence).not.toContain('Get-CimInstance')
