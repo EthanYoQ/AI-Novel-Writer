@@ -859,6 +859,59 @@ $watch.Stop()
     expect(result.ElapsedMilliseconds as number).toBeLessThan(20_000)
   }, 25_000)
 
+  windowsIt('finalizes redirected output before accepting a zero exit code', () => {
+    const output = runInstallerLibrary(`
+$probeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-exit-finalization-test-' + [guid]::NewGuid().ToString('N'))
+$stdoutPath = Join-Path $probeRoot 'stdout.txt'
+$stderrPath = Join-Path $probeRoot 'stderr.txt'
+$failure = ''
+$stdout = ''
+$stderr = ''
+$previousStdoutValue = $env:AI_NOVEL_EXIT_FINALIZATION_STDOUT
+$previousStderrValue = $env:AI_NOVEL_EXIT_FINALIZATION_STDERR
+try {
+  New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+  $env:AI_NOVEL_EXIT_FINALIZATION_STDOUT = 'stdout-finalized'
+  $env:AI_NOVEL_EXIT_FINALIZATION_STDERR = 'stderr-finalized'
+  try {
+    $parameters = @{
+      Path = $installer
+      Arguments = @('-NoProfile', '-Command', '[Console]::Out.WriteLine($env:AI_NOVEL_EXIT_FINALIZATION_STDOUT); [Console]::Error.WriteLine($env:AI_NOVEL_EXIT_FINALIZATION_STDERR); exit 0')
+      Operation = 'Synthetic redirected zero-exit process'
+      StandardOutputPath = $stdoutPath
+      StandardErrorPath = $stderrPath
+      HideWindow = $true
+    }
+    Invoke-AiNovelMonitoredExecutable @parameters
+  } catch {
+    $failure = $_.Exception.Message
+  }
+  if (Test-Path -LiteralPath $stdoutPath) { $stdout = Get-Content -LiteralPath $stdoutPath -Raw }
+  if (Test-Path -LiteralPath $stderrPath) { $stderr = Get-Content -LiteralPath $stderrPath -Raw }
+} finally {
+  $env:AI_NOVEL_EXIT_FINALIZATION_STDOUT = $previousStdoutValue
+  $env:AI_NOVEL_EXIT_FINALIZATION_STDERR = $previousStderrValue
+  Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+[pscustomobject]@{
+  Failure = $failure
+  Stdout = [Convert]::ToString($stdout).Trim()
+  Stderr = [Convert]::ToString($stderr).Trim()
+  CleanupSucceeded = -not (Test-Path -LiteralPath $probeRoot)
+  EnvironmentRestored = $env:AI_NOVEL_EXIT_FINALIZATION_STDOUT -eq $previousStdoutValue -and $env:AI_NOVEL_EXIT_FINALIZATION_STDERR -eq $previousStderrValue
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      Failure: '',
+      Stdout: 'stdout-finalized',
+      Stderr: 'stderr-finalized',
+      CleanupSucceeded: true,
+      EnvironmentRestored: true,
+    })
+  }, 25_000)
+
   windowsIt('does not treat a reused process ID as the process originally tracked by the release gate', () => {
     const output = runReleaseMonitorLibrary(`
 $ids = [System.Collections.Generic.HashSet[int]]::new()
