@@ -2,7 +2,8 @@ import { app, ipcMain, dialog } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import path from 'node:path'
 import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_PATH } from '../utils/config-utils'
-import { GlobalConfig, ModelProfile, type ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { GlobalConfig, ModelProfile } from '../../src/shared/ipc-channels'
+import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import type { EmbeddingOptions } from '../../src/shared/embedding-options'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { mainText } from '../i18n'
@@ -130,13 +131,6 @@ type KnowledgeBaseHandler<Args extends unknown[] = unknown[]> = (
 ) => unknown
 
 const KNOWLEDGE_BASE_GRANT_TTL_MS = 10 * 60 * 1000
-
-function isProjectSessionContext(value: unknown): value is ProjectSessionContext {
-  return !!value && typeof value === 'object'
-    && typeof (value as ProjectSessionContext).projectId === 'string'
-    && typeof (value as ProjectSessionContext).leaseId === 'string'
-    && typeof (value as ProjectSessionContext).projectPath === 'string'
-}
 
 function registerKnowledgeBaseHandler<Args extends unknown[]>(
   channel: string,

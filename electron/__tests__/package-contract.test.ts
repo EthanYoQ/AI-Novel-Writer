@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
+import { normalizeSourceEol } from '../../test/source-contract'
+
 const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as {
   packageManager?: string
   optionalDependencies?: Record<string, string>
@@ -50,7 +52,9 @@ describe('release dependency contract', () => {
     expect(pkg.scripts?.['build:win:artifacts']).toContain('--publish never')
 
     const releaseGate = readFileSync('scripts/release-win-verify.mjs', 'utf8')
-    const releaseMonitor = readFileSync('scripts/monitor-win-release-gate.ps1', 'utf8')
+    const releaseMonitor = normalizeSourceEol(
+      readFileSync('scripts/monitor-win-release-gate.ps1', 'utf8'),
+    )
     expect(releaseGate).toContain('monitor-win-release-gate.ps1')
     expect(releaseGate.indexOf("await waitForMonitorState(['ready']")).toBeLessThan(
       releaseGate.indexOf('for (const step of releaseVerificationSteps)'),

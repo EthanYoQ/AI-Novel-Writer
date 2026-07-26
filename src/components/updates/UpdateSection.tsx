@@ -6,6 +6,7 @@ import { useEditorStore } from '../../stores/editor-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
+import { getOfficialHomepageOpenError } from '../../shared/official-homepage'
 import { Button } from '../ui/Button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/Dialog'
 import { discardChangesThenRequestInstall } from './update-install-discard'
@@ -64,12 +65,9 @@ export function UpdateSection() {
       const result = await ipc.invoke('official-homepage:open')
       if (!result.success) throw new Error(result.error)
     } catch {
-      setOfficialHomepageError(text(
-        '无法打开官方主页，请稍后重试。',
-        'Unable to open the official homepage. Please try again later.',
-      ))
+      setOfficialHomepageError(getOfficialHomepageOpenError(locale))
     }
-  }, [text])
+  }, [locale])
 
   return <section className="mb-10" lang={locale} aria-label={text('应用更新', 'App updates')}>
     <div className="writer-panel-card flex items-center justify-between gap-4 px-4 py-3" style={{ borderColor: 'var(--color-border)' }}>
@@ -79,7 +77,7 @@ export function UpdateSection() {
       </div>
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2" data-testid="update-entry-actions">
         <Button type="button" size="lg" variant="outline" onClick={() => void handleOfficialHomepageClick()} className="text-sm" title={text('在默认浏览器中打开官方主页', 'Open the official homepage in your default browser')}>
-          <ExternalLink size={15} aria-hidden="true" />{text('官方主页', 'Official homepage')}
+          <ExternalLink size={15} aria-hidden="true" />{text('官方主页', 'Official Website')}
         </Button>
         <Button type="button" size="lg" onClick={() => void checkForUpdates()} disabled={!presentation.canCheck} className="text-sm" title={presentation.kind === 'disabled' ? text('请在已安装的 Windows 应用中检查更新', 'Check for updates in the installed Windows app') : text('立即检查正式版更新', 'Check for stable updates now')}>
           <RefreshCw size={15} className={presentation.kind === 'checking' ? 'animate-spin' : undefined} />{presentation.kind === 'checking' ? text('正在检查', 'Checking') : text('检查更新', 'Check for updates')}

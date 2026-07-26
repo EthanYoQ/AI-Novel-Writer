@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import path from 'node:path'
 import { FileNode, type ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { getCurrentProjectPath } from '../database'
 import { projectAccess } from '../services/project-access'
 import { mainText } from '../i18n'
@@ -37,13 +38,6 @@ type ProjectFilesystemHandler<Args extends unknown[] = unknown[]> = (
   context: ProjectSessionContext,
   ...args: Args
 ) => unknown
-
-function isProjectSessionContext(value: unknown): value is ProjectSessionContext {
-  return !!value && typeof value === 'object'
-    && typeof (value as ProjectSessionContext).projectId === 'string'
-    && typeof (value as ProjectSessionContext).leaseId === 'string'
-    && typeof (value as ProjectSessionContext).projectPath === 'string'
-}
 
 function text(zhCNText: string, enUSText: string): string {
   // This controller also runs in isolated IPC tests where Electron's `app`

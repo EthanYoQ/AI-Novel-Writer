@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 
+import { normalizeSourceEol } from '../../../../test/source-contract'
 import type { ChapterBlueprint } from '../../../services/workflows/directory-workflow'
 import {
   CHAPTER_CARD_TAB_ID,
@@ -257,7 +258,9 @@ describe('chapter-card draft ledger', () => {
   })
 
   it('renders the chapter number as a readonly field with no ordinary renumber action', () => {
-    const source = readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8')
+    const source = normalizeSourceEol(
+      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
+    )
     const chapterNumberInput = source.match(
       /<Input\s+type="number"\s+value=\{selected\.chapterNumber\}[\s\S]*?\/>/,
     )?.[0]
@@ -270,8 +273,12 @@ describe('chapter-card draft ledger', () => {
   })
 
   it('binds chapter-card IPC reads and writes to the loaded project identity', () => {
-    const componentSource = readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8')
-    const workflowSource = readFileSync('src/services/workflows/directory-workflow.ts', 'utf8')
+    const componentSource = normalizeSourceEol(
+      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
+    )
+    const workflowSource = normalizeSourceEol(
+      readFileSync('src/services/workflows/directory-workflow.ts', 'utf8'),
+    )
 
     // A path is only a location.  The editor must bind reads/writes to the
     // frozen project ID + lease as well, so a same-path reopen cannot apply
