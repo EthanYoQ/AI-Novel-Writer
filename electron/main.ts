@@ -12,6 +12,12 @@ import {
   releaseVectorSmokeWasRequested,
   runReleaseVectorSmoke,
 } from './services/release-vector-smoke'
+import {
+  claimReleaseOfficialHomepageSmokeInvocation,
+  releaseOfficialHomepageSmokeWasRequested,
+  runReleaseOfficialHomepageSmoke,
+} from './services/release-official-homepage-smoke'
+import { registerOfficialHomepageController } from './controllers/official-homepage-controller'
 import type { UpdateState } from './services/update-service'
 import {
   createOfficialHomepageWindowOpenHandler,
@@ -46,8 +52,13 @@ let win: BrowserWindow | null
 // fail-closed. A command-line request without the matching environment token
 // must never turn into a normal interactive application launch.
 const releaseVectorSmokeRequested = releaseVectorSmokeWasRequested(process.argv)
+const releaseHomepageSmokeRequested = releaseOfficialHomepageSmokeWasRequested(process.argv)
+const releaseSmokeRequested = releaseVectorSmokeRequested || releaseHomepageSmokeRequested
 const releaseVectorSmokeInvocation = releaseVectorSmokeRequested
   ? claimReleaseVectorSmokeInvocation(process.argv, process.env)
+  : undefined
+const releaseHomepageSmokeInvocation = releaseHomepageSmokeRequested
+  ? claimReleaseOfficialHomepageSmokeInvocation(process.argv, process.env)
   : undefined
 
 function publishUpdateState(state: UpdateState): void {
@@ -100,6 +111,26 @@ function createWindow() {
   }
 }
 
+function createReleaseHomepageSmokeWindow(): BrowserWindow {
+  return new BrowserWindow({
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.mjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  })
+}
+
+async function runPackagedOfficialHomepageSmoke(token: string) {
+  return runReleaseOfficialHomepageSmoke(token, {
+    createWindow: createReleaseHomepageSmokeWindow,
+    loadProbeDocument: window => window.loadFile(path.join(RENDERER_DIST, 'release-homepage-smoke.html')),
+    removeHandler: channel => ipcMain.removeHandler(channel),
+    registerController: options => registerOfficialHomepageController(options),
+  })
+}
+
 // macOS: 关闭所有窗口不退出
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -110,18 +141,24 @@ app.on('window-all-closed', () => {
 
 // macOS: 点击 dock 图标重新创建窗口
 app.on('activate', () => {
-  if (releaseVectorSmokeRequested) return
+  if (releaseSmokeRequested) return
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow()
   }
 })
 
 app.whenReady().then(async () => {
-  if (releaseVectorSmokeRequested) {
-    if (!releaseVectorSmokeInvocation) {
-      throw new Error('Invalid packaged vector smoke invocation: the environment and one-time CLI token must match')
+  if (releaseSmokeRequested) {
+    const requestedSmokeModeCount = Number(releaseVectorSmokeRequested)
+      + Number(releaseHomepageSmokeRequested)
+    const invocationCount = Number(releaseVectorSmokeInvocation !== undefined)
+      + Number(releaseHomepageSmokeInvocation !== undefined)
+    if (requestedSmokeModeCount !== 1 || invocationCount !== 1) {
+      throw new Error('Invalid packaged smoke invocation: exactly one environment and one-time CLI token pair must match')
     }
-    const evidence = await runReleaseVectorSmoke(releaseVectorSmokeInvocation.token)
+    const evidence = releaseVectorSmokeInvocation
+      ? await runReleaseVectorSmoke(releaseVectorSmokeInvocation.token)
+      : await runPackagedOfficialHomepageSmoke(releaseHomepageSmokeInvocation!.token)
     process.stdout.write(`${JSON.stringify(evidence)}\n`)
     app.exit(0)
     return
@@ -145,7 +182,7 @@ app.whenReady().then(async () => {
   })
 }).catch((error: unknown) => {
   console.error('[Vela] Electron 启动失败。', error)
-  if (releaseVectorSmokeRequested) {
+  if (releaseSmokeRequested) {
     app.exit(1)
     return
   }

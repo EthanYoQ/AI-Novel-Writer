@@ -100,6 +100,7 @@ jobs:
             release/*/manifest.json
             release/*/SHA256SUMS.txt
             release/*/qualification/packaged-vector-smoke.json
+            release/*/qualification/packaged-official-homepage-smoke.json
 
       - name: Upload Windows build diagnostics
         if: ${{ failure() }}

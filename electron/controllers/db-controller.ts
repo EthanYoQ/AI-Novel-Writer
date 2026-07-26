@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { closeProjectDatabase, getCurrentProjectPath } from '../database'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
@@ -52,13 +52,6 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:log-llm-call',
   'db:save-summary-snapshot',
 ])
-
-function isProjectSessionContext(value: unknown): value is ProjectSessionContext {
-  return !!value && typeof value === 'object'
-    && typeof (value as ProjectSessionContext).projectId === 'string'
-    && typeof (value as ProjectSessionContext).leaseId === 'string'
-    && typeof (value as ProjectSessionContext).projectPath === 'string'
-}
 
 function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabaseHandler): void {
   ipcMain.handle(channel, async (event, ...args: unknown[]) => {
