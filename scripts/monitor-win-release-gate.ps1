@@ -79,6 +79,30 @@ namespace AiNovelReleaseGate {
     }
   }
 
+  // QueryFullProcessImageName can preserve an 8.3 alias such as
+  // C:\\Users\\RUNNER~1 even though the monitor's TEMP root uses the long
+  // profile name. Keep that translation narrowly available to the PowerShell
+  // classifier; a failed lookup deliberately leaves the classifier fail-closed.
+  public static class WindowsPath {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetLongPathName(
+      string shortPath,
+      StringBuilder longPath,
+      uint cchBuffer
+    );
+
+    public static string TryGetLongPathName(string path) {
+      if (String.IsNullOrWhiteSpace(path)) return null;
+      uint required = GetLongPathName(path, null, 0);
+      if (required == 0) return null;
+      StringBuilder buffer = new StringBuilder(unchecked((int)required + 1));
+      uint written = GetLongPathName(path, buffer, unchecked((uint)buffer.Capacity));
+      if (written == 0 || written >= buffer.Capacity) return null;
+      return buffer.ToString();
+    }
+
+  }
+
   public sealed class JobProcessMonitor : IDisposable {
     private const int JobObjectAssociateCompletionPortInformation = 7;
     private const uint JobObjectMsgActiveProcessZero = 4;
@@ -865,6 +889,59 @@ function Initialize-AiNovelGateRootIdentity {
     -ExpectedStartTimeTicks $RootProcessStartTimeTicks
 }
 
+function Get-AiNovelGateArmedRootIdentity {
+  param(
+    [Parameter(Mandatory = $true)][int]$RootProcessId,
+    [Parameter(Mandatory = $true)][long]$RootProcessStartTimeTicks
+  )
+
+  # Capture the gate root once, while it is deliberately held before release.
+  # Child lifecycle records can later be consumed after that root has exited,
+  # so the uninstaller exception must retain this immutable PID/start/path
+  # identity instead of accepting a same-named helper chain from elsewhere in
+  # the Job Object.
+  if ($RootProcessStartTimeTicks -le 0) {
+    return $null
+  }
+  $process = $null
+  try {
+    $process = [System.Diagnostics.Process]::GetProcessById($RootProcessId)
+    $process.Refresh()
+    if ($process.HasExited) {
+      return $null
+    }
+    $actualStartTimeTicks = $process.StartTime.ToUniversalTime().Ticks
+    if ($actualStartTimeTicks -ne $RootProcessStartTimeTicks) {
+      return $null
+    }
+    $imagePath = [System.IO.Path]::GetFullPath([string]$process.MainModule.FileName)
+    if ([string]::IsNullOrWhiteSpace($imagePath) -or $imagePath -notmatch '^[A-Za-z]:\\') {
+      return $null
+    }
+    return [pscustomobject][ordered]@{
+      processId = $RootProcessId
+      startTimeTicks = [string]$actualStartTimeTicks
+      processName = [string]$process.ProcessName
+      executablePath = $imagePath
+      commandLine = $null
+      parentProcessId = $null
+      parentProcessStartTimeTicks = $null
+      parentExecutablePath = $null
+      identityCaptured = $true
+      commandLineCaptured = $false
+      identityCaptureError = $null
+    }
+  }
+  catch {
+    return $null
+  }
+  finally {
+    if ($null -ne $process) {
+      $process.Dispose()
+    }
+  }
+}
+
 function New-AiNovelGateQuietDeadline {
   param(
     [Parameter(Mandatory = $true)][DateTime]$NowUtc,
@@ -1150,6 +1227,105 @@ function Test-AiNovelGateSameAbsolutePath {
   }
 }
 
+function Resolve-AiNovelGateCanonicalExistingPath {
+  param([AllowEmptyString()][string]$Path)
+
+  if ([string]::IsNullOrWhiteSpace($Path) -or $Path -notmatch '^[A-Za-z]:\\') {
+    return $null
+  }
+  try {
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    # Do not accept a path merely because its textual 8.3 spelling happens to
+    # resemble TEMP. When the file still exists (as the NSIS helper does while
+    # its probes run), expand the alias through kernel32. If expansion fails,
+    # retain the absolute spelling and let the strict TEMP containment test
+    # reject any unproven alias.
+    $longPath = [AiNovelReleaseGate.WindowsPath]::TryGetLongPathName($fullPath)
+    if (-not [string]::IsNullOrWhiteSpace($longPath)) {
+      return [System.IO.Path]::GetFullPath($longPath)
+    }
+    return $fullPath
+  }
+  catch {
+    return $null
+  }
+}
+
+function Test-AiNovelGateDirectChildDirectory {
+  param(
+    [AllowEmptyString()][string]$DirectoryPath,
+    [AllowEmptyString()][string]$RootPath
+  )
+
+  $directoryFullPath = Resolve-AiNovelGateCanonicalExistingPath -Path $DirectoryPath
+  $rootFullPath = Resolve-AiNovelGateCanonicalExistingPath -Path $RootPath
+  if (
+    [string]::IsNullOrWhiteSpace($directoryFullPath) -or
+    [string]::IsNullOrWhiteSpace($rootFullPath)
+  ) {
+    return $false
+  }
+  try {
+    $rootWithSeparator = $rootFullPath.TrimEnd([char]92) + [char]92
+    if (-not $directoryFullPath.StartsWith($rootWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {
+      return $false
+    }
+    $relativeDirectory = $directoryFullPath.Substring($rootWithSeparator.Length)
+    return (
+      -not [string]::IsNullOrWhiteSpace($relativeDirectory) -and
+      $relativeDirectory.IndexOf([char]92) -lt 0
+    )
+  }
+  catch {
+    return $false
+  }
+}
+
+function Test-AiNovelGateNsisUninstallerImage {
+  param([AllowEmptyString()][string]$ImagePath)
+
+  if ([string]::IsNullOrWhiteSpace($ImagePath) -or $ImagePath -notmatch '^[A-Za-z]:\\') {
+    return $false
+  }
+  try {
+    return [string]::Equals(
+      [System.IO.Path]::GetFileName([System.IO.Path]::GetFullPath($ImagePath)),
+      'Uninstall AI小说作家.exe',
+      [System.StringComparison]::OrdinalIgnoreCase
+    )
+  }
+  catch {
+    return $false
+  }
+}
+
+function Test-AiNovelGateNsisUninstallerHelperImage {
+  param([AllowEmptyString()][string]$ImagePath)
+
+  if ([string]::IsNullOrWhiteSpace($ImagePath) -or $ImagePath -notmatch '^[A-Za-z]:\\') {
+    return $false
+  }
+  try {
+    $helperFullPath = Resolve-AiNovelGateCanonicalExistingPath -Path $ImagePath
+    if ([string]::IsNullOrWhiteSpace($helperFullPath)) {
+      return $false
+    }
+    $helperDirectory = [System.IO.Path]::GetDirectoryName($helperFullPath)
+    $helperFileName = [System.IO.Path]::GetFileName($helperFullPath)
+    $helperDirectoryName = [System.IO.Path]::GetFileName($helperDirectory)
+    return (
+      (Test-AiNovelGateDirectChildDirectory `
+        -DirectoryPath $helperDirectory `
+        -RootPath ([System.IO.Path]::GetTempPath())) -and
+      $helperDirectoryName -match '^(?i:~nsu[A-Za-z0-9]+\.tmp)$' -and
+      $helperFileName -match '^(?i:Un_[A-Za-z0-9]+\.exe)$'
+    )
+  }
+  catch {
+    return $false
+  }
+}
+
 function Test-AiNovelGateSameBoundSystemExecutablePath {
   param(
     [AllowEmptyString()][string]$Left,
@@ -1376,6 +1552,59 @@ function Test-AiNovelGateCapturedInstallerParent {
   )
 }
 
+function Test-AiNovelGateCapturedNsisUninstallerHelperParent {
+  param(
+    [AllowNull()]$HelperIdentity,
+    [AllowNull()]$UninstallerIdentity,
+    [AllowNull()]$ArmedRootIdentity
+  )
+
+  # electron-builder's NSIS uninstaller first copies itself into the current
+  # TEMP root (~nsu*.tmp\Un_*.exe), then runs its process-exit checks from that
+  # helper. This is intentionally a fixed product chain, not a basename-based
+  # exemption for arbitrary temporary executables.
+  return (
+    (Test-AiNovelGateNsisUninstallerHelperImage -ImagePath ([string]$HelperIdentity.executablePath)) -and
+    (Test-AiNovelGateCapturedParentIdentity `
+      -ChildIdentity $HelperIdentity `
+      -ParentIdentity $UninstallerIdentity) -and
+    (Test-AiNovelGateNsisUninstallerImage -ImagePath ([string]$UninstallerIdentity.executablePath)) -and
+    # The named uninstaller is a child of the armed Node release-gate root;
+    # it is not itself that root. Bind this final edge to reject an unrelated
+    # same-named NSIS chain that happens to be inside the Job Object.
+    (Test-AiNovelGateCapturedParentIdentity `
+      -ChildIdentity $UninstallerIdentity `
+      -ParentIdentity $ArmedRootIdentity)
+  )
+}
+
+function Test-AiNovelGateCapturedNsisProbeParent {
+  param(
+    [AllowNull()]$ChildIdentity,
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$ArmedRootIdentity
+  )
+
+  # Keep the original direct-installer check intact. The only additional
+  # branch is the complete helper -> named uninstaller -> armed gate-root
+  # chain, with every edge bound by PID, creation time, and absolute image
+  # path. The direct installer branch deliberately retains its original
+  # classification semantics.
+  return (
+    (Test-AiNovelGateCapturedInstallerParent `
+      -ChildIdentity $ChildIdentity `
+      -ParentIdentity $ParentIdentity) -or
+    ((Test-AiNovelGateCapturedNsisUninstallerHelperParent `
+        -HelperIdentity $ParentIdentity `
+        -UninstallerIdentity $GrandParentIdentity `
+        -ArmedRootIdentity $ArmedRootIdentity) -and
+      (Test-AiNovelGateCapturedParentIdentity `
+        -ChildIdentity $ChildIdentity `
+        -ParentIdentity $ParentIdentity))
+  )
+}
+
 function Get-AiNovelGateProcessIdentityKey {
   param([AllowNull()]$ProcessIdentity)
 
@@ -1411,7 +1640,9 @@ function Test-AiNovelGateExpectedNsisPowerShellProbeExit {
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
     [Parameter(Mandatory = $true)]$Event,
     [AllowNull()]$ProcessIdentity,
-    [AllowNull()]$ParentIdentity
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$ArmedRootIdentity
   )
 
   # electron-builder's NSIS template deliberately treats exit 1 from these
@@ -1437,9 +1668,11 @@ function Test-AiNovelGateExpectedNsisPowerShellProbeExit {
     -PowerShellImagePath ([string]$ProcessIdentity.executablePath))) {
     return $false
   }
-  return Test-AiNovelGateCapturedInstallerParent `
+  return Test-AiNovelGateCapturedNsisProbeParent `
     -ChildIdentity $ProcessIdentity `
-    -ParentIdentity $ParentIdentity
+    -ParentIdentity $ParentIdentity `
+    -GrandParentIdentity $GrandParentIdentity `
+    -ArmedRootIdentity $ArmedRootIdentity
 }
 
 function Test-AiNovelGateNsisCmdProcessCheckCandidate {
@@ -1447,7 +1680,9 @@ function Test-AiNovelGateNsisCmdProcessCheckCandidate {
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
     [Parameter(Mandatory = $true)]$Event,
     [AllowNull()]$ProcessIdentity,
-    [AllowNull()]$ParentIdentity
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$ArmedRootIdentity
   )
 
   if (-not (Test-AiNovelGateExpectedExitOne -Step $Step -Event $Event)) {
@@ -1466,9 +1701,11 @@ function Test-AiNovelGateNsisCmdProcessCheckCandidate {
   ) {
     return $false
   }
-  return Test-AiNovelGateCapturedInstallerParent `
+  return Test-AiNovelGateCapturedNsisProbeParent `
     -ChildIdentity $ProcessIdentity `
-    -ParentIdentity $ParentIdentity
+    -ParentIdentity $ParentIdentity `
+    -GrandParentIdentity $GrandParentIdentity `
+    -ArmedRootIdentity $ArmedRootIdentity
 }
 
 function Test-AiNovelGateExpectedNsisCmdProcessCheckExit {
@@ -1477,6 +1714,8 @@ function Test-AiNovelGateExpectedNsisCmdProcessCheckExit {
     [Parameter(Mandatory = $true)]$Event,
     [AllowNull()]$ProcessIdentity,
     [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$ArmedRootIdentity,
     [AllowNull()]$VerifiedFindParentKeys
   )
 
@@ -1484,7 +1723,9 @@ function Test-AiNovelGateExpectedNsisCmdProcessCheckExit {
     -Step $Step `
     -Event $Event `
     -ProcessIdentity $ProcessIdentity `
-    -ParentIdentity $ParentIdentity)) {
+    -ParentIdentity $ParentIdentity `
+    -GrandParentIdentity $GrandParentIdentity `
+    -ArmedRootIdentity $ArmedRootIdentity)) {
     return $false
   }
   $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $ProcessIdentity
@@ -1672,7 +1913,9 @@ function Test-AiNovelGateExpectedNsisFindNoMatchExit {
     [Parameter(Mandatory = $true)]$Event,
     [AllowNull()]$ProcessIdentity,
     [AllowNull()]$ParentIdentity,
-    [AllowNull()]$GrandParentIdentity
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$GreatGrandParentIdentity,
+    [AllowNull()]$ArmedRootIdentity
   )
 
   if (-not (Test-AiNovelGateExpectedExitOne -Step $Step -Event $Event)) {
@@ -1702,9 +1945,11 @@ function Test-AiNovelGateExpectedNsisFindNoMatchExit {
   ) {
     return $false
   }
-  return Test-AiNovelGateCapturedInstallerParent `
+  return Test-AiNovelGateCapturedNsisProbeParent `
     -ChildIdentity $ParentIdentity `
-    -ParentIdentity $GrandParentIdentity
+    -ParentIdentity $GrandParentIdentity `
+    -GrandParentIdentity $GreatGrandParentIdentity `
+    -ArmedRootIdentity $ArmedRootIdentity
 }
 
 function ConvertTo-AiNovelGateProcessEvidenceIdentity {
@@ -1852,6 +2097,7 @@ $atomicMonitor = $null
 $deferredProcessFailure = $null
 $deferredProcessFailureDeadline = $null
 $deferredNsisCmdExitFailure = New-AiNovelGateDeferredNsisCmdExitFailureState
+$armedRootIdentity = $null
 $verifiedNsisFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $pendingNsisCmdExitFailures = @{}
 $drainSequence = 0
@@ -1928,6 +2174,7 @@ try {
         $deferredProcessFailure = $null
         $deferredProcessFailureDeadline = $null
         Clear-AiNovelGateDeferredNsisCmdExitFailureState -State $deferredNsisCmdExitFailure
+        $armedRootIdentity = $null
         $verifiedNsisFindParentKeys.Clear()
         $pendingNsisCmdExitFailures.Clear()
         $rootIdentityAccepted = Initialize-AiNovelGateRootIdentity `
@@ -1937,6 +2184,12 @@ try {
           -ProcessStartTimeTicks $trackedProcessStartTimeTicks
         if (-not $rootIdentityAccepted) {
           throw "Release gate rejected missing, exited, or reused root process identity for step '$activeStep'."
+        }
+        $armedRootIdentity = Get-AiNovelGateArmedRootIdentity `
+          -RootProcessId ([int]$control.rootProcessId) `
+          -RootProcessStartTimeTicks ([long]$control.rootProcessStartTimeTicks)
+        if ($null -eq $armedRootIdentity) {
+          throw "Release gate could not capture the immutable PID/start/path identity for root process $($control.rootProcessId) in step '$activeStep'."
         }
         try {
           # The launcher is deliberately held at its gate. Assigning it to the
@@ -1975,6 +2228,7 @@ try {
         $deferredProcessFailure = $null
         $deferredProcessFailureDeadline = $null
         Clear-AiNovelGateDeferredNsisCmdExitFailureState -State $deferredNsisCmdExitFailure
+        $armedRootIdentity = $null
         $verifiedNsisFindParentKeys.Clear()
         $pendingNsisCmdExitFailures.Clear()
         $completionDeadline = $null
@@ -2042,6 +2296,7 @@ try {
         }
         $parentIdentity = $null
         $grandParentIdentity = $null
+        $greatGrandParentIdentity = $null
         try {
           if (
             $null -ne $processIdentity -and
@@ -2054,6 +2309,12 @@ try {
               $trackedProcessIdentities.ContainsKey([int]$parentIdentity.parentProcessId)
             ) {
               $grandParentIdentity = $trackedProcessIdentities[[int]$parentIdentity.parentProcessId]
+              if (
+                $null -ne $grandParentIdentity.parentProcessId -and
+                $trackedProcessIdentities.ContainsKey([int]$grandParentIdentity.parentProcessId)
+              ) {
+                $greatGrandParentIdentity = $trackedProcessIdentities[[int]$grandParentIdentity.parentProcessId]
+              }
             }
           }
         }
@@ -2068,7 +2329,9 @@ try {
           -Step $activeStep `
           -Event $processEvent `
           -ProcessIdentity $processIdentity `
-          -ParentIdentity $parentIdentity) {
+          -ParentIdentity $parentIdentity `
+          -GrandParentIdentity $grandParentIdentity `
+          -ArmedRootIdentity $armedRootIdentity) {
           $exitClassification = 'expected-nsis-powershell-probe'
         }
         elseif (Test-AiNovelGateExpectedNsisFindNoMatchExit `
@@ -2076,7 +2339,9 @@ try {
           -Event $processEvent `
           -ProcessIdentity $processIdentity `
           -ParentIdentity $parentIdentity `
-          -GrandParentIdentity $grandParentIdentity) {
+          -GrandParentIdentity $grandParentIdentity `
+          -GreatGrandParentIdentity $greatGrandParentIdentity `
+          -ArmedRootIdentity $armedRootIdentity) {
           $parentProcessIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $parentIdentity
           if ($null -eq $parentProcessIdentityKey) {
             $exitClassification = 'failure'
@@ -2096,6 +2361,8 @@ try {
           -Event $processEvent `
           -ProcessIdentity $processIdentity `
           -ParentIdentity $parentIdentity `
+          -GrandParentIdentity $grandParentIdentity `
+          -ArmedRootIdentity $armedRootIdentity `
           -VerifiedFindParentKeys $verifiedNsisFindParentKeys) {
           $exitClassification = 'expected-nsis-cmd-process-check'
         }
@@ -2103,7 +2370,9 @@ try {
           -Step $activeStep `
           -Event $processEvent `
           -ProcessIdentity $processIdentity `
-          -ParentIdentity $parentIdentity) {
+          -ParentIdentity $parentIdentity `
+          -GrandParentIdentity $grandParentIdentity `
+          -ArmedRootIdentity $armedRootIdentity) {
           $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $processIdentity
           if (Add-AiNovelGatePendingNsisCmdExitFailure `
             -PendingNsisCmdExitFailures $pendingNsisCmdExitFailures `
