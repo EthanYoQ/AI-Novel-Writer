@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
@@ -63,14 +64,29 @@ describe('release dependency contract', () => {
     expect(releaseMonitor).toContain('Save-AiNovelSmokeFailureEvidence')
     expect(releaseMonitor).toContain('left related processes running')
 
+    expect(pkg.scripts?.['build:win-zip']).toBeUndefined()
+    expect(pkg.scripts?.['verify:github-update-release']).toBe('node scripts/verify-github-update-release.mjs')
+  })
+
+  it('isolates release-monitor self-tests before the outer monitor starts', () => {
+    const selfTest = 'scripts/__tests__/release-win-verify.test.ts'
+    expect(pkg.scripts?.test).toBe('vitest run')
+    expect(pkg.scripts?.['test:release-monitor-selftest']).toBe(`vitest run ${selfTest}`)
+    expect(pkg.scripts?.['test:release-workload']).toBe(`vitest run --exclude ${selfTest}`)
+    expect(pkg.scripts?.['test:release-monitor-selftest']).not.toBe(pkg.scripts?.['test:release-workload'])
+
+    const releaseGate = readFileSync('scripts/release-win-verify.mjs', 'utf8')
+    const releaseMonitor = readFileSync('scripts/monitor-win-release-gate.ps1', 'utf8')
     const plan = spawnSync(process.execPath, ['scripts/release-win-verify.mjs', '--print-plan'], {
       cwd: process.cwd(),
       encoding: 'utf8',
     })
-    expect(plan.status).toBe(0)
+
+    expect(plan.status, plan.stderr || plan.error?.message).toBe(0)
     expect(JSON.parse(plan.stdout)).toEqual([
+      'test:release-monitor-selftest',
       'prepare:native-node',
-      'test',
+      'test:release-workload',
       'clean:build',
       'build:win:artifacts',
       'verify:win-update-artifacts',
@@ -82,8 +98,67 @@ describe('release dependency contract', () => {
       'verify:native-node',
       'final:quiet',
     ])
-    expect(pkg.scripts?.['build:win-zip']).toBeUndefined()
-    expect(pkg.scripts?.['verify:github-update-release']).toBe('node scripts/verify-github-update-release.mjs')
+
+    const preMonitorLoop = releaseGate.indexOf('for (const step of releasePreMonitorSteps)')
+    const preMonitorInvocation = releaseGate.indexOf('await runPreMonitorSteps()')
+    const monitorStartDefinition = releaseGate.indexOf('async function startReleaseMonitor()')
+    const monitorStartCall = releaseGate.lastIndexOf('await startReleaseMonitor()')
+    const finalizationFlagSet = releaseGate.indexOf('releaseFinalizationRequired = true')
+    const monitorReadyWait = releaseGate.indexOf("await waitForMonitorState(['ready'], 10_000)")
+    const monitorSpawn = releaseGate.indexOf('monitor = spawn(', monitorStartDefinition)
+    const monitorPidValidation = releaseGate.indexOf('!Number.isInteger(monitor.pid) || monitor.pid <= 0')
+    const monitorMarkerPublish = releaseGate.indexOf(
+      'renameSync(monitorProcessTemporaryPath, monitorProcessPath)',
+    )
+    const monitoredWorkloadLoop = releaseGate.indexOf('for (const step of releaseVerificationSteps)')
+    const finalizationGuard = releaseGate.indexOf('if (releaseFinalizationRequired) {')
+    const canUseMonitorDefinition = releaseGate.indexOf('function canUseMonitor()')
+    const canUseMonitorBody = releaseGate.slice(
+      canUseMonitorDefinition,
+      releaseGate.indexOf('async function runMonitoredNodeProcess', canUseMonitorDefinition),
+    )
+    const monitorStartBody = releaseGate.slice(
+      monitorStartDefinition,
+      releaseGate.indexOf('async function main()', monitorStartDefinition),
+    )
+    expect(preMonitorLoop).toBeGreaterThanOrEqual(0)
+    expect(preMonitorInvocation).toBeGreaterThanOrEqual(0)
+    expect(monitorStartDefinition).toBeGreaterThanOrEqual(0)
+    expect(preMonitorInvocation).toBeLessThan(monitorStartCall)
+    expect(monitorStartCall).toBeLessThan(finalizationFlagSet)
+    expect(finalizationFlagSet).toBeLessThan(monitorReadyWait)
+    expect(monitorReadyWait).toBeLessThan(monitoredWorkloadLoop)
+    expect(monitorSpawn).toBeGreaterThan(monitorStartDefinition)
+    expect(monitorPidValidation).toBeGreaterThan(monitorSpawn)
+    expect(monitorMarkerPublish).toBeGreaterThan(monitorPidValidation)
+    expect(monitorMarkerPublish).toBeLessThan(monitorStartCall)
+    expect(releaseGate.match(/monitor = spawn\(/g) ?? []).toHaveLength(1)
+    expect(releaseGate.match(/await startReleaseMonitor\(\)/g) ?? []).toHaveLength(1)
+    expect(monitorStartBody).toContain('observeChild(monitor)')
+    expect(monitorStartBody).toContain('catch (markerPublicationError)')
+    expect(monitorStartBody).toContain('monitor.kill()')
+    expect(monitorStartBody).toContain(
+      'await waitForObservedChildToSettleWithin(monitor, 5_000)',
+    )
+    expect(monitorStartBody).toContain(
+      'rmSync(monitorProcessTemporaryPath, { force: true })',
+    )
+    expect(finalizationGuard).toBeGreaterThan(monitoredWorkloadLoop)
+    expect(canUseMonitorBody).toContain('monitor.exitCode === null')
+    expect(canUseMonitorBody).toContain('monitor.signalCode === null')
+    expect(releaseGate.slice(preMonitorLoop, preMonitorInvocation)).toContain(
+      "await runNodeProcess([pnpmCli, 'run', step])",
+    )
+    expect(releaseGate).toContain('let releaseFinalizationRequired = false')
+    expect(releaseGate).not.toContain('preMonitorSucceeded')
+    expect(releaseGate).toContain(
+      "const monitorProcessPath = join(monitorRoot, 'monitor-process.json')",
+    )
+    expect(releaseGate).toContain('startedAt: new Date().toISOString()')
+
+    expect(
+      createHash('sha256').update(releaseMonitor).digest('hex'),
+    ).toBe('a9b9cb0a38074c22247b227b0a2403719530b5f10077fad91ca06299403795a9')
   })
 
   it('blocks direct Windows artifact builds outside the release gate', () => {
