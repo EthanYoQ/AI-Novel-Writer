@@ -447,6 +447,7 @@ async function restoreAndVerifyNodeNativeAbi({ monitored }) {
   await runner('verify:native-node', [
     resolve('node_modules/vitest/vitest.mjs'),
     'run',
+    '--pool=threads',
     'electron/repositories/__tests__/character-repository.test.ts',
   ])
   console.log('Restored and verified better-sqlite3 for the ordinary Node test runtime.')

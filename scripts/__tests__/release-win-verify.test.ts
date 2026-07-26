@@ -408,6 +408,14 @@ describe('Windows release verification orchestration', () => {
     expect(script).toContain(
       'await restoreAndVerifyNodeNativeAbi({ monitored: false })',
     )
+
+    const nativeVerifyCall = script.lastIndexOf("await runner('verify:native-node', [")
+    const nativeVerifyCallEnd = script.indexOf('  ])', nativeVerifyCall)
+    const nativeVerifyArguments = script.slice(nativeVerifyCall, nativeVerifyCallEnd)
+    expect(nativeVerifyCall).toBeGreaterThan(0)
+    expect(nativeVerifyCallEnd).toBeGreaterThan(nativeVerifyCall)
+    expect(nativeVerifyArguments).toContain("'--pool=threads'")
+    expect(script.match(/'--pool=threads'/g) ?? []).toHaveLength(1)
   })
 
   windowsIt('stops a marker-only release monitor before status and control initialization', async () => {
