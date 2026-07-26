@@ -48,7 +48,7 @@ describe('Windows PowerShell smoke script encoding', () => {
   it('uses a UTF-8 BOM for scripts directly executed by Windows PowerShell', () => {
     const utf8Bom = Buffer.from([0xef, 0xbb, 0xbf])
 
-    for (const script of [probeScript, installerScript]) {
+    for (const script of [probeScript, installerScript, releaseMonitorScript]) {
       expect(readFileSync(script).subarray(0, utf8Bom.length)).toEqual(utf8Bom)
     }
   })
