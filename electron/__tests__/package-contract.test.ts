@@ -176,7 +176,7 @@ describe('release dependency contract', () => {
 
     expect(
       createHash('sha256').update(releaseMonitor).digest('hex'),
-    ).toBe('a9b9cb0a38074c22247b227b0a2403719530b5f10077fad91ca06299403795a9')
+    ).toBe('5c32a06428cf382dd780d1ca31fbd9dae5fc5d872e0de8104f4c709be06aa768')
   })
 
   it('blocks direct Windows artifact builds outside the release gate', () => {
