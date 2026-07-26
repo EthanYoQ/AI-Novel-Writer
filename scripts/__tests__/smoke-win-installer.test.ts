@@ -988,6 +988,175 @@ $uncaptured = Get-GateExitFailure ([pscustomobject]@{ ProcessId = 704; ExitCode 
     expect(result.Uncaptured).toContain('could not capture the exit code')
   })
 
+  windowsIt('exempts only the known NSIS PowerShell probes during installer smoke steps', () => {
+    const output = runReleaseMonitorLibrary(`
+$system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+$sysWow64 = Join-Path $env:SystemRoot 'SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe'
+$event = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$parentPath = 'C:\\temp\\ai-novel-writer-setup-0.4.0.exe'
+$parentStartTimeTicks = '638900000000000000'
+$parent = [pscustomobject]@{
+  processId = 700
+  startTimeTicks = $parentStartTimeTicks
+  identityCaptured = $true
+  executablePath = $parentPath
+}
+$system32Prefix = '"' + $system32 + '" -C "'
+$sysWow64Prefix = '"' + $sysWow64 + '" -C "'
+$availabilityPayload = 'if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }'
+$policyPayload = 'if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }'
+$runningProcessPayload = 'if ((Get-CimInstance -ClassName Win32_Process | ? {$_.Path -and $_.Path.StartsWith(''C:\\temp\\installed'', ''CurrentCultureIgnoreCase'')}).Count -gt 0) { exit 0 } else { exit 1 }'
+$availabilityCommand = $system32Prefix + $availabilityPayload + '"'
+$policyCommand = $system32Prefix + $policyPayload + '"'
+$runningProcessCommand = $sysWow64Prefix + $runningProcessPayload + '"'
+$arbitraryCommand = $system32Prefix + 'Write-Error ''not an NSIS probe''; exit 1"'
+$suffixedCommand = $availabilityCommand.Substring(0, $availabilityCommand.Length - 1) + '; Write-Error ''surplus action''"'
+$alternateSwitchCommand = $availabilityCommand.Replace(' -C ', ' -Command ')
+$lowercaseSwitchCommand = $availabilityCommand.Replace(' -C ', ' -c ')
+$changedPayloadCaseCommand = $availabilityCommand.Replace('Get-CimInstance', 'get-ciminstance')
+$pathCaseCommand = $availabilityCommand.Replace($system32, $system32.ToUpperInvariant())
+$wrongArgvZeroCommand = $availabilityCommand.Replace('"' + $system32 + '"', '"C:\\temp\\totally-unrelated.exe"')
+$extraWhitespaceCommand = $availabilityCommand.Replace(' -C ', '  -C ')
+
+function New-ProbeIdentity {
+  param(
+    [string]$ImagePath,
+    [string]$CommandLine,
+    [bool]$IdentityCaptured = $true,
+    [bool]$CommandLineCaptured = $true,
+    [Nullable[int]]$ParentProcessId = 700,
+    [AllowNull()][string]$ParentStartTimeTicks = $parentStartTimeTicks,
+    [AllowNull()][string]$ParentExecutablePath = $parentPath
+  )
+  return [pscustomobject]@{
+    processId = 701
+    identityCaptured = $IdentityCaptured
+    commandLineCaptured = $CommandLineCaptured
+    parentProcessId = $ParentProcessId
+    parentProcessStartTimeTicks = $ParentStartTimeTicks
+    parentExecutablePath = $ParentExecutablePath
+    executablePath = $ImagePath
+    commandLine = $CommandLine
+  }
+}
+
+function Test-SyntheticNsisProbe {
+  param(
+    [string]$Step,
+    $Event,
+    $Identity,
+    $Parent
+  )
+  return Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step $Step -Event $Event -ProcessIdentity $Identity -ParentIdentity $Parent
+}
+
+$validAvailability = New-ProbeIdentity -ImagePath $system32 -CommandLine $availabilityCommand
+$validPolicy = New-ProbeIdentity -ImagePath $system32 -CommandLine $policyCommand
+$validRunningProcess = New-ProbeIdentity -ImagePath $sysWow64 -CommandLine $runningProcessCommand
+$wrongParent = [pscustomobject]@{ processId = 700; startTimeTicks = $parentStartTimeTicks; identityCaptured = $true; executablePath = 'C:\\temp\\unrelated.exe' }
+$relativeParent = [pscustomobject]@{ processId = 700; startTimeTicks = $parentStartTimeTicks; identityCaptured = $true; executablePath = 'ai-novel-writer-setup-0.4.0.exe' }
+$nonOne = [pscustomobject]@{ ProcessId = 701; ExitCode = 2; ExitCodeCaptured = $true; JobMessage = 7 }
+$abnormal = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 8 }
+
+[pscustomobject]@{
+  InstallerAvailability = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity $validAvailability -Parent $parent
+  UpgradePolicy = Test-SyntheticNsisProbe -Step 'smoke:win-v025-upgrade' -Event $event -Identity $validPolicy -Parent $parent
+  SysWow64RunningProcess = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity $validRunningProcess -Parent $parent
+  PathCaseOnly = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $pathCaseCommand) -Parent $parent
+  OtherStep = Test-SyntheticNsisProbe -Step 'other-step' -Event $event -Identity $validAvailability -Parent $parent
+  ArbitraryPowerShell = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $arbitraryCommand) -Parent $parent
+  SuffixedKnownCommand = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $suffixedCommand) -Parent $parent
+  AlternateSwitch = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $alternateSwitchCommand) -Parent $parent
+  LowercaseSwitch = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $lowercaseSwitchCommand) -Parent $parent
+  ChangedPayloadCase = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $changedPayloadCaseCommand) -Parent $parent
+  WrongArgvZero = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $wrongArgvZeroCommand) -Parent $parent
+  ExtraWhitespace = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $extraWhitespaceCommand) -Parent $parent
+  WrongParent = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity $validAvailability -Parent $wrongParent
+  ReusedParentPid = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $availabilityCommand -ParentStartTimeTicks '638899999999999999') -Parent $parent
+  ParentPathMismatch = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $availabilityCommand -ParentExecutablePath 'C:\\temp\\other\\ai-novel-writer-setup-0.4.0.exe') -Parent $parent
+  RelativeInstallerParent = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $availabilityCommand -ParentExecutablePath 'ai-novel-writer-setup-0.4.0.exe') -Parent $relativeParent
+  NonOneExit = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $nonOne -Identity $validAvailability -Parent $parent
+  AbnormalExit = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $abnormal -Identity $validAvailability -Parent $parent
+  ProductProcess = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath 'C:\\temp\\AI小说作家.exe' -CommandLine $availabilityCommand) -Parent $parent
+  RelativePowerShell = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath 'System32\\WindowsPowerShell\\v1.0\\powershell.exe' -CommandLine $availabilityCommand) -Parent $parent
+  MissingIdentity = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $availabilityCommand -IdentityCaptured $false) -Parent $parent
+  MissingCommandLine = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine '' -CommandLineCaptured $false) -Parent $parent
+  MissingParentMetadata = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $availabilityCommand -ParentProcessId $null) -Parent $parent
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result.InstallerAvailability).toBe(true)
+    expect(result.UpgradePolicy).toBe(true)
+    expect(result.SysWow64RunningProcess).toBe(true)
+    expect(result.PathCaseOnly).toBe(true)
+    expect(result.OtherStep).toBe(false)
+    expect(result.ArbitraryPowerShell).toBe(false)
+    expect(result.SuffixedKnownCommand).toBe(false)
+    expect(result.AlternateSwitch).toBe(false)
+    expect(result.LowercaseSwitch).toBe(false)
+    expect(result.ChangedPayloadCase).toBe(false)
+    expect(result.WrongArgvZero).toBe(false)
+    expect(result.ExtraWhitespace).toBe(false)
+    expect(result.WrongParent).toBe(false)
+    expect(result.ReusedParentPid).toBe(false)
+    expect(result.ParentPathMismatch).toBe(false)
+    expect(result.RelativeInstallerParent).toBe(false)
+    expect(result.NonOneExit).toBe(false)
+    expect(result.AbnormalExit).toBe(false)
+    expect(result.ProductProcess).toBe(false)
+    expect(result.RelativePowerShell).toBe(false)
+    expect(result.MissingIdentity).toBe(false)
+    expect(result.MissingCommandLine).toBe(false)
+    expect(result.MissingParentMetadata).toBe(false)
+  })
+
+  windowsIt('keeps command-line secrets in memory and redacts them from process evidence', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-evidence-redaction-'))
+    const secret = 'super-secret-cli-token'
+    try {
+      runReleaseMonitorLibrary(`
+New-Item -ItemType Directory -Path ${quotePowerShell(root)} -Force | Out-Null
+$event = [pscustomobject]@{
+  Kind = 'process-start'
+  ProcessId = 701
+  ExitCode = $null
+  CaptureEstablished = $true
+  ExitCodeCaptured = $false
+  JobMessage = 6
+  RecordedAt = '2026-01-01T00:00:00.0000000Z'
+}
+$identity = [pscustomobject]@{
+  processId = 701
+  startTimeTicks = '638900000000000000'
+  processName = 'powershell'
+  executablePath = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+  commandLine = 'powershell.exe -Command Invoke-Thing --token ${secret}'
+  parentProcessId = 700
+  parentProcessStartTimeTicks = '638899999999999999'
+  parentExecutablePath = 'C:\\temp\\parent.exe'
+  identityCaptured = $true
+  commandLineCaptured = $true
+  identityCaptureError = $null
+}
+Write-AiNovelGateProcessEventEvidence -Path ${quotePowerShell(root)} -Step 'redaction-test' -Event $event -ProcessIdentity $identity -ExitClassification 'failure'
+`)
+      const rawEvidence = readFileSync(join(root, 'process-events.jsonl'), 'utf8')
+      const evidence = JSON.parse(rawEvidence.trim()) as {
+        processIdentity?: Record<string, unknown>
+      }
+
+      expect(rawEvidence).not.toContain(secret)
+      expect(evidence.processIdentity).not.toHaveProperty('commandLine')
+      expect(evidence.processIdentity).toMatchObject({
+        commandLineCaptured: true,
+        commandLineRedacted: true,
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   windowsIt('does not treat a reused process ID as the process originally tracked by the release gate', () => {
     const output = runReleaseMonitorLibrary(`
 $ids = [System.Collections.Generic.HashSet[int]]::new()
