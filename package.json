@@ -17,8 +17,6 @@
     "typecheck": "tsc --noEmit",
     "check:i18n": "node scripts/check-i18n-coverage.mjs",
     "test": "vitest run",
-    "test:release-monitor-selftest": "vitest run scripts/__tests__/release-win-verify.test.ts",
-    "test:release-workload": "vitest run --exclude scripts/__tests__/release-win-verify.test.ts",
     "build": "tsc && vite build",
     "build:win": "pnpm run release:win:verify",
     "build:win:artifacts": "node scripts/require-release-gate.mjs && pnpm run rebuild:electron && tsc && vite build && electron-builder --win --x64 --publish never",

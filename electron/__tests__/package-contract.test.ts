@@ -68,12 +68,10 @@ describe('release dependency contract', () => {
     expect(pkg.scripts?.['verify:github-update-release']).toBe('node scripts/verify-github-update-release.mjs')
   })
 
-  it('isolates release-monitor self-tests before the outer monitor starts', () => {
-    const selfTest = 'scripts/__tests__/release-win-verify.test.ts'
+  it('runs the full test suite before the outer monitor starts', () => {
     expect(pkg.scripts?.test).toBe('vitest run')
-    expect(pkg.scripts?.['test:release-monitor-selftest']).toBe(`vitest run ${selfTest}`)
-    expect(pkg.scripts?.['test:release-workload']).toBe(`vitest run --exclude ${selfTest}`)
-    expect(pkg.scripts?.['test:release-monitor-selftest']).not.toBe(pkg.scripts?.['test:release-workload'])
+    expect(pkg.scripts?.['test:release-monitor-selftest']).toBeUndefined()
+    expect(pkg.scripts?.['test:release-workload']).toBeUndefined()
 
     const releaseGate = readFileSync('scripts/release-win-verify.mjs', 'utf8')
     const releaseMonitor = readFileSync('scripts/monitor-win-release-gate.ps1', 'utf8')
@@ -84,9 +82,8 @@ describe('release dependency contract', () => {
 
     expect(plan.status, plan.stderr || plan.error?.message).toBe(0)
     expect(JSON.parse(plan.stdout)).toEqual([
-      'test:release-monitor-selftest',
+      'test',
       'prepare:native-node',
-      'test:release-workload',
       'clean:build',
       'build:win:artifacts',
       'verify:win-update-artifacts',
@@ -98,7 +95,21 @@ describe('release dependency contract', () => {
       'verify:native-node',
       'final:quiet',
     ])
+    const releasePlan = JSON.parse(plan.stdout) as string[]
+    expect(releasePlan[0]).toBe('test')
+    expect(releasePlan.filter(step => step === 'test')).toHaveLength(1)
 
+    const preMonitorStepsDefinition = releaseGate.indexOf('export const releasePreMonitorSteps = [')
+    const releaseVerificationStepsDefinition = releaseGate.indexOf('export const releaseVerificationSteps = [')
+    const releaseFinalizationStepsDefinition = releaseGate.indexOf('export const releaseFinalizationSteps = [')
+    const preMonitorSteps = releaseGate.slice(
+      preMonitorStepsDefinition,
+      releaseVerificationStepsDefinition,
+    )
+    const releaseVerificationSteps = releaseGate.slice(
+      releaseVerificationStepsDefinition,
+      releaseFinalizationStepsDefinition,
+    )
     const preMonitorLoop = releaseGate.indexOf('for (const step of releasePreMonitorSteps)')
     const preMonitorInvocation = releaseGate.indexOf('await runPreMonitorSteps()')
     const monitorStartDefinition = releaseGate.indexOf('async function startReleaseMonitor()')
@@ -123,6 +134,11 @@ describe('release dependency contract', () => {
     )
     expect(preMonitorLoop).toBeGreaterThanOrEqual(0)
     expect(preMonitorInvocation).toBeGreaterThanOrEqual(0)
+    expect(preMonitorStepsDefinition).toBeGreaterThanOrEqual(0)
+    expect(releaseVerificationStepsDefinition).toBeGreaterThan(preMonitorStepsDefinition)
+    expect(releaseFinalizationStepsDefinition).toBeGreaterThan(releaseVerificationStepsDefinition)
+    expect(preMonitorSteps.match(/'test'/g) ?? []).toHaveLength(1)
+    expect(releaseVerificationSteps).not.toMatch(/'test(?:[^']*)?'/)
     expect(monitorStartDefinition).toBeGreaterThanOrEqual(0)
     expect(preMonitorInvocation).toBeLessThan(monitorStartCall)
     expect(monitorStartCall).toBeLessThan(finalizationFlagSet)
