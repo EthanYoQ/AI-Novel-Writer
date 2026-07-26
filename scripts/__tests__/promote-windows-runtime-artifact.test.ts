@@ -13,6 +13,7 @@ import {
   verifyRemoteReleaseAssets,
   verifyStagedPromotion,
 } from '../promote-windows-runtime-artifact.mjs'
+import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
 
 const SHA = 'a'.repeat(40)
 const OTHER_SHA = 'b'.repeat(40)
@@ -109,14 +110,23 @@ function queuedFetcher(
   }, { assertDrained: () => expect(expected).toHaveLength(0), requests })
 }
 
-function qualificationFixture() {
+function qualificationFixture({
+  sourceLockfileText = 'lockfileVersion: 9.0\n',
+  manifestLockfileText = sourceLockfileText,
+}: {
+  sourceLockfileText?: string
+  manifestLockfileText?: string
+} = {}) {
   const root = temporaryDirectory()
   const source = path.join(root, 'source')
   const artifact = path.join(root, 'artifact', '0.4.0')
   mkdirSync(path.join(artifact, 'qualification'), { recursive: true })
   mkdirSync(source, { recursive: true })
   writeJson(path.join(source, 'package.json'), { version: '0.4.0' })
-  writeFileSync(path.join(source, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8')
+  const sourceLockfile = path.join(source, 'pnpm-lock.yaml')
+  const manifestLockfile = path.join(root, 'manifest-pnpm-lock.yaml')
+  writeFileSync(sourceLockfile, sourceLockfileText, 'utf8')
+  writeFileSync(manifestLockfile, manifestLockfileText, 'utf8')
 
   const installer = 'ai-novel-writer-setup-0.4.0.exe'
   writeFileSync(path.join(artifact, installer), 'installer bytes')
@@ -170,7 +180,7 @@ function qualificationFixture() {
   writeJson(path.join(artifact, 'manifest.json'), {
     schemaVersion: 1,
     commit: SHA,
-    lockfileSha256: hash(path.join(source, 'pnpm-lock.yaml')),
+    lockfileSha256: canonicalPnpmLockfileSha256(manifestLockfile),
     gateLevel: 'RUNTIME_VERIFIED',
     releaseCreated: false,
     artifacts,
@@ -232,6 +242,31 @@ describe('downloaded qualification verification', () => {
       'latest.yml',
     ])
     expect(verifyStagedPromotion(output).expectedSha).toBe(SHA)
+  })
+
+  it('accepts Windows lockfile line endings but rejects a changed lockfile', () => {
+    const sourceLockfileText = 'lockfileVersion: 9.0\nsettings:\n  autoInstallPeers: false\n'
+    const windowsQualification = qualificationFixture({
+      sourceLockfileText,
+      manifestLockfileText: sourceLockfileText.replaceAll('\n', '\r\n'),
+    })
+    expect(() => verifyDownloadedQualification({
+      artifactRoot: windowsQualification.artifactRoot,
+      qualifiedSource: windowsQualification.source,
+      sourceCommit: SHA,
+      sourcePlan: sourcePlan(),
+    })).not.toThrow()
+
+    const changedLockfile = qualificationFixture({
+      sourceLockfileText,
+      manifestLockfileText: 'lockfileVersion: 9.0\nsettings:\n  autoInstallPeers: true\n',
+    })
+    expect(() => verifyDownloadedQualification({
+      artifactRoot: changedLockfile.artifactRoot,
+      qualifiedSource: changedLockfile.source,
+      sourceCommit: SHA,
+      sourcePlan: sourcePlan(),
+    })).toThrow('lockfile hash')
   })
 
   it('rejects a manifest without the RUNTIME_VERIFIED gate', () => {
