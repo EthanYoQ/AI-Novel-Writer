@@ -99,6 +99,20 @@ describe('embedding batch response contract', () => {
 
 describe('OpenAI embedding endpoint construction', () => {
   it.each([
+    ['localhost', 'http://localhost:11434/api', 'http://localhost:11434/v1'],
+    ['127.0.0.1', 'http://127.0.0.1:11434/api/', 'http://127.0.0.1:11434/v1'],
+  ])('explains how to replace the Ollama native /api base for %s', async (_name, baseUrl, recommendedBaseUrl) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(embedOpenAI(['第一段'], { ...model, baseUrl })).rejects.toThrow(
+      `本应用使用 OpenAI-compatible Embedding API，请将 Base URL 改为 ${recommendedBaseUrl}。 `
+      + `This app uses the OpenAI-compatible Embedding API; change the Base URL to ${recommendedBaseUrl}.`,
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
     ['a complete endpoint', 'https://embedding.example/v1/embeddings', 'https://embedding.example/v1/embeddings'],
     ['a v1 base', 'https://embedding.example/v1', 'https://embedding.example/v1/embeddings'],
     ['a versioned compatible base', 'https://open.bigmodel.cn/api/paas/v4', 'https://open.bigmodel.cn/api/paas/v4/embeddings'],
