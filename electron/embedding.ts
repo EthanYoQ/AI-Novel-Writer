@@ -142,6 +142,30 @@ const KNOWN_OPENAI_COMPATIBLE_ROOTS = new Set([
   'http://127.0.0.1:11434',
 ])
 
+const OLLAMA_LOCAL_HOSTS = new Set(['localhost', '127.0.0.1'])
+
+function ollamaOpenAIEmbeddingBaseUrl(baseUrl: string): string | undefined {
+  try {
+    const parsed = new URL(baseUrl)
+    const pathname = parsed.pathname.replace(/\/+$/, '') || '/'
+    if (
+      parsed.protocol !== 'http:'
+      || parsed.port !== '11434'
+      || !OLLAMA_LOCAL_HOSTS.has(parsed.hostname.toLowerCase())
+      || pathname !== '/api'
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+    ) {
+      return undefined
+    }
+    return `${parsed.protocol}//${parsed.host}/v1`
+  } catch {
+    return undefined
+  }
+}
+
 function buildOpenAIEmbeddingUrl(baseUrl: string): string {
   const base = baseUrl.replace(/\/+$/, '')
   if (base.endsWith('/embeddings')) {
@@ -162,6 +186,14 @@ export async function embedOpenAI(
   texts: string[],
   model: { baseUrl: string; apiKey: string; modelName?: string },
 ): Promise<number[][]> {
+  const ollamaCompatibleBaseUrl = ollamaOpenAIEmbeddingBaseUrl(model.baseUrl)
+  if (ollamaCompatibleBaseUrl) {
+    throw new Error(
+      'Ollama 原生 /api 地址不兼容：'
+      + `本应用使用 OpenAI-compatible Embedding API，请将 Base URL 改为 ${ollamaCompatibleBaseUrl}。 `
+      + `This app uses the OpenAI-compatible Embedding API; change the Base URL to ${ollamaCompatibleBaseUrl}.`,
+    )
+  }
   const embeddingModel = model.modelName || 'text-embedding-3-small'
   const url = buildOpenAIEmbeddingUrl(model.baseUrl)
   const res = await fetch(url, {

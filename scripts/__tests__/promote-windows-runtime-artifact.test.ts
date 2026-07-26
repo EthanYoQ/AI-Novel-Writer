@@ -5,6 +5,9 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   PROMOTION_CONFIRMATION,
+  claimLightweightTag,
+  finalizeVerifiedDraft,
+  resolveTagCommitSha,
   validateQualificationSource,
   verifyDownloadedQualification,
   verifyRemoteReleaseAssets,
@@ -12,6 +15,8 @@ import {
 } from '../promote-windows-runtime-artifact.mjs'
 
 const SHA = 'a'.repeat(40)
+const OTHER_SHA = 'b'.repeat(40)
+const TAG_OBJECT_SHA = 'c'.repeat(40)
 const temporaryDirectories: string[] = []
 
 function temporaryDirectory() {
@@ -77,6 +82,31 @@ function sourcePlan() {
 
 function writeJson(file: string, value: unknown) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+}
+
+interface MockRequest {
+  method: string
+  url: string
+  body?: string
+}
+
+function queuedFetcher(
+  expected: Array<{ method: string; path: string; status: number; data?: unknown }>,
+  requests: MockRequest[] = [],
+) {
+  return Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+    const next = expected.shift()
+    expect(next, `Unexpected request: ${String(input)}`).toBeDefined()
+    const method = init?.method ?? 'GET'
+    const url = String(input)
+    requests.push({ method, url, body: typeof init?.body === 'string' ? init.body : undefined })
+    expect(method).toBe(next?.method)
+    expect(url).toContain(next?.path)
+    return new Response(next?.data === undefined ? '' : JSON.stringify(next.data), {
+      status: next?.status,
+      headers: next?.data === undefined ? undefined : { 'Content-Type': 'application/json' },
+    })
+  }, { assertDrained: () => expect(expected).toHaveLength(0), requests })
 }
 
 function qualificationFixture() {
@@ -274,5 +304,159 @@ describe('remote Release asset verification', () => {
         { name: 'portable.zip', size: 9, digest: `sha256:${'2'.repeat(64)}`, state: 'uploaded' },
       ],
     }, local)).toThrow(/size mismatch|Unexpected remote/)
+  })
+})
+
+describe('atomic tag claim and commit peeling', () => {
+  it('atomically creates a lightweight tag and confirms its commit', async () => {
+    const fetcher = queuedFetcher([
+      {
+        method: 'POST',
+        path: '/git/refs',
+        status: 201,
+        data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } },
+      },
+      {
+        method: 'GET',
+        path: '/git/ref/tags/v0.4.0',
+        status: 200,
+        data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } },
+      },
+    ])
+    await expect(claimLightweightTag({
+      token: 'token',
+      repository: 'EthanYoQ/AI-Novel-Writer',
+      tag: 'v0.4.0',
+      expectedSha: SHA,
+      fetcher,
+    })).resolves.toBe(SHA)
+    fetcher.assertDrained()
+  })
+
+  it('rejects a concurrently occupied tag after HTTP 422 without updating or deleting it', async () => {
+    const requests: MockRequest[] = []
+    const fetcher = queuedFetcher([
+      { method: 'POST', path: '/git/refs', status: 422, data: { message: 'Reference already exists' } },
+      {
+        method: 'GET',
+        path: '/git/ref/tags/v0.4.0',
+        status: 200,
+        data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: OTHER_SHA } },
+      },
+    ], requests)
+    await expect(claimLightweightTag({
+      token: 'token',
+      repository: 'EthanYoQ/AI-Novel-Writer',
+      tag: 'v0.4.0',
+      expectedSha: SHA,
+      fetcher,
+    })).rejects.toThrow(`tag now resolves to ${OTHER_SHA}`)
+    expect(requests.map(request => request.method)).toEqual(['POST', 'GET'])
+    expect(requests).not.toEqual(expect.arrayContaining([expect.objectContaining({ method: 'PATCH', url: expect.stringContaining('/git/refs') })]))
+    expect(requests).not.toEqual(expect.arrayContaining([expect.objectContaining({ method: 'DELETE' })]))
+    fetcher.assertDrained()
+  })
+
+  it('recursively peels an annotated tag to its final commit', async () => {
+    const fetcher = queuedFetcher([
+      {
+        method: 'GET',
+        path: '/git/ref/tags/v0.4.0',
+        status: 200,
+        data: { ref: 'refs/tags/v0.4.0', object: { type: 'tag', sha: TAG_OBJECT_SHA } },
+      },
+      {
+        method: 'GET',
+        path: `/git/tags/${TAG_OBJECT_SHA}`,
+        status: 200,
+        data: { sha: TAG_OBJECT_SHA, object: { type: 'commit', sha: SHA } },
+      },
+    ])
+    await expect(resolveTagCommitSha({
+      token: 'token',
+      repository: 'EthanYoQ/AI-Novel-Writer',
+      tag: 'v0.4.0',
+      fetcher,
+    })).resolves.toBe(SHA)
+    fetcher.assertDrained()
+  })
+
+  it('rejects when a newly claimed tag resolves to the wrong commit', async () => {
+    const fetcher = queuedFetcher([
+      {
+        method: 'POST',
+        path: '/git/refs',
+        status: 201,
+        data: { ref: 'refs/tags/v0.4.0', object: { type: 'commit', sha: SHA } },
+      },
+      {
+        method: 'GET',
+        path: '/git/ref/tags/v0.4.0',
+        status: 200,
+        data: { ref: 'refs/tags/v0.4.0', object: { type: 'tag', sha: TAG_OBJECT_SHA } },
+      },
+      {
+        method: 'GET',
+        path: `/git/tags/${TAG_OBJECT_SHA}`,
+        status: 200,
+        data: { sha: TAG_OBJECT_SHA, object: { type: 'commit', sha: OTHER_SHA } },
+      },
+    ])
+    await expect(claimLightweightTag({
+      token: 'token',
+      repository: 'EthanYoQ/AI-Novel-Writer',
+      tag: 'v0.4.0',
+      expectedSha: SHA,
+      fetcher,
+    })).rejects.toThrow(`resolves to ${OTHER_SHA}, expected ${SHA}`)
+    fetcher.assertDrained()
+  })
+})
+
+describe('final Release PATCH compensation', () => {
+  it('publishes only between successful pre- and post-PATCH tag checks', async () => {
+    const calls: string[] = []
+    await expect(finalizeVerifiedDraft({
+      verifyTag: async (phase: string) => { calls.push(phase) },
+      publishRelease: async () => { calls.push('PATCH-final'); return { draft: false } },
+      restoreDraft: async () => { calls.push('PATCH-draft') },
+    })).resolves.toEqual({ draft: false })
+    expect(calls).toEqual(['before-publish', 'PATCH-final', 'after-publish'])
+  })
+
+  it('restores draft and fails when the post-PATCH tag resolves to another SHA', async () => {
+    const calls: string[] = []
+    await expect(finalizeVerifiedDraft({
+      verifyTag: async (phase: string) => {
+        calls.push(phase)
+        if (phase === 'after-publish') throw new Error(`tag resolves to ${OTHER_SHA}`)
+      },
+      publishRelease: async () => { calls.push('PATCH-final'); return { draft: false } },
+      restoreDraft: async () => { calls.push('PATCH-draft') },
+    })).rejects.toThrow('Post-publication tag verification failed; the Release was restored to draft state')
+    expect(calls).toEqual(['before-publish', 'PATCH-final', 'after-publish', 'PATCH-draft'])
+  })
+
+  it('restores draft and fails when the formal PATCH API outcome is uncertain', async () => {
+    const calls: string[] = []
+    await expect(finalizeVerifiedDraft({
+      verifyTag: async (phase: string) => { calls.push(phase) },
+      publishRelease: async () => { calls.push('PATCH-final'); throw new Error('GitHub API 502') },
+      restoreDraft: async () => { calls.push('PATCH-draft') },
+    })).rejects.toThrow('Formal Release PATCH failed; the Release was restored to draft state')
+    expect(calls).toEqual(['before-publish', 'PATCH-final', 'PATCH-draft'])
+  })
+
+  it('stays failed and reports manual intervention when draft restoration also fails', async () => {
+    const calls: string[] = []
+    await expect(finalizeVerifiedDraft({
+      verifyTag: async (phase: string) => {
+        calls.push(phase)
+        if (phase === 'after-publish') throw new Error('tag verification API unavailable')
+      },
+      publishRelease: async () => { calls.push('PATCH-final'); return { draft: false } },
+      restoreDraft: async () => { calls.push('PATCH-draft'); throw new Error('draft PATCH failed') },
+    })).rejects.toThrow('draft restoration also failed; manual intervention is required')
+    expect(calls).toEqual(['before-publish', 'PATCH-final', 'after-publish', 'PATCH-draft'])
   })
 })
