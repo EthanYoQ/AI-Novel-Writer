@@ -1041,6 +1041,12 @@ finally {
         }),
       }))
       expect((powerShellFailure?.processIdentity as Record<string, unknown>)).not.toHaveProperty('commandLine')
+    } catch (error) {
+      const eventPath = join(evidencePath, 'process-events.jsonl')
+      const diagnostics = existsSync(eventPath)
+        ? readFileSync(eventPath, 'utf8').trim().split(/\r?\n/).slice(-20).join('\n')
+        : 'process-events.jsonl was not created'
+      throw new Error(`${String(error)}\nRecent redacted process events:\n${diagnostics}`)
     } finally {
       if (gate) {
         gate.child.kill()
@@ -1051,7 +1057,7 @@ finally {
     }
   }, 45_000)
 
-  windowsIt('accepts the three exact electron-builder probes from one captured installer instance', async () => {
+  windowsIt('accepts the exact electron-builder process-check chain from one captured installer instance', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-nsis-probes-'))
     const controlPath = join(root, 'control.jsonl')
     const statusPath = join(root, 'status.json')
@@ -1066,6 +1072,7 @@ finally {
       'v1.0',
       'powershell.exe',
     )
+    const systemCmd = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe')
     writeFileSync(sourcePath, String.raw`
 using System;
 using System.IO;
@@ -1126,15 +1133,13 @@ internal static class ExactNsisProbeParent {
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool CloseHandle(IntPtr handle);
 
-  private static int RunProbe(string powerShellPath, string payload) {
+  private static int RunCommand(string executablePath, string commandLineValue) {
     StartupInfo startupInfo = new StartupInfo();
     startupInfo.cb = Marshal.SizeOf(startupInfo);
     ProcessInformation processInformation;
-    StringBuilder commandLine = new StringBuilder(
-      "\"" + powerShellPath + "\" -C \"" + payload + "\""
-    );
+    StringBuilder commandLine = new StringBuilder(commandLineValue);
     if (!CreateProcess(
-      powerShellPath,
+      executablePath,
       commandLine,
       IntPtr.Zero,
       IntPtr.Zero,
@@ -1157,17 +1162,32 @@ internal static class ExactNsisProbeParent {
     }
   }
 
+  private static int RunProbe(string powerShellPath, string payload, bool quoteImage) {
+    string argvZero = quoteImage ? "\"" + powerShellPath + "\"" : powerShellPath;
+    return RunCommand(powerShellPath, argvZero + " -C \"" + payload + "\"");
+  }
+
+  private static int RunCmdProcessCheck(string cmdPath) {
+    string findPath = Path.Combine(Path.GetDirectoryName(cmdPath), "find.exe");
+    string commandLine =
+      "\"" + cmdPath + "\" /C tasklist /FI \"USERNAME eq %USERNAME%\" /FI \"IMAGENAME eq AI\u5c0f\u8bf4\u4f5c\u5bb6.exe\" /FO CSV | \"" +
+      findPath +
+      "\" \"AI\u5c0f\u8bf4\u4f5c\u5bb6.exe\"";
+    return RunCommand(cmdPath, commandLine);
+  }
+
   public static int Main(string[] args) {
     string[] payloads = new[] {
       "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }",
       "if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }",
       "if ((Get-CimInstance -ClassName Win32_Process | ? {$_.Path -and $_.Path.StartsWith('C:\\ai-novel-release-probe-empty', 'CurrentCultureIgnoreCase')}).Count -gt 0) { exit 0 } else { exit 1 }"
     };
-    int[] results = new int[payloads.Length];
+    int[] results = new int[payloads.Length + 1];
     for (int index = 0; index < payloads.Length; index++) {
-      results[index] = RunProbe(args[0], payloads[index]);
+      results[index] = RunProbe(args[0], payloads[index], index != 1);
     }
-    File.WriteAllText(args[1], String.Join(",", results));
+    results[3] = RunCmdProcessCheck(args[1]);
+    File.WriteAllText(args[2], String.Join(",", results));
     return 0;
   }
 }
@@ -1204,7 +1224,7 @@ internal static class ExactNsisProbeParent {
 
     try {
       await waitForGateStatus(statusPath, 'ready')
-      gate = await startArmedExecutable(root, installerPath, [systemPowerShell, probeResultPath])
+      gate = await startArmedExecutable(root, installerPath, [systemPowerShell, systemCmd, probeResultPath])
       if (gate.child.pid == null) throw new Error('The armed gate did not expose a PID')
       appendFileSync(
         controlPath,
@@ -1222,9 +1242,10 @@ internal static class ExactNsisProbeParent {
       writeFileSync(gate.releasePath, 'release', 'utf8')
       expect(await settleWithin(gate.child, 30_000)).toEqual({ code: 0, signal: null })
       const probeResults = readFileSync(probeResultPath, 'utf8').split(',').map(Number)
-      expect(probeResults).toHaveLength(3)
+      expect(probeResults).toHaveLength(4)
       expect(probeResults.every(exitCode => exitCode === 0 || exitCode === 1)).toBe(true)
-      expect(probeResults.at(-1)).toBe(1)
+      expect(probeResults.at(2)).toBe(1)
+      expect(probeResults.at(3)).toBe(1)
 
       appendFileSync(
         controlPath,
@@ -1238,10 +1259,23 @@ internal static class ExactNsisProbeParent {
         const identity = event.processIdentity as Record<string, unknown> | undefined
         return event.kind === 'process-exit' && identity?.processName === 'powershell'
       })
+      const cmdExit = events.find(event => {
+        const identity = event.processIdentity as Record<string, unknown> | undefined
+        return event.kind === 'process-exit'
+          && event.exitCode === 1
+          && identity?.processName === 'cmd'
+          && identity?.parentExecutablePath === installerPath
+      })
+      const findExit = events.find(event => {
+        const identity = event.processIdentity as Record<string, unknown> | undefined
+        return event.kind === 'process-exit'
+          && event.exitCode === 1
+          && identity?.processName === 'find'
+      })
 
       expect(powerShellExits).toHaveLength(3)
       expect(powerShellExits.map(event => event.exitClassification)).toEqual(
-        probeResults.map(exitCode => exitCode === 0 ? 'succeeded' : 'expected-nsis-powershell-probe'),
+        probeResults.slice(0, 3).map(exitCode => exitCode === 0 ? 'succeeded' : 'expected-nsis-powershell-probe'),
       )
       for (const event of powerShellExits) {
         const identity = event.processIdentity as Record<string, unknown>
@@ -1253,7 +1287,18 @@ internal static class ExactNsisProbeParent {
         expect(identity.parentProcessStartTimeTicks).toEqual(expect.any(String))
         expect(identity).not.toHaveProperty('commandLine')
       }
+      expect(cmdExit).toMatchObject({ exitClassification: 'expected-nsis-cmd-process-check' })
+      expect(findExit).toMatchObject({ exitClassification: 'expected-nsis-find-no-match' })
+      expect((cmdExit?.processIdentity as Record<string, unknown>)).not.toHaveProperty('commandLine')
+      expect((findExit?.processIdentity as Record<string, unknown>)).not.toHaveProperty('commandLine')
       expect(rawEvidence).not.toContain('Get-CimInstance')
+      expect(rawEvidence).not.toContain('tasklist /FI')
+    } catch (error) {
+      const eventPath = join(evidencePath, 'process-events.jsonl')
+      const diagnostics = existsSync(eventPath)
+        ? readFileSync(eventPath, 'utf8').trim().split(/\r?\n/).slice(-20).join('\n')
+        : 'process-events.jsonl was not created'
+      throw new Error(`${String(error)}\nRecent redacted process events:\n${diagnostics}`)
     } finally {
       if (gate) {
         gate.child.kill()

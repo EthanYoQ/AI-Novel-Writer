@@ -1086,20 +1086,15 @@ function Test-AiNovelGateKnownNsisPowerShellProbeCommand {
   ) {
     return $false
   }
-  # electron-builder 26.8.1 emits exactly three quoted Windows PowerShell
-  # command lines with the short -C switch. Bind argv[0] to the captured image
-  # path and preserve the template's literal spacing so this narrow exception
-  # cannot grow into a general PowerShell success override.
-  $quotedImage = '"' + $PowerShellImagePath + '"'
-  if (
-    $CommandLine.Length -le $quotedImage.Length -or
-    -not $CommandLine.StartsWith($quotedImage, [System.StringComparison]::OrdinalIgnoreCase)
-  ) {
+  # nsExec may remove the source template's argv[0] quotes when it launches a
+  # path without spaces. Bind either runtime form to the captured full image
+  # path; the switch, whitespace, and payload remain byte-for-byte literals.
+  $arguments = Get-AiNovelGateBoundCommandArguments `
+    -CommandLine $CommandLine `
+    -ImagePath $PowerShellImagePath
+  if ($null -eq $arguments) {
     return $false
   }
-  # Windows paths are case-insensitive, but the switch, whitespace, and probe
-  # payload are versioned template literals and therefore compare ordinally.
-  $arguments = $CommandLine.Substring($quotedImage.Length)
   $availabilityArguments =
     ' -C "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"'
   $policyArguments =
@@ -1155,6 +1150,206 @@ function Test-AiNovelGateSameAbsolutePath {
   }
 }
 
+function Get-AiNovelGateBoundCommandArguments {
+  param(
+    [AllowEmptyString()][string]$CommandLine,
+    [AllowEmptyString()][string]$ImagePath
+  )
+
+  if (
+    [string]::IsNullOrWhiteSpace($CommandLine) -or
+    [string]::IsNullOrWhiteSpace($ImagePath)
+  ) {
+    return $null
+  }
+  $argvZero = ''
+  $arguments = ''
+  if ($CommandLine[0] -eq '"') {
+    $closingQuote = $CommandLine.IndexOf('"', 1)
+    if ($closingQuote -le 1) {
+      return $null
+    }
+    $argvZero = $CommandLine.Substring(1, $closingQuote - 1)
+    $arguments = $CommandLine.Substring($closingQuote + 1)
+  }
+  else {
+    $firstWhitespace = [regex]::Match($CommandLine, '\s')
+    if (-not $firstWhitespace.Success -or $firstWhitespace.Index -le 0) {
+      return $null
+    }
+    $argvZero = $CommandLine.Substring(0, $firstWhitespace.Index)
+    $arguments = $CommandLine.Substring($firstWhitespace.Index)
+  }
+  if (-not (Test-AiNovelGateSameAbsolutePath -Left $argvZero -Right $ImagePath)) {
+    return $null
+  }
+  return [string]$arguments
+}
+
+function Test-AiNovelGateSystemUtilityImage {
+  param(
+    [AllowEmptyString()][string]$ImagePath,
+    [Parameter(Mandatory = $true)][ValidateSet('cmd.exe', 'find.exe')][string]$FileName
+  )
+
+  if ([string]::IsNullOrWhiteSpace($ImagePath) -or $ImagePath -notmatch '^[A-Za-z]:\\') {
+    return $false
+  }
+  try {
+    $systemRoot = [System.Environment]::GetEnvironmentVariable('SystemRoot')
+    if ([string]::IsNullOrWhiteSpace($systemRoot)) {
+      return $false
+    }
+    $expectedPaths = @(
+      (Join-Path $systemRoot (Join-Path 'System32' $FileName))
+      (Join-Path $systemRoot (Join-Path 'SysWOW64' $FileName))
+    )
+    return @($expectedPaths | Where-Object {
+      Test-AiNovelGateSameAbsolutePath -Left $ImagePath -Right $_
+    }).Count -eq 1
+  }
+  catch {
+    return $false
+  }
+}
+
+function Test-AiNovelGateKnownNsisCmdProcessCheckCommand {
+  param(
+    [AllowEmptyString()][string]$CommandLine,
+    [AllowEmptyString()][string]$CmdImagePath
+  )
+
+  $arguments = Get-AiNovelGateBoundCommandArguments `
+    -CommandLine $CommandLine `
+    -ImagePath $CmdImagePath
+  if ($null -eq $arguments) {
+    return $false
+  }
+  try {
+    $expectedFindPath = Join-Path ([System.IO.Path]::GetDirectoryName($CmdImagePath)) 'find.exe'
+    $prefix = ' /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI小说作家.exe" /FO CSV | "'
+    $suffix = '" "AI小说作家.exe"'
+    if (
+      -not $arguments.StartsWith($prefix, [System.StringComparison]::Ordinal) -or
+      -not $arguments.EndsWith($suffix, [System.StringComparison]::Ordinal)
+    ) {
+      return $false
+    }
+    $findPathLength = $arguments.Length - $prefix.Length - $suffix.Length
+    if ($findPathLength -le 0) {
+      return $false
+    }
+    $findPath = $arguments.Substring($prefix.Length, $findPathLength)
+    return Test-AiNovelGateSameAbsolutePath -Left $findPath -Right $expectedFindPath
+  }
+  catch {
+    return $false
+  }
+}
+
+function Test-AiNovelGateKnownNsisFindNoMatchCommand {
+  param(
+    [AllowEmptyString()][string]$CommandLine,
+    [AllowEmptyString()][string]$FindImagePath
+  )
+
+  $arguments = Get-AiNovelGateBoundCommandArguments `
+    -CommandLine $CommandLine `
+    -ImagePath $FindImagePath
+  return (
+    $null -ne $arguments -and
+    [string]::Equals($arguments, '  "AI小说作家.exe"', [System.StringComparison]::Ordinal)
+  )
+}
+
+function Test-AiNovelGateExpectedExitOne {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [Parameter(Mandatory = $true)]$Event
+  )
+
+  return (
+    $Step -in @('smoke:win-installer', 'smoke:win-v025-upgrade') -and
+    [bool]$Event.ExitCodeCaptured -and
+    $null -ne $Event.ExitCode -and
+    [uint32]$Event.JobMessage -eq 7 -and
+    [int]$Event.ExitCode -eq 1
+  )
+}
+
+function Test-AiNovelGateCapturedParentIdentity {
+  param(
+    [AllowNull()]$ChildIdentity,
+    [AllowNull()]$ParentIdentity
+  )
+
+  if (
+    $null -eq $ChildIdentity -or
+    $null -eq $ParentIdentity -or
+    -not [bool]$ChildIdentity.identityCaptured -or
+    -not [bool]$ParentIdentity.identityCaptured -or
+    $null -eq $ChildIdentity.parentProcessId -or
+    [int]$ParentIdentity.processId -ne [int]$ChildIdentity.parentProcessId -or
+    [string]::IsNullOrWhiteSpace([string]$ParentIdentity.startTimeTicks) -or
+    [string]::IsNullOrWhiteSpace([string]$ChildIdentity.parentProcessStartTimeTicks) -or
+    -not [string]::Equals(
+      [string]$ParentIdentity.startTimeTicks,
+      [string]$ChildIdentity.parentProcessStartTimeTicks,
+      [System.StringComparison]::Ordinal
+    ) -or
+    -not (Test-AiNovelGateSameAbsolutePath `
+      -Left ([string]$ParentIdentity.executablePath) `
+      -Right ([string]$ChildIdentity.parentExecutablePath))
+  ) {
+    return $false
+  }
+  return $true
+}
+
+function Test-AiNovelGateCapturedInstallerParent {
+  param(
+    [AllowNull()]$ChildIdentity,
+    [AllowNull()]$ParentIdentity
+  )
+
+  return (
+    (Test-AiNovelGateCapturedParentIdentity `
+      -ChildIdentity $ChildIdentity `
+      -ParentIdentity $ParentIdentity) -and
+    (Test-AiNovelGateNsisInstallerImage -ImagePath ([string]$ParentIdentity.executablePath))
+  )
+}
+
+function Get-AiNovelGateProcessIdentityKey {
+  param([AllowNull()]$ProcessIdentity)
+
+  # A PID by itself can be reused. Keep the immutable creation time and
+  # canonical image path in the correlation key so a verified find.exe child
+  # cannot authorize a different cmd.exe instance.
+  if (
+    $null -eq $ProcessIdentity -or
+    -not [bool]$ProcessIdentity.identityCaptured -or
+    $null -eq $ProcessIdentity.processId -or
+    [int]$ProcessIdentity.processId -le 0 -or
+    [string]::IsNullOrWhiteSpace([string]$ProcessIdentity.startTimeTicks) -or
+    [string]::IsNullOrWhiteSpace([string]$ProcessIdentity.executablePath) -or
+    [string]$ProcessIdentity.executablePath -notmatch '^[A-Za-z]:\\'
+  ) {
+    return $null
+  }
+  try {
+    $startTimeTicks = [long]$ProcessIdentity.startTimeTicks
+    if ($startTimeTicks -le 0) {
+      return $null
+    }
+    $fullPath = [System.IO.Path]::GetFullPath([string]$ProcessIdentity.executablePath)
+    return ('{0}|{1}|{2}' -f [int]$ProcessIdentity.processId, $startTimeTicks, $fullPath)
+  }
+  catch {
+    return $null
+  }
+}
+
 function Test-AiNovelGateExpectedNsisPowerShellProbeExit {
   param(
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
@@ -1167,15 +1362,7 @@ function Test-AiNovelGateExpectedNsisPowerShellProbeExit {
   # three probe commands as a normal branch: PowerShell availability,
   # execution-policy availability, and "no process in INSTDIR". This exception
   # applies only to installer smoke steps, not to a general PowerShell process.
-  if ($Step -notin @('smoke:win-installer', 'smoke:win-v025-upgrade')) {
-    return $false
-  }
-  if (
-    -not [bool]$Event.ExitCodeCaptured -or
-    $null -eq $Event.ExitCode -or
-    [uint32]$Event.JobMessage -ne 7 -or
-    [int]$Event.ExitCode -ne 1
-  ) {
+  if (-not (Test-AiNovelGateExpectedExitOne -Step $Step -Event $Event)) {
     return $false
   }
   if (
@@ -1194,24 +1381,274 @@ function Test-AiNovelGateExpectedNsisPowerShellProbeExit {
     -PowerShellImagePath ([string]$ProcessIdentity.executablePath))) {
     return $false
   }
+  return Test-AiNovelGateCapturedInstallerParent `
+    -ChildIdentity $ProcessIdentity `
+    -ParentIdentity $ParentIdentity
+}
+
+function Test-AiNovelGateNsisCmdProcessCheckCandidate {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [Parameter(Mandatory = $true)]$Event,
+    [AllowNull()]$ProcessIdentity,
+    [AllowNull()]$ParentIdentity
+  )
+
+  if (-not (Test-AiNovelGateExpectedExitOne -Step $Step -Event $Event)) {
+    return $false
+  }
   if (
-    $null -eq $ParentIdentity -or
-    -not [bool]$ParentIdentity.identityCaptured -or
-    [int]$ParentIdentity.processId -ne [int]$ProcessIdentity.parentProcessId -or
-    [string]::IsNullOrWhiteSpace([string]$ParentIdentity.startTimeTicks) -or
-    [string]::IsNullOrWhiteSpace([string]$ProcessIdentity.parentProcessStartTimeTicks) -or
-    -not [string]::Equals(
-      [string]$ParentIdentity.startTimeTicks,
-      [string]$ProcessIdentity.parentProcessStartTimeTicks,
-      [System.StringComparison]::Ordinal
-    ) -or
-    -not (Test-AiNovelGateSameAbsolutePath `
-      -Left ([string]$ParentIdentity.executablePath) `
-      -Right ([string]$ProcessIdentity.parentExecutablePath))
+    $null -eq $ProcessIdentity -or
+    -not [bool]$ProcessIdentity.identityCaptured -or
+    -not [bool]$ProcessIdentity.commandLineCaptured -or
+    -not (Test-AiNovelGateSystemUtilityImage `
+      -ImagePath ([string]$ProcessIdentity.executablePath) `
+      -FileName 'cmd.exe') -or
+    -not (Test-AiNovelGateKnownNsisCmdProcessCheckCommand `
+      -CommandLine ([string]$ProcessIdentity.commandLine) `
+      -CmdImagePath ([string]$ProcessIdentity.executablePath))
   ) {
     return $false
   }
-  return Test-AiNovelGateNsisInstallerImage -ImagePath ([string]$ParentIdentity.executablePath)
+  return Test-AiNovelGateCapturedInstallerParent `
+    -ChildIdentity $ProcessIdentity `
+    -ParentIdentity $ParentIdentity
+}
+
+function Test-AiNovelGateExpectedNsisCmdProcessCheckExit {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [Parameter(Mandatory = $true)]$Event,
+    [AllowNull()]$ProcessIdentity,
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$VerifiedFindParentKeys
+  )
+
+  if (-not (Test-AiNovelGateNsisCmdProcessCheckCandidate `
+    -Step $Step `
+    -Event $Event `
+    -ProcessIdentity $ProcessIdentity `
+    -ParentIdentity $ParentIdentity)) {
+    return $false
+  }
+  $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $ProcessIdentity
+  return (
+    $null -ne $VerifiedFindParentKeys -and
+    $null -ne $processIdentityKey -and
+    $VerifiedFindParentKeys.Contains($processIdentityKey)
+  )
+}
+
+function Register-AiNovelGateVerifiedNsisFindParent {
+  param(
+    [Parameter(Mandatory = $true)]$VerifiedFindParentKeys,
+    [Parameter(Mandatory = $true)][hashtable]$PendingNsisCmdExitFailures,
+    [AllowEmptyString()][string]$ParentProcessIdentityKey
+  )
+
+  if ([string]::IsNullOrWhiteSpace($ParentProcessIdentityKey)) {
+    return $false
+  }
+  [void]$VerifiedFindParentKeys.Add($ParentProcessIdentityKey)
+  $wasPending = $PendingNsisCmdExitFailures.ContainsKey($ParentProcessIdentityKey)
+  [void]$PendingNsisCmdExitFailures.Remove($ParentProcessIdentityKey)
+  return $wasPending
+}
+
+function Add-AiNovelGatePendingNsisCmdExitFailure {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$PendingNsisCmdExitFailures,
+    [AllowEmptyString()][string]$ProcessIdentityKey,
+    [AllowEmptyString()][string]$Failure
+  )
+
+  if (
+    [string]::IsNullOrWhiteSpace($ProcessIdentityKey) -or
+    [string]::IsNullOrWhiteSpace($Failure)
+  ) {
+    return $false
+  }
+  if (-not $PendingNsisCmdExitFailures.ContainsKey($ProcessIdentityKey)) {
+    # The failure text comes from the durable Job Object event and contains
+    # only step, PID, and exit code. Do not retain the command line here.
+    $PendingNsisCmdExitFailures[$ProcessIdentityKey] = $Failure
+  }
+  return $true
+}
+
+function Get-AiNovelGatePendingNsisCmdExitFailure {
+  param([Parameter(Mandatory = $true)][hashtable]$PendingNsisCmdExitFailures)
+
+  $entry = Get-AiNovelGatePendingNsisCmdExitFailureEntry `
+    -PendingNsisCmdExitFailures $PendingNsisCmdExitFailures
+  if ($null -eq $entry) {
+    return $null
+  }
+  return [string]$entry.Failure
+}
+
+function Get-AiNovelGatePendingNsisCmdExitFailureEntry {
+  param([Parameter(Mandatory = $true)][hashtable]$PendingNsisCmdExitFailures)
+
+  if ($PendingNsisCmdExitFailures.Count -eq 0) {
+    return $null
+  }
+  $entry = @($PendingNsisCmdExitFailures.GetEnumerator() | Sort-Object {
+    [string]$_.Key
+  } | Select-Object -First 1)
+  if ($entry.Count -ne 1) {
+    return $null
+  }
+  $processIdentityKey = [string]$entry[0].Key
+  $failure = [string]$entry[0].Value
+  if (
+    [string]::IsNullOrWhiteSpace($processIdentityKey) -or
+    [string]::IsNullOrWhiteSpace($failure)
+  ) {
+    return $null
+  }
+  return [pscustomobject][ordered]@{
+    processIdentityKey = $processIdentityKey
+    failure = $failure
+  }
+}
+
+function New-AiNovelGateDeferredNsisCmdExitFailureState {
+  return @{
+    failure = $null
+    source = ''
+    processIdentityKey = $null
+    correlationDeadline = $null
+    earliestFailureDrain = 0
+  }
+}
+
+function Clear-AiNovelGateDeferredNsisCmdExitFailureState {
+  param([Parameter(Mandatory = $true)][hashtable]$State)
+
+  $State.failure = $null
+  $State.source = ''
+  $State.processIdentityKey = $null
+  $State.correlationDeadline = $null
+  $State.earliestFailureDrain = 0
+}
+
+function Promote-AiNovelGatePendingNsisCmdExitFailure {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$State,
+    [AllowNull()]$PendingEntry,
+    [Parameter(Mandatory = $true)][DateTime]$NowUtc,
+    [Parameter(Mandatory = $true)][int]$CurrentDrain,
+    [ValidateRange(1, 10)][int]$CorrelationGraceSeconds = 1
+  )
+
+  if (
+    $null -ne $State.failure -or
+    $null -eq $PendingEntry -or
+    [string]::IsNullOrWhiteSpace([string]$PendingEntry.processIdentityKey) -or
+    [string]::IsNullOrWhiteSpace([string]$PendingEntry.failure)
+  ) {
+    return $false
+  }
+  # The terminal Job Object notification may precede the child find.exe
+  # completion record. Preserve the exact cmd.exe identity so only that
+  # process's verified find.exe child can revoke this deferred failure.
+  $State.failure = [string]$PendingEntry.failure
+  $State.source = 'nsis-cmd-awaiting-verified-find'
+  $State.processIdentityKey = [string]$PendingEntry.processIdentityKey
+  $State.correlationDeadline = $NowUtc.AddSeconds($CorrelationGraceSeconds)
+  $State.earliestFailureDrain = $CurrentDrain + 1
+  return $true
+}
+
+function Resolve-AiNovelGateDeferredNsisCmdExitFailure {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$State,
+    [AllowEmptyString()][string]$ProcessIdentityKey
+  )
+
+  if (
+    [string]::IsNullOrWhiteSpace($ProcessIdentityKey) -or
+    $State.source -ne 'nsis-cmd-awaiting-verified-find' -or
+    [string]::IsNullOrWhiteSpace([string]$State.processIdentityKey) -or
+    -not [string]::Equals(
+      [string]$State.processIdentityKey,
+      $ProcessIdentityKey,
+      [System.StringComparison]::OrdinalIgnoreCase
+    )
+  ) {
+    return $false
+  }
+  Clear-AiNovelGateDeferredNsisCmdExitFailureState -State $State
+  return $true
+}
+
+function Test-AiNovelGateDeferredNsisCmdExitFailureReady {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$State,
+    [Parameter(Mandatory = $true)][DateTime]$NowUtc,
+    [Parameter(Mandatory = $true)][int]$CurrentDrain
+  )
+
+  if ($null -eq $State.failure) {
+    return $false
+  }
+  # A malformed special state must never silently permit a release. The valid
+  # state, however, always waits through one later Drain() plus its short
+  # correlation grace so the next batch can deliver the matching find.exe.
+  if (
+    $State.source -ne 'nsis-cmd-awaiting-verified-find' -or
+    [string]::IsNullOrWhiteSpace([string]$State.processIdentityKey) -or
+    $null -eq $State.correlationDeadline -or
+    [int]$State.earliestFailureDrain -le 0
+  ) {
+    return $true
+  }
+  return (
+    $CurrentDrain -ge [int]$State.earliestFailureDrain -and
+    $NowUtc -ge [DateTime]$State.correlationDeadline
+  )
+}
+
+function Test-AiNovelGateExpectedNsisFindNoMatchExit {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [Parameter(Mandatory = $true)]$Event,
+    [AllowNull()]$ProcessIdentity,
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity
+  )
+
+  if (-not (Test-AiNovelGateExpectedExitOne -Step $Step -Event $Event)) {
+    return $false
+  }
+  if (
+    $null -eq $ProcessIdentity -or
+    -not [bool]$ProcessIdentity.identityCaptured -or
+    -not [bool]$ProcessIdentity.commandLineCaptured -or
+    -not (Test-AiNovelGateSystemUtilityImage `
+      -ImagePath ([string]$ProcessIdentity.executablePath) `
+      -FileName 'find.exe') -or
+    -not (Test-AiNovelGateKnownNsisFindNoMatchCommand `
+      -CommandLine ([string]$ProcessIdentity.commandLine) `
+      -FindImagePath ([string]$ProcessIdentity.executablePath)) -or
+    -not (Test-AiNovelGateCapturedParentIdentity `
+      -ChildIdentity $ProcessIdentity `
+      -ParentIdentity $ParentIdentity) -or
+    $null -eq $ParentIdentity -or
+    -not [bool]$ParentIdentity.commandLineCaptured -or
+    -not (Test-AiNovelGateSystemUtilityImage `
+      -ImagePath ([string]$ParentIdentity.executablePath) `
+      -FileName 'cmd.exe') -or
+    -not (Test-AiNovelGateKnownNsisCmdProcessCheckCommand `
+      -CommandLine ([string]$ParentIdentity.commandLine) `
+      -CmdImagePath ([string]$ParentIdentity.executablePath))
+  ) {
+    return $false
+  }
+  return Test-AiNovelGateCapturedInstallerParent `
+    -ChildIdentity $ParentIdentity `
+    -ParentIdentity $GrandParentIdentity
 }
 
 function ConvertTo-AiNovelGateProcessEvidenceIdentity {
@@ -1358,6 +1795,10 @@ $lastWindowSnapshot = @()
 $atomicMonitor = $null
 $deferredProcessFailure = $null
 $deferredProcessFailureDeadline = $null
+$deferredNsisCmdExitFailure = New-AiNovelGateDeferredNsisCmdExitFailureState
+$verifiedNsisFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$pendingNsisCmdExitFailures = @{}
+$drainSequence = 0
 
 New-Item -ItemType Directory -Path $EvidencePath -Force | Out-Null
 try {
@@ -1430,6 +1871,9 @@ try {
         $trackedProcessIdentities.Clear()
         $deferredProcessFailure = $null
         $deferredProcessFailureDeadline = $null
+        Clear-AiNovelGateDeferredNsisCmdExitFailureState -State $deferredNsisCmdExitFailure
+        $verifiedNsisFindParentKeys.Clear()
+        $pendingNsisCmdExitFailures.Clear()
         $rootIdentityAccepted = Initialize-AiNovelGateRootIdentity `
           -RootProcessId ([int]$control.rootProcessId) `
           -RootProcessStartTimeTicks ([long]$control.rootProcessStartTimeTicks) `
@@ -1474,6 +1918,9 @@ try {
         $trackedProcessIdentities.Clear()
         $deferredProcessFailure = $null
         $deferredProcessFailureDeadline = $null
+        Clear-AiNovelGateDeferredNsisCmdExitFailureState -State $deferredNsisCmdExitFailure
+        $verifiedNsisFindParentKeys.Clear()
+        $pendingNsisCmdExitFailures.Clear()
         $completionDeadline = $null
         $completionQuietDeadline = $null
         $quietDeadline = New-AiNovelGateQuietDeadline `
@@ -1484,6 +1931,8 @@ try {
     }
 
     $windowEventSnapshots = @()
+    $jobBecameEmpty = $false
+    $drainSequence += 1
     foreach ($processEvent in @($atomicMonitor.Job.Drain())) {
       $processIdentity = $null
       $exitClassification = ''
@@ -1536,6 +1985,7 @@ try {
           $processIdentity = $trackedProcessIdentities[[int]$processEvent.ProcessId]
         }
         $parentIdentity = $null
+        $grandParentIdentity = $null
         try {
           if (
             $null -ne $processIdentity -and
@@ -1543,6 +1993,12 @@ try {
             $trackedProcessIdentities.ContainsKey([int]$processIdentity.parentProcessId)
           ) {
             $parentIdentity = $trackedProcessIdentities[[int]$processIdentity.parentProcessId]
+            if (
+              $null -ne $parentIdentity.parentProcessId -and
+              $trackedProcessIdentities.ContainsKey([int]$parentIdentity.parentProcessId)
+            ) {
+              $grandParentIdentity = $trackedProcessIdentities[[int]$parentIdentity.parentProcessId]
+            }
           }
         }
         catch {
@@ -1559,9 +2015,61 @@ try {
           -ParentIdentity $parentIdentity) {
           $exitClassification = 'expected-nsis-powershell-probe'
         }
+        elseif (Test-AiNovelGateExpectedNsisFindNoMatchExit `
+          -Step $activeStep `
+          -Event $processEvent `
+          -ProcessIdentity $processIdentity `
+          -ParentIdentity $parentIdentity `
+          -GrandParentIdentity $grandParentIdentity) {
+          $parentProcessIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $parentIdentity
+          if ($null -eq $parentProcessIdentityKey) {
+            $exitClassification = 'failure'
+          } else {
+            [void](Register-AiNovelGateVerifiedNsisFindParent `
+              -VerifiedFindParentKeys $verifiedNsisFindParentKeys `
+              -PendingNsisCmdExitFailures $pendingNsisCmdExitFailures `
+              -ParentProcessIdentityKey $parentProcessIdentityKey)
+            [void](Resolve-AiNovelGateDeferredNsisCmdExitFailure `
+              -State $deferredNsisCmdExitFailure `
+              -ProcessIdentityKey $parentProcessIdentityKey)
+            $exitClassification = 'expected-nsis-find-no-match'
+          }
+        }
+        elseif (Test-AiNovelGateExpectedNsisCmdProcessCheckExit `
+          -Step $activeStep `
+          -Event $processEvent `
+          -ProcessIdentity $processIdentity `
+          -ParentIdentity $parentIdentity `
+          -VerifiedFindParentKeys $verifiedNsisFindParentKeys) {
+          $exitClassification = 'expected-nsis-cmd-process-check'
+        }
+        elseif (Test-AiNovelGateNsisCmdProcessCheckCandidate `
+          -Step $activeStep `
+          -Event $processEvent `
+          -ProcessIdentity $processIdentity `
+          -ParentIdentity $parentIdentity) {
+          $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $processIdentity
+          if (Add-AiNovelGatePendingNsisCmdExitFailure `
+            -PendingNsisCmdExitFailures $pendingNsisCmdExitFailures `
+            -ProcessIdentityKey $processIdentityKey `
+            -Failure $exitFailure) {
+            # A cmd.exe exit can reach the completion port before its find.exe
+            # child. Delay the exception decision until a matching, validated
+            # find.exe no-match event is observed.
+            $exitClassification = 'pending-nsis-cmd-process-check'
+          } else {
+            $exitClassification = 'failure'
+          }
+        }
         else {
           $exitClassification = 'failure'
         }
+      }
+      elseif ([string]$processEvent.Kind -eq 'job-empty') {
+        # Delay resolution until the whole Drain() batch is processed: a
+        # completion port can surface cmd.exe before its find.exe child.
+        $jobBecameEmpty = $true
+        $exitClassification = 'job-empty'
       }
       Write-AiNovelGateProcessEventEvidence `
         -Path $EvidencePath `
@@ -1586,7 +2094,12 @@ try {
         # write its durable result.json. The failure is finalized on the
         # explicit step-complete acknowledgement, or after a bounded drain
         # deadline if the launcher never completes.
-        if ($exitClassification -eq 'expected-nsis-powershell-probe') {
+        if ($exitClassification -in @(
+          'expected-nsis-powershell-probe',
+          'expected-nsis-cmd-process-check',
+          'expected-nsis-find-no-match',
+          'pending-nsis-cmd-process-check'
+        )) {
           continue
         }
         $exitFailure = Get-AiNovelGateProcessExitFailure -Step $activeStep -Event $processEvent
@@ -1600,6 +2113,23 @@ try {
             -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
             -Reason 'process-failure-awaiting-launch-result'
         }
+      }
+    }
+
+    if ($jobBecameEmpty -and $null -eq $deferredProcessFailure) {
+      $pendingNsisCmdFailure = Get-AiNovelGatePendingNsisCmdExitFailureEntry `
+        -PendingNsisCmdExitFailures $pendingNsisCmdExitFailures
+      if (Promote-AiNovelGatePendingNsisCmdExitFailure `
+        -State $deferredNsisCmdExitFailure `
+        -PendingEntry $pendingNsisCmdFailure `
+        -NowUtc ([DateTime]::UtcNow) `
+        -CurrentDrain $drainSequence) {
+        Write-AiNovelGateProcessTreeEvidence `
+          -Path $EvidencePath `
+          -Step $activeStep `
+          -ProcessIds $trackedProcessIds `
+          -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
+          -Reason 'nsis-cmd-awaiting-verified-find'
       }
     }
 
@@ -1682,7 +2212,11 @@ try {
       }
     }
 
-    if ($completionDeadline) {
+    if (
+      $completionDeadline -and
+      $null -eq $deferredProcessFailure -and
+      $null -eq $deferredNsisCmdExitFailure.failure
+    ) {
       $aliveProcessIds = @(Get-AiNovelAliveProcessIds `
         -ProcessIds $trackedProcessIds `
         -ProcessStartTimeTicks $trackedProcessStartTimeTicks)
@@ -1693,6 +2227,23 @@ try {
         -PostExitQuietDeadline $completionQuietDeadline
       $completionQuietDeadline = $completionDecision.PostExitQuietDeadline
       if ($completionDecision.State -eq 'complete') {
+        # If the Job Object did not deliver its terminal notification, keep
+        # draining through the normal post-exit quiet period and fail closed
+        # immediately before this step could otherwise be marked complete.
+        $pendingNsisCmdFailure = Get-AiNovelGatePendingNsisCmdExitFailureEntry `
+          -PendingNsisCmdExitFailures $pendingNsisCmdExitFailures
+        if (Promote-AiNovelGatePendingNsisCmdExitFailure `
+          -State $deferredNsisCmdExitFailure `
+          -PendingEntry $pendingNsisCmdFailure `
+          -NowUtc ([DateTime]::UtcNow) `
+          -CurrentDrain $drainSequence) {
+          Write-AiNovelGateProcessTreeEvidence `
+            -Path $EvidencePath `
+            -Step $activeStep `
+            -ProcessIds $trackedProcessIds `
+            -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
+            -Reason 'nsis-cmd-awaiting-verified-find'
+        } else {
         # Keep the full historical PID + start-time set until error-window
         # detection has run continuously for five seconds after process exit.
         Write-AiNovelGateProcessTreeEvidence `
@@ -1704,6 +2255,7 @@ try {
         Write-AiNovelGateStatus -State 'step-completed' -Step $activeStep
         $completionDeadline = $null
         $completionQuietDeadline = $null
+        }
       }
       elseif ($completionDecision.State -eq 'process-timeout') {
         $failure = "Release gate step '$activeStep' left related processes running: $($aliveProcessIds -join ', ')"
@@ -1750,6 +2302,37 @@ try {
         -ProcessIds $trackedProcessIds `
         -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
         -Reason 'deferred-process-failure'
+      $script:AiNovelGateMonitorStoppedAt = [DateTime]::UtcNow.ToString('o')
+      Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure
+      Stop-AiNovelGateAtomicJob -AtomicMonitor $atomicMonitor
+      Stop-AiNovelGateProcesses `
+        -ProcessIds $trackedProcessIds `
+        -ProcessStartTimeTicks $trackedProcessStartTimeTicks
+      exit 1
+    }
+
+    if (
+      $null -eq $deferredProcessFailure -and
+      (Test-AiNovelGateDeferredNsisCmdExitFailureReady `
+        -State $deferredNsisCmdExitFailure `
+        -NowUtc ([DateTime]::UtcNow) `
+        -CurrentDrain $drainSequence)
+    ) {
+      # The narrow NSIS exception is fail-closed: after a whole later Drain()
+      # and a bounded correlation grace, a cmd.exe no-process exit without its
+      # exact, identity-bound find.exe child remains a real installer failure.
+      $failure = [string]$deferredNsisCmdExitFailure.failure
+      Save-AiNovelSmokeFailureEvidence `
+        -Path $EvidencePath `
+        -Failure $failure `
+        -Windows $lastWindowSnapshot `
+        -ObservedProcessIds @($trackedProcessIds)
+      Write-AiNovelGateProcessTreeEvidence `
+        -Path $EvidencePath `
+        -Step $activeStep `
+        -ProcessIds $trackedProcessIds `
+        -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
+        -Reason 'nsis-cmd-missing-verified-find'
       $script:AiNovelGateMonitorStoppedAt = [DateTime]::UtcNow.ToString('o')
       Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure
       Stop-AiNovelGateAtomicJob -AtomicMonitor $atomicMonitor
