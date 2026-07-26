@@ -16,12 +16,11 @@ import { join, resolve } from 'node:path'
 import { restoreNativeWithIndependentFallback } from './release-native-restore.mjs'
 
 export const releasePreMonitorSteps = [
-  'test:release-monitor-selftest',
+  'test',
 ]
 
 export const releaseVerificationSteps = [
   'prepare:native-node',
-  'test:release-workload',
   'clean:build',
   'build:win:artifacts',
   'verify:win-update-artifacts',
