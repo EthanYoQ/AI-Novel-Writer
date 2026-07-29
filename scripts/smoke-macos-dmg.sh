@@ -47,6 +47,24 @@ if [[ ! -x "$secure_helper" ]]; then
   exit 1
 fi
 
+run_with_timeout() {
+  local label="$1"
+  local timeout_seconds="$2"
+  shift 2
+  python3 - "$label" "$timeout_seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+label, timeout_seconds, *command = sys.argv[1:]
+try:
+    completed = subprocess.run(command, timeout=int(timeout_seconds))
+except subprocess.TimeoutExpired:
+    print(f"Package smoke process exceeded timeout ({timeout_seconds}s): {label}", file=sys.stderr)
+    raise SystemExit(124)
+raise SystemExit(completed.returncode)
+PY
+}
+
 node - "$secure_helper" "$smoke_root" <<'NODE'
 const fs = require('node:fs')
 const path = require('node:path')
@@ -94,9 +112,11 @@ token="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).to
 vector_evidence="$qualification_directory/packaged-vector-smoke.json"
 homepage_evidence="$qualification_directory/packaged-official-homepage-smoke.json"
 
-HOME="$smoke_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
+run_with_timeout 'packaged vector smoke' 300 env \
+  HOME="$smoke_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
   "$executable" "--ai-novel-release-smoke=$token" > "$vector_evidence"
-HOME="$smoke_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
+run_with_timeout 'packaged official homepage smoke' 300 env \
+  HOME="$smoke_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
   "$executable" "--ai-novel-release-homepage-smoke=$token" > "$homepage_evidence"
 
 node - "$vector_evidence" "$homepage_evidence" <<'NODE'
