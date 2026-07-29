@@ -82,6 +82,48 @@ describe('GitHub Windows update release verification', () => {
     })
   })
 
+  it('keeps the Windows updater verification on latest.yml when a formal release also contains macOS assets', async () => {
+    const artifacts = createArtifacts(fixture())
+    const release = {
+      ...releaseFor(artifacts),
+      assets: [
+        ...releaseFor(artifacts).assets,
+        {
+          name: 'ai-novel-writer-0.2.6-arm64.dmg',
+          size: 7,
+          digest: `sha256:${sha256('mac-dmg')}`,
+          browser_download_url: 'https://example.test/ai-novel-writer-0.2.6-arm64.dmg',
+        },
+        {
+          name: 'ai-novel-writer-0.2.6-arm64.dmg.sha256',
+          size: 64,
+          digest: `sha256:${sha256('mac-checksum')}`,
+          browser_download_url: 'https://example.test/ai-novel-writer-0.2.6-arm64.dmg.sha256',
+        },
+      ],
+    }
+    const fetcher = vi.fn(async (url: string) => {
+      if (url.includes('/releases/tags/v0.2.6')) return new Response(JSON.stringify(release))
+      return new Response('version: 0.2.6\nsha512: verified\n')
+    })
+
+    await expect(verifyGithubWindowsUpdateRelease({
+      tag: 'v0.2.6',
+      localArtifacts: artifacts,
+      fetcher,
+      apiBaseUrl: 'https://api.example.test',
+    })).resolves.toMatchObject({
+      installer: 'ai-novel-writer-setup-0.2.6.exe',
+      latestMetadata: 'latest.yml',
+      blockMap: 'ai-novel-writer-setup-0.2.6.exe.blockmap',
+    })
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      'https://api.example.test/repos/EthanYoQ/AI-Novel-Writer/releases/tags/v0.2.6',
+      'https://example.test/latest.yml',
+    ])
+  })
+
   it('rejects a draft, prerelease, or portable ZIP release before accepting updater assets', async () => {
     const artifacts = createArtifacts(fixture())
     const invalidRelease = {
