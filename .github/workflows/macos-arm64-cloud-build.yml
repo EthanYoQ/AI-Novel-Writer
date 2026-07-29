@@ -33,6 +33,11 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build native secure helper for macOS tests
+        run: |
+          clang -fobjc-arc -framework Foundation electron/security/darwin-safe-file-system.m -o electron/security/darwin-safe-file-system
+          chmod +x electron/security/darwin-safe-file-system
+
       - name: Run test suite
         run: pnpm test
 
