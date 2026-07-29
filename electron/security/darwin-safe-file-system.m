@@ -167,6 +167,16 @@ static int OpenDirectoryAt(int parent, NSString *segment, BOOL createIfMissing, 
     *errorCode = kInvalidPath;
     return -1;
   }
+  struct stat existing;
+  if (fstatat(parent, name, &existing, AT_SYMLINK_NOFOLLOW) == 0) {
+    if (S_ISLNK(existing.st_mode)) {
+      *errorCode = kReparsePoint;
+      return -1;
+    }
+  } else if (errno != ENOENT) {
+    *errorCode = CodeForErrno(errno);
+    return -1;
+  }
   int fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (fd >= 0 || !createIfMissing || errno != ENOENT) {
     if (fd < 0) *errorCode = CodeForErrno(errno);
@@ -359,7 +369,10 @@ static NSDictionary *ListDirectory(NSString *rootPath, NSArray<NSString *> *segm
       close(directory);
       return Failure(kReparsePoint);
     }
-    [entries addObject:@{ @"name": name, @"isDirectory": @(S_ISDIR(information.st_mode)) }];
+    [entries addObject:@{
+      @"name": name,
+      @"isDirectory": S_ISDIR(information.st_mode) ? @YES : @NO,
+    }];
     if (entries.count > kMaxDirectoryEntries) {
       closedir(stream);
       close(directory);
