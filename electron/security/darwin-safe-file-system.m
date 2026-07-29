@@ -339,7 +339,9 @@ static NSDictionary *ListDirectory(NSString *rootPath, NSArray<NSString *> *segm
   struct dirent *entry = NULL;
   while ((entry = readdir(stream)) != NULL) {
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
-    NSString *name = [[NSString alloc] initWithFileSystemRepresentation:entry->d_name length:strlen(entry->d_name)];
+    NSString *name = [[NSFileManager defaultManager]
+      stringWithFileSystemRepresentation:entry->d_name
+      length:strlen(entry->d_name)];
     if (!name || !IsSafeSegment(name)) {
       closedir(stream);
       close(directory);
