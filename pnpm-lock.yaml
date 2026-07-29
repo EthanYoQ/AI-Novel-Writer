@@ -220,6 +220,9 @@ importers:
         specifier: ^4.1.4
         version: 4.1.4(@types/node@25.6.0)(@vitest/browser-playwright@4.1.4)(@vitest/coverage-v8@4.1.4)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.28.0)(jiti@2.6.1))
     optionalDependencies:
+      '@lancedb/lancedb-darwin-arm64':
+        specifier: 0.27.2
+        version: 0.27.2
       '@lancedb/lancedb-win32-x64-msvc':
         specifier: 0.27.2
         version: 0.27.2
