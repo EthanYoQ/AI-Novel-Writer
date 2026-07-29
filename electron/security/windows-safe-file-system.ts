@@ -5,8 +5,8 @@ import * as electron from 'electron'
 
 /**
  * A path capability is intentionally root-relative. Callers must never turn it
- * back into a host path for I/O: the Windows helper opens every component from
- * the root directory handle with OBJ_DONT_REPARSE.
+ * back into a host path for I/O: the platform helper opens every component from
+ * a root directory handle without following symlinks or reparse points.
  */
 export interface SecureFileCapability {
   rootPath: string
@@ -20,13 +20,13 @@ export interface SecureDirectoryEntry {
 
 export interface AtomicWriteConstraints {
   /**
-   * Require an existing target and keep a Windows name lease through commit.
-   * If the OS/file system cannot replace under that lease, fail closed.
+   * Require an existing target through commit. The platform helper must fail
+   * closed when it cannot preserve that invariant.
    */
   mustAlreadyExist?: boolean
 }
 
-export interface WindowsSafeFileSystem {
+export interface SecureFileSystem {
   readText(capability: SecureFileCapability): Promise<string>
   writeTextAtomically(
     capability: SecureFileCapability,
@@ -38,6 +38,12 @@ export interface WindowsSafeFileSystem {
   exists(capability: SecureFileCapability): Promise<boolean>
   listDirectory(capability: SecureFileCapability): Promise<SecureDirectoryEntry[]>
 }
+
+/**
+ * Historical compatibility name. New production code should use
+ * `SecureFileSystem`, which is implemented by both Windows and Darwin helpers.
+ */
+export type WindowsSafeFileSystem = SecureFileSystem
 
 type HelperOperation = 'read' | 'write' | 'mkdir' | 'exists' | 'list'
 
@@ -161,19 +167,28 @@ function validateCapability(capability: SecureFileCapability): SecureFileCapabil
   }
 }
 
+type SecureFileSystemPlatform = Extract<NodeJS.Platform, 'win32' | 'darwin'>
+
+function helperFileName(platform: SecureFileSystemPlatform): string {
+  return platform === 'win32'
+    ? 'windows-safe-file-system.ps1'
+    : 'darwin-safe-file-system'
+}
+
 function defaultHelperPath(options: {
+  platform: SecureFileSystemPlatform
   isPackaged: boolean
   resourcesPath: string | undefined
   cwd: string
 }): string {
   const packagedPath = typeof options.resourcesPath === 'string'
-    ? path.join(options.resourcesPath, 'security', 'windows-safe-file-system.ps1')
+    ? path.join(options.resourcesPath, 'security', helperFileName(options.platform))
     : null
   if (packagedPath && existsSync(packagedPath)) return packagedPath
   if (options.isPackaged) throw secureError('SECURE_FS_HELPER_UNAVAILABLE')
 
   // Development and tests may execute directly from the source tree.
-  const sourcePath = path.resolve(options.cwd, 'electron', 'security', 'windows-safe-file-system.ps1')
+  const sourcePath = path.resolve(options.cwd, 'electron', 'security', helperFileName(options.platform))
   if (existsSync(sourcePath)) return sourcePath
   throw secureError('SECURE_FS_HELPER_UNAVAILABLE')
 }
@@ -204,8 +219,21 @@ function parseResponse(raw: string): HelperResponse {
   return parsed as HelperResponse
 }
 
+function spawnPlatformHelper(platform: SecureFileSystemPlatform, helperPath: string) {
+  const command = platform === 'win32' ? 'powershell.exe' : helperPath
+  const args = platform === 'win32'
+    ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', helperPath]
+    : []
+  return spawn(command, args, {
+    windowsHide: platform === 'win32',
+    shell: false,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+}
+
 async function invokeBundledHelper(
   request: HelperRequest,
+  platform: SecureFileSystemPlatform,
   helperPath: string,
   timeoutMs: number,
 ): Promise<HelperResponse> {
@@ -215,17 +243,7 @@ async function invokeBundledHelper(
   }
 
   return new Promise<HelperResponse>((resolve, reject) => {
-    const child = spawn('powershell.exe', [
-      '-NoLogo',
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', helperPath,
-    ], {
-      windowsHide: true,
-      shell: false,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
+    const child = spawnPlatformHelper(platform, helperPath)
     let output = ''
     let settled = false
     const finish = (callback: () => void) => {
@@ -269,6 +287,7 @@ async function invokeBundledHelper(
  */
 async function invokeBundledAtomicWrite(
   request: HelperRequest,
+  platform: SecureFileSystemPlatform,
   helperPath: string,
   timeoutMs: number,
   beforeReplace: (() => void | Promise<void>) | undefined,
@@ -279,17 +298,7 @@ async function invokeBundledAtomicWrite(
   }
 
   return new Promise<HelperResponse>((resolve, reject) => {
-    const child = spawn('powershell.exe', [
-      '-NoLogo',
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', helperPath,
-    ], {
-      windowsHide: true,
-      shell: false,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
+    const child = spawnPlatformHelper(platform, helperPath)
     let outputBuffer = ''
     let finalResponse: HelperResponse | null = null
     let ready = false
@@ -398,7 +407,7 @@ function parseDirectoryEntries(entries: unknown): SecureDirectoryEntry[] {
   })
 }
 
-export function createWindowsSafeFileSystem(
+export function createSecureFileSystem(
   options: WindowsSafeFileSystemOptions = {},
 ): WindowsSafeFileSystem {
   const platform = options.platform ?? process.platform
@@ -410,18 +419,27 @@ export function createWindowsSafeFileSystem(
   )
   const cwd = options.cwd ?? process.cwd()
   const usingTestInvoke = options.invoke !== undefined
+  const securePlatform = (): SecureFileSystemPlatform => {
+    if (platform === 'win32' || platform === 'darwin') return platform
+    throw secureError('SECURE_FS_UNSUPPORTED_PLATFORM')
+  }
   const resolveHelperPath = (): string => {
+    const supportedPlatform = securePlatform()
     if (helperPath === undefined) {
-      return defaultHelperPath({ isPackaged, resourcesPath, cwd })
+      return defaultHelperPath({ platform: supportedPlatform, isPackaged, resourcesPath, cwd })
     }
     if (isPackaged) {
       const packagedPath = resourcesPath
-        ? path.join(resourcesPath, 'security', 'windows-safe-file-system.ps1')
+        ? path.join(resourcesPath, 'security', helperFileName(supportedPlatform))
         : null
       if (
         !packagedPath
-        || path.resolve(helperPath).toLocaleLowerCase('en-US')
-          !== path.resolve(packagedPath).toLocaleLowerCase('en-US')
+        || (
+          supportedPlatform === 'win32'
+            ? path.resolve(helperPath).toLocaleLowerCase('en-US')
+              !== path.resolve(packagedPath).toLocaleLowerCase('en-US')
+            : path.resolve(helperPath) !== path.resolve(packagedPath)
+        )
         || !existsSync(packagedPath)
       ) {
         throw secureError('SECURE_FS_HELPER_UNAVAILABLE')
@@ -432,8 +450,8 @@ export function createWindowsSafeFileSystem(
     return helperPath
   }
   const invoke = options.invoke ?? ((request: HelperRequest) => {
-    if (platform !== 'win32') throw secureError('SECURE_FS_UNSUPPORTED_PLATFORM')
-    return invokeBundledHelper(request, resolveHelperPath(), timeoutMs)
+    const supportedPlatform = securePlatform()
+    return invokeBundledHelper(request, supportedPlatform, resolveHelperPath(), timeoutMs)
   })
 
   const run = async (
@@ -485,9 +503,10 @@ export function createWindowsSafeFileSystem(
         await beforeReplace?.()
         return
       }
-      if (platform !== 'win32') throw secureError('SECURE_FS_UNSUPPORTED_PLATFORM')
+      const supportedPlatform = securePlatform()
       const response = await invokeBundledAtomicWrite(
         request,
+        supportedPlatform,
         resolveHelperPath(),
         timeoutMs,
         beforeReplace,
@@ -512,7 +531,10 @@ export function createWindowsSafeFileSystem(
   }
 }
 
+/** Historical compatibility factory; prefer createSecureFileSystem in new code. */
+export const createWindowsSafeFileSystem = createSecureFileSystem
+
 /** The only production implementation. There is intentionally no Node fs fallback. */
-export const windowsSafeFileSystem = createWindowsSafeFileSystem({
+export const windowsSafeFileSystem = createSecureFileSystem({
   isPackaged: electronAppIsPackaged(),
 })
