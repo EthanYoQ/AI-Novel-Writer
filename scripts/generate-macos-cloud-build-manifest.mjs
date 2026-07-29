@@ -49,7 +49,7 @@ function main() {
   assert(typeof packageMetadata.version === 'string' && packageMetadata.version.length > 0, 'package.json must declare a version')
   const version = packageMetadata.version
   const releaseDirectory = path.join(repositoryRoot, 'release', version)
-  const dmg = `AI小说作家-Mac-${version}-Installer.dmg`
+  const dmg = `ai-novel-writer-mac-arm64-${version}-installer.dmg`
   const artifacts = [requiredArtifact(releaseDirectory, dmg)]
   const evidence = [
     requiredEvidence(releaseDirectory, 'qualification/packaged-vector-smoke.json', 'packaged-vector-smoke'),
