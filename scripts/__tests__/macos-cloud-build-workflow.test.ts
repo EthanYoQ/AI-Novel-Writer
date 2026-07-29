@@ -69,6 +69,8 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(packageMetadata.scripts?.['smoke:mac-dmg']).toContain('scripts/smoke-macos-dmg.sh')
     expect(smokeScript).toContain('hdiutil attach')
     expect(smokeScript).toContain('hdiutil detach')
+    expect(smokeScript).toContain('hdiutil detach "$mount_point" -force -quiet')
+    expect(smokeScript).toContain('rm -rf "$smoke_root" || true')
     expect(smokeScript).toContain('--ai-novel-release-smoke=')
     expect(smokeScript).toContain('--ai-novel-release-homepage-smoke=')
     expect(smokeScript).toContain('security/darwin-safe-file-system')

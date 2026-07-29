@@ -20,10 +20,13 @@ smoke_home="$smoke_root/home"
 mounted=0
 
 cleanup() {
+  local exit_status=$?
   if [[ "$mounted" == "1" ]]; then
-    hdiutil detach "$mount_point" -quiet || true
+    hdiutil detach "$mount_point" -force -quiet || true
+    mounted=0
   fi
-  rm -rf "$smoke_root"
+  rm -rf "$smoke_root" || true
+  return "$exit_status"
 }
 trap cleanup EXIT
 
