@@ -27,6 +27,7 @@ describe('release dependency contract', () => {
     expect(pkg.scripts?.['smoke:win-app']).toContain('scripts/smoke-win-app.ps1')
 
     const builder = readFileSync('electron-builder.json5', 'utf8')
+    expect(builder).toContain('ai-novel-writer-mac-arm64-${version}-installer.${ext}')
     expect(builder).toContain('node_modules/@lancedb/lancedb/**/*')
     expect(builder).toContain('node_modules/@lancedb/lancedb-win32-x64-msvc/**/*')
     expect(builder).toContain('electron/security/windows-safe-file-system.ps1')

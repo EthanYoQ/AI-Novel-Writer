@@ -164,7 +164,7 @@ function validateWindowsArtifact(root, { expectedSha, lockfileSha256, version })
 
 function validateMacosArtifact(root, { expectedSha, lockfileSha256, version }) {
   const bundleRoot = resolvePromotionArtifactRoot(root, 'macOS qualification')
-  const dmg = `AI小说作家-Mac-${version}-Installer.dmg`
+  const dmg = `ai-novel-writer-mac-arm64-${version}-installer.dmg`
   const dmgChecksum = `${dmg}.sha256`
   const evidence = [
     ['qualification/packaged-vector-smoke.json', 'packaged-vector-smoke'],
@@ -332,7 +332,7 @@ function releaseNotes(version) {
     `AI 小说作家 ${version} 同时提供 Windows 与 macOS Apple Silicon（ARM64）安装包。`,
     ``,
     `- Windows：下载 \`ai-novel-writer-setup-${version}.exe\`。`,
-    `- macOS ARM64：下载 \`AI小说作家-Mac-${version}-Installer.dmg\`。此包未签名、未公证；首次安装时 macOS Gatekeeper 可能要求在“隐私与安全性”中手动允许。`,
+    `- macOS ARM64：下载 \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`。此包未签名、未公证；首次安装时 macOS Gatekeeper 可能要求在“隐私与安全性”中手动允许。`,
     `- macOS 本版本不提供应用内更新；Windows 应用内更新只使用 Windows 的 \`latest.yml\` 与安装器。`,
     ``,
     `## English`,
@@ -340,7 +340,7 @@ function releaseNotes(version) {
     `AI Novel Writer ${version} includes installers for Windows and macOS Apple Silicon (ARM64).`,
     ``,
     `- Windows: download \`ai-novel-writer-setup-${version}.exe\`.`,
-    `- macOS ARM64: download \`AI小说作家-Mac-${version}-Installer.dmg\`. This package is unsigned and not notarized; Gatekeeper may require a manual Allow action in Privacy & Security on first install.`,
+    `- macOS ARM64: download \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`. This package is unsigned and not notarized; Gatekeeper may require a manual Allow action in Privacy & Security on first install.`,
     `- This macOS release has no in-app updater. The Windows in-app updater consumes only Windows \`latest.yml\` and installer assets.`,
   ].join('\n')
 }

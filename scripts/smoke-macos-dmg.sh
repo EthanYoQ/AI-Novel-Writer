@@ -6,7 +6,7 @@ cd "$repository_root"
 
 version="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
 release_directory="$repository_root/release/$version"
-dmg="$release_directory/AI小说作家-Mac-$version-Installer.dmg"
+dmg="$release_directory/ai-novel-writer-mac-arm64-$version-installer.dmg"
 qualification_directory="$release_directory/qualification"
 
 if [[ ! -f "$dmg" ]]; then
