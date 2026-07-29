@@ -69,6 +69,8 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(smokeScript).toContain('security/darwin-safe-file-system')
     expect(smokeScript).toContain('SECURE_FS_REPARSE_POINT')
     expect(smokeScript).toContain('secureFileSystemSmoke: true')
+    expect(smokeScript).toContain('run_with_timeout')
+    expect(smokeScript).toContain('Package smoke process exceeded timeout')
     expect(manifestScript).toContain("platform: 'darwin'")
     expect(manifestScript).toContain("arch: 'arm64'")
     expect(manifestScript).toContain("gateLevel: 'RUNTIME_VERIFIED'")
