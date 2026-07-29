@@ -46,6 +46,11 @@ if [[ ! -x "$secure_helper" ]]; then
   echo "Missing executable Darwin secure file-system helper: $secure_helper" >&2
   exit 1
 fi
+vector_runner="$app/Contents/Resources/app.asar/dist-electron/release-vector-smoke-runner.cjs"
+if [[ ! -f "$app/Contents/Resources/app.asar" ]]; then
+  echo 'Mounted application does not contain app.asar.' >&2
+  exit 1
+fi
 
 run_with_timeout() {
   local label="$1"
@@ -112,9 +117,9 @@ token="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).to
 vector_evidence="$qualification_directory/packaged-vector-smoke.json"
 homepage_evidence="$qualification_directory/packaged-official-homepage-smoke.json"
 
-run_with_timeout 'packaged vector smoke' 300 env \
-  HOME="$smoke_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
-  "$executable" "--ai-novel-release-smoke=$token" > "$vector_evidence"
+run_with_timeout 'packaged vector smoke' 120 env \
+  ELECTRON_RUN_AS_NODE=1 HOME="$smoke_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
+  "$executable" "$vector_runner" "--ai-novel-release-smoke=$token" > "$vector_evidence"
 run_with_timeout 'packaged official homepage smoke' 300 env \
   HOME="$smoke_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
   "$executable" "--ai-novel-release-homepage-smoke=$token" > "$homepage_evidence"
