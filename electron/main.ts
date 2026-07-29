@@ -60,6 +60,31 @@ const releaseVectorSmokeInvocation = releaseVectorSmokeRequested
 const releaseHomepageSmokeInvocation = releaseHomepageSmokeRequested
   ? claimReleaseOfficialHomepageSmokeInvocation(process.argv, process.env)
   : undefined
+let releaseSmokeStage = 'not-requested'
+let releaseSmokeTimeout: NodeJS.Timeout | undefined
+
+function reportReleaseSmokeStage(stage: string): void {
+  if (!releaseSmokeRequested) return
+  releaseSmokeStage = stage
+  process.stderr.write(`[AI Novel release smoke] stage=${stage}\n`)
+}
+
+function clearReleaseSmokeTimeout(): void {
+  if (releaseSmokeTimeout === undefined) return
+  clearTimeout(releaseSmokeTimeout)
+  releaseSmokeTimeout = undefined
+}
+
+if (releaseSmokeRequested) {
+  reportReleaseSmokeStage('bootstrap')
+  const timeoutDescription = releaseVectorSmokeRequested
+    ? 'Packaged vector smoke timed out after 90 seconds'
+    : 'Packaged official homepage smoke timed out after 90 seconds'
+  releaseSmokeTimeout = setTimeout(() => {
+    console.error(`[AI Novel release smoke] ${timeoutDescription}; last stage=${releaseSmokeStage}`)
+    app.exit(1)
+  }, 90_000)
+}
 
 function publishUpdateState(state: UpdateState): void {
   for (const target of BrowserWindow.getAllWindows()) {
@@ -148,6 +173,7 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(async () => {
+  reportReleaseSmokeStage('electron-ready')
   if (releaseSmokeRequested) {
     const requestedSmokeModeCount = Number(releaseVectorSmokeRequested)
       + Number(releaseHomepageSmokeRequested)
@@ -156,10 +182,13 @@ app.whenReady().then(async () => {
     if (requestedSmokeModeCount !== 1 || invocationCount !== 1) {
       throw new Error('Invalid packaged smoke invocation: exactly one environment and one-time CLI token pair must match')
     }
+    reportReleaseSmokeStage(releaseVectorSmokeInvocation ? 'vector-invocation-valid' : 'official-homepage-invocation-valid')
     const evidence = releaseVectorSmokeInvocation
       ? await runReleaseVectorSmoke(releaseVectorSmokeInvocation.token)
       : await runPackagedOfficialHomepageSmoke(releaseHomepageSmokeInvocation!.token)
+    reportReleaseSmokeStage('evidence-ready')
     process.stdout.write(`${JSON.stringify(evidence)}\n`)
+    clearReleaseSmokeTimeout()
     app.exit(0)
     return
   }
@@ -181,6 +210,7 @@ app.whenReady().then(async () => {
     },
   })
 }).catch((error: unknown) => {
+  clearReleaseSmokeTimeout()
   console.error('[Vela] Electron 启动失败。', error)
   if (releaseSmokeRequested) {
     app.exit(1)
