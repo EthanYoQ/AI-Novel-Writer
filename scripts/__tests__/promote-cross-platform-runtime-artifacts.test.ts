@@ -1,7 +1,11 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   PROMOTION_CONFIRMATION,
   planPromotion,
+  resolvePromotionArtifactRoot,
   verifyRemoteReleaseAssets,
 } from '../promote-cross-platform-runtime-artifacts.mjs'
 
@@ -29,6 +33,23 @@ function jsonResponse(payload: unknown) {
 }
 
 describe('cross-platform artifact promotion planner', () => {
+  it('accepts GitHub artifact-name wrappers but rejects files outside the verified bundle', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-artifact-'))
+    const bundleRoot = path.join(root, 'windows-cloud-build-runtime-verified', '0.5.0')
+    try {
+      mkdirSync(bundleRoot, { recursive: true })
+      writeFileSync(path.join(bundleRoot, 'manifest.json'), '{}\n', 'utf8')
+
+      expect(resolvePromotionArtifactRoot(root, 'Windows qualification')).toBe(bundleRoot)
+
+      writeFileSync(path.join(root, 'unexpected.txt'), 'unexpected\n', 'utf8')
+      expect(() => resolvePromotionArtifactRoot(root, 'Windows qualification'))
+        .toThrow('Windows qualification artifact contains files outside its verified bundle')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('selects exactly one immutable Windows and macOS artifact from matching default-branch runs', async () => {
     const responses = new Map<string, unknown>([
       ['', { full_name: repository, default_branch: 'master' }],

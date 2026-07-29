@@ -90,11 +90,17 @@ function exactFileSet(actual, expected, label) {
   assert(JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort()), `${label} file set is not exact; got ${[...actual].join(', ')}`)
 }
 
-function artifactRoot(root, label) {
-  const manifests = listRegularFiles(root).filter(file => path.posix.basename(file) === 'manifest.json')
+export function resolvePromotionArtifactRoot(root, label) {
+  const files = listRegularFiles(root)
+  const manifests = files.filter(file => path.posix.basename(file) === 'manifest.json')
   assert(manifests.length === 1, `Expected exactly one manifest.json in ${label}, found ${manifests.length}`)
-  const bundleRoot = path.join(root, path.dirname(manifests[0]))
-  exactFileSet(listRegularFiles(root), listRegularFiles(bundleRoot), `${label} artifact`)
+  const bundleRelativePath = path.posix.dirname(manifests[0])
+  const bundleRoot = path.join(root, bundleRelativePath)
+  const bundlePrefix = bundleRelativePath === '.' ? '' : `${bundleRelativePath}/`
+  const filesOutsideBundle = files.filter(file => bundlePrefix !== '' && !file.startsWith(bundlePrefix))
+  assert(filesOutsideBundle.length === 0, `${label} artifact contains files outside its verified bundle: ${filesOutsideBundle.join(', ')}`)
+  const bundleFilesFromRoot = files.map(file => bundlePrefix === '' ? file : file.slice(bundlePrefix.length))
+  exactFileSet(bundleFilesFromRoot, listRegularFiles(bundleRoot), `${label} artifact`)
   return bundleRoot
 }
 
@@ -140,7 +146,7 @@ function validateManifestArtifact(manifest, bundleRoot, expectedFiles, expectedC
 }
 
 function validateWindowsArtifact(root, { expectedSha, lockfileSha256, version }) {
-  const bundleRoot = artifactRoot(root, 'Windows qualification')
+  const bundleRoot = resolvePromotionArtifactRoot(root, 'Windows qualification')
   const installer = `ai-novel-writer-setup-${version}.exe`
   const blockmap = `${installer}.blockmap`
   const evidence = ['qualification/packaged-vector-smoke.json', 'qualification/packaged-official-homepage-smoke.json']
@@ -157,7 +163,7 @@ function validateWindowsArtifact(root, { expectedSha, lockfileSha256, version })
 }
 
 function validateMacosArtifact(root, { expectedSha, lockfileSha256, version }) {
-  const bundleRoot = artifactRoot(root, 'macOS qualification')
+  const bundleRoot = resolvePromotionArtifactRoot(root, 'macOS qualification')
   const dmg = `AI小说作家-Mac-${version}-Installer.dmg`
   const dmgChecksum = `${dmg}.sha256`
   const evidence = [
