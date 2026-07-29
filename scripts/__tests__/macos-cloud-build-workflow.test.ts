@@ -7,6 +7,8 @@ const workflowPath = path.join(repositoryRoot, '.github', 'workflows', 'macos-ar
 const packageMetadataPath = path.join(repositoryRoot, 'package.json')
 const macSmokeScriptPath = path.join(repositoryRoot, 'scripts', 'smoke-macos-dmg.sh')
 const manifestScriptPath = path.join(repositoryRoot, 'scripts', 'generate-macos-cloud-build-manifest.mjs')
+const vectorRunnerBuildScriptPath = path.join(repositoryRoot, 'scripts', 'build-release-vector-smoke-runner.mjs')
+const vectorRunnerSourcePath = path.join(repositoryRoot, 'electron', 'release-vector-smoke-runner.ts')
 
 function readRequired(file: string) {
   expect(existsSync(file), `Missing macOS cloud qualification contract file: ${file}`).toBe(true)
@@ -27,6 +29,8 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     const packageMetadata = JSON.parse(readRequired(packageMetadataPath)) as { scripts?: Record<string, string> }
     const smokeScript = readRequired(macSmokeScriptPath)
     const manifestScript = readRequired(manifestScriptPath)
+    const vectorRunnerBuildScript = readRequired(vectorRunnerBuildScriptPath)
+    const vectorRunnerSource = readRequired(vectorRunnerSourcePath)
 
     const triggerBlock = workflow.match(/^on:\r?\n(?<triggers>(?: {2}.*(?:\r?\n|$))*)/m)?.groups?.triggers
     expect(triggerBlock?.trim()).toBe('workflow_dispatch:')
@@ -60,6 +64,7 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(artifactStep).toContain('qualification/packaged-official-homepage-smoke.json')
     expect(artifactStep).toContain('qualification/macos-dmg-smoke.json')
 
+    expect(packageMetadata.scripts?.['build:mac:artifacts']).toContain('node scripts/build-release-vector-smoke-runner.mjs')
     expect(packageMetadata.scripts?.['build:mac:artifacts']).toContain('electron-builder --mac --arm64 --publish never')
     expect(packageMetadata.scripts?.['smoke:mac-dmg']).toContain('scripts/smoke-macos-dmg.sh')
     expect(smokeScript).toContain('hdiutil attach')
@@ -71,6 +76,12 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(smokeScript).toContain('secureFileSystemSmoke: true')
     expect(smokeScript).toContain('run_with_timeout')
     expect(smokeScript).toContain('Package smoke process exceeded timeout')
+    expect(smokeScript).toContain('ELECTRON_RUN_AS_NODE=1')
+    expect(smokeScript).toContain('release-vector-smoke-runner.cjs')
+    expect(vectorRunnerBuildScript).toContain('release-vector-smoke-runner.ts')
+    expect(vectorRunnerBuildScript).toContain("platform: 'node'")
+    expect(vectorRunnerSource).toContain('runReleaseVectorSmoke')
+    expect(vectorRunnerSource).toContain('Packaged vector smoke timed out after 90 seconds')
     expect(manifestScript).toContain("platform: 'darwin'")
     expect(manifestScript).toContain("arch: 'arm64'")
     expect(manifestScript).toContain("gateLevel: 'RUNTIME_VERIFIED'")
