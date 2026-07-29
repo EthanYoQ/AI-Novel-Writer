@@ -58,6 +58,8 @@ describe('Electron main window chrome contract', () => {
     expect(main).toContain("process.stdout.write(`${JSON.stringify(evidence)}\\n`)")
     expect(main).toContain('app.exit(0)')
     expect(main).toContain('app.exit(1)')
+    expect(main).toContain('[AI Novel release smoke] stage=${stage}')
+    expect(main).toContain('Packaged vector smoke timed out after 90 seconds')
   })
 
   it('runs the packaged official-homepage qualification through a hidden local preload window', () => {

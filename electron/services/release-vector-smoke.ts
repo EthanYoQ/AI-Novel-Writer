@@ -95,6 +95,12 @@ function assertSmokeResult(condition: unknown, detail: string): asserts conditio
   if (!condition) throw new Error(`Packaged vector smoke failed: ${detail}`)
 }
 
+function reportReleaseVectorSmokeStage(stage: string): void {
+  // This is qualification-only diagnostics. Keep stdout reserved for the final
+  // evidence JSON and never include the one-time token or temporary paths.
+  process.stderr.write(`[AI Novel release vector smoke] stage=${stage}\n`)
+}
+
 function activeDimension(registry: Awaited<ReturnType<typeof getEmbeddingSpaces>>): number | undefined {
   return registry.spaces.find(space => space.generation === registry.activeGeneration)?.vectorDimension
 }
@@ -113,13 +119,16 @@ export async function runReleaseVectorSmoke(token: string): Promise<ReleaseVecto
     throw new Error('Release vector smoke requires its environment and one-time CLI token')
   }
 
+  reportReleaseVectorSmokeStage('invocation-valid')
   const root = createInternalProjectRoot()
   const projectA = path.join(root, 'project-a')
   const projectB = path.join(root, 'project-b')
   fs.mkdirSync(projectA)
   fs.mkdirSync(projectB)
+  reportReleaseVectorSmokeStage('temporary-projects-created')
   try {
     const model768 = releaseSmokeModel(token, 768)
+    reportReleaseVectorSmokeStage('import-a')
     const importedA = await importText(
       'installed package vector source A',
       'packaged-vector-a.txt',
@@ -128,7 +137,9 @@ export async function runReleaseVectorSmoke(token: string): Promise<ReleaseVecto
       model768,
     )
     assertSmokeResult(importedA.success && importedA.chunkCount === 1, '768-dimensional importText did not complete')
+    reportReleaseVectorSmokeStage('fts-a')
     const ftsA = await searchKnowledgeFTS('never-match-query-a-9', projectA)
+    reportReleaseVectorSmokeStage('semantic-a')
     const semanticA = await searchKnowledge('never-match-query-a-9', projectA, 'openai', model768)
     const registryA = await getEmbeddingSpaces(projectA)
     assertSmokeResult(ftsA.length === 0, '768-dimensional query unexpectedly matched FTS')
@@ -137,6 +148,7 @@ export async function runReleaseVectorSmoke(token: string): Promise<ReleaseVecto
 
     const driftingModelName = 'release-smoke-dimension-drift'
     const modelB768 = releaseSmokeModel(token, 768, driftingModelName)
+    reportReleaseVectorSmokeStage('import-b')
     const initialImportB = await importText(
       'installed package vector source B',
       'packaged-vector-b.txt',
@@ -148,9 +160,12 @@ export async function runReleaseVectorSmoke(token: string): Promise<ReleaseVecto
     const registryBeforeB = await getEmbeddingSpaces(projectB)
     assertSmokeResult(activeDimension(registryBeforeB) === 768, 'same-fingerprint 768-dimensional embedding space was not active')
     const modelB1536 = releaseSmokeModel(token, 1536, driftingModelName)
+    reportReleaseVectorSmokeStage('backfill-b')
     const backfilledB = await backfillVectors(projectB, 'openai', modelB1536)
     assertSmokeResult(backfilledB.success && backfilledB.processed === 1, 'same-fingerprint 1536-dimensional backfillVectors did not complete')
+    reportReleaseVectorSmokeStage('fts-b')
     const ftsB = await searchKnowledgeFTS('never-match-query-b-9', projectB)
+    reportReleaseVectorSmokeStage('semantic-b')
     const semanticB = await searchKnowledge('never-match-query-b-9', projectB, 'openai', modelB1536)
     const registryB = await getEmbeddingSpaces(projectB)
     const fingerprintB = `openai|vela-release-smoke://${token}|${driftingModelName}`
@@ -184,6 +199,7 @@ export async function runReleaseVectorSmoke(token: string): Promise<ReleaseVecto
       },
     }
   } finally {
+    reportReleaseVectorSmokeStage('cleanup')
     closeConnection(projectA)
     closeConnection(projectB)
     fs.rmSync(root, { recursive: true, force: true })
