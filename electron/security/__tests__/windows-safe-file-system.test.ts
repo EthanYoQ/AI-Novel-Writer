@@ -423,12 +423,16 @@ describe.runIf(process.platform === 'darwin')('Darwin handle-bound secure file s
     const output = capability(selectedRoot, 'nested/chapter.txt')
 
     await safeFileSystem.mkdir(capability(selectedRoot, 'nested'))
+    await safeFileSystem.mkdir(capability(selectedRoot, 'nested/drafts'))
     await safeFileSystem.writeTextAtomically(output, 'normal content')
 
     await expect(safeFileSystem.readText(output)).resolves.toBe('normal content')
     await expect(safeFileSystem.exists(output)).resolves.toBe(true)
     await expect(safeFileSystem.listDirectory(capability(selectedRoot, 'nested')))
-      .resolves.toEqual([{ name: 'chapter.txt', isDirectory: false }])
+      .resolves.toEqual(expect.arrayContaining([
+        { name: 'chapter.txt', isDirectory: false },
+        { name: 'drafts', isDirectory: true },
+      ]))
 
     await expect(safeFileSystem.writeTextAtomically(output, 'rejected replacement', () => {
       throw new Error('lease-revalidation-rejected')
