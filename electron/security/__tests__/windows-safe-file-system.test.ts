@@ -34,10 +34,45 @@ function runExternalNode(script: string, ...args: string[]): SpawnSyncReturns<st
   })
 }
 
+function buildDarwinHelper(fixture: string): string {
+  const output = path.join(fixture, 'darwin-safe-file-system')
+  const source = path.resolve('electron/security/darwin-safe-file-system.m')
+  const result = spawnSync('clang', [
+    '-fobjc-arc',
+    '-Wall',
+    '-Werror',
+    '-framework', 'Foundation',
+    source,
+    '-o', output,
+  ], {
+    encoding: 'utf8',
+  })
+  expect(result.status, result.stderr).toBe(0)
+  return output
+}
+
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+describe('Darwin handle-bound secure file system', () => {
+  it('fails closed in packaged mode when the bundled Darwin helper is missing', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const missingResources = path.join(fixture, 'packaged-resources')
+    fs.mkdirSync(selectedRoot)
+
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'darwin',
+      isPackaged: true,
+      resourcesPath: missingResources,
+    })
+
+    await expect(safeFileSystem.exists(capability(selectedRoot, 'chapter.txt')))
+      .rejects.toThrow('SECURE_FS_HELPER_UNAVAILABLE')
+  })
 })
 
 describe.runIf(process.platform === 'win32')('Windows handle-bound secure file system', () => {
@@ -347,4 +382,127 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
 
     expect(fs.readFileSync(targetPath, 'utf8')).toBe('new content')
   })
+})
+
+describe.runIf(process.platform === 'darwin')('Darwin handle-bound secure file system', () => {
+  it('rejects symlink escapes for reads, mkdir, and atomic writes', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const outsideRoot = path.join(fixture, 'outside')
+    fs.mkdirSync(path.join(selectedRoot, 'guarded'), { recursive: true })
+    fs.mkdirSync(outsideRoot)
+    fs.writeFileSync(path.join(selectedRoot, 'guarded', 'secret.txt'), 'inside', 'utf8')
+    fs.writeFileSync(path.join(outsideRoot, 'secret.txt'), 'outside', 'utf8')
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'darwin',
+      helperPath: buildDarwinHelper(fixture),
+    })
+
+    replaceWithOutsideJunction(selectedRoot, outsideRoot)
+
+    await expect(safeFileSystem.readText(capability(selectedRoot, 'guarded/secret.txt')))
+      .rejects.toThrow('SECURE_FS_REPARSE_POINT')
+    await expect(safeFileSystem.mkdir(capability(selectedRoot, 'guarded/new-folder')))
+      .rejects.toThrow('SECURE_FS_REPARSE_POINT')
+    await expect(safeFileSystem.writeTextAtomically(
+      capability(selectedRoot, 'guarded/result.txt'),
+      'must stay inside',
+    )).rejects.toThrow('SECURE_FS_REPARSE_POINT')
+    expect(fs.existsSync(path.join(outsideRoot, 'new-folder'))).toBe(false)
+    expect(fs.existsSync(path.join(outsideRoot, 'result.txt'))).toBe(false)
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
+  it('keeps ordinary operations and the atomic commit boundary working', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    fs.mkdirSync(selectedRoot)
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'darwin',
+      helperPath: buildDarwinHelper(fixture),
+    })
+    const output = capability(selectedRoot, 'nested/chapter.txt')
+
+    await safeFileSystem.mkdir(capability(selectedRoot, 'nested'))
+    await safeFileSystem.writeTextAtomically(output, 'normal content')
+
+    await expect(safeFileSystem.readText(output)).resolves.toBe('normal content')
+    await expect(safeFileSystem.exists(output)).resolves.toBe(true)
+    await expect(safeFileSystem.listDirectory(capability(selectedRoot, 'nested')))
+      .resolves.toEqual([{ name: 'chapter.txt', isDirectory: false }])
+
+    await expect(safeFileSystem.writeTextAtomically(output, 'rejected replacement', () => {
+      throw new Error('lease-revalidation-rejected')
+    })).rejects.toThrow('lease-revalidation-rejected')
+    expect(fs.readFileSync(path.join(selectedRoot, 'nested', 'chapter.txt'), 'utf8')).toBe('normal content')
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
+  it('does not recreate a must-exist target that was removed before preparation', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const targetPath = path.join(selectedRoot, 'chapter.txt')
+    fs.mkdirSync(selectedRoot)
+    fs.writeFileSync(targetPath, 'old content', 'utf8')
+    fs.rmSync(targetPath)
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'darwin',
+      helperPath: buildDarwinHelper(fixture),
+    })
+    let reachedCommitGuard = false
+
+    await expect(safeFileSystem.writeTextAtomically(
+      capability(selectedRoot, 'chapter.txt'),
+      'new content',
+      () => {
+        reachedCommitGuard = true
+      },
+      { mustAlreadyExist: true },
+    )).rejects.toThrow('SECURE_FS_NOT_FOUND')
+
+    expect(reachedCommitGuard).toBe(false)
+    expect(fs.existsSync(targetPath)).toBe(false)
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
+  it('fails closed when a must-exist target changes during the commit guard', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const targetPath = path.join(selectedRoot, 'chapter.txt')
+    fs.mkdirSync(selectedRoot)
+    fs.writeFileSync(targetPath, 'old content', 'utf8')
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'darwin',
+      helperPath: buildDarwinHelper(fixture),
+    })
+
+    await expect(safeFileSystem.writeTextAtomically(
+      capability(selectedRoot, 'chapter.txt'),
+      'new content',
+      () => fs.rmSync(targetPath),
+      { mustAlreadyExist: true },
+    )).rejects.toThrow('SECURE_FS_WRITE_FAILED')
+
+    expect(fs.existsSync(targetPath)).toBe(false)
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
+  it('does not replace a must-exist target substituted during the commit guard', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const targetPath = path.join(selectedRoot, 'chapter.txt')
+    const attackerPath = path.join(selectedRoot, 'attacker.txt')
+    fs.mkdirSync(selectedRoot)
+    fs.writeFileSync(targetPath, 'old content', 'utf8')
+    fs.writeFileSync(attackerPath, 'attacker content', 'utf8')
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'darwin',
+      helperPath: buildDarwinHelper(fixture),
+    })
+
+    await expect(safeFileSystem.writeTextAtomically(
+      capability(selectedRoot, 'chapter.txt'),
+      'new content',
+      () => fs.renameSync(attackerPath, targetPath),
+      { mustAlreadyExist: true },
+    )).rejects.toThrow('SECURE_FS_WRITE_FAILED')
+
+    expect(fs.readFileSync(targetPath, 'utf8')).toBe('attacker content')
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
 })

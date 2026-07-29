@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-describe('v0.4.0 release metadata', () => {
+describe('v0.5.0 release metadata', () => {
   it('uses the release version in package metadata', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }
-    expect(pkg.version).toBe('0.4.0')
+    expect(pkg.version).toBe('0.5.0')
   })
 
   it('keeps stale Mythpen branding out of release metadata', () => {

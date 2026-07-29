@@ -1,50 +1,50 @@
-name: Promote runtime-verified Windows artifact
+name: Promote verified Windows and macOS artifacts
 
 on:
   workflow_dispatch:
     inputs:
-      qualification_run_id:
-        description: Successful Windows cloud package qualification run ID
+      windows_qualification_run_id:
+        description: Successful Windows cloud qualification run ID
+        required: true
+        type: string
+      macos_qualification_run_id:
+        description: Successful macOS ARM64 cloud qualification run ID
         required: true
         type: string
       expected_sha:
-        description: Full commit SHA qualified by that run
+        description: Full commit SHA qualified by both runs
         required: true
         type: string
       tag:
-        description: New final release tag (for example v0.4.0)
+        description: New final release tag (for example v0.5.0)
         required: true
         type: string
       confirmation:
-        description: Type PROMOTE_RUNTIME_VERIFIED_WINDOWS_RELEASE exactly
+        description: Type PROMOTE_RUNTIME_VERIFIED_CROSS_PLATFORM_RELEASE exactly
         required: true
         type: string
 
 permissions: {}
 
 concurrency:
-  group: windows-runtime-artifact-release-promotion
+  group: cross-platform-runtime-artifact-release-promotion
   cancel-in-progress: false
 
 jobs:
-  verify-runtime-artifact:
+  verify-runtime-artifacts:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       actions: read
       contents: read
     outputs:
-      artifact_id: ${{ steps.plan.outputs.artifact_id }}
+      windows_artifact_id: ${{ steps.plan.outputs.windows_artifact_id }}
+      macos_artifact_id: ${{ steps.plan.outputs.macos_artifact_id }}
     steps:
       - name: Require dispatch from the default branch
         shell: bash
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
-            echo "Promotion workflow must be dispatched from the default branch." >&2
-            exit 1
-          fi
+          test "$GITHUB_REF" = "refs/heads/${{ github.event.repository.default_branch }}"
 
       - name: Check out trusted promotion code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -58,62 +58,69 @@ jobs:
         with:
           node-version: 22.23.1
 
-      - name: Verify qualification run and select its immutable artifact
+      - name: Verify qualification runs and select immutable artifacts
         id: plan
         working-directory: promotion-source
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          PROMOTION_CONFIRMATION: ${{ inputs.confirmation }}
         run: >-
-          node scripts/promote-windows-runtime-artifact.mjs plan
+          node scripts/promote-cross-platform-runtime-artifacts.mjs plan
           --repository "$GITHUB_REPOSITORY"
-          --qualification-run-id "$QUALIFICATION_RUN_ID"
-          --expected-sha "$EXPECTED_SHA"
-          --tag "$RELEASE_TAG"
-          --confirmation "$PROMOTION_CONFIRMATION"
+          --windows-qualification-run-id "${{ inputs.windows_qualification_run_id }}"
+          --macos-qualification-run-id "${{ inputs.macos_qualification_run_id }}"
+          --expected-sha "${{ inputs.expected_sha }}"
+          --tag "${{ inputs.tag }}"
+          --confirmation "${{ inputs.confirmation }}"
           --output ../qualification-source-plan.json
 
-      - name: Check out the qualified commit
+      - name: Check out qualified source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ inputs.expected_sha }}
           path: qualified-source
           persist-credentials: false
 
-      - name: Download the selected cross-run artifact
+      - name: Download selected Windows qualification artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          artifact-ids: ${{ steps.plan.outputs.artifact_id }}
-          path: qualification-artifact
+          artifact-ids: ${{ steps.plan.outputs.windows_artifact_id }}
+          path: windows-qualification-artifact
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          run-id: ${{ inputs.qualification_run_id }}
+          run-id: ${{ inputs.windows_qualification_run_id }}
 
-      - name: Verify runtime manifest, evidence, and every artifact byte
+      - name: Download selected macOS qualification artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ steps.plan.outputs.macos_artifact_id }}
+          path: macos-qualification-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.macos_qualification_run_id }}
+
+      - name: Verify both artifacts and stage one release inventory
         working-directory: promotion-source
         run: >-
-          node scripts/promote-windows-runtime-artifact.mjs verify
-          --artifact-root ../qualification-artifact
+          node scripts/promote-cross-platform-runtime-artifacts.mjs verify
+          --windows-artifact-root ../windows-qualification-artifact
+          --macos-artifact-root ../macos-qualification-artifact
           --qualified-source ../qualified-source
           --plan ../qualification-source-plan.json
           --output ../promotion-ready
 
-      - name: Preserve only the verified promotion package for this run
+      - name: Preserve same-run verified promotion package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-release-promotion-ready-${{ github.run_id }}
+          name: cross-platform-release-promotion-ready-${{ github.run_id }}
           retention-days: 1
           compression-level: 0
           if-no-files-found: error
           path: promotion-ready/
 
   publish-final-release:
-    needs: verify-runtime-artifact
+    needs: verify-runtime-artifacts
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       actions: read
       contents: write
@@ -135,17 +142,14 @@ jobs:
       - name: Download this run's verified promotion package
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: windows-release-promotion-ready-${{ github.run_id }}
+          name: cross-platform-release-promotion-ready-${{ github.run_id }}
           path: promotion-ready
 
-      - name: Create draft, verify remote assets, then publish final Release
+      - name: Publish one formal cross-platform Release
         id: publish
         working-directory: promotion-source
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag }}
         run: >-
-          node scripts/promote-windows-runtime-artifact.mjs publish
+          node scripts/promote-cross-platform-runtime-artifacts.mjs publish
           --ready-root ../promotion-ready
-          --repository "$GITHUB_REPOSITORY"
-          --tag "$RELEASE_TAG"
