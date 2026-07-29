@@ -92,7 +92,7 @@ describe('cross-platform artifact promotion planner', () => {
   it('requires the complete, byte-verified remote asset inventory before publication', () => {
     const assets = [
       { file: 'ai-novel-writer-setup-0.5.0.exe', sizeBytes: 3, sha256: 'a'.repeat(64) },
-      { file: 'AI小说作家-Mac-0.5.0-Installer.dmg', sizeBytes: 4, sha256: 'b'.repeat(64) },
+      { file: 'ai-novel-writer-mac-arm64-0.5.0-installer.dmg', sizeBytes: 4, sha256: 'b'.repeat(64) },
     ]
     expect(() => verifyRemoteReleaseAssets({
       draft: true,
