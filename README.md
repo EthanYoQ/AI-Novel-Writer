@@ -21,14 +21,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新 Windows 安装包</a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新 Windows 与 macOS ARM64 安装包</a>
 </p>
 
-> ## v0.4.0 重大更新
+> ## v0.5.0 跨平台正式发布
 >
-> 这个项目最初只是一次兴趣驱动的尝试，没想到获得了许多 Star 和真实使用反馈。为了回应，本轮对核心创作、数据、进程和安装更新链路进行了系统性 Code Review 与代码重构。
+> [v0.5.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.0) 在同一个 Release 资产列表中提供 Windows x64 与 macOS Apple Silicon（ARM64）安装包，均由 GitHub Actions 云端构建并完成运行资格验证。
 >
-> v0.4.0 是一次重大更新：在正式 Release 发布后，建议安装版用户升级。正式安装包已经完成云端 Windows 构建与资格验证发布。
+> Windows 安装程序支持应用内更新；macOS 包未签名、未公证，且需要从 Release 页面手动下载更新。首次安装时，Gatekeeper 可能要求在“隐私与安全性”中手动允许。
 
 ## 产品定位
 
@@ -117,9 +117,11 @@ Model:     你的 Ollama 模型名，例如 qwen3:14b
 
 软件本身不提供模型账号、云端生成服务或运营消息推送。联网更新检查只读取公开 GitHub Release；用户可手动检查，也可在发现更新后暂缓提醒。
 
-## Windows 安装与更新
+## 安装与更新
 
-从 v0.3.0 起，正式版使用 Windows NSIS 安装程序：
+### Windows x64
+
+正式版使用 Windows NSIS 安装程序：
 
 ```text
 ai-novel-writer-setup-<版本号>.exe
@@ -132,12 +134,24 @@ ai-novel-writer-setup-<版本号>.exe
 
 当前安装程序尚未进行代码签名。Windows 可能显示发布者或信誉提示；请确认下载页面属于本项目的官方 GitHub Release 后再继续。
 
+### macOS Apple Silicon（ARM64）
+
+从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载：
+
+```text
+ai-novel-writer-mac-arm64-<版本号>-installer.dmg
+```
+
+1. 此包仅适用于 Apple Silicon Mac（M1、M2、M3、M4 等 ARM64 机型），不提供 Intel Mac 安装包。
+2. 将 DMG 中的应用拖入“应用程序”文件夹后启动；本版本不提供 macOS 应用内更新，请从同一 Release 页面手动下载后续版本。
+3. 该包未签名、未公证。若 Gatekeeper 阻止打开，请确认来源是本项目的官方 GitHub Release，然后在 Finder 中按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。
+
 ## 当前限制
 
 - 不承诺任意第三方 API 都能仅靠 URL 和 Key 接入；只保证已实现协议与预设范围内的行为。
 - 不替代作者的创意、事实核查或版权判断；AI 输出需要作者审阅。
 - 不提供在线发布、阅读社区或云端模型账号。
-- 发布安装包前仍需通过云端 Windows 构建资格检查；本 README 不是安装包已经发布的证明。
+- 正式安装包由 GitHub Actions 云端构建；Windows 与 macOS ARM64 会各自通过资格检查后，才会进入同一个 GitHub Release。
 
 ## 许可证
 

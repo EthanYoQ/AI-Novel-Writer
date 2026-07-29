@@ -21,14 +21,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows installer</a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows and macOS ARM64 installers</a>
 </p>
 
-> ## v0.4.0 major update (pre-release note)
+> ## v0.5.0 cross-platform release
 >
-> This project began as an interest-driven experiment. The number of Stars and real-world feedback was unexpected, so this release cycle focuses on users: the core creation, data, process, and installer-update paths received a systematic Code Review and refactor.
+> [v0.5.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.0) provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. Both are built in GitHub Actions and have completed runtime qualification.
 >
-> v0.4.0 is a major update. Once the formal Release is published, installation-build users are encouraged to upgrade. This is not a zero-defect claim: the formal installer still has to pass cloud Windows build and qualification checks before release. A real NovelAI-account, end-to-end smoke test has not been performed in this repository because the maintainer does not have a user's Token.
+> The Windows installer supports in-app updates. The macOS package is unsigned and not notarized, and future macOS updates are downloaded manually from the Release page. Gatekeeper may require a manual Allow action on first launch.
 
 ## What this product is
 
@@ -117,9 +117,11 @@ The preset applies minimal parameter compatibility: it does not send standard `r
 
 The app does not provide model accounts, cloud generation, or operational-message pushes. Update checks read public GitHub Releases only; users can check manually and defer a discovered version reminder.
 
-## Windows installation and updates
+## Installation and updates
 
-Formal releases have used a Windows NSIS installer since v0.3.0:
+### Windows x64
+
+Formal releases use a Windows NSIS installer:
 
 ```text
 ai-novel-writer-setup-<version>.exe
@@ -132,12 +134,24 @@ ai-novel-writer-setup-<version>.exe
 
 The installer is not code-signed at present. Windows may show publisher or reputation warnings; continue only after confirming that the download page is this repository's official GitHub Release.
 
+### macOS Apple Silicon (ARM64)
+
+Download this file from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest):
+
+```text
+ai-novel-writer-mac-arm64-<version>-installer.dmg
+```
+
+1. This package supports Apple Silicon Macs only (M1, M2, M3, M4, and later ARM64 devices); no Intel Mac installer is provided.
+2. Drag the app from the DMG to Applications. This macOS release has no in-app updater; download future versions manually from the same Release page.
+3. This package is unsigned and not notarized. If Gatekeeper blocks it, confirm that the source is this repository's official GitHub Release, then Control-click the app in Finder and choose **Open**, or allow it in **System Settings → Privacy & Security**.
+
 ## Current limits
 
 - A URL and key do not guarantee support for every third-party API; only implemented protocols and presets are in scope.
 - The app does not replace authorial judgment, fact checking, or copyright decisions. Review AI output before using it.
 - It does not provide online publishing, a reading community, or cloud-model accounts.
-- A release installer must still pass cloud Windows qualification before publication. This README is not proof that an installer has already been released.
+- Formal installers are built in GitHub Actions. Windows and macOS ARM64 candidates each pass their own qualification before both are listed in one GitHub Release.
 
 ## License
 
