@@ -21,16 +21,16 @@
     "dist-electron",
     "build"
   ],
-  "extraResources": [
-    {
-      "from": "electron/security/windows-safe-file-system.ps1",
-      "to": "security/windows-safe-file-system.ps1"
-    }
-  ],
   "mac": {
     "target": ["dmg"],
     "artifactName": "${productName}-Mac-${version}-Installer.${ext}",
-    "category": "public.app-category.productivity"
+    "category": "public.app-category.productivity",
+    "extraResources": [
+      {
+        "from": "electron/security/darwin-safe-file-system",
+        "to": "security/darwin-safe-file-system"
+      }
+    ]
   },
   "win": {
     "target": [
@@ -48,6 +48,12 @@
         "releaseType": "release",
         "publishAutoUpdate": true,
         "tagNamePrefix": "v"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "electron/security/windows-safe-file-system.ps1",
+        "to": "security/windows-safe-file-system.ps1"
       }
     ]
   },
