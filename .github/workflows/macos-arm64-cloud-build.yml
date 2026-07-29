@@ -67,8 +67,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           path: |
-            release/*/AI小说作家-Mac-*-Installer.dmg
-            release/*/AI小说作家-Mac-*-Installer.dmg.sha256
+            release/*/ai-novel-writer-mac-arm64-*-installer.dmg
+            release/*/ai-novel-writer-mac-arm64-*-installer.dmg.sha256
             release/*/SHA256SUMS.txt
             release/*/manifest.json
             release/*/qualification/packaged-vector-smoke.json
