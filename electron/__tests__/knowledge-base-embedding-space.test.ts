@@ -14,6 +14,7 @@ vi.mock('../embedding', () => ({
 
 import {
   backfillVectors,
+  importDocument,
   importText,
   searchKnowledge,
   searchKnowledgeFTS,
@@ -27,6 +28,7 @@ import {
   getEmbeddingSpaces,
   search,
 } from '../vector-store'
+import { EmbeddingResponseValidationError } from '../services/embedding-response-error'
 
 describe('知识库嵌入空间回填', () => {
   const projects: string[] = []
@@ -176,6 +178,48 @@ describe('知识库嵌入空间回填', () => {
     await expect(search(projectPath, '仍需保留', undefined, 5)).resolves.toEqual([
       expect.objectContaining({ fileName: 'fts.txt', text: '仍需保留的全文正文' }),
     ])
+  })
+
+  it('导入遇到无效 Embedding 响应时返回可理解错误且不打开 LanceDB', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-import-invalid-response-'))
+    projects.push(projectPath)
+    generateEmbeddingsMock.mockRejectedValue(new EmbeddingResponseValidationError(
+      'OpenAI',
+      '第 1 个向量的第 2 个值不是有限数字（收到 null）',
+    ))
+
+    await expect(importText('不应写入数据库的正文', 'invalid.txt', projectPath, 'openai', {
+      baseUrl: 'http://127.0.0.1:8080/v1',
+      apiKey: 'test-key',
+      modelName: 'qwen3-embedding',
+    })).resolves.toEqual({
+      success: false,
+      error: 'OpenAI Embedding 响应无效：第 1 个向量的第 2 个值不是有限数字（收到 null）',
+    })
+
+    expect(fs.existsSync(path.join(projectPath, '.vela', 'lancedb'))).toBe(false)
+  })
+
+  it('文件导入遇到无效 Embedding 响应时不打开 LanceDB', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-file-invalid-response-'))
+    projects.push(projectPath)
+    const filePath = path.join(projectPath, 'invalid.txt')
+    fs.writeFileSync(filePath, '不应写入数据库的文件正文', 'utf8')
+    generateEmbeddingsMock.mockRejectedValue(new EmbeddingResponseValidationError(
+      'OpenAI',
+      '第 1 个向量的第 2 个值不是有限数字（收到 null）',
+    ))
+
+    await expect(importDocument(filePath, projectPath, 'openai', {
+      baseUrl: 'http://127.0.0.1:8080/v1',
+      apiKey: 'test-key',
+      modelName: 'qwen3-embedding',
+    })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/OpenAI Embedding 响应无效.*第 2 个值.*null/),
+    })
+
+    expect(fs.existsSync(path.join(projectPath, '.vela', 'lancedb'))).toBe(false)
   })
 
   it('importText 遇到 reindex_required 时不先删除同名旧文档', async () => {

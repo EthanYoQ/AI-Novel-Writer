@@ -13,6 +13,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { chunkText, generateEmbeddings } from './embedding'
 import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
+import { EmbeddingResponseValidationError } from './services/embedding-response-error'
 import {
   LEGACY_VECTOR_MIGRATION_BLOCKED,
   LegacyVectorMigrationBlockedError,
@@ -133,6 +134,7 @@ export async function importDocument(
         onProgress?.(20, `正在向量化 ${chunks.length} 个块...`)
         vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
       } catch (e) {
+        if (e instanceof EmbeddingResponseValidationError) throw e
         console.warn('[Vela KB] Embedding 调用失败，降级为 FTS-only:', e)
         // 不影响导入，仅 FTS
       }
@@ -354,6 +356,7 @@ export async function importText(
       try {
         vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
       } catch (e) {
+        if (e instanceof EmbeddingResponseValidationError) throw e
         console.warn('[Vela KB] importText Embedding 失败，降级 FTS-only:', e)
       }
     }

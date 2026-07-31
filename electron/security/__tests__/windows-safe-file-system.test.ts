@@ -196,6 +196,24 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
     expect(fs.existsSync(path.join(outsideRoot, 'result.txt'))).toBe(false)
   }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
 
+  it('lists ordinary entries when the directory also contains a junction without exposing the junction', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const outsideRoot = path.join(fixture, 'outside')
+    fs.mkdirSync(selectedRoot)
+    fs.mkdirSync(outsideRoot)
+    fs.writeFileSync(path.join(selectedRoot, 'chapter.txt'), 'inside', 'utf8')
+    fs.writeFileSync(path.join(outsideRoot, 'secret.txt'), 'outside', 'utf8')
+    fs.symlinkSync(outsideRoot, path.join(selectedRoot, 'linked-outside'), 'junction')
+
+    const safeFileSystem = createWindowsSafeFileSystem()
+
+    await expect(safeFileSystem.listDirectory(capability(selectedRoot, '')))
+      .resolves.toEqual([{ name: 'chapter.txt', isDirectory: false }])
+    await expect(safeFileSystem.listDirectory(capability(selectedRoot, 'linked-outside')))
+      .resolves.toEqual([])
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
   it('keeps ordinary non-reparse reads, recursive mkdir, atomic writes, and enumeration working', async () => {
     const fixture = fixtureRoot()
     const selectedRoot = path.join(fixture, 'selected')

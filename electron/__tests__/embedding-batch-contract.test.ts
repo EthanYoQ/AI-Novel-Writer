@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { embedOpenAI, generateEmbeddings } from '../embedding'
+import { embedGemini, embedOpenAI, generateEmbeddings } from '../embedding'
 import { BUILTIN_PRESETS } from '../../src/shared/provider-presets'
 
 const model = {
@@ -94,6 +94,61 @@ describe('embedding batch response contract', () => {
       [0.1],
       [0.2],
     ])
+  })
+
+  it.each([
+    ['null', null],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('rejects an OpenAI vector containing %s at the response boundary', async (_label, invalidValue) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulResponse({
+      data: [{ index: 0, embedding: [0.1, invalidValue, 0.3] }],
+    })))
+
+    await expect(embedOpenAI(['第一段'], model)).rejects.toThrow(
+      /OpenAI Embedding 响应无效.*第 1 个向量.*第 2 个值.*有限数字/,
+    )
+  })
+
+  it('rejects inconsistent OpenAI vector dimensions at the response boundary', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulResponse({
+      data: [
+        { index: 0, embedding: [0.1, 0.2] },
+        { index: 1, embedding: [0.3] },
+      ],
+    })))
+
+    await expect(embedOpenAI(['第一段', '第二段'], model)).rejects.toThrow(
+      /OpenAI Embedding 响应无效.*第 2 个向量.*1 维.*期望 2 维/,
+    )
+  })
+
+  it('rejects a Gemini vector containing null at the response boundary', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(successfulResponse({
+      embeddings: [{ values: [0.1, null, 0.3] }],
+    })))
+
+    await expect(embedGemini(['第一段'], model)).rejects.toThrow(
+      /Gemini Embedding 响应无效.*第 1 个向量.*第 2 个值.*有限数字/,
+    )
+  })
+
+  it('rejects a dimension change between OpenAI batches before returning the aggregate', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(successfulResponse({
+        data: [
+          { index: 0, embedding: [0.1, 0.2] },
+          { index: 1, embedding: [0.3, 0.4] },
+        ],
+      }))
+      .mockResolvedValueOnce(successfulResponse({
+        data: [{ index: 0, embedding: [0.5] }],
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(generateEmbeddings(['第一段', '第二段', '第三段'], 'openai', model, 2)).rejects.toThrow(
+      /OpenAI Embedding 响应无效.*第 3 个向量.*1 维.*期望 2 维/,
+    )
   })
 })
 

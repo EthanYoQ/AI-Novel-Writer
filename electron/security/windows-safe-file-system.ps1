@@ -667,15 +667,19 @@ namespace AiNovelSecureFs {
             }
             string name = Marshal.PtrToStringUni(IntPtr.Add(buffer, offset + 64), nameLength / 2);
             if (name != "." && name != "..") {
-              if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-                throw new SecureFsException("SECURE_FS_REPARSE_POINT");
+              // A directory may legitimately contain system compatibility
+              // junctions (for example C:\Documents and Settings). Omitting
+              // them keeps recursive enumeration usable without making the
+              // entry traversable: any explicit access still goes through
+              // OBJ_DONT_REPARSE in OpenRelative and fails closed.
+              if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+                ValidateSegment(name);
+                entries.Add(new SecureDirectoryEntry {
+                  Name = name,
+                  IsDirectory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
+                });
+                if (entries.Count > MaxEntries) throw new SecureFsException("SECURE_FS_DIRECTORY_TOO_LARGE");
               }
-              ValidateSegment(name);
-              entries.Add(new SecureDirectoryEntry {
-                Name = name,
-                IsDirectory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
-              });
-              if (entries.Count > MaxEntries) throw new SecureFsException("SECURE_FS_DIRECTORY_TOO_LARGE");
             }
             if (nextOffset == 0) break;
             if (nextOffset < 0 || offset + nextOffset > bytes) throw new SecureFsException("SECURE_FS_HELPER_FAILED");
