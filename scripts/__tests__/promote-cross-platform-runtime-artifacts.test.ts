@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PROMOTION_CONFIRMATION,
   planPromotion,
+  releaseNotes,
   resolvePromotionArtifactRoot,
   verifyRemoteReleaseAssets,
 } from '../promote-cross-platform-runtime-artifacts.mjs'
@@ -35,7 +36,7 @@ function jsonResponse(payload: unknown) {
 describe('cross-platform artifact promotion planner', () => {
   it('accepts GitHub artifact-name wrappers but rejects files outside the verified bundle', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-artifact-'))
-    const bundleRoot = path.join(root, 'windows-cloud-build-runtime-verified', '0.5.0')
+    const bundleRoot = path.join(root, 'windows-cloud-build-runtime-verified', '0.5.1')
     try {
       mkdirSync(bundleRoot, { recursive: true })
       writeFileSync(path.join(bundleRoot, 'manifest.json'), '{}\n', 'utf8')
@@ -64,7 +65,7 @@ describe('cross-platform artifact promotion planner', () => {
     const fetcher = async (url: string) => {
       const parsed = new URL(url)
       const key = parsed.pathname.replace(`/repos/${repository}`, '') + parsed.search
-      if (parsed.pathname.endsWith(`/git/ref/tags/v0.5.0`)) return { ok: false, status: 404, json: async () => ({}) }
+      if (parsed.pathname.endsWith(`/git/ref/tags/v0.5.1`)) return { ok: false, status: 404, json: async () => ({}) }
       const response = responses.get(key)
       if (!response) throw new Error(`Unexpected request: ${key}`)
       return jsonResponse(response)
@@ -76,7 +77,7 @@ describe('cross-platform artifact promotion planner', () => {
         windowsQualificationRunId: '101',
         macosQualificationRunId: '202',
         expectedSha,
-        tag: 'v0.5.0',
+        tag: 'v0.5.1',
         confirmation: PROMOTION_CONFIRMATION,
       },
       fetcher,
@@ -86,13 +87,13 @@ describe('cross-platform artifact promotion planner', () => {
     expect(plan.windows.artifact.id).toBe(1001)
     expect(plan.macos.artifact.id).toBe(2002)
     expect(plan.expectedSha).toBe(expectedSha)
-    expect(plan.version).toBe('0.5.0')
+    expect(plan.version).toBe('0.5.1')
   })
 
   it('requires the complete, byte-verified remote asset inventory before publication', () => {
     const assets = [
-      { file: 'ai-novel-writer-setup-0.5.0.exe', sizeBytes: 3, sha256: 'a'.repeat(64) },
-      { file: 'ai-novel-writer-mac-arm64-0.5.0-installer.dmg', sizeBytes: 4, sha256: 'b'.repeat(64) },
+      { file: 'ai-novel-writer-setup-0.5.1.exe', sizeBytes: 3, sha256: 'a'.repeat(64) },
+      { file: 'ai-novel-writer-mac-arm64-0.5.1-installer.dmg', sizeBytes: 4, sha256: 'b'.repeat(64) },
     ]
     expect(() => verifyRemoteReleaseAssets({
       draft: true,
@@ -104,5 +105,20 @@ describe('cross-platform artifact promotion planner', () => {
     }, assets)).not.toThrow()
     expect(() => verifyRemoteReleaseAssets({ draft: true, prerelease: false, assets: [] }, assets))
       .toThrow('Remote release asset file set is not exact')
+  })
+
+  it('generates bilingual v0.5.1 release notes with all three patch fixes', () => {
+    const body = releaseNotes('0.5.1')
+
+    expect(body).toContain('## 中文')
+    expect(body).toContain('## English')
+    expect(body).toContain('#70')
+    expect(body).toContain('DeepSeek')
+    expect(body).toContain('#71')
+    expect(body).toContain('SECURE_FS_REPARSE_POINT')
+    expect(body).toContain('#72')
+    expect(body).toContain('Arrow')
+    expect(body).toContain('ai-novel-writer-setup-0.5.1.exe')
+    expect(body).toContain('ai-novel-writer-mac-arm64-0.5.1-installer.dmg')
   })
 })
