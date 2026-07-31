@@ -1,10 +1,11 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   PROMOTION_CONFIRMATION,
   planPromotion,
+  publishPromotion,
   releaseNotes,
   resolvePromotionArtifactRoot,
   verifyRemoteReleaseAssets,
@@ -120,5 +121,64 @@ describe('cross-platform artifact promotion planner', () => {
     expect(body).toContain('Arrow')
     expect(body).toContain('ai-novel-writer-setup-0.5.1.exe')
     expect(body).toContain('ai-novel-writer-mac-arm64-0.5.1-installer.dmg')
+  })
+
+  it('publishes after a newly created tag becomes readable without creating the tag twice', async () => {
+    vi.useFakeTimers()
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-publish-'))
+    const ready = {
+      schemaVersion: 1,
+      state: 'READY_TO_PUBLISH',
+      repository,
+      expectedSha,
+      tag: 'v0.5.1',
+      version: '0.5.1',
+      assets: [],
+    }
+    const draft = {
+      id: 123,
+      upload_url: 'https://uploads.github.com/repos/test/releases/123/assets{?name,label}',
+      draft: true,
+      prerelease: false,
+      tag_name: ready.tag,
+      target_commitish: expectedSha,
+      name: ready.tag,
+      body: releaseNotes(ready.version),
+      assets: [],
+    }
+    let tagCreateRequests = 0
+    let tagReadsAfterCreate = 0
+
+    try {
+      writeFileSync(path.join(root, 'promotion-ready.json'), `${JSON.stringify(ready)}\n`, 'utf8')
+      const fetcher = async (url: string, options: { method?: string } = {}) => {
+        const parsed = new URL(url)
+        const method = options.method ?? 'GET'
+        if (parsed.pathname.endsWith('/releases/tags/v0.5.1')) return jsonResponse(draft)
+        if (parsed.pathname.endsWith('/git/refs') && method === 'POST') {
+          tagCreateRequests += 1
+          return jsonResponse({ ref: `refs/tags/${ready.tag}`, object: { type: 'commit', sha: expectedSha } })
+        }
+        if (parsed.pathname.endsWith('/git/ref/tags/v0.5.1')) {
+          if (tagCreateRequests === 0) return { ok: false, status: 404, json: async () => ({}) }
+          tagReadsAfterCreate += 1
+          if (tagReadsAfterCreate < 3) return { ok: false, status: 404, json: async () => ({}) }
+          return jsonResponse({ ref: `refs/tags/${ready.tag}`, object: { type: 'commit', sha: expectedSha } })
+        }
+        if (parsed.pathname.endsWith('/releases/123') && method === 'PATCH') {
+          return jsonResponse({ ...draft, draft: false })
+        }
+        throw new Error(`Unexpected request: ${method} ${parsed.pathname}`)
+      }
+
+      const publication = publishPromotion({ readyRoot: root, token: 'test-token', fetcher })
+      const result = expect(publication).resolves.toMatchObject({ id: 123, draft: false })
+      await vi.runAllTimersAsync()
+      await result
+      expect(tagCreateRequests).toBe(1)
+    } finally {
+      vi.useRealTimers()
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
