@@ -376,6 +376,20 @@ async function assertTagCommit(fetcher, api, headers, ready, phase) {
   assert(actual === ready.expectedSha, `Git tag does not resolve to expected_sha ${phase}`)
 }
 
+async function assertCreatedTagCommit(fetcher, api, headers, ready, phase) {
+  // GitHub can acknowledge the tag POST before the new ref is visible to a
+  // subsequent GET. Retry reads only, with a finite ~30 second total budget.
+  const retryDelaysMs = [0, 1_000, 2_000, 4_000, 8_000, 15_000]
+  for (const delayMs of retryDelaysMs) {
+    if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs))
+    const actual = await tagCommitShaIfPresent(fetcher, api, headers, ready)
+    if (actual === null) continue
+    assert(actual === ready.expectedSha, `Git tag does not resolve to expected_sha ${phase}`)
+    return
+  }
+  throw new Error(`Git tag does not resolve to expected_sha ${phase}`)
+}
+
 function validatePromotionDraft(release, ready) {
   assert(Number.isInteger(release?.id) && release.id > 0 && typeof release.upload_url === 'string', 'Release draft response is invalid')
   assert(release.draft === true && release.prerelease === false, 'Existing Release is not an unpublished final-release draft')
@@ -430,8 +444,12 @@ export async function publishPromotion({ readyRoot, token, fetcher = globalThis.
     validatePromotionDraft(draft, ready)
     verifyRemoteReleaseAssets(draft, ready.assets)
   }
-  if (existingTag === null) await createVerifiedTag(fetcher, api, headers, ready)
-  await assertTagCommit(fetcher, api, headers, ready, 'before publication')
+  if (existingTag === null) {
+    await createVerifiedTag(fetcher, api, headers, ready)
+    await assertCreatedTagCommit(fetcher, api, headers, ready, 'before publication')
+  } else {
+    await assertTagCommit(fetcher, api, headers, ready, 'before publication')
+  }
   let publicationAttempted = false
   try {
     publicationAttempted = true
