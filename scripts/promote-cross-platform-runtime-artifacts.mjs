@@ -399,7 +399,18 @@ function validatePromotionDraft(release, ready) {
 }
 
 async function releaseDraftIfPresent(fetcher, api, headers, ready) {
-  return requestMaybeNotFound(fetcher, `${api}/repos/${ready.repository}/releases/tags/${encodeURIComponent(ready.tag)}`, { headers }, 'Release draft')
+  const draft = await requestMaybeNotFound(fetcher, `${api}/repos/${ready.repository}/releases/tags/${encodeURIComponent(ready.tag)}`, { headers }, 'Release draft')
+  if (draft !== null) return draft
+
+  const response = await fetcher(`${api}/repos/${ready.repository}/releases?per_page=100`, { headers })
+  assert(response?.ok, `Release list fallback request failed${response ? ` (${response.status})` : ''}`)
+  const releases = await response.json()
+  assert(Array.isArray(releases), 'Release list fallback response is invalid')
+  const link = response.headers?.get?.('link') ?? ''
+  assert(releases.length < 100 && !/rel="next"/.test(link), 'Release list fallback is incomplete')
+  const matches = releases.filter(release => release?.draft === true && release?.tag_name === ready.tag)
+  assert(matches.length <= 1, 'Release list fallback found multiple matching drafts')
+  return matches[0] ?? null
 }
 
 async function createAndPopulateDraft(fetcher, api, uploads, headers, ready, readyRoot) {

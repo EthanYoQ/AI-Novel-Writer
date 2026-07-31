@@ -181,4 +181,57 @@ describe('cross-platform artifact promotion planner', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('recovers the unique matching draft from the complete release list when the tag endpoint returns 404', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-draft-fallback-'))
+    const ready = {
+      schemaVersion: 1,
+      state: 'READY_TO_PUBLISH',
+      repository,
+      expectedSha,
+      tag: 'v0.5.1',
+      version: '0.5.1',
+      assets: [],
+    }
+    const draft = {
+      id: 363065264,
+      upload_url: 'https://uploads.github.com/repos/test/releases/363065264/assets{?name,label}',
+      draft: true,
+      prerelease: false,
+      tag_name: ready.tag,
+      target_commitish: expectedSha,
+      name: ready.tag,
+      body: releaseNotes(ready.version),
+      assets: [],
+    }
+    const mutationMethods: string[] = []
+
+    try {
+      writeFileSync(path.join(root, 'promotion-ready.json'), `${JSON.stringify(ready)}\n`, 'utf8')
+      const fetcher = async (url: string, options: { method?: string } = {}) => {
+        const parsed = new URL(url)
+        const method = options.method ?? 'GET'
+        if (method !== 'GET') mutationMethods.push(method)
+        if (parsed.pathname.endsWith('/releases/tags/v0.5.1')) {
+          return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) }
+        }
+        if (parsed.pathname.endsWith('/releases') && parsed.search === '?per_page=100') {
+          return { ok: true, status: 200, headers: new Headers(), json: async () => [draft] }
+        }
+        if (parsed.pathname.endsWith('/git/ref/tags/v0.5.1')) {
+          return jsonResponse({ ref: `refs/tags/${ready.tag}`, object: { type: 'commit', sha: expectedSha } })
+        }
+        if (parsed.pathname.endsWith('/releases/363065264') && method === 'PATCH') {
+          return jsonResponse({ ...draft, draft: false })
+        }
+        throw new Error(`Unexpected request: ${method} ${parsed.pathname}${parsed.search}`)
+      }
+
+      await expect(publishPromotion({ readyRoot: root, token: 'test-token', fetcher }))
+        .resolves.toMatchObject({ id: 363065264, draft: false })
+      expect(mutationMethods).toEqual(['PATCH'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
