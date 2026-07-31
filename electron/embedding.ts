@@ -9,6 +9,7 @@
  */
 
 import { normalizeEmbeddingOptions } from '../src/shared/embedding-options'
+import { EmbeddingResponseValidationError } from './services/embedding-response-error'
 
 const RELEASE_SMOKE_BASE_URL_PREFIX = 'vela-release-smoke://'
 
@@ -17,7 +18,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function invalidEmbeddingResponse(provider: 'OpenAI' | 'Gemini', details: string): never {
-  throw new Error(`${provider} Embedding 响应无效：${details}`)
+  throw new EmbeddingResponseValidationError(provider, details)
+}
+
+function validateEmbeddingVectors(
+  provider: 'OpenAI' | 'Gemini',
+  vectors: readonly unknown[],
+): number[][] {
+  let expectedDimension: number | undefined
+  const validated: number[][] = []
+
+  for (let vectorIndex = 0; vectorIndex < vectors.length; vectorIndex += 1) {
+    const vector = vectors[vectorIndex]
+    if (!Array.isArray(vector) || vector.length === 0) {
+      invalidEmbeddingResponse(provider, `第 ${vectorIndex + 1} 个向量为空或不是数组`)
+    }
+    if (expectedDimension === undefined) {
+      expectedDimension = vector.length
+    } else if (vector.length !== expectedDimension) {
+      invalidEmbeddingResponse(
+        provider,
+        `第 ${vectorIndex + 1} 个向量为 ${vector.length} 维，期望 ${expectedDimension} 维`,
+      )
+    }
+
+    const values: number[] = []
+    for (let valueIndex = 0; valueIndex < vector.length; valueIndex += 1) {
+      const value = vector[valueIndex]
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        invalidEmbeddingResponse(
+          provider,
+          `第 ${vectorIndex + 1} 个向量的第 ${valueIndex + 1} 个值不是有限数字（收到 ${String(value)}）`,
+        )
+      }
+      values.push(value)
+    }
+    validated.push(values)
+  }
+
+  return validated
 }
 
 function validateOpenAIEmbeddings(data: unknown, batchLength: number): number[][] {
@@ -67,7 +106,7 @@ function validateOpenAIEmbeddings(data: unknown, batchLength: number): number[][
     invalidEmbeddingResponse('OpenAI', errors.join('；'))
   }
 
-  return embeddingsByIndex as number[][]
+  return validateEmbeddingVectors('OpenAI', embeddingsByIndex)
 }
 
 function validateGeminiEmbeddings(data: unknown, batchLength: number): number[][] {
@@ -93,7 +132,7 @@ function validateGeminiEmbeddings(data: unknown, batchLength: number): number[][
     invalidEmbeddingResponse('Gemini', errors.join('；'))
   }
 
-  return embeddings
+  return validateEmbeddingVectors('Gemini', embeddings)
 }
 
 /**
@@ -278,7 +317,7 @@ export async function generateEmbeddings(
     results.push(...embeddings)
   }
 
-  return results
+  return validateEmbeddingVectors(protocol === 'gemini' ? 'Gemini' : 'OpenAI', results)
 }
 
 // ===== 文本分块 =====

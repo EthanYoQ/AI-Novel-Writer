@@ -11,6 +11,7 @@ import type { LLMFinishReason, ModelProfile, GlobalConfig, TokenUsage } from '..
 import { LLMFactory } from '../llm/llm-factory'
 
 const activeStreams = new Map<string, AbortController>()
+const CONNECTION_TEST_MAX_TOKENS = 1024
 
 function loadModelConfigs(): ModelProfile[] {
   return readJsonFile<ModelProfile[]>(MODELS_CONFIG_PATH, [])
@@ -215,7 +216,8 @@ export function registerLLMController() {
       } else {
         const res = await provider.generate(model, messages, {
           temperature: 0.7,
-          maxTokens: 10,
+          // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
+          maxTokens: CONNECTION_TEST_MAX_TOKENS,
         })
         result = { success: res.success, error: res.error }
       }
