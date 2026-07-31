@@ -24,11 +24,11 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows and macOS ARM64 installers</a>
 </p>
 
-> ## v0.5.0 cross-platform release
+> ## v0.5.1 cross-platform patch release
 >
-> [v0.5.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.0) provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. Both are built in GitHub Actions and have completed runtime qualification.
+> [v0.5.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.1) fixes [#70](https://github.com/EthanYoQ/AI-Novel-Writer/issues/70), where connection tests could falsely reject DeepSeek and other reasoning models; [#71](https://github.com/EthanYoQ/AI-Novel-Writer/issues/71), where `SECURE_FS_REPARSE_POINT` could prevent Windows project folders from being used; and [#72](https://github.com/EthanYoQ/AI-Novel-Writer/issues/72), where null or invalid embedding values could surface as an Arrow error.
 >
-> The Windows installer supports in-app updates. The macOS package is unsigned and not notarized, and future macOS updates are downloaded manually from the Release page. Gatekeeper may require a manual Allow action on first launch.
+> This release provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. The Windows installer supports in-app updates. The macOS package is unsigned and not notarized, and future macOS updates are downloaded manually from the Release page. Gatekeeper may require a manual Allow action on first launch.
 
 ## What this product is
 

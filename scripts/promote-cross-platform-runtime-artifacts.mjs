@@ -325,11 +325,17 @@ export function verifyRemoteReleaseAssets(release, localAssets) {
   }
 }
 
-function releaseNotes(version) {
+export function releaseNotes(version) {
   return [
     `## 中文`,
     ``,
-    `AI 小说作家 ${version} 同时提供 Windows 与 macOS Apple Silicon（ARM64）安装包。`,
+    `AI 小说作家 ${version} 是一个补丁版本，修复以下严重问题：`,
+    ``,
+    `- #70：增加连接测试的输出预算，避免 DeepSeek 等推理模型被误判为连接失败。`,
+    `- #71：修复 Windows 安全文件系统在目录枚举中发现 junction/symlink 后中断整个目录加载的问题，避免 \`SECURE_FS_REPARSE_POINT\` 阻止项目创建或打开。`,
+    `- #72：在写入向量库前拒绝 embedding 响应中的 null、非有限数值和维度异常，并返回明确错误，避免底层 Arrow 错误。`,
+    ``,
+    `本版本同时提供 Windows 与 macOS Apple Silicon（ARM64）安装包。`,
     ``,
     `- Windows：下载 \`ai-novel-writer-setup-${version}.exe\`。`,
     `- macOS ARM64：下载 \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`。此包未签名、未公证；首次安装时 macOS Gatekeeper 可能要求在“隐私与安全性”中手动允许。`,
@@ -337,7 +343,13 @@ function releaseNotes(version) {
     ``,
     `## English`,
     ``,
-    `AI Novel Writer ${version} includes installers for Windows and macOS Apple Silicon (ARM64).`,
+    `AI Novel Writer ${version} is a patch release for the following serious issues:`,
+    ``,
+    `- #70: increases the connection-test output budget so DeepSeek and other reasoning models are not falsely reported as unreachable.`,
+    `- #71: prevents Windows directory enumeration from failing the entire project when it encounters a junction or symlink, so \`SECURE_FS_REPARSE_POINT\` no longer blocks project creation or opening.`,
+    `- #72: rejects null, non-finite, or dimensionally invalid embedding responses before vector storage and reports a clear error instead of exposing a low-level Arrow failure.`,
+    ``,
+    `This release includes installers for Windows and macOS Apple Silicon (ARM64).`,
     ``,
     `- Windows: download \`ai-novel-writer-setup-${version}.exe\`.`,
     `- macOS ARM64: download \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`. This package is unsigned and not notarized; Gatekeeper may require a manual Allow action in Privacy & Security on first install.`,
