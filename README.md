@@ -24,11 +24,11 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新 Windows 与 macOS ARM64 安装包</a>
 </p>
 
-> ## v0.5.1 跨平台补丁版
+> ## v0.5.2 跨平台补丁版
 >
-> [v0.5.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.1) 修复了 [#70](https://github.com/EthanYoQ/AI-Novel-Writer/issues/70) DeepSeek 等推理模型连接测试被误判失败、[#71](https://github.com/EthanYoQ/AI-Novel-Writer/issues/71) Windows 项目目录触发 `SECURE_FS_REPARSE_POINT` 而无法使用，以及 [#72](https://github.com/EthanYoQ/AI-Novel-Writer/issues/72) embedding 返回空值或非法数值后引发 Arrow 错误的问题。
+> [v0.5.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.2) 修复了 [#73](https://github.com/EthanYoQ/AI-Novel-Writer/issues/73)：单章生成的目标字数现在会真实生效。目标仍受所选模型的能力上限和自然边界约束，避免把 3000 字等目标误解为无止境续写、越写越多。还修复了 [#74](https://github.com/EthanYoQ/AI-Novel-Writer/issues/74)：embedding 回填遇到 HTML 或其他非 JSON 响应时，会提示检查配置、网关或鉴权，而不是抛出 `Unexpected token`；符合协议的合法 JSON 返回仍正常兼容。
 >
-> 本版在同一个 Release 资产列表中提供 Windows x64 与 macOS Apple Silicon（ARM64）安装包。Windows 安装程序支持应用内更新；macOS 包未签名、未公证，且需要从 Release 页面手动下载更新。首次安装时，Gatekeeper 可能要求在“隐私与安全性”中手动允许。
+> 本版在同一个 Release 资产列表中提供 Windows x64 与 macOS Apple Silicon（ARM64）安装包。Windows x64 安装程序支持应用内更新；macOS ARM64 包未签名、未公证，且需要从 Release 页面手动下载更新。首次安装时，Gatekeeper 可能要求在“隐私与安全性”中手动允许。
 
 ## 产品定位
 
