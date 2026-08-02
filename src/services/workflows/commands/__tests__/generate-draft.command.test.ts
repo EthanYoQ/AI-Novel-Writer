@@ -138,7 +138,7 @@ describe('GenerateDraftCommand truncation boundary', () => {
     useProjectStore.setState({ currentProject: null })
   })
 
-  function setup(wordsPerChapter: number) {
+  function setup(wordsPerChapter: number, wordsTarget?: number) {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       void args
       if (channel === 'db:project-core-get') {
@@ -190,57 +190,103 @@ describe('GenerateDraftCommand truncation boundary', () => {
       purpose: '建立冲突',
       keyEvents: '开端',
       characters: [],
+      wordsTarget,
     })
     return { invoke, context, callbacks, command }
   }
 
-  it('continues a 5,000/6,000-char draft after an explicit length finish and uses the configured model budget', async () => {
+  it('uses the chapter target for the prompt, output budget, and bounded persisted draft', async () => {
+    const { invoke, context, callbacks, command } = setup(6000, 3000)
+    const overlongDraft = Array.from(
+      { length: 20 },
+      (_, index) => `第${index + 1}段${'甲'.repeat(195)}。`,
+    ).join('\n\n')
+    const initial = vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: overlongDraft, finishReason: 'stop' })
+    const continuation = vi.spyOn(
+      command as unknown as {
+        callLLMResult: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
+      },
+      'callLLMResult',
+    ).mockResolvedValue({ content: '不应续写。', finishReason: 'stop' })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBeTruthy()
+
+    const builder = initial.mock.calls[0]?.[0] as { build: () => string }
+    expect(builder.build()).toContain('大约 3000 字左右')
+    expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 2240 })
+    expect(continuation).not.toHaveBeenCalled()
+    const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
+    const persistedContent = (persisted?.[1] as { content: string } | undefined)?.content
+    expect(persistedContent).toBeDefined()
+    expect(countChineseDraftChars(persistedContent!)).toBeLessThanOrEqual(3360)
+    expect(persistedContent).toMatch(/[。！？]$/)
+  })
+
+  it('continues a large draft only below the target lower bound and with the remaining target budget', async () => {
     const { invoke, context, callbacks, command } = setup(6000)
     const initial = vi.spyOn(
       command as unknown as {
         callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'length' }>
       },
       'callLLMResultWithBuilder',
-    ).mockResolvedValue({ content: '初'.repeat(5000), finishReason: 'length' })
+    ).mockResolvedValue({ content: '初'.repeat(4500), finishReason: 'length' })
     const continuation = vi.spyOn(
       command as unknown as {
         callLLMResult: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
       },
       'callLLMResult',
-    ).mockResolvedValue({ content: '续'.repeat(1000), finishReason: 'stop' })
+    ).mockResolvedValue({ content: `${'续'.repeat(1000)}。`, finishReason: 'stop' })
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('续')
 
     expect(continuation).toHaveBeenCalledTimes(1)
-    expect(initial.mock.calls[0]?.[2]).not.toHaveProperty('maxTokens')
-    expect(continuation.mock.calls[0]?.[3]).not.toHaveProperty('maxTokens')
+    expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 4480 })
+    expect(continuation.mock.calls[0]?.[0]).toContain('剩余约 1500 字')
+    expect(continuation.mock.calls[0]?.[3]).toMatchObject({ maxTokens: 1480 })
     const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
     expect(persisted?.[1]).toMatchObject({ content: expect.stringContaining('续') })
   })
 
-  it('fails without persisting when every bounded continuation is still length-truncated', async () => {
+  it('does not let a length finish bypass the target lower bound', async () => {
     const { invoke, context, callbacks, command } = setup(6000)
-    vi.spyOn(
+    const initial = vi.spyOn(
       command as unknown as {
         callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'length' }>
       },
       'callLLMResultWithBuilder',
-    ).mockResolvedValue({ content: '初'.repeat(5000), finishReason: 'length' })
-    let continuationRound = 0
+    ).mockResolvedValue({ content: `${'初'.repeat(5000)}。`, finishReason: 'length' })
     const continuation = vi.spyOn(
       command as unknown as {
         callLLMResult: (...args: unknown[]) => Promise<{ content: string; finishReason: 'length' }>
       },
       'callLLMResult',
-    ).mockImplementation(async () => ({
-      content: `第${++continuationRound}段续写`.repeat(400),
-      finishReason: 'length',
-    }))
+    ).mockResolvedValue({ content: '不应续写。', finishReason: 'length' })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('初')
+
+    expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 4480 })
+    expect(continuation).not.toHaveBeenCalled()
+    const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
+    expect(persisted?.[1]).toMatchObject({ content: expect.stringContaining('初') })
+  })
+
+  it('does not persist a content-filtered response even when it reaches the target lower bound', async () => {
+    const { invoke, context, callbacks, command } = setup(3000)
+    vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'content_filter' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: `${'初'.repeat(3000)}。`, finishReason: 'content_filter' })
 
     await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('输出达到模型最大长度')
+      .rejects.toThrow('AI 输出因内容限制而未完成')
 
-    expect(continuation).toHaveBeenCalledTimes(7)
     expect(invoke).not.toHaveBeenCalledWith('db:draft-next-version', expect.anything(), expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   })

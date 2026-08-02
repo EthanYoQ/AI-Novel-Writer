@@ -4,7 +4,7 @@ import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 
-import { createChapterWorkflow } from '../../services/workflows/chapter-workflow'
+import { createChapterWorkflow, type ChapterInfo } from '../../services/workflows/chapter-workflow'
 import { guardChapterWriting } from '../../services/workflow-guards'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
@@ -47,6 +47,40 @@ interface Props {
 
 /** 章节创作参数持久化路径（相对于项目路径） */
 const CREATION_LOG_REL = '.vela/chapter_creation_log.json'
+
+interface ChapterCreationDialogInput {
+  projectPath: string
+  chapterNumber: number | ''
+  title: string
+  role: string
+  purpose: string
+  keyEvents: string
+  characters: string
+  userGuidance: string
+  knowledgeQueryHint: string
+  wordsTarget: number | ''
+  defaultWordsTarget: number
+}
+
+/** 将章节创作表单收敛为工作流的稳定输入，保留本次单章目标字数。 */
+export function createChapterInfoFromDialogInput(input: ChapterCreationDialogInput): ChapterInfo {
+  const chapterNumber = Number(input.chapterNumber) || 1
+  const fallbackWordsTarget = Math.max(100, Math.trunc(Number(input.defaultWordsTarget) || 3000))
+  const requestedWordsTarget = Math.trunc(Number(input.wordsTarget))
+
+  return {
+    projectPath: input.projectPath,
+    chapterNumber,
+    title: input.title || `第${chapterNumber}章`,
+    role: input.role,
+    purpose: input.purpose,
+    characters: input.characters.split(/[、,，]/).map(s => s.trim()).filter(Boolean),
+    keyEvents: input.keyEvents,
+    userGuidance: input.userGuidance,
+    wordsTarget: requestedWordsTarget >= 100 ? requestedWordsTarget : fallbackWordsTarget,
+    knowledgeQueryHint: input.knowledgeQueryHint.trim() || undefined,
+  }
+}
 
 /** 章节创作对话框 — 配置并启动章节创作工作流（步进式，每步等待用户确认） */
 export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Props) {
@@ -242,17 +276,19 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
     await saveParams(projectSession)
     if (!isProjectSessionCurrent(projectSession)) return
 
-    const workflow = createChapterWorkflow({
+    const workflow = createChapterWorkflow(createChapterInfoFromDialogInput({
       projectPath,
-      chapterNumber: Number(chapterNumber) || 1,
-      title: title || `第${chapterNumber || 1}章`,
+      chapterNumber,
+      title,
       role,
       purpose,
-      characters: characters.split(/[、,，]/).map(s => s.trim()).filter(Boolean),
       keyEvents,
+      characters,
       userGuidance,
-      knowledgeQueryHint: knowledgeHint.trim() || undefined,
-    }, projectSession)
+      knowledgeQueryHint: knowledgeHint,
+      wordsTarget,
+      defaultWordsTarget: currentProject?.novelConfig.wordsPerChapter || 3000,
+    }), projectSession)
 
     // 启动任务后关闭设定弹窗，由全局 Overlay 接管展示
     if (!isProjectSessionCurrent(projectSession)) return

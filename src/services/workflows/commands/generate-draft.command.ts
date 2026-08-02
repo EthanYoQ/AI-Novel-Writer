@@ -15,6 +15,9 @@ import type { ChapterInfo } from '../chapter-workflow'
 const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MIN_TARGET_COMPLETION_RATIO = 0.82
 const MAX_AUTO_CONTINUE_ROUNDS = 7
+const MAX_TARGET_OVERAGE_RATIO = 0.12
+const MIN_TARGET_CHARS = 100
+const OUTPUT_CHARS_PER_TOKEN = 1.5
 
 export function countChineseDraftChars(text: string): number {
   return text.replace(/\s+/g, '').length
@@ -39,6 +42,67 @@ export function sanitizeDraftText(text: string): string {
     deduped.push(paragraph)
   }
   return deduped.join('\n\n').trim()
+}
+
+function resolveDraftTargetChars(wordsTarget: unknown, fallbackWordsTarget: unknown): number {
+  const requested = Math.trunc(Number(wordsTarget))
+  if (Number.isFinite(requested) && requested >= MIN_TARGET_CHARS) return requested
+
+  const fallback = Math.trunc(Number(fallbackWordsTarget))
+  if (Number.isFinite(fallback) && fallback >= MIN_TARGET_CHARS) return fallback
+
+  return 3000
+}
+
+function maxDraftCharsForTarget(targetChars: number): number {
+  return Math.floor(targetChars * (1 + MAX_TARGET_OVERAGE_RATIO))
+}
+
+function outputTokenBudgetForTarget(targetChars: number, currentChars = 0): number {
+  const remainingChars = Math.max(0, maxDraftCharsForTarget(targetChars) - currentChars)
+  return Math.max(1, Math.ceil(remainingChars / OUTPUT_CHARS_PER_TOKEN))
+}
+
+function takeSentenceBoundaryWithin(text: string, maxChars: number): string {
+  let chars = 0
+  let boundaryIndex = -1
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (!/\s/.test(char)) chars += 1
+    if (chars > maxChars) break
+    if ('。！？…'.includes(char)) {
+      boundaryIndex = index + 1
+      while (boundaryIndex < text.length && '”’」』）】'.includes(text[boundaryIndex])) {
+        boundaryIndex += 1
+      }
+    }
+  }
+
+  return boundaryIndex > 0 ? text.slice(0, boundaryIndex).trim() : ''
+}
+
+function capDraftAtNaturalBoundary(text: string, maxChars: number): string {
+  const cleaned = sanitizeDraftText(text)
+  if (countChineseDraftChars(cleaned) <= maxChars) return cleaned
+
+  const paragraphs = cleaned.split(/\n\s*\n/).map(paragraph => paragraph.trim()).filter(Boolean)
+  let capped = ''
+
+  for (const paragraph of paragraphs) {
+    const candidate = capped ? `${capped}\n\n${paragraph}` : paragraph
+    if (countChineseDraftChars(candidate) <= maxChars) {
+      capped = candidate
+      continue
+    }
+
+    const remaining = maxChars - countChineseDraftChars(capped)
+    const sentence = takeSentenceBoundaryWithin(paragraph, remaining)
+    if (sentence) capped = capped ? `${capped}\n\n${sentence}` : sentence
+    break
+  }
+
+  return capped.trim()
 }
 
 export class GenerateDraftCommand extends BaseWorkflowCommand {
@@ -93,7 +157,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       .withGlobalGuidance(mergedGuidance)
       .withWritingStyle(novelConfig.writingStyle || '')
       .withNovelConfig(novelConfig)
-      .withWordNumber(novelConfig.wordsPerChapter)
+      .withWordNumber(resolveDraftTargetChars(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter))
 
     if (!isFirstChapter) {
       // 从蓝图 JSON 的 notes 字段读取章节要点时间线（按序拼装，利于前缀缓存）
@@ -155,10 +219,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
     callbacks.log('调用 AI 生成章节草稿...')
 
-    const targetChars = Math.max(0, Number(novelConfig.wordsPerChapter) || 0)
+    const targetChars = resolveDraftTargetChars(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
+    const maxDraftChars = maxDraftCharsForTarget(targetChars)
     const initialCompletion = await this.callLLMResultWithBuilder(promptBuilder, callbacks, {
       temperature: 0.88,
       thinking: false,
+      maxTokens: outputTokenBudgetForTarget(targetChars),
     }, context)
     this.assertNotCancelled(context)
     const cleanDraftText = await this.extendDraftIfNeeded({
@@ -174,6 +240,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       writingStyle: novelConfig.writingStyle || '',
     })
     this.assertNotCancelled(context)
+    const boundedDraftText = capDraftAtNaturalBoundary(cleanDraftText, maxDraftChars)
+    if (!boundedDraftText) {
+      throw new Error('草稿超过目标字数容差，且无法在自然句或段落边界内安全截断，结果未保存。')
+    }
+    if (boundedDraftText !== cleanDraftText) {
+      callbacks.log(`  草稿超过目标容差，已在自然边界收束至约 ${countChineseDraftChars(boundedDraftText)}/${targetChars} 字`)
+    }
 
     // 落于数据库
     if (!sameProjectSessionContext(
@@ -194,8 +267,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       chapterNumber: this.chapterInfo.chapterNumber,
       version: nextVersion,
       source: 'write',
-      content: cleanDraftText,
-      wordCount: cleanDraftText.length,
+      content: boundedDraftText,
+      wordCount: boundedDraftText.length,
     }, expectedProjectPath)
     if (!createResult.success || !createResult.id) {
       throw new Error(createResult.error || '章节草稿保存失败')
@@ -204,8 +277,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
     const pseudoPath = createResult.id ? `vela://draft/${createResult.id}` : `vela://draft/ch${this.chapterInfo.chapterNumber}/v${nextVersion}`
 
-    context.data.draft = cleanDraftText
-    context.data.draftContent = cleanDraftText
+    context.data.draft = boundedDraftText
+    context.data.draftContent = boundedDraftText
     context.data.draftPath = pseudoPath
     context.data.chapterNumber = this.chapterInfo.chapterNumber
     context.data.chapterInfo = this.chapterInfo
@@ -229,14 +302,14 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         name: `第${this.chapterInfo.chapterNumber}章 ${this.chapterInfo.title} v${nextVersion}`,
         type: 'chapter',
         filePath: pseudoPath,
-        content: cleanDraftText,
-        savedContent: cleanDraftText,
+        content: boundedDraftText,
+        savedContent: boundedDraftText,
         projectKey: expectedProjectPath,
       })
     } catch { /* 忽略 */ }
 
-    callbacks.log(`✅ 草稿已自动入库保存为版本 v${nextVersion}（${cleanDraftText.length} 字）`)
-    return cleanDraftText
+    callbacks.log(`✅ 草稿已自动入库保存为版本 v${nextVersion}（${boundedDraftText.length} 字）`)
+    return boundedDraftText
   }
 
   private shouldAutoContinue(
@@ -246,13 +319,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     finishReason: LLMCompletion['finishReason'],
   ): boolean {
     if (rounds >= MAX_AUTO_CONTINUE_ROUNDS) return false
-    // Explicit length termination is a stronger signal than the historical
-    // character-ratio heuristic: a 5,000/6,000-char draft can still be cut
-    // off even though it already exceeds the 82% threshold.
-    if (finishReason === 'length') return true
-    if (finishReason !== 'stop') return false
-    if (targetChars < 4500) return false
-    return countChineseDraftChars(currentText) < Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
+    if (finishReason !== 'stop' && finishReason !== 'length') return false
+    const currentChars = countChineseDraftChars(currentText)
+    const lowerBound = Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
+    return currentChars < lowerBound && currentChars < maxDraftCharsForTarget(targetChars)
   }
 
   private async extendDraftIfNeeded(params: {
@@ -277,7 +347,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const currentChars = countChineseDraftChars(draft)
       params.callbacks.log(`  自动续写第 ${rounds} 段：当前约 ${currentChars}/${params.targetChars} 字`)
 
-      const remaining = Math.max(1200, params.targetChars - currentChars)
+      const remaining = Math.max(0, params.targetChars - currentChars)
       const continuationPrompt = `请无缝续写当前章节正文。
 
 【硬性要求】
@@ -307,7 +377,11 @@ ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
         continuationPrompt,
         params.systemRole,
         params.callbacks,
-        { temperature: 0.88, thinking: false },
+        {
+          temperature: 0.88,
+          thinking: false,
+          maxTokens: outputTokenBudgetForTarget(params.targetChars, currentChars),
+        },
         params.context
       )
       this.assertNotCancelled(params.context)
@@ -321,7 +395,13 @@ ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
       }
     }
 
-    if (lastFinishReason !== 'stop') {
+    if (
+      lastFinishReason !== 'stop'
+      && (
+        lastFinishReason !== 'length'
+        || countChineseDraftChars(draft) < Math.floor(params.targetChars * MIN_TARGET_COMPLETION_RATIO)
+      )
+    ) {
       throw this.createIncompleteCompletionError(lastFinishReason)
     }
 
