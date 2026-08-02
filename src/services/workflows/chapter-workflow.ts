@@ -22,6 +22,8 @@ export interface ChapterInfo {
   keyEvents: string
   suspenseHook?: string
   userGuidance?: string
+  /** 本次单章创作的用户目标字数；未提供时沿用项目默认值。 */
+  wordsTarget?: number
   /** 用户自定义知识库检索关键词（追加到向量搜索 query） */
   knowledgeQueryHint?: string
 }

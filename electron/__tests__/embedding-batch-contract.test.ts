@@ -25,6 +25,75 @@ afterEach(() => {
 })
 
 describe('embedding batch response contract', () => {
+  it('reports a bounded actionable error when OpenAI returns 2xx HTML instead of JSON', async () => {
+    const bodyMarker = 'DO-NOT-EXPOSE-THIS-LONG-UPSTREAM-HTML-BODY'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      `<!doctype html><html><body>${bodyMarker.repeat(100)}</body></html>`,
+      {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      },
+    )))
+
+    const error = await embedOpenAI(['第一段'], model).catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      name: 'EmbeddingResponseValidationError',
+      code: 'EMBEDDING_RESPONSE_INVALID',
+    })
+    expect((error as Error).message).toMatch(
+      /OpenAI Embedding 响应无效：服务端返回非 JSON 响应.*Base URL、网关或鉴权页/,
+    )
+    expect((error as Error).message).not.toContain(bodyMarker)
+    expect((error as Error).message).not.toContain("Unexpected token '<'")
+  })
+
+  it('reports a bounded actionable error when Gemini returns 2xx HTML instead of JSON', async () => {
+    const bodyMarker = 'DO-NOT-EXPOSE-THIS-LONG-GEMINI-HTML-BODY'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      `<!doctype html><html><body>${bodyMarker.repeat(100)}</body></html>`,
+      {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      },
+    )))
+
+    const error = await embedGemini(['第一段'], model).catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      name: 'EmbeddingResponseValidationError',
+      code: 'EMBEDDING_RESPONSE_INVALID',
+    })
+    expect((error as Error).message).toMatch(
+      /Gemini Embedding 响应无效：服务端返回非 JSON 响应.*Base URL、网关或鉴权页/,
+    )
+    expect((error as Error).message).not.toContain(bodyMarker)
+    expect((error as Error).message).not.toContain("Unexpected token '<'")
+  })
+
+  it('reports a bounded actionable error when OpenAI labels malformed 2xx content as JSON', async () => {
+    const bodyMarker = 'DO-NOT-EXPOSE-THIS-MALFORMED-JSON-BODY'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      bodyMarker.repeat(100),
+      {
+        status: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      },
+    )))
+
+    const error = await embedOpenAI(['第一段'], model).catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({
+      name: 'EmbeddingResponseValidationError',
+      code: 'EMBEDDING_RESPONSE_INVALID',
+    })
+    expect((error as Error).message).toMatch(
+      /OpenAI Embedding 响应无效：服务端返回非 JSON 响应.*响应体无法解析为 JSON.*Base URL、网关或鉴权页/,
+    )
+    expect((error as Error).message).not.toContain(bodyMarker)
+    expect((error as Error).message).not.toContain('Unexpected token')
+  })
+
   it('rejects a short first OpenAI batch before a later oversized batch can offset the total', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(successfulResponse({

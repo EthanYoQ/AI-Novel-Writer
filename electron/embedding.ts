@@ -21,6 +21,34 @@ function invalidEmbeddingResponse(provider: 'OpenAI' | 'Gemini', details: string
   throw new EmbeddingResponseValidationError(provider, details)
 }
 
+function isJsonContentType(contentType: string): boolean {
+  const mediaType = contentType.split(';', 1)[0].trim().toLowerCase()
+  return mediaType === 'application/json' || mediaType.startsWith('application/') && mediaType.endsWith('+json')
+}
+
+async function parseEmbeddingJsonResponse(
+  provider: 'OpenAI' | 'Gemini',
+  res: Response,
+): Promise<unknown> {
+  const contentType = res.headers?.get?.('content-type')?.trim()
+  const details = `HTTP ${res.status}${contentType ? `，Content-Type: ${contentType}` : ''}`
+  if (contentType && !isJsonContentType(contentType)) {
+    invalidEmbeddingResponse(
+      provider,
+      `服务端返回非 JSON 响应（${details}）。请检查 Base URL、网关或鉴权页。`,
+    )
+  }
+
+  try {
+    return await res.json() as unknown
+  } catch {
+    invalidEmbeddingResponse(
+      provider,
+      `服务端返回非 JSON 响应（${details}；响应体无法解析为 JSON）。请检查 Base URL、网关或鉴权页。`,
+    )
+  }
+}
+
 function validateEmbeddingVectors(
   provider: 'OpenAI' | 'Gemini',
   vectors: readonly unknown[],
@@ -252,7 +280,7 @@ export async function embedOpenAI(
     throw new Error(`OpenAI Embedding 调用失败 (${res.status}): ${text}`)
   }
 
-  const data = await res.json() as unknown
+  const data = await parseEmbeddingJsonResponse('OpenAI', res)
   return validateOpenAIEmbeddings(data, texts.length)
 }
 
@@ -286,7 +314,7 @@ export async function embedGemini(
     throw new Error(`Gemini Embedding 调用失败 (${res.status}): ${text}`)
   }
 
-  const data = await res.json() as unknown
+  const data = await parseEmbeddingJsonResponse('Gemini', res)
   return validateGeminiEmbeddings(data, texts.length)
 }
 
