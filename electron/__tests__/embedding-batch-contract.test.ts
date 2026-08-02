@@ -94,6 +94,52 @@ describe('embedding batch response contract', () => {
     expect((error as Error).message).not.toContain('Unexpected token')
   })
 
+  it.each([
+    {
+      provider: 'OpenAI',
+      embed: embedOpenAI,
+      payload: { data: [openAIEmbedding(0)] },
+    },
+    {
+      provider: 'Gemini',
+      embed: embedGemini,
+      payload: { embeddings: [{ values: [0.25] }] },
+    },
+  ])('$provider accepts valid JSON with missing or non-standard Content-Type', async ({ embed, payload }) => {
+    for (const contentType of [undefined, 'text/plain', 'text/json']) {
+      const response = new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: contentType ? { 'content-type': contentType } : undefined,
+      })
+      if (!contentType) {
+        response.headers.delete('content-type')
+      }
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+
+      await expect(embed(['第一段'], model)).resolves.toEqual([[0.25]])
+    }
+  })
+
+  it.each([
+    ['OpenAI', embedOpenAI],
+    ['Gemini', embedGemini],
+  ] as const)('%s keeps non-2xx response errors bounded and actionable', async (_provider, embed) => {
+    const bodyMarker = 'DO-NOT-EXPOSE-THIS-NON-2XX-UPSTREAM-BODY'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(bodyMarker.repeat(100), {
+      status: 401,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    })))
+
+    const error = await embed(['第一段'], model).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('HTTP 401')
+    expect((error as Error).message).toContain('检查 Base URL')
+    expect((error as Error).message).toContain('网关')
+    expect((error as Error).message).toContain('鉴权')
+    expect((error as Error).message).not.toContain(bodyMarker)
+  })
+
   it('rejects a short first OpenAI batch before a later oversized batch can offset the total', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(successfulResponse({

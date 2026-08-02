@@ -4,7 +4,14 @@ import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 
-import { createChapterWorkflow, type ChapterInfo } from '../../services/workflows/chapter-workflow'
+import { createChapterWorkflow } from '../../services/workflows/chapter-workflow'
+import {
+  CHAPTER_WORDS_TARGET_MAX,
+  CHAPTER_WORDS_TARGET_MIN,
+  createChapterInfoFromDialogInput,
+  DEFAULT_CHAPTER_WORDS_TARGET,
+  normalizeChapterWordsTarget,
+} from '../../services/workflows/chapter-creation-parameters'
 import { guardChapterWriting } from '../../services/workflow-guards'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
@@ -48,40 +55,6 @@ interface Props {
 /** 章节创作参数持久化路径（相对于项目路径） */
 const CREATION_LOG_REL = '.vela/chapter_creation_log.json'
 
-interface ChapterCreationDialogInput {
-  projectPath: string
-  chapterNumber: number | ''
-  title: string
-  role: string
-  purpose: string
-  keyEvents: string
-  characters: string
-  userGuidance: string
-  knowledgeQueryHint: string
-  wordsTarget: number | ''
-  defaultWordsTarget: number
-}
-
-/** 将章节创作表单收敛为工作流的稳定输入，保留本次单章目标字数。 */
-export function createChapterInfoFromDialogInput(input: ChapterCreationDialogInput): ChapterInfo {
-  const chapterNumber = Number(input.chapterNumber) || 1
-  const fallbackWordsTarget = Math.max(100, Math.trunc(Number(input.defaultWordsTarget) || 3000))
-  const requestedWordsTarget = Math.trunc(Number(input.wordsTarget))
-
-  return {
-    projectPath: input.projectPath,
-    chapterNumber,
-    title: input.title || `第${chapterNumber}章`,
-    role: input.role,
-    purpose: input.purpose,
-    characters: input.characters.split(/[、,，]/).map(s => s.trim()).filter(Boolean),
-    keyEvents: input.keyEvents,
-    userGuidance: input.userGuidance,
-    wordsTarget: requestedWordsTarget >= 100 ? requestedWordsTarget : fallbackWordsTarget,
-    knowledgeQueryHint: input.knowledgeQueryHint.trim() || undefined,
-  }
-}
-
 /** 章节创作对话框 — 配置并启动章节创作工作流（步进式，每步等待用户确认） */
 export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Props) {
   const text = useLocaleStore(s => s.text)
@@ -98,7 +71,7 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
   const [characters, setCharacters] = useState('')
   const [userGuidance, setUserGuidance] = useState('')
   const [knowledgeHint, setKnowledgeHint] = useState('')
-  const [wordsTarget, setWordsTarget] = useState<number | ''>(3000)
+  const [wordsTarget, setWordsTarget] = useState<number | ''>(DEFAULT_CHAPTER_WORDS_TARGET)
   const [loadedFromHistory, setLoadedFromHistory] = useState(false)
   const [loadedFromBlueprint, setLoadedFromBlueprint] = useState(false)
   const [guardError, setGuardError] = useState<string | null>(null)
@@ -156,7 +129,7 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
           setKeyEvents(last.keyEvents || '')
           setCharacters(last.characters || '')
           setUserGuidance(last.userGuidance || '')
-          setWordsTarget(last.wordsTarget || defaultWordsTarget)
+          setWordsTarget(normalizeChapterWordsTarget(last.wordsTarget, defaultWordsTarget))
           setLoadedFromHistory(true)
           return
         }
@@ -164,7 +137,7 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
     } catch { /* 文件不存在，使用默认值 */ }
     if (!isCurrentRequest()) return
     // 默认值：根据已有稿件数量推断下一章节号
-    setWordsTarget(defaultWordsTarget)
+    setWordsTarget(normalizeChapterWordsTarget(defaultWordsTarget))
     setChapterNumber(1)
     setLoadedFromHistory(false)
   }, [])
@@ -175,7 +148,10 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession) return
     const projectPath = projectSession.projectPath
-    const defaultWordsTarget = currentProject.novelConfig.wordsPerChapter || 3000
+    const defaultWordsTarget = normalizeChapterWordsTarget(
+      currentProject.novelConfig.wordsPerChapter,
+      DEFAULT_CHAPTER_WORDS_TARGET,
+    )
     const gate = loadGate.current
     const requestToken = gate.begin(projectPath)
     const isCurrentRequest = () => gate.isCurrent(
@@ -209,9 +185,9 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
 
 
   /** 保存当前参数到持久化文件 */
-  const saveParams = async (projectSession: ProjectSessionContext) => {
+  const saveParams = async (projectSession: ProjectSessionContext, normalizedWordsTarget: number) => {
     const projectPath = projectSession.projectPath
-    const params = { chapterNumber, title, role, purpose, keyEvents, characters, userGuidance, wordsTarget }
+    const params = { chapterNumber, title, role, purpose, keyEvents, characters, userGuidance, wordsTarget: normalizedWordsTarget }
     try {
       // 读取已有 log
       let log: { lastUsed?: object; history?: object[] } = {}
@@ -272,8 +248,14 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
     }
     setGuardError(null)
 
+    const normalizedWordsTarget = normalizeChapterWordsTarget(
+      wordsTarget,
+      currentProject?.novelConfig.wordsPerChapter,
+    )
+    setWordsTarget(normalizedWordsTarget)
+
     // 持久化本次参数
-    await saveParams(projectSession)
+    await saveParams(projectSession, normalizedWordsTarget)
     if (!isProjectSessionCurrent(projectSession)) return
 
     const workflow = createChapterWorkflow(createChapterInfoFromDialogInput({
@@ -286,8 +268,8 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
       characters,
       userGuidance,
       knowledgeQueryHint: knowledgeHint,
-      wordsTarget,
-      defaultWordsTarget: currentProject?.novelConfig.wordsPerChapter || 3000,
+      wordsTarget: normalizedWordsTarget,
+      defaultWordsTarget: currentProject?.novelConfig.wordsPerChapter ?? DEFAULT_CHAPTER_WORDS_TARGET,
     }), projectSession)
 
     // 启动任务后关闭设定弹窗，由全局 Overlay 接管展示
@@ -350,13 +332,14 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
                   <Input
                     type="number"
                     value={wordsTarget}
-                    onChange={(e) => setWordsTarget(e.target.value === '' ? '' : parseInt(e.target.value))}
-                    onBlur={() => {
-                      const v = Number(wordsTarget)
-                      if (!v || v < 100) setWordsTarget(3000)
-                    }}
+                    onChange={(e) => setWordsTarget(e.target.value === '' ? '' : Number(e.target.value))}
+                    onBlur={() => setWordsTarget(normalizeChapterWordsTarget(
+                      wordsTarget,
+                      currentProject?.novelConfig.wordsPerChapter,
+                    ))}
                     placeholder="3000"
-                    min={100}
+                    min={CHAPTER_WORDS_TARGET_MIN}
+                    max={CHAPTER_WORDS_TARGET_MAX}
                     step={500}
                   />
                 </div>
