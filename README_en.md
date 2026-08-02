@@ -24,11 +24,11 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows and macOS ARM64 installers</a>
 </p>
 
-> ## v0.5.1 cross-platform patch release
+> ## v0.5.2 cross-platform patch release
 >
-> [v0.5.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.1) fixes [#70](https://github.com/EthanYoQ/AI-Novel-Writer/issues/70), where connection tests could falsely reject DeepSeek and other reasoning models; [#71](https://github.com/EthanYoQ/AI-Novel-Writer/issues/71), where `SECURE_FS_REPARSE_POINT` could prevent Windows project folders from being used; and [#72](https://github.com/EthanYoQ/AI-Novel-Writer/issues/72), where null or invalid embedding values could surface as an Arrow error.
+> [v0.5.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.2) fixes [#73](https://github.com/EthanYoQ/AI-Novel-Writer/issues/73): a single chapter's target word count now actually takes effect. Targets remain bounded by the selected model's output capacity and natural completion boundaries, so a 3,000-word target does not turn into ever-longer continuation. It also fixes [#74](https://github.com/EthanYoQ/AI-Novel-Writer/issues/74): when embedding backfill receives HTML or another non-JSON response, the app points to configuration, gateway, or authentication troubleshooting rather than showing `Unexpected token`; valid JSON responses remain compatible.
 >
-> This release provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. The Windows installer supports in-app updates. The macOS package is unsigned and not notarized, and future macOS updates are downloaded manually from the Release page. Gatekeeper may require a manual Allow action on first launch.
+> This release provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. The Windows x64 installer supports in-app updates. The macOS ARM64 package is unsigned and not notarized, and future macOS updates are downloaded manually from the Release page. Gatekeeper may require a manual Allow action on first launch.
 
 ## What this product is
 

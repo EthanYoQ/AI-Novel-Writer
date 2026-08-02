@@ -108,19 +108,25 @@ describe('cross-platform artifact promotion planner', () => {
       .toThrow('Remote release asset file set is not exact')
   })
 
-  it('generates bilingual v0.5.1 release notes with all three patch fixes', () => {
-    const body = releaseNotes('0.5.1')
+  it('generates bilingual v0.5.2 release notes for the chapter-target and embedding-response fixes', () => {
+    const body = releaseNotes('0.5.2')
 
     expect(body).toContain('## 中文')
     expect(body).toContain('## English')
-    expect(body).toContain('#70')
-    expect(body).toContain('DeepSeek')
-    expect(body).toContain('#71')
-    expect(body).toContain('SECURE_FS_REPARSE_POINT')
-    expect(body).toContain('#72')
-    expect(body).toContain('Arrow')
-    expect(body).toContain('ai-novel-writer-setup-0.5.1.exe')
-    expect(body).toContain('ai-novel-writer-mac-arm64-0.5.1-installer.dmg')
+    expect(body).toContain('#73')
+    expect(body).toContain('单章目标字数')
+    expect(body).toContain('3000')
+    expect(body).toContain('natural completion boundaries')
+    expect(body).toContain('#74')
+    expect(body).toContain('HTML')
+    expect(body).toContain('Unexpected token')
+    expect(body).toContain('合法 JSON')
+    expect(body).toContain('configuration, gateway, or authentication')
+    expect(body).not.toContain('#70')
+    expect(body).not.toContain('#71')
+    expect(body).not.toContain('#72')
+    expect(body).toContain('ai-novel-writer-setup-0.5.2.exe')
+    expect(body).toContain('ai-novel-writer-mac-arm64-0.5.2-installer.dmg')
   })
 
   it('publishes after a newly created tag becomes readable without creating the tag twice', async () => {
