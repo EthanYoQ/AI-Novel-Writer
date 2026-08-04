@@ -6,9 +6,9 @@ export class LLMHistoryRepository {
     modelId: string
     modelName: string
     purpose: string
-    promptTokens: number
-    completionTokens: number
-    totalTokens: number
+    promptTokens: number | null
+    completionTokens: number | null
+    totalTokens: number | null
     durationMs: number
     success: boolean
     errorMessage?: string
@@ -29,23 +29,50 @@ export class LLMHistoryRepository {
   /** 获取调用统计 */
   static getStats(): {
     totalCalls: number
-    totalTokens: number
-    totalPromptTokens: number
-    totalCompletionTokens: number
+    successfulCalls: number
+    failedCalls: number
+    knownUsageCalls: number
+    totalTokens: number | null
+    totalPromptTokens: number | null
+    totalCompletionTokens: number | null
   } {
     const db = getProjectDb()
-    if (!db) return { totalCalls: 0, totalTokens: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }
+    if (!db) return {
+      totalCalls: 0,
+      successfulCalls: 0,
+      failedCalls: 0,
+      knownUsageCalls: 0,
+      totalTokens: null,
+      totalPromptTokens: null,
+      totalCompletionTokens: null,
+    }
 
     const row = db.prepare(`
       SELECT
         COUNT(*) as totalCalls,
-        COALESCE(SUM(total_tokens), 0) as totalTokens,
-        COALESCE(SUM(prompt_tokens), 0) as totalPromptTokens,
-        COALESCE(SUM(completion_tokens), 0) as totalCompletionTokens
-      FROM llm_calls WHERE success = 1
-    `).get() as { totalCalls: number; totalTokens: number; totalPromptTokens: number; totalCompletionTokens: number }
+        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successfulCalls,
+        SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failedCalls,
+        SUM(CASE WHEN total_tokens IS NOT NULL THEN 1 ELSE 0 END) as knownUsageCalls,
+        SUM(total_tokens) as totalTokens,
+        SUM(prompt_tokens) as totalPromptTokens,
+        SUM(completion_tokens) as totalCompletionTokens
+      FROM llm_calls
+    `).get() as {
+      totalCalls: number
+      successfulCalls: number | null
+      failedCalls: number | null
+      knownUsageCalls: number | null
+      totalTokens: number | null
+      totalPromptTokens: number | null
+      totalCompletionTokens: number | null
+    }
 
-    return row
+    return {
+      ...row,
+      successfulCalls: row.successfulCalls ?? 0,
+      failedCalls: row.failedCalls ?? 0,
+      knownUsageCalls: row.knownUsageCalls ?? 0,
+    }
   }
 
   /** 获取最近 LLM 调用记录 */

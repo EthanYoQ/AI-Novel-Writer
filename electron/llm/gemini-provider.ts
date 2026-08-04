@@ -1,5 +1,5 @@
 import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
-import type { LLMFinishReason, ModelProfile } from '../../src/shared/ipc-channels'
+import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 
 export class GeminiProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
@@ -78,9 +78,9 @@ export class GeminiProvider implements ILLMProvider {
       const finishReason = this.normalizeFinishReason(data.candidates?.[0]?.finishReason)
       const complete = finishReason === 'stop'
       const usage = data.usageMetadata ? {
-        promptTokens: data.usageMetadata.promptTokenCount ?? 0,
-        completionTokens: data.usageMetadata.candidatesTokenCount ?? 0,
-        totalTokens: data.usageMetadata.totalTokenCount ?? 0,
+        promptTokens: data.usageMetadata.promptTokenCount ?? null,
+        completionTokens: data.usageMetadata.candidatesTokenCount ?? null,
+        totalTokens: data.usageMetadata.totalTokenCount ?? null,
       } : undefined
 
       return {
@@ -142,7 +142,7 @@ export class GeminiProvider implements ILLMProvider {
 
       const decoder = new TextDecoder()
       let fullText = ''
-      let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined
+      let usage: TokenUsage | undefined
       let buffer = ''
       let finishReason: LLMFinishReason = 'stop'
 
@@ -169,9 +169,9 @@ export class GeminiProvider implements ILLMProvider {
           }
           if (parsed.usageMetadata) {
             usage = {
-              promptTokens: parsed.usageMetadata.promptTokenCount ?? 0,
-              completionTokens: parsed.usageMetadata.candidatesTokenCount ?? 0,
-              totalTokens: parsed.usageMetadata.totalTokenCount ?? 0,
+              promptTokens: parsed.usageMetadata.promptTokenCount ?? null,
+              completionTokens: parsed.usageMetadata.candidatesTokenCount ?? null,
+              totalTokens: parsed.usageMetadata.totalTokenCount ?? null,
             }
           }
         } catch {

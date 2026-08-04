@@ -11,6 +11,8 @@ import {
   type DirectoryWorkflowProjectSnapshot,
 } from '../directory-workflow'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { getBlueprintBatchSize } from '../blueprint-batch-policy'
+import { syncBlueprintCharacterCandidates } from '../blueprint-character-sync'
 
 function isBlueprintJsonParseError(error: unknown): error is Error {
   return error instanceof Error && error.message.startsWith('蓝图 JSON 解析失败：')
@@ -54,16 +56,14 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
 
     callbacks.log(`生成第 ${startChapter}–${endChapter} 章蓝图...`)
 
-    // 从当前默认模型获取 maxTokens，动态计算每批次章节数
+    // 根据当前模型保守收敛物理请求大小；无论模型输出上限多高，每次最多 5 章。
     const llmStore = (await import('../../../stores/llm-store')).useLLMStore.getState()
     const defaultModel = llmStore.models.find(m => m.id === llmStore.defaultModelId)
     const modelMaxTokens = defaultModel?.maxTokens || 4096
-    const outputBudget = Math.floor(modelMaxTokens * 0.6)  // 预留 40% 给 prompt + 思考
-    const tokensPerChapter = 200
-    const batchSize = Math.min(50, Math.max(5, Math.floor(outputBudget / tokensPerChapter)))
+    const batchSize = getBlueprintBatchSize(modelMaxTokens)
 
     const newBlueprints: ChapterBlueprint[] = []
-    // 使用游标追踪生成进度，支持 AI 超额返回时智能跳过后续批次
+    // 游标只会在已完整保存当前物理批次后推进。
     let cursor = startChapter
 
     while (cursor <= endChapter) {
@@ -72,40 +72,25 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       const batchEnd = Math.min(cursor + batchSize - 1, endChapter)
       callbacks.log(`  正在生成第 ${cursor}–${batchEnd} 章...`)
 
-      let prompt: string
-      if (cursor === 1 && this.params.mode === 'full') {
-        const template = getPromptTemplate('chapter_blueprint', projectSession)
-        if (!template) throw new Error('模板丢失')
-        prompt = new DirectoryPromptBuilder(template)
-          .withNovelArchitecture(architecture)
-          .withNumberOfChapters(endChapter)
-          .withGlobalGuidance(globalGuidance)
-          .withGenre(genre)
-          .withPacingGuidance((context.data.pacingGuidance as string) || '')
-          .build()
-      } else {
-        const template = getPromptTemplate('chapter_blueprint_chunk', projectSession)
-        if (!template) throw new Error('模板丢失')
-
-        const prevAll = [...existingBlueprints, ...newBlueprints]
-        const chapterList = prevAll.slice(-100).map(c => `第${c.chapterNumber}章 ${c.title}：${c.keyEvents}`).join('\n')
-
-        prompt = new DirectoryPromptBuilder(template)
-          .withNovelArchitecture(architecture)
-          .withChapterList(chapterList || '（首批生成）')
-          .withNumberOfChapters(totalChapters)
-          .withN(cursor)
-          .withM(batchEnd)
-          .withGlobalGuidance(globalGuidance)
-          .withGenre(genre)
-          .withPacingGuidance((context.data.pacingGuidance as string) || '')
-          .build()
-      }
+      const template = getPromptTemplate('chapter_blueprint_chunk', projectSession)
+      if (!template) throw new Error('模板丢失')
+      const prevAll = [...existingBlueprints, ...newBlueprints]
+      const chapterList = prevAll.slice(-100).map(c => `第${c.chapterNumber}章 ${c.title}：${c.keyEvents}`).join('\n')
+      const prompt = new DirectoryPromptBuilder(template)
+        .withNovelArchitecture(architecture)
+        .withChapterList(chapterList || '（首批生成，尚无前置章节）')
+        .withNumberOfChapters(totalChapters)
+        .withN(cursor)
+        .withM(batchEnd)
+        .withGlobalGuidance(globalGuidance)
+        .withGenre(genre)
+        .withPacingGuidance((context.data.pacingGuidance as string) || '')
+        .build()
 
       callbacks.setProgress(Math.round(((cursor - startChapter) / (endChapter - startChapter + 1)) * 90))
 
       // systemRole 由模板定义，不再硬编码
-      const systemRole = getPromptTemplate('chapter_blueprint', projectSession)?.systemRole || '你是一位经验丰富的网文架构师。'
+      const systemRole = template.systemRole || '你是一位经验丰富的网文架构师。'
       const jsonOutputOptions = {
         responseFormat: { type: 'json_object' },
         thinking: false,
@@ -115,27 +100,25 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       const resultText = await this.callLLM(prompt, systemRole, callbacks, jsonOutputOptions, context)
       this.assertNotCancelled(context)
 
-      // ★ 关键修复：接受 AI 返回的从 cursor 到 endChapter 范围内的所有有效章节
-      // AI 可能一次性返回超出本批次（batchEnd）的章节，全部保留，避免浪费和重复 LLM 请求
+      // 当前物理请求只能接受当前批次。越界、重复造成的缺章都不能落库或推进游标。
       let parsed: ChapterBlueprint[]
       try {
-        parsed = parseTextBlueprintsStrict(resultText, cursor, endChapter)
+        parsed = parseTextBlueprintsStrict(resultText, cursor, batchEnd)
       } catch (error) {
         if (!isBlueprintJsonParseError(error)) throw error
 
         callbacks.log('  蓝图 JSON 格式异常，正在请求模型修复格式...')
         const repairedText = await this.callLLM(
-          buildBlueprintJsonRepairPrompt(resultText, cursor, endChapter),
+          buildBlueprintJsonRepairPrompt(resultText, cursor, batchEnd),
           '你是严格的 JSON 格式修复器，只输出有效 JSON。',
           callbacks,
           { ...jsonOutputOptions, temperature: 0.2 },
           context,
         )
         this.assertNotCancelled(context)
-        parsed = parseTextBlueprintsStrict(repairedText, cursor, endChapter)
+        parsed = parseTextBlueprintsStrict(repairedText, cursor, batchEnd)
       }
-      const actualMaxChapter = Math.max(...parsed.map(p => p.chapterNumber))
-      assertBlueprintCoverage(parsed, cursor, actualMaxChapter)
+      assertBlueprintCoverage(parsed, cursor, batchEnd)
       newBlueprints.push(...parsed)
 
       // ==== 批次入库 ====
@@ -146,15 +129,16 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         await verifyBlueprintsPersisted(
           parsed,
           expectedProjectPath,
-          { startChapter: cursor, endChapter: actualMaxChapter },
+          { startChapter: cursor, endChapter: batchEnd },
           context.projectSession,
         )
+        this.assertNotCancelled(context)
+        await syncBlueprintCharacterCandidates(parsed, expectedProjectPath, context.projectSession)
       }
 
-      // 计算本次实际生成到的最大章节号，推进游标到已生成的最后一章之后
-      callbacks.log(`  ✅ 第 ${cursor}–${actualMaxChapter} 章完成（${parsed.length} 章）并已保存入库`)
+      callbacks.log(`  ✅ 第 ${cursor}–${batchEnd} 章完成（${parsed.length} 章）并已保存入库`)
 
-      cursor = actualMaxChapter + 1
+      cursor = batchEnd + 1
     }
 
     this.assertNotCancelled(context)

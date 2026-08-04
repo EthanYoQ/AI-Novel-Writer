@@ -7,6 +7,7 @@ import {
 
 export interface UpdateStartupDependencies {
   updateRuntimeEnabled: boolean
+  updateConfiguration?: UpdateServiceOptions['updateConfiguration']
   currentVersion: string
   createBackend(): UpdateBackend
   createPreferences(): UpdatePreferencesStore
@@ -32,14 +33,19 @@ function createDisabledUpdateBackend(): UpdateBackend {
 export function startUpdateRuntime(dependencies: UpdateStartupDependencies): void {
   let updater = createDisabledUpdateBackend()
   let isPackagedRuntime = false
+  const updateConfiguration = dependencies.updateConfiguration ?? 'available'
 
-  if (dependencies.updateRuntimeEnabled) {
+  if (dependencies.updateRuntimeEnabled && updateConfiguration === 'available') {
     try {
       updater = dependencies.createBackend()
       isPackagedRuntime = true
     } catch (error) {
       dependencies.reportFailure('初始化更新器', error)
     }
+  } else if (dependencies.updateRuntimeEnabled) {
+    // 保留 packaged 状态，以便手动检查能显示配置缺失的可行动错误；但绝不创建
+    // electron-updater 或进行自动网络检查。
+    isPackagedRuntime = true
   }
 
   let service: UpdateService
@@ -48,6 +54,7 @@ export function startUpdateRuntime(dependencies: UpdateStartupDependencies): voi
       updater,
       currentVersion: dependencies.currentVersion,
       isPackaged: isPackagedRuntime,
+      updateConfiguration,
       preferences: dependencies.createPreferences(),
     }
     service = dependencies.createService?.(options) ?? new UpdateService(options)
@@ -57,7 +64,7 @@ export function startUpdateRuntime(dependencies: UpdateStartupDependencies): voi
     return
   }
 
-  if (!isPackagedRuntime) return
+  if (!isPackagedRuntime || updateConfiguration === 'missing') return
 
   void service.checkAutomatically().catch((error: unknown) => {
     dependencies.reportFailure('自动检查更新', error)

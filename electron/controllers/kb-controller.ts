@@ -16,6 +16,7 @@ import {
   type SecureFileCapability,
   type WindowsSafeFileSystem,
 } from '../security/windows-safe-file-system'
+import { childFileCapability } from '../security/file-capability'
 import {
   LEGACY_VECTOR_MIGRATION_BLOCKED,
   LegacyVectorMigrationBlockedError,
@@ -32,17 +33,6 @@ function invalidExternalGrantText(): string {
 const MAX_SECURE_KNOWLEDGE_IMPORT_FILES = 16_384
 const MAX_SECURE_KNOWLEDGE_IMPORT_DEPTH = 64
 
-function childCapability(
-  parent: SecureFileCapability,
-  name: string,
-): SecureFileCapability {
-  return {
-    rootPath: parent.rootPath,
-    relativePath: parent.relativePath ? `${parent.relativePath}\\${name}` : name,
-    rootIdentity: parent.rootIdentity,
-  }
-}
-
 async function readGrantedKnowledgeFolder(
   fileSystem: WindowsSafeFileSystem,
   root: SecureFileCapability,
@@ -54,7 +44,7 @@ async function readGrantedKnowledgeFolder(
     }
     const entries = await fileSystem.listDirectory(directory)
     for (const entry of entries) {
-      const child = childCapability(directory, entry.name)
+      const child = childFileCapability(directory, entry.name)
       if (entry.isDirectory) {
         await visit(child, depth + 1)
         continue

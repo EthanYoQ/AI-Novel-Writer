@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ipc } from '../../services/ipc-client'
 import {
   getUpdatePresentation,
-  type UpdateErrorCode,
+  type UpdateError,
   type UpdateState,
 } from '../../services/update-presentation'
 
@@ -11,6 +11,30 @@ const disabledState: UpdateState = {
   status: 'disabled',
   currentVersion: '',
   isReminderDeferred: false,
+}
+
+const fallbackCheckError: UpdateError = {
+  code: 'CHECK_FAILED',
+  phase: 'check',
+  reason: 'unknown',
+  retryable: true,
+  safeTechnicalDetails: 'UPDATE_OPERATION_FAILED',
+}
+
+const fallbackReminderError: UpdateError = {
+  code: 'REMINDER_NOT_AVAILABLE',
+  phase: 'reminder',
+  reason: 'reminder-unavailable',
+  retryable: false,
+  safeTechnicalDetails: 'REMINDER_NOT_AVAILABLE',
+}
+
+const fallbackInstallError: UpdateError = {
+  code: 'INSTALL_FAILED',
+  phase: 'install',
+  reason: 'install-failed',
+  retryable: true,
+  safeTechnicalDetails: 'INSTALL_FAILED',
 }
 
 const MAX_TIMER_DELAY_MS = 2_147_000_000
@@ -54,7 +78,7 @@ export function scheduleReminderRefresh(
 export function useUpdateState() {
   const [state, setState] = useState<UpdateState>(disabledState)
   const [manualCheckRequested, setManualCheckRequested] = useState(false)
-  const [manualActionError, setManualActionError] = useState<UpdateErrorCode>()
+  const [manualActionError, setManualActionError] = useState<UpdateError>()
   const [isDeferring, setIsDeferring] = useState(false)
   const [lastReminderDays, setLastReminderDays] = useState<7 | 30>(7)
 
@@ -109,9 +133,9 @@ export function useUpdateState() {
     try {
       const response = await ipc.invoke('update:check')
       setState(response.state)
-      setManualActionError(response.error?.code)
+      setManualActionError(response.error)
     } catch {
-      setManualActionError('CHECK_FAILED')
+      setManualActionError(fallbackCheckError)
     }
   }, [presentation.canCheck])
 
@@ -123,10 +147,10 @@ export function useUpdateState() {
     try {
       const response = await ipc.invoke('update:defer-reminder', days)
       setState(response.state)
-      setManualActionError(response.error?.code)
+      setManualActionError(response.error)
       if (response.success) setManualCheckRequested(false)
     } catch {
-      setManualActionError('REMINDER_NOT_AVAILABLE')
+      setManualActionError(fallbackReminderError)
     } finally {
       setIsDeferring(false)
     }
@@ -138,9 +162,9 @@ export function useUpdateState() {
     try {
       const response = await ipc.invoke('update:quit-and-install')
       setState(response.state)
-      setManualActionError(response.error?.code)
+      setManualActionError(response.error)
     } catch {
-      setManualActionError('INSTALL_FAILED')
+      setManualActionError(fallbackInstallError)
     }
   }, [presentation.canInstall])
 

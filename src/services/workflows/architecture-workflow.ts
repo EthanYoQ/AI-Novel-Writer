@@ -309,7 +309,14 @@ export function createCharacterExtractSteps(projectPath: string, characterDynami
               }
             },
             undefined,
-            { responseFormat: { type: 'json_object' }, thinking: false, maxTokens: 4096, temperature: 0.2 }
+            {
+              responseFormat: { type: 'json_object' },
+              thinking: false,
+              maxTokens: 4096,
+              temperature: 0.2,
+              purpose: 'character-extraction',
+              projectSession: context?.projectSession,
+            }
           ).then((requestId) => {
             streamRequestId = requestId
             if (context?.cancelled) {

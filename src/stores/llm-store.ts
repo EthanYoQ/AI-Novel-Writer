@@ -3,6 +3,8 @@ import { ipc } from '../services/ipc-client'
 import { requireIpcSuccess } from '../services/ipc-result'
 import { alertError } from '../components/ui/AlertDialog'
 import type { LLMFinishReason, ModelProfile, LLMResponse, TokenUsage } from '../shared/ipc-channels'
+import { projectSessionContextFromProject } from '../shared/project-session-context'
+import { useProjectStore } from './project-store'
 
 /** 流式生成的回调 */
 interface StreamCallbacks {
@@ -40,14 +42,14 @@ interface LLMState {
   generate: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     modelId?: string,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number }
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext }
   ) => Promise<LLMResponse>
   /** 流式生成 */
   generateStream: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     callbacks: StreamCallbacks,
     modelId?: string,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number }
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext }
   ) => Promise<string>
   /** 取消生成 */
   cancelGeneration: (requestId: string) => Promise<void>
@@ -135,14 +137,20 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
   generate: async (messages, modelId, options) => {
     const mid = modelId ?? get().defaultModelId
     if (!mid) return { success: false, content: '', error: '未配置默认模型' }
-    return ipc.invoke('llm:generate', {
+    const projectSession = options?.projectSession
+      ?? projectSessionContextFromProject(useProjectStore.getState().currentProject)
+      ?? undefined
+    const response = await ipc.invoke('llm:generate', {
       modelId: mid,
+      purpose: options?.purpose ?? 'generation',
+      projectSession,
       messages,
       responseFormat: options?.responseFormat as { type: 'json_object' | 'text' } | undefined,
       thinking: options?.thinking,
       maxTokens: options?.maxTokens,
       temperature: options?.temperature,
     })
+    return requireIpcSuccess(response, '模型生成')
   },
 
   generateStream: async (messages, callbacks, modelId, options) => {
@@ -153,6 +161,9 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     }
 
     const requestId = crypto.randomUUID()
+    const projectSession = options?.projectSession
+      ?? projectSessionContextFromProject(useProjectStore.getState().currentProject)
+      ?? undefined
 
     // 注册流式事件监听
     const unsubChunk = ipc.on('llm:stream-chunk', (data) => {
@@ -190,15 +201,29 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     set({ activeRequests: reqs })
 
     // 发起流式请求
-    await ipc.invoke('llm:generate-stream', requestId, {
-      modelId: mid,
-      messages,
-      stream: true,
-      responseFormat: options?.responseFormat as { type: 'json_object' | 'text' } | undefined,
-      thinking: options?.thinking,
-      maxTokens: options?.maxTokens,
-      temperature: options?.temperature,
-    })
+    let started: { requestId: string; started: boolean }
+    try {
+      started = await ipc.invoke('llm:generate-stream', requestId, {
+        modelId: mid,
+        purpose: options?.purpose ?? 'generation',
+        projectSession,
+        messages,
+        stream: true,
+        responseFormat: options?.responseFormat as { type: 'json_object' | 'text' } | undefined,
+        thinking: options?.thinking,
+        maxTokens: options?.maxTokens,
+        temperature: options?.temperature,
+      })
+    } catch (error) {
+      cleanup()
+      callbacks.onError?.(String(error))
+      throw error
+    }
+    if (!started.started) {
+      cleanup()
+      callbacks.onError?.('模型流式生成未能启动')
+      throw new Error('模型流式生成未能启动')
+    }
 
     return requestId
   },

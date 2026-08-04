@@ -2,6 +2,7 @@ import type { UpdateChannels } from '../shared/ipc-channels'
 
 export type UpdateState = UpdateChannels['update:get-state']['return']
 export type UpdateErrorCode = NonNullable<UpdateState['error']>['code']
+export type UpdateError = NonNullable<UpdateState['error']>
 
 export type UpdatePresentationKind =
   | 'hidden'
@@ -25,7 +26,7 @@ export interface UpdatePresentation {
 export interface UpdatePresentationInput {
   state?: UpdateState | null
   manualCheckRequested: boolean
-  manualActionError?: UpdateErrorCode
+  manualActionError?: UpdateError
 }
 
 const hiddenPresentation: UpdatePresentation = {

@@ -99,6 +99,36 @@ describe('UpdateService', () => {
     expect(service.getState()).toMatchObject({ status: 'disabled' })
   })
 
+  it('does not contact the backend when a packaged test or unpacked build lacks app-update.yml', async () => {
+    const updater = new FakeUpdater({ updateInfo: { version: '0.2.6' } })
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      updateConfiguration: 'missing',
+      preferences: createPreferencesStore(),
+    })
+
+    const automatic = await service.checkAutomatically()
+    const manual = await service.checkManually()
+
+    expect(updater.checkCalls).toBe(0)
+    expect(automatic).toMatchObject({ success: false, checked: false })
+    expect(automatic.error).toBeUndefined()
+    expect(manual).toMatchObject({
+      success: false,
+      checked: false,
+      error: {
+        code: 'UPDATE_CONFIGURATION_MISSING',
+        phase: 'configuration',
+        reason: 'configuration-missing',
+        retryable: false,
+        safeTechnicalDetails: 'UPDATE_CONFIGURATION_MISSING',
+      },
+    })
+    expect(service.getState()).toMatchObject({ status: 'error' })
+  })
+
   it('checks at most once per calendar day automatically while manual checks remain forceable', async () => {
     const updater = new FakeUpdater()
     const service = new UpdateService({
@@ -439,6 +469,40 @@ describe('UpdateService', () => {
     expect(updater.quitCalls).toBe(1)
   })
 
+  it('re-checks downloaded state inside the queue so overlapping checks download only once', async () => {
+    const firstCheck = deferred<UpdateCheckResult | null>()
+    let checkCalls = 0
+    let downloadCalls = 0
+    const updater: UpdateBackend = {
+      checkForUpdates: async () => {
+        checkCalls += 1
+        if (checkCalls === 1) return firstCheck.promise
+        return { updateInfo: { version: '0.2.6' } }
+      },
+      downloadUpdate: async () => {
+        downloadCalls += 1
+        return []
+      },
+      quitAndInstall: () => undefined,
+      on: () => undefined,
+    }
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore(),
+    })
+
+    const automatic = service.checkAutomatically()
+    const manual = service.checkManually()
+    firstCheck.resolve({ updateInfo: { version: '0.2.6' } })
+
+    await expect(automatic).resolves.toMatchObject({ success: true, updateAvailable: true })
+    await expect(manual).resolves.toMatchObject({ success: true, checked: false, updateAvailable: true })
+    expect(checkCalls).toBe(1)
+    expect(downloadCalls).toBe(1)
+  })
+
   it('returns a safe error for a manual failure while automatic failure remains silent', async () => {
     const manualUpdater = new FakeUpdater()
     manualUpdater.checkError = new Error('network details must not reach the renderer')
@@ -460,6 +524,66 @@ describe('UpdateService', () => {
     expect(JSON.stringify(manualResult)).not.toContain('network details')
     expect(automaticResult.error).toBeUndefined()
     expect(automaticService.getState()).toMatchObject({ status: 'idle' })
+  })
+
+  it.each([
+    ['DNS/offline', new Error('getaddrinfo ENOTFOUND api.github.com token=secret C:\\Users\\private'), 'network', true, 'DNS_OR_OFFLINE'],
+    ['proxy', new Error('proxy tunnel rejected http://user:secret@proxy.example'), 'proxy', true, 'PROXY_CONNECT_FAILED'],
+    ['TLS', new Error('self signed certificate in certificate chain'), 'tls', true, 'TLS_HANDSHAKE_FAILED'],
+    ['HTTP 403', new Error('HTTP 403 Bearer secret-token'), 'http-forbidden', false, 'HTTP_403'],
+    ['HTTP 404', new Error('HTTP 404 latest.yml'), 'http-not-found', false, 'HTTP_404'],
+    ['HTTP 429', new Error('HTTP 429 too many requests'), 'http-rate-limited', true, 'HTTP_429'],
+    ['invalid metadata', new Error('Invalid latest.yml metadata at C:\\Users\\private'), 'metadata-invalid', false, 'UPDATE_METADATA_INVALID'],
+  ] as const)('classifies manual %s check failures without exposing raw diagnostics', async (_name, checkError, reason, retryable, safeTechnicalDetails) => {
+    const updater = new FakeUpdater()
+    updater.checkError = checkError
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore(),
+    })
+
+    const result = await service.checkManually()
+
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        code: 'CHECK_FAILED',
+        phase: 'check',
+        reason,
+        retryable,
+        safeTechnicalDetails,
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain('secret')
+    expect(JSON.stringify(result)).not.toContain('C:\\Users\\private')
+  })
+
+  it('classifies a missing downloaded installer asset without exposing the asset URL', async () => {
+    const updater = new FakeUpdater({ updateInfo: { version: '0.2.6' } })
+    updater.downloadError = new Error('HTTP 404 installer asset https://token@example.invalid/update.exe')
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore(),
+    })
+
+    const result = await service.checkManually()
+
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        code: 'DOWNLOAD_FAILED',
+        phase: 'download',
+        reason: 'asset-missing',
+        retryable: false,
+        safeTechnicalDetails: 'UPDATE_ASSET_MISSING',
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain('example.invalid')
+    expect(JSON.stringify(result)).not.toContain('token')
   })
 
   it('does not reject or bypass the daily automatic-check limit when update preferences cannot be read or written', async () => {

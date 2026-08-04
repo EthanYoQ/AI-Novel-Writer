@@ -8,9 +8,11 @@ import PromptSettings from './PromptSettings'
 import { useLLMStore } from '../../stores/llm-store'
 import { useThemeStore, FONT_OPTIONS, type FontId } from '../../stores/theme-store'
 import type { ModelProfile } from '../../shared/ipc-channels'
-import { DEFAULT_EMBEDDING_OPTIONS, LOW_VRAM_EMBEDDING_OPTIONS, normalizeEmbeddingOptions } from '../../shared/embedding-options'
-import type { ProviderPreset } from '../../shared/provider-presets'
+import { LOW_VRAM_EMBEDDING_OPTIONS, normalizeEmbeddingOptions } from '../../shared/embedding-options'
+import type { ModelCapabilities, ProviderPreset } from '../../shared/provider-presets'
 import { BUILTIN_PRESETS } from '../../shared/provider-presets'
+import { createModelProfileDraft } from '../../shared/model-profile-draft'
+import type { ModelProviderResourceId } from '../../shared/model-provider-resources'
 import { randomUUID } from '../../utils/id'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -23,6 +25,7 @@ import { APP_BRAND } from '../../shared/brand'
 import { useLayoutStore, type SettingsSection } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { Locale } from '../../i18n/types'
+import { alertError } from '../ui/AlertDialog'
 
 // ==================== 分类定义 ====================
 
@@ -184,25 +187,12 @@ function LLMSection({
     m.purposes?.some((p) => purposes.includes(p as ModelProfile['purposes'][number]))
   )
 
-  /** 创建新模型，使用预设中 openai 的默认属性 */
+  /** 创建新模型草稿；向量模型由工厂选择完整的 SiliconFlow 默认值。 */
   const handleAdd = () => {
-    const isEmbedding = purposes.includes('embedding')
-    const openaiPreset = presets.find((p) => p.provider === 'openai') ?? presets[0]
-    setEditingModel({
+    setEditingModel(createModelProfileDraft({
       id: randomUUID(),
-      name: '',
-      provider: 'openai',
-      protocol: (openaiPreset?.protocol ?? 'openai') as 'openai' | 'gemini',
-      modelName: isEmbedding
-        ? (openaiPreset?.embeddingModels[0] ?? 'text-embedding-3-small')
-        : (openaiPreset?.models[0]?.name ?? 'gpt-4o'),
-      apiKey: '',
-      baseUrl: openaiPreset?.baseUrl ?? 'https://api.openai.com',
-      temperature: 0.7,
-      maxTokens: openaiPreset?.models[0]?.maxTokens ?? 4096,
       purposes: [...purposes],
-      ...(isEmbedding ? { embeddingOptions: DEFAULT_EMBEDDING_OPTIONS } : {}),
-    })
+    }))
   }
 
   const isEmbeddingSection = purposes.includes('embedding')
@@ -408,14 +398,34 @@ function ModelForm({
   // 将预设数组转换为以 provider 为键的 Map 方便查找
   const presetMap = new Map(presets.map((p) => [p.provider, p]))
   const preset = presetMap.get(model.provider)
+  const capabilitiesForPresetModel = (modelName: string) => isEmbedding
+    ? preset?.embeddingModelCapabilities?.[modelName]
+    : preset?.models.find((candidate) => candidate.name === modelName)?.capabilities
   // 生成模型列表为 ModelPreset[]，embedding 模型为 string列表转换过来的 ModelPreset
   const presetModels: import('../../shared/provider-presets').ModelPreset[] = isEmbedding
-    ? (preset?.embeddingModels ?? []).map((name) => ({ name, maxTokens: 0 }))
+    ? (preset?.embeddingModels ?? []).map((name) => ({
+        name,
+        maxTokens: 0,
+        capabilities: capabilitiesForPresetModel(name),
+      }))
     : (preset?.models ?? [])
 
   /** 更新单个字段 */
   const up = <K extends keyof ModelProfile>(key: K, val: ModelProfile[K]) =>
     onChange({ ...model, [key]: val })
+
+  const currentCapabilities: ModelCapabilities = {
+    contextWindowTokens: model.capabilities?.contextWindowTokens ?? null,
+    maxOutputTokens: model.capabilities?.maxOutputTokens ?? model.maxTokens,
+    reasoning: model.capabilities?.reasoning ?? false,
+    structuredOutput: model.capabilities?.structuredOutput ?? false,
+    usage: model.capabilities?.usage ?? false,
+  }
+
+  const updateCapabilities = (next: Partial<ModelCapabilities>) => {
+    const capabilities = { ...currentCapabilities, ...next }
+    onChange({ ...model, capabilities, maxTokens: capabilities.maxOutputTokens })
+  }
 
   /**
    * 切换服务商：从持久化预设中自动填充 baseUrl / protocol
@@ -427,6 +437,9 @@ function ModelForm({
     const defaultModelName = isEmbedding
       ? (p?.embeddingModels[0] ?? '')
       : (firstModel?.name ?? '')
+    const capabilities = isEmbedding
+      ? p?.embeddingModelCapabilities?.[defaultModelName]
+      : firstModel?.capabilities
     setCustomModelName(false)
     onChange({
       ...model,
@@ -434,7 +447,8 @@ function ModelForm({
       protocol: (p?.protocol ?? 'openai') as 'openai' | 'gemini',
       baseUrl: p?.baseUrl ?? '',
       modelName: defaultModelName,
-      maxTokens: firstModel?.maxTokens ?? 4096,
+      maxTokens: capabilities?.maxOutputTokens ?? firstModel?.maxTokens ?? 4096,
+      capabilities: capabilities ? { ...capabilities } : undefined,
     })
   }
 
@@ -447,10 +461,12 @@ function ModelForm({
       setCustomModelName(false)
       // 找到对应的 ModelPreset，同时更新 modelName 和 maxTokens
       const matched = presetModels.find((m) => m.name === val)
+      const capabilities = matched?.capabilities
       onChange({
         ...model,
         modelName: val,
-        maxTokens: matched?.maxTokens ?? model.maxTokens,
+        maxTokens: capabilities?.maxOutputTokens ?? matched?.maxTokens ?? model.maxTokens,
+        capabilities: capabilities ? { ...capabilities } : undefined,
       })
     }
   }
@@ -469,6 +485,15 @@ function ModelForm({
     setTestResult(result)
     setTesting(false)
     setTimeout(() => setTestResult(null), 3000)
+  }
+
+  const openModelProviderResource = async (resource: ModelProviderResourceId) => {
+    try {
+      const result = await ipc.invoke('model-provider-resource:open', resource)
+      if (!result.success) throw new Error(result.error || text('无法打开服务商页面', 'Unable to open provider page'))
+    } catch (error) {
+      alertError(String(error), { title: text('打开链接失败', 'Unable to open link') })
+    }
   }
 
   return (
@@ -502,6 +527,8 @@ function ModelForm({
             <option value="novelai">NovelAI</option>
             <option value="deepseek">DeepSeek</option>
             <option value="gemini">Google Gemini</option>
+            <option value="xai">xAI(Grok)</option>
+            <option value="siliconflow">SiliconFlow</option>
             <option value="ollama">{text('Ollama（本地）', 'Ollama (local)')}</option>
             <option value="bigmodel">{text('BigModel（智谱）', 'BigModel (Zhipu)')}</option>
             <option value="custom">{text('自定义', 'Custom')}</option>
@@ -522,7 +549,7 @@ function ModelForm({
       {/* 模型标识：有预设时显示下拉，否则纯输入 */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <Label className="mb-0">{text('模型标识', 'Model ID')}</Label>
+          <Label className="mb-0">{text('model（模型名称）', 'model')}</Label>
           {presetModels.length > 0 && (
             <button
               type="button"
@@ -530,8 +557,14 @@ function ModelForm({
                 if (customModelName) {
                   // 切回预设列表
                   const first = presetModels[0]
+                  const capabilities = first.capabilities
                   setCustomModelName(false)
-                  onChange({ ...model, modelName: first.name, maxTokens: first.maxTokens ?? model.maxTokens })
+                  onChange({
+                    ...model,
+                    modelName: first.name,
+                    maxTokens: capabilities?.maxOutputTokens ?? first.maxTokens ?? model.maxTokens,
+                    capabilities: capabilities ? { ...capabilities } : undefined,
+                  })
                 } else {
                   // 切换到自定义输入
                   setCustomModelName(true)
@@ -569,9 +602,9 @@ function ModelForm({
         )}
       </div>
 
-      {/* API 地址 */}
+      {/* Base URL */}
       <div>
-        <Label>{text('API 地址', 'API URL')}</Label>
+        <Label>{text('base_url', 'base_url')}</Label>
         <Input
           value={model.baseUrl}
           onChange={(e) => up('baseUrl', e.target.value)}
@@ -586,7 +619,7 @@ function ModelForm({
 
       {/* API Key */}
       <div>
-        <Label>API Key</Label>
+        <Label>{text('API Key', 'API Key')}</Label>
         <div className="relative">
           <Input
             type={showKey ? 'text' : 'password'}
@@ -605,33 +638,61 @@ function ModelForm({
         </div>
       </div>
 
-      {/* 温度 / Token（仅生成模型） */}
+      {isEmbedding && model.provider === 'siliconflow' && model.modelName === 'BAAI/bge-m3' && (
+        <div className="rounded-lg p-3 space-y-2" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-hover)' }}>
+          <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+            {text('BAAI/bge-m3 当前在 SiliconFlow 提供免费调用。完成实名认证后可使用，仍受固定速率限制约束。', 'BAAI/bge-m3 is currently free on SiliconFlow. Verification is required; fixed rate limits still apply.')}
+          </p>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+            <button type="button" onClick={() => openModelProviderResource('siliconflow-invite')} className="text-[var(--color-accent)] hover:underline">
+              {text('邀请注册链接', 'Invitation registration link')}
+            </button>
+            <button type="button" onClick={() => openModelProviderResource('siliconflow-console')} className="text-[var(--color-accent)] hover:underline">
+              {text('官方控制台', 'Official console')}
+            </button>
+            <button type="button" onClick={() => openModelProviderResource('siliconflow-docs')} className="text-[var(--color-accent)] hover:underline">
+              {text('官方文档', 'Official documentation')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>{text('上下文窗口', 'Context Window')}</Label>
+          <Input
+            type="number"
+            min={0}
+            value={model.capabilities?.contextWindowTokens ?? ''}
+            placeholder={text('可选', 'Optional')}
+              onChange={(e) => updateCapabilities({ contextWindowTokens: e.target.value === '' ? null : parseInt(e.target.value) || null })}
+          />
+        </div>
+        <div>
+          <Label>{text('最大输出 Tokens', 'Max Output Tokens')}</Label>
+          <Input
+            type="number"
+            min={0}
+            disabled={isEmbedding}
+            value={currentCapabilities.maxOutputTokens}
+            onChange={(e) => updateCapabilities({ maxOutputTokens: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+          />
+        </div>
+      </div>
+
+      {/* 温度（仅生成模型） */}
       {!isEmbedding && (
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label>{text('温度', 'Temperature')}</Label>
-            <Input
-              type="number" min={0} max={2} step={0.1}
-              value={model.temperature}
-              onChange={(e) => up('temperature', (e.target.value === '' ? '' : parseFloat(e.target.value)) as number)}
-              onBlur={() => {
-                const v = Number(model.temperature);
-                if (isNaN(v)) up('temperature', 0.7)
-              }}
-            />
-          </div>
-          <div>
-            <Label>{text('最大 Tokens', 'Maximum tokens')}</Label>
-            <Input
-              type="number"
-              value={model.maxTokens}
-              onChange={(e) => up('maxTokens', (e.target.value === '' ? '' : parseInt(e.target.value)) as number)}
-              onBlur={() => {
-                const v = Number(model.maxTokens);
-                if (!v || v < 1) up('maxTokens', 4096)
-              }}
-            />
-          </div>
+        <div>
+          <Label>{text('温度', 'Temperature')}</Label>
+          <Input
+            type="number" min={0} max={2} step={0.1}
+            value={model.temperature}
+            onChange={(e) => up('temperature', (e.target.value === '' ? '' : parseFloat(e.target.value)) as number)}
+            onBlur={() => {
+              const v = Number(model.temperature);
+              if (isNaN(v)) up('temperature', 0.7)
+            }}
+          />
         </div>
       )}
 
@@ -1059,6 +1120,10 @@ function providerIcon(provider: string) {
       return <Database {...commonProps} />
     case 'gemini':
       return <Globe {...commonProps} />
+    case 'xai':
+      return <Cpu {...commonProps} />
+    case 'siliconflow':
+      return <Database {...commonProps} />
     case 'ollama':
       return <Cpu {...commonProps} />
     case 'bigmodel':

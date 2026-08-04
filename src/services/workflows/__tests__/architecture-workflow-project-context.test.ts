@@ -162,7 +162,8 @@ describe('architecture workflow project context', () => {
       callbacks.onDone?.(generatedCard)
       return Promise.resolve('request-id')
     })
-    const invoke = vi.fn(async (channel: string, ..._args: unknown[]) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      void args
       if (channel === 'db:character-get-all') return []
       if (channel === 'db:character-save-all') return { success: true }
       throw new Error(`Unexpected IPC channel: ${channel}`)
@@ -309,7 +310,8 @@ describe('architecture workflow project context', () => {
       callbacks.onDone?.(generatedCard)
       return Promise.resolve('request-id')
     })
-    const invoke = vi.fn(async (channel: string, ..._args: unknown[]) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      void args
       if (channel === 'db:character-get-all') return existingCards
       if (channel === 'db:character-save-all') return { success: true }
       throw new Error(`Unexpected IPC channel: ${channel}`)

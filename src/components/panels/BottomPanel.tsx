@@ -605,12 +605,13 @@ function ModelsView() {
   const [data, setData] = useState<{
     projectSession: ProjectSessionContext
     stats: {
-      totalCalls: number; totalTokens: number
-      totalPromptTokens: number; totalCompletionTokens: number
+      totalCalls: number; successfulCalls: number; failedCalls: number; knownUsageCalls: number
+      totalTokens: number | null
+      totalPromptTokens: number | null; totalCompletionTokens: number | null
     }
     history: Array<{
       id: number; modelName: string; purpose: string
-      promptTokens: number; completionTokens: number; totalTokens: number
+      promptTokens: number | null; completionTokens: number | null; totalTokens: number | null
       durationMs: number; success: boolean; createdAt: string
     }>
   } | null>(null)
@@ -627,20 +628,30 @@ function ModelsView() {
       requestGate.invalidate()
       return
     }
-
-    const ticket = requestGate.begin(projectSession)
-    void import('../../services/stats-service')
-      .then(({ loadLLMData }) => loadLLMData(projectSession, 30))
-      .then(({ stats: loadedStats, history: loadedHistory }) => {
-        const currentSession = projectSessionContextFromProject(
-          useProjectStore.getState().currentProject,
-        )
-        if (!requestGate.isCurrent(ticket, currentSession)) return
-        setData({ projectSession: ticket.projectSession, stats: loadedStats, history: loadedHistory })
-      })
-      .catch(() => {
-        // IPC 失败时保持清空状态；旧请求也不能反向写入 UI。
-      })
+    let disposed = false
+    const load = () => {
+      const ticket = requestGate.begin(projectSession)
+      void import('../../services/stats-service')
+        .then(({ loadLLMData }) => loadLLMData(projectSession, 30))
+        .then(({ stats: loadedStats, history: loadedHistory }) => {
+          if (disposed) return
+          const currentSession = projectSessionContextFromProject(
+            useProjectStore.getState().currentProject,
+          )
+          if (!requestGate.isCurrent(ticket, currentSession)) return
+          setData({ projectSession: ticket.projectSession, stats: loadedStats, history: loadedHistory })
+        })
+        .catch(() => {
+          // IPC 失败时保持清空状态；旧请求也不能反向写入 UI。
+        })
+    }
+    load()
+    const refreshTimer = window.setInterval(load, 2000)
+    return () => {
+      disposed = true
+      window.clearInterval(refreshTimer)
+      requestGate.invalidate()
+    }
   }, [projectSession, requestGate])
 
   return (
@@ -654,13 +665,16 @@ function ModelsView() {
             <span className="font-bold text-sm text-[var(--color-text)]">{stats.totalCalls}</span> 次调用
           </div>
           <div className="text-[0.7rem] text-[var(--color-text-muted)]">
-            <span className="font-bold text-sm text-[var(--color-text)]">{(stats.totalTokens / 1000).toFixed(1)}k</span> Tokens
+            <span className="font-bold text-sm text-[var(--color-text)]">{stats.totalTokens == null ? '未知' : `${(stats.totalTokens / 1000).toFixed(1)}k`}</span> Tokens
+            {stats.knownUsageCalls < stats.totalCalls && (
+              <span>（{stats.knownUsageCalls}/{stats.totalCalls} 次已报告）</span>
+            )}
           </div>
           <div className="text-[0.7rem] text-[var(--color-text-muted)]">
-            输入 <span className="font-mono text-[var(--color-text-secondary)]">{(stats.totalPromptTokens / 1000).toFixed(1)}k</span>
+            输入 <span className="font-mono text-[var(--color-text-secondary)]">{stats.totalPromptTokens == null ? '未知' : `${(stats.totalPromptTokens / 1000).toFixed(1)}k`}</span>
           </div>
           <div className="text-[0.7rem] text-[var(--color-text-muted)]">
-            输出 <span className="font-mono text-[var(--color-text-secondary)]">{(stats.totalCompletionTokens / 1000).toFixed(1)}k</span>
+            输出 <span className="font-mono text-[var(--color-text-secondary)]">{stats.totalCompletionTokens == null ? '未知' : `${(stats.totalCompletionTokens / 1000).toFixed(1)}k`}</span>
           </div>
         </div>
       )}
@@ -694,7 +708,7 @@ function ModelsView() {
                   </td>
                   <td className="px-2 py-1 text-[var(--color-text-secondary)]">{row.modelName || '-'}</td>
                   <td className="px-2 py-1 text-[var(--color-text-secondary)]">{row.purpose || '-'}</td>
-                  <td className="px-2 py-1 text-right text-[var(--color-text)]">{row.totalTokens.toLocaleString()}</td>
+                  <td className="px-2 py-1 text-right text-[var(--color-text)]">{row.totalTokens == null ? '未知' : row.totalTokens.toLocaleString()}</td>
                   <td className="px-2 py-1 text-right text-[var(--color-text-muted)]">{(row.durationMs / 1000).toFixed(1)}s</td>
                   <td className="px-2 py-1 text-center">{row.success ? <CheckCircle2 size={12} style={{ color: 'var(--color-success)', display: 'inline' }} /> : <XCircle size={12} style={{ color: 'var(--color-error)', display: 'inline' }} />}</td>
                 </tr>

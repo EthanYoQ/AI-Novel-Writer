@@ -50,6 +50,43 @@ function stubIpcInvoke(handler: (channel: string, ...args: unknown[]) => unknown
   return invoke
 }
 
+function blueprintJson(chapterNumbers: number[]): string {
+  return JSON.stringify({
+    blueprints: chapterNumbers.map(chapterNumber => ({
+      chapterNumber,
+      title: `第${chapterNumber}章`,
+      role: '发展',
+      purpose: `推进第${chapterNumber}章`,
+      keyEvents: `第${chapterNumber}章发生关键事件`,
+      characters: [],
+      suspenseHook: '',
+    })),
+  })
+}
+
+function createPersistenceIpc() {
+  const saved = new Map<number, Record<string, unknown>>()
+  const invoke = stubIpcInvoke((channel, ...args) => {
+    if (channel === 'db:blueprint-upsert-many') {
+      for (const blueprint of args[0] as Array<Record<string, unknown>>) {
+        saved.set(Number(blueprint.chapterNumber), blueprint)
+      }
+      return { success: true }
+    }
+    if (channel === 'db:blueprint-get') {
+      return saved.get(Number(args[0])) ?? null
+    }
+    return { success: true }
+  })
+  return { invoke, saved }
+}
+
+function persistedBatches(invoke: ReturnType<typeof vi.fn>): number[][] {
+  return invoke.mock.calls
+    .filter(([channel]) => channel === 'db:blueprint-upsert-many')
+    .map(([, blueprints]) => (blueprints as Array<{ chapterNumber: number }>).map(({ chapterNumber }) => chapterNumber))
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   useProjectStore.setState({
@@ -102,6 +139,145 @@ afterEach(() => {
 })
 
 describe('GenerateDirectoryCommand', () => {
+  it('synchronizes blueprint character candidates only after the batch is persisted and verified', async () => {
+    const saved = new Map<number, Record<string, unknown>>()
+    const invoke = stubIpcInvoke((channel, ...args) => {
+      if (channel === 'db:blueprint-upsert-many') {
+        for (const blueprint of args[0] as Array<Record<string, unknown>>) {
+          saved.set(Number(blueprint.chapterNumber), blueprint)
+        }
+        return { success: true }
+      }
+      if (channel === 'db:blueprint-get') return saved.get(Number(args[0])) ?? null
+      if (channel === 'db:character-get-all') return []
+      if (channel === 'db:character-upsert') return { success: true }
+      return { success: true }
+    })
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(JSON.stringify({
+      blueprints: [{
+        chapterNumber: 1,
+        title: '结盟',
+        keyEvents: '两人结盟追查真相',
+        characters: ['林岚', '周砚'],
+        relationships: [{ from: '林岚', to: '周砚', relation: '共同追查真相' }],
+      }],
+    }))
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const persistedAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:blueprint-upsert-many')
+    const verifiedAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:blueprint-get')
+    const candidateSyncAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:character-get-all')
+    expect(persistedAt).toBeGreaterThanOrEqual(0)
+    expect(verifiedAt).toBeGreaterThan(persistedAt)
+    expect(candidateSyncAt).toBeGreaterThan(verifiedAt)
+    const candidateUpserts = invoke.mock.calls
+      .filter(([channel]) => channel === 'db:character-upsert')
+      .map(([, candidate]) => candidate)
+    expect(candidateUpserts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: '林岚',
+        relationships: JSON.stringify([{ target: '周砚', relation: '共同追查真相' }]),
+      }),
+      expect.objectContaining({
+        name: '周砚',
+        relationships: JSON.stringify([{ target: '林岚', relation: '共同追查真相' }]),
+      }),
+    ]))
+  })
+
+  it('partitions a 12-chapter request into 1–5, 6–10, and 11–12 even for a high-output model', async () => {
+    const snapshot = {
+      ...projectSnapshot,
+      novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 12 },
+    }
+    useLLMStore.setState((state) => ({
+      models: state.models.map(model => ({ ...model, maxTokens: 100_000 })),
+    }))
+    const { invoke } = createPersistenceIpc()
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 12 }, snapshot)
+    const callLLM = vi.spyOn(
+      command as unknown as { callLLM: (...args: unknown[]) => Promise<string> },
+      'callLLM',
+    )
+      .mockResolvedValueOnce(blueprintJson([1, 2, 3, 4, 5]))
+      .mockResolvedValueOnce(blueprintJson([6, 7, 8, 9, 10]))
+      .mockResolvedValueOnce(blueprintJson([11, 12]))
+
+    const result = await command.execute({ step: {}, context, callbacks })
+
+    expect(result.map(blueprint => blueprint.chapterNumber)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    expect(callLLM).toHaveBeenCalledTimes(3)
+    const physicalRequestPrompts = callLLM.mock.calls.map(([prompt]) => String(prompt))
+    expect(physicalRequestPrompts[0]).toContain('第1章到第5章')
+    expect(physicalRequestPrompts[0]).toContain('全书规模：共 12 章')
+    expect(physicalRequestPrompts[1]).toContain('第6章到第10章')
+    expect(physicalRequestPrompts[2]).toContain('第11章到第12章')
+    expect(persistedBatches(invoke)).toEqual([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12]])
+  })
+
+  it('rejects an out-of-range chapter before any blueprint batch is persisted or cursor advances', async () => {
+    const snapshot = {
+      ...projectSnapshot,
+      novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 6 },
+    }
+    const { invoke } = createPersistenceIpc()
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 6 }, snapshot)
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+      blueprintJson([1, 2, 3, 4, 5, 6]),
+    )
+
+    await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow(/越界/)
+    expect(persistedBatches(invoke)).toEqual([])
+  })
+
+  it('rejects a batch missing its final requested chapter before any blueprint batch is persisted', async () => {
+    const snapshot = {
+      ...projectSnapshot,
+      novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 6 },
+    }
+    const { invoke } = createPersistenceIpc()
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 6 }, snapshot)
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+      blueprintJson([1, 2, 3, 4]),
+    )
+
+    await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow(/缺少目标章节/)
+    expect(persistedBatches(invoke)).toEqual([])
+  })
+
+  it('uses the current physical batch range for JSON repair rather than the complete request range', async () => {
+    const snapshot = {
+      ...projectSnapshot,
+      novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 6 },
+    }
+    createPersistenceIpc()
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 6 }, snapshot)
+    const callLLM = vi.spyOn(
+      command as unknown as { callLLM: (...args: unknown[]) => Promise<string> },
+      'callLLM',
+    )
+      .mockResolvedValueOnce('{"blueprints":[{"chapterNumber" 1}]}')
+      .mockResolvedValueOnce(blueprintJson([1, 2, 3, 4, 5]))
+      .mockResolvedValueOnce(blueprintJson([6]))
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toHaveLength(6)
+    expect(callLLM).toHaveBeenCalledTimes(3)
+    expect(String(callLLM.mock.calls[1]?.[0])).toContain('第 1 至第 5 章')
+  })
+
+  it('does not try JSON repair after the model reports a length-limited completion', async () => {
+    const { invoke } = createPersistenceIpc()
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
+    const callLLM = vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+      .mockRejectedValueOnce(new Error('AI 输出达到模型最大长度，结果不完整。'))
+
+    await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow(/最大长度/)
+    expect(callLLM).toHaveBeenCalledTimes(1)
+    expect(persistedBatches(invoke)).toEqual([])
+  })
+
   it('fails when a generated batch parses to no blueprints', async () => {
     stubIpcInvoke(() => ({ success: true }))
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)

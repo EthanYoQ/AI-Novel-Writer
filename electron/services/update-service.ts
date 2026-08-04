@@ -12,12 +12,15 @@ import type {
   UpdateDownloadProgress,
   UpdateError,
   UpdateErrorCode,
+  UpdateErrorPhase,
+  UpdateErrorReason,
   UpdatePreferences,
   UpdateReleaseInfo,
   UpdateReminder,
   UpdateReminderDelay,
   UpdateState,
   UpdateStatus,
+  SafeUpdateTechnicalDetails,
 } from '../../src/shared/update-types'
 
 export type {
@@ -27,12 +30,15 @@ export type {
   UpdateDownloadProgress,
   UpdateError,
   UpdateErrorCode,
+  UpdateErrorPhase,
+  UpdateErrorReason,
   UpdatePreferences,
   UpdateReleaseInfo,
   UpdateReminder,
   UpdateReminderDelay,
   UpdateState,
   UpdateStatus,
+  SafeUpdateTechnicalDetails,
 } from '../../src/shared/update-types'
 
 export interface UpdateBackend {
@@ -52,6 +58,8 @@ export interface UpdateServiceOptions {
   updater: UpdateBackend
   currentVersion: string
   isPackaged: boolean
+  /** A packaged test/unpacked build may lack Electron Builder's app-update.yml. */
+  updateConfiguration?: 'available' | 'missing'
   preferences: UpdatePreferencesStore
   now?: () => Date
 }
@@ -81,6 +89,82 @@ function normalizeProgress(value: unknown): UpdateDownloadProgress | undefined {
     total: number('total'),
     bytesPerSecond: number('bytesPerSecond'),
   }
+}
+
+function makeUpdateError(
+  code: UpdateErrorCode,
+  phase: UpdateErrorPhase,
+  reason: UpdateErrorReason,
+  retryable: boolean,
+  safeTechnicalDetails: SafeUpdateTechnicalDetails,
+): UpdateError {
+  return { code, phase, reason, retryable, safeTechnicalDetails }
+}
+
+function updateConfigurationMissingError(): UpdateError {
+  return makeUpdateError(
+    'UPDATE_CONFIGURATION_MISSING',
+    'configuration',
+    'configuration-missing',
+    false,
+    'UPDATE_CONFIGURATION_MISSING',
+  )
+}
+
+function updaterErrorHints(error: unknown): string {
+  const parts: string[] = []
+  if (error instanceof Error) {
+    parts.push(error.name, error.message)
+  } else if (typeof error === 'string') {
+    parts.push(error)
+  }
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    for (const key of ['code', 'name', 'message', 'status', 'statusCode']) {
+      const value = record[key]
+      if (typeof value === 'string' || typeof value === 'number') parts.push(String(value))
+    }
+  }
+  return parts.join(' ').toLowerCase()
+}
+
+function updaterHttpStatus(error: unknown, hints: string): number | undefined {
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    for (const key of ['status', 'statusCode']) {
+      const value = record[key]
+      if (typeof value === 'number' && Number.isInteger(value)) return value
+      if (typeof value === 'string' && /^\d{3}$/.test(value)) return Number(value)
+    }
+  }
+  const match = /\b(?:http\s*)?(403|404|429)\b/.exec(hints)
+  return match ? Number(match[1]) : undefined
+}
+
+/** Maps unsafe updater failures to a fixed, renderer-safe classification. */
+function classifyUpdateFailure(phase: Extract<UpdateErrorPhase, 'check' | 'download'>, error: unknown): UpdateError {
+  const hints = updaterErrorHints(error)
+  const status = updaterHttpStatus(error, hints)
+  const code: UpdateErrorCode = phase === 'download' ? 'DOWNLOAD_FAILED' : 'CHECK_FAILED'
+
+  if (/app-update\.ya?ml|update(?:r)? configuration|updater config/.test(hints)) {
+    return updateConfigurationMissingError()
+  }
+  if (phase === 'download' && (status === 404 || /(?:asset|installer|update file).*(?:missing|not found|404)/.test(hints))) {
+    return makeUpdateError(code, phase, 'asset-missing', false, 'UPDATE_ASSET_MISSING')
+  }
+  if (/(?:invalid|malformed|parse).*(?:latest\.ya?ml|metadata|update)|(?:latest\.ya?ml|metadata).*(?:invalid|malformed|parse)/.test(hints)) {
+    return makeUpdateError(code, phase, 'metadata-invalid', false, 'UPDATE_METADATA_INVALID')
+  }
+  if (status === 403) return makeUpdateError(code, phase, 'http-forbidden', false, 'HTTP_403')
+  if (status === 404) return makeUpdateError(code, phase, 'http-not-found', false, 'HTTP_404')
+  if (status === 429) return makeUpdateError(code, phase, 'http-rate-limited', true, 'HTTP_429')
+  if (/proxy|tunnel/.test(hints)) return makeUpdateError(code, phase, 'proxy', true, 'PROXY_CONNECT_FAILED')
+  if (/cert|tls|ssl|self signed|unable to verify/.test(hints)) return makeUpdateError(code, phase, 'tls', true, 'TLS_HANDSHAKE_FAILED')
+  if (/enotfound|eai_again|enetunreach|econnrefused|econnreset|etimedout|enotconn|offline|network/.test(hints)) {
+    return makeUpdateError(code, phase, 'network', true, 'DNS_OR_OFFLINE')
+  }
+  return makeUpdateError(code, phase, 'unknown', true, 'UPDATE_OPERATION_FAILED')
 }
 
 /** 预发布版本和非 SemVer 版本不属于可用更新。 */
@@ -154,6 +238,14 @@ export class UpdateService {
 
   async checkAutomatically(): Promise<UpdateCheckResponse> {
     if (!this.options.isPackaged) return this.disabledResponse()
+    if (this.options.updateConfiguration === 'missing') {
+      return this.handleFailure(
+        'automatic',
+        updateConfigurationMissingError(),
+        this.state.availableVersion ? 'available' : 'idle',
+        false,
+      )
+    }
     if (this.downloadedVersion) {
       return this.response({ success: true, checked: false, updateAvailable: true })
     }
@@ -179,6 +271,14 @@ export class UpdateService {
 
   async checkManually(): Promise<UpdateCheckResponse> {
     if (!this.options.isPackaged) return this.disabledResponse()
+    if (this.options.updateConfiguration === 'missing') {
+      return this.handleFailure(
+        'manual',
+        updateConfigurationMissingError(),
+        this.state.availableVersion ? 'available' : 'idle',
+        false,
+      )
+    }
     if (this.downloadedVersion) {
       return this.response({ success: true, checked: false, updateAvailable: true })
     }
@@ -199,6 +299,11 @@ export class UpdateService {
   }
 
   private async performCheck(mode: 'automatic' | 'manual', now: Date): Promise<UpdateCheckResponse> {
+    // Re-check inside the serialized queue: an earlier queued check may have
+    // completed the download after this operation passed its public guard.
+    if (this.downloadedVersion) {
+      return this.response({ success: true, checked: false, updateAvailable: true })
+    }
     this.setState({
       ...this.state,
       status: 'checking',
@@ -209,8 +314,8 @@ export class UpdateService {
     let result: UpdateCheckResult | null
     try {
       result = await this.options.updater.checkForUpdates()
-    } catch {
-      return this.handleFailure(mode, 'CHECK_FAILED', this.state.availableVersion ? 'available' : 'idle')
+    } catch (error) {
+      return this.handleFailure(mode, classifyUpdateFailure('check', error), this.state.availableVersion ? 'available' : 'idle')
     }
 
     const update = result?.updateInfo
@@ -243,8 +348,8 @@ export class UpdateService {
     })
     try {
       await this.options.updater.downloadUpdate()
-    } catch {
-      return this.handleFailure(mode, 'DOWNLOAD_FAILED', 'available')
+    } catch (error) {
+      return this.handleFailure(mode, classifyUpdateFailure('download', error), 'available')
     }
     this.downloadedVersion = update.version
     this.setState({ ...this.state, status: 'downloaded' })
@@ -253,20 +358,20 @@ export class UpdateService {
 
   async deferReminder(days: UpdateReminderDelay): Promise<UpdateActionResponse> {
     if (!this.options.isPackaged) {
-      return this.actionResponse(false, { code: 'UPDATES_DISABLED' })
+      return this.actionResponse(false, makeUpdateError('UPDATES_DISABLED', 'configuration', 'not-installed', false, 'UPDATES_DISABLED'))
     }
     if (days !== 7 && days !== 30) {
-      return this.actionResponse(false, { code: 'INVALID_REMINDER_DELAY' })
+      return this.actionResponse(false, makeUpdateError('INVALID_REMINDER_DELAY', 'reminder', 'invalid-reminder-delay', false, 'INVALID_REMINDER_DELAY'))
     }
     if (!this.state.availableVersion) {
-      return this.actionResponse(false, { code: 'REMINDER_NOT_AVAILABLE' })
+      return this.actionResponse(false, makeUpdateError('REMINDER_NOT_AVAILABLE', 'reminder', 'reminder-unavailable', false, 'REMINDER_NOT_AVAILABLE'))
     }
 
     const until = new Date(this.now().getTime() + days * 24 * 60 * 60 * 1000).toISOString()
     const reminder = { version: this.state.availableVersion, until }
     const preferences = this.readPreferences() ?? {}
     if (!this.writePreferences({ ...preferences, reminder })) {
-      return this.actionResponse(false, { code: 'REMINDER_SAVE_FAILED' })
+      return this.actionResponse(false, makeUpdateError('REMINDER_SAVE_FAILED', 'reminder', 'reminder-save-failed', true, 'REMINDER_SAVE_FAILED'))
     }
     this.reminder = reminder
     this.setState({
@@ -280,20 +385,20 @@ export class UpdateService {
   /** 只响应渲染进程明确发出的安装请求。 */
   async requestInstall(): Promise<UpdateActionResponse> {
     if (!this.options.isPackaged) {
-      return this.actionResponse(false, { code: 'UPDATES_DISABLED' })
+      return this.actionResponse(false, makeUpdateError('UPDATES_DISABLED', 'configuration', 'not-installed', false, 'UPDATES_DISABLED'))
     }
     if (
       !this.downloadedVersion
       || this.state.availableVersion !== this.downloadedVersion
     ) {
-      return this.actionResponse(false, { code: 'INSTALL_NOT_READY' })
+      return this.actionResponse(false, makeUpdateError('INSTALL_NOT_READY', 'install', 'not-ready', true, 'INSTALL_NOT_READY'))
     }
 
     try {
       this.options.updater.quitAndInstall()
       return this.actionResponse(true)
     } catch {
-      return this.actionResponse(false, { code: 'INSTALL_FAILED' })
+      return this.actionResponse(false, makeUpdateError('INSTALL_FAILED', 'install', 'install-failed', true, 'INSTALL_FAILED'))
     }
   }
 
@@ -302,7 +407,7 @@ export class UpdateService {
     return this.response({
       success: false,
       checked: false,
-      error: { code: 'UPDATES_DISABLED' },
+      error: makeUpdateError('UPDATES_DISABLED', 'configuration', 'not-installed', false, 'UPDATES_DISABLED'),
     })
   }
 
@@ -363,18 +468,18 @@ export class UpdateService {
 
   private handleFailure(
     mode: 'automatic' | 'manual',
-    code: Extract<UpdateErrorCode, 'CHECK_FAILED' | 'DOWNLOAD_FAILED'>,
+    error: UpdateError,
     automaticStatus: Extract<UpdateStatus, 'idle' | 'available'>,
+    checked = true,
   ): UpdateCheckResponse {
-    const error: UpdateError = { code }
     if (mode === 'manual') {
       this.setState({ ...this.state, status: 'error', error })
-      return this.response({ success: false, checked: true, error })
+      return this.response({ success: false, checked, error })
     }
 
     // 自动检查与后台下载的失败只留在主进程；不向渲染进程提供打扰性错误状态。
     this.setState({ ...this.state, status: automaticStatus, error: undefined })
-    return this.response({ success: false, checked: true })
+    return this.response({ success: false, checked })
   }
 
   private bindUpdaterEvents(): void {

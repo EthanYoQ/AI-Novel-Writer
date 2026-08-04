@@ -1,3 +1,5 @@
+import { CHARACTER_ARRAY_KEYS, CHARACTER_FIELD_ALIASES } from './character-card-fields'
+
 export type RawCharacterCard = Record<string, unknown>
 
 export type RosterParseIssue = {
@@ -11,18 +13,6 @@ export type ArchitectureRosterParseResult = {
   complete: boolean
 }
 
-const CHARACTER_ARRAY_KEYS = [
-  'characters',
-  'characterCards',
-  'character_cards',
-  'cards',
-  '角色',
-  '角色卡',
-  '角色列表',
-  '人物',
-  '人物列表',
-]
-
 const NON_CHARACTER_OBJECT_KEYS = new Set([
   ...CHARACTER_ARRAY_KEYS,
   'relationships',
@@ -33,8 +23,6 @@ const NON_CHARACTER_OBJECT_KEYS = new Set([
   'metadata',
   '说明',
 ])
-
-const NAME_KEYS = ['name', '姓名', '角色名', '名字', '人物名称']
 
 const FIELD_KEYS: Record<string, string> = {
   性别: 'gender',
@@ -83,7 +71,7 @@ function textValue(value: unknown): string {
 }
 
 function readName(card: RawCharacterCard): string {
-  for (const key of NAME_KEYS) {
+  for (const key of CHARACTER_FIELD_ALIASES.name) {
     const name = textValue(card[key])
     if (name) return name
   }
@@ -239,12 +227,12 @@ function isCharacterScopeTitle(title: string): boolean {
 
 function parseSingleName(value: string): { name?: string; issue?: RosterParseIssue['kind'] } {
   const name = stripHeadingPrefix(value)
-    .split(/[（(【\[]/u, 1)[0]
+    .split(/[（(【[]/u, 1)[0]
     .trim()
   if (!name || isNarrativeTitle(name) || /^第[一二三四五六七八九十百千万\d]+(?:章|节|卷|部|篇|回)/u.test(name)) {
     return { issue: 'unmatched_candidate' }
   }
-  if (/[\/|｜、，,]/u.test(name) || /\s(?:和|与|及)\s/u.test(name)) {
+  if (/[/|｜、，,]/u.test(name) || /\s(?:和|与|及)\s/u.test(name)) {
     return { issue: 'ambiguous_candidate' }
   }
   return { name }
@@ -327,7 +315,7 @@ function collectFieldBlock(lines: readonly string[], start: number, end: number)
     const value = field[2].trim()
     if (!value) continue
 
-    if (NAME_KEYS.includes(label)) {
+    if ((CHARACTER_FIELD_ALIASES.name as readonly string[]).includes(label)) {
       const parsedName = parseSingleName(value)
       if (!parsedName.name) return { fields, hasCharacterField, issue: parsedName.issue ?? 'unmatched_candidate' }
       if (name && characterKey(name) !== characterKey(parsedName.name)) {

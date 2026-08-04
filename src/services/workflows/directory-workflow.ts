@@ -71,20 +71,44 @@ function extractJsonPayload(content: string): string | null {
   return jsonStr.substring(firstBrace, lastBrace + 1)
 }
 
-function normalizeBlueprints(parsed: unknown, startNum: number, endNum: number): ChapterBlueprint[] {
+function readBlueprintChapterNumber(blueprint: unknown): number | null {
+  if (!blueprint || typeof blueprint !== 'object' || Array.isArray(blueprint)) return null
+  const source = blueprint as Record<string, unknown>
+  const candidate = source.chapterNumber ?? source.chapter_number
+  const chapterNumber = Number(candidate)
+  return Number.isInteger(chapterNumber) ? chapterNumber : null
+}
+
+function normalizeBlueprints(
+  parsed: unknown,
+  startNum: number,
+  endNum: number,
+  rejectOutOfRange = false,
+): ChapterBlueprint[] {
   let blueprintList = parsed
   if (blueprintList && typeof blueprintList === 'object' && !Array.isArray(blueprintList) && 'blueprints' in blueprintList) {
     blueprintList = (blueprintList as { blueprints: unknown }).blueprints
   }
   if (!Array.isArray(blueprintList)) return []
 
+  if (rejectOutOfRange) {
+    for (const blueprint of blueprintList) {
+      const chapterNumber = readBlueprintChapterNumber(blueprint)
+      if (chapterNumber === null || chapterNumber < startNum || chapterNumber > endNum) {
+        throw new Error(
+          `蓝图包含越界章节或无效章节号（当前批次仅允许第 ${startNum}–${endNum} 章）`,
+        )
+      }
+    }
+  }
+
   const result = blueprintList
-    .filter((p: Record<string, unknown>) => {
-      const n = Number(p.chapterNumber || p.chapter_number)
-      return n >= startNum && n <= endNum
+    .filter((blueprint): blueprint is Record<string, unknown> => {
+      const chapterNumber = readBlueprintChapterNumber(blueprint)
+      return chapterNumber !== null && chapterNumber >= startNum && chapterNumber <= endNum
     })
     .map((p: Record<string, unknown>) => {
-      const chapterNumber = Number(p.chapterNumber || p.chapter_number || 0)
+      const chapterNumber = readBlueprintChapterNumber(p) ?? 0
       return {
         ...EMPTY_BLUEPRINT,
         chapterNumber,
@@ -93,6 +117,7 @@ function normalizeBlueprints(parsed: unknown, startNum: number, endNum: number):
         purpose: String(p.purpose || ''),
         keyEvents: String(p.keyEvents || p.key_events || ''),
         characters: Array.isArray(p.characters) ? p.characters : [],
+        relationshipHints: p.relationships ?? p.relations,
         suspenseHook: String(p.suspenseHook || p.suspense_hook || ''),
         userGuidance: '',
       }
@@ -133,7 +158,7 @@ export function parseTextBlueprintsStrict(content: string, startNum: number, end
     throw new Error(`蓝图 JSON 解析失败：${detail}`)
   }
 
-  const blueprints = normalizeBlueprints(parsed, startNum, endNum)
+  const blueprints = normalizeBlueprints(parsed, startNum, endNum, true)
   if (blueprints.length === 0) {
     throw new Error(`未解析到第 ${startNum}–${endNum} 章范围内的蓝图`)
   }

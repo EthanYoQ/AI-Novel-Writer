@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { Plus, Trash2, Check, Zap, Save, Globe, CheckCircle2, XCircle } from 'lucide-react'
 import { useLLMStore } from '../../stores/llm-store'
 import type { ModelProfile } from '../../shared/ipc-channels'
+import type { ModelCapabilities } from '../../shared/provider-presets'
+import { createModelProfileDraft } from '../../shared/model-profile-draft'
 import { randomUUID } from '../../utils/id'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -29,18 +31,10 @@ export default function ModelSettings() {
 
   /** 创建新模型配置 */
   const handleAddModel = () => {
-    setEditingModel({
+    setEditingModel(createModelProfileDraft({
       id: randomUUID(),
-      name: '',
-      provider: 'openai',
-      protocol: 'openai',
-      modelName: 'gpt-4o',
-      apiKey: '',
-      baseUrl: 'https://api.openai.com',
-      temperature: 0.7,
-      maxTokens: 4096,
       purposes: ['generation'],
-    })
+    }))
   }
 
   /** 保存模型 */
@@ -157,6 +151,19 @@ function ModelForm({
     onChange({ ...model, [key]: value })
   }
 
+  const currentCapabilities: ModelCapabilities = {
+    contextWindowTokens: model.capabilities?.contextWindowTokens ?? null,
+    maxOutputTokens: model.capabilities?.maxOutputTokens ?? model.maxTokens,
+    reasoning: model.capabilities?.reasoning ?? false,
+    structuredOutput: model.capabilities?.structuredOutput ?? false,
+    usage: model.capabilities?.usage ?? false,
+  }
+
+  const updateCapabilities = (next: Partial<ModelCapabilities>) => {
+    const capabilities = { ...currentCapabilities, ...next }
+    onChange({ ...model, capabilities, maxTokens: capabilities.maxOutputTokens })
+  }
+
   const handleTest = async () => {
     setTesting(true)
     setTestResult(null)
@@ -180,6 +187,8 @@ function ModelForm({
             <option value="openai">OpenAI</option>
             <option value="deepseek">DeepSeek</option>
             <option value="gemini">Gemini</option>
+            <option value="xai">xAI(Grok)</option>
+            <option value="siliconflow">SiliconFlow</option>
             <option value="ollama">Ollama</option>
             <option value="custom">{text('自定义', 'Custom')}</option>
           </NativeSelect>
@@ -194,19 +203,41 @@ function ModelForm({
       </div>
 
       <div>
-        <Label>{text('模型名称', 'Model name')}</Label>
+        <Label>{text('model（模型名称）', 'model')}</Label>
         <Input value={model.modelName} onChange={(e) => update('modelName', e.target.value)} placeholder="gpt-4o / deepseek-chat" />
       </div>
       <div>
-        <Label>{text('API 地址', 'API endpoint')}</Label>
+        <Label>{text('base_url', 'base_url')}</Label>
         <Input value={model.baseUrl} onChange={(e) => update('baseUrl', e.target.value)} placeholder="https://api.openai.com" />
       </div>
       <div>
-        <Label>API Key</Label>
+        <Label>{text('API Key', 'API Key')}</Label>
         <Input type="password" value={model.apiKey} onChange={(e) => update('apiKey', e.target.value)} placeholder="sk-..." />
       </div>
 
       <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label>{text('上下文窗口', 'Context Window')}</Label>
+          <Input
+            type="number"
+            min={0}
+            value={model.capabilities?.contextWindowTokens ?? ''}
+            placeholder={text('可选', 'Optional')}
+            onChange={(e) => updateCapabilities({ contextWindowTokens: e.target.value === '' ? null : parseInt(e.target.value) || null })}
+          />
+        </div>
+        <div>
+          <Label>{text('最大输出 Tokens', 'Max Output Tokens')}</Label>
+          <Input
+            type="number"
+            min={0}
+            value={currentCapabilities.maxOutputTokens}
+            onChange={(e) => updateCapabilities({ maxOutputTokens: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+          />
+        </div>
+      </div>
+
+      <div>
         <div>
           <Label>{text('温度', 'Temperature')}</Label>
           <Input 
@@ -215,17 +246,6 @@ function ModelForm({
             onBlur={() => {
               const v = Number(model.temperature);
               if (isNaN(v)) update('temperature', 0.7);
-            }}
-          />
-        </div>
-        <div>
-          <Label>{text('最大 Tokens', 'Max tokens')}</Label>
-          <Input 
-            value={String(model.maxTokens)} 
-            onChange={(e) => update('maxTokens', (e.target.value === '' ? '' : parseInt(e.target.value)) as number)} 
-            onBlur={() => {
-              const v = Number(model.maxTokens);
-              if (!v || v < 1) update('maxTokens', 4096);
             }}
           />
         </div>
