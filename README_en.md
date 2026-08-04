@@ -24,11 +24,11 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows and macOS ARM64 installers</a>
 </p>
 
-> ## v0.5.2 cross-platform patch release
+> ## v0.6.0 major update
 >
-> [v0.5.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.2) fixes [#73](https://github.com/EthanYoQ/AI-Novel-Writer/issues/73): a single chapter's target word count now actually takes effect. Targets remain bounded by the selected model's output capacity and natural completion boundaries, so a 3,000-word target does not turn into ever-longer continuation. It also fixes [#74](https://github.com/EthanYoQ/AI-Novel-Writer/issues/74): when embedding backfill receives HTML or another non-JSON response, the app points to configuration, gateway, or authentication troubleshooting rather than showing `Unexpected token`; valid JSON responses remain compatible.
+> [v0.6.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.6.0) is a major update to the complete writing workflow. Update checks now distinguish network, configuration, and release-asset failures. Model setup adds Grok, uses API-native terms such as `base_url`, and preconfigures SiliconFlow's free `BAAI/bge-m3` vector model. Blueprint generation runs up to five chapters per batch. Draft generation uses bounded continuation with reasoning and context-budget safeguards so truncated output is not saved as complete. Blueprint characters and relationships synchronize without a vector model, and usage statistics now distinguish successful, failed, and unknown-token calls. The Windows project-path and character-extraction failures reported in [#71](https://github.com/EthanYoQ/AI-Novel-Writer/issues/71) are included in this release.
 >
-> This release provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. The Windows x64 installer supports in-app updates. The macOS ARM64 package is unsigned and not notarized, and future macOS updates are downloaded manually from the Release page. Gatekeeper may require a manual Allow action on first launch.
+> This release provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. The Windows x64 installer supports in-app updates but is not code-signed. The macOS ARM64 package is unsigned and not notarized, and future macOS updates are downloaded manually from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
 
 ## What this product is
 
