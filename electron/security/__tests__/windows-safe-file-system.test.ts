@@ -4,6 +4,7 @@ import path from 'node:path'
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  createSecureFileCapability,
   createWindowsSafeFileSystem,
   type SecureFileCapability,
 } from '../windows-safe-file-system'
@@ -18,13 +19,18 @@ function fixtureRoot(): string {
 }
 
 function capability(rootPath: string, relativePath: string): SecureFileCapability {
-  return { rootPath, relativePath }
+  return createSecureFileCapability(rootPath, path.join(rootPath, relativePath))
 }
 
 function replaceWithOutsideJunction(rootPath: string, outsidePath: string): void {
   const guardedPath = path.join(rootPath, 'guarded')
   fs.rmSync(guardedPath, { recursive: true, force: true })
   fs.symlinkSync(outsidePath, guardedPath, 'junction')
+}
+
+function replaceRootWithOutsideJunction(rootPath: string, outsidePath: string): void {
+  fs.rmSync(rootPath, { recursive: true, force: true })
+  fs.symlinkSync(outsidePath, rootPath, 'junction')
 }
 
 function runExternalNode(script: string, ...args: string[]): SpawnSyncReturns<string> {
@@ -214,6 +220,56 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
       .resolves.toEqual([])
   }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
 
+  it('lists authorized roots reached through parent or root junctions without exposing child junctions', async () => {
+    const fixture = fixtureRoot()
+    const physicalParent = path.join(fixture, 'physical-parent')
+    const selectedRoot = path.join(physicalParent, 'project')
+    const junctionParent = path.join(fixture, 'junction-parent')
+    const rootViaParentJunction = path.join(junctionParent, 'project')
+    const rootJunction = path.join(fixture, 'project-junction')
+    const outsideRoot = path.join(fixture, 'outside')
+    fs.mkdirSync(selectedRoot, { recursive: true })
+    fs.mkdirSync(outsideRoot)
+    fs.writeFileSync(path.join(selectedRoot, 'chapter.txt'), 'inside', 'utf8')
+    fs.writeFileSync(path.join(outsideRoot, 'secret.txt'), 'outside', 'utf8')
+    fs.symlinkSync(physicalParent, junctionParent, 'junction')
+    fs.symlinkSync(selectedRoot, rootJunction, 'junction')
+    fs.symlinkSync(outsideRoot, path.join(selectedRoot, 'linked-outside'), 'junction')
+
+    const safeFileSystem = createWindowsSafeFileSystem()
+
+    await expect(safeFileSystem.listDirectory(capability(rootViaParentJunction, '')))
+      .resolves.toEqual([{ name: 'chapter.txt', isDirectory: false }])
+    await expect(safeFileSystem.listDirectory(capability(rootJunction, '')))
+      .resolves.toEqual([{ name: 'chapter.txt', isDirectory: false }])
+    await expect(safeFileSystem.listDirectory(capability(rootViaParentJunction, 'linked-outside')))
+      .resolves.toEqual([])
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
+  it('rejects read, list, and atomic write after an authorized ordinary root becomes an outside junction', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const outsideRoot = path.join(fixture, 'outside')
+    fs.mkdirSync(selectedRoot)
+    fs.mkdirSync(outsideRoot)
+    fs.writeFileSync(path.join(selectedRoot, 'chapter.txt'), 'inside', 'utf8')
+    fs.writeFileSync(path.join(outsideRoot, 'chapter.txt'), 'outside', 'utf8')
+
+    const grantedRead = capability(selectedRoot, 'chapter.txt')
+    const grantedList = capability(selectedRoot, '')
+    const grantedWrite = capability(selectedRoot, 'new-chapter.txt')
+    replaceRootWithOutsideJunction(selectedRoot, outsideRoot)
+
+    const safeFileSystem = createWindowsSafeFileSystem()
+
+    await expect(safeFileSystem.readText(grantedRead)).rejects.toThrow('SECURE_FS_ROOT_CHANGED')
+    await expect(safeFileSystem.listDirectory(grantedList)).rejects.toThrow('SECURE_FS_ROOT_CHANGED')
+    await expect(safeFileSystem.writeTextAtomically(grantedWrite, 'must stay inside'))
+      .rejects.toThrow('SECURE_FS_ROOT_CHANGED')
+    expect(fs.readFileSync(path.join(outsideRoot, 'chapter.txt'), 'utf8')).toBe('outside')
+    expect(fs.existsSync(path.join(outsideRoot, 'new-chapter.txt'))).toBe(false)
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
   it('keeps ordinary non-reparse reads, recursive mkdir, atomic writes, and enumeration working', async () => {
     const fixture = fixtureRoot()
     const selectedRoot = path.join(fixture, 'selected')
@@ -235,9 +291,9 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
   it('cancels a prepared atomic replacement when the main-process commit guard rejects it', async () => {
     const fixture = fixtureRoot()
     const selectedRoot = path.join(fixture, 'selected')
-    const output = capability(selectedRoot, 'chapter.txt')
     fs.mkdirSync(selectedRoot)
     fs.writeFileSync(path.join(selectedRoot, 'chapter.txt'), 'old content', 'utf8')
+    const output = capability(selectedRoot, 'chapter.txt')
     const safeFileSystem = createWindowsSafeFileSystem()
 
     await expect(safeFileSystem.writeTextAtomically(output, 'new content', () => {
@@ -251,9 +307,9 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
     const fixture = fixtureRoot()
     const selectedRoot = path.join(fixture, 'selected')
     const targetPath = path.join(selectedRoot, 'chapter.txt')
-    const output = capability(selectedRoot, 'chapter.txt')
     fs.mkdirSync(selectedRoot)
     fs.writeFileSync(targetPath, 'old content', 'utf8')
+    const output = capability(selectedRoot, 'chapter.txt')
     fs.rmSync(targetPath)
     const safeFileSystem = createWindowsSafeFileSystem()
     let reachedCommitGuard = false
@@ -278,9 +334,9 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
     const fixture = fixtureRoot()
     const selectedRoot = path.join(fixture, 'selected')
     const targetPath = path.join(selectedRoot, 'chapter.txt')
-    const output = capability(selectedRoot, 'chapter.txt')
     fs.mkdirSync(selectedRoot)
     fs.writeFileSync(targetPath, 'old content', 'utf8')
+    const output = capability(selectedRoot, 'chapter.txt')
     const safeFileSystem = createWindowsSafeFileSystem()
 
     let writeError: unknown
@@ -315,10 +371,10 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
     const selectedRoot = path.join(fixture, 'selected')
     const targetPath = path.join(selectedRoot, 'chapter.txt')
     const attackerPath = path.join(selectedRoot, 'attacker.txt')
-    const output = capability(selectedRoot, 'chapter.txt')
     fs.mkdirSync(selectedRoot)
     fs.writeFileSync(targetPath, 'old content', 'utf8')
     fs.writeFileSync(attackerPath, 'attacker content', 'utf8')
+    const output = capability(selectedRoot, 'chapter.txt')
     const safeFileSystem = createWindowsSafeFileSystem()
 
     let writeError: unknown
@@ -386,9 +442,9 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
     const fixture = fixtureRoot()
     const selectedRoot = path.join(fixture, 'selected')
     const targetPath = path.join(selectedRoot, 'chapter.txt')
-    const output = capability(selectedRoot, 'chapter.txt')
     fs.mkdirSync(selectedRoot)
     fs.writeFileSync(targetPath, 'old content', 'utf8')
+    const output = capability(selectedRoot, 'chapter.txt')
     const safeFileSystem = createWindowsSafeFileSystem()
 
     await safeFileSystem.writeTextAtomically(

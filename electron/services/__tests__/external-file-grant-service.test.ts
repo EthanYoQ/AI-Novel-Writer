@@ -188,6 +188,10 @@ describe('ExternalFileGrantService', () => {
       relativePath: 'escape/secret.txt',
     })).toEqual({
       rootPath: fs.realpathSync.native(root),
+      rootIdentity: expect.objectContaining({
+        volumeSerialNumber: expect.any(String),
+        fileIndex: expect.any(String),
+      }),
       relativePath: 'escape\\secret.txt',
       scope: 'directory',
     })
@@ -219,6 +223,10 @@ describe('ExternalFileGrantService', () => {
       operation: 'read',
     })).toEqual({
       rootPath: path.dirname(fs.realpathSync.native(selectedFile)),
+      rootIdentity: expect.objectContaining({
+        volumeSerialNumber: expect.any(String),
+        fileIndex: expect.any(String),
+      }),
       relativePath: 'selected.txt',
       scope: 'file',
     })
@@ -255,11 +263,19 @@ describe('ExternalFileGrantService', () => {
 
     expect(grants.resolve(request)).toEqual({
       rootPath: fs.realpathSync.native(root),
+      rootIdentity: expect.objectContaining({
+        volumeSerialNumber: expect.any(String),
+        fileIndex: expect.any(String),
+      }),
       relativePath: 'chapter.txt',
       scope: 'directory',
     })
     expect(grants.resolve(request)).toEqual({
       rootPath: fs.realpathSync.native(root),
+      rootIdentity: expect.objectContaining({
+        volumeSerialNumber: expect.any(String),
+        fileIndex: expect.any(String),
+      }),
       relativePath: 'chapter.txt',
       scope: 'directory',
     })
@@ -317,11 +333,19 @@ describe('ExternalFileGrantService', () => {
     grants.resolve(request)
     expect(grants.revalidate(request)).toEqual({
       rootPath: fs.realpathSync.native(root),
+      rootIdentity: expect.objectContaining({
+        volumeSerialNumber: expect.any(String),
+        fileIndex: expect.any(String),
+      }),
       relativePath: 'chapter.txt',
       scope: 'directory',
     })
     expect(grants.revalidate({ ...request, operation: 'create' })).toEqual({
       rootPath: fs.realpathSync.native(root),
+      rootIdentity: expect.objectContaining({
+        volumeSerialNumber: expect.any(String),
+        fileIndex: expect.any(String),
+      }),
       relativePath: 'chapter.txt',
       scope: 'directory',
     })

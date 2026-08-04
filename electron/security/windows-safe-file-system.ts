@@ -1,7 +1,17 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import * as electron from 'electron'
+
+/**
+ * Windows exposes these as the volume serial number and 64-bit file index of
+ * the root directory handle. The values are captured when authority is issued,
+ * never re-sampled when the helper performs I/O.
+ */
+export interface SecureRootIdentity {
+  readonly volumeSerialNumber: string
+  readonly fileIndex: string
+}
 
 /**
  * A path capability is intentionally root-relative. Callers must never turn it
@@ -11,6 +21,7 @@ import * as electron from 'electron'
 export interface SecureFileCapability {
   rootPath: string
   relativePath: string
+  rootIdentity: SecureRootIdentity
 }
 
 export interface SecureDirectoryEntry {
@@ -51,6 +62,7 @@ interface HelperRequest {
   operation: HelperOperation
   rootPath: string
   relativePath: string
+  rootIdentity: SecureRootIdentity
   contentBase64?: string
   mustAlreadyExist?: boolean
 }
@@ -81,11 +93,59 @@ const MAX_TEXT_BYTES = 64 * 1024 * 1024
 const MAX_DIRECTORY_ENTRIES = 16_384
 const MAX_HELPER_RESPONSE_BYTES = Math.ceil(MAX_TEXT_BYTES * 1.4) + (2 * 1024 * 1024)
 const DEFAULT_TIMEOUT_MS = 30_000
+const MAX_UINT32 = BigInt('4294967295')
+const MAX_UINT64 = BigInt('18446744073709551615')
 
 const windowsReservedNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
+const unsignedDecimal = /^(?:0|[1-9]\d*)$/
 
 function secureError(code: string): Error {
   return new Error(code)
+}
+
+function validatedUnsignedDecimal(value: unknown, maximum: bigint): string | null {
+  if (typeof value !== 'string' || !unsignedDecimal.test(value)) return null
+  try {
+    return BigInt(value) <= maximum ? value : null
+  } catch {
+    return null
+  }
+}
+
+function validateRootIdentity(identity: unknown): SecureRootIdentity {
+  if (!identity || typeof identity !== 'object') {
+    throw secureError('SECURE_FS_INVALID_PATH')
+  }
+  const volumeSerialNumber = validatedUnsignedDecimal(
+    (identity as SecureRootIdentity).volumeSerialNumber,
+    MAX_UINT32,
+  )
+  const fileIndex = validatedUnsignedDecimal((identity as SecureRootIdentity).fileIndex, MAX_UINT64)
+  if (!volumeSerialNumber || !fileIndex) throw secureError('SECURE_FS_INVALID_PATH')
+  return Object.freeze({ volumeSerialNumber, fileIndex })
+}
+
+/**
+ * Snapshot the resolved root directory's Windows identity at the authorization
+ * boundary. A later junction substitution can resolve the same rootPath to a
+ * different directory, but cannot forge this handle identity.
+ */
+export function captureSecureRootIdentity(rootPath: string): SecureRootIdentity {
+  try {
+    const canonicalRoot = realpathSync.native(rootPath)
+    const information = statSync(canonicalRoot, { bigint: true })
+    if (!information.isDirectory() || information.dev < 0n || information.ino < 0n
+      || information.dev > MAX_UINT32 || information.ino > MAX_UINT64) {
+      throw secureError('SECURE_FS_INVALID_PATH')
+    }
+    return Object.freeze({
+      volumeSerialNumber: information.dev.toString(),
+      fileIndex: information.ino.toString(),
+    })
+  } catch (error) {
+    if (error instanceof Error && /^SECURE_FS_[A-Z0-9_]+$/.test(error.message)) throw error
+    throw secureError('SECURE_FS_NOT_FOUND')
+  }
 }
 
 function assertSafeSegment(segment: string): void {
@@ -147,7 +207,11 @@ export function createSecureFileCapability(
   ) {
     throw secureError('SECURE_FS_INVALID_PATH')
   }
-  return { rootPath: root, relativePath: normalizeSecureRelativePath(relativePath) }
+  return Object.freeze({
+    rootPath: root,
+    relativePath: normalizeSecureRelativePath(relativePath),
+    rootIdentity: captureSecureRootIdentity(root),
+  })
 }
 
 function validateCapability(capability: SecureFileCapability): SecureFileCapability {
@@ -164,6 +228,7 @@ function validateCapability(capability: SecureFileCapability): SecureFileCapabil
   return {
     rootPath: path.resolve(capability.rootPath),
     relativePath: normalizeSecureRelativePath(capability.relativePath),
+    rootIdentity: validateRootIdentity(capability.rootIdentity),
   }
 }
 
@@ -464,6 +529,7 @@ export function createSecureFileSystem(
       operation,
       rootPath: safeCapability.rootPath,
       relativePath: safeCapability.relativePath,
+      rootIdentity: safeCapability.rootIdentity,
       ...(contentBase64 === undefined ? {} : { contentBase64 }),
     })
     if (!response.ok) responseError(response)
@@ -494,6 +560,7 @@ export function createSecureFileSystem(
         operation: 'write',
         rootPath: safeCapability.rootPath,
         relativePath: safeCapability.relativePath,
+        rootIdentity: safeCapability.rootIdentity,
         contentBase64: buffer.toString('base64'),
         mustAlreadyExist: constraints?.mustAlreadyExist === true,
       }

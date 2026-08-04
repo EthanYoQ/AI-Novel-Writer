@@ -1,6 +1,11 @@
 import type { CharacterData, CharacterStateData } from '../../../electron/repositories/character-repository'
+import {
+  parseArchitectureCharacterRoster,
+  parseModelCharacterCards,
+  type RawCharacterCard,
+} from './character-roster-parser'
 
-type RawCard = Record<string, unknown>
+type RawCard = RawCharacterCard
 type RelationshipEdge = { target: string; relation: string }
 
 const ROLE_MAP: Record<string, string> = {
@@ -24,37 +29,6 @@ const ROLE_MAP: Record<string, string> = {
   龙套: 'minor',
   次要角色: 'minor',
 }
-
-const CHARACTER_ARRAY_KEYS = [
-  'characters',
-  'characterCards',
-  'character_cards',
-  'cards',
-  '角色',
-  '角色卡',
-  '角色列表',
-  '人物',
-  '人物列表',
-]
-
-const NON_CHARACTER_OBJECT_KEYS = new Set([
-  'characters',
-  'characterCards',
-  'character_cards',
-  'cards',
-  '角色',
-  '角色卡',
-  '角色列表',
-  '人物',
-  '人物列表',
-  'relationships',
-  'relations',
-  '关系',
-  '关系网',
-  'meta',
-  'metadata',
-  '说明',
-])
 
 function readField(card: RawCard, keys: string[]): unknown {
   for (const key of keys) {
@@ -82,125 +56,12 @@ function stringifyValue(value: unknown): string {
   return ''
 }
 
-function cleanModelText(text: string): string {
-  return text
-    .replace(/<think>[\s\S]*?<\/think>/gi, '\n')
-    .replace(/^[\s\S]*?<\/think>/i, '\n')
-    .replace(/<\/?think>/gi, '\n')
-    .replace(/```(?:json)?/gi, '')
-    .replace(/```/g, '')
-    .trim()
-}
-
-function parseJson(text: string): unknown | null {
+function parseStructuredJson(text: string): unknown | null {
   try {
     return JSON.parse(text)
   } catch {
     return null
   }
-}
-
-function matchingClose(open: string): string {
-  return open === '{' ? '}' : ']'
-}
-
-function extractBalancedJsonCandidates(text: string): string[] {
-  const candidates: string[] = []
-
-  for (let start = 0; start < text.length; start++) {
-    const first = text[start]
-    if (first !== '{' && first !== '[') continue
-
-    const stack: string[] = []
-    let inString = false
-    let escaped = false
-
-    for (let i = start; i < text.length; i++) {
-      const char = text[i]
-
-      if (inString) {
-        if (escaped) {
-          escaped = false
-        } else if (char === '\\') {
-          escaped = true
-        } else if (char === '"') {
-          inString = false
-        }
-        continue
-      }
-
-      if (char === '"') {
-        inString = true
-        continue
-      }
-
-      if (char === '{' || char === '[') {
-        stack.push(matchingClose(char))
-        continue
-      }
-
-      if ((char === '}' || char === ']') && stack.length > 0) {
-        const expected = stack.pop()
-        if (char !== expected) break
-        if (stack.length === 0) {
-          candidates.push(text.slice(start, i + 1))
-          break
-        }
-      }
-    }
-  }
-
-  return candidates
-}
-
-function parseLooseJson(text: string): unknown | null {
-  const cleaned = cleanModelText(text)
-  if (!cleaned) return null
-
-  const direct = parseJson(cleaned)
-  if (direct !== null) return direct
-
-  for (const candidate of extractBalancedJsonCandidates(cleaned)) {
-    const parsed = parseJson(candidate)
-    if (parsed !== null) return parsed
-  }
-
-  return null
-}
-
-function isRawCard(value: unknown): value is RawCard {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
-}
-
-function objectEntriesToCards(value: RawCard): RawCard[] {
-  const cards: RawCard[] = []
-
-  for (const [name, entry] of Object.entries(value)) {
-    if (NON_CHARACTER_OBJECT_KEYS.has(name)) continue
-    if (!isRawCard(entry)) continue
-    cards.push({ name, ...entry })
-  }
-
-  return cards
-}
-
-function rawCardsFromParsedJson(parsed: unknown): RawCard[] {
-  if (Array.isArray(parsed)) {
-    return parsed.filter(isRawCard)
-  }
-
-  if (!isRawCard(parsed)) return []
-
-  for (const key of CHARACTER_ARRAY_KEYS) {
-    const value = parsed[key]
-    if (Array.isArray(value)) return value.filter(isRawCard)
-  }
-
-  if (stringifyValue(readField(parsed, ['name', '姓名', '角色名', '名字']))) {
-    return [parsed]
-  }
-
-  return objectEntriesToCards(parsed)
 }
 
 function normalizeRole(value: unknown): string {
@@ -349,17 +210,304 @@ export function normalizeCharacterCardsForPersistence(rawCards: RawCard[]): Char
   }))
 }
 
+const CHARACTER_FIELD_ALIASES: Record<string, string[]> = {
+  name: ['name', '姓名', '角色名', '名字'],
+  role: ['role', '定位', '角色定位', '类型'],
+  gender: ['gender', '性别'],
+  age: ['age', '年龄', '年龄段'],
+  appearance: ['appearance', '外貌', '外貌特征', '外貌描写'],
+  personality: ['personality', '性格', '性格特点', '性格特征'],
+  background: ['background', '背景', '背景故事', '身世'],
+  abilities: ['abilities', 'ability', '能力', '技能', '能力/技能', '能力技能'],
+  motivation: ['motivation', '动机', '动力', '核心动机', '核心动机与渴望'],
+  relationships: ['relationships', 'relations', '关系网', '角色关系', '关系'],
+  arc: ['arc', '角色弧光', '成长轨迹', '成长线'],
+  notes: ['notes', '备注', '其他补充说明', '补充'],
+  currentState: ['currentState', 'current_state', '当前状态', '状态'],
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'object') return Object.keys(value).length > 0
+  return true
+}
+
+function readMeaningfulField(card: RawCard, keys: readonly string[]): unknown {
+  for (const key of keys) {
+    if (hasMeaningfulValue(card[key])) return card[key]
+  }
+  return undefined
+}
+
+function canonicalizeRawCard(card: RawCard): RawCard {
+  const canonical: RawCard = {}
+  for (const [field, keys] of Object.entries(CHARACTER_FIELD_ALIASES)) {
+    const value = readMeaningfulField(card, keys)
+    if (value !== undefined) canonical[field] = value
+  }
+  return canonical
+}
+
+function characterName(card: RawCard): string {
+  return stringifyValue(readMeaningfulField(card, CHARACTER_FIELD_ALIASES.name))
+}
+
+function characterKey(name: string): string {
+  return name.trim().toLocaleLowerCase('en-US')
+}
+
+/**
+ * The architecture is the identity source of truth. A model card may enrich
+ * it, but must not replace an explicit architecture role or remove a source
+ * character because the local model stopped early.
+ */
+function mergeRawCharacterCards(source: RawCard, model: RawCard): RawCard {
+  const merged = { ...canonicalizeRawCard(source) }
+  const modelCard = canonicalizeRawCard(model)
+
+  for (const field of Object.keys(CHARACTER_FIELD_ALIASES)) {
+    if (field === 'name') continue
+    if (field === 'role' && hasMeaningfulValue(merged.role)) continue
+    if (hasMeaningfulValue(modelCard[field])) merged[field] = modelCard[field]
+  }
+
+  merged.name = characterName(source) || characterName(model)
+  return merged
+}
+
+function deduplicateRawCards(cards: readonly RawCard[]): RawCard[] {
+  const cardsByName = new Map<string, RawCard>()
+  for (const card of cards) {
+    const normalized = canonicalizeRawCard(card)
+    const name = characterName(normalized)
+    if (!name) continue
+    const key = characterKey(name)
+    const existing = cardsByName.get(key)
+    cardsByName.set(key, existing ? mergeRawCharacterCards(existing, normalized) : normalized)
+  }
+  return [...cardsByName.values()]
+}
+
+function mergeModelAndSourceCards(
+  modelCards: readonly RawCard[],
+  sourceCards: readonly RawCard[],
+  includeModelOnly = true,
+): RawCard[] {
+  const modelByName = new Map(
+    deduplicateRawCards(modelCards).map(card => [characterKey(characterName(card)), card]),
+  )
+  const merged: RawCard[] = []
+  const sourceKeys = new Set<string>()
+
+  for (const source of deduplicateRawCards(sourceCards)) {
+    const key = characterKey(characterName(source))
+    sourceKeys.add(key)
+    const model = modelByName.get(key)
+    merged.push(model ? mergeRawCharacterCards(source, model) : source)
+  }
+
+  if (includeModelOnly) {
+    for (const model of deduplicateRawCards(modelCards)) {
+      if (!sourceKeys.has(characterKey(characterName(model)))) merged.push(model)
+    }
+  }
+  return deduplicateRawCards(merged)
+}
+
+function assertModelCardsMatchSource(modelCards: readonly RawCard[], sourceCards: readonly RawCard[]): void {
+  const sourceKeys = new Set(deduplicateRawCards(sourceCards).map(card => characterKey(characterName(card))))
+  for (const model of deduplicateRawCards(modelCards)) {
+    const name = characterName(model)
+    if (name && !sourceKeys.has(characterKey(name))) {
+      throw new Error(`模型角色「${name}」不在角色图谱完整清单中，未写入角色列表`)
+    }
+  }
+}
+
+function explicitRelationshipTargets(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(item => explicitRelationshipTargets(item))
+  if (typeof value === 'string') {
+    const parsed = parseStructuredJson(value)
+    return parsed === null ? [] : explicitRelationshipTargets(parsed)
+  }
+  if (!value || typeof value !== 'object') return []
+
+  const relationship = value as RawCard
+  const target = stringifyValue(readMeaningfulField(
+    relationship,
+    ['target', 'name', 'to', 'character', '角色', '对象', '目标'],
+  ))
+  if (target) return [target]
+
+  return Object.keys(relationship).filter(key => ![
+    'relation', 'label', 'type', '关系', '关系类型', '描述',
+  ].includes(key))
+}
+
+function structuredRelationshipTargets(value: unknown): string[] | null {
+  if (Array.isArray(value)) {
+    const targets = value.flatMap(item => structuredRelationshipTargets(item) ?? [])
+    return targets.length > 0 ? targets : null
+  }
+  if (!value || typeof value !== 'object') return null
+
+  const relationship = value as RawCard
+  const target = stringifyValue(readMeaningfulField(
+    relationship,
+    ['target', 'name', 'to', 'character', '角色', '对象', '目标'],
+  ))
+  if (target) return [target]
+
+  const targets = Object.keys(relationship).filter(key => ![
+    'relation', 'label', 'type', '关系', '关系类型', '描述',
+  ].includes(key))
+  return targets.length > 0 ? targets : null
+}
+
+function assertCompleteCharacterCards(
+  cards: readonly CharacterData[],
+  sourceCards: readonly RawCard[],
+  mergedRawCards: readonly RawCard[],
+): void {
+  const names = new Set(cards.map(card => characterKey(card.name)))
+  if (names.size !== cards.length) {
+    throw new Error('角色卡包含重复角色名，未写入角色列表')
+  }
+
+  for (const source of sourceCards) {
+    const sourceName = characterName(source)
+    if (!sourceName || !names.has(characterKey(sourceName))) {
+      throw new Error(`角色图谱中的「${sourceName || '未命名角色'}」未被补齐，未写入角色列表`)
+    }
+    const sourceRole = readMeaningfulField(source, CHARACTER_FIELD_ALIASES.role)
+    if (sourceRole === undefined) continue
+    const persisted = cards.find(card => characterKey(card.name) === characterKey(sourceName))
+    if (!persisted || persisted.role !== normalizeRole(sourceRole)) {
+      throw new Error(`角色图谱中的「${sourceName}」角色定位未被保留，未写入角色列表`)
+    }
+  }
+
+  for (const card of mergedRawCards) {
+    const relationships = readMeaningfulField(card, CHARACTER_FIELD_ALIASES.relationships)
+    for (const target of explicitRelationshipTargets(relationships)) {
+      if (!names.has(characterKey(target))) {
+        throw new Error(`角色关系目标「${target}」不在完整角色清单中，未写入角色列表`)
+      }
+    }
+  }
+
+  for (const card of cards) {
+    const parsed = parseStructuredJson(card.relationships)
+    const targets = parsed === null ? null : structuredRelationshipTargets(parsed)
+    if (!targets) continue
+    if (targets.some(target => !names.has(characterKey(target)))) {
+      throw new Error(`角色「${card.name}」包含无效关系目标，未写入角色列表`)
+    }
+  }
+}
+
+const PERSISTED_TEXT_FIELDS: Array<Exclude<keyof CharacterData, 'name' | 'currentState'>> = [
+  'role', 'gender', 'age', 'appearance', 'personality', 'background', 'abilities',
+  'motivation', 'relationships', 'arc', 'notes',
+]
+
+function hasManualValue(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim().length > 0
+  if (typeof value === 'number') return Number.isFinite(value) && value !== 0
+  return Boolean(value)
+}
+
+function assertSafeCharacterIdentities(cards: readonly CharacterData[]): void {
+  const names = new Set<string>()
+  for (const card of cards) {
+    const name = typeof card?.name === 'string' ? card.name.trim() : ''
+    if (!name || names.has(characterKey(name))) {
+      throw new Error('无法安全合并已有角色卡，未写入角色列表')
+    }
+    names.add(characterKey(name))
+  }
+}
+
+function mergeCurrentStateManualWins(
+  existing: CharacterStateData | undefined,
+  generated: CharacterStateData | undefined,
+): CharacterStateData | undefined {
+  if (!existing && !generated) return undefined
+  const merged = { ...(generated ?? {}), ...(existing ?? {}) } as CharacterStateData
+  const stateFields: Array<keyof CharacterStateData> = [
+    'location', 'powerLevel', 'physicalState', 'mentalState', 'keyItems', 'recentEvents', 'updatedAtChapter',
+  ]
+
+  for (const field of stateFields) {
+    if (!hasManualValue(existing?.[field]) && generated?.[field] !== undefined) {
+      Object.assign(merged, { [field]: generated[field] })
+    }
+  }
+  return merged
+}
+
+function mergeExistingCharacterManualWins(existing: CharacterData, generated: CharacterData): CharacterData {
+  const merged = { ...existing, name: existing.name.trim() }
+  for (const field of PERSISTED_TEXT_FIELDS) {
+    if (!hasManualValue(existing[field]) && hasManualValue(generated[field])) {
+      Object.assign(merged, { [field]: generated[field] })
+    }
+  }
+  merged.currentState = mergeCurrentStateManualWins(existing.currentState, generated.currentState)
+  return merged
+}
+
+/**
+ * Automatic extraction may enrich a manual card, but never replaces an
+ * existing non-empty field or removes a card omitted from the architecture.
+ */
+export function mergeExtractedCharacterCardsWithExisting(
+  generatedCards: readonly CharacterData[],
+  existingCards: readonly CharacterData[],
+): CharacterData[] {
+  assertSafeCharacterIdentities(generatedCards)
+  assertSafeCharacterIdentities(existingCards)
+
+  const generatedByName = new Map(
+    generatedCards.map(card => [characterKey(card.name), card]),
+  )
+  const mergedExisting = existingCards.map((existing) => {
+    const generated = generatedByName.get(characterKey(existing.name))
+    return generated ? mergeExistingCharacterManualWins(existing, generated) : { ...existing }
+  })
+  const existingNames = new Set(existingCards.map(card => characterKey(card.name)))
+  const additions = generatedCards.filter(card => !existingNames.has(characterKey(card.name)))
+  return [...mergedExisting, ...additions]
+}
+
+/**
+ * This is the persistence boundary for automatic extraction. If the source
+ * architecture cannot tell us who must exist, a partial model response is not
+ * safe to save because `character-save-all` may overwrite matching manual
+ * cards.
+ */
+export function extractCompleteCharacterCards(modelText: string, sourceText: string): CharacterData[] {
+  const modelCards = parseModelCharacterCards(modelText)
+  const sourceRoster = parseArchitectureCharacterRoster(sourceText)
+  if (!sourceRoster.complete) {
+    throw new Error('无法从角色图谱中安全识别完整角色清单，未写入角色列表')
+  }
+  const sourceCards = sourceRoster.cards
+
+  assertModelCardsMatchSource(modelCards, sourceCards)
+  const mergedRawCards = mergeModelAndSourceCards(modelCards, sourceCards, false)
+  const cards = normalizeCharacterCardsForPersistence(mergedRawCards)
+  if (cards.length === 0) {
+    throw new Error('未能从 AI 输出或角色图谱中提取到有效角色卡，未写入角色列表')
+  }
+  assertCompleteCharacterCards(cards, sourceCards, mergedRawCards)
+  return cards
+}
+
 export function parseCharacterCardsFromModelOrSource(modelText: string, sourceText: string): CharacterData[] {
-  const parsedModel = parseLooseJson(modelText)
-  if (parsedModel !== null) {
-    const modelCards = normalizeCharacterCardsForPersistence(rawCardsFromParsedJson(parsedModel))
-    if (modelCards.length > 0) return modelCards
-  }
-
-  const parsedSource = parseLooseJson(sourceText)
-  if (parsedSource !== null) {
-    return normalizeCharacterCardsForPersistence(rawCardsFromParsedJson(parsedSource))
-  }
-
-  return []
+  const modelCards = parseModelCharacterCards(modelText)
+  const sourceCards = parseArchitectureCharacterRoster(sourceText).cards
+  return normalizeCharacterCardsForPersistence(mergeModelAndSourceCards(modelCards, sourceCards))
 }
