@@ -24,11 +24,11 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新 Windows 与 macOS ARM64 安装包</a>
 </p>
 
-> ## v0.5.2 跨平台补丁版
+> ## v0.6.0 重大更新
 >
-> [v0.5.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.5.2) 修复了 [#73](https://github.com/EthanYoQ/AI-Novel-Writer/issues/73)：单章生成的目标字数现在会真实生效。目标仍受所选模型的能力上限和自然边界约束，避免把 3000 字等目标误解为无止境续写、越写越多。还修复了 [#74](https://github.com/EthanYoQ/AI-Novel-Writer/issues/74)：embedding 回填遇到 HTML 或其他非 JSON 响应时，会提示检查配置、网关或鉴权，而不是抛出 `Unexpected token`；符合协议的合法 JSON 返回仍正常兼容。
+> [v0.6.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.6.0) 是一次面向完整创作流程的重大更新：更新检查会区分网络、配置和发布资产问题；模型设置新增 Grok，并采用 `base_url` 等 API 术语；向量模型默认引导使用硅基流动的免费 `BAAI/bge-m3`。蓝图改为每批最多 5 章，草稿支持有界续写并加入推理与上下文预算保护，避免把被截断的内容保存为完成稿。蓝图中的角色与关系会自动同步，且无需向量模型；模型调用统计也会区分成功、失败和未知 Token 用量。[#71](https://github.com/EthanYoQ/AI-Novel-Writer/issues/71) 中的 Windows 项目路径与角色提取问题已一并修复。
 >
-> 本版在同一个 Release 资产列表中提供 Windows x64 与 macOS Apple Silicon（ARM64）安装包。Windows x64 安装程序支持应用内更新；macOS ARM64 包未签名、未公证，且需要从 Release 页面手动下载更新。首次安装时，Gatekeeper 可能要求在“隐私与安全性”中手动允许。
+> 本版在同一个 Release 资产列表中提供 Windows x64 与 macOS Apple Silicon（ARM64）安装包。Windows x64 安装程序支持应用内更新，但尚未配置代码签名；macOS ARM64 包未签名、未公证，且需要从 Release 页面手动下载更新。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
 
 ## 产品定位
 
