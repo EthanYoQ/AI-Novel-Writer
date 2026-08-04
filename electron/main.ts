@@ -5,7 +5,10 @@ import { mainT } from './i18n'
 import { registerUpdateController } from './controllers/update-controller'
 import { createElectronUpdaterBackend } from './services/electron-updater-adapter'
 import { GlobalConfigUpdatePreferencesStore } from './services/update-preferences-store'
-import { isWindowsUpdateRuntimeEnabled } from './services/update-runtime'
+import {
+  hasWindowsUpdateConfiguration,
+  isWindowsUpdateRuntimeEnabled,
+} from './services/update-runtime'
 import { startUpdateRuntime } from './services/update-startup'
 import {
   claimReleaseVectorSmokeInvocation,
@@ -197,8 +200,13 @@ app.whenReady().then(async () => {
   createWindow()
   registerIPCHandlers()
   registerMCPHandlers()
+  const updateRuntimeEnabled = isWindowsUpdateRuntimeEnabled(app.isPackaged, VITE_DEV_SERVER_URL)
+  const updateConfiguration = updateRuntimeEnabled && !hasWindowsUpdateConfiguration()
+    ? 'missing'
+    : 'available'
   startUpdateRuntime({
-    updateRuntimeEnabled: isWindowsUpdateRuntimeEnabled(app.isPackaged, VITE_DEV_SERVER_URL),
+    updateRuntimeEnabled,
+    updateConfiguration,
     currentVersion: app.getVersion(),
     createBackend: createElectronUpdaterBackend,
     createPreferences: () => new GlobalConfigUpdatePreferencesStore(),

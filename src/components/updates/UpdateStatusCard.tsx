@@ -1,6 +1,6 @@
 import { AlertCircle, CheckCircle2, Clock3, Download, LoaderCircle, RotateCcw, X } from 'lucide-react'
 
-import type { UpdateErrorCode, UpdatePresentation, UpdateState } from '../../services/update-presentation'
+import type { UpdateError, UpdatePresentation, UpdateState } from '../../services/update-presentation'
 import { Button } from '../ui/Button'
 import { IconBtn } from '../ui/IconBtn'
 import { getUpdateCardCopy, type UpdateText } from './update-card-copy'
@@ -10,7 +10,7 @@ interface UpdateStatusCardProps {
   presentation: UpdatePresentation
   state: UpdateState
   text: UpdateText
-  manualActionError?: UpdateErrorCode
+  manualActionError?: UpdateError
   isDeferring: boolean
   lastReminderDays: 7 | 30
   onCheck(): void
@@ -38,7 +38,8 @@ function ReminderActions({ isDeferring, onDefer, text, includeSevenDays }: Pick<
 
 function UpdateActions({ presentation, manualActionError, isDeferring, lastReminderDays, onCheck, onDefer, onInstall, text }: Pick<UpdateStatusCardProps, 'presentation' | 'manualActionError' | 'isDeferring' | 'lastReminderDays' | 'onCheck' | 'onDefer' | 'onInstall' | 'text'>) {
   if (presentation.kind === 'manual-error') {
-    const retryAction = getUpdateRetryAction(manualActionError)
+    if (manualActionError && !manualActionError.retryable) return null
+    const retryAction = getUpdateRetryAction(manualActionError?.code)
     if (retryAction === 'install') {
       return <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onInstall}><RotateCcw size={14} />{text('再次尝试重启更新', 'Try restarting the update again')}</Button>
@@ -66,7 +67,7 @@ function UpdateActions({ presentation, manualActionError, isDeferring, lastRemin
 export function UpdateStatusCard(props: UpdateStatusCardProps) {
   const { presentation, state, text, manualActionError, isDeferring, lastReminderDays, onCheck, onDefer, onInstall } = props
   const cardCopy = getUpdateCardCopy(presentation, state, text, manualActionError)
-  const errorCode = manualActionError ?? state.error?.code
+  const error = manualActionError ?? state.error
   const progress = Math.round(state.downloadProgress?.percent ?? 0)
 
   return <div className="writer-panel-card relative mt-3 overflow-hidden p-4" role={presentation.kind === 'manual-error' ? 'alert' : 'status'} aria-live="polite">
@@ -77,7 +78,7 @@ export function UpdateStatusCard(props: UpdateStatusCardProps) {
         <h2 className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>{cardCopy.title}</h2>
         <p className="mt-1 text-xs leading-5" style={{ color: 'var(--color-text-secondary)' }}>{cardCopy.description}</p>
         {presentation.showProgress && <div className="mt-3"><div className="mb-1 flex items-center justify-between text-xs" style={{ color: 'var(--color-text-muted)' }}><span>{text('下载进度', 'Download progress')}</span><span>{progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full" style={{ backgroundColor: 'var(--color-hover)' }}><div className="h-full rounded-full transition-[width] duration-300" style={{ width: `${Math.min(100, Math.max(0, progress))}%`, backgroundColor: 'var(--color-accent)' }} /></div></div>}
-        <UpdateActions presentation={presentation} manualActionError={errorCode} isDeferring={isDeferring} lastReminderDays={lastReminderDays} onCheck={onCheck} onDefer={onDefer} onInstall={onInstall} text={text} />
+        <UpdateActions presentation={presentation} manualActionError={error} isDeferring={isDeferring} lastReminderDays={lastReminderDays} onCheck={onCheck} onDefer={onDefer} onInstall={onInstall} text={text} />
       </div>
     </div>
   </div>

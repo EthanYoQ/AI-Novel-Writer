@@ -34,10 +34,55 @@ export type UpdateReminderDelay = 7 | 30
 
 export type UpdateStatus = 'idle' | 'checking' | 'not-available' | 'available' | 'downloading' | 'downloaded' | 'error' | 'disabled'
 
-export type UpdateErrorCode = 'UPDATES_DISABLED' | 'CHECK_FAILED' | 'DOWNLOAD_FAILED' | 'INSTALL_NOT_READY' | 'INSTALL_FAILED' | 'REMINDER_NOT_AVAILABLE' | 'REMINDER_SAVE_FAILED' | 'INVALID_REMINDER_DELAY'
+export type UpdateErrorCode = 'UPDATES_DISABLED' | 'UPDATE_CONFIGURATION_MISSING' | 'CHECK_FAILED' | 'DOWNLOAD_FAILED' | 'INSTALL_NOT_READY' | 'INSTALL_FAILED' | 'REMINDER_NOT_AVAILABLE' | 'REMINDER_SAVE_FAILED' | 'INVALID_REMINDER_DELAY'
+
+/** Which safe, user-facing update operation produced the error. */
+export type UpdateErrorPhase = 'configuration' | 'check' | 'download' | 'install' | 'reminder'
+
+/** Stable classifications; raw updater/network errors never cross the IPC boundary. */
+export type UpdateErrorReason =
+  | 'not-installed'
+  | 'configuration-missing'
+  | 'network'
+  | 'proxy'
+  | 'tls'
+  | 'http-forbidden'
+  | 'http-not-found'
+  | 'http-rate-limited'
+  | 'metadata-invalid'
+  | 'asset-missing'
+  | 'not-ready'
+  | 'reminder-unavailable'
+  | 'reminder-save-failed'
+  | 'invalid-reminder-delay'
+  | 'install-failed'
+  | 'unknown'
+
+/** Allowlisted diagnostics that are safe to retain and render without credentials or paths. */
+export type SafeUpdateTechnicalDetails =
+  | 'UPDATES_DISABLED'
+  | 'UPDATE_CONFIGURATION_MISSING'
+  | 'DNS_OR_OFFLINE'
+  | 'PROXY_CONNECT_FAILED'
+  | 'TLS_HANDSHAKE_FAILED'
+  | 'HTTP_403'
+  | 'HTTP_404'
+  | 'HTTP_429'
+  | 'UPDATE_METADATA_INVALID'
+  | 'UPDATE_ASSET_MISSING'
+  | 'UPDATE_OPERATION_FAILED'
+  | 'INSTALL_NOT_READY'
+  | 'INSTALL_FAILED'
+  | 'REMINDER_NOT_AVAILABLE'
+  | 'REMINDER_SAVE_FAILED'
+  | 'INVALID_REMINDER_DELAY'
 
 export interface UpdateError {
   code: UpdateErrorCode
+  phase: UpdateErrorPhase
+  reason: UpdateErrorReason
+  retryable: boolean
+  safeTechnicalDetails: SafeUpdateTechnicalDetails
 }
 
 export interface UpdateDownloadProgress {

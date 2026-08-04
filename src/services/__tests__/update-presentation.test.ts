@@ -1,11 +1,27 @@
 import { describe, expect, it } from 'vitest'
 
-import { getUpdatePresentation } from '../update-presentation'
+import { getUpdatePresentation, type UpdateError } from '../update-presentation'
 
 const baseState = {
   currentVersion: '0.2.5',
   isReminderDeferred: false,
 } as const
+
+const checkFailure = {
+  code: 'CHECK_FAILED',
+  phase: 'check',
+  reason: 'unknown',
+  retryable: true,
+  safeTechnicalDetails: 'UPDATE_OPERATION_FAILED',
+} satisfies UpdateError
+
+const installFailure = {
+  code: 'INSTALL_FAILED',
+  phase: 'install',
+  reason: 'install-failed',
+  retryable: true,
+  safeTechnicalDetails: 'INSTALL_FAILED',
+} satisfies UpdateError
 
 describe('getUpdatePresentation', () => {
   it('keeps the update button disabled while an automatic check is running', () => {
@@ -30,7 +46,7 @@ describe('getUpdatePresentation', () => {
     })
 
     expect(getUpdatePresentation({
-      state: { ...baseState, status: 'error', error: { code: 'CHECK_FAILED' } },
+      state: { ...baseState, status: 'error', error: checkFailure },
       manualCheckRequested: false,
     })).toMatchObject({
       kind: 'hidden',
@@ -51,7 +67,7 @@ describe('getUpdatePresentation', () => {
     })).toMatchObject({ kind: 'not-available', visible: true, canCheck: true })
 
     expect(getUpdatePresentation({
-      state: { ...baseState, status: 'error', error: { code: 'CHECK_FAILED' } },
+      state: { ...baseState, status: 'error', error: checkFailure },
       manualCheckRequested: true,
     })).toMatchObject({ kind: 'manual-error', visible: true, canCheck: true })
   })
@@ -154,7 +170,7 @@ describe('getUpdatePresentation', () => {
     expect(getUpdatePresentation({
       state: { ...baseState, status: 'downloaded', availableVersion: '0.2.6' },
       manualCheckRequested: true,
-      manualActionError: 'INSTALL_FAILED',
+      manualActionError: installFailure,
     })).toMatchObject({
       kind: 'manual-error',
       visible: true,

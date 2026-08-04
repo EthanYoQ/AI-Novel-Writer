@@ -6,7 +6,19 @@
 /** 单个模型的预设 — name + 该模型的输出 token 上限 */
 export interface ModelPreset {
   name: string
+  /** Model-specific capability metadata. `maxTokens` remains the legacy output limit. */
+  capabilities?: ModelCapabilities
   maxTokens: number
+}
+
+/** Optional capabilities supported by a model endpoint. */
+export interface ModelCapabilities {
+  /** `null` means the endpoint has not declared a context window. */
+  contextWindowTokens: number | null
+  maxOutputTokens: number
+  reasoning: boolean
+  structuredOutput: boolean
+  usage: boolean
 }
 
 /** 单个服务商的预设配置 */
@@ -23,10 +35,17 @@ export interface ProviderPreset {
   models: ModelPreset[]
   /** 支持的向量模型列表（embedding 模型不需要 maxTokens） */
   embeddingModels: string[]
+  /** 向量模型的能力元数据，按模型 ID 索引以保持旧的 string[] 配置兼容。 */
+  embeddingModelCapabilities?: Record<string, ModelCapabilities>
 }
 
-/** 内置默认预设（首次启动时写入持久化文件） */
-export const BUILTIN_PRESETS: ProviderPreset[] = [
+/**
+ * 创建内置服务商目录。
+ *
+ * 每次调用均返回新的对象，方便调用方安全地派生 UI 状态而不污染全局预设。
+ */
+export function createProviderCatalog(): ProviderPreset[] {
+  return [
   {
     provider: 'openai',
     displayName: 'OpenAI',
@@ -39,6 +58,45 @@ export const BUILTIN_PRESETS: ProviderPreset[] = [
       { name: 'gpt-3.5-turbo', maxTokens: 4096 }
     ],
     embeddingModels: ['text-embedding-3-small', 'text-embedding-3-large', 'text-embedding-ada-002'],
+  },
+  {
+    provider: 'xai',
+    displayName: 'xAI(Grok)',
+    baseUrl: 'https://api.x.ai/v1',
+    protocol: 'openai',
+    models: [
+      {
+        name: 'grok-4.5',
+        // Retain `maxTokens` for existing execution paths while exposing the
+        // precise capability names used by new settings forms.
+        maxTokens: 8192,
+        capabilities: {
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 8192,
+          reasoning: true,
+          structuredOutput: true,
+          usage: true,
+        },
+      },
+    ],
+    embeddingModels: [],
+  },
+  {
+    provider: 'siliconflow',
+    displayName: 'SiliconFlow',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    protocol: 'openai',
+    models: [],
+    embeddingModels: ['BAAI/bge-m3'],
+    embeddingModelCapabilities: {
+      'BAAI/bge-m3': {
+        contextWindowTokens: 8192,
+        maxOutputTokens: 0,
+        reasoning: false,
+        structuredOutput: false,
+        usage: true,
+      },
+    },
   },
   {
     provider: 'novelai',
@@ -112,4 +170,8 @@ export const BUILTIN_PRESETS: ProviderPreset[] = [
     models: [],
     embeddingModels: [],
   },
-]
+  ]
+}
+
+/** 内置默认预设（首次启动时写入持久化文件） */
+export const BUILTIN_PRESETS: ProviderPreset[] = createProviderCatalog()

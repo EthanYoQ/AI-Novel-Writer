@@ -92,6 +92,23 @@ describe('GeminiProvider', () => {
     })
   })
 
+  it('keeps omitted Gemini usage fields unknown instead of inventing zeros', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: '完成' }] }, finishReason: 'STOP' }],
+        usageMetadata: { promptTokenCount: 10 },
+      }),
+    }))
+
+    await expect(new GeminiProvider().generate(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+    })).resolves.toMatchObject({
+      usage: { promptTokens: 10, completionTokens: null, totalTokens: null },
+    })
+  })
+
   it('forwards Gemini stream MAX_TOKENS while treating omitted finishReason as compatible STOP', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

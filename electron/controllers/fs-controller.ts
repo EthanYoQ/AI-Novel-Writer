@@ -15,6 +15,7 @@ import {
   type SecureFileCapability,
   type WindowsSafeFileSystem,
 } from '../security/windows-safe-file-system'
+import { childFileCapability } from '../security/file-capability'
 
 function assertProjectFileOperation(
   context: ProjectSessionContext,
@@ -169,17 +170,6 @@ function parentCapability(capability: SecureFileCapability): SecureFileCapabilit
   }
 }
 
-function childCapability(
-  parent: SecureFileCapability,
-  name: string,
-): SecureFileCapability {
-  return {
-    rootPath: parent.rootPath,
-    relativePath: parent.relativePath ? `${parent.relativePath}\\${name}` : name,
-    rootIdentity: parent.rootIdentity,
-  }
-}
-
 function capabilityDisplayPath(capability: SecureFileCapability): string {
   return capability.relativePath
     ? path.join(capability.rootPath, ...capability.relativePath.split('\\'))
@@ -198,7 +188,7 @@ async function readDirRecursive(
       return a.name.localeCompare(b.name, 'zh-CN')
     })
   return Promise.all(visibleEntries.map(async (entry) => {
-    const child = childCapability(directory, entry.name)
+    const child = childFileCapability(directory, entry.name)
     if (entry.isDirectory) {
       return {
         name: entry.name,

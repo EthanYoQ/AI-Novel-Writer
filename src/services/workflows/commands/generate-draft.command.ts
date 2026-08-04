@@ -20,6 +20,9 @@ const MAX_AUTO_CONTINUE_ROUNDS = 7
 const MAX_TARGET_OVERAGE_RATIO = 0.12
 const OUTPUT_CHARS_PER_TOKEN = 1.5
 const SAFE_DEFAULT_MODEL_MAX_TOKENS = 4096
+const UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS = 8192
+const CONTEXT_SAFETY_RESERVE_TOKENS = 512
+const MIN_CONTINUATION_OVERLAP_CHARS = 48
 const CHINESE_CHARACTER_PATTERN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu
 const ENGLISH_WORD_PATTERN = /[A-Za-z]+(?:['’][A-Za-z]+)*/g
 const WHITESPACE_OR_PUNCTUATION_PATTERN = /[\s\p{P}\p{S}]/gu
@@ -65,17 +68,87 @@ function outputTokenBudgetForTarget(targetChars: number, currentChars = 0): numb
   return Math.max(1, Math.ceil(remainingChars / OUTPUT_CHARS_PER_TOKEN))
 }
 
-function defaultModelMaxTokens(): number {
-  const { defaultModelId, models } = useLLMStore.getState()
-  const configuredMaxTokens = models.find(model => model.id === defaultModelId)?.maxTokens
-  const parsedMaxTokens = Math.trunc(Number(configuredMaxTokens))
-  return Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0
-    ? parsedMaxTokens
-    : SAFE_DEFAULT_MODEL_MAX_TOKENS
+export interface DraftModelLimits {
+  /** `null` means the model did not declare a context window; it is not a guessed model limit. */
+  contextWindowTokens: number | null
+  /** The request output ceiling, resolved from new capability metadata or legacy maxTokens. */
+  maxOutputTokens: number
+  /** Whether the endpoint may consume output budget on hidden reasoning. */
+  reasoning: boolean
 }
 
-function boundedOutputTokenBudget(targetChars: number, currentChars = 0): number {
-  return Math.min(outputTokenBudgetForTarget(targetChars, currentChars), defaultModelMaxTokens())
+function positiveTokenLimit(value: unknown): number | null {
+  const parsed = Math.trunc(Number(value))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+/**
+ * Resolve persisted model data at the workflow boundary. Older profiles only
+ * have `maxTokens`; unknown or malformed context windows must remain unknown,
+ * rather than becoming a fabricated provider limit.
+ */
+export function resolveDraftModelLimits(model?: {
+  maxTokens?: unknown
+    capabilities?: {
+      contextWindowTokens?: unknown
+      maxOutputTokens?: unknown
+      reasoning?: unknown
+  } | null
+} | null): DraftModelLimits {
+  return {
+    contextWindowTokens: positiveTokenLimit(model?.capabilities?.contextWindowTokens),
+    maxOutputTokens: positiveTokenLimit(model?.capabilities?.maxOutputTokens)
+      ?? positiveTokenLimit(model?.maxTokens)
+      ?? SAFE_DEFAULT_MODEL_MAX_TOKENS,
+    reasoning: model?.capabilities?.reasoning === true,
+  }
+}
+
+function defaultModelLimits(): DraftModelLimits {
+  const { defaultModelId, models } = useLLMStore.getState()
+  return resolveDraftModelLimits(models.find(model => model.id === defaultModelId))
+}
+
+function boundedOutputTokenBudget(
+  targetChars: number,
+  maxOutputTokens: number,
+  currentChars = 0,
+): number {
+  return Math.min(outputTokenBudgetForTarget(targetChars, currentChars), maxOutputTokens)
+}
+
+function estimatedPromptTokens(prompt: string): number {
+  return Math.ceil(prompt.length / OUTPUT_CHARS_PER_TOKEN)
+}
+
+function removeLeadingNonWhitespaceCharacters(text: string, count: number): string {
+  if (count <= 0) return text
+  let consumed = 0
+  for (let index = 0; index < text.length; index += 1) {
+    if (!/\s/u.test(text[index])) consumed += 1
+    if (consumed >= count) return text.slice(index + 1).trimStart()
+  }
+  return ''
+}
+
+function overlappingVisiblePrefixLength(existingText: string, addition: string): number {
+  const existingTail = existingText.slice(-CONTINUE_PROMPT_MAX_CHARS).replace(/\s+/gu, '')
+  const additionHead = addition.slice(0, CONTINUE_PROMPT_MAX_CHARS).replace(/\s+/gu, '')
+  const maximum = Math.min(existingTail.length, additionHead.length)
+
+  for (let length = maximum; length >= MIN_CONTINUATION_OVERLAP_CHARS; length -= 1) {
+    if (existingTail.slice(-length) === additionHead.slice(0, length)) return length
+  }
+  return 0
+}
+
+/** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
+export function appendVisibleDraftContinuation(draft: string, continuation: string): string {
+  const visibleDraft = sanitizeDraftText(draft)
+  const visibleContinuation = sanitizeDraftText(continuation)
+  const overlap = overlappingVisiblePrefixLength(visibleDraft, visibleContinuation)
+  const newVisibleText = removeLeadingNonWhitespaceCharacters(visibleContinuation, overlap)
+  return sanitizeDraftText([visibleDraft, newVisibleText].filter(Boolean).join('\n\n'))
 }
 
 function takeSentenceBoundaryWithin(text: string, maxChars: number): string {
@@ -228,22 +301,23 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         .withUserGuidance(this.chapterInfo.userGuidance?.trim() || '（无微操指导）')
     }
 
-    // Token 预算管控：中文约 1.5 字符/token，预留 4K 给输出
+    // 输入与输出预算独立：输出上限来自模型配置，输入则必须为输出和
+    // 上下文安全余量留出空间，不能把 legacy maxTokens 当作上下文窗口。
     const prompt = promptBuilder.build()
-    const estimatedTokens = Math.ceil(prompt.length / 1.5)
-    const TOKEN_BUDGET = 28000
-    if (estimatedTokens > TOKEN_BUDGET) {
-      callbacks.log(`⚠️ Prompt 预估 ${estimatedTokens} tokens，超出预算 ${TOKEN_BUDGET}，请考虑精简上下文`)
-    }
-
-    callbacks.log('调用 AI 生成章节草稿...')
-
     const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
     const maxDraftChars = maxDraftCharsForTarget(targetChars)
+    const modelLimits = defaultModelLimits()
+    const initialOutputTokenBudget = boundedOutputTokenBudget(
+      targetChars,
+      modelLimits.maxOutputTokens,
+    )
+    this.assertPromptFitsBudget(prompt, promptBuilder.getSystemRole(), initialOutputTokenBudget, modelLimits)
+
+    callbacks.log('调用 AI 生成章节草稿...')
     const initialCompletion = await this.callLLMResultWithBuilder(promptBuilder, callbacks, {
       temperature: 0.88,
       thinking: false,
-      maxTokens: boundedOutputTokenBudget(targetChars),
+      maxTokens: initialOutputTokenBudget,
     }, context)
     this.assertNotCancelled(context)
     const cleanDraftText = await this.extendDraftIfNeeded({
@@ -257,6 +331,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       futureBlueprints: futureBlueprintsStr,
       globalGuidance: mergedGuidance,
       writingStyle: novelConfig.writingStyle || '',
+      modelLimits,
     })
     this.assertNotCancelled(context)
     const boundedDraftText = capDraftAtNaturalBoundary(cleanDraftText, maxDraftChars)
@@ -338,7 +413,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     finishReason: LLMCompletion['finishReason'],
   ): boolean {
     if (rounds >= MAX_AUTO_CONTINUE_ROUNDS) return false
-    if (finishReason !== 'stop' && finishReason !== 'length') return false
+    // `stop` means the provider declares this response complete. Only an
+    // explicit output-length terminal state is eligible for continuation.
+    if (finishReason !== 'length') return false
     const currentChars = countDraftUnits(currentText)
     const lowerBound = Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
     return currentChars < lowerBound && currentChars < maxDraftCharsForTarget(targetChars)
@@ -355,10 +432,22 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     futureBlueprints: string
     globalGuidance: string
     writingStyle: string
+    modelLimits: DraftModelLimits
   }): Promise<string> {
     let draft = params.initialDraft
     let rounds = 0
     let lastFinishReason = params.initialFinishReason
+
+    if (
+      params.modelLimits.reasoning
+      && lastFinishReason === 'length'
+      && countDraftUnits(draft) < 100
+    ) {
+      throw new Error(
+        '模型的输出预算主要消耗在推理阶段，尚未产生足够正文。无法安全续接隐藏推理过程；' +
+        '请关闭模型思考模式、提高最大输出 Tokens，或改用更适合正文创作的非推理模型。',
+      )
+    }
 
     while (this.shouldAutoContinue(draft, params.targetChars, rounds, lastFinishReason)) {
       if (params.context.cancelled) break
@@ -367,6 +456,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       params.callbacks.log(`  自动续写第 ${rounds} 段：当前约 ${currentChars}/${params.targetChars} 字`)
 
       const remaining = Math.max(0, params.targetChars - currentChars)
+      const visibleTail = sanitizeDraftText(draft).slice(-CONTINUE_PROMPT_MAX_CHARS)
       const continuationPrompt = `请无缝续写当前章节正文。
 
 【硬性要求】
@@ -390,7 +480,19 @@ ${params.globalGuidance}
 ${params.writingStyle || '（无）'}
 
 【已写正文末尾】
-${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
+${visibleTail}`
+
+      const continuationOutputTokenBudget = boundedOutputTokenBudget(
+        params.targetChars,
+        params.modelLimits.maxOutputTokens,
+        currentChars,
+      )
+      this.assertPromptFitsBudget(
+        continuationPrompt,
+        params.systemRole,
+        continuationOutputTokenBudget,
+        params.modelLimits,
+      )
 
       const addition = await this.callLLMResult(
         continuationPrompt,
@@ -399,14 +501,17 @@ ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
         {
           temperature: 0.88,
           thinking: false,
-          maxTokens: boundedOutputTokenBudget(params.targetChars, currentChars),
+          maxTokens: continuationOutputTokenBudget,
         },
         params.context
       )
       this.assertNotCancelled(params.context)
       lastFinishReason = addition.finishReason
       const beforeChars = countDraftUnits(draft)
-      draft = sanitizeDraftText(`${draft}\n\n${sanitizeDraftText(this.stripThinkingTags(addition.content))}`)
+      draft = appendVisibleDraftContinuation(
+        draft,
+        this.stripThinkingTags(addition.content),
+      )
       const afterChars = countDraftUnits(draft)
       if (afterChars - beforeChars < 300) {
         params.callbacks.log('  自动续写增量过短，停止继续请求')
@@ -414,17 +519,57 @@ ${draft.slice(-CONTINUE_PROMPT_MAX_CHARS)}`
       }
     }
 
-    if (
-      lastFinishReason !== 'stop'
-      && (
-        lastFinishReason !== 'length'
-        || countDraftUnits(draft) < Math.floor(params.targetChars * MIN_TARGET_COMPLETION_RATIO)
-      )
-    ) {
+    this.assertNotCancelled(params.context)
+    // A length finish is always an incomplete physical response. Reaching a
+    // word-count threshold is not proof that the model completed its sentence
+    // or scene, so never persist it as a successful chapter.
+    if (lastFinishReason !== 'stop') {
       throw this.createIncompleteCompletionError(lastFinishReason)
     }
 
+    const lowerBound = Math.floor(params.targetChars * MIN_TARGET_COMPLETION_RATIO)
+    if (countDraftUnits(draft) < lowerBound) {
+      throw new Error(
+        `模型已声明生成结束，但正文仅约 ${countDraftUnits(draft)}/${params.targetChars} 字，明显未达到章节目标，结果未保存。` +
+        '请提高最大输出 Tokens、降低本章目标字数，或改用输出能力更强的模型后重试。',
+      )
+    }
+
     return draft
+  }
+
+  private assertPromptFitsBudget(
+    prompt: string,
+    systemPrompt: string,
+    outputTokenBudget: number,
+    modelLimits: DraftModelLimits,
+  ): void {
+    const inputTokens = estimatedPromptTokens(`${systemPrompt}\n${prompt}`)
+    if (modelLimits.contextWindowTokens === null) {
+      const safeInputTokens = UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS
+        - outputTokenBudget
+        - CONTEXT_SAFETY_RESERVE_TOKENS
+      if (safeInputTokens <= 0 || inputTokens > safeInputTokens) {
+        throw new Error(
+          `当前模型未声明上下文窗口。为避免盲目联网，本次按保守窗口 ${UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS} tokens 估算，` +
+          `扣除输出预留 ${outputTokenBudget} 与安全余量 ${CONTEXT_SAFETY_RESERVE_TOKENS} 后，可用输入约 ${Math.max(0, safeInputTokens)} tokens；` +
+          `当前 Prompt 约 ${inputTokens} tokens，已停止生成。请缩短项目设定、提示词或前文，或在模型配置中补充上下文窗口。`,
+        )
+      }
+      return
+    }
+
+    const availableInputTokens = modelLimits.contextWindowTokens
+      - outputTokenBudget
+      - CONTEXT_SAFETY_RESERVE_TOKENS
+    if (availableInputTokens <= 0 || inputTokens > availableInputTokens) {
+      throw new Error(
+        `当前 Prompt 预估约 ${inputTokens} tokens，超过模型已声明的输入上下文预算 ` +
+        `${Math.max(0, availableInputTokens)} tokens（上下文窗口 ${modelLimits.contextWindowTokens}，` +
+        `本次输出预留 ${outputTokenBudget}，安全余量 ${CONTEXT_SAFETY_RESERVE_TOKENS}）。` +
+        '请缩短项目设定、提示词或前文，或选择上下文窗口更大的模型后重试。',
+      )
+    }
   }
 
   // --- 抽取自原文件的辅助方法 ---

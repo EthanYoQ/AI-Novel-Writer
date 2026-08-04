@@ -4,9 +4,14 @@ import {
   parseModelCharacterCards,
   type RawCharacterCard,
 } from './character-roster-parser'
+import {
+  CHARACTER_FIELD_ALIASES,
+  RELATIONSHIP_LABEL_ALIASES,
+  RELATIONSHIP_TARGET_ALIASES,
+} from './character-card-fields'
 
 type RawCard = RawCharacterCard
-type RelationshipEdge = { target: string; relation: string }
+export type CharacterRelationshipEdge = { target: string; relation: string }
 
 const ROLE_MAP: Record<string, string> = {
   protagonist: 'protagonist',
@@ -30,7 +35,12 @@ const ROLE_MAP: Record<string, string> = {
   次要角色: 'minor',
 }
 
-function readField(card: RawCard, keys: string[]): unknown {
+const RELATIONSHIP_DESCRIPTOR_KEYS: ReadonlySet<string> = new Set([
+  ...RELATIONSHIP_TARGET_ALIASES,
+  ...RELATIONSHIP_LABEL_ALIASES,
+])
+
+function readField(card: RawCard, keys: readonly string[]): unknown {
   for (const key of keys) {
     if (card[key] !== undefined && card[key] !== null) return card[key]
   }
@@ -89,27 +99,31 @@ function normalizeCurrentState(value: unknown): CharacterStateData | undefined {
   }
 }
 
-function normalizeRelationshipObject(value: RawCard, names: Set<string>): RelationshipEdge | null {
-  const target = stringifyValue(readField(value, ['target', 'name', 'to', 'character', '角色', '对象', '目标']))
+function normalizeRelationshipObject(value: RawCard, names: ReadonlySet<string>): CharacterRelationshipEdge | null {
+  const target = stringifyValue(readField(value, RELATIONSHIP_TARGET_ALIASES))
   if (!target || !names.has(target)) return null
-  const relation = stringifyValue(readField(value, ['relation', 'label', 'type', '关系', '关系类型', '描述'])) || '相关'
+  const relation = stringifyValue(readField(value, RELATIONSHIP_LABEL_ALIASES)) || '相关'
   return { target, relation }
 }
 
-function parseRelationshipJsonText(text: string, names: Set<string>): RelationshipEdge[] | null {
+function parseRelationshipJsonText(text: string, names: ReadonlySet<string>): CharacterRelationshipEdge[] | null {
   try {
     const parsed = JSON.parse(text)
-    return normalizeRelationshipEdges(parsed, names)
+    return normalizeCharacterRelationshipEdges(parsed, names)
   } catch {
     return null
   }
 }
 
-function normalizeRelationshipEdges(value: unknown, names: Set<string>, selfName?: string): RelationshipEdge[] {
-  const edges: RelationshipEdge[] = []
+export function normalizeCharacterRelationshipEdges(
+  value: unknown,
+  names: ReadonlySet<string>,
+  selfName?: string,
+): CharacterRelationshipEdge[] {
+  const edges: CharacterRelationshipEdge[] = []
   const seen = new Set<string>()
 
-  const addEdge = (edge: RelationshipEdge | null) => {
+  const addEdge = (edge: CharacterRelationshipEdge | null) => {
     if (!edge || edge.target === selfName) return
     const key = `${edge.target}\u0000${edge.relation}`
     if (seen.has(key)) return
@@ -144,8 +158,8 @@ function normalizeRelationshipEdges(value: unknown, names: Set<string>, selfName
   return edges
 }
 
-function normalizeRelationshipText(text: string, names: Set<string>, selfName?: string): RelationshipEdge[] {
-  const edges: RelationshipEdge[] = []
+function normalizeRelationshipText(text: string, names: ReadonlySet<string>, selfName?: string): CharacterRelationshipEdge[] {
+  const edges: CharacterRelationshipEdge[] = []
   const seen = new Set<string>()
   const lines = text.split(/[,;，；\n]/).map((line) => line.trim()).filter(Boolean)
 
@@ -178,7 +192,7 @@ function normalizeRelationshipText(text: string, names: Set<string>, selfName?: 
 }
 
 function normalizeRelationships(value: unknown, names: Set<string>, selfName: string): string {
-  const edges = normalizeRelationshipEdges(value, names, selfName)
+  const edges = normalizeCharacterRelationshipEdges(value, names, selfName)
   if (edges.length > 0) return JSON.stringify(edges)
   return stringifyValue(value)
 }
@@ -187,7 +201,7 @@ export function normalizeCharacterCardsForPersistence(rawCards: RawCard[]): Char
   const rawWithNames = rawCards
     .map((card) => ({
       card,
-      name: stringifyValue(readField(card, ['name', '姓名', '角色名', '名字'])),
+      name: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.name)),
     }))
     .filter((item) => item.name)
 
@@ -195,35 +209,19 @@ export function normalizeCharacterCardsForPersistence(rawCards: RawCard[]): Char
 
   return rawWithNames.map(({ card, name }) => ({
     name,
-    role: normalizeRole(readField(card, ['role', '定位', '角色定位', '类型'])),
-    gender: stringifyValue(readField(card, ['gender', '性别'])),
-    age: stringifyValue(readField(card, ['age', '年龄', '年龄段'])),
-    appearance: stringifyValue(readField(card, ['appearance', '外貌', '外貌特征', '外貌描写'])),
-    personality: stringifyValue(readField(card, ['personality', '性格', '性格特点', '性格特征'])),
-    background: stringifyValue(readField(card, ['background', '背景', '背景故事', '身世'])),
-    abilities: stringifyValue(readField(card, ['abilities', 'ability', '能力', '技能', '能力/技能', '能力技能'])),
-    motivation: stringifyValue(readField(card, ['motivation', '动机', '动力', '核心动机', '核心动机与渴望'])),
-    relationships: normalizeRelationships(readField(card, ['relationships', 'relations', '关系网', '角色关系', '关系']), names, name),
-    arc: stringifyValue(readField(card, ['arc', '角色弧光', '成长轨迹', '成长线'])),
-    notes: stringifyValue(readField(card, ['notes', '备注', '其他补充说明', '补充'])),
-    currentState: normalizeCurrentState(readField(card, ['currentState', 'current_state', '当前状态', '状态'])),
+    role: normalizeRole(readField(card, CHARACTER_FIELD_ALIASES.role)),
+    gender: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.gender)),
+    age: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.age)),
+    appearance: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.appearance)),
+    personality: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.personality)),
+    background: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.background)),
+    abilities: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.abilities)),
+    motivation: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.motivation)),
+    relationships: normalizeRelationships(readField(card, CHARACTER_FIELD_ALIASES.relationships), names, name),
+    arc: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.arc)),
+    notes: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.notes)),
+    currentState: normalizeCurrentState(readField(card, CHARACTER_FIELD_ALIASES.currentState)),
   }))
-}
-
-const CHARACTER_FIELD_ALIASES: Record<string, string[]> = {
-  name: ['name', '姓名', '角色名', '名字'],
-  role: ['role', '定位', '角色定位', '类型'],
-  gender: ['gender', '性别'],
-  age: ['age', '年龄', '年龄段'],
-  appearance: ['appearance', '外貌', '外貌特征', '外貌描写'],
-  personality: ['personality', '性格', '性格特点', '性格特征'],
-  background: ['background', '背景', '背景故事', '身世'],
-  abilities: ['abilities', 'ability', '能力', '技能', '能力/技能', '能力技能'],
-  motivation: ['motivation', '动机', '动力', '核心动机', '核心动机与渴望'],
-  relationships: ['relationships', 'relations', '关系网', '角色关系', '关系'],
-  arc: ['arc', '角色弧光', '成长轨迹', '成长线'],
-  notes: ['notes', '备注', '其他补充说明', '补充'],
-  currentState: ['currentState', 'current_state', '当前状态', '状态'],
 }
 
 function hasMeaningfulValue(value: unknown): boolean {
@@ -335,15 +333,10 @@ function explicitRelationshipTargets(value: unknown): string[] {
   if (!value || typeof value !== 'object') return []
 
   const relationship = value as RawCard
-  const target = stringifyValue(readMeaningfulField(
-    relationship,
-    ['target', 'name', 'to', 'character', '角色', '对象', '目标'],
-  ))
+  const target = stringifyValue(readMeaningfulField(relationship, RELATIONSHIP_TARGET_ALIASES))
   if (target) return [target]
 
-  return Object.keys(relationship).filter(key => ![
-    'relation', 'label', 'type', '关系', '关系类型', '描述',
-  ].includes(key))
+  return Object.keys(relationship).filter(key => !RELATIONSHIP_DESCRIPTOR_KEYS.has(key))
 }
 
 function structuredRelationshipTargets(value: unknown): string[] | null {
@@ -354,15 +347,10 @@ function structuredRelationshipTargets(value: unknown): string[] | null {
   if (!value || typeof value !== 'object') return null
 
   const relationship = value as RawCard
-  const target = stringifyValue(readMeaningfulField(
-    relationship,
-    ['target', 'name', 'to', 'character', '角色', '对象', '目标'],
-  ))
+  const target = stringifyValue(readMeaningfulField(relationship, RELATIONSHIP_TARGET_ALIASES))
   if (target) return [target]
 
-  const targets = Object.keys(relationship).filter(key => ![
-    'relation', 'label', 'type', '关系', '关系类型', '描述',
-  ].includes(key))
+  const targets = Object.keys(relationship).filter(key => !RELATIONSHIP_DESCRIPTOR_KEYS.has(key))
   return targets.length > 0 ? targets : null
 }
 

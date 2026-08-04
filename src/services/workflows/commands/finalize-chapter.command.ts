@@ -97,7 +97,11 @@ async function callLLMForPostProcess(
         },
       },
       undefined,
-      options,
+      {
+        ...options,
+        purpose: 'post-process',
+        projectSession: context?.projectSession,
+      },
     ).then((requestId) => {
       streamRequestId = requestId
       if (context?.cancelled) {

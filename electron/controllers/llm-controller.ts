@@ -7,10 +7,19 @@ import {
   GLOBAL_CONFIG_PATH,
   DEFAULT_GLOBAL_CONFIG,
 } from '../utils/config-utils'
-import type { LLMFinishReason, ModelProfile, GlobalConfig, TokenUsage } from '../../src/shared/ipc-channels'
+import type { LLMFinishReason, LLMRequest, ModelProfile, GlobalConfig, TokenUsage } from '../../src/shared/ipc-channels'
+import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { LLMFactory } from '../llm/llm-factory'
+import { getCurrentProjectPath } from '../database'
+import { LLMHistoryRepository } from '../repositories/llm-repository'
+import { projectAccess } from '../services/project-access'
 
-const activeStreams = new Map<string, AbortController>()
+interface ActiveStream {
+  controller: AbortController
+  recordCancelled: () => void
+}
+
+const activeStreams = new Map<string, ActiveStream>()
 const CONNECTION_TEST_MAX_TOKENS = 1024
 
 function loadModelConfigs(): ModelProfile[] {
@@ -46,32 +55,73 @@ function applyProxyConfig() {
   } catch { /* 忽略 */ }
 }
 
+function recordProviderOutcome(
+  request: LLMRequest,
+  model: ModelProfile,
+  startedAt: number,
+  outcome: { success: boolean; usage?: TokenUsage; error?: string },
+): void {
+  if (!isProjectSessionContext(request.projectSession)) return
+  try {
+    projectAccess.assertCurrentProjectContext(request.projectSession, getCurrentProjectPath())
+    LLMHistoryRepository.logCall({
+      modelId: model.id,
+      modelName: model.name || model.modelName,
+      purpose: request.purpose?.trim() || 'generation',
+      promptTokens: outcome.usage?.promptTokens ?? null,
+      completionTokens: outcome.usage?.completionTokens ?? null,
+      totalTokens: outcome.usage?.totalTokens ?? null,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      success: outcome.success,
+      errorMessage: outcome.error,
+    })
+  } catch (error) {
+    // Statistics are diagnostic only and must never change generation outcome.
+    console.warn('[AI Novel Writer] LLM call statistics were not recorded.', error)
+  }
+}
+
 export function registerLLMController() {
-  ipcMain.handle('llm:generate', async (_event, request: { modelId: string; messages: Array<{ role: string; content: string }>; temperature?: number; maxTokens?: number; responseFormat?: { type: string }; thinking?: boolean }) => {
+  ipcMain.handle('llm:generate', async (_event, request: LLMRequest) => {
+    const startedAt = Date.now()
+    let model: ModelProfile | null = null
     try {
       applyProxyConfig()
-      const model = getModelConfig(request.modelId)
+      model = getModelConfig(request.modelId)
       if (!model) return { success: false, content: '', error: '未找到模型配置' }
 
       const provider = LLMFactory.getProvider(model)
-      return await provider.generate(model, request.messages, {
+      const result = await provider.generate(model, request.messages, {
         temperature: request.temperature ?? model.temperature,
         maxTokens: request.maxTokens ?? model.maxTokens,
         responseFormat: request.responseFormat,
         thinking: request.thinking,
       })
+      recordProviderOutcome(request, model, startedAt, result)
+      return result
     } catch (error) {
+      if (model) recordProviderOutcome(request, model, startedAt, { success: false, error: String(error) })
       return { success: false, content: '', error: String(error) }
     }
   })
 
-  ipcMain.handle('llm:generate-stream', async (event, requestId: string, request: { modelId: string; messages: Array<{ role: string; content: string }>; temperature?: number; maxTokens?: number; responseFormat?: { type: string }; thinking?: boolean }) => {
+  ipcMain.handle('llm:generate-stream', async (event, requestId: string, request: LLMRequest) => {
     applyProxyConfig()
     const model = getModelConfig(request.modelId)
     if (!model) return { requestId, started: false }
 
     const abortController = new AbortController()
-    activeStreams.set(requestId, abortController)
+    const startedAt = Date.now()
+    let recorded = false
+    const recordOnce = (outcome: { success: boolean; usage?: TokenUsage; error?: string }) => {
+      if (recorded) return
+      recorded = true
+      recordProviderOutcome(request, model, startedAt, outcome)
+    }
+    activeStreams.set(requestId, {
+      controller: abortController,
+      recordCancelled: () => recordOnce({ success: false, error: 'cancelled' }),
+    })
     const win = BrowserWindow.fromWebContents(event.sender)
 
     const provider = LLMFactory.getProvider(model)
@@ -85,10 +135,13 @@ export function registerLLMController() {
       signal: abortController.signal,
       onChunk: (chunk: string) => win?.webContents.send('llm:stream-chunk', { requestId, chunk }),
       onDone: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => {
+        const success = (finishReason ?? 'stop') === 'stop'
+        recordOnce({ success, usage, error: success ? undefined : `finish:${finishReason ?? 'unknown'}` })
         win?.webContents.send('llm:stream-done', { requestId, fullText, usage, finishReason })
         activeStreams.delete(requestId)
       },
       onError: (error: string) => {
+        recordOnce({ success: false, error })
         win?.webContents.send('llm:stream-error', { requestId, error })
         activeStreams.delete(requestId)
       },
@@ -98,9 +151,10 @@ export function registerLLMController() {
   })
 
   ipcMain.handle('llm:cancel', async (_event, requestId: string) => {
-    const controller = activeStreams.get(requestId)
-    if (controller) {
-      controller.abort()
+    const stream = activeStreams.get(requestId)
+    if (stream) {
+      stream.recordCancelled()
+      stream.controller.abort()
       activeStreams.delete(requestId)
       return { success: true }
     }

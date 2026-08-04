@@ -1,9 +1,30 @@
-import type { UpdateErrorCode, UpdatePresentation, UpdateState } from '../../services/update-presentation'
+import type { UpdateError, UpdatePresentation, UpdateState } from '../../services/update-presentation'
 
 export type UpdateText = (zhCNText: string, enUSText: string) => string
 
-export function getUpdateErrorMessage(code: UpdateErrorCode | undefined, text: UpdateText): string {
-  switch (code) {
+export function getUpdateErrorMessage(error: UpdateError | undefined, text: UpdateText): string {
+  switch (error?.reason) {
+    case 'configuration-missing':
+      return text('测试/解压包缺少更新配置，请使用正式安装版或打开Release。', 'This test or unpacked build lacks update configuration. Install the formal package or open Releases.')
+    case 'network':
+      return text('无法连接更新服务。请检查网络连接后重试。', 'Could not reach the update service. Check your network connection and try again.')
+    case 'proxy':
+      return text('更新请求无法通过代理连接。请检查代理设置后重试。', 'The update request could not connect through the proxy. Check proxy settings and try again.')
+    case 'tls':
+      return text('无法验证更新服务的安全连接。请检查系统时间、证书或网络拦截。', 'Could not verify the secure update connection. Check system time, certificates, or network interception.')
+    case 'http-forbidden':
+      return text('没有权限访问更新发布信息。请打开Release手动下载正式安装包。', 'Access to update release information was denied. Open Releases to download the formal installer manually.')
+    case 'http-not-found':
+      return text('未找到更新发布信息。请打开Release手动下载正式安装包。', 'Update release information was not found. Open Releases to download the formal installer manually.')
+    case 'http-rate-limited':
+      return text('更新服务请求过于频繁。请稍后重试。', 'Too many update requests were made. Please try again later.')
+    case 'metadata-invalid':
+      return text('更新元数据无效。请打开Release手动下载正式安装包。', 'Update metadata is invalid. Open Releases to download the formal installer manually.')
+    case 'asset-missing':
+      return text('更新安装包不完整或缺失。请打开Release手动下载正式安装包。', 'The update installer is incomplete or missing. Open Releases to download the formal installer manually.')
+  }
+
+  switch (error?.code) {
     case 'UPDATES_DISABLED':
       return text('更新检查仅在已安装的 Windows 应用中可用。', 'Update checks are available in the installed Windows app only.')
     case 'DOWNLOAD_FAILED':
@@ -20,7 +41,7 @@ export function getUpdateErrorMessage(code: UpdateErrorCode | undefined, text: U
       return text('提醒时间无效，请重新选择。', 'That reminder period is unavailable. Please choose again.')
     case 'CHECK_FAILED':
     default:
-      return text('暂时无法连接更新服务。请检查网络后重试。', 'The update service is temporarily unavailable. Check your connection and try again.')
+      return text('更新操作暂时失败。请稍后重试。', 'The update operation failed temporarily. Please try again later.')
   }
 }
 
@@ -28,7 +49,7 @@ export function getUpdateCardCopy(
   presentation: UpdatePresentation,
   state: UpdateState,
   text: UpdateText,
-  manualActionError?: UpdateErrorCode,
+  manualActionError?: UpdateError,
 ) {
   const version = state.availableVersion ? `v${state.availableVersion}` : text('新版本', 'A new version')
 
@@ -44,7 +65,7 @@ export function getUpdateCardCopy(
     case 'downloaded':
       return { title: text('更新已准备就绪', 'Update ready to install'), description: text(`${version} 已下载完成。重启后将开始安装。`, `${version} has finished downloading. Restart to begin installation.`) }
     case 'manual-error':
-      return { title: text('无法完成更新操作', 'Could not complete update action'), description: getUpdateErrorMessage(manualActionError ?? state.error?.code, text) }
+      return { title: text('无法完成更新操作', 'Could not complete update action'), description: getUpdateErrorMessage(manualActionError ?? state.error, text) }
     default:
       return { title: '', description: '' }
   }

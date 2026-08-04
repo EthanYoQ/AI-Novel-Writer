@@ -159,6 +159,44 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
+  it('requests and forwards the final OpenAI stream usage metadata', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => sseReader(
+          'data: {"choices":[{"delta":{"content":"正文"},"finish_reason":"stop"}]}\n',
+          'data: {"choices":[],"usage":{"prompt_tokens":13,"completion_tokens":21,"total_tokens":34}}\n',
+          'data: [DONE]\n',
+        ),
+      },
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onDone = vi.fn()
+
+    await new OpenAIProvider().generateStream({
+      ...novelAIModel,
+      provider: 'openai',
+      baseUrl: 'https://api.openai.com',
+    }, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone,
+      onError: vi.fn(),
+    })
+
+    expect(requestBody(fetchMock)).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true },
+    })
+    expect(onDone).toHaveBeenCalledWith('正文', {
+      promptTokens: 13,
+      completionTokens: 21,
+      totalTokens: 34,
+    }, 'stop')
+  })
+
   it('rejects an OpenAI stream that ends before [DONE], even if text was received', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

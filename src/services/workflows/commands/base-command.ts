@@ -29,7 +29,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     prompt: string, 
     systemPrompt: string, 
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string },
     context?: WorkflowContext
   ): Promise<string> {
     const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
@@ -48,7 +48,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     prompt: string,
     systemPrompt: string,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string },
     context?: WorkflowContext,
   ): Promise<LLMCompletion> {
     this.assertNotCancelled(context)
@@ -111,7 +111,11 @@ export abstract class BaseWorkflowCommand<TResult = string> {
           }
         },
         undefined,
-        options
+        {
+          ...options,
+          purpose: options?.purpose ?? 'workflow',
+          projectSession: context?.projectSession,
+        }
       ).then(reqId => {
         streamRequestId = reqId
         // 如果在 generateStream 返回前已经取消

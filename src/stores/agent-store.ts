@@ -408,12 +408,15 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
       // LLM 生成函数（封装为非流式调用，Agent 专用参数）
       const generateFn = async (messages: LLMMessage[], mid: string): Promise<string> => {
-        const request = {
-          modelId: mid,
-          messages: messages.map(m => ({ role: m.role, content: m.content })),
-          temperature: 0.7,    // 创作场景适度随机
-        }
-        const response = await (window as unknown as { velaAPI: { invoke: (ch: string, ...args: unknown[]) => Promise<unknown> } }).velaAPI.invoke('llm:generate', request)
+        const response = await llmStore.generate(
+          messages.map(m => ({ role: m.role, content: m.content })),
+          mid,
+          {
+            temperature: 0.7,
+            purpose: 'agent',
+            projectSession: executionContext.projectSession ?? undefined,
+          },
+        )
         return requireCompleteAgentResponse(response as Pick<LLMResponse, 'success' | 'content' | 'error' | 'finishReason'>)
       }
 

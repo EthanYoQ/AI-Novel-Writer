@@ -1,5 +1,5 @@
 import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
-import type { LLMFinishReason, ModelProfile } from '../../src/shared/ipc-channels'
+import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 
 export class OpenAIProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
@@ -63,6 +63,12 @@ export class OpenAIProvider implements ILLMProvider {
 
     if (opts.responseFormat && !isNovelAI) {
       body.response_format = opts.responseFormat
+    }
+
+    // The OpenAI streaming API only sends the final usage chunk when this is
+    // explicitly requested. Keep NovelAI's narrower compatibility payload.
+    if (stream && !isNovelAI) {
+      body.stream_options = { include_usage: true }
     }
 
     return body
@@ -148,6 +154,7 @@ export class OpenAIProvider implements ILLMProvider {
       let buffer = ''
       let sawDone = false
       let finishReason: LLMFinishReason = 'stop'
+      let usage: TokenUsage | undefined
 
       const processLine = (line: string) => {
         if (!line.startsWith('data: ')) return
@@ -159,10 +166,15 @@ export class OpenAIProvider implements ILLMProvider {
         if (!json) return
         try {
           const parsed = JSON.parse(json) as {
-            choices: Array<{
+            choices?: Array<{
               delta: { content?: string, reasoning_content?: string }
               finish_reason?: string | null
             }>
+            usage?: {
+              prompt_tokens?: number
+              completion_tokens?: number
+              total_tokens?: number
+            }
           }
           const choice = parsed.choices?.[0]
           if (choice?.finish_reason !== undefined && choice.finish_reason !== null) {
@@ -195,6 +207,19 @@ export class OpenAIProvider implements ILLMProvider {
           if (emitChunk) {
             fullText += emitChunk
             opts.onChunk(emitChunk)
+          }
+
+          const reportedUsage = parsed.usage
+          if (
+            typeof reportedUsage?.prompt_tokens === 'number'
+            && typeof reportedUsage.completion_tokens === 'number'
+            && typeof reportedUsage.total_tokens === 'number'
+          ) {
+            usage = {
+              promptTokens: reportedUsage.prompt_tokens,
+              completionTokens: reportedUsage.completion_tokens,
+              totalTokens: reportedUsage.total_tokens,
+            }
           }
         } catch {
           // Ignore non-data SSE lines and malformed keepalives. A normal
@@ -230,7 +255,7 @@ export class OpenAIProvider implements ILLMProvider {
         opts.onChunk(closeTag)
       }
 
-      opts.onDone(this.stripThinking(fullText), undefined, finishReason)
+      opts.onDone(this.stripThinking(fullText), usage, finishReason)
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
         opts.onError('已取消生成')

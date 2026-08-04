@@ -29,6 +29,12 @@ export interface BlueprintData {
     purpose: string
     keyEvents: string
     characters: string[]
+    /**
+     * Runtime-only relationship payload from the just-generated blueprint.
+     * It is intentionally not persisted in the blueprints table; the workflow
+     * consumes it immediately to synchronize character-card relationships.
+     */
+    relationshipHints?: unknown
     suspenseHook: string
     userGuidance: string
     notes: string

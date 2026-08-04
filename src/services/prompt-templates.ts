@@ -435,6 +435,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
       "title": "引人入胜的标题",
       "purpose": "本章主角最想解决的一件事",
       "characters": ["本章互动的要人A", "要人B"],
+      "relationships": [{ "from": "要人A", "to": "要人B", "relation": "本章可确认的关系；无则空数组" }],
       "keyEvents": "主角做了什么，遭遇了什么反转，金手指怎么用的。100字左右具体说明",
       "suspenseHook": "一句话说明结尾留了什么悬念"
     },
@@ -446,7 +447,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 
 要求：
 - 每章的 keyEvents 控制在 100-150 字以内，信息密度必须极高。
-- 每个对象必须包含完整的 chapterNumber、title、purpose、characters、keyEvents、suspenseHook。
+- 每个对象必须包含完整的 chapterNumber、title、purpose、characters、relationships、keyEvents、suspenseHook；relationships 仅写本章可确认的角色关系，无则输出空数组。
 - 仅给出最终的 JSON 文本，不要任何客套解释、分析、计划、Markdown 或代码块。
 
 ★【作者节奏/风格指导（如有，最高优先级）】★：
@@ -498,6 +499,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
       "title": "引人入胜的标题",
       "purpose": "本章主角最想解决的一件事",
       "characters": ["本章互动的要人A", "要人B"],
+      "relationships": [{ "from": "要人A", "to": "要人B", "relation": "本章可确认的关系；无则空数组" }],
       "keyEvents": "具体发生了什么，金手指怎么运作的。100字左右",
       "suspenseHook": "结尾留的钩子"
     }
@@ -506,7 +508,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 
 要求：
 - 严格遵循上下文连贯，不要前后矛盾。
-- 每个对象必须包含完整的 chapterNumber、title、purpose、characters、keyEvents、suspenseHook。
+- 每个对象必须包含完整的 chapterNumber、title、purpose、characters、relationships、keyEvents、suspenseHook；relationships 仅写本章可确认的角色关系，无则输出空数组。
 - 仅给出最终的 JSON 文本，不要解释、分析、计划、Markdown 或代码块。
 
 ★【作者节奏/风格指导（如有，最高优先级）】★：

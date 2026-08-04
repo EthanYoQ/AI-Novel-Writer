@@ -9,6 +9,7 @@ import { registerKBController } from './controllers/kb-controller'
 import { registerImportController } from './controllers/import-controller'
 import { registerWindowController } from './controllers/window-controller'
 import { registerOfficialHomepageController } from './controllers/official-homepage-controller'
+import { registerModelProviderResourceController } from './controllers/model-provider-resource-controller'
 import { registerFinalizationController } from './controllers/finalization-controller'
 import { registerExternalFileGrantController } from './controllers/external-file-grant-controller'
 import { registerAppDataController } from './controllers/app-data-controller'
@@ -24,6 +25,7 @@ export function registerIPCHandlers() {
   // 挂载控制器路由
   registerWindowController()
   registerOfficialHomepageController()
+  registerModelProviderResourceController()
   registerConfigController()
   registerAppDataController()
   registerProjectController()

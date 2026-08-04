@@ -4,6 +4,8 @@
  */
 import type { Locale } from '../i18n/types'
 import type { EmbeddingOptions } from './embedding-options'
+import type { ModelCapabilities } from './provider-presets'
+import type { ModelProviderResourceId } from './model-provider-resources'
 import type {
   UpdateActionResponse,
   UpdateCheckResponse,
@@ -68,6 +70,15 @@ export interface WindowChannels {
 export interface OfficialHomepageChannels {
   'official-homepage:open': {
     args: []
+    return: { success: boolean; error?: string }
+  }
+}
+
+// ===== 固定模型服务商外链 =====
+export interface ModelProviderResourceChannels {
+  /** 只接受受信任资源 ID，由主进程映射为固定 HTTPS URL。 */
+  'model-provider-resource:open': {
+    args: [resource: ModelProviderResourceId]
     return: { success: boolean; error?: string }
   }
 }
@@ -369,6 +380,10 @@ export interface AppDataChannels {
 
 export interface LLMRequest {
   modelId: string
+  /** Stable attribution for per-project call history. */
+  purpose?: string
+  /** Frozen project lease. Missing/stale leases are never written to project statistics. */
+  projectSession?: ProjectSessionContext
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
   temperature?: number
   maxTokens?: number
@@ -399,20 +414,23 @@ export type LLMFinishReason =
   | 'unknown'
 
 export interface TokenUsage {
-  promptTokens: number
-  completionTokens: number
-  totalTokens: number
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
 }
 
 export interface ModelProfile {
   id: string
   name: string
-  provider: 'openai' | 'gemini' | 'deepseek' | 'ollama' | 'bigmodel' | 'novelai' | 'custom'
+  provider: 'openai' | 'gemini' | 'deepseek' | 'ollama' | 'bigmodel' | 'novelai' | 'xai' | 'siliconflow' | 'custom'
   protocol: 'openai' | 'gemini'
   modelName: string
   apiKey: string
   baseUrl: string
   temperature: number
+  /** 新配置使用的端点能力；旧配置缺失时继续使用 maxTokens。 */
+  capabilities?: ModelCapabilities
+  /** 旧配置和当前执行路径使用的输出 token 上限，保持兼容。 */
   maxTokens: number
   purposes: Array<'generation' | 'refinement' | 'summary' | 'embedding'>
   /** 仅用于 Embedding 模型；旧配置省略时沿用原有默认行为。 */
@@ -513,7 +531,18 @@ export interface DatabaseChannels {
 
   // 沿用旧表
   'db:log-llm-call': { args: [call: Record<string, unknown>, expectedProjectPath: string]; return: { success: boolean } }
-  'db:get-llm-stats': { args: [expectedProjectPath: string]; return: { totalCalls: number; totalTokens: number; totalPromptTokens: number; totalCompletionTokens: number } }
+  'db:get-llm-stats': {
+    args: [expectedProjectPath: string]
+    return: {
+      totalCalls: number
+      successfulCalls: number
+      failedCalls: number
+      knownUsageCalls: number
+      totalTokens: number | null
+      totalPromptTokens: number | null
+      totalCompletionTokens: number | null
+    }
+  }
   'db:get-llm-history': { args: [limit: number | undefined, expectedProjectPath: string]; return: unknown[] }
   'db:save-summary-snapshot': { args: [chapterNumber: number, characterStates: string, expectedProjectPath: string]; return: { success: boolean } }
   'db:get-latest-summary': { args: [expectedProjectPath: string]; return: { characterStates: string; chapterNumber: number } | null }
@@ -578,7 +607,7 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ConfigChannels & UpdateChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ImportChannels & MCPChannels
+export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ImportChannels & MCPChannels
 export type AllEventChannels = LLMStreamEvents & UpdateStateEvents
 
 /** 提取 invoke 频道名 */

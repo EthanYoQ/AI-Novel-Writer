@@ -13,6 +13,10 @@ import { Label } from '../ui/Label'
 import { Textarea } from '../ui/Textarea'
 import type { DirectoryWorkflowParams } from '../../services/workflows/directory-workflow'
 import {
+  DEFAULT_BLUEPRINT_GENERATION_COUNT,
+  getBlueprintBatchAdvice,
+} from '../../services/workflows/blueprint-batch-policy'
+import {
   captureProjectSession,
   isProjectSessionCurrent,
 } from '../project-session-gate'
@@ -35,7 +39,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   // 覆盖/追加模式选择 (仅当 existingCount > 0 时有效)
   const [overwriteMode, setOverwriteMode] = useState<'append' | 'full'>('append')
 
-  const [frontN, setFrontN] = useState<number | ''>(50)
+  const [frontN, setFrontN] = useState<number | ''>(DEFAULT_BLUEPRINT_GENERATION_COUNT)
   const [rangeStart, setRangeStart] = useState<number | ''>(existingCount + 1)
   const [rangeEnd, setRangeEnd] = useState<number | ''>(existingCount + 50)
   // 节奏指导
@@ -77,10 +81,13 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
           return
         }
         const remaining = total - existingCount
-        const count = Math.min(remaining, Math.max(1, Number(frontN) || 50))
+        const count = Math.min(remaining, Math.max(1, Number(frontN) || DEFAULT_BLUEPRINT_GENERATION_COUNT))
         params = { mode: 'append', startChapter: existingCount + 1, count }
       } else {
-        params = { mode: 'full', count: Math.min(total, Math.max(1, Number(frontN) || 50)) }
+        params = {
+          mode: 'full',
+          count: Math.min(total, Math.max(1, Number(frontN) || DEFAULT_BLUEPRINT_GENERATION_COUNT)),
+        }
       }
     } else {
       // 指定范围：提交时归一化，不依赖 blur；全书已有蓝图时拒绝追加
@@ -132,7 +139,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
                       onChange={e => setFrontN(e.target.value === '' ? '' : parseInt(e.target.value))}
                       onBlur={() => {
                         const v = Number(frontN)
-                        if (!v || v < 1) setFrontN(50)
+                        if (!v || v < 1) setFrontN(DEFAULT_BLUEPRINT_GENERATION_COUNT)
                         else setFrontN(Math.min(total, v))
                       }}
                       className="w-16 h-6 text-xs px-2 py-0"
@@ -184,6 +191,16 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
                 label={text(`全量生成（共 ${total} 章）`, `Generate all ${total} chapters`)}
               />
             </div>
+            <p
+              className="mt-3 rounded-md border px-3 py-2 text-xs leading-5"
+              style={{
+                color: 'var(--color-text-secondary)',
+                backgroundColor: 'var(--color-panel)',
+                borderColor: 'var(--color-border)',
+              }}
+            >
+              {text(getBlueprintBatchAdvice('zh-CN'), getBlueprintBatchAdvice('en-US'))}
+            </p>
           </div>
 
           {existingCount > 0 && (

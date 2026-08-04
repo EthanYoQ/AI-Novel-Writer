@@ -215,8 +215,8 @@ describe('parseTextBlueprintsStrict', () => {
     expect(() => parseTextBlueprintsStrict('{not json', 1, 3)).toThrow(/蓝图 JSON/)
   })
 
-  it('throws when the parsed result is empty', () => {
-    expect(() => parseTextBlueprintsStrict('[{"chapterNumber": 9, "title": "太远"}]', 1, 3)).toThrow(/未解析到/)
+  it('rejects an out-of-range chapter instead of silently filtering it', () => {
+    expect(() => parseTextBlueprintsStrict('[{"chapterNumber": 9, "title": "太远"}]', 1, 3)).toThrow(/越界/)
   })
 })
 

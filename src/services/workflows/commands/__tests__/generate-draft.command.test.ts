@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useLLMStore } from '../../../../stores/llm-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
-import { GenerateDraftCommand, countDraftUnits, sanitizeDraftText } from '../generate-draft.command'
+import {
+  GenerateDraftCommand,
+  countDraftUnits,
+  resolveDraftModelLimits,
+  sanitizeDraftText,
+} from '../generate-draft.command'
 
 describe('generate draft command text cleanup', () => {
   it('removes thinking residue and continue UI prompts from draft text', () => {
@@ -141,7 +146,15 @@ describe('GenerateDraftCommand truncation boundary', () => {
     useLLMStore.setState({ defaultModelId: null, models: [] })
   })
 
-  function setup(wordsPerChapter: number, wordsTarget?: number, defaultModelMaxTokens?: number) {
+  function setup(
+    wordsPerChapter: number,
+    wordsTarget?: number,
+    defaultModelMaxTokens?: number,
+    options: {
+      capabilities?: { contextWindowTokens?: number | null; maxOutputTokens?: number | null; reasoning?: boolean }
+      premise?: string
+    } = {},
+  ) {
     useLLMStore.setState(defaultModelMaxTokens === undefined
       ? { defaultModelId: 'missing-draft-model', models: [] }
       : {
@@ -156,13 +169,14 @@ describe('GenerateDraftCommand truncation boundary', () => {
             baseUrl: 'https://example.invalid',
             temperature: 0.88,
             maxTokens: defaultModelMaxTokens,
+            capabilities: options.capabilities as never,
             purposes: ['generation'],
           }] as never,
         })
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       void args
       if (channel === 'db:project-core-get') {
-        return { premise: '故事前提', charactersArch: '', worldbuilding: '', synopsis: '' }
+        return { premise: options.premise ?? '故事前提', charactersArch: '', worldbuilding: '', synopsis: '' }
       }
       if (channel === 'fs:list-dir' || channel === 'db:character-get-all') return []
       if (channel === 'db:draft-next-version') return 1
@@ -317,12 +331,13 @@ describe('GenerateDraftCommand truncation boundary', () => {
       'callLLMResult',
     ).mockResolvedValue({ content: '不应续写。', finishReason: 'length' })
 
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('初')
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
 
     expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 4096 })
     expect(continuation).not.toHaveBeenCalled()
-    const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
-    expect(persisted?.[1]).toMatchObject({ content: expect.stringContaining('初') })
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-next-version', expect.anything(), expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   })
 
   it('does not persist a content-filtered response even when it reaches the target lower bound', async () => {
@@ -361,5 +376,161 @@ describe('GenerateDraftCommand truncation boundary', () => {
     expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 1024 })
     expect(continuation).toHaveBeenCalledTimes(1)
     expect(continuation.mock.calls[0]?.[3]).toMatchObject({ maxTokens: 1024 })
+  })
+
+  it('uses capability output limits while preserving legacy maxTokens and unknown context', () => {
+    expect(resolveDraftModelLimits({
+      maxTokens: 1024,
+      capabilities: {
+        contextWindowTokens: null,
+        maxOutputTokens: 4096,
+      },
+    })).toEqual({
+      contextWindowTokens: null,
+      maxOutputTokens: 4096,
+      reasoning: false,
+    })
+
+    expect(resolveDraftModelLimits({
+      maxTokens: 1536,
+      capabilities: {
+        contextWindowTokens: 32_768,
+        maxOutputTokens: null,
+      },
+    })).toEqual({
+      contextWindowTokens: 32_768,
+      maxOutputTokens: 1536,
+      reasoning: false,
+    })
+  })
+
+  it('fails before the first network call when a declared context window cannot fit the prompt and output budget', async () => {
+    const { invoke, context, callbacks, command } = setup(3000, 3000, 512, {
+      capabilities: { contextWindowTokens: 256, maxOutputTokens: 512 },
+    })
+    const initial = vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: '不应联网。', finishReason: 'stop' })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('输入上下文预算')
+
+    expect(initial).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
+  })
+
+  it('uses a conservative safety budget instead of claiming an unknown context window is sufficient', async () => {
+    const { invoke, context, callbacks, command } = setup(3000, 3000, 1024, {
+      capabilities: { contextWindowTokens: null, maxOutputTokens: 1024 },
+      premise: '设定'.repeat(13_000),
+    })
+    const initial = vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: '不应联网。', finishReason: 'stop' })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('未声明上下文窗口')
+
+    expect(initial).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
+  })
+
+  it('fails with a reasoning-specific action when hidden reasoning exhausts output before visible prose', async () => {
+    const { invoke, context, callbacks, command } = setup(3000, 3000, 1024, {
+      capabilities: { contextWindowTokens: 32_768, maxOutputTokens: 1024, reasoning: true },
+    })
+    vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'length' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: '<think>推理耗尽</think>', finishReason: 'length' })
+    const continuation = vi.spyOn(
+      command as unknown as { callLLMResult: (...args: unknown[]) => Promise<never> },
+      'callLLMResult',
+    )
+
+    await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('无法安全续接隐藏推理过程')
+    expect(continuation).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
+  })
+
+  it('only continues an incomplete draft after a length finish', async () => {
+    const { context, callbacks, command } = setup(3000, 3000)
+    vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: '初'.repeat(200), finishReason: 'stop' })
+    const continuation = vi.spyOn(
+      command as unknown as {
+        callLLMResult: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
+      },
+      'callLLMResult',
+    ).mockResolvedValue({ content: '不应续写。', finishReason: 'stop' })
+
+    await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('明显未达到章节目标')
+
+    expect(continuation).not.toHaveBeenCalled()
+  })
+
+  it('continues with visible text only and removes an overlapping repeated tail', async () => {
+    const { invoke, context, callbacks, command } = setup(3000, 3000)
+    const tail = '尾'.repeat(100)
+    const initialDraft = `${'初'.repeat(1000)}<think>不应进入续写上下文</think>${tail}`
+    vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'length' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: initialDraft, finishReason: 'length' })
+    const continuation = vi.spyOn(
+      command as unknown as {
+        callLLMResult: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
+      },
+      'callLLMResult',
+    ).mockResolvedValue({ content: `${tail}${'续'.repeat(1600)}。`, finishReason: 'stop' })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('续')
+
+    const continuationPrompt = continuation.mock.calls[0]?.[0] ?? ''
+    expect(continuationPrompt).not.toContain('<think>')
+    expect(continuationPrompt).not.toContain('不应进入续写上下文')
+    const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
+    const persistedContent = (persisted?.[1] as { content: string } | undefined)?.content ?? ''
+    expect(persistedContent.match(/尾/g)).toHaveLength(100)
+  })
+
+  it('stops after a bounded number of length continuations and never persists a still-truncated draft', async () => {
+    const { invoke, context, callbacks, command } = setup(20_000, 20_000, 1024)
+    vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'length' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: '初'.repeat(1000), finishReason: 'length' })
+    const continuation = vi.spyOn(
+      command as unknown as {
+        callLLMResult: (...args: unknown[]) => Promise<{ content: string; finishReason: 'length' }>
+      },
+      'callLLMResult',
+    ).mockImplementation(async () => ({
+      content: `第${continuation.mock.calls.length}段${'续'.repeat(1000)}。`,
+      finishReason: 'length' as const,
+    }))
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
+
+    expect(continuation).toHaveBeenCalledTimes(7)
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-next-version', expect.anything(), expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   })
 })

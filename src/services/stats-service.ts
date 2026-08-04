@@ -10,9 +10,12 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 /** LLM 调用统计 */
 export interface LLMStats {
   totalCalls: number
-  totalTokens: number
-  totalPromptTokens: number
-  totalCompletionTokens: number
+  successfulCalls: number
+  failedCalls: number
+  knownUsageCalls: number
+  totalTokens: number | null
+  totalPromptTokens: number | null
+  totalCompletionTokens: number | null
 }
 
 /** LLM 调用记录 */
@@ -20,9 +23,9 @@ export interface LLMCallRecord {
   id: number
   modelName: string
   purpose: string
-  promptTokens: number
-  completionTokens: number
-  totalTokens: number
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
   durationMs: number
   success: boolean
   createdAt: string
