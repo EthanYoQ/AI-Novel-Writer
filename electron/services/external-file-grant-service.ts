@@ -1,7 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { normalizeSecureRelativePath, type SecureFileCapability } from '../security/windows-safe-file-system'
+import {
+  captureSecureRootIdentity,
+  normalizeSecureRelativePath,
+  type SecureFileCapability,
+  type SecureRootIdentity,
+} from '../security/windows-safe-file-system'
 
 /**
  * 短期外部文件授权由主进程签发并保存在内存中。渲染进程只能携带授权标识，
@@ -55,6 +60,7 @@ interface ExternalFileGrantRecord {
   webContentsId: number
   scope: 'file' | 'directory'
   rootPath: string
+  rootIdentity: SecureRootIdentity
   fixedRelativePath: string | null
   operations: ReadonlySet<ExternalFileGrantOperation>
   expiresAt: number
@@ -105,6 +111,7 @@ export class ExternalFileGrantService {
       webContentsId: options.webContentsId,
       scope: 'directory',
       rootPath: targetPath,
+      rootIdentity: captureSecureRootIdentity(targetPath),
       fixedRelativePath: null,
       operations: options.operations,
       ttlMs: options.ttlMs,
@@ -117,10 +124,12 @@ export class ExternalFileGrantService {
     if (!fs.statSync(targetPath).isFile()) {
       throw new Error('外部文件授权目标必须是已存在的文件')
     }
+    const rootPath = path.dirname(targetPath)
     return this.issue({
       webContentsId: options.webContentsId,
       scope: 'file',
-      rootPath: path.dirname(targetPath),
+      rootPath,
+      rootIdentity: captureSecureRootIdentity(rootPath),
       fixedRelativePath: path.basename(targetPath),
       operations: options.operations,
       ttlMs: options.ttlMs,
@@ -144,6 +153,7 @@ export class ExternalFileGrantService {
     webContentsId: number
     scope: 'file' | 'directory'
     rootPath: string
+    rootIdentity: SecureRootIdentity
     fixedRelativePath: string | null
     operations: readonly ExternalFileGrantOperation[]
     ttlMs: number
@@ -163,6 +173,7 @@ export class ExternalFileGrantService {
       webContentsId: options.webContentsId,
       scope: options.scope,
       rootPath: options.rootPath,
+      rootIdentity: options.rootIdentity,
       fixedRelativePath: options.fixedRelativePath,
       operations: new Set(options.operations),
       expiresAt,
@@ -224,6 +235,7 @@ export class ExternalFileGrantService {
     return {
       rootPath: grant.rootPath,
       relativePath,
+      rootIdentity: grant.rootIdentity,
       scope: grant.scope,
     }
   }

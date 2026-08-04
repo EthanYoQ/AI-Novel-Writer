@@ -12,7 +12,10 @@ import {
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
 import type { CharacterData } from '../../../electron/repositories/character-repository'
-import { parseCharacterCardsFromModelOrSource } from './character-card-normalizer'
+import {
+  extractCompleteCharacterCards,
+  mergeExtractedCharacterCardsWithExisting,
+} from './character-card-normalizer'
 import { randomUUID } from '../../utils/id'
 
 import { runPostProcessPipeline, type PostProcessStep } from './workflow-utils'
@@ -321,10 +324,34 @@ export function createCharacterExtractSteps(projectPath: string, characterDynami
         })
         if (context?.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
 
-        const characterDataList = parseCharacterCardsFromModelOrSource(fullContent, characterDynamicsContent)
-        if (characterDataList.length === 0) {
-          throw new Error(text('未能从 AI 输出或角色图谱中提取到有效角色卡，未写入角色列表', 'No valid character cards could be extracted from the AI output or character dynamics. Nothing was saved.'))
+        const generatedCharacterCards = extractCompleteCharacterCards(fullContent, characterDynamicsContent)
+        if (!sameProjectSessionContext(
+          projectSession,
+          projectSessionContextFromProject(useProjectStore.getState().currentProject),
+        )) {
+          throw new Error(text(
+            '项目上下文已切换，角色卡提取已停止以避免写入错误项目',
+            'The project context changed, so character-card extraction stopped before saving.',
+          ))
         }
+        const existingCharacterCards = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:character-get-all',
+          projectPath,
+        )
+        if (!sameProjectSessionContext(
+          projectSession,
+          projectSessionContextFromProject(useProjectStore.getState().currentProject),
+        )) {
+          throw new Error(text(
+            '项目上下文已切换，角色卡提取已停止以避免写入错误项目',
+            'The project context changed, so character-card extraction stopped before saving.',
+          ))
+        }
+        const characterDataList = mergeExtractedCharacterCardsWithExisting(
+          generatedCharacterCards,
+          existingCharacterCards,
+        )
 
         // 批量写入数据库
         if (context?.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))

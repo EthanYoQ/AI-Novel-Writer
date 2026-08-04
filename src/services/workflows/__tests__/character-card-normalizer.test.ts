@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  extractCompleteCharacterCards,
   normalizeCharacterCardsForPersistence,
   parseCharacterCardsFromModelOrSource,
 } from '../character-card-normalizer'
@@ -103,5 +104,141 @@ describe('character card normalizer', () => {
     expect(cards).toHaveLength(2)
     expect(cards[0].name).toBe('林晓薇')
     expect(JSON.parse(cards[0].relationships)).toEqual([{ target: '周砚', relation: '盟友' }])
+  })
+
+  it('completes a partial model response with every character represented in the source architecture', () => {
+    const source = JSON.stringify({
+      characters: [
+        {
+          name: '林晓薇',
+          role: 'protagonist',
+          relationships: [{ target: '周砚', relation: '共同追查真相' }],
+        },
+        { name: '周砚', role: 'supporting', background: '掌握关键线索的调查记者' },
+        { name: 'Ethan', role: 'antagonist', background: '施压主角的上级' },
+      ],
+    })
+    const model = JSON.stringify({
+      characters: [{
+        name: '林晓薇',
+        role: 'protagonist',
+        appearance: '灰色职业套装，神情克制。',
+        relationships: [{ target: '周砚', relation: '互相试探的盟友' }],
+      }],
+    })
+
+    const cards = parseCharacterCardsFromModelOrSource(model, source)
+
+    expect(cards.map(card => card.name)).toEqual(['林晓薇', '周砚', 'Ethan'])
+    expect(cards.map(card => card.role)).toEqual(['protagonist', 'supporting', 'antagonist'])
+    expect(cards[0].appearance).toBe('灰色职业套装，神情克制。')
+    expect(JSON.parse(cards[0].relationships)).toEqual([
+      { target: '周砚', relation: '互相试探的盟友' },
+    ])
+  })
+
+  it('extracts every character from the real markdown heading formats when the model is empty', () => {
+    const source = [
+      '# 角色图谱总览',
+      '## 一、【第一核心：主角】',
+      '### 陈默',
+      '- 性别：男',
+      '- 核心动机：摆脱深渊留下的命运',
+      '### 角色一：苍青（盟友/共生线，非附庸）',
+      '- 关系：与陈默共生',
+      '### 角色二：墨无极（对手/宿敌线）',
+      '- 关系：陈默：宿敌',
+      '### 角色三：陶厌（灰色变数/独立线）',
+      '- 背景：游走于各方势力之间',
+      '## 三、深渊魔主残魂（B面人格/内在敌人）',
+      '- 能力：侵蚀陈默的意志',
+    ].join('\n')
+
+    const cards = extractCompleteCharacterCards('', source)
+
+    expect(cards.map(card => card.name)).toEqual(['陈默', '苍青', '墨无极', '陶厌', '深渊魔主残魂'])
+    expect(cards.map(card => card.role)).toEqual([
+      'protagonist',
+      'supporting',
+      'antagonist',
+      'supporting',
+      'antagonist',
+    ])
+    expect(cards.find(card => card.name === '陈默')?.motivation).toBe('摆脱深渊留下的命运')
+  })
+
+  it('does not mistake character overview or chapter headings for character cards', () => {
+    const source = [
+      '# 角色图谱总览',
+      '## 第一卷：坠渊',
+      '### 第1章：深渊来客',
+      '### 第一节：命运裂缝',
+      '## 一、【第一核心：主角】',
+      '### 角色一：苍青（盟友/共生线，非附庸）',
+      '## 第二卷：旧敌重逢',
+      '### 第2章：墨色风暴',
+    ].join('\n')
+
+    const cards = extractCompleteCharacterCards('', source)
+
+    expect(cards.map(card => card.name)).toEqual(['苍青'])
+  })
+
+  it('keeps a role section narrative heading out of the roster', () => {
+    const source = [
+      '# 角色图谱',
+      '## 第一核心：主角',
+      '### 陈默',
+      '- 性别：男',
+      '- 核心动机：摆脱深渊留下的命运',
+      '### 宿命冲突',
+      '- 主题：陈默必须在自由与责任之间作出选择',
+    ].join('\n')
+
+    const cards = extractCompleteCharacterCards('', source)
+
+    expect(cards.map(card => card.name)).toEqual(['陈默'])
+  })
+
+  it('fails closed when a role candidate cannot be matched to a supported character entry', () => {
+    const source = [
+      '# 角色图谱',
+      '## 主角：陈默',
+      '- 性别：男',
+      '## 反派：',
+      '- 目标：阻止陈默离开深渊',
+    ].join('\n')
+
+    expect(() => extractCompleteCharacterCards('', source)).toThrow(
+      '无法从角色图谱中安全识别完整角色清单',
+    )
+  })
+
+  it('fails closed when a role candidate names multiple possible characters', () => {
+    const source = [
+      '# 角色图谱',
+      '## 主角：陈默',
+      '- 性别：男',
+      '## 反派：墨无极 / 深渊魔主',
+      '- 目标：阻止陈默离开深渊',
+    ].join('\n')
+
+    expect(() => extractCompleteCharacterCards('', source)).toThrow(
+      '无法从角色图谱中安全识别完整角色清单',
+    )
+  })
+
+  it('preserves free-form relationship notes that are not structured JSON', () => {
+    const source = JSON.stringify({
+      characters: [
+        { name: '陈默', role: 'protagonist', relationships: '[暂无明确关系]' },
+      ],
+    })
+
+    const cards = extractCompleteCharacterCards('', source)
+
+    expect(cards).toEqual([
+      expect.objectContaining({ name: '陈默', relationships: '[暂无明确关系]' }),
+    ])
   })
 })

@@ -39,6 +39,7 @@ function childCapability(
   return {
     rootPath: parent.rootPath,
     relativePath: parent.relativePath ? `${parent.relativePath}\\${name}` : name,
+    rootIdentity: parent.rootIdentity,
   }
 }
 

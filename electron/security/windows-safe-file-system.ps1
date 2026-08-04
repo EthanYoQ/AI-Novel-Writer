@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 $nativeSource = @'
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
@@ -92,6 +93,33 @@ namespace AiNovelSecureFs {
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct ByHandleFileInformation {
+      public uint FileAttributes;
+      public uint CreationTimeLow;
+      public uint CreationTimeHigh;
+      public uint LastAccessTimeLow;
+      public uint LastAccessTimeHigh;
+      public uint LastWriteTimeLow;
+      public uint LastWriteTimeHigh;
+      public uint VolumeSerialNumber;
+      public uint FileSizeHigh;
+      public uint FileSizeLow;
+      public uint NumberOfLinks;
+      public uint FileIndexHigh;
+      public uint FileIndexLow;
+    }
+
+    public sealed class RootIdentity {
+      public readonly uint VolumeSerialNumber;
+      public readonly ulong FileIndex;
+
+      public RootIdentity(uint volumeSerialNumber, ulong fileIndex) {
+        VolumeSerialNumber = volumeSerialNumber;
+        FileIndex = fileIndex;
+      }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct RenameInformationHeader {
       public byte ReplaceIfExists;
       public IntPtr RootDirectory;
@@ -166,6 +194,12 @@ namespace AiNovelSecureFs {
       IntPtr fileName,
       [MarshalAs(UnmanagedType.U1)] bool restartScan);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(
+      IntPtr fileHandle,
+      out ByHandleFileInformation fileInformation);
+
     private static bool IsValidHandle(IntPtr handle) {
       return handle != IntPtr.Zero && handle != new IntPtr(-1);
     }
@@ -183,6 +217,30 @@ namespace AiNovelSecureFs {
         throw new SecureFsException("SECURE_FS_NOT_FOUND");
       }
       throw new SecureFsException("SECURE_FS_OPEN_FAILED");
+    }
+
+    public static RootIdentity ParseRootIdentity(string volumeSerialNumber, string fileIndex) {
+      ulong volume;
+      ulong index;
+      if (String.IsNullOrEmpty(volumeSerialNumber) || String.IsNullOrEmpty(fileIndex)
+          || !UInt64.TryParse(volumeSerialNumber, NumberStyles.None, CultureInfo.InvariantCulture, out volume)
+          || volume > UInt32.MaxValue
+          || !UInt64.TryParse(fileIndex, NumberStyles.None, CultureInfo.InvariantCulture, out index)) {
+        throw new SecureFsException("SECURE_FS_INVALID_PATH");
+      }
+      return new RootIdentity((uint)volume, index);
+    }
+
+    private static void VerifyRootIdentity(IntPtr rootHandle, RootIdentity expected) {
+      if (expected == null) throw new SecureFsException("SECURE_FS_INVALID_PATH");
+      ByHandleFileInformation actual;
+      if (!GetFileInformationByHandle(rootHandle, out actual)) {
+        throw new SecureFsException("SECURE_FS_OPEN_FAILED");
+      }
+      ulong fileIndex = ((ulong)actual.FileIndexHigh << 32) | actual.FileIndexLow;
+      if (actual.VolumeSerialNumber != expected.VolumeSerialNumber || fileIndex != expected.FileIndex) {
+        throw new SecureFsException("SECURE_FS_ROOT_CHANGED");
+      }
     }
 
     private static string ToNtPath(string rootPath) {
@@ -252,6 +310,26 @@ namespace AiNovelSecureFs {
       uint disposition,
       uint options,
       uint shareAccess) {
+      return OpenRelative(
+        rootDirectory,
+        name,
+        desiredAccess,
+        fileAttributes,
+        disposition,
+        options,
+        shareAccess,
+        true);
+    }
+
+    private static IntPtr OpenRelative(
+      IntPtr rootDirectory,
+      string name,
+      uint desiredAccess,
+      uint fileAttributes,
+      uint disposition,
+      uint options,
+      uint shareAccess,
+      bool preventReparse) {
       if (name == null || name.Length > 32760) throw new SecureFsException("SECURE_FS_INVALID_PATH");
       IntPtr nameBuffer = IntPtr.Zero;
       try {
@@ -264,11 +342,17 @@ namespace AiNovelSecureFs {
         IntPtr unicodePointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString)));
         try {
           Marshal.StructureToPtr(unicode, unicodePointer, false);
+          uint objectAttributes = OBJ_CASE_INSENSITIVE;
+          uint createOptions = options | FILE_SYNCHRONOUS_IO_NONALERT;
+          if (preventReparse) {
+            objectAttributes |= OBJ_DONT_REPARSE;
+            createOptions |= FILE_OPEN_REPARSE_POINT;
+          }
           ObjectAttributes attributes = new ObjectAttributes {
             Length = Marshal.SizeOf(typeof(ObjectAttributes)),
             RootDirectory = rootDirectory,
             ObjectName = unicodePointer,
-            Attributes = OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
+            Attributes = objectAttributes,
             SecurityDescriptor = IntPtr.Zero,
             SecurityQualityOfService = IntPtr.Zero,
           };
@@ -283,7 +367,7 @@ namespace AiNovelSecureFs {
             fileAttributes,
             shareAccess,
             disposition,
-            options | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+            createOptions,
             IntPtr.Zero,
             0);
           if (status != STATUS_SUCCESS) ThrowForStatus(status);
@@ -302,14 +386,27 @@ namespace AiNovelSecureFs {
       return access;
     }
 
-    private static IntPtr OpenRoot(string rootPath, bool writable) {
-      return OpenRelative(
+    private static IntPtr OpenRoot(string rootPath, RootIdentity rootIdentity, bool writable) {
+      // The user-authorized root is bound to a directory handle once. It may
+      // legitimately sit below a parent junction, so only this initial,
+      // absolute open is allowed to resolve reparse points. All child opens
+      // keep OBJ_DONT_REPARSE and FILE_OPEN_REPARSE_POINT via OpenRelative.
+      IntPtr root = OpenRelative(
         IntPtr.Zero,
         ToNtPath(rootPath),
         DirectoryAccess(writable),
         FILE_ATTRIBUTE_DIRECTORY,
         FILE_OPEN,
-        FILE_DIRECTORY_FILE);
+        FILE_DIRECTORY_FILE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        false);
+      try {
+        VerifyRootIdentity(root, rootIdentity);
+        return root;
+      } catch {
+        CloseHandle(ref root);
+        throw;
+      }
     }
 
     private static IntPtr OpenDirectory(IntPtr parent, string segment, bool createIfMissing, bool writable) {
@@ -332,10 +429,10 @@ namespace AiNovelSecureFs {
         FILE_NON_DIRECTORY_FILE);
     }
 
-    private static List<IntPtr> OpenDirectoryChain(string rootPath, string[] segments, bool createIfMissing, bool writable) {
+    private static List<IntPtr> OpenDirectoryChain(string rootPath, RootIdentity rootIdentity, string[] segments, bool createIfMissing, bool writable) {
       List<IntPtr> handles = new List<IntPtr>();
       try {
-        IntPtr current = OpenRoot(rootPath, writable);
+        IntPtr current = OpenRoot(rootPath, rootIdentity, writable);
         handles.Add(current);
         foreach (string segment in segments) {
           current = OpenDirectory(current, segment, createIfMissing, writable);
@@ -358,10 +455,10 @@ namespace AiNovelSecureFs {
       }
     }
 
-    public static string ReadTextBase64(string rootPath, string relativePath) {
+    public static string ReadTextBase64(string rootPath, RootIdentity rootIdentity, string relativePath) {
       string[] segments = RelativeSegments(relativePath);
       if (segments.Length == 0) throw new SecureFsException("SECURE_FS_INVALID_PATH");
-      List<IntPtr> directories = OpenDirectoryChain(rootPath, Prefix(segments), false, false);
+      List<IntPtr> directories = OpenDirectoryChain(rootPath, rootIdentity, Prefix(segments), false, false);
       IntPtr file = IntPtr.Zero;
       try {
         file = OpenFile(
@@ -554,11 +651,11 @@ namespace AiNovelSecureFs {
       }
     }
 
-    public static AtomicWriteSession BeginAtomicWrite(string rootPath, string relativePath, byte[] content, bool mustAlreadyExist) {
+    public static AtomicWriteSession BeginAtomicWrite(string rootPath, RootIdentity rootIdentity, string relativePath, byte[] content, bool mustAlreadyExist) {
       if (content == null || content.Length > MaxTextBytes) throw new SecureFsException("SECURE_FS_FILE_TOO_LARGE");
       string[] segments = RelativeSegments(relativePath);
       if (segments.Length == 0) throw new SecureFsException("SECURE_FS_INVALID_PATH");
-      List<IntPtr> directories = OpenDirectoryChain(rootPath, Prefix(segments), false, true);
+      List<IntPtr> directories = OpenDirectoryChain(rootPath, rootIdentity, Prefix(segments), false, true);
       IntPtr temporaryFile = IntPtr.Zero;
       IntPtr requiredTarget = IntPtr.Zero;
       try {
@@ -591,22 +688,22 @@ namespace AiNovelSecureFs {
       }
     }
 
-    public static void MakeDirectory(string rootPath, string relativePath) {
+    public static void MakeDirectory(string rootPath, RootIdentity rootIdentity, string relativePath) {
       string[] segments = RelativeSegments(relativePath);
-      List<IntPtr> directories = OpenDirectoryChain(rootPath, segments, true, true);
+      List<IntPtr> directories = OpenDirectoryChain(rootPath, rootIdentity, segments, true, true);
       CloseDirectoryChain(directories);
     }
 
-    public static bool Exists(string rootPath, string relativePath) {
+    public static bool Exists(string rootPath, RootIdentity rootIdentity, string relativePath) {
       string[] segments = RelativeSegments(relativePath);
       if (segments.Length == 0) {
-        List<IntPtr> root = OpenDirectoryChain(rootPath, segments, false, false);
+        List<IntPtr> root = OpenDirectoryChain(rootPath, rootIdentity, segments, false, false);
         CloseDirectoryChain(root);
         return true;
       }
       List<IntPtr> directories;
       try {
-        directories = OpenDirectoryChain(rootPath, Prefix(segments), false, false);
+        directories = OpenDirectoryChain(rootPath, rootIdentity, Prefix(segments), false, false);
       } catch (SecureFsException error) {
         if (error.Code == "SECURE_FS_NOT_FOUND") return false;
         throw;
@@ -630,9 +727,9 @@ namespace AiNovelSecureFs {
       }
     }
 
-    public static SecureDirectoryEntry[] ListDirectory(string rootPath, string relativePath) {
+    public static SecureDirectoryEntry[] ListDirectory(string rootPath, RootIdentity rootIdentity, string relativePath) {
       string[] segments = RelativeSegments(relativePath);
-      List<IntPtr> directories = OpenDirectoryChain(rootPath, segments, false, false);
+      List<IntPtr> directories = OpenDirectoryChain(rootPath, rootIdentity, segments, false, false);
       IntPtr buffer = IntPtr.Zero;
       try {
         IntPtr directory = directories[directories.Count - 1];
@@ -707,16 +804,22 @@ try {
     throw [AiNovelSecureFs.SecureFsException]::new('SECURE_FS_REQUEST_TOO_LARGE')
   }
   $request = $inputLine | ConvertFrom-Json -ErrorAction Stop
-  if (($null -eq $request) -or ($request.PSObject.Properties.Name -notcontains 'operation') -or ($request.PSObject.Properties.Name -notcontains 'rootPath') -or ($request.PSObject.Properties.Name -notcontains 'relativePath')) {
+  if (($null -eq $request) -or ($request.PSObject.Properties.Name -notcontains 'operation') -or ($request.PSObject.Properties.Name -notcontains 'rootPath') -or ($request.PSObject.Properties.Name -notcontains 'relativePath') -or ($request.PSObject.Properties.Name -notcontains 'rootIdentity')) {
     throw [AiNovelSecureFs.SecureFsException]::new('SECURE_FS_INVALID_PATH')
   }
   if ($request.rootPath -isnot [string] -or $request.relativePath -isnot [string]) {
     throw [AiNovelSecureFs.SecureFsException]::new('SECURE_FS_INVALID_PATH')
   }
+  if ($null -eq $request.rootIdentity -or ($request.rootIdentity.PSObject.Properties.Name -notcontains 'volumeSerialNumber') -or ($request.rootIdentity.PSObject.Properties.Name -notcontains 'fileIndex') -or $request.rootIdentity.volumeSerialNumber -isnot [string] -or $request.rootIdentity.fileIndex -isnot [string]) {
+    throw [AiNovelSecureFs.SecureFsException]::new('SECURE_FS_INVALID_PATH')
+  }
+  $rootIdentity = [AiNovelSecureFs.SecureHandleFileSystem]::ParseRootIdentity(
+    $request.rootIdentity.volumeSerialNumber,
+    $request.rootIdentity.fileIndex)
 
   switch ([string]$request.operation) {
     'read' {
-      $contentBase64 = [AiNovelSecureFs.SecureHandleFileSystem]::ReadTextBase64($request.rootPath, $request.relativePath)
+      $contentBase64 = [AiNovelSecureFs.SecureHandleFileSystem]::ReadTextBase64($request.rootPath, $rootIdentity, $request.relativePath)
       Write-HelperResponse ([pscustomobject]@{ ok = $true; contentBase64 = $contentBase64 })
       break
     }
@@ -734,7 +837,7 @@ try {
       $content = [Convert]::FromBase64String([string]$request.contentBase64)
       $session = $null
       try {
-        $session = [AiNovelSecureFs.SecureHandleFileSystem]::BeginAtomicWrite($request.rootPath, $request.relativePath, $content, $mustAlreadyExist)
+        $session = [AiNovelSecureFs.SecureHandleFileSystem]::BeginAtomicWrite($request.rootPath, $rootIdentity, $request.relativePath, $content, $mustAlreadyExist)
         Write-HelperResponse ([pscustomobject]@{ ok = $true; phase = 'ready' })
         $commandLine = [Console]::In.ReadLine()
         if ($null -eq $commandLine -or $commandLine.Length -gt 4096) {
@@ -753,18 +856,18 @@ try {
       break
     }
     'mkdir' {
-      [AiNovelSecureFs.SecureHandleFileSystem]::MakeDirectory($request.rootPath, $request.relativePath)
+      [AiNovelSecureFs.SecureHandleFileSystem]::MakeDirectory($request.rootPath, $rootIdentity, $request.relativePath)
       Write-HelperResponse ([pscustomobject]@{ ok = $true })
       break
     }
     'exists' {
-      $exists = [AiNovelSecureFs.SecureHandleFileSystem]::Exists($request.rootPath, $request.relativePath)
+      $exists = [AiNovelSecureFs.SecureHandleFileSystem]::Exists($request.rootPath, $rootIdentity, $request.relativePath)
       Write-HelperResponse ([pscustomobject]@{ ok = $true; exists = $exists })
       break
     }
     'list' {
       $entries = @(
-        [AiNovelSecureFs.SecureHandleFileSystem]::ListDirectory($request.rootPath, $request.relativePath) |
+        [AiNovelSecureFs.SecureHandleFileSystem]::ListDirectory($request.rootPath, $rootIdentity, $request.relativePath) |
           ForEach-Object { [pscustomobject]@{ name = $_.Name; isDirectory = $_.IsDirectory } }
       )
       Write-HelperResponse ([pscustomobject]@{ ok = $true; entries = $entries })

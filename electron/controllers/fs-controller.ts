@@ -165,6 +165,7 @@ function parentCapability(capability: SecureFileCapability): SecureFileCapabilit
   return {
     rootPath: capability.rootPath,
     relativePath: parent === '.' ? '' : parent,
+    rootIdentity: capability.rootIdentity,
   }
 }
 
@@ -175,6 +176,7 @@ function childCapability(
   return {
     rootPath: parent.rootPath,
     relativePath: parent.relativePath ? `${parent.relativePath}\\${name}` : name,
+    rootIdentity: parent.rootIdentity,
   }
 }
 
