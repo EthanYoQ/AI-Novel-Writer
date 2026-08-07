@@ -71,6 +71,7 @@ function New-E2eUserDataFixture {
     [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
   }
   & $writeUtf8 (Join-Path $velaHome 'config.json') (@{
+    e2eUserSentinel = 'preserve-config-sentinel'
     theme = 'light'
     locale = 'zh-CN'
     proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 }
@@ -111,8 +112,6 @@ function New-E2eUserDataFixture {
     preservationRoot = $preservationRoot
     recentProjectRoot = $recentProjectRoot
     frozenUserDataPaths = @(
-      'config.json',
-      'recent-projects.json',
       'prompts/e2e-continuity.json',
       'skills/continuity-e2e/SKILL.md',
       'e2e-preservation/character-card.json',
@@ -138,6 +137,57 @@ function Get-E2eJsonWhenAvailable {
   catch {
     return $null
   }
+}
+
+function Read-E2eRequiredJsonFile {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+
+  Assert-E2eCondition -Condition (Test-Path -LiteralPath $Path -PathType Leaf) -Message "$Label is missing: $Path"
+  try {
+    return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw "$Label is not valid JSON: $($_.Exception.Message)"
+  }
+}
+
+function Assert-E2eManagedConfigPreserved {
+  param(
+    [Parameter(Mandatory = $true)]$Before,
+    [Parameter(Mandatory = $true)]$After
+  )
+
+  foreach ($propertyName in @('e2eUserSentinel', 'theme', 'locale')) {
+    Assert-E2eCondition -Condition ($Before.PSObject.Properties.Name -contains $propertyName) -Message "Seeded config is missing required $propertyName value."
+    Assert-E2eCondition -Condition ($After.PSObject.Properties.Name -contains $propertyName) -Message "Managed config lost the seeded $propertyName value."
+    Assert-E2eCondition -Condition ([string]$After.$propertyName -eq [string]$Before.$propertyName) -Message "Managed config changed the seeded $propertyName value."
+  }
+  Assert-E2eCondition -Condition ($null -ne $Before.proxy -and $null -ne $After.proxy) -Message 'Managed config lost the seeded proxy settings.'
+  foreach ($propertyName in @('enabled', 'type', 'host', 'port')) {
+    Assert-E2eCondition -Condition ($Before.proxy.PSObject.Properties.Name -contains $propertyName) -Message "Seeded proxy config is missing required $propertyName value."
+    Assert-E2eCondition -Condition ($After.proxy.PSObject.Properties.Name -contains $propertyName) -Message "Managed config lost the seeded proxy $propertyName value."
+    Assert-E2eCondition -Condition ([string]$After.proxy.$propertyName -eq [string]$Before.proxy.$propertyName) -Message "Managed config changed the seeded proxy $propertyName value."
+  }
+}
+
+function Assert-E2eRecentProjectPreserved {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$RecentProjects,
+    [Parameter(Mandatory = $true)][string]$ExpectedProjectRoot
+  )
+
+  $matches = @(
+    $RecentProjects | Where-Object {
+      $null -ne $_ -and
+      $_.PSObject.Properties.Name -contains 'path' -and
+      -not [string]::IsNullOrWhiteSpace([string]$_.path) -and
+      (Test-E2eSameAbsolutePath -Left ([string]$_.path) -Right $ExpectedProjectRoot)
+    }
+  )
+  Assert-E2eCondition -Condition ($matches.Count -eq 1) -Message 'Managed recent projects did not retain exactly one entry for the seeded recent project.'
 }
 
 function Wait-E2eMonitorState {
@@ -772,6 +822,11 @@ try {
   $e2eRecentProjectRoot = [string]$userDataFixture.recentProjectRoot
   $e2eFrozenUserDataPaths = @($userDataFixture.frozenUserDataPaths)
   $e2eRecentProjectFrozenPaths = @($userDataFixture.recentProjectFrozenPaths)
+  $e2eConfigPath = Join-Path $e2eVelaHome 'config.json'
+  $e2eRecentProjectsPath = Join-Path $e2eVelaHome 'recent-projects.json'
+  $beforeManagedConfig = Read-E2eRequiredJsonFile -Path $e2eConfigPath -Label 'Seeded managed config'
+  $beforeRecentProjects = @(Read-E2eRequiredJsonFile -Path $e2eRecentProjectsPath -Label 'Seeded recent projects')
+  [void](Assert-E2eRecentProjectPreserved -RecentProjects $beforeRecentProjects -ExpectedProjectRoot $e2eRecentProjectRoot)
   $beforeFrozenUserData = Get-E2eFrozenFileManifest -Root $e2eVelaHome -RelativePaths $e2eFrozenUserDataPaths
   $beforeRecentProject = Get-E2eFrozenFileManifest -Root $e2eRecentProjectRoot -RelativePaths $e2eRecentProjectFrozenPaths
   $beforePreservation = Get-E2eSha256Manifest -Root $e2ePreservationRoot
@@ -781,6 +836,8 @@ try {
     velaHome = $e2eVelaHome
     preservationRoot = $e2ePreservationRoot
     recentProjectRoot = $e2eRecentProjectRoot
+    managedConfigSentinel = [string]$beforeManagedConfig.e2eUserSentinel
+    recentProjectCanonicalPath = [System.IO.Path]::GetFullPath($e2eRecentProjectRoot)
     frozenFilesBefore = $beforeFrozenUserData
     recentProjectFrozenFilesBefore = $beforeRecentProject
     beforePreservation = $beforePreservation
@@ -933,6 +990,10 @@ try {
   $afterRecentProject = Get-E2eFrozenFileManifest -Root $e2eRecentProjectRoot -RelativePaths $e2eRecentProjectFrozenPaths
   $afterPreservation = Get-E2eSha256Manifest -Root $e2ePreservationRoot
   $afterVelaHome = Get-E2eSha256Manifest -Root $e2eVelaHome
+  $afterManagedConfig = Read-E2eRequiredJsonFile -Path $e2eConfigPath -Label 'Updated managed config'
+  $afterRecentProjects = @(Read-E2eRequiredJsonFile -Path $e2eRecentProjectsPath -Label 'Updated recent projects')
+  Assert-E2eManagedConfigPreserved -Before $beforeManagedConfig -After $afterManagedConfig
+  Assert-E2eRecentProjectPreserved -RecentProjects $afterRecentProjects -ExpectedProjectRoot $e2eRecentProjectRoot
   Assert-E2eFrozenFileManifestUnchanged -Before $beforeFrozenUserData -After $afterFrozenUserData
   Assert-E2eFrozenFileManifestUnchanged -Before $beforeRecentProject -After $afterRecentProject
   Assert-E2eCondition -Condition ($beforePreservation.sha256 -eq $afterPreservation.sha256) -Message 'The representative ~/.vela preservation fixture changed during the in-app update.'
@@ -940,6 +1001,8 @@ try {
   $evidence.userData.frozenFilesHashMatched = $true
   $evidence.userData.recentProjectFrozenFilesAfter = $afterRecentProject
   $evidence.userData.recentProjectFrozenFilesHashMatched = $true
+  $evidence.userData.managedConfigSemanticsPreserved = $true
+  $evidence.userData.recentProjectSemanticsPreserved = $true
   $evidence.userData.afterPreservation = $afterPreservation
   $evidence.userData.afterVelaHome = $afterVelaHome
   $evidence.userData.preservationHashMatched = $true
