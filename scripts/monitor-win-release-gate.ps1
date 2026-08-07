@@ -2424,8 +2424,9 @@ function Test-AiNovelGateLegacyBridgeWizardWindow {
   ) {
     return $false
   }
-  $expectedTitle = 'AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup '
-  if ([string]$Window.Title -cne $expectedTitle) {
+  $expectedTitle = 'AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup'
+  $normalizedTitle = ([string]$Window.Title).TrimEnd()
+  if (-not [string]::Equals($normalizedTitle, $expectedTitle, [System.StringComparison]::Ordinal)) {
     return $false
   }
   $key = Get-AiNovelGateLegacyBridgeWindowKey -Window $Window

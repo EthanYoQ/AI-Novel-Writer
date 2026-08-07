@@ -1128,10 +1128,16 @@ try {
   $statusAfterBlank = Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $bridge
   $otherTitle = [pscustomobject]@{ WindowHandle = '0x12'; ProcessId = $PID; Title = 'Other'; ClassName = '#32770'; Visible = $true }
   $setupTitle = [pscustomobject]@{ WindowHandle = '0x13'; ProcessId = $PID; Title = ('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup '); ClassName = '#32770'; Visible = $true }
+  $setupTitleWithTrailingWhitespace = [pscustomobject]@{ WindowHandle = '0x16'; ProcessId = $PID; Title = (('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup') + [char]9 + '  '); ClassName = '#32770'; Visible = $true }
+  $setupTitleWithLeadingWhitespace = [pscustomobject]@{ WindowHandle = '0x17'; ProcessId = $PID; Title = (' AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup '); ClassName = '#32770'; Visible = $true }
+  $setupTitleWithSuffix = [pscustomobject]@{ WindowHandle = '0x18'; ProcessId = $PID; Title = ('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup extra'); ClassName = '#32770'; Visible = $true }
   $wrongPid = [pscustomobject]@{ WindowHandle = '0x14'; ProcessId = ($PID + 1); Title = ''; ClassName = '#32770'; Visible = $true }
   $wrongClass = [pscustomobject]@{ WindowHandle = '0x15'; ProcessId = $PID; Title = ''; ClassName = 'OtherClass'; Visible = $true }
   $otherTitleRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $otherTitle)
   $setupTitleRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $setupTitle)
+  $setupTitleTrailingWhitespaceAccepted = Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBridge $bridge -Window $setupTitleWithTrailingWhitespace
+  $setupTitleLeadingWhitespaceRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBridge $bridge -Window $setupTitleWithLeadingWhitespace)
+  $setupTitleSuffixRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBridge $bridge -Window $setupTitleWithSuffix)
   $wrongPidRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $wrongPid)
   $wrongClassRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $wrongClass)
   $bridge.State = 'terminated'
@@ -1144,6 +1150,9 @@ try {
     BlankDidNotMarkWizard = -not $statusAfterBlank.legacyInteractiveWizardObserved
     OtherTitleRejected = $otherTitleRejected
     SetupTitleRejected = $setupTitleRejected
+    SetupTitleTrailingWhitespaceAccepted = $setupTitleTrailingWhitespaceAccepted
+    SetupTitleLeadingWhitespaceRejected = $setupTitleLeadingWhitespaceRejected
+    SetupTitleSuffixRejected = $setupTitleSuffixRejected
     WrongPidRejected = $wrongPidRejected
     WrongClassRejected = $wrongClassRejected
     TerminatedRejected = $terminatedRejected
@@ -1161,6 +1170,9 @@ finally {
       BlankDidNotMarkWizard: true,
       OtherTitleRejected: true,
       SetupTitleRejected: true,
+      SetupTitleTrailingWhitespaceAccepted: true,
+      SetupTitleLeadingWhitespaceRejected: true,
+      SetupTitleSuffixRejected: true,
       WrongPidRejected: true,
       WrongClassRejected: true,
       TerminatedRejected: true,
