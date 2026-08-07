@@ -519,9 +519,34 @@ function Get-E2eInstalledAppProcesses {
 
   $canonicalExe = [System.IO.Path]::GetFullPath($ExePath)
   return @(
-    Get-CimInstance Win32_Process -Filter "Name = '$appExecutableName'" -ErrorAction Stop | Where-Object {
+    $entries = @(Get-CimInstance Win32_Process -Filter "Name = '$appExecutableName'" -ErrorAction Stop | Where-Object {
       -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
       [System.IO.Path]::GetFullPath([string]$_.ExecutablePath).Equals($canonicalExe, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    foreach ($entry in $entries) {
+      $process = $null
+      try {
+        try {
+          $process = [System.Diagnostics.Process]::GetProcessById([int]$entry.ProcessId)
+        }
+        catch [System.ArgumentException] {
+          continue
+        }
+        $process.Refresh()
+        if ($process.HasExited) { continue }
+        $currentPath = [System.IO.Path]::GetFullPath([string]$process.MainModule.FileName)
+        if (-not $currentPath.Equals($canonicalExe, [System.StringComparison]::OrdinalIgnoreCase)) {
+          throw 'Existing installed application path changed while capturing cleanup identity.'
+        }
+        [pscustomobject]@{
+          ProcessId = [int]$process.Id
+          StartTimeTicks = [string]($process.StartTime.ToUniversalTime().Ticks)
+          ExecutablePath = $currentPath
+        }
+      }
+      finally {
+        if ($null -ne $process) { $process.Dispose() }
+      }
     }
   )
 }
@@ -532,12 +557,37 @@ function Stop-E2eExistingInstalledApps {
   foreach ($entry in @(Get-E2eInstalledAppProcesses -ExePath $ExePath)) {
     $process = $null
     try {
-      $process = [System.Diagnostics.Process]::GetProcessById([int]$entry.ProcessId)
+      try {
+        $process = [System.Diagnostics.Process]::GetProcessById([int]$entry.ProcessId)
+      }
+      catch [System.ArgumentException] {
+        continue
+      }
+      $canonicalExe = [System.IO.Path]::GetFullPath($ExePath)
+      if (-not [System.IO.Path]::GetFullPath([string]$entry.ExecutablePath).Equals($canonicalExe, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Existing installed application path changed before cleanup.'
+      }
+      if (
+        [string]::IsNullOrWhiteSpace([string]$entry.StartTimeTicks) -or
+        [long]$entry.StartTimeTicks -le 0
+      ) {
+        throw 'Existing installed application identity changed before cleanup.'
+      }
+      $process.Refresh()
       if ($process.HasExited) { continue }
+      if ($process.StartTime.ToUniversalTime().Ticks -ne [long]$entry.StartTimeTicks) {
+        throw 'Existing installed application identity changed before cleanup.'
+      }
+      $currentPath = [System.IO.Path]::GetFullPath([string]$process.MainModule.FileName)
+      if (-not $currentPath.Equals($canonicalExe, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Existing installed application path changed before cleanup.'
+      }
       $processIds = [System.Collections.Generic.HashSet[int]]::new()
       $startTimeTicks = @{}
       Add-AiNovelTrackedProcess -ProcessIds $processIds -StartTimeTicks $startTimeTicks -ProcessId $process.Id | Out-Null
       Add-AiNovelTrackedProcessTree -RootProcessId $process.Id -ProcessIds $processIds -StartTimeTicks $startTimeTicks
+      $process.Refresh()
+      if ($process.HasExited) { continue }
       $windows = @(Get-AiNovelTopLevelWindowSnapshot)
       $visibleMainWindows = @($windows | Where-Object { Test-AiNovelVisibleMainWindow -Window $_ -TargetProcessIds $processIds })
       if ($visibleMainWindows.Count -eq 1) {

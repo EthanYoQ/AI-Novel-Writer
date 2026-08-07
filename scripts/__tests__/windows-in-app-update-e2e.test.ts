@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -17,6 +18,27 @@ import {
 } from '../windows-in-app-update-e2e.mjs'
 
 const temporaryRoots: string[] = []
+const windowsIt = process.platform === 'win32' ? it : it.skip
+
+function quotePowerShell(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+function runWindowsE2ePowerShellFunction(script: string): string {
+  const sourcePath = resolve(process.cwd(), 'scripts/windows-in-app-update-e2e.ps1')
+  return execFileSync('powershell.exe', [
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-Command', [
+      `$tokens = $null; $errors = $null; $ast = [System.Management.Automation.Language.Parser]::ParseFile(${quotePowerShell(sourcePath)}, [ref]$tokens, [ref]$errors)`,
+      `if ($errors.Count -gt 0) { throw ($errors | ForEach-Object { $_.Message } | Out-String) }`,
+      `$definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Stop-E2eExistingInstalledApps' }, $true)`,
+      `if ($null -eq $definition) { throw 'Stop-E2eExistingInstalledApps was not found.' }`,
+      `Invoke-Expression $definition.Extent.Text`,
+      script,
+    ].join('; '),
+  ], { cwd: process.cwd(), encoding: 'utf8' })
+}
 
 function temporaryRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'ai-novel-update-e2e-test-'))
@@ -357,5 +379,64 @@ describe('Windows official in-app update E2E contract', () => {
 
   it('runs the E2E orchestration under the workflow PowerShell runtime', () => {
     expect(WINDOWS_UPDATE_RUNNER_COMMAND).toBe('pwsh.exe')
+  })
+
+  windowsIt('treats an already-exited installed app as clean while rejecting PID reuse', () => {
+    const output = runWindowsE2ePowerShellFunction(`
+$script:stopCalled = $false
+function Add-AiNovelTrackedProcess { param($ProcessIds, $StartTimeTicks, $ProcessId); [void]$ProcessIds.Add([int]$ProcessId); $StartTimeTicks[[int]$ProcessId] = '1'; return $true }
+function Add-AiNovelTrackedProcessTree { param($RootProcessId, $ProcessIds, $StartTimeTicks) }
+function Get-AiNovelTopLevelWindowSnapshot { return @() }
+function Test-AiNovelVisibleMainWindow { return $false }
+function Stop-AiNovelProcessTree { $script:stopCalled = $true; throw 'unsafe stop invoked' }
+function Assert-AiNovelProcessTreeExited { throw 'unsafe exit assertion invoked' }
+
+$missingPid = 2147483000
+function Get-E2eInstalledAppProcesses {
+  return [pscustomobject]@{ ProcessId = $missingPid; ExecutablePath = 'C:\\e2e\\AI.exe'; StartTimeTicks = '639217262838291804' }
+}
+$naturalExitAccepted = $true
+try { Stop-E2eExistingInstalledApps -ExePath 'C:\\e2e\\AI.exe' } catch { $naturalExitAccepted = $false }
+
+$current = [System.Diagnostics.Process]::GetCurrentProcess()
+try {
+  $currentPath = [System.IO.Path]::GetFullPath([string]$current.MainModule.FileName)
+  $currentStart = $current.StartTime.ToUniversalTime()
+  function Get-E2eInstalledAppProcesses {
+    return [pscustomobject]@{ ProcessId = $PID; ExecutablePath = $currentPath; StartTimeTicks = [string]($currentStart.AddSeconds(-1).Ticks) }
+  }
+  $script:stopCalled = $false
+  $startMismatchRejected = $false
+  try { Stop-E2eExistingInstalledApps -ExePath $currentPath } catch { $startMismatchRejected = $_.Exception.Message -like '*identity changed*' }
+  $startMismatchStoppedNothing = -not $script:stopCalled
+
+  $expectedOtherPath = 'C:\\e2e\\other\\AI.exe'
+  function Get-E2eInstalledAppProcesses {
+    return [pscustomobject]@{ ProcessId = $PID; ExecutablePath = $expectedOtherPath; StartTimeTicks = [string]$currentStart.Ticks }
+  }
+  $script:stopCalled = $false
+  $pathMismatchRejected = $false
+  try { Stop-E2eExistingInstalledApps -ExePath $expectedOtherPath } catch { $pathMismatchRejected = $_.Exception.Message -like '*path changed*' }
+  $pathMismatchStoppedNothing = -not $script:stopCalled
+
+  [pscustomobject]@{
+    NaturalExitAccepted = $naturalExitAccepted
+    StartMismatchRejected = $startMismatchRejected
+    StartMismatchStoppedNothing = $startMismatchStoppedNothing
+    PathMismatchRejected = $pathMismatchRejected
+    PathMismatchStoppedNothing = $pathMismatchStoppedNothing
+  } | ConvertTo-Json -Compress
+}
+finally {
+  $current.Dispose()
+}
+`)
+    expect(JSON.parse(output.trim().split(/\r?\n/).at(-1)!)).toEqual({
+      NaturalExitAccepted: true,
+      StartMismatchRejected: true,
+      StartMismatchStoppedNothing: true,
+      PathMismatchRejected: true,
+      PathMismatchStoppedNothing: true,
+    })
   })
 })
