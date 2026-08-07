@@ -16,7 +16,7 @@ export interface ElectronUpdaterLike {
   allowDowngrade: boolean
   checkForUpdates(): Promise<NativeUpdateCheckResult | null>
   downloadUpdate(): Promise<string[]>
-  quitAndInstall(): void
+  quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void
   on(event: string, listener: (...args: unknown[]) => void): unknown
 }
 
@@ -51,7 +51,9 @@ export function configureElectronUpdater(updater: ElectronUpdaterLike): UpdateBa
       return updateInfo ? { updateInfo } : null
     },
     downloadUpdate: () => updater.downloadUpdate(),
-    quitAndInstall: () => updater.quitAndInstall(),
+    // “立即重启更新”应当完成无人值守替换并自动拉起新版本；Electron
+    // 默认参数会打开 assisted NSIS 向导并且安装后不重启应用。
+    quitAndInstall: () => updater.quitAndInstall(true, true),
     on: (event, listener) => {
       updater.on(event, listener)
     },
