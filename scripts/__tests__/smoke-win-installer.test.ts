@@ -1006,7 +1006,8 @@ $uncaptured = Get-GateExitFailure ([pscustomobject]@{ ProcessId = 704; ExitCode 
 
   windowsIt('admits only one exact historical updater handoff into the legacy bridge', () => {
     const output = runReleaseMonitorLibrary(`
-$oldExe = 'C:\\e2e\\installed-app\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
+$installRoot = 'C:\\e2e\\installed app'
+$oldExe = $installRoot + '\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
 $pendingExe = 'C:\\Users\\runneradmin\\AppData\\Local\\ai-novel-writer-updater\\pending\\ai-novel-writer-setup-0.7.0.exe'
 $old = [pscustomobject]@{
   processId = 410
@@ -1020,7 +1021,7 @@ $bridge = [pscustomobject]@{
   OldApplicationIdentity = $old
   ExpectedPendingInstallerPath = $pendingExe
   ExpectedInstallerName = 'ai-novel-writer-setup-0.7.0.exe'
-  InstallRoot = 'C:\\e2e\\installed-app'
+  InstallRoot = $installRoot
   ObservedInstallerIdentity = $null
   AllowedWizardWindowKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 }
@@ -1040,8 +1041,13 @@ function New-LegacyInstallerIdentity {
 }
 $installer = New-LegacyInstallerIdentity
 $exact = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity $installer -ParentIdentity $old
-$silent = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated /S /D=C:\\e2e\\installed-app')) -ParentIdentity $old
-$explicitDirectory = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated /D=C:\\e2e\\installed-app')) -ParentIdentity $old
+$equivalentWhitespace = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '"' + [char]9 + '--updated  ')) -ParentIdentity $old
+$explicitDirectory = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated "/D=' + $installRoot + '"')) -ParentIdentity $old
+$silent = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated /S "/D=' + $installRoot + '"')) -ParentIdentity $old
+$wrongDirectory = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated /D=C:\\e2e\\other')) -ParentIdentity $old
+$directoryFirst = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" "/D=' + $installRoot + '" --updated')) -ParentIdentity $old
+$duplicateDirectory = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated "/D=' + $installRoot + '" "/D=' + $installRoot + '"')) -ParentIdentity $old
+$duplicateUpdated = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated --updated')) -ParentIdentity $old
 $forceRun = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated --force-run')) -ParentIdentity $old
 $packageFile = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated --package-file=C:\\temp\\package.7z')) -ParentIdentity $old
 $extraArgument = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated unexpected')) -ParentIdentity $old
@@ -1065,8 +1071,13 @@ $wrongTitleRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBrid
   HistoricalSource = Test-AiNovelGateLegacyBridgeSourceTag -SourceTag 'v0.6.0'
   NativeSourceRejected = -not (Test-AiNovelGateLegacyBridgeSourceTag -SourceTag 'v0.7.0')
   ExactInstaller = $exact
+  EquivalentWhitespace = $equivalentWhitespace
+  ExplicitDirectory = $explicitDirectory
   SilentArgumentsRejected = -not $silent
-  ExplicitDirectoryRejected = -not $explicitDirectory
+  WrongDirectoryRejected = -not $wrongDirectory
+  DirectoryFirstRejected = -not $directoryFirst
+  DuplicateDirectoryRejected = -not $duplicateDirectory
+  DuplicateUpdatedRejected = -not $duplicateUpdated
   ForceRunRejected = -not $forceRun
   PackageFileRejected = -not $packageFile
   ExtraArgumentRejected = -not $extraArgument
@@ -1082,8 +1093,13 @@ $wrongTitleRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBrid
       HistoricalSource: true,
       NativeSourceRejected: true,
       ExactInstaller: true,
+      EquivalentWhitespace: true,
+      ExplicitDirectory: true,
       SilentArgumentsRejected: true,
-      ExplicitDirectoryRejected: true,
+      WrongDirectoryRejected: true,
+      DirectoryFirstRejected: true,
+      DuplicateDirectoryRejected: true,
+      DuplicateUpdatedRejected: true,
       ForceRunRejected: true,
       PackageFileRejected: true,
       ExtraArgumentRejected: true,

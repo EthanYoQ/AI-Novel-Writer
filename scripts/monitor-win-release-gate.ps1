@@ -103,6 +103,36 @@ namespace AiNovelReleaseGate {
 
   }
 
+  public static class WindowsCommandLine {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
+    public static string[] Parse(string commandLine) {
+      if (String.IsNullOrWhiteSpace(commandLine)) {
+        throw new ArgumentException("A Windows command line is required.", "commandLine");
+      }
+      int argumentCount;
+      IntPtr argumentVector = CommandLineToArgvW(commandLine, out argumentCount);
+      if (argumentVector == IntPtr.Zero) {
+        throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not parse the Windows command line.");
+      }
+      try {
+        string[] arguments = new string[argumentCount];
+        for (int index = 0; index < argumentCount; index++) {
+          IntPtr argument = Marshal.ReadIntPtr(argumentVector, index * IntPtr.Size);
+          arguments[index] = Marshal.PtrToStringUni(argument);
+        }
+        return arguments;
+      }
+      finally {
+        LocalFree(argumentVector);
+      }
+    }
+  }
+
   public sealed class JobProcessMonitor : IDisposable {
     private const int JobObjectAssociateCompletionPortInformation = 7;
     private const uint JobObjectMsgActiveProcessZero = 4;
@@ -2215,17 +2245,48 @@ function Test-AiNovelGateLegacyBridgeHistoricalCommand {
   ) {
     return $false
   }
-  $arguments = Get-AiNovelGateBoundCommandArguments `
-    -CommandLine ([string]$InstallerIdentity.commandLine) `
-    -ImagePath ([string]$InstallerIdentity.executablePath)
-  if ($null -eq $arguments) {
+  try {
+    [string[]]$arguments = [AiNovelReleaseGate.WindowsCommandLine]::Parse(
+      [string]$InstallerIdentity.commandLine
+    )
+  }
+  catch {
     return $false
   }
-  # electron-updater 6.8.9 appends /D only when installDirectory was set
-  # explicitly. Historical v0.5/v0.6 used the default updater path, so the
-  # assisted NSIS handoff has exactly one argument and no silent/package flags.
-  $expectedArguments = ' --updated'
-  return [string]::Equals($arguments, $expectedArguments, [System.StringComparison]::Ordinal)
+  if (
+    $arguments.Count -lt 2 -or
+    -not (Test-AiNovelGateSameAbsolutePath `
+      -Left ([string]$arguments[0]) `
+      -Right ([string]$InstallerIdentity.executablePath)) -or
+    -not [string]::Equals(
+      [string]$arguments[1],
+      '--updated',
+      [System.StringComparison]::Ordinal
+    )
+  ) {
+    return $false
+  }
+
+  # Historical electron-updater launches are interactive. They contain only
+  # --updated, plus an optional install-directory binding when explicitly set.
+  # Parse argv with Windows' own tokenizer so quoting and separator whitespace
+  # are accepted without admitting silent, package, reordered, or extra flags.
+  if ($arguments.Count -eq 2) {
+    return $true
+  }
+  if ($arguments.Count -ne 3) {
+    return $false
+  }
+  $directoryArgument = [string]$arguments[2]
+  $directoryPrefix = '/D='
+  if (-not $directoryArgument.StartsWith($directoryPrefix, [System.StringComparison]::Ordinal)) {
+    return $false
+  }
+  $boundInstallRoot = $directoryArgument.Substring($directoryPrefix.Length)
+  if ([string]::IsNullOrWhiteSpace($boundInstallRoot)) {
+    return $false
+  }
+  return Test-AiNovelGateSameAbsolutePath -Left $boundInstallRoot -Right $InstallRoot
 }
 
 function New-AiNovelGateLegacyBridgeState {
