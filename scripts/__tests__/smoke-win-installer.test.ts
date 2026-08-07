@@ -1152,6 +1152,39 @@ catch {
     })
   })
 
+  windowsIt('reads Node-authored UTF-8 monitor control paths without corrupting non-ASCII characters', () => {
+    const releaseMonitor = readFileSync(releaseMonitorScript, 'utf8')
+    expect(releaseMonitor).toContain(
+      '$lines = @(Get-Content -LiteralPath $ControlPath -Encoding UTF8 -ErrorAction Stop)',
+    )
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-monitor-control-utf8-'))
+    const controlPath = join(root, 'control.jsonl')
+    const executablePath = join(root, 'installed-app', 'AI小说作家.exe')
+    writeFileSync(controlPath, `${JSON.stringify({
+      sequence: 1,
+      state: 'legacy-bridge-arm',
+      executablePath,
+    })}\n`, 'utf8')
+
+    try {
+      const output = runReleaseMonitorLibrary(`
+$ControlPath = ${quotePowerShell(controlPath)}
+$control = Get-AiNovelGateControl
+[pscustomobject]@{
+  State = [string]$control.state
+  ExecutablePath = [string]$control.executablePath
+} | ConvertTo-Json -Compress
+`)
+      expect(parseLastJsonLine(output)).toEqual({
+        State: 'legacy-bridge-arm',
+        ExecutablePath: executablePath,
+      })
+    }
+    finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   windowsIt('exempts only the known NSIS PowerShell probes during installer smoke steps', () => {
     const output = runReleaseMonitorLibrary(`
 $system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
