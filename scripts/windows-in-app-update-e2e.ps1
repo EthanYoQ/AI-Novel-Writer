@@ -252,7 +252,7 @@ try {
   Assert-E2eCondition -Condition ((Get-FileHash -LiteralPath $fromInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -eq ([string]$plan.from.assets.installer.sha256).ToLowerInvariant()) -Message 'Downloaded official from_tag installer SHA-256 changed before install.'
 
   New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
-  $installRoot = Join-Path $runtimeRoot 'installed-app'
+  $e2eInstallRoot = Join-Path $runtimeRoot 'installed-app'
   $isolatedHome = Join-Path $runtimeRoot 'home'
   $velaHome = Join-Path $isolatedHome '.vela'
   $preservationRoot = Join-Path $velaHome 'e2e-preservation'
@@ -303,12 +303,12 @@ try {
   $oldInstallerStderr = Join-Path $resolvedEvidenceRoot 'old-installer.stderr.log'
   Invoke-AiNovelMonitoredExecutable `
     -Path $fromInstaller `
-    -Arguments @('/S', "/D=$installRoot") `
+    -Arguments @('/S', "/D=$e2eInstallRoot") `
     -Operation 'Official from_tag silent NSIS installer' `
     -StandardOutputPath $oldInstallerStdout `
     -StandardErrorPath $oldInstallerStderr `
     -HideWindow
-  $oldExe = Join-Path $installRoot $appExecutableName
+  $oldExe = Join-Path $e2eInstallRoot $appExecutableName
   Assert-E2eCondition -Condition (Test-Path -LiteralPath $oldExe -PathType Leaf) -Message "v$($plan.from.version) application is missing after silent installation: $oldExe"
   $electronRunner = Join-Path $repositoryRoot 'node_modules\electron\dist\electron.exe'
   Assert-E2eCondition -Condition (Test-Path -LiteralPath $electronRunner -PathType Leaf) -Message "Project Electron runner is missing: $electronRunner"
@@ -347,7 +347,7 @@ try {
     -QuietSeconds $PostExitQuietSeconds `
     -LastWindowSnapshot ([ref]$postOldExitSnapshot)
 
-  $updatedExe = Join-Path $installRoot $appExecutableName
+  $updatedExe = Join-Path $e2eInstallRoot $appExecutableName
   $installedUpdatedVersion = Wait-E2eInstalledVersion `
     -ExePath $updatedExe `
     -ElectronRunner $electronRunner `
