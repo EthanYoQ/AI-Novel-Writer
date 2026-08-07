@@ -79,6 +79,19 @@ function fallbackNotice(): SkinNotice {
   }
 }
 
+function failureNotice(message: string): SkinNotice {
+  // The main process already selects a renderer-safe localized message. Keep
+  // the error visible without inventing a second client-side classification.
+  return { zh: message, en: message }
+}
+
+function transportFailureNotice(): SkinNotice {
+  return {
+    zh: '皮肤操作暂时无法完成，当前皮肤未改变。',
+    en: 'The skin operation could not be completed. Your current skin was not changed.',
+  }
+}
+
 /**
  * 为真实 renderer 和测试提供同一条状态边界。图片字节永不持久化到 Zustand；
  * renderer 只保存当前 Blob URL，且在替换或卸载时立即回收。
@@ -89,6 +102,13 @@ export function createSkinStore(dependencies: SkinStoreDependencies = {}) {
   const revokeObjectURL = dependencies.revokeObjectURL ?? URL.revokeObjectURL.bind(URL)
 
   return create<SkinStoreState>()((set, get) => {
+    let transitionTail: Promise<void> = Promise.resolve()
+    const serializeTransition = <T>(operation: () => Promise<T>): Promise<T> => {
+      const scheduled = transitionTail.then(operation, operation)
+      transitionTail = scheduled.then(() => undefined, () => undefined)
+      return scheduled
+    }
+
     const revokeBackgroundUrl = (url = get().backgroundUrl) => {
       if (!url) return
       try {
@@ -104,6 +124,27 @@ export function createSkinStore(dependencies: SkinStoreDependencies = {}) {
         skinState: { ...source, activeSkin: 'classic' },
         backgroundUrl: null,
         notice: fallbackNotice(),
+      })
+    }
+
+    /**
+     * A normal command failure is authoritative state from the main process,
+     * not evidence that the current image is corrupt. Preserve a matching Blob
+     * preview, otherwise remove only a stale preview without changing the
+     * durable skin selection.
+     */
+    const applyAuthoritativeFailure = (nextState: SkinState, notice: SkinNotice) => {
+      const current = get()
+      const preservePreview = Boolean(
+        nextState.activeSkin === 'custom'
+        && nextState.customSkin?.revision === current.skinState.customSkin?.revision
+        && current.backgroundUrl,
+      )
+      if (!preservePreview) revokeBackgroundUrl(current.backgroundUrl)
+      set({
+        skinState: nextState,
+        backgroundUrl: preservePreview ? current.backgroundUrl : null,
+        notice,
       })
     }
 
@@ -131,8 +172,16 @@ export function createSkinStore(dependencies: SkinStoreDependencies = {}) {
 
       try {
         const response = await transport.invoke('skin:read-custom-asset')
-        if (!isReadableAsset(response) || !sameAssetMetadata(nextState, response)) {
-          applyClassicFallback(nextState)
+        if (!isReadableAsset(response)) {
+          if (response.error.code === 'CUSTOM_ASSET_UNAVAILABLE') {
+            applyClassicFallback(response.state)
+          } else {
+            applyAuthoritativeFailure(response.state, failureNotice(response.error.message))
+          }
+          return false
+        }
+        if (!sameAssetMetadata(nextState, response)) {
+          applyAuthoritativeFailure(nextState, transportFailureNotice())
           return false
         }
 
@@ -143,7 +192,7 @@ export function createSkinStore(dependencies: SkinStoreDependencies = {}) {
         set({ skinState: nextState, backgroundUrl: nextUrl, notice: null })
         return true
       } catch {
-        applyClassicFallback(nextState)
+        applyAuthoritativeFailure(nextState, transportFailureNotice())
         return false
       }
     }
@@ -152,7 +201,11 @@ export function createSkinStore(dependencies: SkinStoreDependencies = {}) {
       try {
         const response = await transport.invoke('skin:execute', command)
         if (!response.success) {
-          applyClassicFallback(response.state)
+          if (response.error.code === 'CUSTOM_ASSET_UNAVAILABLE') {
+            applyClassicFallback(response.state)
+          } else {
+            applyAuthoritativeFailure(response.state, failureNotice(response.error.message))
+          }
           return false
         }
         if (response.cancelled) {
@@ -162,7 +215,7 @@ export function createSkinStore(dependencies: SkinStoreDependencies = {}) {
         }
         return applySkinState(response.state)
       } catch {
-        applyClassicFallback(get().skinState)
+        set({ notice: transportFailureNotice() })
         return false
       }
     }
@@ -172,19 +225,23 @@ export function createSkinStore(dependencies: SkinStoreDependencies = {}) {
       backgroundUrl: null,
       notice: null,
       async init() {
-        try {
-          const nextState = await transport.invoke('skin:get-state')
-          await applySkinState(nextState)
-        } catch {
-          applyClassicFallback(get().skinState)
-        }
+        await serializeTransition(async () => {
+          try {
+            const nextState = await transport.invoke('skin:get-state')
+            await applySkinState(nextState)
+          } catch {
+            set({ notice: transportFailureNotice() })
+          }
+        })
       },
-      activateSkin: (skinId) => execute({ type: 'activate', skinId }),
-      importCustomSkin: () => execute({ type: 'import-custom' }),
-      removeCustomSkin: () => execute({ type: 'remove-custom' }),
+      activateSkin: (skinId) => serializeTransition(() => execute({ type: 'activate', skinId })),
+      importCustomSkin: () => serializeTransition(() => execute({ type: 'import-custom' })),
+      removeCustomSkin: () => serializeTransition(() => execute({ type: 'remove-custom' })),
       async recoverFromImageFailure() {
-        const recovered = await execute({ type: 'activate', skinId: 'classic' })
-        if (recovered) set({ notice: fallbackNotice() })
+        await serializeTransition(async () => {
+          const recovered = await execute({ type: 'activate', skinId: 'classic' })
+          if (recovered) set({ notice: fallbackNotice() })
+        })
       },
       dismissNotice: () => set({ notice: null }),
       dispose() {

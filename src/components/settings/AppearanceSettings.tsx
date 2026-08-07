@@ -17,8 +17,13 @@ import { useSkinStore } from '../../stores/skin-store'
 import { useThemeStore, type Theme } from '../../stores/theme-store'
 import type { SkinId } from '../../shared/skin-types'
 
-/** Replace this single public path when the bundled anime asset is finalized. */
-export const ANIME_SKIN_URL = '/skins/anime-night.webp'
+/**
+ * Vite's base is deliberately relative for BrowserWindow.loadFile().  This
+ * keeps the public asset rooted at dist/ both in development and in a
+ * packaged file:// renderer.
+ */
+const skinAssetBase = import.meta.env.BASE_URL === '/' ? './' : import.meta.env.BASE_URL
+export const ANIME_SKIN_URL = `${skinAssetBase}skins/anime-night.webp`
 
 /** Native picker validation is authoritative; this copy makes its limits visible first. */
 export const CUSTOM_SKIN_REQUIREMENTS = {

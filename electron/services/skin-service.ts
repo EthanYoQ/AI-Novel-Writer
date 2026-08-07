@@ -13,7 +13,8 @@ import type {
 } from '../../src/shared/skin-types'
 import { VELA_HOME } from '../utils/config-utils'
 
-const MAX_INPUT_BYTES = 20 * 1024 * 1024
+/** Same on-disk boundary enforced by the native picker and persisted-asset reads. */
+export const MAX_SKIN_INPUT_BYTES = 20 * 1024 * 1024
 const MAX_IMAGE_EDGE = 4_096
 const MAX_IMAGE_PIXELS = 16_000_000
 
@@ -228,12 +229,14 @@ export class SkinService {
   }
 
   importCustomAsset(input: Uint8Array): SkinServiceResult {
+    let createdAssetFile: string | undefined
+    let previousAssetFile: string | undefined
     try {
       if (!(input instanceof Uint8Array)) {
         throw new SkinServiceFailure('IMAGE_FORMAT_INVALID')
       }
       const source = Buffer.from(input)
-      if (source.byteLength > MAX_INPUT_BYTES) {
+      if (source.byteLength > MAX_SKIN_INPUT_BYTES) {
         throw new SkinServiceFailure('IMAGE_TOO_LARGE')
       }
       const mime = detectImageMime(source)
@@ -271,9 +274,9 @@ export class SkinService {
         height: size.height,
       }
       const nextState: SkinState = { activeSkin: 'custom', customSkin }
-      const previousAssetFile = this.state.customSkin ? assetFileFor(this.state.customSkin) : undefined
+      previousAssetFile = this.state.customSkin ? assetFileFor(this.state.customSkin) : undefined
 
-      this.writeAssetIfMissing(assetFile, bytes)
+      if (this.writeAssetIfMissing(assetFile, bytes)) createdAssetFile = assetFile
       this.writeManifest(nextState)
       this.state = nextState
       if (previousAssetFile && previousAssetFile !== assetFile) {
@@ -281,6 +284,11 @@ export class SkinService {
       }
       return { success: true, state: this.getState() }
     } catch (error) {
+      // The previous manifest is still authoritative. Only remove an asset
+      // proved to be created by this transaction and not referenced by it.
+      if (createdAssetFile && createdAssetFile !== previousAssetFile) {
+        this.cleanupAsset(createdAssetFile)
+      }
       const code = error instanceof SkinServiceFailure ? error.code : 'SKIN_STORAGE_FAILED'
       return { success: false, state: this.getState(), code }
     }
@@ -334,7 +342,7 @@ export class SkinService {
     }
 
     try {
-      const bytes = fs.readFileSync(path.join(this.rootDirectory, 'assets', assetFileFor(customSkin)))
+      const bytes = this.readStoredAsset(customSkin)
       if (
         createHash('sha256').update(bytes).digest('hex') !== customSkin.revision
         || detectImageMime(bytes) !== customSkin.mime
@@ -364,13 +372,32 @@ export class SkinService {
     }
   }
 
-  private writeAssetIfMissing(assetFile: string, bytes: Buffer): void {
+  private writeAssetIfMissing(assetFile: string, bytes: Buffer): boolean {
     const assetPath = path.join(this.rootDirectory, 'assets', assetFile)
     if (fs.existsSync(assetPath)) {
       if (!fs.statSync(assetPath).isFile()) throw new SkinServiceFailure('SKIN_STORAGE_FAILED')
-      return
+      return false
     }
     writeFileAtomically(assetPath, bytes)
+    return true
+  }
+
+  private readStoredAsset(customSkin: CustomSkin): Buffer {
+    const assetPath = path.join(this.rootDirectory, 'assets', assetFileFor(customSkin))
+    const stat = fs.statSync(assetPath)
+    if (
+      !stat.isFile()
+      || !Number.isSafeInteger(stat.size)
+      || stat.size <= 0
+      || stat.size > MAX_SKIN_INPUT_BYTES
+    ) {
+      throw new SkinServiceFailure('CUSTOM_ASSET_UNAVAILABLE')
+    }
+    const bytes = fs.readFileSync(assetPath)
+    if (bytes.byteLength !== stat.size || bytes.byteLength > MAX_SKIN_INPUT_BYTES) {
+      throw new SkinServiceFailure('CUSTOM_ASSET_UNAVAILABLE')
+    }
+    return bytes
   }
 
   private writeManifest(state: SkinState): void {
@@ -432,7 +459,7 @@ export class SkinService {
     let customSkin: CustomSkin | null = null
     if (parsed.customSkin) {
       try {
-        const bytes = fs.readFileSync(path.join(this.rootDirectory, 'assets', parsed.customSkin.assetFile))
+        const bytes = this.readStoredAsset(parsed.customSkin)
         const revision = createHash('sha256').update(bytes).digest('hex')
         const image = this.imageCodec.createFromBuffer(bytes)
         const size = image.getSize()

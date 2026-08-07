@@ -13,6 +13,7 @@ import type {
 } from '../../src/shared/skin-types'
 import { mainText } from '../i18n'
 import {
+  MAX_SKIN_INPUT_BYTES,
   skinService,
   type SkinService,
   type SkinServiceAssetResult,
@@ -135,45 +136,119 @@ function safeAssetResponse(service: SkinControllerService): SkinReadCustomAssetR
   }
 }
 
+class SkinPickerReadFailure extends Error {
+  constructor(readonly code: 'IMAGE_READ_FAILED' | 'IMAGE_TOO_LARGE') {
+    super(code)
+  }
+}
+
+/**
+ * Reads at most the persisted skin limit after proving the picker result is a
+ * regular file. Never let a selected path or a native filesystem error cross
+ * the IPC boundary.
+ */
+async function readSelectedSkinFile(filePath: string): Promise<Buffer> {
+  let selectedStat: fs.Stats
+  try {
+    selectedStat = await fs.promises.stat(filePath)
+  } catch {
+    throw new SkinPickerReadFailure('IMAGE_READ_FAILED')
+  }
+  if (!selectedStat.isFile() || !Number.isSafeInteger(selectedStat.size)) {
+    throw new SkinPickerReadFailure('IMAGE_READ_FAILED')
+  }
+  if (selectedStat.size > MAX_SKIN_INPUT_BYTES) {
+    throw new SkinPickerReadFailure('IMAGE_TOO_LARGE')
+  }
+
+  let handle: fs.promises.FileHandle | undefined
+  try {
+    handle = await fs.promises.open(filePath, 'r')
+    const openedStat = await handle.stat()
+    if (
+      !openedStat.isFile()
+      || !Number.isSafeInteger(openedStat.size)
+      || openedStat.size !== selectedStat.size
+    ) {
+      throw new SkinPickerReadFailure('IMAGE_READ_FAILED')
+    }
+    if (openedStat.size > MAX_SKIN_INPUT_BYTES) {
+      throw new SkinPickerReadFailure('IMAGE_TOO_LARGE')
+    }
+
+    const bytes = Buffer.allocUnsafe(openedStat.size)
+    let offset = 0
+    while (offset < bytes.byteLength) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.byteLength - offset, offset)
+      if (bytesRead <= 0) throw new SkinPickerReadFailure('IMAGE_READ_FAILED')
+      offset += bytesRead
+    }
+    return bytes
+  } catch (error) {
+    if (error instanceof SkinPickerReadFailure) throw error
+    throw new SkinPickerReadFailure('IMAGE_READ_FAILED')
+  } finally {
+    if (handle) {
+      try {
+        await handle.close()
+      } catch {
+        // The read already completed; a close failure must not leak a path.
+      }
+    }
+  }
+}
+
 /**
  * The renderer can name a skin action but never provides a path or image bytes.
  * The only source path exists between Electron's file dialog and this controller.
  */
 export function registerSkinController(service: SkinControllerService = skinService): void {
+  // The file picker is asynchronous. Queue every state-changing command in
+  // arrival order so the user's later selection remains the durable result.
+  let mutationTail: Promise<void> = Promise.resolve()
+  const serializeMutation = <T>(operation: () => Promise<T>): Promise<T> => {
+    const scheduled = mutationTail.then(operation, operation)
+    mutationTail = scheduled.then(() => undefined, () => undefined)
+    return scheduled
+  }
+
   ipcMain.handle('skin:get-state', (event: SkinEvent): SkinState => {
     return validSender(event) ? safeState(service) : CLASSIC_STATE
   })
 
   ipcMain.handle('skin:execute', async (event: SkinEvent, input: unknown): Promise<SkinExecuteResponse> => {
-    const state = safeState(service)
-    if (!validSender(event)) return failure(state, 'INVALID_SENDER')
-    if (!isSkinCommand(input)) return failure(state, 'INVALID_COMMAND')
+    return serializeMutation(async () => {
+      const state = safeState(service)
+      if (!validSender(event)) return failure(state, 'INVALID_SENDER')
+      if (!isSkinCommand(input)) return failure(state, 'INVALID_COMMAND')
 
-    if (input.type === 'activate') return safeOperation(service, () => service.activate(input.skinId))
-    if (input.type === 'remove-custom') return safeOperation(service, () => service.removeCustom())
+      if (input.type === 'activate') return safeOperation(service, () => service.activate(input.skinId))
+      if (input.type === 'remove-custom') return safeOperation(service, () => service.removeCustom())
 
-    let selected: { canceled: boolean; filePaths: string[] }
-    try {
-      selected = await dialog.showOpenDialog({
-        title: text('选择自定义皮肤图片', 'Choose a custom skin image'),
-        properties: ['openFile'],
-        filters: [{ name: 'PNG / JPEG', extensions: ['png', 'jpg', 'jpeg'] }],
-      })
-    } catch {
-      return failure(safeState(service), 'IMAGE_READ_FAILED')
-    }
-    if (selected.canceled || selected.filePaths.length === 0) {
-      return { success: true, cancelled: true, state: safeState(service) }
-    }
-    if (selected.filePaths.length !== 1) return failure(safeState(service), 'IMAGE_READ_FAILED')
+      let selected: { canceled: boolean; filePaths: string[] }
+      try {
+        selected = await dialog.showOpenDialog({
+          title: text('选择自定义皮肤图片', 'Choose a custom skin image'),
+          properties: ['openFile'],
+          filters: [{ name: 'PNG / JPEG', extensions: ['png', 'jpg', 'jpeg'] }],
+        })
+      } catch {
+        return failure(safeState(service), 'IMAGE_READ_FAILED')
+      }
+      if (selected.canceled || selected.filePaths.length === 0) {
+        return { success: true, cancelled: true, state: safeState(service) }
+      }
+      if (selected.filePaths.length !== 1) return failure(safeState(service), 'IMAGE_READ_FAILED')
 
-    let bytes: Buffer
-    try {
-      bytes = fs.readFileSync(selected.filePaths[0])
-    } catch {
-      return failure(safeState(service), 'IMAGE_READ_FAILED')
-    }
-    return safeOperation(service, () => service.importCustomAsset(bytes))
+      let bytes: Buffer
+      try {
+        bytes = await readSelectedSkinFile(selected.filePaths[0])
+      } catch (error) {
+        const code = error instanceof SkinPickerReadFailure ? error.code : 'IMAGE_READ_FAILED'
+        return failure(safeState(service), code)
+      }
+      return safeOperation(service, () => service.importCustomAsset(bytes))
+    })
   })
 
   ipcMain.handle('skin:read-custom-asset', (event: SkinEvent): SkinReadCustomAssetResponse => {

@@ -16,6 +16,7 @@ vi.mock('electron', () => ({
 import { SkinService } from '../skin-service'
 import {
   parseReleaseSkinSmokeInvocation,
+  resolveFileLoadedRendererSkinAssetPath,
   runReleaseSkinSmoke,
 } from '../release-skin-smoke'
 
@@ -89,10 +90,28 @@ describe('packaged skin qualification smoke', () => {
     )).toBeUndefined()
   })
 
-  it('proves that the packaged anime asset and an isolated custom skin survive import, read, and restart', () => {
+  it('resolves the anime asset with the same file:// semantics as BrowserWindow.loadFile', () => {
     const root = temporaryRoot()
+    const rendererEntryPath = path.join(root, 'dist', 'index.html')
     const builtInAssetPath = path.join(root, 'dist', 'skins', 'anime-night.webp')
     fs.mkdirSync(path.dirname(builtInAssetPath), { recursive: true })
+    fs.writeFileSync(rendererEntryPath, '<!doctype html>')
+    fs.writeFileSync(builtInAssetPath, Buffer.from('asset'))
+
+    expect(resolveFileLoadedRendererSkinAssetPath(rendererEntryPath, './skins/anime-night.webp'))
+      .toBe(builtInAssetPath)
+    expect(() => resolveFileLoadedRendererSkinAssetPath(rendererEntryPath, '/skins/anime-night.webp'))
+      .toThrow(/file-loaded renderer/i)
+  })
+
+  it('proves that the file-loaded renderer URL resolves the packaged anime asset and an isolated custom skin survives import, read, and restart', () => {
+    const root = temporaryRoot()
+    const builtInAssetPath = path.join(root, 'dist', 'skins', 'anime-night.webp')
+    const rendererEntryPath = path.join(root, 'dist', 'index.html')
+    fs.mkdirSync(path.dirname(builtInAssetPath), { recursive: true })
+    fs.writeFileSync(rendererEntryPath, '<script type="module" src="./assets/app.js"></script>')
+    fs.mkdirSync(path.join(root, 'dist', 'assets'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'dist', 'assets', 'app.js'), 'const skin = "./skins/anime-night.webp"')
     fs.writeFileSync(builtInAssetPath, Buffer.from([
       0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00,
       0x57, 0x45, 0x42, 0x50,
@@ -101,7 +120,7 @@ describe('packaged skin qualification smoke', () => {
     const imageCodec = createImageCodec()
     const skinRoot = path.join(root, 'isolated-vela-home', 'skins')
     const evidence = withSmokeEnvironment(root, () => runReleaseSkinSmoke(smokeToken, {
-      builtInAssetPath,
+      rendererEntryPath,
       createSkinService: () => new SkinService({ rootDirectory: skinRoot, imageCodec }),
     }))
 
@@ -110,6 +129,8 @@ describe('packaged skin qualification smoke', () => {
       kind: 'packaged-skin-smoke',
       builtInAnime: {
         asset: 'skins/anime-night.webp',
+        rendererUrl: './skins/anime-night.webp',
+        fileLoadable: true,
         present: true,
         format: 'webp',
       },

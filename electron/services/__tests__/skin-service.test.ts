@@ -118,6 +118,40 @@ describe('SkinService', () => {
     })
   })
 
+  it('rejects an oversized persisted custom asset before reading bytes or decoding it at startup', () => {
+    const rootDirectory = temporaryRoot()
+    const assetsDirectory = path.join(rootDirectory, 'assets')
+    const revision = 'a'.repeat(64)
+    const assetPath = path.join(assetsDirectory, `${revision}.png`)
+    fs.mkdirSync(assetsDirectory, { recursive: true })
+    fs.writeFileSync(assetPath, Buffer.alloc(0))
+    fs.truncateSync(assetPath, 20 * 1024 * 1024 + 1)
+    fs.writeFileSync(path.join(rootDirectory, 'manifest.json'), JSON.stringify({
+      version: 1,
+      activeSkin: 'custom',
+      customSkin: {
+        assetFile: `${revision}.png`,
+        mime: 'image/png',
+        revision,
+        width: 1440,
+        height: 900,
+      },
+    }))
+    const originalReadFileSync = fs.readFileSync
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((filePath, ...args) => {
+      if (String(filePath) === assetPath) throw new Error('oversized asset bytes must not be read')
+      return originalReadFileSync(filePath, ...args)
+    })
+
+    expect(new SkinService({ rootDirectory }).initialize()).toEqual({
+      activeSkin: 'classic',
+      customSkin: null,
+    })
+    expect(readSpy.mock.calls.some(([filePath]) => String(filePath) === assetPath)).toBe(false)
+    expect(mocks.createFromBuffer).not.toHaveBeenCalled()
+    readSpy.mockRestore()
+  })
+
   it('normalizes a verified PNG into the skin store and activates it', () => {
     const rootDirectory = temporaryRoot()
     const normalized = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01])
@@ -326,6 +360,7 @@ describe('SkinService', () => {
     const previousManifest = fs.readFileSync(manifestPath, 'utf8')
 
     normalized = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x07])
+    const secondRevision = createHash('sha256').update(normalized).digest('hex')
     const originalRenameSync = fs.renameSync
     const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
       if (String(to) === manifestPath) {
@@ -349,6 +384,7 @@ describe('SkinService', () => {
     expect(service.getState()).toEqual(previousState)
     expect(fs.readFileSync(manifestPath, 'utf8')).toBe(previousManifest)
     expect(fs.existsSync(path.join(rootDirectory, 'assets', `${firstRevision}.png`))).toBe(true)
+    expect(fs.existsSync(path.join(rootDirectory, 'assets', `${secondRevision}.png`))).toBe(false)
     expect(JSON.stringify(result)).not.toContain(rootDirectory)
   })
 

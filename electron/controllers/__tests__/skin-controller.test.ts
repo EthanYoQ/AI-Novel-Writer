@@ -1,5 +1,7 @@
 import fs from 'node:fs'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import os from 'node:os'
+import path from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown> | unknown
 
@@ -25,6 +27,13 @@ vi.mock('../../i18n', () => ({
 import { registerSkinController } from '../skin-controller'
 
 const classicState = { activeSkin: 'classic' as const, customSkin: null }
+const temporaryRoots: string[] = []
+
+function temporaryFile(name: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-skin-controller-'))
+  temporaryRoots.push(root)
+  return path.join(root, name)
+}
 
 function handler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel)
@@ -45,6 +54,12 @@ describe('skin IPC boundary', () => {
   beforeEach(() => {
     mocks.handlers.clear()
     mocks.showOpenDialog.mockReset()
+  })
+
+  afterEach(() => {
+    for (const root of temporaryRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('registers the fixed skin channels and returns only renderer-safe state to a live sender', async () => {
@@ -197,6 +212,94 @@ describe('skin IPC boundary', () => {
       },
     })
     expect(JSON.stringify(result)).not.toContain(selectedPath)
+  })
+
+  it('stats picker input asynchronously and rejects an oversized file before reading or importing it', async () => {
+    const service = {
+      getState: vi.fn(() => classicState),
+      activate: vi.fn(),
+      importCustomAsset: vi.fn(() => ({
+        success: false as const,
+        state: classicState,
+        code: 'IMAGE_TOO_LARGE' as const,
+      })),
+      removeCustom: vi.fn(),
+      readCustomAsset: vi.fn(),
+    }
+    const selectedPath = temporaryFile('oversized.png')
+    fs.writeFileSync(selectedPath, Buffer.alloc(0))
+    fs.truncateSync(selectedPath, 20 * 1024 * 1024 + 1)
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [selectedPath] })
+    const statSpy = vi.spyOn(fs.promises, 'stat')
+    const syncReadSpy = vi.spyOn(fs, 'readFileSync')
+    registerSkinController(service)
+
+    const result = await handler('skin:execute')(liveEvent(), { type: 'import-custom' })
+
+    expect(result).toEqual({
+      success: false,
+      state: classicState,
+      error: {
+        code: 'IMAGE_TOO_LARGE',
+        message: '图片不能超过 20MB。',
+      },
+    })
+    expect(statSpy).toHaveBeenCalledWith(selectedPath)
+    expect(syncReadSpy).not.toHaveBeenCalledWith(selectedPath)
+    expect(service.importCustomAsset).not.toHaveBeenCalled()
+    statSpy.mockRestore()
+    syncReadSpy.mockRestore()
+  })
+
+  it('serializes concurrent mutating IPC commands so the later selection wins durably', async () => {
+    const selectedPath = temporaryFile('chosen.png')
+    fs.writeFileSync(selectedPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    let resolvePicker: ((selection: { canceled: boolean; filePaths: string[] }) => void) | undefined
+    mocks.showOpenDialog.mockImplementation(() => new Promise(resolve => {
+      resolvePicker = resolve
+    }))
+    const customState = {
+      activeSkin: 'custom' as const,
+      customSkin: {
+        mime: 'image/png' as const,
+        revision: 'a'.repeat(64),
+        width: 1600,
+        height: 1000,
+      },
+    }
+    let state = classicState as typeof classicState | typeof customState | {
+      activeSkin: 'anime'
+      customSkin: typeof customState.customSkin
+    }
+    const actions: string[] = []
+    const service = {
+      getState: vi.fn(() => state),
+      activate: vi.fn((skinId: 'anime') => {
+        actions.push(`activate:${skinId}`)
+        state = { activeSkin: skinId, customSkin: customState.customSkin }
+        return { success: true as const, state }
+      }),
+      importCustomAsset: vi.fn(() => {
+        actions.push('import')
+        state = customState
+        return { success: true as const, state }
+      }),
+      removeCustom: vi.fn(),
+      readCustomAsset: vi.fn(),
+    }
+    registerSkinController(service)
+
+    const importPromise = handler('skin:execute')(liveEvent(), { type: 'import-custom' })
+    await Promise.resolve()
+    const activatePromise = handler('skin:execute')(liveEvent(), { type: 'activate', skinId: 'anime' })
+    await Promise.resolve()
+
+    expect(service.activate).not.toHaveBeenCalled()
+    resolvePicker?.({ canceled: false, filePaths: [selectedPath] })
+    await Promise.all([importPromise, activatePromise])
+
+    expect(actions).toEqual(['import', 'activate:anime'])
+    expect(state).toEqual({ activeSkin: 'anime', customSkin: customState.customSkin })
   })
 
   it('converts an unexpected service exception into a renderer-safe failure response', async () => {

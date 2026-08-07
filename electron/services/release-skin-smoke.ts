@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { SkinService } from './skin-service'
 
@@ -8,6 +9,7 @@ const CONTROLLED_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9p5r8AAAAASUVORK5CYII=',
   'base64',
 )
+const BUNDLED_ANIME_RENDERER_URL = './skins/anime-night.webp'
 
 export interface ReleaseSkinSmokeInvocation {
   token: string
@@ -18,6 +20,8 @@ export interface ReleaseSkinSmokeEvidence {
   kind: 'packaged-skin-smoke'
   builtInAnime: {
     asset: 'skins/anime-night.webp'
+    rendererUrl: './skins/anime-night.webp'
+    fileLoadable: true
     present: true
     format: 'webp'
   }
@@ -33,7 +37,7 @@ export interface ReleaseSkinSmokeEvidence {
 }
 
 export interface ReleaseSkinSmokeDependencies {
-  builtInAssetPath?: string
+  rendererEntryPath?: string
   createSkinService?: () => SkinService
 }
 
@@ -74,10 +78,59 @@ function isWebp(bytes: Buffer): boolean {
     && bytes.subarray(8, 12).toString('ascii') === 'WEBP'
 }
 
-function defaultBuiltInAssetPath(): string {
+function defaultRendererEntryPath(): string {
   const publicDirectory = process.env.VITE_PUBLIC
   assertSmokeResult(typeof publicDirectory === 'string' && publicDirectory.length > 0, 'packaged public asset directory is unavailable')
-  return path.join(publicDirectory, 'skins', 'anime-night.webp')
+  return path.join(publicDirectory, 'index.html')
+}
+
+function isChildPath(rootPath: string, candidatePath: string): boolean {
+  const relative = path.relative(rootPath, candidatePath)
+  return Boolean(relative)
+    && relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+}
+
+/**
+ * Mirrors Chromium's resolution of an img src from BrowserWindow.loadFile().
+ * Root-relative Vite public URLs would otherwise resolve outside dist/.
+ */
+export function resolveFileLoadedRendererSkinAssetPath(
+  rendererEntryPath: string,
+  rendererAssetUrl: string = BUNDLED_ANIME_RENDERER_URL,
+): string {
+  const rendererDirectory = path.dirname(rendererEntryPath)
+  const entryUrl = pathToFileURL(rendererEntryPath)
+  const assetUrl = new URL(rendererAssetUrl, entryUrl)
+  assertSmokeResult(assetUrl.protocol === 'file:', 'the renderer anime URL is not file-loadable')
+  const assetPath = fileURLToPath(assetUrl)
+  assertSmokeResult(
+    isChildPath(rendererDirectory, assetPath),
+    'the renderer anime URL escapes the file-loaded renderer directory',
+  )
+  return assetPath
+}
+
+function assertRendererBundleUsesAnimeUrl(rendererEntryPath: string): void {
+  const assetDirectory = path.join(path.dirname(rendererEntryPath), 'assets')
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(assetDirectory, { withFileTypes: true })
+  } catch {
+    throw new Error('Packaged skin smoke failed: renderer asset bundle directory is unavailable')
+  }
+  const found = entries
+    .filter(entry => entry.isFile() && entry.name.endsWith('.js'))
+    .some(entry => {
+      try {
+        return fs.readFileSync(path.join(assetDirectory, entry.name), 'utf8')
+          .includes(BUNDLED_ANIME_RENDERER_URL)
+      } catch {
+        return false
+      }
+    })
+  assertSmokeResult(found, 'the packaged renderer does not retain the file-relative anime URL')
 }
 
 function requireIsolatedVelaHome(): void {
@@ -104,7 +157,9 @@ export function runReleaseSkinSmoke(
   }
   requireIsolatedVelaHome()
 
-  const builtInAssetPath = dependencies.builtInAssetPath ?? defaultBuiltInAssetPath()
+  const rendererEntryPath = dependencies.rendererEntryPath ?? defaultRendererEntryPath()
+  assertRendererBundleUsesAnimeUrl(rendererEntryPath)
+  const builtInAssetPath = resolveFileLoadedRendererSkinAssetPath(rendererEntryPath)
   const builtInAsset = fs.readFileSync(builtInAssetPath)
   assertSmokeResult(isWebp(builtInAsset), 'the packaged anime skin asset is missing or is not WebP')
 
@@ -154,6 +209,8 @@ export function runReleaseSkinSmoke(
     kind: 'packaged-skin-smoke',
     builtInAnime: {
       asset: 'skins/anime-night.webp',
+      rendererUrl: BUNDLED_ANIME_RENDERER_URL,
+      fileLoadable: true,
       present: true,
       format: 'webp',
     },
