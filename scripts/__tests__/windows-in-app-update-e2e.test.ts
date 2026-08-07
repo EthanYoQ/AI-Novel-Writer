@@ -205,4 +205,10 @@ describe('Windows official in-app update E2E contract', () => {
     expect(driver).toContain('立即重启更新')
     expect(driver).toContain('Restart and update now')
   })
+
+  it('keeps the PowerShell runner ASCII-safe for Windows PowerShell child-process parsing', () => {
+    const powershellBytes = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e.ps1'))
+
+    expect([...powershellBytes].every(byte => byte < 0x80)).toBe(true)
+  })
 })

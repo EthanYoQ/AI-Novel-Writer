@@ -17,6 +17,8 @@ $runtimeRoot = Join-Path $resolvedEvidenceRoot 'runtime'
 $transcriptPath = Join-Path $resolvedEvidenceRoot 'runner-transcript.log'
 $evidencePath = Join-Path $resolvedEvidenceRoot 'in-app-update-e2e.json'
 $failureWindowsPath = Join-Path $resolvedEvidenceRoot 'failure-windows.json'
+$appExecutableName = "AI$([char]0x5C0F)$([char]0x8BF4)$([char]0x4F5C)$([char]0x5BB6).exe"
+$appDisplayName = [System.IO.Path]::GetFileNameWithoutExtension($appExecutableName)
 
 function Assert-E2eCondition {
   param(
@@ -159,7 +161,7 @@ function Get-E2eInstalledAppProcesses {
 
   $canonicalExe = [System.IO.Path]::GetFullPath($ExePath)
   return @(
-    Get-CimInstance Win32_Process -Filter "Name = 'AI小说作家.exe'" -ErrorAction Stop | Where-Object {
+    Get-CimInstance Win32_Process -Filter "Name = '$appExecutableName'" -ErrorAction Stop | Where-Object {
       -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
       [System.IO.Path]::GetFullPath([string]$_.ExecutablePath).Equals($canonicalExe, [System.StringComparison]::OrdinalIgnoreCase)
     }
@@ -267,10 +269,10 @@ try {
   @{ key = 'e2e-continuity'; name = 'E2E continuity'; content = "Keep the heroine's secret, the chapter ledger, and chronology." } |
     ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $promptsRoot 'e2e-continuity.json') -Encoding utf8
   Set-Content -LiteralPath (Join-Path $skillsRoot 'SKILL.md') -Value "# E2E continuity fixture`n`nPreserve user-authored continuity evidence across update." -Encoding utf8
-  @{ character = '沈青岚'; unresolvedThread = '北港来信'; chapter = 17 } |
+  @{ character = 'E2E protagonist'; unresolvedThread = 'unopened north-harbor letter'; chapter = 17 } |
     ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $preservationRoot 'character-card.json') -Encoding utf8
-  Set-Content -LiteralPath (Join-Path $preservationRoot 'chapter-017.md') -Value '# 第十七章`n北港来信尚未拆封。' -Encoding utf8
-  Set-Content -LiteralPath (Join-Path $preservationRoot 'continuity-ledger.txt') -Value 'timeline=2026-08-07; protagonist=沈青岚; promise=return north' -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $preservationRoot 'chapter-017.md') -Value '# Chapter 17`nThe north-harbor letter remains sealed.' -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $preservationRoot 'continuity-ledger.txt') -Value 'timeline=2026-08-07; protagonist=e2e-protagonist; promise=return north' -Encoding utf8
   $beforePreservation = Get-E2eSha256Manifest -Root $preservationRoot
   $beforeVelaHome = Get-E2eSha256Manifest -Root $velaHome
   $evidence.userData = [ordered]@{
@@ -291,8 +293,8 @@ try {
   foreach ($name in @(
     [System.IO.Path]::GetFileName($fromInstaller),
     [System.IO.Path]::GetFileNameWithoutExtension($fromInstaller),
-    'AI小说作家.exe',
-    'AI小说作家',
+    $appExecutableName,
+    $appDisplayName,
     'ai-novel-writer'
   )) {
     if (-not [string]::IsNullOrWhiteSpace($name)) { [void]$script:roundTargetNames.Add($name) }
@@ -306,7 +308,7 @@ try {
     -StandardOutputPath $oldInstallerStdout `
     -StandardErrorPath $oldInstallerStderr `
     -HideWindow
-  $oldExe = Join-Path $installRoot 'AI小说作家.exe'
+  $oldExe = Join-Path $installRoot $appExecutableName
   Assert-E2eCondition -Condition (Test-Path -LiteralPath $oldExe -PathType Leaf) -Message "v$($plan.from.version) application is missing after silent installation: $oldExe"
   $electronRunner = Join-Path $repositoryRoot 'node_modules\electron\dist\electron.exe'
   Assert-E2eCondition -Condition (Test-Path -LiteralPath $electronRunner -PathType Leaf) -Message "Project Electron runner is missing: $electronRunner"
@@ -345,7 +347,7 @@ try {
     -QuietSeconds $PostExitQuietSeconds `
     -LastWindowSnapshot ([ref]$postOldExitSnapshot)
 
-  $updatedExe = Join-Path $installRoot 'AI小说作家.exe'
+  $updatedExe = Join-Path $installRoot $appExecutableName
   $installedUpdatedVersion = Wait-E2eInstalledVersion `
     -ExePath $updatedExe `
     -ElectronRunner $electronRunner `
