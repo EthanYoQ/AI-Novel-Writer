@@ -16,6 +16,9 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  // BrowserWindow.loadFile() serves the renderer through file://.  Keep public
+  // and bundled asset URLs relative to dist/ rather than the filesystem root.
+  base: './',
   plugins: [tailwindcss(), react(), electron({
     main: {
       // Shortcut of `build.lib.entry`.

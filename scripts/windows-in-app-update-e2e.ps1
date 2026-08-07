@@ -387,7 +387,15 @@ try {
   $oldDebugPort = Get-E2eFreeTcpPort
   $oldAppStdout = Join-Path $resolvedEvidenceRoot 'old-app.stdout.log'
   $oldAppStderr = Join-Path $resolvedEvidenceRoot 'old-app.stderr.log'
-  $oldAppProcess = Start-Process -FilePath $oldExe -ArgumentList @("--remote-debugging-port=$oldDebugPort", '--disable-gpu') -PassThru -RedirectStandardOutput $oldAppStdout -RedirectStandardError $oldAppStderr
+  $oldElectronLog = Join-Path $resolvedEvidenceRoot 'old-electron.log'
+  $oldAppProcess = Start-Process -FilePath $oldExe -ArgumentList @(
+    "--remote-debugging-port=$oldDebugPort",
+    '--disable-gpu',
+    '--no-sandbox',
+    '--enable-logging',
+    '--v=1',
+    "--log-file=$oldElectronLog"
+  ) -PassThru -RedirectStandardOutput $oldAppStdout -RedirectStandardError $oldAppStderr
   [void]$oldAppProcess.Handle
   Add-AiNovelTrackedProcess -ProcessIds $oldAppIds -StartTimeTicks $oldAppStartTimes -ProcessId $oldAppProcess.Id | Out-Null
   Add-AiNovelTrackedProcessTree -RootProcessId $oldAppProcess.Id -ProcessIds $oldAppIds -StartTimeTicks $oldAppStartTimes
@@ -422,7 +430,15 @@ try {
   $newDebugPort = Get-E2eFreeTcpPort
   $newAppStdout = Join-Path $resolvedEvidenceRoot 'updated-app.stdout.log'
   $newAppStderr = Join-Path $resolvedEvidenceRoot 'updated-app.stderr.log'
-  $newAppProcess = Start-Process -FilePath $updatedExe -ArgumentList @("--remote-debugging-port=$newDebugPort", '--disable-gpu') -PassThru -RedirectStandardOutput $newAppStdout -RedirectStandardError $newAppStderr
+  $updatedElectronLog = Join-Path $resolvedEvidenceRoot 'updated-electron.log'
+  $newAppProcess = Start-Process -FilePath $updatedExe -ArgumentList @(
+    "--remote-debugging-port=$newDebugPort",
+    '--disable-gpu',
+    '--no-sandbox',
+    '--enable-logging',
+    '--v=1',
+    "--log-file=$updatedElectronLog"
+  ) -PassThru -RedirectStandardOutput $newAppStdout -RedirectStandardError $newAppStderr
   [void]$newAppProcess.Handle
   Add-AiNovelTrackedProcess -ProcessIds $newAppIds -StartTimeTicks $newAppStartTimes -ProcessId $newAppProcess.Id | Out-Null
   Add-AiNovelTrackedProcessTree -RootProcessId $newAppProcess.Id -ProcessIds $newAppIds -StartTimeTicks $newAppStartTimes

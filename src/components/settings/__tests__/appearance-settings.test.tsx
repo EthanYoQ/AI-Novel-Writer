@@ -33,7 +33,7 @@ describe('appearance settings renderer seam', () => {
     expect(markup).toContain('PNG / JPEG')
     expect(markup).toContain('20 MB')
     expect(markup).toContain('16:10')
-    expect(ANIME_SKIN_URL).toBe('/skins/anime-night.webp')
+    expect(ANIME_SKIN_URL).toBe('./skins/anime-night.webp')
   })
 
   it('offers choosing before an image exists, then replacement and removal after import', () => {

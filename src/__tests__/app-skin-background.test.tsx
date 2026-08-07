@@ -10,14 +10,16 @@ const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8')
 describe('App image-skin background seam', () => {
   it('renders one passive background layer and only resolves an image for image skins', () => {
     expect(resolveSkinBackgroundUrl('classic', 'blob:custom')).toBeNull()
-    expect(resolveSkinBackgroundUrl('anime', null)).toBe('/skins/anime-night.webp')
+    // The packaged app is loaded with BrowserWindow.loadFile().  An absolute
+    // public path would resolve to the filesystem root instead of dist/.
+    expect(resolveSkinBackgroundUrl('anime', null)).toBe('./skins/anime-night.webp')
     expect(resolveSkinBackgroundUrl('custom', 'blob:custom')).toBe('blob:custom')
 
     const markup = renderToStaticMarkup(<SkinBackgroundLayer skinId="anime" backgroundUrl={null} onImageError={() => {}} />)
     expect((markup.match(/aria-hidden/g) ?? [])).toHaveLength(1)
     expect(markup).toContain('data-skin-background="anime"')
     expect(markup).toContain('<img')
-    expect(markup).toContain('/skins/anime-night.webp')
+    expect(markup).toContain('./skins/anime-night.webp')
   })
 
   it('locks background framing and fixed readability surfaces without skin blur, opacity controls, or crop controls', () => {
