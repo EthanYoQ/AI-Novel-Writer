@@ -1183,13 +1183,17 @@ finally {
     const transientDecision = releaseMonitor.indexOf(
       'if (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $legacyBridge -Window $window)',
     )
+    const terminationArmedCleanupDecision = releaseMonitor.indexOf(
+      'if (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow `',
+    )
     const cleanupDecision = releaseMonitor.indexOf(
       'if (Test-AiNovelGateLegacyBridgeTerminationCleanupWindow `',
     )
     const failClosedDecision = releaseMonitor.indexOf('$unallowedErrorWindows.Add($window)', cleanupDecision)
     expect(wizardDecision).toBeGreaterThan(-1)
     expect(transientDecision).toBeGreaterThan(wizardDecision)
-    expect(cleanupDecision).toBeGreaterThan(transientDecision)
+    expect(terminationArmedCleanupDecision).toBeGreaterThan(transientDecision)
+    expect(cleanupDecision).toBeGreaterThan(terminationArmedCleanupDecision)
     expect(failClosedDecision).toBeGreaterThan(cleanupDecision)
   })
 
@@ -1246,6 +1250,74 @@ $pidReuseRejected = -not (Test-AiNovelGateLegacyBridgeTerminationCleanupWindow -
       WrongClassRejected: true,
       PidReuseRejected: true,
     })
+  })
+
+  windowsIt('bounds the termination-armed window gap before the exact exit event is consumed', () => {
+    const output = runReleaseMonitorLibrary(`
+$armedAt = [DateTime]::new(2026, 8, 8, 0, 0, 0, [DateTimeKind]::Utc)
+$installer = [pscustomobject]@{
+  processId = 1032
+  startTimeTicks = '639218304000001032'
+  executablePath = 'C:\\Users\\runneradmin\\AppData\\Local\\ai-novel-writer-updater\\pending\\ai-novel-writer-setup-0.7.0.exe'
+  identityCaptured = $true
+}
+$bridge = [pscustomobject]@{
+  State = 'termination-armed'
+  TerminationArmedAtUtc = $armedAt
+  ObservedInstallerIdentity = $installer
+}
+$tracked = @{ 1032 = $installer }
+$setup = [pscustomobject]@{ WindowHandle = '0x31'; ProcessId = 1032; Title = ('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup '); ClassName = '#32770'; Visible = $true }
+$blank = [pscustomobject]@{ WindowHandle = '0x32'; ProcessId = 1032; Title = ''; ClassName = '#32770'; Visible = $true }
+$differentTitle = [pscustomobject]@{ WindowHandle = '0x33'; ProcessId = 1032; Title = 'Other Setup'; ClassName = '#32770'; Visible = $true }
+$wrongPid = [pscustomobject]@{ WindowHandle = '0x34'; ProcessId = 1033; Title = ''; ClassName = '#32770'; Visible = $true }
+$wrongClass = [pscustomobject]@{ WindowHandle = '0x35'; ProcessId = 1032; Title = ''; ClassName = 'OtherClass'; Visible = $true }
+$inGrace = $armedAt.AddSeconds(2)
+$setupAccepted = Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $setup -TrackedProcessIdentities $tracked -NowUtc $inGrace
+$blankAccepted = Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $blank -TrackedProcessIdentities $tracked -NowUtc $inGrace
+$expiredRejected = -not (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $blank -TrackedProcessIdentities $tracked -NowUtc $armedAt.AddSeconds(6))
+$beforeArmedRejected = -not (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $blank -TrackedProcessIdentities $tracked -NowUtc $armedAt.AddMilliseconds(-1))
+$differentTitleRejected = -not (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $differentTitle -TrackedProcessIdentities $tracked -NowUtc $inGrace)
+$wrongPidRejected = -not (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $wrongPid -TrackedProcessIdentities $tracked -NowUtc $inGrace)
+$wrongClassRejected = -not (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $wrongClass -TrackedProcessIdentities $tracked -NowUtc $inGrace)
+$tracked[1032] = [pscustomobject]@{ processId = 1032; startTimeTicks = '639218304000001033'; executablePath = $installer.executablePath; identityCaptured = $true }
+$pidReuseRejected = -not (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $blank -TrackedProcessIdentities $tracked -NowUtc $inGrace)
+$tracked[1032] = [pscustomobject]@{ processId = 1032; startTimeTicks = $installer.startTimeTicks; executablePath = 'C:\\other\\installer.exe'; identityCaptured = $true }
+$wrongPathRejected = -not (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $blank -TrackedProcessIdentities $tracked -NowUtc $inGrace)
+$tracked[1032] = $installer
+$bridge.State = 'authorized'
+$wrongStateRejected = -not (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow -LegacyBridge $bridge -Window $blank -TrackedProcessIdentities $tracked -NowUtc $inGrace)
+[pscustomobject]@{
+  SetupAccepted = $setupAccepted
+  BlankAccepted = $blankAccepted
+  ExpiredRejected = $expiredRejected
+  BeforeArmedRejected = $beforeArmedRejected
+  DifferentTitleRejected = $differentTitleRejected
+  WrongPidRejected = $wrongPidRejected
+  WrongClassRejected = $wrongClassRejected
+  PidReuseRejected = $pidReuseRejected
+  WrongPathRejected = $wrongPathRejected
+  WrongStateRejected = $wrongStateRejected
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      SetupAccepted: true,
+      BlankAccepted: true,
+      ExpiredRejected: true,
+      BeforeArmedRejected: true,
+      DifferentTitleRejected: true,
+      WrongPidRejected: true,
+      WrongClassRejected: true,
+      PidReuseRejected: true,
+      WrongPathRejected: true,
+      WrongStateRejected: true,
+    })
+
+    expect(readFileSync(releaseMonitorScript, 'utf8')).toContain(
+      '$legacyBridge.TerminationArmedAtUtc = [DateTime]::UtcNow',
+    )
   })
 
   windowsIt('classifies only the exact historical old app breakpoint after a bound installer handoff', () => {
