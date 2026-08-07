@@ -205,6 +205,8 @@ describe('Windows official in-app update E2E contract', () => {
     expect(powershell).toContain('--remote-debugging-port')
     expect(powershell).toContain('$e2eInstallRoot')
     expect(powershell).not.toMatch(/\$installRoot\s*=/)
+    expect(powershell).toContain("'resources\\app.asar'")
+    expect(powershell).not.toContain("'resources\\app.asar\\package.json'")
     expect(driver).toContain('connectOverCDP')
     expect(driver).toContain('检查更新')
     expect(driver).toContain('Check for updates')

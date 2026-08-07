@@ -117,8 +117,9 @@ function Get-E2eInstalledVersion {
     [Parameter(Mandatory = $true)][string]$ElectronRunner
   )
 
-  $packagePath = Join-Path (Split-Path -Parent $ExePath) 'resources\app.asar\package.json'
-  Assert-E2eCondition -Condition (Test-Path -LiteralPath $packagePath -PathType Leaf) -Message "Installed app package metadata is missing: $packagePath"
+  $asarPath = Join-Path (Split-Path -Parent $ExePath) 'resources\app.asar'
+  Assert-E2eCondition -Condition (Test-Path -LiteralPath $asarPath -PathType Leaf) -Message "Installed app archive is missing: $asarPath"
+  $packagePath = "$asarPath\package.json"
   $previousElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
   try {
     $env:ELECTRON_RUN_AS_NODE = '1'
