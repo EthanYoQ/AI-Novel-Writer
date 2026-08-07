@@ -2438,6 +2438,30 @@ function Test-AiNovelGateLegacyBridgeWizardWindow {
   return (Test-AiNovelGateLiveIdentity -Identity $LegacyBridge.ObservedInstallerIdentity)
 }
 
+function Test-AiNovelGateLegacyBridgeTransientWindow {
+  param(
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$Window
+  )
+
+  # A bound historical NSIS process can briefly publish an untitled dialog
+  # while the runner completes its exact-identity termination handshake. This
+  # is not evidence that the interactive Setup wizard was observed.
+  if (
+    $null -eq $LegacyBridge -or
+    $LegacyBridge.State -notin @('observed', 'authorized', 'termination-armed') -or
+    $null -eq $LegacyBridge.ObservedInstallerIdentity -or
+    $null -eq $Window -or
+    -not [bool]$Window.Visible -or
+    [string]$Window.ClassName -ne '#32770' -or
+    -not [string]::IsNullOrWhiteSpace([string]$Window.Title) -or
+    [int]$Window.ProcessId -ne [int]$LegacyBridge.ObservedInstallerIdentity.processId
+  ) {
+    return $false
+  }
+  return (Test-AiNovelGateLiveIdentity -Identity $LegacyBridge.ObservedInstallerIdentity)
+}
+
 if ($LoadMonitorLibrary) {
   return
 }
@@ -3010,6 +3034,9 @@ try {
               [void]$legacyBridge.AllowedWizardWindowKeys.Add($windowKey)
               continue
             }
+          }
+          if (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $legacyBridge -Window $window) {
+            continue
           }
           $unallowedErrorWindows.Add($window)
         }

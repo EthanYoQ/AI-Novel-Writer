@@ -1101,6 +1101,85 @@ $wrongTitleRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBrid
     })
   })
 
+  windowsIt('allows only a bound live installer blank dialog during the legacy termination handshake', () => {
+    const output = runReleaseMonitorLibrary(`
+$current = [System.Diagnostics.Process]::GetProcessById($PID)
+try {
+  $identity = [pscustomobject]@{
+    processId = $PID
+    startTimeTicks = [string]$current.StartTime.ToUniversalTime().Ticks
+    executablePath = [System.IO.Path]::GetFullPath([string]$current.MainModule.FileName)
+    identityCaptured = $true
+    commandLineCaptured = $true
+  }
+  $bridge = [pscustomobject]@{
+    Mode = 'legacy-bridge'
+    SourceTag = 'v0.6.0'
+    State = 'termination-armed'
+    ObservedInstallerIdentity = $identity
+    ExpectedPendingInstallerPath = $identity.executablePath
+    ExpectedInstallerName = [System.IO.Path]::GetFileName($identity.executablePath)
+    ExpectedInstallerSize = 1
+    ExpectedInstallerSha256 = ('a' * 64)
+    AllowedWizardWindowKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  }
+  $blank = [pscustomobject]@{ WindowHandle = '0x11'; ProcessId = $PID; Title = ''; ClassName = '#32770'; Visible = $true }
+  $blankAccepted = Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $blank
+  $statusAfterBlank = Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $bridge
+  $otherTitle = [pscustomobject]@{ WindowHandle = '0x12'; ProcessId = $PID; Title = 'Other'; ClassName = '#32770'; Visible = $true }
+  $setupTitle = [pscustomobject]@{ WindowHandle = '0x13'; ProcessId = $PID; Title = ('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup '); ClassName = '#32770'; Visible = $true }
+  $wrongPid = [pscustomobject]@{ WindowHandle = '0x14'; ProcessId = ($PID + 1); Title = ''; ClassName = '#32770'; Visible = $true }
+  $wrongClass = [pscustomobject]@{ WindowHandle = '0x15'; ProcessId = $PID; Title = ''; ClassName = 'OtherClass'; Visible = $true }
+  $otherTitleRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $otherTitle)
+  $setupTitleRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $setupTitle)
+  $wrongPidRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $wrongPid)
+  $wrongClassRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $wrongClass)
+  $bridge.State = 'terminated'
+  $terminatedRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $blank)
+  $bridge.State = 'termination-armed'
+  $identity.startTimeTicks = [string]([long]$identity.startTimeTicks - 1)
+  $reusedPidRejected = -not (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $bridge -Window $blank)
+  [pscustomobject]@{
+    BlankAccepted = $blankAccepted
+    BlankDidNotMarkWizard = -not $statusAfterBlank.legacyInteractiveWizardObserved
+    OtherTitleRejected = $otherTitleRejected
+    SetupTitleRejected = $setupTitleRejected
+    WrongPidRejected = $wrongPidRejected
+    WrongClassRejected = $wrongClassRejected
+    TerminatedRejected = $terminatedRejected
+    ReusedPidRejected = $reusedPidRejected
+  } | ConvertTo-Json -Compress
+}
+finally {
+  $current.Dispose()
+}
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      BlankAccepted: true,
+      BlankDidNotMarkWizard: true,
+      OtherTitleRejected: true,
+      SetupTitleRejected: true,
+      WrongPidRejected: true,
+      WrongClassRejected: true,
+      TerminatedRejected: true,
+      ReusedPidRejected: true,
+    })
+
+    const releaseMonitor = readFileSync(releaseMonitorScript, 'utf8')
+    const wizardDecision = releaseMonitor.indexOf(
+      'if (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBridge $legacyBridge -Window $window)',
+    )
+    const transientDecision = releaseMonitor.indexOf(
+      'if (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $legacyBridge -Window $window)',
+    )
+    const failClosedDecision = releaseMonitor.indexOf('$unallowedErrorWindows.Add($window)', transientDecision)
+    expect(wizardDecision).toBeGreaterThan(-1)
+    expect(transientDecision).toBeGreaterThan(wizardDecision)
+    expect(failClosedDecision).toBeGreaterThan(transientDecision)
+  })
+
   it('persists captured process-start identity before evaluating the legacy bridge handoff', () => {
     const releaseMonitor = readFileSync(releaseMonitorScript, 'utf8')
     const identityEvidence = releaseMonitor.indexOf("-ExitClassification 'identity-captured'")
