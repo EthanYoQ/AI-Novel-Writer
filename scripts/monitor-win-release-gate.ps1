@@ -2221,7 +2221,10 @@ function Test-AiNovelGateLegacyBridgeHistoricalCommand {
   if ($null -eq $arguments) {
     return $false
   }
-  $expectedArguments = " --updated /D=$([System.IO.Path]::GetFullPath($InstallRoot))"
+  # electron-updater 6.8.9 appends /D only when installDirectory was set
+  # explicitly. Historical v0.5/v0.6 used the default updater path, so the
+  # assisted NSIS handoff has exactly one argument and no silent/package flags.
+  $expectedArguments = ' --updated'
   return [string]::Equals($arguments, $expectedArguments, [System.StringComparison]::Ordinal)
 }
 
@@ -2693,6 +2696,7 @@ try {
     foreach ($processEvent in @($atomicMonitor.Job.Drain())) {
       $processIdentity = $null
       $exitClassification = ''
+      $processEventEvidenceWritten = $false
       if ([string]$processEvent.Kind -eq 'process-start') {
         $processIdentity = Get-AiNovelGateProcessIdentity -Event $processEvent
         if (-not [bool]$processEvent.CaptureEstablished) {
@@ -2736,6 +2740,13 @@ try {
         catch {
           # The event's durable Job Object record is still retained below.
         }
+        Write-AiNovelGateProcessEventEvidence `
+          -Path $EvidencePath `
+          -Step $activeStep `
+          -Event $processEvent `
+          -ProcessIdentity $processIdentity `
+          -ExitClassification 'identity-captured'
+        $processEventEvidenceWritten = $true
         if ($null -ne $legacyBridge) {
           $legacyParentIdentity = $null
           if (
@@ -2887,12 +2898,14 @@ try {
         $jobBecameEmpty = $true
         $exitClassification = 'job-empty'
       }
-      Write-AiNovelGateProcessEventEvidence `
-        -Path $EvidencePath `
-        -Step $activeStep `
-        -Event $processEvent `
-        -ProcessIdentity $processIdentity `
-        -ExitClassification $exitClassification
+      if (-not $processEventEvidenceWritten) {
+        Write-AiNovelGateProcessEventEvidence `
+          -Path $EvidencePath `
+          -Step $activeStep `
+          -Event $processEvent `
+          -ProcessIdentity $processIdentity `
+          -ExitClassification $exitClassification
+      }
       if ([string]::IsNullOrWhiteSpace($activeStep)) {
         continue
       }
