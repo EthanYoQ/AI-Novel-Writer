@@ -278,15 +278,23 @@ function Invoke-E2eLegacyBridge {
   Assert-E2eCondition -Condition ($null -ne $observed -and [string]$observed.mode -eq 'legacy-bridge') -Message 'Release monitor did not publish a legacy bridge observation record.'
   Assert-E2eCondition -Condition ([string]$observed.sourceTag -eq $Contract.sourceTag) -Message 'Release monitor legacy bridge source tag did not match the release plan.'
   Assert-E2eCondition -Condition (Test-E2eSameAbsolutePath -Left ([string]$observed.executablePath) -Right $Contract.pendingInstallerPath) -Message 'Release monitor observed an unexpected legacy installer path.'
+  Assert-E2eCondition -Condition ([bool]$observed.commandLineCaptured) -Message 'Release monitor did not capture the legacy installer command line for record-only evidence.'
   $installerIdentity = [pscustomobject][ordered]@{
     processId = [int]$observed.processId
     startTimeTicks = [string]$observed.startTimeTicks
     executablePath = [string]$observed.executablePath
   }
   $pending = Test-E2eLegacyBridgePendingInstaller -Contract $Contract
-  $Evidence.legacyInteractiveHandoffObserved = $true
+  $Evidence.legacyInstallerHandoffObserved = $true
   $Evidence.pendingInstallerDigestMatched = $true
   $Evidence.legacyBridge.pendingInstaller = $pending
+  $Evidence.legacyBridge.observedInstaller = [ordered]@{
+    processId = $installerIdentity.processId
+    startTimeTicks = $installerIdentity.startTimeTicks
+    executablePath = $installerIdentity.executablePath
+    commandLineCaptured = $true
+    commandLineAuthorizationMode = 'record-only'
+  }
 
   New-Item -ItemType Directory -Path $StagingRoot -Force | Out-Null
   $stagingInstaller = Join-Path $StagingRoot $Contract.installerName
@@ -325,7 +333,8 @@ function Invoke-E2eLegacyBridge {
   }
   [void](Wait-E2eMonitorState -StatusPath $MonitorStatusPath -ExpectedState 'legacy-bridge-termination-armed' -TimeoutSeconds 15 -Phase 'legacy bridge controlled termination')
   Stop-E2eExactProcess -Identity $terminationIdentity -TimeoutSeconds 15
-  [void](Wait-E2eMonitorState -StatusPath $MonitorStatusPath -ExpectedState 'legacy-bridge-terminated' -TimeoutSeconds 15 -Phase 'legacy bridge installer termination')
+  $terminatedStatus = Wait-E2eMonitorState -StatusPath $MonitorStatusPath -ExpectedState 'legacy-bridge-terminated' -TimeoutSeconds 15 -Phase 'legacy bridge installer termination'
+  $Evidence.legacyInteractiveWizardObserved = [bool]$terminatedStatus.legacyBridge.legacyInteractiveWizardObserved
 
   $bridgeStdout = Join-Path $resolvedEvidenceRoot 'legacy-bridge-installer.stdout.log'
   $bridgeStderr = Join-Path $resolvedEvidenceRoot 'legacy-bridge-installer.stderr.log'
@@ -586,6 +595,7 @@ $oldAppStartTimes = @{}
 $newAppStartTimes = @{}
 $legacyBridgeContract = $null
 $oldAppIdentity = $null
+$preTriggerOldAppIdentity = $null
 $transcriptStarted = $false
 
 try {
@@ -600,7 +610,8 @@ try {
   Assert-E2eCondition -Condition ($plan.expected.version -eq $plan.expected.tag.Substring(1)) -Message 'Expected Release version does not match its tag.'
   $legacyBridgeContract = Get-E2eLegacyBridgeContract -Plan $plan
   $evidence.mode = if ($null -ne $legacyBridgeContract) { 'legacy-bridge' } else { 'native-silent' }
-  $evidence.legacyInteractiveHandoffObserved = $false
+  $evidence.legacyInstallerHandoffObserved = $false
+  $evidence.legacyInteractiveWizardObserved = $false
   $evidence.pendingInstallerDigestMatched = $false
   $evidence.bridgeApplied = $false
   $evidence.nativeSilentSourceVersion = ($null -eq $legacyBridgeContract)
@@ -728,13 +739,20 @@ try {
       installRoot = $e2eInstallRoot
     }
     [void](Wait-E2eMonitorState -StatusPath $MonitorStatusPath -ExpectedState 'legacy-bridge-armed' -TimeoutSeconds 15 -Phase 'legacy bridge pre-arm')
+    $preTriggerOldAppIdentity = Get-E2eLiveProcessIdentity -ProcessId $oldAppIdentity.processId -ExpectedImagePath $oldAppIdentity.executablePath
+    Assert-E2eCondition -Condition ($preTriggerOldAppIdentity.startTimeTicks -eq $oldAppIdentity.startTimeTicks) -Message 'Old application identity changed before triggering the legacy updater handoff.'
   }
   & node (Join-Path $PSScriptRoot 'windows-in-app-update-e2e-driver.mjs') trigger `
     --endpoint $oldEndpoint `
     --expected-version ([string]$plan.expected.version) `
     --evidence-root $resolvedEvidenceRoot
   if ($LASTEXITCODE -ne 0) { throw "Live UI update trigger failed with exit code $LASTEXITCODE." }
-  $evidence.oldApplication = [ordered]@{ processId = $oldAppProcess.Id; cdpEndpoint = $oldEndpoint; triggerEvidence = 'ui-trigger.json' }
+  $evidence.oldApplication = [ordered]@{
+    processId = $oldAppProcess.Id
+    cdpEndpoint = $oldEndpoint
+    triggerEvidence = 'ui-trigger.json'
+    exactIdentityBeforeTrigger = $preTriggerOldAppIdentity
+  }
 
   $oldAppProcess.WaitForExit($ApplicationTimeoutSeconds * 1000) | Out-Null
   $oldAppProcess.Refresh()
