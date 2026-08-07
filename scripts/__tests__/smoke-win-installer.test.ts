@@ -1411,7 +1411,25 @@ function Test-LegacyOldUninstallerProbe {
   param($LegacyBridge = $bridge, $Child = $powerShell, $Parent = $oldUninstaller, $GrandParent = $stagingInstaller, $Root = $armedRoot)
   return Test-AiNovelGateExpectedLegacyBridgeOldUninstallerPowerShellProbeExit -Step 'windows-in-app-update-e2e' -LegacyBridge $LegacyBridge -Event $event -ProcessIdentity $Child -ParentIdentity $Parent -GrandParentIdentity $GrandParent -ArmedRootIdentity $Root -TrackedProcessIdentities $tracked
 }
+function Test-LegacyOldUninstallerDirectory {
+  param([string]$DirectoryName, [string]$FileName = 'old-uninstaller.exe', [bool]$Nested = $false)
+  $directory = Join-Path $tempRoot $DirectoryName
+  if ($Nested) { $directory = Join-Path $directory 'nested' }
+  $helperPath = Join-Path $directory $FileName
+  $helper = $oldUninstaller.PSObject.Copy()
+  $helper.executablePath = $helperPath
+  $child = $powerShell.PSObject.Copy()
+  $child.parentExecutablePath = $helperPath
+  return Test-LegacyOldUninstallerProbe -Child $child -Parent $helper
+}
 $exact = Test-LegacyOldUninstallerProbe
+$nsiDirectory = Test-LegacyOldUninstallerDirectory -DirectoryName 'nsiCC8F.tmp'
+$nshDirectory = Test-LegacyOldUninstallerDirectory -DirectoryName 'nsh2922.tmp'
+$nsoDirectory = Test-LegacyOldUninstallerDirectory -DirectoryName 'nso8049.tmp'
+$wrongDirectoryRejected = -not (Test-LegacyOldUninstallerDirectory -DirectoryName 'other8049.tmp')
+$nestedDirectoryRejected = -not (Test-LegacyOldUninstallerDirectory -DirectoryName 'nso8049.tmp' -Nested $true)
+$wrongFileNameRejected = -not (Test-LegacyOldUninstallerDirectory -DirectoryName 'nso8049.tmp' -FileName 'other.exe')
+$missingDirectParentRejected = -not (Test-LegacyOldUninstallerProbe -Parent $null)
 $exactCmd = Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'windows-in-app-update-e2e' -Event $event -ProcessIdentity $cmd -ParentIdentity $oldUninstaller -GrandParentIdentity $stagingInstaller -LegacyBridge $bridge -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $tracked
 $exactFind = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'windows-in-app-update-e2e' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $oldUninstaller -GreatGrandParentIdentity $stagingInstaller -LegacyBridge $bridge -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $tracked
 $missingBridgeCmdRejected = -not (Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'windows-in-app-update-e2e' -Event $event -ProcessIdentity $cmd -ParentIdentity $oldUninstaller -GrandParentIdentity $stagingInstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $tracked)
@@ -1446,6 +1464,13 @@ $missingAncestryRejected = -not (Test-LegacyOldUninstallerProbe)
 $tracked = $trackedBefore
 [pscustomobject]@{
   Exact = $exact
+  NsiDirectory = $nsiDirectory
+  NshDirectory = $nshDirectory
+  NsoDirectory = $nsoDirectory
+  WrongDirectoryRejected = $wrongDirectoryRejected
+  NestedDirectoryRejected = $nestedDirectoryRejected
+  WrongFileNameRejected = $wrongFileNameRejected
+  MissingDirectParentRejected = $missingDirectParentRejected
   ExactCmd = $exactCmd
   ExactFind = $exactFind
   MissingBridgeCmdRejected = $missingBridgeCmdRejected
@@ -1463,6 +1488,13 @@ $tracked = $trackedBefore
 
     expect(result).toEqual({
       Exact: true,
+      NsiDirectory: true,
+      NshDirectory: true,
+      NsoDirectory: true,
+      WrongDirectoryRejected: true,
+      NestedDirectoryRejected: true,
+      WrongFileNameRejected: true,
+      MissingDirectParentRejected: true,
       ExactCmd: true,
       ExactFind: true,
       MissingBridgeCmdRejected: true,
