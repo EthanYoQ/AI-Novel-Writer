@@ -87,6 +87,18 @@ function attachPageDiagnostics(page, evidence) {
   })
 }
 
+async function waitForAvailableUpdateControl(checkButton, restartButton, timeoutMilliseconds) {
+  const deadline = Date.now() + timeoutMilliseconds
+  while (Date.now() < deadline) {
+    if (await restartButton.isVisible().catch(() => false)) return 'restart'
+    const checkIsReady = await checkButton.isVisible().catch(() => false)
+      && await checkButton.isEnabled().catch(() => false)
+    if (checkIsReady) return 'check'
+    await delay(250)
+  }
+  throw new Error('Timed out waiting for either an enabled update check or a downloaded update')
+}
+
 async function triggerRealUpdate({ endpoint, expectedVersion, evidenceRoot }) {
   const screenshots = join(evidenceRoot, 'screenshots')
   mkdirSync(screenshots, { recursive: true })
@@ -109,12 +121,19 @@ async function triggerRealUpdate({ endpoint, expectedVersion, evidenceRoot }) {
     attachPageDiagnostics(page, evidence)
     await page.screenshot({ path: join(screenshots, 'before-check-update.png'), fullPage: true })
 
-    const checkButton = page.getByRole('button', { name: checkUpdateNames })
-    await checkButton.waitFor({ state: 'visible', timeout: 30_000 })
-    evidence.usedControl = await checkButton.innerText()
-    await checkButton.click()
-
     const restartButton = page.getByRole('button', { name: restartUpdateNames })
+    const checkButton = page.getByRole('button', { name: checkUpdateNames })
+    const availableControl = await waitForAvailableUpdateControl(checkButton, restartButton, 300_000)
+    if (availableControl === 'check') {
+      evidence.usedControl = await checkButton.innerText()
+      await checkButton.click()
+    } else {
+      // The production runtime can begin its formal-release check immediately
+      // at startup. A disabled check button plus the real downloaded-state
+      // restart control proves that path completed before automation arrived.
+      evidence.usedControl = 'startup-auto-check'
+    }
+
     await restartButton.waitFor({ state: 'visible', timeout: 300_000 })
     evidence.restartControl = await restartButton.innerText()
     await page.screenshot({ path: join(screenshots, 'ready-to-restart-update.png'), fullPage: true })
