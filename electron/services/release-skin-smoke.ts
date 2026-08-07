@@ -6,7 +6,7 @@ import { SkinService } from './skin-service'
 
 const RELEASE_SKIN_SMOKE_ARGUMENT_PREFIX = '--ai-novel-release-skin-smoke='
 const CONTROLLED_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9p5r8AAAAASUVORK5CYII=',
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAG0lEQVR4nGMQ0bD5H5BS8Z+hZ8GW/yfufPgPAEfAChWpGdTPAAAAAElFTkSuQmCC',
   'base64',
 )
 const BUNDLED_ANIME_RENDERER_URL = './skins/anime-night.webp'
