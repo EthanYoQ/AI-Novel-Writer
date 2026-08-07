@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   OFFICIAL_UPDATE_REPOSITORY,
   WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS,
+  WINDOWS_UPDATE_RUNNER_COMMAND,
   createOfficialUpdatePlan,
   normalizeFinalReleaseTag,
   parseWindowsInAppUpdateE2eCli,
@@ -215,5 +216,9 @@ describe('Windows official in-app update E2E contract', () => {
 
   it('allows a cold GitHub runner enough time to initialize the release monitor', () => {
     expect(WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000)
+  })
+
+  it('runs the E2E orchestration under the workflow PowerShell runtime', () => {
+    expect(WINDOWS_UPDATE_RUNNER_COMMAND).toBe('pwsh.exe')
   })
 })

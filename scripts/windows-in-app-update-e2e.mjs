@@ -33,6 +33,7 @@ export const OFFICIAL_UPDATE_REPOSITORY = Object.freeze({
 // A cold GitHub Windows runner spends around 15 seconds compiling the monitor's
 // native Job Object helper before it can publish `ready`.
 export const WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS = 60_000
+export const WINDOWS_UPDATE_RUNNER_COMMAND = 'pwsh.exe'
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -471,7 +472,7 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
       '--release-path', releasePath,
       '--result-path', resultPath,
       '--',
-      'powershell.exe',
+      WINDOWS_UPDATE_RUNNER_COMMAND,
       '-NoProfile',
       '-ExecutionPolicy', 'Bypass',
       '-File', runnerScript,
