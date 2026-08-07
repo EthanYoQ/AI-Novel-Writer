@@ -895,7 +895,10 @@ $at = Get-AiNovelStepCompletionDecision -NowUtc $start.AddSeconds(5) -AliveProce
       BeforeState: 'waiting-for-quiet',
       AtState: 'complete',
     })
-  }, 15_000)
+  // The assertions use a fixed clock and do not shorten the production five-second
+  // quiet contract. This budget only covers a cold Windows PowerShell process and
+  // monitor-library parsing while the full Vitest suite is contending for CPU.
+  }, 30_000)
 
   windowsIt('strictly rejects a missing, exited, or reused launcher identity', () => {
     const output = execFileSync(
