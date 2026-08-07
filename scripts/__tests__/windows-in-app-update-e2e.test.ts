@@ -24,7 +24,7 @@ function quotePowerShell(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-function runWindowsE2ePowerShellFunction(script: string): string {
+function runWindowsE2ePowerShellFunctions(functionNames: string[], script: string): string {
   const sourcePath = resolve(process.cwd(), 'scripts/windows-in-app-update-e2e.ps1')
   return execFileSync('powershell.exe', [
     '-NoProfile',
@@ -32,12 +32,18 @@ function runWindowsE2ePowerShellFunction(script: string): string {
     '-Command', [
       `$tokens = $null; $errors = $null; $ast = [System.Management.Automation.Language.Parser]::ParseFile(${quotePowerShell(sourcePath)}, [ref]$tokens, [ref]$errors)`,
       `if ($errors.Count -gt 0) { throw ($errors | ForEach-Object { $_.Message } | Out-String) }`,
-      `$definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Stop-E2eExistingInstalledApps' }, $true)`,
-      `if ($null -eq $definition) { throw 'Stop-E2eExistingInstalledApps was not found.' }`,
-      `Invoke-Expression $definition.Extent.Text`,
+      ...functionNames.flatMap(functionName => [
+        `$definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq ${quotePowerShell(functionName)} }, $true)`,
+        `if ($null -eq $definition) { throw ${quotePowerShell(`${functionName} was not found.`)} }`,
+        `Invoke-Expression $definition.Extent.Text`,
+      ]),
       script,
     ].join('; '),
   ], { cwd: process.cwd(), encoding: 'utf8' })
+}
+
+function runWindowsE2ePowerShellFunction(script: string): string {
+  return runWindowsE2ePowerShellFunctions(['Stop-E2eExistingInstalledApps'], script)
 }
 
 function temporaryRoot(): string {
@@ -347,7 +353,7 @@ describe('Windows official in-app update E2E contract', () => {
 
     expect(powershell).toContain('function Get-E2eFrozenFileManifest')
     expect(powershell).toContain('function Assert-E2eFrozenFileManifestUnchanged')
-    expect(powershell).toContain('$frozenUserDataPaths = @(')
+    expect(powershell).toContain('frozenUserDataPaths = @(')
     for (const path of [
       'config.json',
       'recent-projects.json',
@@ -359,12 +365,51 @@ describe('Windows official in-app update E2E contract', () => {
     ]) {
       expect(powershell).toContain(`'${path}'`)
     }
-    expect(powershell).toContain('Get-E2eFrozenFileManifest -Root $velaHome -RelativePaths $frozenUserDataPaths')
+    expect(powershell).toContain('Get-E2eFrozenFileManifest -Root $e2eVelaHome -RelativePaths $e2eFrozenUserDataPaths')
     expect(powershell).toContain('Assert-E2eFrozenFileManifestUnchanged -Before $beforeFrozenUserData -After $afterFrozenUserData')
     expect(powershell).toContain('frozenFilesBefore = $beforeFrozenUserData')
     expect(powershell).toContain('frozenFilesAfter = $afterFrozenUserData')
     expect(powershell).toContain('frozenFilesHashMatched = $true')
     expect(powershell).not.toContain('$beforeVelaHome.sha256 -eq $afterVelaHome.sha256')
+    expect(powershell).toContain('$e2eVelaHome = [string]$userDataFixture.velaHome')
+    expect(powershell).toContain('$env:AI_NOVEL_VELA_HOME = $e2eVelaHome')
+    expect(powershell).toContain('Get-E2eFrozenFileManifest -Root $e2eVelaHome')
+    expect(powershell).toContain('Assert-E2eFrozenFileManifestUnchanged -Before $beforeRecentProject -After $afterRecentProject')
+  })
+
+  windowsIt('seeds a valid recent-project array whose authorized project data is frozen independently', () => {
+    const root = temporaryRoot()
+    const output = runWindowsE2ePowerShellFunctions(['New-E2eUserDataFixture'], `
+$fixture = New-E2eUserDataFixture -RuntimeRoot ${quotePowerShell(root)}
+$rawRecentProjects = Get-Content -LiteralPath (Join-Path $fixture.velaHome 'recent-projects.json') -Raw -Encoding UTF8
+$recentProjects = @($rawRecentProjects | ConvertFrom-Json)
+$projectManifest = Get-Content -LiteralPath (Join-Path $fixture.recentProjectRoot '.vela\\project.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$representativePath = Join-Path $fixture.recentProjectRoot 'drafts\\chapter-017.md'
+$originalVelaHome = [System.IO.Path]::GetFullPath([string]$fixture.velaHome)
+$e2eVelaHome = $fixture.velaHome
+$velaHome = 'C:\\polluted-by-dot-source'
+[pscustomobject]@{
+  JsonIsArray = $rawRecentProjects.TrimStart().StartsWith('[')
+  RecentCount = $recentProjects.Count
+  RecentPathMatches = [System.IO.Path]::GetFullPath([string]$recentProjects[0].path) -eq [System.IO.Path]::GetFullPath([string]$fixture.recentProjectRoot)
+  ProjectRootExists = Test-Path -LiteralPath $fixture.recentProjectRoot -PathType Container
+  ManifestValid = $projectManifest.schemaVersion -eq 1 -and $projectManifest.kind -eq 'ai-novel-project' -and [guid]::TryParse([string]$projectManifest.projectId, [ref]([guid]::Empty))
+  RepresentativeExists = Test-Path -LiteralPath $representativePath -PathType Leaf
+  RepresentativeFrozen = @($fixture.recentProjectFrozenPaths) -contains 'drafts/chapter-017.md'
+  VelaHomeSurvivesCollision = [System.IO.Path]::GetFullPath([string]$e2eVelaHome) -eq $originalVelaHome
+} | ConvertTo-Json -Compress
+`)
+
+    expect(JSON.parse(output.trim())).toEqual({
+      JsonIsArray: true,
+      RecentCount: 1,
+      RecentPathMatches: true,
+      ProjectRootExists: true,
+      ManifestValid: true,
+      RepresentativeExists: true,
+      RepresentativeFrozen: true,
+      VelaHomeSurvivesCollision: true,
+    })
   })
 
   it('keeps the PowerShell runner ASCII-safe for Windows PowerShell child-process parsing', () => {
