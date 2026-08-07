@@ -2246,6 +2246,7 @@ function New-AiNovelGateLegacyBridgeState {
     PendingOldApplicationIdentity = $null
     OldApplicationIdentity = $null
     ObservedInstallerIdentity = $null
+    TerminatedAtUtc = $null
     InstallRoot = $null
     AllowedWizardWindowKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   }
@@ -2461,6 +2462,50 @@ function Test-AiNovelGateLegacyBridgeTransientWindow {
     return $false
   }
   return (Test-AiNovelGateLiveIdentity -Identity $LegacyBridge.ObservedInstallerIdentity)
+}
+
+function Test-AiNovelGateLegacyBridgeTerminationCleanupWindow {
+  param(
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$Window,
+    [Parameter(Mandatory = $true)][hashtable]$TrackedProcessIdentities,
+    [Parameter(Mandatory = $true)][DateTime]$NowUtc
+  )
+
+  if (
+    $null -eq $LegacyBridge -or
+    $LegacyBridge.State -ne 'terminated' -or
+    $null -eq $LegacyBridge.TerminatedAtUtc -or
+    $null -eq $LegacyBridge.ObservedInstallerIdentity -or
+    $null -eq $Window -or
+    -not [bool]$Window.Visible -or
+    [string]$Window.ClassName -ne '#32770' -or
+    [int]$Window.ProcessId -ne [int]$LegacyBridge.ObservedInstallerIdentity.processId
+  ) {
+    return $false
+  }
+  $terminatedAtUtc = [DateTime]$LegacyBridge.TerminatedAtUtc
+  $cleanupAge = $NowUtc - $terminatedAtUtc
+  if ($cleanupAge.TotalMilliseconds -lt 0 -or $cleanupAge.TotalSeconds -gt 5) {
+    return $false
+  }
+  $installerProcessId = [int]$LegacyBridge.ObservedInstallerIdentity.processId
+  if (-not $TrackedProcessIdentities.ContainsKey($installerProcessId)) {
+    return $false
+  }
+  if (-not (Test-AiNovelGateExactIdentity `
+    -Identity $TrackedProcessIdentities[$installerProcessId] `
+    -ProcessId $installerProcessId `
+    -StartTimeTicks ([string]$LegacyBridge.ObservedInstallerIdentity.startTimeTicks) `
+    -ExecutablePath ([string]$LegacyBridge.ObservedInstallerIdentity.executablePath))) {
+    return $false
+  }
+  $title = [string]$Window.Title
+  if ([string]::IsNullOrWhiteSpace($title)) {
+    return $true
+  }
+  $expectedTitle = 'AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup'
+  return [string]::Equals($title.TrimEnd(), $expectedTitle, [System.StringComparison]::Ordinal)
 }
 
 if ($LoadMonitorLibrary) {
@@ -2815,6 +2860,7 @@ try {
           -LegacyBridge $legacyBridge `
           -InstallerIdentity $processIdentity) {
           $legacyBridge.State = 'terminated'
+          $legacyBridge.TerminatedAtUtc = [DateTime]::UtcNow
           $exitClassification = 'legacy-bridge-terminated'
           Write-AiNovelGateStatus -State 'legacy-bridge-terminated' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
         }
@@ -3037,6 +3083,24 @@ try {
             }
           }
           if (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $legacyBridge -Window $window) {
+            continue
+          }
+          if (Test-AiNovelGateLegacyBridgeTerminationCleanupWindow `
+            -LegacyBridge $legacyBridge `
+            -Window $window `
+            -TrackedProcessIdentities $trackedProcessIdentities `
+            -NowUtc ([DateTime]::UtcNow)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$window.Title)) {
+              $windowKey = Get-AiNovelGateLegacyBridgeWindowKey -Window $window
+              if (
+                -not $legacyBridge.AllowedWizardWindowKeys.Contains($windowKey) -and
+                $legacyBridge.AllowedWizardWindowKeys.Count -gt 0
+              ) {
+                $unallowedErrorWindows.Add($window)
+                continue
+              }
+              [void]$legacyBridge.AllowedWizardWindowKeys.Add($windowKey)
+            }
             continue
           }
           $unallowedErrorWindows.Add($window)
