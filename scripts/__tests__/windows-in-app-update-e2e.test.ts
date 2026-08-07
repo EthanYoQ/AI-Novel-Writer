@@ -355,8 +355,6 @@ describe('Windows official in-app update E2E contract', () => {
     expect(powershell).toContain('function Assert-E2eFrozenFileManifestUnchanged')
     expect(powershell).toContain('frozenUserDataPaths = @(')
     for (const path of [
-      'config.json',
-      'recent-projects.json',
       'prompts/e2e-continuity.json',
       'skills/continuity-e2e/SKILL.md',
       'e2e-preservation/character-card.json',
@@ -375,6 +373,61 @@ describe('Windows official in-app update E2E contract', () => {
     expect(powershell).toContain('$env:AI_NOVEL_VELA_HOME = $e2eVelaHome')
     expect(powershell).toContain('Get-E2eFrozenFileManifest -Root $e2eVelaHome')
     expect(powershell).toContain('Assert-E2eFrozenFileManifestUnchanged -Before $beforeRecentProject -After $afterRecentProject')
+    expect(powershell).toContain('Assert-E2eManagedConfigPreserved -Before $beforeManagedConfig -After $afterManagedConfig')
+    expect(powershell).toContain('Assert-E2eRecentProjectPreserved -RecentProjects $afterRecentProjects')
+  })
+
+  windowsIt('allows managed JSON normalization while rejecting lost user config or recent projects', () => {
+    const expectedProject = 'C:\\e2e\\projects\\continuity'
+    const output = runWindowsE2ePowerShellFunctions([
+      'Assert-E2eCondition',
+      'Test-E2eSameAbsolutePath',
+      'Assert-E2eManagedConfigPreserved',
+      'Assert-E2eRecentProjectPreserved',
+    ], `
+$before = [pscustomobject]@{
+  e2eUserSentinel = 'preserve-config-sentinel'
+  theme = 'light'
+  locale = 'zh-CN'
+  proxy = [pscustomobject]@{ enabled = $false; type = 'http'; host = '127.0.0.1'; port = 7890 }
+}
+$normalized = [pscustomobject]@{
+  locale = 'zh-CN'
+  theme = 'light'
+  proxy = [pscustomobject]@{ port = 7890; host = '127.0.0.1'; type = 'http'; enabled = $false }
+  e2eUserSentinel = 'preserve-config-sentinel'
+  editorFontSize = 16
+  updatePreferences = [pscustomobject]@{ lastCheckedAt = '2026-08-08T00:00:00.000Z' }
+}
+$normalizedAccepted = $true
+try { Assert-E2eManagedConfigPreserved -Before $before -After $normalized } catch { $normalizedAccepted = $false }
+
+$lostSentinelRejected = $false
+try { Assert-E2eManagedConfigPreserved -Before $before -After ([pscustomobject]@{ theme = 'light'; locale = 'zh-CN'; proxy = $before.proxy }) } catch { $lostSentinelRejected = $_.Exception.Message -like '*sentinel*' }
+$changedValueRejected = $false
+try { Assert-E2eManagedConfigPreserved -Before $before -After ([pscustomobject]@{ e2eUserSentinel = $before.e2eUserSentinel; theme = 'dark'; locale = 'zh-CN'; proxy = $before.proxy }) } catch { $changedValueRejected = $_.Exception.Message -like '*theme*' }
+
+$recentAccepted = $true
+try { Assert-E2eRecentProjectPreserved -RecentProjects @([pscustomobject]@{ path = ${quotePowerShell(expectedProject)} }, [pscustomobject]@{ path = 'C:\\other' }) -ExpectedProjectRoot ${quotePowerShell(expectedProject)} } catch { $recentAccepted = $false }
+$missingRecentRejected = $false
+try { Assert-E2eRecentProjectPreserved -RecentProjects @([pscustomobject]@{ path = 'C:\\other' }) -ExpectedProjectRoot ${quotePowerShell(expectedProject)} } catch { $missingRecentRejected = $_.Exception.Message -like '*recent project*' }
+
+[pscustomobject]@{
+  NormalizedAccepted = $normalizedAccepted
+  LostSentinelRejected = $lostSentinelRejected
+  ChangedValueRejected = $changedValueRejected
+  RecentAccepted = $recentAccepted
+  MissingRecentRejected = $missingRecentRejected
+} | ConvertTo-Json -Compress
+`)
+
+    expect(JSON.parse(output.trim())).toEqual({
+      NormalizedAccepted: true,
+      LostSentinelRejected: true,
+      ChangedValueRejected: true,
+      RecentAccepted: true,
+      MissingRecentRejected: true,
+    })
   })
 
   windowsIt('seeds a valid recent-project array whose authorized project data is frozen independently', () => {
@@ -391,6 +444,7 @@ $velaHome = 'C:\\polluted-by-dot-source'
 [pscustomobject]@{
   JsonIsArray = $rawRecentProjects.TrimStart().StartsWith('[')
   RecentCount = $recentProjects.Count
+  ConfigSentinel = (Get-Content -LiteralPath (Join-Path $fixture.velaHome 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json).e2eUserSentinel
   RecentPathMatches = [System.IO.Path]::GetFullPath([string]$recentProjects[0].path) -eq [System.IO.Path]::GetFullPath([string]$fixture.recentProjectRoot)
   ProjectRootExists = Test-Path -LiteralPath $fixture.recentProjectRoot -PathType Container
   ManifestValid = $projectManifest.schemaVersion -eq 1 -and $projectManifest.kind -eq 'ai-novel-project' -and [guid]::TryParse([string]$projectManifest.projectId, [ref]([guid]::Empty))
@@ -403,6 +457,7 @@ $velaHome = 'C:\\polluted-by-dot-source'
     expect(JSON.parse(output.trim())).toEqual({
       JsonIsArray: true,
       RecentCount: 1,
+      ConfigSentinel: 'preserve-config-sentinel',
       RecentPathMatches: true,
       ProjectRootExists: true,
       ManifestValid: true,
