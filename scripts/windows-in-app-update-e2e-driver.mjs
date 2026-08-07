@@ -89,6 +89,7 @@ function attachPageDiagnostics(page, evidence) {
 
 async function triggerRealUpdate({ endpoint, expectedVersion, evidenceRoot }) {
   const screenshots = join(evidenceRoot, 'screenshots')
+  mkdirSync(screenshots, { recursive: true })
   const evidence = {
     schemaVersion: 1,
     kind: 'windows-in-app-update-e2e-ui-trigger',
@@ -131,6 +132,7 @@ async function triggerRealUpdate({ endpoint, expectedVersion, evidenceRoot }) {
 
 async function verifyRestartedVersion({ endpoint, expectedVersion, evidenceRoot }) {
   const screenshots = join(evidenceRoot, 'screenshots')
+  mkdirSync(screenshots, { recursive: true })
   const evidence = {
     schemaVersion: 1,
     kind: 'windows-in-app-update-e2e-ui-restart',

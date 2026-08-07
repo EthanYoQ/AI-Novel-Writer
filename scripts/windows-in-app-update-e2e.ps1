@@ -76,6 +76,59 @@ function Get-E2eSha256Manifest {
   }
 }
 
+function Get-E2eFrozenFileManifest {
+  param(
+    [Parameter(Mandatory = $true)][string]$Root,
+    [Parameter(Mandatory = $true)][string[]]$RelativePaths
+  )
+
+  Assert-E2eCondition -Condition (Test-Path -LiteralPath $Root -PathType Container) -Message "Cannot freeze files from a missing root: $Root"
+  Assert-E2eCondition -Condition ($RelativePaths.Count -gt 0) -Message 'At least one seeded user-data file must be frozen.'
+  Assert-E2eCondition -Condition ((@($RelativePaths | Select-Object -Unique)).Count -eq $RelativePaths.Count) -Message 'Seeded user-data paths must be unique.'
+  $resolvedRoot = (Resolve-Path -LiteralPath $Root).Path
+  $rootWithSeparator = $resolvedRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+  $entries = @(
+    foreach ($relativePath in $RelativePaths) {
+      Assert-E2eCondition -Condition (-not [string]::IsNullOrWhiteSpace($relativePath)) -Message 'A seeded user-data path is empty.'
+      Assert-E2eCondition -Condition (-not [System.IO.Path]::IsPathRooted($relativePath)) -Message "Seeded user-data path must be relative: $relativePath"
+      $normalizedRelativePath = $relativePath -replace '/', '\'
+      Assert-E2eCondition -Condition (-not ($normalizedRelativePath -match '(^|\\)\.\.(\\|$)')) -Message "Seeded user-data path escapes its root: $relativePath"
+      $candidatePath = [System.IO.Path]::GetFullPath((Join-Path $resolvedRoot $normalizedRelativePath))
+      Assert-E2eCondition -Condition ($candidatePath.StartsWith($rootWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) -Message "Seeded user-data path escapes its root: $relativePath"
+      Assert-E2eCondition -Condition (Test-Path -LiteralPath $candidatePath -PathType Leaf) -Message "Seeded user-data file is missing: $relativePath"
+      $file = Get-Item -LiteralPath $candidatePath
+      [ordered]@{
+        path = $normalizedRelativePath -replace '\\', '/'
+        size = $file.Length
+        sha256 = (Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
+      }
+    }
+  )
+  return [ordered]@{
+    root = $resolvedRoot
+    fileCount = $entries.Count
+    entries = $entries
+  }
+}
+
+function Assert-E2eFrozenFileManifestUnchanged {
+  param(
+    [Parameter(Mandatory = $true)]$Before,
+    [Parameter(Mandatory = $true)]$After
+  )
+
+  $beforeEntries = @($Before.entries)
+  $afterEntries = @($After.entries)
+  Assert-E2eCondition -Condition ($beforeEntries.Count -eq $afterEntries.Count) -Message 'The frozen seeded user-data file count changed during the in-app update.'
+  for ($index = 0; $index -lt $beforeEntries.Count; $index += 1) {
+    $beforeEntry = $beforeEntries[$index]
+    $afterEntry = $afterEntries[$index]
+    Assert-E2eCondition -Condition ($beforeEntry.path -eq $afterEntry.path) -Message "The frozen seeded user-data path changed at index $index."
+    Assert-E2eCondition -Condition ($beforeEntry.size -eq $afterEntry.size) -Message "The frozen seeded user-data size changed: $($beforeEntry.path)"
+    Assert-E2eCondition -Condition ($beforeEntry.sha256 -eq $afterEntry.sha256) -Message "The frozen seeded user-data hash changed: $($beforeEntry.path)"
+  }
+}
+
 function Get-E2eFreeTcpPort {
   $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
   try {
@@ -274,12 +327,23 @@ try {
     ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $preservationRoot 'character-card.json') -Encoding utf8
   Set-Content -LiteralPath (Join-Path $preservationRoot 'chapter-017.md') -Value '# Chapter 17`nThe north-harbor letter remains sealed.' -Encoding utf8
   Set-Content -LiteralPath (Join-Path $preservationRoot 'continuity-ledger.txt') -Value 'timeline=2026-08-07; protagonist=e2e-protagonist; promise=return north' -Encoding utf8
+  $frozenUserDataPaths = @(
+    'config.json',
+    'recent-projects.json',
+    'prompts/e2e-continuity.json',
+    'skills/continuity-e2e/SKILL.md',
+    'e2e-preservation/character-card.json',
+    'e2e-preservation/chapter-017.md',
+    'e2e-preservation/continuity-ledger.txt'
+  )
+  $beforeFrozenUserData = Get-E2eFrozenFileManifest -Root $velaHome -RelativePaths $frozenUserDataPaths
   $beforePreservation = Get-E2eSha256Manifest -Root $preservationRoot
   $beforeVelaHome = Get-E2eSha256Manifest -Root $velaHome
   $evidence.userData = [ordered]@{
     isolatedUserHome = $isolatedHome
     velaHome = $velaHome
     preservationRoot = $preservationRoot
+    frozenFilesBefore = $beforeFrozenUserData
     beforePreservation = $beforePreservation
     beforeVelaHome = $beforeVelaHome
   }
@@ -323,7 +387,7 @@ try {
   $oldDebugPort = Get-E2eFreeTcpPort
   $oldAppStdout = Join-Path $resolvedEvidenceRoot 'old-app.stdout.log'
   $oldAppStderr = Join-Path $resolvedEvidenceRoot 'old-app.stderr.log'
-  $oldAppProcess = Start-Process -FilePath $oldExe -ArgumentList @("--remote-debugging-port=$oldDebugPort") -PassThru -RedirectStandardOutput $oldAppStdout -RedirectStandardError $oldAppStderr
+  $oldAppProcess = Start-Process -FilePath $oldExe -ArgumentList @("--remote-debugging-port=$oldDebugPort", '--disable-gpu') -PassThru -RedirectStandardOutput $oldAppStdout -RedirectStandardError $oldAppStderr
   [void]$oldAppProcess.Handle
   Add-AiNovelTrackedProcess -ProcessIds $oldAppIds -StartTimeTicks $oldAppStartTimes -ProcessId $oldAppProcess.Id | Out-Null
   Add-AiNovelTrackedProcessTree -RootProcessId $oldAppProcess.Id -ProcessIds $oldAppIds -StartTimeTicks $oldAppStartTimes
@@ -358,7 +422,7 @@ try {
   $newDebugPort = Get-E2eFreeTcpPort
   $newAppStdout = Join-Path $resolvedEvidenceRoot 'updated-app.stdout.log'
   $newAppStderr = Join-Path $resolvedEvidenceRoot 'updated-app.stderr.log'
-  $newAppProcess = Start-Process -FilePath $updatedExe -ArgumentList @("--remote-debugging-port=$newDebugPort") -PassThru -RedirectStandardOutput $newAppStdout -RedirectStandardError $newAppStderr
+  $newAppProcess = Start-Process -FilePath $updatedExe -ArgumentList @("--remote-debugging-port=$newDebugPort", '--disable-gpu') -PassThru -RedirectStandardOutput $newAppStdout -RedirectStandardError $newAppStderr
   [void]$newAppProcess.Handle
   Add-AiNovelTrackedProcess -ProcessIds $newAppIds -StartTimeTicks $newAppStartTimes -ProcessId $newAppProcess.Id | Out-Null
   Add-AiNovelTrackedProcessTree -RootProcessId $newAppProcess.Id -ProcessIds $newAppIds -StartTimeTicks $newAppStartTimes
@@ -382,9 +446,13 @@ try {
     -BaselineWindows $baselineWindows `
     -TargetNames @($script:roundTargetNames)
 
+  $afterFrozenUserData = Get-E2eFrozenFileManifest -Root $velaHome -RelativePaths $frozenUserDataPaths
   $afterPreservation = Get-E2eSha256Manifest -Root $preservationRoot
   $afterVelaHome = Get-E2eSha256Manifest -Root $velaHome
+  Assert-E2eFrozenFileManifestUnchanged -Before $beforeFrozenUserData -After $afterFrozenUserData
   Assert-E2eCondition -Condition ($beforePreservation.sha256 -eq $afterPreservation.sha256) -Message 'The representative ~/.vela preservation fixture changed during the in-app update.'
+  $evidence.userData.frozenFilesAfter = $afterFrozenUserData
+  $evidence.userData.frozenFilesHashMatched = $true
   $evidence.userData.afterPreservation = $afterPreservation
   $evidence.userData.afterVelaHome = $afterVelaHome
   $evidence.userData.preservationHashMatched = $true
