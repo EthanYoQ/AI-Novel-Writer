@@ -5,7 +5,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
+  <img src="docs/assets/readme/ai-novel-writer-logo-transparent.png" width="104" height="104" alt="AI 小说作家 Logo" />
 </p>
 
 <h1 align="center">AI 小说作家 / AI Novel Writer</h1>
@@ -22,6 +22,10 @@
 
 <p align="center">
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新 Windows 与 macOS ARM64 安装包</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
 </p>
 
 > ## v0.7.0 重大更新
@@ -61,19 +65,6 @@ flowchart LR
 | 参考文本与知识库 | 可导入常见文本格式作为参考资料；未配置 embedding 时仍可使用 SQLite FTS 全文检索。 |
 | 批量创作任务 | 单独的批量章节创作任务可设为 1–10 章，支持暂停、取消；后处理失败会停止后续章节。 |
 | 中英文界面 | 首次启动可跟随系统语言，手动选择会持久保存。 |
-
-## v0.4.0 更新内容
-
-| 范围 | 本轮变化 |
-| --- | --- |
-| 模型接入 | 新增 NovelAI 的 OpenAI-compatible 预设；保留手动填写模型标识的方式，不声称覆盖 NovelAI 原生协议或完成真实账户联调。 |
-| Ollama 与向量 | Ollama 预设统一使用 OpenAI-compatible 的 `/v1` 基地址；embedding 请求会正确落到 `/v1/embeddings`。已有把地址填为 `/api` 的配置应改为 `/v1`。 |
-| 输出完整性 | 识别 OpenAI `finish_reason=length` 和 Gemini `MAX_TOKENS`；草稿会在有界次数内续写，仍被截断时明确失败且不保存不完整草稿。Agent 也不会把被截断的非流式回复当成可执行内容。 |
-| Agent 文件读取 | `read_file` 的指引更清楚：项目架构属于结构化数据时应使用对应读取工具，而不是猜测不存在的文件路径。 |
-| 向量与 Arrow | 向量索引按实际 embedding 维度隔离，避免把不同维度或含空值的向量混入同一空间并触发 Arrow 错误。 |
-| 项目与定稿安全 | 加强项目会话边界、定稿快照与发布分离，以及安装更新时对项目资料、角色卡和设置的保留。 |
-| 应用更新与主页 | 首页可检查正式 GitHub Release 更新，支持稍后提醒；同时提供官方 GitHub 主页入口。第一版只做版本更新提示，不包含运营推送。 |
-| Windows 构建质量 | 增加并强化 GitHub Actions 云端 Windows 安装包资格检查。它用于发布前验证构建可复现性；本候选版本的最终云端验收结果以发布记录为准。 |
 
 ## 模型配置
 

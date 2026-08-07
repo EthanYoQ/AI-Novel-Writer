@@ -5,7 +5,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
+  <img src="docs/assets/readme/ai-novel-writer-logo-transparent.png" width="104" height="104" alt="AI Novel Writer Logo" />
 </p>
 
 <h1 align="center">AI Novel Writer / AI 小说作家</h1>
@@ -22,6 +22,10 @@
 
 <p align="center">
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows and macOS ARM64 installers</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
 > ## v0.7.0 major update
@@ -61,19 +65,6 @@ flowchart LR
 | Reference text and knowledge base | Imports common text formats as reference material. SQLite FTS remains available when no embedding model is configured. |
 | Batch writing task | A separate batch chapter task supports 1–10 chapters, pause, and cancel; downstream processing failure stops later chapters. |
 | Chinese and English UI | The first launch can follow the system locale; a manual choice is persisted. |
-
-## What changes in v0.4.0
-
-| Area | Change in this cycle |
-| --- | --- |
-| Model connections | Adds a NovelAI OpenAI-compatible preset. Model identifiers remain user-entered; this does not claim NovelAI native-protocol coverage or real-account integration testing. |
-| Ollama and embeddings | The Ollama preset uses the OpenAI-compatible `/v1` base URL, and embedding calls target `/v1/embeddings`. Existing `/api` configurations should be changed to `/v1`. |
-| Output completeness | Detects OpenAI `finish_reason=length` and Gemini `MAX_TOKENS`. Drafts continue for a bounded number of rounds; if they still end truncated, they fail clearly and are not saved. The Agent also does not treat a truncated non-stream response as executable content. |
-| Agent file reading | `read_file` guidance now distinguishes structured project data from guessed file paths and points agents to the appropriate reading tool. |
-| Vectors and Arrow | Vector indexes are isolated by their actual embedding dimension, avoiding mixed dimensions or null-bearing vectors that can trigger Arrow errors. |
-| Project and finalization safety | Strengthens project-session boundaries, separates finalization snapshots from publication, and preserves project material, character cards, and settings during application updates. |
-| In-app updates and homepage | The welcome page can check formal GitHub Releases and defer reminders; it also exposes the official GitHub homepage. The first version only communicates version updates, not operational or marketing pushes. |
-| Windows build quality | Adds and hardens GitHub Actions cloud qualification for the Windows installer. It is a pre-release reproducibility check; the final cloud-verification result for this candidate is recorded with the release, not promised here. |
 
 ## Model configuration
 
