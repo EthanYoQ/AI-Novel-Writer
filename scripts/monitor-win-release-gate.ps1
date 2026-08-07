@@ -2267,11 +2267,76 @@ function New-AiNovelGateLegacyBridgeState {
     ExpectedInstallerSize = [long]$installer.size
     ExpectedInstallerSha256 = ([string]$installer.sha256).ToLowerInvariant()
     State = 'pre-armed'
+    PendingOldApplicationIdentity = $null
     OldApplicationIdentity = $null
     ObservedInstallerIdentity = $null
     InstallRoot = $null
     AllowedWizardWindowKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   }
+}
+
+function Request-AiNovelGateLegacyBridgeArm {
+  param(
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$Control,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ActiveStep
+  )
+
+  if ($null -eq $LegacyBridge -or $ActiveStep -ne 'windows-in-app-update-e2e' -or $LegacyBridge.State -ne 'pre-armed') {
+    throw 'Release gate rejected an unexpected legacy bridge arm request.'
+  }
+  if ([string]$Control.step -ne $ActiveStep -or [string]$Control.sourceTag -ne $LegacyBridge.SourceTag) {
+    throw 'Release gate rejected a legacy bridge arm request with a mismatched step or source tag.'
+  }
+  $installRoot = [string]$Control.installRoot
+  if ([string]::IsNullOrWhiteSpace($installRoot) -or $installRoot -notmatch '^[A-Za-z]:\\') {
+    throw 'Release gate rejected a legacy bridge arm request without an absolute install root.'
+  }
+  $resolvedInstallRoot = [System.IO.Path]::GetFullPath($installRoot)
+  $expectedOldApplication = Join-Path $resolvedInstallRoot ('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe')
+  if (
+    [int]$Control.processId -le 0 -or
+    [string]::IsNullOrWhiteSpace([string]$Control.processStartTimeTicks) -or
+    -not (Test-AiNovelGateSameAbsolutePath -Left ([string]$Control.executablePath) -Right $expectedOldApplication)
+  ) {
+    throw 'Release gate rejected a legacy bridge arm request with an invalid old application identity.'
+  }
+
+  $LegacyBridge.PendingOldApplicationIdentity = [pscustomobject]@{
+    processId = [int]$Control.processId
+    startTimeTicks = [string]$Control.processStartTimeTicks
+    executablePath = [System.IO.Path]::GetFullPath([string]$Control.executablePath)
+  }
+  $LegacyBridge.InstallRoot = $resolvedInstallRoot
+  $LegacyBridge.State = 'arm-requested'
+}
+
+function Complete-AiNovelGateLegacyBridgeArm {
+  param(
+    [AllowNull()]$LegacyBridge,
+    [Parameter(Mandatory = $true)]$TrackedProcessIdentities
+  )
+
+  if ($null -eq $LegacyBridge -or $LegacyBridge.State -ne 'arm-requested') {
+    return $false
+  }
+  $pendingIdentity = $LegacyBridge.PendingOldApplicationIdentity
+  if ($null -eq $pendingIdentity -or -not $TrackedProcessIdentities.ContainsKey([int]$pendingIdentity.processId)) {
+    return $false
+  }
+  $oldApplicationIdentity = $TrackedProcessIdentities[[int]$pendingIdentity.processId]
+  if (-not (Test-AiNovelGateExactIdentity `
+    -Identity $oldApplicationIdentity `
+    -ProcessId ([int]$pendingIdentity.processId) `
+    -StartTimeTicks ([string]$pendingIdentity.startTimeTicks) `
+    -ExecutablePath ([string]$pendingIdentity.executablePath))) {
+    throw 'Release gate rejected a legacy bridge arm request without the captured old application identity.'
+  }
+
+  $LegacyBridge.OldApplicationIdentity = $oldApplicationIdentity
+  $LegacyBridge.PendingOldApplicationIdentity = $null
+  $LegacyBridge.State = 'armed'
+  return $true
 }
 
 function Get-AiNovelGateLegacyBridgeStatus {
@@ -2556,35 +2621,8 @@ try {
         Write-AiNovelGateStatus -State 'monitoring' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
       }
       elseif ([string]$control.state -eq 'legacy-bridge-arm') {
-        if ($null -eq $legacyBridge -or $activeStep -ne 'windows-in-app-update-e2e' -or $legacyBridge.State -ne 'pre-armed') {
-          throw 'Release gate rejected an unexpected legacy bridge arm request.'
-        }
-        if ([string]$control.step -ne $activeStep -or [string]$control.sourceTag -ne $legacyBridge.SourceTag) {
-          throw 'Release gate rejected a legacy bridge arm request with a mismatched step or source tag.'
-        }
-        $installRoot = [string]$control.installRoot
-        if ([string]::IsNullOrWhiteSpace($installRoot) -or $installRoot -notmatch '^[A-Za-z]:\\') {
-          throw 'Release gate rejected a legacy bridge arm request without an absolute install root.'
-        }
-        $oldApplicationIdentity = $null
-        if ($trackedProcessIdentities.ContainsKey([int]$control.processId)) {
-          $oldApplicationIdentity = $trackedProcessIdentities[[int]$control.processId]
-        }
-        if (-not (Test-AiNovelGateExactIdentity `
-          -Identity $oldApplicationIdentity `
-          -ProcessId ([int]$control.processId) `
-          -StartTimeTicks ([string]$control.processStartTimeTicks) `
-          -ExecutablePath ([string]$control.executablePath))) {
-          throw 'Release gate rejected a legacy bridge arm request without the captured old application identity.'
-        }
-        $expectedOldApplication = Join-Path ([System.IO.Path]::GetFullPath($installRoot)) ('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe')
-        if (-not (Test-AiNovelGateSameAbsolutePath -Left ([string]$oldApplicationIdentity.executablePath) -Right $expectedOldApplication)) {
-          throw 'Release gate rejected a legacy bridge arm request with an old application outside the requested install root.'
-        }
-        $legacyBridge.OldApplicationIdentity = $oldApplicationIdentity
-        $legacyBridge.InstallRoot = [System.IO.Path]::GetFullPath($installRoot)
-        $legacyBridge.State = 'armed'
-        Write-AiNovelGateStatus -State 'legacy-bridge-armed' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
+        Request-AiNovelGateLegacyBridgeArm -LegacyBridge $legacyBridge -Control $control -ActiveStep $activeStep
+        Write-AiNovelGateStatus -State 'legacy-bridge-awaiting-old-application' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
       }
       elseif ([string]$control.state -eq 'legacy-bridge-authorize') {
         if ($null -eq $legacyBridge -or $activeStep -ne 'windows-in-app-update-e2e' -or $legacyBridge.State -ne 'observed') {
@@ -2893,6 +2931,12 @@ try {
             -Reason 'process-failure-awaiting-launch-result'
         }
       }
+    }
+
+    if (Complete-AiNovelGateLegacyBridgeArm `
+      -LegacyBridge $legacyBridge `
+      -TrackedProcessIdentities $trackedProcessIdentities) {
+      Write-AiNovelGateStatus -State 'legacy-bridge-armed' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
     }
 
     if ($jobBecameEmpty -and $null -eq $deferredProcessFailure) {
