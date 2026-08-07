@@ -2259,6 +2259,7 @@ function New-AiNovelGateLegacyBridgeState {
     PendingOldApplicationIdentity = $null
     OldApplicationIdentity = $null
     ObservedInstallerIdentity = $null
+    TerminationArmedAtUtc = $null
     TerminatedAtUtc = $null
     InstallRoot = $null
     AllowedWizardWindowKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -2671,6 +2672,53 @@ function Test-AiNovelGateLegacyBridgeTransientWindow {
   return (Test-AiNovelGateLiveIdentity -Identity $LegacyBridge.ObservedInstallerIdentity)
 }
 
+function Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow {
+  param(
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$Window,
+    [Parameter(Mandatory = $true)][hashtable]$TrackedProcessIdentities,
+    [Parameter(Mandatory = $true)][DateTime]$NowUtc
+  )
+
+  # Stop-Process can make the exact bound installer cease being live before
+  # its durable Job Object exit event is consumed. Bound this destruction gap
+  # from the accepted termination control, without trusting a reused PID.
+  if (
+    $null -eq $LegacyBridge -or
+    $LegacyBridge.State -ne 'termination-armed' -or
+    $null -eq $LegacyBridge.TerminationArmedAtUtc -or
+    $null -eq $LegacyBridge.ObservedInstallerIdentity -or
+    $null -eq $Window -or
+    -not [bool]$Window.Visible -or
+    [string]$Window.ClassName -ne '#32770' -or
+    [int]$Window.ProcessId -ne [int]$LegacyBridge.ObservedInstallerIdentity.processId
+  ) {
+    return $false
+  }
+  $terminationArmedAtUtc = [DateTime]$LegacyBridge.TerminationArmedAtUtc
+  $cleanupAge = $NowUtc - $terminationArmedAtUtc
+  if ($cleanupAge.TotalMilliseconds -lt 0 -or $cleanupAge.TotalSeconds -gt 5) {
+    return $false
+  }
+  $installerProcessId = [int]$LegacyBridge.ObservedInstallerIdentity.processId
+  if (-not $TrackedProcessIdentities.ContainsKey($installerProcessId)) {
+    return $false
+  }
+  if (-not (Test-AiNovelGateExactIdentity `
+    -Identity $TrackedProcessIdentities[$installerProcessId] `
+    -ProcessId $installerProcessId `
+    -StartTimeTicks ([string]$LegacyBridge.ObservedInstallerIdentity.startTimeTicks) `
+    -ExecutablePath ([string]$LegacyBridge.ObservedInstallerIdentity.executablePath))) {
+    return $false
+  }
+  $title = [string]$Window.Title
+  if ([string]::IsNullOrWhiteSpace($title)) {
+    return $true
+  }
+  $expectedTitle = 'AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup'
+  return [string]::Equals($title.TrimEnd(), $expectedTitle, [System.StringComparison]::Ordinal)
+}
+
 function Test-AiNovelGateLegacyBridgeTerminationCleanupWindow {
   param(
     [AllowNull()]$LegacyBridge,
@@ -2913,6 +2961,7 @@ try {
           throw 'Release gate rejected a legacy bridge termination request that did not bind the observed installer identity.'
         }
         $legacyBridge.State = 'termination-armed'
+        $legacyBridge.TerminationArmedAtUtc = [DateTime]::UtcNow
         Write-AiNovelGateStatus -State 'legacy-bridge-termination-armed' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
       }
       elseif ([string]$control.state -eq 'step-complete') {
@@ -3313,6 +3362,24 @@ try {
             }
           }
           if (Test-AiNovelGateLegacyBridgeTransientWindow -LegacyBridge $legacyBridge -Window $window) {
+            continue
+          }
+          if (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow `
+            -LegacyBridge $legacyBridge `
+            -Window $window `
+            -TrackedProcessIdentities $trackedProcessIdentities `
+            -NowUtc ([DateTime]::UtcNow)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$window.Title)) {
+              $windowKey = Get-AiNovelGateLegacyBridgeWindowKey -Window $window
+              if (
+                -not $legacyBridge.AllowedWizardWindowKeys.Contains($windowKey) -and
+                $legacyBridge.AllowedWizardWindowKeys.Count -gt 0
+              ) {
+                $unallowedErrorWindows.Add($window)
+                continue
+              }
+              [void]$legacyBridge.AllowedWizardWindowKeys.Add($windowKey)
+            }
             continue
           }
           if (Test-AiNovelGateLegacyBridgeTerminationCleanupWindow `
