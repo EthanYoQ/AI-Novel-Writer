@@ -218,6 +218,9 @@ describe('Windows official in-app update E2E contract', () => {
     expect(driver).toContain('Check for updates')
     expect(driver).toContain('立即重启更新')
     expect(driver).toContain('Restart and update now')
+    expect(driver).toContain('startup-auto-check')
+    expect(driver).toContain('checkButton.isEnabled()')
+    expect(driver).toContain('restartButton.isVisible()')
   })
 
   it('persists and uploads the three live UI lifecycle screenshots', () => {
