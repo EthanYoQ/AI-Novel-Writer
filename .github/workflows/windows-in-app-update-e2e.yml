@@ -1,0 +1,77 @@
+name: Windows official in-app update E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_tag:
+        description: Official installed source release; final semantic version only (for example v0.5.2)
+        required: true
+        default: v0.5.2
+        type: string
+      expected_tag:
+        description: Current official latest release; final semantic version only (for example v0.6.0)
+        required: true
+        default: v0.6.0
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-official-in-app-update-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update-through-real-installed-ui:
+    if: ${{ github.repository == 'EthanYoQ/AI-Novel-Writer' }}
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Check out E2E harness source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: 11.11.0
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install locked dependencies
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Create isolated evidence root
+        shell: pwsh
+        run: |
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "ai-novel-windows-in-app-update-e2e-$env:GITHUB_RUN_ID"
+          New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
+          "AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT=$evidenceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upgrade the official installed app through its live UI
+        shell: pwsh
+        env:
+          E2E_FROM_TAG: ${{ inputs.from_tag }}
+          E2E_EXPECTED_TAG: ${{ inputs.expected_tag }}
+        run: |
+          & node scripts/windows-in-app-update-e2e.mjs run `
+            --from-tag $env:E2E_FROM_TAG `
+            --expected-tag $env:E2E_EXPECTED_TAG `
+            --evidence-root $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload official update E2E evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-official-in-app-update-e2e-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}
