@@ -2472,7 +2472,7 @@ function Test-AiNovelGateLegacyBridgeOldUninstallerImage {
       (Test-AiNovelGateDirectChildDirectory `
         -DirectoryPath $directory `
         -RootPath ([System.IO.Path]::GetTempPath())) -and
-      $directoryName -match '^(?i:ns[hi][A-Za-z0-9]+\.tmp)$' -and
+      $directoryName -match '^(?i:ns[A-Za-z0-9]+\.tmp)$' -and
       [string]::Equals(
         [System.IO.Path]::GetFileName($fullPath),
         'old-uninstaller.exe',
@@ -2580,7 +2580,7 @@ function Test-AiNovelGateExpectedLegacyBridgeOldUninstallerPowerShellProbeExit {
   )
 
   # The historical NSIS upgrade copies the installed uninstaller to
-  # TEMP\nsh*.tmp\old-uninstaller.exe. Its fixed PowerShell probes use exit 1
+  # TEMP\ns<ASCII-alnum>.tmp\old-uninstaller.exe. Its fixed PowerShell probes use exit 1
   # as a normal negative result. This branch is intentionally limited to the
   # same-byte legacy bridge's private staging installer after the official
   # handoff has been terminated, with every ancestry edge identity-bound.
