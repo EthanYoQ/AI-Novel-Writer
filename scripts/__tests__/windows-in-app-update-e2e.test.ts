@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   OFFICIAL_UPDATE_REPOSITORY,
+  WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS,
   createOfficialUpdatePlan,
   normalizeFinalReleaseTag,
   parseWindowsInAppUpdateE2eCli,
@@ -210,5 +211,9 @@ describe('Windows official in-app update E2E contract', () => {
     const powershellBytes = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e.ps1'))
 
     expect([...powershellBytes].every(byte => byte < 0x80)).toBe(true)
+  })
+
+  it('allows a cold GitHub runner enough time to initialize the release monitor', () => {
+    expect(WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000)
   })
 })
