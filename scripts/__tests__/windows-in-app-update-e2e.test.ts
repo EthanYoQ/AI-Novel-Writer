@@ -9,6 +9,7 @@ import {
   OFFICIAL_UPDATE_REPOSITORY,
   WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS,
   WINDOWS_UPDATE_RUNNER_COMMAND,
+  createLegacyUpdateBridgePlan,
   createOfficialUpdatePlan,
   normalizeFinalReleaseTag,
   parseWindowsInAppUpdateE2eCli,
@@ -165,6 +166,43 @@ describe('Windows official in-app update E2E contract', () => {
     })).rejects.toThrow('SHA-256 digest does not match')
   })
 
+  it('pre-arms a one-time legacy bridge only for sources older than v0.7.0', () => {
+    const historicalPlan = {
+      from: { tag: 'v0.6.0' },
+      expected: {
+        tag: 'v0.7.0',
+        assets: {
+          installer: {
+            name: 'ai-novel-writer-setup-0.7.0.exe',
+            size: 234_679_883,
+            sha256: 'd751d4ed6edbef1589380304c1cfff521f0b97eeb9f1a2f0936b0032f579f66c',
+          },
+        },
+      },
+    }
+
+    expect(createLegacyUpdateBridgePlan(historicalPlan, {
+      localAppData: 'C:\\Users\\runneradmin\\AppData\\Local',
+    })).toEqual({
+      mode: 'legacy-bridge',
+      sourceTag: 'v0.6.0',
+      expectedPendingInstallerPath: 'C:\\Users\\runneradmin\\AppData\\Local\\ai-novel-writer-updater\\pending\\ai-novel-writer-setup-0.7.0.exe',
+      expectedInstaller: {
+        name: 'ai-novel-writer-setup-0.7.0.exe',
+        size: 234_679_883,
+        sha256: 'd751d4ed6edbef1589380304c1cfff521f0b97eeb9f1a2f0936b0032f579f66c',
+      },
+    })
+
+    expect(createLegacyUpdateBridgePlan({
+      ...historicalPlan,
+      from: { tag: 'v0.7.0' },
+      expected: { ...historicalPlan.expected, tag: 'v0.7.1' },
+    }, {
+      localAppData: 'C:\\Users\\runneradmin\\AppData\\Local',
+    })).toBeNull()
+  })
+
   it('exposes a CLI with only release-tag and evidence-root inputs', () => {
     expect(parseWindowsInAppUpdateE2eCli([
       'prepare',
@@ -185,6 +223,8 @@ describe('Windows official in-app update E2E contract', () => {
   it('keeps the dispatch-only workflow and real UI/update evidence requirements explicit', () => {
     const workflow = readFileSync(resolve(process.cwd(), '.github/workflows/windows-in-app-update-e2e.yml'), 'utf8')
     const powershell = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e.ps1'), 'utf8')
+    const orchestration = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e.mjs'), 'utf8')
+    const releaseMonitor = readFileSync(resolve(process.cwd(), 'scripts/monitor-win-release-gate.ps1'), 'utf8')
     const driver = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e-driver.mjs'), 'utf8')
 
     expect(workflow).toContain('workflow_dispatch:')
@@ -221,6 +261,22 @@ describe('Windows official in-app update E2E contract', () => {
     expect(driver).toContain('startup-auto-check')
     expect(driver).toContain('checkButton.isEnabled()')
     expect(driver).toContain('restartButton.isVisible()')
+
+    expect(orchestration).toContain('createLegacyUpdateBridgePlan')
+    expect(orchestration).toContain("mode: 'legacy-bridge'")
+    expect(orchestration).toContain('legacyBridge,')
+    expect(orchestration).toContain('-MonitorControlPath')
+    expect(orchestration).toContain('-MonitorStatusPath')
+    expect(powershell).toContain("state = 'legacy-bridge-arm'")
+    expect(powershell).toContain('Test-E2eLegacyBridgePendingInstaller')
+    expect(powershell).toContain('Invoke-E2eLegacyBridge')
+    expect(powershell).toContain('legacyInteractiveHandoffObserved')
+    expect(powershell).toContain('pendingInstallerDigestMatched')
+    expect(powershell).toContain('nativeSilentSourceVersion = $false')
+    expect(releaseMonitor).toContain('Test-AiNovelGateLegacyBridgeInstaller')
+    expect(releaseMonitor).toContain('Test-AiNovelGateLegacyBridgeWizardWindow')
+    expect(releaseMonitor).toContain("'legacy-bridge-observed'")
+    expect(releaseMonitor).toContain("'legacy-bridge-terminated'")
   })
 
   it('persists and uploads the three live UI lifecycle screenshots', () => {

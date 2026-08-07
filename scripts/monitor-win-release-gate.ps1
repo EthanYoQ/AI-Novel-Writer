@@ -736,17 +736,22 @@ function Write-AiNovelGateStatus {
   param(
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Step = '',
-    [string]$Failure = ''
+    [string]$Failure = '',
+    [AllowNull()]$LegacyBridge = $null
   )
 
-  $payload = [pscustomobject]@{
+  $statusRecord = [ordered]@{
     state = $State
     step = $Step
     failure = $Failure
     updatedAt = [DateTime]::UtcNow.ToString('o')
     monitorStartedAt = $script:AiNovelGateMonitorStartedAt
     monitorStoppedAt = $script:AiNovelGateMonitorStoppedAt
-  } | ConvertTo-Json -Compress
+  }
+  if ($null -ne $LegacyBridge) {
+    $statusRecord.legacyBridge = $LegacyBridge
+  }
+  $payload = [pscustomobject]$statusRecord | ConvertTo-Json -Depth 8 -Compress
   $encoding = [System.Text.UTF8Encoding]::new($false)
   $lastWriteError = $null
   for ($attempt = 0; $attempt -lt 20; $attempt++) {
@@ -2130,6 +2135,268 @@ function ConvertFrom-AiNovelGateWindowEvent {
   }
 }
 
+function Test-AiNovelGateLegacyBridgeSourceTag {
+  param([AllowEmptyString()][string]$SourceTag)
+
+  if ([string]::IsNullOrWhiteSpace($SourceTag) -or $SourceTag -notmatch '^v\d+\.\d+\.\d+$') {
+    return $false
+  }
+  try {
+    return ([version]$SourceTag.Substring(1)) -lt ([version]'0.7.0')
+  }
+  catch {
+    return $false
+  }
+}
+
+function Test-AiNovelGateExactIdentity {
+  param(
+    [AllowNull()]$Identity,
+    [int]$ProcessId,
+    [AllowEmptyString()][string]$StartTimeTicks,
+    [AllowEmptyString()][string]$ExecutablePath
+  )
+
+  return (
+    $null -ne $Identity -and
+    [bool]$Identity.identityCaptured -and
+    $ProcessId -gt 0 -and
+    [int]$Identity.processId -eq $ProcessId -and
+    -not [string]::IsNullOrWhiteSpace($StartTimeTicks) -and
+    [string]$Identity.startTimeTicks -eq $StartTimeTicks -and
+    (Test-AiNovelGateSameAbsolutePath `
+      -Left ([string]$Identity.executablePath) `
+      -Right $ExecutablePath)
+  )
+}
+
+function Test-AiNovelGateLiveIdentity {
+  param([AllowNull()]$Identity)
+
+  if (
+    $null -eq $Identity -or
+    -not [bool]$Identity.identityCaptured -or
+    [int]$Identity.processId -le 0 -or
+    [string]::IsNullOrWhiteSpace([string]$Identity.startTimeTicks) -or
+    [string]::IsNullOrWhiteSpace([string]$Identity.executablePath)
+  ) {
+    return $false
+  }
+  $process = $null
+  try {
+    $process = [System.Diagnostics.Process]::GetProcessById([int]$Identity.processId)
+    $process.Refresh()
+    if ($process.HasExited -or $process.StartTime.ToUniversalTime().Ticks -ne [long]$Identity.startTimeTicks) {
+      return $false
+    }
+    return Test-AiNovelGateSameAbsolutePath `
+      -Left ([System.IO.Path]::GetFullPath([string]$process.MainModule.FileName)) `
+      -Right ([string]$Identity.executablePath)
+  }
+  catch {
+    return $false
+  }
+  finally {
+    if ($null -ne $process) { $process.Dispose() }
+  }
+}
+
+function Test-AiNovelGateLegacyBridgeHistoricalCommand {
+  param(
+    [AllowNull()]$InstallerIdentity,
+    [AllowEmptyString()][string]$InstallRoot
+  )
+
+  if (
+    $null -eq $InstallerIdentity -or
+    -not [bool]$InstallerIdentity.commandLineCaptured -or
+    [string]::IsNullOrWhiteSpace($InstallRoot) -or
+    $InstallRoot -notmatch '^[A-Za-z]:\\'
+  ) {
+    return $false
+  }
+  $arguments = Get-AiNovelGateBoundCommandArguments `
+    -CommandLine ([string]$InstallerIdentity.commandLine) `
+    -ImagePath ([string]$InstallerIdentity.executablePath)
+  if ($null -eq $arguments) {
+    return $false
+  }
+  $expectedArguments = " --updated /D=$([System.IO.Path]::GetFullPath($InstallRoot))"
+  return [string]::Equals($arguments, $expectedArguments, [System.StringComparison]::Ordinal)
+}
+
+function New-AiNovelGateLegacyBridgeState {
+  param(
+    [AllowNull()]$Control,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step
+  )
+
+  if ($null -eq $Control.legacyBridge) {
+    return $null
+  }
+  if ($Step -ne 'windows-in-app-update-e2e') {
+    throw "Release gate rejected a legacy bridge outside the Windows in-app update E2E step."
+  }
+  $bridge = $Control.legacyBridge
+  if (
+    [string]$bridge.mode -ne 'legacy-bridge' -or
+    -not (Test-AiNovelGateLegacyBridgeSourceTag -SourceTag ([string]$bridge.sourceTag))
+  ) {
+    throw 'Release gate rejected an invalid legacy bridge mode or source version.'
+  }
+  $installer = $bridge.expectedInstaller
+  if (
+    $null -eq $installer -or
+    [string]$installer.name -notmatch '^ai-novel-writer-setup-\d+\.\d+\.\d+\.exe$' -or
+    [long]$installer.size -le 0 -or
+    [string]$installer.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or
+    [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA) -or
+    $env:LOCALAPPDATA -notmatch '^[A-Za-z]:\\'
+  ) {
+    throw 'Release gate rejected incomplete legacy bridge installer metadata.'
+  }
+  $expectedPath = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA (Join-Path 'ai-novel-writer-updater\pending' ([string]$installer.name))))
+  if (-not (Test-AiNovelGateSameAbsolutePath -Left ([string]$bridge.expectedPendingInstallerPath) -Right $expectedPath)) {
+    throw 'Release gate rejected a legacy bridge pending installer path outside LOCALAPPDATA.'
+  }
+  return [pscustomobject]@{
+    Mode = 'legacy-bridge'
+    SourceTag = [string]$bridge.sourceTag
+    ExpectedPendingInstallerPath = $expectedPath
+    ExpectedInstallerName = [string]$installer.name
+    ExpectedInstallerSize = [long]$installer.size
+    ExpectedInstallerSha256 = ([string]$installer.sha256).ToLowerInvariant()
+    State = 'pre-armed'
+    OldApplicationIdentity = $null
+    ObservedInstallerIdentity = $null
+    InstallRoot = $null
+    AllowedWizardWindowKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  }
+}
+
+function Get-AiNovelGateLegacyBridgeStatus {
+  param([AllowNull()]$LegacyBridge)
+
+  if ($null -eq $LegacyBridge) {
+    return $null
+  }
+  $installer = $LegacyBridge.ObservedInstallerIdentity
+  return [pscustomobject][ordered]@{
+    mode = $LegacyBridge.Mode
+    sourceTag = $LegacyBridge.SourceTag
+    state = $LegacyBridge.State
+    expectedPendingInstallerPath = $LegacyBridge.ExpectedPendingInstallerPath
+    expectedInstaller = [ordered]@{
+      name = $LegacyBridge.ExpectedInstallerName
+      size = $LegacyBridge.ExpectedInstallerSize
+      sha256 = $LegacyBridge.ExpectedInstallerSha256
+    }
+    processId = if ($null -ne $installer) { [int]$installer.processId } else { $null }
+    startTimeTicks = if ($null -ne $installer) { [string]$installer.startTimeTicks } else { $null }
+    executablePath = if ($null -ne $installer) { [string]$installer.executablePath } else { $null }
+    legacyInteractiveHandoffObserved = ($null -ne $installer)
+    bridgeApplied = ($LegacyBridge.State -eq 'terminated')
+    allowedWizardWindowCount = $LegacyBridge.AllowedWizardWindowKeys.Count
+  }
+}
+
+function Test-AiNovelGateLegacyBridgeInstaller {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$InstallerIdentity,
+    [AllowNull()]$ParentIdentity
+  )
+
+  if (
+    $Step -ne 'windows-in-app-update-e2e' -or
+    $null -eq $LegacyBridge -or
+    $LegacyBridge.State -ne 'armed' -or
+    $null -eq $LegacyBridge.OldApplicationIdentity -or
+    $null -eq $InstallerIdentity
+  ) {
+    return $false
+  }
+  return (
+    [bool]$InstallerIdentity.identityCaptured -and
+    [bool]$InstallerIdentity.commandLineCaptured -and
+    (Test-AiNovelGateSameAbsolutePath `
+      -Left ([string]$InstallerIdentity.executablePath) `
+      -Right $LegacyBridge.ExpectedPendingInstallerPath) -and
+    ([System.IO.Path]::GetFileName([string]$InstallerIdentity.executablePath) -eq $LegacyBridge.ExpectedInstallerName) -and
+    (Test-AiNovelGateExactIdentity `
+      -Identity $ParentIdentity `
+      -ProcessId ([int]$LegacyBridge.OldApplicationIdentity.processId) `
+      -StartTimeTicks ([string]$LegacyBridge.OldApplicationIdentity.startTimeTicks) `
+      -ExecutablePath ([string]$LegacyBridge.OldApplicationIdentity.executablePath)) -and
+    (Test-AiNovelGateCapturedParentIdentity `
+      -ChildIdentity $InstallerIdentity `
+      -ParentIdentity $ParentIdentity) -and
+    (Test-AiNovelGateLegacyBridgeHistoricalCommand `
+      -InstallerIdentity $InstallerIdentity `
+      -InstallRoot $LegacyBridge.InstallRoot)
+  )
+}
+
+function Test-AiNovelGateLegacyBridgeTermination {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$InstallerIdentity
+  )
+
+  return (
+    $Step -eq 'windows-in-app-update-e2e' -and
+    $null -ne $LegacyBridge -and
+    $LegacyBridge.State -eq 'termination-armed' -and
+    $null -ne $LegacyBridge.ObservedInstallerIdentity -and
+    (Test-AiNovelGateExactIdentity `
+      -Identity $InstallerIdentity `
+      -ProcessId ([int]$LegacyBridge.ObservedInstallerIdentity.processId) `
+      -StartTimeTicks ([string]$LegacyBridge.ObservedInstallerIdentity.startTimeTicks) `
+      -ExecutablePath ([string]$LegacyBridge.ObservedInstallerIdentity.executablePath))
+  )
+}
+
+function Get-AiNovelGateLegacyBridgeWindowKey {
+  param([AllowNull()]$Window)
+
+  if ($null -eq $Window) {
+    return $null
+  }
+  return "$([string]$Window.WindowHandle)|$([int]$Window.ProcessId)"
+}
+
+function Test-AiNovelGateLegacyBridgeWizardWindow {
+  param(
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$Window
+  )
+
+  if (
+    $null -eq $LegacyBridge -or
+    $null -eq $LegacyBridge.ObservedInstallerIdentity -or
+    $null -eq $Window -or
+    -not [bool]$Window.Visible -or
+    [string]$Window.ClassName -ne '#32770' -or
+    [int]$Window.ProcessId -ne [int]$LegacyBridge.ObservedInstallerIdentity.processId
+  ) {
+    return $false
+  }
+  $expectedTitle = 'AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup '
+  if ([string]$Window.Title -cne $expectedTitle) {
+    return $false
+  }
+  $key = Get-AiNovelGateLegacyBridgeWindowKey -Window $Window
+  if ($LegacyBridge.State -eq 'terminated') {
+    return $LegacyBridge.AllowedWizardWindowKeys.Contains($key)
+  }
+  if ($LegacyBridge.State -notin @('observed', 'authorized', 'termination-armed')) {
+    return $false
+  }
+  return (Test-AiNovelGateLiveIdentity -Identity $LegacyBridge.ObservedInstallerIdentity)
+}
+
 if ($LoadMonitorLibrary) {
   return
 }
@@ -2170,6 +2437,7 @@ $deferredNsisCmdExitFailure = New-AiNovelGateDeferredNsisCmdExitFailureState
 $armedRootIdentity = $null
 $verifiedNsisFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $pendingNsisCmdExitFailures = @{}
+$legacyBridge = $null
 $drainSequence = 0
 
 New-Item -ItemType Directory -Path $EvidencePath -Force | Out-Null
@@ -2247,6 +2515,7 @@ try {
         $armedRootIdentity = $null
         $verifiedNsisFindParentKeys.Clear()
         $pendingNsisCmdExitFailures.Clear()
+        $legacyBridge = New-AiNovelGateLegacyBridgeState -Control $control -Step $activeStep
         $rootIdentityAccepted = Initialize-AiNovelGateRootIdentity `
           -RootProcessId ([int]$control.rootProcessId) `
           -RootProcessStartTimeTicks ([long]$control.rootProcessStartTimeTicks) `
@@ -2284,7 +2553,76 @@ try {
           -ProcessIds $trackedProcessIds `
           -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
           -Reason 'root-assigned-before-release'
-        Write-AiNovelGateStatus -State 'monitoring' -Step $activeStep
+        Write-AiNovelGateStatus -State 'monitoring' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
+      }
+      elseif ([string]$control.state -eq 'legacy-bridge-arm') {
+        if ($null -eq $legacyBridge -or $activeStep -ne 'windows-in-app-update-e2e' -or $legacyBridge.State -ne 'pre-armed') {
+          throw 'Release gate rejected an unexpected legacy bridge arm request.'
+        }
+        if ([string]$control.step -ne $activeStep -or [string]$control.sourceTag -ne $legacyBridge.SourceTag) {
+          throw 'Release gate rejected a legacy bridge arm request with a mismatched step or source tag.'
+        }
+        $installRoot = [string]$control.installRoot
+        if ([string]::IsNullOrWhiteSpace($installRoot) -or $installRoot -notmatch '^[A-Za-z]:\\') {
+          throw 'Release gate rejected a legacy bridge arm request without an absolute install root.'
+        }
+        $oldApplicationIdentity = $null
+        if ($trackedProcessIdentities.ContainsKey([int]$control.processId)) {
+          $oldApplicationIdentity = $trackedProcessIdentities[[int]$control.processId]
+        }
+        if (-not (Test-AiNovelGateExactIdentity `
+          -Identity $oldApplicationIdentity `
+          -ProcessId ([int]$control.processId) `
+          -StartTimeTicks ([string]$control.processStartTimeTicks) `
+          -ExecutablePath ([string]$control.executablePath))) {
+          throw 'Release gate rejected a legacy bridge arm request without the captured old application identity.'
+        }
+        $expectedOldApplication = Join-Path ([System.IO.Path]::GetFullPath($installRoot)) ('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe')
+        if (-not (Test-AiNovelGateSameAbsolutePath -Left ([string]$oldApplicationIdentity.executablePath) -Right $expectedOldApplication)) {
+          throw 'Release gate rejected a legacy bridge arm request with an old application outside the requested install root.'
+        }
+        $legacyBridge.OldApplicationIdentity = $oldApplicationIdentity
+        $legacyBridge.InstallRoot = [System.IO.Path]::GetFullPath($installRoot)
+        $legacyBridge.State = 'armed'
+        Write-AiNovelGateStatus -State 'legacy-bridge-armed' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
+      }
+      elseif ([string]$control.state -eq 'legacy-bridge-authorize') {
+        if ($null -eq $legacyBridge -or $activeStep -ne 'windows-in-app-update-e2e' -or $legacyBridge.State -ne 'observed') {
+          throw 'Release gate rejected an unexpected legacy bridge authorization request.'
+        }
+        if (
+          [string]$control.step -ne $activeStep -or
+          [string]$control.sourceTag -ne $legacyBridge.SourceTag -or
+          -not [bool]$control.pendingInstallerDigestMatched -or
+          [string]$control.stagingInstallerSha256 -cne $legacyBridge.ExpectedInstallerSha256 -or
+          -not (Test-AiNovelGateExactIdentity `
+            -Identity $legacyBridge.ObservedInstallerIdentity `
+            -ProcessId ([int]$control.processId) `
+            -StartTimeTicks ([string]$control.processStartTimeTicks) `
+            -ExecutablePath ([string]$control.executablePath))
+        ) {
+          throw 'Release gate rejected a legacy bridge authorization request that did not bind the observed installer identity and release digest.'
+        }
+        $legacyBridge.State = 'authorized'
+        Write-AiNovelGateStatus -State 'legacy-bridge-authorized' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
+      }
+      elseif ([string]$control.state -eq 'legacy-bridge-terminate') {
+        if ($null -eq $legacyBridge -or $activeStep -ne 'windows-in-app-update-e2e' -or $legacyBridge.State -ne 'authorized') {
+          throw 'Release gate rejected an unexpected legacy bridge termination request.'
+        }
+        if (
+          [string]$control.step -ne $activeStep -or
+          [string]$control.sourceTag -ne $legacyBridge.SourceTag -or
+          -not (Test-AiNovelGateExactIdentity `
+            -Identity $legacyBridge.ObservedInstallerIdentity `
+            -ProcessId ([int]$control.processId) `
+            -StartTimeTicks ([string]$control.processStartTimeTicks) `
+            -ExecutablePath ([string]$control.executablePath))
+        ) {
+          throw 'Release gate rejected a legacy bridge termination request that did not bind the observed installer identity.'
+        }
+        $legacyBridge.State = 'termination-armed'
+        Write-AiNovelGateStatus -State 'legacy-bridge-termination-armed' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
       }
       elseif ([string]$control.state -eq 'step-complete') {
         $completionDeadline = [DateTime]::UtcNow.AddSeconds(5)
@@ -2301,6 +2639,7 @@ try {
         $armedRootIdentity = $null
         $verifiedNsisFindParentKeys.Clear()
         $pendingNsisCmdExitFailures.Clear()
+        $legacyBridge = $null
         $completionDeadline = $null
         $completionQuietDeadline = $null
         $quietDeadline = New-AiNovelGateQuietDeadline `
@@ -2359,6 +2698,38 @@ try {
         catch {
           # The event's durable Job Object record is still retained below.
         }
+        if ($null -ne $legacyBridge) {
+          $legacyParentIdentity = $null
+          if (
+            $null -ne $processIdentity.parentProcessId -and
+            $trackedProcessIdentities.ContainsKey([int]$processIdentity.parentProcessId)
+          ) {
+            $legacyParentIdentity = $trackedProcessIdentities[[int]$processIdentity.parentProcessId]
+          }
+          if (Test-AiNovelGateLegacyBridgeInstaller `
+            -Step $activeStep `
+            -LegacyBridge $legacyBridge `
+            -InstallerIdentity $processIdentity `
+            -ParentIdentity $legacyParentIdentity) {
+            $legacyBridge.ObservedInstallerIdentity = $processIdentity
+            $legacyBridge.State = 'observed'
+            Write-AiNovelGateStatus -State 'legacy-bridge-observed' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
+          }
+          elseif (
+            $legacyBridge.State -eq 'armed' -and
+            (Test-AiNovelGateNsisInstallerImage -ImagePath ([string]$processIdentity.executablePath))
+          ) {
+            throw 'Release gate rejected an unbound NSIS installer while the legacy bridge was armed.'
+          }
+          elseif (
+            $legacyBridge.State -in @('observed', 'authorized', 'termination-armed') -and
+            (Test-AiNovelGateSameAbsolutePath `
+              -Left ([string]$processIdentity.executablePath) `
+              -Right $legacyBridge.ExpectedPendingInstallerPath)
+          ) {
+            throw 'Release gate rejected a second legacy bridge installer process.'
+          }
+        }
       }
       elseif ([string]$processEvent.Kind -eq 'process-exit') {
         if ($trackedProcessIdentities.ContainsKey([int]$processEvent.ProcessId)) {
@@ -2392,7 +2763,15 @@ try {
           # Missing parent metadata remains fail-closed in the classifier.
         }
         $exitFailure = Get-AiNovelGateProcessExitFailure -Step $activeStep -Event $processEvent
-        if ($null -eq $exitFailure) {
+        if (Test-AiNovelGateLegacyBridgeTermination `
+          -Step $activeStep `
+          -LegacyBridge $legacyBridge `
+          -InstallerIdentity $processIdentity) {
+          $legacyBridge.State = 'terminated'
+          $exitClassification = 'legacy-bridge-terminated'
+          Write-AiNovelGateStatus -State 'legacy-bridge-terminated' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
+        }
+        elseif ($null -eq $exitFailure) {
           $exitClassification = 'succeeded'
         }
         elseif (Test-AiNovelGateExpectedNsisPowerShellProbeExit `
@@ -2497,7 +2876,8 @@ try {
           'expected-nsis-powershell-probe',
           'expected-nsis-cmd-process-check',
           'expected-nsis-find-no-match',
-          'pending-nsis-cmd-process-check'
+          'pending-nsis-cmd-process-check',
+          'legacy-bridge-terminated'
         )) {
           continue
         }
@@ -2588,6 +2968,23 @@ try {
         -TargetProcessIds $trackedProcessIds `
         -TargetProcessStartTimeTicks $trackedProcessStartTimeTicks `
         -TargetNames $targetNameSnapshot)
+      if ($null -ne $legacyBridge -and $newErrorWindows.Count -gt 0) {
+        $unallowedErrorWindows = [System.Collections.Generic.List[object]]::new()
+        foreach ($window in $newErrorWindows) {
+          if (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBridge $legacyBridge -Window $window) {
+            $windowKey = Get-AiNovelGateLegacyBridgeWindowKey -Window $window
+            if (
+              $legacyBridge.AllowedWizardWindowKeys.Contains($windowKey) -or
+              $legacyBridge.AllowedWizardWindowKeys.Count -eq 0
+            ) {
+              [void]$legacyBridge.AllowedWizardWindowKeys.Add($windowKey)
+              continue
+            }
+          }
+          $unallowedErrorWindows.Add($window)
+        }
+        $newErrorWindows = @($unallowedErrorWindows)
+      }
       if ($newErrorWindows.Count -gt 0) {
         $failure = "Release gate step '$activeStep' displayed a new Windows error dialog: $(Format-AiNovelWindowEvidence -Windows $newErrorWindows)"
         Save-AiNovelSmokeFailureEvidence `

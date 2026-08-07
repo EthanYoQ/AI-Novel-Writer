@@ -16,7 +16,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve, win32 } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -34,6 +34,7 @@ export const OFFICIAL_UPDATE_REPOSITORY = Object.freeze({
 // native Job Object helper before it can publish `ready`.
 export const WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS = 60_000
 export const WINDOWS_UPDATE_RUNNER_COMMAND = 'pwsh.exe'
+const LEGACY_UPDATE_BRIDGE_FIRST_NATIVE_SILENT_SOURCE_TAG = 'v0.7.0'
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -80,6 +81,54 @@ function compareFinalVersions(left, right) {
     if (leftParts[index] !== rightParts[index]) return leftParts[index] - rightParts[index]
   }
   return 0
+}
+
+/**
+ * The v0.5/v0.6 updater starts an assisted NSIS wizard because it calls
+ * quitAndInstall(false, false). This test-only bridge is deliberately
+ * unavailable once v0.7.0 is the source: v0.7.0 ships the native silent
+ * invocation and must prove that behavior without a harness substitution.
+ *
+ * All installer metadata is copied from the digest-authenticated release plan;
+ * callers cannot select a different repository, asset, or pending path.
+ */
+export function createLegacyUpdateBridgePlan(plan, { localAppData = process.env.LOCALAPPDATA } = {}) {
+  const record = assertRecord(plan, 'release plan')
+  const source = assertRecord(record.from, 'release plan from')
+  const expected = assertRecord(record.expected, 'release plan expected')
+  const sourceTag = normalizeFinalReleaseTag(source.tag, 'release plan from tag')
+  normalizeFinalReleaseTag(expected.tag, 'release plan expected tag')
+  if (compareFinalVersions(sourceTag, LEGACY_UPDATE_BRIDGE_FIRST_NATIVE_SILENT_SOURCE_TAG) >= 0) return null
+
+  assert(
+    typeof localAppData === 'string' && /^[A-Za-z]:[\\/]/.test(localAppData),
+    'LOCALAPPDATA must be an absolute Windows path for the legacy update bridge',
+  )
+  const assets = assertRecord(expected.assets, 'release plan expected assets')
+  const installer = assertRecord(assets.installer, 'release plan expected installer')
+  assert(
+    typeof installer.name === 'string' && installer.name.length > 0 && win32.basename(installer.name) === installer.name,
+    'release plan expected installer name is unsafe for the legacy update bridge',
+  )
+  assert(
+    typeof installer.size === 'number' && Number.isSafeInteger(installer.size) && installer.size > 0,
+    'release plan expected installer size is invalid for the legacy update bridge',
+  )
+  assert(
+    typeof installer.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(installer.sha256),
+    'release plan expected installer SHA-256 is invalid for the legacy update bridge',
+  )
+
+  return {
+    mode: 'legacy-bridge',
+    sourceTag,
+    expectedPendingInstallerPath: win32.join(localAppData, 'ai-novel-writer-updater', 'pending', installer.name),
+    expectedInstaller: {
+      name: installer.name,
+      size: installer.size,
+      sha256: installer.sha256.toLowerCase(),
+    },
+  }
 }
 
 function githubHeaders() {
@@ -427,6 +476,7 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
   const releasePath = join(launchRoot, 'release-command')
   const resultPath = join(launchRoot, 'result.json')
   const executionPath = join(resolvedEvidenceRoot, 'execution.json')
+  const legacyBridge = createLegacyUpdateBridgePlan(plan)
   const record = {
     schemaVersion: 1,
     kind: 'windows-in-app-update-e2e-execution',
@@ -434,6 +484,9 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
     monitor: { controlPath, statusPath, evidencePath: monitorEvidencePath },
     launch: { armedPath, releasePath, resultPath },
     expected: { tag: plan.expected.tag, version: plan.expected.version },
+    legacyBridge: legacyBridge
+      ? { mode: legacyBridge.mode, sourceTag: legacyBridge.sourceTag, enabled: true }
+      : { mode: 'native-silent', sourceTag: plan.from.tag, enabled: false },
   }
   mkdirSync(monitorRoot, { recursive: true })
   mkdirSync(launchRoot, { recursive: true })
@@ -478,6 +531,8 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
       '-File', runnerScript,
       '-PlanPath', planPath,
       '-EvidenceRoot', resolvedEvidenceRoot,
+      '-MonitorControlPath', controlPath,
+      '-MonitorStatusPath', statusPath,
     ], {
       cwd: repositoryRoot,
       env: { ...process.env, AI_NOVEL_RELEASE_GATE: 'windows-in-app-update-e2e' },
@@ -506,6 +561,7 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
         'AI小说作家',
         'ai-novel-writer',
       ],
+      legacyBridge,
     })
     await waitForMonitorState(statusPath, ['monitoring'], 15_000, 'monitoring')
     writeFileSync(releasePath, 'release\n', 'utf8')
