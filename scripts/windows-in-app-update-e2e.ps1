@@ -46,6 +46,86 @@ function Write-E2eJson {
   Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
 }
 
+function New-E2eUserDataFixture {
+  param([Parameter(Mandatory = $true)][string]$RuntimeRoot)
+
+  $isolatedHome = Join-Path $RuntimeRoot 'home'
+  $velaHome = Join-Path $isolatedHome '.vela'
+  $preservationRoot = Join-Path $velaHome 'e2e-preservation'
+  $promptsRoot = Join-Path $velaHome 'prompts'
+  $skillsRoot = Join-Path $velaHome 'skills\continuity-e2e'
+  $recentProjectRoot = Join-Path $RuntimeRoot 'user-projects\e2e-continuity-fixture'
+  $recentProjectMetadataRoot = Join-Path $recentProjectRoot '.vela'
+  $recentProjectDraftsRoot = Join-Path $recentProjectRoot 'drafts'
+  New-Item -ItemType Directory -Path @(
+    $preservationRoot,
+    $promptsRoot,
+    $skillsRoot,
+    $recentProjectMetadataRoot,
+    $recentProjectDraftsRoot
+  ) -Force | Out-Null
+
+  $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+  $writeUtf8 = {
+    param([string]$Path, [string]$Content)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+  }
+  & $writeUtf8 (Join-Path $velaHome 'config.json') (@{
+    theme = 'light'
+    locale = 'zh-CN'
+    proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 }
+  } | ConvertTo-Json -Depth 4)
+
+  $projectManifest = [ordered]@{
+    schemaVersion = 1
+    kind = 'ai-novel-project'
+    projectId = '00000000-0000-4000-8000-000000000017'
+    createdAt = '2026-08-07T00:00:00.000Z'
+  }
+  & $writeUtf8 (Join-Path $recentProjectMetadataRoot 'project.json') ($projectManifest | ConvertTo-Json -Depth 4)
+  & $writeUtf8 (Join-Path $recentProjectDraftsRoot 'chapter-017.md') "# Chapter 17`nThe north-harbor letter remains sealed."
+  $recentProjects = @([ordered]@{
+    name = 'E2E continuity fixture'
+    path = $recentProjectRoot
+    updatedAt = '2026-08-07T00:00:00.000Z'
+  })
+  & $writeUtf8 (Join-Path $velaHome 'recent-projects.json') (ConvertTo-Json -InputObject $recentProjects -Depth 4)
+
+  & $writeUtf8 (Join-Path $promptsRoot 'e2e-continuity.json') (@{
+    key = 'e2e-continuity'
+    name = 'E2E continuity'
+    content = "Keep the heroine's secret, the chapter ledger, and chronology."
+  } | ConvertTo-Json -Depth 4)
+  & $writeUtf8 (Join-Path $skillsRoot 'SKILL.md') "# E2E continuity fixture`n`nPreserve user-authored continuity evidence across update."
+  & $writeUtf8 (Join-Path $preservationRoot 'character-card.json') (@{
+    character = 'E2E protagonist'
+    unresolvedThread = 'unopened north-harbor letter'
+    chapter = 17
+  } | ConvertTo-Json -Depth 4)
+  & $writeUtf8 (Join-Path $preservationRoot 'chapter-017.md') "# Chapter 17`nThe north-harbor letter remains sealed."
+  & $writeUtf8 (Join-Path $preservationRoot 'continuity-ledger.txt') 'timeline=2026-08-07; protagonist=e2e-protagonist; promise=return north'
+
+  return [pscustomobject][ordered]@{
+    isolatedHome = $isolatedHome
+    velaHome = $velaHome
+    preservationRoot = $preservationRoot
+    recentProjectRoot = $recentProjectRoot
+    frozenUserDataPaths = @(
+      'config.json',
+      'recent-projects.json',
+      'prompts/e2e-continuity.json',
+      'skills/continuity-e2e/SKILL.md',
+      'e2e-preservation/character-card.json',
+      'e2e-preservation/chapter-017.md',
+      'e2e-preservation/continuity-ledger.txt'
+    )
+    recentProjectFrozenPaths = @(
+      '.vela/project.json',
+      'drafts/chapter-017.md'
+    )
+  }
+}
+
 function Get-E2eJsonWhenAvailable {
   param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -684,43 +764,25 @@ try {
   New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
   $e2eInstallRoot = Join-Path $runtimeRoot 'installed-app'
   $chromiumUserDataDir = Join-Path $runtimeRoot 'chromium-profile'
-  $isolatedHome = Join-Path $runtimeRoot 'home'
-  $velaHome = Join-Path $isolatedHome '.vela'
-  $preservationRoot = Join-Path $velaHome 'e2e-preservation'
-  $promptsRoot = Join-Path $velaHome 'prompts'
-  $skillsRoot = Join-Path $velaHome 'skills\continuity-e2e'
-  New-Item -ItemType Directory -Path $chromiumUserDataDir, $preservationRoot, $promptsRoot, $skillsRoot -Force | Out-Null
-  @{
-    theme = 'light'
-    locale = 'zh-CN'
-    proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 }
-  } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $velaHome 'config.json') -Encoding utf8
-  @(@{ name = 'E2E continuity fixture'; path = $preservationRoot; updatedAt = '2026-08-07T00:00:00.000Z' }) |
-    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $velaHome 'recent-projects.json') -Encoding utf8
-  @{ key = 'e2e-continuity'; name = 'E2E continuity'; content = "Keep the heroine's secret, the chapter ledger, and chronology." } |
-    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $promptsRoot 'e2e-continuity.json') -Encoding utf8
-  Set-Content -LiteralPath (Join-Path $skillsRoot 'SKILL.md') -Value "# E2E continuity fixture`n`nPreserve user-authored continuity evidence across update." -Encoding utf8
-  @{ character = 'E2E protagonist'; unresolvedThread = 'unopened north-harbor letter'; chapter = 17 } |
-    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $preservationRoot 'character-card.json') -Encoding utf8
-  Set-Content -LiteralPath (Join-Path $preservationRoot 'chapter-017.md') -Value '# Chapter 17`nThe north-harbor letter remains sealed.' -Encoding utf8
-  Set-Content -LiteralPath (Join-Path $preservationRoot 'continuity-ledger.txt') -Value 'timeline=2026-08-07; protagonist=e2e-protagonist; promise=return north' -Encoding utf8
-  $frozenUserDataPaths = @(
-    'config.json',
-    'recent-projects.json',
-    'prompts/e2e-continuity.json',
-    'skills/continuity-e2e/SKILL.md',
-    'e2e-preservation/character-card.json',
-    'e2e-preservation/chapter-017.md',
-    'e2e-preservation/continuity-ledger.txt'
-  )
-  $beforeFrozenUserData = Get-E2eFrozenFileManifest -Root $velaHome -RelativePaths $frozenUserDataPaths
-  $beforePreservation = Get-E2eSha256Manifest -Root $preservationRoot
-  $beforeVelaHome = Get-E2eSha256Manifest -Root $velaHome
+  New-Item -ItemType Directory -Path $chromiumUserDataDir -Force | Out-Null
+  $userDataFixture = New-E2eUserDataFixture -RuntimeRoot $runtimeRoot
+  $e2eIsolatedHome = [string]$userDataFixture.isolatedHome
+  $e2eVelaHome = [string]$userDataFixture.velaHome
+  $e2ePreservationRoot = [string]$userDataFixture.preservationRoot
+  $e2eRecentProjectRoot = [string]$userDataFixture.recentProjectRoot
+  $e2eFrozenUserDataPaths = @($userDataFixture.frozenUserDataPaths)
+  $e2eRecentProjectFrozenPaths = @($userDataFixture.recentProjectFrozenPaths)
+  $beforeFrozenUserData = Get-E2eFrozenFileManifest -Root $e2eVelaHome -RelativePaths $e2eFrozenUserDataPaths
+  $beforeRecentProject = Get-E2eFrozenFileManifest -Root $e2eRecentProjectRoot -RelativePaths $e2eRecentProjectFrozenPaths
+  $beforePreservation = Get-E2eSha256Manifest -Root $e2ePreservationRoot
+  $beforeVelaHome = Get-E2eSha256Manifest -Root $e2eVelaHome
   $evidence.userData = [ordered]@{
-    isolatedUserHome = $isolatedHome
-    velaHome = $velaHome
-    preservationRoot = $preservationRoot
+    isolatedUserHome = $e2eIsolatedHome
+    velaHome = $e2eVelaHome
+    preservationRoot = $e2ePreservationRoot
+    recentProjectRoot = $e2eRecentProjectRoot
     frozenFilesBefore = $beforeFrozenUserData
+    recentProjectFrozenFilesBefore = $beforeRecentProject
     beforePreservation = $beforePreservation
     beforeVelaHome = $beforeVelaHome
   }
@@ -758,9 +820,9 @@ try {
   Assert-E2eCondition -Condition ($installedOldVersion -eq $plan.from.version) -Message "Installed old app version $installedOldVersion does not match v$($plan.from.version)"
   $evidence.oldInstallation = [ordered]@{ exePath = $oldExe; version = $installedOldVersion; silent = $true }
 
-  $env:USERPROFILE = $isolatedHome
-  $env:HOME = $isolatedHome
-  $env:AI_NOVEL_VELA_HOME = $velaHome
+  $env:USERPROFILE = $e2eIsolatedHome
+  $env:HOME = $e2eIsolatedHome
+  $env:AI_NOVEL_VELA_HOME = $e2eVelaHome
   $oldDebugPort = Get-E2eFreeTcpPort
   $oldAppStdout = Join-Path $resolvedEvidenceRoot 'old-app.stdout.log'
   $oldAppStderr = Join-Path $resolvedEvidenceRoot 'old-app.stderr.log'
@@ -867,13 +929,17 @@ try {
     -BaselineWindows $baselineWindows `
     -TargetNames @($script:roundTargetNames)
 
-  $afterFrozenUserData = Get-E2eFrozenFileManifest -Root $velaHome -RelativePaths $frozenUserDataPaths
-  $afterPreservation = Get-E2eSha256Manifest -Root $preservationRoot
-  $afterVelaHome = Get-E2eSha256Manifest -Root $velaHome
+  $afterFrozenUserData = Get-E2eFrozenFileManifest -Root $e2eVelaHome -RelativePaths $e2eFrozenUserDataPaths
+  $afterRecentProject = Get-E2eFrozenFileManifest -Root $e2eRecentProjectRoot -RelativePaths $e2eRecentProjectFrozenPaths
+  $afterPreservation = Get-E2eSha256Manifest -Root $e2ePreservationRoot
+  $afterVelaHome = Get-E2eSha256Manifest -Root $e2eVelaHome
   Assert-E2eFrozenFileManifestUnchanged -Before $beforeFrozenUserData -After $afterFrozenUserData
+  Assert-E2eFrozenFileManifestUnchanged -Before $beforeRecentProject -After $afterRecentProject
   Assert-E2eCondition -Condition ($beforePreservation.sha256 -eq $afterPreservation.sha256) -Message 'The representative ~/.vela preservation fixture changed during the in-app update.'
   $evidence.userData.frozenFilesAfter = $afterFrozenUserData
   $evidence.userData.frozenFilesHashMatched = $true
+  $evidence.userData.recentProjectFrozenFilesAfter = $afterRecentProject
+  $evidence.userData.recentProjectFrozenFilesHashMatched = $true
   $evidence.userData.afterPreservation = $afterPreservation
   $evidence.userData.afterVelaHome = $afterVelaHome
   $evidence.userData.preservationHashMatched = $true
