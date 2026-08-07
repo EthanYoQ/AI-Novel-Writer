@@ -386,8 +386,30 @@ function readJsonWhenAvailable(path) {
   }
 }
 
-function appendMonitorControl(controlPath, sequence, payload) {
+function readLastMonitorControlSequence(controlPath) {
+  if (!existsSync(controlPath)) return 0
+  const lines = readFileSync(controlPath, 'utf8').split(/\r?\n/).filter(line => line.trim().length > 0)
+  let lastSequence = 0
+  for (const line of lines) {
+    let record
+    try {
+      record = JSON.parse(line)
+    } catch {
+      throw new Error('Release monitor control file contains malformed JSON')
+    }
+    assert(
+      Number.isSafeInteger(record?.sequence) && record.sequence > lastSequence,
+      'Release monitor control sequences must be strictly increasing',
+    )
+    lastSequence = record.sequence
+  }
+  return lastSequence
+}
+
+export function appendMonitorControl(controlPath, payload) {
+  const sequence = readLastMonitorControlSequence(controlPath) + 1
   appendFileSync(controlPath, `${JSON.stringify({ sequence, ...payload })}\n`, 'utf8')
+  return sequence
 }
 
 async function waitForMonitorState(statusPath, acceptedStates, timeoutMilliseconds, phase) {
@@ -509,7 +531,6 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
     join(monitorRoot, 'monitor.stdout.log'),
     join(monitorRoot, 'monitor.stderr.log'),
   )
-  let controlSequence = 0
   let launch
   let stopLaunchOutput
   try {
@@ -548,8 +569,7 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
     const armed = readJsonWhenAvailable(armedPath)
     assert(armed?.state === 'armed' && armed.processId === launch.pid, 'Launch gate did not publish a valid armed record')
     assert(Number.isInteger(launch.pid) && launch.pid > 0, 'Launch gate did not expose a valid process ID')
-    controlSequence += 1
-    appendMonitorControl(controlPath, controlSequence, {
+    appendMonitorControl(controlPath, {
       state: 'running',
       step: 'windows-in-app-update-e2e',
       rootProcessId: launch.pid,
@@ -569,8 +589,7 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
     record.launch.exitCode = result.code
     record.launch.signal = result.signal
     record.launch.result = readJsonWhenAvailable(resultPath) ?? null
-    controlSequence += 1
-    appendMonitorControl(controlPath, controlSequence, { state: 'step-complete', step: 'windows-in-app-update-e2e' })
+    appendMonitorControl(controlPath, { state: 'step-complete', step: 'windows-in-app-update-e2e' })
     await waitForMonitorState(statusPath, ['step-completed'], 30_000, 'step completion')
     assert(result.code === 0 && !result.signal, `In-app update runner failed with code ${result.code ?? 'null'}${result.signal ? ` (${result.signal})` : ''}`)
     assert(record.launch.result?.targetExitCode === 0 && !record.launch.result?.targetSignal, 'In-app update target did not complete successfully')
@@ -591,8 +610,7 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
     writeExecutionRecord(executionPath, record)
     try {
       if (monitor.exitCode === null && monitor.signalCode === null) {
-        controlSequence += 1
-        appendMonitorControl(controlPath, controlSequence, { state: 'stop' })
+        appendMonitorControl(controlPath, { state: 'stop' })
         await waitForMonitorState(statusPath, ['stopped'], 15_000, 'stop')
       }
     } catch (stopError) {

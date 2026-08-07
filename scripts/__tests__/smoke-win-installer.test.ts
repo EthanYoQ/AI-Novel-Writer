@@ -1082,6 +1082,76 @@ $wrongTitleRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBrid
     })
   })
 
+  windowsIt('arms the legacy bridge only after the monitor captures the exact old application identity', () => {
+    const output = runReleaseMonitorLibrary(`
+$oldExe = 'C:\\e2e\\installed-app\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
+$request = [pscustomobject]@{
+  step = 'windows-in-app-update-e2e'
+  sourceTag = 'v0.5.2'
+  processId = 410
+  processStartTimeTicks = '638900000000000410'
+  executablePath = $oldExe
+  installRoot = 'C:\\e2e\\installed-app'
+}
+function New-BridgeArmFixture {
+  return [pscustomobject]@{
+    State = 'pre-armed'
+    SourceTag = 'v0.5.2'
+    PendingOldApplicationIdentity = $null
+    OldApplicationIdentity = $null
+    InstallRoot = $null
+  }
+}
+$bridge = New-BridgeArmFixture
+$captured = [pscustomobject]@{
+  processId = 410
+  startTimeTicks = '638900000000000410'
+  executablePath = $oldExe
+  identityCaptured = $true
+}
+$tracked = [System.Collections.Generic.Dictionary[int,object]]::new()
+Request-AiNovelGateLegacyBridgeArm -LegacyBridge $bridge -Control $request -ActiveStep 'windows-in-app-update-e2e'
+$waitingWithoutCapture = (
+  $bridge.State -eq 'arm-requested' -and
+  -not (Complete-AiNovelGateLegacyBridgeArm -LegacyBridge $bridge -TrackedProcessIdentities $tracked)
+)
+$tracked[410] = $captured
+$armedAfterCapture = Complete-AiNovelGateLegacyBridgeArm -LegacyBridge $bridge -TrackedProcessIdentities $tracked
+$exactIdentityRetained = Test-AiNovelGateExactIdentity -Identity $bridge.OldApplicationIdentity -ProcessId 410 -StartTimeTicks '638900000000000410' -ExecutablePath $oldExe
+
+$mismatchBridge = New-BridgeArmFixture
+$mismatchTracked = [System.Collections.Generic.Dictionary[int,object]]::new()
+$mismatchTracked[410] = [pscustomobject]@{
+  processId = 410
+  startTimeTicks = '638900000000000409'
+  executablePath = $oldExe
+  identityCaptured = $true
+}
+Request-AiNovelGateLegacyBridgeArm -LegacyBridge $mismatchBridge -Control $request -ActiveStep 'windows-in-app-update-e2e'
+$mismatchRejected = $false
+try {
+  [void](Complete-AiNovelGateLegacyBridgeArm -LegacyBridge $mismatchBridge -TrackedProcessIdentities $mismatchTracked)
+}
+catch {
+  $mismatchRejected = $_.Exception.Message -like '*without the captured old application identity*'
+}
+[pscustomobject]@{
+  WaitingWithoutCapture = $waitingWithoutCapture
+  ArmedAfterCapture = $armedAfterCapture
+  ExactIdentityRetained = $exactIdentityRetained
+  MismatchRejected = $mismatchRejected
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      WaitingWithoutCapture: true,
+      ArmedAfterCapture: true,
+      ExactIdentityRetained: true,
+      MismatchRejected: true,
+    })
+  })
+
   windowsIt('exempts only the known NSIS PowerShell probes during installer smoke steps', () => {
     const output = runReleaseMonitorLibrary(`
 $system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'

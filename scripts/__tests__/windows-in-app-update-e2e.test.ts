@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -9,6 +9,7 @@ import {
   OFFICIAL_UPDATE_REPOSITORY,
   WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS,
   WINDOWS_UPDATE_RUNNER_COMMAND,
+  appendMonitorControl,
   createLegacyUpdateBridgePlan,
   createOfficialUpdatePlan,
   normalizeFinalReleaseTag,
@@ -112,6 +113,24 @@ afterEach(() => {
 })
 
 describe('Windows official in-app update E2E contract', () => {
+  it('allocates monitor control sequences from the shared durable JSONL stream', () => {
+    const root = temporaryRoot()
+    const controlPath = join(root, 'control.jsonl')
+    writeFileSync(controlPath, [
+      JSON.stringify({ sequence: 1, state: 'running' }),
+      JSON.stringify({ sequence: 2, state: 'legacy-bridge-arm' }),
+      '',
+    ].join('\n'))
+
+    expect(appendMonitorControl(controlPath, { state: 'step-complete' })).toBe(3)
+    expect(appendMonitorControl(controlPath, { state: 'stop' })).toBe(4)
+    const records = readFileSync(controlPath, 'utf8')
+      .trim()
+      .split(/\r?\n/)
+      .map(line => JSON.parse(line))
+    expect(records.map(record => record.sequence)).toEqual([1, 2, 3, 4])
+  })
+
   it('pins the official repository and accepts final semantic release tags only', () => {
     expect(OFFICIAL_UPDATE_REPOSITORY).toEqual({ owner: 'EthanYoQ', repo: 'AI-Novel-Writer' })
     expect(normalizeFinalReleaseTag('v0.5.2', 'from_tag')).toBe('v0.5.2')
