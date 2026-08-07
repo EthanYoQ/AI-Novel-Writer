@@ -24,9 +24,9 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新 Windows 与 macOS ARM64 安装包</a>
 </p>
 
-> ## v0.6.0 重大更新
+> ## v0.7.0 重大更新
 >
-> [v0.6.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.6.0) 是一次面向完整创作流程的重大更新：更新检查会区分网络、配置和发布资产问题；模型设置新增 Grok，并采用 `base_url` 等 API 术语；向量模型默认引导使用硅基流动的免费 `BAAI/bge-m3`。蓝图改为每批最多 5 章，草稿支持有界续写并加入推理与上下文预算保护，避免把被截断的内容保存为完成稿。蓝图中的角色与关系会自动同步，且无需向量模型；模型调用统计也会区分成功、失败和未知 Token 用量。[#71](https://github.com/EthanYoQ/AI-Novel-Writer/issues/71) 中的 Windows 项目路径与角色提取问题已一并修复。
+> [v0.7.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.7.0) 是一次面向发布可靠性和界面外观的重大更新：提供经典、原创二次元与自定义图片皮肤，经典皮肤仍为默认外观。自定义图片只接受 PNG 或 JPEG，文件由主进程选择、验证并复制到应用数据目录；导入或读取失败会安全回退到经典皮肤，界面不会取得本机绝对路径。新增 Windows 正式 Release 应用内更新端到端验收能力，用于验证已安装正式版升级到较新正式版的路径；Windows x64 与 macOS ARM64 的云端资格构建还会运行双平台打包皮肤 smoke，覆盖内置资源和隔离用户目录中的自定义皮肤恢复。
 >
 > 本版在同一个 Release 资产列表中提供 Windows x64 与 macOS Apple Silicon（ARM64）安装包。Windows x64 安装程序支持应用内更新，但尚未配置代码签名；macOS ARM64 包未签名、未公证，且需要从 Release 页面手动下载更新。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
 

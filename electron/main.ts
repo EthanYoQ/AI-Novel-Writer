@@ -20,6 +20,11 @@ import {
   releaseOfficialHomepageSmokeWasRequested,
   runReleaseOfficialHomepageSmoke,
 } from './services/release-official-homepage-smoke'
+import {
+  claimReleaseSkinSmokeInvocation,
+  releaseSkinSmokeWasRequested,
+  runReleaseSkinSmoke,
+} from './services/release-skin-smoke'
 import { registerOfficialHomepageController } from './controllers/official-homepage-controller'
 import type { UpdateState } from './services/update-service'
 import {
@@ -56,12 +61,16 @@ let win: BrowserWindow | null
 // must never turn into a normal interactive application launch.
 const releaseVectorSmokeRequested = releaseVectorSmokeWasRequested(process.argv)
 const releaseHomepageSmokeRequested = releaseOfficialHomepageSmokeWasRequested(process.argv)
-const releaseSmokeRequested = releaseVectorSmokeRequested || releaseHomepageSmokeRequested
+const releaseSkinSmokeRequested = releaseSkinSmokeWasRequested(process.argv)
+const releaseSmokeRequested = releaseVectorSmokeRequested || releaseHomepageSmokeRequested || releaseSkinSmokeRequested
 const releaseVectorSmokeInvocation = releaseVectorSmokeRequested
   ? claimReleaseVectorSmokeInvocation(process.argv, process.env)
   : undefined
 const releaseHomepageSmokeInvocation = releaseHomepageSmokeRequested
   ? claimReleaseOfficialHomepageSmokeInvocation(process.argv, process.env)
+  : undefined
+const releaseSkinSmokeInvocation = releaseSkinSmokeRequested
+  ? claimReleaseSkinSmokeInvocation(process.argv, process.env)
   : undefined
 let releaseSmokeStage = 'not-requested'
 let releaseSmokeTimeout: NodeJS.Timeout | undefined
@@ -82,7 +91,9 @@ if (releaseSmokeRequested) {
   reportReleaseSmokeStage('bootstrap')
   const timeoutDescription = releaseVectorSmokeRequested
     ? 'Packaged vector smoke timed out after 90 seconds'
-    : 'Packaged official homepage smoke timed out after 90 seconds'
+    : releaseHomepageSmokeRequested
+      ? 'Packaged official homepage smoke timed out after 90 seconds'
+      : 'Packaged skin smoke timed out after 90 seconds'
   releaseSmokeTimeout = setTimeout(() => {
     console.error(`[AI Novel release smoke] ${timeoutDescription}; last stage=${releaseSmokeStage}`)
     app.exit(1)
@@ -180,15 +191,25 @@ app.whenReady().then(async () => {
   if (releaseSmokeRequested) {
     const requestedSmokeModeCount = Number(releaseVectorSmokeRequested)
       + Number(releaseHomepageSmokeRequested)
+      + Number(releaseSkinSmokeRequested)
     const invocationCount = Number(releaseVectorSmokeInvocation !== undefined)
       + Number(releaseHomepageSmokeInvocation !== undefined)
+      + Number(releaseSkinSmokeInvocation !== undefined)
     if (requestedSmokeModeCount !== 1 || invocationCount !== 1) {
       throw new Error('Invalid packaged smoke invocation: exactly one environment and one-time CLI token pair must match')
     }
-    reportReleaseSmokeStage(releaseVectorSmokeInvocation ? 'vector-invocation-valid' : 'official-homepage-invocation-valid')
+    reportReleaseSmokeStage(
+      releaseVectorSmokeInvocation
+        ? 'vector-invocation-valid'
+        : releaseHomepageSmokeInvocation
+          ? 'official-homepage-invocation-valid'
+          : 'skin-invocation-valid',
+    )
     const evidence = releaseVectorSmokeInvocation
       ? await runReleaseVectorSmoke(releaseVectorSmokeInvocation.token)
-      : await runPackagedOfficialHomepageSmoke(releaseHomepageSmokeInvocation!.token)
+      : releaseHomepageSmokeInvocation
+        ? await runPackagedOfficialHomepageSmoke(releaseHomepageSmokeInvocation.token)
+        : runReleaseSkinSmoke(releaseSkinSmokeInvocation!.token)
     reportReleaseSmokeStage('evidence-ready')
     process.stdout.write(`${JSON.stringify(evidence)}\n`)
     clearReleaseSmokeTimeout()
@@ -196,10 +217,11 @@ app.whenReady().then(async () => {
     return
   }
 
-  // 先让本地工作区可用；更新功能失败不能阻断作者进入应用。
-  createWindow()
+  // 先准备主进程服务和 IPC，再允许渲染层加载并发起调用。
   registerIPCHandlers()
   registerMCPHandlers()
+  // 更新功能失败不能阻断作者进入应用；窗口先于更新运行时创建。
+  createWindow()
   const updateRuntimeEnabled = isWindowsUpdateRuntimeEnabled(app.isPackaged, VITE_DEV_SERVER_URL)
   const updateConfiguration = updateRuntimeEnabled && !hasWindowsUpdateConfiguration()
     ? 'missing'

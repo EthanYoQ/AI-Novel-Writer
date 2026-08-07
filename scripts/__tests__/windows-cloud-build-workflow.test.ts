@@ -118,6 +118,7 @@ describe('Windows cloud build workflow contract', () => {
     expect(successfulArtifact).toContain('SHA256SUMS.txt')
     expect(successfulArtifact).toContain('qualification/packaged-vector-smoke.json')
     expect(successfulArtifact).toContain('qualification/packaged-official-homepage-smoke.json')
+    expect(successfulArtifact).toContain('qualification/packaged-skin-smoke.json')
     expect(successfulArtifact).not.toContain('win-unpacked')
     expect(successfulArtifact).not.toMatch(/failure\(\)/)
     expect(failedArtifact).toMatch(/if:\s*\$\{\{\s*failure\(\)\s*\}\}/)

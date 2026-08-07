@@ -2,9 +2,10 @@ import { useState, useEffect, useRef } from 'react'
 import {
   X, Plus, Trash2, Check, Save, Globe, Cpu, Database,
   Type, Settings2, Zap, Eye, EyeOff, ChevronDown, MessageSquare,
-  Info,
+  Info, Palette,
 } from 'lucide-react'
 import PromptSettings from './PromptSettings'
+import AppearanceSettings from './AppearanceSettings'
 import { useLLMStore } from '../../stores/llm-store'
 import { useThemeStore, FONT_OPTIONS, type FontId } from '../../stores/theme-store'
 import type { ModelProfile } from '../../shared/ipc-channels'
@@ -29,8 +30,10 @@ import { alertError } from '../ui/AlertDialog'
 
 // ==================== 分类定义 ====================
 
+type SettingsModalSection = SettingsSection | 'appearance'
+
 interface SectionItem {
-  id: SettingsSection
+  id: SettingsModalSection
   label: string
   labelEn: string
   icon: React.ReactNode
@@ -38,7 +41,9 @@ interface SectionItem {
   descriptionEn: string
 }
 
-const SECTIONS: SectionItem[] = [
+// eslint-disable-next-line react-refresh/only-export-components
+export const SETTINGS_SECTIONS: SectionItem[] = [
+  { id: 'appearance', label: '外观', labelEn: 'Appearance', icon: <Palette size={16} />, description: '主题与界面皮肤彼此独立，可随时切换', descriptionEn: 'Themes and interface skins can be changed independently' },
   { id: 'llm', label: 'AI 生成模型', labelEn: 'Generation models', icon: <Cpu size={16} />, description: '配置用于文章生成、改写、摘要的语言模型', descriptionEn: 'Models used for writing, rewriting, and summarization' },
   { id: 'embedding', label: '向量模型', labelEn: 'Embedding model', icon: <Database size={16} />, description: '配置用于知识库检索的 Embedding 模型', descriptionEn: 'Embedding model used for knowledge retrieval' },
   { id: 'proxy', label: '网络代理', labelEn: 'Network proxy', icon: <Globe size={16} />, description: '配置 HTTP / SOCKS5 代理，用于访问受限 API', descriptionEn: 'HTTP / SOCKS5 proxy for restricted APIs' },
@@ -58,7 +63,7 @@ interface SettingsModalProps {
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const text = useLocaleStore(s => s.text)
   const requestedSection = useLayoutStore(s => s.settingsSection)
-  const [section, setSection] = useState<SettingsSection>(requestedSection)
+  const [section, setSection] = useState<SettingsModalSection>(requestedSection)
 
   useEffect(() => {
     if (!open) return
@@ -71,7 +76,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="skin-solid-surface fixed inset-0 z-50 flex items-center justify-center"
       style={{ backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
@@ -98,7 +103,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             </span>
           </div>
 
-          {SECTIONS.map((s) => (
+          {SETTINGS_SECTIONS.map((s) => (
             <button
               key={s.id}
               onClick={() => setSection(s.id)}
@@ -124,10 +129,10 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           >
             <div>
               <h2 className="text-base font-semibold" style={{ color: 'var(--color-text)' }}>
-                {(() => { const item = SECTIONS.find(s => s.id === section); return item ? text(item.label, item.labelEn) : '' })()}
+                {(() => { const item = SETTINGS_SECTIONS.find(s => s.id === section); return item ? text(item.label, item.labelEn) : '' })()}
               </h2>
               <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                {(() => { const item = SECTIONS.find(s => s.id === section); return item ? text(item.description, item.descriptionEn) : '' })()}
+                {(() => { const item = SETTINGS_SECTIONS.find(s => s.id === section); return item ? text(item.description, item.descriptionEn) : '' })()}
               </p>
             </div>
             <button
@@ -141,6 +146,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
 
           {/* 区域内容 */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
+            {section === 'appearance' && <AppearanceSettings />}
             {section === 'llm' && <LLMSection purposes={['generation', 'refinement', 'summary']} purposeLabel={text('生成模型', 'generation models')} />}
             {section === 'embedding' && <LLMSection purposes={['embedding']} purposeLabel={text('向量模型', 'embedding models')} />}
             {section === 'proxy' && <ProxySection />}

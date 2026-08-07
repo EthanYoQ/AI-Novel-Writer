@@ -54,6 +54,7 @@ function main() {
   const evidence = [
     requiredEvidence(releaseDirectory, 'qualification/packaged-vector-smoke.json', 'packaged-vector-smoke'),
     requiredEvidence(releaseDirectory, 'qualification/packaged-official-homepage-smoke.json', 'packaged-official-homepage-smoke'),
+    requiredEvidence(releaseDirectory, 'qualification/packaged-skin-smoke.json', 'packaged-skin-smoke'),
     requiredEvidence(releaseDirectory, 'qualification/macos-dmg-smoke.json', 'macos-dmg-smoke'),
   ]
   const manifest = {

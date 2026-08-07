@@ -28,6 +28,7 @@ if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $script:aiNovelPackagedVectorEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-vector-smoke.json" -f [string]$packageJson.version)
 $script:aiNovelPackagedOfficialHomepageEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-official-homepage-smoke.json" -f [string]$packageJson.version)
+$script:aiNovelPackagedSkinEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-skin-smoke.json" -f [string]$packageJson.version)
 $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-installer-smoke-' + [guid]::NewGuid().ToString('N'))
 $installRoot = Join-Path $smokeRoot 'installed-app'
 $velaHome = Join-Path $smokeRoot 'vela-home'
@@ -502,6 +503,90 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
   }
 }
 
+function Invoke-AiNovelPackagedSkinSmoke {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  # The package receives only a one-time token. Its storage root is the
+  # installer smoke's isolated Vela home, never a user profile or caller path.
+  $token = [guid]::NewGuid().ToString('N')
+  $stdoutPath = Join-Path $smokeRoot 'packaged-skin-smoke.stdout'
+  $stderrPath = Join-Path $smokeRoot 'packaged-skin-smoke.stderr'
+  $previousReleaseSkinSmoke = $env:AI_NOVEL_RELEASE_SKIN_SMOKE
+  $previousReleaseSkinSmokeToken = $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN
+  $previousVelaHome = $env:AI_NOVEL_VELA_HOME
+  $evidenceSucceeded = $false
+
+  try {
+    $env:AI_NOVEL_RELEASE_SKIN_SMOKE = '1'
+    $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN = $token
+    $env:AI_NOVEL_VELA_HOME = $velaHome
+    Invoke-AiNovelMonitoredExecutable `
+      -Path $Path `
+      -Arguments @("--ai-novel-release-skin-smoke=$token") `
+      -Operation 'Packaged skin qualification' `
+      -StandardOutputPath $stdoutPath `
+      -StandardErrorPath $stderrPath `
+      -HideWindow
+
+    $resultLine = @(Get-AiNovelUtf8NonEmptyLines -Path $stdoutPath | Select-Object -Last 1)
+    if ($resultLine.Count -ne 1) {
+      throw 'Packaged skin qualification did not produce exactly one JSON evidence line.'
+    }
+    try {
+      $result = $resultLine[0] | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+      throw "Packaged skin qualification produced invalid JSON evidence: $($_.Exception.Message)"
+    }
+    $validEvidence = (
+      $result.schemaVersion -eq 1 -and
+      $result.kind -eq 'packaged-skin-smoke' -and
+      $null -ne $result.builtInAnime -and
+      $result.builtInAnime.asset -eq 'skins/anime-night.webp' -and
+      $result.builtInAnime.present -eq $true -and
+      $result.builtInAnime.format -eq 'webp' -and
+      $null -ne $result.customSkin -and
+      $result.customSkin.importSucceeded -eq $true -and
+      $result.customSkin.readSucceeded -eq $true -and
+      $result.customSkin.stateRestored -eq $true -and
+      $result.customSkin.activeSkin -eq 'custom' -and
+      $result.customSkin.mime -eq 'image/png' -and
+      [int]$result.customSkin.width -gt 0 -and
+      [int]$result.customSkin.height -gt 0
+    )
+    if (-not $validEvidence) {
+      throw 'Packaged skin qualification returned incomplete or unexpected evidence.'
+    }
+
+    $evidenceDirectory = Split-Path -Parent $script:aiNovelPackagedSkinEvidencePath
+    New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
+    $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $script:aiNovelPackagedSkinEvidencePath -Encoding utf8
+    Write-Host "Packaged skin smoke evidence: $script:aiNovelPackagedSkinEvidencePath"
+    $evidenceSucceeded = $true
+  }
+  catch {
+    $stderr = if (Test-Path -LiteralPath $stderrPath) {
+      (Get-AiNovelUtf8NonEmptyLines -Path $stderrPath) -join [Environment]::NewLine
+    }
+    else {
+      ''
+    }
+    if ([string]::IsNullOrWhiteSpace($stderr)) {
+      throw
+    }
+    throw "Packaged skin qualification failed: $($_.Exception.Message)$([Environment]::NewLine)$stderr"
+  }
+  finally {
+    $env:AI_NOVEL_RELEASE_SKIN_SMOKE = $previousReleaseSkinSmoke
+    $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN = $previousReleaseSkinSmokeToken
+    $env:AI_NOVEL_VELA_HOME = $previousVelaHome
+    if ($evidenceSucceeded) {
+      Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 function Install-Silently {
   param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -597,6 +682,7 @@ try {
   }
   Invoke-AiNovelPackagedVectorSmoke -Path $exePath
   Invoke-AiNovelPackagedOfficialHomepageSmoke -Path $exePath
+  Invoke-AiNovelPackagedSkinSmoke -Path $exePath
   $appSmokeParameters = @{
     ExePath = $exePath
     ObservationSeconds = $ObservationSeconds

@@ -24,11 +24,11 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows and macOS ARM64 installers</a>
 </p>
 
-> ## v0.6.0 major update
+> ## v0.7.0 major update
 >
-> [v0.6.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.6.0) is a major update to the complete writing workflow. Update checks now distinguish network, configuration, and release-asset failures. Model setup adds Grok, uses API-native terms such as `base_url`, and preconfigures SiliconFlow's free `BAAI/bge-m3` vector model. Blueprint generation runs up to five chapters per batch. Draft generation uses bounded continuation with reasoning and context-budget safeguards so truncated output is not saved as complete. Blueprint characters and relationships synchronize without a vector model, and usage statistics now distinguish successful, failed, and unknown-token calls. The Windows project-path and character-extraction failures reported in [#71](https://github.com/EthanYoQ/AI-Novel-Writer/issues/71) are included in this release.
+> [v0.7.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.7.0) is a major update to release reliability and interface appearance. It provides classic, original anime, and custom image skins, with classic retained as the default appearance. Custom images accept only PNG or JPEG; the main process selects, validates, and copies them into application data. A safe fallback returns to classic on import or read failure without exposing a local absolute path to the renderer. It also adds Windows formal-Release in-app-update end-to-end qualification for the path from an installed formal version to a newer formal version. Windows x64 and macOS ARM64 cloud qualification include a cross-platform packaged-skin smoke covering the built-in asset and custom-skin recovery in isolated user data.
 >
-> This release provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. The Windows x64 installer supports in-app updates but is not code-signed. The macOS ARM64 package is unsigned and not notarized, and future macOS updates are downloaded manually from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
+> This release provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. The Windows x64 installer supports in-app updates but is not code-signed. The macOS ARM64 package is unsigned and not notarized, and future macOS updates require a manual download from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
 
 ## What this product is
 

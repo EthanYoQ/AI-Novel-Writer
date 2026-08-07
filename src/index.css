@@ -1093,6 +1093,221 @@
   }
 }
 
+/* ===== 图片皮肤：背景与固定可读性层级 ===== */
+.app-skin-root {
+  position: relative;
+  isolation: isolate;
+  --skin-editor-base: var(--color-editor-bg);
+}
+
+.app-skin-root > :not(.app-skin-background) {
+  z-index: 1;
+}
+
+.app-skin-background {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center;
+}
+
+.app-skin-background::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+.app-skin-background-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.app-skin-root:is([data-skin='anime'], [data-skin='custom']) {
+  --skin-welcome-surface: color-mix(in srgb, var(--color-bg) 84%, transparent);
+  --skin-panel-surface: color-mix(in srgb, var(--color-panel) 93%, transparent);
+  --skin-main-surface: color-mix(in srgb, var(--skin-editor-base) 98%, transparent);
+  --skin-solid-surface: var(--color-panel);
+}
+
+.app-skin-root:is([data-skin='anime'], [data-skin='custom']) .app-skin-background::after {
+  background: color-mix(in srgb, var(--color-bg) 24%, transparent);
+}
+
+/* 欢迎区域 84%，侧栏 / AI / 任务区域 93%，正文区域 98%。 */
+.app-skin-root:is([data-skin='anime'], [data-skin='custom']) .writer-shell-surface {
+  background: var(--skin-welcome-surface) !important;
+}
+
+.app-skin-root:is([data-skin='anime'], [data-skin='custom']) :is(
+  .writer-project-tree,
+  .writer-ai-panel,
+  .writer-task-table
+) {
+  background: var(--skin-panel-surface) !important;
+}
+
+.app-skin-root:is([data-skin='anime'], [data-skin='custom']) .app-skin-main-region {
+  --color-editor-bg: var(--skin-main-surface);
+}
+
+/* 菜单、输入控件和弹窗保持完全不透明，避免文本与焦点状态受背景干扰。 */
+.app-skin-root:is([data-skin='anime'], [data-skin='custom']) :is(
+  input,
+  textarea,
+  select,
+  [role='dialog'],
+  [role='menu'],
+  .skin-solid-surface
+) {
+  background-color: var(--skin-solid-surface) !important;
+}
+
+.app-skin-root:is([data-skin='anime'], [data-skin='custom']) .skin-solid-surface {
+  --color-editor-bg: var(--skin-solid-surface);
+  --color-sidebar: var(--skin-solid-surface);
+}
+
+.appearance-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.appearance-theme-option,
+.appearance-action-button,
+.appearance-skin-select {
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  background: var(--color-panel);
+  cursor: pointer;
+}
+
+.appearance-theme-option {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.appearance-theme-option--active,
+.appearance-skin-card--active {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 36%, transparent);
+}
+
+.appearance-skin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.appearance-skin-card {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-panel);
+}
+
+.appearance-skin-select {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  text-align: left;
+}
+
+.appearance-skin-preview {
+  display: block;
+  height: 92px;
+  border-bottom: 1px solid var(--color-border);
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center;
+}
+
+.appearance-skin-preview--classic {
+  background-color: var(--color-editor-bg);
+}
+
+.appearance-skin-preview--anime {
+  background-color: var(--color-bg);
+}
+
+.appearance-skin-preview--custom {
+  background-color: var(--color-hover);
+}
+
+.appearance-skin-copy {
+  display: flex;
+  min-height: 76px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  font-size: 12px;
+}
+
+.appearance-skin-copy > span:last-child,
+.appearance-skin-hint {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.appearance-skin-hint {
+  margin: 0;
+  padding: 0 10px 8px;
+}
+
+.appearance-skin-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.appearance-action-button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.appearance-action-button--danger {
+  color: var(--color-error);
+}
+
+.appearance-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 42%, transparent);
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: var(--color-text-secondary);
+  background: var(--color-panel);
+  font-size: 12px;
+}
+
+.appearance-notice-dismiss {
+  border: 0;
+  color: var(--color-accent);
+  background: transparent;
+  cursor: pointer;
+}
+
+/* ===== 图片皮肤结束 ===== */
+
 /* ===== 全局 @keyframes（不受层级影响） ===== */
 
 /* 增强的光标闪烁动画 */

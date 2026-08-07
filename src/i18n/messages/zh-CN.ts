@@ -1,6 +1,22 @@
 import type { MessageKey } from './en-US'
 
 export const zhCN = {
+  'appearance.anime': '动漫夜景',
+  'appearance.animeDescription': '内置插画皮肤，保持固定可读性。',
+  'appearance.change': '更换图片',
+  'appearance.choose': '选择图片',
+  'appearance.classic': '经典',
+  'appearance.classicDescription': '原始界面，保持不变。',
+  'appearance.custom': '自定义图片',
+  'appearance.customAvailable': '当前图片已可使用。',
+  'appearance.customHint': 'PNG / JPEG · 最大 20 MB · 建议 16:10',
+  'appearance.customUnavailable': '选择一张图片来个性化工作台。',
+  'appearance.remove': '移除',
+  'appearance.section': '外观',
+  'appearance.skins': '界面皮肤',
+  'appearance.skinsDescription': '皮肤与颜色主题彼此独立，且不会改变可读性设置。',
+  'appearance.theme': '主题',
+  'appearance.themeDescription': '选择标题栏和界面控件使用的颜色主题。',
   'app.windowTitle': 'AI小说作家 — AI Novel Writer',
   'common.backup': '备份',
   'common.close': '关闭',
