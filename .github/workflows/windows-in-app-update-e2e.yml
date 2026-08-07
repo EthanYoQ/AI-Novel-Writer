@@ -74,4 +74,9 @@ jobs:
           name: windows-official-in-app-update-e2e-${{ github.run_id }}
           retention-days: 7
           if-no-files-found: warn
-          path: ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}
+          path: |
+            ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/*.json
+            ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/*.log
+            ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/*.png
+            ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/launch-gate
+            ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/release-gate-monitor
