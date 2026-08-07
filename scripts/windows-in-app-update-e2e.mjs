@@ -30,6 +30,10 @@ export const OFFICIAL_UPDATE_REPOSITORY = Object.freeze({
   repo: 'AI-Novel-Writer',
 })
 
+// A cold GitHub Windows runner spends around 15 seconds compiling the monitor's
+// native Job Object helper before it can publish `ready`.
+export const WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS = 60_000
+
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
@@ -455,7 +459,12 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
   let launch
   let stopLaunchOutput
   try {
-    await waitForMonitorState(statusPath, ['ready'], 15_000, 'ready')
+    await waitForMonitorState(
+      statusPath,
+      ['ready'],
+      WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS,
+      'ready',
+    )
     launch = spawn(process.execPath, [
       launchGateScript,
       '--armed-path', armedPath,
