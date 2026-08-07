@@ -1004,6 +1004,84 @@ $uncaptured = Get-GateExitFailure ([pscustomobject]@{ ProcessId = 704; ExitCode 
     expect(result.Uncaptured).toContain('could not capture the exit code')
   })
 
+  windowsIt('admits only one exact historical updater handoff into the legacy bridge', () => {
+    const output = runReleaseMonitorLibrary(`
+$oldExe = 'C:\\e2e\\installed-app\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
+$pendingExe = 'C:\\Users\\runneradmin\\AppData\\Local\\ai-novel-writer-updater\\pending\\ai-novel-writer-setup-0.7.0.exe'
+$old = [pscustomobject]@{
+  processId = 410
+  startTimeTicks = '638900000000000410'
+  executablePath = $oldExe
+  identityCaptured = $true
+  commandLineCaptured = $true
+}
+$bridge = [pscustomobject]@{
+  State = 'armed'
+  OldApplicationIdentity = $old
+  ExpectedPendingInstallerPath = $pendingExe
+  ExpectedInstallerName = 'ai-novel-writer-setup-0.7.0.exe'
+  InstallRoot = 'C:\\e2e\\installed-app'
+  ObservedInstallerIdentity = $null
+  AllowedWizardWindowKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+}
+function New-LegacyInstallerIdentity {
+  param([string]$CommandLine = ('"' + $pendingExe + '" --updated /D=C:\\e2e\\installed-app'))
+  return [pscustomobject]@{
+    processId = 411
+    startTimeTicks = '638900000000000411'
+    executablePath = $pendingExe
+    commandLine = $CommandLine
+    identityCaptured = $true
+    commandLineCaptured = $true
+    parentProcessId = 410
+    parentProcessStartTimeTicks = '638900000000000410'
+    parentExecutablePath = $oldExe
+  }
+}
+$installer = New-LegacyInstallerIdentity
+$exact = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity $installer -ParentIdentity $old
+$silent = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated /S /D=C:\\e2e\\installed-app')) -ParentIdentity $old
+$wrongParent = [pscustomobject]@{ processId = 410; startTimeTicks = '638900000000000409'; executablePath = $oldExe; identityCaptured = $true }
+$wrongParentRejected = -not (Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity $installer -ParentIdentity $wrongParent)
+$wrongStepRejected = -not (Test-AiNovelGateLegacyBridgeInstaller -Step 'other-step' -LegacyBridge $bridge -InstallerIdentity $installer -ParentIdentity $old)
+$bridge.ObservedInstallerIdentity = $installer
+$bridge.State = 'terminated'
+$wizard = [pscustomobject]@{
+  WindowHandle = '0x1'
+  ProcessId = 411
+  Title = ('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup ')
+  ClassName = '#32770'
+  Visible = $true
+}
+[void]$bridge.AllowedWizardWindowKeys.Add((Get-AiNovelGateLegacyBridgeWindowKey -Window $wizard))
+$wizardAccepted = Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBridge $bridge -Window $wizard
+$wizard.Title = 'Other Setup '
+$wrongTitleRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBridge $bridge -Window $wizard)
+[pscustomobject]@{
+  HistoricalSource = Test-AiNovelGateLegacyBridgeSourceTag -SourceTag 'v0.6.0'
+  NativeSourceRejected = -not (Test-AiNovelGateLegacyBridgeSourceTag -SourceTag 'v0.7.0')
+  ExactInstaller = $exact
+  SilentArgumentsRejected = -not $silent
+  WrongParentRejected = $wrongParentRejected
+  WrongStepRejected = $wrongStepRejected
+  WizardAccepted = $wizardAccepted
+  WrongTitleRejected = $wrongTitleRejected
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      HistoricalSource: true,
+      NativeSourceRejected: true,
+      ExactInstaller: true,
+      SilentArgumentsRejected: true,
+      WrongParentRejected: true,
+      WrongStepRejected: true,
+      WizardAccepted: true,
+      WrongTitleRejected: true,
+    })
+  })
+
   windowsIt('exempts only the known NSIS PowerShell probes during installer smoke steps', () => {
     const output = runReleaseMonitorLibrary(`
 $system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
