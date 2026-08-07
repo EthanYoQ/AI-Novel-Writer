@@ -1248,6 +1248,67 @@ $pidReuseRejected = -not (Test-AiNovelGateLegacyBridgeTerminationCleanupWindow -
     })
   })
 
+  windowsIt('classifies only the exact historical old app breakpoint after a bound installer handoff', () => {
+    const output = runReleaseMonitorLibrary(`
+$oldExe = 'D:\\e2e\\installed-app\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
+$pendingExe = 'C:\\Users\\runneradmin\\AppData\\Local\\ai-novel-writer-updater\\pending\\ai-novel-writer-setup-0.7.0.exe'
+$old = [pscustomobject]@{ processId = 3472; startTimeTicks = '639217245409219881'; executablePath = $oldExe; identityCaptured = $true }
+$installer = [pscustomobject]@{
+  processId = 5180
+  startTimeTicks = '639217245535054565'
+  executablePath = $pendingExe
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = 3472
+  parentProcessStartTimeTicks = '639217245409219881'
+  parentExecutablePath = $oldExe
+}
+$bridge = [pscustomobject]@{
+  SourceTag = 'v0.5.2'
+  State = 'termination-armed'
+  OldApplicationIdentity = $old
+  ObservedInstallerIdentity = $installer
+  ExpectedPendingInstallerPath = $pendingExe
+}
+$breakpoint = [pscustomobject]@{ ExitCode = -2147483645; ExitCodeCaptured = $true; JobMessage = 8 }
+$accepted = Test-AiNovelGateLegacyBridgeOldApplicationExit -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -Event $breakpoint -ProcessIdentity $old
+$wrongCode = [pscustomobject]@{ ExitCode = -1; ExitCodeCaptured = $true; JobMessage = 8 }
+$wrongCodeRejected = -not (Test-AiNovelGateLegacyBridgeOldApplicationExit -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -Event $wrongCode -ProcessIdentity $old)
+$normalExitEvent = [pscustomobject]@{ ExitCode = -2147483645; ExitCodeCaptured = $true; JobMessage = 7 }
+$normalExitRejected = -not (Test-AiNovelGateLegacyBridgeOldApplicationExit -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -Event $normalExitEvent -ProcessIdentity $old)
+$bridge.State = 'armed'
+$preHandoffRejected = -not (Test-AiNovelGateLegacyBridgeOldApplicationExit -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -Event $breakpoint -ProcessIdentity $old)
+$bridge.State = 'termination-armed'
+$bridge.SourceTag = 'v0.7.0'
+$nativeSourceRejected = -not (Test-AiNovelGateLegacyBridgeOldApplicationExit -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -Event $breakpoint -ProcessIdentity $old)
+$bridge.SourceTag = 'v0.5.2'
+$wrongOld = [pscustomobject]@{ processId = 3472; startTimeTicks = '639217245409219882'; executablePath = $oldExe; identityCaptured = $true }
+$wrongOldRejected = -not (Test-AiNovelGateLegacyBridgeOldApplicationExit -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -Event $breakpoint -ProcessIdentity $wrongOld)
+$installer.parentProcessStartTimeTicks = '639217245409219882'
+$wrongInstallerParentRejected = -not (Test-AiNovelGateLegacyBridgeOldApplicationExit -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -Event $breakpoint -ProcessIdentity $old)
+[pscustomobject]@{
+  Accepted = $accepted
+  WrongCodeRejected = $wrongCodeRejected
+  NormalExitRejected = $normalExitRejected
+  PreHandoffRejected = $preHandoffRejected
+  NativeSourceRejected = $nativeSourceRejected
+  WrongOldRejected = $wrongOldRejected
+  WrongInstallerParentRejected = $wrongInstallerParentRejected
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      Accepted: true,
+      WrongCodeRejected: true,
+      NormalExitRejected: true,
+      PreHandoffRejected: true,
+      NativeSourceRejected: true,
+      WrongOldRejected: true,
+      WrongInstallerParentRejected: true,
+    })
+  })
+
   it('persists captured process-start identity before evaluating the legacy bridge handoff', () => {
     const releaseMonitor = readFileSync(releaseMonitorScript, 'utf8')
     const identityEvidence = releaseMonitor.indexOf("-ExitClassification 'identity-captured'")
