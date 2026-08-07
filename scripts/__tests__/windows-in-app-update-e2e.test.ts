@@ -203,6 +203,7 @@ describe('Windows official in-app update E2E contract', () => {
     expect(powershell).toContain('AI_NOVEL_VELA_HOME')
     expect(powershell).toContain('Get-FileHash')
     expect(powershell).toContain('--remote-debugging-port')
+    expect(powershell).toContain('--disable-gpu')
     expect(powershell).toContain('$e2eInstallRoot')
     expect(powershell).not.toMatch(/\$installRoot\s*=/)
     expect(powershell).toContain("'resources\\app.asar'")
@@ -212,6 +213,43 @@ describe('Windows official in-app update E2E contract', () => {
     expect(driver).toContain('Check for updates')
     expect(driver).toContain('立即重启更新')
     expect(driver).toContain('Restart and update now')
+  })
+
+  it('persists and uploads the three live UI lifecycle screenshots', () => {
+    const workflow = readFileSync(resolve(process.cwd(), '.github/workflows/windows-in-app-update-e2e.yml'), 'utf8')
+    const driver = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e-driver.mjs'), 'utf8')
+
+    expect(driver).toContain("const screenshots = join(evidenceRoot, 'screenshots')")
+    expect(driver).toContain('mkdirSync(screenshots, { recursive: true })')
+    expect(driver).toContain("join(screenshots, 'before-check-update.png')")
+    expect(driver).toContain("join(screenshots, 'ready-to-restart-update.png')")
+    expect(driver).toContain('join(screenshots, `restarted-${expectedVersion}.png`)')
+    expect(workflow).toContain('${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/screenshots')
+  })
+
+  it('freezes each seeded user-data file while allowing updater-owned profile state to change', () => {
+    const powershell = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e.ps1'), 'utf8')
+
+    expect(powershell).toContain('function Get-E2eFrozenFileManifest')
+    expect(powershell).toContain('function Assert-E2eFrozenFileManifestUnchanged')
+    expect(powershell).toContain('$frozenUserDataPaths = @(')
+    for (const path of [
+      'config.json',
+      'recent-projects.json',
+      'prompts/e2e-continuity.json',
+      'skills/continuity-e2e/SKILL.md',
+      'e2e-preservation/character-card.json',
+      'e2e-preservation/chapter-017.md',
+      'e2e-preservation/continuity-ledger.txt',
+    ]) {
+      expect(powershell).toContain(`'${path}'`)
+    }
+    expect(powershell).toContain('Get-E2eFrozenFileManifest -Root $velaHome -RelativePaths $frozenUserDataPaths')
+    expect(powershell).toContain('Assert-E2eFrozenFileManifestUnchanged -Before $beforeFrozenUserData -After $afterFrozenUserData')
+    expect(powershell).toContain('frozenFilesBefore = $beforeFrozenUserData')
+    expect(powershell).toContain('frozenFilesAfter = $afterFrozenUserData')
+    expect(powershell).toContain('frozenFilesHashMatched = $true')
+    expect(powershell).not.toContain('$beforeVelaHome.sha256 -eq $afterVelaHome.sha256')
   })
 
   it('keeps the PowerShell runner ASCII-safe for Windows PowerShell child-process parsing', () => {

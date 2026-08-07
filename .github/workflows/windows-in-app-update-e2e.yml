@@ -78,5 +78,6 @@ jobs:
             ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/*.json
             ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/*.log
             ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/*.png
+            ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/screenshots
             ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/launch-gate
             ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/release-gate-monitor
