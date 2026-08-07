@@ -307,12 +307,13 @@ try {
 
   New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
   $e2eInstallRoot = Join-Path $runtimeRoot 'installed-app'
+  $chromiumUserDataDir = Join-Path $runtimeRoot 'chromium-profile'
   $isolatedHome = Join-Path $runtimeRoot 'home'
   $velaHome = Join-Path $isolatedHome '.vela'
   $preservationRoot = Join-Path $velaHome 'e2e-preservation'
   $promptsRoot = Join-Path $velaHome 'prompts'
   $skillsRoot = Join-Path $velaHome 'skills\continuity-e2e'
-  New-Item -ItemType Directory -Path $preservationRoot, $promptsRoot, $skillsRoot -Force | Out-Null
+  New-Item -ItemType Directory -Path $chromiumUserDataDir, $preservationRoot, $promptsRoot, $skillsRoot -Force | Out-Null
   @{
     theme = 'light'
     locale = 'zh-CN'
@@ -391,7 +392,7 @@ try {
   $oldAppProcess = Start-Process -FilePath $oldExe -ArgumentList @(
     "--remote-debugging-port=$oldDebugPort",
     '--disable-gpu',
-    '--no-sandbox',
+    "--user-data-dir=$chromiumUserDataDir",
     '--enable-logging',
     '--v=1',
     "--log-file=$oldElectronLog"
@@ -434,7 +435,7 @@ try {
   $newAppProcess = Start-Process -FilePath $updatedExe -ArgumentList @(
     "--remote-debugging-port=$newDebugPort",
     '--disable-gpu',
-    '--no-sandbox',
+    "--user-data-dir=$chromiumUserDataDir",
     '--enable-logging',
     '--v=1',
     "--log-file=$updatedElectronLog"
