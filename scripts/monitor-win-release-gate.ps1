@@ -1648,15 +1648,15 @@ function Test-AiNovelGateCapturedNsisProbeParent {
     [AllowNull()]$ChildIdentity,
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$LegacyBridge,
     [AllowNull()]$ArmedRootIdentity,
     [AllowNull()]$TrackedProcessIdentities
   )
 
-  # Keep the original direct-installer check intact. The only additional
-  # branch is the complete helper -> named uninstaller -> armed gate-root
-  # chain, with every edge bound by PID, creation time, and absolute image
-  # path. The direct installer branch deliberately retains its original
-  # classification semantics.
+  # Keep the original direct-installer check intact. Additional branches are
+  # complete, product-specific uninstaller chains whose every edge is bound by
+  # PID, creation time, and absolute image path. The direct installer branch
+  # deliberately retains its original classification semantics.
   return (
     (Test-AiNovelGateCapturedInstallerParent `
       -ChildIdentity $ChildIdentity `
@@ -1668,7 +1668,14 @@ function Test-AiNovelGateCapturedNsisProbeParent {
         -TrackedProcessIdentities $TrackedProcessIdentities) -and
       (Test-AiNovelGateCapturedParentIdentity `
         -ChildIdentity $ChildIdentity `
-        -ParentIdentity $ParentIdentity))
+        -ParentIdentity $ParentIdentity)) -or
+    (Test-AiNovelGateCapturedLegacyBridgeOldUninstallerProbeParent `
+      -LegacyBridge $LegacyBridge `
+      -ChildIdentity $ChildIdentity `
+      -ParentIdentity $ParentIdentity `
+      -GrandParentIdentity $GrandParentIdentity `
+      -ArmedRootIdentity $ArmedRootIdentity `
+      -TrackedProcessIdentities $TrackedProcessIdentities)
   )
 }
 
@@ -1751,6 +1758,7 @@ function Test-AiNovelGateNsisCmdProcessCheckCandidate {
     [AllowNull()]$ProcessIdentity,
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$LegacyBridge,
     [AllowNull()]$ArmedRootIdentity,
     [AllowNull()]$TrackedProcessIdentities
   )
@@ -1775,6 +1783,7 @@ function Test-AiNovelGateNsisCmdProcessCheckCandidate {
     -ChildIdentity $ProcessIdentity `
     -ParentIdentity $ParentIdentity `
     -GrandParentIdentity $GrandParentIdentity `
+    -LegacyBridge $LegacyBridge `
     -ArmedRootIdentity $ArmedRootIdentity `
     -TrackedProcessIdentities $TrackedProcessIdentities
 }
@@ -1786,6 +1795,7 @@ function Test-AiNovelGateExpectedNsisCmdProcessCheckExit {
     [AllowNull()]$ProcessIdentity,
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$LegacyBridge,
     [AllowNull()]$ArmedRootIdentity,
     [AllowNull()]$TrackedProcessIdentities,
     [AllowNull()]$VerifiedFindParentKeys
@@ -1797,6 +1807,7 @@ function Test-AiNovelGateExpectedNsisCmdProcessCheckExit {
     -ProcessIdentity $ProcessIdentity `
     -ParentIdentity $ParentIdentity `
     -GrandParentIdentity $GrandParentIdentity `
+    -LegacyBridge $LegacyBridge `
     -ArmedRootIdentity $ArmedRootIdentity `
     -TrackedProcessIdentities $TrackedProcessIdentities)) {
     return $false
@@ -1988,6 +1999,7 @@ function Test-AiNovelGateExpectedNsisFindNoMatchExit {
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
     [AllowNull()]$GreatGrandParentIdentity,
+    [AllowNull()]$LegacyBridge,
     [AllowNull()]$ArmedRootIdentity,
     [AllowNull()]$TrackedProcessIdentities
   )
@@ -2023,6 +2035,7 @@ function Test-AiNovelGateExpectedNsisFindNoMatchExit {
     -ChildIdentity $ParentIdentity `
     -ParentIdentity $GrandParentIdentity `
     -GrandParentIdentity $GreatGrandParentIdentity `
+    -LegacyBridge $LegacyBridge `
     -ArmedRootIdentity $ArmedRootIdentity `
     -TrackedProcessIdentities $TrackedProcessIdentities
 }
@@ -2436,6 +2449,158 @@ function Test-AiNovelGateLegacyBridgeOldApplicationExit {
     -not (Test-AiNovelGateCapturedParentIdentity `
       -ChildIdentity $LegacyBridge.ObservedInstallerIdentity `
       -ParentIdentity $LegacyBridge.OldApplicationIdentity)
+  ) {
+    return $false
+  }
+  return $true
+}
+
+function Test-AiNovelGateLegacyBridgeOldUninstallerImage {
+  param([AllowEmptyString()][string]$ImagePath)
+
+  if ([string]::IsNullOrWhiteSpace($ImagePath) -or $ImagePath -notmatch '^[A-Za-z]:\\') {
+    return $false
+  }
+  try {
+    $fullPath = Resolve-AiNovelGateCanonicalExistingPath -Path $ImagePath
+    if ([string]::IsNullOrWhiteSpace($fullPath)) {
+      return $false
+    }
+    $directory = [System.IO.Path]::GetDirectoryName($fullPath)
+    $directoryName = [System.IO.Path]::GetFileName($directory)
+    return (
+      (Test-AiNovelGateDirectChildDirectory `
+        -DirectoryPath $directory `
+        -RootPath ([System.IO.Path]::GetTempPath())) -and
+      $directoryName -match '^(?i:ns[hi][A-Za-z0-9]+\.tmp)$' -and
+      [string]::Equals(
+        [System.IO.Path]::GetFileName($fullPath),
+        'old-uninstaller.exe',
+        [System.StringComparison]::OrdinalIgnoreCase
+      )
+    )
+  }
+  catch {
+    return $false
+  }
+}
+
+function Get-AiNovelGateLegacyBridgeStagingInstallerPath {
+  param([AllowNull()]$LegacyBridge)
+
+  if (
+    $null -eq $LegacyBridge -or
+    [string]$LegacyBridge.Mode -ne 'legacy-bridge' -or
+    -not (Test-AiNovelGateLegacyBridgeSourceTag -SourceTag ([string]$LegacyBridge.SourceTag)) -or
+    [string]::IsNullOrWhiteSpace([string]$LegacyBridge.InstallRoot) -or
+    [string]::IsNullOrWhiteSpace([string]$LegacyBridge.ExpectedInstallerName) -or
+    [string]$LegacyBridge.InstallRoot -notmatch '^[A-Za-z]:\\'
+  ) {
+    return $null
+  }
+  try {
+    $installRoot = [System.IO.Path]::GetFullPath([string]$LegacyBridge.InstallRoot)
+    if (-not [string]::Equals(
+      [System.IO.Path]::GetFileName($installRoot.TrimEnd([char]92)),
+      'installed-app',
+      [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+      return $null
+    }
+    $runtimeRoot = [System.IO.Path]::GetDirectoryName($installRoot.TrimEnd([char]92))
+    return [System.IO.Path]::GetFullPath([System.IO.Path]::Combine(
+      $runtimeRoot,
+      'legacy-bridge-staging',
+      [string]$LegacyBridge.ExpectedInstallerName
+    ))
+  }
+  catch {
+    return $null
+  }
+}
+
+function Test-AiNovelGateCapturedLegacyBridgeOldUninstallerProbeParent {
+  param(
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$ChildIdentity,
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities
+  )
+
+  $expectedStagingInstallerPath = Get-AiNovelGateLegacyBridgeStagingInstallerPath -LegacyBridge $LegacyBridge
+  if (
+    $null -eq $LegacyBridge -or
+    $null -eq $ChildIdentity -or
+    $null -eq $ParentIdentity -or
+    $null -eq $GrandParentIdentity -or
+    $null -eq $ArmedRootIdentity -or
+    $null -eq $TrackedProcessIdentities
+  ) {
+    return $false
+  }
+  return (
+    [string]$LegacyBridge.State -eq 'terminated' -and
+    -not [string]::IsNullOrWhiteSpace($expectedStagingInstallerPath) -and
+    (Test-AiNovelGateLegacyBridgeOldUninstallerImage -ImagePath ([string]$ParentIdentity.executablePath)) -and
+    (Test-AiNovelGateCapturedParentIdentity `
+      -ChildIdentity $ChildIdentity `
+      -ParentIdentity $ParentIdentity) -and
+    [bool]$GrandParentIdentity.identityCaptured -and
+    [bool]$GrandParentIdentity.commandLineCaptured -and
+    (Test-AiNovelGateSameAbsolutePath `
+      -Left ([string]$GrandParentIdentity.executablePath) `
+      -Right $expectedStagingInstallerPath) -and
+    [string]::Equals(
+      [System.IO.Path]::GetFileName([string]$GrandParentIdentity.executablePath),
+      [string]$LegacyBridge.ExpectedInstallerName,
+      [System.StringComparison]::OrdinalIgnoreCase
+    ) -and
+    (Test-AiNovelGateCapturedParentIdentity `
+      -ChildIdentity $ParentIdentity `
+      -ParentIdentity $GrandParentIdentity) -and
+    (Test-AiNovelGateIdentityAncestryToArmedRoot `
+      -StartIdentity $GrandParentIdentity `
+      -TrackedProcessIdentities $TrackedProcessIdentities `
+      -ArmedRootIdentity $ArmedRootIdentity)
+  )
+}
+
+function Test-AiNovelGateExpectedLegacyBridgeOldUninstallerPowerShellProbeExit {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [AllowNull()]$LegacyBridge,
+    [Parameter(Mandatory = $true)]$Event,
+    [AllowNull()]$ProcessIdentity,
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities
+  )
+
+  # The historical NSIS upgrade copies the installed uninstaller to
+  # TEMP\nsh*.tmp\old-uninstaller.exe. Its fixed PowerShell probes use exit 1
+  # as a normal negative result. This branch is intentionally limited to the
+  # same-byte legacy bridge's private staging installer after the official
+  # handoff has been terminated, with every ancestry edge identity-bound.
+  if (
+    $Step -ne 'windows-in-app-update-e2e' -or
+    -not (Test-AiNovelGateExpectedExitOne -Step $Step -Event $Event) -or
+    $null -eq $ProcessIdentity -or
+    -not [bool]$ProcessIdentity.identityCaptured -or
+    -not [bool]$ProcessIdentity.commandLineCaptured -or
+    -not (Test-AiNovelGateSystemPowerShellImage -ImagePath ([string]$ProcessIdentity.executablePath)) -or
+    -not (Test-AiNovelGateKnownNsisPowerShellProbeCommand `
+      -CommandLine ([string]$ProcessIdentity.commandLine) `
+      -PowerShellImagePath ([string]$ProcessIdentity.executablePath)) -or
+    -not (Test-AiNovelGateCapturedLegacyBridgeOldUninstallerProbeParent `
+      -LegacyBridge $LegacyBridge `
+      -ChildIdentity $ProcessIdentity `
+      -ParentIdentity $ParentIdentity `
+      -GrandParentIdentity $GrandParentIdentity `
+      -ArmedRootIdentity $ArmedRootIdentity `
+      -TrackedProcessIdentities $TrackedProcessIdentities)
   ) {
     return $false
   }
@@ -2916,6 +3081,17 @@ try {
         elseif ($null -eq $exitFailure) {
           $exitClassification = 'succeeded'
         }
+        elseif (Test-AiNovelGateExpectedLegacyBridgeOldUninstallerPowerShellProbeExit `
+          -Step $activeStep `
+          -LegacyBridge $legacyBridge `
+          -Event $processEvent `
+          -ProcessIdentity $processIdentity `
+          -ParentIdentity $parentIdentity `
+          -GrandParentIdentity $grandParentIdentity `
+          -ArmedRootIdentity $armedRootIdentity `
+          -TrackedProcessIdentities $trackedProcessIdentities) {
+          $exitClassification = 'expected-legacy-bridge-old-uninstaller-powershell-probe'
+        }
         elseif (Test-AiNovelGateExpectedNsisPowerShellProbeExit `
           -Step $activeStep `
           -Event $processEvent `
@@ -2933,6 +3109,7 @@ try {
           -ParentIdentity $parentIdentity `
           -GrandParentIdentity $grandParentIdentity `
           -GreatGrandParentIdentity $greatGrandParentIdentity `
+          -LegacyBridge $legacyBridge `
           -ArmedRootIdentity $armedRootIdentity `
           -TrackedProcessIdentities $trackedProcessIdentities) {
           $parentProcessIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $parentIdentity
@@ -2955,6 +3132,7 @@ try {
           -ProcessIdentity $processIdentity `
           -ParentIdentity $parentIdentity `
           -GrandParentIdentity $grandParentIdentity `
+          -LegacyBridge $legacyBridge `
           -ArmedRootIdentity $armedRootIdentity `
           -TrackedProcessIdentities $trackedProcessIdentities `
           -VerifiedFindParentKeys $verifiedNsisFindParentKeys) {
@@ -2966,6 +3144,7 @@ try {
           -ProcessIdentity $processIdentity `
           -ParentIdentity $parentIdentity `
           -GrandParentIdentity $grandParentIdentity `
+          -LegacyBridge $legacyBridge `
           -ArmedRootIdentity $armedRootIdentity `
           -TrackedProcessIdentities $trackedProcessIdentities) {
           $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $processIdentity
@@ -3017,6 +3196,7 @@ try {
         # explicit step-complete acknowledgement, or after a bounded drain
         # deadline if the launcher never completes.
         if ($exitClassification -in @(
+          'expected-legacy-bridge-old-uninstaller-powershell-probe',
           'expected-nsis-powershell-probe',
           'expected-nsis-cmd-process-check',
           'expected-nsis-find-no-match',
