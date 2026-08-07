@@ -2400,6 +2400,48 @@ function Test-AiNovelGateLegacyBridgeTermination {
   )
 }
 
+function Test-AiNovelGateLegacyBridgeOldApplicationExit {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$Event,
+    [AllowNull()]$ProcessIdentity
+  )
+
+  # Historical Electron can report STATUS_BREAKPOINT while quitting after its
+  # already-bound updater handoff. Keep this exception tied to the exact old
+  # app and exact direct-child official installer identity; no other process,
+  # exit code, or pre-authorization state is accepted.
+  if (
+    $Step -ne 'windows-in-app-update-e2e' -or
+    $null -eq $LegacyBridge -or
+    -not (Test-AiNovelGateLegacyBridgeSourceTag -SourceTag ([string]$LegacyBridge.SourceTag)) -or
+    $LegacyBridge.State -notin @('authorized', 'termination-armed', 'terminated') -or
+    $null -eq $LegacyBridge.OldApplicationIdentity -or
+    $null -eq $LegacyBridge.ObservedInstallerIdentity -or
+    $null -eq $Event -or
+    -not [bool]$Event.ExitCodeCaptured -or
+    [uint32]$Event.JobMessage -ne 8 -or
+    [int]$Event.ExitCode -ne -2147483645 -or
+    -not [bool]$LegacyBridge.ObservedInstallerIdentity.identityCaptured -or
+    -not [bool]$LegacyBridge.ObservedInstallerIdentity.commandLineCaptured -or
+    -not (Test-AiNovelGateSameAbsolutePath `
+      -Left ([string]$LegacyBridge.ObservedInstallerIdentity.executablePath) `
+      -Right ([string]$LegacyBridge.ExpectedPendingInstallerPath)) -or
+    -not (Test-AiNovelGateExactIdentity `
+      -Identity $ProcessIdentity `
+      -ProcessId ([int]$LegacyBridge.OldApplicationIdentity.processId) `
+      -StartTimeTicks ([string]$LegacyBridge.OldApplicationIdentity.startTimeTicks) `
+      -ExecutablePath ([string]$LegacyBridge.OldApplicationIdentity.executablePath)) -or
+    -not (Test-AiNovelGateCapturedParentIdentity `
+      -ChildIdentity $LegacyBridge.ObservedInstallerIdentity `
+      -ParentIdentity $LegacyBridge.OldApplicationIdentity)
+  ) {
+    return $false
+  }
+  return $true
+}
+
 function Get-AiNovelGateLegacyBridgeWindowKey {
   param([AllowNull()]$Window)
 
@@ -2864,6 +2906,13 @@ try {
           $exitClassification = 'legacy-bridge-terminated'
           Write-AiNovelGateStatus -State 'legacy-bridge-terminated' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
         }
+        elseif (Test-AiNovelGateLegacyBridgeOldApplicationExit `
+          -Step $activeStep `
+          -LegacyBridge $legacyBridge `
+          -Event $processEvent `
+          -ProcessIdentity $processIdentity) {
+          $exitClassification = 'legacy-bridge-old-application-breakpoint'
+        }
         elseif ($null -eq $exitFailure) {
           $exitClassification = 'succeeded'
         }
@@ -2972,7 +3021,8 @@ try {
           'expected-nsis-cmd-process-check',
           'expected-nsis-find-no-match',
           'pending-nsis-cmd-process-check',
-          'legacy-bridge-terminated'
+          'legacy-bridge-terminated',
+          'legacy-bridge-old-application-breakpoint'
         )) {
           continue
         }
