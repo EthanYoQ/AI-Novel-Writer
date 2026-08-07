@@ -1309,6 +1309,174 @@ $wrongInstallerParentRejected = -not (Test-AiNovelGateLegacyBridgeOldApplication
     })
   })
 
+  windowsIt('accepts only the exact legacy bridge old-uninstaller PowerShell probe chain', () => {
+    const output = runReleaseMonitorLibrary(`
+$system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+$cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+$findPath = Join-Path $env:SystemRoot 'System32\\find.exe'
+$policyPayload = 'if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }'
+$policyCommand = '"' + $system32 + '" -C "' + $policyPayload + '"'
+$cmdCommand = '"' + $cmdPath + '" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe" /FO CSV | "' + $findPath + '" "AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe"'
+$findCommand = '"' + $findPath + '"  "AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe"'
+$event = [pscustomobject]@{ ProcessId = 7956; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$installRoot = 'D:\\a\\_temp\\ai-novel-e2e\\runtime\\installed-app'
+$stagingPath = 'D:\\a\\_temp\\ai-novel-e2e\\runtime\\legacy-bridge-staging\\ai-novel-writer-setup-0.6.0.exe'
+$tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+$oldUninstallerPath = Join-Path (Join-Path $tempRoot 'nsh2922.tmp') 'old-uninstaller.exe'
+$armedRoot = [pscustomobject]@{
+  processId = 1
+  startTimeTicks = '639217250000000001'
+  executablePath = 'D:\\actions\\node.exe'
+  identityCaptured = $true
+}
+$runner = [pscustomobject]@{
+  processId = 7264
+  startTimeTicks = '639217250000007264'
+  executablePath = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe'
+  identityCaptured = $true
+  parentProcessId = 1
+  parentProcessStartTimeTicks = '639217250000000001'
+  parentExecutablePath = 'D:\\actions\\node.exe'
+}
+$stagingInstaller = [pscustomobject]@{
+  processId = 2964
+  startTimeTicks = '639217250000002964'
+  executablePath = $stagingPath
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = 7264
+  parentProcessStartTimeTicks = '639217250000007264'
+  parentExecutablePath = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe'
+}
+$oldUninstaller = [pscustomobject]@{
+  processId = 4636
+  startTimeTicks = '639217250000004636'
+  executablePath = $oldUninstallerPath
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = 2964
+  parentProcessStartTimeTicks = '639217250000002964'
+  parentExecutablePath = $stagingPath
+}
+$powerShell = [pscustomobject]@{
+  processId = 7956
+  startTimeTicks = '639217250000007956'
+  executablePath = $system32
+  commandLine = $policyCommand
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = 4636
+  parentProcessStartTimeTicks = '639217250000004636'
+  parentExecutablePath = $oldUninstallerPath
+}
+$cmd = [pscustomobject]@{
+  processId = 7548
+  startTimeTicks = '639217250000007548'
+  executablePath = $cmdPath
+  commandLine = $cmdCommand
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = 4636
+  parentProcessStartTimeTicks = '639217250000004636'
+  parentExecutablePath = $oldUninstallerPath
+}
+$find = [pscustomobject]@{
+  processId = 4600
+  startTimeTicks = '639217250000004600'
+  executablePath = $findPath
+  commandLine = $findCommand
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = 7548
+  parentProcessStartTimeTicks = '639217250000007548'
+  parentExecutablePath = $cmdPath
+}
+$bridge = [pscustomobject]@{
+  Mode = 'legacy-bridge'
+  SourceTag = 'v0.5.2'
+  State = 'terminated'
+  InstallRoot = $installRoot
+  ExpectedInstallerName = 'ai-novel-writer-setup-0.6.0.exe'
+}
+$tracked = @{
+  1 = $armedRoot
+  7264 = $runner
+  2964 = $stagingInstaller
+  4636 = $oldUninstaller
+  7548 = $cmd
+  4600 = $find
+  7956 = $powerShell
+}
+function Test-LegacyOldUninstallerProbe {
+  param($LegacyBridge = $bridge, $Child = $powerShell, $Parent = $oldUninstaller, $GrandParent = $stagingInstaller, $Root = $armedRoot)
+  return Test-AiNovelGateExpectedLegacyBridgeOldUninstallerPowerShellProbeExit -Step 'windows-in-app-update-e2e' -LegacyBridge $LegacyBridge -Event $event -ProcessIdentity $Child -ParentIdentity $Parent -GrandParentIdentity $GrandParent -ArmedRootIdentity $Root -TrackedProcessIdentities $tracked
+}
+$exact = Test-LegacyOldUninstallerProbe
+$exactCmd = Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'windows-in-app-update-e2e' -Event $event -ProcessIdentity $cmd -ParentIdentity $oldUninstaller -GrandParentIdentity $stagingInstaller -LegacyBridge $bridge -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $tracked
+$exactFind = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'windows-in-app-update-e2e' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $oldUninstaller -GreatGrandParentIdentity $stagingInstaller -LegacyBridge $bridge -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $tracked
+$missingBridgeCmdRejected = -not (Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'windows-in-app-update-e2e' -Event $event -ProcessIdentity $cmd -ParentIdentity $oldUninstaller -GrandParentIdentity $stagingInstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $tracked)
+$missingBridgeFindRejected = -not (Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'windows-in-app-update-e2e' -Event $event -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $oldUninstaller -GreatGrandParentIdentity $stagingInstaller -ArmedRootIdentity $armedRoot -TrackedProcessIdentities $tracked)
+$bridge.State = 'termination-armed'
+$wrongStateRejected = -not (Test-LegacyOldUninstallerProbe)
+$bridge.State = 'terminated'
+$bridge.SourceTag = 'v0.7.0'
+$nativeSourceRejected = -not (Test-LegacyOldUninstallerProbe)
+$bridge.SourceTag = 'v0.5.2'
+$wrongStaging = $stagingInstaller.PSObject.Copy()
+$wrongStaging.executablePath = 'D:\\a\\_temp\\ai-novel-e2e\\runtime\\other\\ai-novel-writer-setup-0.6.0.exe'
+$wrongStagingRejected = -not (Test-LegacyOldUninstallerProbe -GrandParent $wrongStaging)
+$wrongHelper = $oldUninstaller.PSObject.Copy()
+$wrongHelper.executablePath = Join-Path (Join-Path $tempRoot 'nsh2922.tmp') 'other.exe'
+$wrongHelperRejected = -not (Test-LegacyOldUninstallerProbe -Parent $wrongHelper)
+$wrongParentStart = $powerShell.PSObject.Copy()
+$wrongParentStart.parentProcessStartTimeTicks = '639217250000004637'
+$reusedParentRejected = -not (Test-LegacyOldUninstallerProbe -Child $wrongParentStart)
+$wrongCommand = $powerShell.PSObject.Copy()
+$wrongCommand.commandLine = '"' + $system32 + '" -C "Write-Error ''not a probe''; exit 1"'
+$wrongCommandRejected = -not (Test-LegacyOldUninstallerProbe -Child $wrongCommand)
+$missingRunner = @{
+  1 = $armedRoot
+  2964 = $stagingInstaller
+  4636 = $oldUninstaller
+  7956 = $powerShell
+}
+$trackedBefore = $tracked
+$tracked = $missingRunner
+$missingAncestryRejected = -not (Test-LegacyOldUninstallerProbe)
+$tracked = $trackedBefore
+[pscustomobject]@{
+  Exact = $exact
+  ExactCmd = $exactCmd
+  ExactFind = $exactFind
+  MissingBridgeCmdRejected = $missingBridgeCmdRejected
+  MissingBridgeFindRejected = $missingBridgeFindRejected
+  WrongStateRejected = $wrongStateRejected
+  NativeSourceRejected = $nativeSourceRejected
+  WrongStagingRejected = $wrongStagingRejected
+  WrongHelperRejected = $wrongHelperRejected
+  ReusedParentRejected = $reusedParentRejected
+  WrongCommandRejected = $wrongCommandRejected
+  MissingAncestryRejected = $missingAncestryRejected
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      Exact: true,
+      ExactCmd: true,
+      ExactFind: true,
+      MissingBridgeCmdRejected: true,
+      MissingBridgeFindRejected: true,
+      WrongStateRejected: true,
+      NativeSourceRejected: true,
+      WrongStagingRejected: true,
+      WrongHelperRejected: true,
+      ReusedParentRejected: true,
+      WrongCommandRejected: true,
+      MissingAncestryRejected: true,
+    })
+  })
+
   it('persists captured process-start identity before evaluating the legacy bridge handoff', () => {
     const releaseMonitor = readFileSync(releaseMonitorScript, 'utf8')
     const identityEvidence = releaseMonitor.indexOf("-ExitClassification 'identity-captured'")
