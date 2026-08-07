@@ -1,6 +1,8 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 import {
   PROMOTION_CONFIRMATION,
@@ -8,8 +10,10 @@ import {
   publishPromotion,
   releaseNotes,
   resolvePromotionArtifactRoot,
+  verifyPromotion,
   verifyRemoteReleaseAssets,
 } from '../promote-cross-platform-runtime-artifacts.mjs'
+import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
 
 const repository = 'EthanYoQ/AI-Novel-Writer'
 const expectedSha = 'a'.repeat(40)
@@ -34,6 +38,112 @@ function jsonResponse(payload: unknown) {
   return { ok: true, status: 200, json: async () => payload }
 }
 
+function sha256(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex')
+}
+
+function writeQualificationEvidence(root: string, relativePath: string, evidence: unknown): void {
+  const file = path.join(root, ...relativePath.split('/'))
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(file, `${JSON.stringify(evidence)}\n`, 'utf8')
+}
+
+function writePromotionFixture(root: string, sourceRoot: string, includeWindowsSkinEvidence: boolean): { sourcePlan: Record<string, unknown> } {
+  const packageMetadata = JSON.parse(readFileSync(path.join(sourceRoot, 'package.json'), 'utf8')) as { version: string }
+  const version = packageMetadata.version
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim().toLowerCase()
+  const lockfileSha256 = canonicalPnpmLockfileSha256(path.join(sourceRoot, 'pnpm-lock.yaml'))
+  const windowsRoot = path.join(root, 'windows')
+  const macosRoot = path.join(root, 'macos')
+  mkdirSync(windowsRoot, { recursive: true })
+  mkdirSync(macosRoot, { recursive: true })
+
+  const windowsFiles = new Map([
+    [`ai-novel-writer-setup-${version}.exe`, Buffer.from('installer')],
+    [`ai-novel-writer-setup-${version}.exe.blockmap`, Buffer.from('blockmap')],
+    ['latest.yml', Buffer.from(`version: ${version}\n`)],
+  ])
+  for (const [file, content] of windowsFiles) writeFileSync(path.join(windowsRoot, file), content)
+  const windowsArtifacts = [...windowsFiles].map(([file, content]) => ({ file, sizeBytes: content.length, sha256: sha256(content) }))
+  const windowsManifest = {
+    schemaVersion: 1,
+    commit,
+    lockfileSha256,
+    gateLevel: 'RUNTIME_VERIFIED',
+    releaseCreated: false,
+    artifacts: windowsArtifacts,
+  }
+  writeFileSync(path.join(windowsRoot, 'manifest.json'), `${JSON.stringify(windowsManifest)}\n`, 'utf8')
+  const windowsSums = [...windowsArtifacts, {
+    file: 'manifest.json',
+    sha256: sha256(readFileSync(path.join(windowsRoot, 'manifest.json'))),
+  }]
+  writeFileSync(path.join(windowsRoot, 'SHA256SUMS.txt'), windowsSums.map(record => `${record.sha256} *${record.file}`).join('\n') + '\n', 'utf8')
+
+  const vectorEvidence = {
+    schemaVersion: 1, kind: 'packaged-vector-smoke',
+    projectA: { vectorDimension: 768, importChunkCount: 1, ftsResultCount: 0, semanticResultCount: 1 },
+    projectB: { initialVectorDimension: 768, vectorDimension: 1536, initialImportChunkCount: 1, backfilledChunkCount: 1, sameFingerprintRebuilt: true, ftsResultCount: 0, semanticResultCount: 1 },
+  }
+  const homepageEvidence = {
+    schemaVersion: 1, kind: 'packaged-official-homepage-smoke',
+    trustedIntent: { channel: 'official-homepage:open', requestArgumentCount: 0, success: true, shellOpenExternalCalls: 1 },
+    failedOpenExternal: { success: false, controllerError: 'offline', shellOpenExternalCalls: 1 },
+  }
+  const skinEvidence = {
+    schemaVersion: 1, kind: 'packaged-skin-smoke',
+    builtInAnime: { asset: 'skins/anime-night.webp', present: true, format: 'webp' },
+    customSkin: { importSucceeded: true, readSucceeded: true, stateRestored: true, activeSkin: 'custom', mime: 'image/png', width: 1, height: 1 },
+  }
+  writeQualificationEvidence(windowsRoot, 'qualification/packaged-vector-smoke.json', vectorEvidence)
+  writeQualificationEvidence(windowsRoot, 'qualification/packaged-official-homepage-smoke.json', homepageEvidence)
+  if (includeWindowsSkinEvidence) writeQualificationEvidence(windowsRoot, 'qualification/packaged-skin-smoke.json', skinEvidence)
+
+  const dmg = `ai-novel-writer-mac-arm64-${version}-installer.dmg`
+  const dmgBytes = Buffer.from('dmg')
+  writeFileSync(path.join(macosRoot, dmg), dmgBytes)
+  const macosManifest = {
+    schemaVersion: 1,
+    platform: 'darwin',
+    arch: 'arm64',
+    commit,
+    lockfileSha256,
+    gateLevel: 'RUNTIME_VERIFIED',
+    releaseCreated: false,
+    dmgChecksum: `${dmg}.sha256`,
+    artifacts: [{ file: dmg, sizeBytes: dmgBytes.length, sha256: sha256(dmgBytes) }],
+  }
+  writeFileSync(path.join(macosRoot, 'manifest.json'), `${JSON.stringify(macosManifest)}\n`, 'utf8')
+  writeFileSync(path.join(macosRoot, `${dmg}.sha256`), `${sha256(dmgBytes)}  ${dmg}\n`, 'utf8')
+  writeFileSync(path.join(macosRoot, 'SHA256SUMS.txt'), [
+    `${sha256(dmgBytes)} *${dmg}`,
+    `${sha256(readFileSync(path.join(macosRoot, 'manifest.json')))} *manifest.json`,
+  ].join('\n') + '\n', 'utf8')
+  writeQualificationEvidence(macosRoot, 'qualification/packaged-vector-smoke.json', vectorEvidence)
+  writeQualificationEvidence(macosRoot, 'qualification/packaged-official-homepage-smoke.json', homepageEvidence)
+  writeQualificationEvidence(macosRoot, 'qualification/macos-dmg-smoke.json', {
+    schemaVersion: 1,
+    kind: 'macos-dmg-smoke',
+    platform: 'darwin',
+    arch: 'arm64',
+    dmgSha256: sha256(dmgBytes),
+    secureFileSystemSmoke: true,
+    secureFileSystemHelper: 'security/darwin-safe-file-system',
+    skinSmoke: true,
+  })
+
+  return {
+    sourcePlan: {
+      schemaVersion: 1,
+      state: 'SOURCE_VERIFIED',
+      repository,
+      expectedSha: commit,
+      tag: `v${version}`,
+      version,
+    },
+  }
+}
+
 describe('cross-platform artifact promotion planner', () => {
   it('accepts GitHub artifact-name wrappers but rejects files outside the verified bundle', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-artifact-'))
@@ -47,6 +157,24 @@ describe('cross-platform artifact promotion planner', () => {
       writeFileSync(path.join(root, 'unexpected.txt'), 'unexpected\n', 'utf8')
       expect(() => resolvePromotionArtifactRoot(root, 'Windows qualification'))
         .toThrow('Windows qualification artifact contains files outside its verified bundle')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a promotion artifact that omits the packaged skin qualification evidence', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-skin-evidence-'))
+    const sourceRoot = path.resolve(import.meta.dirname, '..', '..')
+    try {
+      const fixture = writePromotionFixture(root, sourceRoot, false)
+
+      expect(() => verifyPromotion({
+        windowsArtifactRoot: path.join(root, 'windows'),
+        macosArtifactRoot: path.join(root, 'macos'),
+        qualifiedSource: sourceRoot,
+        sourcePlan: fixture.sourcePlan,
+        outputDirectory: path.join(root, 'output'),
+      })).toThrow('Windows qualification file set is not exact')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -108,38 +236,32 @@ describe('cross-platform artifact promotion planner', () => {
       .toThrow('Remote release asset file set is not exact')
   })
 
-  it('generates bilingual v0.6.0 major-release notes for the workflow reliability update', () => {
-    const body = releaseNotes('0.6.0')
+  it('generates bilingual v0.7.0 major-release notes for skins and release-update qualification', () => {
+    const body = releaseNotes('0.7.0')
 
     expect(body).toContain('## 中文')
     expect(body).toContain('## English')
     expect(body).toContain('重大更新')
     expect(body).toContain('major update')
-    expect(body).toContain('更新检查')
-    expect(body).toContain('Update checks')
-    expect(body).toContain('Grok')
-    expect(body).toContain('base_url')
-    expect(body).toContain('BAAI/bge-m3')
-    expect(body).toContain('每批最多 5 章')
-    expect(body).toContain('up to five chapters per batch')
-    expect(body).toContain('有界续写')
-    expect(body).toContain('bounded continuation')
-    expect(body).toContain('推理')
-    expect(body).toContain('reasoning')
-    expect(body).toContain('上下文')
-    expect(body).toContain('context')
-    expect(body).toContain('角色与关系')
-    expect(body).toContain('Characters and relationships')
-    expect(body).toContain('无需向量模型')
-    expect(body).toContain('without a vector model')
-    expect(body).toContain('调用统计')
-    expect(body).toContain('Usage statistics')
-    expect(body).toContain('#71')
-    expect(body).toContain('ai-novel-writer-setup-0.6.0.exe')
-    expect(body).toContain('ai-novel-writer-setup-0.6.0.exe.blockmap')
+    expect(body).toContain('经典、原创二次元与自定义图片皮肤')
+    expect(body).toContain('classic, original anime, and custom image skins')
+    expect(body).toContain('PNG 或 JPEG')
+    expect(body).toContain('PNG or JPEG')
+    expect(body).toContain('主进程')
+    expect(body).toContain('main process')
+    expect(body).toContain('安全回退')
+    expect(body).toContain('safe fallback')
+    expect(body).toContain('正式 GitHub Release')
+    expect(body).toContain('formal GitHub Release')
+    expect(body).toContain('端到端验收')
+    expect(body).toContain('end-to-end qualification')
+    expect(body).toContain('双平台打包皮肤 smoke')
+    expect(body).toContain('cross-platform packaged-skin smoke')
+    expect(body).toContain('ai-novel-writer-setup-0.7.0.exe')
+    expect(body).toContain('ai-novel-writer-setup-0.7.0.exe.blockmap')
     expect(body).toContain('latest.yml')
-    expect(body).toContain('ai-novel-writer-mac-arm64-0.6.0-installer.dmg')
-    expect(body).toContain('ai-novel-writer-mac-arm64-0.6.0-installer.dmg.sha256')
+    expect(body).toContain('ai-novel-writer-mac-arm64-0.7.0-installer.dmg')
+    expect(body).toContain('ai-novel-writer-mac-arm64-0.7.0-installer.dmg.sha256')
     expect(body).toContain('Windows x64')
     expect(body).toContain('unsigned and not notarized')
     expect(body).toContain('未签名、未公证')

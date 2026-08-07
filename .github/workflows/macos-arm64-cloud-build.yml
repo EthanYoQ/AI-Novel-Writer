@@ -73,4 +73,5 @@ jobs:
             release/*/manifest.json
             release/*/qualification/packaged-vector-smoke.json
             release/*/qualification/packaged-official-homepage-smoke.json
+            release/*/qualification/packaged-skin-smoke.json
             release/*/qualification/macos-dmg-smoke.json

@@ -42,6 +42,22 @@ describe('packaged vector qualification wiring', () => {
     expect(installer).toContain('$result.failedOpenExternal.success -eq $false')
     expect(installer).toContain('$result.failedOpenExternal.rendererError.enUS -eq \'Unable to open the official homepage. Please try again later.\'')
   })
+
+  it('runs the installed package against an isolated Vela home to prove the anime asset and custom skin persistence', () => {
+    const installer = readFileSync(installerScript, 'utf8')
+
+    expect(installer).toContain('Invoke-AiNovelPackagedSkinSmoke')
+    expect(installer).toContain("$env:AI_NOVEL_RELEASE_SKIN_SMOKE = '1'")
+    expect(installer).toContain('AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN')
+    expect(installer).toContain('AI_NOVEL_VELA_HOME')
+    expect(installer).toContain('--ai-novel-release-skin-smoke=')
+    expect(installer).toContain('packaged-skin-smoke.json')
+    expect(installer).toContain("$result.kind -eq 'packaged-skin-smoke'")
+    expect(installer).toContain("$result.builtInAnime.asset -eq 'skins/anime-night.webp'")
+    expect(installer).toContain('$result.customSkin.importSucceeded -eq $true')
+    expect(installer).toContain('$result.customSkin.readSucceeded -eq $true')
+    expect(installer).toContain('$result.customSkin.stateRestored -eq $true')
+  })
 })
 
 describe('Windows PowerShell smoke script encoding', () => {
@@ -1063,6 +1079,7 @@ $abnormal = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured =
   InstallerAvailability = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity $validAvailability -Parent $parent
   UnquotedInstallerAvailability = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $unquotedAvailabilityCommand) -Parent $parent
   UpgradePolicy = Test-SyntheticNsisProbe -Step 'smoke:win-v025-upgrade' -Event $event -Identity $validPolicy -Parent $parent
+  UpdateE2ERunningProcess = Test-SyntheticNsisProbe -Step 'windows-in-app-update-e2e' -Event $event -Identity $validRunningProcess -Parent $parent
   SysWow64RunningProcess = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity $validRunningProcess -Parent $parent
   PathCaseOnly = Test-SyntheticNsisProbe -Step 'smoke:win-installer' -Event $event -Identity (New-ProbeIdentity -ImagePath $system32 -CommandLine $pathCaseCommand) -Parent $parent
   OtherStep = Test-SyntheticNsisProbe -Step 'other-step' -Event $event -Identity $validAvailability -Parent $parent
@@ -1091,6 +1108,7 @@ $abnormal = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured =
     expect(result.InstallerAvailability).toBe(true)
     expect(result.UnquotedInstallerAvailability).toBe(true)
     expect(result.UpgradePolicy).toBe(true)
+    expect(result.UpdateE2ERunningProcess).toBe(true)
     expect(result.SysWow64RunningProcess).toBe(true)
     expect(result.PathCaseOnly).toBe(true)
     expect(result.OtherStep).toBe(false)

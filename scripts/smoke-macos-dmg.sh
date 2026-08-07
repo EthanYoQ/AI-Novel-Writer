@@ -17,6 +17,7 @@ fi
 smoke_root="$(mktemp -d "${TMPDIR:-/tmp}/ai-novel-macos-dmg-smoke.XXXXXX")"
 mount_point="$smoke_root/mount"
 smoke_home="$smoke_root/home"
+skin_home="$smoke_root/vela-skin-home"
 mounted=0
 
 cleanup() {
@@ -30,7 +31,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$mount_point" "$smoke_home" "$qualification_directory"
+mkdir -p "$mount_point" "$smoke_home" "$skin_home" "$qualification_directory"
 hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_point" -quiet
 mounted=1
 
@@ -117,8 +118,10 @@ if (escaped?.ok === true || escaped?.code !== 'SECURE_FS_REPARSE_POINT') {
 NODE
 
 token="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
+skin_token="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
 vector_evidence="$qualification_directory/packaged-vector-smoke.json"
 homepage_evidence="$qualification_directory/packaged-official-homepage-smoke.json"
+skin_evidence="$qualification_directory/packaged-skin-smoke.json"
 
 run_with_timeout 'packaged vector smoke' 120 env \
   ELECTRON_RUN_AS_NODE=1 HOME="$smoke_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
@@ -126,14 +129,25 @@ run_with_timeout 'packaged vector smoke' 120 env \
 run_with_timeout 'packaged official homepage smoke' 300 env \
   HOME="$smoke_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
   "$executable" "--ai-novel-release-homepage-smoke=$token" > "$homepage_evidence"
+run_with_timeout 'packaged skin smoke' 120 env \
+  HOME="$smoke_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_SKIN_SMOKE=1 AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN="$skin_token" \
+  "$executable" "--ai-novel-release-skin-smoke=$skin_token" > "$skin_evidence"
 
-node - "$vector_evidence" "$homepage_evidence" <<'NODE'
+node - "$vector_evidence" "$homepage_evidence" "$skin_evidence" <<'NODE'
 const fs = require('node:fs')
-const [vectorFile, homepageFile] = process.argv.slice(2)
+const [vectorFile, homepageFile, skinFile] = process.argv.slice(2)
 const vector = JSON.parse(fs.readFileSync(vectorFile, 'utf8'))
 const homepage = JSON.parse(fs.readFileSync(homepageFile, 'utf8'))
+const skin = JSON.parse(fs.readFileSync(skinFile, 'utf8'))
 if (vector?.schemaVersion !== 1 || vector?.kind !== 'packaged-vector-smoke') throw new Error('Invalid vector smoke evidence')
 if (homepage?.schemaVersion !== 1 || homepage?.kind !== 'packaged-official-homepage-smoke') throw new Error('Invalid homepage smoke evidence')
+if (skin?.schemaVersion !== 1 || skin?.kind !== 'packaged-skin-smoke') throw new Error('Invalid skin smoke evidence')
+if (skin?.builtInAnime?.asset !== 'skins/anime-night.webp' || skin?.builtInAnime?.present !== true || skin?.builtInAnime?.format !== 'webp') {
+  throw new Error('Packaged anime skin evidence is incomplete')
+}
+if (skin?.customSkin?.importSucceeded !== true || skin?.customSkin?.readSucceeded !== true || skin?.customSkin?.stateRestored !== true) {
+  throw new Error('Packaged custom skin persistence evidence is incomplete')
+}
 NODE
 
 node - "$qualification_directory/macos-dmg-smoke.json" "$dmg" "$app" <<'NODE'
@@ -152,5 +166,6 @@ fs.writeFileSync(output, `${JSON.stringify({
   dmgSha256: sha256,
   vectorSmoke: true,
   officialHomepageSmoke: true,
+  skinSmoke: true,
 }, null, 2)}\n`)
 NODE

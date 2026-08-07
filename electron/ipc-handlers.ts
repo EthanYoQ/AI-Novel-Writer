@@ -13,6 +13,8 @@ import { registerModelProviderResourceController } from './controllers/model-pro
 import { registerFinalizationController } from './controllers/finalization-controller'
 import { registerExternalFileGrantController } from './controllers/external-file-grant-controller'
 import { registerAppDataController } from './controllers/app-data-controller'
+import { registerSkinController } from './controllers/skin-controller'
+import { skinService } from './services/skin-service'
 
 /**
  * 注册所有 IPC 通道 — 在主进程启动时调用
@@ -21,6 +23,14 @@ import { registerAppDataController } from './controllers/app-data-controller'
 export function registerIPCHandlers() {
   // 确保全局配置目录结构存在
   ensureVelaHome()
+
+  // 皮肤存储损坏或不可用时必须降级为经典皮肤，不能阻断其余 IPC 注册。
+  try {
+    skinService.initialize()
+  } catch (error) {
+    console.warn('[Vela Skin] 皮肤服务初始化失败，已降级并继续启动应用。', error)
+  }
+  registerSkinController()
 
   // 挂载控制器路由
   registerWindowController()

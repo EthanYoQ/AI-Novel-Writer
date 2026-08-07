@@ -128,6 +128,27 @@ function validateHomepageEvidence(evidence) {
   assert(typeof evidence.failedOpenExternal?.controllerError === 'string' && evidence.failedOpenExternal.controllerError.length > 0, 'Homepage qualification error evidence is incomplete')
 }
 
+function validateSkinEvidence(evidence) {
+  assert(
+    evidence.builtInAnime?.asset === 'skins/anime-night.webp'
+      && evidence.builtInAnime?.present === true
+      && evidence.builtInAnime?.format === 'webp',
+    'Skin qualification did not verify the packaged anime asset',
+  )
+  assert(
+    evidence.customSkin?.importSucceeded === true
+      && evidence.customSkin?.readSucceeded === true
+      && evidence.customSkin?.stateRestored === true
+      && evidence.customSkin?.activeSkin === 'custom'
+      && evidence.customSkin?.mime === 'image/png'
+      && Number.isInteger(evidence.customSkin?.width)
+      && evidence.customSkin.width > 0
+      && Number.isInteger(evidence.customSkin?.height)
+      && evidence.customSkin.height > 0,
+    'Skin qualification did not verify isolated custom skin persistence',
+  )
+}
+
 function validateManifestArtifact(manifest, bundleRoot, expectedFiles, expectedCommit, expectedLockfile, label) {
   assert(manifest?.schemaVersion === 1, `${label} manifest schema is invalid`)
   assert(manifest.gateLevel === 'RUNTIME_VERIFIED', `${label} manifest gate level is invalid`)
@@ -149,7 +170,11 @@ function validateWindowsArtifact(root, { expectedSha, lockfileSha256, version })
   const bundleRoot = resolvePromotionArtifactRoot(root, 'Windows qualification')
   const installer = `ai-novel-writer-setup-${version}.exe`
   const blockmap = `${installer}.blockmap`
-  const evidence = ['qualification/packaged-vector-smoke.json', 'qualification/packaged-official-homepage-smoke.json']
+  const evidence = [
+    'qualification/packaged-vector-smoke.json',
+    'qualification/packaged-official-homepage-smoke.json',
+    'qualification/packaged-skin-smoke.json',
+  ]
   const expected = ['SHA256SUMS.txt', 'manifest.json', installer, blockmap, 'latest.yml', ...evidence]
   exactFileSet(listRegularFiles(bundleRoot), expected, 'Windows qualification')
   const manifest = jsonFile(path.join(bundleRoot, 'manifest.json'), 'Windows manifest')
@@ -159,6 +184,7 @@ function validateWindowsArtifact(root, { expectedSha, lockfileSha256, version })
   for (const [file, digest] of sums) assert(sha256(path.join(bundleRoot, file)) === digest, `Windows SHA-256 mismatch: ${file}`)
   validateVectorEvidence(validateEvidence(path.join(bundleRoot, evidence[0]), 'packaged-vector-smoke'))
   validateHomepageEvidence(validateEvidence(path.join(bundleRoot, evidence[1]), 'packaged-official-homepage-smoke'))
+  validateSkinEvidence(validateEvidence(path.join(bundleRoot, evidence[2]), 'packaged-skin-smoke'))
   return { bundleRoot, releaseFiles: [installer, blockmap, 'latest.yml'] }
 }
 
@@ -169,6 +195,7 @@ function validateMacosArtifact(root, { expectedSha, lockfileSha256, version }) {
   const evidence = [
     ['qualification/packaged-vector-smoke.json', 'packaged-vector-smoke'],
     ['qualification/packaged-official-homepage-smoke.json', 'packaged-official-homepage-smoke'],
+    ['qualification/packaged-skin-smoke.json', 'packaged-skin-smoke'],
     ['qualification/macos-dmg-smoke.json', 'macos-dmg-smoke'],
   ]
   exactFileSet(listRegularFiles(bundleRoot), ['SHA256SUMS.txt', 'manifest.json', dmg, dmgChecksum, ...evidence.map(([file]) => file)], 'macOS qualification')
@@ -182,11 +209,13 @@ function validateMacosArtifact(root, { expectedSha, lockfileSha256, version }) {
   assert(readFileSync(path.join(bundleRoot, dmgChecksum), 'utf8').trim() === `${sha256(path.join(bundleRoot, dmg))}  ${dmg}`, 'macOS DMG checksum file does not match the DMG')
   validateVectorEvidence(validateEvidence(path.join(bundleRoot, evidence[0][0]), evidence[0][1]))
   validateHomepageEvidence(validateEvidence(path.join(bundleRoot, evidence[1][0]), evidence[1][1]))
-  validateEvidence(path.join(bundleRoot, evidence[2][0]), evidence[2][1])
+  validateSkinEvidence(validateEvidence(path.join(bundleRoot, evidence[2][0]), evidence[2][1]))
+  validateEvidence(path.join(bundleRoot, evidence[3][0]), evidence[3][1])
   const dmgSmoke = jsonFile(path.join(bundleRoot, 'qualification/macos-dmg-smoke.json'), 'macOS DMG smoke')
   assert(dmgSmoke.platform === 'darwin' && dmgSmoke.arch === 'arm64', 'macOS DMG smoke platform/architecture is invalid')
   assert(dmgSmoke.dmgSha256 === sha256(path.join(bundleRoot, dmg)), 'macOS DMG smoke SHA-256 does not match the DMG')
   assert(dmgSmoke.secureFileSystemSmoke === true && dmgSmoke.secureFileSystemHelper === 'security/darwin-safe-file-system', 'macOS DMG smoke did not verify the packaged secure file-system helper')
+  assert(dmgSmoke.skinSmoke === true, 'macOS DMG smoke did not verify the packaged skin qualification')
   return { bundleRoot, releaseFiles: [dmg, dmgChecksum] }
 }
 
@@ -329,15 +358,11 @@ export function releaseNotes(version) {
   return [
     `## 中文`,
     ``,
-    `AI 小说作家 ${version} 是一次面向完整创作流程的重大更新。`,
+    `AI 小说作家 ${version} 是一次面向发布可靠性和界面外观的重大更新。`,
     ``,
-    `- 更新检查：区分网络、配置和发布资产问题，手动检查提供可操作提示，并避免重复下载。`,
-    `- 模型配置：新增 Grok；字段采用 \`base_url\`、\`model\` 等 API 术语；向量模型默认引导硅基流动免费 \`BAAI/bge-m3\`，只需填写 API Key。`,
-    `- 蓝图生成：大任务自动拆分为每批最多 5 章，并明确提示章节数、模型输出能力和 Token 预算之间的关系。`,
-    `- 草稿可靠性：仅对真正的长度截断执行有界续写；推理输出与上下文预算受到保护，无法安全完成时明确失败且不保存不完整草稿。`,
-    `- 角色与关系：蓝图中的角色与结构化关系会自动同步，无需向量模型，并保留用户手工维护的字段。`,
-    `- 调用统计：记录成功、失败和取消调用；供应商未报告 Token 时明确显示未知，不再误报为 0。`,
-    `- #71：修复 Windows 项目根目录处于重解析路径时的误判，以及角色提取、保存和蓝图后同步问题。`,
+    `- 图片皮肤：提供经典、原创二次元与自定义图片皮肤，经典皮肤仍为默认外观。自定义图片仅接受 PNG 或 JPEG；用户选择的文件只由主进程处理、验证并复制到应用数据目录，导入或读取失败时安全回退到经典皮肤，界面不会获得本机绝对路径。`,
+    `- Windows 更新验收：新增针对正式 GitHub Release 的 Windows 应用内更新端到端验收能力，用于校验从已安装正式版获得较新正式版的路径。`,
+    `- 双平台构建：Windows x64 与 macOS ARM64 云端资格构建包含双平台打包皮肤 smoke，验证内置二次元资源，以及隔离用户目录中的自定义皮肤导入、读取与重启恢复。`,
     ``,
     `本版本在同一个 Release 资产列表中提供 Windows x64 与 macOS Apple Silicon（ARM64）安装包。`,
     ``,
@@ -348,15 +373,11 @@ export function releaseNotes(version) {
     ``,
     `## English`,
     ``,
-    `AI Novel Writer ${version} is a major update to the complete writing workflow.`,
+    `AI Novel Writer ${version} is a major update to release reliability and interface appearance.`,
     ``,
-    `- Update checks: distinguishes network, configuration, and release-asset failures, gives actionable manual-check guidance, and prevents duplicate downloads.`,
-    `- Model setup: adds Grok; uses API-native terms such as \`base_url\` and \`model\`; preconfigures SiliconFlow's free \`BAAI/bge-m3\` vector model so only the API key is required.`,
-    `- Blueprint generation: splits large jobs into up to five chapters per batch and explains the relationship between chapter count, model output capacity, and token budget.`,
-    `- Draft reliability: bounded continuation runs only for genuine length truncation; reasoning and context budgets are protected, and incomplete output is not saved when safe completion is impossible.`,
-    `- Characters and relationships: blueprint entities and structured relationships synchronize without a vector model while preserving manually maintained fields.`,
-    `- Usage statistics: records successful, failed, and cancelled calls; unreported token usage is shown as unknown instead of zero.`,
-    `- #71: fixes false Windows project-root reparse detection together with character extraction, persistence, and post-blueprint synchronization.`,
+    `- Skins: provides classic, original anime, and custom image skins, with classic retained as the default appearance. Custom images accept only PNG or JPEG; the main process owns selection, validation, and copying into application data, while a safe fallback returns to classic if import or read fails and no local absolute path reaches the renderer.`,
+    `- Windows update qualification: adds Windows formal GitHub Release in-app-update end-to-end qualification for the path from an installed formal version to a newer formal version.`,
+    `- Cross-platform builds: Windows x64 and macOS ARM64 cloud qualification include a cross-platform packaged-skin smoke for the built-in anime asset plus custom-skin import, read, and restart recovery in an isolated user-data directory.`,
     ``,
     `This release includes Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list.`,
     ``,

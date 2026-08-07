@@ -7,6 +7,7 @@ import { useProjectStore } from './stores/project-store'
 import { useMCPStore } from './stores/mcp-store'
 import { useWorkflowStore } from './stores/workflow-store'
 import { useLocaleStore } from './stores/locale-store'
+import { useSkinStore } from './stores/skin-store'
 import { ipc } from './services/ipc-client'
 import TitleBar from './components/layout/TitleBar'
 import StatusBar from './components/layout/StatusBar'
@@ -22,6 +23,7 @@ import ImportNovelDialog from './components/dialogs/ImportNovelDialog'
 import ChapterCreationDialog from './components/dialogs/ChapterCreationDialog'
 import ExportDialog from './components/dialogs/ExportDialog'
 import SettingsModal from './components/settings/SettingsModal'
+import { ANIME_SKIN_URL } from './components/settings/AppearanceSettings'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { actionToast } from './components/ui/ActionToast'
 import { globalEventBus } from './shared/event-bus'
@@ -30,6 +32,36 @@ import {
   sameProjectSessionContext,
 } from './shared/project-session-context'
 import { getAutoNextChapterPrefill, type NextChapterBlueprint } from './services/auto-next-chapter'
+import type { SkinId } from './shared/skin-types'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function resolveSkinBackgroundUrl(skinId: SkinId, customUrl: string | null): string | null {
+  if (skinId === 'anime') return ANIME_SKIN_URL
+  if (skinId === 'custom') return customUrl
+  return null
+}
+
+/** The sole decorative skin layer at the App root. It never participates in accessibility. */
+export function SkinBackgroundLayer({
+  skinId,
+  backgroundUrl,
+  onImageError,
+}: {
+  skinId: SkinId
+  backgroundUrl: string | null
+  onImageError?: () => void
+}) {
+  const imageUrl = resolveSkinBackgroundUrl(skinId, backgroundUrl)
+  return (
+    <div
+      aria-hidden="true"
+      data-skin-background={skinId}
+      className="app-skin-background"
+    >
+      {imageUrl && <img src={imageUrl} alt="" className="app-skin-background-image" onError={onImageError} />}
+    </div>
+  )
+}
 
 /**
  * Vela 主应用组件
@@ -55,6 +87,11 @@ export default function App() {
   const closeChapterCreation = useLayoutStore(s => s.closeChapterCreation)
   const initLLM = useLLMStore((s) => s.init)
   const loadRecentProjects = useProjectStore((s) => s.loadRecentProjects)
+  const skinState = useSkinStore((s) => s.skinState)
+  const skinBackgroundUrl = useSkinStore((s) => s.backgroundUrl)
+  const initSkin = useSkinStore((s) => s.init)
+  const disposeSkin = useSkinStore((s) => s.dispose)
+  const recoverFromImageFailure = useSkinStore((s) => s.recoverFromImageFailure)
 
   // 初始化：主题 + LLM 模型 + 最近项目 + 缩放级别
   useEffect(() => {
@@ -148,6 +185,12 @@ export default function App() {
   }, [initLocale, initTheme, initLLM, loadRecentProjects])
 
   useEffect(() => {
+    if (!ipc.isElectron) return undefined
+    void initSkin()
+    return disposeSkin
+  }, [disposeSkin, initSkin])
+
+  useEffect(() => {
     if (!ipc.isElectron) return
     void ipc.invoke('project:smoke-open-request').then(async (request) => {
       if (!request) return
@@ -180,7 +223,12 @@ export default function App() {
   }, [])
 
   return (
-    <div className="flex flex-col w-full h-full overflow-hidden">
+    <div className="app-skin-root flex flex-col w-full h-full overflow-hidden" data-skin={skinState.activeSkin}>
+      <SkinBackgroundLayer
+        skinId={skinState.activeSkin}
+        backgroundUrl={skinBackgroundUrl}
+        onImageError={() => void recoverFromImageFailure()}
+      />
       {/* 标题栏 */}
       <TitleBar />
 
@@ -192,7 +240,7 @@ export default function App() {
         │   │     BottomPanel (全宽)        │   │
         └───┴──────────────────────────────┴───┘
       */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="app-skin-main-region flex flex-1 overflow-hidden">
 
         {/* 左侧工具窗口栏（全高，包括底部面板区域） */}
         <LeftToolWindowBar />
