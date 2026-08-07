@@ -1501,7 +1501,7 @@ function Test-AiNovelGateExpectedExitOne {
   )
 
   return (
-    $Step -in @('smoke:win-installer', 'smoke:win-v025-upgrade') -and
+    $Step -in @('smoke:win-installer', 'smoke:win-v025-upgrade', 'windows-in-app-update-e2e') -and
     [bool]$Event.ExitCodeCaptured -and
     $null -ne $Event.ExitCode -and
     [uint32]$Event.JobMessage -eq 7 -and
