@@ -1025,7 +1025,7 @@ $bridge = [pscustomobject]@{
   AllowedWizardWindowKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 }
 function New-LegacyInstallerIdentity {
-  param([string]$CommandLine = ('"' + $pendingExe + '" --updated /D=C:\\e2e\\installed-app'))
+  param([string]$CommandLine = ('"' + $pendingExe + '" --updated'))
   return [pscustomobject]@{
     processId = 411
     startTimeTicks = '638900000000000411'
@@ -1041,6 +1041,10 @@ function New-LegacyInstallerIdentity {
 $installer = New-LegacyInstallerIdentity
 $exact = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity $installer -ParentIdentity $old
 $silent = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated /S /D=C:\\e2e\\installed-app')) -ParentIdentity $old
+$explicitDirectory = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated /D=C:\\e2e\\installed-app')) -ParentIdentity $old
+$forceRun = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated --force-run')) -ParentIdentity $old
+$packageFile = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated --package-file=C:\\temp\\package.7z')) -ParentIdentity $old
+$extraArgument = Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity (New-LegacyInstallerIdentity -CommandLine ('"' + $pendingExe + '" --updated unexpected')) -ParentIdentity $old
 $wrongParent = [pscustomobject]@{ processId = 410; startTimeTicks = '638900000000000409'; executablePath = $oldExe; identityCaptured = $true }
 $wrongParentRejected = -not (Test-AiNovelGateLegacyBridgeInstaller -Step 'windows-in-app-update-e2e' -LegacyBridge $bridge -InstallerIdentity $installer -ParentIdentity $wrongParent)
 $wrongStepRejected = -not (Test-AiNovelGateLegacyBridgeInstaller -Step 'other-step' -LegacyBridge $bridge -InstallerIdentity $installer -ParentIdentity $old)
@@ -1062,6 +1066,10 @@ $wrongTitleRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBrid
   NativeSourceRejected = -not (Test-AiNovelGateLegacyBridgeSourceTag -SourceTag 'v0.7.0')
   ExactInstaller = $exact
   SilentArgumentsRejected = -not $silent
+  ExplicitDirectoryRejected = -not $explicitDirectory
+  ForceRunRejected = -not $forceRun
+  PackageFileRejected = -not $packageFile
+  ExtraArgumentRejected = -not $extraArgument
   WrongParentRejected = $wrongParentRejected
   WrongStepRejected = $wrongStepRejected
   WizardAccepted = $wizardAccepted
@@ -1075,11 +1083,25 @@ $wrongTitleRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBrid
       NativeSourceRejected: true,
       ExactInstaller: true,
       SilentArgumentsRejected: true,
+      ExplicitDirectoryRejected: true,
+      ForceRunRejected: true,
+      PackageFileRejected: true,
+      ExtraArgumentRejected: true,
       WrongParentRejected: true,
       WrongStepRejected: true,
       WizardAccepted: true,
       WrongTitleRejected: true,
     })
+  })
+
+  it('persists captured process-start identity before evaluating the legacy bridge handoff', () => {
+    const releaseMonitor = readFileSync(releaseMonitorScript, 'utf8')
+    const identityEvidence = releaseMonitor.indexOf("-ExitClassification 'identity-captured'")
+    const legacyBridgeDecision = releaseMonitor.indexOf('if (Test-AiNovelGateLegacyBridgeInstaller `')
+
+    expect(identityEvidence).toBeGreaterThan(-1)
+    expect(legacyBridgeDecision).toBeGreaterThan(identityEvidence)
+    expect(releaseMonitor).toContain('if (-not $processEventEvidenceWritten) {')
   })
 
   windowsIt('arms the legacy bridge only after the monitor captures the exact old application identity', () => {
