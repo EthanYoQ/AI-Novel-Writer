@@ -776,7 +776,7 @@ function Get-AiNovelGateControl {
   }
 
   try {
-    $lines = @(Get-Content -LiteralPath $ControlPath -ErrorAction Stop)
+    $lines = @(Get-Content -LiteralPath $ControlPath -Encoding UTF8 -ErrorAction Stop)
     for ($index = $lines.Count - 1; $index -ge 0; $index--) {
       if (-not [string]::IsNullOrWhiteSpace($lines[$index])) {
         return $lines[$index] | ConvertFrom-Json -ErrorAction Stop

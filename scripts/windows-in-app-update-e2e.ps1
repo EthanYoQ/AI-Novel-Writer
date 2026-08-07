@@ -95,7 +95,7 @@ function Add-E2eMonitorControl {
 
   Assert-E2eCondition -Condition (Test-Path -LiteralPath $ControlPath -PathType Leaf) -Message "Release monitor control file is missing: $ControlPath"
   $lastRecord = $null
-  foreach ($line in @(Get-Content -LiteralPath $ControlPath)) {
+  foreach ($line in @(Get-Content -LiteralPath $ControlPath -Encoding UTF8)) {
     if ([string]::IsNullOrWhiteSpace($line)) { continue }
     try {
       $lastRecord = $line | ConvertFrom-Json -ErrorAction Stop

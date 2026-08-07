@@ -287,6 +287,9 @@ describe('Windows official in-app update E2E contract', () => {
     expect(orchestration).toContain('-MonitorControlPath')
     expect(orchestration).toContain('-MonitorStatusPath')
     expect(powershell).toContain("state = 'legacy-bridge-arm'")
+    expect(powershell).toContain(
+      'foreach ($line in @(Get-Content -LiteralPath $ControlPath -Encoding UTF8))',
+    )
     expect(powershell).toContain('Test-E2eLegacyBridgePendingInstaller')
     expect(powershell).toContain('Invoke-E2eLegacyBridge')
     expect(powershell).toContain('legacyInteractiveHandoffObserved')
