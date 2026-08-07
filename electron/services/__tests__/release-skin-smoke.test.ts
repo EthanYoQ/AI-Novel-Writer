@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { inflateSync } from 'node:zlib'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -22,7 +23,43 @@ import {
 
 const temporaryRoots: string[] = []
 const smokeToken = 'a'.repeat(64)
-const controlledPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9p5r8AAAAASUVORK5CYII=', 'base64')
+
+function decodedPngSize(bytes: Buffer): { width: number; height: number } {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  if (!bytes.subarray(0, signature.length).equals(signature)) {
+    throw new Error('The controlled fixture must have a PNG signature')
+  }
+
+  let offset = signature.length
+  let width: number | undefined
+  let height: number | undefined
+  const idatChunks: Buffer[] = []
+  while (offset + 12 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset)
+    const dataStart = offset + 8
+    const dataEnd = dataStart + length
+    if (dataEnd + 4 > bytes.length) throw new Error('The controlled fixture has a truncated PNG chunk')
+
+    const type = bytes.subarray(offset + 4, dataStart).toString('ascii')
+    const data = bytes.subarray(dataStart, dataEnd)
+    if (type === 'IHDR') {
+      if (data.length !== 13) throw new Error('The controlled fixture has an invalid PNG header')
+      width = data.readUInt32BE(0)
+      height = data.readUInt32BE(4)
+    } else if (type === 'IDAT') {
+      idatChunks.push(data)
+    } else if (type === 'IEND') {
+      break
+    }
+    offset = dataEnd + 4
+  }
+
+  if (!width || !height || idatChunks.length === 0) {
+    throw new Error('The controlled fixture must contain image dimensions and compressed pixels')
+  }
+  inflateSync(Buffer.concat(idatChunks))
+  return { width, height }
+}
 
 function temporaryRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-release-skin-smoke-'))
@@ -51,17 +88,20 @@ function withSmokeEnvironment<T>(root: string, callback: () => T): T {
 
 function createImageCodec() {
   return {
-    createFromBuffer: vi.fn(() => ({
-      isEmpty: () => false,
-      getSize: () => ({ width: 1, height: 1 }),
-      resize: () => {
-        throw new Error('The controlled smoke image must not need resizing')
-      },
-      toPNG: () => controlledPng,
-      toJPEG: () => {
-        throw new Error('The controlled PNG smoke image must not be encoded as JPEG')
-      },
-    })),
+    createFromBuffer: vi.fn((bytes: Buffer) => {
+      const size = decodedPngSize(bytes)
+      return {
+        isEmpty: () => false,
+        getSize: () => size,
+        resize: () => {
+          throw new Error('The controlled smoke image must not need resizing')
+        },
+        toPNG: () => Buffer.from(bytes),
+        toJPEG: () => {
+          throw new Error('The controlled PNG smoke image must not be encoded as JPEG')
+        },
+      }
+    }),
   }
 }
 
@@ -140,8 +180,8 @@ describe('packaged skin qualification smoke', () => {
         stateRestored: true,
         activeSkin: 'custom',
         mime: 'image/png',
-        width: 1,
-        height: 1,
+        width: 2,
+        height: 2,
       },
     })
     expect(JSON.stringify(evidence)).not.toContain(root)
