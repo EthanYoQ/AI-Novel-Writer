@@ -28,11 +28,13 @@
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
-> ## v0.7.1 patch update
+> ## v0.8.0 structured character roster major update
 >
-> [v0.7.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.7.1) is a patch update for interface experience and the model-configuration entry: it improves skin visibility and preserves classic theme consistency across writing surfaces. The embedding-model entry now recommends SiliconFlow's BAAI/bge-m3 and provides a “Free model registration” link.
+> [v0.8.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.0) is a major update centered on the structured character roster: the structured character roster is the single source of truth for character cards, fixing #76 at the source. Character architecture is driven by one structured output, uses an SQLite atomic commit for the roster and its read-only character-graph projection, and is marked successful only after the read-back succeeds.
 >
-> One Release contains five assets: the Windows x64 installer `ai-novel-writer-setup-0.7.1.exe`, its `.blockmap`, `latest.yml`, plus the macOS Apple Silicon (ARM64) DMG and its `.sha256` checksum. The Windows installer is not code-signed but supports in-app updates. The macOS ARM64 package is unsigned and not notarized, and future versions require a manual download from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
+> This means legacy projects require an explicit safe migration: original legacy character-graph text is retained as evidence, and failure never overwrites character data. Imports, manual edits, blueprint synchronization, finalization, and clearing all use one roster seam.
+>
+> One Release continues the five assets contract: the Windows x64 installer `ai-novel-writer-setup-0.8.0.exe`, its `.blockmap`, `latest.yml`, plus the macOS Apple Silicon (ARM64) DMG and its `.sha256` checksum. The Windows installer is not code-signed but supports the in-app update. The macOS ARM64 package is unsigned and not notarized, and future versions require a manual update from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
 
 ## What this product is
 

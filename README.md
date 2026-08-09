@@ -28,11 +28,13 @@
   <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
 </p>
 
-> ## v0.7.1 补丁更新
+> ## v0.8.0 结构化角色名单重大更新
 >
-> [v0.7.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.7.1) 是一次界面体验与模型配置入口的补丁更新：增强皮肤可见性，使经典主题在各创作界面保持主题一致性；“向量模型入口”顶部现在推荐硅基流动的 BAAI/bge-m3，并提供“免费模型注册链接”。
+> [v0.8.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.0) 是一次围绕结构化角色名单的重大更新：结构化角色名单成为角色卡的唯一事实源，从根源修复 #76。角色架构由一次结构化输出驱动，以 SQLite 原子提交角色名单及其只读角色图谱投影；只有回读成功后才标记成功。
 >
-> 同一个 Release 的五项资产包括 Windows x64 安装程序 `ai-novel-writer-setup-0.7.1.exe`、其 `.blockmap`、`latest.yml`，以及 macOS Apple Silicon（ARM64）DMG 和其 `.sha256` 校验文件。Windows 安装包未签名，但支持应用内更新；macOS ARM64 包未签名、未公证，后续版本需从 Release 页面手动下载。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
+> 旧项目必须显式安全迁移：保留旧角色图谱原文作为证据，失败不会改写任何角色数据。导入、手工编辑、蓝图同步、定稿和清除均经过统一的角色名单 seam。
+>
+> 同一个 Release 仍严格遵守五项资产合同：Windows x64 安装程序 `ai-novel-writer-setup-0.8.0.exe`、其 `.blockmap`、`latest.yml`，以及 macOS Apple Silicon（ARM64）DMG 和其 `.sha256` 校验文件。Windows 安装包未签名，但支持应用内更新；macOS ARM64 包未签名、未公证，后续版本需从 Release 页面手动更新。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
 
 ## 产品定位
 
