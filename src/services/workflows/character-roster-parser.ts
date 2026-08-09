@@ -24,33 +24,53 @@ const NON_CHARACTER_OBJECT_KEYS = new Set([
   '说明',
 ])
 
-const FIELD_KEYS: Record<string, string> = {
-  性别: 'gender',
-  年龄: 'age',
-  年龄段: 'age',
-  外貌: 'appearance',
-  外貌特征: 'appearance',
-  外貌描写: 'appearance',
-  性格: 'personality',
-  性格特点: 'personality',
-  性格特征: 'personality',
-  背景: 'background',
-  背景故事: 'background',
-  身世: 'background',
-  能力: 'abilities',
-  '能力/技能': 'abilities',
-  技能: 'abilities',
-  动机: 'motivation',
-  核心动机: 'motivation',
-  动力: 'motivation',
-  关系: 'relationships',
-  关系网: 'relationships',
-  角色关系: 'relationships',
-  角色弧光: 'arc',
-  成长轨迹: 'arc',
-  成长线: 'arc',
-  备注: 'notes',
-  补充: 'notes',
+const PERSISTED_ROSTER_FIELD_NAMES = [
+  'gender', 'age', 'appearance', 'personality', 'background', 'abilities',
+  'motivation', 'relationships', 'arc', 'notes',
+] as const satisfies readonly (keyof typeof CHARACTER_FIELD_ALIASES)[]
+
+const FIELD_KEYS: Readonly<Record<string, string>> = Object.fromEntries(
+  PERSISTED_ROSTER_FIELD_NAMES.flatMap(field =>
+    CHARACTER_FIELD_ALIASES[field].map(alias => [alias, field]),
+  ),
+)
+
+function normalizeMarkdownFieldLabel(label: string): string {
+  return label
+    .trim()
+    .replace(/^(?:\*\*|__|\*|_)\s*/u, '')
+    .replace(/\s*(?:\*\*|__|\*|_)$/u, '')
+    .trim()
+}
+
+type MarkdownFieldLine = {
+  label: string
+  value: string
+  hasListPrefix: boolean
+}
+
+function parseMarkdownFieldLine(line: string): MarkdownFieldLine | null {
+  const trimmed = line.trim()
+  const prefix = trimmed.match(/^(?:(?:[-*+]\s+)|(?:(?:\d+|[一二三四五六七八九十百千万]+)[、.．)）]\s*))/u)
+  const withoutPrefix = prefix ? trimmed.slice(prefix[0].length) : trimmed
+  const field = withoutPrefix.match(/^([^：:]+?)\s*[：:]\s*(.+)$/u)
+  if (!field) return null
+
+  const label = normalizeMarkdownFieldLabel(field[1])
+  const value = field[2].trim()
+  if (!label || !value) return null
+  return { label, value, hasListPrefix: Boolean(prefix) }
+}
+
+function isNameFieldLabel(label: string): boolean {
+  return (CHARACTER_FIELD_ALIASES.name as readonly string[]).includes(label)
+}
+
+function parseNameFieldValue(label: string, value: string): { name?: string; issue?: RosterParseIssue['kind'] } {
+  const canonicalValue = label === '姓名/代号'
+    ? value.split(/[/／]/u, 1)[0].trim()
+    : value
+  return parseSingleName(canonicalValue)
 }
 
 const GENERIC_OR_NARRATIVE_TITLES = [
@@ -197,12 +217,28 @@ export function parseModelCharacterCards(text: string): RawCharacterCard[] {
   return parsed === null ? [] : rawCardsFromParsedJson(parsed)
 }
 
-function roleFromText(text: string): string | undefined {
-  if (/(?:女主角?|男主角?|核心主角|主角)/u.test(text)) return 'protagonist'
-  if (/(?:大反派|主要反派|反派|内在敌人|敌人|对手)/u.test(text)) return 'antagonist'
-  if (/(?:龙套|次要角色)/u.test(text)) return 'minor'
-  if (/(?:重要配角|核心配角|配角|同盟者|盟友)/u.test(text)) return 'supporting'
-  return undefined
+type CharacterRole = 'protagonist' | 'antagonist' | 'minor' | 'supporting'
+
+const ROLE_SIGNAL_PATTERNS: ReadonlyArray<readonly [CharacterRole, RegExp]> = [
+  ['protagonist', /(?:女主角?|男主角?|核心主角|主角)/u],
+  ['antagonist', /(?:大反派|主要反派|反派|内在敌人|敌人|对手|竞争者|对立者)/u],
+  ['minor', /(?:龙套|次要角色)/u],
+  ['supporting', /(?:重要配角|核心配角|配角|同盟者|盟友)/u],
+]
+
+function roleCandidatesFromText(text: string): CharacterRole[] {
+  return ROLE_SIGNAL_PATTERNS
+    .filter(([, pattern]) => pattern.test(text))
+    .map(([role]) => role)
+}
+
+function roleFromText(text: string): CharacterRole | undefined {
+  const candidates = roleCandidatesFromText(text)
+  return candidates.length === 1 ? candidates[0] : undefined
+}
+
+function hasAmbiguousRoleCandidates(text: string): boolean {
+  return roleCandidatesFromText(text).length > 1
 }
 
 function stripHeadingPrefix(title: string): string {
@@ -238,6 +274,44 @@ function parseSingleName(value: string): { name?: string; issue?: RosterParseIss
   return { name }
 }
 
+const ROLE_SECTION_CHARACTER_DESCRIPTORS: ReadonlyArray<{
+  readonly pattern: RegExp
+  readonly role?: string
+}> = [
+  { pattern: /^核心盟友$/u, role: 'supporting' },
+  { pattern: /^盟友$/u, role: 'supporting' },
+  { pattern: /^伙伴$/u, role: 'supporting' },
+  { pattern: /^竞争者$/u, role: 'antagonist' },
+  { pattern: /^与主角理念对立的竞争者$/u, role: 'antagonist' },
+  { pattern: /^理念对立者$/u, role: 'antagonist' },
+  { pattern: /^对手$/u, role: 'antagonist' },
+  { pattern: /^灰色观察者$/u },
+  { pattern: /^观察者$/u },
+  { pattern: /^隐藏变数$/u },
+  { pattern: /^变数$/u },
+  { pattern: /^导师$/u, role: 'supporting' },
+  { pattern: /^阴谋家$/u, role: 'antagonist' },
+  { pattern: /^势力代言人$/u },
+]
+
+function parseRoleSectionCharacterHeading(
+  title: string,
+  inheritedRole: string,
+): { name?: string; role?: string; issue?: RosterParseIssue['kind'] } | null {
+  const normalized = stripHeadingPrefix(title)
+  const match = normalized.match(/^(.+?)\s*[：:]\s*(.+)$/u)
+  if (!match) return null
+
+  const descriptor = match[1].trim()
+  const descriptorRule = ROLE_SECTION_CHARACTER_DESCRIPTORS.find(rule => rule.pattern.test(descriptor))
+  if (!descriptorRule) return null
+
+  const parsedName = parseSingleName(match[2])
+  return parsedName.name
+    ? { name: parsedName.name, role: descriptorRule.role ?? inheritedRole }
+    : { issue: parsedName.issue ?? 'unmatched_candidate' }
+}
+
 type HeadingParse =
   | { kind: 'role_section'; role: string }
   | { kind: 'card'; name: string; role?: string }
@@ -245,8 +319,30 @@ type HeadingParse =
   | { kind: 'none' }
 
 function parseHeading(title: string): HeadingParse {
+  const bracketedRoleAndName = title.trim().match(/^【\s*(.+?)\s*[：:]\s*(.+?)\s*】\s*(.+)$/u)
+  if (bracketedRoleAndName) {
+    const slot = bracketedRoleAndName[1].trim()
+    const roleText = bracketedRoleAndName[2]
+    if (slot === '第一核心' && hasAmbiguousRoleCandidates(roleText)) {
+      return { kind: 'issue', issue: 'ambiguous_candidate' }
+    }
+    const role = roleFromText(roleText)
+    if (slot === '第一核心' && role === 'protagonist') {
+      const parsedName = parseSingleName(bracketedRoleAndName[3])
+      return parsedName.name
+        ? { kind: 'card', name: parsedName.name, role }
+        : { kind: 'issue', issue: parsedName.issue ?? 'unmatched_candidate' }
+    }
+  }
+
   const normalized = stripHeadingPrefix(title)
+  if (/^核心角色阵营$/u.test(normalized)) {
+    return { kind: 'role_section', role: 'supporting' }
+  }
   const terminalRole = normalized.match(/[：:]\s*(.+?)\s*$/u)
+  if (terminalRole && hasAmbiguousRoleCandidates(terminalRole[1])) {
+    return { kind: 'issue', issue: 'ambiguous_candidate' }
+  }
   if (terminalRole && roleFromText(terminalRole[1])) {
     const beforeTerminalRole = normalized.slice(0, terminalRole.index ?? 0).replace(/[：:]\s*$/u, '').trim()
     if (!beforeTerminalRole || isNarrativeTitle(beforeTerminalRole)) {
@@ -271,14 +367,23 @@ function parseHeading(title: string): HeadingParse {
   }
 
   const parenthetical = normalized.match(/^(.+?)\s*[（(]([^）)]+)[）)]\s*$/u)
-  if (parenthetical && roleFromText(parenthetical[2])) {
-    const parsedName = parseSingleName(parenthetical[1])
-    return parsedName.name
-      ? { kind: 'card', name: parsedName.name, role: roleFromText(parenthetical[2]) }
-      : { kind: 'issue', issue: parsedName.issue ?? 'unmatched_candidate' }
+  if (parenthetical) {
+    if (hasAmbiguousRoleCandidates(parenthetical[2])) {
+      return { kind: 'issue', issue: 'ambiguous_candidate' }
+    }
+    const role = roleFromText(parenthetical[2])
+    if (role) {
+      const parsedName = parseSingleName(parenthetical[1])
+      return parsedName.name
+        ? { kind: 'card', name: parsedName.name, role }
+        : { kind: 'issue', issue: parsedName.issue ?? 'unmatched_candidate' }
+    }
   }
 
   const trailingRole = normalized.match(/^(.+?)\s*[：:]\s*(.+)$/u)
+  if (trailingRole && hasAmbiguousRoleCandidates(trailingRole[2])) {
+    return { kind: 'issue', issue: 'ambiguous_candidate' }
+  }
   if (trailingRole && roleFromText(trailingRole[2])) {
     const parsedName = parseSingleName(trailingRole[1])
     return parsedName.name
@@ -308,15 +413,12 @@ function collectFieldBlock(lines: readonly string[], start: number, end: number)
   let hasCharacterField = false
 
   for (let index = start; index < end; index++) {
-    const line = lines[index].trim()
-    const field = line.match(/^(?:[-*+]\s*)?([^：:]+?)\s*[：:]\s*(.+)$/u)
+    const field = parseMarkdownFieldLine(lines[index])
     if (!field) continue
-    const label = field[1].trim()
-    const value = field[2].trim()
-    if (!value) continue
+    const { label, value } = field
 
-    if ((CHARACTER_FIELD_ALIASES.name as readonly string[]).includes(label)) {
-      const parsedName = parseSingleName(value)
+    if (isNameFieldLabel(label)) {
+      const parsedName = parseNameFieldValue(label, value)
       if (!parsedName.name) return { fields, hasCharacterField, issue: parsedName.issue ?? 'unmatched_candidate' }
       if (name && characterKey(name) !== characterKey(parsedName.name)) {
         return { fields, hasCharacterField, issue: 'ambiguous_candidate' }
@@ -334,12 +436,75 @@ function collectFieldBlock(lines: readonly string[], start: number, end: number)
   return { fields, name, hasCharacterField }
 }
 
+type NumberedCharacterBlocks = {
+  cards: RawCharacterCard[]
+  issues: RosterParseIssue[]
+  handled: boolean
+}
+
+/**
+ * `character_dynamics` explicitly permits numbered/list paragraphs such as
+ * `1. 姓名/代号：...` under a role section. Treat only those explicit name-field
+ * boundaries as cards; free-form prose stays outside the roster.
+ */
+function collectNumberedCharacterBlocks(
+  lines: readonly string[],
+  start: number,
+  end: number,
+  role: string,
+): NumberedCharacterBlocks {
+  const cards: RawCharacterCard[] = []
+  const issues: RosterParseIssue[] = []
+  let current: RawCharacterCard | undefined
+  let handled = false
+
+  const flush = () => {
+    if (current) cards.push(current)
+    current = undefined
+  }
+
+  for (let index = start; index < end; index++) {
+    const field = parseMarkdownFieldLine(lines[index])
+    if (!field) continue
+
+    if (field.hasListPrefix && isNameFieldLabel(field.label)) {
+      handled = true
+      const parsedName = parseNameFieldValue(field.label, field.value)
+      if (!parsedName.name) {
+        issues.push({ kind: parsedName.issue ?? 'unmatched_candidate', source: lines[index].trim() })
+        continue
+      }
+      flush()
+      current = { name: parsedName.name, role }
+      continue
+    }
+
+    if (!current) continue
+    const key = FIELD_KEYS[field.label]
+    if (key) current[key] = field.value
+  }
+
+  flush()
+  return { cards, issues, handled }
+}
+
 type Heading = { level: number; title: string; line: number }
 
 function headingsFromLines(lines: readonly string[]): Heading[] {
   return lines.flatMap((line, index) => {
-    const heading = line.trim().match(/^(#{1,6})\s+(.+)$/u)
-    return heading ? [{ level: heading[1].length, title: heading[2].trim(), line: index }] : []
+    const trimmed = line.trim()
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/u)
+    if (heading) return [{ level: heading[1].length, title: heading[2].trim(), line: index }]
+
+    const standaloneBold = trimmed.match(/^\*\*(.+?)\*\*$/u)
+    if (!standaloneBold) return []
+
+    const title = standaloneBold[1].trim()
+    const parsed = parseHeading(title)
+    if (parsed.kind === 'none' && !isCharacterScopeTitle(title)) return []
+
+    const level = /^(?:\d+|[一二三四五六七八九十百千万]+)[、.．]\s*/u.test(title) ? 2 : 1
+    return [{ level, title, line: index }]
   })
 }
 
@@ -409,9 +574,22 @@ function parseMarkdownRoster(text: string): ArchitectureRosterParseResult {
     }
 
     if (parsedHeading.kind === 'role_section') {
-      if (immediateBlock.issue) addIssue(immediateBlock.issue, heading.title)
-      if (immediateBlock.name) {
-        addCard(immediateBlock.name, parsedHeading.role, immediateBlock.fields, heading.title)
+      const numberedBlocks = collectNumberedCharacterBlocks(
+        lines,
+        heading.line + 1,
+        blockEnd,
+        parsedHeading.role,
+      )
+      if (numberedBlocks.handled) {
+        for (const issue of numberedBlocks.issues) addIssue(issue.kind, issue.source)
+        for (const card of numberedBlocks.cards) {
+          addCard(readName(card), parsedHeading.role, card, heading.title)
+        }
+      } else {
+        if (immediateBlock.issue) addIssue(immediateBlock.issue, heading.title)
+        if (immediateBlock.name) {
+          addCard(immediateBlock.name, parsedHeading.role, immediateBlock.fields, heading.title)
+        }
       }
       roleSections.push({ level: heading.level, role: parsedHeading.role })
       scopes.push(heading.level)
@@ -432,6 +610,29 @@ function parseMarkdownRoster(text: string): ArchitectureRosterParseResult {
     }
 
     if (directRoleSection && !isNarrativeTitle(heading.title)) {
+      const descriptorHeading = parseRoleSectionCharacterHeading(heading.title, directRoleSection.role)
+      if (descriptorHeading) {
+        if (descriptorHeading.issue || !descriptorHeading.name) {
+          addIssue(descriptorHeading.issue ?? 'unmatched_candidate', heading.title)
+          continue
+        }
+        if (immediateBlock.issue) {
+          addIssue(immediateBlock.issue, heading.title)
+          continue
+        }
+        if (immediateBlock.name && characterKey(immediateBlock.name) !== characterKey(descriptorHeading.name)) {
+          addIssue('ambiguous_candidate', heading.title)
+          continue
+        }
+        addCard(descriptorHeading.name, descriptorHeading.role, immediateBlock.fields, heading.title)
+        continue
+      }
+
+      if (/[：:]/u.test(stripHeadingPrefix(heading.title))) {
+        addIssue('unmatched_candidate', heading.title)
+        continue
+      }
+
       const parsedName = parseSingleName(heading.title)
       if (!parsedName.name) {
         addIssue(parsedName.issue ?? 'unmatched_candidate', heading.title)

@@ -5,13 +5,13 @@ export const CHARACTER_ARRAY_KEYS = [
 ] as const
 
 export const CHARACTER_FIELD_ALIASES = {
-  name: ['name', '姓名', '角色名', '名字', '人物名称'],
+  name: ['name', '姓名', '姓名/代号', '角色名', '名字', '人物名称'],
   role: ['role', '定位', '角色定位', '类型'],
   gender: ['gender', '性别'],
   age: ['age', '年龄', '年龄段'],
   appearance: ['appearance', '外貌', '外貌特征', '外貌描写'],
   personality: ['personality', '性格', '性格特点', '性格特征'],
-  background: ['background', '背景', '背景故事', '身世'],
+  background: ['background', '背景', '身份背景', '背景故事', '身世'],
   abilities: ['abilities', 'ability', '能力', '技能', '能力/技能', '能力技能'],
   motivation: ['motivation', '动机', '动力', '核心动机', '核心动机与渴望'],
   relationships: ['relationships', 'relations', '关系网', '角色关系', '关系'],
