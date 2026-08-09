@@ -1645,6 +1645,7 @@ function Test-AiNovelGateCapturedNsisUninstallerHelperParent {
 
 function Test-AiNovelGateCapturedNsisProbeParent {
   param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
     [AllowNull()]$ChildIdentity,
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
@@ -1675,6 +1676,13 @@ function Test-AiNovelGateCapturedNsisProbeParent {
       -ParentIdentity $ParentIdentity `
       -GrandParentIdentity $GrandParentIdentity `
       -ArmedRootIdentity $ArmedRootIdentity `
+      -TrackedProcessIdentities $TrackedProcessIdentities) -or
+    (Test-AiNovelGateCapturedNativeUpdaterOldUninstallerProbeParent `
+      -Step $Step `
+      -LegacyBridge $LegacyBridge `
+      -ChildIdentity $ChildIdentity `
+      -ParentIdentity $ParentIdentity `
+      -GrandParentIdentity $GrandParentIdentity `
       -TrackedProcessIdentities $TrackedProcessIdentities)
   )
 }
@@ -1716,6 +1724,7 @@ function Test-AiNovelGateExpectedNsisPowerShellProbeExit {
     [AllowNull()]$ProcessIdentity,
     [AllowNull()]$ParentIdentity,
     [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$LegacyBridge,
     [AllowNull()]$ArmedRootIdentity,
     [AllowNull()]$TrackedProcessIdentities
   )
@@ -1744,9 +1753,11 @@ function Test-AiNovelGateExpectedNsisPowerShellProbeExit {
     return $false
   }
   return Test-AiNovelGateCapturedNsisProbeParent `
+    -Step $Step `
     -ChildIdentity $ProcessIdentity `
     -ParentIdentity $ParentIdentity `
     -GrandParentIdentity $GrandParentIdentity `
+    -LegacyBridge $LegacyBridge `
     -ArmedRootIdentity $ArmedRootIdentity `
     -TrackedProcessIdentities $TrackedProcessIdentities
 }
@@ -1780,6 +1791,7 @@ function Test-AiNovelGateNsisCmdProcessCheckCandidate {
     return $false
   }
   return Test-AiNovelGateCapturedNsisProbeParent `
+    -Step $Step `
     -ChildIdentity $ProcessIdentity `
     -ParentIdentity $ParentIdentity `
     -GrandParentIdentity $GrandParentIdentity `
@@ -2032,6 +2044,7 @@ function Test-AiNovelGateExpectedNsisFindNoMatchExit {
     return $false
   }
   return Test-AiNovelGateCapturedNsisProbeParent `
+    -Step $Step `
     -ChildIdentity $ParentIdentity `
     -ParentIdentity $GrandParentIdentity `
     -GrandParentIdentity $GreatGrandParentIdentity `
@@ -2414,6 +2427,59 @@ function Test-AiNovelGateLegacyBridgeTermination {
   )
 }
 
+function Test-AiNovelGateNativeUpdaterOldApplicationIdentity {
+  param(
+    [AllowNull()]$OldApplicationIdentity,
+    [AllowNull()]$TrackedProcessIdentities
+  )
+
+  if (
+    $null -eq $OldApplicationIdentity -or
+    $null -eq $TrackedProcessIdentities -or
+    -not [bool]$OldApplicationIdentity.identityCaptured -or
+    -not [bool]$OldApplicationIdentity.commandLineCaptured -or
+    [int]$OldApplicationIdentity.processId -le 0 -or
+    [string]::IsNullOrWhiteSpace($env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT) -or
+    $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT -notmatch '^[A-Za-z]:\\'
+  ) {
+    return $false
+  }
+
+  try {
+    $oldApplicationName = 'AI小说作家.exe'
+    $expectedOldApplicationPath = [System.IO.Path]::GetFullPath(
+      [System.IO.Path]::Combine(
+        $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT,
+        'runtime',
+        'installed-app',
+        $oldApplicationName
+      )
+    )
+    if (-not [string]::Equals(
+      [System.IO.Path]::GetFileName([string]$OldApplicationIdentity.executablePath),
+      $oldApplicationName,
+      [System.StringComparison]::OrdinalIgnoreCase
+    ) -or -not (Test-AiNovelGateSameAbsolutePath `
+      -Left ([string]$OldApplicationIdentity.executablePath) `
+      -Right $expectedOldApplicationPath) -or
+      -not $TrackedProcessIdentities.ContainsKey([int]$OldApplicationIdentity.processId)) {
+      return $false
+    }
+    $trackedOldApplicationIdentity = $TrackedProcessIdentities[[int]$OldApplicationIdentity.processId]
+    return (
+      [bool]$trackedOldApplicationIdentity.commandLineCaptured -and
+      (Test-AiNovelGateExactIdentity `
+        -Identity $trackedOldApplicationIdentity `
+        -ProcessId ([int]$OldApplicationIdentity.processId) `
+        -StartTimeTicks ([string]$OldApplicationIdentity.startTimeTicks) `
+        -ExecutablePath ([string]$OldApplicationIdentity.executablePath))
+    )
+  }
+  catch {
+    return $false
+  }
+}
+
 function Test-AiNovelGateNativeUpdaterPendingInstallerIdentity {
   param(
     [AllowNull()]$InstallerIdentity,
@@ -2489,39 +2555,12 @@ function Test-AiNovelGateNativeUpdaterOldApplicationExit {
   }
 
   try {
-    $oldApplicationName = 'AI小说作家.exe'
-    $expectedOldApplicationPath = [System.IO.Path]::GetFullPath(
-      [System.IO.Path]::Combine(
-        $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT,
-        'runtime',
-        'installed-app',
-        $oldApplicationName
-      )
-    )
-    if (-not [string]::Equals(
-      [System.IO.Path]::GetFileName([string]$ProcessIdentity.executablePath),
-      $oldApplicationName,
-      [System.StringComparison]::OrdinalIgnoreCase
-    ) -or -not (Test-AiNovelGateSameAbsolutePath `
-      -Left ([string]$ProcessIdentity.executablePath) `
-      -Right $expectedOldApplicationPath)) {
-      return $false
-    }
-    if (-not $TrackedProcessIdentities.ContainsKey([int]$ProcessIdentity.processId)) {
+    if (-not (Test-AiNovelGateNativeUpdaterOldApplicationIdentity `
+      -OldApplicationIdentity $ProcessIdentity `
+      -TrackedProcessIdentities $TrackedProcessIdentities)) {
       return $false
     }
     $trackedOldApplicationIdentity = $TrackedProcessIdentities[[int]$ProcessIdentity.processId]
-    if (-not [bool]$trackedOldApplicationIdentity.commandLineCaptured) {
-      return $false
-    }
-    if (-not (Test-AiNovelGateExactIdentity `
-      -Identity $trackedOldApplicationIdentity `
-      -ProcessId ([int]$ProcessIdentity.processId) `
-      -StartTimeTicks ([string]$ProcessIdentity.startTimeTicks) `
-      -ExecutablePath ([string]$ProcessIdentity.executablePath))) {
-      return $false
-    }
-
     $matchingInstallerCount = 0
     foreach ($candidateIdentity in @($TrackedProcessIdentities.Values)) {
       if (Test-AiNovelGateNativeUpdaterPendingInstallerIdentity `
@@ -2689,6 +2728,94 @@ function Test-AiNovelGateCapturedLegacyBridgeOldUninstallerProbeParent {
       -TrackedProcessIdentities $TrackedProcessIdentities `
       -ArmedRootIdentity $ArmedRootIdentity)
   )
+}
+
+function Test-AiNovelGateCapturedNativeUpdaterOldUninstallerProbeParent {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$ChildIdentity,
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$TrackedProcessIdentities
+  )
+
+  # Native updater has no control record. The only valid old-uninstaller probe
+  # chain is the captured E2E old app -> updater-owned pending installer ->
+  # TEMP\ns<ASCII-alnum>.tmp\old-uninstaller.exe sequence. Keep each process
+  # record identity-bound so a reused PID or similarly named temporary helper
+  # cannot inherit this exception.
+  if (
+    $Step -ne 'windows-in-app-update-e2e' -or
+    $null -ne $LegacyBridge -or
+    $null -eq $ChildIdentity -or
+    $null -eq $ParentIdentity -or
+    $null -eq $GrandParentIdentity -or
+    $null -eq $TrackedProcessIdentities -or
+    [int]$ChildIdentity.processId -le 0 -or
+    [int]$ParentIdentity.processId -le 0 -or
+    [int]$GrandParentIdentity.processId -le 0 -or
+    $null -eq $GrandParentIdentity.parentProcessId -or
+    -not $TrackedProcessIdentities.ContainsKey([int]$ChildIdentity.processId) -or
+    -not $TrackedProcessIdentities.ContainsKey([int]$ParentIdentity.processId) -or
+    -not $TrackedProcessIdentities.ContainsKey([int]$GrandParentIdentity.processId) -or
+    -not $TrackedProcessIdentities.ContainsKey([int]$GrandParentIdentity.parentProcessId)
+  ) {
+    return $false
+  }
+
+  try {
+    $trackedChildIdentity = $TrackedProcessIdentities[[int]$ChildIdentity.processId]
+    $trackedOldUninstallerIdentity = $TrackedProcessIdentities[[int]$ParentIdentity.processId]
+    $trackedPendingInstallerIdentity = $TrackedProcessIdentities[[int]$GrandParentIdentity.processId]
+    $trackedOldApplicationIdentity = $TrackedProcessIdentities[[int]$GrandParentIdentity.parentProcessId]
+    if (
+      -not (Test-AiNovelGateExactIdentity `
+        -Identity $trackedChildIdentity `
+        -ProcessId ([int]$ChildIdentity.processId) `
+        -StartTimeTicks ([string]$ChildIdentity.startTimeTicks) `
+        -ExecutablePath ([string]$ChildIdentity.executablePath)) -or
+      -not (Test-AiNovelGateExactIdentity `
+        -Identity $trackedOldUninstallerIdentity `
+        -ProcessId ([int]$ParentIdentity.processId) `
+        -StartTimeTicks ([string]$ParentIdentity.startTimeTicks) `
+        -ExecutablePath ([string]$ParentIdentity.executablePath)) -or
+      -not (Test-AiNovelGateExactIdentity `
+        -Identity $trackedPendingInstallerIdentity `
+        -ProcessId ([int]$GrandParentIdentity.processId) `
+        -StartTimeTicks ([string]$GrandParentIdentity.startTimeTicks) `
+        -ExecutablePath ([string]$GrandParentIdentity.executablePath)) -or
+      -not (Test-AiNovelGateLegacyBridgeOldUninstallerImage `
+        -ImagePath ([string]$ParentIdentity.executablePath)) -or
+      -not (Test-AiNovelGateCapturedParentIdentity `
+        -ChildIdentity $ChildIdentity `
+        -ParentIdentity $ParentIdentity) -or
+      -not (Test-AiNovelGateCapturedParentIdentity `
+        -ChildIdentity $ParentIdentity `
+        -ParentIdentity $GrandParentIdentity) -or
+      -not (Test-AiNovelGateNativeUpdaterOldApplicationIdentity `
+        -OldApplicationIdentity $trackedOldApplicationIdentity `
+        -TrackedProcessIdentities $TrackedProcessIdentities) -or
+      -not (Test-AiNovelGateNativeUpdaterPendingInstallerIdentity `
+        -InstallerIdentity $trackedPendingInstallerIdentity `
+        -OldApplicationIdentity $trackedOldApplicationIdentity)
+    ) {
+      return $false
+    }
+
+    $matchingInstallerCount = 0
+    foreach ($candidateIdentity in @($TrackedProcessIdentities.Values)) {
+      if (Test-AiNovelGateNativeUpdaterPendingInstallerIdentity `
+        -InstallerIdentity $candidateIdentity `
+        -OldApplicationIdentity $trackedOldApplicationIdentity) {
+        $matchingInstallerCount += 1
+      }
+    }
+    return $matchingInstallerCount -eq 1
+  }
+  catch {
+    return $false
+  }
 }
 
 function Test-AiNovelGateExpectedLegacyBridgeOldUninstallerPowerShellProbeExit {
@@ -3278,6 +3405,7 @@ try {
           -ProcessIdentity $processIdentity `
           -ParentIdentity $parentIdentity `
           -GrandParentIdentity $grandParentIdentity `
+          -LegacyBridge $legacyBridge `
           -ArmedRootIdentity $armedRootIdentity `
           -TrackedProcessIdentities $trackedProcessIdentities) {
           $exitClassification = 'expected-nsis-powershell-probe'
