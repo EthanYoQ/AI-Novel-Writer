@@ -220,6 +220,69 @@ describe('architecture workflow project context', () => {
     expect(new Set(savedCards.map(card => card.name)).size).toBe(savedCards.length)
   })
 
+  it('persists every standalone bold role heading instead of saving zero cards', async () => {
+    const source = [
+      '**【第一核心：主角】沈砺**',
+      '- **姓名/代号**：沈砺 / “断指”技师。原矿场事故幸存者。',
+      '- **标志性外貌特征**：左手缺一截食指，常穿旧工装。',
+      '**【核心角色阵营】**',
+      '**1. 顾湘（盟友/解密者）**',
+      '- **姓名/代号**：顾湘 / “断指”技师。原矿场检修员。',
+      '**2. 宋延军（竞争者/理念对立者）**',
+      '- **姓名/代号**：宋延军 / 矿区安保负责人。',
+    ].join('\n')
+    const generatedCard = JSON.stringify({
+      characters: [
+        { name: '沈砺', role: 'protagonist', appearance: '左眉有旧伤的矿区青年' },
+        { name: '顾湘', role: 'supporting' },
+        { name: '宋延军', role: 'antagonist' },
+      ],
+    })
+    const generateStream = vi.fn((
+      _messages: Parameters<typeof originalGenerateStream>[0],
+      callbacks: Parameters<typeof originalGenerateStream>[1],
+    ) => {
+      callbacks.onChunk?.(generatedCard)
+      callbacks.onDone?.(generatedCard)
+      return Promise.resolve('request-id')
+    })
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      void args
+      if (channel === 'db:character-get-all') return []
+      if (channel === 'db:character-save-all') return { success: true }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    useLLMStore.setState({ generateStream })
+    useProjectStore.setState({
+      currentProject: {
+        id: 'project-A', sessionLease: 'lease-A', name: 'A', path: 'C:/projects/A',
+        novelConfig: {}, characterStates: '', createdAt: '', updatedAt: '',
+      } as never,
+    })
+    vi.stubGlobal('window', {
+      velaAPI: {
+        invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(),
+        setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn(),
+      },
+    })
+
+    const [extractStep] = createCharacterExtractSteps('C:/projects/A', source, '科幻')
+    await extractStep.executor(
+      { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
+      {
+        runId: 'extract-run', projectPath: 'C:/projects/A',
+        projectSession: { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
+        data: {}, cancelled: false,
+      },
+    )
+
+    const saveCall = invoke.mock.calls.find(([channel]) => channel === 'db:character-save-all')
+    const savedCards = saveCall?.[1] as Array<{ name: string; role: string; background: string }>
+    expect(savedCards).toHaveLength(3)
+    expect(savedCards.map(card => card.name)).toEqual(['沈砺', '顾湘', '宋延军'])
+    expect(savedCards.map(card => card.role)).toEqual(['protagonist', 'supporting', 'antagonist'])
+  })
+
   it('does not save over existing manual cards when the architecture cannot establish a complete role list', async () => {
     const manualCards = [{ name: '手工角色', role: 'supporting', notes: '作者已确认' }]
     const generatedCard = JSON.stringify({
