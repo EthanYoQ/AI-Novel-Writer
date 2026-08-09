@@ -31,6 +31,18 @@ export async function readCoreContent(
     projectSession: ProjectSessionContext,
 ): Promise<string> {
     const key = velaPath.replace('vela://core/', '')
+    if (key === 'characters') {
+        const roster = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:character-roster-read',
+            projectSession.projectPath,
+        )
+        // 角色图谱是 roster 的只读投影；未 ready 时仅展示已存档的旧文本证据，
+        // 绝不从 project_core.charactersArch 把不一致投影伪装成事实。
+        return roster.status === 'ready'
+            ? roster.renderedMarkdown
+            : roster.legacyMarkdown ?? ''
+    }
     const core = await ipc.invokeWithProjectSession(
         projectSession,
         'db:project-core-get',
@@ -40,7 +52,6 @@ export async function readCoreContent(
     const fieldMap: Record<string, string> = {
         premise: core.premise || '',
         worldbuilding: core.worldbuilding || '',
-        characters: core.charactersArch || '',
         synopsis: core.synopsis || '',
     }
     return fieldMap[key] || ''
@@ -52,6 +63,7 @@ export async function writeCoreContent(
     content: string,
     projectSession: ProjectSessionContext,
 ): Promise<boolean> {
+    if (velaPath === 'vela://core/characters') return false
     const dbField = parseCoreField(velaPath)
     if (!dbField) return false
     const res = await ipc.invokeWithProjectSession(

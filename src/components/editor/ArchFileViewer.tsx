@@ -10,8 +10,8 @@ import { requireIpcSuccess } from '../../services/ipc-result'
 import { parseCoreField } from '../../services/vela-protocol'
 import CodeMirrorEditor from './CodeMirrorEditor'
 import { useProjectStore } from '../../stores/project-store'
-import { useCharacterStore } from '../../stores/character-store'
-import { runArchCharacterExtract, createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
+import { useLocaleStore } from '../../stores/locale-store'
+import { createArchitectureWorkflow, repairArchCharacterCards } from '../../services/workflows/architecture-workflow'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
 import {
@@ -27,14 +27,16 @@ import {
   shouldRefreshArchOnWorkflowComplete,
   writeArchEditState,
 } from './arch-file-refresh-policy'
-import { isCharacterExtractionReady } from './character-extraction-policy'
+import {
+  canExplicitlyRepairCharacterRoster,
+  getCharacterRosterRepairPresentation,
+} from './character-roster-repair-state'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
   isProjectSessionPath,
 } from '../project-session-gate'
-import type { ProjectSessionContext } from '../../shared/ipc-channels'
-import { sameProjectSessionContext } from '../../shared/project-session-context'
+import type { CharacterRosterSnapshot } from '../../shared/character-roster'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -87,8 +89,10 @@ function ArchFileViewerSession({
   savedContent: initialSavedContent,
 }: Props) {
   const stepKey = detectStepKey(filePath)
+  const isCharacterProjection = stepKey === 'characters'
   const meta = stepKey ? ARCH_META[stepKey] : null
   const currentProject = useProjectStore(s => s.currentProject)
+  const text = useLocaleStore(s => s.text)
   const currentProjectKey = currentProject?.path
   const projectMatches = isArchProjectCurrent(projectKey, currentProjectKey)
 
@@ -105,24 +109,13 @@ function ArchFileViewerSession({
   const [checkingArch, setCheckingArch] = useState(false)
   const [fullArchStatus, setFullArchStatus] = useState<Record<string, boolean>>({})
   const [extracting, setExtracting] = useState(false)
-  const extractingRunIdRef = useRef<string | null>(null)
-  const extractingSessionRef = useRef<ProjectSessionContext | null>(null)
-  const extractingListenerCleanupRef = useRef<(() => void) | null>(null)
+  const [rosterSnapshot, setRosterSnapshot] = useState<CharacterRosterSnapshot | null>(null)
+  const [rosterRepairError, setRosterRepairError] = useState<string | null>(null)
+  const rosterRequestIdRef = useRef(0)
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
   const [refreshBlockedMessage, setRefreshBlockedMessage] = useState<string | null>(null)
   const reloadGateRef = useRef(new ArchReloadGate())
 
-  const characterCount = useCharacterStore(s => s.characters.length)
-  const characterDataProjectKey = useCharacterStore(s => s.dataProjectKey)
-  const characterLoadingProjectKey = useCharacterStore(s => s.loadingProjectKey)
-  const characterLoadError = useCharacterStore(s => s.lastError)
-  const characterExtractionReady = isCharacterExtractionReady({
-    projectKey,
-    dataProjectKey: characterDataProjectKey,
-    loadingProjectKey: characterLoadingProjectKey,
-    lastError: characterLoadError,
-    characterCount,
-  })
   const isArchRunning = useWorkflowStore(s => s.isTypeRunning('architecture_generation'))
 
   // 中文字数（由 CodeMirrorEditor 回调更新）
@@ -133,6 +126,41 @@ function ArchFileViewerSession({
   const visibleBlockedMessage = projectMatches
     ? refreshBlockedMessage
     : ARCH_PROJECT_MISMATCH_MESSAGE
+
+  const loadCharacterRosterStatus = useCallback(async () => {
+    if (stepKey !== 'characters') {
+      setRosterSnapshot(null)
+      setRosterRepairError(null)
+      return
+    }
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      setRosterSnapshot(null)
+      setRosterRepairError(null)
+      return
+    }
+    const requestId = rosterRequestIdRef.current + 1
+    rosterRequestIdRef.current = requestId
+    try {
+      const snapshot = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:character-roster-read',
+        projectSession.projectPath,
+      )
+      if (requestId !== rosterRequestIdRef.current || !isProjectSessionCurrent(projectSession)) return
+      setRosterSnapshot(snapshot)
+      if (snapshot.status === 'ready') setRosterRepairError(null)
+    } catch {
+      if (requestId === rosterRequestIdRef.current && isProjectSessionCurrent(projectSession)) {
+        setRosterSnapshot(null)
+      }
+    }
+  }, [projectKey, stepKey])
+
+  useEffect(() => {
+    const timer = setTimeout(() => { void loadCharacterRosterStatus() }, 0)
+    return () => clearTimeout(timer)
+  }, [loadCharacterRosterStatus])
 
   // 外部内容更新时的热重载（拦截 store.syncTabContent 带来的 props.content 更新）
   useEffect(() => {
@@ -164,6 +192,7 @@ function ArchFileViewerSession({
 
   // 内容变化回调：更新 ref，不触发重渲染，避免 content prop 回传导致光标跳末尾
   const handleChange = useCallback((md: string) => {
+    if (isCharacterProjection) return
     reloadGateRef.current.recordContentChange()
     setLoading(false)
     currentContentRef.current = md
@@ -175,10 +204,11 @@ function ArchFileViewerSession({
     setIsDirty(dirty)
     // 同步 editor-store 的 tab.dirty，供标题栏警示灯、Tab 圆点、关闭确认使用
     writeArchEditState(useEditorStore.getState(), tabId, md, storeAction)
-  }, [tabId])
+  }, [isCharacterProjection, tabId])
 
   /** 保存（统一走 vela://core/ DB 路径） */
   const handleSave = useCallback(async (md: string) => {
+    if (isCharacterProjection) return
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
       return
@@ -226,7 +256,7 @@ function ArchFileViewerSession({
     } finally {
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
-  }, [filePath, projectKey, tabId])
+  }, [filePath, isCharacterProjection, projectKey, tabId])
 
   /** 从 DB 重新加载（AI 生成后刷新用） */
   const handleReload = useCallback(async () => {
@@ -319,10 +349,7 @@ function ArchFileViewerSession({
     const reloadGate = reloadGateRef.current
     return () => {
       reloadGate.invalidate()
-      extractingListenerCleanupRef.current?.()
-      extractingListenerCleanupRef.current = null
-      extractingRunIdRef.current = null
-      extractingSessionRef.current = null
+      rosterRequestIdRef.current += 1
     }
   }, [])
 
@@ -338,8 +365,9 @@ function ArchFileViewerSession({
       )) return
       lastCompletedArchitectureRunRef.current = payload.runId
       void handleReload()
+      void loadCharacterRosterStatus()
     })
-  }, [handleReload, projectKey])
+  }, [handleReload, loadCharacterRosterStatus, projectKey])
 
   /** 确认后启动架构生成工作流 */
   const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
@@ -371,7 +399,7 @@ function ArchFileViewerSession({
       if (!isProjectSessionCurrent(projectSession)) return
       const status: Record<string, boolean> = {
         premise: !!core?.premise && core.premise.length > 50 && !core.premise.includes('待生成'),
-        characters: !!core?.charactersArch && core.charactersArch.length > 50 && !core.charactersArch.includes('待生成'),
+        characters: rosterSnapshot?.status === 'ready',
         worldbuilding: !!core?.worldbuilding && core.worldbuilding.length > 50 && !core.worldbuilding.includes('待生成'),
         synopsis: !!core?.synopsis && core.synopsis.length > 50 && !core.synopsis.includes('待生成'),
       }
@@ -394,77 +422,39 @@ function ArchFileViewerSession({
 
   const generated = initialContent.length > 50 && !initialContent.includes('待生成')
 
-  const handleExtractCharacters = useCallback(async () => {
-    const project = useProjectStore.getState().currentProject
-    const projectSession = captureProjectSession(project)
-    if (!project || !projectSession || !isProjectSessionPath(projectSession, projectKey) || extracting) {
-      return
-    }
+  const handleRepairCharacterRoster = useCallback(async () => {
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey) || extracting) return
     setExtracting(true)
+    setRosterRepairError(null)
     try {
-      const core = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:project-core-get',
-        projectSession.projectPath,
-      )
+      await repairArchCharacterCards(projectSession.projectPath)
+      if (isProjectSessionCurrent(projectSession)) await loadCharacterRosterStatus()
+    } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
-      const charArch = core?.charactersArch ?? ''
-      if (charArch.length < 50) {
-        if (isProjectSessionCurrent(projectSession)) setExtracting(false)
-        return
-      }
-      if (!isProjectSessionCurrent(projectSession)) return
-      extractingSessionRef.current = projectSession
-      extractingRunIdRef.current = runArchCharacterExtract(
-        projectSession.projectPath,
-        charArch,
-        project.novelConfig.genre,
-        projectSession,
-      )
-
-      // 通过 EventBus 监听提取完成事件；卸载或会话切换时必须解除监听。
-      let unsub1: () => void = () => {}
-      let unsub2: () => void = () => {}
-      const clearListeners = () => {
-        unsub1()
-        unsub2()
-        if (extractingListenerCleanupRef.current === clearListeners) {
-          extractingListenerCleanupRef.current = null
-        }
-      }
-      extractingListenerCleanupRef.current?.()
-      extractingListenerCleanupRef.current = clearListeners
-      unsub1 = globalEventBus.on('ARCH_POSTPROCESS_UPDATED', (payload) => {
-        if (
-          !isProjectSessionCurrent(projectSession)
-          || !sameProjectSessionContext(projectSession, payload.projectSession)
-          || payload.runId !== extractingRunIdRef.current
-        ) return
-        extractingRunIdRef.current = null
-        extractingSessionRef.current = null
-        setExtracting(false)
-        clearListeners()
-      })
-      unsub2 = globalEventBus.on('CHARACTER_EXTRACT_FAILED', (payload) => {
-        if (
-          !isProjectSessionCurrent(projectSession)
-          || !sameProjectSessionContext(projectSession, payload.projectSession)
-          || payload.runId !== extractingRunIdRef.current
-        ) return
-        extractingRunIdRef.current = null
-        extractingSessionRef.current = null
-        setExtracting(false)
-        clearListeners()
-      })
-
-    } catch (e) {
-      if (isProjectSessionCurrent(projectSession)) {
-        console.error('角色卡提取失败', e)
-        extractingSessionRef.current = null
-        setExtracting(false)
-      }
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('角色名单修复失败', error)
+      setRosterRepairError(message)
+    } finally {
+      if (isProjectSessionCurrent(projectSession)) setExtracting(false)
     }
-  }, [extracting, projectKey])
+  }, [extracting, loadCharacterRosterStatus, projectKey])
+
+  const rosterPresentation = stepKey === 'characters'
+    ? getCharacterRosterRepairPresentation(rosterSnapshot, text, rosterRepairError)
+    : null
+  const canRepairRoster = canExplicitlyRepairCharacterRoster(rosterPresentation)
+  const discardCharacterProjectionDraft = useCallback(() => {
+    if (!isCharacterProjection) return
+    // 旧版未保存 Markdown 草稿仍停留在只读编辑器中，作者可先复制。只有
+    // 明确点击后才放弃该草稿并接受当前确定性投影。
+    const projection = rosterSnapshot?.renderedMarkdown ?? initialSavedContent
+    savedContentRef.current = projection
+    currentContentRef.current = projection
+    setEditorContent(projection)
+    setIsDirty(false)
+    writeArchEditState(useEditorStore.getState(), tabId, projection, 'sync-saved')
+  }, [initialSavedContent, isCharacterProjection, rosterSnapshot?.renderedMarkdown, tabId])
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -519,7 +509,7 @@ function ArchFileViewerSession({
           </Button>
 
           {/* 保存按钮（有修改时才显示） */}
-          {isDirty && (
+          {!isCharacterProjection && isDirty && (
             <Button
               variant="outline"
               size="sm"
@@ -532,20 +522,20 @@ function ArchFileViewerSession({
             </Button>
           )}
 
-          {/* 角色卡提取按钮（仅角色图谱页面显式且为空时、且不在架构生成中时才显示） */}
-          {stepKey === 'characters' && generated && characterExtractionReady && !isArchRunning && (
+          {/* 旧项目只可显式安全修复；不再从 Markdown 标题/排版提取角色卡。 */}
+          {stepKey === 'characters' && canRepairRoster && !isArchRunning && rosterPresentation?.actionLabel && (
             <Button
               size="sm"
               disabled={extracting || !projectMatches}
-              onClick={handleExtractCharacters}
-              className="gap-1.5 bg-gradient-to-r from-red-500 to-orange-500 text-white shadow-sm hover:from-red-600 hover:to-orange-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
-              title="角色档案为空，可能是因为上一次生成失败或被删除。点击重新提取"
+              onClick={() => { void handleRepairCharacterRoster() }}
+              className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm hover:from-amber-600 hover:to-orange-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
+              title={rosterPresentation.actionTitle}
             >
               {extracting
                 ? <RefreshCw size={12} className="animate-spin opacity-90" />
                 : <AlertTriangle size={12} className="opacity-90" />
               }
-              {extracting ? '提取中...' : '提取角色卡'}
+              {extracting ? text('处理中...', 'Working...') : rosterPresentation.actionLabel}
             </Button>
           )}
 
@@ -564,6 +554,52 @@ function ArchFileViewerSession({
           )}
         </div>
       </div>
+
+      {stepKey === 'characters' && rosterPresentation && (
+        <div
+          role="status"
+          className="flex items-start gap-2 px-3 py-2 text-xs"
+          style={{
+            color: rosterPresentation.kind === 'ready' || rosterPresentation.kind === 'empty'
+              ? 'var(--color-text-secondary)'
+              : 'var(--color-warning)',
+            backgroundColor: 'var(--color-editor-bg)',
+            borderBottom: '1px solid var(--color-border)',
+          }}
+        >
+          {rosterPresentation.kind === 'ready' || rosterPresentation.kind === 'empty'
+            ? <FileText size={13} className="flex-shrink-0 mt-0.5" />
+            : <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />}
+          <span><strong>{rosterPresentation.label}</strong> · {rosterPresentation.description}</span>
+        </div>
+      )}
+
+      {isCharacterProjection && (
+        <div
+          role="note"
+          className="flex items-center justify-between gap-3 px-3 py-2 text-xs"
+          style={{
+            color: 'var(--color-text-secondary)',
+            backgroundColor: 'var(--color-editor-bg)',
+            borderBottom: '1px solid var(--color-border)',
+          }}
+        >
+          <span>{text(
+            '角色图谱由角色名单自动生成，只读展示。请到「角色管理」修改角色身份、资料和关系。',
+            'The character graph is a read-only projection of the roster. Edit identity, profile, and relationships in Character Management.',
+          )}</span>
+          {isDirty && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={discardCharacterProjectionDraft}
+              title={text('旧草稿可先复制；点击后明确放弃并加载当前角色图谱', 'Copy the legacy draft first; this explicitly discards it and loads the current character graph.')}
+            >
+              {text('放弃旧草稿并加载投影', 'Discard draft and load projection')}
+            </Button>
+          )}
+        </div>
+      )}
 
       {visibleBlockedMessage && (
         <div
@@ -586,8 +622,9 @@ function ArchFileViewerSession({
           mode="document"
           content={editorContent}
           filePath={filePath}
-          onChange={handleChange}
-          onSave={handleSave}
+          editable={!isCharacterProjection}
+          onChange={isCharacterProjection ? undefined : handleChange}
+          onSave={isCharacterProjection ? undefined : handleSave}
           onCharCountChange={setCharCount}
           hideStatusBar
           placeholder="尚未生成内容，点击右上角「AI 生成」或直接在此编辑..."

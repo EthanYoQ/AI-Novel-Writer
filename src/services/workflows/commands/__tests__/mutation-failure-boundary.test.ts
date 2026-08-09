@@ -201,31 +201,19 @@ describe('workflow mutation failure boundaries', () => {
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('剧情要点提取完成'))
   })
 
-  it.each([
-    {
-      failureChannel: 'db:character-update-state',
-      allCharacters: [{ name: '林岚', role: 'protagonist', currentState: {} }],
-      llmResponse: JSON.stringify({
-        updates: [{ name: '林岚', currentState: { location: '车站' } }],
-        newCharacters: [],
-      }),
-    },
-    {
-      failureChannel: 'db:character-upsert',
-      allCharacters: [],
-      llmResponse: JSON.stringify({
-        updates: [],
-        newCharacters: [{ name: '周砚', role: 'supporting', currentState: {} }],
-      }),
-    },
-  ])('stops character-card post-processing when $failureChannel reports failure', async ({
-    failureChannel,
-    allCharacters,
-    llmResponse,
-  }) => {
+  it('stops character-card post-processing when its one roster receipt reports failure', async () => {
+    const allCharacters = [{ name: '林岚', role: 'protagonist', currentState: {} }]
+    const llmResponse = JSON.stringify({
+      updates: [{ name: '林岚', currentState: { location: '车站' } }],
+      newCharacters: [],
+    })
     const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:character-get-all') return allCharacters
-      if (channel === failureChannel) return { success: false, error: `${failureChannel} rejected` }
+      if (channel === 'db:character-roster-read') {
+        return { status: 'ready', revision: 4, entries: allCharacters }
+      }
+      if (channel === 'db:character-roster-commit') {
+        return { success: false, error: 'roster receipt rejected' }
+      }
       throw new Error(`unexpected IPC: ${channel}`)
     })
     vi.stubGlobal('window', { velaAPI: { invoke } })
@@ -246,8 +234,12 @@ describe('workflow mutation failure boundaries', () => {
     const stepCallbacks = callbacks()
 
     await expect(step!.executor(stepCallbacks, context()))
-      .rejects.toThrow(`${failureChannel} rejected`)
+      .rejects.toThrow('roster receipt rejected')
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('自动提取并登记'))
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      'db:character-roster-read',
+      'db:character-roster-commit',
+    ])
   })
 
   it.each([

@@ -8,12 +8,9 @@ import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { ProjectCoreRepository, ProjectCoreData } from '../repositories/project-core-repository'
 import { ProjectClearRepository, ProjectClearOptions } from '../repositories/project-clear-repository'
 import { BlueprintRepository, BlueprintData } from '../repositories/blueprint-repository'
-import {
-  CharacterRepository,
-  CharacterData,
-  CharacterRenameData,
-  CharacterStateData,
-} from '../repositories/character-repository'
+import { CharacterRepository } from '../repositories/character-repository'
+import { CharacterRosterRepository } from '../repositories/character-roster-repository'
+import type { CharacterRosterCommitRequest } from '../../src/shared/character-roster'
 import { DraftRepository } from '../repositories/draft-repository'
 import { RevisionRepository } from '../repositories/revision-repository'
 import { ReviewRepository } from '../repositories/review-repository'
@@ -34,10 +31,7 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:blueprint-update-notes',
   'db:blueprint-delete',
   'db:blueprint-clear-all',
-  'db:character-upsert',
-  'db:character-save-all',
-  'db:character-delete',
-  'db:character-update-state',
+  'db:character-roster-commit',
   'db:draft-create',
   'db:draft-update-status',
   'db:draft-update-content',
@@ -189,46 +183,19 @@ export function registerDatabaseController() {
     return CharacterRepository.getAll()
   })
 
-  ipcMain.handle('db:character-upsert', async (_event, data: CharacterData, expectedProjectPath: string) => {
-    try {
-      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      CharacterRepository.upsert(data)
-      return { success: true }
-    } catch (err) {
-      return { success: false, error: String(err) }
-    }
+  ipcMain.handle('db:character-roster-read', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return CharacterRosterRepository.read()
   })
 
-  ipcMain.handle('db:character-save-all', async (
+  ipcMain.handle('db:character-roster-commit', async (
     _event,
-    items: CharacterData[],
-    renames: CharacterRenameData[] = [],
+    request: CharacterRosterCommitRequest,
     expectedProjectPath: string,
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      CharacterRepository.saveAll(items, renames)
-      return { success: true }
-    } catch (err) {
-      return { success: false, error: String(err) }
-    }
-  })
-
-  ipcMain.handle('db:character-delete', async (_event, name: string, expectedProjectPath: string) => {
-    try {
-      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      CharacterRepository.delete(name)
-      return { success: true }
-    } catch (err) {
-      return { success: false, error: String(err) }
-    }
-  })
-
-  ipcMain.handle('db:character-update-state', async (_event, name: string, state: CharacterStateData, expectedProjectPath: string) => {
-    try {
-      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      CharacterRepository.updateState(name, state)
-      return { success: true }
+      return { success: true, receipt: CharacterRosterRepository.commit(request) }
     } catch (err) {
       return { success: false, error: String(err) }
     }

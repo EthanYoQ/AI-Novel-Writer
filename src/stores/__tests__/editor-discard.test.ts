@@ -106,9 +106,17 @@ function chapter(chapterNumber: number, title: string): ChapterBlueprint {
 beforeEach(() => {
   invoke.mockReset()
   invokeWithProjectSession.mockReset()
-  invokeWithProjectSession.mockImplementation((_context: unknown, channel: string, ...args: unknown[]) => (
-    invoke(channel, ...args)
-  ))
+  invokeWithProjectSession.mockImplementation(async (_context: unknown, channel: string, ...args: unknown[]) => {
+    const result = await invoke(channel, ...args)
+    if (channel === 'db:character-roster-commit' && result?.success && !result.receipt) {
+      const request = args[0] as { entries: unknown[]; expectedRevision: number }
+      return {
+        ...result,
+        receipt: { revision: request.expectedRevision + 1, snapshot: { entries: request.entries } },
+      }
+    }
+    return result
+  })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
   useProjectStore.setState({ currentProject: project('A'), fileTree: [], loading: false })
   useCharacterStore.setState({
@@ -119,6 +127,7 @@ beforeEach(() => {
     loaded: true,
     dataProjectKey: project('A').path,
     dataProjectSession: projectSession('A'),
+    rosterRevision: 1,
     loadingProjectKey: null,
     loadingProjectSession: null,
     lastError: null,
@@ -182,9 +191,11 @@ describe('editor discard semantics', () => {
     invoke.mockResolvedValueOnce({ success: true })
     await useCharacterStore.getState().saveAll(project('A').path)
     expect(invoke).toHaveBeenCalledWith(
-      'db:character-save-all',
-      [expect.objectContaining({ name: '旧名' })],
-      [],
+      'db:character-roster-commit',
+      expect.objectContaining({
+        intent: 'manual_edit',
+        entries: [expect.objectContaining({ name: '旧名' })],
+      }),
       project('A').path,
     )
   })

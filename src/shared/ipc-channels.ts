@@ -472,13 +472,16 @@ import type { ProjectCoreData } from '../../electron/repositories/project-core-r
 import type { BlueprintData } from '../../electron/repositories/blueprint-repository'
 import type {
   CharacterData,
-  CharacterRenameData,
-  CharacterStateData,
 } from '../../electron/repositories/character-repository'
 import type { DraftMeta, DraftFull } from '../../electron/repositories/draft-repository'
 import type { RevisionMeta, RevisionFull } from '../../electron/repositories/revision-repository'
 import type { ReviewMeta, ReviewFull } from '../../electron/repositories/review-repository'
 import type { PostProcessRunData, PostProcessStepData } from '../../electron/repositories/post-process-repository'
+import type {
+  CharacterRosterCommitReceipt,
+  CharacterRosterCommitRequest,
+  CharacterRosterSnapshot,
+} from './character-roster'
 
 // ===== 数据库操作 =====
 export interface DatabaseChannels {
@@ -506,13 +509,18 @@ export interface DatabaseChannels {
 
   // 3. characters
   'db:character-get-all': { args: [expectedProjectPath: string]; return: CharacterData[] }
-  'db:character-upsert': { args: [data: CharacterData, expectedProjectPath: string]; return: { success: boolean; error?: string } }
-  'db:character-save-all': {
-    args: [items: CharacterData[], renames: CharacterRenameData[] | undefined, expectedProjectPath: string]
-    return: { success: boolean; error?: string }
+  /**
+   * 结构化角色名单的唯一提交 seam。角色条目仍持久化于 characters 表；
+   * 返回的快照经过主进程事务内 read-back 验证。
+   */
+  'db:character-roster-read': {
+    args: [expectedProjectPath: string]
+    return: CharacterRosterSnapshot
   }
-  'db:character-delete': { args: [name: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }
-  'db:character-update-state': { args: [name: string, state: CharacterStateData, expectedProjectPath: string]; return: { success: boolean; error?: string } }
+  'db:character-roster-commit': {
+    args: [request: CharacterRosterCommitRequest, expectedProjectPath: string]
+    return: { success: boolean; receipt?: CharacterRosterCommitReceipt; error?: string }
+  }
 
   // 4. drafts
   'db:draft-create': { args: [params: { chapterNumber: number; version: number; source: 'write' | 'rewrite'; content: string; wordCount: number }, expectedProjectPath: string]; return: { success: boolean; id?: number; error?: string } }

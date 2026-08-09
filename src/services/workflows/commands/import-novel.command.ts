@@ -14,8 +14,8 @@ import { ImportPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
-import type { CharacterData } from '../../../../electron/repositories/character-repository'
 import { normalizeCharacterCardsForPersistence } from '../character-card-normalizer'
+import { characterRosterEntriesFromCards } from '../../character-roster-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
 
@@ -265,27 +265,44 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       this.assertNotCancelled(context)
       const coreResult = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-update', {
         premise: inferResult.architectureFiles.premise,
-        charactersArch: inferResult.architectureFiles.characters,
         worldbuilding: inferResult.architectureFiles.worldbuilding,
         synopsis: inferResult.architectureFiles.synopsis,
       }, context.projectPath)
       if (!coreResult.success) throw new Error(coreResult.error || '故事架构写入失败')
-      callbacks.log('四段式故事架构已持久化到数据库')
+      callbacks.log('非角色架构已持久化到数据库；角色图谱将由结构化角色名单生成')
     }
 
     // ===== 写入角色卡 =====
     if (inferResult.characterCards && Array.isArray(inferResult.characterCards)) {
-      const cardsToSave: CharacterData[] = normalizeCharacterCardsForPersistence(inferResult.characterCards)
+      const cardsToSave = normalizeCharacterCardsForPersistence(inferResult.characterCards)
       if (cardsToSave.length > 0) {
+        this.assertNotCancelled(context)
+        const rosterEntries = characterRosterEntriesFromCards(cardsToSave)
+        if (rosterEntries.some(entry => entry.legacyRelationshipNotes)) {
+          throw new Error('导入角色卡包含无法验证的自由文本关系；请让模型输出包含目标角色和关系类型的结构化 relationships')
+        }
+        const roster = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:character-roster-read',
+          context.projectPath,
+        )
+        if (roster.status !== 'ready' && roster.status !== 'empty') {
+          throw new Error('角色名单当前不可安全导入；请先完成旧项目修复或处理数据不一致状态')
+        }
         this.assertNotCancelled(context)
         const saveResult = await ipc.invokeWithProjectSession(
           projectSession,
-          'db:character-save-all',
-          cardsToSave,
-          undefined,
+          'db:character-roster-commit',
+          {
+            operationId: `novel-import-characters-${context.runId}`,
+            expectedRevision: roster.revision,
+            schemaVersion: 1,
+            intent: 'novel_import',
+            entries: rosterEntries,
+          },
           context.projectPath,
         )
-        if (!saveResult.success) {
+        if (!saveResult.success || !saveResult.receipt) {
           throw new Error(saveResult.error || '角色卡写入数据库失败')
         }
       }

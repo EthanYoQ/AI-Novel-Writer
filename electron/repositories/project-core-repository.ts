@@ -102,6 +102,9 @@ export class ProjectCoreRepository {
     static update(data: Partial<ProjectCoreData>): void {
         const db = getProjectDb()
         if (!db) throw new Error('项目数据库未打开')
+        if (Object.hasOwn(data, 'charactersArch')) {
+            throw new Error('角色图谱由角色名单自动生成；请通过角色管理修改角色资料')
+        }
 
         // 构建动态 SET 子句，只更新传入的字段
         const fieldMap: Record<string, string> = {
@@ -119,7 +122,6 @@ export class ProjectCoreRepository {
             goldenFinger: 'golden_finger',
             premise: 'premise',
             worldbuilding: 'worldbuilding',
-            charactersArch: 'characters_arch',
             synopsis: 'synopsis',
             characterStates: 'character_states',
         }
@@ -154,7 +156,6 @@ export class ProjectCoreRepository {
             goldenFinger: '',
             premise: '',
             worldbuilding: '',
-            charactersArch: '',
             synopsis: '',
             characterStates: '',
         })

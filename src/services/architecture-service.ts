@@ -36,16 +36,23 @@ export async function checkArchStatus(
     synopsis: false,
   }
 
-  const core = await ipc.invokeWithProjectSession(
-    projectSession,
-    'db:project-core-get',
-    projectSession.projectPath,
-  )
+  const [core, roster] = await Promise.all([
+    ipc.invokeWithProjectSession(
+      projectSession,
+      'db:project-core-get',
+      projectSession.projectPath,
+    ),
+    ipc.invokeWithProjectSession(
+      projectSession,
+      'db:character-roster-read',
+      projectSession.projectPath,
+    ),
+  ])
   if (!core) return status
 
   // 长度 > 50 才算真正已生成，前端可以直接用长度判断
   status.premise = (core.premise?.length ?? 0) > 50
-  status.characters = (core.charactersArch?.length ?? 0) > 50
+  status.characters = roster.status === 'ready'
   status.worldbuilding = (core.worldbuilding?.length ?? 0) > 50
   status.synopsis = (core.synopsis?.length ?? 0) > 50
 
@@ -62,11 +69,18 @@ export async function checkArchStatusWithWordCount(projectSession: ProjectSessio
   const status: Record<string, boolean> = { premise: false, characters: false, worldbuilding: false, synopsis: false }
   const wordCounts: Record<string, number> = { premise: 0, characters: 0, worldbuilding: 0, synopsis: 0 }
 
-  const core = await ipc.invokeWithProjectSession(
-    projectSession,
-    'db:project-core-get',
-    projectSession.projectPath,
-  )
+  const [core, roster] = await Promise.all([
+    ipc.invokeWithProjectSession(
+      projectSession,
+      'db:project-core-get',
+      projectSession.projectPath,
+    ),
+    ipc.invokeWithProjectSession(
+      projectSession,
+      'db:character-roster-read',
+      projectSession.projectPath,
+    ),
+  ])
   if (!core) return { status, wordCounts }
 
   const check = (key: ArchStepKey, content: string | undefined | null) => {
@@ -77,7 +91,7 @@ export async function checkArchStatusWithWordCount(projectSession: ProjectSessio
   }
 
   check('premise', core.premise)
-  check('characters', core.charactersArch)
+  check('characters', roster.status === 'ready' ? roster.renderedMarkdown : '')
   check('worldbuilding', core.worldbuilding)
   check('synopsis', core.synopsis)
 
@@ -108,6 +122,19 @@ export async function readArchFile(
   projectSession: ProjectSessionContext,
 ): Promise<{ success: boolean; content: string }> {
   try {
+    if (key === 'characters') {
+      const roster = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:character-roster-read',
+        projectSession.projectPath,
+      )
+      return {
+        success: true,
+        content: roster.status === 'ready'
+          ? roster.renderedMarkdown
+          : roster.legacyMarkdown ?? '',
+      }
+    }
     const core = await ipc.invokeWithProjectSession(
       projectSession,
       'db:project-core-get',
@@ -118,7 +145,6 @@ export async function readArchFile(
     let content = ''
     switch (key) {
       case 'premise': content = core.premise; break
-      case 'characters': content = core.charactersArch; break
       case 'worldbuilding': content = core.worldbuilding; break
       case 'synopsis': content = core.synopsis; break
     }

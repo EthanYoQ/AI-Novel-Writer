@@ -65,6 +65,18 @@ function character(name: string, notes = ''): CharacterCard {
   }
 }
 
+function rosterReadFromCards(cards: CharacterCard[]) {
+  return {
+    revision: 1,
+    status: cards.length > 0 ? 'ready' : 'empty',
+    entries: cards.map(card => ({
+      ...card,
+      relationships: [],
+      ...(card.relationships.trim() ? { legacyRelationshipNotes: card.relationships.trim() } : {}),
+    })),
+  }
+}
+
 function currentLedger() {
   return parseProjectEditorDraftLedger<CharacterCard[]>(
     useEditorStore.getState().draftLedgers[CHARACTER_DRAFT_TAB.id],
@@ -80,11 +92,27 @@ function deferred<T>() {
 beforeEach(() => {
   invoke.mockReset()
   invokeWithProjectSession.mockReset()
-  invokeWithProjectSession.mockImplementation((
+  invokeWithProjectSession.mockImplementation(async (
     _projectSession: unknown,
     channel: string,
     ...args: unknown[]
-  ) => invoke(channel, ...args))
+  ) => {
+    const result = await invoke(channel, ...args)
+    if (channel === 'db:character-roster-read' && Array.isArray(result)) {
+      return rosterReadFromCards(result)
+    }
+    if (channel === 'db:character-roster-commit' && result?.success && !result.receipt) {
+      const request = args[0] as { entries: unknown[]; expectedRevision: number }
+      return {
+        ...result,
+        receipt: {
+          revision: request.expectedRevision + 1,
+          snapshot: { entries: request.entries },
+        },
+      }
+    }
+    return result
+  })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
   useProjectStore.setState({ currentProject: project(PROJECT_A), fileTree: [], loading: false })
   useCharacterStore.getState().reset()
@@ -97,7 +125,7 @@ describe('character store project context', () => {
       .mockResolvedValueOnce({ success: true })
 
     await useCharacterStore.getState().load(PROJECT_A)
-    expect(invoke).toHaveBeenNthCalledWith(1, 'db:character-get-all', PROJECT_A)
+    expect(invoke).toHaveBeenNthCalledWith(1, 'db:character-roster-read', PROJECT_A)
     expect(useCharacterStore.getState()).toMatchObject({
       dataProjectKey: PROJECT_A,
       loadingProjectKey: null,
@@ -108,9 +136,12 @@ describe('character store project context', () => {
     await expect(useCharacterStore.getState().saveAll(PROJECT_A)).resolves.toBeUndefined()
     expect(invoke).toHaveBeenNthCalledWith(
       2,
-      'db:character-save-all',
-      [expect.objectContaining({ name: 'A 角色', notes: 'A 本地修改' })],
-      [],
+      'db:character-roster-commit',
+      expect.objectContaining({
+        intent: 'manual_edit',
+        expectedRevision: 1,
+        entries: [expect.objectContaining({ name: 'A 角色', notes: 'A 本地修改' })],
+      }),
       PROJECT_A,
     )
   })
@@ -170,11 +201,14 @@ describe('character store project context', () => {
 
     expect(invoke).toHaveBeenNthCalledWith(
       2,
-      'db:character-delete',
-      'A 待删除',
+      'db:character-roster-commit',
+      expect.objectContaining({
+        intent: 'manual_edit',
+        entries: [expect.objectContaining({ name: 'A 保留' })],
+      }),
       PROJECT_A,
     )
-    expect(invoke).toHaveBeenNthCalledWith(3, 'db:character-get-all', PROJECT_B)
+    expect(invoke).toHaveBeenNthCalledWith(3, 'db:character-roster-read', PROJECT_B)
     expect(useCharacterStore.getState()).toMatchObject({
       characters: [character('B 角色')],
       dataProjectKey: PROJECT_B,

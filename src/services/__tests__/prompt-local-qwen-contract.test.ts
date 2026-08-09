@@ -114,6 +114,7 @@ const expectedPromptVariables: Record<string, string[]> = {
 }
 
 const expectedJsonFields: Record<string, string[]> = {
+  character_dynamics: ['schemaVersion', 'entries'],
   generate_global_config: [
     'genre',
     'targetAudience',

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Sparkles, CheckCircle2, Circle, RefreshCw, FileText, BookOpen, AlertTriangle, FolderTree } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
-import { useCharacterStore } from '../../stores/character-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
@@ -10,8 +10,7 @@ import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { ipc } from '../../services/ipc-client'
 
-import { ARCH_CHARACTER_SCOPE, runArchCharacterExtract, createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
-import { readPostProcessStatus, type PostProcessStatus } from '../../services/workflows/workflow-utils'
+import { createArchitectureWorkflow, repairArchCharacterCards } from '../../services/workflows/architecture-workflow'
 import { globalEventBus } from '../../shared/event-bus'
 import {
   createProjectArchTabId,
@@ -19,7 +18,10 @@ import {
   shouldSyncProjectArchTab,
 } from './arch-file-refresh-policy'
 import { LatestRequestGate } from './latest-request-gate'
-import { isCharacterExtractionReady } from './character-extraction-policy'
+import {
+  canExplicitlyRepairCharacterRoster,
+  getCharacterRosterRepairPresentation,
+} from './character-roster-repair-state'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
@@ -27,6 +29,7 @@ import {
 } from '../project-session-gate'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectSessionContext } from '../../shared/project-session-context'
+import type { CharacterRosterSnapshot } from '../../shared/character-roster'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -47,34 +50,18 @@ const ARCH_FILES: Array<{
 export default function WorldBuildingEditor({ projectKey }: { projectKey: string }) {
   // ✅ 精确订阅，避免 novelConfig 等变化导致不必要的 loadStatus 重建
   const currentProject = useProjectStore(s => s.currentProject)
+  const text = useLocaleStore(s => s.text)
   const projectMatches = currentProject?.path === projectKey
-  const characters = useCharacterStore(s => s.characters)
-  const characterDataProjectKey = useCharacterStore(s => s.dataProjectKey)
-  const characterLoadingProjectKey = useCharacterStore(s => s.loadingProjectKey)
-  const characterLoadError = useCharacterStore(s => s.lastError)
-  // 角色数据由 ProjectService 统一加载，组件只消费
-  const characterCount = characters.length
-  const characterExtractionReady = isCharacterExtractionReady({
-    projectKey,
-    dataProjectKey: characterDataProjectKey,
-    loadingProjectKey: characterLoadingProjectKey,
-    lastError: characterLoadError,
-    characterCount,
-  })
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [showArchDialog, setShowArchDialog] = useState(false)
   const [extracting, setExtracting] = useState(false)
-  const extractingRunIdRef = useRef<string | null>(null)
-  const extractingSessionRef = useRef<ProjectSessionContext | null>(null)
+  const [rosterSnapshot, setRosterSnapshot] = useState<CharacterRosterSnapshot | null>(null)
+  const [rosterRepairError, setRosterRepairError] = useState<string | null>(null)
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
-  // 用于强制刷新 PostProcessStatusPanel 的 key
-  const [, setPostProcessKey] = useState(0)
-  // 角色卡后处理状态（用于控制卡片边框颜色）
-  const [charExtractStatus, setCharExtractStatus] = useState<PostProcessStatus | null>(null)
   const archStatusRequestGate = useRef(new LatestRequestGate())
-  const characterStatusRequestGate = useRef(new LatestRequestGate())
+  const rosterStatusRequestGate = useRef(new LatestRequestGate())
 
   /** 加载各架构文件状态（通过 Service 层获取，不直接调 IPC） */
   const loadStatus = useCallback(async () => {
@@ -90,20 +77,27 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     const projectPath = projectSession.projectPath
     const requestId = archStatusRequestGate.current.begin()
     setLoading(true)
-    const core = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:project-core-get',
-      projectPath,
-    )
+    const [core, roster] = await Promise.all([
+      ipc.invokeWithProjectSession(
+        projectSession,
+        'db:project-core-get',
+        projectPath,
+      ),
+      ipc.invokeWithProjectSession(
+        projectSession,
+        'db:character-roster-read',
+        projectPath,
+      ),
+    ])
     const status: Record<string, boolean> = {
       premise: (core?.premise?.length ?? 0) > 50,
-      characters: (core?.charactersArch?.length ?? 0) > 50,
+      characters: roster.status === 'ready',
       worldbuilding: (core?.worldbuilding?.length ?? 0) > 50,
       synopsis: (core?.synopsis?.length ?? 0) > 50,
     }
     const counts: Record<string, number> = {
       premise: status.premise ? (core?.premise?.length ?? 0) : 0,
-      characters: status.characters ? (core?.charactersArch?.length ?? 0) : 0,
+      characters: status.characters ? roster.renderedMarkdown.length : 0,
       worldbuilding: status.worldbuilding ? (core?.worldbuilding?.length ?? 0) : 0,
       synopsis: status.synopsis ? (core?.synopsis?.length ?? 0) : 0,
     }
@@ -122,29 +116,43 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     return () => clearTimeout(timer)
   }, [loadStatus])
 
-  /** 加载角色卡后处理状态 */
-  const loadCharExtractStatus = useCallback(async () => {
+  /** 只读加载结构化名单状态；绝不在打开项目时自动修复旧数据。 */
+  const loadCharacterRosterStatus = useCallback(async () => {
     await Promise.resolve()
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) {
-      characterStatusRequestGate.current.begin()
-      setCharExtractStatus(null)
+      rosterStatusRequestGate.current.begin()
+      setRosterSnapshot(null)
+      setRosterRepairError(null)
       return
     }
     const projectPath = projectSession.projectPath
-    const requestId = characterStatusRequestGate.current.begin()
-    const s = await readPostProcessStatus(projectPath, ARCH_CHARACTER_SCOPE, projectSession)
+    const requestId = rosterStatusRequestGate.current.begin()
+    let snapshot: CharacterRosterSnapshot
+    try {
+      snapshot = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:character-roster-read',
+        projectPath,
+      )
+    } catch {
+      if (rosterStatusRequestGate.current.isLatest(requestId) && isProjectSessionCurrent(projectSession)) {
+        setRosterSnapshot(null)
+      }
+      return
+    }
     if (
-      !characterStatusRequestGate.current.isLatest(requestId)
+      !rosterStatusRequestGate.current.isLatest(requestId)
       || !isProjectSessionCurrent(projectSession)
     ) return
-    setCharExtractStatus(s)
+    setRosterSnapshot(snapshot)
+    if (snapshot.status === 'ready') setRosterRepairError(null)
   }, [currentProject, projectKey, projectMatches])
 
   useEffect(() => {
-    const timer = setTimeout(() => { void loadCharExtractStatus() }, 0)
+    const timer = setTimeout(() => { void loadCharacterRosterStatus() }, 0)
     return () => clearTimeout(timer)
-  }, [loadCharExtractStatus])
+  }, [loadCharacterRosterStatus])
 
   // 监听 EventBus 事件，刷新后处理状态面板
   useEffect(() => {
@@ -159,36 +167,11 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
           && sameProjectSessionContext(projectSession, payload.projectSession)
       })()
       && payload.runId.length > 0
-    const unsub1 = globalEventBus.on('ARCH_POSTPROCESS_UPDATED', (payload) => {
-      if (!eventMatchesProjectRun(payload)) return
-      setPostProcessKey(k => k + 1)
-      loadCharExtractStatus()
-      if (
-        extractingRunIdRef.current === payload.runId
-        && isProjectSessionCurrent(extractingSessionRef.current)
-      ) {
-        extractingRunIdRef.current = null
-        extractingSessionRef.current = null
-        setExtracting(false)
-      }
-    })
-    const unsub2 = globalEventBus.on('CHARACTER_EXTRACT_FAILED', (payload) => {
-      if (!eventMatchesProjectRun(payload)) return
-      setPostProcessKey(k => k + 1)
-      loadCharExtractStatus()
-      if (
-        extractingRunIdRef.current === payload.runId
-        && isProjectSessionCurrent(extractingSessionRef.current)
-      ) {
-        extractingRunIdRef.current = null
-        extractingSessionRef.current = null
-        setExtracting(false)
-      }
-    })
     // 每步架构文件写完后实时刷新状态
     const unsub3 = globalEventBus.on('ARCH_FILE_UPDATED', (payload) => {
       if (!eventMatchesProjectRun(payload)) return
       loadStatus()
+      loadCharacterRosterStatus()
     })
     // 整个工作流完成后也刷新一次
     const unsub4 = globalEventBus.on('WORKFLOW_COMPLETE', (payload) => {
@@ -201,45 +184,31 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       )) return
       lastCompletedArchitectureRunRef.current = payload.runId
       loadStatus()
+      loadCharacterRosterStatus()
     })
-    return () => { unsub1(); unsub2(); unsub3(); unsub4() }
-  }, [currentProject, loadCharExtractStatus, loadStatus, projectKey])
+    return () => { unsub3(); unsub4() }
+  }, [currentProject, loadCharacterRosterStatus, loadStatus, projectKey])
 
 
 
-  /** 从角色图谱提取角色卡（首次提取 / 重新提取） */
-  const handleExtractCharacters = useCallback(async () => {
+  /** 显式修复旧图谱，或采用既有角色卡重建只读图谱。 */
+  const handleRepairCharacterRoster = useCallback(async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey) || extracting) return
     setExtracting(true)
+    setRosterRepairError(null)
     try {
-      const core = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:project-core-get',
-        projectSession.projectPath,
-      )
-      if (!isProjectSessionCurrent(projectSession)) return
-      const charArch = core?.charactersArch ?? ''
-      if (charArch.length < 50) {
-        console.error('角色图谱不存在或内容不完整')
-        setExtracting(false)
-        return
-      }
-      if (!isProjectSessionCurrent(projectSession)) return
-      extractingSessionRef.current = projectSession
-      extractingRunIdRef.current = runArchCharacterExtract(
-        projectSession.projectPath,
-        charArch,
-        currentProject.novelConfig.genre,
-        projectSession,
-      )
+      await repairArchCharacterCards(projectSession.projectPath)
+      if (isProjectSessionCurrent(projectSession)) await loadCharacterRosterStatus()
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
-      console.error('角色卡提取失败', e)
-      extractingSessionRef.current = null
-      setExtracting(false)
+      const message = e instanceof Error ? e.message : String(e)
+      console.error('角色名单修复失败', e)
+      setRosterRepairError(message)
+    } finally {
+      if (isProjectSessionCurrent(projectSession)) setExtracting(false)
     }
-  }, [currentProject, extracting, projectKey, projectMatches])
+  }, [currentProject, extracting, loadCharacterRosterStatus, projectKey, projectMatches])
 
   /** 打开单个架构文件（arch-file 类型；若 tab 已存在则刷新磁盘内容） */
   const openArchFile = async (f: typeof ARCH_FILES[number]) => {
@@ -247,19 +216,29 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     const filePath = `vela://core/${f.key}`
     const tabId = createProjectArchTabId(projectKey, filePath)
-    let core: Record<string, unknown> | null
+    let content = ''
     try {
-      core = (await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:project-core-get',
-        projectSession.projectPath,
-      )) as Record<string, unknown> | null
+      if (f.key === 'characters') {
+        const roster = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:character-roster-read',
+          projectSession.projectPath,
+        )
+        content = roster.status === 'ready'
+          ? roster.renderedMarkdown
+          : roster.legacyMarkdown ?? ''
+      } else {
+        const core = (await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:project-core-get',
+          projectSession.projectPath,
+        )) as Record<string, unknown> | null
+        content = (core?.[f.key] as string) || ''
+      }
     } catch {
       return
     }
     if (!isProjectSessionCurrent(projectSession)) return
-    const propertyKey = f.key === 'characters' ? 'charactersArch' : f.key
-    const content = (core && (core[propertyKey] as string)) || ''
 
     const { useEditorStore } = await import('../../stores/editor-store')
     if (!isProjectSessionCurrent(projectSession)) return
@@ -322,6 +301,12 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   }
 
   const generatedCount = ARCH_FILES.filter(f => archStatus[f.key]).length
+  const rosterPresentation = getCharacterRosterRepairPresentation(
+    rosterSnapshot,
+    text,
+    rosterRepairError,
+  )
+  const canRepairRoster = canExplicitlyRepairCharacterRoster(rosterPresentation)
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -367,11 +352,15 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
           const generated = archStatus[f.key]
           const words = wordCounts[f.key] ?? 0
           const isCharacters = f.key === 'characters'
-          // 角色图谱卡片：提取失败时显示红色警告
-          const charExtractFailed = isCharacters && charExtractStatus && !charExtractStatus.allCriticalPassed
-          // 动态边框颜色：提取失败 → 红 | 已生成 → 绿 | 未生成 → 默认
-          const cardBorderColor = charExtractFailed
+          const rosterNeedsAttention = isCharacters && rosterPresentation
+            && rosterPresentation.kind !== 'ready'
+            && rosterPresentation.kind !== 'empty'
+          // 动态边框颜色：明确失败/异常 → 红 | 显式修复/采用 → 警告 | 已生成 → 绿
+          const cardBorderColor = rosterPresentation?.kind === 'failed_with_data_preserved'
+            || rosterPresentation?.kind === 'inconsistent'
             ? 'var(--color-error, #ef4444)'
+            : rosterNeedsAttention
+              ? 'var(--color-warning)'
             : generated
               ? 'var(--color-success)'
               : 'var(--color-border)'
@@ -381,7 +370,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                 className="rounded-lg border p-4 flex items-center gap-4 cursor-pointer transition-all"
                 style={{
                   borderColor: cardBorderColor,
-                  backgroundColor: charExtractFailed ? 'rgba(239, 68, 68, 0.03)' : 'var(--color-panel)',
+                  backgroundColor: rosterPresentation?.kind === 'failed_with_data_preserved'
+                    || rosterPresentation?.kind === 'inconsistent'
+                    ? 'rgba(239, 68, 68, 0.03)'
+                    : 'var(--color-panel)',
                   opacity: loading ? 0.6 : 1,
                 }}
                 onClick={() => openArchFile(f)}
@@ -406,11 +398,45 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                   <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
                     {f.desc}
                   </div>
+                  {isCharacters && rosterPresentation && (
+                    <div
+                      role="status"
+                      className="text-xs mt-1 leading-5"
+                      style={{
+                        color: rosterNeedsAttention
+                          ? 'var(--color-warning)'
+                          : 'var(--color-text-muted)',
+                      }}
+                    >
+                      {rosterPresentation.label} · {rosterPresentation.description}
+                    </div>
+                  )}
                 </div>
 
                 {/* 右侧状态标签 / 字数 / 提取按钮 */}
                 <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                  {generated ? (
+                  {isCharacters && rosterPresentation ? (
+                    <>
+                      <span
+                        className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium"
+                        style={{
+                          backgroundColor: rosterNeedsAttention
+                            ? 'rgba(245, 158, 11, 0.12)'
+                            : 'rgba(34, 197, 94, 0.1)',
+                          color: rosterNeedsAttention
+                            ? 'var(--color-warning)'
+                            : 'var(--color-success)',
+                        }}
+                      >
+                        {rosterPresentation.label}
+                      </span>
+                      {generated && (
+                        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                          {words.toLocaleString()} 字符
+                        </span>
+                      )}
+                    </>
+                  ) : generated ? (
                     <>
                       <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-green-600 dark:text-green-400">
                         已生成
@@ -427,27 +453,27 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                       待生成
                     </span>
                   )}
-                  {/* 角色图谱已生成但角色卡为空时，显示重新提取按钮（带质感的警告色） */}
-                  {isCharacters && generated && !loading && characterExtractionReady && (
+                  {/* 显式安全修复，或采用受保护的既有角色卡。 */}
+                  {isCharacters && !loading && canRepairRoster && rosterPresentation?.actionLabel && (
                     <Button
                       size="sm"
                       disabled={extracting}
-                      className="gap-1.5 mt-0.5 bg-gradient-to-r from-red-500 to-orange-500 text-white shadow-sm hover:from-red-600 hover:to-orange-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
+                      className="gap-1.5 mt-0.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm hover:from-amber-600 hover:to-orange-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
                       onClick={(e) => {
                         e.stopPropagation()
-                        handleExtractCharacters()
+                        void handleRepairCharacterRoster()
                       }}
-                      title="角色档案为空，可能是因为上一次生成失败或被删除。点击重新提取"
+                      title={rosterPresentation.actionTitle}
                     >
                       {extracting
                         ? <RefreshCw size={12} className="animate-spin opacity-90" />
                         : <AlertTriangle size={12} className="opacity-90" />
                       }
-                      {extracting ? '提取中...' : '提取角色卡'}
+                      {extracting ? text('处理中...', 'Working...') : rosterPresentation.actionLabel}
                     </Button>
                   )}
                   {/* 查看箭头提示 */}
-                  {generated && !(isCharacters && !loading && characterExtractionReady) && (
+                  {generated && !(isCharacters && !loading && canRepairRoster) && (
                     <span className="text-[0.7rem] flex items-center gap-0.5" style={{ color: 'var(--color-text-muted)' }}>
                       <FileText size={10} /> 点击查看
                     </span>

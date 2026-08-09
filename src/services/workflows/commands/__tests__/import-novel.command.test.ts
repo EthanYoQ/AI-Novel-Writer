@@ -101,6 +101,69 @@ describe('InferBlueprintsPerChapterCommand', () => {
 })
 
 describe('InferGlobalSettingsCommand', () => {
+  it('rejects inferred free-text relationships before any roster commit', async () => {
+    const invoke = stubIpcInvoke((channel) => {
+      if (channel === 'kb:search') return []
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+    const command = new InferGlobalSettingsCommand()
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+      .mockResolvedValue(JSON.stringify({
+        characterCards: [{
+          name: '陆舟',
+          role: '主角',
+          relationships: '与旧友苏绾保持复杂关系',
+        }],
+      }))
+
+    await expect(command.execute({ step: {}, context: createContext(), callbacks }))
+      .rejects.toThrow('导入角色卡包含无法验证的自由文本关系')
+
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      'kb:search',
+      'kb:search',
+      'kb:search',
+      'kb:search',
+    ])
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-roster-commit')
+  })
+
+  it('commits structurally complete inferred relationships through the roster seam', async () => {
+    const invoke = stubIpcInvoke((channel) => {
+      if (channel === 'kb:search') return []
+      if (channel === 'db:character-roster-read') return { status: 'ready', revision: 7, entries: [] }
+      if (channel === 'db:character-roster-commit') return { success: true, receipt: { revision: 8 } }
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+    const command = new InferGlobalSettingsCommand()
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+      .mockResolvedValue(JSON.stringify({
+        characterCards: [
+          { name: '陆舟', role: '主角', relationships: { 苏绾: '旧友' } },
+          { name: '苏绾', role: '配角' },
+        ],
+      }))
+
+    await command.execute({ step: {}, context: createContext(), callbacks })
+
+    expect(invoke).toHaveBeenLastCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({
+        intent: 'novel_import',
+        expectedRevision: 7,
+        entries: [
+          expect.objectContaining({
+            name: '陆舟',
+            relationships: [{ target: '苏绾', relation: '旧友' }],
+          }),
+          expect.objectContaining({ name: '苏绾' }),
+        ],
+      }),
+      'C:\\tmp\\vela-import-test',
+      expect.objectContaining({ projectId: 'project-1' }),
+    )
+  })
+
   it('stops and keeps renderer config unchanged when project:save reports failure', async () => {
     stubIpcInvoke((channel) => {
       if (channel === 'kb:search') return []

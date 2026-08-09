@@ -20,9 +20,35 @@ const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('../../services/ipc-client', () => ({
   ipc: {
     invoke,
-    invokeWithProjectSession: (_context: unknown, channel: string, ...args: unknown[]) => (
-      invoke(channel, ...args)
-    ),
+    invokeWithProjectSession: async (_context: unknown, channel: string, ...args: unknown[]) => {
+      const result = await invoke(channel, ...args)
+      if (channel === 'db:character-roster-read' && Array.isArray(result)) {
+        return {
+          revision: 1,
+          status: result.length > 0 ? 'ready' : 'empty',
+          entries: result.map(card => {
+            const relationshipText = typeof card.relationships === 'string' ? card.relationships.trim() : ''
+            try {
+              const relationships = relationshipText ? JSON.parse(relationshipText) : []
+              return { ...card, relationships }
+            } catch {
+              return { ...card, relationships: [], legacyRelationshipNotes: relationshipText }
+            }
+          }),
+        }
+      }
+      if (channel === 'db:character-roster-commit' && result?.success && !result.receipt) {
+        const request = args[0] as { entries: unknown[]; expectedRevision: number }
+        return {
+          ...result,
+          receipt: {
+            revision: request.expectedRevision + 1,
+            snapshot: { entries: request.entries },
+          },
+        }
+      }
+      return result
+    },
   },
 }))
 
@@ -132,6 +158,7 @@ beforeEach(() => {
     loaded: true,
     dataProjectKey: project().path,
     dataProjectSession: projectSession(project()),
+    rosterRevision: 1,
     loadingProjectKey: null,
     loadingProjectSession: null,
     lastError: null,
@@ -154,7 +181,7 @@ describe('explicit editor dirty integration', () => {
         expect(args[0]).toBe(projectB().path)
         return fileTree.promise
       }
-      if (channel === 'db:character-get-all') {
+      if (channel === 'db:character-roster-read') {
         expect(args).toEqual([projectB().path])
         return [character('项目 B 角色')]
       }
@@ -313,7 +340,7 @@ describe('explicit editor dirty integration', () => {
     projectASave.resolve({ success: true })
     await Promise.all([saveA, loadB])
 
-    expect(invoke).toHaveBeenNthCalledWith(2, 'db:character-get-all', projectB().path)
+    expect(invoke).toHaveBeenNthCalledWith(2, 'db:character-roster-read', projectB().path)
     expect(useCharacterStore.getState().characters).toEqual([
       character('项目 B 角色', 'B 数据'),
     ])
@@ -402,7 +429,7 @@ describe('explicit editor dirty integration', () => {
     const refresh = useCharacterStore.getState().load(project().path)
     useCharacterStore.getState().updateField('保留角色', 'notes', '删除等待期间编辑')
     expect(invoke).toHaveBeenCalledTimes(1)
-    expect(useCharacterStore.getState().characters).toHaveLength(2)
+    expect(useCharacterStore.getState().characters).toHaveLength(1)
 
     pendingDelete.resolve({ success: true })
     await Promise.all([expect(deletion).resolves.toBe(true), refresh])
@@ -568,9 +595,12 @@ describe('explicit editor dirty integration', () => {
     await save
 
     expect(invoke).toHaveBeenCalledWith(
-      'db:character-save-all',
-      [expect.objectContaining({ name: '新名', notes: '保存前' })],
-      [{ originalName: '旧名', newName: '新名' }],
+      'db:character-roster-commit',
+      expect.objectContaining({
+        intent: 'manual_edit',
+        entries: [expect.objectContaining({ name: '新名', notes: '保存前' })],
+        renames: [{ originalName: '旧名', newName: '新名' }],
+      }),
       project().path,
     )
     const ledger = parseProjectEditorDraftLedger<CharacterCard[]>(
@@ -698,9 +728,11 @@ describe('explicit editor dirty integration', () => {
     await useCharacterStore.getState().saveAll(project().path)
 
     expect(invoke).toHaveBeenCalledWith(
-      'db:character-save-all',
-      [expect.objectContaining({ name: '首个正式名字' })],
-      [],
+      'db:character-roster-commit',
+      expect.objectContaining({
+        intent: 'manual_edit',
+        entries: [expect.objectContaining({ name: '首个正式名字' })],
+      }),
       project().path,
     )
     expect(visibleEditor('character')?.dirty).toBe(false)

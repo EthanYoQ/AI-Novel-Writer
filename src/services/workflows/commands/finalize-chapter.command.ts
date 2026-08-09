@@ -22,6 +22,7 @@ import {
 import type { ChapterInfo } from '../chapter-workflow'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
+import type { CharacterRosterEntry, CharacterRosterRole } from '../../../shared/character-roster'
 
 export interface FinalizeChapterParams {
   draftPath: string
@@ -217,12 +218,17 @@ export function buildFinalizePostProcessSteps(
         const projectSession = requireWorkflowProjectSession(context)
         const cardTemplate = getPromptTemplate('update_character_cards', projectSession)
         if (!cardTemplate) throw new Error('未找到角色状态模板')
-        // 读取现有角色卡
-        const allChars = (await ipc.invokeWithProjectSession(
+        // 章节定稿只读取并提交结构化角色名单。状态、新角色、图谱投影和
+        // revision 由同一个 roster receipt 结算，绝不逐张卡片部分成功。
+        const roster = await ipc.invokeWithProjectSession(
           projectSession,
-          'db:character-get-all',
+          'db:character-roster-read',
           _project.path,
-        )) as unknown as Array<Record<string, unknown>>
+        )
+        if (roster.status !== 'ready' && roster.status !== 'empty') {
+          throw new Error('角色名单当前不可安全更新；请先完成旧项目修复或处理数据不一致状态')
+        }
+        const allChars = roster.entries
         if (context?.cancelled) throw new Error('工作流已取消')
         const simpleCards = allChars.map((c) => ({ name: c.name, role: c.role }))
 
@@ -252,46 +258,56 @@ export function buildFinalizePostProcessSteps(
           newCharacters?: Array<{ name: string; role: string; currentState: LLMUpdateState }>
         }>(cardsResult)
 
-        if (cardUpdates.updates && Array.isArray(cardUpdates.updates)) {
-          for (const upd of cardUpdates.updates) {
-            if (context?.cancelled) throw new Error('工作流已取消')
-            const dbChar = allChars.find((c) => c.name === upd.name)
-            if (dbChar && upd.currentState) {
-              const cs = upd.currentState
-              const dbCharState = (dbChar.currentState as Record<string, unknown>) || {}
-              const newState = {
-                location: cs.location || (dbCharState.location as string) || '',
-                powerLevel: cs.powerLevel || (dbCharState.powerLevel as string) || '',
-                physicalState: cs.physicalState || (dbCharState.physicalState as string) || '',
-                mentalState: cs.mentalState || (dbCharState.mentalState as string) || '',
-                keyItems: cs.keyItems || (dbCharState.keyItems as string) || '',
-                recentEvents: cs.recentEvents || '',
-                updatedAtChapter: chapterNumber,
-              }
-              const result = await ipc.invokeWithProjectSession(
-                projectSession,
-                'db:character-update-state',
-                upd.name,
-                newState,
-                _project.path,
-              )
-              requireIpcSuccess(result, `更新角色 ${upd.name}`)
-              callbacks.log(`更新角色动态状态: ${dbChar.name}`)
-            }
-          }
+        const updatesByName = new Map(
+          Array.isArray(cardUpdates.updates)
+            ? cardUpdates.updates
+                .filter(update => typeof update.name === 'string' && update.name.trim() && update.currentState)
+                .map(update => [update.name.trim(), update.currentState])
+            : [],
+        )
+        let updatedCount = 0
+        const changedEntries: CharacterRosterEntry[] = []
+        for (const character of allChars) {
+          const patch = updatesByName.get(character.name)
+          if (!patch) continue
+          updatedCount += 1
+          const currentState = character.currentState
+          const structuredCharacter = { ...character }
+          delete structuredCharacter.legacyRelationshipNotes
+          changedEntries.push({
+            ...structuredCharacter,
+            currentState: {
+              location: patch.location || currentState?.location || '',
+              powerLevel: patch.powerLevel || currentState?.powerLevel || '',
+              physicalState: patch.physicalState || currentState?.physicalState || '',
+              mentalState: patch.mentalState || currentState?.mentalState || '',
+              keyItems: patch.keyItems || currentState?.keyItems || '',
+              recentEvents: patch.recentEvents || currentState?.recentEvents || '',
+              updatedAtChapter: chapterNumber,
+            },
+          })
         }
 
-        if (cardUpdates.newCharacters && Array.isArray(cardUpdates.newCharacters)) {
-          let newCharCount = 0
+        let newCharCount = 0
+        const existingNames = new Set(allChars.map(character => character.name))
+        if (Array.isArray(cardUpdates.newCharacters)) {
           for (const newChar of cardUpdates.newCharacters) {
             if (context?.cancelled) throw new Error('工作流已取消')
-            if (allChars.some((c) => c.name === newChar.name)) continue
+            if (typeof newChar.name !== 'string' || !newChar.name.trim()) continue
+            const name = newChar.name.trim()
+            if (existingNames.has(name)) continue
             const cs = newChar.currentState || {}
-            const result = await ipc.invokeWithProjectSession(projectSession, 'db:character-upsert', {
-              name: newChar.name,
-              role: newChar.role || 'supporting',
+            const role: CharacterRosterRole = (
+              newChar.role === 'protagonist'
+              || newChar.role === 'antagonist'
+              || newChar.role === 'supporting'
+              || newChar.role === 'minor'
+            ) ? newChar.role : 'supporting'
+            changedEntries.push({
+              name,
+              role,
               gender: '', age: '', appearance: '', personality: '', background: '',
-              abilities: '', motivation: '', relationships: '', arc: '', notes: '',
+              abilities: '', motivation: '', relationships: [], arc: '', notes: '',
               currentState: {
                 location: cs.location || '',
                 powerLevel: cs.powerLevel || '',
@@ -300,14 +316,34 @@ export function buildFinalizePostProcessSteps(
                 keyItems: cs.keyItems || '',
                 recentEvents: cs.recentEvents || '',
                 updatedAtChapter: chapterNumber,
-              }
-            }, _project.path)
-            requireIpcSuccess(result, `登记角色 ${newChar.name}`)
-            newCharCount++
+              },
+            })
+            existingNames.add(name)
+            newCharCount += 1
           }
-          if (newCharCount > 0) {
-            callbacks.log(`自动提取并登记 ${newCharCount} 名新出场角色`)
+        }
+
+        if (updatedCount > 0 || newCharCount > 0) {
+          if (context?.cancelled) throw new Error('工作流已取消')
+          const result = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:character-roster-commit',
+            {
+              operationId: `chapter-progress-${context.runId}-${chapterNumber}`,
+              expectedRevision: roster.revision,
+              schemaVersion: 1,
+              intent: 'chapter_progress',
+              // incremental intent only carries changed state/new cards. It
+              // never echoes untouched legacy free-text relationship notes.
+              entries: changedEntries,
+            },
+            _project.path,
+          )
+          if (!result.success || !result.receipt) {
+            throw new Error(result.error || '角色状态与新角色登记未能原子提交')
           }
+          if (updatedCount > 0) callbacks.log(`更新角色动态状态: ${updatedCount} 名`)
+          if (newCharCount > 0) callbacks.log(`自动提取并登记 ${newCharCount} 名新出场角色`)
         }
       },
     })

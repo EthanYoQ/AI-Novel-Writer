@@ -10,6 +10,11 @@ import type {
   CharacterData,
   CharacterStateData,
 } from '../../electron/repositories/character-repository'
+import {
+  characterCardFromRosterEntry,
+  characterRosterEntriesFromCards,
+} from '../services/character-roster-client'
+import { randomUUID } from '../utils/id'
 import { useEditorStore } from './editor-store'
 import { useProjectStore } from './project-store'
 import {
@@ -21,7 +26,6 @@ import {
   persistProjectEditorDraftLedger,
   rebaseProjectEditorDraft,
   recordProjectEditorEdit,
-  setProjectEditorDraft,
   settleProjectEditorSave,
 } from './project-editor-draft-ledger'
 import {
@@ -102,6 +106,7 @@ function removeFirstCharacterNamed(
 interface SessionOperation<T> {
   projectSession: ProjectSessionContext
   promise: Promise<T>
+  kind: 'save' | 'rename' | 'delete'
 }
 
 let characterSaveInFlight: SessionOperation<void> | null = null
@@ -118,6 +123,8 @@ interface CharacterState {
   dataProjectKey: string | null
   /** Exact lease whose character data is currently mounted. */
   dataProjectSession: ProjectSessionContext | null
+  /** 当前角色卡来自的 roster revision；所有保存都必须带回这一乐观并发令牌。 */
+  rosterRevision: number | null
   loadingProjectKey: string | null
   loadingProjectSession: ProjectSessionContext | null
   lastError: string | null
@@ -139,7 +146,11 @@ interface CharacterState {
     key: K,
     value: CharacterCard[K],
   ) => void
-  saveAll: (projectPath?: string, expectedProjectSession?: ProjectSessionContext) => Promise<void>
+  saveAll: (
+    projectPath?: string,
+    expectedProjectSession?: ProjectSessionContext,
+    operationKind?: 'delete',
+  ) => Promise<void>
 
   // 兼容旧接口
   loadCharacters: (projectPath: string, expectedProjectSession?: ProjectSessionContext) => Promise<void>
@@ -153,6 +164,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
   loaded: false,
   dataProjectKey: null,
   dataProjectSession: null,
+  rosterRevision: null,
   loadingProjectKey: null,
   loadingProjectSession: null,
   lastError: null,
@@ -169,6 +181,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
         loaded: false,
         dataProjectKey: null,
         dataProjectSession: null,
+        rosterRevision: null,
         loadingProjectKey: requestedProjectKey,
         loadingProjectSession: projectSession,
         lastError: null,
@@ -196,9 +209,9 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       ) return
     }
     try {
-      const cards = await ipc.invokeWithProjectSession(
+      const roster = await ipc.invokeWithProjectSession(
         projectSession,
-        'db:character-get-all',
+        'db:character-roster-read',
         requestedProjectKey,
       )
       if (
@@ -207,6 +220,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       ) return
 
       const draftLedger = readCharacterDraftLedger()
+      const cards = roster.entries.map(characterCardFromRosterEntry)
       const renames = requestedProjectKey
         ? getCharacterDraftRenames(draftLedger, requestedProjectKey)
         : []
@@ -237,6 +251,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
         loaded: true,
         dataProjectKey: requestedProjectKey,
         dataProjectSession: projectSession,
+        rosterRevision: roster.revision,
         loadingProjectKey: null,
         loadingProjectSession: null,
         lastError: null,
@@ -255,6 +270,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
         loaded: false,
         dataProjectKey: requestedProjectKey,
         dataProjectSession: projectSession,
+        rosterRevision: null,
         loadingProjectKey: null,
         loadingProjectSession: null,
         lastError: error instanceof Error ? error.message : String(error),
@@ -276,6 +292,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       loaded: false,
       dataProjectKey: null,
       dataProjectSession: null,
+      rosterRevision: null,
       loadingProjectKey: projectPath,
       loadingProjectSession: null,
       lastError: null,
@@ -292,6 +309,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       loaded: false,
       dataProjectKey: null,
       dataProjectSession: null,
+      rosterRevision: null,
       loadingProjectKey: null,
       loadingProjectSession: null,
       lastError: null,
@@ -355,80 +373,29 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       || get().lastError !== null
     ) return Promise.resolve(false)
     const { characters } = get()
-    const card = characters.find(c => c.name === name)
-    if (!card) return Promise.resolve(false)
+    if (!characters.some(card => card.name === name)) return Promise.resolve(false)
     const ledger = readCharacterDraftLedger()
     const renames = getCharacterDraftRenames(ledger, projectKey)
+    const remaining = removeFirstCharacterNamed(characters, name)
     const pendingRename = renames.find(rename => rename.newName === name)
-    const persistedName = pendingRename?.originalName ?? name
-
-    const performDelete = async (): Promise<boolean> => {
-      // SQLite 删除
-      try {
-        const result = await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:character-delete',
-          persistedName,
-          projectKey,
-        )
-        if (!result.success) return false
-      } catch {
-        return false
-      }
-      if (!isCharacterProjectSessionCurrent(projectSession)) return false
-
-      const latestLedger = readCharacterDraftLedger()
-      const latestProjectDraft = projectKey
-        ? getProjectEditorDraft(latestLedger, projectKey)
-        : undefined
-      const latestRenames = projectKey
-        ? getCharacterDraftRenames(latestLedger, projectKey)
-        : []
-      const latestPendingRename = latestRenames.find(rename => (
-        rename.originalName === persistedName || rename.newName === name
-      ))
-      const currentCharacters = get().characters
-      const currentTargetName = latestPendingRename?.newName ?? name
-      const remaining = removeFirstCharacterNamed(currentCharacters, currentTargetName)
-      if (isCharacterProjectSessionCurrent(projectSession)) {
-        const selectedName = get().selectedName
-        set({
-          characters: remaining,
-          selectedName: remaining.some(character => character.name === selectedName)
-            ? selectedName
-            : (remaining[0]?.name ?? null),
-        })
-      }
-      const initialProjectDraft = getProjectEditorDraft(ledger, projectKey)
-      const baseCharacters = latestProjectDraft?.baseValue
-        ?? initialProjectDraft?.baseValue
-        ?? characters
-      let nextLedger = setProjectEditorDraft(
-        latestLedger,
-        projectKey,
-        removeFirstCharacterNamed(baseCharacters, persistedName),
-        remaining,
-      )
-      nextLedger = setCharacterDraftRenames(
-        nextLedger,
-        projectKey,
-        latestRenames.filter(rename => rename !== latestPendingRename),
-      )
-      if (!isCharacterProjectSessionCurrent(projectSession)) return false
-      persistCharacterDraftLedger(nextLedger)
-      return true
-    }
-    set({ identityBusy: true })
-    const trackedDelete = performDelete().finally(() => {
-      if (characterIdentityMutationInFlight?.promise === trackedDelete) {
-        characterIdentityMutationInFlight = null
-        if (isCharacterProjectSessionCurrent(projectSession)) {
-          set({ identityBusy: false })
-        }
-      }
+    const nextRenames = pendingRename
+      ? renames.filter(rename => rename !== pendingRename)
+      : renames
+    set({
+      characters: remaining,
+      selectedName: remaining.some(character => character.name === get().selectedName)
+        ? get().selectedName
+        : (remaining[0]?.name ?? null),
     })
-    characterIdentityMutationInFlight = { projectSession, promise: trackedDelete }
-    return trackedDelete
+    let nextLedger = recordProjectEditorEdit(ledger, projectKey, characters, remaining)
+    nextLedger = setCharacterDraftRenames(nextLedger, projectKey, nextRenames)
+    persistCharacterDraftLedger(nextLedger)
+
+    // 删除同样是完整手工名单保存：由 roster seam 在一次事务中清理关系、
+    // 蓝图引用、投影、revision 与 receipt。失败时草稿仍在本地可重试。
+    return get().saveAll(projectKey, projectSession, 'delete')
+      .then(() => isCharacterProjectSessionCurrent(projectSession))
+      .catch(() => false)
   },
 
   renameCharacter: (name, newName) => {
@@ -533,7 +500,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     ))
   },
 
-  saveAll: (projectPath, expectedProjectSession) => {
+  saveAll: (projectPath, expectedProjectSession, operationKind) => {
     const projectSession = currentCharacterProjectSession(projectPath, expectedProjectSession)
     const projectKey = projectSession?.projectPath
     if (
@@ -542,13 +509,19 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       || !sameProjectSessionContext(get().dataProjectSession, projectSession)
       || get().loadingProjectSession !== null
       || get().lastError !== null
+      || get().rosterRevision === null
     ) {
       return Promise.reject(new Error('角色数据仍在切换项目，已拒绝跨项目保存'))
     }
     if (
       characterSaveInFlight
       && sameProjectSessionContext(characterSaveInFlight.projectSession, projectSession)
-    ) return characterSaveInFlight.promise
+    ) {
+      if (characterSaveInFlight.kind === 'delete') {
+        return Promise.reject(new Error('角色身份操作正在进行（删除中），请等待完成后再保存'))
+      }
+      return characterSaveInFlight.promise
+    }
     if (
       characterIdentityMutationInFlight
       && sameProjectSessionContext(characterIdentityMutationInFlight.projectSession, projectSession)
@@ -557,6 +530,10 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     }
     set({ saving: true, identityBusy: true })
     const { characters } = get()
+    const expectedRevision = get().rosterRevision
+    if (expectedRevision === null) {
+      return Promise.reject(new Error('角色名单尚未完成安全读取，已拒绝保存'))
+    }
     const saveLedger = readCharacterDraftLedger()
     const renames = getCharacterDraftRenames(saveLedger, projectKey)
     const savedCharacters = characters.map(character => ({
@@ -567,31 +544,41 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       originalName: rename.originalName,
       newName: rename.newName.trim(),
     }))
+    const saveKind: SessionOperation<void>['kind'] = operationKind
+      ?? (savedRenames.length > 0 ? 'rename' : 'save')
 
     const save = async () => {
-      // 角色主键改名、蓝图结构化引用更新和角色卡保存由主进程在单事务内完成。
+      // 角色主键改名、删除、蓝图结构化引用、角色图谱、revision 和 receipt
+      // 都由主进程 roster seam 在同一事务内完成。
       const result = await ipc.invokeWithProjectSession(
         projectSession,
-        'db:character-save-all',
-        savedCharacters,
-        savedRenames,
+        'db:character-roster-commit',
+        {
+          operationId: `manual-character-save-${randomUUID()}`,
+          expectedRevision,
+          schemaVersion: 1,
+          intent: 'manual_edit',
+          entries: characterRosterEntriesFromCards(savedCharacters),
+          ...(savedRenames.length > 0 ? { renames: savedRenames } : {}),
+        },
         projectKey,
       )
-      if (!result.success) {
+      if (!result.success || !result.receipt) {
         throw new Error(result.error ?? '角色卡保存失败')
       }
       if (!isCharacterProjectSessionCurrent(projectSession)) return
+      const savedRosterCards = result.receipt.snapshot.entries.map(characterCardFromRosterEntry)
       const ledger = readCharacterDraftLedger()
       const currentProjectDraft = getProjectEditorDraft(ledger, projectKey)
       const projectSaveInputStillCurrent = (
         !currentProjectDraft || valuesMatch(currentProjectDraft.draftValue, characters)
       )
       const currentValue = projectSaveInputStillCurrent
-        ? savedCharacters
+        ? savedRosterCards
         : currentProjectDraft.draftValue
       const currentRenames = getCharacterDraftRenames(ledger, projectKey)
       const remainingRenames = rebuildCharacterRenamesAfterSave(
-        savedCharacters,
+        savedRosterCards,
         currentValue,
         savedRenames,
         currentRenames,
@@ -599,7 +586,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       let settledLedger = settleProjectEditorSave(
         ledger,
         projectKey,
-        savedCharacters,
+        savedRosterCards,
         currentValue,
       )
       settledLedger = setCharacterDraftRenames(settledLedger, projectKey, remainingRenames)
@@ -610,13 +597,16 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
         projectSaveInputStillCurrent
         && valuesMatch(get().characters, characters)
       ) {
-        const selectedIndex = characters.findIndex(character => character.name === get().selectedName)
+        const selectedIndex = savedRosterCards.findIndex(character => character.name === get().selectedName)
         set({
-          characters: savedCharacters,
+          characters: savedRosterCards,
+          rosterRevision: result.receipt.revision,
           selectedName: selectedIndex >= 0
-            ? savedCharacters[selectedIndex].name
+            ? savedRosterCards[selectedIndex].name
             : get().selectedName,
         })
+      } else if (isCharacterProjectSessionCurrent(projectSession)) {
+        set({ rosterRevision: result.receipt.revision })
       }
     }
     const trackedSave = save().finally(() => {
@@ -630,8 +620,8 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
         set({ saving: false, identityBusy: false })
       }
     })
-    characterSaveInFlight = { projectSession, promise: trackedSave }
-    characterIdentityMutationInFlight = { projectSession, promise: trackedSave }
+    characterSaveInFlight = { projectSession, promise: trackedSave, kind: saveKind }
+    characterIdentityMutationInFlight = { projectSession, promise: trackedSave, kind: saveKind }
     return trackedSave
   },
 }))
