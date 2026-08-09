@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writer",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "AI Novel Writer - a local-first production workspace for long-form fiction",
   "author": "AI Novel Writer Maintainers",
   "private": true,
@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "check:i18n": "node scripts/check-i18n-coverage.mjs",
     "test": "vitest run",
+    "test:renderer-surface:e2e": "node scripts/renderer-surface-e2e.mjs",
     "build": "tsc && vite build",
     "build:win": "pnpm run release:win:verify",
     "build:win:artifacts": "node scripts/require-release-gate.mjs && pnpm run rebuild:electron && tsc && vite build && electron-builder --win --x64 --publish never",

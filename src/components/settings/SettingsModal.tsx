@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import {
   X, Plus, Trash2, Check, Save, Globe, Cpu, Database,
   Type, Settings2, Zap, Eye, EyeOff, ChevronDown, MessageSquare,
-  Info, Palette,
+  Info, Palette, ExternalLink,
 } from 'lucide-react'
 import PromptSettings from './PromptSettings'
 import AppearanceSettings from './AppearanceSettings'
@@ -162,6 +162,18 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
 
 // ==================== LLM & Embedding 通用区 ====================
 
+type LocalizedText = (zhCNText: string, enUSText: string) => string
+
+/** Open only an allowlisted provider resource through the trusted main-process IPC boundary. */
+async function openModelProviderResource(resource: ModelProviderResourceId, text: LocalizedText) {
+  try {
+    const result = await ipc.invoke('model-provider-resource:open', resource)
+    if (!result.success) throw new Error(result.error || text('无法打开服务商页面', 'Unable to open provider page'))
+  } catch (error) {
+    alertError(String(error), { title: text('打开链接失败', 'Unable to open link') })
+  }
+}
+
 function LLMSection({
   purposes,
   purposeLabel,
@@ -202,6 +214,7 @@ function LLMSection({
   }
 
   const isEmbeddingSection = purposes.includes('embedding')
+  const openSiliconFlowInvite = () => void openModelProviderResource('siliconflow-invite', text)
 
   /** 保存模型；若是该分类第一个则自动设为默认 */
   const handleSave = async () => {
@@ -259,6 +272,26 @@ function LLMSection({
               {text(`添加${purposeLabel}`, `Add ${purposeLabel}`)}
             </Button>
           </div>
+
+          {isEmbeddingSection && !editingModel && (
+            <div
+              className="flex items-center justify-between gap-4 rounded-xl px-4 py-3"
+              style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-panel)' }}
+            >
+              <div className="min-w-0">
+                <p className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>
+                  {text('免费向量模型推荐', 'Free embedding model recommendation')}
+                </p>
+                <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
+                  {text('SiliconFlow 提供免费的 BAAI/bge-m3；注册后仅需填写 API Key 即可使用。', 'SiliconFlow provides the free BAAI/bge-m3 model. Register, then add your API Key to use it.')}
+                </p>
+              </div>
+              <Button type="button" size="sm" variant="outline" onClick={openSiliconFlowInvite} className="flex-shrink-0">
+                {text('免费模型注册链接', 'Free model registration')}
+                <ExternalLink size={13} />
+              </Button>
+            </div>
+          )}
 
           {filtered.length === 0 ? (
             <div
@@ -493,15 +526,6 @@ function ModelForm({
     setTimeout(() => setTestResult(null), 3000)
   }
 
-  const openModelProviderResource = async (resource: ModelProviderResourceId) => {
-    try {
-      const result = await ipc.invoke('model-provider-resource:open', resource)
-      if (!result.success) throw new Error(result.error || text('无法打开服务商页面', 'Unable to open provider page'))
-    } catch (error) {
-      alertError(String(error), { title: text('打开链接失败', 'Unable to open link') })
-    }
-  }
-
   return (
     <div
       className="rounded-xl p-5 space-y-4"
@@ -650,13 +674,13 @@ function ModelForm({
             {text('BAAI/bge-m3 当前在 SiliconFlow 提供免费调用。完成实名认证后可使用，仍受固定速率限制约束。', 'BAAI/bge-m3 is currently free on SiliconFlow. Verification is required; fixed rate limits still apply.')}
           </p>
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
-            <button type="button" onClick={() => openModelProviderResource('siliconflow-invite')} className="text-[var(--color-accent)] hover:underline">
+            <button type="button" onClick={() => void openModelProviderResource('siliconflow-invite', text)} className="text-[var(--color-accent)] hover:underline">
               {text('邀请注册链接', 'Invitation registration link')}
             </button>
-            <button type="button" onClick={() => openModelProviderResource('siliconflow-console')} className="text-[var(--color-accent)] hover:underline">
+            <button type="button" onClick={() => void openModelProviderResource('siliconflow-console', text)} className="text-[var(--color-accent)] hover:underline">
               {text('官方控制台', 'Official console')}
             </button>
-            <button type="button" onClick={() => openModelProviderResource('siliconflow-docs')} className="text-[var(--color-accent)] hover:underline">
+            <button type="button" onClick={() => void openModelProviderResource('siliconflow-docs', text)} className="text-[var(--color-accent)] hover:underline">
               {text('官方文档', 'Official documentation')}
             </button>
           </div>

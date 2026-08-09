@@ -418,7 +418,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   if (sidebarView === 'characters') {
     return (
       <div
-        className="w-full h-full flex flex-col overflow-hidden"
+        className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--color-editor-bg)' }}
       >
         <CharacterEditor projectKey={currentProject?.path ?? ''} />
@@ -453,7 +453,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   if (tabs.length === 0) {
     return (
       <div
-        className="w-full h-full flex flex-col overflow-hidden"
+        className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--color-editor-bg)' }}
       >
         <div className="flex-1 flex items-center justify-center">
@@ -482,7 +482,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
 
   return (
     <div
-      className="w-full h-full flex flex-col overflow-hidden"
+      className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
       style={{ backgroundColor: 'var(--color-editor-bg)' }}
     >
       {/* Tab 条：左右箭头 + 可横向滚动区域 + 三个点菜单 */}

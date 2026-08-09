@@ -19,7 +19,7 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
 
   return (
     <div
-      className="writer-shell-surface w-full h-full overflow-y-auto"
+      className="writer-shell-surface skin-workspace-page w-full h-full overflow-y-auto"
     >
       <div className="max-w-lg w-full mx-auto px-8 py-16">
         {/* Logo 区域 — 品牌极光光环 */}

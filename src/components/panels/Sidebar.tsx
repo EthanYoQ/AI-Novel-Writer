@@ -40,7 +40,7 @@ export default function Sidebar() {
 
   return (
     <div
-      className="w-full h-full flex flex-col overflow-hidden"
+      className="skin-workspace-panel w-full h-full flex flex-col overflow-hidden"
       style={{
         backgroundColor: 'var(--color-sidebar)',
         borderRight: '1px solid var(--color-border)',

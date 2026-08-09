@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
+import { type ReactNode, useEffect } from 'react'
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels'
-import { useThemeStore } from './stores/theme-store'
+import { type Theme, useThemeStore } from './stores/theme-store'
 import { useLayoutStore } from './stores/layout-store'
 import { useLLMStore } from './stores/llm-store'
 import { useProjectStore } from './stores/project-store'
@@ -63,12 +63,35 @@ export function SkinBackgroundLayer({
   )
 }
 
+/** Stable root semantics let image skins opt into their own readability tokens for every color theme. */
+export function AppSkinRoot({
+  theme,
+  skinId,
+  children,
+}: {
+  theme: Theme
+  skinId: SkinId
+  children: ReactNode
+}) {
+  return (
+    <div
+      className="app-skin-root flex flex-col w-full h-full overflow-hidden"
+      data-theme={theme}
+      data-skin={skinId}
+      data-skin-readability={skinId === 'classic' ? 'theme-default' : 'high-contrast'}
+    >
+      {children}
+    </div>
+  )
+}
+
 /**
  * Vela 主应用组件
  * 使用 react-resizable-panels 实现可拖拽调整大小的四区布局
  */
 export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme)
+  const resolvedTheme = useThemeStore((s) => s.resolvedTheme)
   const initLocale = useLocaleStore((s) => s.init)
   const text = useLocaleStore((s) => s.text)
   const sidebarOpen = useLayoutStore(s => s.sidebarOpen)
@@ -223,7 +246,7 @@ export default function App() {
   }, [])
 
   return (
-    <div className="app-skin-root flex flex-col w-full h-full overflow-hidden" data-skin={skinState.activeSkin}>
+    <AppSkinRoot theme={resolvedTheme} skinId={skinState.activeSkin}>
       <SkinBackgroundLayer
         skinId={skinState.activeSkin}
         backgroundUrl={skinBackgroundUrl}
@@ -324,6 +347,6 @@ export default function App() {
         onClose={closeSettings}
       />
 
-    </div>
+    </AppSkinRoot>
   )
 }

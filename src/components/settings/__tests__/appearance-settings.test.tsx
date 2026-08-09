@@ -29,6 +29,8 @@ describe('appearance settings renderer seam', () => {
     expect(markup).toContain('data-skin-card="classic"')
     expect(markup).toContain('data-skin-card="anime"')
     expect(markup).toContain('data-skin-card="custom"')
+    expect(markup).toContain('手绘幻想')
+    expect(markup).toContain('原创日系动画氛围')
     expect(markup).toContain('data-skin-action="choose"')
     expect(markup).toContain('PNG / JPEG')
     expect(markup).toContain('20 MB')

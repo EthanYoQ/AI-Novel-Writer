@@ -33,9 +33,9 @@ describe('model settings contract', () => {
     const resourceController = source('electron/controllers/model-provider-resource-controller.ts')
 
     expect(settingsModal).toContain('createModelProfileDraft')
-    expect(settingsModal).toContain("openModelProviderResource('siliconflow-invite')")
-    expect(settingsModal).toContain("openModelProviderResource('siliconflow-console')")
-    expect(settingsModal).toContain("openModelProviderResource('siliconflow-docs')")
+    expect(settingsModal).toContain("openModelProviderResource('siliconflow-invite'")
+    expect(settingsModal).toContain("openModelProviderResource('siliconflow-console'")
+    expect(settingsModal).toContain("openModelProviderResource('siliconflow-docs'")
     expect(settingsModal).toContain('邀请注册链接')
     expect(settingsModal).toContain('BAAI/bge-m3')
     expect(settingsModal).toContain('免费')
@@ -43,4 +43,5 @@ describe('model settings contract', () => {
     expect(settingsModal).not.toContain('shell.openExternal')
     expect(resourceController).toContain('MODEL_PROVIDER_RESOURCE_URLS[resource]')
   })
+
 })

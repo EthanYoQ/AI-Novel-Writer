@@ -135,7 +135,7 @@ export default function KnowledgeOverview() {
 
   if (!currentProject) {
     return (
-      <div className="h-full flex flex-col overflow-hidden bg-[var(--color-bg)]">
+      <div className="skin-workspace-page h-full flex flex-col overflow-hidden bg-[var(--color-bg)]">
         <div
           className="flex items-center justify-between gap-2 px-3 h-9 flex-shrink-0"
           style={{
@@ -269,7 +269,7 @@ export default function KnowledgeOverview() {
   }
 
   return (
-    <div className="h-full overflow-y-auto" style={{ backgroundColor: 'var(--color-editor-bg)' }}>
+    <div className="skin-workspace-page h-full overflow-y-auto" style={{ backgroundColor: 'var(--color-editor-bg)' }}>
       <div className="max-w-4xl mx-auto px-8 py-6">
 
         {/* ===== 标题 ===== */}
