@@ -336,6 +336,34 @@ describe('Windows official in-app update E2E contract', () => {
     expect(releaseMonitor).toContain("displayed a new Windows error dialog")
   })
 
+  it('waits for the exact updater installer root, clears force-run app instances, and then stabilizes the install root', () => {
+    const powershell = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e.ps1'), 'utf8')
+    const triggerIndex = powershell.indexOf("windows-in-app-update-e2e-driver.mjs') trigger")
+    const capturePendingInstallerIndex = powershell.indexOf('$pendingInstallerIdentity = Wait-E2ePendingInstallerIdentity')
+    const waitForOldAppExitIndex = powershell.indexOf('$oldAppProcess.WaitForExit', capturePendingInstallerIndex)
+    const waitForPendingInstallerRootExitIndex = powershell.indexOf('Wait-E2ePendingInstallerRootExit `', waitForOldAppExitIndex)
+    const stopForceRunAppIndex = powershell.indexOf('Stop-E2eExistingInstalledApps -ExePath $updatedExe', waitForPendingInstallerRootExitIndex)
+    const pendingInstallerRootExitCall = powershell.slice(waitForPendingInstallerRootExitIndex, stopForceRunAppIndex)
+    const waitForStableInstallRootIndex = powershell.indexOf('$installedUpdatedVersion = Wait-E2eInstallRootStable', stopForceRunAppIndex)
+    const launchUpdatedAppIndex = powershell.indexOf('$newAppProcess = Start-Process')
+
+    expect(triggerIndex).toBeGreaterThanOrEqual(0)
+    expect(capturePendingInstallerIndex).toBeGreaterThan(triggerIndex)
+    expect(waitForOldAppExitIndex).toBeGreaterThan(capturePendingInstallerIndex)
+    expect(waitForPendingInstallerRootExitIndex).toBeGreaterThan(waitForOldAppExitIndex)
+    expect(stopForceRunAppIndex).toBeGreaterThan(waitForPendingInstallerRootExitIndex)
+    expect(pendingInstallerRootExitCall.trimEnd()).toMatch(/-TimeoutSeconds \$ApplicationTimeoutSeconds$/)
+    expect(waitForStableInstallRootIndex).toBeGreaterThan(stopForceRunAppIndex)
+    expect(launchUpdatedAppIndex).toBeGreaterThan(waitForStableInstallRootIndex)
+    expect(powershell).toContain('function Wait-E2ePendingInstallerIdentity')
+    expect(powershell).toContain('function Wait-E2ePendingInstallerRootExit')
+    expect(powershell).toContain('function Wait-E2eInstallRootStable')
+    expect(powershell).toContain('-ExpectedImagePath $expectedPendingInstallerPath')
+    expect(powershell).toContain('-Identity $pendingInstallerIdentity')
+    expect(powershell).not.toContain('$pendingInstallerProcessIds')
+    expect(powershell).toContain('function Get-E2eInstallRootFingerprint')
+  })
+
   it('persists and uploads the three live UI lifecycle screenshots', () => {
     const workflow = readFileSync(resolve(process.cwd(), '.github/workflows/windows-in-app-update-e2e.yml'), 'utf8')
     const driver = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e-driver.mjs'), 'utf8')
@@ -479,6 +507,99 @@ $velaHome = 'C:\\polluted-by-dot-source'
 
   it('runs the E2E orchestration under the workflow PowerShell runtime', () => {
     expect(WINDOWS_UPDATE_RUNNER_COMMAND).toBe('pwsh.exe')
+  })
+
+  windowsIt('waits only for the exact pending installer root to exit before force-run cleanup', () => {
+    const pendingInstallerPath = 'C:\\Users\\runneradmin\\AppData\\Local\\ai-novel-writer-updater\\pending\\ai-novel-writer-setup-0.8.0.exe'
+    const output = runWindowsE2ePowerShellFunctions([
+      'Assert-E2eCondition',
+      'Test-E2eSameAbsolutePath',
+      'Wait-E2ePendingInstallerRootExit',
+    ], `
+$identity = [pscustomobject]@{
+  processId = 5936
+  startTimeTicks = '639219050918203812'
+  executablePath = ${quotePowerShell(pendingInstallerPath)}
+}
+
+$script:normalProbeCount = 0
+$normalExitAccepted = $true
+try {
+  [void](Wait-E2ePendingInstallerRootExit -Identity $identity -ExpectedImagePath ${quotePowerShell(pendingInstallerPath)} -TimeoutSeconds 1 -PollMilliseconds 1 -ProcessIdentityProvider {
+    param($ignored)
+    $script:normalProbeCount += 1
+    if ($script:normalProbeCount -eq 1) {
+      return [pscustomobject]@{
+        processId = 5936
+        startTimeTicks = '639219050918203812'
+        executablePath = ${quotePowerShell(pendingInstallerPath)}
+      }
+    }
+    return $null
+  })
+}
+catch {
+  $normalExitAccepted = $false
+}
+
+$startMismatchRejected = $false
+try {
+  [void](Wait-E2ePendingInstallerRootExit -Identity $identity -ExpectedImagePath ${quotePowerShell(pendingInstallerPath)} -TimeoutSeconds 1 -PollMilliseconds 1 -ProcessIdentityProvider {
+    param($ignored)
+    return [pscustomobject]@{
+      processId = 5936
+      startTimeTicks = '639219050918203813'
+      executablePath = ${quotePowerShell(pendingInstallerPath)}
+    }
+  })
+}
+catch {
+  $startMismatchRejected = $_.Exception.Message -like '*start time*'
+}
+
+$pathDriftRejected = $false
+try {
+  [void](Wait-E2ePendingInstallerRootExit -Identity $identity -ExpectedImagePath ${quotePowerShell(pendingInstallerPath)} -TimeoutSeconds 1 -PollMilliseconds 1 -ProcessIdentityProvider {
+    param($ignored)
+    return [pscustomobject]@{
+      processId = 5936
+      startTimeTicks = '639219050918203812'
+      executablePath = 'C:\\unexpected\\ai-novel-writer-setup-0.8.0.exe'
+    }
+  })
+}
+catch {
+  $pathDriftRejected = $_.Exception.Message -like '*path changed*'
+}
+
+$forceRunChildStillAlive = $true
+$forceRunChildDidNotBlockRootExit = $true
+try {
+  [void](Wait-E2ePendingInstallerRootExit -Identity $identity -ExpectedImagePath ${quotePowerShell(pendingInstallerPath)} -TimeoutSeconds 1 -PollMilliseconds 1 -ProcessIdentityProvider {
+    param($ignored)
+    return $null
+  })
+}
+catch {
+  $forceRunChildDidNotBlockRootExit = $false
+}
+
+[pscustomobject]@{
+  NormalExitAccepted = $normalExitAccepted
+  StartMismatchRejected = $startMismatchRejected
+  PathDriftRejected = $pathDriftRejected
+  ForceRunChildStillAlive = $forceRunChildStillAlive
+  ForceRunChildDidNotBlockRootExit = $forceRunChildDidNotBlockRootExit
+} | ConvertTo-Json -Compress
+`)
+
+    expect(JSON.parse(output.trim().split(/\r?\n/).at(-1)!)).toEqual({
+      NormalExitAccepted: true,
+      StartMismatchRejected: true,
+      PathDriftRejected: true,
+      ForceRunChildStillAlive: true,
+      ForceRunChildDidNotBlockRootExit: true,
+    })
   })
 
   windowsIt('treats an already-exited installed app as clean while rejecting PID reuse', () => {

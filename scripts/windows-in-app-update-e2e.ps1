@@ -270,6 +270,18 @@ function Test-E2eLegacyBridgeSourceTag {
   return ([version]$SourceTag.Substring(1)) -lt ([version]'0.7.0')
 }
 
+function Get-E2eExpectedPendingInstallerPath {
+  param([Parameter(Mandatory = $true)]$Plan)
+
+  Assert-E2eCondition -Condition ($env:LOCALAPPDATA -match '^[A-Za-z]:\\') -Message 'The Windows in-app update E2E requires an absolute LOCALAPPDATA path.'
+  $installerName = [string]$Plan.expected.assets.installer.name
+  Assert-E2eCondition -Condition ($installerName -match '^ai-novel-writer-setup-\d+\.\d+\.\d+\.exe$') -Message 'The expected pending installer name is unsafe.'
+  $pendingRoot = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'ai-novel-writer-updater\pending'))
+  $pendingInstallerPath = [System.IO.Path]::GetFullPath((Join-Path $pendingRoot $installerName))
+  Assert-E2eCondition -Condition ((Split-Path -Parent $pendingInstallerPath) -eq $pendingRoot) -Message 'The expected pending installer path escaped its canonical cache directory.'
+  return $pendingInstallerPath
+}
+
 function Get-E2eLegacyBridgeContract {
   param([Parameter(Mandatory = $true)]$Plan)
 
@@ -644,6 +656,158 @@ function Wait-E2eInstalledVersion {
   throw "Installed app did not become v$ExpectedVersion after in-app update. Last observation: $lastObservation"
 }
 
+function Wait-E2ePendingInstallerIdentity {
+  param(
+    [Parameter(Mandatory = $true)][string]$ExpectedImagePath,
+    [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+  )
+
+  $canonicalExpectedPath = [System.IO.Path]::GetFullPath($ExpectedImagePath)
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  $lastObservation = 'no exact pending installer process was observed'
+  while ([DateTime]::UtcNow -lt $deadline) {
+    $matches = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
+      if ([string]::IsNullOrWhiteSpace([string]$entry.ExecutablePath)) { continue }
+      if (-not (Test-E2eSameAbsolutePath -Left ([string]$entry.ExecutablePath) -Right $canonicalExpectedPath)) { continue }
+      try {
+        $matches.Add((Get-E2eLiveProcessIdentity -ProcessId ([int]$entry.ProcessId) -ExpectedImagePath $canonicalExpectedPath))
+      }
+      catch [System.ArgumentException] {
+        $lastObservation = "pending installer PID $($entry.ProcessId) exited while its exact identity was being captured"
+      }
+    }
+    if ($matches.Count -eq 1) {
+      return $matches[0]
+    }
+    if ($matches.Count -gt 1) {
+      throw "Observed multiple exact pending installer processes at $canonicalExpectedPath."
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  throw "Did not observe the exact pending installer before timeout: $canonicalExpectedPath. Last observation: $lastObservation"
+}
+
+function Wait-E2ePendingInstallerRootExit {
+  param(
+    [Parameter(Mandatory = $true)]$Identity,
+    [Parameter(Mandatory = $true)][string]$ExpectedImagePath,
+    [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+    [int]$PollMilliseconds = 100,
+    [scriptblock]$ProcessIdentityProvider
+  )
+
+  $expectedProcessId = [int]$Identity.processId
+  $expectedStartTimeTicks = [long]$Identity.startTimeTicks
+  $canonicalExpectedPath = [System.IO.Path]::GetFullPath($ExpectedImagePath)
+  Assert-E2eCondition -Condition ($expectedProcessId -gt 0) -Message 'Pending installer identity does not contain a valid PID.'
+  Assert-E2eCondition -Condition ($expectedStartTimeTicks -gt 0) -Message 'Pending installer identity does not contain a valid start time.'
+  Assert-E2eCondition -Condition (Test-E2eSameAbsolutePath -Left ([string]$Identity.executablePath) -Right $canonicalExpectedPath) -Message 'Pending installer identity path does not match the expected cache path.'
+  Assert-E2eCondition -Condition ($PollMilliseconds -gt 0) -Message 'Pending installer root-exit polling interval must be positive.'
+  if ($null -eq $ProcessIdentityProvider) {
+    $ProcessIdentityProvider = {
+      param($CandidateIdentity)
+      $process = $null
+      try {
+        try {
+          $process = [System.Diagnostics.Process]::GetProcessById([int]$CandidateIdentity.processId)
+        }
+        catch [System.ArgumentException] {
+          return $null
+        }
+        $process.Refresh()
+        if ($process.HasExited) { return $null }
+        return [pscustomobject][ordered]@{
+          processId = [int]$process.Id
+          startTimeTicks = [string]($process.StartTime.ToUniversalTime().Ticks)
+          executablePath = [System.IO.Path]::GetFullPath([string]$process.MainModule.FileName)
+        }
+      }
+      catch [System.InvalidOperationException] {
+        return $null
+      }
+      finally {
+        if ($null -ne $process) { $process.Dispose() }
+      }
+    }
+  }
+
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    $observed = & $ProcessIdentityProvider $Identity
+    if ($null -eq $observed) {
+      return
+    }
+    Assert-E2eCondition -Condition ([int]$observed.processId -eq $expectedProcessId) -Message 'Pending installer PID changed before exit.'
+    Assert-E2eCondition -Condition ([long]$observed.startTimeTicks -eq $expectedStartTimeTicks) -Message 'Pending installer start time changed before exit.'
+    Assert-E2eCondition -Condition (Test-E2eSameAbsolutePath -Left ([string]$observed.executablePath) -Right $canonicalExpectedPath) -Message 'Pending installer path changed before exit.'
+    Start-Sleep -Milliseconds $PollMilliseconds
+  }
+  throw "Exact pending installer root did not exit before timeout: PID $expectedProcessId at $canonicalExpectedPath"
+}
+
+function Get-E2eInstallRootFingerprint {
+  param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+  Assert-E2eCondition -Condition (Test-Path -LiteralPath $InstallRoot -PathType Container) -Message "Installed app root is missing: $InstallRoot"
+  $canonicalRoot = (Resolve-Path -LiteralPath $InstallRoot).Path.TrimEnd('\\', '/')
+  $entries = @(
+    Get-ChildItem -LiteralPath $canonicalRoot -File -Recurse -ErrorAction Stop | Sort-Object FullName | ForEach-Object {
+      $relativePath = $_.FullName.Substring($canonicalRoot.Length).TrimStart('\\', '/') -replace '\\', '/'
+      "${relativePath}:$($_.Length):$($_.LastWriteTimeUtc.Ticks)"
+    }
+  )
+  return ((@("root:$((Get-Item -LiteralPath $canonicalRoot -Force).LastWriteTimeUtc.Ticks)") + $entries) -join "`n")
+}
+
+function Wait-E2eInstallRootStable {
+  param(
+    [Parameter(Mandatory = $true)][string]$InstallRoot,
+    [Parameter(Mandatory = $true)][string]$ExePath,
+    [Parameter(Mandatory = $true)][string]$ElectronRunner,
+    [Parameter(Mandatory = $true)][string]$ExpectedVersion,
+    [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+    [int]$StableSeconds = 2
+  )
+
+  Assert-E2eCondition -Condition ($StableSeconds -gt 0) -Message 'Install-root stability duration must be positive.'
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  $lastObservation = $null
+  $lastFingerprint = $null
+  $stableSince = $null
+  while ([DateTime]::UtcNow -lt $deadline) {
+    try {
+      $lastObservation = Get-E2eInstalledVersion -ExePath $ExePath -ElectronRunner $ElectronRunner
+      if ($lastObservation -eq $ExpectedVersion) {
+        $fingerprint = Get-E2eInstallRootFingerprint -InstallRoot $InstallRoot
+        if ($fingerprint -eq $lastFingerprint) {
+          if ($null -eq $stableSince) {
+            $stableSince = [DateTime]::UtcNow
+          }
+          elseif (([DateTime]::UtcNow - $stableSince).TotalSeconds -ge $StableSeconds) {
+            return $lastObservation
+          }
+        }
+        else {
+          $lastFingerprint = $fingerprint
+          $stableSince = [DateTime]::UtcNow
+        }
+      }
+      else {
+        $lastFingerprint = $null
+        $stableSince = $null
+      }
+    }
+    catch {
+      $lastObservation = $_.Exception.Message
+      $lastFingerprint = $null
+      $stableSince = $null
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  throw "Installed app root did not remain stable at v$ExpectedVersion after in-app update. Last observation: $lastObservation"
+}
+
 function Get-E2eInstalledAppProcesses {
   param([Parameter(Mandatory = $true)][string]$ExePath)
 
@@ -776,6 +940,7 @@ $newAppStartTimes = @{}
 $legacyBridgeContract = $null
 $oldAppIdentity = $null
 $preTriggerOldAppIdentity = $null
+$pendingInstallerIdentity = $null
 $transcriptStarted = $false
 
 try {
@@ -789,6 +954,7 @@ try {
   Assert-E2eCondition -Condition ($plan.expected.tag -eq $plan.latest.tag) -Message 'expected_tag is not the current latest formal Release.'
   Assert-E2eCondition -Condition ($plan.expected.version -eq $plan.expected.tag.Substring(1)) -Message 'Expected Release version does not match its tag.'
   $legacyBridgeContract = Get-E2eLegacyBridgeContract -Plan $plan
+  $expectedPendingInstallerPath = Get-E2eExpectedPendingInstallerPath -Plan $plan
   $evidence.mode = if ($null -ne $legacyBridgeContract) { 'legacy-bridge' } else { 'native-silent' }
   $evidence.legacyInstallerHandoffObserved = $false
   $evidence.legacyInteractiveWizardObserved = $false
@@ -916,11 +1082,18 @@ try {
     --expected-version ([string]$plan.expected.version) `
     --evidence-root $resolvedEvidenceRoot
   if ($LASTEXITCODE -ne 0) { throw "Live UI update trigger failed with exit code $LASTEXITCODE." }
+  $pendingInstallerIdentity = Wait-E2ePendingInstallerIdentity `
+    -ExpectedImagePath $expectedPendingInstallerPath `
+    -TimeoutSeconds $ApplicationTimeoutSeconds
   $evidence.oldApplication = [ordered]@{
     processId = $oldAppProcess.Id
     cdpEndpoint = $oldEndpoint
     triggerEvidence = 'ui-trigger.json'
     exactIdentityBeforeTrigger = $preTriggerOldAppIdentity
+  }
+  $evidence.pendingInstaller = [ordered]@{
+    expectedPath = $expectedPendingInstallerPath
+    exactIdentity = $pendingInstallerIdentity
   }
 
   $oldAppProcess.WaitForExit($ApplicationTimeoutSeconds * 1000) | Out-Null
@@ -945,12 +1118,17 @@ try {
     -LastWindowSnapshot ([ref]$postOldExitSnapshot)
 
   $updatedExe = Join-Path $e2eInstallRoot $appExecutableName
-  $installedUpdatedVersion = Wait-E2eInstalledVersion `
+  Wait-E2ePendingInstallerRootExit `
+    -Identity $pendingInstallerIdentity `
+    -ExpectedImagePath $expectedPendingInstallerPath `
+    -TimeoutSeconds $ApplicationTimeoutSeconds
+  Stop-E2eExistingInstalledApps -ExePath $updatedExe
+  $installedUpdatedVersion = Wait-E2eInstallRootStable `
+    -InstallRoot $e2eInstallRoot `
     -ExePath $updatedExe `
     -ElectronRunner $electronRunner `
     -ExpectedVersion ([string]$plan.expected.version) `
     -TimeoutSeconds $ApplicationTimeoutSeconds
-  Stop-E2eExistingInstalledApps -ExePath $updatedExe
   $newDebugPort = Get-E2eFreeTcpPort
   $newAppStdout = Join-Path $resolvedEvidenceRoot 'updated-app.stdout.log'
   $newAppStderr = Join-Path $resolvedEvidenceRoot 'updated-app.stderr.log'
