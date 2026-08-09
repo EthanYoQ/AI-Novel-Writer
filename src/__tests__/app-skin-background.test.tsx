@@ -10,13 +10,28 @@ import KnowledgeOverview from '../components/pages/KnowledgeOverview'
 
 const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8')
 
-function imageSkinCss(): string {
-  const start = css.indexOf('/* ===== 图片皮肤')
-  const end = css.indexOf('/* ===== 图片皮肤结束 =====', start)
-  return start >= 0 && end >= 0 ? css.slice(start, end) : ''
+function imageSkinCss(source = css): string {
+  const normalizedSource = source.replace(/\r\n?/g, '\n')
+  const start = normalizedSource.indexOf('/* ===== 图片皮肤')
+  const end = normalizedSource.indexOf('/* ===== 图片皮肤结束 =====', start)
+  return start >= 0 && end >= 0 ? normalizedSource.slice(start, end) : ''
 }
 
 describe('App image-skin background seam', () => {
+  it('extracts identical image-skin CSS from LF and CRLF checkouts', () => {
+    const lfSource = [
+      '/* ===== 图片皮肤 ===== */',
+      "[data-skin-readability='high-contrast'] :is(",
+      '  .writer-shell-surface,',
+      '  .writer-panel-card',
+      ') {}',
+      '/* ===== 图片皮肤结束 ===== */',
+    ].join('\n')
+    const crlfSource = lfSource.replace(/\n/g, '\r\n')
+
+    expect(imageSkinCss(crlfSource)).toBe(imageSkinCss(lfSource))
+  })
+
   it('emits stable high-contrast semantics on the App root for every theme and image skin', () => {
     const themes = ['light', 'galaxy', 'paper', 'dark'] as const
     const imageSkins = ['anime', 'custom'] as const
