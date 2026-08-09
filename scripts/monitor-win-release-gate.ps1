@@ -2414,6 +2414,129 @@ function Test-AiNovelGateLegacyBridgeTermination {
   )
 }
 
+function Test-AiNovelGateNativeUpdaterPendingInstallerIdentity {
+  param(
+    [AllowNull()]$InstallerIdentity,
+    [AllowNull()]$OldApplicationIdentity
+  )
+
+  # Native updater handoff has no legacy control record. Bind it to the one
+  # expected final NSIS artifact underneath the updater-owned pending root and
+  # to the exact captured old-app parent; do not infer authorization from a
+  # basename or a merely similar LOCALAPPDATA path.
+  if (
+    $null -eq $InstallerIdentity -or
+    $null -eq $OldApplicationIdentity -or
+    -not [bool]$InstallerIdentity.identityCaptured -or
+    -not [bool]$InstallerIdentity.commandLineCaptured -or
+    [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA) -or
+    $env:LOCALAPPDATA -notmatch '^[A-Za-z]:\\'
+  ) {
+    return $false
+  }
+  try {
+    $installerName = [System.IO.Path]::GetFileName([string]$InstallerIdentity.executablePath)
+    if ($installerName -notmatch '^ai-novel-writer-setup-\d+\.\d+\.\d+\.exe$') {
+      return $false
+    }
+    $expectedPendingInstallerPath = [System.IO.Path]::GetFullPath((Join-Path `
+      $env:LOCALAPPDATA `
+      (Join-Path 'ai-novel-writer-updater\pending' $installerName)))
+    return (
+      (Test-AiNovelGateSameAbsolutePath `
+        -Left ([string]$InstallerIdentity.executablePath) `
+        -Right $expectedPendingInstallerPath) -and
+      (Test-AiNovelGateCapturedParentIdentity `
+        -ChildIdentity $InstallerIdentity `
+        -ParentIdentity $OldApplicationIdentity)
+    )
+  }
+  catch {
+    return $false
+  }
+}
+
+function Test-AiNovelGateNativeUpdaterOldApplicationExit {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$Event,
+    [AllowNull()]$ProcessIdentity,
+    [AllowNull()]$TrackedProcessIdentities
+  )
+
+  # Electron can surface STATUS_BREAKPOINT after native autoUpdater has handed
+  # its exact updater-owned pending installer to the old application. This is
+  # deliberately independent of the legacy bridge and rejects every partial,
+  # reused, drifted, or ambiguous process chain.
+  if (
+    $Step -ne 'windows-in-app-update-e2e' -or
+    $null -ne $LegacyBridge -or
+    $null -eq $Event -or
+    $null -eq $ProcessIdentity -or
+    $null -eq $TrackedProcessIdentities -or
+    -not [bool]$Event.ExitCodeCaptured -or
+    [uint32]$Event.JobMessage -ne 8 -or
+    [int]$Event.ExitCode -ne -2147483645 -or
+    -not [bool]$ProcessIdentity.identityCaptured -or
+    -not [bool]$ProcessIdentity.commandLineCaptured -or
+    [int]$ProcessIdentity.processId -le 0 -or
+    [int]$Event.ProcessId -ne [int]$ProcessIdentity.processId -or
+    [string]::IsNullOrWhiteSpace($env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT) -or
+    $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT -notmatch '^[A-Za-z]:\\'
+  ) {
+    return $false
+  }
+
+  try {
+    $oldApplicationName = 'AI小说作家.exe'
+    $expectedOldApplicationPath = [System.IO.Path]::GetFullPath(
+      [System.IO.Path]::Combine(
+        $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT,
+        'runtime',
+        'installed-app',
+        $oldApplicationName
+      )
+    )
+    if (-not [string]::Equals(
+      [System.IO.Path]::GetFileName([string]$ProcessIdentity.executablePath),
+      $oldApplicationName,
+      [System.StringComparison]::OrdinalIgnoreCase
+    ) -or -not (Test-AiNovelGateSameAbsolutePath `
+      -Left ([string]$ProcessIdentity.executablePath) `
+      -Right $expectedOldApplicationPath)) {
+      return $false
+    }
+    if (-not $TrackedProcessIdentities.ContainsKey([int]$ProcessIdentity.processId)) {
+      return $false
+    }
+    $trackedOldApplicationIdentity = $TrackedProcessIdentities[[int]$ProcessIdentity.processId]
+    if (-not [bool]$trackedOldApplicationIdentity.commandLineCaptured) {
+      return $false
+    }
+    if (-not (Test-AiNovelGateExactIdentity `
+      -Identity $trackedOldApplicationIdentity `
+      -ProcessId ([int]$ProcessIdentity.processId) `
+      -StartTimeTicks ([string]$ProcessIdentity.startTimeTicks) `
+      -ExecutablePath ([string]$ProcessIdentity.executablePath))) {
+      return $false
+    }
+
+    $matchingInstallerCount = 0
+    foreach ($candidateIdentity in @($TrackedProcessIdentities.Values)) {
+      if (Test-AiNovelGateNativeUpdaterPendingInstallerIdentity `
+        -InstallerIdentity $candidateIdentity `
+        -OldApplicationIdentity $trackedOldApplicationIdentity) {
+        $matchingInstallerCount += 1
+      }
+    }
+    return $matchingInstallerCount -eq 1
+  }
+  catch {
+    return $false
+  }
+}
+
 function Test-AiNovelGateLegacyBridgeOldApplicationExit {
   param(
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
@@ -3127,6 +3250,14 @@ try {
           -ProcessIdentity $processIdentity) {
           $exitClassification = 'legacy-bridge-old-application-breakpoint'
         }
+        elseif (Test-AiNovelGateNativeUpdaterOldApplicationExit `
+          -Step $activeStep `
+          -LegacyBridge $legacyBridge `
+          -Event $processEvent `
+          -ProcessIdentity $processIdentity `
+          -TrackedProcessIdentities $trackedProcessIdentities) {
+          $exitClassification = 'native-updater-old-application-breakpoint'
+        }
         elseif ($null -eq $exitFailure) {
           $exitClassification = 'succeeded'
         }
@@ -3251,7 +3382,8 @@ try {
           'expected-nsis-find-no-match',
           'pending-nsis-cmd-process-check',
           'legacy-bridge-terminated',
-          'legacy-bridge-old-application-breakpoint'
+          'legacy-bridge-old-application-breakpoint',
+          'native-updater-old-application-breakpoint'
         )) {
           continue
         }

@@ -523,6 +523,7 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
     '-EvidencePath', monitorEvidencePath,
   ], {
     cwd: repositoryRoot,
+    env: { ...process.env, AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT: resolvedEvidenceRoot },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   })
