@@ -50,14 +50,7 @@ function LeftNavButton({
       <button
         onClick={onClick}
         title={title ?? label}
-        className="left-nav-button"
-        style={{
-          color: active ? '#fff8e8' : 'rgba(255, 247, 228, 0.78)',
-          background: active
-            ? 'linear-gradient(180deg, rgba(138, 91, 46, 0.88), rgba(82, 50, 23, 0.88))'
-            : 'transparent',
-          boxShadow: active ? 'inset 3px 0 0 var(--writer-brass-400)' : 'none',
-        }}
+        className={`left-nav-button${active ? ' is-active' : ''}`}
       >
         <Icon size={22} strokeWidth={active ? 2 : 1.75} />
         <span className="left-nav-label">{label}</span>

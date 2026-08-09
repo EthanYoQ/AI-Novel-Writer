@@ -4,7 +4,12 @@ import LeftToolWindowBar from '../LeftToolWindowBar'
 import { useLayoutStore } from '../../../stores/layout-store'
 
 function countActiveRailButtons(html: string) {
-  return (html.match(/linear-gradient\(180deg/g) ?? []).length
+  return [...html.matchAll(/<button\b[^>]*\bclass="([^"]*)"[^>]*>/g)]
+    .filter(([, className]) => {
+      const classTokens = className.split(/\s+/)
+      return classTokens.includes('left-nav-button') && classTokens.includes('is-active')
+    })
+    .length
 }
 
 describe('LeftToolWindowBar', () => {

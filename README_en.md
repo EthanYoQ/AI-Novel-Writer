@@ -28,11 +28,11 @@
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
-> ## v0.7.0 major update
+> ## v0.7.1 patch update
 >
-> [v0.7.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.7.0) is a major update to release reliability and interface appearance. It provides classic, original anime, and custom image skins, with classic retained as the default appearance. Custom images accept only PNG or JPEG; the main process selects, validates, and copies them into application data. A safe fallback returns to classic on import or read failure without exposing a local absolute path to the renderer. On Windows, “Restart and update now” now installs silently and relaunches the new version automatically. This release also adds formal-Release in-app-update end-to-end qualification for the path from an installed formal version to a newer formal version. Windows x64 and macOS ARM64 cloud qualification include a cross-platform packaged-skin smoke covering the built-in asset and custom-skin recovery in isolated user data.
+> [v0.7.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.7.1) is a patch update for interface experience and the model-configuration entry: it improves skin visibility and preserves classic theme consistency across writing surfaces. The embedding-model entry now recommends SiliconFlow's BAAI/bge-m3 and provides a “Free model registration” link.
 >
-> This release provides both Windows x64 and macOS Apple Silicon (ARM64) installers in one Release asset list. The Windows x64 installer supports in-app updates but is not code-signed. The macOS ARM64 package is unsigned and not notarized, and future macOS updates require a manual download from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
+> One Release contains five assets: the Windows x64 installer `ai-novel-writer-setup-0.7.1.exe`, its `.blockmap`, `latest.yml`, plus the macOS Apple Silicon (ARM64) DMG and its `.sha256` checksum. The Windows installer is not code-signed but supports in-app updates. The macOS ARM64 package is unsigned and not notarized, and future versions require a manual download from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
 
 ## What this product is
 

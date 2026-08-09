@@ -1,8 +1,8 @@
 import type { MessageKey } from './en-US'
 
 export const zhCN = {
-  'appearance.anime': '动漫夜景',
-  'appearance.animeDescription': '内置插画皮肤，保持固定可读性。',
+  'appearance.anime': '手绘幻想',
+  'appearance.animeDescription': '原创日系动画氛围，兼顾背景层次与文字可读性。',
   'appearance.change': '更换图片',
   'appearance.choose': '选择图片',
   'appearance.classic': '经典',

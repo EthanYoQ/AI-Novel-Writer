@@ -135,13 +135,7 @@ export default function TitleBar() {
       } as CSSProperties}
     >
       <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
-        <div
-          className="flex h-8 w-8 items-center justify-center rounded-md"
-          style={{
-            background: 'linear-gradient(180deg, rgba(255, 239, 205, 0.22), rgba(160, 98, 39, 0.16))',
-            border: '1px solid rgba(255, 236, 194, 0.18)',
-          }}
-        >
+        <div className="writer-brand-mark flex h-8 w-8 items-center justify-center rounded-md">
           <ScrollText size={18} strokeWidth={1.7} />
         </div>
         <div className="leading-tight min-w-[112px]">
@@ -173,7 +167,7 @@ export default function TitleBar() {
           {hasDirty ? t('save.modified') : t('save.saved')}
         </span>
 
-        <div className="h-5 w-px bg-[rgba(255,244,223,0.24)]" />
+        <div className="writer-command-divider h-5 w-px" />
 
         <button className="writer-command-button" title={t('project.backupUnavailable')} disabled>
           <Archive size={14} strokeWidth={1.75} />
@@ -247,7 +241,7 @@ export default function TitleBar() {
         >
           <Settings size={13} strokeWidth={1.5} />
         </button>
-        <div className="h-5 w-px bg-[rgba(255,244,223,0.24)] mx-1" />
+        <div className="writer-command-divider h-5 w-px mx-1" />
         <button
           className="writer-command-button"
           title={t('common.minimize')}

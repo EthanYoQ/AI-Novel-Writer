@@ -217,14 +217,6 @@ function StatusBarSegment({
       title={title}
       onClick={onClick}
       style={{ cursor: onClick ? 'pointer' : 'default' }}
-      onMouseEnter={e => {
-        if (onClick) {
-          e.currentTarget.style.backgroundColor = 'rgba(255, 244, 223, 0.08)'
-        }
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.backgroundColor = 'transparent'
-      }}
     >
       {children}
     </div>

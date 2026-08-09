@@ -1,6 +1,6 @@
 export const enUS = {
-  'appearance.anime': 'Anime night',
-  'appearance.animeDescription': 'A bundled illustration skin with fixed readability.',
+  'appearance.anime': 'Hand-painted fantasy',
+  'appearance.animeDescription': 'An original anime-inspired skin balanced for scenery and readable text.',
   'appearance.change': 'Change image',
   'appearance.choose': 'Choose image',
   'appearance.classic': 'Classic',

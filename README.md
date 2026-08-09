@@ -28,11 +28,11 @@
   <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
 </p>
 
-> ## v0.7.0 重大更新
+> ## v0.7.1 补丁更新
 >
-> [v0.7.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.7.0) 是一次面向发布可靠性和界面外观的重大更新：提供经典、原创二次元与自定义图片皮肤，经典皮肤仍为默认外观。自定义图片只接受 PNG 或 JPEG，文件由主进程选择、验证并复制到应用数据目录；导入或读取失败会安全回退到经典皮肤，界面不会取得本机绝对路径。Windows 的“立即重启更新”现在会静默完成安装并自动拉起新版本；同时新增正式 Release 应用内更新端到端验收能力，用于验证已安装正式版升级到较新正式版的路径。Windows x64 与 macOS ARM64 的云端资格构建还会运行双平台打包皮肤 smoke，覆盖内置资源和隔离用户目录中的自定义皮肤恢复。
+> [v0.7.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.7.1) 是一次界面体验与模型配置入口的补丁更新：增强皮肤可见性，使经典主题在各创作界面保持主题一致性；“向量模型入口”顶部现在推荐硅基流动的 BAAI/bge-m3，并提供“免费模型注册链接”。
 >
-> 本版在同一个 Release 资产列表中提供 Windows x64 与 macOS Apple Silicon（ARM64）安装包。Windows x64 安装程序支持应用内更新，但尚未配置代码签名；macOS ARM64 包未签名、未公证，且需要从 Release 页面手动下载更新。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
+> 同一个 Release 的五项资产包括 Windows x64 安装程序 `ai-novel-writer-setup-0.7.1.exe`、其 `.blockmap`、`latest.yml`，以及 macOS Apple Silicon（ARM64）DMG 和其 `.sha256` 校验文件。Windows 安装包未签名，但支持应用内更新；macOS ARM64 包未签名、未公证，后续版本需从 Release 页面手动下载。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
 
 ## 产品定位
 
