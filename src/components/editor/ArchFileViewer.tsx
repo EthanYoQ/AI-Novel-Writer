@@ -11,7 +11,7 @@ import { parseCoreField } from '../../services/vela-protocol'
 import CodeMirrorEditor from './CodeMirrorEditor'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
-import { createArchitectureWorkflow, repairArchCharacterCards } from '../../services/workflows/architecture-workflow'
+import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
 import {
@@ -31,12 +31,12 @@ import {
   canExplicitlyRepairCharacterRoster,
   getCharacterRosterRepairPresentation,
 } from './character-roster-repair-state'
+import { useCharacterRosterRepair } from './use-character-roster-repair'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
   isProjectSessionPath,
 } from '../project-session-gate'
-import type { CharacterRosterSnapshot } from '../../shared/character-roster'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -108,15 +108,18 @@ function ArchFileViewerSession({
   const [showDialog, setShowDialog] = useState(false)
   const [checkingArch, setCheckingArch] = useState(false)
   const [fullArchStatus, setFullArchStatus] = useState<Record<string, boolean>>({})
-  const [extracting, setExtracting] = useState(false)
-  const [rosterSnapshot, setRosterSnapshot] = useState<CharacterRosterSnapshot | null>(null)
-  const [rosterRepairError, setRosterRepairError] = useState<string | null>(null)
-  const rosterRequestIdRef = useRef(0)
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
   const [refreshBlockedMessage, setRefreshBlockedMessage] = useState<string | null>(null)
   const reloadGateRef = useRef(new ArchReloadGate())
 
   const isArchRunning = useWorkflowStore(s => s.isTypeRunning('architecture_generation'))
+  const {
+    snapshot: rosterSnapshot,
+    repairError: rosterRepairError,
+    isRepairing: extracting,
+    refresh: loadCharacterRosterStatus,
+    migrate: handleRepairCharacterRoster,
+  } = useCharacterRosterRepair({ projectKey, enabled: isCharacterProjection })
 
   // 中文字数（由 CodeMirrorEditor 回调更新）
   const [charCount, setCharCount] = useState(0)
@@ -126,41 +129,6 @@ function ArchFileViewerSession({
   const visibleBlockedMessage = projectMatches
     ? refreshBlockedMessage
     : ARCH_PROJECT_MISMATCH_MESSAGE
-
-  const loadCharacterRosterStatus = useCallback(async () => {
-    if (stepKey !== 'characters') {
-      setRosterSnapshot(null)
-      setRosterRepairError(null)
-      return
-    }
-    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
-    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
-      setRosterSnapshot(null)
-      setRosterRepairError(null)
-      return
-    }
-    const requestId = rosterRequestIdRef.current + 1
-    rosterRequestIdRef.current = requestId
-    try {
-      const snapshot = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:character-roster-read',
-        projectSession.projectPath,
-      )
-      if (requestId !== rosterRequestIdRef.current || !isProjectSessionCurrent(projectSession)) return
-      setRosterSnapshot(snapshot)
-      if (snapshot.status === 'ready') setRosterRepairError(null)
-    } catch {
-      if (requestId === rosterRequestIdRef.current && isProjectSessionCurrent(projectSession)) {
-        setRosterSnapshot(null)
-      }
-    }
-  }, [projectKey, stepKey])
-
-  useEffect(() => {
-    const timer = setTimeout(() => { void loadCharacterRosterStatus() }, 0)
-    return () => clearTimeout(timer)
-  }, [loadCharacterRosterStatus])
 
   // 外部内容更新时的热重载（拦截 store.syncTabContent 带来的 props.content 更新）
   useEffect(() => {
@@ -349,7 +317,6 @@ function ArchFileViewerSession({
     const reloadGate = reloadGateRef.current
     return () => {
       reloadGate.invalidate()
-      rosterRequestIdRef.current += 1
     }
   }, [])
 
@@ -421,24 +388,6 @@ function ArchFileViewerSession({
   }
 
   const generated = initialContent.length > 50 && !initialContent.includes('待生成')
-
-  const handleRepairCharacterRoster = useCallback(async () => {
-    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
-    if (!projectSession || !isProjectSessionPath(projectSession, projectKey) || extracting) return
-    setExtracting(true)
-    setRosterRepairError(null)
-    try {
-      await repairArchCharacterCards(projectSession.projectPath)
-      if (isProjectSessionCurrent(projectSession)) await loadCharacterRosterStatus()
-    } catch (error) {
-      if (!isProjectSessionCurrent(projectSession)) return
-      const message = error instanceof Error ? error.message : String(error)
-      console.error('角色名单修复失败', error)
-      setRosterRepairError(message)
-    } finally {
-      if (isProjectSessionCurrent(projectSession)) setExtracting(false)
-    }
-  }, [extracting, loadCharacterRosterStatus, projectKey])
 
   const rosterPresentation = stepKey === 'characters'
     ? getCharacterRosterRepairPresentation(rosterSnapshot, text, rosterRepairError)

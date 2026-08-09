@@ -4,7 +4,7 @@ import { useLLMStore } from '../../../stores/llm-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import type { CharacterRosterEntry, CharacterRosterSnapshot } from '../../../shared/character-roster'
-import { repairArchCharacterCards } from '../architecture-workflow'
+import { migrateLegacyCharacterRoster } from '../architecture-workflow'
 
 const projectPath = 'C:\\novels\\legacy-roster'
 const projectSession = {
@@ -150,7 +150,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await repairArchCharacterCards(projectPath)
+    await migrateLegacyCharacterRoster(projectPath)
 
     expect(generateStream).toHaveBeenCalledOnce()
     expect(invoke).toHaveBeenCalledWith(
@@ -197,7 +197,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await repairArchCharacterCards(projectPath)
+    await migrateLegacyCharacterRoster(projectPath)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     const repairOptions = (generateStream.mock.calls as unknown as unknown[][])[1]?.[3]
@@ -227,7 +227,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await expect(repairArchCharacterCards(projectPath)).rejects.toThrow('AI 输出达到模型最大长度')
+    await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('AI 输出达到模型最大长度')
     expect(generateStream).toHaveBeenCalledOnce()
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
   })
@@ -257,7 +257,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await repairArchCharacterCards(projectPath)
+    await migrateLegacyCharacterRoster(projectPath)
 
     expect(generateStream).not.toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith(
@@ -285,7 +285,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    const execution = repairArchCharacterCards(projectPath)
+    const execution = migrateLegacyCharacterRoster(projectPath)
     await vi.waitFor(() => expect(generateStream).toHaveBeenCalledOnce())
     useProjectStore.setState({
       currentProject: {
@@ -316,7 +316,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    const execution = repairArchCharacterCards(projectPath)
+    const execution = migrateLegacyCharacterRoster(projectPath)
     await vi.waitFor(() => expect(generateStream).toHaveBeenCalledOnce())
     const runId = useWorkflowStore.getState().activeRuns[0]?.id
     expect(runId).toBeTruthy()
@@ -343,7 +343,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await expect(repairArchCharacterCards(projectPath)).rejects.toThrow('角色名单不能为空')
+    await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('角色名单不能为空')
     expect(generateStream).toHaveBeenCalledOnce()
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
       'db:character-roster-read',

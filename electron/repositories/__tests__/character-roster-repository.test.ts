@@ -104,6 +104,23 @@ afterEach(() => {
   db.close()
 })
 
+function rawRosterStorage() {
+  return {
+    core: db.prepare("SELECT characters_arch FROM project_core WHERE id = 'main'").get(),
+    cards: db.prepare('SELECT * FROM characters ORDER BY name').all(),
+    meta: db.prepare(`
+      SELECT schema_version, revision, migration_state, legacy_markdown, projection_hash, fact_hash, updated_at
+      FROM character_roster_meta
+      WHERE id = 'main'
+    `).get(),
+    operations: db.prepare(`
+      SELECT operation_id, payload_hash, committed_revision, projection_hash, created_at
+      FROM character_roster_operations
+      ORDER BY operation_id
+    `).all(),
+  }
+}
+
 describe('CharacterRosterRepository public read/commit seam', () => {
   it('uses one manual-edit receipt to rename, delete, preserve free-text relations, update blueprint references, and allow an empty roster', () => {
     const initial = CharacterRosterRepository.commit(commitRequest({
@@ -267,6 +284,43 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       idempotent: true,
     })
     expect(CharacterRosterRepository.read().revision).toBe(1)
+  })
+
+  it('returns a current consistent idempotent observation when replaying an older operation after a later commit', () => {
+    const first = CharacterRosterRepository.commit(commitRequest())
+    const second = CharacterRosterRepository.commit({
+      operationId: 'manual-edit-after-first-operation',
+      expectedRevision: first.revision,
+      schemaVersion: 1,
+      intent: 'manual_edit',
+      entries: first.snapshot.entries.map(entry => (
+        entry.name === '林舟'
+          ? { ...entry, notes: 'B 已成为当前角色事实' }
+          : entry
+      )),
+    })
+    const operationCountBeforeReplay = (db.prepare(
+      'SELECT COUNT(*) AS count FROM character_roster_operations',
+    ).get() as { count: number }).count
+
+    const replay = CharacterRosterRepository.commit(commitRequest())
+
+    expect(replay).toMatchObject({
+      operationId: first.operationId,
+      payloadHash: first.payloadHash,
+      idempotent: true,
+      revision: second.revision,
+      snapshot: {
+        revision: second.revision,
+        entries: expect.arrayContaining([
+          expect.objectContaining({ name: '林舟', notes: 'B 已成为当前角色事实' }),
+        ]),
+      },
+    })
+    expect(replay.revision).toBe(replay.snapshot.revision)
+    expect(replay.snapshot).toEqual(second.snapshot)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM character_roster_operations').get() as { count: number }).count)
+      .toBe(operationCountBeforeReplay)
   })
 
   it('rejects a reused operation ID with a different payload and a stale revision without changing the roster', () => {
@@ -550,6 +604,28 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       entries: [],
       renderedMarkdown: '',
       legacyMarkdown: '## 主角：这段旧文本不能自动成为事实',
+    })
+  })
+
+  it('rejects normal generation for a zero-card legacy graph without changing its raw evidence, cards, or roster metadata', () => {
+    const legacyMarkdown = '旧角色图谱原文：没有角色卡时，普通架构生成不得把它转为 ready。'
+    db.prepare('DELETE FROM character_roster_meta').run()
+    db.prepare("UPDATE project_core SET characters_arch = ? WHERE id = 'main'").run(legacyMarkdown)
+    ensureCharacterRosterSchema(db)
+    const before = rawRosterStorage()
+
+    expect(() => CharacterRosterRepository.commit(commitRequest({
+      operationId: 'normal-generation-must-not-migrate-legacy-markdown',
+      intent: 'architecture_generation',
+    }))).toThrow(/只能通过显式旧角色图谱修复/)
+
+    expect(rawRosterStorage()).toEqual(before)
+    expect(CharacterRosterRepository.read()).toMatchObject({
+      revision: 0,
+      migrationState: 'legacy_markdown_pending',
+      status: 'legacy_repair_required',
+      entries: [],
+      legacyMarkdown,
     })
   })
 

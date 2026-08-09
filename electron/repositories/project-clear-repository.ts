@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { getCurrentProjectPath, getProjectDb } from '../database'
+import { ensureCharacterRosterSchema } from './character-roster-schema'
 
 export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText'
 
@@ -107,6 +108,14 @@ export class ProjectClearRepository {
                 }
 
                 if (options.creativeFields) {
+                    // 即使项目是在 roster 元数据迁移前创建的，也必须先按唯一
+                    // 迁移规则建立元数据表，再在同一 transaction 内清空角色事实
+                    // 与 receipt。这样下次 read 会重新分类为空项目，而不会遗留
+                    // ready 状态或旧角色参与新的架构生成。
+                    ensureCharacterRosterSchema(db)
+                    db.prepare('DELETE FROM character_roster_operations').run()
+                    db.prepare('DELETE FROM character_roster_meta').run()
+                    db.prepare('DELETE FROM characters').run()
                     db.prepare(`
                         UPDATE project_core
                         SET writing_style = '',
@@ -115,6 +124,7 @@ export class ProjectClearRepository {
                             golden_finger = '',
                             premise = '',
                             worldbuilding = '',
+                            characters_arch = '',
                             synopsis = '',
                             character_states = '',
                             updated_at = datetime('now')

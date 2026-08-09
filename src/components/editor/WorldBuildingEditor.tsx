@@ -10,7 +10,7 @@ import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { ipc } from '../../services/ipc-client'
 
-import { createArchitectureWorkflow, repairArchCharacterCards } from '../../services/workflows/architecture-workflow'
+import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
 import { globalEventBus } from '../../shared/event-bus'
 import {
   createProjectArchTabId,
@@ -22,6 +22,7 @@ import {
   canExplicitlyRepairCharacterRoster,
   getCharacterRosterRepairPresentation,
 } from './character-roster-repair-state'
+import { useCharacterRosterRepair } from './use-character-roster-repair'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
@@ -29,7 +30,6 @@ import {
 } from '../project-session-gate'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectSessionContext } from '../../shared/project-session-context'
-import type { CharacterRosterSnapshot } from '../../shared/character-roster'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -56,12 +56,15 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [showArchDialog, setShowArchDialog] = useState(false)
-  const [extracting, setExtracting] = useState(false)
-  const [rosterSnapshot, setRosterSnapshot] = useState<CharacterRosterSnapshot | null>(null)
-  const [rosterRepairError, setRosterRepairError] = useState<string | null>(null)
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
   const archStatusRequestGate = useRef(new LatestRequestGate())
-  const rosterStatusRequestGate = useRef(new LatestRequestGate())
+  const {
+    snapshot: rosterSnapshot,
+    repairError: rosterRepairError,
+    isRepairing: extracting,
+    refresh: loadCharacterRosterStatus,
+    migrate: handleRepairCharacterRoster,
+  } = useCharacterRosterRepair({ projectKey, enabled: projectMatches })
 
   /** 加载各架构文件状态（通过 Service 层获取，不直接调 IPC） */
   const loadStatus = useCallback(async () => {
@@ -77,27 +80,20 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     const projectPath = projectSession.projectPath
     const requestId = archStatusRequestGate.current.begin()
     setLoading(true)
-    const [core, roster] = await Promise.all([
-      ipc.invokeWithProjectSession(
-        projectSession,
-        'db:project-core-get',
-        projectPath,
-      ),
-      ipc.invokeWithProjectSession(
-        projectSession,
-        'db:character-roster-read',
-        projectPath,
-      ),
-    ])
+    const core = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:project-core-get',
+      projectPath,
+    )
     const status: Record<string, boolean> = {
       premise: (core?.premise?.length ?? 0) > 50,
-      characters: roster.status === 'ready',
+      characters: rosterSnapshot?.status === 'ready',
       worldbuilding: (core?.worldbuilding?.length ?? 0) > 50,
       synopsis: (core?.synopsis?.length ?? 0) > 50,
     }
     const counts: Record<string, number> = {
       premise: status.premise ? (core?.premise?.length ?? 0) : 0,
-      characters: status.characters ? roster.renderedMarkdown.length : 0,
+      characters: status.characters ? (rosterSnapshot?.renderedMarkdown.length ?? 0) : 0,
       worldbuilding: status.worldbuilding ? (core?.worldbuilding?.length ?? 0) : 0,
       synopsis: status.synopsis ? (core?.synopsis?.length ?? 0) : 0,
     }
@@ -109,50 +105,12 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     setWordCounts(counts)
     setLoading(false)
     // ✅ 只依赖 path 字符串，避免 novelConfig 等变化导致 loadStatus 重建
-  }, [currentProject, projectKey, projectMatches])
+  }, [currentProject, projectKey, projectMatches, rosterSnapshot])
 
   useEffect(() => {
     const timer = setTimeout(() => { void loadStatus() }, 0)
     return () => clearTimeout(timer)
   }, [loadStatus])
-
-  /** 只读加载结构化名单状态；绝不在打开项目时自动修复旧数据。 */
-  const loadCharacterRosterStatus = useCallback(async () => {
-    await Promise.resolve()
-    const projectSession = captureProjectSession(currentProject)
-    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) {
-      rosterStatusRequestGate.current.begin()
-      setRosterSnapshot(null)
-      setRosterRepairError(null)
-      return
-    }
-    const projectPath = projectSession.projectPath
-    const requestId = rosterStatusRequestGate.current.begin()
-    let snapshot: CharacterRosterSnapshot
-    try {
-      snapshot = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:character-roster-read',
-        projectPath,
-      )
-    } catch {
-      if (rosterStatusRequestGate.current.isLatest(requestId) && isProjectSessionCurrent(projectSession)) {
-        setRosterSnapshot(null)
-      }
-      return
-    }
-    if (
-      !rosterStatusRequestGate.current.isLatest(requestId)
-      || !isProjectSessionCurrent(projectSession)
-    ) return
-    setRosterSnapshot(snapshot)
-    if (snapshot.status === 'ready') setRosterRepairError(null)
-  }, [currentProject, projectKey, projectMatches])
-
-  useEffect(() => {
-    const timer = setTimeout(() => { void loadCharacterRosterStatus() }, 0)
-    return () => clearTimeout(timer)
-  }, [loadCharacterRosterStatus])
 
   // 监听 EventBus 事件，刷新后处理状态面板
   useEffect(() => {
@@ -189,27 +147,6 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     return () => { unsub3(); unsub4() }
   }, [currentProject, loadCharacterRosterStatus, loadStatus, projectKey])
 
-
-
-  /** 显式修复旧图谱，或采用既有角色卡重建只读图谱。 */
-  const handleRepairCharacterRoster = useCallback(async () => {
-    const projectSession = captureProjectSession(currentProject)
-    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey) || extracting) return
-    setExtracting(true)
-    setRosterRepairError(null)
-    try {
-      await repairArchCharacterCards(projectSession.projectPath)
-      if (isProjectSessionCurrent(projectSession)) await loadCharacterRosterStatus()
-    } catch (e) {
-      if (!isProjectSessionCurrent(projectSession)) return
-      const message = e instanceof Error ? e.message : String(e)
-      console.error('角色名单修复失败', e)
-      setRosterRepairError(message)
-    } finally {
-      if (isProjectSessionCurrent(projectSession)) setExtracting(false)
-    }
-  }, [currentProject, extracting, loadCharacterRosterStatus, projectKey, projectMatches])
-
   /** 打开单个架构文件（arch-file 类型；若 tab 已存在则刷新磁盘内容） */
   const openArchFile = async (f: typeof ARCH_FILES[number]) => {
     const projectSession = captureProjectSession(currentProject)
@@ -219,11 +156,8 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     let content = ''
     try {
       if (f.key === 'characters') {
-        const roster = await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:character-roster-read',
-          projectSession.projectPath,
-        )
+        const roster = await loadCharacterRosterStatus()
+        if (!roster) return
         content = roster.status === 'ready'
           ? roster.renderedMarkdown
           : roster.legacyMarkdown ?? ''
