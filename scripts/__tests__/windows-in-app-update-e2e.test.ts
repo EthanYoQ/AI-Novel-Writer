@@ -606,6 +606,31 @@ catch {
     })
   })
 
+  windowsIt('fingerprints an installed app root containing a file', () => {
+    const root = temporaryRoot()
+    const output = runWindowsE2ePowerShellFunctions([
+      'Assert-E2eCondition',
+      'Get-E2eInstallRootFingerprint',
+    ], `
+$installRoot = Join-Path ${quotePowerShell(root)} 'installed-app'
+New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $installRoot 'fingerprint-fixture.txt'), 'native updater fingerprint fixture')
+$fingerprint = Get-E2eInstallRootFingerprint -InstallRoot $installRoot
+$lines = @($fingerprint -split [char]10)
+[pscustomobject]@{
+  RootEntry = $lines[0] -like 'root:*'
+  FileEntryCount = @($lines | Where-Object { $_ -like 'fingerprint-fixture.txt:*' }).Count
+  LineCount = $lines.Count
+} | ConvertTo-Json -Compress
+`)
+
+    expect(JSON.parse(output.trim().split(/\r?\n/).at(-1)!)).toEqual({
+      RootEntry: true,
+      FileEntryCount: 1,
+      LineCount: 2,
+    })
+  })
+
   windowsIt('treats an already-exited installed app as clean while rejecting PID reuse', () => {
     const output = runWindowsE2ePowerShellFunction(`
 $script:stopCalled = $false

@@ -750,10 +750,11 @@ function Get-E2eInstallRootFingerprint {
   param([Parameter(Mandatory = $true)][string]$InstallRoot)
 
   Assert-E2eCondition -Condition (Test-Path -LiteralPath $InstallRoot -PathType Container) -Message "Installed app root is missing: $InstallRoot"
-  $canonicalRoot = (Resolve-Path -LiteralPath $InstallRoot).Path.TrimEnd('\\', '/')
+  $directorySeparators = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+  $canonicalRoot = (Resolve-Path -LiteralPath $InstallRoot).Path.TrimEnd($directorySeparators)
   $entries = @(
     Get-ChildItem -LiteralPath $canonicalRoot -File -Recurse -ErrorAction Stop | Sort-Object FullName | ForEach-Object {
-      $relativePath = $_.FullName.Substring($canonicalRoot.Length).TrimStart('\\', '/') -replace '\\', '/'
+      $relativePath = $_.FullName.Substring($canonicalRoot.Length).TrimStart($directorySeparators) -replace '\\', '/'
       "${relativePath}:$($_.Length):$($_.LastWriteTimeUtc.Ticks)"
     }
   )
