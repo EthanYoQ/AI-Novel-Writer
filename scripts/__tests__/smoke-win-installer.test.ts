@@ -1381,6 +1381,128 @@ $wrongInstallerParentRejected = -not (Test-AiNovelGateLegacyBridgeOldApplication
     })
   })
 
+  windowsIt('classifies only a verified native updater old app breakpoint handoff', () => {
+    const output = runReleaseMonitorLibrary(`
+$e2eEvidenceRoot = 'D:\\a\\_temp\\ai-novel-windows-in-app-update-e2e'
+$env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT = $e2eEvidenceRoot
+$oldExe = $e2eEvidenceRoot + '\\runtime\\installed-app\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
+$pendingRoot = Join-Path $env:LOCALAPPDATA 'ai-novel-writer-updater\\pending'
+$pendingExe = Join-Path $pendingRoot 'ai-novel-writer-setup-0.8.0.exe'
+$old = [pscustomobject]@{
+  processId = 5660
+  startTimeTicks = '639219070367704249'
+  executablePath = $oldExe
+  identityCaptured = $true
+  commandLineCaptured = $true
+}
+function New-NativeUpdaterInstallerIdentity {
+  param(
+    [int]$ProcessId = 5012,
+    [string]$Path = $pendingExe,
+    [int]$ParentProcessId = 5660,
+    [string]$ParentStartTimeTicks = '639219070367704249',
+    [string]$ParentPath = $oldExe,
+    [bool]$IdentityCaptured = $true,
+    [bool]$CommandLineCaptured = $true
+  )
+  return [pscustomobject]@{
+    processId = $ProcessId
+    startTimeTicks = ('639219070493632' + $ProcessId)
+    executablePath = $Path
+    identityCaptured = $IdentityCaptured
+    commandLineCaptured = $CommandLineCaptured
+    parentProcessId = $ParentProcessId
+    parentProcessStartTimeTicks = $ParentStartTimeTicks
+    parentExecutablePath = $ParentPath
+  }
+}
+function New-NativeUpdaterTrackedProcesses {
+  param([AllowNull()]$Installer, [AllowNull()]$TrackedOld = $old)
+  $tracked = @{}
+  if ($null -ne $TrackedOld) { $tracked[[int]$TrackedOld.processId] = $TrackedOld }
+  if ($null -ne $Installer) { $tracked[[int]$Installer.processId] = $Installer }
+  return $tracked
+}
+$installer = New-NativeUpdaterInstallerIdentity
+$tracked = New-NativeUpdaterTrackedProcesses -Installer $installer
+$breakpoint = [pscustomobject]@{ ProcessId = 5660; ExitCode = -2147483645; ExitCodeCaptured = $true; JobMessage = 8 }
+$accepted = Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities $tracked
+$wrongStepRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'smoke:win-installer' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities $tracked)
+$wrongCode = [pscustomobject]@{ ProcessId = 5660; ExitCode = -1; ExitCodeCaptured = $true; JobMessage = 8 }
+$wrongCodeRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $wrongCode -ProcessIdentity $old -TrackedProcessIdentities $tracked)
+$preHandoffRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer $null))
+$multipleCandidates = New-NativeUpdaterTrackedProcesses -Installer $installer
+$multipleCandidates[5013] = New-NativeUpdaterInstallerIdentity -ProcessId 5013
+$multipleCandidatesRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities $multipleCandidates)
+$wrongPathRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer (New-NativeUpdaterInstallerIdentity -Path 'C:\\temp\\ai-novel-writer-setup-0.8.0.exe')))
+$wrongOldExe = 'D:\\e2e-other\\runtime\\installed-app\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
+$wrongOldPath = [pscustomobject]@{ processId = 5660; startTimeTicks = '639219070367704249'; executablePath = $wrongOldExe; identityCaptured = $true; commandLineCaptured = $true }
+$wrongOldPathRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $wrongOldPath -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer (New-NativeUpdaterInstallerIdentity -ParentPath $wrongOldExe) -TrackedOld $wrongOldPath))
+$evidenceRootBeforeMissingEnvironmentCheck = $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT
+Remove-Item Env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT
+try {
+  $missingEvidenceRootRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities $tracked)
+}
+finally {
+  $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT = $evidenceRootBeforeMissingEnvironmentCheck
+}
+$nonFinalSemverRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer (New-NativeUpdaterInstallerIdentity -Path (Join-Path $pendingRoot 'ai-novel-writer-setup-0.8.0-beta.1.exe'))))
+$wrongParentRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer (New-NativeUpdaterInstallerIdentity -ParentProcessId 9999)))
+$pidReuseRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer (New-NativeUpdaterInstallerIdentity -ParentStartTimeTicks '639219070367704250')))
+$missingIdentityCaptureRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer (New-NativeUpdaterInstallerIdentity -IdentityCaptured $false)))
+$missingCaptureRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer (New-NativeUpdaterInstallerIdentity -CommandLineCaptured $false)))
+$oldWithoutCommandLine = [pscustomobject]@{ processId = 5660; startTimeTicks = '639219070367704249'; executablePath = $oldExe; identityCaptured = $true; commandLineCaptured = $false }
+$missingOldCaptureRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $oldWithoutCommandLine -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer $installer -TrackedOld $oldWithoutCommandLine))
+$trackedOldWithoutCommandLine = [pscustomobject]@{ processId = 5660; startTimeTicks = '639219070367704249'; executablePath = $oldExe; identityCaptured = $true; commandLineCaptured = $false }
+$trackedOldCaptureDriftRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $old -TrackedProcessIdentities (New-NativeUpdaterTrackedProcesses -Installer $installer -TrackedOld $trackedOldWithoutCommandLine))
+$wrongOldIdentity = [pscustomobject]@{ processId = 5660; startTimeTicks = '639219070367704250'; executablePath = $oldExe; identityCaptured = $true; commandLineCaptured = $true }
+$wrongOldIdentityRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $breakpoint -ProcessIdentity $wrongOldIdentity -TrackedProcessIdentities $tracked)
+$otherProcess = [pscustomobject]@{ processId = 5661; startTimeTicks = '639219070367704249'; executablePath = $oldExe; identityCaptured = $true; commandLineCaptured = $true }
+$otherProcessEvent = [pscustomobject]@{ ProcessId = 5661; ExitCode = -2147483645; ExitCodeCaptured = $true; JobMessage = 8 }
+$otherProcessRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -Step 'windows-in-app-update-e2e' -Event $otherProcessEvent -ProcessIdentity $otherProcess -TrackedProcessIdentities $tracked)
+[pscustomobject]@{
+  Accepted = $accepted
+  WrongStepRejected = $wrongStepRejected
+  WrongCodeRejected = $wrongCodeRejected
+  PreHandoffRejected = $preHandoffRejected
+  MultipleCandidatesRejected = $multipleCandidatesRejected
+  WrongPathRejected = $wrongPathRejected
+  WrongOldPathRejected = $wrongOldPathRejected
+  MissingEvidenceRootRejected = $missingEvidenceRootRejected
+  NonFinalSemverRejected = $nonFinalSemverRejected
+  WrongParentRejected = $wrongParentRejected
+  PidReuseRejected = $pidReuseRejected
+  MissingIdentityCaptureRejected = $missingIdentityCaptureRejected
+  MissingCaptureRejected = $missingCaptureRejected
+  MissingOldCaptureRejected = $missingOldCaptureRejected
+  TrackedOldCaptureDriftRejected = $trackedOldCaptureDriftRejected
+  WrongOldIdentityRejected = $wrongOldIdentityRejected
+  OtherProcessRejected = $otherProcessRejected
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      Accepted: true,
+      WrongStepRejected: true,
+      WrongCodeRejected: true,
+      PreHandoffRejected: true,
+      MultipleCandidatesRejected: true,
+      WrongPathRejected: true,
+      WrongOldPathRejected: true,
+      MissingEvidenceRootRejected: true,
+      NonFinalSemverRejected: true,
+      WrongParentRejected: true,
+      PidReuseRejected: true,
+      MissingIdentityCaptureRejected: true,
+      MissingCaptureRejected: true,
+      MissingOldCaptureRejected: true,
+      TrackedOldCaptureDriftRejected: true,
+      WrongOldIdentityRejected: true,
+      OtherProcessRejected: true,
+    })
+  })
+
   windowsIt('accepts only the exact legacy bridge old-uninstaller PowerShell probe chain', () => {
     const output = runReleaseMonitorLibrary(`
 $system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
