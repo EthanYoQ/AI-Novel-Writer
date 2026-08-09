@@ -128,6 +128,7 @@ export interface CharacterRosterCommitRequest {
 export interface CharacterRosterCommitReceipt {
   operationId: string
   payloadHash: string
+  /** 始终等于 snapshot.revision；幂等 replay 返回当前无写入观察，不重放历史 payload。 */
   revision: number
   idempotent: boolean
   snapshot: CharacterRosterSnapshot

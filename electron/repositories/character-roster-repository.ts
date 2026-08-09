@@ -707,12 +707,17 @@ export class CharacterRosterRepository {
         if (existingOperation.payload_hash !== requestPayloadHash) {
           throw new Error('操作 ID 已被用于不同的角色名单，已拒绝覆盖')
         }
+        // 幂等 replay 只是“该操作已被观察到”的无写入查询，不能把历史
+        // committed_revision 冒充为当前事实。返回读取时的完整当前快照，保证
+        // receipt.revision 始终与 receipt.snapshot.revision 一致，也不会暗示
+        // 较早 payload 在后续提交后又重新生效。
+        const snapshot = readSnapshot(db)
         return {
           operationId: request.operationId,
           payloadHash: requestPayloadHash,
-          revision: existingOperation.committed_revision,
+          revision: snapshot.revision,
           idempotent: true,
-          snapshot: readSnapshot(db),
+          snapshot,
         }
       }
 
@@ -729,6 +734,9 @@ export class CharacterRosterRepository {
       const isManualEdit = isManualEditIntent(intent)
       const isIncremental = intent === 'blueprint_sync' || intent === 'chapter_progress'
       const isNovelImport = intent === 'novel_import'
+      if (currentSnapshot.status === 'legacy_repair_required' && !isLegacyRepair) {
+        throw new Error('检测到旧角色图谱且没有角色卡；只能通过显式旧角色图谱修复写入')
+      }
       if (currentSnapshot.status === 'inconsistent' && !isLegacyCardsAdoption) {
         if (meta.migration_state === 'legacy_cards_preserved') {
           throw new Error('已有角色数据受到保护；请使用后续的显式迁移或编辑流程')

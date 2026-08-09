@@ -230,10 +230,12 @@ export function getNarrativePOVLabel(pov: string): string {
 }
 
 /**
- * 旧项目的显式、安全修复入口。正常角色架构不再启动异步 Markdown 提取；
- * 唯一可写路径是 RepairLegacyCharacterRosterCommand 的结构化 roster commit。
+ * 旧角色名单迁移的显式、安全入口。它会根据持久化状态执行“旧 Markdown
+ * 迁移”为结构化名单，或“已有角色卡采用”为只读投影；正常角色架构不会
+ * 启动 Markdown 提取。唯一写路径是 RepairLegacyCharacterRosterCommand 的
+ * 结构化 roster commit。
  */
-export async function repairArchCharacterCards(projectPath: string): Promise<void> {
+export async function migrateLegacyCharacterRoster(projectPath: string): Promise<void> {
   const text = useLocaleStore.getState().text
   const project = useProjectStore.getState().currentProject
   const projectSession = projectSessionContextFromProject(project)

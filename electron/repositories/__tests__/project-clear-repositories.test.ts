@@ -1,24 +1,101 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type BetterSqlite3 from 'better-sqlite3'
 
 import { getCurrentProjectPath, getProjectDb } from '../../database'
 import { BlueprintRepository } from '../blueprint-repository'
+import { CharacterRosterRepository } from '../character-roster-repository'
 import { DraftRepository } from '../draft-repository'
 import { ProjectClearRepository } from '../project-clear-repository'
 import { ProjectCoreRepository } from '../project-core-repository'
+import type { CharacterRosterCommitRequest } from '../../../src/shared/character-roster'
 
 vi.mock('../../database', () => ({
   getCurrentProjectPath: vi.fn(),
   getProjectDb: vi.fn(),
 }))
 
+const require = createRequire(import.meta.url)
+const Database = require('better-sqlite3') as typeof import('better-sqlite3')
+
 function createMockDb() {
   const run = vi.fn()
-  const prepare = vi.fn((sql: string) => ({ sql, run }))
+  const all = vi.fn(() => [{ name: 'fact_hash' }])
+  const get = vi.fn(() => ({ present: true }))
+  const prepare = vi.fn((sql: string) => ({ sql, run, all, get }))
   const transaction = vi.fn((fn: () => void) => () => fn())
-  return { prepare, transaction, run }
+  const exec = vi.fn()
+  return { prepare, transaction, run, exec }
+}
+
+function rosterCommitRequest(operationId: string, expectedRevision: number): CharacterRosterCommitRequest {
+  return {
+    operationId,
+    expectedRevision,
+    schemaVersion: 1,
+    entries: [{
+      name: '清除前角色',
+      role: 'protagonist',
+      gender: '女',
+      age: '二十五岁',
+      appearance: '黑色风衣',
+      personality: '冷静',
+      background: '旧城区调查员',
+      abilities: '线索分析',
+      motivation: '找回失踪同伴',
+      relationships: [],
+      arc: '学会信任同伴',
+      notes: '应随故事架构一起清除',
+    }],
+  }
+}
+
+function createRealProjectDb(): BetterSqlite3.Database {
+  const db = new Database(':memory:')
+  db.exec(`
+    CREATE TABLE project_core (
+      id TEXT PRIMARY KEY,
+      writing_style TEXT DEFAULT '',
+      reference_works TEXT DEFAULT '',
+      global_guidance TEXT DEFAULT '',
+      golden_finger TEXT DEFAULT '',
+      premise TEXT DEFAULT '',
+      worldbuilding TEXT DEFAULT '',
+      characters_arch TEXT DEFAULT '',
+      synopsis TEXT DEFAULT '',
+      character_states TEXT DEFAULT '',
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    INSERT INTO project_core (id, writing_style, premise, characters_arch)
+    VALUES ('main', '旧文风', '旧故事前提', '');
+    CREATE TABLE characters (
+      name TEXT PRIMARY KEY,
+      role TEXT DEFAULT 'supporting',
+      gender TEXT DEFAULT '',
+      age TEXT DEFAULT '',
+      appearance TEXT DEFAULT '',
+      personality TEXT DEFAULT '',
+      background TEXT DEFAULT '',
+      abilities TEXT DEFAULT '',
+      motivation TEXT DEFAULT '',
+      relationships TEXT DEFAULT '',
+      arc TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      cs_location TEXT DEFAULT '',
+      cs_power_level TEXT DEFAULT '',
+      cs_physical_state TEXT DEFAULT '',
+      cs_mental_state TEXT DEFAULT '',
+      cs_key_items TEXT DEFAULT '',
+      cs_recent_events TEXT DEFAULT '',
+      cs_updated_at_chapter INTEGER DEFAULT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `)
+  return db
 }
 
 beforeEach(() => {
@@ -86,11 +163,51 @@ describe('project clear repositories', () => {
 
     expect(db.transaction).toHaveBeenCalledOnce()
     const statements = db.prepare.mock.calls.map(([sql]) => sql)
-    expect(statements).toEqual([
+    expect(statements).toEqual(expect.arrayContaining([
       'DELETE FROM blueprints',
+      'DELETE FROM character_roster_operations',
+      'DELETE FROM character_roster_meta',
+      'DELETE FROM characters',
       expect.stringContaining('UPDATE project_core') as unknown as string,
-    ])
+    ]))
     expect(result.cleared).toEqual(['blueprints', 'creativeFields'])
+  })
+
+  it('clears creative roster facts and receipts through the public clear seam so a fresh generation cannot inherit ready state or old cards', () => {
+    const db = createRealProjectDb()
+    vi.mocked(getProjectDb).mockReturnValue(db as never)
+    vi.mocked(getCurrentProjectPath).mockReturnValue(null)
+
+    try {
+      const beforeClear = CharacterRosterRepository.commit(rosterCommitRequest('roster-before-clear', 0))
+      expect(beforeClear.snapshot).toMatchObject({ status: 'ready', entries: [expect.objectContaining({ name: '清除前角色' })] })
+      expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_operations').get()).toEqual({ count: 1 })
+
+      expect(ProjectClearRepository.clearGeneratedData({ creativeFields: true })).toMatchObject({
+        cleared: ['creativeFields'],
+      })
+
+      expect(db.prepare('SELECT characters_arch FROM project_core WHERE id = ?').get('main')).toEqual({ characters_arch: '' })
+      expect(db.prepare('SELECT COUNT(*) AS count FROM characters').get()).toEqual({ count: 0 })
+      expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_meta').get()).toEqual({ count: 0 })
+      expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_operations').get()).toEqual({ count: 0 })
+      expect(CharacterRosterRepository.read()).toMatchObject({
+        revision: 0,
+        migrationState: 'empty',
+        status: 'empty',
+        entries: [],
+        renderedMarkdown: '',
+      })
+
+      const regenerated = CharacterRosterRepository.commit(rosterCommitRequest('roster-after-clear', 0))
+      expect(regenerated).toMatchObject({
+        idempotent: false,
+        revision: 1,
+        snapshot: { status: 'ready', entries: [expect.objectContaining({ name: '清除前角色' })] },
+      })
+    } finally {
+      db.close()
+    }
   })
 
   it('removes generated root chapter txt files when generated text is cleared', () => {

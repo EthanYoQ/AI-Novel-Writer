@@ -20,7 +20,7 @@ export interface CharacterRosterRepairPresentation {
 
 /**
  * 将持久化状态翻译为作者能理解的动作。这里不做任何数据访问或自动修复，
- * 组件必须显式调用 repairArchCharacterCards 才会产生写入。
+ * 组件必须显式调用 migrateLegacyCharacterRoster 才会产生写入。
  */
 export function getCharacterRosterRepairPresentation(
   snapshot: CharacterRosterSnapshot | null,

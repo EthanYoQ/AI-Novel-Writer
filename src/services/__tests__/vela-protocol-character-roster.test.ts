@@ -73,6 +73,7 @@ describe('structured character roster static contract', () => {
     const workflow = source('src/services/workflows/architecture-workflow.ts')
     const projectTree = source('src/components/panels/sidebar/ProjectTree.tsx')
     const worldBuilding = source('src/components/editor/WorldBuildingEditor.tsx')
+    const archFileViewer = source('src/components/editor/ArchFileViewer.tsx')
 
     for (const channel of [
       'db:character-upsert',
@@ -87,13 +88,18 @@ describe('structured character roster static contract', () => {
     expect(controller).toContain("ipcMain.handle('db:character-roster-commit'")
     expect(projectCore).toContain("Object.hasOwn(data, 'charactersArch')")
     expect(projectCore).not.toContain("charactersArch: 'characters_arch'")
-    expect(projectClear).not.toContain('characters_arch')
+    expect(projectClear).toContain("characters_arch = ''")
+    expect(projectClear).toContain("DELETE FROM characters")
+    expect(projectClear).toContain("DELETE FROM character_roster_meta")
+    expect(projectClear).toContain("DELETE FROM character_roster_operations")
     expect(roster.match(/SET characters_arch\s*=/g)).toHaveLength(1)
     expect(workflow).not.toContain('runArchCharacterExtract')
     expect(workflow).not.toContain('createCharacterExtractSteps')
     expect(workflow).not.toContain('runPostProcessPipeline')
     expect(projectTree).toContain("const isCharacterProjection = f.key === 'characters'")
     expect(projectTree).toContain('...(isCharacterProjection ? [] : [')
-    expect(worldBuilding).toContain("characters: roster.status === 'ready'")
+    expect(worldBuilding).toContain('useCharacterRosterRepair')
+    expect(archFileViewer).toContain('useCharacterRosterRepair')
+    expect(worldBuilding).toContain("characters: rosterSnapshot?.status === 'ready'")
   })
 })
