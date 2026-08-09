@@ -11,6 +11,7 @@ import fs from 'node:fs'
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 import type BetterSqlite3 from 'better-sqlite3'
+import { ensureCharacterRosterSchema } from './repositories/character-roster-schema'
 
 let projectDb: BetterSqlite3.Database | null = null
 let currentProjectPath: string | null = null
@@ -282,6 +283,10 @@ function createTables(db: BetterSqlite3.Database) {
     -- 索引
     CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls(created_at);
   `)
+
+  // 角色事实继续存放于 characters；这里仅建立 revision、迁移与幂等元数据。
+  // 旧角色图谱原文在首次打开时只归档，不自动解析或改写。
+  ensureCharacterRosterSchema(db)
 
   // 兼容早期 #23 预览数据库：该表一旦已经存在，CREATE TABLE IF NOT EXISTS
   // 不会补列。正文快照必须留在 outbox，重试时不能再从可变 contents.body 回读。

@@ -149,8 +149,13 @@ describe('GenerateDirectoryCommand', () => {
         return { success: true }
       }
       if (channel === 'db:blueprint-get') return saved.get(Number(args[0])) ?? null
-      if (channel === 'db:character-get-all') return []
-      if (channel === 'db:character-upsert') return { success: true }
+      if (channel === 'db:character-roster-read') {
+        return { status: 'empty', revision: 0, entries: [] }
+      }
+      if (channel === 'db:character-roster-commit') {
+        const request = args[0] as { entries: unknown[] }
+        return { success: true, receipt: { revision: 1, snapshot: { status: 'ready', entries: request.entries } } }
+      }
       return { success: true }
     })
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
@@ -168,21 +173,20 @@ describe('GenerateDirectoryCommand', () => {
 
     const persistedAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:blueprint-upsert-many')
     const verifiedAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:blueprint-get')
-    const candidateSyncAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:character-get-all')
+    const candidateSyncAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:character-roster-read')
     expect(persistedAt).toBeGreaterThanOrEqual(0)
     expect(verifiedAt).toBeGreaterThan(persistedAt)
     expect(candidateSyncAt).toBeGreaterThan(verifiedAt)
-    const candidateUpserts = invoke.mock.calls
-      .filter(([channel]) => channel === 'db:character-upsert')
-      .map(([, candidate]) => candidate)
-    expect(candidateUpserts).toEqual(expect.arrayContaining([
+    const candidateCommit = invoke.mock.calls
+      .find(([channel]) => channel === 'db:character-roster-commit')?.[1] as { entries: unknown[] }
+    expect(candidateCommit.entries).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: '林岚',
-        relationships: JSON.stringify([{ target: '周砚', relation: '共同追查真相' }]),
+        relationships: [{ target: '周砚', relation: '共同追查真相' }],
       }),
       expect.objectContaining({
         name: '周砚',
-        relationships: JSON.stringify([{ target: '林岚', relation: '共同追查真相' }]),
+        relationships: [{ target: '林岚', relation: '共同追查真相' }],
       }),
     ]))
   })

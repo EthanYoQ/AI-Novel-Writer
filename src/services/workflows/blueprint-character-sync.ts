@@ -1,11 +1,13 @@
-import type { CharacterData } from '../../../electron/repositories/character-repository'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { CharacterRosterEntry } from '../../shared/character-roster'
 import { ipc } from '../ipc-client'
 import {
   normalizeCharacterCardsForPersistence,
   normalizeCharacterRelationshipEdges,
   type CharacterRelationshipEdge,
 } from './character-card-normalizer'
+import { characterRosterEntryFromCard } from '../character-roster-client'
+import { randomUUID } from '../../utils/id'
 
 export interface BlueprintCharacterCandidateSource {
   chapterNumber: number
@@ -131,35 +133,6 @@ function collectRelationshipHints(
   }
 }
 
-function parseStoredRelationshipEdges(value: string): CharacterRelationshipEdge[] | null {
-  const text = value.trim()
-  if (!text) return []
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    return null
-  }
-
-  if (Array.isArray(parsed)) {
-    const edges: CharacterRelationshipEdge[] = []
-    for (const item of parsed) {
-      if (!isRecord(item) || typeof item.target !== 'string' || !item.target.trim()) return null
-      const relation = typeof item.relation === 'string' && item.relation.trim() ? item.relation.trim() : '相关'
-      edges.push({ target: item.target.trim(), relation })
-    }
-    return edges
-  }
-
-  if (!isRecord(parsed) || 'target' in parsed || 'relation' in parsed) return null
-  return Object.entries(parsed).flatMap(([target, relation]) => {
-    if (!target.trim()) return []
-    const label = typeof relation === 'string' && relation.trim() ? relation.trim() : '相关'
-    return [{ target: target.trim(), relation: label }]
-  })
-}
-
 function mergeRelationshipEdges(
   existing: readonly CharacterRelationshipEdge[],
   additions: readonly CharacterRelationshipEdge[],
@@ -191,6 +164,7 @@ export async function syncBlueprintCharacterCandidates(
   blueprints: readonly BlueprintCharacterCandidateSource[],
   expectedProjectPath: string,
   projectSession: ProjectSessionContext,
+  operationId = `blueprint-sync-${randomUUID()}`,
 ): Promise<void> {
   const sourcesByKey = new Map<string, CharacterSource>()
   for (const blueprint of blueprints) {
@@ -205,12 +179,15 @@ export async function syncBlueprintCharacterCandidates(
   }
   if (sourcesByKey.size === 0) return
 
-  const existingCharacters = await ipc.invokeWithProjectSession(
+  const roster = await ipc.invokeWithProjectSession(
     projectSession,
-    'db:character-get-all',
+    'db:character-roster-read',
     expectedProjectPath,
   )
-  const existingByKey = new Map(existingCharacters.map(character => [characterKey(character.name), character]))
+  if (roster.status !== 'ready' && roster.status !== 'empty') {
+    throw new Error('角色名单当前不可安全同步；请先完成旧项目修复或处理数据不一致状态')
+  }
+  const existingByKey = new Map(roster.entries.map(character => [characterKey(character.name), character]))
   const canonicalNameByKey = new Map([...sourcesByKey].map(([key, source]) => [key, source.name]))
   for (const [key, character] of existingByKey) canonicalNameByKey.set(key, character.name)
   const allNames = new Set(canonicalNameByKey.values())
@@ -229,28 +206,40 @@ export async function syncBlueprintCharacterCandidates(
       notes: formatCandidateSource(source.chapters),
     }))
   const candidates = normalizeCharacterCardsForPersistence(rawCandidates).map(candidate => ({
-    ...candidate,
-    relationships: JSON.stringify(relationshipGraph.get(candidate.name) ?? []),
+    ...characterRosterEntryFromCard(candidate),
+    relationships: relationshipGraph.get(candidate.name) ?? [],
   }))
 
-  const changedExisting: CharacterData[] = []
+  const changedExisting: CharacterRosterEntry[] = []
   for (const [key, existing] of existingByKey) {
     const additions = relationshipGraph.get(existing.name) ?? relationshipGraph.get(canonicalNameByKey.get(key) ?? '') ?? []
     if (additions.length === 0) continue
-    const currentEdges = parseStoredRelationshipEdges(existing.relationships)
-    if (currentEdges === null) continue
-    const mergedEdges = mergeRelationshipEdges(currentEdges, additions)
-    if (mergedEdges.length === currentEdges.length) continue
-    changedExisting.push({ ...existing, relationships: JSON.stringify(mergedEdges) })
+    // 旧自由文本关系没有可靠字段级迁移；蓝图同步只能附加到已结构化的
+    // 关系列表，绝不为了“补关系”覆盖作者原文。
+    if (existing.legacyRelationshipNotes) continue
+    const mergedEdges = mergeRelationshipEdges(existing.relationships, additions)
+    if (mergedEdges.length === existing.relationships.length) continue
+    changedExisting.push({ ...existing, relationships: mergedEdges })
   }
 
-  for (const character of [...changedExisting, ...candidates]) {
-    const result = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:character-upsert',
-      character,
-      expectedProjectPath,
-    )
-    assertIpcSuccess(result)
+  if (changedExisting.length === 0 && candidates.length === 0) return
+  const result = await ipc.invokeWithProjectSession(
+    projectSession,
+    'db:character-roster-commit',
+    {
+      operationId,
+      expectedRevision: roster.revision,
+      schemaVersion: 1,
+      intent: 'blueprint_sync',
+      // incremental intents never echo untouched cards back through IPC. This
+      // keeps legacy free-text relationship evidence read-only and lets the
+      // deep module merge only the changed/new structured entries.
+      entries: [...changedExisting, ...candidates],
+    },
+    expectedProjectPath,
+  )
+  assertIpcSuccess(result)
+  if (!result.receipt) {
+    throw new Error('同步蓝图角色候选未返回已验证的角色名单回执')
   }
 }

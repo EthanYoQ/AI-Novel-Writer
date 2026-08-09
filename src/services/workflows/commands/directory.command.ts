@@ -133,7 +133,12 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           context.projectSession,
         )
         this.assertNotCancelled(context)
-        await syncBlueprintCharacterCandidates(parsed, expectedProjectPath, context.projectSession)
+        await syncBlueprintCharacterCandidates(
+          parsed,
+          expectedProjectPath,
+          context.projectSession,
+          `blueprint-sync-${context.runId}-${cursor}-${batchEnd}`,
+        )
       }
 
       callbacks.log(`  ✅ 第 ${cursor}–${batchEnd} 章完成（${parsed.length} 章）并已保存入库`)

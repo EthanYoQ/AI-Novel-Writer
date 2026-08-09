@@ -429,7 +429,9 @@ function ArchFileRow({
   const text = useLocaleStore(s => s.text)
   const english = ARCH_FILE_EN[f.key] ?? { label: f.label, desc: f.desc }
   const label = text(f.label, english.label)
+  const isCharacterProjection = f.key === 'characters'
   const clearArchFile = async () => {
+    if (isCharacterProjection) return
     const projectSession = await confirmCurrentProjectSession(
       useProjectStore.getState().currentProject,
       () => confirm(text(`确认清空「${f.label}」内容？\n此操作会删除该项故事架构文本，不影响其他架构项、蓝图或正文。`, `Clear “${english.label}”?\nThis removes only this architecture section and preserves the other sections, blueprints, and manuscript.`), {
@@ -477,15 +479,17 @@ function ArchFileRow({
           icon: <Copy size={13} />,
           onClick: () => navigator.clipboard.writeText(filePath).catch(() => { }),
         },
-        { key: 'div2', type: 'divider' as const },
-        {
-          key: 'delete',
-          label: text(`清空${f.label}`, `Clear ${english.label}`),
-          icon: <Trash2 size={13} />,
-          danger: true,
-          disabled: !isGenerated,
-          onClick: clearArchFile,
-        },
+        ...(isCharacterProjection ? [] : [
+          { key: 'div2', type: 'divider' as const },
+          {
+            key: 'delete',
+            label: text(`清空${f.label}`, `Clear ${english.label}`),
+            icon: <Trash2 size={13} />,
+            danger: true,
+            disabled: !isGenerated,
+            onClick: clearArchFile,
+          },
+        ]),
       ], e)}
       title={text(f.desc, english.desc)}
     >
@@ -505,7 +509,7 @@ function ArchFileRow({
           {text('待生成', 'Pending')}
         </span>
       )}
-      {isGenerated && (
+      {isGenerated && !isCharacterProjection && (
         <button
           type="button"
           className="opacity-70 hover:opacity-100 rounded p-0.5"

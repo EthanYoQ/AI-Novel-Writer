@@ -115,7 +115,6 @@ export class ProjectClearRepository {
                             golden_finger = '',
                             premise = '',
                             worldbuilding = '',
-                            characters_arch = '',
                             synopsis = '',
                             character_states = '',
                             updated_at = datetime('now')

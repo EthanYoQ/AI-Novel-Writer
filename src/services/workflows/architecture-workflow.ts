@@ -1,9 +1,6 @@
 import type { WorkflowDefinition, WorkflowContext, StepCallbacks } from '../../stores/workflow-store'
-import { useLLMStore } from '../../stores/llm-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
-import { getPromptTemplate } from '../prompt-templates'
-import { ipc } from '../ipc-client'
 import type { NovelConfig } from '../../shared/ipc-channels'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import {
@@ -11,14 +8,7 @@ import {
   sameProjectPathKey,
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
-import type { CharacterData } from '../../../electron/repositories/character-repository'
-import {
-  extractCompleteCharacterCards,
-  mergeExtractedCharacterCardsWithExisting,
-} from './character-card-normalizer'
 import { randomUUID } from '../../utils/id'
-
-import { runPostProcessPipeline, type PostProcessStep } from './workflow-utils'
 import { requireWorkflowProjectSession } from './workflow-project-session'
 import type { ArchitectureProjectSnapshot } from './commands/architecture.command'
 
@@ -239,205 +229,10 @@ export function getNarrativePOVLabel(pov: string): string {
   return labels[pov] || pov
 }
 
-// ==========================================
-// 4. 角色卡后处理逻辑
-// ==========================================
-
-export const ARCH_CHARACTER_SCOPE = 'arch_characters'
-
-export function createCharacterExtractSteps(projectPath: string, characterDynamicsContent: string, genre: string): PostProcessStep[] {
-  const text = useLocaleStore.getState().text
-  return [
-    {
-      key: 'extract_character_cards',
-      label: text('提取初始角色卡', 'Extract initial character cards'),
-      critical: true,
-      executor: async (cb, context) => {
-        if (context?.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
-        if (!context) throw new Error(text('工作流缺少冻结项目会话', 'The workflow is missing its frozen project session.'))
-        const projectSession = requireWorkflowProjectSession(context)
-        const { ArchitecturePromptBuilder } = await import('../prompts/prompt-builder')
-        const template = getPromptTemplate('extract_initial_characters', projectSession)
-        if (!template) throw new Error(text('未找到 extract_initial_characters', 'Could not find extract_initial_characters'))
-        const extractPrompt = new ArchitecturePromptBuilder(template).withCharacterDynamics(characterDynamicsContent).withGenre(genre).build()
-        const systemRole = template.systemRole || '你是一位专业的小说数据结构化专家。'
-
-        const llmStore = useLLMStore.getState()
-        cb.appendText(text('正在调用 AI 提取角色卡片...\n', 'Calling AI to extract character cards...\n'))
-
-        let fullContent = ''
-        await new Promise<void>((resolve, reject) => {
-          let streamRequestId = ''
-          let cancelCheckTimer: ReturnType<typeof setInterval> | null = null
-          const cleanup = () => {
-            if (cancelCheckTimer) {
-              clearInterval(cancelCheckTimer)
-              cancelCheckTimer = null
-            }
-          }
-          if (context) {
-            cancelCheckTimer = setInterval(() => {
-              if (context.cancelled && streamRequestId) {
-                cleanup()
-                llmStore.cancelGeneration(streamRequestId).catch(() => {})
-                reject(new Error(text('工作流已取消', 'Workflow cancelled')))
-              }
-            }, 200)
-          }
-          llmStore.generateStream(
-            [
-              { role: 'system', content: systemRole },
-              { role: 'user', content: extractPrompt }
-            ],
-            {
-              onChunk: (chunk) => {
-                if (context?.cancelled) return
-                fullContent += chunk
-                cb.appendText(chunk)
-              },
-              onDone: () => {
-                cleanup()
-                if (context?.cancelled) {
-                  reject(new Error(text('工作流已取消', 'Workflow cancelled')))
-                  return
-                }
-                resolve()
-              },
-              onError: (err) => {
-                cleanup()
-                reject(new Error(err))
-              }
-            },
-            undefined,
-            {
-              responseFormat: { type: 'json_object' },
-              thinking: false,
-              maxTokens: 4096,
-              temperature: 0.2,
-              purpose: 'character-extraction',
-              projectSession: context?.projectSession,
-            }
-          ).then((requestId) => {
-            streamRequestId = requestId
-            if (context?.cancelled) {
-              llmStore.cancelGeneration(requestId).catch(() => {})
-              cleanup()
-              reject(new Error(text('工作流已取消', 'Workflow cancelled')))
-            }
-          }).catch((error) => {
-            cleanup()
-            reject(error)
-          })
-        })
-        if (context?.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
-
-        const generatedCharacterCards = extractCompleteCharacterCards(fullContent, characterDynamicsContent)
-        if (!sameProjectSessionContext(
-          projectSession,
-          projectSessionContextFromProject(useProjectStore.getState().currentProject),
-        )) {
-          throw new Error(text(
-            '项目上下文已切换，角色卡提取已停止以避免写入错误项目',
-            'The project context changed, so character-card extraction stopped before saving.',
-          ))
-        }
-        const existingCharacterCards = await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:character-get-all',
-          projectPath,
-        )
-        if (!sameProjectSessionContext(
-          projectSession,
-          projectSessionContextFromProject(useProjectStore.getState().currentProject),
-        )) {
-          throw new Error(text(
-            '项目上下文已切换，角色卡提取已停止以避免写入错误项目',
-            'The project context changed, so character-card extraction stopped before saving.',
-          ))
-        }
-        const characterDataList = mergeExtractedCharacterCardsWithExisting(
-          generatedCharacterCards,
-          existingCharacterCards,
-        )
-
-        // 批量写入数据库
-        if (context?.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
-        if (!context) throw new Error(text('角色卡后处理缺少冻结工作流上下文', 'Character-card post-processing is missing its frozen workflow context.'))
-        const saveResult = await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:character-save-all',
-          characterDataList as unknown as CharacterData[],
-          undefined,
-          projectPath,
-        )
-        if (!saveResult.success) {
-          throw new Error(saveResult.error || text('角色卡写入数据库失败', 'Could not save character cards to the database.'))
-        }
-        cb.log(text(`角色卡提取完毕（共 ${characterDataList.length} 个角色）`, `Character-card extraction complete (${characterDataList.length} characters).`))
-      },
-    },
-  ]
-}
-
-export function runArchCharacterExtract(
-  projectPath: string,
-  characterDynamicsContent: string,
-  genre: string,
-  sourceProjectSession: ProjectSessionContext,
-): string {
-  const text = useLocaleStore.getState().text
-  const runId = randomUUID()
-  const steps = createCharacterExtractSteps(projectPath, characterDynamicsContent, genre)
-  import('../../stores/workflow-store').then(async ({ useWorkflowStore }) => {
-    await useWorkflowStore.getState().startWorkflow({
-      runId,
-      type: 'post_process',
-      title: text('后处理：角色卡提取', 'Post-processing: character-card extraction'),
-      projectPath,
-      projectSession: sourceProjectSession,
-      steps: [
-        {
-          name: text('提取角色卡片', 'Extract character cards'),
-          description: text('从角色图谱中提取并生成角色卡片数据', 'Extract and create character-card data from character dynamics'),
-          executor: async (_step, context, callbacks) => {
-            const { globalEventBus } = await import('../../shared/event-bus')
-            const archStatus = await runPostProcessPipeline(
-              projectPath,
-              ARCH_CHARACTER_SCOPE,
-              text('架构-角色图谱', 'Architecture — character dynamics'),
-              steps,
-              callbacks,
-              { cancellation: context, projectSession: requireWorkflowProjectSession(context) },
-            )
-            if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
-            if (archStatus.allCriticalPassed) {
-              // 角色卡提取成功 → 通过 EventBus 通知 ProjectService 刷新
-              globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {
-                projectPath,
-                projectSession: requireWorkflowProjectSession(context),
-                runId: context.runId,
-              })
-            } else {
-              globalEventBus.emit('CHARACTER_EXTRACT_FAILED', {
-                projectPath,
-                projectSession: requireWorkflowProjectSession(context),
-                runId: context.runId,
-                error: archStatus.steps.extract_character_cards?.error,
-              })
-              globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {
-                projectPath,
-                projectSession: requireWorkflowProjectSession(context),
-                runId: context.runId,
-              })
-            }
-          },
-        },
-      ],
-    })
-  })
-  return runId
-}
-
+/**
+ * 旧项目的显式、安全修复入口。正常角色架构不再启动异步 Markdown 提取；
+ * 唯一可写路径是 RepairLegacyCharacterRosterCommand 的结构化 roster commit。
+ */
 export async function repairArchCharacterCards(projectPath: string): Promise<void> {
   const text = useLocaleStore.getState().text
   const project = useProjectStore.getState().currentProject
@@ -445,57 +240,44 @@ export async function repairArchCharacterCards(projectPath: string): Promise<voi
   if (!project || !projectSession || !sameProjectPathKey(project.path, projectPath)) {
     throw new Error(text('当前项目已切换，请在原项目中重试', 'The project changed. Return to the original project and try again.'))
   }
-  const projectSnapshot = Object.freeze({ ...project.novelConfig })
-  const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath)
-  if (!core?.charactersArch || core.charactersArch.length < 50) throw new Error(text('无法提取角色卡', 'Could not extract character cards.'))
   if (!sameProjectSessionContext(
     projectSession,
     projectSessionContextFromProject(useProjectStore.getState().currentProject),
   )) throw new Error(text('当前项目已切换，请在原项目中重试', 'The project changed. Return to the original project and try again.'))
 
-  const steps = createCharacterExtractSteps(projectPath, core.charactersArch, projectSnapshot.genre)
   const { useWorkflowStore } = await import('../../stores/workflow-store')
   const runId = randomUUID()
-  await useWorkflowStore.getState().startWorkflow({
+  const completedRunId = await useWorkflowStore.getState().startWorkflow({
     runId,
     type: 'post_process',
-    title: text('修复：角色卡提取', 'Repair: character-card extraction'),
+    title: text('修复：旧角色名单', 'Repair: legacy character roster'),
     projectPath,
     projectSession,
-    steps: [
-      {
-        name: text('重试角色卡提取', 'Retry character-card extraction'),
-        description: text('重试失败的角色卡提取步骤', 'Retry failed character-card extraction steps'),
-        executor: async (_step, context, callbacks) => {
-          const { globalEventBus } = await import('../../shared/event-bus')
-          const archStatus = await runPostProcessPipeline(
-            projectPath,
-            ARCH_CHARACTER_SCOPE,
-              text('架构-角色图谱', 'Architecture — character dynamics'),
-            steps,
-              callbacks,
-              {
-                onlyFailed: true,
-                cancellation: context,
-                projectSession: requireWorkflowProjectSession(context),
-              },
-          )
-          if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow cancelled'))
-          if (archStatus.allCriticalPassed) {
-            globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {
-              projectPath,
-              projectSession: requireWorkflowProjectSession(context),
-              runId: context.runId,
-            })
-          } else {
-            globalEventBus.emit('ARCH_POSTPROCESS_UPDATED', {
-              projectPath,
-              projectSession: requireWorkflowProjectSession(context),
-              runId: context.runId,
-            })
-          }
-        },
+    steps: [{
+      name: text('安全修复旧角色图谱', 'Safely repair the legacy character graph'),
+      description: text(
+        '只将保留的旧图谱原文转换为结构化角色名单；失败时不改动任何角色数据',
+        'Convert preserved legacy graph evidence into a structured roster; failures leave all character data unchanged.',
+      ),
+      executor: async (_step, context, callbacks) => {
+        const { RepairLegacyCharacterRosterCommand } = await import('./commands/legacy-character-roster-repair.command')
+        const currentProject = useProjectStore.getState().currentProject
+        const genre = sameProjectSessionContext(
+          requireWorkflowProjectSession(context),
+          projectSessionContextFromProject(currentProject),
+        ) ? currentProject?.novelConfig.genre ?? '' : ''
+        return new RepairLegacyCharacterRosterCommand({
+          expectedProjectPath: projectPath,
+          genre,
+        }).execute({ step: _step, context, callbacks })
       },
-    ],
+    }],
   })
+  const completedRun = useWorkflowStore.getState().history.find(run => run.id === completedRunId)
+  if (!completedRun || completedRun.status !== 'completed') {
+    throw new Error(completedRun?.error || text(
+      '旧角色图谱修复未完成；原始图谱和已有角色卡均未被覆盖。',
+      'Legacy character-graph repair did not complete; the original graph and existing cards were not overwritten.',
+    ))
+  }
 }
