@@ -1503,6 +1503,113 @@ $otherProcessRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -S
     })
   })
 
+  windowsIt('classifies only the exact native updater old-uninstaller NSIS probe chain', () => {
+    const output = runReleaseMonitorLibrary(`
+$e2eEvidenceRoot = 'D:\\a\\_temp\\ai-novel-windows-in-app-update-e2e'
+$env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT = $e2eEvidenceRoot
+$oldExe = $e2eEvidenceRoot + '\\runtime\\installed-app\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
+$pendingExe = Join-Path $env:LOCALAPPDATA 'ai-novel-writer-updater\\pending\\ai-novel-writer-setup-0.8.0.exe'
+$oldUninstallerPath = Join-Path (Join-Path ([System.IO.Path]::GetTempPath()) 'nsn315E.tmp') 'old-uninstaller.exe'
+$system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+$cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+$findPath = Join-Path $env:SystemRoot 'System32\\find.exe'
+$policyPayload = 'if ((Get-ExecutionPolicy -Scope Process) -eq ''Restricted'') { exit 1 } else { exit 0 }'
+$policyCommand = '"' + $system32 + '" -C "' + $policyPayload + '"'
+$cmdCommand = '"' + $cmdPath + '" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe" /FO CSV | "' + $findPath + '" "AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe"'
+$findCommand = '"' + $findPath + '"  "AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe"'
+$old = [pscustomobject]@{
+  processId = 1557
+  startTimeTicks = '639219070367704249'
+  executablePath = $oldExe
+  commandLine = '"' + $oldExe + '"'
+  identityCaptured = $true
+  commandLineCaptured = $true
+}
+$pendingInstaller = [pscustomobject]@{
+  processId = 1715
+  startTimeTicks = '639219070493632715'
+  executablePath = $pendingExe
+  commandLine = '"' + $pendingExe + '" --updated'
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = $old.processId
+  parentProcessStartTimeTicks = $old.startTimeTicks
+  parentExecutablePath = $old.executablePath
+}
+$oldUninstaller = [pscustomobject]@{
+  processId = 1730
+  startTimeTicks = '639219070493632730'
+  executablePath = $oldUninstallerPath
+  commandLine = '"' + $oldUninstallerPath + '" /S'
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = $pendingInstaller.processId
+  parentProcessStartTimeTicks = $pendingInstaller.startTimeTicks
+  parentExecutablePath = $pendingInstaller.executablePath
+}
+$powerShell = [pscustomobject]@{
+  processId = 1792
+  startTimeTicks = '639219070493632792'
+  executablePath = $system32
+  commandLine = $policyCommand
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = $oldUninstaller.processId
+  parentProcessStartTimeTicks = $oldUninstaller.startTimeTicks
+  parentExecutablePath = $oldUninstaller.executablePath
+}
+$cmd = [pscustomobject]@{
+  processId = 1793
+  startTimeTicks = '639219070493632793'
+  executablePath = $cmdPath
+  commandLine = $cmdCommand
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = $oldUninstaller.processId
+  parentProcessStartTimeTicks = $oldUninstaller.startTimeTicks
+  parentExecutablePath = $oldUninstaller.executablePath
+}
+$find = [pscustomobject]@{
+  processId = 1794
+  startTimeTicks = '639219070493632794'
+  executablePath = $findPath
+  commandLine = $findCommand
+  identityCaptured = $true
+  commandLineCaptured = $true
+  parentProcessId = $cmd.processId
+  parentProcessStartTimeTicks = $cmd.startTimeTicks
+  parentExecutablePath = $cmd.executablePath
+}
+$tracked = @{
+  $old.processId = $old
+  $pendingInstaller.processId = $pendingInstaller
+  $oldUninstaller.processId = $oldUninstaller
+  $powerShell.processId = $powerShell
+  $cmd.processId = $cmd
+  $find.processId = $find
+}
+$powerShellEvent = [pscustomobject]@{ ProcessId = $powerShell.processId; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$cmdEvent = [pscustomobject]@{ ProcessId = $cmd.processId; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$findEvent = [pscustomobject]@{ ProcessId = $find.processId; ExitCode = 1; ExitCodeCaptured = $true; JobMessage = 7 }
+$verifiedFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+[void]$verifiedFindParentKeys.Add((Get-AiNovelGateProcessIdentityKey -ProcessIdentity $cmd))
+[pscustomobject]@{
+  PowerShell = Test-AiNovelGateExpectedNsisPowerShellProbeExit -Step 'windows-in-app-update-e2e' -Event $powerShellEvent -ProcessIdentity $powerShell -ParentIdentity $oldUninstaller -GrandParentIdentity $pendingInstaller -TrackedProcessIdentities $tracked
+  CmdCandidate = Test-AiNovelGateNsisCmdProcessCheckCandidate -Step 'windows-in-app-update-e2e' -Event $cmdEvent -ProcessIdentity $cmd -ParentIdentity $oldUninstaller -GrandParentIdentity $pendingInstaller -LegacyBridge $null -TrackedProcessIdentities $tracked
+  Cmd = Test-AiNovelGateExpectedNsisCmdProcessCheckExit -Step 'windows-in-app-update-e2e' -Event $cmdEvent -ProcessIdentity $cmd -ParentIdentity $oldUninstaller -GrandParentIdentity $pendingInstaller -LegacyBridge $null -TrackedProcessIdentities $tracked -VerifiedFindParentKeys $verifiedFindParentKeys
+  Find = Test-AiNovelGateExpectedNsisFindNoMatchExit -Step 'windows-in-app-update-e2e' -Event $findEvent -ProcessIdentity $find -ParentIdentity $cmd -GrandParentIdentity $oldUninstaller -GreatGrandParentIdentity $pendingInstaller -LegacyBridge $null -TrackedProcessIdentities $tracked
+} | ConvertTo-Json -Compress
+`)
+    const result = parseLastJsonLine(output)
+
+    expect(result).toEqual({
+      PowerShell: true,
+      CmdCandidate: true,
+      Cmd: true,
+      Find: true,
+    })
+  })
+
   windowsIt('accepts only the exact legacy bridge old-uninstaller PowerShell probe chain', () => {
     const output = runReleaseMonitorLibrary(`
 $system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
