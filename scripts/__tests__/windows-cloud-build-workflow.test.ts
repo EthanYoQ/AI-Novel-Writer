@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -6,8 +8,9 @@ import { describe, expect, it } from 'vitest'
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = path.resolve(testDirectory, '..', '..')
 const workflowPath = path.join(repositoryRoot, '.github', 'workflows', 'windows-cloud-build-test.yml')
-const manifestScriptPath = path.join(repositoryRoot, 'scripts', 'generate-cloud-build-manifest.mjs')
+const evidenceScriptPath = path.join(repositoryRoot, 'scripts', 'release-evidence-v2.mjs')
 const forbiddenJobEnvContextPattern = /\$\{\{\s*runner(?:\.|\[)/i
+const windowsIt = process.platform === 'win32' ? it : it.skip
 
 function readRequiredFile(file: string) {
   expect(existsSync(file), `Missing required cloud-build contract file: ${file}`).toBe(true)
@@ -71,7 +74,7 @@ function jobLevelEnvBlocks(source: string) {
 describe('Windows cloud build workflow contract', () => {
   it('uses an isolated, manual, pinned, runtime-qualified Windows build without release publication', () => {
     const workflow = readRequiredFile(workflowPath)
-    const manifestScript = readRequiredFile(manifestScriptPath)
+    const evidenceScript = readRequiredFile(evidenceScriptPath)
 
     const triggerBlock = workflow.match(/^on:\r?\n(?<triggers>(?: {2}.*(?:\r?\n|$))*)/m)?.groups?.triggers
     expect(triggerBlock?.trim()).toBe('workflow_dispatch:')
@@ -98,17 +101,17 @@ describe('Windows cloud build workflow contract', () => {
     expect(workflow).toContain('AI-Novel-Writer-0.2.5-windows-x64.zip')
     expect(workflow).toContain('22b38b7337a456882bf130ccb898f17616fffb85d6c8b8b3d0ee431409f18531')
     expect(workflow).toContain('AI_NOVEL_PREVIOUS_PORTABLE_ZIP')
-    expect(workflow).toContain('node scripts/generate-cloud-build-manifest.mjs')
+    expect(workflow).toContain('release-evidence-v2.mjs finalize --platform windows')
 
     const portableDownload = namedStep(workflow, 'Download verified v0.2.5 portable migration input')
     expect(portableDownload).toContain("$portableZip = Join-Path $env:RUNNER_TEMP 'AI-Novel-Writer-0.2.5-windows-x64.zip'")
     expect(portableDownload).toContain('"AI_NOVEL_PREVIOUS_PORTABLE_ZIP=$portableZip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8')
 
-    expect(manifestScript).toContain("gateLevel: 'RUNTIME_VERIFIED'")
-    expect(manifestScript).toContain('releaseCreated: false')
-    expect(manifestScript).toContain('lockfileSha256')
-    expect(manifestScript).toContain('runnerImage')
-    expect(manifestScript).toContain('SHA256SUMS.txt')
+    expect(evidenceScript).toContain("gateLevel: 'RUNTIME_VERIFIED'")
+    expect(evidenceScript).toContain('releaseCreated: false')
+    expect(evidenceScript).toContain('lockfileSha256')
+    expect(evidenceScript).toContain('runnerImage')
+    expect(evidenceScript).toContain('SHA256SUMS.txt')
 
     const successfulArtifact = namedStep(workflow, 'Upload runtime-verified Windows package')
     const failedArtifact = namedStep(workflow, 'Upload Windows build diagnostics')
@@ -133,6 +136,111 @@ describe('Windows cloud build workflow contract', () => {
     const workflow = readRequiredFile(workflowPath)
 
     expect(jobLevelEnvBlocks(workflow).join('\n')).not.toMatch(forbiddenJobEnvContextPattern)
+  })
+
+  it('freezes v2 evidence before install and records install, browser, build, and finalization without broad diagnostics', () => {
+    const workflow = readRequiredFile(workflowPath)
+    const checkout = namedStep(workflow, 'Check out source')
+    const initialize = namedStep(workflow, 'Initialize frozen Windows release evidence')
+    const install = namedStep(workflow, 'Install locked dependencies')
+    const browserInstall = namedStep(workflow, 'Install Playwright Chromium')
+    const browserTest = namedStep(workflow, 'Run renderer browser tests')
+    const build = namedStep(workflow, 'Run complete Windows release gate')
+    const finalize = namedStep(workflow, 'Finalize Windows release evidence')
+    const diagnostics = namedStep(workflow, 'Collect Windows build diagnostics')
+    const upload = namedStep(workflow, 'Upload runtime-verified Windows package')
+
+    expect(checkout).toContain('ref: ${{ github.sha }}')
+    expect(checkout).toContain('persist-credentials: false')
+    expect(workflow.indexOf('Initialize frozen Windows release evidence'))
+      .toBeLessThan(workflow.indexOf('Install locked dependencies'))
+    expect(initialize).toContain('release-evidence-v2.mjs init --platform windows')
+    expect(initialize).toContain('AI_NOVEL_RELEASE_EVIDENCE_ROOT')
+    expect(initialize).toContain('git rev-parse HEAD')
+    expect(initialize).toContain('--expected-node-version 22.23.1')
+    expect(initialize).toContain('--expected-pnpm-version 11.11.0')
+    expect(initialize).toContain('--run-attempt "$env:GITHUB_RUN_ATTEMPT"')
+    expect(initialize).toContain("--workflow-path '.github/workflows/windows-cloud-build-test.yml'")
+    expect(initialize).toContain("--workflow-name 'Windows cloud package qualification'")
+    expect(initialize).toContain('--actor "$env:GITHUB_ACTOR"')
+    expect(initialize).toContain('--event "$env:GITHUB_EVENT_NAME"')
+    expect(initialize).toContain("--dispatch-inputs-json '{}'")
+    expect(initialize).not.toContain('AI_NOVEL_RELEASE_EVIDENCE_NODE_VERSION')
+    expect(initialize).not.toContain('AI_NOVEL_RELEASE_EVIDENCE_PNPM_VERSION')
+    expect(initialize).not.toContain('$actualNodeVersion')
+    expect(initialize).not.toContain('$actualPnpmVersion')
+    for (const [step, safeName, fixedCommand] of [
+      [install, 'install-locked-dependencies', 'pnpm install --frozen-lockfile'],
+      [browserInstall, 'install-playwright-chromium', 'pnpm exec playwright install chromium'],
+      [browserTest, 'renderer-browser-tests', 'pnpm run test:browser'],
+      [build, 'complete-windows-release-gate', 'pnpm run build:win'],
+    ] as const) {
+      expect(step).toContain('release-evidence-v2.mjs record')
+      expect(step).toContain(`--step ${safeName}`)
+      expect(step).toContain('-- "$env:ComSpec" /d /s /c')
+      expect(step).toContain(`"${fixedCommand}"`)
+    }
+    expect(finalize).toContain('release-evidence-v2.mjs finalize --platform windows')
+    expect(finalize).toContain('--release-root "release/$version"')
+    expect(upload).toContain('release/*/qualification/release-contract.json')
+    expect(upload).toContain('release/*/qualification/run-ledger.json')
+    expect(upload).toContain('release/*/qualification/acceptance/*.json')
+    expect(diagnostics).not.toContain('Copy-Item -LiteralPath $_.FullName')
+    expect(diagnostics).not.toMatch(/-Recurse\b/)
+    expect(diagnostics).not.toContain('monitor-control-log.jsonl')
+    expect(diagnostics).toContain('orchestrator-failures.jsonl')
+    expect(diagnostics).toContain('monitor-status.json')
+  })
+
+  windowsIt('executes pnpm through the explicit trusted command processor and records the sanitized result', () => {
+    const evidenceRoot = mkdtempSync(path.join(tmpdir(), 'ai-novel-windows-comspec-record-'))
+    try {
+      const initialize = spawnSync(process.execPath, [
+        evidenceScriptPath,
+        'init',
+        '--platform', 'windows',
+        '--evidence-root', evidenceRoot,
+        '--repository', 'EthanYoQ/AI-Novel-Writer',
+        '--commit', 'a'.repeat(40),
+        '--run-id', '123',
+        '--run-attempt', '1',
+        '--runner-label', 'windows-2022',
+        '--image-os', 'Windows',
+        '--image-version', 'test',
+        '--expected-node-version', process.versions.node,
+        '--expected-pnpm-version', '11.11.0',
+        '--workflow-path', '.github/workflows/windows-cloud-build-test.yml',
+        '--workflow-name', 'Windows cloud package qualification',
+        '--actor', 'release-operator',
+        '--event', 'workflow_dispatch',
+        '--dispatch-inputs-json', '{}',
+      ], { cwd: repositoryRoot, encoding: 'utf8' })
+      expect(initialize.status, initialize.stderr).toBe(0)
+
+      const commandProcessor = process.env.ComSpec
+      expect(commandProcessor).toBeTruthy()
+      const recorded = spawnSync(process.execPath, [
+        evidenceScriptPath,
+        'record',
+        '--evidence-root', evidenceRoot,
+        '--step', 'pnpm-comspec-probe',
+        '--', commandProcessor!, '/d', '/s', '/c', 'pnpm --version',
+      ], { cwd: repositoryRoot, encoding: 'utf8' })
+      expect(recorded.status, recorded.stderr).toBe(0)
+
+      const ledger = JSON.parse(readFileSync(path.join(evidenceRoot, 'run-ledger.json'), 'utf8')) as {
+        commands: Array<{ step: string, command: { executable: string, argumentCount: number }, exitCode: number }>
+      }
+      expect(ledger.commands).toEqual([
+        expect.objectContaining({
+          step: 'pnpm-comspec-probe',
+          command: { executable: path.basename(commandProcessor!), argumentCount: 4 },
+          exitCode: 0,
+        }),
+      ])
+    } finally {
+      rmSync(evidenceRoot, { recursive: true, force: true })
+    }
   })
 
   it.each([

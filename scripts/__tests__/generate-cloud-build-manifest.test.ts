@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
+import { recordQualificationCommands, windowsAcceptanceReceipt } from './release-evidence-v2-fixtures'
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = path.resolve(testDirectory, '..', '..')
@@ -34,6 +35,11 @@ function fixture() {
   return root
 }
 
+function writeJson(file: string, value: unknown) {
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+}
+
 afterEach(() => {
   for (const root of fixtures.splice(0)) rmSync(root, { recursive: true, force: true })
 })
@@ -60,8 +66,9 @@ describe('cloud Windows build manifest', () => {
     })
   })
 
-  it('records the runtime-qualified package files and reproducibility inputs with SHA-256 sums', () => {
+  it('finalizes the runtime-qualified package from its pre-build evidence contract', () => {
     const releaseDir = fixture()
+    const evidenceRoot = fixture()
     const installerName = `ai-novel-writer-setup-${packageMetadata.version}.exe`
     const installer = Buffer.from('verified-nsis-installer')
     const blockmap = Buffer.from('{"version":"2","files":[]}')
@@ -70,7 +77,48 @@ describe('cloud Windows build manifest', () => {
     writeFileSync(path.join(releaseDir, `${installerName}.blockmap`), blockmap)
     writeFileSync(path.join(releaseDir, 'latest.yml'), latest)
 
+    for (const smoke of [
+      ['packaged-vector-smoke.json', 'packaged-vector-smoke'],
+      ['packaged-official-homepage-smoke.json', 'packaged-official-homepage-smoke'],
+      ['packaged-skin-smoke.json', 'packaged-skin-smoke'],
+    ] as const) {
+      writeJson(path.join(releaseDir, 'qualification', smoke[0]), {
+        schemaVersion: 1,
+        kind: smoke[1],
+        direct: { packaged: true },
+      })
+    }
     const commit = 'a'.repeat(40)
+    const initialized = spawnSync(process.execPath, [
+      path.join(repositoryRoot, 'scripts', 'release-evidence-v2.mjs'),
+      'init',
+      '--platform', 'windows',
+      '--evidence-root', evidenceRoot,
+      '--repository', 'EthanYoQ/AI-Novel-Writer',
+      '--commit', commit,
+      '--run-id', '101',
+      '--run-attempt', '1',
+      '--runner-label', 'windows-2022',
+      '--image-os', 'win22',
+      '--image-version', '20260726.1',
+      '--expected-node-version', process.versions.node,
+      '--expected-pnpm-version', '11.11.0',
+      '--workflow-path', '.github/workflows/windows-cloud-build-test.yml',
+      '--workflow-name', 'Windows cloud package qualification',
+      '--actor', 'release-operator',
+      '--event', 'workflow_dispatch',
+      '--dispatch-inputs-json', '{}',
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+    })
+    expect(initialized.status, initialized.stderr).toBe(0)
+    recordQualificationCommands(evidenceRoot, 'windows', repositoryRoot)
+    for (const receipt of [
+      'install', 'launch', 'quiet-window', 'error-dialogs', 'uninstall', 'upgrade-data', 'native-abi', 'packaged-smoke', 'signing',
+    ]) {
+      writeJson(path.join(evidenceRoot, 'acceptance', `${receipt}.json`), windowsAcceptanceReceipt(releaseDir, packageMetadata.version, receipt))
+    }
     const result = spawnSync(process.execPath, [manifestScript, '--release-dir', releaseDir], {
       cwd: repositoryRoot,
       env: environmentWithOverrides(process.env, {
@@ -78,6 +126,7 @@ describe('cloud Windows build manifest', () => {
         AI_NOVEL_CLOUD_BUILD_PNPM_VERSION: '11.11.0',
         ImageOS: 'win22',
         ImageVersion: '20260726.1',
+        AI_NOVEL_RELEASE_EVIDENCE_ROOT: evidenceRoot,
       }),
       encoding: 'utf8',
     })
@@ -86,8 +135,10 @@ describe('cloud Windows build manifest', () => {
 
     const manifest = JSON.parse(readFileSync(path.join(releaseDir, 'manifest.json'), 'utf8'))
     expect(manifest).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      platform: 'windows',
       commit,
+      version: packageMetadata.version,
       lockfileSha256: canonicalPnpmLockfileSha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
       nodeVersion: process.versions.node,
       pnpmVersion: '11.11.0',
@@ -103,11 +154,18 @@ describe('cloud Windows build manifest', () => {
         { file: 'latest.yml', sizeBytes: latest.length, sha256: sha256(latest) },
       ],
     })
+    expect(manifest.contractSha256).toBe(sha256(readFileSync(path.join(releaseDir, 'qualification', 'release-contract.json'))))
+    expect(manifest.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ file: 'qualification/release-contract.json' }),
+      expect.objectContaining({ file: 'qualification/run-ledger.json' }),
+      expect.objectContaining({ file: 'qualification/acceptance/signing.json' }),
+    ]))
 
     const sums = readFileSync(path.join(releaseDir, 'SHA256SUMS.txt'), 'utf8')
     expect(sums).toContain(`${sha256(installer)} *${installerName}`)
     expect(sums).toContain(`${sha256(blockmap)} *${installerName}.blockmap`)
     expect(sums).toContain(`${sha256(latest)} *latest.yml`)
     expect(sums).toContain(`${sha256(readFileSync(path.join(releaseDir, 'manifest.json')))} *manifest.json`)
+    expect(sums).toContain(`${sha256(readFileSync(path.join(releaseDir, 'qualification', 'acceptance', 'signing.json')))} *qualification/acceptance/signing.json`)
   })
 })

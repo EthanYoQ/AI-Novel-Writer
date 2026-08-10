@@ -28,13 +28,15 @@
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
-> ## v0.8.0 structured character roster major update
+> ## v0.8.1 major stability update
 >
-> [v0.8.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.0) is a major update centered on the structured character roster: the structured character roster is the single source of truth for character cards, fixing #76 at the source. Character architecture is driven by one structured output, uses an SQLite atomic commit for the roster and its read-only character-graph projection, and is marked successful only after the read-back succeeds.
+> [v0.8.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.1) is a major update spanning model parameters, legacy character data, and recovery from length-limited output.
 >
-> This means legacy projects require an explicit safe migration: original legacy character-graph text is retained as evidence, and failure never overwrites character data. Imports, manual edits, blueprint synchronization, finalization, and clearing all use one roster seam.
+> - **#78 model temperature and Kimi compatibility** — The user-configured temperature is now authoritative across connection tests, standard and streaming generation, and workflows. The request policy handles a fixed temperature only when an official provider endpoint explicitly requires it, without misclassifying third-party proxies.
+> - **#84 character sidebar crash** — Legacy character records with missing or unknown roles are normalized when a project opens, with defensive rendering retained for malformed external data so legacy character data can no longer crash the sidebar.
+> - **#85 long-output recovery** — Output stopped by a model length limit now uses bounded continuation with a finite continuation count and context budget. If a complete result cannot be obtained, the operation fails immediately and incomplete drafts or post-processing results are not persisted.
 >
-> One Release continues the five assets contract: the Windows x64 installer `ai-novel-writer-setup-0.8.0.exe`, its `.blockmap`, `latest.yml`, plus the macOS Apple Silicon (ARM64) DMG and its `.sha256` checksum. The Windows installer is not code-signed but supports the in-app update. The macOS ARM64 package is unsigned and not notarized, and future versions require a manual update from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
+> One Release keeps the exact five assets contract: the Windows x64 assets `ai-novel-writer-setup-0.8.1.exe`, `ai-novel-writer-setup-0.8.1.exe.blockmap`, and `latest.yml`, plus `ai-novel-writer-mac-arm64-0.8.1-installer.dmg` and `ai-novel-writer-mac-arm64-0.8.1-installer.dmg.sha256`. The Windows installer is not code-signed but supports the in-app update. The macOS ARM64 package is unsigned and not notarized, and it still requires a manual update from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
 
 ## What this product is
 

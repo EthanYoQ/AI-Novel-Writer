@@ -153,7 +153,7 @@ describe('llm generation parameter policy controller integration', () => {
     return registered
   }
 
-  it('uses the profile temperature for both regular and streaming generation', async () => {
+  it('uses the profile temperature for regular generation and each initial/continuation stream request', async () => {
     const genericModel = { ...deepSeekModel, temperature: 1 }
     mocks.models = [genericModel]
 
@@ -196,10 +196,28 @@ describe('llm generation parameter policy controller integration', () => {
       }),
     )
 
+    await handler('llm:generate-stream')({ sender: {} }, 'generic-continuation', {
+      modelId: genericModel.id,
+      messages: [{ role: 'user', content: 'continue' }],
+      maxTokens: 512,
+      responseFormat: { type: 'json_object' },
+      thinking: true,
+    })
+    expect(mocks.generateStream).toHaveBeenCalledTimes(2)
+    for (const [, , options] of mocks.generateStream.mock.calls) {
+      expect(options).toMatchObject({
+        temperature: genericModel.temperature,
+        maxTokens: 512,
+        responseFormat: { type: 'json_object' },
+        thinking: true,
+      })
+    }
+
     await handler('llm:cancel')({}, 'generic-stream')
+    await handler('llm:cancel')({}, 'generic-continuation')
   })
 
-  it('uses the same fixed-Kimi policy for regular, streaming, and connection requests', async () => {
+  it('uses the same fixed-Kimi policy for regular, connection, and each initial/continuation stream request', async () => {
     mocks.models = [fixedTemperatureKimiModel]
 
     await handler('llm:generate')({}, {
@@ -228,7 +246,20 @@ describe('llm generation parameter policy controller integration', () => {
       expect.objectContaining({ temperature: undefined }),
     )
     expect(mocks.generateStream.mock.calls[0]?.[2]).not.toHaveProperty('thinking')
+
+    await handler('llm:generate-stream')({ sender: {} }, 'kimi-continuation', {
+      modelId: fixedTemperatureKimiModel.id,
+      messages: [{ role: 'user', content: 'continue' }],
+      maxTokens: 512,
+      thinking: true,
+    })
+    expect(mocks.generateStream).toHaveBeenCalledTimes(2)
+    for (const [, , options] of mocks.generateStream.mock.calls) {
+      expect(options).toMatchObject({ temperature: undefined, maxTokens: 512 })
+      expect(options).not.toHaveProperty('thinking')
+    }
     await handler('llm:cancel')({}, 'kimi-stream')
+    await handler('llm:cancel')({}, 'kimi-continuation')
 
     mocks.generate.mockClear()
     await connectionHandler()({}, fixedTemperatureKimiModel)

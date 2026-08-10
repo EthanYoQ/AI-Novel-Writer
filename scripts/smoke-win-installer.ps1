@@ -29,6 +29,11 @@ $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $script:aiNovelPackagedVectorEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-vector-smoke.json" -f [string]$packageJson.version)
 $script:aiNovelPackagedOfficialHomepageEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-official-homepage-smoke.json" -f [string]$packageJson.version)
 $script:aiNovelPackagedSkinEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-skin-smoke.json" -f [string]$packageJson.version)
+$script:aiNovelAcceptanceDirectory = if (-not [string]::IsNullOrWhiteSpace($env:AI_NOVEL_RELEASE_EVIDENCE_ROOT)) {
+  Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance'
+} else {
+  Join-Path $root ("release\{0}\qualification\acceptance" -f [string]$packageJson.version)
+}
 $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-installer-smoke-' + [guid]::NewGuid().ToString('N'))
 $installRoot = Join-Path $smokeRoot 'installed-app'
 $velaHome = Join-Path $smokeRoot 'vela-home'
@@ -596,6 +601,136 @@ function Install-Silently {
     -Operation 'Installer'
 }
 
+function Get-AiNovelSigningAcceptanceReceipt {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [scriptblock]$SignatureProvider
+  )
+
+  $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
+  $signature = if ($null -eq $SignatureProvider) {
+    Get-AuthenticodeSignature -FilePath $resolvedPath
+  } else {
+    & $SignatureProvider $resolvedPath
+  }
+  $validationResult = [string]$signature.Status
+  if ($validationResult -eq 'Valid') {
+    return [ordered]@{
+      schemaVersion = 2
+      kind = 'windows-signing'
+      accepted = $true
+      observations = @('Get-AuthenticodeSignature validated the installer signature as Valid.')
+      direct = [ordered]@{ authenticodeStatus = $validationResult; installerSha256 = (Get-AiNovelFileSha256 -Path $resolvedPath).ToLowerInvariant() }
+      installerPath = $resolvedPath
+      installerSha256 = (Get-AiNovelFileSha256 -Path $resolvedPath).ToLowerInvariant()
+      status = 'signed'
+      validationResult = $validationResult
+      signerSubject = [string]$signature.SignerCertificate.Subject
+      unsignedDistributionImpact = 'not-applicable'
+    }
+  }
+  if ($validationResult -eq 'NotSigned') {
+    return [ordered]@{
+      schemaVersion = 2
+      kind = 'windows-signing'
+      accepted = $true
+      observations = @('Get-AuthenticodeSignature directly reported that the installer is not signed.')
+      direct = [ordered]@{ authenticodeStatus = $validationResult; installerSha256 = (Get-AiNovelFileSha256 -Path $resolvedPath).ToLowerInvariant() }
+      installerPath = $resolvedPath
+      installerSha256 = (Get-AiNovelFileSha256 -Path $resolvedPath).ToLowerInvariant()
+      status = 'unsigned'
+      validationResult = $validationResult
+      signerSubject = $null
+      unsignedDistributionImpact = 'Windows SmartScreen may display an unknown-publisher warning, enterprise policy may block execution, and users cannot verify publisher identity through a code-signing certificate.'
+    }
+  }
+  throw "Installer Authenticode validation failed closed with status ${validationResult}: $resolvedPath"
+}
+
+function Assert-AiNovelUninstallPostcondition {
+  param(
+    [Parameter(Mandatory = $true)][string]$InstallRoot,
+    [Parameter(Mandatory = $true)][string]$InstalledExecutable
+  )
+
+  $installedExecutableExists = Test-Path -LiteralPath $InstalledExecutable -PathType Leaf
+  if ($installedExecutableExists) {
+    throw "Uninstall postcondition failed because the installed executable still exists: $InstalledExecutable"
+  }
+
+  $directoryState = 'absent'
+  $allowedSystemResiduals = @()
+  if (Test-Path -LiteralPath $InstallRoot -PathType Container) {
+    $entries = @(Get-ChildItem -LiteralPath $InstallRoot -Force -ErrorAction Stop)
+    if ($entries.Count -eq 0) {
+      $directoryState = 'empty'
+    }
+    else {
+      $unexpected = @($entries | Where-Object {
+        $isAllowedName = $_.Name -in @('desktop.ini', 'Thumbs.db')
+        $hasSystemAttribute = ([int]$_.Attributes -band [int][System.IO.FileAttributes]::System) -ne 0
+        $_.PSIsContainer -or -not $isAllowedName -or -not $hasSystemAttribute
+      })
+      if ($unexpected.Count -gt 0) {
+        throw "Uninstall postcondition failed because the product directory contains unexpected residue: $($unexpected.Name -join ', ')"
+      }
+      $directoryState = 'system-residue-only'
+      $allowedSystemResiduals = @($entries | ForEach-Object Name)
+    }
+  }
+
+  return [ordered]@{
+    schemaVersion = 2
+    kind = 'windows-uninstall'
+    accepted = $true
+    observations = @(
+      'The monitored uninstaller exited successfully and completed its post-exit quiet period.'
+      'The installed product executable no longer exists.'
+      'The product install directory is absent, empty, or contains only explicitly allowed system files.'
+    )
+    direct = [ordered]@{
+      installedExecutableExists = $false
+      installDirectoryState = $directoryState
+      allowedSystemResiduals = $allowedSystemResiduals
+    }
+    installedExecutableExists = $false
+    installDirectoryState = $directoryState
+    allowedSystemResiduals = $allowedSystemResiduals
+  }
+}
+
+function Write-AiNovelPackagedSmokeAcceptanceReceipt {
+  $records = @(
+    @{ kind = 'packaged-vector-smoke'; path = $script:aiNovelPackagedVectorEvidencePath }
+    @{ kind = 'packaged-official-homepage-smoke'; path = $script:aiNovelPackagedOfficialHomepageEvidencePath }
+    @{ kind = 'packaged-skin-smoke'; path = $script:aiNovelPackagedSkinEvidencePath }
+  ) | ForEach-Object {
+    if (-not (Test-Path -LiteralPath $_.path -PathType Leaf)) {
+      throw "Packaged smoke evidence is missing: $($_.path)"
+    }
+    $record = Get-Content -LiteralPath $_.path -Raw | ConvertFrom-Json
+    if ([string]$record.kind -ne [string]$_.kind) {
+      throw "Packaged smoke evidence kind mismatch: $($_.path)"
+    }
+    [ordered]@{
+      kind = [string]$_.kind
+      evidencePath = "qualification/$([System.IO.Path]::GetFileName([string]$_.path))"
+      sha256 = (Get-AiNovelFileSha256 -Path $_.path).ToLowerInvariant()
+    }
+  }
+  Write-AiNovelAcceptanceReceipt `
+    -Directory $script:aiNovelAcceptanceDirectory `
+    -FileName 'packaged-smoke.json' `
+    -Receipt ([ordered]@{
+      schemaVersion = 2
+      kind = 'windows-packaged-smoke-summary'
+      accepted = $true
+      observations = @('The installed package produced the required vector, official-homepage, and skin smoke evidence.')
+      direct = [ordered]@{ evidenceCount = @($records).Count; evidenceKinds = @($records | ForEach-Object { $_.kind }) }
+      evidence = @($records)
+    })
+}
+
 if ($LoadInstallerLibrary) {
   return
 }
@@ -604,6 +739,7 @@ $smokeSucceeded = $false
 $failureRecord = $null
 $upgradeFixtureSeeded = $false
 $upgradeValidationEvidence = $null
+$currentInstallCompleted = $false
 
 try {
   $startupWindowsBeforeBaseline = @(Get-AiNovelTopLevelWindowSnapshot)
@@ -675,14 +811,44 @@ try {
       -LegacyProjectPathToOpen $upgradeFixtureRoot
   }
   Install-Silently $resolvedInstaller
+$currentInstallCompleted = $true
 
   $exePath = Join-Path $installRoot 'AI小说作家.exe'
   if (-not (Test-Path -LiteralPath $exePath)) {
     throw "Installed application is missing: $exePath"
   }
+  $signingReceipt = Get-AiNovelSigningAcceptanceReceipt -Path $resolvedInstaller
+  Write-AiNovelAcceptanceReceipt `
+    -Directory $script:aiNovelAcceptanceDirectory `
+    -FileName 'signing.json' `
+    -Receipt $signingReceipt
+  Write-AiNovelAcceptanceReceipt `
+    -Directory $script:aiNovelAcceptanceDirectory `
+    -FileName 'install.json' `
+    -Receipt ([ordered]@{
+      schemaVersion = 2
+      kind = 'windows-install'
+      accepted = $true
+      observations = @(
+        'The real NSIS installer and its complete observed process tree exited with code zero.'
+        'The installed product executable exists at the requested isolated install location.'
+      )
+      direct = [ordered]@{
+        installerExitCode = 0
+        installedExecutable = $exePath
+        installedExecutableExists = $true
+      }
+      installerPath = $resolvedInstaller
+      installerSha256 = (Get-AiNovelFileSha256 -Path $resolvedInstaller).ToLowerInvariant()
+      installerExitCode = 0
+      installRoot = $installRoot
+      installedExecutable = $exePath
+      installedExecutableExists = $true
+    })
   Invoke-AiNovelPackagedVectorSmoke -Path $exePath
   Invoke-AiNovelPackagedOfficialHomepageSmoke -Path $exePath
   Invoke-AiNovelPackagedSkinSmoke -Path $exePath
+  Write-AiNovelPackagedSmokeAcceptanceReceipt
   $appSmokeParameters = @{
     ExePath = $exePath
     ObservationSeconds = $ObservationSeconds
@@ -692,6 +858,8 @@ try {
     RelatedProcessIds = $observedProcessIds
     RelatedProcessStartTimeTicks = $observedProcessStartTimeTicks
     RelatedTargetNames = @($roundTargetNames)
+    AcceptanceDirectory = $script:aiNovelAcceptanceDirectory
+    ExpectedVersion = [string]$packageJson.version
   }
   if ($upgradeFixtureSeeded) {
     $appSmokeParameters.ProjectPathToOpen = $upgradeFixtureRoot
@@ -717,6 +885,34 @@ try {
     if ($fixtureRecentEntry.Count -ne 1) {
       throw 'The upgraded application did not retain the opened fixture in recent projects.'
     }
+    Write-AiNovelAcceptanceReceipt `
+      -Directory $script:aiNovelAcceptanceDirectory `
+      -FileName 'upgrade-data.json' `
+      -Receipt ([ordered]@{
+        schemaVersion = 2
+        kind = 'windows-upgrade-data'
+        accepted = $true
+        observations = @(
+          'The verified v0.2.5 fixture was opened before upgrade and reopened by the current installed application.'
+          'Project database records, physical assets, embedding search, global settings, and recent-project state were validated after upgrade.'
+        )
+        direct = [ordered]@{
+          previousVersion = '0.2.5'
+          legacyTableCount = [int]$upgradeValidationEvidence.legacyTableCount
+          preservedAssetCount = [int]$upgradeValidationEvidence.preservedAssetCount
+          vectorDimension = [int]$upgradeValidationEvidence.embeddingSpace.vectorDimension
+          queryResultCount = [int]$upgradeValidationEvidence.embeddingSpace.queryResultCount
+        }
+        previousVersion = '0.2.5'
+        previousSource = if (-not [string]::IsNullOrWhiteSpace($PreviousPortableZipPath)) { 'verified-portable-zip' } else { 'verified-installer' }
+        legacyTableCount = [int]$upgradeValidationEvidence.legacyTableCount
+        assetCount = [int]$upgradeValidationEvidence.assetCount
+        preservedAssetCount = [int]$upgradeValidationEvidence.preservedAssetCount
+        vectorDimension = [int]$upgradeValidationEvidence.embeddingSpace.vectorDimension
+        queryResultCount = [int]$upgradeValidationEvidence.embeddingSpace.queryResultCount
+        settingsPreserved = $true
+        recentProjectPreserved = $true
+      })
   }
   $smokeSucceeded = $true
 }
@@ -729,12 +925,30 @@ catch {
     -ObservedProcessIds @($observedProcessIds)
 }
 finally {
-  if (Test-Path -LiteralPath $uninstaller) {
+  if ($currentInstallCompleted -and -not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
+    if ($null -eq $failureRecord) {
+      $failureRecord = [System.Management.Automation.ErrorRecord]::new(
+        [System.IO.FileNotFoundException]::new("Installed uninstaller is missing: $uninstaller"),
+        'AiNovelUninstallerMissing',
+        [System.Management.Automation.ErrorCategory]::ObjectNotFound,
+        $uninstaller
+      )
+    }
+    $smokeSucceeded = $false
+  }
+  elseif (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
     try {
       Invoke-AiNovelMonitoredExecutable `
         -Path $uninstaller `
         -Arguments @('/S') `
         -Operation 'Uninstaller'
+      $uninstallReceipt = Assert-AiNovelUninstallPostcondition `
+        -InstallRoot $installRoot `
+        -InstalledExecutable (Join-Path $installRoot 'AI小说作家.exe')
+      Write-AiNovelAcceptanceReceipt `
+        -Directory $script:aiNovelAcceptanceDirectory `
+        -FileName 'uninstall.json' `
+        -Receipt $uninstallReceipt
     }
     catch {
       if ($null -eq $failureRecord) {

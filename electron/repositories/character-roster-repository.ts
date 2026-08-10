@@ -19,7 +19,7 @@ import {
 import { getProjectDb } from '../database'
 import { CharacterRepository, type CharacterData } from './character-repository'
 import { ensureCharacterRosterSchema } from './character-roster-schema'
-import { normalizeCharacterRole } from '../../src/shared/character-role'
+import { CHARACTER_ROLE_LABELS, normalizeCharacterRole } from '../../src/shared/character-role'
 
 interface CharacterRosterMetaRow {
   schema_version: number
@@ -35,13 +35,6 @@ interface CharacterRosterOperationRow {
   payload_hash: string
   committed_revision: number
   projection_hash: string
-}
-
-const ROLE_LABELS: Record<CharacterRosterRole, string> = {
-  protagonist: '主角',
-  antagonist: '反派',
-  supporting: '配角',
-  minor: '次要角色',
 }
 
 const ROLE_ORDER: Record<CharacterRosterRole, number> = {
@@ -552,7 +545,7 @@ export function renderCharacterRosterMarkdown(entries: CharacterRosterEntry[]): 
   if (canonical.length === 0) return ''
 
   const blocks = canonical.map(entry => {
-    const lines = [`## ${ROLE_LABELS[entry.role]}：${entry.name}`]
+    const lines = [`## ${CHARACTER_ROLE_LABELS[entry.role].zhCN}：${entry.name}`]
     const fields: Array<[string, string]> = [
       ['性别', entry.gender],
       ['年龄', entry.age],

@@ -28,13 +28,15 @@
   <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
 </p>
 
-> ## v0.8.0 结构化角色名单重大更新
+> ## v0.8.1 稳定性重大更新
 >
-> [v0.8.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.0) 是一次围绕结构化角色名单的重大更新：结构化角色名单成为角色卡的唯一事实源，从根源修复 #76。角色架构由一次结构化输出驱动，以 SQLite 原子提交角色名单及其只读角色图谱投影；只有回读成功后才标记成功。
+> [v0.8.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.1) 是一次覆盖模型参数、旧项目角色数据与长输出恢复的重大更新。
 >
-> 旧项目必须显式安全迁移：保留旧角色图谱原文作为证据，失败不会改写任何角色数据。导入、手工编辑、蓝图同步、定稿和清除均经过统一的角色名单 seam。
+> - **#78 模型温度与 Kimi 兼容**：用户配置温度成为连接测试、普通生成、流式生成和工作流的唯一权威来源；仅在服务商官方端点明确要求固定温度时才由参数策略安全处理，避免第三方代理被误判。
+> - **#84 角色侧边栏崩溃**：打开项目时统一规范化旧角色记录中缺失或未知的角色定位，并为外部坏数据保留防御显示，避免旧角色数据导致侧边栏渲染失败。
+> - **#85 长输出恢复**：模型因长度限制截断时采用有上限、有上下文预算的有界续写；无法获得完整结果时立即失败，不完整草稿及后处理结果不落盘。
 >
-> 同一个 Release 仍严格遵守五项资产合同：Windows x64 安装程序 `ai-novel-writer-setup-0.8.0.exe`、其 `.blockmap`、`latest.yml`，以及 macOS Apple Silicon（ARM64）DMG 和其 `.sha256` 校验文件。Windows 安装包未签名，但支持应用内更新；macOS ARM64 包未签名、未公证，后续版本需从 Release 页面手动更新。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
+> 同一个 Release 严格遵守五项资产合同：Windows x64 安装程序 `ai-novel-writer-setup-0.8.1.exe`、`ai-novel-writer-setup-0.8.1.exe.blockmap`、`latest.yml`，以及 `ai-novel-writer-mac-arm64-0.8.1-installer.dmg` 和 `ai-novel-writer-mac-arm64-0.8.1-installer.dmg.sha256`。Windows 安装包未签名，但支持应用内更新；macOS ARM64 包未签名、未公证，并且仍需从 Release 页面手动更新。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
 
 ## 产品定位
 
