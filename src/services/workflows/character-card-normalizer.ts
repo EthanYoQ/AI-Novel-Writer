@@ -9,31 +9,13 @@ import {
   RELATIONSHIP_LABEL_ALIASES,
   RELATIONSHIP_TARGET_ALIASES,
 } from './character-card-fields'
+import {
+  normalizeCharacterRole,
+  type CharacterRole,
+} from '../../shared/character-role'
 
 type RawCard = RawCharacterCard
 export type CharacterRelationshipEdge = { target: string; relation: string }
-
-const ROLE_MAP: Record<string, string> = {
-  protagonist: 'protagonist',
-  main: 'protagonist',
-  主角: 'protagonist',
-  男主: 'protagonist',
-  女主: 'protagonist',
-  核心主角: 'protagonist',
-  antagonist: 'antagonist',
-  villain: 'antagonist',
-  反派: 'antagonist',
-  对手: 'antagonist',
-  敌人: 'antagonist',
-  supporting: 'supporting',
-  support: 'supporting',
-  配角: 'supporting',
-  重要配角: 'supporting',
-  核心配角: 'supporting',
-  minor: 'minor',
-  龙套: 'minor',
-  次要角色: 'minor',
-}
 
 const RELATIONSHIP_DESCRIPTOR_KEYS: ReadonlySet<string> = new Set([
   ...RELATIONSHIP_TARGET_ALIASES,
@@ -74,10 +56,8 @@ function parseStructuredJson(text: string): unknown | null {
   }
 }
 
-function normalizeRole(value: unknown): string {
-  const roleText = stringifyValue(value)
-  if (!roleText) return 'supporting'
-  return ROLE_MAP[roleText] ?? ROLE_MAP[roleText.toLowerCase()] ?? 'supporting'
+function normalizeRole(value: unknown): CharacterRole {
+  return normalizeCharacterRole(stringifyValue(value))
 }
 
 function toNumber(value: unknown, fallback: number): number {

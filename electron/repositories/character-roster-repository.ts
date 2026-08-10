@@ -19,6 +19,7 @@ import {
 import { getProjectDb } from '../database'
 import { CharacterRepository, type CharacterData } from './character-repository'
 import { ensureCharacterRosterSchema } from './character-roster-schema'
+import { normalizeCharacterRole } from '../../src/shared/character-role'
 
 interface CharacterRosterMetaRow {
   schema_version: number
@@ -291,10 +292,9 @@ function entryFromCharacter(character: CharacterData): CharacterRosterEntry {
   const relationships = hasStructuredRelationships
     ? JSON.parse(character.relationships) as CharacterRosterRelationship[]
     : []
-  const role = isRosterRole(character.role) ? character.role : 'supporting'
   return {
     name: character.name,
-    role,
+    role: normalizeCharacterRole(character.role),
     gender: character.gender,
     age: character.age,
     appearance: character.appearance,

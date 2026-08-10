@@ -4,11 +4,12 @@
 
 import { Users, RefreshCw, Plus } from 'lucide-react'
 import { useProjectStore } from '../../../stores/project-store'
-import { useCharacterStore, type CharacterCard } from '../../../stores/character-store'
+import { useCharacterStore } from '../../../stores/character-store'
 import { Button } from '../../ui/Button'
 import { EmptyState } from '../../ui/EmptyState'
 import { cn } from '../../../lib/utils'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { getCharacterRoleLabels } from '../../../shared/character-role'
 
 export default function CharactersView() {
   const currentProject = useProjectStore(s => s.currentProject)
@@ -22,17 +23,10 @@ export default function CharactersView() {
   const identityBusy = useCharacterStore(s => s.identityBusy)
   const lastError = useCharacterStore(s => s.lastError)
   const text = useLocaleStore(s => s.text)
-  const roleLabel = (role: CharacterCard['role']) => text(({
-    protagonist: '主角',
-    antagonist: '反派',
-    supporting: '配角',
-    minor: '龙套',
-  } as Record<CharacterCard['role'], string>)[role], ({
-    protagonist: 'Protagonist',
-    antagonist: 'Antagonist',
-    supporting: 'Supporting character',
-    minor: 'Minor character',
-  } as Record<CharacterCard['role'], string>)[role])
+  const roleLabel = (role: unknown) => {
+    const { zhCN, enUS } = getCharacterRoleLabels(role)
+    return text(zhCN, enUS)
+  }
   const dataReady = Boolean(
     currentProject
     && dataProjectKey === currentProject.path
