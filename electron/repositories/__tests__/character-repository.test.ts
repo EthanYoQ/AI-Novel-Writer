@@ -99,6 +99,17 @@ afterEach(() => {
 })
 
 describe('CharacterRepository transactional rename', () => {
+  it('normalizes missing and unknown persisted roles while preserving canonical roles', () => {
+    const insert = db.prepare('INSERT INTO characters (name, role) VALUES (?, ?)')
+    insert.run('缺少定位', null)
+    insert.run('未知定位', 'legacy-custom-role')
+    insert.run('法定主角', 'protagonist')
+
+    expect(CharacterRepository.getByName('缺少定位')?.role).toBe('supporting')
+    expect(CharacterRepository.getByName('未知定位')?.role).toBe('supporting')
+    expect(CharacterRepository.getByName('法定主角')?.role).toBe('protagonist')
+  })
+
   it('renames the primary key and exact structured blueprint references in one transaction', () => {
     CharacterRepository.upsert(character('旧名', '原始备注'))
     BlueprintRepository.upsert(blueprint(['旧名', '另一角色']))

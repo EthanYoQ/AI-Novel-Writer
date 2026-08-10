@@ -4,6 +4,10 @@
  * currentState 子结构已拍平为 cs_* 前缀列，杜绝 JSON 大字段。
  */
 import { getProjectDb } from '../database'
+import {
+    normalizeCharacterRole,
+    type CharacterRole,
+} from '../../src/shared/character-role'
 
 /** 角色卡动态状态 */
 export interface CharacterStateData {
@@ -19,7 +23,7 @@ export interface CharacterStateData {
 /** 角色卡完整数据（前端驼峰接口） */
 export interface CharacterData {
     name: string
-    role: string
+    role: CharacterRole
     gender: string
     age: string
     appearance: string
@@ -41,7 +45,7 @@ export interface CharacterRenameData {
 function rowToData(row: Record<string, unknown>): CharacterData {
     const data: CharacterData = {
         name: row.name as string,
-        role: (row.role as string) || 'supporting',
+        role: normalizeCharacterRole(row.role),
         gender: (row.gender as string) || '',
         age: (row.age as string) || '',
         appearance: (row.appearance as string) || '',

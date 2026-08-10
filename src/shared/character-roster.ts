@@ -4,16 +4,13 @@
  * 角色的持久化事实仍只存在于 SQLite characters 表；本文件只定义读写
  * seam 的数据形状，不引入第二份 roster JSON 事实源。
  */
+import { CHARACTER_ROLES, type CharacterRole } from './character-role'
+
 export const CHARACTER_ROSTER_SCHEMA_VERSION = 1 as const
 
-export const CHARACTER_ROSTER_ROLES = [
-  'protagonist',
-  'antagonist',
-  'supporting',
-  'minor',
-] as const
+export const CHARACTER_ROSTER_ROLES = CHARACTER_ROLES
 
-export type CharacterRosterRole = typeof CHARACTER_ROSTER_ROLES[number]
+export type CharacterRosterRole = CharacterRole
 
 export type CharacterRosterMigrationState =
   | 'empty'

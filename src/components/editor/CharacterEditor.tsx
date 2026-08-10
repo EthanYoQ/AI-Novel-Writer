@@ -6,7 +6,6 @@ import { confirm } from '../ui/Confirm'
 import {
   useCharacterStore,
   EMPTY_STATE,
-  CHARACTER_ROLE_KEYS,
   type CharacterCard,
   type CharacterCurrentState,
 } from '../../stores/character-store'
@@ -18,6 +17,7 @@ import { Textarea } from '../ui/Textarea'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 import { useLocaleStore } from '../../stores/locale-store'
+import { CHARACTER_ROLES, getCharacterRoleLabels } from '../../shared/character-role'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
@@ -44,17 +44,10 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   const saveAll = useCharacterStore(s => s.saveAll)
   const [viewMode, setViewMode] = useState<'edit' | 'state' | 'graph'>('edit')
   const text = useLocaleStore(s => s.text)
-  const roleLabel = (role: CharacterCard['role']) => text(({
-    protagonist: '主角',
-    antagonist: '反派',
-    supporting: '配角',
-    minor: '龙套',
-  } as Record<CharacterCard['role'], string>)[role], ({
-    protagonist: 'Protagonist',
-    antagonist: 'Antagonist',
-    supporting: 'Supporting character',
-    minor: 'Minor character',
-  } as Record<CharacterCard['role'], string>)[role])
+  const roleLabel = (role: CharacterCard['role']) => {
+    const { zhCN, enUS } = getCharacterRoleLabels(role)
+    return text(zhCN, enUS)
+  }
   const projectMatches = currentProject?.path === projectKey
   const dataReady = Boolean(
     projectMatches
@@ -254,7 +247,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                 <div>
                   <Label>{text('定位', 'Role')}</Label>
                   <NativeSelect value={selectedCard.role} onChange={(e) => updateCurrentField(selectedCard.name, 'role', e.target.value as typeof selectedCard.role)}>
-                    {CHARACTER_ROLE_KEYS.map(role => (
+                    {CHARACTER_ROLES.map(role => (
                       <option key={role} value={role}>{roleLabel(role)}</option>
                     ))}
                   </NativeSelect>

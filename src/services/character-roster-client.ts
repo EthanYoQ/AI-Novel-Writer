@@ -3,6 +3,7 @@ import type {
   CharacterRosterEntry,
   CharacterRosterRelationship,
 } from '../shared/character-roster'
+import { normalizeCharacterRole } from '../shared/character-role'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -41,7 +42,7 @@ export function characterRosterEntryFromCard(card: CharacterData): CharacterRost
   const relationships = parseStructuredRelationships(card.relationships)
   return {
     name: card.name.trim(),
-    role: card.role as CharacterRosterEntry['role'],
+    role: card.role,
     gender: card.gender,
     age: card.age,
     appearance: card.appearance,
@@ -62,7 +63,7 @@ export function characterRosterEntryFromCard(card: CharacterData): CharacterRost
 export function characterCardFromRosterEntry(entry: CharacterRosterEntry): CharacterData {
   return {
     name: entry.name,
-    role: entry.role,
+    role: normalizeCharacterRole(entry.role),
     gender: entry.gender,
     age: entry.age,
     appearance: entry.appearance,

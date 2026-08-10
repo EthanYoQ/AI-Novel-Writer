@@ -10,6 +10,7 @@ import type {
   CharacterData,
   CharacterStateData,
 } from '../../electron/repositories/character-repository'
+import { normalizeCharacterRole } from '../shared/character-role'
 import {
   characterCardFromRosterEntry,
   characterRosterEntriesFromCards,
@@ -50,17 +51,76 @@ export const EMPTY_STATE: CharacterCurrentState = {
   keyItems: '', recentEvents: '', updatedAtChapter: 0,
 }
 
-export const CHARACTER_ROLE_KEYS = [
-  'protagonist',
-  'antagonist',
-  'supporting',
-  'minor',
-] as const satisfies readonly CharacterCard['role'][]
+function textField(record: Record<string, unknown>, key: string): string {
+  return typeof record[key] === 'string' ? record[key] : ''
+}
 
-function readCharacterDraftLedger() {
-  return parseProjectEditorDraftLedger<CharacterCard[]>(
+function normalizeCharacterState(value: unknown): CharacterCurrentState | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const state = value as Record<string, unknown>
+  return {
+    location: textField(state, 'location'),
+    powerLevel: textField(state, 'powerLevel'),
+    physicalState: textField(state, 'physicalState'),
+    mentalState: textField(state, 'mentalState'),
+    keyItems: textField(state, 'keyItems'),
+    recentEvents: textField(state, 'recentEvents'),
+    updatedAtChapter: Number.isInteger(state.updatedAtChapter) && Number(state.updatedAtChapter) >= 0
+      ? Number(state.updatedAtChapter)
+      : 0,
+  }
+}
+
+function readCharacterDraftLedger(projectKey: string) {
+  const ledger = parseProjectEditorDraftLedger<unknown>(
     useEditorStore.getState().draftLedgers[CHARACTER_DRAFT_TAB.id],
   )
+  return {
+    version: 1 as const,
+    projects: ledger.projects.map(project => (
+      project.projectKey === projectKey
+        ? {
+            ...project,
+            baseValue: normalizeCharacterCards(project.baseValue),
+            draftValue: normalizeCharacterCards(project.draftValue),
+          }
+        : project
+    )),
+    // The ledger is heterogeneous on disk. Only the requested project is ever
+    // read through the typed editor helpers; foreign payloads stay opaque and
+    // are carried through byte-for-byte at the value level.
+  } as ReturnType<typeof parseProjectEditorDraftLedger<CharacterCard[]>>
+}
+
+function normalizeCharacterCards(value: unknown): CharacterCard[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((candidate) => {
+    if (
+      !candidate
+      || typeof candidate !== 'object'
+      || typeof (candidate as { name?: unknown }).name !== 'string'
+    ) return []
+    const card = candidate as Record<string, unknown>
+    const currentState = normalizeCharacterState(card.currentState)
+    const normalizedCard = {
+      ...card,
+      name: card.name as string,
+      role: normalizeCharacterRole(card.role),
+      gender: textField(card, 'gender'),
+      age: textField(card, 'age'),
+      appearance: textField(card, 'appearance'),
+      personality: textField(card, 'personality'),
+      background: textField(card, 'background'),
+      abilities: textField(card, 'abilities'),
+      motivation: textField(card, 'motivation'),
+      relationships: textField(card, 'relationships'),
+      arc: textField(card, 'arc'),
+      notes: textField(card, 'notes'),
+    } as CharacterCard
+    if (currentState) normalizedCard.currentState = currentState
+    else delete normalizedCard.currentState
+    return [normalizedCard]
+  })
 }
 
 function persistCharacterDraftLedger(ledger: ReturnType<typeof readCharacterDraftLedger>) {
@@ -219,8 +279,8 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
         || requestSequence !== characterLoadSequence
       ) return
 
-      const draftLedger = readCharacterDraftLedger()
-      const cards = roster.entries.map(characterCardFromRosterEntry)
+      const draftLedger = readCharacterDraftLedger(requestedProjectKey)
+      const cards = normalizeCharacterCards(roster.entries.map(characterCardFromRosterEntry))
       const renames = requestedProjectKey
         ? getCharacterDraftRenames(draftLedger, requestedProjectKey)
         : []
@@ -243,7 +303,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
         !isCharacterProjectSessionCurrent(projectSession)
         || requestSequence !== characterLoadSequence
       ) return
-      const visibleCards = restored.value
+      const visibleCards = normalizeCharacterCards(restored.value)
 
       const { selectedName } = get()
       set({
@@ -352,7 +412,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       selectedName: newCard.name,
     }))
     persistCharacterDraftLedger(recordProjectEditorEdit(
-      readCharacterDraftLedger(),
+      readCharacterDraftLedger(projectKey),
       projectKey,
       before,
       get().characters,
@@ -374,7 +434,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     ) return Promise.resolve(false)
     const { characters } = get()
     if (!characters.some(card => card.name === name)) return Promise.resolve(false)
-    const ledger = readCharacterDraftLedger()
+    const ledger = readCharacterDraftLedger(projectKey)
     const renames = getCharacterDraftRenames(ledger, projectKey)
     const remaining = removeFirstCharacterNamed(characters, name)
     const pendingRename = renames.find(rename => rename.newName === name)
@@ -419,7 +479,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       return false
     }
 
-    const ledger = readCharacterDraftLedger()
+    const ledger = readCharacterDraftLedger(projectKey)
     const existing = getProjectEditorDraft(ledger, projectKey)
     const renames = getCharacterDraftRenames(ledger, projectKey)
     const persistedNames = new Set((existing?.baseValue ?? before).map(character => character.name))
@@ -440,7 +500,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
   },
 
   discardDraft: (projectPath, expectedProjectSession) => {
-    const ledger = readCharacterDraftLedger()
+    const ledger = readCharacterDraftLedger(projectPath)
     const projectDraft = getProjectEditorDraft(ledger, projectPath)
     if (!projectDraft) return
     const projectSession = currentCharacterProjectSession(projectPath, expectedProjectSession)
@@ -493,7 +553,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       return { characters: newChars }
     })
     persistCharacterDraftLedger(recordProjectEditorEdit(
-      readCharacterDraftLedger(),
+      readCharacterDraftLedger(projectKey),
       projectKey,
       before,
       get().characters,
@@ -534,7 +594,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     if (expectedRevision === null) {
       return Promise.reject(new Error('角色名单尚未完成安全读取，已拒绝保存'))
     }
-    const saveLedger = readCharacterDraftLedger()
+    const saveLedger = readCharacterDraftLedger(projectKey)
     const renames = getCharacterDraftRenames(saveLedger, projectKey)
     const savedCharacters = characters.map(character => ({
       ...character,
@@ -568,7 +628,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       }
       if (!isCharacterProjectSessionCurrent(projectSession)) return
       const savedRosterCards = result.receipt.snapshot.entries.map(characterCardFromRosterEntry)
-      const ledger = readCharacterDraftLedger()
+      const ledger = readCharacterDraftLedger(projectKey)
       const currentProjectDraft = getProjectEditorDraft(ledger, projectKey)
       const projectSaveInputStillCurrent = (
         !currentProjectDraft || valuesMatch(currentProjectDraft.draftValue, characters)

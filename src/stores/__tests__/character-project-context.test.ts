@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProjectData } from '../../shared/ipc-channels'
-import { useCharacterStore, type CharacterCard } from '../character-store'
+import { EMPTY_CARD, useCharacterStore, type CharacterCard } from '../character-store'
 import { useEditorStore } from '../editor-store'
 import { useProjectStore } from '../project-store'
 import {
@@ -119,6 +119,67 @@ beforeEach(() => {
 })
 
 describe('character store project context', () => {
+  it('normalizes a legacy draft role before rebasing it into renderer state', async () => {
+    const persistedCharacter = { ...character('旧角色'), role: 'supporting' as const }
+    const legacyDraftCharacter = { ...persistedCharacter } as Partial<CharacterCard>
+    delete legacyDraftCharacter.role
+    useEditorStore.setState({
+      draftLedgers: {
+        [CHARACTER_DRAFT_TAB.id]: JSON.stringify({
+          version: 1,
+          projects: [{
+            projectKey: PROJECT_A,
+            baseValue: [persistedCharacter],
+            draftValue: [legacyDraftCharacter],
+          }],
+        }),
+      },
+    })
+    invoke.mockResolvedValueOnce([persistedCharacter])
+
+    await useCharacterStore.getState().load(PROJECT_A)
+
+    expect(useCharacterStore.getState().characters).toEqual([persistedCharacter])
+    expect(getProjectEditorDraft(currentLedger(), PROJECT_A)?.draftValue).toEqual([
+      persistedCharacter,
+    ])
+  })
+
+  it('normalizes only the opened project draft and preserves another project opaque payload', async () => {
+    const projectBOpaqueDraft = {
+      projectKey: PROJECT_B,
+      baseValue: { schema: 'legacy-b', cards: null },
+      draftValue: ['opaque', { futureField: true }],
+      metadata: { legacyRenames: [{ from: '旧名', to: '新名' }] },
+    }
+    useEditorStore.setState({
+      draftLedgers: {
+        [CHARACTER_DRAFT_TAB.id]: JSON.stringify({
+          version: 1,
+          projects: [
+            {
+              projectKey: PROJECT_A,
+              baseValue: [{ name: 'A 草稿', role: 'supporting' }],
+              draftValue: [{ name: 'A 草稿', notes: '本地修改' }],
+            },
+            projectBOpaqueDraft,
+          ],
+        }),
+      },
+    })
+    invoke.mockResolvedValueOnce([character('A 草稿')])
+
+    await useCharacterStore.getState().load(PROJECT_A)
+
+    expect(useCharacterStore.getState().characters).toEqual([
+      { ...EMPTY_CARD, name: 'A 草稿', notes: '本地修改' },
+    ])
+    const persistedLedger = JSON.parse(
+      useEditorStore.getState().draftLedgers[CHARACTER_DRAFT_TAB.id],
+    ) as { projects: unknown[] }
+    expect(persistedLedger.projects).toContainEqual(projectBOpaqueDraft)
+  })
+
   it('binds a normal load and every mutation to the same project path', async () => {
     invoke
       .mockResolvedValueOnce([character('A 角色')])
