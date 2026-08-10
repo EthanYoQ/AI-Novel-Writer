@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { OpenAIProvider } from '../openai-provider'
+import { resolveGenerationParameters } from '../generation-parameter-policy'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 
 const novelAIModel: ModelProfile = {
@@ -14,6 +15,16 @@ const novelAIModel: ModelProfile = {
   temperature: 0.7,
   maxTokens: 4096,
   purposes: ['generation'],
+}
+
+const fixedTemperatureKimiModel: ModelProfile = {
+  ...novelAIModel,
+  id: 'kimi-k3',
+  name: 'Kimi K3',
+  provider: 'custom',
+  modelName: 'kimi-k3',
+  baseUrl: 'https://api.moonshot.cn/v1',
+  temperature: 0.7,
 }
 
 function requestBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
@@ -109,8 +120,54 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     const body = requestBody(fetchMock)
-    expect(body).toMatchObject({ thinking: { type: 'enabled' }, response_format: { type: 'json_object' } })
+    expect(body).toMatchObject({
+      temperature: 0.2,
+      thinking: { type: 'enabled' },
+      response_format: { type: 'json_object' },
+    })
     expect(body).not.toHaveProperty('enable_thinking')
+  })
+
+  it('omits Kimi K3 fixed sampling and generic thinking fields for non-stream generation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '正文' } }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new OpenAIProvider().generate(
+      fixedTemperatureKimiModel,
+      [{ role: 'user', content: '写正文' }],
+      resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512, thinking: true }),
+    )
+
+    const body = requestBody(fetchMock)
+    expect(body).not.toHaveProperty('temperature')
+    expect(body).not.toHaveProperty('thinking')
+  })
+
+  it('omits Kimi K3 fixed sampling and generic thinking fields for stream generation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => sseReader('data: [DONE]\n') },
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new OpenAIProvider().generateStream(
+      fixedTemperatureKimiModel,
+      [{ role: 'user', content: '写正文' }],
+      {
+        ...resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512, thinking: true }),
+        signal: new AbortController().signal,
+        onChunk: vi.fn(),
+        onDone: vi.fn(),
+        onError: vi.fn(),
+      },
+    )
+
+    const body = requestBody(fetchMock)
+    expect(body).not.toHaveProperty('temperature')
+    expect(body).not.toHaveProperty('thinking')
   })
 
   it('preserves an explicit non-stream length finish reason for downstream rejection', async () => {

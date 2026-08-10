@@ -173,7 +173,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
   })
 
-  it('allows exactly one low-temperature JSON syntax repair, then commits through the same roster seam', async () => {
+  it('allows exactly one JSON syntax repair without overriding the configured model sampling, then commits through the same roster seam', async () => {
     const malformed = '{"schemaVersion":1,"entries":['
     const repaired = JSON.stringify({ schemaVersion: 1, entries: repairedEntries })
     const generateStream = vi.fn((
@@ -202,9 +202,9 @@ describe('legacy character roster repair public workflow seam', () => {
     expect(generateStream).toHaveBeenCalledTimes(2)
     const repairOptions = (generateStream.mock.calls as unknown as unknown[][])[1]?.[3]
     expect(repairOptions).toMatchObject({
-      temperature: 0.1,
       purpose: 'legacy-character-roster-json-repair',
     })
+    expect(repairOptions).not.toHaveProperty('temperature')
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
       'db:character-roster-read',
       'db:character-roster-read',

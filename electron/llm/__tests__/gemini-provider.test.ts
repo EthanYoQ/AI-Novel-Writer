@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { GeminiProvider } from '../gemini-provider'
+import { resolveGenerationParameters } from '../generation-parameter-policy'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 
 const model: ModelProfile = {
@@ -31,6 +32,63 @@ afterEach(() => {
 })
 
 describe('GeminiProvider', () => {
+  it('sends the resolved generic profile temperature in both payload forms', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ candidates: [{ content: { parts: [{ text: '正文' }] } }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => ({ read: vi.fn().mockResolvedValue({ done: true }) }) },
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    const resolved = resolveGenerationParameters(model, { maxTokens: 512 })
+
+    await new GeminiProvider().generate(model, [{ role: 'user', content: '写正文' }], resolved)
+    await new GeminiProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      ...resolved,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    })
+
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(JSON.parse(String(request.body)).generationConfig.temperature).toBe(model.temperature)
+    }
+  })
+
+  it('omits temperature from both payload forms when the resolved policy leaves it undefined', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ candidates: [{ content: { parts: [{ text: '正文' }] } }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => ({ read: vi.fn().mockResolvedValue({ done: true }) }) },
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new GeminiProvider().generate(model, [{ role: 'user', content: '写正文' }], {
+      temperature: undefined,
+      maxTokens: 512,
+    })
+    await new GeminiProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: undefined,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    })
+
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(JSON.parse(String(request.body)).generationConfig).not.toHaveProperty('temperature')
+    }
+  })
+
   it('requests application JSON when the caller requires a JSON object', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

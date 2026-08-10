@@ -8,7 +8,8 @@ import type {
 export type LLMResponse = SharedLLMResponse
 
 export interface LLMGenerateOptions {
-  temperature: number
+  /** `undefined` means the provider must omit temperature from its payload. */
+  temperature: number | undefined
   maxTokens: number
   responseFormat?: { type: string }
   thinking?: boolean

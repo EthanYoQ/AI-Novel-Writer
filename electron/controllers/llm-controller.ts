@@ -10,6 +10,7 @@ import {
 import type { LLMFinishReason, LLMRequest, ModelProfile, GlobalConfig, TokenUsage } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { LLMFactory } from '../llm/llm-factory'
+import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
 import { getCurrentProjectPath } from '../database'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { projectAccess } from '../services/project-access'
@@ -91,12 +92,11 @@ export function registerLLMController() {
       if (!model) return { success: false, content: '', error: '未找到模型配置' }
 
       const provider = LLMFactory.getProvider(model)
-      const result = await provider.generate(model, request.messages, {
-        temperature: request.temperature ?? model.temperature,
-        maxTokens: request.maxTokens ?? model.maxTokens,
-        responseFormat: request.responseFormat,
-        thinking: request.thinking,
-      })
+      const result = await provider.generate(
+        model,
+        request.messages,
+        resolveGenerationParameters(model, request),
+      )
       recordProviderOutcome(request, model, startedAt, result)
       return result
     } catch (error) {
@@ -109,6 +109,7 @@ export function registerLLMController() {
     applyProxyConfig()
     const model = getModelConfig(request.modelId)
     if (!model) return { requestId, started: false }
+    const generationParameters = resolveGenerationParameters(model, request)
 
     const abortController = new AbortController()
     const startedAt = Date.now()
@@ -128,10 +129,7 @@ export function registerLLMController() {
     
     // We do not await this globally since it's streaming independently
     provider.generateStream(model, request.messages, {
-      temperature: request.temperature ?? model.temperature,
-      maxTokens: request.maxTokens ?? model.maxTokens,
-      responseFormat: request.responseFormat,
-      thinking: request.thinking,
+      ...generationParameters,
       signal: abortController.signal,
       onChunk: (chunk: string) => win?.webContents.send('llm:stream-chunk', { requestId, chunk }),
       onDone: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => {
@@ -268,11 +266,14 @@ export function registerLLMController() {
         const { generateEmbeddings } = await import('../embedding')
         await generateEmbeddings(['hello'], model.protocol, model)
       } else {
-        const res = await provider.generate(model, messages, {
-          temperature: 0.7,
-          // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
-          maxTokens: CONNECTION_TEST_MAX_TOKENS,
-        })
+        const res = await provider.generate(
+          model,
+          messages,
+          resolveGenerationParameters(model, {
+            // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
+            maxTokens: CONNECTION_TEST_MAX_TOKENS,
+          }),
+        )
         result = { success: res.success, error: res.error }
       }
       

@@ -29,7 +29,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     prompt: string, 
     systemPrompt: string, 
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string },
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string },
     context?: WorkflowContext
   ): Promise<string> {
     const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
@@ -48,7 +48,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     prompt: string,
     systemPrompt: string,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string },
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string },
     context?: WorkflowContext,
   ): Promise<LLMCompletion> {
     this.assertNotCancelled(context)
@@ -151,7 +151,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   protected async callLLMWithBuilder(
     builder: BasePromptBuilder,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number },
     context?: WorkflowContext
   ): Promise<string> {
     return this.callLLM(builder.build(), builder.getSystemRole(), callbacks, options, context)
@@ -160,7 +160,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   protected async callLLMResultWithBuilder(
     builder: BasePromptBuilder,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number },
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number },
     context?: WorkflowContext,
   ): Promise<LLMCompletion> {
     return this.callLLMResult(builder.build(), builder.getSystemRole(), callbacks, options, context)

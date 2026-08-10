@@ -723,6 +723,9 @@ function ModelForm({
               if (isNaN(v)) up('temperature', 0.7)
             }}
           />
+          <p className="mt-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            {text('部分服务商的固定温度模型由服务商自行决定；本应用不会发送温度参数。', 'For provider-fixed temperature models, the provider chooses the value; this app does not send a temperature parameter.')}
+          </p>
         </div>
       )}
 

@@ -412,7 +412,6 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           messages.map(m => ({ role: m.role, content: m.content })),
           mid,
           {
-            temperature: 0.7,
             purpose: 'agent',
             projectSession: executionContext.projectSession ?? undefined,
           },
