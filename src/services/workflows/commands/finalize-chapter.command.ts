@@ -23,6 +23,7 @@ import type { ChapterInfo } from '../chapter-workflow'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
 import type { CharacterRosterEntry, CharacterRosterRole } from '../../../shared/character-roster'
+import { createBoundedCompletionError } from '../bounded-completion'
 
 export interface FinalizeChapterParams {
   draftPath: string
@@ -83,10 +84,15 @@ async function callLLMForPostProcess(
           fullContent += chunk
           callbacks.appendText(chunk)
         },
-        onDone: (text) => {
+        onDone: (text, _usage, finishReason) => {
           cleanup()
           if (context?.cancelled) {
             reject(new Error('工作流已取消'))
+            return
+          }
+          const terminalReason = finishReason ?? 'stop'
+          if (terminalReason !== 'stop') {
+            reject(createBoundedCompletionError(terminalReason))
             return
           }
           const raw = text || fullContent

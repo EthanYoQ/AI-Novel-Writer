@@ -96,7 +96,14 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         thinking: false,
         maxTokens: Math.min(modelMaxTokens, 4096),
       }
-      const resultText = await this.callLLM(prompt, systemRole, callbacks, jsonOutputOptions, context)
+      const resultText = await this.callLLMWithBoundedCompletion(
+        prompt,
+        systemRole,
+        callbacks,
+        { mode: 'replace-structured-output', maxContinuations: 2 },
+        jsonOutputOptions,
+        context,
+      )
       this.assertNotCancelled(context)
 
       // 当前物理请求只能接受当前批次。越界、重复造成的缺章都不能落库或推进游标。
@@ -107,10 +114,11 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         if (!isBlueprintJsonParseError(error)) throw error
 
         callbacks.log('  蓝图 JSON 格式异常，正在请求模型修复格式...')
-        const repairedText = await this.callLLM(
+        const repairedText = await this.callLLMWithBoundedCompletion(
           buildBlueprintJsonRepairPrompt(resultText, cursor, batchEnd),
           '你是严格的 JSON 格式修复器，只输出有效 JSON。',
           callbacks,
+          { mode: 'replace-structured-output', maxContinuations: 2 },
           jsonOutputOptions,
           context,
         )

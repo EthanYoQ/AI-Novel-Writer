@@ -11,7 +11,24 @@ class CompletionProbeCommand extends BaseWorkflowCommand {
   }
 
   run(callbacks: StepCallbacks, context: WorkflowContext): Promise<string> {
-    return this.callLLM('prompt', 'system', callbacks, undefined, context)
+    return this.callLLM(
+      '普通 JSON 工作流',
+      'system',
+      callbacks,
+      { responseFormat: { type: 'json_object' } },
+      context,
+    )
+  }
+
+  runStructuredBatch(callbacks: StepCallbacks, context: WorkflowContext): Promise<string> {
+    return this.callLLMWithBoundedCompletion(
+      '返回目录 JSON',
+      'system',
+      callbacks,
+      { mode: 'replace-structured-output', maxContinuations: 2 },
+      { responseFormat: { type: 'json_object' } },
+      context,
+    )
   }
 }
 
@@ -32,19 +49,60 @@ const callbacks: StepCallbacks = {
 describe('BaseWorkflowCommand completion boundary', () => {
   afterEach(() => {
     vi.restoreAllMocks()
-    useLLMStore.setState({ defaultModelId: null })
+    useLLMStore.setState({ defaultModelId: null, models: [] })
   })
 
-  it('rejects an explicitly length-truncated stream before a workflow can persist it', async () => {
+  it('keeps ordinary callLLM fail-closed after a single length completion even with JSON responseFormat', async () => {
+    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.('半截结果', undefined, 'length')
+      return `request-${generateStream.mock.calls.length}`
+    })
     useLLMStore.setState({
       defaultModelId: 'model',
-      generateStream: vi.fn(async (_messages, streamCallbacks) => {
-        streamCallbacks.onDone?.('半截结果', undefined, 'length')
-        return 'request-1'
-      }),
+      generateStream,
     })
 
     await expect(new CompletionProbeCommand().run(callbacks, context))
-      .rejects.toThrow('输出达到模型最大长度')
+      .rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
+    expect(generateStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires the explicit bounded-completion seam before retrying a structured batch', async () => {
+    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
+      const callNumber = generateStream.mock.calls.length
+      streamCallbacks.onDone?.(
+        callNumber === 1 ? '{"blueprints":[' : '{"blueprints":[]}',
+        undefined,
+        callNumber === 1 ? 'length' : 'stop',
+      )
+      return `request-${callNumber}`
+    })
+    useLLMStore.setState({
+      defaultModelId: 'model',
+      generateStream,
+      models: [{
+        id: 'model',
+        name: 'Probe',
+        provider: 'custom',
+        protocol: 'openai',
+        modelName: 'probe',
+        apiKey: '',
+        baseUrl: 'https://example.invalid',
+        temperature: 0.7,
+        maxTokens: 4096,
+        purposes: ['generation'],
+        capabilities: {
+          contextWindowTokens: 8192,
+          maxOutputTokens: 4096,
+          reasoning: false,
+          structuredOutput: true,
+          usage: false,
+        },
+      }],
+    })
+
+    await expect(new CompletionProbeCommand().runStructuredBatch(callbacks, context))
+      .resolves.toBe('{"blueprints":[]}')
+    expect(generateStream).toHaveBeenCalledTimes(2)
   })
 })

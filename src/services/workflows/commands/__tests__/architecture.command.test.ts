@@ -330,22 +330,44 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith('角色图谱与 2 张角色卡已生成')
   })
 
-  it('does not parse, repair, or commit a truncated roster response', async () => {
+  it('replaces a truncated roster JSON before committing the readable roster receipt', async () => {
     const truncated = '{"schemaVersion":1,"entries":['
+    const completed = JSON.stringify({ schemaVersion: 1, entries: rosterEntries })
     const generateStream = vi.fn((
       _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
       streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
     ) => {
-      streamCallbacks.onChunk?.(truncated)
-      streamCallbacks.onDone?.(truncated, undefined, 'length')
-      return Promise.resolve('truncated-character-request')
+      const output = generateStream.mock.calls.length === 1 ? truncated : completed
+      const finishReason = generateStream.mock.calls.length === 1 ? 'length' : 'stop'
+      streamCallbacks.onChunk?.(output)
+      streamCallbacks.onDone?.(output, undefined, finishReason)
+      return Promise.resolve(`truncated-character-request-${generateStream.mock.calls.length}`)
     })
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:project-core-get') {
-        return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证截断响应不会写入结构化角色事实或后续检查点，避免测试因为前置长度不足而提前中止。' }
+      switch (channel) {
+        case 'db:project-core-get':
+          return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证截断结构化响应必须先由完整替代 JSON 覆盖后才允许写入结构化角色事实。' }
+        case 'db:character-roster-read':
+          return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
+        case 'db:character-roster-commit':
+          return {
+            success: true,
+            receipt: {
+              operationId: context.runId,
+              payloadHash: 'payload-hash',
+              revision: 1,
+              idempotent: false,
+              snapshot: readyRoster,
+            },
+          }
+        case 'fs:read-json':
+          return { success: true, data: {} }
+        case 'fs:write-json':
+          return { success: true }
+        default:
+          throw new Error(`Unexpected IPC channel: ${channel}`)
       }
-      throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
       velaAPI: {
@@ -364,10 +386,13 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
     await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('AI 输出达到模型最大长度')
+      .resolves.toBe(readyRoster.renderedMarkdown)
 
-    expect(generateStream).toHaveBeenCalledOnce()
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    const continuationMessages = generateStream.mock.calls[1]?.[0] ?? []
+    const continuationPrompt = continuationMessages.find(message => message.role === 'user')?.content ?? ''
+    expect(continuationPrompt).toContain('返回完整 JSON，从头重建，不要只补后缀')
+    expect(invoke.mock.calls.map(([channel]) => channel)).toContain('db:character-roster-commit')
   })
 
   it('repairs only one complete but syntactically invalid roster response before committing it', async () => {

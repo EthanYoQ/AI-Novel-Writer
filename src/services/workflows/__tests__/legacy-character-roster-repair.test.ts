@@ -212,7 +212,7 @@ describe('legacy character roster repair public workflow seam', () => {
     ])
   })
 
-  it('does not parse, repair or commit a truncated legacy repair response', async () => {
+  it('fails closed without parsing or committing when bounded structured continuations remain truncated', async () => {
     const generateStream = vi.fn((
       _messages: Parameters<typeof originalGenerateStream>[0],
       callbacks: Parameters<typeof originalGenerateStream>[1],
@@ -227,8 +227,8 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('AI 输出达到模型最大长度')
-    expect(generateStream).toHaveBeenCalledOnce()
+    await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('已自动续写 2 次仍未完成')
+    expect(generateStream).toHaveBeenCalledTimes(3)
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
   })
 

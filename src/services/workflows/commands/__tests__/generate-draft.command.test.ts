@@ -23,6 +23,14 @@ describe('generate draft command text cleanup', () => {
     expect(text).toContain('林岚推开办公室的门')
   })
 
+  it('removes a long malformed thinking prefix before visible draft prose', () => {
+    const text = sanitizeDraftText(`推理过程：${'隐藏步骤。'.repeat(61)}</think>
+
+林岚推开办公室的门。`)
+
+    expect(text).toBe('林岚推开办公室的门。')
+  })
+
   it('deduplicates repeated long paragraphs while keeping distinct paragraphs', () => {
     const repeated = '林岚握紧手中的U盘，屏幕蓝光映在她的指节上，走廊尽头传来压低的脚步声，她没有回头，只把那串航班编号重新敲进检索框。'
     const unique = '周砚没有立刻回答，只把监控画面停在三点十七分。'
@@ -316,7 +324,33 @@ describe('GenerateDraftCommand truncation boundary', () => {
     expect(persisted?.[1]).toMatchObject({ content: expect.stringContaining('续') })
   })
 
-  it('does not let a length finish bypass the target lower bound', async () => {
+  it('continues a length-truncated draft even after it has reached the target lower bound', async () => {
+    const { invoke, context, callbacks, command } = setup(6000)
+    vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'length' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: '初'.repeat(5000), finishReason: 'length' })
+    const continuation = vi.spyOn(
+      command as unknown as {
+        callLLMResult: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
+      },
+      'callLLMResult',
+    ).mockResolvedValue({ content: `${'续'.repeat(800)}。`, finishReason: 'stop' })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('续')
+
+    expect(continuation).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({ content: expect.stringContaining('续') }),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
+  it('does not persist a length finish after an above-threshold continuation makes no meaningful progress', async () => {
     const { invoke, context, callbacks, command } = setup(6000)
     const initial = vi.spyOn(
       command as unknown as {
@@ -335,7 +369,7 @@ describe('GenerateDraftCommand truncation boundary', () => {
       .rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
 
     expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 4096 })
-    expect(continuation).not.toHaveBeenCalled()
+    expect(continuation).toHaveBeenCalledTimes(1)
     expect(invoke).not.toHaveBeenCalledWith('db:draft-next-version', expect.anything(), expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   })
