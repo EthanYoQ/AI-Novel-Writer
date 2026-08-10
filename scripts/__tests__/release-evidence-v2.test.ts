@@ -43,8 +43,8 @@ function validWindowsReceipt(name: string, releaseRoot: string) {
   const receipts: Record<string, unknown> = {
     install: { ...base, kind: 'windows-install', direct: { installerExitCode: 0, installedExecutable: 'C:/AI/AI小说作家.exe', installedExecutableExists: true } },
     launch: { ...base, kind: 'windows-launch', direct: { executablePath: 'C:/AI/AI小说作家.exe', productVersion: '0.8.1', processId: 101, processStartTimeTicks: '12345', visibleMainWindowCount: 1 } },
-    'quiet-window': { ...base, kind: 'windows-final-quiet-window', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', quietWindowSeconds: 5, completedAt: '2026-08-10T12:00:00.000Z' } },
-    'error-dialogs': { ...base, kind: 'windows-error-dialogs', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', newProductErrorDialogCount: 0, observedThrough: '2026-08-10T12:00:00.000Z' } },
+    'quiet-window': { ...base, kind: 'windows-final-quiet-window', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', quietWindowSeconds: 5, completedAt: '2026-08-10T14:57:30.3051843Z' } },
+    'error-dialogs': { ...base, kind: 'windows-error-dialogs', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', newProductErrorDialogCount: 0, observedThrough: '2026-08-10T14:57:30.3051843Z' } },
     uninstall: { ...base, kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
     'upgrade-data': { ...base, kind: 'windows-upgrade-data', direct: { previousVersion: '0.2.5', legacyTableCount: 11, preservedAssetCount: 1, vectorDimension: 768, queryResultCount: 1 } },
     'native-abi': { ...base, kind: 'windows-native-abi', direct: { restoreMode: 'monitored', nodeModuleAbi: '127', verificationTest: 'electron/repositories/__tests__/character-repository.test.ts' } },
@@ -301,11 +301,35 @@ describe('release evidence v2 CLI', () => {
       ], { cwd: repositoryRoot, encoding: 'utf8' })
       expect(recorded.status, recorded.stderr).toBe(0)
     }
-    for (const receipt of [
-      'install', 'launch', 'quiet-window', 'error-dialogs', 'uninstall', 'upgrade-data', 'native-abi', 'packaged-smoke', 'signing',
-    ]) {
-      writeJson(path.join(evidenceRoot, 'acceptance', `${receipt}.json`), validWindowsReceipt(receipt, releaseRoot))
+    const writeSemanticReceipts = (timestamp?: string) => {
+      for (const receipt of [
+        'install', 'launch', 'quiet-window', 'error-dialogs', 'uninstall', 'upgrade-data', 'native-abi', 'packaged-smoke', 'signing',
+      ]) {
+        const value = validWindowsReceipt(receipt, releaseRoot) as { direct: Record<string, unknown> }
+        if (timestamp !== undefined && receipt === 'quiet-window') value.direct.completedAt = timestamp
+        if (timestamp !== undefined && receipt === 'error-dialogs') value.direct.observedThrough = timestamp
+        writeJson(path.join(evidenceRoot, 'acceptance', `${receipt}.json`), value)
+      }
     }
+    for (const invalidTimestamp of [
+      '2026-08-10T14:57:30.3051843+00:00',
+      'not-a-timestamp',
+      '2026-02-30T14:57:30Z',
+      '2026-08-10T24:00:00Z',
+      '2026-08-10T14:57:30.1234567890Z',
+    ]) {
+      writeSemanticReceipts(invalidTimestamp)
+      const invalidTimestampResult = spawnSync(process.execPath, [
+        evidenceScript,
+        'finalize',
+        '--platform', 'windows',
+        '--evidence-root', evidenceRoot,
+        '--release-root', releaseRoot,
+      ], { cwd: repositoryRoot, encoding: 'utf8' })
+      expect(invalidTimestampResult.status).not.toBe(0)
+      expect(invalidTimestampResult.stderr).toContain('Windows error-dialog receipt facts are invalid')
+    }
+    writeSemanticReceipts()
 
     const result = spawnSync(process.execPath, [
       evidenceScript,
@@ -363,7 +387,7 @@ describe('release evidence v2 CLI', () => {
       platform: 'windows',
       releaseFiles: [installer, `${installer}.blockmap`, 'latest.yml'],
     })
-  })
+  }, 15_000)
 
   it('requires externally frozen expected toolchain versions and rejects a runtime mismatch', () => {
     const evidenceRoot = fixture()
