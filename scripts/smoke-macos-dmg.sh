@@ -145,10 +145,13 @@ spctl --assess --type execute --verbose=4 "$app" > "$spctl_assessment" 2>&1
 spctl_assessment_status=$?
 set -e
 
-node - "$signing_receipt" "$codesign_details_status" "$codesign_verification_status" "$spctl_assessment_status" "$codesign_details" "$codesign_verification" "$spctl_assessment" <<'NODE'
-const crypto = require('node:crypto')
-const fs = require('node:fs')
-const [output, detailsStatus, verificationStatus, assessmentStatus, detailsFile, verificationFile, assessmentFile] = process.argv.slice(2)
+node --input-type=module - "$repository_root/scripts/release-evidence-v2.mjs" "$signing_receipt" "$codesign_details_status" "$codesign_verification_status" "$spctl_assessment_status" "$codesign_details" "$codesign_verification" "$spctl_assessment" <<'NODE'
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import { pathToFileURL } from 'node:url'
+
+const [evidenceModule, output, detailsStatus, verificationStatus, assessmentStatus, detailsFile, verificationFile, assessmentFile] = process.argv.slice(2)
+const { classifyMacosCodeSigning, MACOS_FORMAL_DISTRIBUTION_POLICY } = await import(pathToFileURL(evidenceModule).href)
 
 function observedCommand(command, exitCode, outputFile) {
   const output = fs.readFileSync(outputFile)
@@ -162,28 +165,36 @@ function observedCommand(command, exitCode, outputFile) {
 const codesignDetails = observedCommand('codesign -dv --verbose=4', detailsStatus, detailsFile)
 const codesignVerification = observedCommand('codesign --verify --deep --strict --verbose=2', verificationStatus, verificationFile)
 const gatekeeperAssessment = observedCommand('spctl --assess --type execute --verbose=4', assessmentStatus, assessmentFile)
+const codeSigningObservation = classifyMacosCodeSigning({
+  detailsExitCode: codesignDetails.exitCode,
+  verificationExitCode: codesignVerification.exitCode,
+  detailsOutput: fs.readFileSync(detailsFile, 'utf8'),
+})
 const codeSigning = {
-  expected: 'unsigned',
-  observed: codesignDetails.exitCode !== 0 && codesignVerification.exitCode !== 0 ? 'unsigned' : 'unexpected-signed',
+  expected: MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning,
+  ...codeSigningObservation,
   details: codesignDetails,
   verification: codesignVerification,
 }
 
-if (codeSigning.observed !== 'unsigned') {
-  throw new Error('Formal macOS release policy requires an unsigned code-signing state; refusing to produce an unsigned receipt for a signed package.')
+if (
+  (codeSigning.observed !== 'ad_hoc' && codeSigning.observed !== 'unsigned')
+  || codeSigning.hasDeveloperIdIdentity
+) {
+  throw new Error('Formal macOS release policy requires ad-hoc or unsigned code signing without a Developer ID identity.')
 }
 
 const notarization = {
-  expected: 'not_notarized',
-  observed: 'not_notarized',
-  basis: 'The formal macOS release has no Apple notarization stage; this unsigned package is not notarized.',
+  expected: MACOS_FORMAL_DISTRIBUTION_POLICY.notarization,
+  observed: MACOS_FORMAL_DISTRIBUTION_POLICY.notarization,
+  basis: 'The formal macOS release has no Apple notarization stage.',
 }
 const gatekeeper = {
   assessment: gatekeeperAssessment,
   observed: gatekeeperAssessment.exitCode === 0 ? 'accepted-on-runner' : 'manual-confirmation-may-be-required',
 }
-const validationResult = `Observed unsigned code-signing state. Apple notarization is ${notarization.observed}; Gatekeeper assessment exited with ${gatekeeperAssessment.exitCode}.`
-const gatekeeperImpact = 'macOS Gatekeeper can warn about or block this unsigned and unnotarized distribution until the user explicitly approves it.'
+const validationResult = `Observed ${codeSigning.observed} code signing without a Developer ID identity. Apple notarization is ${notarization.observed}; Gatekeeper assessment exited with ${gatekeeperAssessment.exitCode}.`
+const gatekeeperImpact = 'macOS Gatekeeper can warn about or block this package because it has no Developer ID distribution identity and is not notarized.'
 const direct = {
   codeSigning,
   notarization,
@@ -196,12 +207,12 @@ fs.writeFileSync(output, `${JSON.stringify({
   platform: 'darwin',
   arch: 'arm64',
   accepted: true,
-  status: 'unsigned',
+  status: MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning,
   validationResult,
   unsignedDistributionImpact: gatekeeperImpact,
   gatekeeperImpact,
   observations: [
-    `codesign details exited with ${codesignDetails.exitCode}; code-signing state=${codeSigning.observed}.`,
+    `codesign details exited with ${codesignDetails.exitCode}; code-signing state=${codeSigning.observed}; Developer ID identity=${codeSigning.hasDeveloperIdIdentity}.`,
     `codesign verification exited with ${codesignVerification.exitCode}.`,
     `Apple notarization state=${notarization.observed} under the formal release policy.`,
     `spctl Gatekeeper assessment exited with ${gatekeeperAssessment.exitCode}; Gatekeeper state=${gatekeeper.observed}.`,

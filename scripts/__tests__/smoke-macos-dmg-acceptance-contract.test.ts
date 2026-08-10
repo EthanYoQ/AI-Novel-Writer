@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
-import { COMMAND_PROFILES } from '../release-evidence-v2.mjs'
+import {
+  classifyMacosCodeSigning,
+  COMMAND_PROFILES,
+  MACOS_FORMAL_DISTRIBUTION_POLICY,
+} from '../release-evidence-v2.mjs'
 
 const repositoryRoot = path.resolve(import.meta.dirname, '..', '..')
 const smokeScriptPath = path.join(repositoryRoot, 'scripts', 'smoke-macos-dmg.sh')
@@ -33,9 +37,74 @@ afterEach(() => {
 })
 
 describe('macOS DMG acceptance receipt contract', () => {
+  it('classifies an exit-zero ad-hoc signature as lacking a Developer ID distribution identity', () => {
+    const observation = classifyMacosCodeSigning({
+      detailsExitCode: 0,
+      verificationExitCode: 0,
+      detailsOutput: [
+        'Executable=/Volumes/AI/AI小说作家.app/Contents/MacOS/AI小说作家',
+        'Identifier=com.ethanyoq.ai-novel-writer',
+        'Format=app bundle with Mach-O thin (arm64)',
+        'Signature=adhoc',
+        'TeamIdentifier=not set',
+      ].join('\n'),
+    })
+
+    expect(observation).toEqual({
+      observed: 'ad_hoc',
+      signature: 'adhoc',
+      teamIdentifier: 'not set',
+      authorities: [],
+      hasDeveloperIdIdentity: false,
+    })
+  })
+
+  it('classifies a Developer ID identity separately so formal unsigned distribution can reject it', () => {
+    const observation = classifyMacosCodeSigning({
+      detailsExitCode: 0,
+      verificationExitCode: 0,
+      detailsOutput: [
+        'Executable=/Volumes/AI/AI小说作家.app/Contents/MacOS/AI小说作家',
+        'Identifier=com.ethanyoq.ai-novel-writer',
+        'Format=app bundle with Mach-O thin (arm64)',
+        'Signature size=8993',
+        'Authority=Developer ID Application: Example Developer (ABCDE12345)',
+        'Authority=Developer ID Certification Authority',
+        'Authority=Apple Root CA',
+        'TeamIdentifier=ABCDE12345',
+      ].join('\n'),
+    })
+
+    expect(observation).toMatchObject({
+      observed: 'developer_id_signed',
+      teamIdentifier: 'ABCDE12345',
+      authorities: [
+        'Developer ID Application: Example Developer (ABCDE12345)',
+        'Developer ID Certification Authority',
+        'Apple Root CA',
+      ],
+      hasDeveloperIdIdentity: true,
+    })
+  })
+
+  it('classifies a bundle with no signature as unsigned', () => {
+    expect(classifyMacosCodeSigning({
+      detailsExitCode: 1,
+      verificationExitCode: 1,
+      detailsOutput: '/Volumes/AI/AI小说作家.app: code object is not signed at all',
+    })).toEqual({
+      observed: 'unsigned',
+      signature: null,
+      teamIdentifier: null,
+      authorities: [],
+      hasDeveloperIdIdentity: false,
+    })
+  })
+
   it('records macOS-only mounted-DMG, packaged smoke, and signing facts from observed tools', () => {
     const script = readRequired(smokeScriptPath)
 
+    expect(MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning).toBe('ad_hoc_or_unsigned')
     expect(script).toContain('evidence_root="${AI_NOVEL_RELEASE_EVIDENCE_ROOT:-$qualification_directory}"')
     expect(script).toContain('acceptance_directory="$evidence_root/acceptance"')
     expect(script).toContain('dmg-mount.json')
@@ -52,10 +121,11 @@ describe('macOS DMG acceptance receipt contract', () => {
     expect(script).toContain('codeSigning')
     expect(script).toContain('notarization')
     expect(script).toContain('gatekeeper')
-    expect(script).toContain("status: 'unsigned'")
-    expect(script).toContain("observed: 'not_notarized'")
-    expect(script).toContain('unexpected-signed')
-    expect(script).not.toContain("status: unsigned ? 'unsigned' : 'signed'")
+    expect(script).toContain('classifyMacosCodeSigning')
+    expect(script).toContain('MACOS_FORMAL_DISTRIBUTION_POLICY')
+    expect(script).toContain('status: MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning')
+    expect(script).toContain('observed: MACOS_FORMAL_DISTRIBUTION_POLICY.notarization')
+    expect(script).not.toContain('unexpected-signed')
     expect(script).toContain('observations: [')
     expect(script).toContain('const direct = {')
     expect(script).toContain('direct,')
@@ -171,14 +241,19 @@ describe('macOS DMG acceptance receipt contract', () => {
       platform: 'darwin',
       arch: 'arm64',
       accepted: true,
-      status: 'signed',
-      validationResult: 'Unexpected signed package observed.',
+      status: 'developer_id_signed',
+      validationResult: 'Developer ID distribution identity observed.',
       unsignedDistributionImpact: 'macOS Gatekeeper can require an explicit user approval for this unsigned package.',
       gatekeeperImpact: 'Gatekeeper was accepted on this runner but remains independent from code-signing policy.',
       observations: ['codesign and spctl inspection completed.'],
       direct: {
         codeSigning: {
-          expected: 'unsigned', observed: 'signed',
+          expected: 'ad_hoc_or_unsigned',
+          observed: 'developer_id_signed',
+          signature: null,
+          teamIdentifier: 'ABCDE12345',
+          authorities: ['Developer ID Application: Example Developer (ABCDE12345)'],
+          hasDeveloperIdIdentity: true,
           details: { command: 'codesign -dv --verbose=4', exitCode: 0, outputSha256: commandOutputSha256 },
           verification: { command: 'codesign --verify --deep --strict --verbose=2', exitCode: 0, outputSha256: commandOutputSha256 },
         },
@@ -198,7 +273,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       '--release-root', releaseRoot,
     ], { cwd: repositoryRoot, encoding: 'utf8' })
     expect(rejectedFinalize.status).not.toBe(0)
-    expect(rejectedFinalize.stderr).toContain('requires an unsigned code-signing state')
+    expect(rejectedFinalize.stderr).toContain('requires ad-hoc or unsigned code signing without a Developer ID identity')
 
     writeJson(signingReceiptPath, {
       schemaVersion: 2,
@@ -206,16 +281,21 @@ describe('macOS DMG acceptance receipt contract', () => {
       platform: 'darwin',
       arch: 'arm64',
       accepted: true,
-      status: 'unsigned',
-      validationResult: 'Observed an unsigned package; notarization and Gatekeeper are modeled separately.',
+      status: 'ad_hoc_or_unsigned',
+      validationResult: 'Observed an ad-hoc signature without a Developer ID identity; notarization and Gatekeeper are modeled separately.',
       unsignedDistributionImpact: 'macOS Gatekeeper can require an explicit user approval for this unsigned and unnotarized package.',
       gatekeeperImpact: 'Gatekeeper can require manual confirmation for this unsigned and unnotarized package.',
-      observations: ['codesign observed no signature.', 'spctl Gatekeeper assessment was recorded separately.'],
+      observations: ['codesign observed an ad-hoc signature without Developer ID identity.', 'spctl Gatekeeper assessment was recorded separately.'],
       direct: {
         codeSigning: {
-          expected: 'unsigned', observed: 'unsigned',
-          details: { command: 'codesign -dv --verbose=4', exitCode: 1, outputSha256: commandOutputSha256 },
-          verification: { command: 'codesign --verify --deep --strict --verbose=2', exitCode: 1, outputSha256: commandOutputSha256 },
+          expected: 'ad_hoc_or_unsigned',
+          observed: 'ad_hoc',
+          signature: 'adhoc',
+          teamIdentifier: 'not set',
+          authorities: [],
+          hasDeveloperIdIdentity: false,
+          details: { command: 'codesign -dv --verbose=4', exitCode: 0, outputSha256: commandOutputSha256 },
+          verification: { command: 'codesign --verify --deep --strict --verbose=2', exitCode: 0, outputSha256: commandOutputSha256 },
         },
         notarization: { expected: 'not_notarized', observed: 'not_notarized', basis: 'Unsigned packages cannot be notarized.' },
         gatekeeper: {
@@ -239,7 +319,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     expect(existsSync(path.join(releaseRoot, 'qualification', 'run-ledger.json'))).toBe(true)
     expect(readFileSync(path.join(acceptanceDirectory, 'dmg-mount.json'), 'utf8')).toContain('"dmg-mount"')
     expect(readFileSync(path.join(acceptanceDirectory, 'packaged-smoke.json'), 'utf8')).toContain('"packaged-smoke"')
-    expect(readFileSync(path.join(acceptanceDirectory, 'signing.json'), 'utf8')).toContain('"unsigned"')
+    expect(readFileSync(path.join(acceptanceDirectory, 'signing.json'), 'utf8')).toContain('"ad_hoc_or_unsigned"')
     expect(existsSync(path.join(releaseRoot, `${dmg}.sha256`))).toBe(true)
     const manifest = JSON.parse(readFileSync(path.join(releaseRoot, 'manifest.json'), 'utf8'))
     expect(manifest.acceptanceProfile).toEqual([
@@ -270,14 +350,19 @@ describe('macOS DMG acceptance receipt contract', () => {
       platform: 'darwin',
       arch: 'arm64',
       accepted: true,
-      status: 'signed',
-      validationResult: 'Unexpected signed package observed.',
+      status: 'developer_id_signed',
+      validationResult: 'Developer ID distribution identity observed.',
       unsignedDistributionImpact: 'macOS Gatekeeper impact must remain explicit.',
       gatekeeperImpact: 'Gatekeeper was accepted on this runner but remains independent from code-signing policy.',
       observations: ['codesign observed a signature.'],
       direct: {
         codeSigning: {
-          expected: 'unsigned', observed: 'signed',
+          expected: 'ad_hoc_or_unsigned',
+          observed: 'developer_id_signed',
+          signature: null,
+          teamIdentifier: 'ABCDE12345',
+          authorities: ['Developer ID Application: Example Developer (ABCDE12345)'],
+          hasDeveloperIdIdentity: true,
           details: { command: 'codesign -dv --verbose=4', exitCode: 0, outputSha256: commandOutputSha256 },
           verification: { command: 'codesign --verify --deep --strict --verbose=2', exitCode: 0, outputSha256: commandOutputSha256 },
         },
@@ -299,6 +384,6 @@ describe('macOS DMG acceptance receipt contract', () => {
       '--version', version,
     ], { cwd: repositoryRoot, encoding: 'utf8' })
     expect(rejectedVerify.status).not.toBe(0)
-    expect(rejectedVerify.stderr).toContain('requires an unsigned code-signing state')
+    expect(rejectedVerify.stderr).toContain('requires ad-hoc or unsigned code signing without a Developer ID identity')
   })
 })

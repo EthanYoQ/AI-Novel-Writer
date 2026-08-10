@@ -436,9 +436,9 @@ function validatePublishedRelease(release, ready) {
 
 export function releaseNotes(version) {
   assert(
-    MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning === 'unsigned'
+    MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning === 'ad_hoc_or_unsigned'
       && MACOS_FORMAL_DISTRIBUTION_POLICY.notarization === 'not_notarized',
-    'macOS release notes only support the formal unsigned and unnotarized distribution policy',
+    'macOS release notes only support distribution without Developer ID signing or Apple notarization',
   )
   return [
     `## 中文`,
@@ -452,7 +452,7 @@ export function releaseNotes(version) {
     `本版本在同一个 Release 中继续遵守五项资产合同：Windows x64 安装程序、其 blockmap、latest.yml、macOS Apple Silicon（ARM64）DMG 及其 SHA-256 校验文件。`,
     ``,
     `- Windows x64：下载 \`ai-novel-writer-setup-${version}.exe\`；配套资产为 \`ai-novel-writer-setup-${version}.exe.blockmap\` 与 \`latest.yml\`，支持应用内更新。Windows 安装包未签名（代码签名：未签名）。`,
-    `- macOS ARM64：下载 \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`。代码签名：未签名；Apple 公证：未公证。首次安装时 macOS Gatekeeper 可能要求在“隐私与安全性”中手动允许。`,
+    `- macOS ARM64：下载 \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`。未签名（未使用 Developer ID 正式代码签名；构建产物可能包含系统生成的临时 ad-hoc 签名）；Apple 公证：未公证。首次安装时 macOS Gatekeeper 可能要求在“隐私与安全性”中手动允许。`,
     `- macOS 校验文件：\`ai-novel-writer-mac-arm64-${version}-installer.dmg.sha256\`。`,
     `- macOS 本版本不提供应用内更新；后续版本需从 Release 页面手动更新。Windows 应用内更新只使用 Windows 的 \`latest.yml\` 与安装器。`,
     ``,
@@ -467,7 +467,7 @@ export function releaseNotes(version) {
     `This Release continues the five assets contract: the Windows x64 installer, its blockmap, latest.yml, the macOS Apple Silicon (ARM64) DMG, and its SHA-256 checksum.`,
     ``,
     `- Windows x64: download \`ai-novel-writer-setup-${version}.exe\`; \`ai-novel-writer-setup-${version}.exe.blockmap\` and \`latest.yml\` support in-app updates. The Windows installer is not code-signed. Code signing: unsigned.`,
-    `- macOS ARM64: download \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`. Code signing: unsigned; Apple notarization: not notarized. Gatekeeper may require a manual Allow action in Privacy & Security on first install.`,
+    `- macOS ARM64: download \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`. Unsigned for public distribution (no Developer ID code signing; the build may carry a system-generated temporary ad-hoc signature); Apple notarization: not notarized. Gatekeeper may require a manual Allow action in Privacy & Security on first install.`,
     `- macOS checksum: \`ai-novel-writer-mac-arm64-${version}-installer.dmg.sha256\`.`,
     `- This macOS release has no in-app updater; future versions require a manual update from the Release page. The Windows in-app updater consumes only Windows \`latest.yml\` and installer assets.`,
   ].join('\n')

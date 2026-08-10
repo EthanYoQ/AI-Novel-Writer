@@ -606,13 +606,14 @@ catch {
     })
   })
 
-  windowsIt('fingerprints an installed app root containing a file', () => {
+  windowsIt('fingerprints an installed app root supplied through its Windows 8.3 path', () => {
     const root = temporaryRoot()
     const output = runWindowsE2ePowerShellFunctions([
       'Assert-E2eCondition',
       'Get-E2eInstallRootFingerprint',
     ], `
-$installRoot = Join-Path ${quotePowerShell(root)} 'installed-app'
+$shortRoot = (New-Object -ComObject Scripting.FileSystemObject).GetFolder(${quotePowerShell(root)}).ShortPath
+$installRoot = Join-Path $shortRoot 'installed-app'
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $installRoot 'fingerprint-fixture.txt'), 'native updater fingerprint fixture')
 $fingerprint = Get-E2eInstallRootFingerprint -InstallRoot $installRoot
