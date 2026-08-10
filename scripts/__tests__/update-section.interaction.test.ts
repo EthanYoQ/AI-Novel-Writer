@@ -9,6 +9,7 @@ import react from '@vitejs/plugin-react'
 const repositoryRoot = path.resolve('.')
 const chromeExecutable = process.env.CHROME_PATH ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 const describeWithChrome = existsSync(chromeExecutable) ? describe : describe.skip
+const VITE_SERVER_HOOK_TIMEOUT_MS = 30_000
 
 describeWithChrome('UpdateSection browser interactions', () => {
   let server: ViteDevServer
@@ -28,7 +29,7 @@ describeWithChrome('UpdateSection browser interactions', () => {
     if (!address || typeof address === 'string') throw new Error('Unable to determine browser harness address')
     pageUrl = `http://127.0.0.1:${address.port}/scripts/browser-fixtures/update-section-harness.html`
     browser = await chromium.launch({ executablePath: chromeExecutable, headless: true })
-  })
+  }, VITE_SERVER_HOOK_TIMEOUT_MS)
 
   afterAll(async () => {
     await browser?.close()

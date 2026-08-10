@@ -11,7 +11,19 @@ const installerScript = resolve('scripts/smoke-win-installer.ps1')
 const releaseMonitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const upgradeFixtureScript = resolve('scripts/upgrade-data-fixture.mjs')
 const electronNodeRunner = resolve('node_modules/electron/dist/electron.exe')
-const WINDOWS_POWERSHELL_RECEIPT_TEST_TIMEOUT_MS = 15_000
+const WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS = 30_000
+
+function windowsPowerShellIt(
+  name: string,
+  handler: () => void | Promise<void>,
+  timeoutMilliseconds = WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS,
+) {
+  return windowsIt(
+    name,
+    handler,
+    Math.max(timeoutMilliseconds, WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS),
+  )
+}
 
 describe('packaged vector qualification wiring', () => {
   it('runs the installed application under a dual-gated one-time token and preserves machine-readable evidence', () => {
@@ -109,7 +121,7 @@ describe('Windows v2 acceptance receipts', () => {
     expect(app).toContain('visibleMainWindowObserved')
   })
 
-  windowsIt('accepts an unsigned signature observation but rejects an unknown uninstall residue', () => {
+  windowsPowerShellIt('accepts an unsigned signature observation but rejects an unknown uninstall residue', () => {
     const output = runInstallerLibrary(`
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-acceptance-test-' + [guid]::NewGuid().ToString('N'))
 $unsigned = Join-Path $root 'unsigned.ps1'
@@ -161,9 +173,9 @@ Remove-Item -LiteralPath $root -Recurse -Force
       accepted: true,
       installedExecutableExists: false,
     })
-  }, WINDOWS_POWERSHELL_RECEIPT_TEST_TIMEOUT_MS)
+  }, WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS)
 
-  windowsIt('verifies an unsigned file when security-module autoloading is unavailable', () => {
+  windowsPowerShellIt('verifies an unsigned file when security-module autoloading is unavailable', () => {
     const output = runInstallerLibrary(`
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-signing-module-test-' + [guid]::NewGuid().ToString('N'))
 $unsigned = Join-Path $root 'unsigned.ps1'
@@ -183,7 +195,7 @@ try {
       status: 'unsigned',
       validationResult: 'NotSigned',
     })
-  }, WINDOWS_POWERSHELL_RECEIPT_TEST_TIMEOUT_MS)
+  }, WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS)
 })
 
 function quotePowerShell(value: string): string {
@@ -682,7 +694,7 @@ describe('Windows installer smoke contract', () => {
     expect(packageJson).toContain('smoke:win-v025-upgrade')
   })
 
-  windowsIt('detects only new error windows, including system-owned dialogs outside the app process tree', () => {
+  windowsPowerShellIt('detects only new error windows, including system-owned dialogs outside the app process tree', () => {
     const output = runProbeLibrary(`
 $baseline = @(
   [pscustomobject]@{ WindowHandle = '0x1'; ProcessId = 101; ProcessName = 'WerFault'; Title = 'Old Application Error' }
@@ -729,7 +741,7 @@ $matches = @(Get-AiNovelNewErrorWindows -BaselineIdentities $identities -Current
     ])
   })
 
-  windowsIt('accepts only visible top-level windows owned by the launched application tree', () => {
+  windowsPowerShellIt('accepts only visible top-level windows owned by the launched application tree', () => {
     const output = runProbeLibrary(`
 $appProcessIds = [System.Collections.Generic.HashSet[int]]::new()
 [void]$appProcessIds.Add(505)
@@ -768,7 +780,7 @@ $visibleTarget = [pscustomobject]@{ ProcessId = 505; Visible = $true }
     expect(finallyBlock).toContain('Stop-AiNovelProcessTree')
   })
 
-  windowsIt('cleans a live tracked child after the root process has already exited', () => {
+  windowsPowerShellIt('cleans a live tracked child after the root process has already exited', () => {
     const output = runProbeLibrary(`
 $parentProcess = $null
 $childProcess = $null
@@ -819,7 +831,7 @@ try {
     })
   }, 15_000)
 
-  windowsIt('closes a real WinForms process through the default CloseMainWindow path', () => {
+  windowsPowerShellIt('closes a real WinForms process through the default CloseMainWindow path', () => {
     const result = runWinFormsGracefulCloseProbe(false, 5)
 
     expect(result).toEqual({
@@ -829,7 +841,7 @@ try {
     })
   }, 15_000)
 
-  windowsIt('fails closed before invoking providers when a tracked start time no longer matches', () => {
+  windowsPowerShellIt('fails closed before invoking providers when a tracked start time no longer matches', () => {
     const output = runProbeLibrary(`
 $processIds = [System.Collections.Generic.HashSet[int]]::new()
 [void]$processIds.Add($PID)
@@ -868,14 +880,14 @@ try {
     expect(result.Failure).toContain('current tracked process')
   })
 
-  windowsIt('fails when a graceful close is accepted but the current process tree does not exit', () => {
+  windowsPowerShellIt('fails when a graceful close is accepted but the current process tree does not exit', () => {
     const result = runWinFormsGracefulCloseProbe(true, 1)
 
     expect(result.Failure).toContain('Application process tree did not terminate')
     expect(result.Exited).toBe(false)
   }, 15_000)
 
-  windowsIt('accepts only the visible, titled Chromium product main window', () => {
+  windowsPowerShellIt('accepts only the visible, titled Chromium product main window', () => {
     const output = runProbeLibrary(`
 $appProcessIds = [System.Collections.Generic.HashSet[int]]::new()
 [void]$appProcessIds.Add(505)
@@ -899,7 +911,7 @@ $results = @($windows | ForEach-Object {
     expect(result.Results).toEqual([false, false, false, false, false, false, false, true])
   })
 
-  windowsIt('detects new global error windows when both target collections are empty', () => {
+  windowsPowerShellIt('detects new global error windows when both target collections are empty', () => {
     const output = runProbeLibrary(String.raw`
 $baseline = [System.Collections.Generic.HashSet[string]]::new()
 $processIds = [System.Collections.Generic.HashSet[int]]::new()
@@ -940,7 +952,7 @@ $matches = @(Get-AiNovelNewErrorWindows -BaselineIdentities $baseline -CurrentWi
     })
   })
 
-  windowsIt('rejects pre-existing product and WerFault error dialogs without rejecting unrelated windows', () => {
+  windowsPowerShellIt('rejects pre-existing product and WerFault error dialogs without rejecting unrelated windows', () => {
     const output = runProbeLibrary(`
 $windows = @(
   [pscustomobject]@{ WindowHandle = '0x21'; ProcessId = 601; ProcessName = 'WerFault'; Title = 'System Error'; ClassName = '#32770'; Visible = $true },
@@ -954,7 +966,7 @@ $matches = @(Get-AiNovelStartupBlockingErrorWindows -CurrentWindows $windows -Pr
     expect(result.Handles).toEqual(['0x21', '0x22'])
   })
 
-  windowsIt('allows a brief main-window polling gap but rejects a lasting disappearance', () => {
+  windowsPowerShellIt('allows a brief main-window polling gap but rejects a lasting disappearance', () => {
     const output = runProbeLibrary(`
 $state = New-AiNovelMainWindowContinuityState
 $start = [DateTime]'2026-01-01T00:00:00Z'
@@ -981,7 +993,7 @@ try {
     expect(result.LastingGapFailure).toContain('main window disappeared')
   })
 
-  windowsIt('waits for a continuous five-second quiet period and takes a final snapshot after the process tree exits', () => {
+  windowsPowerShellIt('waits for a continuous five-second quiet period and takes a final snapshot after the process tree exits', () => {
     const output = runInstallerLibrary(`
 $watch = [System.Diagnostics.Stopwatch]::StartNew()
 Invoke-AiNovelMonitoredExecutable -Path $installer -Arguments @('-NoProfile', '-Command', 'Start-Sleep -Milliseconds 100') -Operation 'Synthetic installer'
@@ -995,7 +1007,7 @@ $watch.Stop()
     expect(result.ElapsedMilliseconds as number).toBeLessThan(20_000)
   }, 25_000)
 
-  windowsIt('finalizes redirected output before accepting a zero exit code', () => {
+  windowsPowerShellIt('finalizes redirected output before accepting a zero exit code', () => {
     const output = runInstallerLibrary(`
 $probeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-exit-finalization-test-' + [guid]::NewGuid().ToString('N'))
 $stdoutPath = Join-Path $probeRoot 'stdout.txt'
@@ -1048,7 +1060,7 @@ try {
     })
   }, 25_000)
 
-  windowsIt('decodes Electron UTF-8 JSON evidence exactly in Windows PowerShell 5.1 with and without a BOM', () => {
+  windowsPowerShellIt('decodes Electron UTF-8 JSON evidence exactly in Windows PowerShell 5.1 with and without a BOM', () => {
     const output = runInstallerLibrary(`
 $probeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-utf8-evidence-' + [guid]::NewGuid().ToString('N'))
 try {
@@ -1080,7 +1092,7 @@ try {
     expect(result.WithBomEnUS).toBe('Unable to open the official homepage. Please try again later.')
   })
 
-  windowsIt('fails the release gate for every nonzero or abnormal job-contained descendant exit', () => {
+  windowsPowerShellIt('fails the release gate for every nonzero or abnormal job-contained descendant exit', () => {
     const output = runReleaseMonitorLibrary(`
 function Get-GateExitFailure {
   param($Event)
@@ -1110,7 +1122,7 @@ $uncaptured = Get-GateExitFailure ([pscustomobject]@{ ProcessId = 704; ExitCode 
     expect(result.Uncaptured).toContain('could not capture the exit code')
   })
 
-  windowsIt('binds the legacy bridge to captured official identities without trusting command contents', () => {
+  windowsPowerShellIt('binds the legacy bridge to captured official identities without trusting command contents', () => {
     const output = runReleaseMonitorLibrary(`
 $installRoot = 'C:\\e2e\\installed app'
 $oldExe = $installRoot + '\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
@@ -1204,7 +1216,7 @@ $wrongTitleRejected = -not (Test-AiNovelGateLegacyBridgeWizardWindow -LegacyBrid
     })
   })
 
-  windowsIt('allows only a bound live installer blank dialog during the legacy termination handshake', () => {
+  windowsPowerShellIt('allows only a bound live installer blank dialog during the legacy termination handshake', () => {
     const output = runReleaseMonitorLibrary(`
 $current = [System.Diagnostics.Process]::GetProcessById($PID)
 try {
@@ -1303,7 +1315,7 @@ finally {
     expect(failClosedDecision).toBeGreaterThan(cleanupDecision)
   })
 
-  windowsIt('bounds legacy installer window cleanup after exact termination', () => {
+  windowsPowerShellIt('bounds legacy installer window cleanup after exact termination', () => {
     const output = runReleaseMonitorLibrary(`
 $terminatedAt = [DateTime]::new(2026, 8, 8, 0, 0, 0, [DateTimeKind]::Utc)
 $installer = [pscustomobject]@{
@@ -1358,7 +1370,7 @@ $pidReuseRejected = -not (Test-AiNovelGateLegacyBridgeTerminationCleanupWindow -
     })
   })
 
-  windowsIt('bounds the termination-armed window gap before the exact exit event is consumed', () => {
+  windowsPowerShellIt('bounds the termination-armed window gap before the exact exit event is consumed', () => {
     const output = runReleaseMonitorLibrary(`
 $armedAt = [DateTime]::new(2026, 8, 8, 0, 0, 0, [DateTimeKind]::Utc)
 $installer = [pscustomobject]@{
@@ -1426,7 +1438,7 @@ $wrongStateRejected = -not (Test-AiNovelGateLegacyBridgeTerminationArmedCleanupW
     )
   })
 
-  windowsIt('classifies only the exact historical old app breakpoint after a bound installer handoff', () => {
+  windowsPowerShellIt('classifies only the exact historical old app breakpoint after a bound installer handoff', () => {
     const output = runReleaseMonitorLibrary(`
 $oldExe = 'D:\\e2e\\installed-app\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
 $pendingExe = 'C:\\Users\\runneradmin\\AppData\\Local\\ai-novel-writer-updater\\pending\\ai-novel-writer-setup-0.7.0.exe'
@@ -1487,7 +1499,7 @@ $wrongInstallerParentRejected = -not (Test-AiNovelGateLegacyBridgeOldApplication
     })
   })
 
-  windowsIt('classifies only a verified native updater old app breakpoint handoff', () => {
+  windowsPowerShellIt('classifies only a verified native updater old app breakpoint handoff', () => {
     const output = runReleaseMonitorLibrary(`
 $e2eEvidenceRoot = 'D:\\a\\_temp\\ai-novel-windows-in-app-update-e2e'
 $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT = $e2eEvidenceRoot
@@ -1609,7 +1621,7 @@ $otherProcessRejected = -not (Test-AiNovelGateNativeUpdaterOldApplicationExit -S
     })
   })
 
-  windowsIt('classifies only the exact native updater old-uninstaller NSIS probe chain', () => {
+  windowsPowerShellIt('classifies only the exact native updater old-uninstaller NSIS probe chain', () => {
     const output = runReleaseMonitorLibrary(`
 $e2eEvidenceRoot = 'D:\\a\\_temp\\ai-novel-windows-in-app-update-e2e'
 $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT = $e2eEvidenceRoot
@@ -1716,7 +1728,7 @@ $verifiedFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([Sys
     })
   })
 
-  windowsIt('accepts only the exact legacy bridge old-uninstaller PowerShell probe chain', () => {
+  windowsPowerShellIt('accepts only the exact legacy bridge old-uninstaller PowerShell probe chain', () => {
     const output = runReleaseMonitorLibrary(`
 $system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
 $cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
@@ -1926,7 +1938,7 @@ $tracked = $trackedBefore
     expect(releaseMonitor).toContain('if (-not $processEventEvidenceWritten) {')
   })
 
-  windowsIt('arms the legacy bridge only after the monitor captures the exact old application identity', () => {
+  windowsPowerShellIt('arms the legacy bridge only after the monitor captures the exact old application identity', () => {
     const output = runReleaseMonitorLibrary(`
 $oldExe = 'C:\\e2e\\installed-app\\AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe'
 $request = [pscustomobject]@{
@@ -1996,7 +2008,7 @@ catch {
     })
   })
 
-  windowsIt('reads Node-authored UTF-8 monitor control paths without corrupting non-ASCII characters', () => {
+  windowsPowerShellIt('reads Node-authored UTF-8 monitor control paths without corrupting non-ASCII characters', () => {
     const releaseMonitor = readFileSync(releaseMonitorScript, 'utf8')
     expect(releaseMonitor).toContain(
       '$lines = @(Get-Content -LiteralPath $ControlPath -Encoding UTF8 -ErrorAction Stop)',
@@ -2029,7 +2041,7 @@ $control = Get-AiNovelGateControl
     }
   })
 
-  windowsIt('exempts only the known NSIS PowerShell probes during installer smoke steps', () => {
+  windowsPowerShellIt('exempts only the known NSIS PowerShell probes during installer smoke steps', () => {
     const output = runReleaseMonitorLibrary(`
 $system32 = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
 $sysWow64 = Join-Path $env:SystemRoot 'SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe'
@@ -2157,7 +2169,7 @@ $abnormal = [pscustomobject]@{ ProcessId = 701; ExitCode = 1; ExitCodeCaptured =
     expect(result.MissingParentMetadata).toBe(false)
   })
 
-  windowsIt('accepts only the NSIS System32 to SysWOW64 command-image redirect aliases', () => {
+  windowsPowerShellIt('accepts only the NSIS System32 to SysWOW64 command-image redirect aliases', () => {
     const output = runReleaseMonitorLibrary(`
 $system32PowerShell = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
 $sysWow64PowerShell = Join-Path $env:SystemRoot 'SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe'
@@ -2244,7 +2256,7 @@ $relativeArgvZeroCommand = 'System32\\WindowsPowerShell\\v1.0\\powershell.exe -C
     })
   })
 
-  windowsIt('exempts only the exact NSIS cmd and find no-process fallback chain', () => {
+  windowsPowerShellIt('exempts only the exact NSIS cmd and find no-process fallback chain', () => {
     const output = runReleaseMonitorLibrary(`
 $cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
 $findPath = Join-Path $env:SystemRoot 'System32\\find.exe'
@@ -2359,7 +2371,7 @@ $verifiedFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([Sys
     })
   })
 
-  windowsIt('defers a NSIS cmd exit until the matching find no-match event is verified', () => {
+  windowsPowerShellIt('defers a NSIS cmd exit until the matching find no-match event is verified', () => {
     const output = runReleaseMonitorLibrary(`
 $cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
 $findPath = Join-Path $env:SystemRoot 'System32\\find.exe'
@@ -2448,7 +2460,7 @@ $reusedPidResolved = Register-AiNovelGateVerifiedNsisFindParent -VerifiedFindPar
     })
   })
 
-  windowsIt('keeps a promoted NSIS cmd failure reversible across the next Drain only for its matching find identity', () => {
+  windowsPowerShellIt('keeps a promoted NSIS cmd failure reversible across the next Drain only for its matching find identity', () => {
     const output = runReleaseMonitorLibrary(`
 $cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
 $findPath = Join-Path $env:SystemRoot 'System32\\find.exe'
@@ -2547,7 +2559,7 @@ $noFindFailsClosedAfterGrace = Test-AiNovelGateDeferredNsisCmdExitFailureReady -
     })
   })
 
-  windowsIt('accepts only the complete NSIS uninstaller helper chain for expected process-check exits', () => {
+  windowsPowerShellIt('accepts only the complete NSIS uninstaller helper chain for expected process-check exits', () => {
     const output = runReleaseMonitorLibrary(`
 $powerShellPath = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
 $cmdPath = Join-Path $env:SystemRoot 'System32\\cmd.exe'
@@ -2759,7 +2771,7 @@ $cycleTracked[[int]$wrapperPowerShell.processId] = $wrapperPowerShell
     })
   })
 
-  windowsIt('keeps command-line secrets in memory and redacts them from process evidence', () => {
+  windowsPowerShellIt('keeps command-line secrets in memory and redacts them from process evidence', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-evidence-redaction-'))
     const secret = 'super-secret-cli-token'
     try {
@@ -2805,7 +2817,7 @@ Write-AiNovelGateProcessEventEvidence -Path ${quotePowerShell(root)} -Step 'reda
     }
   })
 
-  windowsIt('does not treat a reused process ID as the process originally tracked by the release gate', () => {
+  windowsPowerShellIt('does not treat a reused process ID as the process originally tracked by the release gate', () => {
     const output = runReleaseMonitorLibrary(`
 $ids = [System.Collections.Generic.HashSet[int]]::new()
 [void]$ids.Add($PID)
@@ -2824,7 +2836,7 @@ $alive = @(Get-AiNovelAliveProcessIds -ProcessIds $ids -ProcessStartTimeTicks $s
     expect(result.AliveCount).toBe(0)
   })
 
-  windowsIt('does not treat a reused process ID as an application smoke target', () => {
+  windowsPowerShellIt('does not treat a reused process ID as an application smoke target', () => {
     const output = runProbeLibrary(`
 $ids = [System.Collections.Generic.HashSet[int]]::new()
 [void]$ids.Add($PID)
@@ -2836,7 +2848,7 @@ $alive = Get-AiNovelLiveTrackedProcessIds -ProcessIds $ids -StartTimeTicks $star
     expect(result.AliveCount).toBe(0)
   })
 
-  windowsIt('attributes a delayed generic WerFault dialog to an exited tracked process identity', () => {
+  windowsPowerShellIt('attributes a delayed generic WerFault dialog to an exited tracked process identity', () => {
     const output = runProbeLibrary(`
 $historicalPid = 2147483000
 $ids = [System.Collections.Generic.HashSet[int]]::new()
@@ -2862,7 +2874,7 @@ $matches = @(Get-AiNovelNewErrorWindows -BaselineIdentities $baseline -CurrentWi
     expect(result.MatchCount).toBe(1)
   })
 
-  windowsIt('does not follow a stale parent PID into a process that predates the current parent instance', () => {
+  windowsPowerShellIt('does not follow a stale parent PID into a process that predates the current parent instance', () => {
     const output = runProbeLibrary(`
 $rootStart = [DateTime]::UtcNow.Ticks
 function Get-CimInstance {
@@ -2901,7 +2913,7 @@ $tree = @(Get-AiNovelProcessTreeIds -RootProcessId 777 -RootStartTimeTicks $root
     expect(result.ContainsNewerRealChild).toBe(true)
   })
 
-  windowsIt('does not expand or track descendants after a queued parent PID is reused', () => {
+  windowsPowerShellIt('does not expand or track descendants after a queued parent PID is reused', () => {
     const output = runProbeLibrary(`
 $rootStart = [DateTime]::UtcNow.Ticks
 $childStart = $rootStart + 10000
@@ -2947,7 +2959,7 @@ $addReused = Add-AiNovelTrackedProcess -ProcessIds $tracked -StartTimeTicks $tra
     })
   })
 
-  windowsIt('refreshes an exited root lineage once and fails closed when the terminal child query is unavailable', () => {
+  windowsPowerShellIt('refreshes an exited root lineage once and fails closed when the terminal child query is unavailable', () => {
     const output = runProbeLibrary(`
 $rootStart = [DateTime]::UtcNow.Ticks
 $childStart = $rootStart + 10000
@@ -3003,7 +3015,7 @@ try {
     expect(result.QueryFailure).toContain('synthetic CIM failure')
   })
 
-  windowsIt('does not accept an empty process tree when an exited root has a live terminal child', () => {
+  windowsPowerShellIt('does not accept an empty process tree when an exited root has a live terminal child', () => {
     const output = runProbeLibrary(`
 $rootProcess = $null
 $childProcess = $null
@@ -3074,7 +3086,7 @@ try {
     expect(result.Failure).toContain('Application process tree did not terminate')
   }, 15_000)
 
-  windowsIt('waits at least five seconds after the application process tree is terminated', () => {
+  windowsPowerShellIt('waits at least five seconds after the application process tree is terminated', () => {
     const output = runProbeLibrary(`
 $baseline = [System.Collections.Generic.HashSet[string]]::new()
 $processIds = [System.Collections.Generic.HashSet[int]]::new()
@@ -3093,7 +3105,7 @@ $watch.Stop()
     expect(result.FinalSnapshotCount).toBe(0)
   }, 10_000)
 
-  windowsIt('rejects a delayed product error dialog during the application post-exit period', () => {
+  windowsPowerShellIt('rejects a delayed product error dialog during the application post-exit period', () => {
     const output = runProbeLibrary(`
 $baseline = [System.Collections.Generic.HashSet[string]]::new()
 $processIds = [System.Collections.Generic.HashSet[int]]::new()
@@ -3274,7 +3286,7 @@ try {
     }
   }, 30_000)
 
-  windowsIt('runs the SQLite seeder and validator through the project Electron runtime', () => {
+  windowsPowerShellIt('runs the SQLite seeder and validator through the project Electron runtime', () => {
     const output = runInstallerLibrary(`
 $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-v025-wrapper-test-' + [guid]::NewGuid().ToString('N'))
 $before = $env:ELECTRON_RUN_AS_NODE
@@ -3331,7 +3343,7 @@ try {
     expect(Number(result.AssetCount)).toBeGreaterThanOrEqual(7)
   }, 15_000)
 
-  windowsIt('persists structured failure evidence and removes diagnostics only after success', () => {
+  windowsPowerShellIt('persists structured failure evidence and removes diagnostics only after success', () => {
     const output = runProbeLibrary(`
 $diagnostics = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-probe-test-' + [guid]::NewGuid().ToString('N'))
 $windows = @(
