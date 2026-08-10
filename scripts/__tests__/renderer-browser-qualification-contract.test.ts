@@ -35,6 +35,10 @@ describe('renderer browser qualification contract', () => {
     )
     expect(browserConfig).toContain("include: ['src/**/*.browser.tsx']")
     expect(browserConfig).not.toContain('.browser.test.tsx')
+    expect(browserConfig).toContain("api: { host: '127.0.0.1' }")
+    expect(browserConfig).not.toMatch(/api:\s*\{[^}]*\bport\s*:/s)
+    expect(browserConfig).toContain('provider: playwright(')
+    expect(browserConfig).toContain('headless: true')
   })
 
   it.each([

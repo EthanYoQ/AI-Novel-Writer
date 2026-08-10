@@ -19,6 +19,7 @@ export default defineConfig({
     setupFiles: ['test/setup-locale.ts'],
     browser: {
       enabled: true,
+      api: { host: '127.0.0.1' },
       provider: playwright(executablePath ? { launchOptions: { executablePath } } : undefined),
       instances: [{ browser: 'chromium' }],
       headless: true,
