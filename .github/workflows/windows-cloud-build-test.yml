@@ -17,6 +17,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
@@ -30,14 +33,28 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Initialize frozen Windows release evidence
+        shell: pwsh
+        run: |
+          $checkedOutSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($checkedOutSha -ne $env:GITHUB_SHA.ToLowerInvariant()) {
+            throw "Checked-out SHA mismatch: expected $env:GITHUB_SHA, got $checkedOutSha"
+          }
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "ai-novel-release-evidence-$env:GITHUB_RUN_ID"
+          node scripts/release-evidence-v2.mjs init --platform windows --evidence-root "$evidenceRoot" --repository "$env:GITHUB_REPOSITORY" --commit "$env:GITHUB_SHA" --run-id "$env:GITHUB_RUN_ID" --run-attempt "$env:GITHUB_RUN_ATTEMPT" --runner-label 'windows-2022' --image-os "$env:ImageOS" --image-version "$env:ImageVersion" --expected-node-version 22.23.1 --expected-pnpm-version 11.11.0 --workflow-path '.github/workflows/windows-cloud-build-test.yml' --workflow-name 'Windows cloud package qualification' --actor "$env:GITHUB_ACTOR" --event "$env:GITHUB_EVENT_NAME" --dispatch-inputs-json '{}'
+          "AI_NOVEL_RELEASE_EVIDENCE_ROOT=$evidenceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
+        shell: pwsh
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$env:AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step install-locked-dependencies -- "$env:ComSpec" /d /s /c "pnpm install --frozen-lockfile"
 
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install chromium
+        shell: pwsh
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$env:AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step install-playwright-chromium -- "$env:ComSpec" /d /s /c "pnpm exec playwright install chromium"
 
       - name: Run renderer browser tests
-        run: pnpm run test:browser
+        shell: pwsh
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$env:AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step renderer-browser-tests -- "$env:ComSpec" /d /s /c "pnpm run test:browser"
 
       - name: Download verified v0.2.5 portable migration input
         shell: pwsh
@@ -54,7 +71,9 @@ jobs:
 
       - name: Run complete Windows release gate
         shell: pwsh
-        run: pnpm run build:win
+        env:
+          AI_NOVEL_RELEASE_EVIDENCE_COMMAND_TIMEOUT_MS: '2700000'
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$env:AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step complete-windows-release-gate -- "$env:ComSpec" /d /s /c "pnpm run build:win"
 
       - name: Record verified toolchain
         if: ${{ success() }}
@@ -70,10 +89,12 @@ jobs:
           }
           "AI_NOVEL_CLOUD_BUILD_PNPM_VERSION=$pnpmVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Generate reproducibility manifest
+      - name: Finalize Windows release evidence
         if: ${{ success() }}
         shell: pwsh
-        run: node scripts/generate-cloud-build-manifest.mjs
+        run: |
+          $version = [string](Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          node scripts/release-evidence-v2.mjs finalize --platform windows --evidence-root "$env:AI_NOVEL_RELEASE_EVIDENCE_ROOT" --release-root "release/$version"
 
       - name: Collect Windows build diagnostics
         if: ${{ always() }}
@@ -88,8 +109,28 @@ jobs:
             "pnpm=$(pnpm --version)"
             "runnerImage=$env:ImageOS $env:ImageVersion"
           ) | Set-Content -LiteralPath (Join-Path $diagnosticsRoot 'environment.txt') -Encoding utf8
+          if (-not [string]::IsNullOrWhiteSpace($env:AI_NOVEL_RELEASE_EVIDENCE_ROOT)) {
+            foreach ($name in @('release-contract.json', 'run-ledger.json')) {
+              $source = Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT $name
+              if (Test-Path -LiteralPath $source -PathType Leaf) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $diagnosticsRoot $name) -Force
+              }
+            }
+            $acceptanceRoot = Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance'
+            foreach ($name in @('install.json', 'launch.json', 'quiet-window.json', 'error-dialogs.json', 'uninstall.json', 'upgrade-data.json', 'native-abi.json', 'packaged-smoke.json', 'signing.json')) {
+              $source = Join-Path $acceptanceRoot $name
+              if (Test-Path -LiteralPath $source -PathType Leaf) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $diagnosticsRoot "acceptance-$name") -Force
+              }
+            }
+          }
           Get-ChildItem -Path ([System.IO.Path]::GetTempPath()) -Directory -Filter 'ai-novel-release-gate-*' -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $diagnosticsRoot $_.Name) -Recurse -Force -ErrorAction Continue
+            foreach ($name in @('orchestrator-failures.jsonl', 'monitor-status.json')) {
+              $source = Join-Path $_.FullName "evidence\$name"
+              if (Test-Path -LiteralPath $source -PathType Leaf) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $diagnosticsRoot "$($_.Name)-$name") -Force -ErrorAction Continue
+              }
+            }
           }
 
       - name: Upload runtime-verified Windows package
@@ -105,9 +146,12 @@ jobs:
             release/*/latest.yml
             release/*/manifest.json
             release/*/SHA256SUMS.txt
+            release/*/qualification/release-contract.json
+            release/*/qualification/run-ledger.json
             release/*/qualification/packaged-vector-smoke.json
             release/*/qualification/packaged-official-homepage-smoke.json
             release/*/qualification/packaged-skin-smoke.json
+            release/*/qualification/acceptance/*.json
 
       - name: Upload Windows build diagnostics
         if: ${{ failure() }}

@@ -21,6 +21,24 @@ export interface LLMCompletion {
   finishReason: LLMFinishReason
 }
 
+type WorkflowLLMOptions = {
+  responseFormat?: { type: string }
+  thinking?: boolean
+  maxTokens?: number
+  purpose?: string
+}
+
+function boundedCompletionOptions(options: WorkflowLLMOptions | undefined): WorkflowLLMOptions | undefined {
+  if (!options) return undefined
+  const { responseFormat, thinking, maxTokens, purpose } = options
+  return {
+    ...(responseFormat === undefined ? {} : { responseFormat }),
+    ...(thinking === undefined ? {} : { thinking }),
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    ...(purpose === undefined ? {} : { purpose }),
+  }
+}
+
 /**
  * 工作流执行环节的抽象基类 (Command Pattern)
  * 将原本混乱的 workflow 闭包拆分为可独立测试、状态解耦的命令单元。
@@ -35,7 +53,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     prompt: string, 
     systemPrompt: string, 
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string },
+    options?: WorkflowLLMOptions,
     context?: WorkflowContext
   ): Promise<string> {
     const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
@@ -54,10 +72,11 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     systemPrompt: string,
     callbacks: StepCallbacks,
     continuation: { mode: BoundedCompletionMode; maxContinuations: number },
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string },
+    options?: WorkflowLLMOptions,
     context?: WorkflowContext,
   ): Promise<string> {
-    const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
+    const requestOptions = boundedCompletionOptions(options)
+    const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, requestOptions, context)
     const llmStore = useLLMStore.getState()
     const model = llmStore.models.find(candidate => candidate.id === llmStore.defaultModelId)
     return completeBoundedCompletion({
@@ -71,7 +90,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
         contextWindowTokens: model?.provider === 'ollama'
           ? null
           : (model?.capabilities?.contextWindowTokens ?? null),
-        maxOutputTokens: options?.maxTokens
+        maxOutputTokens: requestOptions?.maxTokens
           ?? model?.capabilities?.maxOutputTokens
           ?? model?.maxTokens
           ?? null,
@@ -83,7 +102,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
         continuationPrompt,
         systemPrompt,
         callbacks,
-        options,
+        requestOptions,
         context,
       ),
     })
@@ -98,7 +117,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     prompt: string,
     systemPrompt: string,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string },
+    options?: WorkflowLLMOptions,
     context?: WorkflowContext,
   ): Promise<LLMCompletion> {
     this.assertNotCancelled(context)

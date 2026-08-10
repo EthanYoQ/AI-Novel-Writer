@@ -13,21 +13,25 @@ import {
   verifyPromotion,
   verifyRemoteReleaseAssets,
 } from '../promote-cross-platform-runtime-artifacts.mjs'
-import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
+import { COMMAND_PROFILES, finalizeReleaseEvidence, initializeReleaseEvidence, recordReleaseCommand } from '../release-evidence-v2.mjs'
+import { macosAcceptanceReceipt, windowsAcceptanceReceipt } from './release-evidence-v2-fixtures'
 
 const repository = 'EthanYoQ/AI-Novel-Writer'
 const expectedSha = 'a'.repeat(40)
 const futureExpiry = new Date(Date.now() + 60_000).toISOString()
+const QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS = 15_000
 
 function successfulRun(id: number, workflowId: number, name: string, path: string) {
   return {
     id,
+    run_attempt: 2,
     workflow_id: workflowId,
     name,
     path: `${path}@refs/heads/master`,
     status: 'completed',
     conclusion: 'success',
     event: 'workflow_dispatch',
+    actor: { login: 'release-operator' },
     head_sha: expectedSha,
     head_branch: 'master',
     head_repository: { full_name: repository },
@@ -42,6 +46,29 @@ function sha256(content: Buffer): string {
   return createHash('sha256').update(content).digest('hex')
 }
 
+function readyQualification() {
+  return {
+    windows: {
+      runId: 101,
+      runAttempt: 1,
+      artifactId: 1001,
+      artifactDigest: `sha256:${'1'.repeat(64)}`,
+      contractSha256: '2'.repeat(64),
+      ledgerSha256: '3'.repeat(64),
+      manifestSha256: '4'.repeat(64),
+    },
+    macos: {
+      runId: 202,
+      runAttempt: 1,
+      artifactId: 2002,
+      artifactDigest: `sha256:${'5'.repeat(64)}`,
+      contractSha256: '6'.repeat(64),
+      ledgerSha256: '7'.repeat(64),
+      manifestSha256: '8'.repeat(64),
+    },
+  }
+}
+
 function writeQualificationEvidence(root: string, relativePath: string, evidence: unknown): void {
   const file = path.join(root, ...relativePath.split('/'))
   mkdirSync(path.dirname(file), { recursive: true })
@@ -52,9 +79,10 @@ function writePromotionFixture(root: string, sourceRoot: string, includeWindowsS
   const packageMetadata = JSON.parse(readFileSync(path.join(sourceRoot, 'package.json'), 'utf8')) as { version: string }
   const version = packageMetadata.version
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim().toLowerCase()
-  const lockfileSha256 = canonicalPnpmLockfileSha256(path.join(sourceRoot, 'pnpm-lock.yaml'))
   const windowsRoot = path.join(root, 'windows')
   const macosRoot = path.join(root, 'macos')
+  const windowsEvidenceRoot = path.join(root, 'windows-evidence')
+  const macosEvidenceRoot = path.join(root, 'macos-evidence')
   mkdirSync(windowsRoot, { recursive: true })
   mkdirSync(macosRoot, { recursive: true })
 
@@ -64,21 +92,6 @@ function writePromotionFixture(root: string, sourceRoot: string, includeWindowsS
     ['latest.yml', Buffer.from(`version: ${version}\n`)],
   ])
   for (const [file, content] of windowsFiles) writeFileSync(path.join(windowsRoot, file), content)
-  const windowsArtifacts = [...windowsFiles].map(([file, content]) => ({ file, sizeBytes: content.length, sha256: sha256(content) }))
-  const windowsManifest = {
-    schemaVersion: 1,
-    commit,
-    lockfileSha256,
-    gateLevel: 'RUNTIME_VERIFIED',
-    releaseCreated: false,
-    artifacts: windowsArtifacts,
-  }
-  writeFileSync(path.join(windowsRoot, 'manifest.json'), `${JSON.stringify(windowsManifest)}\n`, 'utf8')
-  const windowsSums = [...windowsArtifacts, {
-    file: 'manifest.json',
-    sha256: sha256(readFileSync(path.join(windowsRoot, 'manifest.json'))),
-  }]
-  writeFileSync(path.join(windowsRoot, 'SHA256SUMS.txt'), windowsSums.map(record => `${record.sha256} *${record.file}`).join('\n') + '\n', 'utf8')
 
   const vectorEvidence = {
     schemaVersion: 1, kind: 'packaged-vector-smoke',
@@ -97,30 +110,41 @@ function writePromotionFixture(root: string, sourceRoot: string, includeWindowsS
   }
   writeQualificationEvidence(windowsRoot, 'qualification/packaged-vector-smoke.json', vectorEvidence)
   writeQualificationEvidence(windowsRoot, 'qualification/packaged-official-homepage-smoke.json', homepageEvidence)
-  if (includeWindowsSkinEvidence) writeQualificationEvidence(windowsRoot, 'qualification/packaged-skin-smoke.json', skinEvidence)
+  writeQualificationEvidence(windowsRoot, 'qualification/packaged-skin-smoke.json', skinEvidence)
+  initializeReleaseEvidence({
+    platform: 'windows',
+    evidenceRoot: windowsEvidenceRoot,
+    repository,
+    commit,
+    runId: '101',
+    runAttempt: '1',
+    runnerLabel: 'windows-2022',
+    imageOS: 'win22',
+    imageVersion: '20260726.1',
+    expectedNodeVersion: process.versions.node,
+    expectedPnpmVersion: '11.11.0',
+    workflowPath: '.github/workflows/windows-cloud-build-test.yml',
+    workflowName: 'Windows cloud package qualification',
+    actor: 'release-operator',
+    event: 'workflow_dispatch',
+    dispatchInputs: {},
+    root: sourceRoot,
+  })
+  for (const step of COMMAND_PROFILES.windows) {
+    recordReleaseCommand({ evidenceRoot: windowsEvidenceRoot, step, command: [process.execPath, '-e', ''], cwd: sourceRoot })
+  }
+  for (const receipt of ['install', 'launch', 'quiet-window', 'error-dialogs', 'uninstall', 'upgrade-data', 'native-abi', 'packaged-smoke', 'signing']) {
+    writeQualificationEvidence(windowsEvidenceRoot, `acceptance/${receipt}.json`, windowsAcceptanceReceipt(windowsRoot, version, receipt))
+  }
+  finalizeReleaseEvidence({ platform: 'windows', evidenceRoot: windowsEvidenceRoot, releaseRoot: windowsRoot })
+  if (!includeWindowsSkinEvidence) rmSync(path.join(windowsRoot, 'qualification', 'packaged-skin-smoke.json'))
 
   const dmg = `ai-novel-writer-mac-arm64-${version}-installer.dmg`
   const dmgBytes = Buffer.from('dmg')
   writeFileSync(path.join(macosRoot, dmg), dmgBytes)
-  const macosManifest = {
-    schemaVersion: 1,
-    platform: 'darwin',
-    arch: 'arm64',
-    commit,
-    lockfileSha256,
-    gateLevel: 'RUNTIME_VERIFIED',
-    releaseCreated: false,
-    dmgChecksum: `${dmg}.sha256`,
-    artifacts: [{ file: dmg, sizeBytes: dmgBytes.length, sha256: sha256(dmgBytes) }],
-  }
-  writeFileSync(path.join(macosRoot, 'manifest.json'), `${JSON.stringify(macosManifest)}\n`, 'utf8')
-  writeFileSync(path.join(macosRoot, `${dmg}.sha256`), `${sha256(dmgBytes)}  ${dmg}\n`, 'utf8')
-  writeFileSync(path.join(macosRoot, 'SHA256SUMS.txt'), [
-    `${sha256(dmgBytes)} *${dmg}`,
-    `${sha256(readFileSync(path.join(macosRoot, 'manifest.json')))} *manifest.json`,
-  ].join('\n') + '\n', 'utf8')
   writeQualificationEvidence(macosRoot, 'qualification/packaged-vector-smoke.json', vectorEvidence)
   writeQualificationEvidence(macosRoot, 'qualification/packaged-official-homepage-smoke.json', homepageEvidence)
+  writeQualificationEvidence(macosRoot, 'qualification/packaged-skin-smoke.json', skinEvidence)
   writeQualificationEvidence(macosRoot, 'qualification/macos-dmg-smoke.json', {
     schemaVersion: 1,
     kind: 'macos-dmg-smoke',
@@ -131,6 +155,32 @@ function writePromotionFixture(root: string, sourceRoot: string, includeWindowsS
     secureFileSystemHelper: 'security/darwin-safe-file-system',
     skinSmoke: true,
   })
+  initializeReleaseEvidence({
+    platform: 'macos',
+    evidenceRoot: macosEvidenceRoot,
+    repository,
+    commit,
+    runId: '202',
+    runAttempt: '1',
+    runnerLabel: 'macos-14',
+    imageOS: 'macos14',
+    imageVersion: '20260726.1',
+    expectedNodeVersion: process.versions.node,
+    expectedPnpmVersion: '11.11.0',
+    workflowPath: '.github/workflows/macos-arm64-cloud-build.yml',
+    workflowName: 'macOS ARM64 cloud package qualification',
+    actor: 'release-operator',
+    event: 'workflow_dispatch',
+    dispatchInputs: {},
+    root: sourceRoot,
+  })
+  for (const step of COMMAND_PROFILES.macos) {
+    recordReleaseCommand({ evidenceRoot: macosEvidenceRoot, step, command: [process.execPath, '-e', ''], cwd: sourceRoot })
+  }
+  for (const receipt of ['dmg-mount', 'packaged-smoke', 'signing']) {
+    writeQualificationEvidence(macosEvidenceRoot, `acceptance/${receipt}.json`, macosAcceptanceReceipt(macosRoot, version, receipt))
+  }
+  finalizeReleaseEvidence({ platform: 'macos', evidenceRoot: macosEvidenceRoot, releaseRoot: macosRoot })
 
   return {
     sourcePlan: {
@@ -140,6 +190,8 @@ function writePromotionFixture(root: string, sourceRoot: string, includeWindowsS
       expectedSha: commit,
       tag: `v${version}`,
       version,
+      windows: { runId: 101, runAttempt: 1, actor: 'release-operator', event: 'workflow_dispatch', workflow: { name: 'Windows cloud package qualification', path: '.github/workflows/windows-cloud-build-test.yml' }, artifact: { id: 1001, digest: `sha256:${'a'.repeat(64)}` } },
+      macos: { runId: 202, runAttempt: 1, actor: 'release-operator', event: 'workflow_dispatch', workflow: { name: 'macOS ARM64 cloud package qualification', path: '.github/workflows/macos-arm64-cloud-build.yml' }, artifact: { id: 2002, digest: `sha256:${'b'.repeat(64)}` } },
     },
   }
 }
@@ -174,11 +226,91 @@ describe('cross-platform artifact promotion planner', () => {
         qualifiedSource: sourceRoot,
         sourcePlan: fixture.sourcePlan,
         outputDirectory: path.join(root, 'output'),
-      })).toThrow('Windows qualification file set is not exact')
+      })).toThrow('Qualification bundle file set is not exact')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
-  })
+  }, QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS)
+
+  it('binds the promotion-ready package to both immutable evidence contracts and their raw hashes', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-evidence-binding-'))
+    const sourceRoot = path.resolve(import.meta.dirname, '..', '..')
+    try {
+      const fixture = writePromotionFixture(root, sourceRoot, true)
+
+      const ready = verifyPromotion({
+        windowsArtifactRoot: path.join(root, 'windows'),
+        macosArtifactRoot: path.join(root, 'macos'),
+        qualifiedSource: sourceRoot,
+        sourcePlan: fixture.sourcePlan,
+        outputDirectory: path.join(root, 'output'),
+      })
+
+      expect(ready).toMatchObject({
+        schemaVersion: 2,
+        state: 'READY_TO_PUBLISH',
+        qualification: {
+          windows: {
+            contractSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+            ledgerSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+          macos: {
+            contractSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+            ledgerSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        },
+      })
+      expect(ready.assets.map(asset => asset.file)).toEqual([
+        `ai-novel-writer-mac-arm64-${fixture.sourcePlan.version}-installer.dmg`,
+        `ai-novel-writer-mac-arm64-${fixture.sourcePlan.version}-installer.dmg.sha256`,
+        `ai-novel-writer-setup-${fixture.sourcePlan.version}.exe`,
+        `ai-novel-writer-setup-${fixture.sourcePlan.version}.exe.blockmap`,
+        'latest.yml',
+      ].sort())
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS)
+
+  it('rejects workflow evidence whose actor differs from the GitHub qualification run', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-workflow-identity-'))
+    const sourceRoot = path.resolve(import.meta.dirname, '..', '..')
+    try {
+      const fixture = writePromotionFixture(root, sourceRoot, true)
+      const windows = fixture.sourcePlan.windows as { actor: string }
+      windows.actor = 'different-operator'
+
+      expect(() => verifyPromotion({
+        windowsArtifactRoot: path.join(root, 'windows'),
+        macosArtifactRoot: path.join(root, 'macos'),
+        qualifiedSource: sourceRoot,
+        sourcePlan: fixture.sourcePlan,
+        outputDirectory: path.join(root, 'output'),
+      })).toThrow('Release evidence contract actor does not match the qualification run')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS)
+
+  it('rejects internally consistent evidence from a different GitHub run attempt', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-run-attempt-'))
+    const sourceRoot = path.resolve(import.meta.dirname, '..', '..')
+    try {
+      const fixture = writePromotionFixture(root, sourceRoot, true)
+      const windows = fixture.sourcePlan.windows as { runAttempt: number }
+      windows.runAttempt = 2
+
+      expect(() => verifyPromotion({
+        windowsArtifactRoot: path.join(root, 'windows'),
+        macosArtifactRoot: path.join(root, 'macos'),
+        qualifiedSource: sourceRoot,
+        sourcePlan: fixture.sourcePlan,
+        outputDirectory: path.join(root, 'output'),
+      })).toThrow('Release evidence contract run attempt does not match the qualification run')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS)
 
   it('selects exactly one immutable Windows and macOS artifact from matching default-branch runs', async () => {
     const responses = new Map<string, unknown>([
@@ -188,13 +320,14 @@ describe('cross-platform artifact promotion planner', () => {
       [`/compare/${expectedSha}...master`, { status: 'identical', merge_base_commit: { sha: expectedSha }, base_commit: { sha: expectedSha } }],
       [`/actions/workflows/11`, { id: 11, name: 'Windows cloud package qualification', path: '.github/workflows/windows-cloud-build-test.yml' }],
       [`/actions/workflows/22`, { id: 22, name: 'macOS ARM64 cloud package qualification', path: '.github/workflows/macos-arm64-cloud-build.yml' }],
-      [`/actions/runs/101/artifacts?per_page=100`, { total_count: 1, artifacts: [{ id: 1001, name: 'windows-cloud-build-runtime-verified', expired: false, size_in_bytes: 1, expires_at: futureExpiry, workflow_run: { id: 101, head_sha: expectedSha } }] }],
-      [`/actions/runs/202/artifacts?per_page=100`, { total_count: 1, artifacts: [{ id: 2002, name: 'macos-arm64-cloud-build-runtime-verified', expired: false, size_in_bytes: 1, expires_at: futureExpiry, workflow_run: { id: 202, head_sha: expectedSha } }] }],
+      [`/actions/runs/101/artifacts?per_page=100`, { total_count: 1, artifacts: [{ id: 1001, name: 'windows-cloud-build-runtime-verified', digest: `sha256:${'a'.repeat(64)}`, expired: false, size_in_bytes: 1, expires_at: futureExpiry, workflow_run: { id: 101, head_sha: expectedSha } }] }],
+      [`/actions/runs/202/artifacts?per_page=100`, { total_count: 1, artifacts: [{ id: 2002, name: 'macos-arm64-cloud-build-runtime-verified', digest: `sha256:${'b'.repeat(64)}`, expired: false, size_in_bytes: 1, expires_at: futureExpiry, workflow_run: { id: 202, head_sha: expectedSha } }] }],
     ])
     const fetcher = async (url: string) => {
       const parsed = new URL(url)
       const key = parsed.pathname.replace(`/repos/${repository}`, '') + parsed.search
       if (parsed.pathname.endsWith(`/git/ref/tags/v0.5.1`)) return { ok: false, status: 404, json: async () => ({}) }
+      if (parsed.pathname.endsWith(`/releases/tags/v0.5.1`)) return { ok: false, status: 404, json: async () => ({}) }
       const response = responses.get(key)
       if (!response) throw new Error(`Unexpected request: ${key}`)
       return jsonResponse(response)
@@ -215,8 +348,36 @@ describe('cross-platform artifact promotion planner', () => {
 
     expect(plan.windows.artifact.id).toBe(1001)
     expect(plan.macos.artifact.id).toBe(2002)
+    expect(plan.windows).toMatchObject({
+      runAttempt: 2,
+      actor: 'release-operator',
+      event: 'workflow_dispatch',
+      workflow: { name: 'Windows cloud package qualification', path: '.github/workflows/windows-cloud-build-test.yml' },
+    })
+    expect(plan.macos).toMatchObject({
+      runAttempt: 2,
+      actor: 'release-operator',
+      event: 'workflow_dispatch',
+      workflow: { name: 'macOS ARM64 cloud package qualification', path: '.github/workflows/macos-arm64-cloud-build.yml' },
+    })
     expect(plan.expectedSha).toBe(expectedSha)
     expect(plan.version).toBe('0.5.1')
+    expect(plan.draftState).toBe('unknown')
+
+    const windowsRun = responses.get('/actions/runs/101') as { run_attempt?: number }
+    delete windowsRun.run_attempt
+    await expect(planPromotion({
+      inputs: {
+        repository,
+        windowsQualificationRunId: '101',
+        macosQualificationRunId: '202',
+        expectedSha,
+        tag: 'v0.5.1',
+        confirmation: PROMOTION_CONFIRMATION,
+      },
+      fetcher,
+      token: 'test-token',
+    })).rejects.toThrow('Windows qualification run attempt is missing or invalid')
   })
 
   it('requires the complete, byte-verified remote asset inventory before publication', () => {
@@ -236,62 +397,63 @@ describe('cross-platform artifact promotion planner', () => {
       .toThrow('Remote release asset file set is not exact')
   })
 
-  it('generates bilingual v0.8.0 major-release notes for the structured-character-roster root-cause fix', () => {
-    const body = releaseNotes('0.8.0')
+  it('generates bilingual v0.8.1 major-release notes for the three issue fixes', () => {
+    const body = releaseNotes('0.8.1')
 
     expect(body).toContain('## 中文')
     expect(body).toContain('## English')
-    expect(body).toContain('AI 小说作家 0.8.0')
-    expect(body).toContain('AI Novel Writer 0.8.0')
+    expect(body).toContain('AI 小说作家 0.8.1')
+    expect(body).toContain('AI Novel Writer 0.8.1')
     expect(body).toContain('重大更新')
     expect(body).toContain('major update')
-    expect(body).toContain('结构化角色名单')
-    expect(body).toContain('structured character roster')
-    expect(body).toContain('角色卡的唯一事实源')
-    expect(body).toContain('single source of truth for character cards')
-    expect(body).toContain('一次结构化输出')
-    expect(body).toContain('one structured output')
-    expect(body).toContain('SQLite 原子提交')
-    expect(body).toContain('SQLite atomic commit')
-    expect(body).toContain('回读成功后')
-    expect(body).toContain('read-back succeeds')
-    expect(body).toContain('旧项目必须显式安全迁移')
-    expect(body).toContain('legacy projects require an explicit safe migration')
-    expect(body).toContain('导入、手工编辑、蓝图同步、定稿和清除')
-    expect(body).toContain('Imports, manual edits, blueprint synchronization, finalization, and clearing')
-    expect(body).toContain('统一的角色名单 seam')
-    expect(body).toContain('one roster seam')
-    expect(body).toContain('从根源修复 #76')
-    expect(body).toContain('fixing #76 at the source')
+    expect(body).toContain('#78')
+    expect(body).toContain('用户配置温度')
+    expect(body).toContain('user-configured temperature')
+    expect(body).toContain('Kimi')
+    expect(body).toContain('#84')
+    expect(body).toContain('旧角色')
+    expect(body).toContain('legacy character')
+    expect(body).toContain('侧边栏')
+    expect(body).toContain('sidebar')
+    expect(body).toContain('#85')
+    expect(body).toContain('有界续写')
+    expect(body).toContain('bounded continuation')
+    expect(body).toContain('不完整')
+    expect(body).toContain('incomplete')
+    expect(body).toContain('不落盘')
+    expect(body).toContain('not persisted')
     expect(body).toContain('五项资产')
     expect(body).toContain('five assets')
-    expect(body).toContain('ai-novel-writer-setup-0.8.0.exe')
-    expect(body).toContain('ai-novel-writer-setup-0.8.0.exe.blockmap')
+    expect(body).toContain('ai-novel-writer-setup-0.8.1.exe')
+    expect(body).toContain('ai-novel-writer-setup-0.8.1.exe.blockmap')
     expect(body).toContain('latest.yml')
-    expect(body).toContain('ai-novel-writer-mac-arm64-0.8.0-installer.dmg')
-    expect(body).toContain('ai-novel-writer-mac-arm64-0.8.0-installer.dmg.sha256')
+    expect(body).toContain('ai-novel-writer-mac-arm64-0.8.1-installer.dmg')
+    expect(body).toContain('ai-novel-writer-mac-arm64-0.8.1-installer.dmg.sha256')
     expect(body).toContain('Windows x64')
     expect(body).toContain('Windows 安装包未签名')
     expect(body).toContain('Windows installer is not code-signed')
     expect(body).toContain('应用内更新')
     expect(body).toContain('in-app update')
-    expect(body).toContain('unsigned and not notarized')
-    expect(body).toContain('未签名、未公证')
+    expect(body).toContain('代码签名：未签名')
+    expect(body).toContain('Apple 公证：未公证')
+    expect(body).toContain('Code signing: unsigned')
+    expect(body).toContain('Apple notarization: not notarized')
     expect(body).toContain('macOS ARM64')
     expect(body).toContain('手动更新')
     expect(body).toContain('manual update')
   })
 
-  it('publishes after a newly created tag becomes readable without creating the tag twice', async () => {
+  it('creates and verifies the tag before creating a release draft', async () => {
     vi.useFakeTimers()
     const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-publish-'))
     const ready = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       state: 'READY_TO_PUBLISH',
       repository,
       expectedSha,
       tag: 'v0.5.1',
       version: '0.5.1',
+      qualification: readyQualification(),
       assets: [],
     }
     const draft = {
@@ -307,14 +469,22 @@ describe('cross-platform artifact promotion planner', () => {
     }
     let tagCreateRequests = 0
     let tagReadsAfterCreate = 0
+    let published = false
+    const mutationOrder: string[] = []
 
     try {
       writeFileSync(path.join(root, 'promotion-ready.json'), `${JSON.stringify(ready)}\n`, 'utf8')
       const fetcher = async (url: string, options: { method?: string } = {}) => {
         const parsed = new URL(url)
         const method = options.method ?? 'GET'
-        if (parsed.pathname.endsWith('/releases/tags/v0.5.1')) return jsonResponse(draft)
+        if (parsed.pathname.endsWith('/releases/tags/v0.5.1')) {
+          return { ok: false, status: 404, headers: new Headers(), json: async () => ({}) }
+        }
+        if (parsed.pathname.endsWith('/releases') && parsed.search === '?per_page=100') {
+          return { ok: true, status: 200, headers: new Headers(), json: async () => [] }
+        }
         if (parsed.pathname.endsWith('/git/refs') && method === 'POST') {
+          mutationOrder.push('tag')
           tagCreateRequests += 1
           return jsonResponse({ ref: `refs/tags/${ready.tag}`, object: { type: 'commit', sha: expectedSha } })
         }
@@ -324,7 +494,13 @@ describe('cross-platform artifact promotion planner', () => {
           if (tagReadsAfterCreate < 3) return { ok: false, status: 404, json: async () => ({}) }
           return jsonResponse({ ref: `refs/tags/${ready.tag}`, object: { type: 'commit', sha: expectedSha } })
         }
+        if (parsed.pathname.endsWith('/releases') && method === 'POST') {
+          mutationOrder.push('draft')
+          return jsonResponse(draft)
+        }
+        if (parsed.pathname.endsWith('/releases/123') && method === 'GET') return jsonResponse(published ? { ...draft, draft: false } : draft)
         if (parsed.pathname.endsWith('/releases/123') && method === 'PATCH') {
+          published = true
           return jsonResponse({ ...draft, draft: false })
         }
         throw new Error(`Unexpected request: ${method} ${parsed.pathname}`)
@@ -335,6 +511,7 @@ describe('cross-platform artifact promotion planner', () => {
       await vi.runAllTimersAsync()
       await result
       expect(tagCreateRequests).toBe(1)
+      expect(mutationOrder).toEqual(['tag', 'draft'])
     } finally {
       vi.useRealTimers()
       rmSync(root, { recursive: true, force: true })
@@ -344,12 +521,13 @@ describe('cross-platform artifact promotion planner', () => {
   it('recovers the unique matching draft from the complete release list when the tag endpoint returns 404', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-draft-fallback-'))
     const ready = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       state: 'READY_TO_PUBLISH',
       repository,
       expectedSha,
       tag: 'v0.5.1',
       version: '0.5.1',
+      qualification: readyQualification(),
       assets: [],
     }
     const draft = {
@@ -364,6 +542,7 @@ describe('cross-platform artifact promotion planner', () => {
       assets: [],
     }
     const mutationMethods: string[] = []
+    let published = false
 
     try {
       writeFileSync(path.join(root, 'promotion-ready.json'), `${JSON.stringify(ready)}\n`, 'utf8')
@@ -381,6 +560,10 @@ describe('cross-platform artifact promotion planner', () => {
           return jsonResponse({ ref: `refs/tags/${ready.tag}`, object: { type: 'commit', sha: expectedSha } })
         }
         if (parsed.pathname.endsWith('/releases/363065264') && method === 'PATCH') {
+          published = true
+          return jsonResponse({ ...draft, draft: false })
+        }
+        if (parsed.pathname.endsWith('/releases/363065264') && method === 'GET' && published) {
           return jsonResponse({ ...draft, draft: false })
         }
         throw new Error(`Unexpected request: ${method} ${parsed.pathname}${parsed.search}`)
@@ -389,6 +572,64 @@ describe('cross-platform artifact promotion planner', () => {
       await expect(publishPromotion({ readyRoot: root, token: 'test-token', fetcher }))
         .resolves.toMatchObject({ id: 363065264, draft: false })
       expect(mutationMethods).toEqual(['PATCH'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed when the authoritative post-publish Release read-back drifts', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-final-readback-'))
+    const asset = { file: 'latest.yml', sizeBytes: 3, sha256: 'a'.repeat(64) }
+    const ready = {
+      schemaVersion: 2,
+      state: 'READY_TO_PUBLISH',
+      repository,
+      expectedSha,
+      tag: 'v0.5.1',
+      version: '0.5.1',
+      qualification: readyQualification(),
+      assets: [asset],
+    }
+    const draft = {
+      id: 456,
+      upload_url: 'https://uploads.github.com/repos/test/releases/456/assets{?name,label}',
+      draft: true,
+      prerelease: false,
+      tag_name: ready.tag,
+      target_commitish: expectedSha,
+      name: ready.tag,
+      body: releaseNotes(ready.version),
+      assets: [{ name: asset.file, state: 'uploaded', size: asset.sizeBytes, digest: `sha256:${asset.sha256}` }],
+    }
+    let publishPatchSeen = false
+    let finalReadSeen = false
+
+    try {
+      writeFileSync(path.join(root, 'promotion-ready.json'), `${JSON.stringify(ready)}\n`, 'utf8')
+      const fetcher = async (url: string, options: { method?: string, body?: string } = {}) => {
+        const parsed = new URL(url)
+        const method = options.method ?? 'GET'
+        if (parsed.pathname.endsWith('/git/ref/tags/v0.5.1')) {
+          return jsonResponse({ ref: `refs/tags/${ready.tag}`, object: { type: 'commit', sha: expectedSha } })
+        }
+        if (parsed.pathname.endsWith('/releases/tags/v0.5.1')) return jsonResponse(draft)
+        if (parsed.pathname.endsWith('/releases/456') && method === 'PATCH') {
+          const body = JSON.parse(options.body ?? '{}')
+          if (body.draft === true) return jsonResponse(draft)
+          publishPatchSeen = true
+          return jsonResponse({ ...draft, draft: false })
+        }
+        if (parsed.pathname.endsWith('/releases/456') && method === 'GET') {
+          finalReadSeen = true
+          return jsonResponse({ ...draft, draft: false, name: 'drifted-release-name' })
+        }
+        throw new Error(`Unexpected request: ${method} ${parsed.pathname}`)
+      }
+
+      await expect(publishPromotion({ readyRoot: root, token: 'test-token', fetcher }))
+        .rejects.toThrow('Published release provenance is inconsistent')
+      expect(publishPatchSeen).toBe(true)
+      expect(finalReadSeen).toBe(true)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

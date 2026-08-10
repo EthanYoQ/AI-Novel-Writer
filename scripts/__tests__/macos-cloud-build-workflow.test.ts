@@ -38,16 +38,56 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(workflow).toMatch(/^permissions:\r?\n\s{2}contents:\s*read\s*$/m)
     expect(workflow).toContain('runs-on: macos-14')
     expect(workflow).toContain('timeout-minutes: 60')
-    expect(workflow).toContain('pnpm install --frozen-lockfile')
     expect(workflow).toMatch(/node-version:\s*['"]?22\.23\.1['"]?/)
     expect(workflow).toMatch(/version:\s*['"]?11\.11\.0['"]?/)
+    const checkout = namedStep(workflow, 'Check out source')
+    expect(checkout).toContain('ref: ${{ github.sha }}')
+    expect(checkout).toContain('persist-credentials: false')
+
+    const initializeEvidence = namedStep(workflow, 'Initialize macOS v2 acceptance evidence')
+    expect(initializeEvidence).toContain('release-evidence-v2.mjs init --platform macos')
+    expect(initializeEvidence).toContain('--evidence-root "$evidence_root"')
+    expect(initializeEvidence).toContain('--repository "$GITHUB_REPOSITORY"')
+    expect(initializeEvidence).toContain('--commit "$GITHUB_SHA"')
+    expect(initializeEvidence).toContain('--run-id "$GITHUB_RUN_ID"')
+    expect(initializeEvidence).toContain('--run-attempt "$GITHUB_RUN_ATTEMPT"')
+    expect(initializeEvidence).toContain("--runner-label 'macos-14'")
+    expect(initializeEvidence).toContain('--image-os "$ImageOS"')
+    expect(initializeEvidence).toContain('--image-version "$ImageVersion"')
+    expect(initializeEvidence).toContain('--expected-node-version 22.23.1')
+    expect(initializeEvidence).toContain('--expected-pnpm-version 11.11.0')
+    expect(initializeEvidence).toContain("--workflow-path '.github/workflows/macos-arm64-cloud-build.yml'")
+    expect(initializeEvidence).toContain("--workflow-name 'macOS ARM64 cloud package qualification'")
+    expect(initializeEvidence).toContain('--actor "$GITHUB_ACTOR"')
+    expect(initializeEvidence).toContain('--event "$GITHUB_EVENT_NAME"')
+    expect(initializeEvidence).toContain("--dispatch-inputs-json '{}'")
+    expect(initializeEvidence).toContain('AI_NOVEL_RELEASE_EVIDENCE_ROOT=$evidence_root')
+    expect(workflow.indexOf('Initialize macOS v2 acceptance evidence')).toBeLessThan(workflow.indexOf('Install locked dependencies'))
+
+    const expectedRecordedSteps = [
+      ['Install locked dependencies', 'install-locked-dependencies', 'pnpm install --frozen-lockfile'],
+      ['Install Playwright Chromium', 'install-playwright-chromium', 'pnpm exec playwright install chromium'],
+      ['Run renderer browser tests', 'renderer-browser-tests', 'pnpm run test:browser'],
+      ['Build native secure helper for macOS tests', 'build-native-secure-helper', 'clang -fobjc-arc -framework Foundation'],
+      ['Run test suite', 'test-suite', 'pnpm test'],
+      ['Build unsigned macOS ARM64 package', 'build-macos-arm64-package', 'pnpm run build:mac:artifacts'],
+      ['Run mounted-DMG smoke', 'mounted-dmg-smoke', 'pnpm run smoke:mac-dmg'],
+    ] as const
+    for (const [name, step, command] of expectedRecordedSteps) {
+      const recordedStep = namedStep(workflow, name)
+      expect(recordedStep).toContain('release-evidence-v2.mjs record')
+      expect(recordedStep).toContain('--evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT"')
+      expect(recordedStep).toContain(`--step ${step} --`)
+      expect(recordedStep).toContain(command)
+    }
+
     const helperPreparation = namedStep(workflow, 'Build native secure helper for macOS tests')
     expect(helperPreparation).toContain('clang -fobjc-arc -framework Foundation')
     expect(helperPreparation).toContain('electron/security/darwin-safe-file-system.m')
     expect(helperPreparation).toContain('chmod +x electron/security/darwin-safe-file-system')
     expect(workflow).toContain('pnpm run build:mac:artifacts')
     expect(workflow).toContain('pnpm run smoke:mac-dmg')
-    expect(workflow).toContain('node scripts/generate-macos-cloud-build-manifest.mjs')
+    expect(workflow).not.toContain('node scripts/generate-macos-cloud-build-manifest.mjs')
     expect(workflow).not.toMatch(/\b(?:gh\s+release|create-release|upload-release|git\s+tag|git\s+push\s+.*(?:tag|refs\/tags)|codesign|notarytool)\b/i)
 
     const actionUses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)/gm)].map(match => match[1])
@@ -60,10 +100,22 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(artifactStep).toContain('ai-novel-writer-mac-arm64-*-installer.dmg.sha256')
     expect(artifactStep).toContain('SHA256SUMS.txt')
     expect(artifactStep).toContain('manifest.json')
+    expect(artifactStep).toContain('qualification/release-contract.json')
+    expect(artifactStep).toContain('qualification/run-ledger.json')
     expect(artifactStep).toContain('qualification/packaged-vector-smoke.json')
     expect(artifactStep).toContain('qualification/packaged-official-homepage-smoke.json')
     expect(artifactStep).toContain('qualification/packaged-skin-smoke.json')
     expect(artifactStep).toContain('qualification/macos-dmg-smoke.json')
+    expect(artifactStep).toContain('qualification/acceptance/dmg-mount.json')
+    expect(artifactStep).toContain('qualification/acceptance/packaged-smoke.json')
+    expect(artifactStep).toContain('qualification/acceptance/signing.json')
+
+    const finalizeEvidence = namedStep(workflow, 'Finalize macOS v2 acceptance receipts')
+    expect(finalizeEvidence).toContain('release-evidence-v2.mjs finalize --platform macos')
+    expect(finalizeEvidence).toContain('--evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT"')
+    expect(finalizeEvidence).toContain('--release-root "release/$version"')
+    expect(workflow.indexOf('Finalize macOS v2 acceptance receipts')).toBeGreaterThan(workflow.indexOf('Run mounted-DMG smoke'))
+    expect(workflow.indexOf('Finalize macOS v2 acceptance receipts')).toBeLessThan(workflow.indexOf('Upload runtime-verified macOS ARM64 package'))
 
     expect(packageMetadata.scripts?.['build:mac:artifacts']).toContain('node scripts/build-release-vector-smoke-runner.mjs')
     expect(packageMetadata.scripts?.['build:mac:artifacts']).toContain('electron-builder --mac --arm64 --publish never')
@@ -90,11 +142,10 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(vectorRunnerBuildScript).toContain("platform: 'node'")
     expect(vectorRunnerSource).toContain('runReleaseVectorSmoke')
     expect(vectorRunnerSource).toContain('Packaged vector smoke timed out after 90 seconds')
-    expect(manifestScript).toContain("platform: 'darwin'")
-    expect(manifestScript).toContain("arch: 'arm64'")
-    expect(manifestScript).toContain("gateLevel: 'RUNTIME_VERIFIED'")
-    expect(manifestScript).toContain('releaseCreated: false')
-    expect(manifestScript).toContain('dmgChecksum')
-    expect(manifestScript).toContain("'qualification/packaged-skin-smoke.json', 'packaged-skin-smoke'")
+    expect(manifestScript).toContain('finalizeReleaseEvidence')
+    expect(manifestScript).toContain("platform: 'macos'")
+    expect(manifestScript).toContain("process.platform === 'darwin'")
+    expect(manifestScript).toContain("process.arch === 'arm64'")
+    expect(manifestScript).toContain('AI_NOVEL_RELEASE_EVIDENCE_ROOT')
   })
 })

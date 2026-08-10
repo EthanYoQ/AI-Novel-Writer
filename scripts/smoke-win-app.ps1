@@ -9,7 +9,9 @@
   [int]$PostExitQuietSeconds = 5,
   [switch]$LoadProbeLibrary,
   [string]$ProjectPathToOpen,
-  [string]$LegacyProjectPathToOpen
+  [string]$LegacyProjectPathToOpen,
+  [string]$AcceptanceDirectory,
+  [string]$ExpectedVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -817,6 +819,31 @@ function Complete-AiNovelSmokeDiagnostics {
   }
 }
 
+function Write-AiNovelAcceptanceReceipt {
+  param(
+    [Parameter(Mandatory = $true)][string]$Directory,
+    [Parameter(Mandatory = $true)][string]$FileName,
+    [Parameter(Mandatory = $true)][object]$Receipt
+  )
+
+  if ($Receipt.accepted -ne $true) {
+    throw "Acceptance receipt must be accepted before publication: $FileName"
+  }
+  if (@($Receipt.observations).Count -eq 0) {
+    throw "Acceptance receipt must contain direct observations: $FileName"
+  }
+  New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+  $destination = Join-Path $Directory $FileName
+  $temporary = "${destination}.$PID.tmp"
+  $encoding = [System.Text.UTF8Encoding]::new($false)
+  [System.IO.File]::WriteAllText(
+    $temporary,
+    (($Receipt | ConvertTo-Json -Depth 12) + "`n"),
+    $encoding
+  )
+  Move-Item -LiteralPath $temporary -Destination $destination -Force
+}
+
 if ($LoadProbeLibrary) {
   return
 }
@@ -843,6 +870,7 @@ $previousUserProfile = $env:USERPROFILE
 $projectOpenMarker = Join-Path $smokeRoot 'project-opened.json'
 $legacyDebuggerPort = $null
 $legacyProofComplete = $false
+$acceptedMainWindowCount = 0
 $smokeSucceeded = $false
 $lastWindowSnapshot = @()
 $observedProcessIds = [System.Collections.Generic.HashSet[int]]::new()
@@ -1024,6 +1052,9 @@ try {
   })) {
     throw 'Application main window was not visible in the final smoke-test snapshot.'
   }
+  $acceptedMainWindowCount = @($lastWindowSnapshot | Where-Object {
+    Test-AiNovelVisibleMainWindow -Window $_ -TargetProcessIds $liveAppProcessIds
+  }).Count
   if (Test-Path -LiteralPath $chromiumLog) {
     $fatalGpuLines = Get-Content -LiteralPath $chromiumLog | Where-Object { $_ -match 'GPU process isn.t usable|:FATAL:' }
     if ($fatalGpuLines) {
@@ -1062,6 +1093,67 @@ try {
     -TargetNames $targetNames `
     -QuietSeconds $PostExitQuietSeconds `
     -LastWindowSnapshot ([ref]$lastWindowSnapshot)
+
+  if (-not [string]::IsNullOrWhiteSpace($AcceptanceDirectory)) {
+    $versionInfo = (Get-Item -LiteralPath $resolvedExe).VersionInfo
+    $actualVersion = [string]$versionInfo.ProductVersion
+    if ([string]::IsNullOrWhiteSpace($actualVersion)) {
+      throw 'Installed application did not expose a product version.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion)) {
+      $actualSemanticVersion = $null
+      $expectedSemanticVersion = $null
+      if (-not [version]::TryParse($actualVersion, [ref]$actualSemanticVersion)) {
+        throw "Installed application exposed an invalid product version: $actualVersion"
+      }
+      if (-not [version]::TryParse($ExpectedVersion, [ref]$expectedSemanticVersion)) {
+        throw "Expected application version is invalid: $ExpectedVersion"
+      }
+      $versionMatches = (
+        $actualSemanticVersion.Major -eq $expectedSemanticVersion.Major -and
+        $actualSemanticVersion.Minor -eq $expectedSemanticVersion.Minor -and
+        $actualSemanticVersion.Build -eq $expectedSemanticVersion.Build -and
+        (
+          $actualSemanticVersion.Revision -eq $expectedSemanticVersion.Revision -or
+          ($expectedSemanticVersion.Revision -eq -1 -and $actualSemanticVersion.Revision -eq 0)
+        )
+      )
+      if (-not $versionMatches) {
+        throw "Installed application version mismatch: expected $ExpectedVersion, got $actualVersion"
+      }
+    }
+    $rootProcessStartTimeTicks = [long]$appProcessStartTimeTicks[[string]$process.Id]
+    Write-AiNovelAcceptanceReceipt `
+      -Directory $AcceptanceDirectory `
+      -FileName 'launch.json' `
+      -Receipt ([ordered]@{
+        schemaVersion = 2
+        kind = 'windows-launch'
+        accepted = $true
+        observations = @(
+          'A visible product main window remained healthy for the complete observation interval.'
+          'The exact root process identity and packaged product version were captured.'
+          'The process tree exited gracefully before the post-exit quiet window completed.'
+        )
+        direct = [ordered]@{
+          executablePath = $resolvedExe
+          productVersion = $actualVersion
+          processId = [int]$process.Id
+          processStartTimeTicks = [string]$rootProcessStartTimeTicks
+          visibleMainWindowCount = $acceptedMainWindowCount
+        }
+        executablePath = $resolvedExe
+        productVersion = $actualVersion
+        expectedVersion = $ExpectedVersion
+        processId = [int]$process.Id
+        processStartTimeTicks = [string]$rootProcessStartTimeTicks
+        visibleMainWindowObserved = ($acceptedMainWindowCount -gt 0)
+        visibleMainWindowCount = $acceptedMainWindowCount
+        healthyObservationSeconds = $ObservationSeconds
+        postExitQuietSeconds = $PostExitQuietSeconds
+        newProductErrorDialogCount = 0
+      })
+  }
 
   $smokeSucceeded = $true
   Write-Host "Windows application smoke test passed: PID $($process.Id), top-level window remained continuously healthy for a full $ObservationSeconds seconds after first appearing and no delayed error dialog appeared during the $PostExitQuietSeconds-second post-exit quiet period"

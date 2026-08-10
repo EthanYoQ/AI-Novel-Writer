@@ -418,6 +418,22 @@ describe('Windows release verification orchestration', () => {
     expect(script.match(/'--pool=threads'/g) ?? []).toHaveLength(1)
   })
 
+  it('writes sanitized native ABI, quiet-window, and zero-error-dialog acceptance receipts before deleting monitor evidence', () => {
+    const script = readFileSync(releaseScript, 'utf8')
+    const receiptWrite = script.indexOf('writeFinalAcceptanceReceipts')
+    const monitorRemoval = script.indexOf('rmSync(monitorRoot, { recursive: true, force: true })')
+
+    expect(script).toContain("'native-abi.json'")
+    expect(script).toContain("'quiet-window.json'")
+    expect(script).toContain("'error-dialogs.json'")
+    expect(script).toContain('newProductErrorDialogCount: 0')
+    expect(script).toContain('quietWindowSeconds: 5')
+    expect(script).toContain("restoreMode: 'monitored'")
+    expect(script).not.toContain('commandLine:')
+    expect(receiptWrite).toBeGreaterThan(0)
+    expect(monitorRemoval).toBeGreaterThan(receiptWrite)
+  })
+
   windowsIt('stops a marker-only release monitor before status and control initialization', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-monitor-cleanup-'))
     const controlPath = join(root, 'control.jsonl')

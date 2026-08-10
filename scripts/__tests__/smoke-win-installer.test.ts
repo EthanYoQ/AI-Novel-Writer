@@ -80,6 +80,76 @@ describe('Windows PowerShell smoke script encoding', () => {
   })
 })
 
+describe('Windows v2 acceptance receipts', () => {
+  it('wires install, real launch identity, packaged smoke, upgrade, signing, and strict uninstall postconditions', () => {
+    const installer = readFileSync(installerScript, 'utf8')
+    const app = readFileSync(probeScript, 'utf8')
+
+    expect(installer).toContain("'install.json'")
+    expect(installer).toContain("'packaged-smoke.json'")
+    expect(installer).toContain("'upgrade-data.json'")
+    expect(installer).toContain("'uninstall.json'")
+    expect(installer).toContain("'signing.json'")
+    expect(installer).toContain('Get-AuthenticodeSignature')
+    expect(installer).toContain('unsignedDistributionImpact')
+    expect(installer).toContain('SmartScreen')
+    expect(installer).toContain('enterprise policy')
+    expect(installer).toContain('Assert-AiNovelUninstallPostcondition')
+    expect(installer).toContain('packaged-vector-smoke.json')
+    expect(installer).toContain('packaged-official-homepage-smoke.json')
+    expect(installer).toContain('packaged-skin-smoke.json')
+    expect(app).toContain('[string]$AcceptanceDirectory')
+    expect(app).toContain('[string]$ExpectedVersion')
+    expect(app).toContain("'launch.json'")
+    expect(app).toContain('processStartTimeTicks')
+    expect(app).toContain('executablePath')
+    expect(app).toContain('visibleMainWindowObserved')
+  })
+
+  windowsIt('accepts an unsigned signature observation but rejects an unknown uninstall residue', () => {
+    const output = runInstallerLibrary(`
+$root = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-acceptance-test-' + [guid]::NewGuid().ToString('N'))
+$unsigned = Join-Path $root 'unsigned.ps1'
+$install = Join-Path $root 'installed'
+$exe = Join-Path $install 'AI小说作家.exe'
+New-Item -ItemType Directory -Path $install -Force | Out-Null
+[System.IO.File]::WriteAllBytes($unsigned, [byte[]](1, 2, 3))
+[System.IO.File]::WriteAllText($exe, 'installed')
+$signing = Get-AiNovelSigningAcceptanceReceipt -Path $unsigned -SignatureProvider {
+  param([string]$Path)
+  [pscustomobject]@{ Status = 'NotSigned'; SignerCertificate = $null }
+}
+$rejected = $false
+try {
+  Assert-AiNovelUninstallPostcondition -InstallRoot $install -InstalledExecutable $exe
+} catch {
+  $rejected = $true
+}
+Remove-Item -LiteralPath $exe -Force
+$uninstall = Assert-AiNovelUninstallPostcondition -InstallRoot $install -InstalledExecutable $exe
+[pscustomobject]@{ Signing = $signing; RejectedUnknownResidue = $rejected; Uninstall = $uninstall } | ConvertTo-Json -Depth 8 -Compress
+Remove-Item -LiteralPath $root -Recurse -Force
+`)
+    const result = parseLastJsonLine(output) as {
+      Signing: Record<string, unknown>
+      RejectedUnknownResidue: boolean
+      Uninstall: Record<string, unknown>
+    }
+
+    expect(result.Signing).toMatchObject({
+      accepted: true,
+      status: 'unsigned',
+      validationResult: 'NotSigned',
+    })
+    expect(String(result.Signing.unsignedDistributionImpact)).toMatch(/SmartScreen/i)
+    expect(result.RejectedUnknownResidue).toBe(true)
+    expect(result.Uninstall).toMatchObject({
+      accepted: true,
+      installedExecutableExists: false,
+    })
+  })
+})
+
 function quotePowerShell(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }

@@ -17,6 +17,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
@@ -30,28 +33,33 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Initialize macOS v2 acceptance evidence
+        run: |
+          evidence_root="$RUNNER_TEMP/ai-novel-release-evidence-$GITHUB_RUN_ID"
+          node scripts/release-evidence-v2.mjs init --platform macos --evidence-root "$evidence_root" --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --runner-label 'macos-14' --image-os "$ImageOS" --image-version "$ImageVersion" --expected-node-version 22.23.1 --expected-pnpm-version 11.11.0 --workflow-path '.github/workflows/macos-arm64-cloud-build.yml' --workflow-name 'macOS ARM64 cloud package qualification' --actor "$GITHUB_ACTOR" --event "$GITHUB_EVENT_NAME" --dispatch-inputs-json '{}'
+          echo "AI_NOVEL_RELEASE_EVIDENCE_ROOT=$evidence_root" >> "$GITHUB_ENV"
+
       - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step install-locked-dependencies -- pnpm install --frozen-lockfile
 
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install chromium
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step install-playwright-chromium -- pnpm exec playwright install chromium
 
       - name: Run renderer browser tests
-        run: pnpm run test:browser
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step renderer-browser-tests -- pnpm run test:browser
 
       - name: Build native secure helper for macOS tests
         run: |
-          clang -fobjc-arc -framework Foundation electron/security/darwin-safe-file-system.m -o electron/security/darwin-safe-file-system
-          chmod +x electron/security/darwin-safe-file-system
+          node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step build-native-secure-helper -- bash -lc 'clang -fobjc-arc -framework Foundation electron/security/darwin-safe-file-system.m -o electron/security/darwin-safe-file-system && chmod +x electron/security/darwin-safe-file-system'
 
       - name: Run test suite
-        run: pnpm test
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step test-suite -- pnpm test
 
       - name: Build unsigned macOS ARM64 package
-        run: pnpm run build:mac:artifacts
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step build-macos-arm64-package -- pnpm run build:mac:artifacts
 
       - name: Run mounted-DMG smoke
-        run: pnpm run smoke:mac-dmg
+        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step mounted-dmg-smoke -- pnpm run smoke:mac-dmg
 
       - name: Record verified toolchain
         if: ${{ success() }}
@@ -61,9 +69,11 @@ jobs:
           test "$(node --version | sed 's/^v//')" = '22.23.1'
           echo "AI_NOVEL_CLOUD_BUILD_PNPM_VERSION=$(pnpm --version)" >> "$GITHUB_ENV"
 
-      - name: Generate reproducibility manifest
+      - name: Finalize macOS v2 acceptance receipts
         if: ${{ success() }}
-        run: node scripts/generate-macos-cloud-build-manifest.mjs
+        run: |
+          version="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
+          node scripts/release-evidence-v2.mjs finalize --platform macos --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --release-root "release/$version"
 
       - name: Upload runtime-verified macOS ARM64 package
         if: ${{ success() }}
@@ -77,7 +87,12 @@ jobs:
             release/*/ai-novel-writer-mac-arm64-*-installer.dmg.sha256
             release/*/SHA256SUMS.txt
             release/*/manifest.json
+            release/*/qualification/release-contract.json
+            release/*/qualification/run-ledger.json
             release/*/qualification/packaged-vector-smoke.json
             release/*/qualification/packaged-official-homepage-smoke.json
             release/*/qualification/packaged-skin-smoke.json
             release/*/qualification/macos-dmg-smoke.json
+            release/*/qualification/acceptance/dmg-mount.json
+            release/*/qualification/acceptance/packaged-smoke.json
+            release/*/qualification/acceptance/signing.json

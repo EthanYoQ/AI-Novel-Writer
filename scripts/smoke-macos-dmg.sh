@@ -8,6 +8,8 @@ version="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', '
 release_directory="$repository_root/release/$version"
 dmg="$release_directory/ai-novel-writer-mac-arm64-$version-installer.dmg"
 qualification_directory="$release_directory/qualification"
+evidence_root="${AI_NOVEL_RELEASE_EVIDENCE_ROOT:-$qualification_directory}"
+acceptance_directory="$evidence_root/acceptance"
 
 if [[ ! -f "$dmg" ]]; then
   echo "Missing macOS DMG: $dmg" >&2
@@ -19,19 +21,88 @@ mount_point="$smoke_root/mount"
 smoke_home="$smoke_root/home"
 skin_home="$smoke_root/vela-skin-home"
 mounted=0
+unmount_attempted=0
+unmount_succeeded=0
+dmg_mount_observed=0
+app=''
+executable=''
+secure_helper=''
+dmg_sha256=''
+dmg_mount_receipt="$acceptance_directory/dmg-mount.json"
+packaged_smoke_receipt="$acceptance_directory/packaged-smoke.json"
+signing_receipt="$acceptance_directory/signing.json"
+
+write_dmg_mount_receipt() {
+  node - "$dmg_mount_receipt" "$dmg" "$app" "$executable" "$secure_helper" "$dmg_sha256" "$mount_point" "$unmount_attempted" "$unmount_succeeded" <<'NODE'
+const fs = require('node:fs')
+const path = require('node:path')
+const [output, dmg, app, executable, helper, dmgSha256, mountPoint, unmountAttempted, unmountSucceeded] = process.argv.slice(2)
+
+for (const [label, value] of Object.entries({ dmg, app, executable, helper, dmgSha256, mountPoint })) {
+  if (typeof value !== 'string' || value.length === 0) throw new Error(`Missing observed DMG mount fact: ${label}`)
+}
+if (!/^[a-f0-9]{64}$/i.test(dmgSha256)) throw new Error('Invalid observed DMG SHA-256')
+
+const direct = {
+  dmg: { path: dmg, filename: path.basename(dmg) },
+  app: { path: app, bundleName: path.basename(app) },
+  executable: { path: executable, present: true },
+  helper: { path: helper, present: true },
+  hash: { algorithm: 'sha256', value: dmgSha256 },
+  mount: {
+    path: mountPoint,
+    attached: true,
+    command: 'hdiutil attach -readonly -nobrowse -mountpoint',
+  },
+  unmount: {
+    attempted: unmountAttempted === '1',
+    succeeded: unmountSucceeded === '1',
+    command: 'hdiutil detach -force -quiet',
+  },
+}
+
+fs.writeFileSync(output, `${JSON.stringify({
+  schemaVersion: 2,
+  kind: 'dmg-mount',
+  platform: 'darwin',
+  arch: 'arm64',
+  accepted: true,
+  observations: [
+    `Mounted ${path.basename(dmg)} at ${mountPoint} with hdiutil.`,
+    `Observed app bundle ${path.basename(app)}, executable, and secure helper in the mounted DMG.`,
+    `Unmount attempted=${direct.unmount.attempted} succeeded=${direct.unmount.succeeded}.`,
+  ],
+  direct,
+  ...direct,
+}, null, 2)}\n`, 'utf8')
+NODE
+}
 
 cleanup() {
   local exit_status=$?
   if [[ "$mounted" == "1" ]]; then
-    hdiutil detach "$mount_point" -force -quiet || true
+    unmount_attempted=1
+    if hdiutil detach "$mount_point" -force -quiet; then
+      unmount_succeeded=1
+    elif [[ "$exit_status" == "0" ]]; then
+      exit_status=1
+    fi
     mounted=0
+  fi
+  if [[ "$dmg_mount_observed" == "1" ]]; then
+    write_dmg_mount_receipt || true
   fi
   rm -rf "$smoke_root" || true
   return "$exit_status"
 }
 trap cleanup EXIT
 
-mkdir -p "$mount_point" "$smoke_home" "$skin_home" "$qualification_directory"
+mkdir -p "$mount_point" "$smoke_home" "$skin_home" "$qualification_directory" "$acceptance_directory"
+dmg_sha256="$(shasum -a 256 "$dmg" | awk '{print $1}')"
+if [[ ! "$dmg_sha256" =~ ^[a-fA-F0-9]{64}$ ]]; then
+  echo "Could not calculate SHA-256 for macOS DMG: $dmg" >&2
+  exit 1
+fi
 hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_point" -quiet
 mounted=1
 
@@ -55,6 +126,89 @@ if [[ ! -f "$app/Contents/Resources/app.asar" ]]; then
   echo 'Mounted application does not contain app.asar.' >&2
   exit 1
 fi
+dmg_mount_observed=1
+write_dmg_mount_receipt
+
+command -v codesign >/dev/null || { echo 'codesign is required for macOS DMG signing observation.' >&2; exit 1; }
+command -v spctl >/dev/null || { echo 'spctl is required for macOS Gatekeeper observation.' >&2; exit 1; }
+signing_observation_directory="$smoke_root/signing-observation"
+mkdir -p "$signing_observation_directory"
+codesign_details="$signing_observation_directory/codesign-details.txt"
+codesign_verification="$signing_observation_directory/codesign-verify.txt"
+spctl_assessment="$signing_observation_directory/spctl-assess.txt"
+set +e
+codesign -dv --verbose=4 "$app" > "$codesign_details" 2>&1
+codesign_details_status=$?
+codesign --verify --deep --strict --verbose=2 "$app" > "$codesign_verification" 2>&1
+codesign_verification_status=$?
+spctl --assess --type execute --verbose=4 "$app" > "$spctl_assessment" 2>&1
+spctl_assessment_status=$?
+set -e
+
+node - "$signing_receipt" "$codesign_details_status" "$codesign_verification_status" "$spctl_assessment_status" "$codesign_details" "$codesign_verification" "$spctl_assessment" <<'NODE'
+const crypto = require('node:crypto')
+const fs = require('node:fs')
+const [output, detailsStatus, verificationStatus, assessmentStatus, detailsFile, verificationFile, assessmentFile] = process.argv.slice(2)
+
+function observedCommand(command, exitCode, outputFile) {
+  const output = fs.readFileSync(outputFile)
+  return {
+    command,
+    exitCode: Number(exitCode),
+    outputSha256: crypto.createHash('sha256').update(output).digest('hex'),
+  }
+}
+
+const codesignDetails = observedCommand('codesign -dv --verbose=4', detailsStatus, detailsFile)
+const codesignVerification = observedCommand('codesign --verify --deep --strict --verbose=2', verificationStatus, verificationFile)
+const gatekeeperAssessment = observedCommand('spctl --assess --type execute --verbose=4', assessmentStatus, assessmentFile)
+const codeSigning = {
+  expected: 'unsigned',
+  observed: codesignDetails.exitCode !== 0 && codesignVerification.exitCode !== 0 ? 'unsigned' : 'unexpected-signed',
+  details: codesignDetails,
+  verification: codesignVerification,
+}
+
+if (codeSigning.observed !== 'unsigned') {
+  throw new Error('Formal macOS release policy requires an unsigned code-signing state; refusing to produce an unsigned receipt for a signed package.')
+}
+
+const notarization = {
+  expected: 'not_notarized',
+  observed: 'not_notarized',
+  basis: 'The formal macOS release has no Apple notarization stage; this unsigned package is not notarized.',
+}
+const gatekeeper = {
+  assessment: gatekeeperAssessment,
+  observed: gatekeeperAssessment.exitCode === 0 ? 'accepted-on-runner' : 'manual-confirmation-may-be-required',
+}
+const validationResult = `Observed unsigned code-signing state. Apple notarization is ${notarization.observed}; Gatekeeper assessment exited with ${gatekeeperAssessment.exitCode}.`
+const gatekeeperImpact = 'macOS Gatekeeper can warn about or block this unsigned and unnotarized distribution until the user explicitly approves it.'
+const direct = {
+  codeSigning,
+  notarization,
+  gatekeeper,
+}
+
+fs.writeFileSync(output, `${JSON.stringify({
+  schemaVersion: 2,
+  kind: 'signing',
+  platform: 'darwin',
+  arch: 'arm64',
+  accepted: true,
+  status: 'unsigned',
+  validationResult,
+  unsignedDistributionImpact: gatekeeperImpact,
+  gatekeeperImpact,
+  observations: [
+    `codesign details exited with ${codesignDetails.exitCode}; code-signing state=${codeSigning.observed}.`,
+    `codesign verification exited with ${codesignVerification.exitCode}.`,
+    `Apple notarization state=${notarization.observed} under the formal release policy.`,
+    `spctl Gatekeeper assessment exited with ${gatekeeperAssessment.exitCode}; Gatekeeper state=${gatekeeper.observed}.`,
+  ],
+  direct,
+}, null, 2)}\n`, 'utf8')
+NODE
 
 run_with_timeout() {
   local label="$1"
@@ -168,4 +322,69 @@ fs.writeFileSync(output, `${JSON.stringify({
   officialHomepageSmoke: true,
   skinSmoke: true,
 }, null, 2)}\n`)
+NODE
+
+node - "$packaged_smoke_receipt" "$release_directory" "$vector_evidence" "$homepage_evidence" "$skin_evidence" "$qualification_directory/macos-dmg-smoke.json" <<'NODE'
+const crypto = require('node:crypto')
+const fs = require('node:fs')
+const path = require('node:path')
+const [output, releaseDirectory, vectorFile, homepageFile, skinFile, macosDmgSmokeFile] = process.argv.slice(2)
+
+function sha256(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+}
+
+function reference(label, file, expectedKind) {
+  const fact = JSON.parse(fs.readFileSync(file, 'utf8'))
+  if (fact?.kind !== expectedKind) throw new Error(`Invalid ${label} packaged smoke fact`)
+  return {
+    path: path.relative(releaseDirectory, file).split(path.sep).join('/'),
+    kind: fact.kind,
+    sha256: sha256(file),
+  }
+}
+
+const vector = reference('vector', vectorFile, 'packaged-vector-smoke')
+const homepage = reference('official homepage', homepageFile, 'packaged-official-homepage-smoke')
+const skin = reference('skin', skinFile, 'packaged-skin-smoke')
+const macosDmgSmoke = JSON.parse(fs.readFileSync(macosDmgSmokeFile, 'utf8'))
+if (macosDmgSmoke?.schemaVersion !== 1 || macosDmgSmoke?.kind !== 'macos-dmg-smoke') {
+  throw new Error('Invalid macOS DMG smoke fact')
+}
+const macosDmgSmokeReference = {
+  path: path.relative(releaseDirectory, macosDmgSmokeFile).split(path.sep).join('/'),
+  kind: macosDmgSmoke.kind,
+  sha256: sha256(macosDmgSmokeFile),
+}
+const direct = {
+  mountedApplication: macosDmgSmoke.mountedApplication,
+  secureFileSystemHelper: macosDmgSmoke.secureFileSystemHelper,
+  secureFileSystemSmoke: macosDmgSmoke.secureFileSystemSmoke,
+  dmgSha256: macosDmgSmoke.dmgSha256,
+  vectorSmoke: macosDmgSmoke.vectorSmoke,
+  officialHomepageSmoke: macosDmgSmoke.officialHomepageSmoke,
+  skinSmoke: macosDmgSmoke.skinSmoke,
+}
+
+fs.writeFileSync(output, `${JSON.stringify({
+  schemaVersion: 2,
+  kind: 'packaged-smoke',
+  platform: 'darwin',
+  arch: 'arm64',
+  accepted: true,
+  references: {
+    vector,
+    officialHomepage: homepage,
+    skin,
+    macosDmgSmoke: macosDmgSmokeReference,
+  },
+  observations: [
+    'Validated the packaged vector smoke fact.',
+    'Validated the packaged official-homepage smoke fact.',
+    'Validated the packaged skin smoke fact.',
+    'Validated the direct macOS DMG smoke fact.',
+  ],
+  direct,
+  directFacts: direct,
+}, null, 2)}\n`, 'utf8')
 NODE

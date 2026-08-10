@@ -313,6 +313,12 @@ describe('GenerateDirectoryCommand', () => {
       }),
     ])
     expect(generateStream).toHaveBeenCalledTimes(2)
+    const requestOptions = (generateStream.mock.calls as unknown as unknown[][])
+      .map(([, , , options]) => options)
+    expect(requestOptions).toHaveLength(2)
+    for (const options of requestOptions) {
+      expect(options).not.toHaveProperty('temperature')
+    }
     const continuationMessages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0]
       = generateStream.mock.calls[1]?.[0] ?? []
     const continuationPrompt = continuationMessages.find(message => message.role === 'user')?.content ?? ''

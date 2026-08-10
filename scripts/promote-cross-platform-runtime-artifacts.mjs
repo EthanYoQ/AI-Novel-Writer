@@ -14,6 +14,7 @@ import process from 'node:process'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { canonicalPnpmLockfileSha256 } from './canonical-pnpm-lockfile-hash.mjs'
+import { MACOS_FORMAL_DISTRIBUTION_POLICY, verifyQualificationBundle } from './release-evidence-v2.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const WINDOWS_WORKFLOW_NAME = 'Windows cloud package qualification'
@@ -72,18 +73,6 @@ function parseFinalTag(tag) {
 
 function workflowPath(pathWithRef) {
   return String(pathWithRef ?? '').split('@', 1)[0]
-}
-
-function parseChecksums(text) {
-  const records = new Map()
-  for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean)) {
-    const match = /^([a-f0-9]{64}) \*([^\\]+)$/i.exec(line)
-    assert(match, `Invalid SHA256SUMS.txt line: ${line}`)
-    const file = match[2].replaceAll('\\', '/')
-    assert(!records.has(file), `Duplicate checksum entry: ${file}`)
-    records.set(file, match[1].toLowerCase())
-  }
-  return records
 }
 
 function exactFileSet(actual, expected, label) {
@@ -149,64 +138,58 @@ function validateSkinEvidence(evidence) {
   )
 }
 
-function validateManifestArtifact(manifest, bundleRoot, expectedFiles, expectedCommit, expectedLockfile, label) {
-  assert(manifest?.schemaVersion === 1, `${label} manifest schema is invalid`)
-  assert(manifest.gateLevel === 'RUNTIME_VERIFIED', `${label} manifest gate level is invalid`)
-  assert(manifest.releaseCreated === false, `${label} qualification manifest claims a Release was created`)
-  assert(String(manifest.commit ?? '').toLowerCase() === expectedCommit, `${label} manifest commit does not match expected_sha`)
-  assert(manifest.lockfileSha256 === expectedLockfile, `${label} manifest lockfile hash does not match qualified source`)
-  assert(Array.isArray(manifest.artifacts), `${label} manifest has no artifact inventory`)
-  exactFileSet(manifest.artifacts.map(record => record?.file), expectedFiles, `${label} manifest artifact`)
-  for (const record of manifest.artifacts) {
-    const file = path.join(bundleRoot, record.file)
-    const metadata = statSync(file)
-    assert(metadata.isFile() && metadata.size > 0, `${label} artifact is missing or empty: ${record.file}`)
-    assert(record.sizeBytes === metadata.size, `${label} manifest size mismatch: ${record.file}`)
-    assert(record.sha256 === sha256(file), `${label} manifest SHA-256 mismatch: ${record.file}`)
-  }
-}
-
-function validateWindowsArtifact(root, { expectedSha, lockfileSha256, version }) {
+function validateWindowsArtifact(root, { expectedSha, lockfileSha256, lockfileRawSha256, version, repository, runId, runAttempt, actor, event, workflow }) {
   const bundleRoot = resolvePromotionArtifactRoot(root, 'Windows qualification')
-  const installer = `ai-novel-writer-setup-${version}.exe`
-  const blockmap = `${installer}.blockmap`
+  const verified = verifyQualificationBundle({
+    platform: 'windows',
+    bundleRoot,
+    expectedCommit: expectedSha,
+    expectedLockfileSha256: lockfileSha256,
+    expectedLockfileRawSha256: lockfileRawSha256,
+    version,
+    expectedRepository: repository,
+    expectedRunId: runId,
+    expectedRunAttempt: runAttempt,
+    expectedWorkflowPath: workflow.path,
+    expectedWorkflowName: workflow.name,
+    expectedActor: actor,
+    expectedEvent: event,
+  })
   const evidence = [
     'qualification/packaged-vector-smoke.json',
     'qualification/packaged-official-homepage-smoke.json',
     'qualification/packaged-skin-smoke.json',
   ]
-  const expected = ['SHA256SUMS.txt', 'manifest.json', installer, blockmap, 'latest.yml', ...evidence]
-  exactFileSet(listRegularFiles(bundleRoot), expected, 'Windows qualification')
-  const manifest = jsonFile(path.join(bundleRoot, 'manifest.json'), 'Windows manifest')
-  validateManifestArtifact(manifest, bundleRoot, [installer, blockmap, 'latest.yml'], expectedSha, lockfileSha256, 'Windows')
-  const sums = parseChecksums(readFileSync(path.join(bundleRoot, 'SHA256SUMS.txt'), 'utf8'))
-  exactFileSet(sums.keys(), [installer, blockmap, 'latest.yml', 'manifest.json'], 'Windows SHA-256')
-  for (const [file, digest] of sums) assert(sha256(path.join(bundleRoot, file)) === digest, `Windows SHA-256 mismatch: ${file}`)
   validateVectorEvidence(validateEvidence(path.join(bundleRoot, evidence[0]), 'packaged-vector-smoke'))
   validateHomepageEvidence(validateEvidence(path.join(bundleRoot, evidence[1]), 'packaged-official-homepage-smoke'))
   validateSkinEvidence(validateEvidence(path.join(bundleRoot, evidence[2]), 'packaged-skin-smoke'))
-  return { bundleRoot, releaseFiles: [installer, blockmap, 'latest.yml'] }
+  return verified
 }
 
-function validateMacosArtifact(root, { expectedSha, lockfileSha256, version }) {
+function validateMacosArtifact(root, { expectedSha, lockfileSha256, lockfileRawSha256, version, repository, runId, runAttempt, actor, event, workflow }) {
   const bundleRoot = resolvePromotionArtifactRoot(root, 'macOS qualification')
   const dmg = `ai-novel-writer-mac-arm64-${version}-installer.dmg`
-  const dmgChecksum = `${dmg}.sha256`
+  const verified = verifyQualificationBundle({
+    platform: 'macos',
+    bundleRoot,
+    expectedCommit: expectedSha,
+    expectedLockfileSha256: lockfileSha256,
+    expectedLockfileRawSha256: lockfileRawSha256,
+    version,
+    expectedRepository: repository,
+    expectedRunId: runId,
+    expectedRunAttempt: runAttempt,
+    expectedWorkflowPath: workflow.path,
+    expectedWorkflowName: workflow.name,
+    expectedActor: actor,
+    expectedEvent: event,
+  })
   const evidence = [
     ['qualification/packaged-vector-smoke.json', 'packaged-vector-smoke'],
     ['qualification/packaged-official-homepage-smoke.json', 'packaged-official-homepage-smoke'],
     ['qualification/packaged-skin-smoke.json', 'packaged-skin-smoke'],
     ['qualification/macos-dmg-smoke.json', 'macos-dmg-smoke'],
   ]
-  exactFileSet(listRegularFiles(bundleRoot), ['SHA256SUMS.txt', 'manifest.json', dmg, dmgChecksum, ...evidence.map(([file]) => file)], 'macOS qualification')
-  const manifest = jsonFile(path.join(bundleRoot, 'manifest.json'), 'macOS manifest')
-  assert(manifest.platform === 'darwin' && manifest.arch === 'arm64', 'macOS manifest platform/architecture is invalid')
-  assert(manifest.dmgChecksum === dmgChecksum, 'macOS manifest checksum file is invalid')
-  validateManifestArtifact(manifest, bundleRoot, [dmg], expectedSha, lockfileSha256, 'macOS')
-  const sums = parseChecksums(readFileSync(path.join(bundleRoot, 'SHA256SUMS.txt'), 'utf8'))
-  exactFileSet(sums.keys(), [dmg, 'manifest.json'], 'macOS SHA-256')
-  for (const [file, digest] of sums) assert(sha256(path.join(bundleRoot, file)) === digest, `macOS SHA-256 mismatch: ${file}`)
-  assert(readFileSync(path.join(bundleRoot, dmgChecksum), 'utf8').trim() === `${sha256(path.join(bundleRoot, dmg))}  ${dmg}`, 'macOS DMG checksum file does not match the DMG')
   validateVectorEvidence(validateEvidence(path.join(bundleRoot, evidence[0][0]), evidence[0][1]))
   validateHomepageEvidence(validateEvidence(path.join(bundleRoot, evidence[1][0]), evidence[1][1]))
   validateSkinEvidence(validateEvidence(path.join(bundleRoot, evidence[2][0]), evidence[2][1]))
@@ -216,7 +199,7 @@ function validateMacosArtifact(root, { expectedSha, lockfileSha256, version }) {
   assert(dmgSmoke.dmgSha256 === sha256(path.join(bundleRoot, dmg)), 'macOS DMG smoke SHA-256 does not match the DMG')
   assert(dmgSmoke.secureFileSystemSmoke === true && dmgSmoke.secureFileSystemHelper === 'security/darwin-safe-file-system', 'macOS DMG smoke did not verify the packaged secure file-system helper')
   assert(dmgSmoke.skinSmoke === true, 'macOS DMG smoke did not verify the packaged skin qualification')
-  return { bundleRoot, releaseFiles: [dmg, dmgChecksum] }
+  return verified
 }
 
 function readArguments(values) {
@@ -256,8 +239,23 @@ async function requestMaybeNotFound(fetcher, url, options, label) {
   return response.json()
 }
 
+async function readOnlyDraftState(fetcher, api, headers, repository, tag) {
+  const response = await fetcher(`${api}/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`, { headers })
+  // A read-only token can receive 404 for a draft it is not allowed to see.
+  // The plan must preserve that uncertainty instead of treating it as a safe
+  // absence that would authorize a later create operation.
+  if (response?.status === 404) return 'unknown'
+  assert(response?.ok, `Release draft read-only request failed${response ? ` (${response.status})` : ''}`)
+  const release = await response.json()
+  return release?.draft === true ? 'draft-present' : 'published-or-non-draft'
+}
+
 function apiHeaders(token) {
   return { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' }
+}
+
+function validDigest(value) {
+  return typeof value === 'string' && /^(?:sha256:)?[a-f0-9]{64}$/i.test(value)
 }
 
 function validateRun({ repository, run, workflow, comparison, artifactResponse, expectedSha, runId, workflowName, workflowPathExpected, artifactName, label }) {
@@ -267,6 +265,8 @@ function validateRun({ repository, run, workflow, comparison, artifactResponse, 
   assert(run?.head_branch === repository.default_branch, `${label} qualification run did not execute on the default branch`)
   assert(run?.head_repository?.full_name === repository.full_name, `${label} qualification run came from another repository`)
   assert(run?.event === 'workflow_dispatch', `${label} qualification run was not manually dispatched`)
+  assert(Number.isInteger(run?.run_attempt) && run.run_attempt > 0, `${label} qualification run attempt is missing or invalid`)
+  assert(typeof run?.actor?.login === 'string' && run.actor.login.length > 0, `${label} qualification run actor is invalid`)
   assert(workflow?.name === workflowName, `${label} qualification workflow name is invalid`)
   assert(workflowPath(workflow?.path) === workflowPathExpected, `${label} qualification workflow path is invalid`)
   assert(run?.workflow_id === workflow.id && run?.name === workflowName && workflowPath(run?.path) === workflowPathExpected, `${label} run does not belong to its expected workflow`)
@@ -279,9 +279,17 @@ function validateRun({ repository, run, workflow, comparison, artifactResponse, 
   assert(matches.length === 1, `${label} qualification artifact is not unique`)
   const artifact = matches[0]
   assert(Number.isInteger(artifact.id) && artifact.id > 0 && artifact.expired === false && Number(artifact.size_in_bytes) > 0, `${label} qualification artifact is invalid`)
+  assert(validDigest(artifact.digest), `${label} qualification artifact digest is invalid`)
   assert(Date.parse(artifact.expires_at ?? '') > Date.now(), `${label} qualification artifact is expired`)
   assert(String(artifact.workflow_run?.id ?? '') === String(run.id) && String(artifact.workflow_run?.head_sha ?? '').toLowerCase() === expectedSha, `${label} qualification artifact is not bound to the verified run`)
-  return { runId: Number(runId), workflow: { id: workflow.id, name: workflow.name, path: workflowPathExpected }, artifact: { id: artifact.id, name: artifact.name, digest: artifact.digest ?? null } }
+  return {
+    runId: Number(runId),
+    runAttempt: run.run_attempt,
+    actor: run.actor.login,
+    event: run.event,
+    workflow: { id: workflow.id, name: workflow.name, path: workflowPathExpected },
+    artifact: { id: artifact.id, name: artifact.name, digest: artifact.digest },
+  }
 }
 
 export async function planPromotion({ inputs, fetcher = globalThis.fetch, apiBaseUrl = 'https://api.github.com', token }) {
@@ -294,11 +302,12 @@ export async function planPromotion({ inputs, fetcher = globalThis.fetch, apiBas
   const version = parseFinalTag(inputs.tag)
   const api = apiBaseUrl.replace(/\/$/, '')
   const headers = apiHeaders(token)
-  const [repository, windowsRun, macosRun, remoteTag] = await Promise.all([
+  const [repository, windowsRun, macosRun, remoteTag, draftState] = await Promise.all([
     requestJson(fetcher, `${api}/repos/${inputs.repository}`, { headers }, 'Repository metadata'),
     requestJson(fetcher, `${api}/repos/${inputs.repository}/actions/runs/${inputs.windowsQualificationRunId}`, { headers }, 'Windows qualification run'),
     requestJson(fetcher, `${api}/repos/${inputs.repository}/actions/runs/${inputs.macosQualificationRunId}`, { headers }, 'macOS qualification run'),
     requestMaybeNotFound(fetcher, `${api}/repos/${inputs.repository}/git/ref/tags/${encodeURIComponent(inputs.tag)}`, { headers }, 'Release tag'),
+    readOnlyDraftState(fetcher, api, headers, inputs.repository, inputs.tag),
   ])
   assert(repository?.full_name === inputs.repository && typeof repository.default_branch === 'string', 'Repository identity/default branch is invalid')
   if (remoteTag !== null) {
@@ -314,7 +323,7 @@ export async function planPromotion({ inputs, fetcher = globalThis.fetch, apiBas
   ])
   const windows = validateRun({ repository, run: windowsRun, workflow: windowsWorkflow, comparison, artifactResponse: windowsArtifacts, expectedSha, runId: inputs.windowsQualificationRunId, workflowName: WINDOWS_WORKFLOW_NAME, workflowPathExpected: WINDOWS_WORKFLOW_PATH, artifactName: WINDOWS_ARTIFACT_NAME, label: 'Windows' })
   const macos = validateRun({ repository, run: macosRun, workflow: macosWorkflow, comparison, artifactResponse: macosArtifacts, expectedSha, runId: inputs.macosQualificationRunId, workflowName: MACOS_WORKFLOW_NAME, workflowPathExpected: MACOS_WORKFLOW_PATH, artifactName: MACOS_ARTIFACT_NAME, label: 'macOS' })
-  return { schemaVersion: 1, state: 'SOURCE_VERIFIED', repository: inputs.repository, defaultBranch: repository.default_branch, expectedSha, tag: inputs.tag, version, tagWasPresent: remoteTag !== null, windows, macos }
+  return { schemaVersion: 1, state: 'SOURCE_VERIFIED', repository: inputs.repository, defaultBranch: repository.default_branch, expectedSha, tag: inputs.tag, version, tagWasPresent: remoteTag !== null, draftState, windows, macos }
 }
 
 export function verifyPromotion({ windowsArtifactRoot, macosArtifactRoot, qualifiedSource, sourcePlan, outputDirectory }) {
@@ -324,8 +333,33 @@ export function verifyPromotion({ windowsArtifactRoot, macosArtifactRoot, qualif
   const packageMetadata = jsonFile(path.join(qualifiedSource, 'package.json'), 'qualified package.json')
   assert(packageMetadata?.version === sourcePlan.version, 'Qualified source version does not match the requested release tag')
   const lockfileSha256 = canonicalPnpmLockfileSha256(path.join(qualifiedSource, 'pnpm-lock.yaml'))
-  const windows = validateWindowsArtifact(windowsArtifactRoot, { expectedSha: sourcePlan.expectedSha, lockfileSha256, version: sourcePlan.version })
-  const macos = validateMacosArtifact(macosArtifactRoot, { expectedSha: sourcePlan.expectedSha, lockfileSha256, version: sourcePlan.version })
+  const lockfileRawSha256 = sha256(path.join(qualifiedSource, 'pnpm-lock.yaml'))
+  assert(Number.isInteger(sourcePlan?.windows?.runId) && Number.isInteger(sourcePlan?.macos?.runId), 'Source verification plan is missing qualification run identity')
+  assert(Number.isInteger(sourcePlan?.windows?.runAttempt) && sourcePlan.windows.runAttempt > 0 && Number.isInteger(sourcePlan?.macos?.runAttempt) && sourcePlan.macos.runAttempt > 0, 'Source verification plan is missing qualification run attempt')
+  const windows = validateWindowsArtifact(windowsArtifactRoot, {
+    expectedSha: sourcePlan.expectedSha,
+    lockfileSha256,
+    lockfileRawSha256,
+    version: sourcePlan.version,
+    repository: sourcePlan.repository,
+    runId: sourcePlan.windows.runId,
+    runAttempt: sourcePlan.windows.runAttempt,
+    actor: sourcePlan.windows.actor,
+    event: sourcePlan.windows.event,
+    workflow: sourcePlan.windows.workflow,
+  })
+  const macos = validateMacosArtifact(macosArtifactRoot, {
+    expectedSha: sourcePlan.expectedSha,
+    lockfileSha256,
+    lockfileRawSha256,
+    version: sourcePlan.version,
+    repository: sourcePlan.repository,
+    runId: sourcePlan.macos.runId,
+    runAttempt: sourcePlan.macos.runAttempt,
+    actor: sourcePlan.macos.actor,
+    event: sourcePlan.macos.event,
+    workflow: sourcePlan.macos.workflow,
+  })
   assert(!existsSync(outputDirectory) || readdirSync(outputDirectory).length === 0, 'Promotion output directory must be empty')
   mkdirSync(path.join(outputDirectory, 'assets'), { recursive: true })
   const inventory = []
@@ -338,7 +372,35 @@ export function verifyPromotion({ windowsArtifactRoot, macosArtifactRoot, qualif
     }
   }
   inventory.sort((left, right) => left.file.localeCompare(right.file))
-  const ready = { schemaVersion: 1, state: 'READY_TO_PUBLISH', repository: sourcePlan.repository, expectedSha: sourcePlan.expectedSha, tag: sourcePlan.tag, version: sourcePlan.version, assets: inventory }
+  const ready = {
+    schemaVersion: 2,
+    state: 'READY_TO_PUBLISH',
+    repository: sourcePlan.repository,
+    expectedSha: sourcePlan.expectedSha,
+    tag: sourcePlan.tag,
+    version: sourcePlan.version,
+    qualification: {
+      windows: {
+        runId: sourcePlan.windows.runId,
+        runAttempt: sourcePlan.windows.runAttempt,
+        artifactId: sourcePlan.windows.artifact?.id ?? null,
+        artifactDigest: sourcePlan.windows.artifact?.digest ?? null,
+        contractSha256: windows.contractSha256,
+        ledgerSha256: windows.ledgerSha256,
+        manifestSha256: windows.manifestSha256,
+      },
+      macos: {
+        runId: sourcePlan.macos.runId,
+        runAttempt: sourcePlan.macos.runAttempt,
+        artifactId: sourcePlan.macos.artifact?.id ?? null,
+        artifactDigest: sourcePlan.macos.artifact?.digest ?? null,
+        contractSha256: macos.contractSha256,
+        ledgerSha256: macos.ledgerSha256,
+        manifestSha256: macos.manifestSha256,
+      },
+    },
+    assets: inventory,
+  }
   writeFileSync(path.join(outputDirectory, 'promotion-ready.json'), `${JSON.stringify(ready, null, 2)}\n`, 'utf8')
   return ready
 }
@@ -354,35 +416,58 @@ export function verifyRemoteReleaseAssets(release, localAssets) {
   }
 }
 
+function validatePublishedRelease(release, ready) {
+  assert(release?.draft === false && release?.prerelease === false, 'Published release state is invalid')
+  assert(
+    release.tag_name === ready.tag
+      && String(release.target_commitish ?? '').toLowerCase() === ready.expectedSha
+      && release.name === ready.tag
+      && release.body === releaseNotes(ready.version),
+    'Published release provenance is inconsistent',
+  )
+  assert(Array.isArray(release.assets), 'Published release assets are invalid')
+  exactFileSet(release.assets.map(asset => asset?.name), ready.assets.map(asset => asset.file), 'Published release asset')
+  for (const local of ready.assets) {
+    const remote = release.assets.find(asset => asset?.name === local.file)
+    assert(remote?.state === 'uploaded', `Published release asset state is invalid: ${local.file}`)
+    assert(remote.size === local.sizeBytes && remote.digest?.toLowerCase() === `sha256:${local.sha256}`, `Published release asset verification failed: ${local.file}`)
+  }
+}
+
 export function releaseNotes(version) {
+  assert(
+    MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning === 'unsigned'
+      && MACOS_FORMAL_DISTRIBUTION_POLICY.notarization === 'not_notarized',
+    'macOS release notes only support the formal unsigned and unnotarized distribution policy',
+  )
   return [
     `## 中文`,
     ``,
-    `AI 小说作家 ${version} 是一次围绕结构化角色名单的重大更新：结构化角色名单成为角色卡的唯一事实源，从根源修复 #76。`,
+    `AI 小说作家 ${version} 是一次覆盖模型参数、旧项目角色数据与长输出恢复的重大更新。`,
     ``,
-    `- 角色架构由一次结构化输出驱动，以 SQLite 原子提交角色名单及其只读角色图谱投影；只有回读成功后才标记成功。`,
-    `- 旧项目必须显式安全迁移：保留旧角色图谱原文作为证据，失败不会改写任何角色数据。`,
-    `- 导入、手工编辑、蓝图同步、定稿和清除均经过统一的角色名单 seam。`,
+    `- #78 模型温度与 Kimi 兼容：用户配置温度成为连接测试、普通生成、流式生成和工作流的唯一权威来源；仅在服务商官方端点明确要求固定温度时才由参数策略安全处理，避免第三方代理被误判。`,
+    `- #84 角色侧边栏崩溃：打开项目时统一规范化旧角色记录中缺失或未知的角色定位，并为外部坏数据保留防御显示，避免旧角色数据导致侧边栏渲染失败。`,
+    `- #85 长输出恢复：模型因长度限制截断时采用有上限、有上下文预算的有界续写；无法获得完整结果时立即失败，不完整草稿及后处理结果不落盘。`,
     ``,
     `本版本在同一个 Release 中继续遵守五项资产合同：Windows x64 安装程序、其 blockmap、latest.yml、macOS Apple Silicon（ARM64）DMG 及其 SHA-256 校验文件。`,
     ``,
-    `- Windows x64：下载 \`ai-novel-writer-setup-${version}.exe\`；配套资产为 \`ai-novel-writer-setup-${version}.exe.blockmap\` 与 \`latest.yml\`，支持应用内更新。Windows 安装包未签名。`,
-    `- macOS ARM64：下载 \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`。此包未签名、未公证；首次安装时 macOS Gatekeeper 可能要求在“隐私与安全性”中手动允许。`,
+    `- Windows x64：下载 \`ai-novel-writer-setup-${version}.exe\`；配套资产为 \`ai-novel-writer-setup-${version}.exe.blockmap\` 与 \`latest.yml\`，支持应用内更新。Windows 安装包未签名（代码签名：未签名）。`,
+    `- macOS ARM64：下载 \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`。代码签名：未签名；Apple 公证：未公证。首次安装时 macOS Gatekeeper 可能要求在“隐私与安全性”中手动允许。`,
     `- macOS 校验文件：\`ai-novel-writer-mac-arm64-${version}-installer.dmg.sha256\`。`,
     `- macOS 本版本不提供应用内更新；后续版本需从 Release 页面手动更新。Windows 应用内更新只使用 Windows 的 \`latest.yml\` 与安装器。`,
     ``,
     `## English`,
     ``,
-    `AI Novel Writer ${version} is a major update centered on the structured character roster: the structured character roster is the single source of truth for character cards, fixing #76 at the source.`,
+    `AI Novel Writer ${version} is a major update spanning model parameters, legacy character data, and recovery from length-limited output.`,
     ``,
-    `- Character architecture is driven by one structured output, uses an SQLite atomic commit for the roster and its read-only character-graph projection, and is marked successful only after the read-back succeeds.`,
-    `- This means legacy projects require an explicit safe migration: original legacy character-graph text is retained as evidence, and failure never overwrites character data.`,
-    `- Imports, manual edits, blueprint synchronization, finalization, and clearing all use one roster seam.`,
+    `- #78 model temperature and Kimi compatibility: the user-configured temperature is authoritative across connection tests, standard and streaming generation, and workflows. The request policy handles a fixed temperature only when an official provider endpoint explicitly requires it, without misclassifying third-party proxies.`,
+    `- #84 character sidebar crash: legacy character records with missing or unknown roles are normalized when a project opens, with defensive rendering retained for malformed external data so legacy character data can no longer crash the sidebar.`,
+    `- #85 long-output recovery: output stopped by a model length limit uses bounded continuation with a finite continuation count and context budget. If a complete result cannot be obtained, the operation fails immediately and incomplete drafts or post-processing results are not persisted.`,
     ``,
     `This Release continues the five assets contract: the Windows x64 installer, its blockmap, latest.yml, the macOS Apple Silicon (ARM64) DMG, and its SHA-256 checksum.`,
     ``,
-    `- Windows x64: download \`ai-novel-writer-setup-${version}.exe\`; \`ai-novel-writer-setup-${version}.exe.blockmap\` and \`latest.yml\` support in-app updates. The Windows installer is not code-signed.`,
-    `- macOS ARM64: download \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`. This package is unsigned and not notarized; Gatekeeper may require a manual Allow action in Privacy & Security on first install.`,
+    `- Windows x64: download \`ai-novel-writer-setup-${version}.exe\`; \`ai-novel-writer-setup-${version}.exe.blockmap\` and \`latest.yml\` support in-app updates. The Windows installer is not code-signed. Code signing: unsigned.`,
+    `- macOS ARM64: download \`ai-novel-writer-mac-arm64-${version}-installer.dmg\`. Code signing: unsigned; Apple notarization: not notarized. Gatekeeper may require a manual Allow action in Privacy & Security on first install.`,
     `- macOS checksum: \`ai-novel-writer-mac-arm64-${version}-installer.dmg.sha256\`.`,
     `- This macOS release has no in-app updater; future versions require a manual update from the Release page. The Windows in-app updater consumes only Windows \`latest.yml\` and installer assets.`,
   ].join('\n')
@@ -445,12 +530,13 @@ async function releaseDraftIfPresent(fetcher, api, headers, ready) {
 }
 
 async function createAndPopulateDraft(fetcher, api, uploads, headers, ready, readyRoot) {
+  await assertTagCommit(fetcher, api, headers, ready, 'before draft creation')
   const release = await requestJson(fetcher, `${api}/repos/${ready.repository}/releases`, {
     method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify({ tag_name: ready.tag, target_commitish: ready.expectedSha, name: ready.tag, body: releaseNotes(ready.version), draft: true, prerelease: false }),
   }, 'Create release draft')
   validatePromotionDraft(release, ready)
-  assert(await tagCommitShaIfPresent(fetcher, api, headers, ready) === null, 'Creating a draft unexpectedly created a Git tag')
+  await assertTagCommit(fetcher, api, headers, ready, 'after draft creation')
   const uploadBase = release.upload_url.replace('{?name,label}', '').replace(/^https:\/\/uploads\.github\.com/, uploads)
   for (const asset of ready.assets) {
     const file = path.join(readyRoot, 'assets', asset.file)
@@ -463,6 +549,20 @@ async function createAndPopulateDraft(fetcher, api, uploads, headers, ready, rea
   return populated
 }
 
+function validatePromotionQualification(qualification) {
+  assert(qualification !== null && typeof qualification === 'object', 'Promotion-ready qualification provenance is invalid')
+  for (const platform of ['windows', 'macos']) {
+    const record = qualification[platform]
+    assert(Number.isInteger(record?.runId) && record.runId > 0, `Promotion-ready ${platform} qualification run ID is invalid`)
+    assert(Number.isInteger(record?.runAttempt) && record.runAttempt > 0, `Promotion-ready ${platform} qualification run attempt is invalid`)
+    assert(Number.isInteger(record?.artifactId) && record.artifactId > 0, `Promotion-ready ${platform} qualification artifact ID is invalid`)
+    assert(validDigest(record?.artifactDigest), `Promotion-ready ${platform} qualification artifact digest is invalid`)
+    for (const hashName of ['contractSha256', 'ledgerSha256', 'manifestSha256']) {
+      assert(/^[a-f0-9]{64}$/i.test(record?.[hashName] ?? ''), `Promotion-ready ${platform} qualification ${hashName} is invalid`)
+    }
+  }
+}
+
 async function restoreDraftRelease(fetcher, api, headers, ready, draft) {
   const restored = await requestJson(fetcher, `${api}/repos/${ready.repository}/releases/${draft.id}`, {
     method: 'PATCH', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ draft: true, prerelease: false }),
@@ -473,37 +573,34 @@ async function restoreDraftRelease(fetcher, api, headers, ready, draft) {
 
 export async function publishPromotion({ readyRoot, token, fetcher = globalThis.fetch, apiBaseUrl = 'https://api.github.com', uploadsBaseUrl = 'https://uploads.github.com' }) {
   const ready = jsonFile(path.join(readyRoot, 'promotion-ready.json'), 'promotion-ready manifest')
-  assert(ready?.schemaVersion === 1 && ready?.state === 'READY_TO_PUBLISH' && Array.isArray(ready.assets), 'Promotion-ready manifest is invalid')
+  assert(ready?.schemaVersion === 2 && ready?.state === 'READY_TO_PUBLISH' && Array.isArray(ready.assets), 'Promotion-ready manifest is invalid')
+  validatePromotionQualification(ready.qualification)
   const api = apiBaseUrl.replace(/\/$/, '')
   const uploads = uploadsBaseUrl.replace(/\/$/, '')
   const headers = apiHeaders(token)
-  let draft = await releaseDraftIfPresent(fetcher, api, headers, ready)
   const existingTag = await tagCommitShaIfPresent(fetcher, api, headers, ready)
-  if (draft === null) {
-    assert(existingTag === null, 'A Git tag exists without its matching draft Release')
+  let draft = await releaseDraftIfPresent(fetcher, api, headers, ready)
+  if (existingTag === null && draft === null) {
+    await createVerifiedTag(fetcher, api, headers, ready)
+    await assertCreatedTagCommit(fetcher, api, headers, ready, 'before draft creation')
     draft = await createAndPopulateDraft(fetcher, api, uploads, headers, ready, readyRoot)
-  } else {
+  } else if (existingTag !== null && draft !== null) {
+    await assertTagCommit(fetcher, api, headers, ready, 'before publication')
     validatePromotionDraft(draft, ready)
     verifyRemoteReleaseAssets(draft, ready.assets)
-  }
-  if (existingTag === null) {
-    await createVerifiedTag(fetcher, api, headers, ready)
-    await assertCreatedTagCommit(fetcher, api, headers, ready, 'before publication')
+  } else if (existingTag !== null) {
+    throw new Error('A Git tag exists without its matching draft Release; stop for manual recovery')
   } else {
-    await assertTagCommit(fetcher, api, headers, ready, 'before publication')
+    throw new Error('A draft Release exists without its matching Git tag; stop for manual recovery')
   }
   let publicationAttempted = false
   try {
     publicationAttempted = true
-    const published = await requestJson(fetcher, `${api}/repos/${ready.repository}/releases/${draft.id}`, {
+    await requestJson(fetcher, `${api}/repos/${ready.repository}/releases/${draft.id}`, {
       method: 'PATCH', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ draft: false, prerelease: false }),
     }, 'Publish final release')
-    assert(published?.draft === false && published?.prerelease === false, 'Release was not published as a final release')
-    exactFileSet(published.assets?.map(asset => asset?.name) ?? [], ready.assets.map(asset => asset.file), 'Published release asset')
-    for (const local of ready.assets) {
-      const remote = published.assets.find(asset => asset?.name === local.file)
-      assert(remote?.size === local.sizeBytes && remote?.digest?.toLowerCase() === `sha256:${local.sha256}`, `Published release asset verification failed: ${local.file}`)
-    }
+    const published = await requestJson(fetcher, `${api}/repos/${ready.repository}/releases/${draft.id}`, { headers }, 'Read back published release')
+    validatePublishedRelease(published, ready)
     await assertTagCommit(fetcher, api, headers, ready, 'after publication')
     return published
   } catch (error) {

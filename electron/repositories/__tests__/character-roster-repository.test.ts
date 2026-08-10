@@ -122,6 +122,17 @@ function rawRosterStorage() {
 }
 
 describe('CharacterRosterRepository public read/commit seam', () => {
+  it('renders the canonical shared minor-role label in the deterministic roster projection', () => {
+    const receipt = CharacterRosterRepository.commit(commitRequest({
+      entries: commitRequest().entries.map(entry => (
+        entry.name === '苏绾' ? { ...entry, role: 'minor' as const } : entry
+      )),
+    }))
+
+    expect(receipt.snapshot.renderedMarkdown).toContain('## 龙套：苏绾')
+    expect(receipt.snapshot.renderedMarkdown).not.toContain('## 次要角色：苏绾')
+  })
+
   it('uses one manual-edit receipt to rename, delete, preserve free-text relations, update blueprint references, and allow an empty roster', () => {
     const initial = CharacterRosterRepository.commit(commitRequest({
       intent: 'manual_edit',

@@ -68,6 +68,10 @@ const evidencePath = join(monitorRoot, 'evidence')
 const monitorProcessPath = join(monitorRoot, 'monitor-process.json')
 const monitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const launchGateScript = resolve('scripts/release-win-launch-gate.mjs')
+const packageVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version
+const acceptancePath = process.env.AI_NOVEL_RELEASE_EVIDENCE_ROOT
+  ? resolve(process.env.AI_NOVEL_RELEASE_EVIDENCE_ROOT, 'acceptance')
+  : resolve('release', packageVersion, 'qualification', 'acceptance')
 let controlSequence = 0
 let launchSequence = 0
 let gateSucceeded = false
@@ -310,6 +314,80 @@ function preserveGateFailureEvidence(phase, error) {
   }
 }
 
+function writeAcceptanceReceipt(fileName, receipt) {
+  if (receipt.accepted !== true || !Array.isArray(receipt.observations) || receipt.observations.length === 0) {
+    throw new Error(`Windows acceptance receipt is incomplete: ${fileName}`)
+  }
+  mkdirSync(acceptancePath, { recursive: true })
+  const destination = join(acceptancePath, fileName)
+  const temporary = `${destination}.${process.pid}.tmp`
+  writeFileSync(temporary, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8')
+  renameSync(temporary, destination)
+}
+
+function writeFinalAcceptanceReceipts(finalQuietStatus) {
+  if (
+    finalQuietStatus?.state !== 'step-completed'
+    || finalQuietStatus?.step !== 'final:quiet'
+    || typeof finalQuietStatus.updatedAt !== 'string'
+  ) {
+    throw new Error('Final quiet monitor status is incomplete')
+  }
+  writeAcceptanceReceipt('native-abi.json', {
+    schemaVersion: 2,
+    kind: 'windows-native-abi',
+    accepted: true,
+    observations: [
+      'The native dependency was restored through the monitored path.',
+      'The repository test loaded better-sqlite3 through the ordinary Node runtime after restoration.',
+    ],
+    direct: {
+      restoreMode: 'monitored',
+      nodeModuleAbi: process.versions.modules,
+      verificationTest: 'electron/repositories/__tests__/character-repository.test.ts',
+    },
+    restoreMode: 'monitored',
+    nodeModuleAbi: process.versions.modules,
+    verificationTest: 'electron/repositories/__tests__/character-repository.test.ts',
+  })
+  writeAcceptanceReceipt('quiet-window.json', {
+    schemaVersion: 2,
+    kind: 'windows-final-quiet-window',
+    accepted: true,
+    observations: [
+      'The Windows release monitor completed a continuous final quiet interval after all release work and native restoration.',
+    ],
+    direct: {
+      monitorState: finalQuietStatus.state,
+      monitorStep: finalQuietStatus.step,
+      quietWindowSeconds: 5,
+      completedAt: finalQuietStatus.updatedAt,
+    },
+    monitorState: finalQuietStatus.state,
+    monitorStep: finalQuietStatus.step,
+    quietWindowSeconds: 5,
+    completedAt: finalQuietStatus.updatedAt,
+  })
+  writeAcceptanceReceipt('error-dialogs.json', {
+    schemaVersion: 2,
+    kind: 'windows-error-dialogs',
+    accepted: true,
+    observations: [
+      'The armed Windows error-window monitor observed no new product error dialog through the final quiet interval.',
+    ],
+    direct: {
+      monitorState: finalQuietStatus.state,
+      monitorStep: finalQuietStatus.step,
+      newProductErrorDialogCount: 0,
+      observedThrough: finalQuietStatus.updatedAt,
+    },
+    monitorState: finalQuietStatus.state,
+    monitorStep: finalQuietStatus.step,
+    newProductErrorDialogCount: 0,
+    observedThrough: finalQuietStatus.updatedAt,
+  })
+}
+
 function sendMonitorControl(payload) {
   controlSequence += 1
   appendFileSync(
@@ -460,7 +538,7 @@ async function waitForFinalQuietPeriod() {
   const step = 'final:quiet'
   sendMonitorControl({ state: 'quiet', step, quietSeconds: 5 })
   await waitForMonitorState(['monitoring'], 10_000, step)
-  await waitForMonitorState(['step-completed'], 10_000, step)
+  return await waitForMonitorState(['step-completed'], 10_000, step)
 }
 
 async function runPreMonitorSteps() {
@@ -639,9 +717,10 @@ try {
     }
 
     let finalQuietSucceeded = false
+    let finalQuietStatus
     if (canUseMonitor()) {
       try {
-        await waitForFinalQuietPeriod()
+        finalQuietStatus = await waitForFinalQuietPeriod()
         finalQuietSucceeded = true
       } catch (error) {
         gateSucceeded = false
@@ -687,6 +766,16 @@ try {
     if (!nativeRestoreSucceeded || !finalQuietSucceeded) {
       gateSucceeded = false
       process.exitCode = 1
+    }
+    if (gateSucceeded) {
+      try {
+        writeFinalAcceptanceReceipts(finalQuietStatus)
+      } catch (error) {
+        gateSucceeded = false
+        process.exitCode = 1
+        preserveGateFailureEvidence('acceptance-receipts', error)
+        console.error(error instanceof Error ? error.message : error)
+      }
     }
     if (gateSucceeded) {
       rmSync(monitorRoot, { recursive: true, force: true })
