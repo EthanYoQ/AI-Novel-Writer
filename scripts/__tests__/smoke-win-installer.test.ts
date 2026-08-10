@@ -92,6 +92,8 @@ describe('Windows v2 acceptance receipts', () => {
     expect(installer).toContain("'uninstall.json'")
     expect(installer).toContain("'signing.json'")
     expect(installer).toContain('Get-AuthenticodeSignature')
+    expect(installer).toContain('Microsoft.PowerShell.Security.psd1')
+    expect(installer).toContain('Microsoft.PowerShell.Security\\Get-AuthenticodeSignature')
     expect(installer).toContain('unsignedDistributionImpact')
     expect(installer).toContain('SmartScreen')
     expect(installer).toContain('enterprise policy')
@@ -120,6 +122,15 @@ $signing = Get-AiNovelSigningAcceptanceReceipt -Path $unsigned -SignatureProvide
   param([string]$Path)
   [pscustomobject]@{ Status = 'NotSigned'; SignerCertificate = $null }
 }
+$unknownStatusRejected = $false
+try {
+  Get-AiNovelSigningAcceptanceReceipt -Path $unsigned -SignatureProvider {
+    param([string]$Path)
+    [pscustomobject]@{ Status = 'UnknownError'; SignerCertificate = $null }
+  }
+} catch {
+  $unknownStatusRejected = $true
+}
 $rejected = $false
 try {
   Assert-AiNovelUninstallPostcondition -InstallRoot $install -InstalledExecutable $exe
@@ -128,11 +139,12 @@ try {
 }
 Remove-Item -LiteralPath $exe -Force
 $uninstall = Assert-AiNovelUninstallPostcondition -InstallRoot $install -InstalledExecutable $exe
-[pscustomobject]@{ Signing = $signing; RejectedUnknownResidue = $rejected; Uninstall = $uninstall } | ConvertTo-Json -Depth 8 -Compress
+[pscustomobject]@{ Signing = $signing; UnknownStatusRejected = $unknownStatusRejected; RejectedUnknownResidue = $rejected; Uninstall = $uninstall } | ConvertTo-Json -Depth 8 -Compress
 Remove-Item -LiteralPath $root -Recurse -Force
 `)
     const result = parseLastJsonLine(output) as {
       Signing: Record<string, unknown>
+      UnknownStatusRejected: boolean
       RejectedUnknownResidue: boolean
       Uninstall: Record<string, unknown>
     }
@@ -143,10 +155,33 @@ Remove-Item -LiteralPath $root -Recurse -Force
       validationResult: 'NotSigned',
     })
     expect(String(result.Signing.unsignedDistributionImpact)).toMatch(/SmartScreen/i)
+    expect(result.UnknownStatusRejected).toBe(true)
     expect(result.RejectedUnknownResidue).toBe(true)
     expect(result.Uninstall).toMatchObject({
       accepted: true,
       installedExecutableExists: false,
+    })
+  }, WINDOWS_POWERSHELL_RECEIPT_TEST_TIMEOUT_MS)
+
+  windowsIt('verifies an unsigned file when security-module autoloading is unavailable', () => {
+    const output = runInstallerLibrary(`
+$root = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-signing-module-test-' + [guid]::NewGuid().ToString('N'))
+$unsigned = Join-Path $root 'unsigned.ps1'
+New-Item -ItemType Directory -Path $root -Force | Out-Null
+[System.IO.File]::WriteAllText($unsigned, 'Write-Output unsigned')
+Remove-Module Microsoft.PowerShell.Security -Force -ErrorAction SilentlyContinue
+$PSModuleAutoLoadingPreference = 'None'
+try {
+  Get-AiNovelSigningAcceptanceReceipt -Path $unsigned | ConvertTo-Json -Depth 8 -Compress
+} finally {
+  Remove-Item -LiteralPath $root -Recurse -Force
+}
+`)
+
+    expect(parseLastJsonLine(output)).toMatchObject({
+      accepted: true,
+      status: 'unsigned',
+      validationResult: 'NotSigned',
     })
   }, WINDOWS_POWERSHELL_RECEIPT_TEST_TIMEOUT_MS)
 })

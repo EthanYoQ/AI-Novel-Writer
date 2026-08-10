@@ -609,7 +609,12 @@ function Get-AiNovelSigningAcceptanceReceipt {
 
   $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
   $signature = if ($null -eq $SignatureProvider) {
-    Get-AuthenticodeSignature -FilePath $resolvedPath
+    $securityModuleManifest = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+    if (-not (Test-Path -LiteralPath $securityModuleManifest -PathType Leaf)) {
+      throw "Windows PowerShell security module manifest is missing: $securityModuleManifest"
+    }
+    Import-Module -Name $securityModuleManifest -Force -ErrorAction Stop
+    Microsoft.PowerShell.Security\Get-AuthenticodeSignature -LiteralPath $resolvedPath -ErrorAction Stop
   } else {
     & $SignatureProvider $resolvedPath
   }
