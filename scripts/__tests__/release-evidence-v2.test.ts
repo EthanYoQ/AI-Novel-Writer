@@ -42,7 +42,7 @@ function validWindowsReceipt(name: string, releaseRoot: string) {
   })
   const receipts: Record<string, unknown> = {
     install: { ...base, kind: 'windows-install', direct: { installerExitCode: 0, installedExecutable: 'C:/AI/AI小说作家.exe', installedExecutableExists: true } },
-    launch: { ...base, kind: 'windows-launch', direct: { executablePath: 'C:/AI/AI小说作家.exe', productVersion: '0.8.1', processId: 101, processStartTimeTicks: '12345', visibleMainWindowCount: 1 } },
+    launch: { ...base, kind: 'windows-launch', expectedVersion: '0.8.1', direct: { executablePath: 'C:/AI/AI小说作家.exe', productVersion: '0.8.1.0', processId: 101, processStartTimeTicks: '12345', visibleMainWindowCount: 1 } },
     'quiet-window': { ...base, kind: 'windows-final-quiet-window', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', quietWindowSeconds: 5, completedAt: '2026-08-10T14:57:30.3051843Z' } },
     'error-dialogs': { ...base, kind: 'windows-error-dialogs', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', newProductErrorDialogCount: 0, observedThrough: '2026-08-10T14:57:30.3051843Z' } },
     uninstall: { ...base, kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
@@ -301,13 +301,15 @@ describe('release evidence v2 CLI', () => {
       ], { cwd: repositoryRoot, encoding: 'utf8' })
       expect(recorded.status, recorded.stderr).toBe(0)
     }
-    const writeSemanticReceipts = (timestamp?: string) => {
+    type LaunchReceipt = { expectedVersion?: unknown, direct: Record<string, unknown> }
+    const writeSemanticReceipts = (timestamp?: string, mutateLaunch?: (receipt: LaunchReceipt) => void) => {
       for (const receipt of [
         'install', 'launch', 'quiet-window', 'error-dialogs', 'uninstall', 'upgrade-data', 'native-abi', 'packaged-smoke', 'signing',
       ]) {
-        const value = validWindowsReceipt(receipt, releaseRoot) as { direct: Record<string, unknown> }
+        const value = validWindowsReceipt(receipt, releaseRoot) as LaunchReceipt
         if (timestamp !== undefined && receipt === 'quiet-window') value.direct.completedAt = timestamp
         if (timestamp !== undefined && receipt === 'error-dialogs') value.direct.observedThrough = timestamp
+        if (receipt === 'launch') mutateLaunch?.(value)
         writeJson(path.join(evidenceRoot, 'acceptance', `${receipt}.json`), value)
       }
     }
@@ -328,6 +330,25 @@ describe('release evidence v2 CLI', () => {
       ], { cwd: repositoryRoot, encoding: 'utf8' })
       expect(invalidTimestampResult.status).not.toBe(0)
       expect(invalidTimestampResult.stderr).toContain('Windows error-dialog receipt facts are invalid')
+    }
+    for (const mutateLaunch of [
+      (receipt: LaunchReceipt) => { receipt.direct.productVersion = '0.8.1.1' },
+      (receipt: LaunchReceipt) => { receipt.direct.productVersion = '0.8.1-beta.1' },
+      (receipt: LaunchReceipt) => { receipt.direct.productVersion = 'garbage' },
+      (receipt: LaunchReceipt) => { delete receipt.direct.productVersion },
+      (receipt: LaunchReceipt) => { receipt.expectedVersion = '0.8.0' },
+      (receipt: LaunchReceipt) => { delete receipt.expectedVersion },
+    ]) {
+      writeSemanticReceipts(undefined, mutateLaunch)
+      const invalidLaunchResult = spawnSync(process.execPath, [
+        evidenceScript,
+        'finalize',
+        '--platform', 'windows',
+        '--evidence-root', evidenceRoot,
+        '--release-root', releaseRoot,
+      ], { cwd: repositoryRoot, encoding: 'utf8' })
+      expect(invalidLaunchResult.status).not.toBe(0)
+      expect(invalidLaunchResult.stderr).toContain('Windows launch receipt facts are invalid')
     }
     writeSemanticReceipts()
 

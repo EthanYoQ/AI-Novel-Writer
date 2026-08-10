@@ -567,7 +567,9 @@ function validateWindowsReceipt(receipt, name, bundleRoot, version) {
   if (name === 'install') {
     assert(direct.installerExitCode === 0 && nonEmptyString(direct.installedExecutable) && direct.installedExecutableExists === true, 'Windows install receipt facts are invalid')
   } else if (name === 'launch') {
-    assert(nonEmptyString(direct.executablePath) && direct.productVersion === version && positiveInteger(direct.processId) && nonEmptyString(direct.processStartTimeTicks) && positiveInteger(direct.visibleMainWindowCount), 'Windows launch receipt facts are invalid')
+    const strictReleaseVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)
+    const productVersionMatches = direct.productVersion === version || direct.productVersion === `${version}.0`
+    assert(strictReleaseVersion && receipt.expectedVersion === version && productVersionMatches && nonEmptyString(direct.executablePath) && positiveInteger(direct.processId) && nonEmptyString(direct.processStartTimeTicks) && positiveInteger(direct.visibleMainWindowCount), 'Windows launch receipt facts are invalid')
   } else if (name === 'quiet-window') {
     assert(direct.monitorState === 'step-completed' && direct.monitorStep === 'final:quiet' && Number(direct.quietWindowSeconds) >= 5 && validIsoTimestamp(direct.completedAt), 'Windows quiet-window receipt facts are invalid')
   } else if (name === 'error-dialogs') {
