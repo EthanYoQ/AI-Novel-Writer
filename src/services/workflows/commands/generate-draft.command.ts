@@ -13,6 +13,8 @@ import {
 } from '../../../shared/project-paths'
 import type { ChapterInfo } from '../chapter-workflow'
 import { normalizeChapterWordsTarget } from '../chapter-creation-parameters'
+import { appendVisibleTextContinuation } from '../bounded-completion'
+import { stripThinkingTags } from '../workflow-utils'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MIN_TARGET_COMPLETION_RATIO = 0.82
@@ -22,7 +24,6 @@ const OUTPUT_CHARS_PER_TOKEN = 1.5
 const SAFE_DEFAULT_MODEL_MAX_TOKENS = 4096
 const UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS = 8192
 const CONTEXT_SAFETY_RESERVE_TOKENS = 512
-const MIN_CONTINUATION_OVERLAP_CHARS = 48
 const CHINESE_CHARACTER_PATTERN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu
 const ENGLISH_WORD_PATTERN = /[A-Za-z]+(?:['’][A-Za-z]+)*/g
 const WHITESPACE_OR_PUNCTUATION_PATTERN = /[\s\p{P}\p{S}]/gu
@@ -39,10 +40,7 @@ export function countDraftUnits(text: string): number {
 }
 
 export function sanitizeDraftText(text: string): string {
-  const cleaned = text
-    .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
-    .replace(/^\s*[\s\S]{0,300}<\/think>\s*/i, '')
-    .replace(/<\/?think>/gi, '')
+  const cleaned = stripThinkingTags(text)
     .replace(/^\s*(?:点我继续生成后续内容|继续生成后续内容|请点击继续|未完待续)\s*$/gmi, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
@@ -121,34 +119,9 @@ function estimatedPromptTokens(prompt: string): number {
   return Math.ceil(prompt.length / OUTPUT_CHARS_PER_TOKEN)
 }
 
-function removeLeadingNonWhitespaceCharacters(text: string, count: number): string {
-  if (count <= 0) return text
-  let consumed = 0
-  for (let index = 0; index < text.length; index += 1) {
-    if (!/\s/u.test(text[index])) consumed += 1
-    if (consumed >= count) return text.slice(index + 1).trimStart()
-  }
-  return ''
-}
-
-function overlappingVisiblePrefixLength(existingText: string, addition: string): number {
-  const existingTail = existingText.slice(-CONTINUE_PROMPT_MAX_CHARS).replace(/\s+/gu, '')
-  const additionHead = addition.slice(0, CONTINUE_PROMPT_MAX_CHARS).replace(/\s+/gu, '')
-  const maximum = Math.min(existingTail.length, additionHead.length)
-
-  for (let length = maximum; length >= MIN_CONTINUATION_OVERLAP_CHARS; length -= 1) {
-    if (existingTail.slice(-length) === additionHead.slice(0, length)) return length
-  }
-  return 0
-}
-
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
 export function appendVisibleDraftContinuation(draft: string, continuation: string): string {
-  const visibleDraft = sanitizeDraftText(draft)
-  const visibleContinuation = sanitizeDraftText(continuation)
-  const overlap = overlappingVisiblePrefixLength(visibleDraft, visibleContinuation)
-  const newVisibleText = removeLeadingNonWhitespaceCharacters(visibleContinuation, overlap)
-  return sanitizeDraftText([visibleDraft, newVisibleText].filter(Boolean).join('\n\n'))
+  return appendVisibleTextContinuation(draft, continuation, sanitizeDraftText)
 }
 
 function takeSentenceBoundaryWithin(text: string, maxChars: number): string {
@@ -416,8 +389,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     // explicit output-length terminal state is eligible for continuation.
     if (finishReason !== 'length') return false
     const currentChars = countDraftUnits(currentText)
-    const lowerBound = Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
-    return currentChars < lowerBound && currentChars < maxDraftCharsForTarget(targetChars)
+    return currentChars < maxDraftCharsForTarget(targetChars)
   }
 
   private async extendDraftIfNeeded(params: {

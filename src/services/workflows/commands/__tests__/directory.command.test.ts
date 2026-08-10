@@ -159,7 +159,7 @@ describe('GenerateDirectoryCommand', () => {
       return { success: true }
     })
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(JSON.stringify({
+    vi.spyOn(command as unknown as { callLLMWithBoundedCompletion: () => Promise<string> }, 'callLLMWithBoundedCompletion').mockResolvedValue(JSON.stringify({
       blueprints: [{
         chapterNumber: 1,
         title: '结盟',
@@ -202,8 +202,8 @@ describe('GenerateDirectoryCommand', () => {
     const { invoke } = createPersistenceIpc()
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 12 }, snapshot)
     const callLLM = vi.spyOn(
-      command as unknown as { callLLM: (...args: unknown[]) => Promise<string> },
-      'callLLM',
+      command as unknown as { callLLMWithBoundedCompletion: (...args: unknown[]) => Promise<string> },
+      'callLLMWithBoundedCompletion',
     )
       .mockResolvedValueOnce(blueprintJson([1, 2, 3, 4, 5]))
       .mockResolvedValueOnce(blueprintJson([6, 7, 8, 9, 10]))
@@ -228,7 +228,7 @@ describe('GenerateDirectoryCommand', () => {
     }
     const { invoke } = createPersistenceIpc()
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 6 }, snapshot)
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+    vi.spyOn(command as unknown as { callLLMWithBoundedCompletion: () => Promise<string> }, 'callLLMWithBoundedCompletion').mockResolvedValue(
       blueprintJson([1, 2, 3, 4, 5, 6]),
     )
 
@@ -243,7 +243,7 @@ describe('GenerateDirectoryCommand', () => {
     }
     const { invoke } = createPersistenceIpc()
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 6 }, snapshot)
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+    vi.spyOn(command as unknown as { callLLMWithBoundedCompletion: () => Promise<string> }, 'callLLMWithBoundedCompletion').mockResolvedValue(
       blueprintJson([1, 2, 3, 4]),
     )
 
@@ -259,8 +259,8 @@ describe('GenerateDirectoryCommand', () => {
     createPersistenceIpc()
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 6 }, snapshot)
     const callLLM = vi.spyOn(
-      command as unknown as { callLLM: (...args: unknown[]) => Promise<string> },
-      'callLLM',
+      command as unknown as { callLLMWithBoundedCompletion: (...args: unknown[]) => Promise<string> },
+      'callLLMWithBoundedCompletion',
     )
       .mockResolvedValueOnce('{"blueprints":[{"chapterNumber" 1}]}')
       .mockResolvedValueOnce(blueprintJson([1, 2, 3, 4, 5]))
@@ -274,7 +274,7 @@ describe('GenerateDirectoryCommand', () => {
   it('does not try JSON repair after the model reports a length-limited completion', async () => {
     const { invoke } = createPersistenceIpc()
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
-    const callLLM = vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+    const callLLM = vi.spyOn(command as unknown as { callLLMWithBoundedCompletion: () => Promise<string> }, 'callLLMWithBoundedCompletion')
       .mockRejectedValueOnce(new Error('AI 输出达到模型最大长度，结果不完整。'))
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow(/最大长度/)
@@ -282,10 +282,51 @@ describe('GenerateDirectoryCommand', () => {
     expect(persistedBatches(invoke)).toEqual([])
   })
 
+  it('replaces a length-truncated blueprint JSON with one complete response before atomically persisting the batch', async () => {
+    const { invoke } = createPersistenceIpc()
+    const partialOutput = '<think>这段推理不得进入续写上下文</think>{"blueprints":[{"chapterNumber":1,"title":"半截标题"'
+    const visiblePartial = '{"blueprints":[{"chapterNumber":1,"title":"半截标题"'
+    const replacementOutput = blueprintJson([1])
+    const completions = [
+      { content: partialOutput, finishReason: 'length' as const },
+      { content: replacementOutput, finishReason: 'stop' as const },
+    ]
+    const generateStream = vi.fn(async (
+      _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
+      streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
+    ) => {
+      const completion = completions.shift()
+      if (!completion) throw new Error('unexpected extra continuation request')
+      streamCallbacks.onChunk?.(completion.content)
+      streamCallbacks.onDone?.(completion.content, undefined, completion.finishReason)
+      return `request-${generateStream.mock.calls.length}`
+    })
+    useLLMStore.setState({ generateStream })
+
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toEqual([
+      expect.objectContaining({
+        chapterNumber: 1,
+        title: '第1章',
+        keyEvents: '第1章发生关键事件',
+      }),
+    ])
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    const continuationMessages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0]
+      = generateStream.mock.calls[1]?.[0] ?? []
+    const continuationPrompt = continuationMessages.find(message => message.role === 'user')?.content ?? ''
+    expect(continuationPrompt).toContain(visiblePartial)
+    expect(continuationPrompt).not.toContain('<think>')
+    expect(continuationPrompt).toContain('返回完整 JSON，从头重建，不要只补后缀')
+    expect(continuationPrompt).toContain('第1章到第1章')
+    expect(persistedBatches(invoke)).toEqual([[1]])
+  })
+
   it('fails when a generated batch parses to no blueprints', async () => {
     stubIpcInvoke(() => ({ success: true }))
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue('[]')
+    vi.spyOn(command as unknown as { callLLMWithBoundedCompletion: () => Promise<string> }, 'callLLMWithBoundedCompletion').mockResolvedValue('[]')
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow(/未解析到/)
   })
@@ -297,7 +338,7 @@ describe('GenerateDirectoryCommand', () => {
       return { success: true }
     })
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+    vi.spyOn(command as unknown as { callLLMWithBoundedCompletion: () => Promise<string> }, 'callLLMWithBoundedCompletion').mockResolvedValue(
       '[{"chapterNumber":1,"title":"启程","keyEvents":"主角发现异常"}]',
     )
 
@@ -308,7 +349,7 @@ describe('GenerateDirectoryCommand', () => {
   it('fails when generated blueprints skip required target chapters', async () => {
     const invoke = stubIpcInvoke(() => ({ success: true }))
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 3 }, projectSnapshot)
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+    vi.spyOn(command as unknown as { callLLMWithBoundedCompletion: () => Promise<string> }, 'callLLMWithBoundedCompletion').mockResolvedValue(
       '[{"chapterNumber":3,"title":"错位","keyEvents":"只返回第三章"}]',
     )
 
@@ -335,7 +376,7 @@ describe('GenerateDirectoryCommand', () => {
       return { success: true }
     })
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
-    const callLLM = vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+    const callLLM = vi.spyOn(command as unknown as { callLLMWithBoundedCompletion: () => Promise<string> }, 'callLLMWithBoundedCompletion')
       .mockResolvedValueOnce('{"blueprints":[{"chapterNumber" 1,"title":"启程"}]}')
       .mockResolvedValueOnce('[{"chapterNumber":1,"title":"启程","keyEvents":"主角发现异常"}]')
 
@@ -370,7 +411,7 @@ describe('GenerateDirectoryCommand', () => {
       return { success: true }
     })
     const command = new GenerateDirectoryCommand({ mode: 'full', count: 1 }, projectSnapshot)
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+    vi.spyOn(command as unknown as { callLLMWithBoundedCompletion: () => Promise<string> }, 'callLLMWithBoundedCompletion')
       .mockReturnValue(llmResult)
 
     const execution = command.execute({ step: {}, context, callbacks })

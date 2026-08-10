@@ -9,6 +9,7 @@ import { RefineDraftCommand } from '../refine-draft.command'
 import { RefineFromReviewCommand } from '../refine-from-review.command'
 import { ReviewChapterCommand } from '../review-chapter.command'
 import { savePartialData } from '../architecture.command'
+import { runPostProcessPipeline } from '../../workflow-utils'
 
 const finalizationClient = vi.hoisted(() => ({
   commitFinalizationSnapshot: vi.fn(),
@@ -199,6 +200,151 @@ describe('workflow mutation failure boundaries', () => {
     await expect(step!.executor(stepCallbacks, context()))
       .rejects.toThrow('notes rejected')
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('剧情要点提取完成'))
+  })
+
+  it('records a length-limited chapter-notes step as failed with zero writes, then retries it successfully', async () => {
+    let runCreated = false
+    let stepState: 'new' | 'failed' | 'ok' = 'new'
+    const invoke = vi.fn(async (channel: string) => {
+      switch (channel) {
+        case 'db:post-process-get-latest-run':
+          return runCreated
+            ? {
+                id: 'run-1',
+                sourceLabel: '第1章定稿',
+                allCriticalPassed: stepState === 'ok',
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+              }
+            : null
+        case 'db:post-process-create-run':
+          runCreated = true
+          return { success: true, id: 'run-1' }
+        case 'db:post-process-get-steps':
+          if (stepState === 'new') return []
+          return [{
+            id: 1,
+            runId: 'run-1',
+            stepKey: 'chapter_notes',
+            label: '章节剧情要点',
+            critical: true,
+            ok: stepState === 'ok',
+            errorMsg: stepState === 'failed' ? 'AI 输出达到模型最大长度，结果不完整。' : '',
+            attemptCount: stepState === 'ok' ? 2 : 1,
+            completedAt: stepState === 'ok' ? '2026-01-01T00:00:00.000Z' : '',
+            lastAttemptAt: '2026-01-01T00:00:00.000Z',
+          }]
+        case 'db:post-process-mark-step-failed':
+          stepState = 'failed'
+          return { success: true }
+        case 'db:post-process-mark-step-ok':
+          stepState = 'ok'
+          return { success: true }
+        case 'db:blueprint-update-notes':
+          return { success: true }
+        default:
+          throw new Error(`unexpected IPC: ${channel}`)
+      }
+    })
+    vi.stubGlobal('window', { velaAPI: { invoke } })
+    const generateStream = vi.fn(async (
+      _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
+      streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
+    ) => {
+      const isFirstAttempt = generateStream.mock.calls.length === 1
+      streamCallbacks.onDone?.(
+        isFirstAttempt ? '半截章节要点' : '完整章节要点',
+        undefined,
+        isFirstAttempt ? 'length' : 'stop',
+      )
+      return `request-${generateStream.mock.calls.length}`
+    })
+    useLLMStore.setState({ defaultModelId: 'model', generateStream })
+    const chapterNotes = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      '第一章',
+      '正文',
+    ).find(candidate => candidate.key === 'chapter_notes')
+    expect(chapterNotes).toBeDefined()
+    const stepCallbacks = callbacks()
+    const workflowContext = context()
+    const options = {
+      retryCount: 0,
+      stopOnFailure: true,
+      cancellation: workflowContext,
+      projectSession: workflowContext.projectSession,
+    }
+
+    await expect(runPostProcessPipeline(
+      PROJECT_PATH,
+      'chapter_1_finalize',
+      '第1章定稿',
+      [chapterNotes!],
+      stepCallbacks,
+      options,
+    )).rejects.toThrow('后处理步骤失败：章节剧情要点')
+
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-update-notes')
+    expect(invoke).toHaveBeenCalledWith(
+      'db:post-process-mark-step-failed',
+      'run-1',
+      'chapter_notes',
+      expect.stringContaining('输出达到模型最大长度'),
+      PROJECT_PATH,
+      workflowContext.projectSession,
+    )
+
+    await expect(runPostProcessPipeline(
+      PROJECT_PATH,
+      'chapter_1_finalize',
+      '第1章定稿',
+      [chapterNotes!],
+      stepCallbacks,
+      { ...options, onlyFailed: true },
+    )).resolves.toMatchObject({ allCriticalPassed: true })
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-update-notes')).toHaveLength(1)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:post-process-mark-step-ok',
+      'run-1',
+      'chapter_notes',
+      PROJECT_PATH,
+      workflowContext.projectSession,
+    )
+  })
+
+  it('does not commit character-state changes when the post-process stream is length-truncated', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:character-roster-read') {
+        return {
+          status: 'ready',
+          revision: 4,
+          entries: [{ name: '林岚', role: 'protagonist', currentState: {} }],
+        }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    vi.stubGlobal('window', { velaAPI: { invoke } })
+    useLLMStore.setState({
+      defaultModelId: 'model',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        streamCallbacks.onDone?.('{"updates":[', undefined, 'length')
+        return 'request-1'
+      }),
+    })
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      '第一章',
+      '正文',
+    ).find(candidate => candidate.key === 'character_cards')
+    expect(step).toBeDefined()
+
+    await expect(step!.executor(callbacks(), context()))
+      .rejects.toThrow('AI 输出达到模型最大长度')
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
   })
 
   it('stops character-card post-processing when its one roster receipt reports failure', async () => {

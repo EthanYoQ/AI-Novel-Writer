@@ -3,6 +3,12 @@ import { useLLMStore } from '../../../stores/llm-store'
 import { globalEventBus, EventPayloadMap } from '../../../shared/event-bus'
 import type { LLMFinishReason, ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { BasePromptBuilder } from '../../prompts/prompt-builder'
+import {
+  completeBoundedCompletion,
+  createBoundedCompletionError,
+  redactVisibleCompletionText,
+  type BoundedCompletionMode,
+} from '../bounded-completion'
 
 export interface CommandExecuteParams {
   step: unknown
@@ -37,6 +43,50 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       throw this.createIncompleteCompletionError(completion.finishReason)
     }
     return completion.content
+  }
+
+  /**
+   * Explicit continuation seam for commands whose product contract permits a
+   * bounded retry. Ordinary callLLM callers remain single-shot and fail-closed.
+   */
+  protected async callLLMWithBoundedCompletion(
+    prompt: string,
+    systemPrompt: string,
+    callbacks: StepCallbacks,
+    continuation: { mode: BoundedCompletionMode; maxContinuations: number },
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string },
+    context?: WorkflowContext,
+  ): Promise<string> {
+    const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
+    const llmStore = useLLMStore.getState()
+    const model = llmStore.models.find(candidate => candidate.id === llmStore.defaultModelId)
+    return completeBoundedCompletion({
+      initial: completion,
+      mode: continuation.mode,
+      maxContinuations: continuation.maxContinuations,
+      originalPrompt: prompt,
+      promptBudget: {
+        // Local model windows are not reliably declared by every endpoint, so
+        // retain the module's conservative unknown-context cap for them.
+        contextWindowTokens: model?.provider === 'ollama'
+          ? null
+          : (model?.capabilities?.contextWindowTokens ?? null),
+        maxOutputTokens: options?.maxTokens
+          ?? model?.capabilities?.maxOutputTokens
+          ?? model?.maxTokens
+          ?? null,
+        systemPromptChars: systemPrompt.length,
+      },
+      isCancelled: () => context?.cancelled === true,
+      redactVisibleText: text => this.stripThinkingTags(text),
+      requestContinuation: continuationPrompt => this.callLLMResult(
+        continuationPrompt,
+        systemPrompt,
+        callbacks,
+        options,
+        context,
+      ),
+    })
   }
 
   /**
@@ -132,16 +182,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   }
 
   protected createIncompleteCompletionError(finishReason: LLMFinishReason): Error {
-    switch (finishReason) {
-      case 'length':
-        return new Error('AI 输出达到模型最大长度，结果不完整。请提高模型最大输出 Tokens 或缩短本次任务后重试。')
-      case 'content_filter':
-        return new Error('AI 输出因内容限制而未完成，结果未被保存。')
-      case 'cancelled':
-        return new Error('AI 生成已取消，结果未被保存。')
-      default:
-        return new Error('AI 未正常完成生成，结果未被保存。')
-    }
+    return createBoundedCompletionError(finishReason)
   }
 
   /**
@@ -177,11 +218,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
    * 去除 DeepSeek 等模型的 <think> 标签，保证落盘纯净
    */
   protected stripThinkingTags(text: string): string {
-    return text
-      .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
-      .replace(/^\s*[\s\S]{0,300}<\/think>\s*/i, '')
-      .replace(/<\/?think>/gi, '')
-      .trim()
+    return redactVisibleCompletionText(text)
   }
 
   /**

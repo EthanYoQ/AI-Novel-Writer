@@ -6,6 +6,7 @@ import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { stripThinkingTags } from '../workflow-utils'
 import {
   CHARACTER_ROSTER_JSON_CONTRACT,
   CHARACTER_ROSTER_JSON_REPAIR_SYSTEM,
@@ -78,10 +79,6 @@ export async function savePartialData(
     projectPath,
   )
   requireIpcSuccess(result, '保存架构生成检查点')
-}
-
-function stripThinkingTags(text: string): string {
-  return text.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '').trim()
 }
 
 async function writeArchToDb(
@@ -270,10 +267,11 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       parseJson: text => this.parseJSON<unknown>(text),
       assertNotCancelled: () => this.assertNotCancelled(context),
       log: message => callbacks.log(message),
-      repair: ({ prompt, systemPrompt, purpose }) => this.callLLM(
+      repair: ({ prompt, systemPrompt, purpose }) => this.callLLMWithBoundedCompletion(
         prompt,
         systemPrompt,
         callbacks,
+        { mode: 'replace-structured-output', maxContinuations: 2 },
         {
           responseFormat: { type: 'json_object' },
           thinking: false,
@@ -341,10 +339,11 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).characters || '')
       .withReferenceWorks(config.referenceWorks || '')
 
-    const completion = await this.callLLMResult(
+    const rosterJson = await this.callLLMWithBoundedCompletion(
       `${promptBuilder.build()}\n\n${CHARACTER_ROSTER_JSON_CONTRACT}`,
       `${promptBuilder.getSystemRole()}\n\n${DIRECT_CHARACTER_ROSTER_SYSTEM_PROMPT}`,
       callbacks,
+      { mode: 'replace-structured-output', maxContinuations: 2 },
       {
         responseFormat: { type: 'json_object' },
         thinking: false,
@@ -353,12 +352,9 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       },
       context,
     )
-    if (completion.finishReason !== 'stop') {
-      throw this.createIncompleteCompletionError(completion.finishReason)
-    }
-    if (!completion.content.trim()) throw new Error('角色名单生成失败，AI 返回空内容')
+    if (!rosterJson.trim()) throw new Error('角色名单生成失败，AI 返回空内容')
 
-    const candidate = await this.parseDirectRosterResponse(completion.content, callbacks, context)
+    const candidate = await this.parseDirectRosterResponse(rosterJson, callbacks, context)
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession)
     const currentRoster = await ipc.invokeWithProjectSession(

@@ -1,0 +1,188 @@
+import { describe, expect, it, vi } from 'vitest'
+
+import {
+  appendVisibleTextContinuation,
+  completeBoundedCompletion,
+  redactVisibleCompletionText,
+} from '../bounded-completion'
+
+describe('bounded completion', () => {
+  it('replaces a partial structured response only after a complete replacement arrives', async () => {
+    const requestContinuation = vi.fn()
+      .mockResolvedValueOnce({ content: '{"chapters":[', finishReason: 'length' })
+      .mockResolvedValueOnce({ content: '{"chapters":[{"number":1}]}', finishReason: 'stop' })
+
+    await expect(completeBoundedCompletion({
+      initial: { content: '<think>hidden</think>{"chapters":[', finishReason: 'length' },
+      mode: 'replace-structured-output',
+      maxContinuations: 2,
+      originalPrompt: '返回章节 JSON',
+      requestContinuation,
+    })).resolves.toBe('{"chapters":[{"number":1}]}')
+
+    expect(requestContinuation).toHaveBeenCalledTimes(2)
+    expect(requestContinuation.mock.calls[0]?.[0]).toContain('返回完整 JSON，从头重建，不要只补后缀')
+    expect(requestContinuation.mock.calls[0]?.[0]).toContain('返回章节 JSON')
+    expect(requestContinuation.mock.calls[0]?.[0]).not.toContain('<think>')
+  })
+
+  it('fails closed after the configured structured continuation limit', async () => {
+    const requestContinuation = vi.fn().mockResolvedValue({ content: '{"half":', finishReason: 'length' })
+
+    await expect(completeBoundedCompletion({
+      initial: { content: '{"half":', finishReason: 'length' },
+      mode: 'replace-structured-output',
+      maxContinuations: 2,
+      originalPrompt: '返回 JSON',
+      requestContinuation,
+    })).rejects.toThrow('已自动续写 2 次仍未完成')
+
+    expect(requestContinuation).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['content_filter', 'cancelled', 'error', 'unknown'] as const)(
+    'fails closed without continuing a %s completion',
+    async (finishReason) => {
+      const requestContinuation = vi.fn()
+
+      await expect(completeBoundedCompletion({
+        initial: { content: '不可保存的输出', finishReason },
+        mode: 'append-visible-text',
+        maxContinuations: 3,
+        originalPrompt: '写一段正文',
+        requestContinuation,
+      })).rejects.toThrow(/结果未被保存/)
+
+      expect(requestContinuation).not.toHaveBeenCalled()
+    },
+  )
+
+  it('checks cancellation before requesting a continuation', async () => {
+    const requestContinuation = vi.fn()
+
+    await expect(completeBoundedCompletion({
+      initial: { content: '半截正文', finishReason: 'length' },
+      mode: 'append-visible-text',
+      maxContinuations: 3,
+      originalPrompt: '写一段正文',
+      requestContinuation,
+      isCancelled: () => true,
+    })).rejects.toThrow('工作流已取消')
+
+    expect(requestContinuation).not.toHaveBeenCalled()
+  })
+
+  it('overlap-merges an ordinary visible text continuation', async () => {
+    const repeatedTail = '林岚推开办公室的门，屏幕上的航班编号仍在闪烁。'.repeat(3)
+    const text = await completeBoundedCompletion({
+      initial: { content: `开头。\n\n${repeatedTail}`, finishReason: 'length' },
+      mode: 'append-visible-text',
+      maxContinuations: 3,
+      originalPrompt: '续写正文',
+      requestContinuation: vi.fn().mockResolvedValue({
+        content: `${repeatedTail}\n\n周砚把监控画面停在三点十七分。`,
+        finishReason: 'stop',
+      }),
+    })
+
+    expect(text).toContain('周砚把监控画面停在三点十七分')
+    expect(text.match(/林岚推开办公室的门/g)).toHaveLength(3)
+    expect(appendVisibleTextContinuation('甲'.repeat(60), `${'甲'.repeat(60)}乙`)).toBe(`${'甲'.repeat(60)}\n\n乙`)
+  })
+
+  it('removes a malformed closing think tag together with a hidden prefix longer than 300 characters', () => {
+    const hiddenReasoning = `推理过程：${'隐藏步骤。'.repeat(61)}`
+    const normalTextBeforeAnOrphanTag = '林岚已经写下第一段正文。'.repeat(61)
+
+    expect(redactVisibleCompletionText(`${hiddenReasoning}</think>{"complete":true}`))
+      .toBe('{"complete":true}')
+    expect(redactVisibleCompletionText('没有任何思考标签的正常正文')).toBe('没有任何思考标签的正常正文')
+    expect(redactVisibleCompletionText(`${normalTextBeforeAnOrphanTag}</think>周砚推门进来。`))
+      .toBe(`${normalTextBeforeAnOrphanTag}周砚推门进来。`)
+  })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5, 8])(
+    'rejects an invalid continuation limit before accepting a completion (%s)',
+    async (maxContinuations) => {
+      const requestContinuation = vi.fn()
+
+      await expect(completeBoundedCompletion({
+        initial: { content: '完整输出', finishReason: 'stop' },
+        mode: 'append-visible-text',
+        maxContinuations,
+        originalPrompt: '写一段正文',
+        requestContinuation,
+      })).rejects.toThrow('自动续写次数必须是 0 到 7 的整数')
+
+      expect(requestContinuation).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    { mode: 'replace-structured-output' as const, maxContinuations: 3, expectedLimit: 2 },
+    { mode: 'append-visible-text' as const, maxContinuations: 4, expectedLimit: 3 },
+  ])('enforces the $expectedLimit-round $mode policy', async ({ mode, maxContinuations, expectedLimit }) => {
+    const requestContinuation = vi.fn()
+
+    await expect(completeBoundedCompletion({
+      initial: { content: '完整输出', finishReason: 'stop' },
+      mode,
+      maxContinuations,
+      originalPrompt: '写一段正文',
+      requestContinuation,
+    })).rejects.toThrow(`当前输出类型最多自动续写 ${expectedLimit} 次`)
+
+    expect(requestContinuation).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { label: 'declared 8k context', contextWindowTokens: 8_192 },
+    { label: 'unknown context', contextWindowTokens: null },
+  ])('bounds $label continuation prompts while preserving the task contract and visible reference', async ({ contextWindowTokens }) => {
+    const originalPrompt = `任务合同开头：必须返回完整章节 JSON。\n${'原始任务内容'.repeat(1_500)}\n任务合同结尾：不得只补后缀。`
+    const partial = `上一轮输出开头：{"chapters":[\n${'不完整可见 JSON'.repeat(1_500)}\n上一轮输出结尾：{"number":1}`
+    const requestContinuation = vi.fn().mockResolvedValue({
+      content: '{"chapters":[{"number":1}]}',
+      finishReason: 'stop',
+    })
+
+    await expect(completeBoundedCompletion({
+      initial: { content: partial, finishReason: 'length' },
+      mode: 'replace-structured-output',
+      maxContinuations: 1,
+      originalPrompt,
+      promptBudget: {
+        contextWindowTokens,
+        maxOutputTokens: 4_096,
+        systemPromptChars: 0,
+      },
+      requestContinuation,
+    })).resolves.toBe('{"chapters":[{"number":1}]}')
+
+    const continuationPrompt = requestContinuation.mock.calls[0]?.[0] as string
+    // 8,192 context - 4,096 output - 512 reserve, estimated at 1.5 chars/token.
+    expect(continuationPrompt.length).toBeLessThanOrEqual(5_376)
+    expect(continuationPrompt).toContain('任务合同开头')
+    expect(continuationPrompt).toContain('任务合同结尾')
+    expect(continuationPrompt).toContain('上一轮输出开头')
+    expect(continuationPrompt).toContain('上一轮输出结尾')
+  })
+
+  it('fails closed before requesting continuation when the reserved context cannot hold a safe contract', async () => {
+    const requestContinuation = vi.fn()
+
+    await expect(completeBoundedCompletion({
+      initial: { content: '{"half":', finishReason: 'length' },
+      mode: 'replace-structured-output',
+      maxContinuations: 1,
+      originalPrompt: '返回完整 JSON',
+      promptBudget: {
+        contextWindowTokens: 4_096,
+        maxOutputTokens: 4_096,
+      },
+      requestContinuation,
+    })).rejects.toThrow('当前模型上下文预算不足以安全续写')
+
+    expect(requestContinuation).not.toHaveBeenCalled()
+  })
+})
