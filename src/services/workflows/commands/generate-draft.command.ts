@@ -315,7 +315,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
     callbacks.log('调用 AI 生成章节草稿...')
     const initialCompletion = await this.callLLMResultWithBuilder(promptBuilder, callbacks, {
-      temperature: 0.88,
       thinking: false,
       maxTokens: initialOutputTokenBudget,
     }, context)
@@ -499,7 +498,6 @@ ${visibleTail}`
         params.systemRole,
         params.callbacks,
         {
-          temperature: 0.88,
           thinking: false,
           maxTokens: continuationOutputTokenBudget,
         },

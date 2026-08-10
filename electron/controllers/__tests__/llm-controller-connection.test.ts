@@ -60,6 +60,16 @@ const deepSeekModel: ModelProfile = {
   purposes: ['generation'],
 }
 
+const fixedTemperatureKimiModel: ModelProfile = {
+  ...deepSeekModel,
+  id: 'kimi-k3',
+  name: 'Kimi K3',
+  provider: 'custom',
+  modelName: 'kimi-k3',
+  baseUrl: 'https://api.moonshot.cn/v1',
+  temperature: 1,
+}
+
 function connectionHandler(): IpcHandler {
   const handler = mocks.handlers.get('llm:test-connection')
   if (!handler) throw new Error('Missing llm:test-connection handler')
@@ -84,6 +94,37 @@ beforeEach(() => {
 })
 
 describe('llm connection test', () => {
+  it('uses the configured profile temperature for a generic connection probe', async () => {
+    const genericModel: ModelProfile = {
+      ...deepSeekModel,
+      temperature: 1,
+    }
+
+    await expect(connectionHandler()({}, genericModel)).resolves.toEqual({
+      success: true,
+      error: undefined,
+    })
+
+    expect(mocks.generate).toHaveBeenCalledWith(
+      genericModel,
+      [{ role: 'user', content: 'Say "hello" and nothing else.' }],
+      expect.objectContaining({ temperature: 1 }),
+    )
+  })
+
+  it('omits temperature for a fixed-temperature Kimi connection probe', async () => {
+    await expect(connectionHandler()({}, fixedTemperatureKimiModel)).resolves.toEqual({
+      success: true,
+      error: undefined,
+    })
+
+    expect(mocks.generate).toHaveBeenCalledWith(
+      fixedTemperatureKimiModel,
+      [{ role: 'user', content: 'Say "hello" and nothing else.' }],
+      expect.objectContaining({ temperature: undefined }),
+    )
+  })
+
   it('gives reasoning models enough output budget to complete the probe', async () => {
     await expect(connectionHandler()({}, deepSeekModel)).resolves.toEqual({
       success: true,
@@ -102,6 +143,119 @@ describe('llm connection test', () => {
   it('does not count a connection probe as a project generation call', async () => {
     await connectionHandler()({}, deepSeekModel)
     expect(mocks.logCall).not.toHaveBeenCalled()
+  })
+})
+
+describe('llm generation parameter policy controller integration', () => {
+  function handler(channel: 'llm:generate' | 'llm:generate-stream' | 'llm:cancel'): IpcHandler {
+    const registered = mocks.handlers.get(channel)
+    if (!registered) throw new Error(`Missing ${channel} handler`)
+    return registered
+  }
+
+  it('uses the profile temperature for both regular and streaming generation', async () => {
+    const genericModel = { ...deepSeekModel, temperature: 1 }
+    mocks.models = [genericModel]
+
+    await handler('llm:generate')({}, {
+      modelId: genericModel.id,
+      messages: [{ role: 'user', content: 'write' }],
+      maxTokens: 512,
+      responseFormat: { type: 'json_object' },
+      thinking: true,
+    })
+
+    expect(mocks.generate).toHaveBeenCalledWith(
+      genericModel,
+      [{ role: 'user', content: 'write' }],
+      {
+        temperature: 1,
+        maxTokens: 512,
+        responseFormat: { type: 'json_object' },
+        thinking: true,
+      },
+    )
+
+    mocks.generateStream.mockClear()
+    await handler('llm:generate-stream')({ sender: {} }, 'generic-stream', {
+      modelId: genericModel.id,
+      messages: [{ role: 'user', content: 'write' }],
+      maxTokens: 512,
+      responseFormat: { type: 'json_object' },
+      thinking: true,
+    })
+
+    expect(mocks.generateStream).toHaveBeenCalledWith(
+      genericModel,
+      [{ role: 'user', content: 'write' }],
+      expect.objectContaining({
+        temperature: 1,
+        maxTokens: 512,
+        responseFormat: { type: 'json_object' },
+        thinking: true,
+      }),
+    )
+
+    await handler('llm:cancel')({}, 'generic-stream')
+  })
+
+  it('uses the same fixed-Kimi policy for regular, streaming, and connection requests', async () => {
+    mocks.models = [fixedTemperatureKimiModel]
+
+    await handler('llm:generate')({}, {
+      modelId: fixedTemperatureKimiModel.id,
+      messages: [{ role: 'user', content: 'write' }],
+      maxTokens: 512,
+      thinking: true,
+    })
+    expect(mocks.generate).toHaveBeenLastCalledWith(
+      fixedTemperatureKimiModel,
+      [{ role: 'user', content: 'write' }],
+      expect.objectContaining({ temperature: undefined }),
+    )
+    expect(mocks.generate.mock.calls.at(-1)?.[2]).not.toHaveProperty('thinking')
+
+    mocks.generateStream.mockClear()
+    await handler('llm:generate-stream')({ sender: {} }, 'kimi-stream', {
+      modelId: fixedTemperatureKimiModel.id,
+      messages: [{ role: 'user', content: 'write' }],
+      maxTokens: 512,
+      thinking: true,
+    })
+    expect(mocks.generateStream).toHaveBeenCalledWith(
+      fixedTemperatureKimiModel,
+      [{ role: 'user', content: 'write' }],
+      expect.objectContaining({ temperature: undefined }),
+    )
+    expect(mocks.generateStream.mock.calls[0]?.[2]).not.toHaveProperty('thinking')
+    await handler('llm:cancel')({}, 'kimi-stream')
+
+    mocks.generate.mockClear()
+    await connectionHandler()({}, fixedTemperatureKimiModel)
+    expect(mocks.generate).toHaveBeenCalledWith(
+      fixedTemperatureKimiModel,
+      [{ role: 'user', content: 'Say "hello" and nothing else.' }],
+      expect.objectContaining({ temperature: undefined }),
+    )
+  })
+
+  it('does not register a stream when parameter resolution rejects the model settings', async () => {
+    const invalidKimiModel: ModelProfile = {
+      ...fixedTemperatureKimiModel,
+      id: 'kimi-future-invalid-temperature',
+      modelName: 'kimi-future-preview',
+      temperature: 1.1,
+    }
+    const requestId = 'invalid-kimi-stream'
+    mocks.models = [invalidKimiModel]
+
+    await expect(handler('llm:generate-stream')({ sender: {} }, requestId, {
+      modelId: invalidKimiModel.id,
+      messages: [{ role: 'user', content: 'write' }],
+    })).rejects.toThrow('0 到 1')
+
+    expect(mocks.generateStream).not.toHaveBeenCalled()
+    await expect(handler('llm:cancel')({}, requestId)).resolves.toEqual({ success: false })
   })
 })
 

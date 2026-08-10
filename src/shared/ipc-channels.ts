@@ -407,7 +407,6 @@ export interface LLMRequest {
   /** Frozen project lease. Missing/stale leases are never written to project statistics. */
   projectSession?: ProjectSessionContext
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
-  temperature?: number
   maxTokens?: number
   stream?: boolean
   responseFormat?: { type: 'json_object' | 'text' }

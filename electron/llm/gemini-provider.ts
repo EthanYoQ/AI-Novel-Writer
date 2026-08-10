@@ -37,8 +37,10 @@ export class GeminiProvider implements ILLMProvider {
       const { contents, systemInstruction } = this.toGeminiContents(messages)
 
       const generationConfig: Record<string, unknown> = {
-        temperature: opts.temperature ?? model.temperature,
         maxOutputTokens: opts.maxTokens ?? model.maxTokens,
+      }
+      if (opts.temperature !== undefined) {
+        generationConfig.temperature = opts.temperature
       }
       if (opts.responseFormat?.type === 'json_object') {
         generationConfig.responseMimeType = 'application/json'
@@ -103,8 +105,10 @@ export class GeminiProvider implements ILLMProvider {
       const { contents, systemInstruction } = this.toGeminiContents(messages)
 
       const generationConfig: Record<string, unknown> = {
-        temperature: opts.temperature ?? model.temperature,
         maxOutputTokens: opts.maxTokens ?? model.maxTokens,
+      }
+      if (opts.temperature !== undefined) {
+        generationConfig.temperature = opts.temperature
       }
       if (opts.responseFormat?.type === 'json_object') {
         generationConfig.responseMimeType = 'application/json'

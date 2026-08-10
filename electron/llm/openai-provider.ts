@@ -49,7 +49,13 @@ export class OpenAIProvider implements ILLMProvider {
       stream,
     }
 
-    // 思考模式下 temperature/top_p 等参数不生效（DeepSeek 会静默忽略），仅在非思考模式下传递。
+    // Temperature has already been resolved by generation-parameter-policy.
+    // Never fall back to model.temperature here: undefined is an intentional
+    // instruction to omit the field for provider/model combinations that own it.
+    if (opts.temperature !== undefined) {
+      body.temperature = opts.temperature
+    }
+
     if (opts.thinking) {
       if (isNovelAI) {
         body.enable_thinking = true
@@ -57,8 +63,6 @@ export class OpenAIProvider implements ILLMProvider {
         // thinking 参数直接放在请求体顶层（非 extra_body，那是 OpenAI SDK 层概念）
         body.thinking = { type: 'enabled' }
       }
-    } else {
-      body.temperature = opts.temperature ?? model.temperature
     }
 
     if (opts.responseFormat && !isNovelAI) {

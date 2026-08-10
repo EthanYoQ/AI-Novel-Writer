@@ -42,14 +42,14 @@ interface LLMState {
   generate: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     modelId?: string,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext }
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext }
   ) => Promise<LLMResponse>
   /** 流式生成 */
   generateStream: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     callbacks: StreamCallbacks,
     modelId?: string,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; temperature?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext }
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext }
   ) => Promise<string>
   /** 取消生成 */
   cancelGeneration: (requestId: string) => Promise<void>
@@ -148,7 +148,6 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
       responseFormat: options?.responseFormat as { type: 'json_object' | 'text' } | undefined,
       thinking: options?.thinking,
       maxTokens: options?.maxTokens,
-      temperature: options?.temperature,
     })
     return requireIpcSuccess(response, '模型生成')
   },
@@ -212,7 +211,6 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
         responseFormat: options?.responseFormat as { type: 'json_object' | 'text' } | undefined,
         thinking: options?.thinking,
         maxTokens: options?.maxTokens,
-        temperature: options?.temperature,
       })
     } catch (error) {
       cleanup()

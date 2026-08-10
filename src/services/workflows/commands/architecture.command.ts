@@ -140,7 +140,7 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
     const resultRaw = await this.callLLMWithBuilder(
       promptBuilder,
       callbacks,
-      { responseFormat: { type: 'json_object' }, thinking: false, maxTokens: 4096, temperature: 0.75 },
+      { responseFormat: { type: 'json_object' }, thinking: false, maxTokens: 4096 },
       context,
     )
     this.assertNotCancelled(context)
@@ -278,7 +278,6 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
           responseFormat: { type: 'json_object' },
           thinking: false,
           maxTokens: 4096,
-          temperature: 0.1,
           purpose,
         },
         context,
@@ -350,7 +349,6 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         responseFormat: { type: 'json_object' },
         thinking: false,
         maxTokens: 4096,
-        temperature: 0.35,
         purpose: 'character-architecture',
       },
       context,

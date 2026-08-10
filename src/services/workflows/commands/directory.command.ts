@@ -95,7 +95,6 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         responseFormat: { type: 'json_object' },
         thinking: false,
         maxTokens: Math.min(modelMaxTokens, 4096),
-        temperature: 0.78,
       }
       const resultText = await this.callLLM(prompt, systemRole, callbacks, jsonOutputOptions, context)
       this.assertNotCancelled(context)
@@ -112,7 +111,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           buildBlueprintJsonRepairPrompt(resultText, cursor, batchEnd),
           '你是严格的 JSON 格式修复器，只输出有效 JSON。',
           callbacks,
-          { ...jsonOutputOptions, temperature: 0.2 },
+          jsonOutputOptions,
           context,
         )
         this.assertNotCancelled(context)
