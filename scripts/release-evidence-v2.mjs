@@ -66,9 +66,47 @@ export const COMMAND_PROFILES = {
 }
 
 export const MACOS_FORMAL_DISTRIBUTION_POLICY = Object.freeze({
-  codeSigning: 'unsigned',
+  codeSigning: 'ad_hoc_or_unsigned',
   notarization: 'not_notarized',
 })
+
+function codesignField(output, name) {
+  const match = String(output).match(new RegExp(`^${name}=(.*)$`, 'm'))
+  return match?.[1]?.trim() || null
+}
+
+export function classifyMacosCodeSigning({ detailsExitCode, verificationExitCode, detailsOutput }) {
+  const output = String(detailsOutput)
+  const signature = codesignField(output, 'Signature')
+  const teamIdentifier = codesignField(output, 'TeamIdentifier')
+  const authorities = [...output.matchAll(/^Authority=(.*)$/gm)]
+    .map(match => match[1].trim())
+    .filter(Boolean)
+  const hasDeveloperIdIdentity = authorities.some(authority => authority.startsWith('Developer ID Application:'))
+    && teamIdentifier !== null
+    && teamIdentifier !== 'not set'
+  let observed = 'unrecognized_signature'
+  if (detailsExitCode === 0 && verificationExitCode === 0 && hasDeveloperIdIdentity) {
+    observed = 'developer_id_signed'
+  } else if (
+    detailsExitCode === 0
+    && verificationExitCode === 0
+    && signature?.toLowerCase() === 'adhoc'
+    && !hasDeveloperIdIdentity
+  ) {
+    observed = 'ad_hoc'
+  } else if (
+    detailsExitCode !== 0
+    && verificationExitCode !== 0
+    && signature === null
+    && teamIdentifier === null
+    && authorities.length === 0
+  ) {
+    observed = 'unsigned'
+  }
+
+  return { observed, signature, teamIdentifier, authorities, hasDeveloperIdIdentity }
+}
 
 const PACKAGED_SMOKE_EVIDENCE = {
   windows: [
@@ -566,8 +604,9 @@ function validateMacosReceipt(receipt, name, bundleRoot, version) {
     assert(
       receipt.status === MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning
         && codeSigning?.expected === MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning
-        && codeSigning?.observed === MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning,
-      'macOS formal distribution requires an unsigned code-signing state',
+        && (codeSigning?.observed === 'ad_hoc' || codeSigning?.observed === 'unsigned')
+        && codeSigning?.hasDeveloperIdIdentity === false,
+      'macOS formal distribution requires ad-hoc or unsigned code signing without a Developer ID identity',
     )
     assert(nonEmptyString(receipt.validationResult) && nonEmptyString(receipt.gatekeeperImpact), 'macOS signing receipt validation and Gatekeeper impact are invalid')
     assert(
@@ -584,7 +623,26 @@ function validateMacosReceipt(receipt, name, bundleRoot, version) {
     for (const [record, command] of commands) {
       assert(record?.command === command && Number.isInteger(record?.exitCode) && validSha256(record?.outputSha256), `macOS signing receipt command is invalid: ${command}`)
     }
-    assert(codeSigning.details.exitCode !== 0 && codeSigning.verification.exitCode !== 0, 'macOS unsigned code-signing receipt facts are invalid')
+    assert(Array.isArray(codeSigning.authorities), 'macOS code-signing authority facts are invalid')
+    if (codeSigning.observed === 'ad_hoc') {
+      assert(
+        codeSigning.details.exitCode === 0
+          && codeSigning.verification.exitCode === 0
+          && codeSigning.signature?.toLowerCase() === 'adhoc'
+          && (codeSigning.teamIdentifier === 'not set' || codeSigning.teamIdentifier === null)
+          && codeSigning.authorities.length === 0,
+        'macOS ad-hoc code-signing receipt facts are invalid',
+      )
+    } else {
+      assert(
+        codeSigning.details.exitCode !== 0
+          && codeSigning.verification.exitCode !== 0
+          && codeSigning.signature === null
+          && codeSigning.teamIdentifier === null
+          && codeSigning.authorities.length === 0,
+        'macOS unsigned code-signing receipt facts are invalid',
+      )
+    }
     const expectedGatekeeperState = gatekeeper.assessment.exitCode === 0
       ? 'accepted-on-runner'
       : 'manual-confirmation-may-be-required'
@@ -599,7 +657,11 @@ function validateAcceptanceReceipt(file, relativePath, platform, bundleRoot, ver
   assert(nonEmptyObservations(receipt?.observations), `Acceptance receipt observations are invalid: ${relativePath}`)
   assert(nonEmptyDirectObservation(receipt?.direct), `Acceptance receipt direct observation is invalid: ${relativePath}`)
   if (relativePath.endsWith('/signing.json')) {
-    assert(receipt.status === 'signed' || receipt.status === 'unsigned', 'Signing receipt status must be signed or unsigned')
+    if (platform === 'windows') {
+      assert(receipt.status === 'signed' || receipt.status === 'unsigned', 'Windows signing receipt status must be signed or unsigned')
+    } else {
+      assert(nonEmptyString(receipt.status), 'macOS signing receipt status is required')
+    }
     assert(receipt.validationResult !== null && receipt.validationResult !== undefined, 'Signing receipt validationResult is required')
     assert(nonEmptyImpact(receipt.unsignedDistributionImpact), 'Signing receipt unsignedDistributionImpact is required')
   }

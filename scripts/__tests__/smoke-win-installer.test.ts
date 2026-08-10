@@ -11,6 +11,7 @@ const installerScript = resolve('scripts/smoke-win-installer.ps1')
 const releaseMonitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const upgradeFixtureScript = resolve('scripts/upgrade-data-fixture.mjs')
 const electronNodeRunner = resolve('node_modules/electron/dist/electron.exe')
+const WINDOWS_POWERSHELL_RECEIPT_TEST_TIMEOUT_MS = 15_000
 
 describe('packaged vector qualification wiring', () => {
   it('runs the installed application under a dual-gated one-time token and preserves machine-readable evidence', () => {
@@ -147,7 +148,7 @@ Remove-Item -LiteralPath $root -Recurse -Force
       accepted: true,
       installedExecutableExists: false,
     })
-  })
+  }, WINDOWS_POWERSHELL_RECEIPT_TEST_TIMEOUT_MS)
 })
 
 function quotePowerShell(value: string): string {

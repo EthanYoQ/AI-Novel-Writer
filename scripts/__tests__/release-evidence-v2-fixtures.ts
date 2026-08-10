@@ -85,21 +85,25 @@ export function macosAcceptanceReceipt(releaseRoot: string, version: string, nam
       },
     },
     signing: {
-      ...base(name), kind: 'signing', platform: 'darwin', arch: 'arm64', status: 'unsigned',
-      validationResult: 'Observed unsigned code-signing state; notarization and Gatekeeper are recorded separately.',
+      ...base(name), kind: 'signing', platform: 'darwin', arch: 'arm64', status: MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning,
+      validationResult: 'Observed an ad-hoc signature without a Developer ID identity; notarization and Gatekeeper are recorded separately.',
       unsignedDistributionImpact: 'macOS Gatekeeper may require a manual Allow action.',
       gatekeeperImpact: 'macOS Gatekeeper may require a manual Allow action.',
       direct: {
         codeSigning: {
           expected: MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning,
-          observed: MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning,
-          details: { command: 'codesign -dv --verbose=4', exitCode: 1, outputSha256 },
-          verification: { command: 'codesign --verify --deep --strict --verbose=2', exitCode: 1, outputSha256 },
+          observed: 'ad_hoc',
+          signature: 'adhoc',
+          teamIdentifier: 'not set',
+          authorities: [],
+          hasDeveloperIdIdentity: false,
+          details: { command: 'codesign -dv --verbose=4', exitCode: 0, outputSha256 },
+          verification: { command: 'codesign --verify --deep --strict --verbose=2', exitCode: 0, outputSha256 },
         },
         notarization: {
           expected: MACOS_FORMAL_DISTRIBUTION_POLICY.notarization,
           observed: MACOS_FORMAL_DISTRIBUTION_POLICY.notarization,
-          basis: 'The formal release does not notarize unsigned packages.',
+          basis: 'The formal release has no Apple notarization stage.',
         },
         gatekeeper: {
           assessment: { command: 'spctl --assess --type execute --verbose=4', exitCode: 1, outputSha256 },
