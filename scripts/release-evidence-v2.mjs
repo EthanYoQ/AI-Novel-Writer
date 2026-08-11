@@ -12,6 +12,7 @@ import {
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { TextDecoder } from 'node:util'
 import { canonicalPnpmLockfileSha256 } from './canonical-pnpm-lockfile-hash.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
@@ -364,8 +365,8 @@ function readInitializedEvidence(evidenceRoot) {
   const ledgerPath = path.join(resolvedEvidenceRoot, 'run-ledger.json')
   assert(existsSync(contractPath), 'Release evidence contract is missing')
   assert(existsSync(ledgerPath), 'Release evidence ledger is missing')
-  const contract = JSON.parse(readFileSync(contractPath, 'utf8'))
-  const ledger = JSON.parse(readFileSync(ledgerPath, 'utf8'))
+  const contract = jsonEvidenceFile(contractPath, 'Release evidence contract')
+  const ledger = jsonEvidenceFile(ledgerPath, 'Release evidence ledger')
   assert(contract?.schemaVersion === 2 && contract?.stage === 'qualification', 'Release evidence contract is invalid')
   assert(ledger?.schemaVersion === 2 && ledger?.stage === 'qualification', 'Release evidence ledger is invalid')
   assert(ledger.contractSha256 === sha256File(contractPath), 'Release evidence contract hash has changed')
@@ -666,7 +667,7 @@ function validateMacosReceipt(receipt, name, bundleRoot, version) {
 }
 
 function validateAcceptanceReceipt(file, relativePath, platform, bundleRoot, version) {
-  const receipt = JSON.parse(readFileSync(file, 'utf8'))
+  const receipt = jsonEvidenceFile(file, `Acceptance receipt ${relativePath}`)
   assert(receipt?.schemaVersion === 2, `Acceptance receipt schema is invalid: ${relativePath}`)
   assert(receipt?.accepted === true, `Acceptance receipt is not accepted: ${relativePath}`)
   assert(nonEmptyObservations(receipt?.observations), `Acceptance receipt observations are invalid: ${relativePath}`)
@@ -738,7 +739,7 @@ function validatePackagedSmokeEvidence(releaseRoot, platform) {
   return PACKAGED_SMOKE_EVIDENCE[platform].map(({ file, kind }) => {
     const evidenceFile = fileWithin(releaseRoot, file, 'Packaged smoke evidence')
     nonEmptyRegularFile(evidenceFile, 'Packaged smoke evidence')
-    const evidence = JSON.parse(readFileSync(evidenceFile, 'utf8'))
+    const evidence = jsonEvidenceFile(evidenceFile, `Packaged smoke evidence ${file}`)
     assert(evidence?.schemaVersion === 1 && evidence?.kind === kind, `Packaged smoke evidence is invalid: ${file}`)
     return fileRecord(releaseRoot, file, kind)
   })
@@ -828,7 +829,14 @@ export function finalizeReleaseEvidence({ platform, evidenceRoot, releaseRoot })
 
 function jsonEvidenceFile(file, label) {
   try {
-    return JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
+    const bytes = readFileSync(file)
+    const hasLeadingUtf8Bom = bytes.length >= 3
+      && bytes[0] === 0xef
+      && bytes[1] === 0xbb
+      && bytes[2] === 0xbf
+    const jsonBytes = hasLeadingUtf8Bom ? bytes.subarray(3) : bytes
+    const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(jsonBytes)
+    return JSON.parse(text)
   } catch (error) {
     throw new Error(`${label} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
   }

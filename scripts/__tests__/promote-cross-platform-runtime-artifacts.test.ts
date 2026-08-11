@@ -20,6 +20,17 @@ const repository = 'EthanYoQ/AI-Novel-Writer'
 const expectedSha = 'a'.repeat(40)
 const futureExpiry = new Date(Date.now() + 60_000).toISOString()
 const QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS = 15_000
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf])
+
+type WindowsPackagedJsonFixture =
+  | 'utf8'
+  | 'powershell-5.1-utf8-bom'
+  | 'double-bom'
+  | 'whitespace-before-bom'
+  | 'partial-bom'
+  | 'utf16le-bom'
+  | 'invalid-utf8-in-string'
+  | 'malformed-after-bom'
 
 function successfulRun(id: number, workflowId: number, name: string, path: string) {
   return {
@@ -69,13 +80,48 @@ function readyQualification() {
   }
 }
 
-function writeQualificationEvidence(root: string, relativePath: string, evidence: unknown): void {
-  const file = path.join(root, ...relativePath.split('/'))
-  mkdirSync(path.dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify(evidence)}\n`, 'utf8')
+function qualificationEvidenceBytes(evidence: unknown, fixture: WindowsPackagedJsonFixture): Buffer {
+  if (fixture === 'utf8') return Buffer.from(`${JSON.stringify(evidence)}\n`, 'utf8')
+  if (fixture === 'malformed-after-bom') {
+    return Buffer.concat([UTF8_BOM, Buffer.from('{"schemaVersion":1', 'utf8')])
+  }
+  if (fixture === 'invalid-utf8-in-string') {
+    const json = JSON.stringify(evidence)
+    expect(json.endsWith('}')).toBe(true)
+    return Buffer.concat([
+      Buffer.from(`${json.slice(0, -1)},"invalidUtf8Probe":"`, 'utf8'),
+      Buffer.from([0xc3, 0x28]),
+      Buffer.from('"}\r\n', 'utf8'),
+    ])
+  }
+
+  // Windows PowerShell 5.1 `Set-Content -Encoding utf8` writes a UTF-8 BOM
+  // and Windows newlines. Keep this byte fixture independent from the reader.
+  const powershellJson = Buffer.from(`${JSON.stringify(evidence, null, 2).replace(/\n/g, '\r\n')}\r\n`, 'utf8')
+  if (fixture === 'powershell-5.1-utf8-bom') return Buffer.concat([UTF8_BOM, powershellJson])
+  if (fixture === 'double-bom') return Buffer.concat([UTF8_BOM, UTF8_BOM, powershellJson])
+  if (fixture === 'whitespace-before-bom') return Buffer.concat([Buffer.from(' ', 'utf8'), UTF8_BOM, powershellJson])
+  if (fixture === 'partial-bom') return Buffer.concat([UTF8_BOM.subarray(0, 2), powershellJson])
+  return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(powershellJson.toString('utf8'), 'utf16le')])
 }
 
-function writePromotionFixture(root: string, sourceRoot: string, includeWindowsSkinEvidence: boolean): { sourcePlan: Record<string, unknown> } {
+function writeQualificationEvidence(
+  root: string,
+  relativePath: string,
+  evidence: unknown,
+  fixture: WindowsPackagedJsonFixture = 'utf8',
+): void {
+  const file = path.join(root, ...relativePath.split('/'))
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(file, qualificationEvidenceBytes(evidence, fixture))
+}
+
+function writePromotionFixture(
+  root: string,
+  sourceRoot: string,
+  includeWindowsSkinEvidence: boolean,
+  windowsPackagedJsonFixture: WindowsPackagedJsonFixture = 'utf8',
+): { sourcePlan: Record<string, unknown> } {
   const packageMetadata = JSON.parse(readFileSync(path.join(sourceRoot, 'package.json'), 'utf8')) as { version: string }
   const version = packageMetadata.version
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim().toLowerCase()
@@ -108,9 +154,9 @@ function writePromotionFixture(root: string, sourceRoot: string, includeWindowsS
     builtInAnime: { asset: 'skins/anime-night.webp', present: true, format: 'webp' },
     customSkin: { importSucceeded: true, readSucceeded: true, stateRestored: true, activeSkin: 'custom', mime: 'image/png', width: 1, height: 1 },
   }
-  writeQualificationEvidence(windowsRoot, 'qualification/packaged-vector-smoke.json', vectorEvidence)
-  writeQualificationEvidence(windowsRoot, 'qualification/packaged-official-homepage-smoke.json', homepageEvidence)
-  writeQualificationEvidence(windowsRoot, 'qualification/packaged-skin-smoke.json', skinEvidence)
+  writeQualificationEvidence(windowsRoot, 'qualification/packaged-vector-smoke.json', vectorEvidence, windowsPackagedJsonFixture)
+  writeQualificationEvidence(windowsRoot, 'qualification/packaged-official-homepage-smoke.json', homepageEvidence, windowsPackagedJsonFixture)
+  writeQualificationEvidence(windowsRoot, 'qualification/packaged-skin-smoke.json', skinEvidence, windowsPackagedJsonFixture)
   initializeReleaseEvidence({
     platform: 'windows',
     evidenceRoot: windowsEvidenceRoot,
@@ -232,11 +278,11 @@ describe('cross-platform artifact promotion planner', () => {
     }
   }, QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS)
 
-  it('binds the promotion-ready package to both immutable evidence contracts and their raw hashes', () => {
+  it('finalizes and verifies PowerShell 5.1 BOM evidence while binding its original bytes', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-evidence-binding-'))
     const sourceRoot = path.resolve(import.meta.dirname, '..', '..')
     try {
-      const fixture = writePromotionFixture(root, sourceRoot, true)
+      const fixture = writePromotionFixture(root, sourceRoot, true, 'powershell-5.1-utf8-bom')
 
       const ready = verifyPromotion({
         windowsArtifactRoot: path.join(root, 'windows'),
@@ -267,6 +313,50 @@ describe('cross-platform artifact promotion planner', () => {
         `ai-novel-writer-setup-${fixture.sourcePlan.version}.exe.blockmap`,
         'latest.yml',
       ].sort())
+
+      const vectorPath = path.join(root, 'windows', 'qualification', 'packaged-vector-smoke.json')
+      const vectorBytes = readFileSync(vectorPath)
+      const vectorRawSha256 = sha256(vectorBytes)
+      const vectorWithoutBomSha256 = sha256(vectorBytes.subarray(UTF8_BOM.length))
+      expect(vectorBytes.subarray(0, UTF8_BOM.length)).toEqual(UTF8_BOM)
+      expect(vectorRawSha256).not.toBe(vectorWithoutBomSha256)
+
+      const windowsManifest = JSON.parse(readFileSync(path.join(root, 'windows', 'manifest.json'), 'utf8'))
+      const vectorManifestRecord = windowsManifest.evidence.find(
+        (record: { file?: string }) => record.file === 'qualification/packaged-vector-smoke.json',
+      )
+      expect(vectorManifestRecord.sha256).toBe(vectorRawSha256)
+
+      const packagedSmokeReceipt = JSON.parse(readFileSync(
+        path.join(root, 'windows', 'qualification', 'acceptance', 'packaged-smoke.json'),
+        'utf8',
+      ))
+      const vectorReference = packagedSmokeReceipt.evidence.find(
+        (record: { kind?: string }) => record.kind === 'packaged-vector-smoke',
+      )
+      expect(vectorReference.sha256).toBe(vectorRawSha256)
+      expect(readFileSync(path.join(root, 'windows', 'SHA256SUMS.txt'), 'utf8')).toContain(
+        `${vectorRawSha256} *qualification/packaged-vector-smoke.json`,
+      )
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS)
+
+  it.each([
+    'double-bom',
+    'whitespace-before-bom',
+    'partial-bom',
+    'utf16le-bom',
+    'invalid-utf8-in-string',
+    'malformed-after-bom',
+  ] satisfies WindowsPackagedJsonFixture[])('rejects non-canonical evidence JSON bytes: %s', fixture => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-invalid-json-'))
+    const sourceRoot = path.resolve(import.meta.dirname, '..', '..')
+    try {
+      expect(() => writePromotionFixture(root, sourceRoot, true, fixture)).toThrow(
+        'Packaged smoke evidence qualification/packaged-vector-smoke.json is not valid JSON',
+      )
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
