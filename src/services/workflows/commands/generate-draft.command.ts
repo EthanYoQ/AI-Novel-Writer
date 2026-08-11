@@ -20,7 +20,7 @@ const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MIN_TARGET_COMPLETION_RATIO = 0.82
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const MAX_TARGET_OVERAGE_RATIO = 0.12
-const OUTPUT_CHARS_PER_TOKEN = 1.5
+const INPUT_CHARS_PER_TOKEN = 1
 const SAFE_DEFAULT_MODEL_MAX_TOKENS = 4096
 const UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS = 8192
 const CONTEXT_SAFETY_RESERVE_TOKENS = 512
@@ -59,11 +59,6 @@ export function sanitizeDraftText(text: string): string {
 
 function maxDraftCharsForTarget(targetChars: number): number {
   return Math.floor(targetChars * (1 + MAX_TARGET_OVERAGE_RATIO))
-}
-
-function outputTokenBudgetForTarget(targetChars: number, currentChars = 0): number {
-  const remainingChars = Math.max(0, maxDraftCharsForTarget(targetChars) - currentChars)
-  return Math.max(1, Math.ceil(remainingChars / OUTPUT_CHARS_PER_TOKEN))
 }
 
 export interface DraftModelLimits {
@@ -107,16 +102,55 @@ function defaultModelLimits(): DraftModelLimits {
   return resolveDraftModelLimits(models.find(model => model.id === defaultModelId))
 }
 
-function boundedOutputTokenBudget(
-  targetChars: number,
-  maxOutputTokens: number,
-  currentChars = 0,
-): number {
-  return Math.min(outputTokenBudgetForTarget(targetChars, currentChars), maxOutputTokens)
+function estimatedPromptTokens(prompt: string): number {
+  // Prompt estimation is intentionally conservative for Chinese text. It is
+  // used only to protect the context window, never to derive an output budget
+  // from the requested chapter length.
+  return Math.ceil(prompt.length / INPUT_CHARS_PER_TOKEN)
 }
 
-function estimatedPromptTokens(prompt: string): number {
-  return Math.ceil(prompt.length / OUTPUT_CHARS_PER_TOKEN)
+interface DraftRequestBudget {
+  maxTokens: number
+  contextCapacityTokens: number
+  contextWindowDeclared: boolean
+}
+
+function resolveDraftRequestBudget(
+  prompt: string,
+  systemPrompt: string,
+  modelLimits: DraftModelLimits,
+): DraftRequestBudget {
+  const inputTokens = estimatedPromptTokens(`${systemPrompt}\n${prompt}`)
+  const contextWindowTokens = modelLimits.contextWindowTokens ?? UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS
+  const contextCapacityTokens = contextWindowTokens - inputTokens - CONTEXT_SAFETY_RESERVE_TOKENS
+  if (contextCapacityTokens <= 0) {
+    const source = modelLimits.contextWindowTokens === null
+      ? `当前模型未声明上下文窗口，本次按保守窗口 ${UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS} tokens 估算`
+      : `模型已声明上下文窗口 ${contextWindowTokens} tokens`
+    throw new Error(
+      `${source}；当前输入上下文预算扣除 Prompt 约 ${inputTokens} tokens 与安全余量 ` +
+      `${CONTEXT_SAFETY_RESERVE_TOKENS} 后，已无安全输出空间。` +
+      '请缩短项目设定、提示词或前文，或选择上下文窗口更大的模型后重试。',
+    )
+  }
+  return {
+    maxTokens: Math.min(modelLimits.maxOutputTokens, contextCapacityTokens),
+    contextCapacityTokens,
+    contextWindowDeclared: modelLimits.contextWindowTokens !== null,
+  }
+}
+
+function logDraftRequestBudget(
+  callbacks: CommandExecuteParams['callbacks'],
+  phase: string,
+  budget: DraftRequestBudget,
+  modelLimits: DraftModelLimits,
+): void {
+  const contextLabel = budget.contextWindowDeclared ? '已声明上下文' : '保守上下文'
+  callbacks.log(
+    `  ${phase}：请求上限 ${budget.maxTokens} Tokens` +
+    `（模型配置上限 ${modelLimits.maxOutputTokens}，${contextLabel}可用输出 ${budget.contextCapacityTokens}）`,
+  )
 }
 
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
@@ -280,17 +314,15 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
     const maxDraftChars = maxDraftCharsForTarget(targetChars)
     const modelLimits = defaultModelLimits()
-    const initialOutputTokenBudget = boundedOutputTokenBudget(
-      targetChars,
-      modelLimits.maxOutputTokens,
-    )
-    this.assertPromptFitsBudget(prompt, promptBuilder.getSystemRole(), initialOutputTokenBudget, modelLimits)
+    const initialBudget = resolveDraftRequestBudget(prompt, promptBuilder.getSystemRole(), modelLimits)
 
     callbacks.log('调用 AI 生成章节草稿...')
+    logDraftRequestBudget(callbacks, '初始生成', initialBudget, modelLimits)
     const initialCompletion = await this.callLLMResultWithBuilder(promptBuilder, callbacks, {
       thinking: false,
-      maxTokens: initialOutputTokenBudget,
+      maxTokens: initialBudget.maxTokens,
     }, context)
+    callbacks.log(`  初始生成完成：finishReason=${initialCompletion.finishReason}`)
     this.assertNotCancelled(context)
     const cleanDraftText = await this.extendDraftIfNeeded({
       initialDraft: sanitizeDraftText(this.stripThinkingTags(initialCompletion.content)),
@@ -453,15 +485,15 @@ ${params.writingStyle || '（无）'}
 【已写正文末尾】
 ${visibleTail}`
 
-      const continuationOutputTokenBudget = boundedOutputTokenBudget(
-        params.targetChars,
-        params.modelLimits.maxOutputTokens,
-        currentChars,
-      )
-      this.assertPromptFitsBudget(
+      const continuationBudget = resolveDraftRequestBudget(
         continuationPrompt,
         params.systemRole,
-        continuationOutputTokenBudget,
+        params.modelLimits,
+      )
+      logDraftRequestBudget(
+        params.callbacks,
+        `自动续写第 ${rounds} 段`,
+        continuationBudget,
         params.modelLimits,
       )
 
@@ -471,10 +503,11 @@ ${visibleTail}`
         params.callbacks,
         {
           thinking: false,
-          maxTokens: continuationOutputTokenBudget,
+          maxTokens: continuationBudget.maxTokens,
         },
         params.context
       )
+      params.callbacks.log(`  自动续写第 ${rounds} 段完成：finishReason=${addition.finishReason}`)
       this.assertNotCancelled(params.context)
       lastFinishReason = addition.finishReason
       const beforeChars = countDraftUnits(draft)
@@ -506,40 +539,6 @@ ${visibleTail}`
     }
 
     return draft
-  }
-
-  private assertPromptFitsBudget(
-    prompt: string,
-    systemPrompt: string,
-    outputTokenBudget: number,
-    modelLimits: DraftModelLimits,
-  ): void {
-    const inputTokens = estimatedPromptTokens(`${systemPrompt}\n${prompt}`)
-    if (modelLimits.contextWindowTokens === null) {
-      const safeInputTokens = UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS
-        - outputTokenBudget
-        - CONTEXT_SAFETY_RESERVE_TOKENS
-      if (safeInputTokens <= 0 || inputTokens > safeInputTokens) {
-        throw new Error(
-          `当前模型未声明上下文窗口。为避免盲目联网，本次按保守窗口 ${UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS} tokens 估算，` +
-          `扣除输出预留 ${outputTokenBudget} 与安全余量 ${CONTEXT_SAFETY_RESERVE_TOKENS} 后，可用输入约 ${Math.max(0, safeInputTokens)} tokens；` +
-          `当前 Prompt 约 ${inputTokens} tokens，已停止生成。请缩短项目设定、提示词或前文，或在模型配置中补充上下文窗口。`,
-        )
-      }
-      return
-    }
-
-    const availableInputTokens = modelLimits.contextWindowTokens
-      - outputTokenBudget
-      - CONTEXT_SAFETY_RESERVE_TOKENS
-    if (availableInputTokens <= 0 || inputTokens > availableInputTokens) {
-      throw new Error(
-        `当前 Prompt 预估约 ${inputTokens} tokens，超过模型已声明的输入上下文预算 ` +
-        `${Math.max(0, availableInputTokens)} tokens（上下文窗口 ${modelLimits.contextWindowTokens}，` +
-        `本次输出预留 ${outputTokenBudget}，安全余量 ${CONTEXT_SAFETY_RESERVE_TOKENS}）。` +
-        '请缩短项目设定、提示词或前文，或选择上下文窗口更大的模型后重试。',
-      )
-    }
   }
 
   // --- 抽取自原文件的辅助方法 ---
