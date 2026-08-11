@@ -237,7 +237,7 @@ describe('GenerateDraftCommand truncation boundary', () => {
     return { invoke, context, callbacks, command }
   }
 
-  it('uses the chapter target for the prompt, output budget, and bounded persisted draft', async () => {
+  it('uses the chapter target for the prompt and persisted draft without reducing the request limit', async () => {
     const { invoke, context, callbacks, command } = setup(6000, 3000)
     const overlongDraft = Array.from(
       { length: 20 },
@@ -260,7 +260,9 @@ describe('GenerateDraftCommand truncation boundary', () => {
 
     const builder = initial.mock.calls[0]?.[0] as { build: () => string }
     expect(builder.build()).toContain('大约 3000 字左右')
-    expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 2240 })
+    expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 4096 })
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('初始生成：请求上限 4096 Tokens（模型配置上限 4096'))
+    expect(callbacks.log).toHaveBeenCalledWith('  初始生成完成：finishReason=stop')
     expect(continuation).not.toHaveBeenCalled()
     const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
     const persistedContent = (persisted?.[1] as { content: string } | undefined)?.content
@@ -299,7 +301,7 @@ describe('GenerateDraftCommand truncation boundary', () => {
     expect(persistedContent).toMatch(/[.?!]$/)
   })
 
-  it('continues a large draft only below the target lower bound and with the remaining target budget', async () => {
+  it('continues below the target lower bound while retaining the context-safe request limit', async () => {
     const { invoke, context, callbacks, command } = setup(6000)
     const initial = vi.spyOn(
       command as unknown as {
@@ -319,7 +321,10 @@ describe('GenerateDraftCommand truncation boundary', () => {
     expect(continuation).toHaveBeenCalledTimes(1)
     expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 4096 })
     expect(continuation.mock.calls[0]?.[0]).toContain('剩余约 1500 字')
-    expect(continuation.mock.calls[0]?.[3]).toMatchObject({ maxTokens: 1480 })
+    expect(continuation.mock.calls[0]?.[3]).toMatchObject({ maxTokens: 4096 })
+    expect(callbacks.log).toHaveBeenCalledWith('  初始生成完成：finishReason=length')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('自动续写第 1 段：请求上限 4096 Tokens（模型配置上限 4096'))
+    expect(callbacks.log).toHaveBeenCalledWith('  自动续写第 1 段完成：finishReason=stop')
     const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
     expect(persisted?.[1]).toMatchObject({ content: expect.stringContaining('续') })
   })
@@ -410,6 +415,26 @@ describe('GenerateDraftCommand truncation boundary', () => {
     expect(initial.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 1024 })
     expect(continuation).toHaveBeenCalledTimes(1)
     expect(continuation.mock.calls[0]?.[3]).toMatchObject({ maxTokens: 1024 })
+  })
+
+  it('caps a large legacy output limit by the conservative unknown context window', async () => {
+    const { context, callbacks, command } = setup(3000, 3000, 60_000)
+    const initial = vi.spyOn(
+      command as unknown as {
+        callLLMResultWithBuilder: (...args: unknown[]) => Promise<{ content: string; finishReason: 'stop' }>
+      },
+      'callLLMResultWithBuilder',
+    ).mockResolvedValue({ content: `${'正文'.repeat(1500)}。`, finishReason: 'stop' })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBeTruthy()
+
+    const request = initial.mock.calls[0]?.[2] as { maxTokens: number }
+    expect(request.maxTokens).toBeGreaterThan(2240)
+    expect(request.maxTokens).toBeLessThan(60_000)
+    expect(request.maxTokens).toBeLessThan(8192)
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining(
+      `模型配置上限 60000，保守上下文可用输出 ${request.maxTokens}`,
+    ))
   })
 
   it('uses capability output limits while preserving legacy maxTokens and unknown context', () => {
