@@ -116,11 +116,39 @@ function writeQualificationEvidence(
   writeFileSync(file, qualificationEvidenceBytes(evidence, fixture))
 }
 
+function writeWindowsCheckoutSource(root: string, sourceRoot: string): string {
+  const windowsSourceRoot = path.join(root, 'windows-source')
+  mkdirSync(windowsSourceRoot, { recursive: true })
+  writeFileSync(
+    path.join(windowsSourceRoot, 'package.json'),
+    readFileSync(path.join(sourceRoot, 'package.json')),
+  )
+  const canonicalLockfile = readFileSync(path.join(sourceRoot, 'pnpm-lock.yaml'), 'utf8')
+    .replace(/\r\n?/g, '\n')
+  writeFileSync(
+    path.join(windowsSourceRoot, 'pnpm-lock.yaml'),
+    canonicalLockfile.replace(/\n/g, '\r\n'),
+    'utf8',
+  )
+  return windowsSourceRoot
+}
+
+function rewriteQualificationContract(
+  bundleRoot: string,
+  update: (contract: { frozen: { lockfile: { rawByteSha256?: string, textNewlinesLfSha256: string } } }) => void,
+): void {
+  const contractPath = path.join(bundleRoot, 'qualification', 'release-contract.json')
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'))
+  update(contract)
+  writeFileSync(contractPath, `${JSON.stringify(contract, null, 2)}\n`, 'utf8')
+}
+
 function writePromotionFixture(
   root: string,
   sourceRoot: string,
   includeWindowsSkinEvidence: boolean,
   windowsPackagedJsonFixture: WindowsPackagedJsonFixture = 'utf8',
+  useWindowsCheckoutNewlines = false,
 ): { sourcePlan: Record<string, unknown> } {
   const packageMetadata = JSON.parse(readFileSync(path.join(sourceRoot, 'package.json'), 'utf8')) as { version: string }
   const version = packageMetadata.version
@@ -129,6 +157,9 @@ function writePromotionFixture(
   const macosRoot = path.join(root, 'macos')
   const windowsEvidenceRoot = path.join(root, 'windows-evidence')
   const macosEvidenceRoot = path.join(root, 'macos-evidence')
+  const windowsSourceRoot = useWindowsCheckoutNewlines
+    ? writeWindowsCheckoutSource(root, sourceRoot)
+    : sourceRoot
   mkdirSync(windowsRoot, { recursive: true })
   mkdirSync(macosRoot, { recursive: true })
 
@@ -174,10 +205,10 @@ function writePromotionFixture(
     actor: 'release-operator',
     event: 'workflow_dispatch',
     dispatchInputs: {},
-    root: sourceRoot,
+    root: windowsSourceRoot,
   })
   for (const step of COMMAND_PROFILES.windows) {
-    recordReleaseCommand({ evidenceRoot: windowsEvidenceRoot, step, command: [process.execPath, '-e', ''], cwd: sourceRoot })
+    recordReleaseCommand({ evidenceRoot: windowsEvidenceRoot, step, command: [process.execPath, '-e', ''], cwd: windowsSourceRoot })
   }
   for (const receipt of ['install', 'launch', 'quiet-window', 'error-dialogs', 'uninstall', 'upgrade-data', 'native-abi', 'packaged-smoke', 'signing']) {
     writeQualificationEvidence(windowsEvidenceRoot, `acceptance/${receipt}.json`, windowsAcceptanceReceipt(windowsRoot, version, receipt))
@@ -338,6 +369,81 @@ describe('cross-platform artifact promotion planner', () => {
       expect(readFileSync(path.join(root, 'windows', 'SHA256SUMS.txt'), 'utf8')).toContain(
         `${vectorRawSha256} *qualification/packaged-vector-smoke.json`,
       )
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS)
+
+  it('uses canonical LF lockfile identity across qualified checkout newline formats', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-lockfile-newlines-'))
+    const sourceRoot = path.resolve(import.meta.dirname, '..', '..')
+    try {
+      const fixture = writePromotionFixture(root, sourceRoot, true, 'utf8', true)
+      const windowsContract = JSON.parse(readFileSync(
+        path.join(root, 'windows', 'qualification', 'release-contract.json'),
+        'utf8',
+      ))
+      const qualifiedLockfileBytes = readFileSync(path.join(sourceRoot, 'pnpm-lock.yaml'))
+      const qualifiedCanonicalBytes = Buffer.from(
+        qualifiedLockfileBytes.toString('utf8').replace(/\r\n?/g, '\n'),
+        'utf8',
+      )
+
+      expect(windowsContract.frozen.lockfile.rawByteSha256).not.toBe(sha256(qualifiedLockfileBytes))
+      expect(windowsContract.frozen.lockfile.textNewlinesLfSha256).toBe(sha256(qualifiedCanonicalBytes))
+      expect(verifyPromotion({
+        windowsArtifactRoot: path.join(root, 'windows'),
+        macosArtifactRoot: path.join(root, 'macos'),
+        qualifiedSource: sourceRoot,
+        sourcePlan: fixture.sourcePlan,
+        outputDirectory: path.join(root, 'output'),
+      }).state).toBe('READY_TO_PUBLISH')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS)
+
+  it('rejects a qualification bundle whose canonical lockfile content differs', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-lockfile-content-'))
+    const sourceRoot = path.resolve(import.meta.dirname, '..', '..')
+    try {
+      const fixture = writePromotionFixture(root, sourceRoot, true)
+      rewriteQualificationContract(path.join(root, 'windows'), contract => {
+        contract.frozen.lockfile.textNewlinesLfSha256 = 'f'.repeat(64)
+      })
+
+      expect(() => verifyPromotion({
+        windowsArtifactRoot: path.join(root, 'windows'),
+        macosArtifactRoot: path.join(root, 'macos'),
+        qualifiedSource: sourceRoot,
+        sourcePlan: fixture.sourcePlan,
+        outputDirectory: path.join(root, 'output'),
+      })).toThrow('Release evidence contract canonical lockfile hash does not match qualified source')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, QUALIFICATION_BUNDLE_TEST_TIMEOUT_MS)
+
+  it.each([
+    ['missing', undefined],
+    ['malformed', 'not-a-sha256'],
+  ])('rejects a qualification bundle with a %s raw lockfile hash field', (_label, rawByteSha256) => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ai-novel-promotion-lockfile-raw-'))
+    const sourceRoot = path.resolve(import.meta.dirname, '..', '..')
+    try {
+      const fixture = writePromotionFixture(root, sourceRoot, true)
+      rewriteQualificationContract(path.join(root, 'windows'), contract => {
+        if (rawByteSha256 === undefined) delete contract.frozen.lockfile.rawByteSha256
+        else contract.frozen.lockfile.rawByteSha256 = rawByteSha256
+      })
+
+      expect(() => verifyPromotion({
+        windowsArtifactRoot: path.join(root, 'windows'),
+        macosArtifactRoot: path.join(root, 'macos'),
+        qualifiedSource: sourceRoot,
+        sourcePlan: fixture.sourcePlan,
+        outputDirectory: path.join(root, 'output'),
+      })).toThrow('Release evidence contract raw lockfile hash is invalid')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
