@@ -333,13 +333,11 @@ export function verifyPromotion({ windowsArtifactRoot, macosArtifactRoot, qualif
   const packageMetadata = jsonFile(path.join(qualifiedSource, 'package.json'), 'qualified package.json')
   assert(packageMetadata?.version === sourcePlan.version, 'Qualified source version does not match the requested release tag')
   const lockfileSha256 = canonicalPnpmLockfileSha256(path.join(qualifiedSource, 'pnpm-lock.yaml'))
-  const lockfileRawSha256 = sha256(path.join(qualifiedSource, 'pnpm-lock.yaml'))
   assert(Number.isInteger(sourcePlan?.windows?.runId) && Number.isInteger(sourcePlan?.macos?.runId), 'Source verification plan is missing qualification run identity')
   assert(Number.isInteger(sourcePlan?.windows?.runAttempt) && sourcePlan.windows.runAttempt > 0 && Number.isInteger(sourcePlan?.macos?.runAttempt) && sourcePlan.macos.runAttempt > 0, 'Source verification plan is missing qualification run attempt')
   const windows = validateWindowsArtifact(windowsArtifactRoot, {
     expectedSha: sourcePlan.expectedSha,
     lockfileSha256,
-    lockfileRawSha256,
     version: sourcePlan.version,
     repository: sourcePlan.repository,
     runId: sourcePlan.windows.runId,
@@ -351,7 +349,6 @@ export function verifyPromotion({ windowsArtifactRoot, macosArtifactRoot, qualif
   const macos = validateMacosArtifact(macosArtifactRoot, {
     expectedSha: sourcePlan.expectedSha,
     lockfileSha256,
-    lockfileRawSha256,
     version: sourcePlan.version,
     repository: sourcePlan.repository,
     runId: sourcePlan.macos.runId,
