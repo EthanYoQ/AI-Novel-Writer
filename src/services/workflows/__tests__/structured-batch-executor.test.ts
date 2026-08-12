@@ -536,13 +536,20 @@ describe('StructuredBatchExecutor seam', () => {
   })
 
   it('classifies malformed structured content as invalid output', async () => {
+    let attempt = 0
     const executor = createStructuredBatchExecutor({
       contract: blueprintContract,
-      session: createSession(vi.fn<AttemptHandler>(async () => ({
-        status: 'completed',
-        content: '{"blueprints":[',
-        requestedTokens: 100,
-      }))),
+      session: {
+        complete: vi.fn<GenerationSession['complete']>(async () => {
+          attempt += 1
+          return {
+            status: 'completed',
+            content: '{"blueprints":[',
+            finishReason: 'stop',
+            receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+          }
+        }),
+      },
     })
 
     const result = await executor.execute({
@@ -553,9 +560,299 @@ describe('StructuredBatchExecutor seam', () => {
     expect(result).toMatchObject({
       ok: false,
       failure: { code: 'invalid_output', reason: 'malformed_output' },
+      receipt: { calls: 2, requestedTokens: 200 },
+    })
+    expect(result).not.toHaveProperty('items')
+  })
+
+  it('repairs one completed malformed JSON response through the same generation session and accounts for both attempts', async () => {
+    const complete = vi.fn<GenerationSession['complete']>(async (task) => {
+      if (task.purpose === 'chapter-blueprints') {
+        return {
+          status: 'completed',
+          content: '{"blueprints":[{"chapterNumber":1,"title":"第1章"}',
+          finishReason: 'stop',
+          receipt: attemptReceipt(1, 100, 100, 'stop'),
+        }
+      }
+      expect(task).toMatchObject({
+        purpose: 'chapter-blueprints:structured-syntax-repair',
+        output: 'structured-data',
+      })
+      const repairPrompt = task.messages.map(message => message.content).join('\n')
+      expect(repairPrompt).toContain('"items":[1]')
+      expect(repairPrompt).toContain('{"blueprints":[{"chapterNumber":1')
+      expect(repairPrompt).toContain('完整替代 JSON')
+      return {
+        status: 'completed',
+        content: blueprintJson([1]),
+        finishReason: 'stop',
+        receipt: attemptReceipt(2, 100, 200, 'stop'),
+      }
+    })
+    const executor = createStructuredBatchExecutor({
+      contract: blueprintContract,
+      session: { complete },
+    })
+
+    const result = await executor.execute({
+      items: [1],
+      limits: { maxBatchItems: 5 },
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: [{ chapterNumber: 1, title: '第1章' }],
+      receipt: {
+        calls: 2,
+        requestedTokens: 200,
+        attempts: [
+          { finishReason: 'stop', budget: { attempt: 1 } },
+          { finishReason: 'stop', budget: { attempt: 2 } },
+        ],
+      },
+    })
+    expect(complete).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['missing item', '{"blueprints":[]}', 'missing_item'],
+    ['duplicate item', '{"blueprints":[{"chapterNumber":1,"title":"甲"},{"chapterNumber":1,"title":"乙"}]}', 'duplicate_item'],
+    ['invalid field', '{"blueprints":[{"chapterNumber":1,"title":""}]}', 'invalid_item'],
+  ] as const)('does not syntax-repair parseable JSON with a %s semantic violation', async (_case, content, reason) => {
+    const complete = vi.fn<GenerationSession['complete']>(async () => ({
+      status: 'completed',
+      content,
+      finishReason: 'stop',
+      receipt: attemptReceipt(1, 100, 100, 'stop'),
+    }))
+    const executor = createStructuredBatchExecutor({
+      contract: blueprintContract,
+      session: { complete },
+    })
+
+    const result = await executor.execute({
+      items: [1],
+      limits: { maxBatchItems: 5 },
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: 'invalid_output', reason },
       receipt: { calls: 1, requestedTokens: 100 },
     })
     expect(result).not.toHaveProperty('items')
+    expect(complete).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not syntax-repair parseable JSON rejected while crossing the contract decode seam', async () => {
+    const complete = vi.fn<GenerationSession['complete']>(async () => ({
+      status: 'completed',
+      content: '{"blueprints":[]}',
+      finishReason: 'stop',
+      receipt: attemptReceipt(1, 100, 100, 'stop'),
+    }))
+    const executor = createStructuredBatchExecutor({
+      contract: {
+        ...blueprintContract,
+        decode: (content) => {
+          JSON.parse(content)
+          throw new Error('domain coverage failed')
+        },
+      },
+      session: { complete },
+    })
+
+    const result = await executor.execute({
+      items: [1],
+      limits: { maxBatchItems: 5 },
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: 'invalid_output', reason: 'invalid_item' },
+      receipt: { calls: 1, requestedTokens: 100 },
+    })
+    expect(result).not.toHaveProperty('items')
+    expect(complete).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['length', 'length', 'limit_exceeded', 'output_limit'],
+    ['safety filter', 'content_filter', 'generation_failed', 'safety'],
+    ['provider error outcome', 'error', 'generation_failed', 'server_error'],
+  ] as const)('fails closed when the one syntax repair ends with %s', async (_case, finishReason, code, reason) => {
+    let attempt = 0
+    const complete = vi.fn<GenerationSession['complete']>(async () => {
+      attempt += 1
+      if (attempt === 1) {
+        return {
+          status: 'completed',
+          content: '{"blueprints":[',
+          finishReason: 'stop',
+          receipt: attemptReceipt(1, 100, 100, 'stop'),
+        }
+      }
+      return {
+        status: 'incomplete',
+        content: '',
+        finishReason,
+        receipt: attemptReceipt(2, 100, 200, finishReason),
+      }
+    })
+    const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+
+    const result = await executor.execute({ items: [1], limits: { maxBatchItems: 5 } })
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code, reason },
+      receipt: { calls: 2, requestedTokens: 200 },
+    })
+    expect(result).not.toHaveProperty('items')
+    expect(complete).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets GenerationSession reject syntax repair before a second billable call when the global attempt budget is exhausted', async () => {
+    const physicalComplete = vi.fn(async () => ({
+      content: '{"blueprints":[',
+      finishReason: 'stop' as const,
+    }))
+    const harness = createGenerationHarness({
+      modelSource: {
+        snapshotDefaultModel: () => ({
+          revision: 'repair-budget-revision',
+          model: {
+            id: 'repair-budget-model',
+            name: 'Repair budget model',
+            provider: 'custom',
+            protocol: 'openai',
+            modelName: 'repair-budget-model',
+            apiKey: 'test-only',
+            baseUrl: 'https://example.invalid/v1',
+            temperature: 0.7,
+            maxTokens: 100,
+            purposes: ['generation'],
+          },
+        }),
+      },
+      completionPort: { complete: physicalComplete },
+      policy: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 100,
+        maxRequestedOutputTokensPerAttempt: 100,
+        deadlineMs: 60_000,
+      },
+      now: () => 0,
+    })
+    const executor = createStructuredBatchExecutor({
+      contract: blueprintContract,
+      session: harness.openSession(),
+    })
+
+    const result = await executor.execute({ items: [1], limits: { maxBatchItems: 5 } })
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: 'limit_exceeded', reason: 'max_calls' },
+      receipt: { calls: 1, requestedTokens: 100 },
+    })
+    expect(result).not.toHaveProperty('items')
+    expect(physicalComplete).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['candidate', false],
+    ['contract', true],
+  ] as const)('refuses syntax repair when the complete %s evidence exceeds its UTF-8 byte limit', async (_case, oversizedContract) => {
+    const complete = vi.fn<GenerationSession['complete']>(async () => ({
+      status: 'completed',
+      content: oversizedContract ? '{"blueprints":[' : `{"blueprints":"${'界'.repeat(11_000)}`,
+      finishReason: 'stop',
+      receipt: attemptReceipt(1, 100, 100, 'stop'),
+    }))
+    const contract: StructuredBatchContract<number, Blueprint> = oversizedContract
+      ? {
+          ...blueprintContract,
+          buildTask: ({ items, validatedPrefix }) => ({
+            purpose: 'oversized-contract',
+            output: 'structured-data',
+            messages: [{
+              role: 'user',
+              content: JSON.stringify({ items, validatedPrefix, contract: '界'.repeat(11_000) }),
+            }],
+          }),
+        }
+      : blueprintContract
+    const executor = createStructuredBatchExecutor({ contract, session: { complete } })
+
+    const result = await executor.execute({ items: [1], limits: { maxBatchItems: 5 } })
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: 'invalid_output', reason: 'malformed_output' },
+      receipt: { calls: 1, requestedTokens: 100 },
+    })
+    expect(result).not.toHaveProperty('items')
+    expect(complete).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows at most one syntax repair across all batches in one executor run', async () => {
+    let attempt = 0
+    const complete = vi.fn<GenerationSession['complete']>(async (task) => {
+      attempt += 1
+      if (attempt === 2) {
+        return {
+          status: 'completed',
+          content: blueprintJson([1]),
+          finishReason: 'stop',
+          receipt: attemptReceipt(2, 100, 200, 'stop'),
+        }
+      }
+      expect(task.purpose).toBe('chapter-blueprints')
+      return {
+        status: 'completed',
+        content: '{"blueprints":[',
+        finishReason: 'stop',
+        receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+      }
+    })
+    const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+
+    const result = await executor.execute({ items: [1, 2], limits: { maxBatchItems: 1 } })
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: 'invalid_output', reason: 'malformed_output' },
+      receipt: { calls: 3, requestedTokens: 300 },
+    })
+    expect(result).not.toHaveProperty('items')
+    expect(complete).toHaveBeenCalledTimes(3)
+  })
+
+  it('lets the contract decode a complete fenced JSON envelope without spending the syntax repair', async () => {
+    const complete = vi.fn<GenerationSession['complete']>(async () => ({
+      status: 'completed',
+      content: `\`\`\`json\n${blueprintJson([1])}\n\`\`\``,
+      finishReason: 'stop',
+      receipt: attemptReceipt(1, 100, 100, 'stop'),
+    }))
+    const executor = createStructuredBatchExecutor({
+      contract: {
+        ...blueprintContract,
+        decode: content => blueprintContract.decode(content.replace(/^```json\s*|\s*```$/gu, '')),
+      },
+      session: { complete },
+    })
+
+    const result = await executor.execute({ items: [1], limits: { maxBatchItems: 5 } })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: [{ chapterNumber: 1 }],
+      receipt: { calls: 1, requestedTokens: 100 },
+    })
+    expect(complete).toHaveBeenCalledTimes(1)
   })
 
   it.each([
