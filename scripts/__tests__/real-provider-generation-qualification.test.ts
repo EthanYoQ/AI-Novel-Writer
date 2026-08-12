@@ -15,6 +15,7 @@ import {
   QUALIFICATION_PRICE_SNAPSHOTS,
   assertQualificationSourceProvenance,
   assertQualificationOutputSchemaSafe,
+  blueprintQualificationFailureCode,
   createQualificationProfilesFromMemory,
   runRealProviderGenerationQualification,
   verifyQualificationReceiptChecksum,
@@ -78,6 +79,17 @@ function inMemoryProfiles() {
 }
 
 describe('real provider generation qualification contract', () => {
+  it('reports only provider identity and bounded structural failure facts', () => {
+    expect(blueprintQualificationFailureCode(
+      { provider: 'deepseek' },
+      { code: 'invalid_output', reason: 'malformed_output', message: 'secret model output' },
+    )).toBe('DEEPSEEK_BLUEPRINT_INVALID_OUTPUT_MALFORMED_OUTPUT')
+    expect(blueprintQualificationFailureCode(
+      { provider: 'unknown-provider' },
+      { code: 'anything', reason: 'anything', message: 'secret model output' },
+    )).toBe('UNKNOWN_BLUEPRINT_UNKNOWN_UNKNOWN')
+  })
+
   it('runs one synthetic fixture through the real Harness and StructuredExecutor without networking in dry-run', async () => {
     const fetchSpy = vi.fn(() => Promise.reject(new Error('dry-run must never call fetch')))
     vi.stubGlobal('fetch', fetchSpy)

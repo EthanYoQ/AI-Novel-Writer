@@ -911,6 +911,26 @@ function summarizedUsage(attempts) {
   }
 }
 
+export function blueprintQualificationFailureCode(profile, failure) {
+  const provider = new Set(['deepseek', 'xai', 'gemini']).has(profile?.provider)
+    ? profile.provider.toUpperCase()
+    : 'UNKNOWN'
+  const code = new Set([
+    'generation_failed', 'invalid_output', 'limit_exceeded', 'cancelled', 'deadline',
+  ]).has(failure?.code)
+    ? failure.code.toUpperCase()
+    : 'UNKNOWN'
+  const reason = new Set([
+    'server_error', 'authentication', 'safety', 'cancelled', 'deadline', 'unknown',
+    'missing_item', 'duplicate_item', 'unexpected_item', 'invalid_item',
+    'malformed_output', 'output_limit', 'max_calls', 'max_requested_tokens',
+    'invalid_limit',
+  ]).has(failure?.reason)
+    ? failure.reason.toUpperCase()
+    : 'UNKNOWN'
+  return `${provider}_BLUEPRINT_${code}_${reason}`
+}
+
 async function qualifyOneProfile({
   mode,
   profile,
@@ -976,7 +996,9 @@ async function qualifyOneProfile({
         maxBatchItems: fixture.blueprintChapterNumbers.length,
       },
     })
-    if (!blueprintResult.ok) throw new QualificationFailure('BLUEPRINT_QUALIFICATION_FAILED')
+    if (!blueprintResult.ok) {
+      throw new QualificationFailure(blueprintQualificationFailureCode(profile, blueprintResult.failure))
+    }
 
     const draftAttempts = []
     let draft = ''
