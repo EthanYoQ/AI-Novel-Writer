@@ -325,6 +325,12 @@ function matchesOfficialTarget(profile, target, { matchModel = true } = {}) {
     && normalizeEndpoint(profile?.baseUrl) === target.baseUrl
 }
 
+function matchesOfficialOpenAiCompatibleCredentialSource(profile, target) {
+  return (profile?.provider === target.provider || profile?.provider === 'custom')
+    && profile?.protocol === target.protocol
+    && normalizeEndpoint(profile?.baseUrl) === target.baseUrl
+}
+
 function assertQualificationTargets(profiles) {
   if (!Array.isArray(profiles) || profiles.length !== QUALIFICATION_TARGETS.length) {
     throw new QualificationFailure('THREE_PROFILES_REQUIRED')
@@ -350,10 +356,8 @@ export function createQualificationProfilesFromMemory({
   const grokTarget = QUALIFICATION_TARGETS[1]
   const geminiTarget = QUALIFICATION_TARGETS[2]
   const deepSeek = profiles.find(profile => matchesOfficialTarget(profile, deepSeekTarget))
-  const grok = profiles.find(profile => matchesOfficialTarget(
-    profile,
-    grokTarget,
-    { matchModel: false },
+  const grok = profiles.find(profile => (
+    matchesOfficialOpenAiCompatibleCredentialSource(profile, grokTarget)
   ))
   if (!deepSeek) throw new QualificationFailure('DEEPSEEK_OFFICIAL_PROFILE_REQUIRED')
   if (!grok) throw new QualificationFailure('GROK_OFFICIAL_PROFILE_REQUIRED')
@@ -366,6 +370,8 @@ export function createQualificationProfilesFromMemory({
   const frozenGrok = {
     ...cloneProfile(requireProfile(grok, 'GROK_PROFILE')),
     id: `${grok.id}:qualification:grok-4.5`,
+    provider: grokTarget.provider,
+    protocol: grokTarget.protocol,
     modelName: grokTarget.modelName,
     baseUrl: grokTarget.baseUrl,
     maxTokens: QUALIFICATION_SAFETY_BUDGET.maxRequestedOutputTokensPerAttempt,

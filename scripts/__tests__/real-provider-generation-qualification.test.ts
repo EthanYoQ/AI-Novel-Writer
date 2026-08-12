@@ -59,7 +59,11 @@ function inMemoryProfiles() {
       {
         id: 'configured-grok',
         name: 'Grok configured',
-        provider: 'xai',
+        // Existing app profiles created through the OpenAI-compatible form are
+        // persisted as `custom`, even when they target xAI's exact official
+        // endpoint. Qualification may use that profile as an in-memory secret
+        // source, but the frozen execution identity must still be canonical xAI.
+        provider: 'custom',
         protocol: 'openai',
         modelName: 'old-grok-model',
         apiKey: 'grok-qualification-secret',
