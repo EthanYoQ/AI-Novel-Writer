@@ -16,6 +16,7 @@ import {
   assertQualificationSourceProvenance,
   assertQualificationOutputSchemaSafe,
   blueprintQualificationFailureCode,
+  classifyStructuredResponseEnvelope,
   createQualificationProfilesFromMemory,
   runRealProviderGenerationQualification,
   verifyQualificationReceiptChecksum,
@@ -83,11 +84,20 @@ describe('real provider generation qualification contract', () => {
     expect(blueprintQualificationFailureCode(
       { provider: 'deepseek' },
       { code: 'invalid_output', reason: 'malformed_output', message: 'secret model output' },
-    )).toBe('DEEPSEEK_BLUEPRINT_INVALID_OUTPUT_MALFORMED_OUTPUT')
+      'empty',
+    )).toBe('DEEPSEEK_BLUEPRINT_INVALID_OUTPUT_MALFORMED_OUTPUT_EMPTY')
     expect(blueprintQualificationFailureCode(
       { provider: 'unknown-provider' },
       { code: 'anything', reason: 'anything', message: 'secret model output' },
-    )).toBe('UNKNOWN_BLUEPRINT_UNKNOWN_UNKNOWN')
+      'unrecognized',
+    )).toBe('UNKNOWN_BLUEPRINT_UNKNOWN_UNKNOWN_UNRECOGNIZED')
+    expect(classifyStructuredResponseEnvelope('')).toBe('empty')
+    expect(classifyStructuredResponseEnvelope('{"blueprints":[]}')).toBe('direct-object')
+    expect(classifyStructuredResponseEnvelope('[1]')).toBe('direct-array')
+    expect(classifyStructuredResponseEnvelope('```json\n{}\n```')).toBe('fenced-json')
+    expect(classifyStructuredResponseEnvelope('```json\n{}')).toBe('malformed-fence')
+    expect(classifyStructuredResponseEnvelope('"json string"')).toBe('json-string')
+    expect(classifyStructuredResponseEnvelope('以下是结果')).toBe('prose')
   })
 
   it('runs one synthetic fixture through the real Harness and StructuredExecutor without networking in dry-run', async () => {

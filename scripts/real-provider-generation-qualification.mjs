@@ -908,7 +908,18 @@ function summarizedUsage(attempts) {
   }
 }
 
-export function blueprintQualificationFailureCode(profile, failure) {
+export function classifyStructuredResponseEnvelope(text) {
+  const trimmed = String(text || '').trim()
+  if (!trimmed) return 'empty'
+  if (/^```(?:json)?\s*[\s\S]*\s*```$/iu.test(trimmed)) return 'fenced-json'
+  if (trimmed.startsWith('```')) return 'malformed-fence'
+  if (trimmed.startsWith('{')) return 'direct-object'
+  if (trimmed.startsWith('[')) return 'direct-array'
+  if (trimmed.startsWith('"')) return 'json-string'
+  return 'prose'
+}
+
+export function blueprintQualificationFailureCode(profile, failure, responseEnvelope = 'unrecognized') {
   const provider = new Set(['deepseek', 'xai', 'gemini']).has(profile?.provider)
     ? profile.provider.toUpperCase()
     : 'UNKNOWN'
@@ -925,7 +936,13 @@ export function blueprintQualificationFailureCode(profile, failure) {
   ]).has(failure?.reason)
     ? failure.reason.toUpperCase()
     : 'UNKNOWN'
-  return `${provider}_BLUEPRINT_${code}_${reason}`
+  const envelope = new Set([
+    'empty', 'direct-object', 'direct-array', 'fenced-json', 'malformed-fence',
+    'json-string', 'prose', 'unrecognized',
+  ]).has(responseEnvelope)
+    ? responseEnvelope.toUpperCase().replaceAll('-', '_')
+    : 'UNRECOGNIZED'
+  return `${provider}_BLUEPRINT_${code}_${reason}_${envelope}`
 }
 
 async function qualifyOneProfile({
@@ -943,9 +960,14 @@ async function qualifyOneProfile({
   const physicalCompletion = mode === 'dry-run'
     ? dryRunCompletion(fixture)
     : realProviderCompletion(productRuntime, profile)
-  const guardedCompletion = request => {
+  let lastStructuredResponseEnvelope = 'unrecognized'
+  const guardedCompletion = async request => {
     preflightLedger.reserve(profile, request)
-    return physicalCompletion(request)
+    const result = await physicalCompletion(request)
+    if (request.purpose === 'qualification-blueprints') {
+      lastStructuredResponseEnvelope = classifyStructuredResponseEnvelope(result.content)
+    }
+    return result
   }
   const leaseId = `qualification-adapter-lease:${adapterIdentitySha256}`
   const lease = Object.freeze(productRuntime.createModelExecutionLeaseReceipt(profile, {
@@ -994,7 +1016,11 @@ async function qualifyOneProfile({
       },
     })
     if (!blueprintResult.ok) {
-      throw new QualificationFailure(blueprintQualificationFailureCode(profile, blueprintResult.failure))
+      throw new QualificationFailure(blueprintQualificationFailureCode(
+        profile,
+        blueprintResult.failure,
+        lastStructuredResponseEnvelope,
+      ))
     }
 
     const draftAttempts = []
