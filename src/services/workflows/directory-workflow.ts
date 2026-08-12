@@ -3,6 +3,7 @@ import { useProjectStore } from '../../stores/project-store'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import {
   decodeBlueprintSemanticPayload,
+  parseBlueprintSemanticResponseText,
   type BlueprintSemanticItem,
 } from '../../shared/blueprint-semantic-contract'
 import {
@@ -49,21 +50,15 @@ export interface DirectoryWorkflowProjectSnapshot {
 function extractJsonPayload(content: string): string | null {
   const cleanContent = stripThinkingTags(content)
   const jsonStr = cleanContent.replace(/```json?\n?/gi, '').replace(/```\n?/g, '').trim()
-
   const firstBrace = jsonStr.indexOf('{')
   const firstBracket = jsonStr.indexOf('[')
   const lastBrace = jsonStr.lastIndexOf('}')
   const lastBracket = jsonStr.lastIndexOf(']')
-
   if (firstBrace === -1 && firstBracket === -1) return null
-
   if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
-    if (lastBracket === -1) return null
-    return jsonStr.substring(firstBracket, lastBracket + 1)
+    return lastBracket === -1 ? null : jsonStr.substring(firstBracket, lastBracket + 1)
   }
-
-  if (lastBrace === -1) return null
-  return jsonStr.substring(firstBrace, lastBrace + 1)
+  return lastBrace === -1 ? null : jsonStr.substring(firstBrace, lastBrace + 1)
 }
 
 function persistedBlueprint(item: BlueprintSemanticItem): ChapterBlueprint {
@@ -109,20 +104,15 @@ export function parseTextBlueprints(content: string, startNum: number, endNum: n
 }
 
 export function parseTextBlueprintsStrict(content: string, startNum: number, endNum: number): ChapterBlueprint[] {
-  const payload = extractJsonPayload(content)
-  if (!payload) {
-    throw new Error(`蓝图 JSON 解析失败：未找到有效 JSON 内容（目标章节 ${startNum}–${endNum}）`)
-  }
-
-  let parsed: unknown
   try {
-    parsed = JSON.parse(payload)
+    return parseBlueprintSemanticResponseText(
+      stripThinkingTags(content),
+      chapterRange(startNum, endNum),
+    ).map(persistedBlueprint)
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`蓝图 JSON 解析失败：${detail}`)
   }
-
-  return decodeBlueprintSemanticPayload(parsed, chapterRange(startNum, endNum)).map(persistedBlueprint)
 }
 
 export function assertBlueprintCoverage(

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   decodeBlueprintSemanticPayload,
+  parseBlueprintSemanticResponseText,
   validateBlueprintSemanticItem,
 } from '../blueprint-semantic-contract'
 
@@ -34,6 +35,16 @@ describe('blueprint semantic contract', () => {
       relationshipHints: [{ from: '林岚', to: '周砚', relation: '临时盟友' }],
       suspenseHook: '追踪器忽然亮起，显示信件刚从屋内发出。',
     }])
+  })
+
+  it('accepts one direct or fenced JSON root but rejects narrative prefix extraction', () => {
+    const payload = JSON.stringify({ blueprints: [validBlueprint()] })
+    expect(parseBlueprintSemanticResponseText(payload, [1])).toHaveLength(1)
+    expect(parseBlueprintSemanticResponseText(`\`\`\`json\n${payload}\n\`\`\``, [1])).toHaveLength(1)
+    expect(() => parseBlueprintSemanticResponseText(`以下是结果：\n${payload}`, [1]))
+      .toThrow(/单一 JSON/u)
+    expect(() => parseBlueprintSemanticResponseText(`${payload}\n补充说明`, [1]))
+      .toThrow(/单一 JSON/u)
   })
 
   it.each([

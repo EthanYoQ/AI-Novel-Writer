@@ -756,7 +756,7 @@ async function loadProductRuntime(repositoryRoot) {
           "export { LLMFactory } from './electron/llm/llm-factory.ts'",
           "export { resolveGenerationParameters } from './electron/llm/generation-parameter-policy.ts'",
           "export { createModelExecutionLeaseReceipt } from './electron/services/model-execution-lease.ts'",
-          "export { decodeBlueprintSemanticPayload, validateBlueprintSemanticItem } from './src/shared/blueprint-semantic-contract.ts'",
+          "export { parseBlueprintSemanticResponseText, validateBlueprintSemanticItem } from './src/shared/blueprint-semantic-contract.ts'",
           "export { BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST } from './src/shared/blueprint-semantic-contract.ts'",
         ].join('\n'),
         loader: 'ts',
@@ -865,13 +865,10 @@ function blueprintContract(productRuntime, fixture) {
     },
     inputKey: chapterNumber => chapterNumber,
     outputKey: blueprint => blueprint.chapterNumber,
-    decode: content => {
-      const decoded = JSON.parse(content)
-      return productRuntime.decodeBlueprintSemanticPayload(
-        decoded,
-        activeBatchChapterNumbers,
-      )
-    },
+    decode: content => productRuntime.parseBlueprintSemanticResponseText(
+      content,
+      activeBatchChapterNumbers,
+    ),
     validateItem: productRuntime.validateBlueprintSemanticItem,
   }
 }

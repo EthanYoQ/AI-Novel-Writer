@@ -187,3 +187,26 @@ export function decodeBlueprintSemanticPayload(
   }
   return decoded.sort((left, right) => left.chapterNumber - right.chapterNumber)
 }
+
+/**
+ * Accepts exactly one JSON root or one complete Markdown JSON fence. It never
+ * searches narrative prose for a nested JSON fragment.
+ */
+export function parseBlueprintSemanticResponseText(
+  text: string,
+  expectedChapterNumbers: readonly number[],
+): BlueprintSemanticItem[] {
+  const trimmed = text.trim()
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed)
+  const candidate = fenced ? fenced[1].trim() : trimmed
+  if (!candidate || !/^[{[]/u.test(candidate)) {
+    throw new Error('蓝图响应必须是单一 JSON 根对象或 JSON 代码块')
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(candidate)
+  } catch {
+    throw new Error('蓝图响应必须是单一 JSON 根对象或 JSON 代码块')
+  }
+  return decodeBlueprintSemanticPayload(parsed, expectedChapterNumbers)
+}

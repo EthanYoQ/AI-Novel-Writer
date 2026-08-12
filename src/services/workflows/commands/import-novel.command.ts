@@ -23,7 +23,7 @@ import type { ChapterBlueprint } from '../directory-workflow'
 import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
 import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
 import {
-  decodeBlueprintSemanticPayload,
+  parseBlueprintSemanticResponseText,
   validateBlueprintSemanticItem,
 } from '../../../shared/blueprint-semantic-contract'
 
@@ -428,7 +428,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       },
       inputKey: chapter => chapter.number,
       outputKey: blueprint => blueprint.chapterNumber,
-      decode: content => decodeBlueprintSemanticPayload(JSON.parse(content), activeChapterNumbers)
+      decode: content => parseBlueprintSemanticResponseText(content, activeChapterNumbers)
         .map(blueprint => ({
           ...blueprint,
           userGuidance: '',
