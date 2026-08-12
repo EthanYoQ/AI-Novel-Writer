@@ -35,7 +35,7 @@ type WorkflowLLMOptions = {
   purpose?: string
 }
 
-export type WorkflowGenerationIntent = 'structured' | 'text'
+export type WorkflowGenerationIntent = 'structured' | 'text' | 'character-architecture'
 
 /**
  * Intent cost ceilings are product policy, never model profiles. The runtime
@@ -53,6 +53,14 @@ export const WORKFLOW_GENERATION_BUDGETS = Object.freeze({
     maxRequestedOutputTokens: 65_536,
     maxRequestedOutputTokensPerAttempt: 8192,
     deadlineMs: 20 * 60_000,
+  }),
+  'character-architecture': Object.freeze({
+    // Worst recoverable path: manifest initial + 2 replacements, eight
+    // individual details, and one global syntax-only repair.
+    maxAttempts: 12,
+    maxRequestedOutputTokens: 147_456,
+    maxRequestedOutputTokensPerAttempt: 12_288,
+    deadlineMs: 10 * 60_000,
   }),
 })
 
@@ -176,6 +184,8 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     context?: WorkflowContext,
   ): Promise<string> {
     const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
+    callbacks.log(`  有界生成初始响应：finishReason=${completion.finishReason}`)
+    let continuationCount = 0
     return completeBoundedCompletion({
       initial: completion,
       mode: continuation.mode,
@@ -188,13 +198,19 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       },
       isCancelled: () => context?.cancelled === true,
       redactVisibleText: text => this.stripThinkingTags(text),
-      requestContinuation: continuationPrompt => this.callLLMResult(
-        continuationPrompt,
-        systemPrompt,
-        callbacks,
-        options,
-        context,
-      ),
+      requestContinuation: async continuationPrompt => {
+        continuationCount += 1
+        callbacks.log(`  自动续写第 ${continuationCount} 轮请求已发起`)
+        const next = await this.callLLMResult(
+          continuationPrompt,
+          systemPrompt,
+          callbacks,
+          options,
+          context,
+        )
+        callbacks.log(`  自动续写第 ${continuationCount} 轮响应：finishReason=${next.finishReason}`)
+        return next
+      },
     })
   }
 

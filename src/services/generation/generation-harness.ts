@@ -57,7 +57,7 @@ export interface GenerationHarnessPolicy {
  */
 export const GENERATION_ABSOLUTE_BUDGET_LIMITS = Object.freeze({
   maxAttempts: 32,
-  maxRequestedOutputTokens: 131_072,
+  maxRequestedOutputTokens: 147_456,
   maxRequestedOutputTokensPerAttempt: 32_768,
   deadlineMs: 60 * 60_000,
 })

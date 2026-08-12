@@ -13,6 +13,8 @@ const MAX_CONTINUATION_PROMPT_CHARS = 12_000
 const MIN_ORIGINAL_TASK_CHARS = 256
 const MIN_VISIBLE_REFERENCE_CHARS = 192
 const TRUNCATION_MARKER = '\n…[内容已按上下文预算截断]…\n'
+const MAX_META_OPENING_VISIBLE_UNITS = 200
+const MIN_OBVIOUS_DUPLICATE_PARAGRAPH_VISIBLE_UNITS = 120
 
 export type BoundedCompletionMode = 'append-visible-text' | 'replace-structured-output'
 
@@ -68,6 +70,58 @@ function overlappingVisiblePrefixLength(existingText: string, addition: string):
     if (existingTail.slice(-length) === additionHead.slice(0, length)) return length
   }
   return 0
+}
+
+function visibleProseUnitCount(text: string): number {
+  return text.match(/[\p{L}\p{N}]/gu)?.length ?? 0
+}
+
+function noVisibleContinuationProgressError(): Error {
+  return new Error('AI 续写未增加新的可见正文，结果未被保存。请重试或缩短本次修改范围。')
+}
+
+function mechanicalCompletionError(reason: string): Error {
+  return new Error(`AI 输出包含${reason}，可能仍不完整，结果未被保存。`)
+}
+
+function assertMechanicallyCompleteVisibleText(content: string): void {
+  const trimmed = content.trim()
+  if (visibleProseUnitCount(trimmed) === 0) throw mechanicalCompletionError('空白或无可见正文')
+  if (/(?:^|\n)\s*```/u.test(trimmed)) throw mechanicalCompletionError('代码围栏')
+  if (/<\/?\s*think(?:\s|>|$)/iu.test(trimmed)) throw mechanicalCompletionError('think 标签残片')
+
+  const paragraphs = trimmed
+    .split(/\n\s*\n+/u)
+    .map(paragraph => paragraph.trim())
+    .filter(Boolean)
+  const opening = trimmed.split(/\r?\n/u).map(line => line.trim()).find(Boolean) ?? ''
+  if (
+    visibleProseUnitCount(opening) <= MAX_META_OPENING_VISIBLE_UNITS
+    && /^(?:(?:以下|下面)(?:是|为).{0,40}(?:修订|修改|重写|生成|完成|提供|正文|章节|内容)|(?:根据|按照)(?:您|用户).{0,40}(?:要求|指示)|这是(?:我为您|根据您的要求).{0,30}(?:修订|修改|重写|生成)|here\s+is|below\s+is|as\s+requested|certainly[,!:]?\s+(?:here\s+is|i(?:'ve|\s+have))|i\s+(?:have\s+(?:revised|rewritten|generated)|will\s+(?:provide|write|revise))\b)/iu.test(opening)
+  ) {
+    throw mechanicalCompletionError('首段元话术')
+  }
+
+  if (
+    trimmed.includes(TRUNCATION_MARKER.trim())
+    || paragraphs.some(paragraph => /^(?:…\s*)?(?:\[(?:内容已按上下文预算截断|内容截断|输出被截断|truncated)\]|[（(]?(?:未完待续|未完)[）)]?)(?:\s*…)?$/iu.test(paragraph))
+  ) {
+    throw mechanicalCompletionError('截断标记')
+  }
+
+  const duplicateCandidateGroups = [
+    paragraphs,
+    trimmed.split(/\r?\n/u).map(line => line.trim()).filter(Boolean),
+  ]
+  for (const candidates of duplicateCandidateGroups) {
+    const seenParagraphs = new Set<string>()
+    for (const paragraph of candidates) {
+      const normalized = paragraph.replace(/\s+/gu, ' ').trim()
+      if (visibleProseUnitCount(normalized) < MIN_OBVIOUS_DUPLICATE_PARAGRAPH_VISIBLE_UNITS) continue
+      if (seenParagraphs.has(normalized)) throw mechanicalCompletionError('明显重复段落')
+      seenParagraphs.add(normalized)
+    }
+  }
 }
 
 /**
@@ -286,12 +340,19 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
     assertNotCancelled(request.isCancelled)
     continuationCount += 1
     const nextVisible = redact(next.content)
-    content = request.mode === 'replace-structured-output'
-      ? nextVisible
-      : merge(content, nextVisible)
+    if (request.mode === 'replace-structured-output') {
+      content = nextVisible
+    } else {
+      const merged = merge(content, nextVisible)
+      if (visibleProseUnitCount(merged) <= visibleProseUnitCount(content)) {
+        throw noVisibleContinuationProgressError()
+      }
+      content = merged
+    }
     finishReason = next.finishReason
   }
 
   assertNotCancelled(request.isCancelled)
+  if (request.mode === 'append-visible-text') assertMechanicallyCompleteVisibleText(content)
   return content
 }

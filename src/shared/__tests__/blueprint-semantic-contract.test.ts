@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   decodeBlueprintSemanticPayload,
+  blueprintSemanticGenerationContract,
   parseBlueprintSemanticResponseText,
   validateBlueprintSemanticItem,
 } from '../blueprint-semantic-contract'
+import { StructuredContractDiagnostic } from '../structured-contract-diagnostic'
 
 function validBlueprint(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -42,9 +44,9 @@ describe('blueprint semantic contract', () => {
     expect(parseBlueprintSemanticResponseText(payload, [1])).toHaveLength(1)
     expect(parseBlueprintSemanticResponseText(`\`\`\`json\n${payload}\n\`\`\``, [1])).toHaveLength(1)
     expect(() => parseBlueprintSemanticResponseText(`以下是结果：\n${payload}`, [1]))
-      .toThrow(/单一 JSON/u)
+      .toThrow(/code=invalid_envelope path=\$/u)
     expect(() => parseBlueprintSemanticResponseText(`${payload}\n补充说明`, [1]))
-      .toThrow(/单一 JSON/u)
+      .toThrow(/code=invalid_json path=\$/u)
   })
 
   it.each([
@@ -55,41 +57,102 @@ describe('blueprint semantic contract', () => {
     ['characters', '出场角色'],
     ['relationships', '角色关系'],
     ['suspenseHook', '悬念钩子'],
-  ])('rejects a missing %s field instead of synthesizing a default', (field, label) => {
+  ])('rejects a missing %s field instead of synthesizing a default', (field) => {
     const incomplete = validBlueprint()
     delete incomplete[field]
 
     expect(() => decodeBlueprintSemanticPayload(
       { blueprints: [incomplete] },
       [1],
-    )).toThrow(label)
+    )).toThrow(`code=missing_field path=blueprints[0].${field}`)
+  })
+
+  it.each([
+    ['relationships', undefined, 'missing_field', 'blueprints[0].relationships'],
+    ['characters', '林岚、周砚', 'invalid_type', 'blueprints[0].characters'],
+    ['role', { label: '发展' }, 'invalid_type', 'blueprints[0].role'],
+    ['suspenseHook', undefined, 'missing_field', 'blueprints[0].suspenseHook'],
+  ])('reports a sanitized typed diagnostic for likely model shape at %s', (field, value, code, path) => {
+    const candidate = validBlueprint()
+    if (value === undefined) delete candidate[field]
+    else candidate[field] = value
+
+    const failure = (() => {
+      try {
+        decodeBlueprintSemanticPayload({ blueprints: [candidate] }, [1])
+        return null
+      } catch (error) {
+        return error
+      }
+    })()
+
+    expect(failure).toBeInstanceOf(StructuredContractDiagnostic)
+    expect(failure).toMatchObject({ code, path, field })
+    expect((failure as Error).message).not.toContain(JSON.stringify(value))
   })
 
   it('requires at least one valid, unique character name', () => {
     expect(validateBlueprintSemanticItem(validBlueprint({ characters: [] })))
-      .toMatch(/出场角色/u)
+      .toContain('code=invalid_value path=blueprint.characters')
     expect(validateBlueprintSemanticItem(validBlueprint({ characters: ['林岚', ' 林岚 '] })))
-      .toMatch(/重复/u)
+      .toContain('code=duplicate_item path=blueprint.characters')
   })
 
   it('accepts an explicit empty relationship list but rejects malformed or dangling relationships', () => {
     expect(validateBlueprintSemanticItem(validBlueprint({ relationships: [] }))).toBeUndefined()
     expect(validateBlueprintSemanticItem(validBlueprint({
       relationships: [{ from: '林岚', to: '未出场者', relation: '追踪' }],
-    }))).toMatch(/出场角色/u)
+    }))).toContain('code=relationship_endpoint_not_in_characters path=blueprint.relationships[0]')
     expect(validateBlueprintSemanticItem(validBlueprint({
       relationships: [{ from: '林岚', to: '周砚', relation: '' }],
-    }))).toMatch(/关系说明/u)
+    }))).toContain('code=invalid_value path=blueprint.relationships[0].relation')
+  })
+
+  it.each([
+    [
+      { from: '林岚', to: '林岚', relation: '内心冲突' },
+      'relationship_self_reference',
+    ],
+    [
+      { from: '林岚', to: '周砚（化名）', relation: '追踪' },
+      'relationship_endpoint_not_in_characters',
+    ],
+  ])('reports a stable sanitized relationship diagnostic without normalizing endpoints', (relationship, code) => {
+    const failure = (() => {
+      try {
+        decodeBlueprintSemanticPayload({
+          blueprints: [validBlueprint({ relationships: [relationship] })],
+        }, [1])
+        return null
+      } catch (error) {
+        return error
+      }
+    })()
+
+    expect(failure).toBeInstanceOf(StructuredContractDiagnostic)
+    expect(failure).toMatchObject({
+      code,
+      path: 'blueprints[0].relationships[0]',
+      field: 'relationships',
+    })
+    expect((failure as Error).message).not.toContain(relationship.to)
+  })
+
+  it('tells generators to copy exact character endpoints and omit unsupported relations', () => {
+    const contract = blueprintSemanticGenerationContract()
+    expect(contract).toContain('from/to 必须逐字复制同一项 characters 中的完整字符串')
+    expect(contract).toContain('任一端点不在 characters 时，删除该关系或使用 []')
+    expect(contract).toContain('不得发明别名')
   })
 
   it('requires exact chapter coverage with no missing, extra, or duplicate chapter', () => {
     expect(() => decodeBlueprintSemanticPayload(
       { blueprints: [validBlueprint(), validBlueprint({ chapterNumber: 3 })] },
       [1, 2],
-    )).toThrow(/非目标章节：第 3 章/u)
+    )).toThrow(/code=unexpected_item path=blueprints/u)
     expect(() => decodeBlueprintSemanticPayload(
       { blueprints: [validBlueprint(), validBlueprint()] },
       [1],
-    )).toThrow(/重复章节/u)
+    )).toThrow(/code=duplicate_item path=blueprints/u)
   })
 })

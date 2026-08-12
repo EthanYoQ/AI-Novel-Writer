@@ -6,6 +6,7 @@ import {
   parseBlueprintSemanticResponseText,
   type BlueprintSemanticItem,
 } from '../../shared/blueprint-semantic-contract'
+import { structuredContractDiagnostic } from '../../shared/structured-contract-diagnostic'
 import {
   projectSessionContextFromProject,
   sameProjectPathKey,
@@ -110,6 +111,7 @@ export function parseTextBlueprintsStrict(content: string, startNum: number, end
       chapterRange(startNum, endNum),
     ).map(persistedBlueprint)
   } catch (error) {
+    if (structuredContractDiagnostic(error)) throw error
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`蓝图 JSON 解析失败：${detail}`)
   }

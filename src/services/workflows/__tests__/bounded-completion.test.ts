@@ -26,6 +26,18 @@ describe('bounded completion', () => {
     expect(requestContinuation.mock.calls[0]?.[0]).not.toContain('<think>')
   })
 
+  it('does not apply visible-prose completeness rules to structured replacement output', async () => {
+    const fencedJson = '```json\n{"complete":true}\n```'
+
+    await expect(completeBoundedCompletion({
+      initial: { content: fencedJson, finishReason: 'stop' },
+      mode: 'replace-structured-output',
+      maxContinuations: 2,
+      originalPrompt: '返回 JSON',
+      requestContinuation: vi.fn(),
+    })).resolves.toBe(fencedJson)
+  })
+
   it('fails closed after the configured structured continuation limit', async () => {
     const requestContinuation = vi.fn().mockResolvedValue({ content: '{"half":', finishReason: 'length' })
 
@@ -88,6 +100,46 @@ describe('bounded completion', () => {
     expect(text).toContain('周砚把监控画面停在三点十七分')
     expect(text.match(/林岚推开办公室的门/g)).toHaveLength(3)
     expect(appendVisibleTextContinuation('甲'.repeat(60), `${'甲'.repeat(60)}乙`)).toBe(`${'甲'.repeat(60)}\n\n乙`)
+  })
+
+  it.each([
+    ['no visible prose', '<think>finished internally</think>'],
+    ['only the already generated prose', '半截修稿正文。'.repeat(20)],
+  ])('fails closed when a stop continuation adds %s', async (_label, continuationContent) => {
+    const partial = '半截修稿正文。'.repeat(20)
+
+    await expect(completeBoundedCompletion({
+      initial: { content: partial, finishReason: 'length' },
+      mode: 'append-visible-text',
+      maxContinuations: 3,
+      originalPrompt: '输出完整修稿',
+      requestContinuation: vi.fn().mockResolvedValue({
+        content: continuationContent,
+        finishReason: 'stop',
+      }),
+    })).rejects.toThrow('续写未增加新的可见正文')
+  })
+
+  it.each([
+    ['a code fence', `\`\`\`markdown\n${'完整正文。'.repeat(40)}\n\`\`\``, '代码围栏'],
+    ['opening meta-talk', `以下是根据您的要求修订后的完整章节。\n\n${'完整正文。'.repeat(40)}`, '首段元话术'],
+    ['single-line opening meta-talk', `以下是根据您的要求修订后的完整章节。\n${'完整正文。'.repeat(40)}`, '首段元话术'],
+    ['a truncation marker', `${'完整正文。'.repeat(40)}\n\n…[内容已按上下文预算截断]…`, '截断标记'],
+    ['an orphan think fragment', `${'完整正文。'.repeat(40)}\n\n</think`, 'think 标签残片'],
+    ['an obvious repeated paragraph', `${'重复段落内容。'.repeat(20)}\n\n${'重复段落内容。'.repeat(20)}`, '重复段落'],
+    ['an obvious repeated single-line block', `${'重复段落内容。'.repeat(20)}\n${'重复段落内容。'.repeat(20)}`, '重复段落'],
+  ])('fails closed when completed visible text contains %s', async (_label, content, message) => {
+    const requestContinuation = vi.fn()
+
+    await expect(completeBoundedCompletion({
+      initial: { content, finishReason: 'stop' },
+      mode: 'append-visible-text',
+      maxContinuations: 3,
+      originalPrompt: '输出完整修稿',
+      requestContinuation,
+    })).rejects.toThrow(message)
+
+    expect(requestContinuation).not.toHaveBeenCalled()
   })
 
   it('removes a malformed closing think tag together with a hidden prefix longer than 300 characters', () => {

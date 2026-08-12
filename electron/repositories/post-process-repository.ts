@@ -119,15 +119,20 @@ export class PostProcessRepository {
         const db = getProjectDb()
         if (!db) return
 
-        db.prepare(`
-      UPDATE post_process_steps
-      SET ok = 1, completed_at = datetime('now'), last_attempt_at = datetime('now'),
-          attempt_count = attempt_count + 1
-      WHERE run_id = ? AND step_key = ?
-    `).run(runId, stepKey)
+        db.transaction(() => {
+            const result = db.prepare(`
+        UPDATE post_process_steps
+        SET ok = 1, error_msg = '', completed_at = datetime('now'),
+            last_attempt_at = datetime('now'), attempt_count = attempt_count + 1
+        WHERE run_id = ? AND step_key = ?
+      `).run(runId, stepKey)
+            if (result.changes !== 1) {
+                throw new Error('后处理步骤不存在或已失效')
+            }
 
-        // 检查是否所有关键步骤都已通过
-        PostProcessRepository._refreshCriticalStatus(runId)
+            // 步骤收据和跑批汇总必须在同一事务里切换为成功。
+            PostProcessRepository._refreshCriticalStatus(runId)
+        })()
     }
 
     /** 标记步骤为失败 */
@@ -135,12 +140,20 @@ export class PostProcessRepository {
         const db = getProjectDb()
         if (!db) return
 
-        db.prepare(`
-      UPDATE post_process_steps
-      SET ok = 0, error_msg = ?, last_attempt_at = datetime('now'),
-          attempt_count = attempt_count + 1
-      WHERE run_id = ? AND step_key = ?
-    `).run(errorMsg, runId, stepKey)
+        db.transaction(() => {
+            const result = db.prepare(`
+        UPDATE post_process_steps
+        SET ok = 0, error_msg = ?, completed_at = '', last_attempt_at = datetime('now'),
+            attempt_count = attempt_count + 1
+        WHERE run_id = ? AND step_key = ?
+      `).run(errorMsg, runId, stepKey)
+            if (result.changes !== 1) {
+                throw new Error('后处理步骤不存在或已失效')
+            }
+
+            // 全量重跑可能把已成功步骤重新置为失败，汇总不能保留旧 true。
+            PostProcessRepository._refreshCriticalStatus(runId)
+        })()
     }
 
     /** 重新检查并更新 all_critical_passed 状态 */

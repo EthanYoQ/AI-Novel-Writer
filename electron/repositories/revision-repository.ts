@@ -88,6 +88,50 @@ export class RevisionRepository {
         return tx()
     }
 
+    /**
+     * 原子替换同一草稿的 pending 修稿：新修稿创建失败时，旧 pending
+     * 状态与内容池分配会随整个 SQLite 事务一起回滚。
+     */
+    static replacePending(params: {
+        baseDraftId: number
+        revisionType: 'refine' | 'review-fix'
+        userPrompt?: string
+        reviewSourceId?: number
+        content: string
+        wordCount: number
+    }): { id: number; revisionIndex: number } {
+        const db = getProjectDb()
+        if (!db) throw new Error('[RevisionRepository] 数据库未连接')
+
+        return db.transaction(() => {
+            const row = db.prepare(`
+        SELECT MAX(revision_index) as maxIdx FROM revisions WHERE base_draft_id = ?
+      `).get(params.baseDraftId) as { maxIdx: number | null }
+            const revisionIndex = (row.maxIdx ?? 0) + 1
+            const contentId = ContentRepository.create(params.content)
+            const result = db.prepare(`
+        INSERT INTO revisions (
+          base_draft_id, revision_index, revision_type,
+          user_prompt, review_source_id, content_id, word_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+                params.baseDraftId,
+                revisionIndex,
+                params.revisionType,
+                params.userPrompt ?? '',
+                params.reviewSourceId ?? null,
+                contentId,
+                params.wordCount,
+            )
+            const id = Number(result.lastInsertRowid)
+            db.prepare(`
+        UPDATE revisions SET status = 'discarded', updated_at = datetime('now')
+        WHERE base_draft_id = ? AND status = 'pending' AND id <> ?
+      `).run(params.baseDraftId, id)
+            return { id, revisionIndex }
+        })()
+    }
+
     /** 列出某草稿的所有修稿 */
     static listByDraft(baseDraftId: number): RevisionMeta[] {
         const db = getProjectDb()

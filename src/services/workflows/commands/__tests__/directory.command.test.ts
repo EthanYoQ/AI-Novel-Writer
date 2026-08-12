@@ -340,7 +340,9 @@ describe('GenerateDirectoryCommand', () => {
   it('keeps a larger logical range in one transaction while the executor makes ordered five-item batches', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const observedRanges: Array<[number, number]> = []
+    let firstPrompt = ''
     const session = generationSession(async task => {
+      if (!firstPrompt) firstPrompt = task.messages.find(message => message.role === 'user')?.content ?? ''
       const range = taskRange(task)
       observedRanges.push(range)
       const chapters = Array.from(
@@ -369,6 +371,10 @@ describe('GenerateDirectoryCommand', () => {
 
     expect(result.map(item => item.chapterNumber)).toEqual([1, 2, 3, 4, 5, 6, 7])
     expect(observedRanges).toEqual([[1, 5], [6, 7]])
+    expect(firstPrompt).toContain('【不可变蓝图 JSON 合同】')
+    for (const field of ['chapterNumber', 'title', 'role', 'purpose', 'keyEvents', 'characters', 'relationships', 'suspenseHook']) {
+      expect(firstPrompt).toContain(field)
+    }
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)
     expect(createRuntime).toHaveBeenCalledWith({
@@ -608,7 +614,7 @@ describe('GenerateDirectoryCommand', () => {
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })).rejects.toThrow(/结构化输出无法按合同解码/u)
+    })).rejects.toThrow(/code=missing_item path=blueprints/u)
 
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
@@ -631,7 +637,7 @@ describe('GenerateDirectoryCommand', () => {
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })).rejects.toThrow(/结构化输出无法按合同解码/u)
+    })).rejects.toThrow(/code=invalid_value path=blueprints\[0\]\.purpose/u)
 
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
@@ -656,7 +662,7 @@ describe('GenerateDirectoryCommand', () => {
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })).rejects.toThrow(/结构化输出无法按合同解码/u)
+    })).rejects.toThrow(/code=missing_field path=blueprints\[0\]\.title/u)
 
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
@@ -677,11 +683,15 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
 
-    await expect(command.execute({
+    const failure = await command.execute({
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })).rejects.toThrow(/结构化输出无法按合同解码/u)
+    }).then(() => null, error => error as Error & { diagnostic?: unknown })
+
+    expect(failure?.message).toContain('code=missing_field')
+    expect(failure?.message).toContain('path=blueprints[0].relationships')
+    expect(failure?.diagnostic).toMatchObject({ code: 'missing_field', path: 'blueprints[0].relationships' })
 
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })

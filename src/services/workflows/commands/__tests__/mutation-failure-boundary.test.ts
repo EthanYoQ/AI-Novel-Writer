@@ -102,10 +102,14 @@ function chapterInfo() {
 }
 
 function stubLlm(command: object, response: string): void {
-  vi.spyOn(
-    command as { callLLMWithBuilder: () => Promise<string> },
-    'callLLMWithBuilder',
-  ).mockResolvedValue(response)
+  const target = command as {
+    callLLMWithBuilder: () => Promise<string>
+    callLLMWithBoundedCompletion?: () => Promise<string>
+  }
+  vi.spyOn(target, 'callLLMWithBuilder').mockResolvedValue(response)
+  if (typeof target.callLLMWithBoundedCompletion === 'function') {
+    vi.spyOn(target as Required<typeof target>, 'callLLMWithBoundedCompletion').mockResolvedValue(response)
+  }
 }
 
 function stubVelaIpc(invoke: (channel: string, ...args: unknown[]) => Promise<unknown>): void {
@@ -504,7 +508,7 @@ describe('workflow mutation failure boundaries', () => {
         return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
       }
       if (channel === 'db:revision-get-pending') return []
-      if (channel === 'db:revision-create') {
+      if (channel === 'db:revision-create' || channel === 'db:revision-replace-pending') {
         return { success: false, error: 'revision rejected' }
       }
       throw new Error(`unexpected IPC: ${channel}`)

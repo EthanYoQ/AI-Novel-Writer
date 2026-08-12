@@ -7,6 +7,7 @@ import { requireIpcSuccess } from '../../ipc-result'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { assertMateriallyCompleteRevision } from './refinement-completeness'
 
 
 export interface RefineFromReviewParams {
@@ -54,23 +55,28 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
       .withGlobalGuidance(novelConfig.globalGuidance || '')
       .withUserRefinePrompt(userPromptBlock)
 
-    const refined = await this.callLLMWithBuilder(promptBuilder, callbacks, undefined, context)
+    const refined = await this.callLLMWithBoundedCompletion(
+      promptBuilder.build(),
+      promptBuilder.getSystemRole(),
+      callbacks,
+      { mode: 'append-visible-text', maxContinuations: 3 },
+      undefined,
+      context,
+    )
     this.assertNotCancelled(context)
-    const cleanRefined = this.stripThinkingTags(refined)
+    const cleanRefined = this.stripThinkingTags(refined).trim()
+    assertMateriallyCompleteRevision(this.params.draftContent, cleanRefined, novelConfig.wordsPerChapter)
+
+    if (!sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(useProjectStore.getState().currentProject),
+    )) throw new Error('当前项目已切换，修稿结果未保存')
 
     const baseDraft = await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
     if (!baseDraft) throw new Error('找不到基准草稿版本')
 
-    // 清理该草稿下已有的 pending 状态修稿，保证只保留最新的一条
-    const pendingRevs = await ipc.invokeWithProjectSession(projectSession, 'db:revision-get-pending', baseDraft.id, context.projectPath)
-    for (const rev of pendingRevs) {
-      this.assertNotCancelled(context)
-      const discardResult = await ipc.invokeWithProjectSession(projectSession, 'db:revision-mark-discarded', rev.id, context.projectPath)
-      requireIpcSuccess(discardResult, '清理旧修订稿')
-    }
-
     this.assertNotCancelled(context)
-    const createRes = await ipc.invokeWithProjectSession(projectSession, 'db:revision-create', {
+    const createRes = await ipc.invokeWithProjectSession(projectSession, 'db:revision-replace-pending', {
       baseDraftId: baseDraft.id,
       revisionType: 'review-fix',
       content: cleanRefined,
@@ -102,6 +108,6 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
     })
 
     callbacks.log(`✅ 审稿修复完成（${cleanRefined.length} 字），已生成修订稿版本 r${revIndex}`)
-    return refined
+    return cleanRefined
   }
 }

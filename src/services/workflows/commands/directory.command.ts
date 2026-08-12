@@ -14,7 +14,10 @@ import {
   parseTextBlueprintsStrict,
   type DirectoryWorkflowProjectSnapshot,
 } from '../directory-workflow'
-import { validateBlueprintSemanticItem } from '../../../shared/blueprint-semantic-contract'
+import {
+  blueprintSemanticGenerationContract,
+  validateBlueprintSemanticItem,
+} from '../../../shared/blueprint-semantic-contract'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
 import {
   listPendingDirectoryCharacterSyncs,
@@ -83,6 +86,13 @@ export class DirectoryCharacterSyncPendingError extends Error {
       + '请先在蓝图生成窗口点击“重试角色同步”，无需重新生成蓝图。',
     )
     this.name = 'DirectoryCharacterSyncPendingError'
+  }
+}
+
+export class DirectoryBlueprintContractError extends Error {
+  constructor(readonly diagnostic: { code: string; path: string; field: string }) {
+    super(`结构化合同诊断 code=${diagnostic.code} path=${diagnostic.path} field=${diagnostic.field}`)
+    this.name = 'DirectoryBlueprintContractError'
   }
 }
 
@@ -191,6 +201,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           .withGenre(novelConfig.genre || '')
           .withPacingGuidance((context.data.pacingGuidance as string) || '')
           .build()
+          + `\n\n${blueprintSemanticGenerationContract()}`
 
         return {
           purpose: 'chapter-blueprint-directory',
@@ -212,6 +223,10 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         activeRange.endChapter,
       ),
       validateItem: validateBlueprintSemanticItem,
+      syntaxRepairContract: ({ items }) => (
+        `${blueprintSemanticGenerationContract()}\n`
+        + `本次必须且只能完整返回以下 chapterNumber：${items.join('、')}。`
+      ),
     }
 
     const cancellation = observeWorkflowCancellation(context)
@@ -228,7 +243,12 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           signal: cancellation.signal,
         })
       })
-      if (!batchResult.ok) throw new Error(batchResult.failure.message)
+      if (!batchResult.ok) {
+        if (batchResult.failure.diagnostic) {
+          throw new DirectoryBlueprintContractError(batchResult.failure.diagnostic)
+        }
+        throw new Error(batchResult.failure.message)
+      }
 
       this.assertNotCancelled(context)
       const generatedBlueprints = [...batchResult.items]

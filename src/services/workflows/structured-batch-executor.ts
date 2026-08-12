@@ -5,6 +5,7 @@ import {
   type GenerationSession,
   type GenerationTask,
 } from '../generation/generation-harness'
+import { structuredContractDiagnostic } from '../../shared/structured-contract-diagnostic'
 
 export type StructuredItemKey = string | number
 
@@ -17,6 +18,12 @@ export interface StructuredBatchContract<TInput, TOutput> {
   outputKey(output: TOutput): StructuredItemKey
   decode(content: string): readonly TOutput[]
   validateItem(output: TOutput): string | undefined
+  /**
+   * Optional immutable, compact syntax-only repair evidence. It must carry
+   * every output field and exact coverage rule, but never the large source
+   * prose used to generate values.
+   */
+  syntaxRepairContract?(input: { items: readonly TInput[] }): string
 }
 
 export type StructuredGenerationFailureReason =
@@ -52,6 +59,7 @@ export interface StructuredBatchFailure {
     | 'max_calls'
     | 'max_requested_tokens'
     | 'invalid_limit'
+  diagnostic?: { code: string; path: string; field: string }
 }
 
 export type StructuredBatchResult<TOutput> =
@@ -83,6 +91,7 @@ function utf8Bytes(value: string): number {
 
 function buildSyntaxRepairTask(
   originalTask: GenerationTask,
+  repairContract: string,
   malformedCandidate: string,
 ): GenerationTask {
   const systemInstruction = [
@@ -91,10 +100,6 @@ function buildSyntaxRepairTask(
     '只修复 JSON 语法和封装，不补造、删减、重排或改写领域事实。',
     '只输出满足原任务合同的完整替代 JSON，不要解释，不要 Markdown 代码块。',
   ].join('')
-  const originalContract = originalTask.messages
-    .map(message => `[${message.role}]\n${message.content}`)
-    .join('\n\n')
-
   return {
     purpose: `${originalTask.purpose}:structured-syntax-repair`,
     output: 'structured-data',
@@ -104,7 +109,7 @@ function buildSyntaxRepairTask(
         role: 'user',
         content: [
           '【原任务合同（完整证据）】',
-          originalContract,
+          repairContract,
           '【待修复候选（完整证据）】',
           malformedCandidate,
           '返回完整替代 JSON。',
@@ -123,6 +128,41 @@ function isRepairableDirectJsonSyntaxFailure(content: string): boolean {
   } catch {
     return true
   }
+}
+
+function compactJsonEvidence(content: string): string {
+  let inString = false
+  let escaped = false
+  let compact = ''
+  for (const character of content) {
+    if (inString) {
+      compact += character
+      if (escaped) {
+        escaped = false
+      } else if (character === '\\') {
+        escaped = true
+      } else if (character === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (character === '"') {
+      inString = true
+      compact += character
+    } else if (!/\s/u.test(character)) {
+      compact += character
+    }
+  }
+  return compact
+}
+
+/** A repair may only append missing container closers to the exact candidate. */
+function preservesJsonCandidateEvidence(candidate: string, repaired: string): boolean {
+  const compactCandidate = compactJsonEvidence(candidate)
+  const compactRepaired = compactJsonEvidence(repaired)
+  if (!compactRepaired.startsWith(compactCandidate)) return false
+  const appended = compactRepaired.slice(compactCandidate.length)
+  return appended.length > 0 && /^[\]}]+$/u.test(appended)
 }
 
 export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
@@ -230,9 +270,19 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           const originalContract = task.messages
             .map(message => `[${message.role}]\n${message.content}`)
             .join('\n\n')
+          let repairContract: string
+          try {
+            repairContract = contract.syntaxRepairContract?.({ items: [...items] }) ?? originalContract
+          } catch {
+            throw new ExecutionFailure({
+              code: 'invalid_output',
+              reason: 'malformed_output',
+              message: '结构化语法修复合同构建失败',
+            })
+          }
           if (
             repairUsed
-            || utf8Bytes(originalContract) > MAX_REPAIR_CONTRACT_UTF8_BYTES
+            || utf8Bytes(repairContract) > MAX_REPAIR_CONTRACT_UTF8_BYTES
             || utf8Bytes(candidateContent) > MAX_REPAIR_CANDIDATE_UTF8_BYTES
           ) {
             throw new ExecutionFailure({
@@ -246,7 +296,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           repairUsed = true
           syntaxRepairApplied = true
           const repaired = await session.complete(
-            buildSyntaxRepairTask(task, outcome.content),
+            buildSyntaxRepairTask(task, repairContract, outcome.content),
             { signal: input.signal },
           )
           recordAttempt(repaired.receipt)
@@ -276,21 +326,36 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
               message: `结构化语法修复未正常完成：${repaired.finishReason}`,
             })
           }
+          if (!preservesJsonCandidateEvidence(candidateContent, repaired.content)) {
+            throw new ExecutionFailure({
+              code: 'invalid_output',
+              reason: 'malformed_output',
+              message: '结构化语法修复改变了候选中的非结构证据，已拒绝补造或改写事实',
+            })
+          }
           candidateContent = repaired.content
         }
         let decoded: readonly TOutput[]
         try {
           decoded = contract.decode(candidateContent)
           if (!Array.isArray(decoded)) throw new TypeError('decoder did not return an array')
-        } catch {
+        } catch (error) {
+          const diagnostic = structuredContractDiagnostic(error)
           throw new ExecutionFailure({
             code: 'invalid_output',
-            reason: syntaxRepairApplied
+            reason: diagnostic
+              ? 'invalid_item'
+              : syntaxRepairApplied
               ? 'malformed_output'
               : 'invalid_item',
-            message: syntaxRepairApplied
+            message: diagnostic
+              ? diagnostic.message
+              : syntaxRepairApplied
               ? '结构化输出经一次语法修复后仍无法按合同解码'
               : '结构化输出无法按合同解码',
+            ...(diagnostic
+              ? { diagnostic: { code: diagnostic.code, path: diagnostic.path, field: diagnostic.field } }
+              : {}),
           })
         }
         for (const output of decoded) {
@@ -337,8 +402,10 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         if (missingKeys.length > 0) {
           throw new ExecutionFailure({
             code: 'invalid_output',
-            reason: 'missing_item',
-            message: `结构化输出缺少目标项：${missingKeys.join('、')}`,
+            reason: syntaxRepairApplied ? 'malformed_output' : 'missing_item',
+            message: syntaxRepairApplied
+              ? `结构化语法修复结果缺少目标项：${missingKeys.join('、')}`
+              : `结构化输出缺少目标项：${missingKeys.join('、')}`,
           })
         }
         const outputByKey = new Map(

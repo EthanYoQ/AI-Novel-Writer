@@ -109,7 +109,7 @@ describe('GenerationRuntime', () => {
 
   it.each([
     ['attempts', { maxAttempts: 33, maxRequestedOutputTokens: 4096, maxRequestedOutputTokensPerAttempt: 4096, deadlineMs: 60_000 }],
-    ['total requested tokens', { maxAttempts: 1, maxRequestedOutputTokens: 131_073, maxRequestedOutputTokensPerAttempt: 4096, deadlineMs: 60_000 }],
+    ['total requested tokens', { maxAttempts: 1, maxRequestedOutputTokens: 147_457, maxRequestedOutputTokensPerAttempt: 4096, deadlineMs: 60_000 }],
     ['per-attempt requested tokens', { maxAttempts: 1, maxRequestedOutputTokens: 32_769, maxRequestedOutputTokensPerAttempt: 32_769, deadlineMs: 60_000 }],
     ['deadline', { maxAttempts: 1, maxRequestedOutputTokens: 4096, maxRequestedOutputTokensPerAttempt: 4096, deadlineMs: 3_600_001 }],
   ])('rejects an oversized %s budget before reading a model or opening a lease', async (_label, budget) => {

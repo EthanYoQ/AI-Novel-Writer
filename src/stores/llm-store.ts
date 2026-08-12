@@ -57,6 +57,8 @@ interface LLMState {
   testConnection: (model: ModelProfile) => Promise<{ success: boolean; error?: string }>
 }
 
+let initializationFlight: Promise<void> | null = null
+
 export const useLLMStore = create<LLMState>()((set, get) => ({
   models: [],
   defaultModelId: null,
@@ -64,25 +66,37 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
   activeRequests: new Map(),
   loaded: false,
 
-  init: async () => {
-    if (get().loaded) return
-    // 从 ~/.vela/ 加载模型列表和默认模型 ID
-    await get().loadModels()
-    if (ipc.isElectron) {
-      const [defaultId, defaultEmbeddingId] = await Promise.all([
+  init: () => {
+    if (get().loaded) return Promise.resolve()
+    if (initializationFlight) return initializationFlight
+
+    const flight = (async () => {
+      if (!ipc.isElectron) {
+        set({ loaded: true })
+        return
+      }
+      const [models, defaultModelId, defaultEmbeddingModelId] = await Promise.all([
+        ipc.invoke('llm:list-models'),
         ipc.invoke('llm:get-default-model'),
         ipc.invoke('llm:get-default-embedding-model'),
       ])
-      set({ defaultModelId: defaultId, defaultEmbeddingModelId: defaultEmbeddingId, loaded: true })
-    } else {
-      set({ loaded: true })
-    }
+      set({
+        models,
+        defaultModelId,
+        defaultEmbeddingModelId,
+        loaded: true,
+      })
+    })().finally(() => {
+      if (initializationFlight === flight) initializationFlight = null
+    })
+    initializationFlight = flight
+    return flight
   },
 
   loadModels: async () => {
     if (!ipc.isElectron) return
     const models = await ipc.invoke('llm:list-models')
-    set({ models, loaded: true })
+    set({ models })
   },
 
   saveModel: async (model) => {

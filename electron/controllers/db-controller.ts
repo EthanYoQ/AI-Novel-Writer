@@ -43,6 +43,7 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:draft-update-content',
   'db:draft-delete',
   'db:revision-create',
+  'db:revision-replace-pending',
   'db:revision-mark-merged',
   'db:revision-mark-discarded',
   'db:review-create',
@@ -355,6 +356,23 @@ ipcMain.handle('db:revision-create', async (_event, params: {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const created = RevisionRepository.create(params)
+      return { success: true, id: created.id, revisionIndex: created.revisionIndex }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:revision-replace-pending', async (_event, params: {
+    baseDraftId: number
+    revisionType: 'refine' | 'review-fix'
+    userPrompt?: string
+    reviewSourceId?: number
+    content: string
+    wordCount: number
+  }, expectedProjectPath: string) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      const created = RevisionRepository.replacePending(params)
       return { success: true, id: created.id, revisionIndex: created.revisionIndex }
     } catch (err) {
       return { success: false, error: String(err) }

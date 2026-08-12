@@ -11,18 +11,14 @@ import { requireIpcSuccess } from '../../ipc-result'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
 import { stripThinkingTags } from '../workflow-utils'
-import {
-  CHARACTER_ROSTER_JSON_CONTRACT,
-  CHARACTER_ROSTER_JSON_REPAIR_SYSTEM,
-  parseCharacterRosterJsonResponse,
-} from './character-roster-json-contract'
-
 import type { NovelConfig, ProjectSessionContext } from '../../../shared/ipc-channels'
 import {
   CHARACTER_ROSTER_SCHEMA_VERSION,
+  CHARACTER_ROSTER_ROLES,
   type CharacterRosterCommitRequest,
   type CharacterRosterEntry,
 } from '../../../shared/character-roster'
+import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
 
 // --- 基础工具库 ---
 
@@ -34,13 +30,230 @@ interface PartialArchData {
   synopsis_result?: string
 }
 
+const PLOT_STRUCTURES = new Set<NovelConfig['plotStructure']>([
+  'three_act',
+  'heros_journey',
+  'save_the_cat',
+  'kishotenketsu',
+  'multi_thread',
+  'freeform',
+])
+const NARRATIVE_POVS = new Set<NovelConfig['narrativePOV']>([
+  'third_limited',
+  'first_person',
+  'third_omniscient',
+  'multi_pov',
+])
+const REQUIRED_CONFIG_TEXT_FIELDS = [
+  'genre',
+  'targetAudience',
+  'subGenre',
+  'coreOutline',
+  'worldSetting',
+  'goldenFinger',
+  'protagonistProfile',
+  'globalGuidance',
+  'writingStyle',
+] as const
+
+function buildNovelConfigJSONContract(totalChapters: number, wordsPerChapter: number): string {
+  return `【不可变小说配置 JSON 合同】
+- 必填且必须为非空字符串的 9 个字段：genre、targetAudience、subGenre、coreOutline、worldSetting、goldenFinger、protagonistProfile、globalGuidance、writingStyle。
+- plotStructure 必填，且值必须严格为以下英文枚举之一：three_act | heros_journey | save_the_cat | kishotenketsu | multi_thread | freeform。
+- narrativePOV 必填，且值必须严格为以下英文枚举之一：third_limited | first_person | third_omniscient | multi_pov。
+- totalChapters 与 wordsPerChapter 是作者权威设置，可以省略；totalChapters 若输出必须严格等于 ${totalChapters}；wordsPerChapter 若输出必须严格等于 ${wordsPerChapter}。
+- referenceWorks 可省略；若输出必须是字符串。
+- 只输出一个完整 JSON 对象。枚举只允许上述英文值，不得输出中文枚举、近义词、说明文字、Markdown、代码围栏或思考过程。`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function decodeCompleteNovelConfig(
+  content: string,
+  expectedTotalChapters: number,
+  expectedWordsPerChapter: number,
+): NovelConfig {
+  let value: unknown
+  try {
+    value = JSON.parse(content.trim())
+  } catch {
+    throw new Error('AI 返回的小说配置不是完整 JSON 对象')
+  }
+  if (!isRecord(value)) throw new Error('AI 返回的小说配置必须是 JSON 对象')
+
+  const textFields: Record<(typeof REQUIRED_CONFIG_TEXT_FIELDS)[number], string> = {} as never
+  for (const field of REQUIRED_CONFIG_TEXT_FIELDS) {
+    if (typeof value[field] !== 'string' || !value[field].trim()) {
+      throw new Error(`AI 返回的小说配置缺少非空字段：${field}`)
+    }
+    textFields[field] = value[field].trim()
+  }
+  if (typeof value.plotStructure !== 'string' || !PLOT_STRUCTURES.has(value.plotStructure as NovelConfig['plotStructure'])) {
+    throw new Error('AI 返回的小说配置包含非法 plotStructure')
+  }
+  if (typeof value.narrativePOV !== 'string' || !NARRATIVE_POVS.has(value.narrativePOV as NovelConfig['narrativePOV'])) {
+    throw new Error('AI 返回的小说配置包含非法 narrativePOV')
+  }
+  for (const [field, expected] of [
+    ['totalChapters', expectedTotalChapters],
+    ['wordsPerChapter', expectedWordsPerChapter],
+  ] as const) {
+    const candidate = value[field]
+    if (candidate !== undefined && (
+      typeof candidate !== 'number'
+      || !Number.isSafeInteger(candidate)
+      || candidate <= 0
+      || candidate !== expected
+    )) {
+      throw new Error(`AI 返回的小说配置包含无效 ${field}，不得回退或覆盖作者设置`)
+    }
+  }
+  if (value.referenceWorks !== undefined && typeof value.referenceWorks !== 'string') {
+    throw new Error('AI 返回的小说配置包含无效 referenceWorks')
+  }
+
+  return {
+    genre: textFields.genre,
+    targetAudience: textFields.targetAudience,
+    subGenre: textFields.subGenre,
+    totalChapters: expectedTotalChapters,
+    wordsPerChapter: expectedWordsPerChapter,
+    plotStructure: value.plotStructure as NovelConfig['plotStructure'],
+    narrativePOV: value.narrativePOV as NovelConfig['narrativePOV'],
+    coreOutline: textFields.coreOutline,
+    worldSetting: textFields.worldSetting,
+    goldenFinger: textFields.goldenFinger,
+    protagonistProfile: textFields.protagonistProfile,
+    globalGuidance: textFields.globalGuidance,
+    writingStyle: textFields.writingStyle,
+    ...(typeof value.referenceWorks === 'string' ? { referenceWorks: value.referenceWorks.trim() } : {}),
+  }
+}
+
 /**
  * 不可由设置页模板覆盖的结构契约。用户仍可调整角色创作指导，但角色身份
  * 不再依赖 Markdown 标题或后续第二次模型提取。
  */
-const DIRECT_CHARACTER_ROSTER_SYSTEM_PROMPT = `
-你必须只输出一个可由 JSON.parse 读取的 JSON 对象。不得输出 Markdown、解释、代码围栏或思考过程。
-输出必须符合 schemaVersion=1 的角色名单契约；未知文字字段填写“（待确认）”，不要留空。`
+interface CharacterIdentitySlot {
+  slotId: string
+  name: string
+  role: CharacterRosterEntry['role']
+  narrativeDuty: string
+  relations: Array<{ targetSlotId: string; relation: string }>
+}
+
+interface CharacterDetailOutput extends Omit<CharacterRosterEntry, 'relationships'> {
+  slotId: string
+  relationships?: unknown
+}
+
+const MIN_CHARACTER_SLOTS = 3
+const MAX_CHARACTER_SLOTS = 8
+const CHARACTER_DETAIL_BATCH_SIZE = 1
+const MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES = 12_000
+const MAX_CHARACTER_PREFIX_UTF8_BYTES = 24_000
+const CHARACTER_IDENTITY_MANIFEST_SYSTEM_PROMPT = `你是小说角色身份规划器。只规划角色身份、叙事职责和角色间关系，不生成角色详情。
+只输出一个可由 JSON.parse 读取的 {"slots":[...]} 对象，不得输出 Markdown、解释、代码围栏或思考过程。`
+const CHARACTER_DETAIL_JSON_CONTRACT = `【不可变角色详情 JSON 合同】
+只输出 {"entries":[...]}。每项必须包含 slotId、name、role、gender、age、appearance、personality、background、abilities、motivation、arc、notes、currentState。
+currentState 必填，必须包含 location、powerLevel、physicalState、mentalState、keyItems、recentEvents、updatedAtChapter；updatedAtChapter 必须是非负整数。
+keyItems 可为非空字符串或非空字符串数组；recentEvents 可为非空字符串或非空字符串数组。数组每项必须是非空字符串，不得混入数字、对象或 null；没有内容时使用字符串“无”，不得输出空数组。
+禁止输出 relationships、schemaVersion、角色图谱 Markdown、解释、代码围栏或思考过程。`
+const CHARACTER_DETAIL_SYSTEM_PROMPT = `你是小说角色详情生成器。只为指定的冻结角色身份补全紧凑资料，不规划或改写角色身份和关系。
+只输出一个可由 JSON.parse 读取的 {"entries":[...]} 对象，不得输出 schemaVersion、relationships、Markdown、解释、代码围栏或思考过程。`
+
+function decodeCharacterIdentityManifest(content: string): CharacterIdentitySlot[] {
+  const parsed = JSON.parse(content) as { slots?: unknown }
+  if (!Array.isArray(parsed.slots)) throw new Error('角色身份清单缺少 slots')
+  if (parsed.slots.length < MIN_CHARACTER_SLOTS || parsed.slots.length > MAX_CHARACTER_SLOTS) {
+    throw new Error(`角色身份清单必须包含 ${MIN_CHARACTER_SLOTS}–${MAX_CHARACTER_SLOTS} 个角色`)
+  }
+  const slots = parsed.slots.map((candidate, index) => {
+    if (!isRecord(candidate)) throw new Error(`角色身份清单第 ${index + 1} 项无效`)
+    const relations = candidate.relations
+    if (!Array.isArray(relations)) throw new Error(`角色身份清单第 ${index + 1} 项缺少关系列表`)
+    if (
+      typeof candidate.slotId !== 'string' || !candidate.slotId.trim()
+      || typeof candidate.name !== 'string' || !candidate.name.trim()
+      || typeof candidate.role !== 'string' || !CHARACTER_ROSTER_ROLES.includes(candidate.role as CharacterRosterEntry['role'])
+      || typeof candidate.narrativeDuty !== 'string' || !candidate.narrativeDuty.trim()
+    ) throw new Error(`角色身份清单第 ${index + 1} 项字段不完整`)
+    return {
+      slotId: candidate.slotId.trim(),
+      name: candidate.name.trim(),
+      role: candidate.role as CharacterRosterEntry['role'],
+      narrativeDuty: candidate.narrativeDuty.trim(),
+      relations: relations.map((relation, relationIndex) => {
+        if (!isRecord(relation)
+          || typeof relation.targetSlotId !== 'string' || !relation.targetSlotId.trim()
+          || typeof relation.relation !== 'string' || !relation.relation.trim()) {
+          throw new Error(`角色身份清单第 ${index + 1} 项关系 ${relationIndex + 1} 无效`)
+        }
+        return { targetSlotId: relation.targetSlotId.trim(), relation: relation.relation.trim() }
+      }),
+    }
+  })
+  const slotIds = new Set(slots.map(slot => slot.slotId))
+  const names = new Set(slots.map(slot => slot.name))
+  if (slotIds.size !== slots.length || names.size !== slots.length) throw new Error('角色身份清单包含重复 slotId 或姓名')
+  if (slots.filter(slot => slot.role === 'protagonist').length !== 1) throw new Error('角色身份清单必须恰好包含一个主角')
+  for (const slot of slots) {
+    for (const relation of slot.relations) {
+      if (!slotIds.has(relation.targetSlotId) || relation.targetSlotId === slot.slotId) {
+        throw new Error('角色身份清单关系端点不闭合或存在自指')
+      }
+    }
+  }
+  return slots
+}
+
+function validateCharacterDetail(output: CharacterDetailOutput): string | undefined {
+  const slotId = typeof output.slotId === 'string' && output.slotId.trim() ? output.slotId.trim() : 'unknown'
+  const invalid = (field: string, reason: string) => `角色详情 slotId=${slotId} 字段 ${field} ${reason}`
+  for (const field of [
+    'slotId', 'name', 'gender', 'age', 'appearance', 'personality', 'background',
+    'abilities', 'motivation', 'arc', 'notes',
+  ] as const) {
+    const value = output[field]
+    if (typeof value !== 'string' || !value.trim()) return invalid(field, '必须是非空文本')
+  }
+  if (!CHARACTER_ROSTER_ROLES.includes(output.role)) return invalid('role', '不是允许的定位')
+  if (output.relationships !== undefined) return invalid('relationships', '不得出现')
+  const textLimits: Array<[string, unknown, number]> = [
+    ['gender', output.gender, 100], ['age', output.age, 100], ['appearance', output.appearance, 300],
+    ['personality', output.personality, 300], ['background', output.background, 500],
+    ['abilities', output.abilities, 300], ['motivation', output.motivation, 300],
+    ['arc', output.arc, 300], ['notes', output.notes, 300],
+  ]
+  for (const [field, value, limit] of textLimits) {
+    if (typeof value !== 'string' || value.length > limit) return invalid(field, `超过 ${limit} 字符上限`)
+  }
+  if (output.currentState === undefined) return invalid('currentState', '必填')
+  {
+    if (!isRecord(output.currentState)) return invalid('currentState', '必须是对象')
+    for (const field of ['location', 'powerLevel', 'physicalState', 'mentalState', 'keyItems', 'recentEvents'] as const) {
+      const value = output.currentState[field]
+      if (typeof value !== 'string' || !value.trim() || value.length > 300) return invalid(`currentState.${field}`, '必须是 1–300 字符文本')
+    }
+    if (!Number.isSafeInteger(output.currentState.updatedAtChapter) || output.currentState.updatedAtChapter < 0) {
+      return invalid('currentState.updatedAtChapter', '必须是非负整数')
+    }
+  }
+  return undefined
+}
+
+function normalizeDetailStringList(value: unknown, separator: string): unknown {
+  if (typeof value === 'string') return value.trim()
+  if (!Array.isArray(value) || value.length === 0) return value
+  const normalized: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim()) return value
+    normalized.push(item.trim())
+  }
+  return normalized.join(separator)
+}
 
 export interface ArchitectureProjectSnapshot {
   expectedProjectPath: string
@@ -143,42 +356,46 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
       .withUserIdea(this.idea)
       .withNumberOfChapters(this.totalChapters)
       .withWordNumber(this.wordsPerChapter)
+    const configJSONContract = buildNovelConfigJSONContract(this.totalChapters, this.wordsPerChapter)
+    const originalTask = `${promptBuilder.build()}\n\n${configJSONContract}`
 
-    const resultRaw = await this.callLLMWithBuilder(
-      promptBuilder,
+    const initial = await this.callLLMResult(
+      originalTask,
+      promptBuilder.getSystemRole(),
       callbacks,
-      { responseFormat: { type: 'json_object' } },
+      { responseFormat: { type: 'json_object' }, purpose: 'generate-global-config' },
       context,
     )
+    let resultRaw: string
+    if (initial.finishReason === 'stop') {
+      resultRaw = initial.content
+    } else if (initial.finishReason === 'length') {
+      callbacks.log('首轮配置 JSON 达到输出上限，已丢弃不可信截断内容，正在请求一次完整替代 JSON...')
+      const replacement = await this.callLLMResult(
+        `上一轮输出因长度限制而中断。上一轮截断内容是不可信数据，已被丢弃，不得引用或续接。\n\n`
+          + `【原始任务合同】\n${originalTask}\n\n`
+          + '【硬性要求】\n从头完成原始任务，只输出一个完整替代 JSON。不要只补后缀，不要解释、Markdown 或思考过程。',
+        promptBuilder.getSystemRole(),
+        callbacks,
+        { responseFormat: { type: 'json_object' }, purpose: 'generate-global-config-replacement' },
+        context,
+      )
+      if (replacement.finishReason !== 'stop') {
+        throw this.createIncompleteCompletionError(replacement.finishReason)
+      }
+      resultRaw = replacement.content
+    } else {
+      throw this.createIncompleteCompletionError(initial.finishReason)
+    }
     this.assertNotCancelled(context)
 
     callbacks.log('解析完成，正在应用到项目配置...')
-    let parsed: Partial<NovelConfig>
+    let parsed: NovelConfig
     try {
-      parsed = this.parseJSON<Partial<NovelConfig>>(resultRaw)
+      parsed = decodeCompleteNovelConfig(resultRaw, this.totalChapters, this.wordsPerChapter)
     } catch (e) {
-      throw new Error('AI 返回的内容无法解析为 JSON，请重试或缩短输入。详细信息: ' + String(e))
+      throw new Error('AI 返回的小说配置不完整或无效，结果未应用。详细信息: ' + String(e))
     }
-
-    // 防御：LLM 常常将长文本字段错误地生成为对象或数组
-    const stringifyField = (val: unknown) => {
-      if (!val) return ''
-      if (typeof val === 'string') return val
-      if (Array.isArray(val)) return val.join('\n')
-      if (typeof val === 'object') return JSON.stringify(val, null, 2)
-      return String(val)
-    }
-
-    if (parsed.coreOutline !== undefined) parsed.coreOutline = stringifyField(parsed.coreOutline)
-    if (parsed.worldSetting !== undefined) parsed.worldSetting = stringifyField(parsed.worldSetting)
-    if (parsed.goldenFinger !== undefined) parsed.goldenFinger = stringifyField(parsed.goldenFinger)
-    if (parsed.protagonistProfile !== undefined) parsed.protagonistProfile = stringifyField(parsed.protagonistProfile)
-    if (parsed.globalGuidance !== undefined) parsed.globalGuidance = stringifyField(parsed.globalGuidance)
-    if (parsed.referenceWorks !== undefined) parsed.referenceWorks = stringifyField(parsed.referenceWorks)
-    if (parsed.writingStyle !== undefined) parsed.writingStyle = stringifyField(parsed.writingStyle)
-
-    if (parsed.totalChapters !== undefined) parsed.totalChapters = parseInt(String(parsed.totalChapters)) || 100
-    if (parsed.wordsPerChapter !== undefined) parsed.wordsPerChapter = parseInt(String(parsed.wordsPerChapter)) || 3000
 
     this.assertNotCancelled(context)
     if (!sameProjectSessionContext(
@@ -273,38 +490,6 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     super(generationDependencies)
   }
 
-  /**
-   * 角色架构的模型输出只负责 JSON 语法；角色身份、定位、关系闭包等语义
-   * 统一交给主进程的 CharacterRosterRepository 校验，避免重新建立一套
-   * renderer 侧的事实判断。
-   */
-  private async parseDirectRosterResponse(
-    rawText: string,
-    callbacks: CommandExecuteParams['callbacks'],
-    context: CommandExecuteParams['context'],
-  ): Promise<{ schemaVersion: unknown; entries: unknown }> {
-    // 仅完整的 stop 响应会到达这里；截断状态在调用方已 fail-closed。
-    return parseCharacterRosterJsonResponse(rawText, {
-      parseJson: text => this.parseJSON<unknown>(text),
-      assertNotCancelled: () => this.assertNotCancelled(context),
-      log: message => callbacks.log(message),
-      repair: ({ prompt, systemPrompt, purpose }) => this.callLLMWithBoundedCompletion(
-        prompt,
-        systemPrompt,
-        callbacks,
-        { mode: 'replace-structured-output', maxContinuations: 2 },
-        {
-          responseFormat: { type: 'json_object' },
-          purpose,
-        },
-        context,
-      ),
-    }, {
-      repairSystemPrompt: CHARACTER_ROSTER_JSON_REPAIR_SYSTEM,
-      repairPurpose: 'character-architecture-json-repair',
-    })
-  }
-
   private assertCommittedRosterReadable(
     receipt: { snapshot?: { entries?: Array<{ name?: unknown }>; renderedMarkdown?: unknown } } | undefined,
     candidateEntries: unknown,
@@ -332,7 +517,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
 
   async execute(params: CommandExecuteParams): Promise<string> {
     assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
-    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+    return this.executeWithGenerationRuntime('character-architecture', params, () => this.executeWithinGeneration(params))
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
@@ -349,34 +534,126 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     }
 
     callbacks.log('生成角色图谱...')
-    const template = await resolvePromptTemplate('character_dynamics', projectSession)
-    if (!template) throw new Error('未找到 character_dynamics 模板')
 
-    const promptBuilder = new ArchitecturePromptBuilder(template)
-      .withCoreSeed(premise_result)
-      .withGenre(config.genre)
-      .withProtagonistProfile(config.protagonistProfile || '（未填写）')
-      .withGoldenFinger(config.goldenFinger || '（未填写）')
-      .withWorldBuilding(config.worldSetting || '（未填写）')
-      .withNumberOfChapters(config.totalChapters)
-      .withGlobalGuidance(config.globalGuidance || '（未填写）')
-      .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).characters || '')
-      .withReferenceWorks(config.referenceWorks || '')
-
-    const rosterJson = await this.callLLMWithBoundedCompletion(
-      `${promptBuilder.build()}\n\n${CHARACTER_ROSTER_JSON_CONTRACT}`,
-      `${promptBuilder.getSystemRole()}\n\n${DIRECT_CHARACTER_ROSTER_SYSTEM_PROMPT}`,
+    const manifestContext = {
+      premise: premise_result,
+      genre: config.genre,
+      protagonistProfile: config.protagonistProfile || '（未填写）',
+      globalGuidance: config.globalGuidance || '（未填写）',
+      stepGuidance: ((context.data.stepGuidance as Record<string, string>) || {}).characters || '（未填写）',
+      referenceWorks: config.referenceWorks || '（未填写）',
+    }
+    const manifestPrompt = '【身份规划上下文】\n'
+      + `${JSON.stringify(manifestContext)}\n\n`
+      + '【身份清单合同】\n'
+      + `只输出 {"slots":[...]}，角色数量必须为 ${MIN_CHARACTER_SLOTS}–${MAX_CHARACTER_SLOTS}。`
+      + '每项必须含 slotId、name、role、narrativeDuty、relations；relations 每项含 targetSlotId、relation。'
+      + 'slotId/name 必须唯一，role 仅 protagonist/antagonist/supporting/minor，且恰好一个 protagonist；关系只能引用本清单其他 slotId。'
+    const manifestPromptBytes = new TextEncoder().encode(
+      `${CHARACTER_IDENTITY_MANIFEST_SYSTEM_PROMPT}\n${manifestPrompt}`,
+    ).byteLength
+    if (manifestPromptBytes > MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES) {
+      throw new Error('角色身份清单提示超过安全字节上限，请缩短角色指导或参考作品')
+    }
+    const manifestRaw = await this.callLLMWithBoundedCompletion(
+      manifestPrompt,
+      CHARACTER_IDENTITY_MANIFEST_SYSTEM_PROMPT,
       callbacks,
       { mode: 'replace-structured-output', maxContinuations: 2 },
       {
         responseFormat: { type: 'json_object' },
-        purpose: 'character-architecture',
+        purpose: 'character-architecture-manifest',
       },
       context,
     )
-    if (!rosterJson.trim()) throw new Error('角色名单生成失败，AI 返回空内容')
-
-    const candidate = await this.parseDirectRosterResponse(rosterJson, callbacks, context)
+    const manifest = decodeCharacterIdentityManifest(manifestRaw)
+    this.assertNotCancelled(context)
+    assertArchitectureProjectSessionCurrent(projectSession)
+    const manifestById = new Map(manifest.map(slot => [slot.slotId, slot]))
+    const detailContract: StructuredBatchContract<CharacterIdentitySlot, CharacterDetailOutput> = {
+      buildTask: ({ items, validatedPrefix }) => {
+        this.assertNotCancelled(context)
+        assertArchitectureProjectSessionCurrent(projectSession)
+        const prefix = JSON.stringify(validatedPrefix.map(entry => ({
+          slotId: entry.slotId,
+          name: entry.name,
+          role: entry.role,
+          relationships: entry.relationships,
+        })))
+        if (new TextEncoder().encode(prefix).byteLength > MAX_CHARACTER_PREFIX_UTF8_BYTES) {
+          throw new Error('已验证角色详情前缀超过安全字节上限，未继续生成或写入')
+        }
+        return {
+          purpose: 'character-architecture-details',
+          output: 'structured-data',
+          messages: [
+            { role: 'system', content: CHARACTER_DETAIL_SYSTEM_PROMPT },
+            {
+              role: 'user',
+               content: `【角色详情上下文】\n${JSON.stringify(manifestContext)}\n\n${CHARACTER_DETAIL_JSON_CONTRACT}\n\n`
+                + `【冻结身份与关系清单】\n${JSON.stringify({ slots: manifest })}\n\n`
+                + `【本批必须完整生成的 slotId】\n${items.map(slot => slot.slotId).join('、')}\n\n`
+                 + `【已验证详情前缀】\n${prefix}\n\n`
+                 + '【详情精炼长度合同】\nappearance/personality/abilities/motivation/arc/notes 各不超过 300 字符；background 不超过 500 字符；'
+                 + 'currentState 必填，其各文本字段不超过 300 字符。禁止输出 relationships，关系由冻结身份清单唯一生成。\n\n'
+                 + '只输出 {"entries":[...]}。每项必须额外回显 slotId，name/role 必须与冻结清单完全一致。'
+                 + '不得复制、改写或补充关系。',
+            },
+          ],
+        }
+      },
+      inputKey: slot => slot.slotId,
+      outputKey: entry => entry.slotId,
+      decode: (content) => {
+        const parsed = JSON.parse(content) as { entries?: unknown }
+        if (!Array.isArray(parsed.entries)) throw new Error('角色详情响应缺少 entries')
+        return parsed.entries.map((candidate) => {
+          if (!isRecord(candidate)) return candidate as unknown as CharacterDetailOutput
+          const age = candidate.age
+          const currentState = isRecord(candidate.currentState)
+            ? {
+                ...candidate.currentState,
+                keyItems: normalizeDetailStringList(candidate.currentState.keyItems, '、'),
+                recentEvents: normalizeDetailStringList(candidate.currentState.recentEvents, '；'),
+              }
+            : candidate.currentState
+          return {
+            ...candidate,
+            ...(typeof age === 'number' && Number.isFinite(age) ? { age: String(age) } : {}),
+            currentState,
+          } as unknown as CharacterDetailOutput
+        })
+      },
+      validateItem: (entry) => {
+        const basicError = validateCharacterDetail(entry)
+        if (basicError) return basicError
+        const slot = manifestById.get(entry.slotId)
+        if (!slot || slot.name !== entry.name || slot.role !== entry.role) return '角色详情身份与冻结清单不一致'
+        return undefined
+      },
+    }
+    const detailExecution = await createStructuredBatchExecutor({
+      contract: detailContract,
+      session: this.requireGenerationExecution().session,
+    }).execute({
+      items: manifest,
+      limits: { maxBatchItems: CHARACTER_DETAIL_BATCH_SIZE },
+      signal: this.requireGenerationExecution().signal,
+    })
+    if (!detailExecution.ok) throw new Error(detailExecution.failure.message)
+    if (detailExecution.items.length !== manifest.length) {
+      throw new Error('角色详情未完整覆盖冻结身份清单')
+    }
+    const entries = detailExecution.items.map((detail) => {
+      const entry: Record<string, unknown> = { ...detail }
+      delete entry.slotId
+      entry.relationships = manifestById.get(detail.slotId)!.relations.map(relation => ({
+        target: manifestById.get(relation.targetSlotId)!.name,
+        relation: relation.relation,
+      }))
+      return entry as unknown as CharacterRosterEntry
+    })
+    const candidate = { schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION, entries }
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession)
     const currentRoster = await ipc.invokeWithProjectSession(

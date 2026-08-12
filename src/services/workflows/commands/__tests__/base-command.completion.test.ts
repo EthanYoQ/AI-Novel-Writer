@@ -12,6 +12,7 @@ import {
   BaseWorkflowCommand,
   WORKFLOW_GENERATION_BUDGETS,
   type CommandExecuteParams,
+  type WorkflowGenerationIntent,
   type WorkflowGenerationRuntimeDependencies,
 } from '../base-command'
 
@@ -21,13 +22,16 @@ type ProbeStep =
   | { kind: 'exhaust'; commit: () => void }
 
 class CompletionProbeCommand extends BaseWorkflowCommand<string> {
-  constructor(dependencies: WorkflowGenerationRuntimeDependencies) {
+  constructor(
+    dependencies: WorkflowGenerationRuntimeDependencies,
+    private readonly intent: WorkflowGenerationIntent = 'structured',
+  ) {
     super(dependencies)
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
     const step = params.step as ProbeStep
-    return this.executeWithGenerationRuntime('structured', params, async () => {
+    return this.executeWithGenerationRuntime(this.intent, params, async () => {
       if (step.kind === 'single') {
         return this.callLLM(
           '普通 JSON 工作流',
@@ -123,6 +127,64 @@ function dependenciesFor(environment: GenerationRuntimeEnvironment): WorkflowGen
 describe('BaseWorkflowCommand completion boundary', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it.each([
+    { leasedCap: 16_384, expectedRequest: 8192 },
+    { leasedCap: 8192, expectedRequest: 8192 },
+  ])('keeps ordinary structured requests at $expectedRequest for a $leasedCap-capability lease', async ({ leasedCap, expectedRequest }) => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '{"ok":true}', finishReason: 'stop' })
+    const baseLease = leaseReceipt()
+    const environment: GenerationRuntimeEnvironment = {
+      snapshotDefaultModelId: () => 'model-a',
+      beginModelExecution: vi.fn().mockResolvedValue(leaseReceipt({
+        capabilityEvidence: { ...baseLease.capabilityEvidence, maxOutputTokens: leasedCap },
+      })),
+      completeWithLease,
+      closeModelExecution: vi.fn().mockResolvedValue(undefined),
+    }
+
+    await expect(new CompletionProbeCommand(dependenciesFor(environment)).execute({
+      step: { kind: 'single' } satisfies ProbeStep,
+      context,
+      callbacks,
+    })).resolves.toBe('{"ok":true}')
+
+    expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(expectedRequest)
+    expect(WORKFLOW_GENERATION_BUDGETS.structured.maxRequestedOutputTokens).toBe(131_072)
+  })
+
+  it.each([
+    { leasedCap: 16_384, expectedRequest: 12_288 },
+    { leasedCap: 8192, expectedRequest: 8192 },
+  ])('uses the bounded character-architecture policy without exceeding a $leasedCap-capability lease', async ({ leasedCap, expectedRequest }) => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '{"ok":true}', finishReason: 'stop' })
+    const baseLease = leaseReceipt()
+    const environment: GenerationRuntimeEnvironment = {
+      snapshotDefaultModelId: () => 'model-a',
+      beginModelExecution: vi.fn().mockResolvedValue(leaseReceipt({
+        capabilityEvidence: { ...baseLease.capabilityEvidence, maxOutputTokens: leasedCap },
+      })),
+      completeWithLease,
+      closeModelExecution: vi.fn().mockResolvedValue(undefined),
+    }
+
+    await new CompletionProbeCommand(dependenciesFor(environment), 'character-architecture').execute({
+      step: { kind: 'single' } satisfies ProbeStep,
+      context,
+      callbacks,
+    })
+
+    expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(expectedRequest)
+    expect(WORKFLOW_GENERATION_BUDGETS['character-architecture']).toEqual({
+      maxAttempts: 12,
+      maxRequestedOutputTokens: 147_456,
+      maxRequestedOutputTokensPerAttempt: 12_288,
+      deadlineMs: 10 * 60_000,
+    })
+    expect(12 * WORKFLOW_GENERATION_BUDGETS['character-architecture'].maxRequestedOutputTokensPerAttempt).toBe(147_456)
   })
 
   it('keeps ordinary generation single-shot and fail-closed while an unknown model uses its leased cap', async () => {

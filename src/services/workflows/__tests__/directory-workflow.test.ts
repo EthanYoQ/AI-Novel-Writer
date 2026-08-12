@@ -14,6 +14,7 @@ import {
 import { useProjectStore } from '../../../stores/project-store'
 import type { ProjectData } from '../../../shared/ipc-channels'
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
+import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
 
 const blueprint: ChapterBlueprint = {
   chapterNumber: 1,
@@ -217,7 +218,13 @@ describe('parseTextBlueprintsStrict', () => {
   })
 
   it('throws when JSON is malformed', () => {
-    expect(() => parseTextBlueprintsStrict('{not json', 1, 3)).toThrow(/蓝图 JSON/)
+    try {
+      parseTextBlueprintsStrict('{not json', 1, 3)
+      expect.unreachable('expected typed structured diagnostic')
+    } catch (error) {
+      expect(error).toBeInstanceOf(StructuredContractDiagnostic)
+      expect(error).toMatchObject({ code: 'invalid_json', path: '$', field: '$' })
+    }
   })
 
   it('rejects an out-of-range chapter instead of silently filtering it', () => {
@@ -225,7 +232,7 @@ describe('parseTextBlueprintsStrict', () => {
       JSON.stringify([{ ...blueprint, chapterNumber: 9, relationships: [] }]),
       1,
       3,
-    )).toThrow(/非目标章节/)
+    )).toThrow('结构化合同诊断 code=unexpected_item path=blueprints field=blueprints')
   })
 
   it('rejects duplicate chapter numbers instead of hiding them during normalization', () => {
@@ -236,7 +243,7 @@ describe('parseTextBlueprintsStrict', () => {
       ]),
       1,
       1,
-    )).toThrow(/重复章节/u)
+    )).toThrow('结构化合同诊断 code=duplicate_item path=blueprints field=blueprints')
   })
 
   it('rejects a structurally valid JSON blueprint when required semantic facts are missing', () => {
@@ -244,7 +251,7 @@ describe('parseTextBlueprintsStrict', () => {
     delete incomplete.relationshipHints
 
     expect(() => parseTextBlueprintsStrict(JSON.stringify([incomplete]), 1, 1))
-      .toThrow(/角色关系/u)
+      .toThrow('结构化合同诊断 code=missing_field path=blueprints[0].relationships field=relationships')
   })
 })
 

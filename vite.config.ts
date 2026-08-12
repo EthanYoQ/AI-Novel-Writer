@@ -66,6 +66,7 @@ export default defineConfig({
       '**/.worktrees/**',
       '**/.pnpm-store/**',
       '**/.workbuddy/**',
+      '**/.runtime/**',
     ],
   },
   build: {
