@@ -841,6 +841,20 @@ function realProviderCompletion(productRuntime, profile) {
   })
 }
 
+export function qualificationBlueprintContractInstruction(manifest, items) {
+  const requiredFields = Array.isArray(manifest?.requiredFields)
+    ? manifest.requiredFields.join('、')
+    : ''
+  return [
+    `只生成章节 ${items.join('、')}，根对象必须是 {"blueprints": [...]}。`,
+    `每章必须且只能使用这些业务字段：${requiredFields}。`,
+    '字段形状：chapterNumber 为对应正整数；title、role、purpose、keyEvents、suspenseHook 为非空字符串；',
+    'characters 为至少一个不重复角色名的字符串数组；relationships 必须是数组，无关系时为 []，',
+    '有关系时每项严格为 {"from":"本章角色名","to":"本章另一角色名","relation":"非空关系说明"}，',
+    'from/to 必须都出现在同章 characters 中且不能相同。不得输出解释、注释、Markdown 或额外章节。',
+  ].join('')
+}
+
 function blueprintContract(productRuntime, fixture) {
   let activeBatchChapterNumbers = []
   return {
@@ -856,9 +870,10 @@ function blueprintContract(productRuntime, fixture) {
           },
           {
             role: 'user',
-            content: `${fixture.architecture}\n请生成章节 ${items.join('、')} 的蓝图。`
-              + '根对象必须是 blueprints；每项完整包含 chapterNumber、title、role、purpose、'
-              + 'keyEvents、characters、relationships、suspenseHook。',
+            content: `${fixture.architecture}\n${qualificationBlueprintContractInstruction(
+              productRuntime.BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST,
+              items,
+            )}`,
           },
         ],
       }

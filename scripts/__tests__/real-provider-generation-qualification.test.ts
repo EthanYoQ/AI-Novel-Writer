@@ -17,6 +17,7 @@ import {
   assertQualificationOutputSchemaSafe,
   blueprintQualificationFailureCode,
   classifyStructuredResponseEnvelope,
+  qualificationBlueprintContractInstruction,
   createQualificationProfilesFromMemory,
   runRealProviderGenerationQualification,
   verifyQualificationReceiptChecksum,
@@ -80,6 +81,16 @@ function inMemoryProfiles() {
 }
 
 describe('real provider generation qualification contract', () => {
+  it('derives an explicit relationship and exact-coverage prompt from the shared manifest', () => {
+    const instruction = qualificationBlueprintContractInstruction({
+      requiredFields: ['chapterNumber', 'title', 'relationships'],
+    }, [1, 2, 3])
+    expect(instruction).toContain('chapterNumber、title、relationships')
+    expect(instruction).toContain('{"from":"本章角色名","to":"本章另一角色名","relation":"非空关系说明"}')
+    expect(instruction).toContain('章节 1、2、3')
+    expect(instruction).toContain('不得输出解释、注释、Markdown 或额外章节')
+  })
+
   it('reports only provider identity and bounded structural failure facts', () => {
     expect(blueprintQualificationFailureCode(
       { provider: 'deepseek' },
