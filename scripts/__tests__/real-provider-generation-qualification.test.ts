@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createModelExecutionLeaseReceipt,
@@ -24,6 +24,29 @@ import {
 } from '../real-provider-generation-qualification.mjs'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+function createDirtyQualificationRepository() {
+  const cacheRoot = path.join(repositoryRoot, '.runtime', '.cache')
+  mkdirSync(cacheRoot, { recursive: true })
+  const dirtyRepositoryRoot = mkdtempSync(path.join(cacheRoot, 'qualification-dirty-source-'))
+  const runGit = (...args: string[]) => spawnSync('git', args, {
+    cwd: dirtyRepositoryRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+
+  expect(runGit('init').status).toBe(0)
+  writeFileSync(path.join(dirtyRepositoryRoot, 'tracked.txt'), 'frozen\n', 'utf8')
+  expect(runGit('add', 'tracked.txt').status).toBe(0)
+  expect(runGit(
+    '-c', 'user.name=Qualification Test',
+    '-c', 'user.email=qualification@example.invalid',
+    'commit', '-m', 'test fixture',
+  ).status).toBe(0)
+  writeFileSync(path.join(dirtyRepositoryRoot, 'tracked.txt'), 'dirty\n', 'utf8')
+  expect(runGit('status', '--porcelain=v1').stdout.trim()).not.toBe('')
+  return dirtyRepositoryRoot
+}
 
 function inMemoryProfiles() {
   return createQualificationProfilesFromMemory({
@@ -81,6 +104,17 @@ function inMemoryProfiles() {
 }
 
 describe('real provider generation qualification contract', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(() => {
+      throw new Error('NETWORK_FORBIDDEN_IN_QUALIFICATION_CONTRACT_TEST')
+    }))
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
   it('derives an explicit relationship and exact-coverage prompt from the shared manifest', () => {
     const instruction = qualificationBlueprintContractInstruction({
       requiredFields: ['chapterNumber', 'title', 'relationships'],
@@ -383,14 +417,19 @@ describe('real provider generation qualification contract', () => {
   it('refuses billable execution from a dirty product/source tree before any provider request', async () => {
     const fetchSpy = vi.fn(() => Promise.reject(new Error('dirty tree must block fetch')))
     vi.stubGlobal('fetch', fetchSpy)
+    const dirtyRepositoryRoot = createDirtyQualificationRepository()
 
-    await expect(runRealProviderGenerationQualification({
-      mode: 'execute',
-      profiles: inMemoryProfiles(),
-      repositoryRoot,
-      allowBillableRequests: true,
-    })).rejects.toMatchObject({ code: 'SOURCE_TREE_DIRTY' })
-    expect(fetchSpy).not.toHaveBeenCalled()
+    try {
+      await expect(runRealProviderGenerationQualification({
+        mode: 'execute',
+        profiles: inMemoryProfiles(),
+        repositoryRoot: dirtyRepositoryRoot,
+        allowBillableRequests: true,
+      })).rejects.toMatchObject({ code: 'SOURCE_TREE_DIRTY' })
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      rmSync(dirtyRepositoryRoot, { recursive: true, force: true })
+    }
   })
 
   it('invalidates execute provenance if HEAD or source cleanliness changes during qualification', () => {
