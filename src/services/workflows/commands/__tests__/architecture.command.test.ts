@@ -4,7 +4,23 @@ import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import type { CharacterRosterEntry, CharacterRosterSnapshot } from '../../../../shared/character-roster'
-import { GenerateCharactersCommand, GenerateConfigCommand } from '../architecture.command'
+import {
+  GenerateCharactersCommand as RuntimeGenerateCharactersCommand,
+  GenerateConfigCommand as RuntimeGenerateConfigCommand,
+} from '../architecture.command'
+import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+
+class GenerateConfigCommand extends RuntimeGenerateConfigCommand {
+  constructor(...args: ConstructorParameters<typeof RuntimeGenerateConfigCommand>) {
+    super(args[0], args[1], args[2], args[3], workflowRuntimeDependencies)
+  }
+}
+
+class GenerateCharactersCommand extends RuntimeGenerateCharactersCommand {
+  constructor(...args: ConstructorParameters<typeof RuntimeGenerateCharactersCommand>) {
+    super(args[0], workflowRuntimeDependencies)
+  }
+}
 
 const projectAPath = 'C:\\novels\\A'
 const projectBPath = 'C:\\novels\\B'
@@ -77,6 +93,21 @@ function project(path: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubGlobal('window', {
+    velaAPI: {
+      invoke: vi.fn(async (channel: string) => {
+        if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+        if (channel === 'fs:check-exists') return false
+        throw new Error(`Unexpected IPC channel: ${channel}`)
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      send: vi.fn(),
+      setZoomLevel: vi.fn(),
+      setZoomFactor: vi.fn(),
+      getZoomLevel: vi.fn(),
+    },
+  })
   useProjectStore.setState({
     currentProject: project(projectAPath) as never,
   })
@@ -139,6 +170,10 @@ describe('GenerateCharactersCommand structured roster seam', () => {
 
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
         case 'db:project-core-get':
           return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并写入结构化角色事实，且不会因为前置条件长度不足而提前中止本次端到端工作流验证。' }
         case 'db:character-roster-read':
@@ -221,6 +256,10 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
         case 'db:project-core-get':
           return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证原子角色名单提交后若收到取消请求，不会再调用任何检查点 IPC。' }
         case 'db:character-roster-read':
@@ -281,6 +320,10 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
         case 'db:project-core-get':
           return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证角色事实提交成功后，检查点写入失败不会误报角色图谱生成失败。' }
         case 'db:character-roster-read':
@@ -336,9 +379,14 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const generateStream = vi.fn((
       _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
       streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
+      modelId: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[2],
     ) => {
+      void modelId
       const output = generateStream.mock.calls.length === 1 ? truncated : completed
       const finishReason = generateStream.mock.calls.length === 1 ? 'length' : 'stop'
+      if (generateStream.mock.calls.length === 1) {
+        useLLMStore.setState({ defaultModelId: 'model-2' })
+      }
       streamCallbacks.onChunk?.(output)
       streamCallbacks.onDone?.(output, undefined, finishReason)
       return Promise.resolve(`truncated-character-request-${generateStream.mock.calls.length}`)
@@ -346,6 +394,10 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
         case 'db:project-core-get':
           return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证截断结构化响应必须先由完整替代 JSON 覆盖后才允许写入结构化角色事实。' }
         case 'db:character-roster-read':
@@ -389,6 +441,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       .resolves.toBe(readyRoster.renderedMarkdown)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(generateStream.mock.calls.map(call => call[2])).toEqual(['model-1', 'model-1'])
     const continuationMessages = generateStream.mock.calls[1]?.[0] ?? []
     const continuationPrompt = continuationMessages.find(message => message.role === 'user')?.content ?? ''
     expect(continuationPrompt).toContain('返回完整 JSON，从头重建，不要只补后缀')
@@ -410,6 +463,10 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
         case 'db:project-core-get':
           return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证一次 JSON 语法修复后的原子角色名单提交，避免测试因为前置长度不足而提前中止。' }
         case 'db:character-roster-read':
@@ -468,6 +525,10 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
         case 'db:project-core-get':
           return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并将空角色名单的语义错误交给原子角色名单 seam 拒绝。' }
         case 'db:character-roster-read':
@@ -516,6 +577,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
         return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证第二次 JSON 仍无效时绝不继续重试或写入，同时避免测试因为前置长度不足而提前中止。' }
       }
@@ -556,6 +619,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
         return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证项目会话切换后不会提交任何角色图谱或角色卡，同时避免测试因为前置长度不足而提前中止。' }
       }
@@ -598,6 +663,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
         return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证取消发生在提交前时不会写入角色图谱或角色卡，同时避免测试因为前置长度不足而提前中止。' }
       }

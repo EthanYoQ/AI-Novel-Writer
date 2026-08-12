@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, ipcMain } from 'electron'
-import type { AppPromptTemplate } from '../../src/shared/ipc-channels'
+import type { AppPromptLoadReceipt, AppPromptTemplate } from '../../src/shared/ipc-channels'
 import { mainText } from '../i18n'
 import { VELA_HOME, writeJsonFile } from '../utils/config-utils'
 
@@ -46,24 +46,48 @@ function isPromptTemplate(value: unknown): value is AppPromptTemplate {
  * 任意 app-data 路径，也不借用外部文件授权。
  */
 export function registerAppDataController(): void {
-  ipcMain.handle('prompt:load-global', async (): Promise<AppPromptTemplate[]> => {
+  ipcMain.handle('prompt:load-global', async (): Promise<AppPromptLoadReceipt> => {
     const promptsDirectory = path.join(VELA_HOME, 'prompts')
-    if (!fs.existsSync(promptsDirectory)) return []
+    if (!fs.existsSync(promptsDirectory)) return { templates: [], diagnostics: [] }
 
     const prompts: AppPromptTemplate[] = []
-    for (const entry of fs.readdirSync(promptsDirectory, { withFileTypes: true })) {
+    const diagnostics: AppPromptLoadReceipt['diagnostics'] = []
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(promptsDirectory, { withFileTypes: true })
+    } catch (error) {
+      return {
+        templates: [],
+        diagnostics: [{
+          path: 'prompts',
+          error: error instanceof Error ? error.message : String(error),
+        }],
+      }
+    }
+    for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue
       try {
         const candidatePath = path.join(promptsDirectory, entry.name)
         const canonicalPath = fs.realpathSync.native(candidatePath)
         if (!isContainedPath(fs.realpathSync.native(promptsDirectory), canonicalPath)) continue
         const parsed = JSON.parse(fs.readFileSync(canonicalPath, 'utf8')) as unknown
-        if (isPromptTemplate(parsed)) prompts.push(parsed)
-      } catch {
-        // 某个覆盖文件损坏不影响其他提示词加载。
+        if (!isPromptTemplate(parsed)) {
+          throw new Error(text('提示词内容结构无效', 'The prompt content shape is invalid'))
+        }
+        const filenameKey = path.basename(entry.name, '.json')
+        if (parsed.key !== filenameKey) {
+          throw new Error(text('提示词标识与文件名不一致', 'The prompt identifier does not match its filename'))
+        }
+        prompts.push(parsed)
+      } catch (error) {
+        diagnostics.push({
+          key: path.basename(entry.name, '.json'),
+          path: entry.name,
+          error: error instanceof Error ? error.message : String(error),
+        })
       }
     }
-    return prompts
+    return { templates: prompts, diagnostics }
   })
 
   ipcMain.handle('prompt:save-global', async (_event, template: AppPromptTemplate) => {

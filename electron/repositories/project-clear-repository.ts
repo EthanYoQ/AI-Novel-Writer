@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { ensureCharacterRosterSchema } from './character-roster-schema'
+import { clearBlueprintFactsWithinTransaction } from './blueprint-repository'
 
 export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText'
 
@@ -103,7 +104,7 @@ export class ProjectClearRepository {
                 }
 
                 if (options.blueprints) {
-                    db.prepare('DELETE FROM blueprints').run()
+                    clearBlueprintFactsWithinTransaction(db)
                     cleared.push('blueprints')
                 }
 

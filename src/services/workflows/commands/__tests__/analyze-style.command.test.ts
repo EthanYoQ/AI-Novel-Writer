@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useProjectStore } from '../../../../stores/project-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
-import { AnalyzeWritingStyleCommand } from '../analyze-style.command'
+import { AnalyzeWritingStyleCommand as RuntimeAnalyzeWritingStyleCommand } from '../analyze-style.command'
+import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+
+class AnalyzeWritingStyleCommand extends RuntimeAnalyzeWritingStyleCommand {
+  constructor(...args: ConstructorParameters<typeof RuntimeAnalyzeWritingStyleCommand>) {
+    super(args[0], workflowRuntimeDependencies)
+  }
+}
 
 const callbacks: StepCallbacks = {
   log: vi.fn(),
@@ -20,6 +27,7 @@ const context: WorkflowContext = {
 
 function stubIpcInvoke(updateResult: { success: boolean; error?: string } = { success: true }) {
   const invoke = vi.fn((channel: string) => {
+    if (channel === 'prompt:load-global') return Promise.resolve({ templates: [], diagnostics: [] })
     if (channel === 'db:project-core-update') return Promise.resolve(updateResult)
     return Promise.resolve(null)
   })
@@ -133,6 +141,7 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
   it('does not apply the persisted result to a newly switched project', async () => {
     let resolveSave: ((value: { success: boolean }) => void) | undefined
     const invoke = vi.fn((channel: string) => {
+      if (channel === 'prompt:load-global') return Promise.resolve({ templates: [], diagnostics: [] })
       if (channel === 'db:project-core-update') {
         return new Promise<{ success: boolean }>((resolve) => { resolveSave = resolve })
       }

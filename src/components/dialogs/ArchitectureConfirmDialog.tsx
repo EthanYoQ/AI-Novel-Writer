@@ -36,7 +36,7 @@ interface Props {
   archStatus: Record<string, boolean>
   /** 预先选中的步骤（单文件生成时传入） */
   initialSelectedSteps?: ArchStepKey[]
-  onConfirm: (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => void
+  onConfirm: (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => Promise<void>
 }
 
 /** 生成架构确认弹框（含步骤勾选） */
@@ -101,13 +101,15 @@ export default function ArchitectureConfirmDialog({
       }
 
       setGuardError(null)
-      onConfirm(selectedSteps, stepGuidance)
+      await onConfirm(selectedSteps, stepGuidance)
       onClose()
       const stepNames = selectedSteps.map(k => {
         const item = ARCH_FILES.find(f => f.key === k)
         return item ? text(item.label, item.labelEn) : ''
       }).filter(Boolean).join(text('、', ', '))
       toast.info(text(`已提交：正在生成${stepNames}...`, `Submitted: generating ${stepNames}...`))
+    } catch (error) {
+      setGuardError(error instanceof Error ? error.message : String(error))
     } finally {
       setIsConfirming(false)
     }

@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { FileText } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { FileText, RotateCcw } from 'lucide-react'
+import type { BlueprintCharacterSyncOperation } from '../../../electron/repositories/blueprint-repository'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { toast } from '../ui/Toast'
@@ -15,18 +16,39 @@ import type { DirectoryWorkflowParams } from '../../services/workflows/directory
 import {
   DEFAULT_BLUEPRINT_GENERATION_COUNT,
   getBlueprintBatchAdvice,
+  MAX_BLUEPRINT_CHAPTERS_PER_TASK,
+  planBlueprintGenerationCost,
 } from '../../services/workflows/blueprint-batch-policy'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
 } from '../project-session-gate'
+import {
+  listPendingDirectoryCharacterSyncs,
+  retryAllPendingDirectoryCharacterSyncs,
+} from '../../services/workflows/directory-character-sync-recovery'
 
 interface Props {
   isOpen: boolean
   onClose: () => void
   /** 已有蓝图章节数（影响「追加」模式的默认值） */
   existingCount: number
-  onConfirm: (params: DirectoryWorkflowParams) => void
+  onConfirm: (params: DirectoryWorkflowParams) => Promise<void>
+}
+
+function requestedChapterCount(
+  params: DirectoryWorkflowParams,
+  totalChapters: number,
+  existingCount: number,
+): number {
+  if (params.mode === 'full') {
+    return params.count && params.count > 0
+      ? Math.min(totalChapters, params.count)
+      : totalChapters
+  }
+  const startChapter = params.startChapter || existingCount + 1
+  const remaining = Math.max(0, totalChapters - startChapter + 1)
+  return params.count && params.count > 0 ? Math.min(remaining, params.count) : remaining
 }
 
 /** 蓝图生成配置弹框 — 选择生成范围和模式 */
@@ -44,13 +66,101 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   const [rangeEnd, setRangeEnd] = useState<number | ''>(existingCount + 50)
   // 节奏指导
   const [pacingGuidance, setPacingGuidance] = useState('')
+  const [isConfirming, setIsConfirming] = useState(false)
+  const [launchError, setLaunchError] = useState<string | null>(null)
+  const [pendingCharacterSyncs, setPendingCharacterSyncs] = useState<BlueprintCharacterSyncOperation[]>([])
+  const [isRecoveryLoading, setIsRecoveryLoading] = useState(false)
+  const [isRecovering, setIsRecovering] = useState(false)
+  const [recoveryError, setRecoveryError] = useState<string | null>(null)
 
   const isBatchRunning = useWorkflowStore(s => s.isTypeRunning('batch_generate'))
 
+  useEffect(() => {
+    if (!isOpen || !currentProject) return
+    const projectSession = captureProjectSession(currentProject)
+    let disposed = false
+    const loadPending = async () => {
+      setIsRecoveryLoading(true)
+      setPendingCharacterSyncs([])
+      setRecoveryError(null)
+      if (!projectSession) {
+        setRecoveryError(text(
+          '项目会话已切换，无法读取角色同步待办。',
+          'The project session changed, so pending character syncs cannot be loaded.',
+        ))
+        setIsRecoveryLoading(false)
+        return
+      }
+      try {
+        const operations = await listPendingDirectoryCharacterSyncs(
+          currentProject.path,
+          projectSession,
+        )
+        if (disposed || !isProjectSessionCurrent(projectSession)) return
+        setPendingCharacterSyncs(operations)
+      } catch (error) {
+        if (disposed) return
+        setRecoveryError(error instanceof Error ? error.message : String(error))
+      } finally {
+        if (!disposed) setIsRecoveryLoading(false)
+      }
+    }
+    void loadPending()
+    return () => { disposed = true }
+  }, [currentProject, isOpen, text])
+
   if (!currentProject) return null
   const total = currentProject.novelConfig.totalChapters
+  const previewParams: DirectoryWorkflowParams = rangeMode === 'full'
+    ? { mode: overwriteMode === 'full' ? 'full' : 'append', count: 0 }
+    : rangeMode === 'front'
+      ? existingCount > 0 && overwriteMode === 'append'
+        ? {
+            mode: 'append',
+            startChapter: existingCount + 1,
+            count: Math.min(
+              Math.max(0, total - existingCount),
+              Math.max(1, Number(frontN) || DEFAULT_BLUEPRINT_GENERATION_COUNT),
+            ),
+          }
+        : {
+            mode: 'full',
+            count: Math.min(total, Math.max(1, Number(frontN) || DEFAULT_BLUEPRINT_GENERATION_COUNT)),
+          }
+      : {
+          mode: 'append',
+          startChapter: Math.min(total, Math.max(1, Number(rangeStart) || 1)),
+          count: Math.max(
+            1,
+            Math.min(total, Math.max(Number(rangeStart) || 1, Number(rangeEnd) || 1))
+              - Math.min(total, Math.max(1, Number(rangeStart) || 1))
+              + 1,
+          ),
+        }
+  const previewCost = planBlueprintGenerationCost(
+    requestedChapterCount(previewParams, total, existingCount),
+  )
 
-  const handleConfirm = () => {
+  const handleCharacterSyncRecovery = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionCurrent(projectSession)) return
+    setIsRecovering(true)
+    try {
+      await retryAllPendingDirectoryCharacterSyncs(currentProject.path, projectSession)
+      if (!isProjectSessionCurrent(projectSession)) return
+      const remaining = await listPendingDirectoryCharacterSyncs(currentProject.path, projectSession)
+      if (!isProjectSessionCurrent(projectSession)) return
+      setPendingCharacterSyncs(remaining)
+      setRecoveryError(null)
+      toast.info(text('角色同步修复完成，无需重新生成蓝图。', 'Character sync repaired without regenerating blueprints.'))
+    } catch (error) {
+      setRecoveryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsRecovering(false)
+    }
+  }
+
+  const handleConfirm = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession) {
       toast.warning(text(
@@ -100,10 +210,27 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
       params = { mode: 'append', startChapter: start, count: Math.max(1, end - start + 1) }
     }
 
+    const costPlan = planBlueprintGenerationCost(requestedChapterCount(params, total, existingCount))
+    if (costPlan.exceedsHardLimit) {
+      toast.warning(text(
+        `当前范围超过单次任务安全成本上限，请拆成每段不超过 ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} 章的范围。`,
+        `This range exceeds the safe cost limit. Split it into ranges of no more than ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} chapters.`,
+      ))
+      return
+    }
+
     if (!isProjectSessionCurrent(projectSession)) return
-    onConfirm({ ...params, pacingGuidance: pacingGuidance.trim() || undefined })
-    onClose()
-    toast.info(text('已提交：正在生成章节蓝图...', 'Submitted: generating chapter blueprints...'))
+    setIsConfirming(true)
+    try {
+      await onConfirm({ ...params, pacingGuidance: pacingGuidance.trim() || undefined })
+      setLaunchError(null)
+      onClose()
+      toast.info(text('已提交：正在生成章节蓝图...', 'Submitted: generating chapter blueprints...'))
+    } catch (error) {
+      setLaunchError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsConfirming(false)
+    }
   }
 
   return (
@@ -122,6 +249,40 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
         </DialogHeader>
 
         <div className="px-5 py-4 space-y-4">
+          {(isRecoveryLoading || pendingCharacterSyncs.length > 0 || recoveryError) && (
+            <div
+              className="rounded-lg border px-3 py-2.5 text-xs"
+              style={{
+                color: 'var(--color-text-secondary)',
+                backgroundColor: 'var(--color-panel)',
+                borderColor: 'var(--color-border)',
+              }}
+            >
+              <p>
+                {isRecoveryLoading
+                  ? text('正在检查角色同步待办...', 'Checking pending character syncs...')
+                  : pendingCharacterSyncs.length > 0
+                    ? text(
+                        `发现 ${pendingCharacterSyncs.length} 次角色同步待修复；蓝图已安全保存，无需重新生成。`,
+                        `${pendingCharacterSyncs.length} character sync operation(s) need repair. The blueprints are already saved.`,
+                      )
+                    : recoveryError}
+              </p>
+              {!isRecoveryLoading && (pendingCharacterSyncs.length > 0 || recoveryError) && (
+                <Button
+                  variant="outline"
+                  className="mt-2 h-7 text-xs"
+                  onClick={handleCharacterSyncRecovery}
+                  disabled={isRecovering}
+                >
+                  <RotateCcw size={13} />
+                  {isRecovering
+                    ? text('修复中...', 'Repairing...')
+                    : text('重试角色同步', 'Retry character sync')}
+                </Button>
+              )}
+            </div>
+          )}
           <div>
             <Label className="text-xs font-semibold mb-2 block" style={{ color: 'var(--color-text)' }}>
               {text('生成数量 / 范围', 'Quantity / range')}
@@ -199,7 +360,14 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
                 borderColor: 'var(--color-border)',
               }}
             >
-              {text(getBlueprintBatchAdvice('zh-CN'), getBlueprintBatchAdvice('en-US'))}
+              {text(
+                getBlueprintBatchAdvice('zh-CN', previewCost.chapterCount),
+                getBlueprintBatchAdvice('en-US', previewCost.chapterCount),
+              )}
+              {previewCost.exceedsHardLimit && text(
+                ` 当前范围超过单次任务安全成本上限，请拆成每段不超过 ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} 章。`,
+                ` This exceeds the safe per-task cost limit; split it into ranges of no more than ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} chapters.`,
+              )}
             </p>
           </div>
 
@@ -239,13 +407,28 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
               className="text-xs"
             />
           </div>
+          {launchError && (
+            <p className="whitespace-pre-line rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2.5 text-xs text-yellow-600 dark:text-yellow-400">
+              {launchError}
+            </p>
+          )}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>{text('取消', 'Cancel')}</Button>
-          <Button variant="default" onClick={handleConfirm}>
+          <Button variant="outline" onClick={onClose} disabled={isConfirming || isRecovering}>{text('取消', 'Cancel')}</Button>
+          <Button
+            variant="default"
+            onClick={handleConfirm}
+            disabled={
+              isConfirming
+              || isRecoveryLoading
+              || isRecovering
+              || pendingCharacterSyncs.length > 0
+              || Boolean(recoveryError)
+            }
+          >
             <FileText size={13} />
-            {text('开始生成', 'Generate')}
+            {isConfirming ? text('启动中...', 'Starting...') : text('开始生成', 'Generate')}
           </Button>
         </DialogFooter>
       </DialogContent>

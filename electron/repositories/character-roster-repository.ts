@@ -59,6 +59,12 @@ function requiredText(value: unknown, label: string): string {
   return value.trim()
 }
 
+/** Only fields whose domain explicitly permits numeric scalar expression use this normalizer. */
+function requiredTextOrFiniteNumber(value: unknown, label: string): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return requiredText(value, label)
+}
+
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
 }
@@ -151,7 +157,7 @@ function normalizeEntry(
     name,
     role: value.role,
     gender: requiredText(value.gender, `角色「${name}」的性别`),
-    age: requiredText(value.age, `角色「${name}」的年龄`),
+    age: requiredTextOrFiniteNumber(value.age, `角色「${name}」的年龄`),
     appearance: requiredText(value.appearance, `角色「${name}」的外貌`),
     personality: requiredText(value.personality, `角色「${name}」的性格`),
     background: requiredText(value.background, `角色「${name}」的背景`),

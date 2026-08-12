@@ -3,11 +3,9 @@ import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared
 
 export class GeminiProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
-    // Some Gemini-compatible endpoints omit finishReason. Their completed HTTP
-    // response remains compatible with a normal STOP completion.
-    if (reason === undefined || reason === null || reason === 'STOP') return 'stop'
+    if (reason === 'STOP') return 'stop'
     if (reason === 'MAX_TOKENS') return 'length'
-    if (['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT'].includes(reason)) {
+    if (reason && ['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT'].includes(reason)) {
       return 'content_filter'
     }
     return 'unknown'
@@ -65,7 +63,7 @@ export class GeminiProvider implements ILLMProvider {
 
       if (!res.ok) {
         const text = await res.text()
-        return { success: false, content: '', error: `Gemini API 调用失败 (${res.status}): ${text}` }
+        return { success: false, content: '', finishReason: 'error', error: `Gemini API 调用失败 (${res.status}): ${text}` }
       }
 
       const data = await res.json() as {
@@ -78,22 +76,30 @@ export class GeminiProvider implements ILLMProvider {
 
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
       const finishReason = this.normalizeFinishReason(data.candidates?.[0]?.finishReason)
-      const complete = finishReason === 'stop'
       const usage = data.usageMetadata ? {
         promptTokens: data.usageMetadata.promptTokenCount ?? null,
         completionTokens: data.usageMetadata.candidatesTokenCount ?? null,
         totalTokens: data.usageMetadata.totalTokenCount ?? null,
       } : undefined
 
+      if (finishReason === 'stop') {
+        return {
+          success: true,
+          content: text,
+          usage,
+          finishReason,
+        }
+      }
+
       return {
-        success: complete,
+        success: false,
         content: text,
         usage,
         finishReason,
-        error: complete ? undefined : 'Gemini API 返回的文本未正常完成',
+        error: 'Gemini API 返回的文本未正常完成',
       }
     } catch (error) {
-      return { success: false, content: '', error: String(error) }
+      return { success: false, content: '', finishReason: 'error', error: String(error) }
     }
   }
 
@@ -148,7 +154,7 @@ export class GeminiProvider implements ILLMProvider {
       let fullText = ''
       let usage: TokenUsage | undefined
       let buffer = ''
-      let finishReason: LLMFinishReason = 'stop'
+      let finishReason: LLMFinishReason = 'unknown'
 
       const processLine = (line: string) => {
         if (!line.startsWith('data: ')) return

@@ -17,10 +17,10 @@ import {
   loadDirectoryBlueprints,
   saveChapterBlueprint,
   saveAllBlueprints,
-  createDirectoryWorkflow,
   type ChapterBlueprint,
   type DirectoryWorkflowParams,
 } from '../../services/workflows/directory-workflow'
+import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { guardDirectoryGeneration } from '../../services/workflow-guards'
 import DirectoryConfigDialog from '../dialogs/DirectoryConfigDialog'
 import BatchChapterCreationDialog from '../dialogs/BatchChapterCreationDialog'
@@ -91,7 +91,6 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
   const locale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
   // ✅ action 用 getState() 获取，不订阅 workflow store 高频更新
-  const startWorkflow = useWorkflowStore.getState().startWorkflow
   const addLog = useWorkflowStore.getState().addLog
   const [blueprints, setBlueprints] = useState<ChapterBlueprint[]>([])
   const [selectedIdx, setSelectedIdx] = useState<number>(0)
@@ -514,7 +513,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
   /** 触发蓝图批量生成（来自 DirectoryConfigDialog 的确认回调） */
   const handleBatchGenerate = async (params: DirectoryWorkflowParams) => {
     const projectSession = currentProjectSessionForPath(projectKey)
-    if (!projectMatches || !projectSession) return
+    if (!projectMatches || !projectSession) throw new Error(text('项目会话已切换，未启动章节蓝图生成', 'The project changed, so blueprint generation was not started.'))
     const expectedProjectPath = projectKey
 
     // 前置校验：故事架构是否就绪
@@ -523,8 +522,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
     if (!guard.ok) {
       // 校验失败：阻断并提示
       addLog('error', text(`前置条件未满足：${guard.message}`, 'A required precondition is not met.'))
-      toast.warning(text(`无法启动\n\n${guard.message}`, 'Could not start chapter blueprint generation.'))
-      return
+      throw new Error(guard.message || text('章节蓝图生成前置条件未满足', 'Blueprint prerequisites are not met.'))
     }
     if (guard.message) {
       // 有警告但允许继续：弹出确认
@@ -535,14 +533,14 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
         title: text('前置条件警告', 'Precondition warning'),
         confirmText: text('继续生成', 'Continue'),
       })
-      if (!yes) return
+      if (!yes) throw new Error(text('已取消启动章节蓝图生成', 'Blueprint generation was cancelled.'))
     }
 
     if (!isCurrentProjectSession(projectSession)) {
       addLog('error', text('项目已切换，未启动章节蓝图生成', 'The project changed, so chapter blueprint generation was not started.'))
-      return
+      throw new Error(text('项目已切换，未启动章节蓝图生成', 'The project changed, so blueprint generation was not started.'))
     }
-    startWorkflow(createDirectoryWorkflow(params, expectedProjectPath, projectSession))
+    await launchCreativeWorkflow({ workflow: 'generate_blueprint', params }, projectSession)
     addLog('info', text('已启动章节蓝图生成', 'Chapter blueprint generation started'))
   }
 

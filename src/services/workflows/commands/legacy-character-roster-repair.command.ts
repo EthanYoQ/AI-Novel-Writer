@@ -1,4 +1,8 @@
-import { BaseWorkflowCommand, type CommandExecuteParams } from './base-command'
+import {
+  BaseWorkflowCommand,
+  type CommandExecuteParams,
+  type WorkflowGenerationRuntimeDependencies,
+} from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
 import { ipc } from '../../ipc-client'
 import {
@@ -106,8 +110,11 @@ export interface LegacyCharacterRosterRepairInput {
  * read/commit seam。
  */
 export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<string> {
-  constructor(private readonly input: LegacyCharacterRosterRepairInput) {
-    super()
+  constructor(
+    private readonly input: LegacyCharacterRosterRepairInput,
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+  ) {
+    super(generationDependencies)
   }
 
   private async parseResponse(
@@ -126,8 +133,6 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
         { mode: 'replace-structured-output', maxContinuations: 2 },
         {
           responseFormat: { type: 'json_object' },
-          thinking: false,
-          maxTokens: 4096,
           purpose,
         },
         context,
@@ -202,7 +207,11 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
     return snapshot.renderedMarkdown
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertLegacyRepairSessionCurrent(projectSession)
     const { expectedProjectPath, genre } = this.input
@@ -228,8 +237,6 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
       { mode: 'replace-structured-output', maxContinuations: 2 },
       {
         responseFormat: { type: 'json_object' },
-        thinking: false,
-        maxTokens: 4096,
         purpose: 'legacy-character-roster-repair',
       },
       context,

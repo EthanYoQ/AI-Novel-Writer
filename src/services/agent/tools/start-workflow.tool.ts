@@ -2,8 +2,8 @@
  * start_workflow — 触发创作工作流
  */
 import { buildAgentTool, createToolArtifact } from '../tool-registry'
-import { useLayoutStore } from '../../../stores/layout-store'
-import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { launchCreativeWorkflow, type CreativeIntent } from '../../workflows/creative-workflow-launcher'
+import { requireAgentProject } from './project-context'
 
 export const startWorkflowTool = buildAgentTool({
   name: 'start_workflow',
@@ -42,12 +42,6 @@ export const startWorkflowTool = buildAgentTool({
       return { success: false, content: '', error: `${workflow} 工作流需要指定 chapter_number 参数` }
     }
 
-    // 打开右侧面板到 AI 输出视图
-    useLayoutStore.getState().openRightPanel('ai-output')
-    assertAgentProjectCurrent(context)
-
-    // 注意：实际的工作流触发需要通过 workflow-store
-    // 这里返回指导信息，让用户可以从 AI 输出面板操作
     const workflowNames: Record<string, string> = {
       generate_draft: '写稿',
       review: '审稿',
@@ -60,15 +54,26 @@ export const startWorkflowTool = buildAgentTool({
     const displayName = workflowNames[workflow] ?? workflow
     const chapterInfo = chapterNumber !== undefined ? `（第 ${chapterNumber} 章）` : ''
 
-    return {
-      success: true,
-      content: `已切换到 AI 输出面板。请在面板中启动「${displayName}${chapterInfo}」工作流。`,
-      artifacts: [createToolArtifact({
-        type: 'workflow_started',
-        name: `${displayName}${chapterInfo}`,
-        projectPath,
-        projectSession,
-      })],
+    try {
+      const receipt = await launchCreativeWorkflow({
+        workflow,
+        ...(chapterNumber === undefined ? {} : { chapterNumber }),
+      } as CreativeIntent, projectSession)
+
+      return {
+        success: true,
+        content: `已启动「${displayName}${chapterInfo}」工作流（运行 ID：${receipt.runId}，状态：${receipt.status}）。`,
+        artifacts: [createToolArtifact({
+          type: 'workflow_started',
+          name: `${displayName}${chapterInfo}`,
+          projectPath,
+          projectSession,
+          runId: receipt.runId,
+          status: receipt.status,
+        })],
+      }
+    } catch (error) {
+      return { success: false, content: '', error: error instanceof Error ? error.message : String(error) }
     }
   },
 })

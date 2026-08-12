@@ -109,8 +109,10 @@ describe('project clear repositories', () => {
 
     BlueprintRepository.clearAll()
 
+    expect(db.prepare).toHaveBeenCalledWith('DELETE FROM blueprint_character_sync_operations')
+    expect(db.prepare).toHaveBeenCalledWith('DELETE FROM blueprint_commit_operations')
     expect(db.prepare).toHaveBeenCalledWith('DELETE FROM blueprints')
-    expect(db.run).toHaveBeenCalledOnce()
+    expect(db.run).toHaveBeenCalledTimes(3)
   })
 
   it('clears generated drafts, review artifacts, summaries, and content in dependency order', () => {
@@ -164,6 +166,8 @@ describe('project clear repositories', () => {
     expect(db.transaction).toHaveBeenCalledOnce()
     const statements = db.prepare.mock.calls.map(([sql]) => sql)
     expect(statements).toEqual(expect.arrayContaining([
+      'DELETE FROM blueprint_character_sync_operations',
+      'DELETE FROM blueprint_commit_operations',
       'DELETE FROM blueprints',
       'DELETE FROM character_roster_operations',
       'DELETE FROM character_roster_meta',

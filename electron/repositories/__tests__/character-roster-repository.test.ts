@@ -122,6 +122,30 @@ function rawRosterStorage() {
 }
 
 describe('CharacterRosterRepository public read/commit seam', () => {
+  it('normalizes a finite numeric model age without widening other roster fields', () => {
+    const base = commitRequest()
+    const numericAge = {
+      ...base,
+      entries: base.entries.map((entry) => (
+        entry.name === '林舟' ? { ...entry, age: 18 } : entry
+      )),
+    } as unknown as CharacterRosterCommitRequest
+
+    const receipt = CharacterRosterRepository.commit(numericAge)
+    expect(receipt.snapshot.entries.find((entry) => entry.name === '林舟')?.age).toBe('18')
+
+    for (const invalidAge of [Number.NaN, Number.POSITIVE_INFINITY, true, null]) {
+      expect(() => CharacterRosterRepository.commit({
+        ...commitRequest({ operationId: `invalid-age-${String(invalidAge)}` }),
+        entries: [{ ...base.entries[0], age: invalidAge }, base.entries[1]],
+      } as unknown as CharacterRosterCommitRequest)).toThrow(/年龄必须是文本/)
+    }
+    expect(() => CharacterRosterRepository.commit({
+      ...commitRequest({ operationId: 'invalid-name-number' }),
+      entries: [{ ...base.entries[0], name: 7 }, base.entries[1]],
+    } as unknown as CharacterRosterCommitRequest)).toThrow(/角色名必须是文本/)
+  })
+
   it('renders the canonical shared minor-role label in the deterministic roster projection', () => {
     const receipt = CharacterRosterRepository.commit(commitRequest({
       entries: commitRequest().entries.map(entry => (

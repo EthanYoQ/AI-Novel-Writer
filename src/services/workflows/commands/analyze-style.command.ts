@@ -1,6 +1,6 @@
-import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
+import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { getPromptTemplate } from '../../prompt-templates'
+import { resolvePromptTemplate } from '../../prompt-templates'
 import { BasePromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
@@ -19,11 +19,18 @@ export interface AnalyzeWritingStyleOptions {
  * 结果写入 NovelConfig.writingStyle 以锚定后续生成/修稿。
  */
 export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
-  constructor(private options: AnalyzeWritingStyleOptions = {}) {
-    super()
+  constructor(
+    private options: AnalyzeWritingStyleOptions = {},
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+  ) {
+    super(generationDependencies)
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
@@ -68,7 +75,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       return ''
     }
 
-    const template = getPromptTemplate('analyze_writing_style', projectSession)
+    const template = await resolvePromptTemplate('analyze_writing_style', projectSession)
     if (!template) throw new Error('未找到文风分析模板')
 
     const sampleText = sampleTexts.join('\n\n---\n\n')

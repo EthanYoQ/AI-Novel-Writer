@@ -10,7 +10,7 @@ import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { ipc } from '../../services/ipc-client'
 
-import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
+import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { globalEventBus } from '../../shared/event-bus'
 import {
   createProjectArchTabId,
@@ -200,15 +200,13 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   /** 确认后启动架构工作流 */
   const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
     const projectSession = captureProjectSession(currentProject)
-    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    const { useWorkflowStore } = await import('../../stores/workflow-store')
-    if (!isProjectSessionCurrent(projectSession)) return
-    useWorkflowStore.getState().startWorkflow(createArchitectureWorkflow({
-      projectPath: projectSession.projectPath,
-      projectSession,
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) throw new Error('项目会话已切换，未启动架构生成')
+    if (!isProjectSessionCurrent(projectSession)) throw new Error('项目会话已切换，未启动架构生成')
+    await launchCreativeWorkflow({
+      workflow: 'generate_architecture',
       selectedSteps,
       stepGuidance,
-    }))
+    }, projectSession)
   }
 
   if (!projectMatches) {

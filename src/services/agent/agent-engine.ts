@@ -88,7 +88,7 @@ export async function runAgentLoop(
   systemPrompt: string,
   historyMessages: LLMMessage[],
   userMessage: string,
-  modelId: string,
+  modelId: string | undefined,
   generateFn: LLMGenerateFn,
   callbacks: AgentEngineCallbacks,
   abortSignal?: AbortSignal,
@@ -122,7 +122,7 @@ export async function runAgentLoop(
     // 调用 LLM
     let llmResponse: string
     try {
-      llmResponse = await generateFn(messages, modelId)
+      llmResponse = await generateFn(messages, modelId ?? '')
     } catch (error) {
       callbacks.onError(`LLM 调用失败：${String(error)}`)
       return

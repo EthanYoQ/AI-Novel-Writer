@@ -11,6 +11,7 @@ import {
   deleteCustomPrompt,
   deleteProjectCustomPrompt,
   clearProjectCustomPrompts,
+  loadCustomPrompts,
   loadProjectCustomPrompts,
   type PromptTemplate,
 } from '../../services/prompt-templates'
@@ -58,6 +59,25 @@ export default function PromptSettings() {
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   // 强制刷新用（保存/恢复后 getPromptSource 的结果会变）
   const [refreshKey, setRefreshKey] = useState(0)
+  const [globalLoadError, setGlobalLoadError] = useState<string | null>(null)
+  const [projectLoadError, setProjectLoadError] = useState<{
+    projectId: string
+    leaseId: string
+    message: string
+  } | null>(null)
+
+  useEffect(() => {
+    let disposed = false
+    void loadCustomPrompts().then(() => {
+      if (!disposed) {
+        setGlobalLoadError(null)
+        setRefreshKey((key) => key + 1)
+      }
+    }).catch(() => {
+      if (!disposed) setGlobalLoadError(text('全局提示词加载失败，创作流程已停止使用未确认的配置', 'Global prompts could not be loaded; generation will not use an unverified configuration'))
+    })
+    return () => { disposed = true }
+  }, [text])
 
   // 项目变更时重新加载项目级覆盖
   useEffect(() => {
@@ -71,13 +91,22 @@ export default function PromptSettings() {
       return () => { disposed = true }
     }
 
-    void loadProjectCustomPrompts(session).then(() => {
-      if (!disposed && isProjectSessionCurrent(session)) {
+    void loadProjectCustomPrompts(session).then((loaded) => {
+      if (!disposed && loaded && isProjectSessionCurrent(session)) {
+        setProjectLoadError(null)
         setRefreshKey((k) => k + 1)
+      }
+    }).catch(() => {
+      if (!disposed && isProjectSessionCurrent(session)) {
+        setProjectLoadError({
+          projectId: session.projectId,
+          leaseId: session.leaseId,
+          message: text('项目提示词加载失败，创作流程已停止使用未确认的配置', 'Project prompts could not be loaded; generation will not use an unverified configuration'),
+        })
       }
     })
     return () => { disposed = true }
-  }, [projectId, projectLease, projectPath])
+  }, [projectId, projectLease, projectPath, text])
 
   // 获取可编辑的模板列表
   const editableTemplates = BUILTIN_PROMPTS.filter((t) => EDITABLE_PROMPT_KEYS.includes(t.key))
@@ -90,6 +119,20 @@ export default function PromptSettings() {
 
   return (
     <div className="space-y-2" key={refreshKey}>
+      {globalLoadError && (
+        <div className="px-3 py-2 rounded-lg text-xs bg-red-500/10 text-red-500 border border-red-500/20">
+          <AlertTriangle size={13} className="inline mr-1" />
+          {globalLoadError}
+        </div>
+      )}
+      {projectLoadError
+        && projectLoadError.projectId === projectSession?.projectId
+        && projectLoadError.leaseId === projectSession.leaseId && (
+        <div className="px-3 py-2 rounded-lg text-xs bg-red-500/10 text-red-500 border border-red-500/20">
+          <AlertTriangle size={13} className="inline mr-1" />
+          {projectLoadError.message}
+        </div>
+      )}
       {/* 说明 */}
       <div
         className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs mb-4"

@@ -11,6 +11,7 @@
  */
 
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { WorkflowStatus } from '../../stores/workflow-store'
 
 // ===== JSON Schema 简化类型 =====
 
@@ -29,23 +30,36 @@ export interface ToolInputSchema {
 // ===== Tool 执行结果 =====
 
 /** Tool 执行产物（Agent 创建/修改的文件等） */
-export interface ToolArtifact {
-  readonly type: 'file_created' | 'file_modified' | 'workflow_started' | 'tab_opened'
+interface ToolArtifactBase {
   /** 工具执行时冻结的来源项目路径，仅用于显示和一致性检查，不单独授予权限。 */
   readonly projectPath: string
   /** 产物必须绑定产生时的完整项目会话；旧 lease 产物不能在重开后复用。 */
   readonly projectSession: ProjectSessionContext
-  /** 文件路径或资源标识 */
-  readonly path?: string
   /** 显示名称 */
   readonly name: string
 }
 
-export function createToolArtifact(artifact: ToolArtifact): ToolArtifact {
+export type ToolArtifact =
+  | (ToolArtifactBase & {
+    readonly type: 'file_created' | 'file_modified' | 'tab_opened'
+    /** 文件路径或资源标识 */
+    readonly path?: string
+    readonly runId?: never
+    readonly status?: never
+  })
+  | (ToolArtifactBase & {
+    readonly type: 'workflow_started'
+    /** A workflow artifact is itself an observable launch receipt. */
+    readonly runId: string
+    readonly status: WorkflowStatus
+    readonly path?: never
+  })
+
+export function createToolArtifact<T extends ToolArtifact>(artifact: T): T {
   return Object.freeze({
     ...artifact,
     projectSession: Object.freeze({ ...artifact.projectSession }),
-  })
+  }) as unknown as T
 }
 
 /** Tool 执行结果 */

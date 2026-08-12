@@ -21,6 +21,16 @@ export interface ModelCapabilities {
   usage: boolean
 }
 
+/** Persisted profile fields needed to resolve effective built-in capabilities. */
+export interface ModelCapabilityProfile {
+  provider?: unknown
+  protocol?: unknown
+  baseUrl?: unknown
+  modelName?: unknown
+  maxTokens?: unknown
+  capabilities?: ModelCapabilities | null
+}
+
 /** 单个服务商的预设配置 */
 export interface ProviderPreset {
   /** 服务商唯一标识（内置值如 openai/deepseek，用户可自定义如 my-proxy） */
@@ -71,7 +81,7 @@ export function createProviderCatalog(): ProviderPreset[] {
         // precise capability names used by new settings forms.
         maxTokens: 8192,
         capabilities: {
-          contextWindowTokens: 1_000_000,
+          contextWindowTokens: 500_000,
           maxOutputTokens: 8192,
           reasoning: true,
           structuredOutput: true,
@@ -112,8 +122,28 @@ export function createProviderCatalog(): ProviderPreset[] {
     baseUrl: 'https://api.deepseek.com',
     protocol: 'openai',
     models: [
-      { name: 'deepseek-v4-flash', maxTokens: 65536 },
-      { name: 'deepseek-v4-pro', maxTokens: 65536 },
+      {
+        name: 'deepseek-v4-flash',
+        maxTokens: 384_000,
+        capabilities: {
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 384_000,
+          reasoning: false,
+          structuredOutput: true,
+          usage: true,
+        },
+      },
+      {
+        name: 'deepseek-v4-pro',
+        maxTokens: 384_000,
+        capabilities: {
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 384_000,
+          reasoning: false,
+          structuredOutput: true,
+          usage: true,
+        },
+      },
     ],
     embeddingModels: [],
   },
@@ -140,6 +170,17 @@ export function createProviderCatalog(): ProviderPreset[] {
     baseUrl: 'https://generativelanguage.googleapis.com',
     protocol: 'gemini',
     models: [
+      {
+        name: 'gemini-2.5-flash-lite',
+        maxTokens: 65536,
+        capabilities: {
+          contextWindowTokens: 1_048_576,
+          maxOutputTokens: 65_536,
+          reasoning: true,
+          structuredOutput: true,
+          usage: true,
+        },
+      },
       { name: 'gemini-3.1-pro-preview', maxTokens: 65536 },
       { name: 'gemini-3-flash-preview', maxTokens: 65536 },
     ],
@@ -175,3 +216,73 @@ export function createProviderCatalog(): ProviderPreset[] {
 
 /** 内置默认预设（首次启动时写入持久化文件） */
 export const BUILTIN_PRESETS: ProviderPreset[] = createProviderCatalog()
+
+function normalizedOfficialBaseUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  try {
+    const endpoint = new URL(value.trim())
+    if (
+      (endpoint.protocol !== 'https:' && endpoint.protocol !== 'http:')
+      || endpoint.username
+      || endpoint.password
+      || endpoint.search
+      || endpoint.hash
+    ) return null
+    endpoint.pathname = endpoint.pathname.replace(/\/+$/u, '') || '/'
+    return endpoint.toString().replace(/\/$/u, '')
+  } catch {
+    return null
+  }
+}
+
+function validatedCapabilities(value: unknown): ModelCapabilities | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as Partial<ModelCapabilities>
+  const validContext = candidate.contextWindowTokens === null
+    || (Number.isSafeInteger(candidate.contextWindowTokens) && Number(candidate.contextWindowTokens) > 0)
+  if (
+    !validContext
+    || !Number.isSafeInteger(candidate.maxOutputTokens)
+    || Number(candidate.maxOutputTokens) <= 0
+    || typeof candidate.reasoning !== 'boolean'
+    || typeof candidate.structuredOutput !== 'boolean'
+    || typeof candidate.usage !== 'boolean'
+  ) return undefined
+  return {
+    contextWindowTokens: candidate.contextWindowTokens as number | null,
+    maxOutputTokens: candidate.maxOutputTokens as number,
+    reasoning: candidate.reasoning,
+    structuredOutput: candidate.structuredOutput,
+    usage: candidate.usage,
+  }
+}
+
+/**
+ * Resolve verified built-in provider facts without mutating persisted data.
+ * User-stored capabilities and output limits are operational policy, not proof
+ * of what a provider endpoint supports, so they never override this result.
+ */
+export function resolveModelProfileCapabilities(
+  profile: ModelCapabilityProfile,
+): ModelCapabilities | undefined {
+  if (
+    typeof profile.provider !== 'string'
+    || typeof profile.protocol !== 'string'
+    || typeof profile.modelName !== 'string'
+  ) return undefined
+
+  const provider = profile.provider
+  const protocol = profile.protocol
+  const modelName = profile.modelName.trim()
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.provider === provider)
+  if (
+    !preset
+    || preset.protocol !== protocol
+    || normalizedOfficialBaseUrl(profile.baseUrl) !== normalizedOfficialBaseUrl(preset.baseUrl)
+  ) {
+    return undefined
+  }
+
+  const model = preset.models.find(candidate => candidate.name === modelName)
+  return validatedCapabilities(model?.capabilities)
+}

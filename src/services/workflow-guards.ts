@@ -48,12 +48,16 @@ function captureGuardProject(
  * 生成故事架构（架构文件）前的前置校验：
  * 要求「核心大纲」或「主角人设」至少填写其中之一。
  */
-export function guardArchitectureGeneration(): GuardResult {
-  const project = useProjectStore.getState().currentProject
-  if (!project) {
+export function guardArchitectureGeneration(
+  expectedProjectPath?: string,
+  expectedProjectSession?: ProjectSessionContext,
+): GuardResult {
+  const captured = captureGuardProject(expectedProjectPath, expectedProjectSession)
+  if (!captured) {
     return { ok: false, message: '请先打开或新建一个项目。' }
   }
 
+  const { project } = captured
   const { coreOutline, protagonistProfile, worldSetting, genre } = project.novelConfig
 
   // 校验：小说配置是否有实质内容

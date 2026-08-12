@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   blueprintGetAll: vi.fn(() => []),
   blueprintUpsert: vi.fn(),
   blueprintUpsertMany: vi.fn(),
+  blueprintCommitRange: vi.fn(),
+  blueprintCompleteCharacterSync: vi.fn(),
   blueprintDelete: vi.fn(),
   blueprintClearAll: vi.fn(),
   characterGetAll: vi.fn(() => []),
@@ -98,6 +100,8 @@ vi.mock('../../repositories/blueprint-repository', () => ({
     getAll: mocks.blueprintGetAll,
     upsert: mocks.blueprintUpsert,
     upsertMany: mocks.blueprintUpsertMany,
+    commitRange: mocks.blueprintCommitRange,
+    completeCharacterSyncOperation: mocks.blueprintCompleteCharacterSync,
     delete: mocks.blueprintDelete,
     clearAll: mocks.blueprintClearAll,
   },
@@ -227,6 +231,41 @@ describe('database controller project context guard', () => {
       receipt: { operationId: 'architecture-run-A', revision: 1 },
     })
     expect(mocks.characterRosterCommit).toHaveBeenCalledWith(request)
+  })
+
+  it('completes blueprint sync from an operation id without accepting renderer evidence', async () => {
+    mocks.blueprintCompleteCharacterSync.mockReturnValueOnce({
+      operationId: 'blueprint-sync-directory-A',
+      status: 'completed',
+      completionReceipt: { status: 'committed' },
+    })
+
+    await expect(handler('db:blueprint-character-sync-complete')(
+      {},
+      'blueprint-sync-directory-A',
+      'C:/projects/A',
+    )).resolves.toMatchObject({
+      success: true,
+      operation: { status: 'completed' },
+    })
+    expect(mocks.blueprintCompleteCharacterSync).toHaveBeenCalledWith(
+      'blueprint-sync-directory-A',
+    )
+
+    mocks.blueprintCompleteCharacterSync.mockClear()
+    const forgedReceipt = {
+      operationId: 'blueprint-sync-directory-A',
+      blueprintCommitOperationId: 'directory-A',
+      status: 'committed',
+      rosterReceipt: { payloadHash: 'forged', revision: 999 },
+    }
+    await expect(handler('db:blueprint-character-sync-complete')(
+      {},
+      'blueprint-sync-directory-A',
+      forgedReceipt,
+      'C:/projects/A',
+    )).resolves.toMatchObject({ success: false })
+    expect(mocks.blueprintCompleteCharacterSync).not.toHaveBeenCalled()
   })
 
   it('rejects a matching path that omits the required project session context', async () => {
@@ -434,6 +473,38 @@ describe('database controller project context guard', () => {
     expect(mocks.blueprintUpsert).toHaveBeenCalledOnce()
     expect(mocks.blueprintDelete).toHaveBeenCalledOnce()
     expect(mocks.blueprintClearAll).toHaveBeenCalledOnce()
+  })
+
+  it('returns the single range-commit readback receipt for the current project session', async () => {
+    const request = {
+      mode: 'replace-range' as const,
+      operationId: 'directory-run-A',
+      startChapter: 1,
+      endChapter: 1,
+      blueprints: [blueprint()],
+    }
+    const receipt = {
+      mode: request.mode,
+      operationId: request.operationId,
+      payloadHash: 'a'.repeat(64),
+      idempotent: false,
+      startChapter: 1,
+      endChapter: 1,
+      chapterNumbers: [1],
+      snapshot: request.blueprints,
+      characterSyncInput: request.blueprints,
+    }
+    mocks.blueprintCommitRange.mockReturnValueOnce(receipt)
+
+    const result = await handler('db:blueprint-commit-range')(
+      {},
+      request,
+      'C:/projects/A',
+    )
+
+    expect(result).toEqual({ success: true, receipt })
+    expect(mocks.blueprintCommitRange).toHaveBeenCalledOnce()
+    expect(mocks.blueprintCommitRange).toHaveBeenCalledWith(request)
   })
 
   it('keeps the same draft id isolated between project A and B and rejects a stale A write', async () => {

@@ -3,9 +3,7 @@ import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared
 
 export class OpenAIProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
-    // A number of OpenAI-compatible servers omit finish_reason entirely while
-    // still sending a normal [DONE] marker. Preserve that compatibility.
-    if (reason === undefined || reason === null || reason === 'stop') return 'stop'
+    if (reason === 'stop') return 'stop'
     if (reason === 'length') return 'length'
     if (reason === 'content_filter') return 'content_filter'
     return 'unknown'
@@ -94,7 +92,7 @@ export class OpenAIProvider implements ILLMProvider {
 
       if (!res.ok) {
         const text = await res.text()
-        return { success: false, content: '', error: `API 调用失败 (${res.status}): ${text}` }
+        return { success: false, content: '', finishReason: 'error', error: `API 调用失败 (${res.status}): ${text}` }
       }
 
       const data = await res.json() as {
@@ -107,21 +105,30 @@ export class OpenAIProvider implements ILLMProvider {
 
       const finalContent = this.stripThinking(data.choices?.[0]?.message?.content ?? '')
       const finishReason = this.normalizeFinishReason(data.choices?.[0]?.finish_reason)
-      const complete = finishReason === 'stop'
+      const usage = data.usage ? {
+        promptTokens: data.usage.prompt_tokens,
+        completionTokens: data.usage.completion_tokens,
+        totalTokens: data.usage.total_tokens,
+      } : undefined
+
+      if (finishReason === 'stop') {
+        return {
+          success: true,
+          content: finalContent,
+          finishReason,
+          usage,
+        }
+      }
 
       return {
-        success: complete,
+        success: false,
         content: finalContent,
         finishReason,
-        error: complete ? undefined : 'API 返回的文本未正常完成',
-        usage: data.usage ? {
-          promptTokens: data.usage.prompt_tokens,
-          completionTokens: data.usage.completion_tokens,
-          totalTokens: data.usage.total_tokens,
-        } : undefined,
+        error: 'API 返回的文本未正常完成',
+        usage,
       }
     } catch (error) {
-      return { success: false, content: '', error: String(error) }
+      return { success: false, content: '', finishReason: 'error', error: String(error) }
     }
   }
 
@@ -157,7 +164,7 @@ export class OpenAIProvider implements ILLMProvider {
       let isThinking = false
       let buffer = ''
       let sawDone = false
-      let finishReason: LLMFinishReason = 'stop'
+      let finishReason: LLMFinishReason = 'unknown'
       let usage: TokenUsage | undefined
 
       const processLine = (line: string) => {

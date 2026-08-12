@@ -154,7 +154,7 @@ describe('project custom prompt session ownership', () => {
       .toBe('override for lease-a-reopened')
   })
 
-  it('publishes no partial cache when one project prompt read fails', async () => {
+  it('isolates one damaged project prompt while publishing the remaining valid overrides', async () => {
     vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (
       session: ProjectSessionContext,
       channel: string,
@@ -188,9 +188,9 @@ describe('project custom prompt session ownership', () => {
       throw new Error(`unexpected channel: ${channel}`)
     }) as never)
 
-    await expect(loadProjectCustomPrompts(sessionA)).resolves.toBe(false)
+    await expect(loadProjectCustomPrompts(sessionA)).rejects.toThrow('next_chapter_draft.json')
 
-    expect(getPromptTemplate('first_chapter_draft', sessionA)?.content).not.toBe('partial override')
+    expect(getPromptTemplate('first_chapter_draft', sessionA)?.content).toBe('partial override')
     expect(ipc.invokeWithProjectSession).toHaveBeenCalledWith(
       sessionA,
       'fs:check-exists',
@@ -233,16 +233,20 @@ describe('project custom prompt session ownership', () => {
     expect(getPromptTemplate('first_chapter_draft', sessionA)?.content).not.toBe('old workflow override')
   })
 
-  it('requires every workflow prompt lookup to pass its frozen project session', () => {
+  it('requires every workflow prompt lookup to await catalog hydration with its frozen project session', () => {
     const workflowRoot = join(process.cwd(), 'src/services/workflows')
-    const unsafeLookups = sourceFilesAt(workflowRoot).flatMap((file) => {
+    const sourceFiles = sourceFilesAt(workflowRoot)
+    const unsafeLookups = sourceFiles.flatMap((file) => {
       const source = readFileSync(file, 'utf8')
-      return [...source.matchAll(/getPromptTemplate\(([^)]*)\)/g)]
-        .filter((match) => !match[1].includes('projectSession'))
+      return [...source.matchAll(/(?:getPromptTemplate|resolvePromptTemplate)\(([^)]*)\)/g)]
+        .filter((match) => !match[0].startsWith('resolvePromptTemplate') || !match[1].includes('projectSession'))
         .map((match) => `${file}:${source.slice(0, match.index).split('\n').length}`)
     })
 
     expect(unsafeLookups).toEqual([])
+    expect(sourceFiles.some((file) => (
+      readFileSync(file, 'utf8').includes('await resolvePromptTemplate(')
+    ))).toBe(true)
   })
 
   it('reloads Prompt settings by full project identity and gates async UI completion', () => {
@@ -254,7 +258,7 @@ describe('project custom prompt session ownership', () => {
     expect(source).toContain('captureProjectSession({ id: projectId, path: projectPath, sessionLease: projectLease })')
     expect(source).toContain('loadProjectCustomPrompts(session)')
     expect(source).toContain('isProjectSessionCurrent(session)')
-    expect(source).toContain('[projectId, projectLease, projectPath]')
+    expect(source).toContain('[projectId, projectLease, projectPath, text]')
     expect(source).toContain('getPromptTemplate(builtinTemplate.key, projectSession ?? undefined)')
     expect(source).toContain('getPromptSource(builtinTemplate.key, projectSession ?? undefined)')
   })

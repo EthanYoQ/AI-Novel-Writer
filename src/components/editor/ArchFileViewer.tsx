@@ -11,7 +11,7 @@ import { parseCoreField } from '../../services/vela-protocol'
 import CodeMirrorEditor from './CodeMirrorEditor'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
-import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
+import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
 import {
@@ -340,15 +340,14 @@ function ArchFileViewerSession({
   const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
-      return
+      throw new Error('项目会话已切换，未启动架构生成')
     }
-    if (!isProjectSessionCurrent(projectSession)) return
-    useWorkflowStore.getState().startWorkflow(createArchitectureWorkflow({
-      projectPath: projectSession.projectPath,
-      projectSession,
+    if (!isProjectSessionCurrent(projectSession)) throw new Error('项目会话已切换，未启动架构生成')
+    await launchCreativeWorkflow({
+      workflow: 'generate_architecture',
       selectedSteps,
       stepGuidance,
-    }))
+    }, projectSession)
   }
 
   const handleOpenDialog = async () => {

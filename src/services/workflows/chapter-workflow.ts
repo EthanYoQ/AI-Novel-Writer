@@ -359,17 +359,16 @@ export function createRepairFinalizeWorkflow(
             if (bp?.title) chapterTitle = bp.title
           } catch { /* 蓝图读取失败时使用默认标题 */ }
 
-          // 构建后处理步骤并以修复模式执行（跳过已成功的步骤）
-          const { buildFinalizePostProcessSteps } = await import('./commands/finalize-chapter.command')
-          const { runPostProcessPipeline, getChapterFinalizeScope } = await import('./workflow-utils')
-          const scope = getChapterFinalizeScope(chapterNumber)
-          const steps = buildFinalizePostProcessSteps(project, chapterNumber, chapterTitle, full.content)
-
-          await runPostProcessPipeline(project.path, scope, `第${chapterNumber}章定稿`, steps, callbacks, {
+          // 修复运行也冻结一次模型租约，全部 LLM 后处理共享一个预算。
+          const { RunFinalizePostProcessCommand } = await import('./commands/finalize-chapter.command')
+          await new RunFinalizePostProcessCommand({
+            project,
+            chapterNumber,
+            chapterTitle,
+            draftContent: full.content,
+            sourceLabel: `第${chapterNumber}章定稿`,
             onlyFailed: true,
-            cancellation: context,
-            projectSession,
-          })
+          }).execute({ step: {}, context, callbacks })
 
           // 后处理修复不会产生新定稿快照，只请求项目资源刷新。
           const { globalEventBus } = await import('../../shared/event-bus')

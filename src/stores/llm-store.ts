@@ -9,7 +9,7 @@ import { useProjectStore } from './project-store'
 /** 流式生成的回调 */
 interface StreamCallbacks {
   onChunk?: (chunk: string) => void
-  onDone?: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => void
+  onDone?: (fullText: string, usage: TokenUsage | undefined, finishReason: LLMFinishReason) => void
   onError?: (error: string) => void
 }
 
@@ -42,14 +42,14 @@ interface LLMState {
   generate: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     modelId?: string,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext }
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext; modelExecutionLeaseId?: string }
   ) => Promise<LLMResponse>
   /** 流式生成 */
   generateStream: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     callbacks: StreamCallbacks,
     modelId?: string,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext }
+    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext; modelExecutionLeaseId?: string }
   ) => Promise<string>
   /** 取消生成 */
   cancelGeneration: (requestId: string) => Promise<void>
@@ -136,7 +136,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
 
   generate: async (messages, modelId, options) => {
     const mid = modelId ?? get().defaultModelId
-    if (!mid) return { success: false, content: '', error: '未配置默认模型' }
+    if (!mid) return { success: false, content: '', finishReason: 'error', error: '未配置默认模型' }
     const projectSession = options?.projectSession
       ?? projectSessionContextFromProject(useProjectStore.getState().currentProject)
       ?? undefined
@@ -144,6 +144,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
       modelId: mid,
       purpose: options?.purpose ?? 'generation',
       projectSession,
+      modelExecutionLeaseId: options?.modelExecutionLeaseId,
       messages,
       responseFormat: options?.responseFormat as { type: 'json_object' | 'text' } | undefined,
       thinking: options?.thinking,
@@ -173,7 +174,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
 
     const unsubDone = ipc.on('llm:stream-done', (data) => {
       if (data.requestId === requestId) {
-        callbacks.onDone?.(data.fullText, data.usage, data.finishReason)
+        callbacks.onDone?.(data.fullText, data.usage, data.finishReason ?? 'unknown')
         cleanup()
       }
     })
@@ -200,12 +201,13 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     set({ activeRequests: reqs })
 
     // 发起流式请求
-    let started: { requestId: string; started: boolean }
+    let started: { requestId: string; started: boolean; error?: string }
     try {
       started = await ipc.invoke('llm:generate-stream', requestId, {
         modelId: mid,
         purpose: options?.purpose ?? 'generation',
         projectSession,
+        modelExecutionLeaseId: options?.modelExecutionLeaseId,
         messages,
         stream: true,
         responseFormat: options?.responseFormat as { type: 'json_object' | 'text' } | undefined,
@@ -219,8 +221,9 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     }
     if (!started.started) {
       cleanup()
-      callbacks.onError?.('模型流式生成未能启动')
-      throw new Error('模型流式生成未能启动')
+      const startError = started.error || '模型流式生成未能启动'
+      callbacks.onError?.(startError)
+      throw new Error(startError)
     }
 
     return requestId

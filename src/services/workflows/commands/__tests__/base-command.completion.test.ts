@@ -1,51 +1,72 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { useLLMStore } from '../../../../stores/llm-store'
+import type { ModelExecutionLeaseReceipt } from '../../../../shared/ipc-channels'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
-import { BaseWorkflowCommand, type CommandExecuteParams } from '../base-command'
+import {
+  createGenerationRuntime,
+  type CreateGenerationRuntimeOptions,
+  type GenerationRuntime,
+  type GenerationRuntimeEnvironment,
+} from '../../../generation/generation-runtime'
+import {
+  BaseWorkflowCommand,
+  WORKFLOW_GENERATION_BUDGETS,
+  type CommandExecuteParams,
+  type WorkflowGenerationRuntimeDependencies,
+} from '../base-command'
 
-type GenerateStreamArguments = Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>
+type ProbeStep =
+  | { kind: 'single' }
+  | { kind: 'bounded'; contaminateOptions?: boolean }
+  | { kind: 'exhaust'; commit: () => void }
 
-class CompletionProbeCommand extends BaseWorkflowCommand {
+class CompletionProbeCommand extends BaseWorkflowCommand<string> {
+  constructor(dependencies: WorkflowGenerationRuntimeDependencies) {
+    super(dependencies)
+  }
+
   async execute(params: CommandExecuteParams): Promise<string> {
-    void params
-    return ''
-  }
+    const step = params.step as ProbeStep
+    return this.executeWithGenerationRuntime('structured', params, async () => {
+      if (step.kind === 'single') {
+        return this.callLLM(
+          '普通 JSON 工作流',
+          'system',
+          params.callbacks,
+          { responseFormat: { type: 'json_object' } },
+          params.context,
+        )
+      }
+      if (step.kind === 'bounded') {
+        const options = step.contaminateOptions
+          ? ({
+              responseFormat: { type: 'json_object' },
+              temperature: 0.01,
+              maxTokens: 999_999,
+            } as unknown as { responseFormat: { type: string } })
+          : { responseFormat: { type: 'json_object' } }
+        return this.callLLMWithBoundedCompletion(
+          '返回目录 JSON',
+          'system',
+          params.callbacks,
+          { mode: 'replace-structured-output', maxContinuations: 2 },
+          options,
+          params.context,
+        )
+      }
 
-  run(callbacks: StepCallbacks, context: WorkflowContext): Promise<string> {
-    return this.callLLM(
-      '普通 JSON 工作流',
-      'system',
-      callbacks,
-      { responseFormat: { type: 'json_object' } },
-      context,
-    )
-  }
-
-  runStructuredBatch(callbacks: StepCallbacks, context: WorkflowContext): Promise<string> {
-    return this.callLLMWithBoundedCompletion(
-      '返回目录 JSON',
-      'system',
-      callbacks,
-      { mode: 'replace-structured-output', maxContinuations: 2 },
-      { responseFormat: { type: 'json_object' } },
-      context,
-    )
-  }
-
-  runStructuredBatchWithForgedRequestTemperature(callbacks: StepCallbacks, context: WorkflowContext): Promise<string> {
-    const contaminatedOptions = {
-      responseFormat: { type: 'json_object' },
-      temperature: 0.01,
-    } as unknown as { responseFormat: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string }
-    return this.callLLMWithBoundedCompletion(
-      '返回目录 JSON',
-      'system',
-      callbacks,
-      { mode: 'replace-structured-output', maxContinuations: 2 },
-      contaminatedOptions,
-      context,
-    )
+      for (let index = 0; index <= WORKFLOW_GENERATION_BUDGETS.structured.maxAttempts; index += 1) {
+        await this.callLLM(
+          `structured request ${index}`,
+          'system',
+          params.callbacks,
+          { responseFormat: { type: 'json_object' } },
+          params.context,
+        )
+      }
+      step.commit()
+      return 'committed'
+    })
   }
 }
 
@@ -63,94 +84,144 @@ const callbacks: StepCallbacks = {
   appendText: vi.fn(),
 }
 
+function leaseReceipt(overrides: Partial<ModelExecutionLeaseReceipt> = {}): ModelExecutionLeaseReceipt {
+  return {
+    leaseId: 'workflow-lease-a',
+    modelId: 'model-a',
+    provider: 'custom',
+    protocol: 'openai',
+    modelName: 'unknown-model',
+    modelRevision: 'a'.repeat(64),
+    endpointFingerprint: 'b'.repeat(64),
+    capabilityEvidence: {
+      source: {
+        contextWindowTokens: 'unknown',
+        maxOutputTokens: 'user-operational-cap',
+        featureFlags: 'unknown',
+      },
+      subjectFingerprint: 'c'.repeat(64),
+      contextWindowTokens: null,
+      maxOutputTokens: 2048,
+      reasoning: null,
+      structuredOutput: true,
+      usage: null,
+    },
+    createdAt: 1000,
+    expiresAt: 61_000,
+    ...overrides,
+  }
+}
+
+function dependenciesFor(environment: GenerationRuntimeEnvironment): WorkflowGenerationRuntimeDependencies {
+  return {
+    createRuntime: (options: CreateGenerationRuntimeOptions): Promise<GenerationRuntime> => (
+      createGenerationRuntime(options, environment)
+    ),
+  }
+}
+
 describe('BaseWorkflowCommand completion boundary', () => {
   afterEach(() => {
     vi.restoreAllMocks()
-    useLLMStore.setState({ defaultModelId: null, models: [] })
   })
 
-  it('keeps ordinary callLLM fail-closed after a single length completion even with JSON responseFormat', async () => {
-    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
-      streamCallbacks.onDone?.('半截结果', undefined, 'length')
-      return `request-${generateStream.mock.calls.length}`
-    })
-    useLLMStore.setState({
-      defaultModelId: 'model',
-      generateStream,
-    })
-
-    await expect(new CompletionProbeCommand().run(callbacks, context))
-      .rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
-    expect(generateStream).toHaveBeenCalledTimes(1)
-  })
-
-  it('requires the explicit bounded-completion seam before retrying a structured batch', async () => {
-    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
-      const callNumber = generateStream.mock.calls.length
-      streamCallbacks.onDone?.(
-        callNumber === 1 ? '{"blueprints":[' : '{"blueprints":[]}',
-        undefined,
-        callNumber === 1 ? 'length' : 'stop',
-      )
-      return `request-${callNumber}`
-    })
-    useLLMStore.setState({
-      defaultModelId: 'model',
-      generateStream,
-      models: [{
-        id: 'model',
-        name: 'Probe',
-        provider: 'custom',
-        protocol: 'openai',
-        modelName: 'probe',
-        apiKey: '',
-        baseUrl: 'https://example.invalid',
-        temperature: 0.7,
-        maxTokens: 4096,
-        purposes: ['generation'],
-        capabilities: {
-          contextWindowTokens: 8192,
-          maxOutputTokens: 4096,
-          reasoning: false,
-          structuredOutput: true,
-          usage: false,
-        },
-      }],
-    })
-
-    await expect(new CompletionProbeCommand().runStructuredBatch(callbacks, context))
-      .resolves.toBe('{"blueprints":[]}')
-    expect(generateStream).toHaveBeenCalledTimes(2)
-  })
-
-  it('does not forward a forged request-level temperature through either bounded completion attempt', async () => {
-    const generateStream = vi.fn(async (
-      _messages: GenerateStreamArguments[0],
-      streamCallbacks: GenerateStreamArguments[1],
-      _modelId?: GenerateStreamArguments[2],
-      _options?: GenerateStreamArguments[3],
-    ) => {
-      void _modelId
-      void _options
-      const callNumber = generateStream.mock.calls.length
-      streamCallbacks.onDone?.(
-        callNumber === 1 ? '{"blueprints":[' : '{"blueprints":[]}',
-        undefined,
-        callNumber === 1 ? 'length' : 'stop',
-      )
-      return `request-${callNumber}`
-    })
-    useLLMStore.setState({
-      defaultModelId: 'model',
-      generateStream,
-    })
-
-    await expect(new CompletionProbeCommand().runStructuredBatchWithForgedRequestTemperature(callbacks, context))
-      .resolves.toBe('{"blueprints":[]}')
-
-    expect(generateStream).toHaveBeenCalledTimes(2)
-    for (const call of generateStream.mock.calls) {
-      expect(call[3]).not.toHaveProperty('temperature')
+  it('keeps ordinary generation single-shot and fail-closed while an unknown model uses its leased cap', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '半截结果', finishReason: 'length' })
+    const environment: GenerationRuntimeEnvironment = {
+      snapshotDefaultModelId: () => 'model-a',
+      beginModelExecution: vi.fn().mockResolvedValue(leaseReceipt()),
+      completeWithLease,
+      closeModelExecution: vi.fn().mockResolvedValue(undefined),
     }
+
+    await expect(new CompletionProbeCommand(dependenciesFor(environment)).execute({
+      step: { kind: 'single' } satisfies ProbeStep,
+      context,
+      callbacks,
+    })).rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
+
+    expect(completeWithLease).toHaveBeenCalledOnce()
+    expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(2048)
+  })
+
+  it('shares one frozen lease and budget across a structured continuation after the default changes', async () => {
+    let defaultModelId: string | null = 'model-a'
+    const beginModelExecution = vi.fn<GenerationRuntimeEnvironment['beginModelExecution']>()
+      .mockResolvedValue(leaseReceipt())
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockImplementation(async () => {
+        const call = completeWithLease.mock.calls.length
+        defaultModelId = 'model-b'
+        return call === 1
+          ? { content: '{"blueprints":[', finishReason: 'length' }
+          : { content: '{"blueprints":[]}', finishReason: 'stop' }
+      })
+    const closeModelExecution = vi.fn<GenerationRuntimeEnvironment['closeModelExecution']>()
+      .mockResolvedValue(undefined)
+    const environment: GenerationRuntimeEnvironment = {
+      snapshotDefaultModelId: () => defaultModelId,
+      beginModelExecution,
+      completeWithLease,
+      closeModelExecution,
+    }
+
+    await expect(new CompletionProbeCommand(dependenciesFor(environment)).execute({
+      step: { kind: 'bounded' } satisfies ProbeStep,
+      context,
+      callbacks,
+    })).resolves.toBe('{"blueprints":[]}')
+
+    expect(beginModelExecution).toHaveBeenCalledOnce()
+    expect(beginModelExecution).toHaveBeenCalledWith('model-a')
+    expect(completeWithLease).toHaveBeenCalledTimes(2)
+    expect(completeWithLease.mock.calls.map(([request]) => request.leaseId))
+      .toEqual(['workflow-lease-a', 'workflow-lease-a'])
+    expect(closeModelExecution).toHaveBeenCalledOnce()
+  })
+
+  it('ignores forged physical request controls at the semantic command boundary', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValueOnce({ content: '{"blueprints":[', finishReason: 'length' })
+      .mockResolvedValueOnce({ content: '{"blueprints":[]}', finishReason: 'stop' })
+    const environment: GenerationRuntimeEnvironment = {
+      snapshotDefaultModelId: () => 'model-a',
+      beginModelExecution: vi.fn().mockResolvedValue(leaseReceipt()),
+      completeWithLease,
+      closeModelExecution: vi.fn().mockResolvedValue(undefined),
+    }
+
+    await new CompletionProbeCommand(dependenciesFor(environment)).execute({
+      step: { kind: 'bounded', contaminateOptions: true } satisfies ProbeStep,
+      context,
+      callbacks,
+    })
+
+    for (const [request] of completeWithLease.mock.calls) {
+      expect(request.plan.maxOutputTokens).toBe(2048)
+      expect(request).not.toHaveProperty('temperature')
+      expect(request).not.toHaveProperty('maxTokens')
+    }
+  })
+
+  it('exhausts the shared command budget before the domain commit callback', async () => {
+    const commit = vi.fn()
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '{"ok":true}', finishReason: 'stop' })
+    const environment: GenerationRuntimeEnvironment = {
+      snapshotDefaultModelId: () => 'model-a',
+      beginModelExecution: vi.fn().mockResolvedValue(leaseReceipt()),
+      completeWithLease,
+      closeModelExecution: vi.fn().mockResolvedValue(undefined),
+    }
+
+    await expect(new CompletionProbeCommand(dependenciesFor(environment)).execute({
+      step: { kind: 'exhaust', commit } satisfies ProbeStep,
+      context,
+      callbacks,
+    })).rejects.toMatchObject({ code: 'ATTEMPT_BUDGET_EXHAUSTED' })
+
+    expect(completeWithLease).toHaveBeenCalledTimes(WORKFLOW_GENERATION_BUDGETS.structured.maxAttempts)
+    expect(commit).not.toHaveBeenCalled()
   })
 })

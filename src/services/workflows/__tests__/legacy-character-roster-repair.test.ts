@@ -84,10 +84,38 @@ function activeProject() {
   }
 }
 
-function installVela(invoke: ReturnType<typeof vi.fn>) {
+function installVela(invoke: (channel: string, ...args: unknown[]) => unknown) {
+  const lease = {
+    leaseId: 'legacy-model-lease',
+    modelId: 'legacy-repair-model',
+    provider: 'custom',
+    protocol: 'openai',
+    modelName: 'legacy-repair-model',
+    modelRevision: 'a'.repeat(64),
+    endpointFingerprint: 'b'.repeat(64),
+    capabilityEvidence: {
+      source: {
+        contextWindowTokens: 'unknown',
+        maxOutputTokens: 'user-operational-cap',
+        featureFlags: 'unknown',
+      },
+      subjectFingerprint: 'c'.repeat(64),
+      contextWindowTokens: null,
+      maxOutputTokens: 8192,
+      reasoning: null,
+      structuredOutput: true,
+      usage: null,
+    },
+    createdAt: 1000,
+    expiresAt: 61_000,
+  }
   vi.stubGlobal('window', {
     velaAPI: {
-      invoke,
+      invoke: vi.fn((channel: string, ...args: unknown[]) => {
+        if (channel === 'llm:begin-execution-lease') return Promise.resolve({ success: true, lease })
+        if (channel === 'llm:close-execution-lease') return Promise.resolve({ success: true })
+        return invoke(channel, ...args)
+      }),
       on: vi.fn(),
       once: vi.fn(),
       send: vi.fn(),

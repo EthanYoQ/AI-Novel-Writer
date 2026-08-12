@@ -7,6 +7,7 @@ import { EditorState } from '@codemirror/state'
 import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
 import { Sparkles, Bold, Check } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { createGenerationRuntime } from '../../services/generation/generation-runtime'
 
 /** 统计字数（简单字符数统计，包含空格换行等格式符） */
 function countWords(text: string): number {
@@ -31,6 +32,13 @@ const AI_ACTIONS = [
   { key: 'continue', label: '续写', color: 'text-purple-400', prompt: '根据上下文，合理续写接下来的情节。' },
   { key: 'dialogue', label: '对话', color: 'text-emerald-400', prompt: '将这部分改写为更生动传神的对话形式。' },
 ]
+
+const EDITOR_AI_GENERATION_BUDGET = Object.freeze({
+  maxAttempts: 1,
+  maxRequestedOutputTokens: 4096,
+  maxRequestedOutputTokensPerAttempt: 4096,
+  deadlineMs: 120_000,
+})
 
 export default function CodeMirrorEditor({
   content,
@@ -67,6 +75,7 @@ export default function CodeMirrorEditor({
   const [bubbleOpen, setBubbleOpen] = useState(false)
   const [bubblePos, setBubblePos] = useState({ top: 0, left: 0 })
   const [aiResult, setAiResult] = useState<string | null>(null)
+  const [aiError, setAiError] = useState<string | null>(null)
   const [activeAIAction, setActiveAIAction] = useState<string | null>(null)
   const [loadingDots, setLoadingDots] = useState('.')
   const [selectionRange, setSelectionRange] = useState<{ from: number, to: number } | null>(null)
@@ -246,34 +255,37 @@ export default function CodeMirrorEditor({
 
   // AI 菜单处理（流式调用，实时显示生成内容）
   const handleAIAction = async (prompt: string, _actionKey: string) => {
+    let runtime: Awaited<ReturnType<typeof createGenerationRuntime>> | null = null
     try {
       if (!selectionRange || !editorRef.current?.view) return
       const view = editorRef.current.view
       const selectedText = view.state.sliceDoc(selectionRange.from, selectionRange.to)
 
-      const { useLLMStore } = await import('../../stores/llm-store')
-
-      // 初始化流式内容
       setActiveAIAction(AI_ACTIONS.find(a => a.key === _actionKey)?.label || 'AI')
       setAiResult('')
+      setAiError(null)
 
-      await useLLMStore.getState().generateStream(
-        [
+      runtime = await createGenerationRuntime({ budget: EDITOR_AI_GENERATION_BUDGET })
+      const outcome = await runtime.execute(({ session }) => session.complete({
+        purpose: `editor-ai-${_actionKey}`,
+        output: 'visible-text',
+        messages: [
           { role: 'system', content: '你是一个专业的小说编辑，请根据要求对文本进行处理，只返回处理后的文本，不要有任何解释。' },
           { role: 'user', content: `要求：${prompt}\n\n文本：\n${selectedText}` },
         ],
-        {
-          onChunk: (chunk) => {
-            setAiResult(prev => (prev ?? '') + chunk)
-          },
-          onError: () => {
-            setAiResult('生成失败')
-          },
-        }
-      )
+      }))
+      if (outcome.status !== 'completed' || outcome.finishReason !== 'stop') {
+        setAiResult('')
+        setAiError('生成未完整完成，结果不可应用')
+        return
+      }
+      setAiResult(outcome.content)
     } catch (e) {
       console.error(e)
-      setAiResult('生成失败')
+      setAiResult('')
+      setAiError('生成失败，结果不可应用')
+    } finally {
+      await runtime?.close().catch(() => {})
     }
   }
 
@@ -290,6 +302,7 @@ export default function CodeMirrorEditor({
 
   const handleRejectAI = () => {
     setAiResult(null)
+    setAiError(null)
     setBubbleOpen(false)
   }
 
@@ -373,7 +386,14 @@ export default function CodeMirrorEditor({
                 <Sparkles size={11} style={{ color: 'var(--color-accent)' }} /> {activeAIAction ? `${activeAIAction}预览` : 'AI 预览'}
               </div>
               {/* 流式输入中显示动态内容 */}
-              {aiResult === '' ? (
+              {aiError ? (
+                <div
+                  className="text-xs leading-relaxed mb-3"
+                  style={{ color: 'var(--color-danger, #dc2626)' }}
+                >
+                  {aiError}
+                </div>
+              ) : aiResult === '' ? (
                 <div
                   className="text-xs leading-relaxed mb-3"
                   style={{ color: 'var(--color-text-muted)' }}
@@ -401,7 +421,7 @@ export default function CodeMirrorEditor({
                   style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
                   onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
                   onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-                  disabled={aiResult === ''}
+                  disabled={aiResult === '' || aiError !== null}
                   onClick={handleAcceptAI}
                 ><Check size={12} aria-hidden="true" />替换</button>
               </div>

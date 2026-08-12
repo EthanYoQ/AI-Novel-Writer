@@ -141,7 +141,8 @@ export const ipc = {
 
   /** 是否在 Electron 环境中 */
   get isElectron(): boolean {
-    return !!(window as unknown as { velaAPI: VelaAPI }).velaAPI
+    return typeof window !== 'undefined'
+      && !!(window as unknown as { velaAPI: VelaAPI }).velaAPI
   },
 
   /** 设置窗口缩放级别 */

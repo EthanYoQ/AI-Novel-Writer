@@ -7,9 +7,9 @@
  * 3. InferBlueprintsPerChapterCommand — 按章逐一推演精准蓝图 + 蓝图入向量库 + 拼装轻量全局摘要
  */
 
-import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
+import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { getPromptTemplate } from '../../prompt-templates'
+import { resolvePromptTemplate } from '../../prompt-templates'
 import { ImportPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
@@ -18,6 +18,14 @@ import { normalizeCharacterCardsForPersistence } from '../character-card-normali
 import { characterRosterEntriesFromCards } from '../../character-roster-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
+import type { ChapterBlueprint } from '../directory-workflow'
+import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
+import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
+import {
+  decodeBlueprintSemanticPayload,
+  validateBlueprintSemanticItem,
+} from '../../../shared/blueprint-semantic-contract'
 
 /** 拆分后的章节数据（从 context.data 中传递） */
 export interface ImportedChapter {
@@ -25,6 +33,19 @@ export interface ImportedChapter {
   title: string
   content: string
   wordCount: number
+}
+
+export class ImportBlueprintPostCommitSyncError extends Error {
+  readonly retryOperationId: string
+
+  constructor(readonly commitReceipt: BlueprintRangeCommitReceipt) {
+    super(
+      `导入蓝图已提交（第 ${commitReceipt.startChapter}–${commitReceipt.endChapter} 章），`
+      + '但角色候选同步失败；可使用同步操作回执安全重试，无需重新生成蓝图。',
+    )
+    this.name = 'ImportBlueprintPostCommitSyncError'
+    this.retryOperationId = commitReceipt.characterSyncOperation.operationId
+  }
 }
 
 // =================================================================
@@ -119,7 +140,15 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
 // =================================================================
 
 export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
+  constructor(generationDependencies?: WorkflowGenerationRuntimeDependencies) {
+    super(generationDependencies)
+  }
+
+  async execute(params: CommandExecuteParams): Promise<void> {
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
@@ -172,8 +201,8 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
     // ===== 构建 Prompt =====
     // 优先使用向量增强版 Prompt
-    const template = getPromptTemplate('infer_novel_config_with_vectors', projectSession)
-      || getPromptTemplate('infer_novel_config', projectSession)
+    const template = await resolvePromptTemplate('infer_novel_config_with_vectors', projectSession)
+      || await resolvePromptTemplate('infer_novel_config', projectSession)
     if (!template) throw new Error('未找到推演 Prompt 模板')
 
     const firstChapter = chapters[0]?.content?.slice(0, 3000) || '（第一章内容不可用）'
@@ -320,10 +349,18 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 // =================================================================
 
 export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> {
-  /** 最大并发数，防止触发模型提供商 Rate Limit */
-  private static readonly CONCURRENCY_LIMIT = 3
+  private static readonly MAX_CHAPTERS_PER_OPERATION = 50
+  private static readonly MAX_ITEMS_PER_BATCH = 5
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
+  constructor(generationDependencies?: WorkflowGenerationRuntimeDependencies) {
+    super(generationDependencies)
+  }
+
+  async execute(params: CommandExecuteParams): Promise<void> {
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
@@ -335,112 +372,115 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     const configSummary = (context.data.novelConfigSummary as string) || '（配置概要不可用）'
     if (!chapters || chapters.length === 0) throw new Error('无章节数据')
 
-    const template = getPromptTemplate('infer_single_chapter_blueprint', projectSession)
+    const template = await resolvePromptTemplate('infer_single_chapter_blueprint', projectSession)
     if (!template) throw new Error('未找到单章蓝图推演 Prompt 模板')
 
-    callbacks.log(`开始逐章推演蓝图（共 ${chapters.length} 章，并发限制 ${InferBlueprintsPerChapterCommand.CONCURRENCY_LIMIT}）...`)
-    callbacks.setProgress(5)
-
-    let completedCount = 0
-    let failedCount = 0
-    const errors: string[] = []
-
-    // 限流并发执行器
-    const runWithConcurrency = async (tasks: (() => Promise<void>)[], limit: number) => {
-      const executing = new Set<Promise<void>>()
-      let schedulingError: unknown
-      try {
-        for (const task of tasks) {
-          this.assertNotCancelled(context)
-          const p = task().finally(() => { executing.delete(p) })
-          executing.add(p)
-          if (executing.size >= limit) {
-            await Promise.race(executing)
-          }
-        }
-      } catch (error) {
-        schedulingError = error
-      }
-      await Promise.allSettled(Array.from(executing))
-      if (schedulingError) throw schedulingError
+    if (chapters.length > InferBlueprintsPerChapterCommand.MAX_CHAPTERS_PER_OPERATION) {
+      throw new Error(
+        `本次导入需推演 ${chapters.length} 章蓝图，超过单次 ${InferBlueprintsPerChapterCommand.MAX_CHAPTERS_PER_OPERATION} 章的安全成本上限；`
+        + `请按连续章节分段，每段不超过 ${InferBlueprintsPerChapterCommand.MAX_CHAPTERS_PER_OPERATION} 章。`,
+      )
+    }
+    const orderedChapters = [...chapters].sort((left, right) => left.number - right.number)
+    const startChapter = orderedChapters[0]?.number
+    const endChapter = orderedChapters.at(-1)?.number
+    if (
+      startChapter === undefined
+      || endChapter === undefined
+      || orderedChapters.some((chapter, index) => chapter.number !== startChapter + index)
+    ) {
+      throw new Error('导入蓝图只能按连续章节范围生成；请先补齐缺失章节或拆分为连续范围。')
     }
 
-    const tasks = chapters.map((ch) => async () => {
-      try {
-        this.assertNotCancelled(context)
+    callbacks.log(
+      `开始分批推演蓝图（共 ${chapters.length} 章，预计至多 ${Math.ceil(chapters.length / InferBlueprintsPerChapterCommand.MAX_ITEMS_PER_BATCH)} 次调用）...`,
+    )
+    callbacks.setProgress(5)
+
+    let activeChapterNumbers: number[] = []
+    const contract: StructuredBatchContract<ImportedChapter, ChapterBlueprint> = {
+      buildTask: ({ items, validatedPrefix }) => {
+        activeChapterNumbers = items.map(item => item.number)
+        const source = items.map(chapter => (
+          `【第${chapter.number}章 ${chapter.title || '无标题'}】\n${chapter.content.slice(0, 6000)}`
+        )).join('\n\n')
+        const prior = validatedPrefix.slice(-10)
+          .map(item => `第${item.chapterNumber}章 ${item.title}：${item.keyEvents}`)
+          .join('\n') || '（无）'
         const prompt = new ImportPromptBuilder(template)
-          .withChapterContent(ch.content.slice(0, 6000)) // 限制单章 Prompt 长度
-          .withChapterNumber(ch.number)
-          .withChapterTitle(ch.title)
-          .withNovelConfigSummary(configSummary)
+          .withChapterContent(source)
+          .withChapterNumber(items[0]?.number ?? 1)
+          .withChapterTitle(items.map(item => item.title).filter(Boolean).join('、'))
+          .withNovelConfigSummary(`${configSummary}\n\n【已验证前缀】\n${prior}`)
           .build()
-
-        const rawResult = await this.callLLM(
-          prompt,
-          template.systemRole || '你是一位专业的网文结构分析师。',
-          callbacks,
-          { responseFormat: { type: 'json_object' } },
-          context,
-        )
-        this.assertNotCancelled(context)
-
-        const blueprint = this.parseJSON<Record<string, unknown>>(rawResult)
-
-        // 确保必要字段
-        const finalBlueprint = {
-          chapterNumber: ch.number,
-          title: (blueprint.title as string) || ch.title,
-          role: (blueprint.role as string) || '发展',
-          purpose: (blueprint.purpose as string) || '',
-          keyEvents: (blueprint.keyEvents as string) || '',
-          characters: Array.isArray(blueprint.characters) ? blueprint.characters as string[] : [],
-          suspenseHook: (blueprint.suspenseHook as string) || '',
+          + `\n\n【结构化批次合同】\n只输出 JSON 对象 {"blueprints":[...]}。必须恰好覆盖章节号：${activeChapterNumbers.join('、')}；`
+          + '每项包含 chapterNumber、title、role、purpose、keyEvents、characters、relationshipHints（无关系时为空数组）、suspenseHook。不得缺项、重复或输出范围外章节。'
+        callbacks.log(`  正在推演第 ${activeChapterNumbers[0]}–${activeChapterNumbers.at(-1)} 章...`)
+        callbacks.setProgress(5 + Math.round((validatedPrefix.length / orderedChapters.length) * 80))
+        return {
+          purpose: 'import-chapter-blueprints',
+          output: 'structured-data',
+          messages: [
+            { role: 'system', content: template.systemRole || '你是一位专业的网文结构分析师。' },
+            { role: 'user', content: prompt },
+          ],
+        }
+      },
+      inputKey: chapter => chapter.number,
+      outputKey: blueprint => blueprint.chapterNumber,
+      decode: content => decodeBlueprintSemanticPayload(JSON.parse(content), activeChapterNumbers)
+        .map(blueprint => ({
+          ...blueprint,
           userGuidance: '',
           notes: '',
           notesUpdatedAt: '',
-        }
-
-        this.assertNotCancelled(context)
-        const saveResult = await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:blueprint-upsert',
-          finalBlueprint,
-          context.projectPath,
-        )
-        if (!saveResult.success) {
-          throw new Error(saveResult.error || `第 ${ch.number} 章蓝图保存失败`)
-        }
-
-        completedCount++
-        callbacks.log(`  第 ${ch.number} 章蓝图已生成`)
-      } catch (err) {
-        if (context.cancelled) throw err
-        failedCount++
-        const message = err instanceof Error ? err.message : String(err)
-        errors.push(`第 ${ch.number} 章：${message}`)
-        callbacks.log(`  第 ${ch.number} 章蓝图生成失败: ${message}`)
-      }
-
-      // 更新进度
-      const total = chapters.length
-      const done = completedCount + failedCount
-      callbacks.setProgress(5 + Math.round((done / total) * 90))
-    })
-
-    await runWithConcurrency(tasks, InferBlueprintsPerChapterCommand.CONCURRENCY_LIMIT)
-
-    callbacks.log('\n蓝图推演完成')
-    callbacks.log(`成功: ${completedCount} 章 | 失败: ${failedCount} 章`)
-    callbacks.setProgress(85)
-
-    if (failedCount > 0) {
-      if (completedCount > 0) {
-        this.notifyRefresh(['fileTree', 'blueprints'], context.projectPath, requireWorkflowProjectSession(context))
-      }
-      throw new Error(`蓝图推演失败 ${failedCount} 章：${errors.slice(0, 3).join('；')}`)
+        })),
+      validateItem: validateBlueprintSemanticItem,
     }
 
+    const execution = this.requireGenerationExecution()
+    const batch = await createStructuredBatchExecutor({
+      contract,
+      session: execution.session,
+    }).execute({
+      items: orderedChapters,
+      limits: { maxBatchItems: InferBlueprintsPerChapterCommand.MAX_ITEMS_PER_BATCH },
+      signal: execution.signal,
+    })
+    if (!batch.ok) throw new Error(batch.failure.message)
+
+    this.assertNotCancelled(context)
+    const commit = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:blueprint-commit-range',
+      {
+        mode: 'replace-range',
+        operationId: `import-blueprints-${context.runId}-${startChapter}-${endChapter}`,
+        startChapter,
+        endChapter,
+        blueprints: [...batch.items],
+      },
+      context.projectPath,
+    )
+    if (!commit.success || !commit.receipt || commit.receipt.snapshot.length !== orderedChapters.length) {
+      throw new Error(commit.error || '导入蓝图未能作为完整范围一次提交并回读。')
+    }
+
+    const commitReceipt = commit.receipt
+    context.data.blueprintCommitReceipt = commitReceipt
+    try {
+      const syncReceipt = await retryDirectoryCharacterSync(
+        commitReceipt.characterSyncOperation.operationId,
+        context.projectPath,
+        projectSession,
+      )
+      context.data.blueprintCharacterSyncReceipt = syncReceipt
+    } catch {
+      throw new ImportBlueprintPostCommitSyncError(commitReceipt)
+    }
+
+    callbacks.log(`蓝图推演完成：${commitReceipt.snapshot.length} 章已一次提交`)
     callbacks.setProgress(100)
-    this.notifyRefresh(['fileTree', 'blueprints'], context.projectPath, requireWorkflowProjectSession(context))
+    this.notifyRefresh(['fileTree', 'blueprints'], context.projectPath, projectSession)
   }
 }

@@ -1,8 +1,16 @@
 import type { WorkflowContext, StepCallbacks } from '../../../stores/workflow-store'
-import { useLLMStore } from '../../../stores/llm-store'
 import { globalEventBus, EventPayloadMap } from '../../../shared/event-bus'
 import type { LLMFinishReason, ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { BasePromptBuilder } from '../../prompts/prompt-builder'
+import {
+  createGenerationRuntime,
+  type CreateGenerationRuntimeOptions,
+  type GenerationRuntime,
+} from '../../generation/generation-runtime'
+import type {
+  GenerationAttemptReceipt,
+  GenerationSession,
+} from '../../generation/generation-harness'
 import {
   completeBoundedCompletion,
   createBoundedCompletionError,
@@ -19,23 +27,61 @@ export interface CommandExecuteParams {
 export interface LLMCompletion {
   content: string
   finishReason: LLMFinishReason
+  receipt: GenerationAttemptReceipt
 }
 
 type WorkflowLLMOptions = {
   responseFormat?: { type: string }
-  thinking?: boolean
-  maxTokens?: number
   purpose?: string
 }
 
-function boundedCompletionOptions(options: WorkflowLLMOptions | undefined): WorkflowLLMOptions | undefined {
-  if (!options) return undefined
-  const { responseFormat, thinking, maxTokens, purpose } = options
+export type WorkflowGenerationIntent = 'structured' | 'text'
+
+/**
+ * Intent cost ceilings are product policy, never model profiles. The runtime
+ * still plans every physical request from the frozen lease capability receipt.
+ */
+export const WORKFLOW_GENERATION_BUDGETS = Object.freeze({
+  structured: Object.freeze({
+    maxAttempts: 16,
+    maxRequestedOutputTokens: 131_072,
+    maxRequestedOutputTokensPerAttempt: 8192,
+    deadlineMs: 10 * 60_000,
+  }),
+  text: Object.freeze({
+    maxAttempts: 8,
+    maxRequestedOutputTokens: 65_536,
+    maxRequestedOutputTokensPerAttempt: 8192,
+    deadlineMs: 20 * 60_000,
+  }),
+})
+
+export interface WorkflowGenerationRuntimeDependencies {
+  createRuntime(options: CreateGenerationRuntimeOptions): Promise<GenerationRuntime>
+}
+
+const DEFAULT_GENERATION_DEPENDENCIES: WorkflowGenerationRuntimeDependencies = {
+  createRuntime: options => createGenerationRuntime(options),
+}
+
+interface ActiveGenerationExecution {
+  context: WorkflowContext
+  session: GenerationSession
+  signal: AbortSignal
+}
+
+function observeWorkflowCancellation(context: WorkflowContext): {
+  signal: AbortSignal
+  dispose(): void
+} {
+  const controller = new AbortController()
+  const timer = setInterval(() => {
+    if (context.cancelled) controller.abort()
+  }, 25)
+  if (context.cancelled) controller.abort()
   return {
-    ...(responseFormat === undefined ? {} : { responseFormat }),
-    ...(thinking === undefined ? {} : { thinking }),
-    ...(maxTokens === undefined ? {} : { maxTokens }),
-    ...(purpose === undefined ? {} : { purpose }),
+    signal: controller.signal,
+    dispose: () => clearInterval(timer),
   }
 }
 
@@ -44,9 +90,63 @@ function boundedCompletionOptions(options: WorkflowLLMOptions | undefined): Work
  * 将原本混乱的 workflow 闭包拆分为可独立测试、状态解耦的命令单元。
  */
 export abstract class BaseWorkflowCommand<TResult = string> {
+  private readonly generationDependencies: WorkflowGenerationRuntimeDependencies
+  private activeGenerationExecution: ActiveGenerationExecution | null = null
+
+  constructor(
+    generationDependencies: WorkflowGenerationRuntimeDependencies = DEFAULT_GENERATION_DEPENDENCIES,
+  ) {
+    this.generationDependencies = generationDependencies
+  }
   
   /** 抽象执行入口 */
   abstract execute(params: CommandExecuteParams): Promise<TResult>
+
+  /**
+   * One command execute owns one immutable model lease, one attempt/token
+   * budget and one cancellation signal. Nested helpers consume this scope and
+   * cannot reopen or reselect a model.
+   */
+  protected async executeWithGenerationRuntime<T>(
+    intent: WorkflowGenerationIntent,
+    params: CommandExecuteParams,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (this.activeGenerationExecution) {
+      throw new Error('同一个工作流命令不能并发或嵌套启动生成运行时。')
+    }
+    this.assertNotCancelled(params.context)
+    const cancellation = observeWorkflowCancellation(params.context)
+    try {
+      const runtime = await this.generationDependencies.createRuntime({
+        budget: WORKFLOW_GENERATION_BUDGETS[intent],
+      })
+      return await runtime.execute(async ({ session }) => {
+        this.activeGenerationExecution = {
+          context: params.context,
+          session,
+          signal: cancellation.signal,
+        }
+        try {
+          this.assertNotCancelled(params.context)
+          return await operation()
+        } finally {
+          this.activeGenerationExecution = null
+        }
+      })
+    } finally {
+      cancellation.dispose()
+      this.activeGenerationExecution = null
+    }
+  }
+
+  /** Structured orchestrators may consume the same session; they cannot replace its budget. */
+  protected requireGenerationExecution(): Readonly<ActiveGenerationExecution> {
+    if (!this.activeGenerationExecution) {
+      throw new Error('生成调用必须位于命令执行期 GenerationRuntime 内。')
+    }
+    return this.activeGenerationExecution
+  }
 
   /** 获取 LLM 大模型连接代理（支持取消） */
   protected async callLLM(
@@ -75,25 +175,15 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     options?: WorkflowLLMOptions,
     context?: WorkflowContext,
   ): Promise<string> {
-    const requestOptions = boundedCompletionOptions(options)
-    const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, requestOptions, context)
-    const llmStore = useLLMStore.getState()
-    const model = llmStore.models.find(candidate => candidate.id === llmStore.defaultModelId)
+    const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
     return completeBoundedCompletion({
       initial: completion,
       mode: continuation.mode,
       maxContinuations: continuation.maxContinuations,
       originalPrompt: prompt,
       promptBudget: {
-        // Local model windows are not reliably declared by every endpoint, so
-        // retain the module's conservative unknown-context cap for them.
-        contextWindowTokens: model?.provider === 'ollama'
-          ? null
-          : (model?.capabilities?.contextWindowTokens ?? null),
-        maxOutputTokens: requestOptions?.maxTokens
-          ?? model?.capabilities?.maxOutputTokens
-          ?? model?.maxTokens
-          ?? null,
+        contextWindowTokens: completion.receipt.capabilities.contextWindowTokens,
+        maxOutputTokens: completion.receipt.budget.requestedOutputTokens,
         systemPromptChars: systemPrompt.length,
       },
       isCancelled: () => context?.cancelled === true,
@@ -102,7 +192,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
         continuationPrompt,
         systemPrompt,
         callbacks,
-        requestOptions,
+        options,
         context,
       ),
     })
@@ -121,83 +211,40 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     context?: WorkflowContext,
   ): Promise<LLMCompletion> {
     this.assertNotCancelled(context)
-    const llmStore = useLLMStore.getState()
-    if (!llmStore.defaultModelId) throw new Error('未配置默认 AI 模型')
-
+    const execution = this.requireGenerationExecution()
+    if (context && execution.context !== context) {
+      throw new Error('生成调用上下文与当前命令执行期不一致。')
+    }
     callbacks.setProgress(10)
-
-    return new Promise<LLMCompletion>((resolve, reject) => {
-      let fullContent = ''
-      let streamRequestId = ''
-
-      // 取消监听：轮询 context.cancelled，主动中断 LLM 流
-      let cancelCheckTimer: ReturnType<typeof setInterval> | null = null
-      if (context) {
-        cancelCheckTimer = setInterval(() => {
-          if (context.cancelled && streamRequestId) {
-            clearInterval(cancelCheckTimer!)
-            cancelCheckTimer = null
-            llmStore.cancelGeneration(streamRequestId).catch(() => {})
-            reject(new Error('工作流已取消'))
-          }
-        }, 200)
-      }
-
-      const cleanup = () => {
-        if (cancelCheckTimer) {
-          clearInterval(cancelCheckTimer)
-          cancelCheckTimer = null
-        }
-      }
-
-      llmStore.generateStream(
-        [
+    try {
+      const outcome = await execution.session.complete({
+        purpose: options?.purpose ?? 'workflow',
+        output: options?.responseFormat ? 'structured-data' : 'visible-text',
+        messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: prompt }
+          { role: 'user', content: prompt },
         ],
-        {
-          onChunk: (chunk) => {
-            // 取消后不再追加输出
-            if (context?.cancelled) return
-            fullContent += chunk
-            callbacks.appendText(chunk)
-          },
-          onDone: (text, _usage, finishReason) => {
-            cleanup()
-            // 取消后不 resolve，让 reject 生效
-            if (context?.cancelled) {
-              reject(new Error('工作流已取消'))
-              return
-            }
-            callbacks.setProgress(90)
-            const raw = text || fullContent
-            const cleaned = this.stripThinkingTags(raw)
-            resolve({ content: cleaned, finishReason: finishReason ?? 'stop' })
-          },
-          onError: (err) => {
-            cleanup()
-            reject(new Error(err || '流式生成失败'))
-          }
-        },
-        undefined,
-        {
-          ...options,
-          purpose: options?.purpose ?? 'workflow',
-          projectSession: context?.projectSession,
-        }
-      ).then(reqId => {
-        streamRequestId = reqId
-        // 如果在 generateStream 返回前已经取消
-        if (context?.cancelled) {
-          llmStore.cancelGeneration(reqId).catch(() => {})
-          cleanup()
-          reject(new Error('工作流已取消'))
-        }
-      }).catch(err => {
-        cleanup()
-        reject(err)
-      })
-    })
+      }, { signal: execution.signal })
+      this.assertNotCancelled(context)
+      const content = this.stripThinkingTags(outcome.content)
+      callbacks.appendText(content)
+      callbacks.setProgress(90)
+      return {
+        content,
+        finishReason: outcome.finishReason,
+        receipt: outcome.receipt,
+      }
+    } catch (error) {
+      if (context?.cancelled || (
+        typeof error === 'object'
+        && error !== null
+        && 'code' in error
+        && error.code === 'CANCELLED'
+      )) {
+        throw new Error('工作流已取消')
+      }
+      throw error
+    }
   }
 
   protected createIncompleteCompletionError(finishReason: LLMFinishReason): Error {
@@ -211,7 +258,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   protected async callLLMWithBuilder(
     builder: BasePromptBuilder,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number },
+    options?: { responseFormat?: { type: string }; purpose?: string },
     context?: WorkflowContext
   ): Promise<string> {
     return this.callLLM(builder.build(), builder.getSystemRole(), callbacks, options, context)
@@ -220,7 +267,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   protected async callLLMResultWithBuilder(
     builder: BasePromptBuilder,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number },
+    options?: { responseFormat?: { type: string }; purpose?: string },
     context?: WorkflowContext,
   ): Promise<LLMCompletion> {
     return this.callLLMResult(builder.build(), builder.getSystemRole(), callbacks, options, context)

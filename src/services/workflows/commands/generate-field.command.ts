@@ -1,4 +1,4 @@
-import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
+import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
 import type { NovelConfig } from '../../../shared/ipc-channels'
 import {
@@ -34,11 +34,18 @@ const FIELD_LABELS: Record<GeneratableField, string> = {
  * 根据已有的 NovelConfig 上下文，只生成指定字段的内容
  */
 export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
-  constructor(private fieldKey: GeneratableField) {
-    super()
+  constructor(
+    private fieldKey: GeneratableField,
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+  ) {
+    super(generationDependencies)
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (

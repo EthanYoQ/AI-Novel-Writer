@@ -1,6 +1,6 @@
-import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
+import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { getPromptTemplate } from '../../prompt-templates'
+import { resolvePromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
@@ -21,11 +21,18 @@ export interface RefineDraftParams {
 }
 
 export class RefineDraftCommand extends BaseWorkflowCommand<string> {
-  constructor(private params: RefineDraftParams) {
-    super()
+  constructor(
+    private params: RefineDraftParams,
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+  ) {
+    super(generationDependencies)
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
@@ -39,7 +46,7 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
 
     callbacks.log('正在进行大神级修稿...')
 
-    const template = getPromptTemplate('refine_chapter', projectSession)
+    const template = await resolvePromptTemplate('refine_chapter', projectSession)
     if (!template) throw new Error('未找到修稿模板')
 
     const mergedGuidance = this.params.mergedGuidance || novelConfig.globalGuidance || ''

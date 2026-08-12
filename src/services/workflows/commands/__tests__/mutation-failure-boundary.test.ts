@@ -4,12 +4,36 @@ import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow
 import { useEditorStore } from '../../../../stores/editor-store'
 import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
-import { buildFinalizePostProcessSteps, FinalizeChapterCommand } from '../finalize-chapter.command'
-import { RefineDraftCommand } from '../refine-draft.command'
-import { RefineFromReviewCommand } from '../refine-from-review.command'
-import { ReviewChapterCommand } from '../review-chapter.command'
+import {
+  buildFinalizePostProcessSteps,
+  FinalizeChapterCommand,
+  type FinalizePostProcessGeneration,
+} from '../finalize-chapter.command'
+import { RefineDraftCommand as RuntimeRefineDraftCommand } from '../refine-draft.command'
+import { RefineFromReviewCommand as RuntimeRefineFromReviewCommand } from '../refine-from-review.command'
+import { ReviewChapterCommand as RuntimeReviewChapterCommand } from '../review-chapter.command'
 import { savePartialData } from '../architecture.command'
 import { runPostProcessPipeline } from '../../workflow-utils'
+import { createBoundedCompletionError } from '../../bounded-completion'
+import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+
+class RefineDraftCommand extends RuntimeRefineDraftCommand {
+  constructor(...args: ConstructorParameters<typeof RuntimeRefineDraftCommand>) {
+    super(args[0], workflowRuntimeDependencies)
+  }
+}
+
+class RefineFromReviewCommand extends RuntimeRefineFromReviewCommand {
+  constructor(...args: ConstructorParameters<typeof RuntimeRefineFromReviewCommand>) {
+    super(args[0], workflowRuntimeDependencies)
+  }
+}
+
+class ReviewChapterCommand extends RuntimeReviewChapterCommand {
+  constructor(...args: ConstructorParameters<typeof RuntimeReviewChapterCommand>) {
+    super(args[0], workflowRuntimeDependencies)
+  }
+}
 
 const finalizationClient = vi.hoisted(() => ({
   commitFinalizationSnapshot: vi.fn(),
@@ -24,6 +48,34 @@ function callbacks(): StepCallbacks {
     log: vi.fn(),
     setProgress: vi.fn(),
     appendText: vi.fn(),
+  }
+}
+
+function testPostProcessGeneration(): FinalizePostProcessGeneration {
+  return {
+    complete(builder, stepCallbacks) {
+      const llmStore = useLLMStore.getState()
+      return new Promise<string>((resolve, reject) => {
+        llmStore.generateStream(
+          [
+            { role: 'system', content: builder.getSystemRole() },
+            { role: 'user', content: builder.build() },
+          ],
+          {
+            onChunk: chunk => stepCallbacks.appendText(chunk),
+            onDone: (content, _usage, finishReason) => {
+              const terminalReason = finishReason ?? 'unknown'
+              if (terminalReason !== 'stop') {
+                reject(createBoundedCompletionError(terminalReason))
+                return
+              }
+              resolve(content)
+            },
+            onError: error => reject(new Error(error)),
+          },
+        ).catch(reject)
+      })
+    },
   }
 }
 
@@ -54,6 +106,20 @@ function stubLlm(command: object, response: string): void {
     command as { callLLMWithBuilder: () => Promise<string> },
     'callLLMWithBuilder',
   ).mockResolvedValue(response)
+}
+
+function stubVelaIpc(invoke: (channel: string, ...args: unknown[]) => Promise<unknown>): void {
+  vi.stubGlobal('window', {
+    velaAPI: {
+      invoke: (channel: string, ...args: unknown[]) => (
+        channel === 'prompt:load-global'
+          ? Promise.resolve({ templates: [], diagnostics: [] })
+          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts')
+            ? Promise.resolve(false)
+            : invoke(channel, ...args)
+      ),
+    },
+  })
 }
 
 beforeEach(() => {
@@ -128,7 +194,7 @@ describe('workflow mutation failure boundaries', () => {
       if (channel === 'fs:write-json') return { success: false, error: 'checkpoint rejected' }
       throw new Error(`unexpected IPC: ${channel}`)
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    stubVelaIpc(invoke)
 
     await expect(savePartialData(PROJECT_PATH, { premise_result: 'premise' }, context().projectSession!))
       .rejects.toThrow('checkpoint rejected')
@@ -180,11 +246,11 @@ describe('workflow mutation failure boundaries', () => {
       }
       throw new Error(`unexpected IPC: ${channel}`)
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    stubVelaIpc(invoke)
     useLLMStore.setState({
       defaultModelId: 'model',
       generateStream: vi.fn(async (_messages, streamCallbacks) => {
-        streamCallbacks.onDone?.('章节要点')
+        streamCallbacks.onDone?.('章节要点', undefined, 'stop')
         return 'request-1'
       }),
     })
@@ -193,6 +259,7 @@ describe('workflow mutation failure boundaries', () => {
       1,
       '第一章',
       '正文',
+      testPostProcessGeneration(),
     ).find(candidate => candidate.key === 'chapter_notes')
     expect(step).toBeDefined()
     const stepCallbacks = callbacks()
@@ -246,7 +313,7 @@ describe('workflow mutation failure boundaries', () => {
           throw new Error(`unexpected IPC: ${channel}`)
       }
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    stubVelaIpc(invoke)
     const generateStream = vi.fn(async (
       _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
       streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
@@ -265,6 +332,7 @@ describe('workflow mutation failure boundaries', () => {
       1,
       '第一章',
       '正文',
+      testPostProcessGeneration(),
     ).find(candidate => candidate.key === 'chapter_notes')
     expect(chapterNotes).toBeDefined()
     const stepCallbacks = callbacks()
@@ -326,7 +394,7 @@ describe('workflow mutation failure boundaries', () => {
       }
       throw new Error(`unexpected IPC: ${channel}`)
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    stubVelaIpc(invoke)
     useLLMStore.setState({
       defaultModelId: 'model',
       generateStream: vi.fn(async (_messages, streamCallbacks) => {
@@ -339,6 +407,7 @@ describe('workflow mutation failure boundaries', () => {
       1,
       '第一章',
       '正文',
+      testPostProcessGeneration(),
     ).find(candidate => candidate.key === 'character_cards')
     expect(step).toBeDefined()
 
@@ -362,11 +431,11 @@ describe('workflow mutation failure boundaries', () => {
       }
       throw new Error(`unexpected IPC: ${channel}`)
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    stubVelaIpc(invoke)
     useLLMStore.setState({
       defaultModelId: 'model',
       generateStream: vi.fn(async (_messages, streamCallbacks) => {
-        streamCallbacks.onDone?.(llmResponse)
+        streamCallbacks.onDone?.(llmResponse, undefined, 'stop')
         return 'request-1'
       }),
     })
@@ -375,6 +444,7 @@ describe('workflow mutation failure boundaries', () => {
       1,
       '第一章',
       '正文',
+      testPostProcessGeneration(),
     ).find(candidate => candidate.key === 'character_cards')
     expect(step).toBeDefined()
     const stepCallbacks = callbacks()
@@ -386,6 +456,33 @@ describe('workflow mutation failure boundaries', () => {
       'db:character-roster-read',
       'db:character-roster-commit',
     ])
+  })
+
+  it('does not persist post-process output when the stream omits terminal evidence', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:blueprint-update-notes') return { success: true }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    useLLMStore.setState({
+      defaultModelId: 'model',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        const legacyOnDone = streamCallbacks.onDone as ((text: string) => void) | undefined
+        legacyOnDone?.('看似完整但无终止证据')
+        return 'request-1'
+      }),
+    })
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      '第一章',
+      '正文',
+      testPostProcessGeneration(),
+    ).find(candidate => candidate.key === 'chapter_notes')
+
+    await expect(step!.executor(callbacks(), context()))
+      .rejects.toThrow('AI 未正常完成生成')
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -412,7 +509,7 @@ describe('workflow mutation failure boundaries', () => {
       }
       throw new Error(`unexpected IPC: ${channel}`)
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    stubVelaIpc(invoke)
     const command = makeCommand()
     stubLlm(command, '修订正文')
 
@@ -436,7 +533,7 @@ describe('workflow mutation failure boundaries', () => {
       if (channel === 'db:review-create') return { success: false, error: 'review rejected' }
       throw new Error(`unexpected IPC: ${channel}`)
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    stubVelaIpc(invoke)
     const command = new ReviewChapterCommand({
       draftPath: 'vela://draft/1',
       draftContent: '待审正文',

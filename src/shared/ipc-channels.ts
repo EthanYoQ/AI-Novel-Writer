@@ -276,13 +276,26 @@ export interface FileChannels {
 
 // ===== LLM 调用 =====
 export interface LLMChannels {
+  'llm:begin-execution-lease': {
+    args: [modelId: string]
+    return: {
+      success: boolean
+      lease?: ModelExecutionLeaseReceipt
+      errorCode?: 'MODEL_NOT_FOUND' | 'LEASE_BEGIN_FAILED'
+      error?: string
+    }
+  }
+  'llm:close-execution-lease': {
+    args: [leaseId: string]
+    return: { success: boolean; error?: string }
+  }
   'llm:generate': {
     args: [request: LLMRequest]
     return: LLMResponse
   }
   'llm:generate-stream': {
     args: [requestId: string, request: LLMRequest]
-    return: { requestId: string; started: boolean }
+    return: { requestId: string; started: boolean; error?: string }
   }
   'llm:cancel': {
     args: [requestId: string]
@@ -333,8 +346,8 @@ export interface LLMStreamEvents {
     requestId: string
     fullText: string
     usage?: TokenUsage
-    /** Provider-normalized completion state. Missing values from older peers are treated as `stop`. */
-    finishReason?: LLMFinishReason
+    /** Main-process-normalized completion state. Missing provider values become `unknown`. */
+    finishReason: LLMFinishReason
   }
   'llm:stream-error': { requestId: string; error: string }
 }
@@ -390,8 +403,20 @@ export interface AppPromptTemplate {
   [key: string]: unknown
 }
 
+export interface PromptLoadDiagnostic {
+  /** Derived from the owned filename when possible; absent means the whole scope is unreadable. */
+  key?: string
+  path: string
+  error: string
+}
+
+export interface AppPromptLoadReceipt {
+  templates: AppPromptTemplate[]
+  diagnostics: PromptLoadDiagnostic[]
+}
+
 export interface AppDataChannels {
-  'prompt:load-global': { args: []; return: AppPromptTemplate[] }
+  'prompt:load-global': { args: []; return: AppPromptLoadReceipt }
   'prompt:save-global': { args: [template: AppPromptTemplate]; return: { success: boolean; error?: string } }
   'prompt:delete-global': { args: [key: string]; return: { success: boolean; error?: string } }
   'skills:list-user': {
@@ -402,6 +427,8 @@ export interface AppDataChannels {
 
 export interface LLMRequest {
   modelId: string
+  /** Optional frozen main-process model snapshot; when present it is authoritative. */
+  modelExecutionLeaseId?: string
   /** Stable attribution for per-project call history. */
   purpose?: string
   /** Frozen project lease. Missing/stale leases are never written to project statistics. */
@@ -413,14 +440,53 @@ export interface LLMRequest {
   thinking?: boolean
 }
 
-export interface LLMResponse {
-  success: boolean
+export type ModelExecutionCapabilityEvidenceSource =
+  | 'verified-provider-preset'
+  | 'user-operational-cap'
+  | 'legacy-profile'
+  | 'unknown'
+
+export interface ModelExecutionCapabilityEvidence {
+  source: {
+    contextWindowTokens: ModelExecutionCapabilityEvidenceSource
+    maxOutputTokens: ModelExecutionCapabilityEvidenceSource
+    featureFlags: ModelExecutionCapabilityEvidenceSource
+  }
+  subjectFingerprint: string
+  contextWindowTokens: number | null
+  maxOutputTokens: number
+  reasoning: boolean | null
+  structuredOutput: boolean | null
+  usage: boolean | null
+}
+
+/** Non-secret evidence for a complete ModelProfile snapshot retained only in the main process. */
+export interface ModelExecutionLeaseReceipt {
+  leaseId: string
+  modelId: string
+  provider: ModelProfile['provider']
+  protocol: ModelProfile['protocol']
+  modelName: string
+  modelRevision: string
+  endpointFingerprint: string
+  capabilityEvidence: ModelExecutionCapabilityEvidence
+  createdAt: number
+  expiresAt: number
+}
+
+interface LLMResponseBase {
   content: string
   usage?: TokenUsage
   error?: string
-  /** Structured end state, including incomplete but inspectable partial text. */
-  finishReason?: LLMFinishReason
 }
+
+/** Every non-stream response carries explicit terminal evidence. */
+export type LLMResponse =
+  | (LLMResponseBase & { success: true; finishReason: 'stop' })
+  | (LLMResponseBase & {
+      success: false
+      finishReason: Exclude<LLMFinishReason, 'stop'>
+    })
 
 /**
  * Provider-neutral end state for generated text. `stop` is the only state
@@ -468,7 +534,12 @@ export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText
 
 // ===== 引入 DB 类型 =====
 import type { ProjectCoreData } from '../../electron/repositories/project-core-repository'
-import type { BlueprintData } from '../../electron/repositories/blueprint-repository'
+import type {
+  BlueprintCharacterSyncOperation,
+  BlueprintData,
+  BlueprintRangeCommitReceipt,
+  BlueprintRangeCommitRequest,
+} from '../../electron/repositories/blueprint-repository'
 import type {
   CharacterData,
 } from '../../electron/repositories/character-repository'
@@ -502,6 +573,25 @@ export interface DatabaseChannels {
   'db:blueprint-get': { args: [chapterNumber: number, expectedProjectPath: string]; return: BlueprintData | null }
   'db:blueprint-upsert': { args: [data: BlueprintData, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:blueprint-upsert-many': { args: [items: BlueprintData[], expectedProjectPath: string]; return: { success: boolean; error?: string } }
+  'db:blueprint-commit-range': {
+    args: [request: BlueprintRangeCommitRequest, expectedProjectPath: string]
+    return: { success: boolean; receipt?: BlueprintRangeCommitReceipt; error?: string }
+  }
+  'db:blueprint-character-sync-list-pending': {
+    args: [expectedProjectPath: string]
+    return: BlueprintCharacterSyncOperation[]
+  }
+  'db:blueprint-character-sync-get': {
+    args: [operationId: string, expectedProjectPath: string]
+    return: BlueprintCharacterSyncOperation | null
+  }
+  'db:blueprint-character-sync-complete': {
+    args: [
+      operationId: string,
+      expectedProjectPath: string,
+    ]
+    return: { success: boolean; operation?: BlueprintCharacterSyncOperation; error?: string }
+  }
   'db:blueprint-update-notes': { args: [chapterNumber: number, notes: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:blueprint-delete': { args: [chapterNumber: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:blueprint-clear-all': { args: [expectedProjectPath: string]; return: { success: boolean; error?: string } }

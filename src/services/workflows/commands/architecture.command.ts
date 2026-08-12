@@ -1,6 +1,10 @@
-import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
+import {
+  BaseWorkflowCommand,
+  CommandExecuteParams,
+  type WorkflowGenerationRuntimeDependencies,
+} from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { getPromptTemplate } from '../../prompt-templates'
+import { resolvePromptTemplate } from '../../prompt-templates'
 import { ArchitecturePromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
@@ -117,16 +121,22 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
     private totalChapters: number,
     private wordsPerChapter: number,
     private onGenerated: (config: Partial<NovelConfig>) => void,
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
   ) {
-    super()
+    super(generationDependencies)
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession)
     callbacks.log('正在调度配置专家 AI，准备解析您的脑洞...')
 
-    const template = getPromptTemplate('generate_global_config', projectSession)
+    const template = await resolvePromptTemplate('generate_global_config', projectSession)
     if (!template) throw new Error('未找到 generate_global_config 模板')
 
     const promptBuilder = new ArchitecturePromptBuilder(template)
@@ -137,7 +147,7 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
     const resultRaw = await this.callLLMWithBuilder(
       promptBuilder,
       callbacks,
-      { responseFormat: { type: 'json_object' }, thinking: false, maxTokens: 4096 },
+      { responseFormat: { type: 'json_object' } },
       context,
     )
     this.assertNotCancelled(context)
@@ -199,18 +209,26 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
 }
 
 export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
-  constructor(private snapshot: ArchitectureProjectSnapshot) {
-    super()
+  constructor(
+    private snapshot: ArchitectureProjectSnapshot,
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+  ) {
+    super(generationDependencies)
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
     callbacks.log('生成故事前提...')
 
-    const template = getPromptTemplate('premise', projectSession)
+    const template = await resolvePromptTemplate('premise', projectSession)
     if (!template) throw new Error('未找到 premise 模板')
 
     const promptBuilder = new ArchitecturePromptBuilder(template)
@@ -248,8 +266,11 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
 }
 
 export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
-  constructor(private snapshot: ArchitectureProjectSnapshot) {
-    super()
+  constructor(
+    private snapshot: ArchitectureProjectSnapshot,
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+  ) {
+    super(generationDependencies)
   }
 
   /**
@@ -274,8 +295,6 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         { mode: 'replace-structured-output', maxContinuations: 2 },
         {
           responseFormat: { type: 'json_object' },
-          thinking: false,
-          maxTokens: 4096,
           purpose,
         },
         context,
@@ -311,7 +330,12 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     }
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession)
     const { expectedProjectPath } = this.snapshot
@@ -325,7 +349,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     }
 
     callbacks.log('生成角色图谱...')
-    const template = getPromptTemplate('character_dynamics', projectSession)
+    const template = await resolvePromptTemplate('character_dynamics', projectSession)
     if (!template) throw new Error('未找到 character_dynamics 模板')
 
     const promptBuilder = new ArchitecturePromptBuilder(template)
@@ -346,8 +370,6 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       { mode: 'replace-structured-output', maxContinuations: 2 },
       {
         responseFormat: { type: 'json_object' },
-        thinking: false,
-        maxTokens: 4096,
         purpose: 'character-architecture',
       },
       context,
@@ -415,11 +437,19 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
 }
 
 export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
-  constructor(private snapshot: ArchitectureProjectSnapshot) {
-    super()
+  constructor(
+    private snapshot: ArchitectureProjectSnapshot,
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+  ) {
+    super(generationDependencies)
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession)
     const { expectedProjectPath } = this.snapshot
@@ -433,7 +463,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     }
 
     callbacks.log('生成世界观...')
-    const template = getPromptTemplate('world_building', projectSession)
+    const template = await resolvePromptTemplate('world_building', projectSession)
     if (!template) throw new Error('模板丢失')
 
     const promptBuilder = new ArchitecturePromptBuilder(template)
@@ -464,11 +494,20 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
 }
 
 export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string> {
-  constructor(private selectedSteps: string[], private snapshot: ArchitectureProjectSnapshot) {
-    super()
+  constructor(
+    private selectedSteps: string[],
+    private snapshot: ArchitectureProjectSnapshot,
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+  ) {
+    super(generationDependencies)
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession)
     const { expectedProjectPath } = this.snapshot
@@ -484,7 +523,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     if (!world_b || world_b.includes('待生成')) throw new Error('世界观未生成')
 
     callbacks.log('生成情节大纲...')
-    const template = getPromptTemplate('synopsis', projectSession)
+    const template = await resolvePromptTemplate('synopsis', projectSession)
     if (!template) throw new Error('模板丢失')
 
     const { getPlotStructureGuide, getNarrativePOVLabel } = await import('../architecture-workflow')

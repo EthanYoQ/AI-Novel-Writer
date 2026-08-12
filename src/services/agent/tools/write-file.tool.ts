@@ -5,6 +5,7 @@ import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { ipc } from '../../ipc-client'
 import { validatePath } from './safe-path'
 import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { projectFactWorkflowForFilePath } from '../../project-fact-targets'
 
 export const writeFileTool = buildAgentTool({
   name: 'write_file',
@@ -32,6 +33,15 @@ export const writeFileTool = buildAgentTool({
 
     if (!filePath || content === undefined) {
       return { success: false, content: '', error: '缺少 file_path 或 content 参数' }
+    }
+
+    const reservedWorkflow = projectFactWorkflowForFilePath(filePath)
+    if (reservedWorkflow) {
+      return {
+        success: false,
+        content: '',
+        error: `“${filePath}”是项目事实的保留语义目标；普通文件不会改变结构化项目。请改用 ${reservedWorkflow} 工作流。`,
+      }
     }
 
     const { project, projectSession } = requireAgentProject(context)

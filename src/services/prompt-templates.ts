@@ -11,10 +11,8 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { Locale } from '../i18n/types'
 import {
   getActiveProjectSessionContext,
-  sameProjectSessionContext,
 } from '../shared/project-session-context'
-import { ipc } from './ipc-client'
-import { requireIpcSuccess } from './ipc-result'
+import { PromptCatalog, ipcPromptPersistence } from './prompt-catalog'
 
 export interface PromptTemplate {
   /** 模板唯一标识 */
@@ -434,6 +432,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
     {
       "chapterNumber": 1,
       "title": "引人入胜的标题",
+      "role": "本章在全书结构中的功能，例如建置、发展、转折或高潮",
       "purpose": "本章主角最想解决的一件事",
       "characters": ["本章互动的要人A", "要人B"],
       "relationships": [{ "from": "要人A", "to": "要人B", "relation": "本章可确认的关系；无则空数组" }],
@@ -448,7 +447,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 
 要求：
 - 每章的 keyEvents 控制在 100-150 字以内，信息密度必须极高。
-- 每个对象必须包含完整的 chapterNumber、title、purpose、characters、relationships、keyEvents、suspenseHook；relationships 仅写本章可确认的角色关系，无则输出空数组。
+- 每个对象必须包含完整的 chapterNumber、title、role、purpose、characters、relationships、keyEvents、suspenseHook；relationships 仅写本章可确认的角色关系，无则输出空数组。
 - 仅给出最终的 JSON 文本，不要任何客套解释、分析、计划、Markdown 或代码块。
 
 ★【作者节奏/风格指导（如有，最高优先级）】★：
@@ -498,6 +497,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
     {
       "chapterNumber": n,
       "title": "引人入胜的标题",
+      "role": "本章在全书结构中的功能，例如建置、发展、转折或高潮",
       "purpose": "本章主角最想解决的一件事",
       "characters": ["本章互动的要人A", "要人B"],
       "relationships": [{ "from": "要人A", "to": "要人B", "relation": "本章可确认的关系；无则空数组" }],
@@ -509,7 +509,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 
 要求：
 - 严格遵循上下文连贯，不要前后矛盾。
-- 每个对象必须包含完整的 chapterNumber、title、purpose、characters、relationships、keyEvents、suspenseHook；relationships 仅写本章可确认的角色关系，无则输出空数组。
+- 每个对象必须包含完整的 chapterNumber、title、role、purpose、characters、relationships、keyEvents、suspenseHook；relationships 仅写本章可确认的角色关系，无则输出空数组。
 - 仅给出最终的 JSON 文本，不要解释、分析、计划、Markdown 或代码块。
 
 ★【作者节奏/风格指导（如有，最高优先级）】★：
@@ -1244,149 +1244,26 @@ severity 取值：error=严重矛盾强烈建议修复, warning=轻微不一致�
   },
 ]
 
-/** 全局自定义覆盖 Prompt 缓存（~/.vela/prompts/） */
-const customPrompts: Map<string, PromptTemplate> = new Map()
-let customPromptsLoaded = false
-
-interface ProjectPromptCache {
-  /** 完整项目身份；path 相同但 lease 不同也必须视为不同缓存。 */
-  owner: ProjectSessionContext
-  prompts: ReadonlyMap<string, PromptTemplate>
-}
-
-/** 项目级覆盖永远携带 owner；null 表示 fail-closed，仅使用全局/内置模板。 */
-let projectPromptCache: ProjectPromptCache | null = null
-let projectPromptLoadRevision = 0
-
-function freezeProjectSession(projectSession: ProjectSessionContext): ProjectSessionContext {
-  return Object.freeze({ ...projectSession })
-}
-
-function isPromptProjectSessionCurrent(projectSession: ProjectSessionContext): boolean {
-  return sameProjectSessionContext(projectSession, getActiveProjectSessionContext())
-}
-
-function assertPromptProjectSessionCurrent(
-  projectSession: ProjectSessionContext,
-  loadRevision?: number,
-): void {
-  if (
-    !isPromptProjectSessionCurrent(projectSession)
-    || (loadRevision !== undefined && loadRevision !== projectPromptLoadRevision)
-  ) {
-    throw new Error('项目会话已变化，已拒绝继续加载项目提示词')
-  }
-}
-
-function projectPromptsForSession(
-  projectSession: ProjectSessionContext | null | undefined,
-): ReadonlyMap<string, PromptTemplate> | null {
-  if (
-    !projectSession
-    || !projectPromptCache
-    || !isPromptProjectSessionCurrent(projectSession)
-    || !sameProjectSessionContext(projectSession, projectPromptCache.owner)
-  ) return null
-  return projectPromptCache.prompts
-}
+/** 提示词生命周期唯一所有者；工作流通过 async resolve 自动完成水合。 */
+export const promptCatalog = new PromptCatalog(
+  BUILTIN_PROMPTS,
+  ipcPromptPersistence,
+  getActiveProjectSessionContext,
+)
 
 /** 项目关闭、切换或新加载开始时立即失效，绝不沿用旧 lease 的覆盖。 */
 export function clearProjectCustomPrompts(): void {
-  projectPromptLoadRevision += 1
-  projectPromptCache = null
+  promptCatalog.clearProject()
 }
 
 /** 加载全局自定义 Prompt 覆盖（从 ~/.vela/prompts/ 目录） */
 export async function loadCustomPrompts(): Promise<void> {
-  try {
-    if (!ipc.isElectron) return
-
-    const prompts = await ipc.invoke('prompt:load-global')
-    customPrompts.clear()
-    for (const prompt of prompts) {
-      const custom = prompt as unknown as PromptTemplate
-      if (custom.key) customPrompts.set(custom.key, custom)
-    }
-    customPromptsLoaded = true
-    console.log(`[Vela Prompts] 已加载 ${customPrompts.size} 个全局自定义覆盖`)
-  } catch {
-    // prompts 目录可能不存在，忽略
-    customPromptsLoaded = true
-  }
+  await promptCatalog.list()
 }
 
 /** 加载项目级自定义 Prompt 覆盖（从 {projectPath}/.vela/prompts/ 目录） */
 export async function loadProjectCustomPrompts(projectSession: ProjectSessionContext): Promise<boolean> {
-  const frozenSession = freezeProjectSession(projectSession)
-  if (!isPromptProjectSessionCurrent(frozenSession)) return false
-
-  const loadRevision = ++projectPromptLoadRevision
-  // 加载期间使用默认模板；禁止旧 owner 的缓存继续可见。
-  projectPromptCache = null
-  try {
-    const loadedPrompts = new Map<string, PromptTemplate>()
-    const promptsDir = `${frozenSession.projectPath}/.vela/prompts`
-
-    await _loadProjectPromptsFromDir(promptsDir, loadedPrompts, frozenSession, loadRevision)
-    assertPromptProjectSessionCurrent(frozenSession, loadRevision)
-    projectPromptCache = {
-      owner: frozenSession,
-      prompts: loadedPrompts,
-    }
-    console.log(`[Vela Prompts] 已加载 ${loadedPrompts.size} 个项目级自定义覆盖`)
-    return true
-  } catch {
-    if (loadRevision === projectPromptLoadRevision && isPromptProjectSessionCurrent(frozenSession)) {
-      projectPromptCache = null
-    }
-    return false
-  }
-}
-
-/** 内部工具：从目录加载 JSON 覆盖到指定 Map */
-async function _loadProjectPromptsFromDir(
-  dirPath: string,
-  target: Map<string, PromptTemplate>,
-  projectSession: ProjectSessionContext,
-  loadRevision: number,
-): Promise<void> {
-  assertPromptProjectSessionCurrent(projectSession, loadRevision)
-  const exists = await ipc.invokeWithProjectSession(
-    projectSession,
-    'fs:check-exists',
-    dirPath,
-    projectSession.projectPath,
-  )
-  assertPromptProjectSessionCurrent(projectSession, loadRevision)
-  if (!exists) return
-
-  const files = await ipc.invokeWithProjectSession(
-    projectSession,
-    'fs:list-dir',
-    dirPath,
-    projectSession.projectPath,
-  )
-  assertPromptProjectSessionCurrent(projectSession, loadRevision)
-  const jsonFiles = files.filter((f) => !f.isDir && f.name.endsWith('.json'))
-
-  for (const file of jsonFiles) {
-    const result = await ipc.invokeWithProjectSession(
-      projectSession,
-      'fs:read-file',
-      file.path,
-      projectSession.projectPath,
-    )
-    assertPromptProjectSessionCurrent(projectSession, loadRevision)
-    requireIpcSuccess(result, '读取项目提示词')
-    if (result.content.trim()) {
-      try {
-        const custom = JSON.parse(result.content) as PromptTemplate
-        if (custom.key) {
-          target.set(custom.key, custom)
-        }
-      } catch { /* 忽略无效 JSON */ }
-    }
-  }
+  return promptCatalog.loadProject(projectSession)
 }
 
 /** 根据 key 获取 Prompt 模板（三级优先级：当前 session 项目级 > 全局级 > 内置） */
@@ -1394,18 +1271,15 @@ export function getPromptTemplate(
   key: string,
   projectSession?: ProjectSessionContext,
 ): PromptTemplate | undefined {
-  // 优先级 1：项目级自定义覆盖
-  const projectCustom = projectPromptsForSession(projectSession)?.get(key)
-  if (projectCustom) return projectCustom
+  return promptCatalog.peek(key, projectSession)?.template
+}
 
-  // 优先级 2：全局自定义覆盖
-  if (customPromptsLoaded) {
-    const globalCustom = customPrompts.get(key)
-    if (globalCustom) return globalCustom
-  }
-
-  // 优先级 3：内置默认
-  return BUILTIN_PROMPTS.find((p) => p.key === key)
+/** 工作流读取入口：首次调用会自动等待全局与当前项目覆盖水合。 */
+export async function resolvePromptTemplate(
+  key: string,
+  projectSession?: ProjectSessionContext,
+): Promise<PromptTemplate | undefined> {
+  return (await promptCatalog.resolve(key, projectSession))?.template
 }
 
 /** 获取指定模板当前生效的来源 */
@@ -1413,47 +1287,19 @@ export function getPromptSource(
   key: string,
   projectSession?: ProjectSessionContext,
 ): 'builtin' | 'global' | 'project' {
-  if (projectPromptsForSession(projectSession)?.has(key)) return 'project'
-  if (customPromptsLoaded && customPrompts.has(key)) return 'global'
-  return 'builtin'
+  return promptCatalog.peek(key, projectSession)?.source ?? 'builtin'
 }
 
 /** 获取所有模板（合并自定义，保留三级覆盖优先级） */
 export function getAllPromptTemplates(projectSession?: ProjectSessionContext): PromptTemplate[] {
-  const all = [...BUILTIN_PROMPTS]
-  // 用全局自定义覆盖同名内置模板
-  for (const [key, custom] of customPrompts) {
-    const idx = all.findIndex((p) => p.key === key)
-    if (idx >= 0) {
-      all[idx] = custom
-    } else {
-      all.push(custom)
-    }
-  }
-  // 用项目级自定义覆盖
-  for (const [key, custom] of projectPromptsForSession(projectSession) ?? []) {
-    const idx = all.findIndex((p) => p.key === key)
-    if (idx >= 0) {
-      all[idx] = custom
-    } else {
-      all.push(custom)
-    }
-  }
-  return all
+  return BUILTIN_PROMPTS.map((template) => (
+    promptCatalog.peek(template.key, projectSession)?.template ?? template
+  ))
 }
 
 /** 保存全局自定义 Prompt 到 ~/.vela/prompts/ */
 export async function saveCustomPrompt(template: PromptTemplate): Promise<boolean> {
-  try {
-    requireIpcSuccess(
-      await ipc.invoke('prompt:save-global', template as unknown as { key: string; [key: string]: unknown }),
-      '保存自定义提示词',
-    )
-    customPrompts.set(template.key, template)
-    return true
-  } catch {
-    return false
-  }
+  return promptCatalog.commit({ action: 'save', scope: 'global', template })
 }
 
 /** 保存项目级自定义 Prompt 到 {projectPath}/.vela/prompts/ */
@@ -1461,74 +1307,12 @@ export async function saveProjectCustomPrompt(
   projectSession: ProjectSessionContext,
   template: PromptTemplate,
 ): Promise<boolean> {
-  const frozenSession = freezeProjectSession(projectSession)
-  try {
-    assertPromptProjectSessionCurrent(frozenSession)
-    const dirPath = `${frozenSession.projectPath}/.vela/prompts`
-    // 确保目录存在
-    const exists = await ipc.invokeWithProjectSession(
-      frozenSession,
-      'fs:check-exists',
-      dirPath,
-      frozenSession.projectPath,
-    )
-    assertPromptProjectSessionCurrent(frozenSession)
-    if (!exists) {
-      requireIpcSuccess(
-        await ipc.invokeWithProjectSession(
-          frozenSession,
-          'fs:mkdir',
-          `${frozenSession.projectPath}/.vela`,
-          frozenSession.projectPath,
-        ),
-        '创建项目配置目录',
-      )
-      assertPromptProjectSessionCurrent(frozenSession)
-      requireIpcSuccess(
-        await ipc.invokeWithProjectSession(
-          frozenSession,
-          'fs:mkdir',
-          dirPath,
-          frozenSession.projectPath,
-        ),
-        '创建项目提示词目录',
-      )
-      assertPromptProjectSessionCurrent(frozenSession)
-    }
-    const filePath = `${dirPath}/${template.key}.json`
-
-    requireIpcSuccess(
-      await ipc.invokeWithProjectSession(
-        frozenSession,
-        'fs:write-file',
-        filePath,
-        JSON.stringify(template, null, 2),
-        frozenSession.projectPath,
-      ),
-      '保存项目提示词',
-    )
-    assertPromptProjectSessionCurrent(frozenSession)
-    const currentPrompts = projectPromptsForSession(frozenSession)
-    if (currentPrompts) {
-      const nextPrompts = new Map(currentPrompts)
-      nextPrompts.set(template.key, template)
-      projectPromptCache = { owner: frozenSession, prompts: nextPrompts }
-    }
-    return true
-  } catch {
-    return false
-  }
+  return promptCatalog.commit({ action: 'save', scope: 'project', projectSession, template })
 }
 
 /** 删除全局自定义 Prompt（恢复为内置版本） */
 export async function deleteCustomPrompt(key: string): Promise<boolean> {
-  try {
-    requireIpcSuccess(await ipc.invoke('prompt:delete-global', key), '删除自定义提示词')
-    customPrompts.delete(key)
-    return true
-  } catch {
-    return false
-  }
+  return promptCatalog.commit({ action: 'delete', scope: 'global', key })
 }
 
 /** 删除项目级自定义 Prompt（恢复为全局/内置版本） */
@@ -1536,40 +1320,7 @@ export async function deleteProjectCustomPrompt(
   projectSession: ProjectSessionContext,
   key: string,
 ): Promise<boolean> {
-  const frozenSession = freezeProjectSession(projectSession)
-  try {
-    assertPromptProjectSessionCurrent(frozenSession)
-    const filePath = `${frozenSession.projectPath}/.vela/prompts/${key}.json`
-    const exists = await ipc.invokeWithProjectSession(
-      frozenSession,
-      'fs:check-exists',
-      filePath,
-      frozenSession.projectPath,
-    )
-    assertPromptProjectSessionCurrent(frozenSession)
-    if (exists) {
-      requireIpcSuccess(
-        await ipc.invokeWithProjectSession(
-          frozenSession,
-          'fs:write-file',
-          filePath,
-          '',
-          frozenSession.projectPath,
-        ),
-        '删除项目提示词',
-      )
-      assertPromptProjectSessionCurrent(frozenSession)
-    }
-    const currentPrompts = projectPromptsForSession(frozenSession)
-    if (currentPrompts) {
-      const nextPrompts = new Map(currentPrompts)
-      nextPrompts.delete(key)
-      projectPromptCache = { owner: frozenSession, prompts: nextPrompts }
-    }
-    return true
-  } catch {
-    return false
-  }
+  return promptCatalog.commit({ action: 'delete', scope: 'project', projectSession, key })
 }
 
 /** 渲染 Prompt 模板（填充变量 + 自动追加内置 systemSuffix + 空段落裁剪） */

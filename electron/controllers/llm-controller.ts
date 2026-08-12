@@ -14,6 +14,10 @@ import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
 import { getCurrentProjectPath } from '../database'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { projectAccess } from '../services/project-access'
+import {
+  ModelExecutionLeaseError,
+  ModelExecutionLeaseRegistry,
+} from '../services/model-execution-lease'
 
 interface ActiveStream {
   controller: AbortController
@@ -22,6 +26,7 @@ interface ActiveStream {
 
 const activeStreams = new Map<string, ActiveStream>()
 const CONNECTION_TEST_MAX_TOKENS = 1024
+const CLOSED_EXECUTION_LEASE_TOMBSTONE_TTL_MS = 5 * 60_000
 
 function loadModelConfigs(): ModelProfile[] {
   return readJsonFile<ModelProfile[]>(MODELS_CONFIG_PATH, [])
@@ -83,13 +88,57 @@ function recordProviderOutcome(
 }
 
 export function registerLLMController() {
+  const modelExecutionLeases = new ModelExecutionLeaseRegistry({ loadModel: getModelConfig })
+  const closedExecutionLeaseTombstones = new Map<string, number>()
+
+  const pruneClosedExecutionLeaseTombstones = (now: number) => {
+    for (const [leaseId, expiresAt] of closedExecutionLeaseTombstones) {
+      if (expiresAt <= now) closedExecutionLeaseTombstones.delete(leaseId)
+    }
+  }
+
+  ipcMain.handle('llm:begin-execution-lease', async (_event, modelId: string) => {
+    try {
+      return { success: true, lease: modelExecutionLeases.begin(modelId) }
+    } catch (error) {
+      if (error instanceof ModelExecutionLeaseError && error.code === 'MODEL_NOT_FOUND') {
+        return {
+          success: false,
+          errorCode: 'MODEL_NOT_FOUND' as const,
+          error: '指定的生成模型不存在或已被删除。',
+        }
+      }
+      return {
+        success: false,
+        errorCode: 'LEASE_BEGIN_FAILED' as const,
+        error: '无法创建模型执行租约。',
+      }
+    }
+  })
+
+  ipcMain.handle('llm:close-execution-lease', async (_event, leaseId: string) => {
+    const now = Date.now()
+    pruneClosedExecutionLeaseTombstones(now)
+    if (modelExecutionLeases.close(leaseId)) {
+      closedExecutionLeaseTombstones.set(
+        leaseId,
+        now + CLOSED_EXECUTION_LEASE_TOMBSTONE_TTL_MS,
+      )
+      return { success: true }
+    }
+    if (closedExecutionLeaseTombstones.has(leaseId)) return { success: true }
+    return { success: false, error: '模型执行租约无效或已关闭' }
+  })
+
   ipcMain.handle('llm:generate', async (_event, request: LLMRequest) => {
     const startedAt = Date.now()
     let model: ModelProfile | null = null
     try {
       applyProxyConfig()
-      model = getModelConfig(request.modelId)
-      if (!model) return { success: false, content: '', error: '未找到模型配置' }
+      model = request.modelExecutionLeaseId
+        ? modelExecutionLeases.resolve(request.modelExecutionLeaseId)
+        : getModelConfig(request.modelId)
+      if (!model) return { success: false, content: '', finishReason: 'error', error: '未找到模型配置' }
 
       const provider = LLMFactory.getProvider(model)
       const result = await provider.generate(
@@ -101,13 +150,20 @@ export function registerLLMController() {
       return result
     } catch (error) {
       if (model) recordProviderOutcome(request, model, startedAt, { success: false, error: String(error) })
-      return { success: false, content: '', error: String(error) }
+      return { success: false, content: '', finishReason: 'error', error: String(error) }
     }
   })
 
   ipcMain.handle('llm:generate-stream', async (event, requestId: string, request: LLMRequest) => {
     applyProxyConfig()
-    const model = getModelConfig(request.modelId)
+    let model: ModelProfile | null
+    try {
+      model = request.modelExecutionLeaseId
+        ? modelExecutionLeases.resolve(request.modelExecutionLeaseId)
+        : getModelConfig(request.modelId)
+    } catch (error) {
+      return { requestId, started: false, error: String(error) }
+    }
     if (!model) return { requestId, started: false }
     const generationParameters = resolveGenerationParameters(model, request)
 
@@ -133,9 +189,15 @@ export function registerLLMController() {
       signal: abortController.signal,
       onChunk: (chunk: string) => win?.webContents.send('llm:stream-chunk', { requestId, chunk }),
       onDone: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => {
-        const success = (finishReason ?? 'stop') === 'stop'
-        recordOnce({ success, usage, error: success ? undefined : `finish:${finishReason ?? 'unknown'}` })
-        win?.webContents.send('llm:stream-done', { requestId, fullText, usage, finishReason })
+        const terminalReason: LLMFinishReason = finishReason ?? 'unknown'
+        const success = terminalReason === 'stop'
+        recordOnce({ success, usage, error: success ? undefined : `finish:${terminalReason}` })
+        win?.webContents.send('llm:stream-done', {
+          requestId,
+          fullText,
+          usage,
+          finishReason: terminalReason,
+        })
         activeStreams.delete(requestId)
       },
       onError: (error: string) => {

@@ -7,7 +7,11 @@ import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 // 导入所有 Repository
 import { ProjectCoreRepository, ProjectCoreData } from '../repositories/project-core-repository'
 import { ProjectClearRepository, ProjectClearOptions } from '../repositories/project-clear-repository'
-import { BlueprintRepository, BlueprintData } from '../repositories/blueprint-repository'
+import {
+  BlueprintRepository,
+  BlueprintData,
+  type BlueprintRangeCommitRequest,
+} from '../repositories/blueprint-repository'
 import { CharacterRepository } from '../repositories/character-repository'
 import { CharacterRosterRepository } from '../repositories/character-roster-repository'
 import type { CharacterRosterCommitRequest } from '../../src/shared/character-roster'
@@ -28,6 +32,8 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:project-clear-generated-data',
   'db:blueprint-upsert',
   'db:blueprint-upsert-many',
+  'db:blueprint-commit-range',
+  'db:blueprint-character-sync-complete',
   'db:blueprint-update-notes',
   'db:blueprint-delete',
   'db:blueprint-clear-all',
@@ -140,6 +146,52 @@ export function registerDatabaseController() {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       BlueprintRepository.upsertMany(items)
       return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:blueprint-commit-range', async (
+    _event,
+    request: BlueprintRangeCommitRequest,
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      return { success: true, receipt: BlueprintRepository.commitRange(request) }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:blueprint-character-sync-list-pending', async (
+    _event,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return BlueprintRepository.listPendingCharacterSyncOperations()
+  })
+
+  ipcMain.handle('db:blueprint-character-sync-get', async (
+    _event,
+    operationId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return BlueprintRepository.getCharacterSyncOperation(operationId)
+  })
+
+  ipcMain.handle('db:blueprint-character-sync-complete', async (
+    _event,
+    operationId: string,
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      return {
+        success: true,
+        operation: BlueprintRepository.completeCharacterSyncOperation(operationId),
+      }
     } catch (err) {
       return { success: false, error: String(err) }
     }

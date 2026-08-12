@@ -50,7 +50,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
   it('uses the OpenAI-compatible URL and Bearer token without unsupported JSON response formatting', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ choices: [{ message: { content: '正文' } }] }),
+      json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }),
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -59,7 +59,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       maxTokens: 512,
       thinking: true,
       responseFormat: { type: 'json_object' },
-    })).resolves.toMatchObject({ success: true, content: '正文' })
+    })).resolves.toMatchObject({ success: true, content: '正文', finishReason: 'stop' })
 
     const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://text.novelai.net/oa/v1/chat/completions')
@@ -74,7 +74,12 @@ describe('OpenAIProvider NovelAI compatibility', () => {
   it('applies the same NovelAI request compatibility to streaming generation', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      body: { getReader: () => sseReader('data: [DONE]\n') },
+      body: {
+        getReader: () => sseReader(
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
+          'data: [DONE]\n',
+        ),
+      },
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -189,6 +194,22 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
   })
 
+  it('does not treat an HTTP response without finish_reason as a completed generation', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '传输已结束但完成原因未知' } }] }),
+    }))
+
+    await expect(new OpenAIProvider().generate(novelAIModel, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+    })).resolves.toMatchObject({
+      success: false,
+      content: '传输已结束但完成原因未知',
+      finishReason: 'unknown',
+    })
+  })
+
   it('forwards an explicit stream length finish reason instead of reporting a complete response', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -214,6 +235,30 @@ describe('OpenAIProvider NovelAI compatibility', () => {
 
     expect(onDone).toHaveBeenCalledWith('被截断', undefined, 'length')
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('treats [DONE] without finish_reason as transport completion with unknown model completion', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => sseReader(
+          'data: {"choices":[{"delta":{"content":"正文"}}]}\n',
+          'data: [DONE]\n',
+        ),
+      },
+    }))
+    const onDone = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone,
+      onError: vi.fn(),
+    })
+
+    expect(onDone).toHaveBeenCalledWith('正文', undefined, 'unknown')
   })
 
   it('requests and forwards the final OpenAI stream usage metadata', async () => {

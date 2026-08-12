@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   assertBlueprintCoverage,
+  commitDirectoryBlueprintRange,
   parseTextBlueprints,
   parseTextBlueprintsStrict,
   createDirectoryWorkflow,
@@ -21,6 +22,7 @@ const blueprint: ChapterBlueprint = {
   purpose: '引出主角目标',
   keyEvents: '主角发现异常',
   characters: ['主角'],
+  relationshipHints: [],
   suspenseHook: '门外传来敲门声',
   userGuidance: '',
   notes: '',
@@ -97,6 +99,7 @@ describe('parseTextBlueprints', () => {
             purpose: '引出主角目标',
             keyEvents: '主角发现异常',
             characters: ['主角'],
+            relationships: [],
             suspenseHook: '门外传来敲门声',
           },
         ],
@@ -124,7 +127,10 @@ describe('parseTextBlueprints', () => {
           chapter_number: 2,
           title: '暗线',
           role: '铺垫',
+          purpose: '让主角发现反派留下的暗线',
           key_events: '反派留下线索',
+          characters: ['主角'],
+          relationships: [],
           suspense_hook: '线索指向故人',
         },
       ]),
@@ -147,7 +153,7 @@ describe('parseTextBlueprints', () => {
       [
         '```json',
         '[',
-        '{"chapterNumber":3,"title":"交锋","keyEvents":"主角正面迎敌"}',
+        '{"chapterNumber":3,"title":"交锋","role":"高潮","purpose":"迫使主角正面抉择","keyEvents":"主角正面迎敌","characters":["主角"],"relationships":[],"suspenseHook":"敌人揭下面具"}',
         ']',
         '```',
       ].join('\n'),
@@ -167,29 +173,28 @@ describe('parseTextBlueprints', () => {
     expect(parseTextBlueprints('{not json', 1, 3)).toEqual([])
   })
 
-  it('deduplicates repeated chapters by keeping the first parsed chapter', () => {
+  it('rejects repeated chapters instead of choosing one model answer', () => {
     const result = parseTextBlueprints(
       JSON.stringify({
         blueprints: [
-          { chapterNumber: 1, title: '第一版' },
-          { chapterNumber: 1, title: '第二版' },
-          { chapterNumber: 2, title: '第二章' },
+          { ...blueprint, chapterNumber: 1, title: '第一版', relationships: [] },
+          { ...blueprint, chapterNumber: 1, title: '第二版', relationships: [] },
+          { ...blueprint, chapterNumber: 2, title: '第二章', relationships: [] },
         ],
       }),
       1,
       3,
     )
 
-    expect(result.map((item) => item.chapterNumber)).toEqual([1, 2])
-    expect(result[0].title).toBe('第一版')
+    expect(result).toEqual([])
   })
 
   it('filters chapters outside the requested range', () => {
     const result = parseTextBlueprints(
       JSON.stringify([
-        { chapterNumber: 1, title: '范围外' },
-        { chapterNumber: 2, title: '范围内' },
-        { chapterNumber: 4, title: '范围外' },
+        { ...blueprint, chapterNumber: 1, title: '范围外', relationships: [] },
+        { ...blueprint, chapterNumber: 2, title: '范围内', relationships: [] },
+        { ...blueprint, chapterNumber: 4, title: '范围外', relationships: [] },
       ]),
       2,
       3,
@@ -199,16 +204,16 @@ describe('parseTextBlueprints', () => {
   })
 
   it('returns an empty array when no chapters survive filtering', () => {
-    expect(parseTextBlueprints('[{"chapterNumber": 9, "title": "太远"}]', 1, 3)).toEqual([])
+    expect(parseTextBlueprints(JSON.stringify([{ ...blueprint, chapterNumber: 9, relationships: [] }]), 1, 3)).toEqual([])
   })
 })
 
 describe('parseTextBlueprintsStrict', () => {
   it('returns parsed blueprints for valid array input', () => {
-    const result = parseTextBlueprintsStrict('[{"chapterNumber": 1, "title": "有效"}]', 1, 3)
+    const result = parseTextBlueprintsStrict(JSON.stringify([{ ...blueprint, relationships: [] }]), 1, 1)
 
     expect(result).toHaveLength(1)
-    expect(result[0].title).toBe('有效')
+    expect(result[0].title).toBe('启程')
   })
 
   it('throws when JSON is malformed', () => {
@@ -216,7 +221,30 @@ describe('parseTextBlueprintsStrict', () => {
   })
 
   it('rejects an out-of-range chapter instead of silently filtering it', () => {
-    expect(() => parseTextBlueprintsStrict('[{"chapterNumber": 9, "title": "太远"}]', 1, 3)).toThrow(/越界/)
+    expect(() => parseTextBlueprintsStrict(
+      JSON.stringify([{ ...blueprint, chapterNumber: 9, relationships: [] }]),
+      1,
+      3,
+    )).toThrow(/非目标章节/)
+  })
+
+  it('rejects duplicate chapter numbers instead of hiding them during normalization', () => {
+    expect(() => parseTextBlueprintsStrict(
+      JSON.stringify([
+        { ...blueprint, chapterNumber: 1, title: '第一次', relationships: [] },
+        { ...blueprint, chapterNumber: 1, title: '第二次', relationships: [] },
+      ]),
+      1,
+      1,
+    )).toThrow(/重复章节/u)
+  })
+
+  it('rejects a structurally valid JSON blueprint when required semantic facts are missing', () => {
+    const incomplete = { ...blueprint } as Record<string, unknown>
+    delete incomplete.relationshipHints
+
+    expect(() => parseTextBlueprintsStrict(JSON.stringify([incomplete]), 1, 1))
+      .toThrow(/角色关系/u)
   })
 })
 
@@ -258,15 +286,49 @@ describe('blueprint persistence helpers', () => {
       session,
     )).rejects.toThrow(/内容与本次生成结果不一致/)
   })
+
+  it('returns the atomic range-commit receipt from the main-process seam', async () => {
+    const receipt = {
+      mode: 'replace-range',
+      operationId: 'directory-run-1',
+      payloadHash: 'a'.repeat(64),
+      idempotent: false,
+      startChapter: 1,
+      endChapter: 1,
+      chapterNumbers: [1],
+      snapshot: [blueprint],
+      characterSyncInput: [blueprint],
+    }
+    const invoke = stubIpcInvoke({ success: true, receipt })
+
+    await expect(commitDirectoryBlueprintRange(
+      [blueprint],
+      'C:/NovelA',
+      { mode: 'replace-range', startChapter: 1, endChapter: 1 },
+      'directory-run-1',
+      session,
+    )).resolves.toEqual(receipt)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:blueprint-commit-range',
+      {
+        mode: 'replace-range',
+        operationId: 'directory-run-1',
+        startChapter: 1,
+        endChapter: 1,
+        blueprints: [blueprint],
+      },
+      'C:/NovelA',
+      session,
+    )
+  })
 })
 
 describe('directory workflow project context', () => {
-  it('freezes the launch project and lets the main-process guard reject a later cross-project save', async () => {
+  it('freezes the launch project and does not schedule a duplicate post-command save step', async () => {
     const projectA = project('C:\\novels\\A')
-    const projectB = project('C:\\novels\\B')
     useProjectStore.setState({ currentProject: projectA })
     const invoke = stubIpcInvoke({ success: true })
-    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+    invoke.mockImplementation(async (channel: string) => {
       if (channel === 'db:project-core-get') {
         return {
           premise: '故事前提'.repeat(30),
@@ -274,11 +336,6 @@ describe('directory workflow project context', () => {
           worldbuilding: '',
           synopsis: '',
         }
-      }
-      if (channel === 'db:blueprint-upsert-many') {
-        return useProjectStore.getState().currentProject?.path === args[1]
-          ? { success: true }
-          : { success: false, error: '项目上下文已切换' }
       }
       return []
     })
@@ -311,10 +368,7 @@ describe('directory workflow project context', () => {
       .resolves.toContain('架构加载完成')
     expect(invoke).toHaveBeenCalledWith('db:project-core-get', projectA.path, context.projectSession)
 
-    useProjectStore.setState({ currentProject: projectB })
-    await expect(workflow.steps[2].executor(workflowStep('保存蓝图'), context, callbacks))
-      .rejects.toThrow(/项目上下文已切换/)
-    expect(invoke).toHaveBeenCalledWith('db:blueprint-upsert-many', [blueprint], projectA.path, context.projectSession)
-    expect(invoke.mock.calls.some(([, ...args]) => args.includes(projectB.path))).toBe(false)
+    expect(workflow.steps.map(step => step.name)).toEqual(['读取架构', '生成蓝图'])
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert-many')
   })
 })

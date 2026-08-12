@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useProjectStore } from '../../../../stores/project-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
-import { GenerateFieldCommand } from '../generate-field.command'
+import { GenerateFieldCommand as RuntimeGenerateFieldCommand } from '../generate-field.command'
+import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+
+class GenerateFieldCommand extends RuntimeGenerateFieldCommand {
+  constructor(...args: ConstructorParameters<typeof RuntimeGenerateFieldCommand>) {
+    super(args[0], workflowRuntimeDependencies)
+  }
+}
 
 const projectAPath = 'C:\\novels\\A'
 const projectBPath = 'C:\\novels\\B'

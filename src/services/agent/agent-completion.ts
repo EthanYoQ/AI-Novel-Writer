@@ -8,7 +8,7 @@ import type { LLMResponse } from '../../shared/ipc-channels'
 export function requireCompleteAgentResponse(
   response: Pick<LLMResponse, 'success' | 'content' | 'error' | 'finishReason'>,
 ): string {
-  switch (response.finishReason ?? 'stop') {
+  switch (response.finishReason) {
     case 'stop':
       if (response.success) return response.content
       throw new Error(response.error ?? 'LLM 生成失败')

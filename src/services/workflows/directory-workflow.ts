@@ -2,12 +2,20 @@ import type { WorkflowDefinition } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import {
+  decodeBlueprintSemanticPayload,
+  type BlueprintSemanticItem,
+} from '../../shared/blueprint-semantic-contract'
+import {
   projectSessionContextFromProject,
   sameProjectPathKey,
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
-import type { BlueprintData } from '../../../electron/repositories/blueprint-repository'
+import type {
+  BlueprintData,
+  BlueprintRangeCommitMode,
+  BlueprintRangeCommitReceipt,
+} from '../../../electron/repositories/blueprint-repository'
 import { stripThinkingTags } from './workflow-utils'
 import { requireWorkflowProjectSession } from './workflow-project-session'
 
@@ -16,19 +24,6 @@ import { requireWorkflowProjectSession } from './workflow-project-session'
 // ==========================================
 
 export type ChapterBlueprint = BlueprintData
-
-const EMPTY_BLUEPRINT: ChapterBlueprint = {
-  chapterNumber: 0,
-  title: '',
-  role: '发展',
-  purpose: '',
-  keyEvents: '',
-  characters: [],
-  suspenseHook: '',
-  userGuidance: '',
-  notes: '',
-  notesUpdatedAt: '',
-}
 
 export interface DirectoryWorkflowParams {
   mode: 'full' | 'append'
@@ -71,72 +66,41 @@ function extractJsonPayload(content: string): string | null {
   return jsonStr.substring(firstBrace, lastBrace + 1)
 }
 
-function readBlueprintChapterNumber(blueprint: unknown): number | null {
-  if (!blueprint || typeof blueprint !== 'object' || Array.isArray(blueprint)) return null
-  const source = blueprint as Record<string, unknown>
-  const candidate = source.chapterNumber ?? source.chapter_number
-  const chapterNumber = Number(candidate)
-  return Number.isInteger(chapterNumber) ? chapterNumber : null
+function persistedBlueprint(item: BlueprintSemanticItem): ChapterBlueprint {
+  return {
+    ...item,
+    userGuidance: '',
+    notes: '',
+    notesUpdatedAt: '',
+  }
 }
 
-function normalizeBlueprints(
-  parsed: unknown,
-  startNum: number,
-  endNum: number,
-  rejectOutOfRange = false,
-): ChapterBlueprint[] {
-  let blueprintList = parsed
-  if (blueprintList && typeof blueprintList === 'object' && !Array.isArray(blueprintList) && 'blueprints' in blueprintList) {
-    blueprintList = (blueprintList as { blueprints: unknown }).blueprints
-  }
-  if (!Array.isArray(blueprintList)) return []
-
-  if (rejectOutOfRange) {
-    for (const blueprint of blueprintList) {
-      const chapterNumber = readBlueprintChapterNumber(blueprint)
-      if (chapterNumber === null || chapterNumber < startNum || chapterNumber > endNum) {
-        throw new Error(
-          `蓝图包含越界章节或无效章节号（当前批次仅允许第 ${startNum}–${endNum} 章）`,
-        )
-      }
-    }
-  }
-
-  const result = blueprintList
-    .filter((blueprint): blueprint is Record<string, unknown> => {
-      const chapterNumber = readBlueprintChapterNumber(blueprint)
-      return chapterNumber !== null && chapterNumber >= startNum && chapterNumber <= endNum
-    })
-    .map((p: Record<string, unknown>) => {
-      const chapterNumber = readBlueprintChapterNumber(p) ?? 0
-      return {
-        ...EMPTY_BLUEPRINT,
-        chapterNumber,
-        title: String(p.title || `第${chapterNumber}章`),
-        role: String(p.role || '发展'),
-        purpose: String(p.purpose || ''),
-        keyEvents: String(p.keyEvents || p.key_events || ''),
-        characters: Array.isArray(p.characters) ? p.characters : [],
-        relationshipHints: p.relationships ?? p.relations,
-        suspenseHook: String(p.suspenseHook || p.suspense_hook || ''),
-        userGuidance: '',
-      }
-    })
-
-  const distinctMap = new Map<number, ChapterBlueprint>()
-  for (const item of result) {
-    if (!distinctMap.has(item.chapterNumber)) distinctMap.set(item.chapterNumber, item)
-  }
-
-  return Array.from(distinctMap.values()).sort((a, b) => a.chapterNumber - b.chapterNumber)
+function chapterRange(startNum: number, endNum: number): number[] {
+  return Array.from({ length: endNum - startNum + 1 }, (_, index) => startNum + index)
 }
 
 export function parseTextBlueprints(content: string, startNum: number, endNum: number): ChapterBlueprint[] {
   try {
     const payload = extractJsonPayload(content)
     if (!payload) return []
-
-    return normalizeBlueprints(JSON.parse(payload), startNum, endNum)
+    const parsed: unknown = JSON.parse(payload)
+    const candidates = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'blueprints' in parsed
+      ? (parsed as { blueprints: unknown }).blueprints
+      : parsed
+    if (!Array.isArray(candidates)) return []
+    const expected = candidates.flatMap((candidate) => {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return []
+      const raw = candidate as Record<string, unknown>
+      const chapter = Number(raw.chapterNumber ?? raw.chapter_number)
+      return Number.isSafeInteger(chapter) && chapter >= startNum && chapter <= endNum ? [chapter] : []
+    })
+    if (expected.length === 0 || new Set(expected).size !== expected.length) return []
+    const filtered = candidates.filter((candidate) => {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false
+      const raw = candidate as Record<string, unknown>
+      return expected.includes(Number(raw.chapterNumber ?? raw.chapter_number))
+    })
+    return decodeBlueprintSemanticPayload(filtered, expected).map(persistedBlueprint)
   } catch {
     console.error('Failed to parse blueprint JSON', content)
   }
@@ -158,12 +122,7 @@ export function parseTextBlueprintsStrict(content: string, startNum: number, end
     throw new Error(`蓝图 JSON 解析失败：${detail}`)
   }
 
-  const blueprints = normalizeBlueprints(parsed, startNum, endNum, true)
-  if (blueprints.length === 0) {
-    throw new Error(`未解析到第 ${startNum}–${endNum} 章范围内的蓝图`)
-  }
-
-  return blueprints
+  return decodeBlueprintSemanticPayload(parsed, chapterRange(startNum, endNum)).map(persistedBlueprint)
 }
 
 export function assertBlueprintCoverage(
@@ -212,6 +171,31 @@ export async function saveAllBlueprints(
 ): Promise<void> {
   const result = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-upsert-many', blueprints, expectedProjectPath)
   assertIpcSuccess(result, '保存章节蓝图')
+}
+
+export async function commitDirectoryBlueprintRange(
+  blueprints: ChapterBlueprint[],
+  expectedProjectPath: string,
+  range: { mode: BlueprintRangeCommitMode; startChapter: number; endChapter: number },
+  operationId: string,
+  projectSession: ProjectSessionContext,
+): Promise<BlueprintRangeCommitReceipt> {
+  const result = await ipc.invokeWithProjectSession(
+    projectSession,
+    'db:blueprint-commit-range',
+    {
+      mode: range.mode,
+      operationId,
+      startChapter: range.startChapter,
+      endChapter: range.endChapter,
+      blueprints,
+    },
+    expectedProjectPath,
+  )
+  if (!result.success || !result.receipt) {
+    throw new Error(result.error || '提交章节蓝图失败')
+  }
+  return result.receipt
 }
 
 export async function verifyBlueprintsPersisted(
@@ -323,52 +307,13 @@ export function createDirectoryWorkflow(
       },
       {
         name: '生成蓝图',
-        description: '基于架构文件生成全书章节蓝图',
+        description: '基于架构文件生成、完整验证并原子提交章节蓝图',
         executor: async (_step, context, callbacks) => {
           const { GenerateDirectoryCommand } = await import('./commands/directory.command')
           const cmd = new GenerateDirectoryCommand(params, projectSnapshot)
           const blueprints = await cmd.execute({ step: _step, context, callbacks })
           // 返回可读摘要字符串（step.result 必须是 string，否则 AIOutputPanel 渲染会崩溃）
           return `已生成 ${blueprints.length} 章蓝图`
-        },
-      },
-      {
-        name: '保存蓝图',
-        description: `将章节蓝图批量写入 SQLite 数据库`,
-        executor: async (_step, context, callbacks) => {
-          const projectSession = requireWorkflowProjectSession(context)
-          const newBlueprints = context.data.newBlueprints as ChapterBlueprint[]
-          const existingBlueprints = (context.data.existingBlueprints || []) as ChapterBlueprint[]
-
-          callbacks.log('保存蓝图到数据库...')
-
-          let merged: ChapterBlueprint[]
-          if (params.mode === 'full') {
-            merged = newBlueprints
-            // TODO: 若需要清理冗余蓝图，可考虑添加 db:blueprint-delete-all 以严格符合全量替换的意图。
-            // 在当前 upsert-many 中，仅覆盖更新
-          } else {
-            const existingMap = new Map(existingBlueprints.map(b => [b.chapterNumber, b]))
-            for (const nb of newBlueprints) existingMap.set(nb.chapterNumber, nb)
-            merged = Array.from(existingMap.values()).sort((a, b) => a.chapterNumber - b.chapterNumber)
-          }
-
-          await saveAllBlueprints(merged, expectedProjectPath, projectSession)
-          if (sameProjectSessionContext(
-            projectSession,
-            projectSessionContextFromProject(useProjectStore.getState().currentProject),
-          )) {
-            try {
-              await useProjectStore.getState().refreshFileTree(
-                expectedProjectPath,
-                undefined,
-                projectSession,
-              )
-            } catch (error) {
-              callbacks.log(`文件树刷新失败，可稍后手动刷新：${String(error)}`)
-            }
-          }
-          return '已保存蓝图'
         },
       },
     ],

@@ -1,5 +1,8 @@
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
-import type { CharacterRosterEntry } from '../../shared/character-roster'
+import type {
+  CharacterRosterCommitReceipt,
+  CharacterRosterEntry,
+} from '../../shared/character-roster'
 import { ipc } from '../ipc-client'
 import {
   normalizeCharacterCardsForPersistence,
@@ -165,7 +168,7 @@ export async function syncBlueprintCharacterCandidates(
   expectedProjectPath: string,
   projectSession: ProjectSessionContext,
   operationId = `blueprint-sync-${randomUUID()}`,
-): Promise<void> {
+): Promise<CharacterRosterCommitReceipt | null> {
   const sourcesByKey = new Map<string, CharacterSource>()
   for (const blueprint of blueprints) {
     for (const rawName of blueprint.characters) {
@@ -177,7 +180,7 @@ export async function syncBlueprintCharacterCandidates(
       sourcesByKey.set(key, source)
     }
   }
-  if (sourcesByKey.size === 0) return
+  if (sourcesByKey.size === 0) return null
 
   const roster = await ipc.invokeWithProjectSession(
     projectSession,
@@ -222,7 +225,7 @@ export async function syncBlueprintCharacterCandidates(
     changedExisting.push({ ...existing, relationships: mergedEdges })
   }
 
-  if (changedExisting.length === 0 && candidates.length === 0) return
+  if (changedExisting.length === 0 && candidates.length === 0) return null
   const result = await ipc.invokeWithProjectSession(
     projectSession,
     'db:character-roster-commit',
@@ -242,4 +245,5 @@ export async function syncBlueprintCharacterCandidates(
   if (!result.receipt) {
     throw new Error('同步蓝图角色候选未返回已验证的角色名单回执')
   }
+  return result.receipt
 }

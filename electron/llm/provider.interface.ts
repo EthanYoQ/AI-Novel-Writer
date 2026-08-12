@@ -5,6 +5,7 @@ import type {
   TokenUsage,
 } from '../../src/shared/ipc-channels'
 
+/** A provider may report success only with explicit semantic stop evidence. */
 export type LLMResponse = SharedLLMResponse
 
 export interface LLMGenerateOptions {
@@ -18,7 +19,12 @@ export interface LLMGenerateOptions {
 export interface LLMStreamOptions extends LLMGenerateOptions {
   signal: AbortSignal
   onChunk: (chunk: string) => void
-  onDone: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => void
+  /**
+   * Signals transport termination and always carries provider-normalized model
+   * completion evidence. `unknown` keeps text inspectable but is never proof
+   * that a creative workflow may commit it.
+   */
+  onDone: (fullText: string, usage: TokenUsage | undefined, finishReason: LLMFinishReason) => void
   onError: (error: string) => void
 }
 

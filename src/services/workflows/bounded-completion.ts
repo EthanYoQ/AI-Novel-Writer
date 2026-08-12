@@ -6,8 +6,7 @@ const MIN_VISIBLE_OVERLAP_CHARS = 48
 const MAX_BOUNDED_CONTINUATIONS = 7
 const MAX_STRUCTURED_CONTINUATIONS = 2
 const MAX_TEXT_CONTINUATIONS = 3
-const SAFE_UNKNOWN_CONTEXT_WINDOW_TOKENS = 8192
-const SAFE_UNKNOWN_OUTPUT_TOKENS = 4096
+const SAFE_UNKNOWN_CONTINUATION_PROMPT_CHARS = 5376
 const CONTEXT_SAFETY_RESERVE_TOKENS = 512
 const ESTIMATED_CHARS_PER_TOKEN = 1.5
 const MAX_CONTINUATION_PROMPT_CHARS = 12_000
@@ -160,9 +159,16 @@ function insufficientContextBudgetError(): Error {
 
 function continuationPromptCharBudget(budget?: BoundedCompletionPromptBudget): number {
   const contextWindowTokens = positiveSafeInteger(budget?.contextWindowTokens)
-    ?? SAFE_UNKNOWN_CONTEXT_WINDOW_TOKENS
+  if (contextWindowTokens === null) {
+    // Unknown means unknown: bound the continuation prompt by product policy,
+    // but never invent an 8k model window and subtract the leased output cap.
+    const availableChars = SAFE_UNKNOWN_CONTINUATION_PROMPT_CHARS
+      - nonNegativeSafeInteger(budget?.systemPromptChars)
+    if (availableChars <= 0) throw insufficientContextBudgetError()
+    return Math.min(MAX_CONTINUATION_PROMPT_CHARS, availableChars)
+  }
   const maxOutputTokens = positiveSafeInteger(budget?.maxOutputTokens)
-    ?? SAFE_UNKNOWN_OUTPUT_TOKENS
+  if (maxOutputTokens === null) throw insufficientContextBudgetError()
   const inputTokens = contextWindowTokens - maxOutputTokens - CONTEXT_SAFETY_RESERVE_TOKENS
   const availableChars = Math.floor(inputTokens * ESTIMATED_CHARS_PER_TOKEN)
     - nonNegativeSafeInteger(budget?.systemPromptChars)

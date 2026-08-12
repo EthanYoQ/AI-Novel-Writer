@@ -8,13 +8,14 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, IpcHandler>(),
   generate: vi.fn(),
   generateStream: vi.fn(),
+  send: vi.fn(),
   logCall: vi.fn(),
   assertCurrentProjectContext: vi.fn(),
   models: [] as ModelProfile[],
 }))
 
 vi.mock('electron', () => ({
-  BrowserWindow: { fromWebContents: vi.fn(() => ({ webContents: { send: vi.fn() } })) },
+  BrowserWindow: { fromWebContents: vi.fn(() => ({ webContents: { send: mocks.send } })) },
   ipcMain: {
     handle: vi.fn((channel: string, handler: IpcHandler) => {
       mocks.handlers.set(channel, handler)
@@ -290,6 +291,145 @@ describe('llm generation parameter policy controller integration', () => {
   })
 })
 
+describe('llm model execution lease controller integration', () => {
+  function handler(channel:
+    | 'llm:begin-execution-lease'
+    | 'llm:close-execution-lease'
+    | 'llm:generate'
+    | 'llm:generate-stream'
+  ): IpcHandler {
+    const registered = mocks.handlers.get(channel)
+    if (!registered) throw new Error(`Missing ${channel} handler`)
+    return registered
+  }
+
+  it('uses the frozen main-process snapshot after the same model id is edited', async () => {
+    const original: ModelProfile = {
+      ...deepSeekModel,
+      apiKey: 'lease-controller-original-key',
+      baseUrl: 'https://api.deepseek.com',
+      temperature: 0.4,
+    }
+    mocks.models = [original]
+
+    const beginResult = await handler('llm:begin-execution-lease')({}, original.id) as {
+      success: boolean
+      lease?: { leaseId: string }
+    }
+    expect(beginResult.success).toBe(true)
+    expect(beginResult.lease?.leaseId).toEqual(expect.any(String))
+    expect(JSON.stringify(beginResult)).not.toContain(original.apiKey)
+
+    mocks.models = [{
+      ...original,
+      apiKey: 'lease-controller-edited-key',
+      baseUrl: 'https://edited.invalid/v1',
+      temperature: 1,
+    }]
+    await handler('llm:generate')({}, {
+      modelId: original.id,
+      modelExecutionLeaseId: beginResult.lease?.leaseId,
+      messages: [{ role: 'user', content: 'write' }],
+      maxTokens: 512,
+    })
+
+    expect(mocks.generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: original.id,
+        apiKey: 'lease-controller-original-key',
+        baseUrl: 'https://api.deepseek.com',
+        temperature: 0.4,
+      }),
+      [{ role: 'user', content: 'write' }],
+      expect.objectContaining({ temperature: 0.4, maxTokens: 512 }),
+    )
+  })
+
+  it('keeps a stream on its leased model after the configured default changes', async () => {
+    const leasedModel: ModelProfile = {
+      ...deepSeekModel,
+      apiKey: 'lease-stream-original-key',
+      temperature: 0.3,
+    }
+    const newDefaultModel: ModelProfile = {
+      ...deepSeekModel,
+      id: 'new-default-model',
+      modelName: 'new-default-model',
+      apiKey: 'lease-stream-new-default-key',
+      baseUrl: 'https://new-default.invalid/v1',
+      temperature: 1,
+    }
+    mocks.models = [leasedModel]
+    const beginResult = await handler('llm:begin-execution-lease')({}, leasedModel.id) as {
+      success: boolean
+      lease?: { leaseId: string }
+    }
+    mocks.models = [newDefaultModel]
+
+    await expect(handler('llm:generate-stream')({ sender: {} }, 'leased-stream', {
+      modelId: newDefaultModel.id,
+      modelExecutionLeaseId: beginResult.lease?.leaseId,
+      messages: [{ role: 'user', content: 'continue' }],
+      maxTokens: 512,
+    })).resolves.toEqual({ requestId: 'leased-stream', started: true })
+
+    expect(mocks.generateStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: leasedModel.id,
+        apiKey: 'lease-stream-original-key',
+        baseUrl: leasedModel.baseUrl,
+      }),
+      [{ role: 'user', content: 'continue' }],
+      expect.objectContaining({ temperature: 0.3, maxTokens: 512 }),
+    )
+  })
+
+  it('rejects generation after close while making a lost close response safe to retry', async () => {
+    mocks.models = [deepSeekModel]
+    const beginResult = await handler('llm:begin-execution-lease')({}, deepSeekModel.id) as {
+      success: boolean
+      lease?: { leaseId: string }
+    }
+    const leaseId = beginResult.lease?.leaseId
+    expect(leaseId).toEqual(expect.any(String))
+
+    await expect(handler('llm:close-execution-lease')({}, leaseId)).resolves.toEqual({ success: true })
+    mocks.generate.mockClear()
+    await expect(handler('llm:generate')({}, {
+      modelId: deepSeekModel.id,
+      modelExecutionLeaseId: leaseId,
+      messages: [{ role: 'user', content: 'write' }],
+    })).resolves.toMatchObject({
+      success: false,
+      content: '',
+      error: expect.stringContaining('模型执行租约无效'),
+    })
+    expect(mocks.generate).not.toHaveBeenCalled()
+    await expect(handler('llm:close-execution-lease')({}, leaseId)).resolves.toEqual({ success: true })
+
+    await expect(handler('llm:close-execution-lease')({}, 'never-issued-lease')).resolves.toEqual({
+      success: false,
+      error: '模型执行租约无效或已关闭',
+    })
+  })
+
+  it('fails a stream closed when its lease is unknown instead of falling back to model id', async () => {
+    mocks.models = [deepSeekModel]
+    mocks.generateStream.mockClear()
+
+    await expect(handler('llm:generate-stream')({ sender: {} }, 'unknown-lease-stream', {
+      modelId: deepSeekModel.id,
+      modelExecutionLeaseId: 'unknown-model-execution-lease',
+      messages: [{ role: 'user', content: 'write' }],
+    })).resolves.toEqual({
+      requestId: 'unknown-lease-stream',
+      started: false,
+      error: expect.stringContaining('模型执行租约无效'),
+    })
+    expect(mocks.generateStream).not.toHaveBeenCalled()
+  })
+})
+
 describe('llm project statistics', () => {
   const projectSession = {
     projectId: 'project-A',
@@ -333,5 +473,35 @@ describe('llm project statistics', () => {
       messages: [{ role: 'user', content: 'write' }],
     })
     expect(mocks.logCall).not.toHaveBeenCalled()
+  })
+
+  it('normalizes a legacy stream without finish reason to unknown before IPC and statistics', async () => {
+    const handler = mocks.handlers.get('llm:generate-stream')
+    if (!handler) throw new Error('Missing llm:generate-stream handler')
+    mocks.generateStream.mockImplementationOnce((
+      _model: ModelProfile,
+      _messages: unknown,
+      options: { onDone: (fullText: string) => void },
+    ) => {
+      options.onDone('legacy partial text')
+    })
+
+    await expect(handler({ sender: {} }, 'legacy-stream', {
+      modelId: deepSeekModel.id,
+      messages: [{ role: 'user', content: 'write' }],
+      purpose: 'draft',
+      projectSession,
+    })).resolves.toEqual({ requestId: 'legacy-stream', started: true })
+
+    expect(mocks.send).toHaveBeenCalledWith('llm:stream-done', {
+      requestId: 'legacy-stream',
+      fullText: 'legacy partial text',
+      usage: undefined,
+      finishReason: 'unknown',
+    })
+    expect(mocks.logCall).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      errorMessage: 'finish:unknown',
+    }))
   })
 })

@@ -1,7 +1,6 @@
 import { BaseWorkflowCommand, CommandExecuteParams, type LLMCompletion } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { useLLMStore } from '../../../stores/llm-store'
-import { getPromptTemplate } from '../../prompt-templates'
+import { resolvePromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
@@ -15,15 +14,21 @@ import type { ChapterInfo } from '../chapter-workflow'
 import { normalizeChapterWordsTarget } from '../chapter-creation-parameters'
 import { appendVisibleTextContinuation } from '../bounded-completion'
 import { stripThinkingTags } from '../workflow-utils'
+import {
+  createGenerationRuntime,
+  type CreateGenerationRuntimeOptions,
+  type GenerationRuntime,
+} from '../../generation/generation-runtime'
+import type {
+  GenerationAttemptReceipt,
+  GenerationOutcome,
+  GenerationSession,
+} from '../../generation/generation-harness'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MIN_TARGET_COMPLETION_RATIO = 0.82
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const MAX_TARGET_OVERAGE_RATIO = 0.12
-const INPUT_CHARS_PER_TOKEN = 1
-const SAFE_DEFAULT_MODEL_MAX_TOKENS = 4096
-const UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS = 8192
-const CONTEXT_SAFETY_RESERVE_TOKENS = 512
 const CHINESE_CHARACTER_PATTERN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu
 const ENGLISH_WORD_PATTERN = /[A-Za-z]+(?:['’][A-Za-z]+)*/g
 const WHITESPACE_OR_PUNCTUATION_PATTERN = /[\s\p{P}\p{S}]/gu
@@ -61,96 +66,50 @@ function maxDraftCharsForTarget(targetChars: number): number {
   return Math.floor(targetChars * (1 + MAX_TARGET_OVERAGE_RATIO))
 }
 
-export interface DraftModelLimits {
-  /** `null` means the model did not declare a context window; it is not a guessed model limit. */
-  contextWindowTokens: number | null
-  /** The request output ceiling, resolved from new capability metadata or legacy maxTokens. */
-  maxOutputTokens: number
-  /** Whether the endpoint may consume output budget on hidden reasoning. */
-  reasoning: boolean
+export const DRAFT_GENERATION_BUDGET = Object.freeze({
+  maxAttempts: 8,
+  maxRequestedOutputTokens: 32_768,
+  maxRequestedOutputTokensPerAttempt: 8192,
+  deadlineMs: 20 * 60_000,
+})
+
+export interface GenerateDraftCommandDependencies {
+  createRuntime(options: CreateGenerationRuntimeOptions): Promise<GenerationRuntime>
 }
 
-function positiveTokenLimit(value: unknown): number | null {
-  const parsed = Math.trunc(Number(value))
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+const DEFAULT_DEPENDENCIES: GenerateDraftCommandDependencies = {
+  createRuntime: options => createGenerationRuntime(options),
 }
 
-/**
- * Resolve persisted model data at the workflow boundary. Older profiles only
- * have `maxTokens`; unknown or malformed context windows must remain unknown,
- * rather than becoming a fabricated provider limit.
- */
-export function resolveDraftModelLimits(model?: {
-  maxTokens?: unknown
-    capabilities?: {
-      contextWindowTokens?: unknown
-      maxOutputTokens?: unknown
-      reasoning?: unknown
-  } | null
-} | null): DraftModelLimits {
+function observeWorkflowCancellation(context: CommandExecuteParams['context']): {
+  signal: AbortSignal
+  dispose(): void
+} {
+  const controller = new AbortController()
+  const timer = setInterval(() => {
+    if (context.cancelled) controller.abort()
+  }, 25)
+  if (context.cancelled) controller.abort()
   return {
-    contextWindowTokens: positiveTokenLimit(model?.capabilities?.contextWindowTokens),
-    maxOutputTokens: positiveTokenLimit(model?.capabilities?.maxOutputTokens)
-      ?? positiveTokenLimit(model?.maxTokens)
-      ?? SAFE_DEFAULT_MODEL_MAX_TOKENS,
-    reasoning: model?.capabilities?.reasoning === true,
+    signal: controller.signal,
+    dispose: () => clearInterval(timer),
   }
 }
 
-function defaultModelLimits(): DraftModelLimits {
-  const { defaultModelId, models } = useLLMStore.getState()
-  return resolveDraftModelLimits(models.find(model => model.id === defaultModelId))
-}
-
-function estimatedPromptTokens(prompt: string): number {
-  // Prompt estimation is intentionally conservative for Chinese text. It is
-  // used only to protect the context window, never to derive an output budget
-  // from the requested chapter length.
-  return Math.ceil(prompt.length / INPUT_CHARS_PER_TOKEN)
-}
-
-interface DraftRequestBudget {
-  maxTokens: number
-  contextCapacityTokens: number
-  contextWindowDeclared: boolean
-}
-
-function resolveDraftRequestBudget(
-  prompt: string,
-  systemPrompt: string,
-  modelLimits: DraftModelLimits,
-): DraftRequestBudget {
-  const inputTokens = estimatedPromptTokens(`${systemPrompt}\n${prompt}`)
-  const contextWindowTokens = modelLimits.contextWindowTokens ?? UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS
-  const contextCapacityTokens = contextWindowTokens - inputTokens - CONTEXT_SAFETY_RESERVE_TOKENS
-  if (contextCapacityTokens <= 0) {
-    const source = modelLimits.contextWindowTokens === null
-      ? `当前模型未声明上下文窗口，本次按保守窗口 ${UNKNOWN_CONTEXT_SAFE_WINDOW_TOKENS} tokens 估算`
-      : `模型已声明上下文窗口 ${contextWindowTokens} tokens`
-    throw new Error(
-      `${source}；当前输入上下文预算扣除 Prompt 约 ${inputTokens} tokens 与安全余量 ` +
-      `${CONTEXT_SAFETY_RESERVE_TOKENS} 后，已无安全输出空间。` +
-      '请缩短项目设定、提示词或前文，或选择上下文窗口更大的模型后重试。',
-    )
-  }
-  return {
-    maxTokens: Math.min(modelLimits.maxOutputTokens, contextCapacityTokens),
-    contextCapacityTokens,
-    contextWindowDeclared: modelLimits.contextWindowTokens !== null,
-  }
-}
-
-function logDraftRequestBudget(
+function logDraftAttempt(
   callbacks: CommandExecuteParams['callbacks'],
   phase: string,
-  budget: DraftRequestBudget,
-  modelLimits: DraftModelLimits,
+  receipt: GenerationAttemptReceipt,
 ): void {
-  const contextLabel = budget.contextWindowDeclared ? '已声明上下文' : '保守上下文'
   callbacks.log(
-    `  ${phase}：请求上限 ${budget.maxTokens} Tokens` +
-    `（模型配置上限 ${modelLimits.maxOutputTokens}，${contextLabel}可用输出 ${budget.contextCapacityTokens}）`,
+    `  ${phase}：租约请求上限 ${receipt.budget.requestedOutputTokens} Tokens` +
+    `（单次上限 ${receipt.budget.maxRequestedOutputTokensPerAttempt}，` +
+    `累计 ${receipt.budget.cumulativeRequestedOutputTokens}/${receipt.budget.maxRequestedOutputTokens}）`,
   )
+}
+
+function completionFromOutcome(outcome: GenerationOutcome): LLMCompletion {
+  return { content: outcome.content, finishReason: outcome.finishReason, receipt: outcome.receipt }
 }
 
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
@@ -205,9 +164,14 @@ function capDraftAtNaturalBoundary(text: string, maxChars: number): string {
 }
 
 export class GenerateDraftCommand extends BaseWorkflowCommand {
+  private readonly dependencies: GenerateDraftCommandDependencies
 
-  constructor(private chapterInfo: ChapterInfo) {
+  constructor(
+    private chapterInfo: ChapterInfo,
+    dependencies: Partial<GenerateDraftCommandDependencies> = {},
+  ) {
     super()
+    this.dependencies = { ...DEFAULT_DEPENDENCIES, ...dependencies }
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
@@ -243,7 +207,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
     const isFirstChapter = this.chapterInfo.chapterNumber === 1
     const templateKey = isFirstChapter ? 'first_chapter_draft' : 'next_chapter_draft'
-    const template = getPromptTemplate(templateKey, projectSession)
+    const template = await resolvePromptTemplate(templateKey, projectSession)
     if (!template) throw new Error(`未找到模板: ${templateKey}`)
 
     // ==========================================
@@ -257,6 +221,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       .withWritingStyle(novelConfig.writingStyle || '')
       .withNovelConfig(novelConfig)
       .withWordNumber(normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter))
+      // ---- 章节公共区（首章与后续章都必须完整注入）----
+      .withChapterInfo(this.chapterInfo)
+      .withFutureBlueprints(futureBlueprintsStr)
+      .withUserGuidance(this.chapterInfo.userGuidance?.trim() || '（无微操指导）')
 
     if (!isFirstChapter) {
       // 从蓝图 JSON 的 notes 字段读取章节要点时间线（按序拼装，利于前缀缓存）
@@ -301,42 +269,63 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         .withCharacterStates(characterState)
         // ---- 缓存失效区（逐章变化）----
         .withPreviousEnding(previousEnding || '（无前文）')
-        .withChapterInfo(this.chapterInfo)
-        .withFutureBlueprints(futureBlueprintsStr)
         .withFilteredContext(filteredContext)
         .withShortSummary('')
-        .withUserGuidance(this.chapterInfo.userGuidance?.trim() || '（无微操指导）')
     }
 
-    // 输入与输出预算独立：输出上限来自模型配置，输入则必须为输出和
-    // 上下文安全余量留出空间，不能把 legacy maxTokens 当作上下文窗口。
     const prompt = promptBuilder.build()
     const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
     const maxDraftChars = maxDraftCharsForTarget(targetChars)
-    const modelLimits = defaultModelLimits()
-    const initialBudget = resolveDraftRequestBudget(prompt, promptBuilder.getSystemRole(), modelLimits)
 
     callbacks.log('调用 AI 生成章节草稿...')
-    logDraftRequestBudget(callbacks, '初始生成', initialBudget, modelLimits)
-    const initialCompletion = await this.callLLMResultWithBuilder(promptBuilder, callbacks, {
-      thinking: false,
-      maxTokens: initialBudget.maxTokens,
-    }, context)
-    callbacks.log(`  初始生成完成：finishReason=${initialCompletion.finishReason}`)
     this.assertNotCancelled(context)
-    const cleanDraftText = await this.extendDraftIfNeeded({
-      initialDraft: sanitizeDraftText(this.stripThinkingTags(initialCompletion.content)),
-      initialFinishReason: initialCompletion.finishReason,
-      targetChars,
-      callbacks,
-      context,
-      systemRole: promptBuilder.getSystemRole(),
-      chapterInfo: this.chapterInfo,
-      futureBlueprints: futureBlueprintsStr,
-      globalGuidance: mergedGuidance,
-      writingStyle: novelConfig.writingStyle || '',
-      modelLimits,
-    })
+    const cancellation = observeWorkflowCancellation(context)
+    let runtime: GenerationRuntime | null = null
+    let cleanDraftText: string
+    try {
+      runtime = await this.dependencies.createRuntime({ budget: DRAFT_GENERATION_BUDGET })
+      cleanDraftText = await runtime.execute(async ({ session }) => {
+        this.assertNotCancelled(context)
+        callbacks.setProgress(10)
+        const initialOutcome = await session.complete({
+          purpose: 'chapter-draft',
+          output: 'visible-text',
+          messages: [
+            { role: 'system', content: promptBuilder.getSystemRole() },
+            { role: 'user', content: prompt },
+          ],
+        }, { signal: cancellation.signal })
+        const initialCompletion = completionFromOutcome(initialOutcome)
+        logDraftAttempt(callbacks, '初始生成', initialOutcome.receipt)
+        callbacks.log(`  初始生成响应结束：finishReason=${initialCompletion.finishReason}`)
+        callbacks.appendText(sanitizeDraftText(this.stripThinkingTags(initialCompletion.content)))
+        callbacks.setProgress(90)
+        this.assertNotCancelled(context)
+        return this.extendDraftIfNeeded({
+          session,
+          signal: cancellation.signal,
+          initialDraft: sanitizeDraftText(this.stripThinkingTags(initialCompletion.content)),
+          initialFinishReason: initialCompletion.finishReason,
+          targetChars,
+          callbacks,
+          context,
+          systemRole: promptBuilder.getSystemRole(),
+          chapterInfo: this.chapterInfo,
+          futureBlueprints: futureBlueprintsStr,
+          globalGuidance: mergedGuidance,
+          writingStyle: novelConfig.writingStyle || '',
+          reasoning: initialOutcome.receipt.capabilities.reasoning === true,
+        })
+      })
+    } catch (error) {
+      if (context.cancelled) throw new Error('工作流已取消')
+      throw error
+    } finally {
+      cancellation.dispose()
+      if (runtime) {
+        try { await runtime.close() } catch { /* execute close failure already fails before persistence */ }
+      }
+    }
     this.assertNotCancelled(context)
     const boundedDraftText = capDraftAtNaturalBoundary(cleanDraftText, maxDraftChars)
     if (!boundedDraftText) {
@@ -417,14 +406,17 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     finishReason: LLMCompletion['finishReason'],
   ): boolean {
     if (rounds >= MAX_AUTO_CONTINUE_ROUNDS) return false
-    // `stop` means the provider declares this response complete. Only an
-    // explicit output-length terminal state is eligible for continuation.
-    if (finishReason !== 'length') return false
     const currentChars = countDraftUnits(currentText)
+    if (finishReason === 'stop') {
+      return currentChars < Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
+    }
+    if (finishReason !== 'length') return false
     return currentChars < maxDraftCharsForTarget(targetChars)
   }
 
   private async extendDraftIfNeeded(params: {
+    session: GenerationSession
+    signal: AbortSignal
     initialDraft: string
     initialFinishReason: LLMCompletion['finishReason']
     targetChars: number
@@ -435,14 +427,14 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     futureBlueprints: string
     globalGuidance: string
     writingStyle: string
-    modelLimits: DraftModelLimits
+    reasoning: boolean
   }): Promise<string> {
     let draft = params.initialDraft
     let rounds = 0
     let lastFinishReason = params.initialFinishReason
 
     if (
-      params.modelLimits.reasoning
+      params.reasoning
       && lastFinishReason === 'length'
       && countDraftUnits(draft) < 100
     ) {
@@ -485,29 +477,18 @@ ${params.writingStyle || '（无）'}
 【已写正文末尾】
 ${visibleTail}`
 
-      const continuationBudget = resolveDraftRequestBudget(
-        continuationPrompt,
-        params.systemRole,
-        params.modelLimits,
-      )
-      logDraftRequestBudget(
-        params.callbacks,
-        `自动续写第 ${rounds} 段`,
-        continuationBudget,
-        params.modelLimits,
-      )
-
-      const addition = await this.callLLMResult(
-        continuationPrompt,
-        params.systemRole,
-        params.callbacks,
-        {
-          thinking: false,
-          maxTokens: continuationBudget.maxTokens,
-        },
-        params.context
-      )
-      params.callbacks.log(`  自动续写第 ${rounds} 段完成：finishReason=${addition.finishReason}`)
+      const outcome = await params.session.complete({
+        purpose: 'chapter-draft-continuation',
+        output: 'visible-text',
+        messages: [
+          { role: 'system', content: params.systemRole },
+          { role: 'user', content: continuationPrompt },
+        ],
+      }, { signal: params.signal })
+      const addition = completionFromOutcome(outcome)
+      logDraftAttempt(params.callbacks, `自动续写第 ${rounds} 段`, outcome.receipt)
+      params.callbacks.log(`  自动续写第 ${rounds} 段响应结束：finishReason=${addition.finishReason}`)
+      params.callbacks.appendText(sanitizeDraftText(this.stripThinkingTags(addition.content)))
       this.assertNotCancelled(params.context)
       lastFinishReason = addition.finishReason
       const beforeChars = countDraftUnits(draft)

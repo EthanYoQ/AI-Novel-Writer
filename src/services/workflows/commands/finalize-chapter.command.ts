@@ -1,8 +1,7 @@
 import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
-import type { WorkflowContext } from '../../../stores/workflow-store'
+import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import { useProjectStore } from '../../../stores/project-store'
-import { useLLMStore } from '../../../stores/llm-store'
-import { getPromptTemplate } from '../../prompt-templates'
+import { resolvePromptTemplate } from '../../prompt-templates'
 import { PostProcessPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
@@ -16,14 +15,13 @@ import {
 import {
   runPostProcessPipeline,
   getChapterFinalizeScope,
-  stripThinkingTags,
   type PostProcessStep,
+  type PostProcessStatus,
 } from '../workflow-utils'
 import type { ChapterInfo } from '../chapter-workflow'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
 import type { CharacterRosterEntry, CharacterRosterRole } from '../../../shared/character-roster'
-import { createBoundedCompletionError } from '../bounded-completion'
 
 export interface FinalizeChapterParams {
   draftPath: string
@@ -38,89 +36,13 @@ export interface FinalizeChapterParams {
   snapshot?: FinalizationSnapshot
 }
 
-// ===== 工具函数：流式调用大模型并返回完整文本 =====
-
-/**
- * 使用 PromptBuilder 调用 LLM（不依赖 BaseWorkflowCommand 实例）
- * 独立函数，可被 PostProcessStep 的 executor 直接调用
- */
-async function callLLMForPostProcess(
-  builder: { build: () => string; getSystemRole: () => string },
-  callbacks: { appendText: (text: string) => void },
-  options?: { responseFormat?: { type: string } },
-  context?: WorkflowContext,
-): Promise<string> {
-  if (context?.cancelled) throw new Error('工作流已取消')
-  const llmStore = useLLMStore.getState()
-  if (!llmStore.defaultModelId) throw new Error('未配置默认 AI 模型')
-
-  return new Promise<string>((resolve, reject) => {
-    let fullContent = ''
-    let streamRequestId = ''
-    let cancelCheckTimer: ReturnType<typeof setInterval> | null = null
-    const cleanup = () => {
-      if (cancelCheckTimer) {
-        clearInterval(cancelCheckTimer)
-        cancelCheckTimer = null
-      }
-    }
-    if (context) {
-      cancelCheckTimer = setInterval(() => {
-        if (context.cancelled && streamRequestId) {
-          cleanup()
-          llmStore.cancelGeneration(streamRequestId).catch(() => {})
-          reject(new Error('工作流已取消'))
-        }
-      }, 200)
-    }
-    llmStore.generateStream(
-      [
-        { role: 'system', content: builder.getSystemRole() },
-        { role: 'user', content: builder.build() },
-      ],
-      {
-        onChunk: (chunk) => {
-          if (context?.cancelled) return
-          fullContent += chunk
-          callbacks.appendText(chunk)
-        },
-        onDone: (text, _usage, finishReason) => {
-          cleanup()
-          if (context?.cancelled) {
-            reject(new Error('工作流已取消'))
-            return
-          }
-          const terminalReason = finishReason ?? 'stop'
-          if (terminalReason !== 'stop') {
-            reject(createBoundedCompletionError(terminalReason))
-            return
-          }
-          const raw = text || fullContent
-          resolve(stripThinkingTags(raw))
-        },
-        onError: (err) => {
-          cleanup()
-          reject(new Error(err || '流式生成失败'))
-        },
-      },
-      undefined,
-      {
-        ...options,
-        purpose: 'post-process',
-        projectSession: context?.projectSession,
-      },
-    ).then((requestId) => {
-      streamRequestId = requestId
-      if (context?.cancelled) {
-        llmStore.cancelGeneration(requestId).catch(() => {})
-        cleanup()
-        reject(new Error('工作流已取消'))
-      }
-    }).catch((error) => {
-      cleanup()
-      reject(error)
-    })
-  })
+export interface FinalizePostProcessGeneration {
+  complete(
+    builder: { build: () => string; getSystemRole: () => string },
+    callbacks: StepCallbacks,
+    output: 'visible-text' | 'structured-data',
+    context: WorkflowContext,
+  ): Promise<string>
 }
 
 /** 容错 JSON 解析（剥离 Markdown 代码块 + 自动截取有效 JSON 边界） */
@@ -153,6 +75,7 @@ export function buildFinalizePostProcessSteps(
   chapterNumber: number,
   chapterTitle: string,
   draftContent: string,
+  generation: FinalizePostProcessGeneration,
 ): PostProcessStep[] {
   const steps: PostProcessStep[] = []
 
@@ -189,14 +112,14 @@ export function buildFinalizePostProcessSteps(
         if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
         if (context.cancelled) throw new Error('工作流已取消')
         const projectSession = requireWorkflowProjectSession(context)
-        const notesTemplate = getPromptTemplate('generate_chapter_notes', projectSession)
+        const notesTemplate = await resolvePromptTemplate('generate_chapter_notes', projectSession)
         if (!notesTemplate) throw new Error('未找到章节要点模板')
         const notesBuilder = new PostProcessPromptBuilder(notesTemplate)
           .withChapterContent(draftContent)
           .withChapterNumber(chapterNumber)
           .withChapterTitle(chapterTitle)
 
-        const cleanNotes = await callLLMForPostProcess(notesBuilder, callbacks, undefined, context)
+        const cleanNotes = await generation.complete(notesBuilder, callbacks, 'visible-text', context)
         if (context?.cancelled) throw new Error('工作流已取消')
 
         // 写入蓝图 JSON 的 notes 字段
@@ -222,7 +145,7 @@ export function buildFinalizePostProcessSteps(
         if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
         if (context.cancelled) throw new Error('工作流已取消')
         const projectSession = requireWorkflowProjectSession(context)
-        const cardTemplate = getPromptTemplate('update_character_cards', projectSession)
+        const cardTemplate = await resolvePromptTemplate('update_character_cards', projectSession)
         if (!cardTemplate) throw new Error('未找到角色状态模板')
         // 章节定稿只读取并提交结构化角色名单。状态、新角色、图谱投影和
         // revision 由同一个 roster receipt 结算，绝不逐张卡片部分成功。
@@ -243,10 +166,10 @@ export function buildFinalizePostProcessSteps(
           .withChapterNumber(chapterNumber)
           .withExistingCardsJson(simpleCards)
 
-        const cardsResult = await callLLMForPostProcess(
+        const cardsResult = await generation.complete(
           cardBuilder,
           callbacks,
-          { responseFormat: { type: 'json_object' } },
+          'structured-data',
           context,
         )
         if (context?.cancelled) throw new Error('工作流已取消')
@@ -378,6 +301,63 @@ export function buildFinalizePostProcessSteps(
   return steps
 }
 
+export interface RunFinalizePostProcessParams {
+  project: { path: string }
+  chapterNumber: number
+  chapterTitle: string
+  draftContent: string
+  sourceLabel: string
+  stopOnFailure?: boolean
+  onlyFailed?: boolean
+}
+
+/** One post-process run freezes one model and one budget across notes/cards. */
+export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProcessStatus> {
+  constructor(private readonly params: RunFinalizePostProcessParams) {
+    super()
+  }
+
+  async execute(params: CommandExecuteParams): Promise<PostProcessStatus> {
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+  }
+
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<PostProcessStatus> {
+    const projectSession = requireWorkflowProjectSession(context)
+    const generation: FinalizePostProcessGeneration = {
+      complete: async (builder, stepCallbacks, output, generationContext) => this.callLLM(
+        builder.build(),
+        builder.getSystemRole(),
+        stepCallbacks,
+        {
+          ...(output === 'structured-data' ? { responseFormat: { type: 'json_object' } } : {}),
+          purpose: 'post-process',
+        },
+        generationContext,
+      ),
+    }
+    const steps = buildFinalizePostProcessSteps(
+      this.params.project,
+      this.params.chapterNumber,
+      this.params.chapterTitle,
+      this.params.draftContent,
+      generation,
+    )
+    return runPostProcessPipeline(
+      this.params.project.path,
+      getChapterFinalizeScope(this.params.chapterNumber),
+      this.params.sourceLabel,
+      steps,
+      callbacks,
+      {
+        stopOnFailure: this.params.stopOnFailure,
+        onlyFailed: this.params.onlyFailed,
+        cancellation: context,
+        projectSession,
+      },
+    )
+  }
+}
+
 // ===== 定稿命令 =====
 
 export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
@@ -439,20 +419,15 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
     // 3. 通过 PostProcessPipeline 执行后处理（状态持久化 + 支持重试）
     callbacks.log('正在启动后台大模型推演系统更新全书状态...')
 
-    const scope = getChapterFinalizeScope(snapshot.chapterNumber)
     const sourceLabel = `第${snapshot.chapterNumber}章定稿`
-    const steps = buildFinalizePostProcessSteps(
+    const postProcessStatus = await new RunFinalizePostProcessCommand({
       project,
-      snapshot.chapterNumber,
-      snapshot.chapterTitle,
-      refinedDraftText,
-    )
-
-    const postProcessStatus = await runPostProcessPipeline(project.path, scope, sourceLabel, steps, callbacks, {
+      chapterNumber: snapshot.chapterNumber,
+      chapterTitle: snapshot.chapterTitle,
+      draftContent: refinedDraftText,
+      sourceLabel,
       stopOnFailure: this.params.stopOnPostProcessFailure,
-      cancellation: context,
-      projectSession,
-    })
+    }).execute({ step: {}, context, callbacks })
     this.assertNotCancelled(context)
 
     if (this.params.stopOnPostProcessFailure) {

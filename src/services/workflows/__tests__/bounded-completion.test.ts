@@ -185,4 +185,25 @@ describe('bounded completion', () => {
 
     expect(requestContinuation).not.toHaveBeenCalled()
   })
+
+  it('does not fabricate an 8192 context window and pre-reject an unknown model with an 8192 output cap', async () => {
+    const requestContinuation = vi.fn().mockResolvedValue({
+      content: '{"chapters":[]}',
+      finishReason: 'stop',
+    })
+
+    await expect(completeBoundedCompletion({
+      initial: { content: '{"chapters":[', finishReason: 'length' },
+      mode: 'replace-structured-output',
+      maxContinuations: 1,
+      originalPrompt: '返回完整 JSON',
+      promptBudget: {
+        contextWindowTokens: null,
+        maxOutputTokens: 8192,
+      },
+      requestContinuation,
+    })).resolves.toBe('{"chapters":[]}')
+
+    expect(requestContinuation).toHaveBeenCalledOnce()
+  })
 })

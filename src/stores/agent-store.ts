@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import { useLLMStore } from './llm-store'
 import { buildAgentSystemPrompt } from '../services/agent/context-builder'
 import { runAgentLoop, type ToolCallInfo, type LLMMessage } from '../services/agent/agent-engine'
 import { registerBuiltinTools } from '../services/agent/tools'
@@ -8,8 +7,14 @@ import { parseSlashCommand, parseMentions, mentionsToToolCalls } from '../servic
 import { toolRegistry } from '../services/agent/tool-registry'
 import type { ToolArtifact } from '../services/agent/tool-registry'
 import { createAgentExecutionContext } from '../services/agent/tools/project-context'
-import { requireCompleteAgentResponse } from '../services/agent/agent-completion'
-import type { LLMResponse } from '../shared/ipc-channels'
+import { createGenerationRuntime } from '../services/generation/generation-runtime'
+
+export const AGENT_GENERATION_BUDGET = Object.freeze({
+  maxAttempts: 8,
+  maxRequestedOutputTokens: 65_536,
+  maxRequestedOutputTokensPerAttempt: 8192,
+  deadlineMs: 20 * 60_000,
+})
 
 // ===== 类型定义 =====
 
@@ -169,7 +174,6 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     // 确保 Tool 已初始化
     get().initializeTools()
 
-    const llmStore = useLLMStore.getState()
     const newConv: AgentConversation = {
       id: genId(),
       title: '新对话',
@@ -177,7 +181,9 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       createdAt: Date.now(),
       updatedAt: Date.now(),
       mode: get().defaultMode,
-      modelId: llmStore.defaultModelId,
+      // Null means “use the default once when a run starts”; the runtime then
+      // freezes the selected lease across the entire ReAct loop.
+      modelId: null,
     }
     set(state => ({
       conversations: [newConv, ...state.conversations],
@@ -359,17 +365,8 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     }
 
     try {
-      const llmStore = useLLMStore.getState()
       const currentConv = get().conversations.find(c => c.id === convId)!
-      const modelId = currentConv.modelId ?? llmStore.defaultModelId ?? undefined
-
-      if (!modelId) {
-        updateAssistantMsg(m => ({
-          ...m, content: '⚠️ 请先在设置中配置 AI 模型。', streaming: false,
-        }))
-        set({ generating: false })
-        return
-      }
+      const modelId = currentConv.modelId ?? undefined
 
       // @ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
       const executionContext = createAgentExecutionContext()
@@ -406,31 +403,42 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         .slice(-16)
         .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
-      // LLM 生成函数（封装为非流式调用，Agent 专用参数）
-      const generateFn = async (messages: LLMMessage[], mid: string): Promise<string> => {
-        const response = await llmStore.generate(
-          messages.map(m => ({ role: m.role, content: m.content })),
-          mid,
-          {
-            purpose: 'agent',
-            projectSession: executionContext.projectSession ?? undefined,
-          },
-        )
-        return requireCompleteAgentResponse(response as Pick<LLMResponse, 'success' | 'content' | 'error' | 'finishReason'>)
-      }
-
       // AbortController 用于取消（P1-7: 提升到模块级变量以便 cancelGeneration 访问）
       const abortController = new AbortController()
       activeAbortController = abortController
       set({ activeRequestId: assistantMsg.id })
 
-      // 启动 ReAct 循环（使用预取增强后的用户消息）
-      await runAgentLoop(
+      // 整个 ReAct 循环只冻结一个模型租约和一份调用/token/deadline预算。
+      const runtime = await createGenerationRuntime({
+        ...(modelId ? { modelId } : {}),
+        budget: AGENT_GENERATION_BUDGET,
+      })
+      await runtime.execute(async ({ session }) => runAgentLoop(
         systemPrompt,
         historyMessages,
         enrichedUserMessage,
         modelId,
-        generateFn,
+        async (messages) => {
+          const outcome = await session.complete({
+            purpose: 'agent',
+            output: 'visible-text',
+            messages: messages.map(message => ({
+              role: message.role,
+              content: message.content,
+            })),
+          }, { signal: abortController.signal })
+          if (outcome.status !== 'completed') {
+            switch (outcome.finishReason) {
+              case 'length':
+                throw new Error('AI 输出达到模型最大长度，未将不完整内容写入对话或执行工具。请提高模型最大输出 Tokens 或缩短任务后重试。')
+              case 'content_filter':
+                throw new Error('AI 输出因内容限制而未完成，未将不完整内容写入对话或执行工具。')
+              default:
+                throw new Error('AI 未正常完成生成，未将不完整内容写入对话或执行工具。')
+            }
+          }
+          return outcome.content
+        },
         {
           onTextChunk: (chunk) => {
             // 清理所有形式的 tool_call/tool_result 标签（完整对 + 孤立片段）
@@ -508,7 +516,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         },
         abortController.signal,
         executionContext,
-      )
+      ))
     } catch (error) {
       updateAssistantMsg(m => ({
         ...m,
@@ -520,16 +528,10 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
   },
 
   cancelGeneration: async () => {
-    const { activeRequestId } = get()
-
     // P1-7: 触发 AbortSignal，使 ReAct 循环真正中止
     if (activeAbortController) {
       activeAbortController.abort()
       activeAbortController = null
-    }
-
-    if (activeRequestId) {
-      await useLLMStore.getState().cancelGeneration(activeRequestId)
     }
 
     // P1-8: 清理所有等待确认的 Promise，防止内存泄漏
