@@ -1,0 +1,22 @@
+# Keep source and release contracts byte-stable across Windows and POSIX checkouts.
+* text=auto eol=lf
+
+# Windows command scripts are the only text artifacts that require CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary release and documentation assets must never be line-normalized.
+*.dll binary
+*.dmg binary
+*.exe binary
+*.gif binary
+*.ico binary
+*.jpeg binary
+*.jpg binary
+*.pdf binary
+*.png binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.zip binary

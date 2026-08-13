@@ -127,12 +127,16 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(artifactStep).toContain('macos-qualified')
 
     const finalizeEvidence = namedStep(workflow, 'Finalize macOS v2 acceptance receipts')
+    const removeUnpackedBuild = namedStep(workflow, 'Remove unpacked macOS build intermediary')
+    expect(removeUnpackedBuild).toContain('rm -rf -- "release/$version/mac-arm64"')
     expect(finalizeEvidence).toContain('release-evidence-v2.mjs finalize --platform macos')
     expect(finalizeEvidence).toContain('--evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT"')
     expect(finalizeEvidence).toContain('--release-root "release/$version"')
     expect(finalizeEvidence).toContain('verify-bundle --platform macos')
     expect(finalizeEvidence).toContain('finalize-legacy-qualification.mjs --platform macos')
     expect(workflow.indexOf('Finalize macOS v2 acceptance receipts')).toBeGreaterThan(workflow.indexOf('Run mounted-DMG smoke'))
+    expect(workflow.indexOf('Remove unpacked macOS build intermediary')).toBeGreaterThan(workflow.indexOf('Run mounted-DMG smoke'))
+    expect(workflow.indexOf('Remove unpacked macOS build intermediary')).toBeLessThan(workflow.indexOf('Finalize macOS v2 acceptance receipts'))
     expect(workflow.indexOf('Finalize macOS v2 acceptance receipts')).toBeLessThan(workflow.indexOf('Upload runtime-verified macOS ARM64 package'))
 
     expect(packageMetadata.scripts?.['build:mac:artifacts']).toContain('node scripts/build-release-vector-smoke-runner.mjs')

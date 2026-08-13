@@ -93,6 +93,13 @@ jobs:
       - name: Run mounted-DMG smoke
         run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step mounted-dmg-smoke -- pnpm run smoke:mac-dmg
 
+      - name: Remove unpacked macOS build intermediary
+        if: ${{ success() }}
+        run: |
+          set -euo pipefail
+          version='${{ inputs.release_version }}'
+          rm -rf -- "release/$version/mac-arm64"
+
       - name: Record verified toolchain
         if: ${{ success() }}
         run: |

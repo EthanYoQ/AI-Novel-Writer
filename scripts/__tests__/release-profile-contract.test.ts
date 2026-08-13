@@ -21,6 +21,25 @@ describe('desktop release profile contract', () => {
     expect(rawSha256(promotionWorkflowPath)).toBe('6929a232d08e33c5af43c0e9b07759b0122dc884e9c1f8cc227d7bddfc109631')
   })
 
+  it('pins release source and tests to LF in every Git checkout', () => {
+    const attributes = spawnSync('git', [
+      '-c', 'core.attributesfile=',
+      'check-attr', 'eol', '--',
+      '.release/scripts/validate-release-profile.mjs',
+      '.release/scripts/github-desktop-promotion.mjs',
+      '.github/workflows/cross-platform-runtime-artifact-promotion.yml',
+      'scripts/__tests__/release-qualification-adapter.test.ts',
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+
+    expect(attributes.status, attributes.stderr).toBe(0)
+    expect(attributes.stdout.trim().split(/\r?\n/u)).toEqual([
+      '.release/scripts/validate-release-profile.mjs: eol: lf',
+      '.release/scripts/github-desktop-promotion.mjs: eol: lf',
+      '.github/workflows/cross-platform-runtime-artifact-promotion.yml: eol: lf',
+      'scripts/__tests__/release-qualification-adapter.test.ts: eol: lf',
+    ])
+  })
+
   it('declares the exact project release facts and passes the shared validator', () => {
     expect(existsSync(profilePath)).toBe(true)
     const validation = spawnSync(process.execPath, [validatorPath, '--profile', profilePath], {
