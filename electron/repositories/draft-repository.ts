@@ -233,6 +233,7 @@ export class DraftRepository {
         if (!db) throw new Error('[DraftRepository] 数据库未连接')
 
         const tx = db.transaction(() => {
+            db.prepare('DELETE FROM finalized_draft_import_operations').run()
             db.prepare('DELETE FROM post_process_steps').run()
             db.prepare('DELETE FROM post_process_runs').run()
             db.prepare('DELETE FROM reviews').run()

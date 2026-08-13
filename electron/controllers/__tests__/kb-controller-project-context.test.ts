@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, IpcHandler>(),
   run: vi.fn(),
   assertCurrentProjectContext: vi.fn(),
+  assertKnowledgeBaseStoragePathSupported: vi.fn(),
+  projectStoragePreflightFailure: vi.fn(),
   readJsonFile: vi.fn(),
 }))
 
@@ -28,6 +30,11 @@ vi.mock('../../services/project-access', () => ({
   projectAccess: {
     assertCurrentProjectContext: mocks.assertCurrentProjectContext,
   },
+}))
+
+vi.mock('../../services/project-storage-preflight', () => ({
+  assertKnowledgeBaseStoragePathSupported: mocks.assertKnowledgeBaseStoragePathSupported,
+  projectStoragePreflightFailure: mocks.projectStoragePreflightFailure,
 }))
 
 vi.mock('../../utils/config-utils', () => ({
@@ -83,6 +90,14 @@ beforeEach(() => {
     }
     return { rootPath: currentProjectPath }
   })
+  mocks.assertKnowledgeBaseStoragePathSupported.mockImplementation(() => undefined)
+  mocks.projectStoragePreflightFailure.mockImplementation((error: unknown) => (
+    error instanceof Error
+    && 'code' in error
+    && error.code === 'PROJECT_STORAGE_PATH_UNSUPPORTED'
+      ? { success: false, errorCode: 'PROJECT_STORAGE_PATH_UNSUPPORTED', error: error.message }
+      : undefined
+  ))
 })
 
 describe('knowledge-base controller project context guard', () => {
@@ -124,6 +139,22 @@ describe('knowledge-base controller project context guard', () => {
       activeVectorDimension: 0,
     })
     expect(mocks.run).not.toHaveBeenCalled()
+  })
+
+  it('keeps a deep existing project open but rejects knowledge-base work with a typed relocation error', async () => {
+    mocks.assertKnowledgeBaseStoragePathSupported.mockImplementationOnce(() => {
+      throw Object.assign(new Error('请将整个项目文件夹移动到更靠近磁盘根目录的位置'), {
+        code: 'PROJECT_STORAGE_PATH_UNSUPPORTED',
+      })
+    })
+
+    await expect(handler('kb:import-text')({}, 'text', 'book.txt', 'C:/projects/A')).resolves.toEqual({
+      success: false,
+      errorCode: 'PROJECT_STORAGE_PATH_UNSUPPORTED',
+      error: '请将整个项目文件夹移动到更靠近磁盘根目录的位置',
+    })
+    expect(mocks.run).not.toHaveBeenCalled()
+    expect(mocks.readJsonFile).not.toHaveBeenCalled()
   })
 
   it('returns a provider-free rebuild status when a usable embedding configuration exists', async () => {

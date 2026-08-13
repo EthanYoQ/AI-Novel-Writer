@@ -21,6 +21,10 @@ import {
   LEGACY_VECTOR_MIGRATION_BLOCKED,
   LegacyVectorMigrationBlockedError,
 } from '../services/knowledge-base-migration-error'
+import {
+  assertKnowledgeBaseStoragePathSupported,
+  projectStoragePreflightFailure,
+} from '../services/project-storage-preflight'
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
@@ -132,12 +136,15 @@ function registerKnowledgeBaseHandler<Args extends unknown[]>(
     const candidate = args.at(-1)
     const context = isProjectSessionContext(candidate) ? candidate : undefined
     if (context) args.pop()
-    projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
+    const projectSession = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
     try {
+      assertKnowledgeBaseStoragePathSupported(projectSession.rootPath)
       const result = await handler(event, ...(args as Args))
       return isLegacyMigrationBlockedResult(result) ? legacyMigrationBlockedFailure() : result
     } catch (error) {
       if (isLegacyMigrationBlockedError(error)) return legacyMigrationBlockedFailure()
+      const storageFailure = projectStoragePreflightFailure(error)
+      if (storageFailure) return storageFailure
       throw error
     }
   })

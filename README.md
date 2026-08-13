@@ -28,15 +28,17 @@
   <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
 </p>
 
-> ## v0.8.1 稳定性重大更新
+> ## v0.8.2 系统性可靠性重大更新
 >
-> [v0.8.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.1) 是一次覆盖模型参数、旧项目角色数据与长输出恢复的重大更新。
+> [v0.8.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.2) 是一次覆盖长输出机制、提示词持久化和 AI 助手项目操作边界的重大更新。
 >
-> - **#78 模型温度与 Kimi 兼容**：用户配置温度成为连接测试、普通生成、流式生成和工作流的唯一权威来源；仅在服务商官方端点明确要求固定温度时才由参数策略安全处理，避免第三方代理被误判。
-> - **#84 角色侧边栏崩溃**：打开项目时统一规范化旧角色记录中缺失或未知的角色定位，并为外部坏数据保留防御显示，避免旧角色数据导致侧边栏渲染失败。
-> - **#85 长输出恢复**：模型因长度限制截断时采用有上限、有上下文预算的有界续写；无法获得完整结果时立即失败，不完整草稿及后处理结果不落盘。
+> - **#87 Token 与长输出机制**：章节目标字数不再静默压低模型输出预算；长度截断进入受总预算约束的续写链，低增量截断内容会被丢弃并仅允许一次恢复请求。最终结果仍不完整时立即失败，不完整草稿及后处理数据不落盘。
+> - **#88 全局提示词持久化**：以 PromptCatalog 统一内置、全局和项目提示词解析；全局提示词保存后立即可见，重新加载可稳定回读，单个损坏文件不会遮蔽其他有效提示词。
+> - **#90 真实 Agent 工作流**：AI 助手通过项目事实与创作工作流 seam 执行操作，只有真实注册运行并取得收据后才报告工作流已启动。普通 Markdown 文件只是文件产物，不等于故事架构、角色、蓝图或正文等项目事实，也不会被隐式导入。
 >
-> 同一个 Release 严格遵守五项资产合同：Windows x64 安装程序 `ai-novel-writer-setup-0.8.1.exe`、`ai-novel-writer-setup-0.8.1.exe.blockmap`、`latest.yml`，以及 `ai-novel-writer-mac-arm64-0.8.1-installer.dmg` 和 `ai-novel-writer-mac-arm64-0.8.1-installer.dmg.sha256`。Windows 安装包未签名，但支持应用内更新；macOS ARM64 包未签名、未公证，并且仍需从 Release 页面手动更新。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
+> 使用 DeepSeek V4 Flash 完成了真实长程验证：项目达到 20 章，其中连续生成章节累计 40,279 个可见正文单位，并验证角色状态、蓝图、知识库与 Agent 工具链。
+>
+> 同一个 Release 严格遵守五项资产合同：Windows x64 安装程序 `ai-novel-writer-setup-0.8.2.exe`、`ai-novel-writer-setup-0.8.2.exe.blockmap`、`latest.yml`，以及 `ai-novel-writer-mac-arm64-0.8.2-installer.dmg` 和 `ai-novel-writer-mac-arm64-0.8.2-installer.dmg.sha256`。Windows 安装包未签名，但支持应用内更新；macOS ARM64 包采用 ad-hoc 或未签名分发、未公证，并且仍需从 Release 页面手动更新。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
 
 ## 产品定位
 

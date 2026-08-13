@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
     factHash: 'empty-fact',
   })),
   characterRosterCommit: vi.fn(),
+  finalizedDraftImportCommit: vi.fn(),
+  importGlobalFactsCommit: vi.fn(),
   draftGetFull: vi.fn(() => ({
     id: 1,
     content: mocks.currentProjectPath.endsWith('/A') ? 'A content' : 'B content',
@@ -134,6 +136,18 @@ vi.mock('../../repositories/draft-repository', () => ({
   },
 }))
 
+vi.mock('../../repositories/finalized-draft-import-repository', () => ({
+  FinalizedDraftImportRepository: {
+    commit: mocks.finalizedDraftImportCommit,
+  },
+}))
+
+vi.mock('../../repositories/import-global-facts-repository', () => ({
+  ImportGlobalFactsRepository: {
+    commit: mocks.importGlobalFactsCommit,
+  },
+}))
+
 import { registerDatabaseController } from '../db-controller'
 
 function currentSession() {
@@ -231,6 +245,55 @@ describe('database controller project context guard', () => {
       receipt: { operationId: 'architecture-run-A', revision: 1 },
     })
     expect(mocks.characterRosterCommit).toHaveBeenCalledWith(request)
+  })
+
+  it('commits a finalized import against the current main-process project root exactly once', async () => {
+    const request = {
+      operationId: 'import-run-A',
+      chapters: [{ chapterNumber: 1, title: '启程', content: '雨声很急。', wordCount: 5 }],
+    }
+    mocks.finalizedDraftImportCommit.mockReturnValueOnce({
+      operationId: request.operationId,
+      payloadHash: 'a'.repeat(64),
+      chapterNumbers: [1],
+      drafts: [],
+      idempotent: false,
+    })
+
+    await expect(handler('db:draft-import-finalized-batch')(
+      {},
+      request,
+      'C:/projects/A',
+    )).resolves.toMatchObject({
+      success: true,
+      receipt: { operationId: 'import-run-A' },
+    })
+    expect(mocks.finalizedDraftImportCommit).toHaveBeenCalledOnce()
+    expect(mocks.finalizedDraftImportCommit).toHaveBeenCalledWith('C:/projects/A', request)
+  })
+
+  it('passes one global-facts import request through the guarded atomic seam', async () => {
+    const request = {
+      operationId: 'import-global-A',
+      expectedRosterRevision: 0,
+      core: { genre: '现实' },
+      characterEntries: [{ name: '阿Q' }],
+    }
+    mocks.importGlobalFactsCommit.mockReturnValueOnce({
+      operationId: request.operationId,
+      payloadHash: 'b'.repeat(64),
+      idempotent: false,
+      core: request.core,
+      roster: { snapshot: { status: 'ready', entries: request.characterEntries } },
+    })
+
+    await expect(handler('db:import-global-facts-commit')(
+      {},
+      request,
+      'C:/projects/A',
+    )).resolves.toMatchObject({ success: true, receipt: { operationId: 'import-global-A' } })
+    expect(mocks.importGlobalFactsCommit).toHaveBeenCalledOnce()
+    expect(mocks.importGlobalFactsCommit).toHaveBeenCalledWith(request)
   })
 
   it('completes blueprint sync from an operation id without accepting renderer evidence', async () => {

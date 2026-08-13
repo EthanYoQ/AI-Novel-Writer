@@ -105,8 +105,10 @@ function blueprintJson(chapterNumbers: readonly number[]): string {
 function generationReceipt(
   attempt: number,
   finishReason: GenerationAttemptReceipt['finishReason'],
+  purpose?: string,
 ): GenerationAttemptReceipt {
   return {
+    ...(purpose ? { purpose } : {}),
     model: {
       id: 'model-1',
       configurationRevision: 'revision-1',
@@ -164,6 +166,8 @@ function testRuntime(session: GenerationSession): GenerationRuntime & { close: R
 function taskRange(task: GenerationTask): [number, number] {
   const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
   const match = /第(\d+)章到第(\d+)章/u.exec(prompt)
+  const compactMatch = /targetChapterNumber"?\s*:\s*(\d+)/u.exec(prompt)
+  if (!match && compactMatch) return [Number(compactMatch[1]), Number(compactMatch[1])]
   if (!match) throw new Error(`missing directory range in prompt: ${prompt}`)
   return [Number(match[1]), Number(match[2])]
 }
@@ -379,12 +383,57 @@ describe('GenerateDirectoryCommand', () => {
       .toHaveLength(1)
     expect(createRuntime).toHaveBeenCalledWith({
       budget: {
-        maxAttempts: 7,
-        maxRequestedOutputTokens: 16_384,
+        maxAttempts: 15,
+        maxRequestedOutputTokens: 61_440,
         maxRequestedOutputTokensPerAttempt: 4_096,
         deadlineMs: 600_000,
       },
     })
+  })
+
+  it('opens one runtime for an eleven-chapter append with the authoritative bounded cost plan', async () => {
+    const invoke = stubIpcInvoke(successfulCommitHandler())
+    const observedRanges: Array<[number, number]> = []
+    const session = generationSession(async task => {
+      const range = taskRange(task)
+      observedRanges.push(range)
+      const chapters = Array.from(
+        { length: range[1] - range[0] + 1 },
+        (_, index) => range[0] + index,
+      )
+      return {
+        status: 'completed',
+        content: blueprintJson(chapters),
+        finishReason: 'stop',
+        receipt: generationReceipt(observedRanges.length, 'stop'),
+      }
+    })
+    const createRuntime = vi.fn(async () => testRuntime(session))
+    const command = new GenerateDirectoryCommand(
+      { mode: 'append', startChapter: 10, count: 11 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 20 } },
+      { createRuntime },
+    )
+
+    const result = await command.execute({
+      step: {},
+      context: workflowContext(),
+      callbacks: stepCallbacks(),
+    })
+
+    expect(result.map(item => item.chapterNumber))
+      .toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
+    expect(observedRanges).toEqual([[10, 14], [15, 19], [20, 20]])
+    expect(createRuntime).toHaveBeenCalledWith({
+      budget: {
+        maxAttempts: 23,
+        maxRequestedOutputTokens: 94_208,
+        maxRequestedOutputTokensPerAttempt: 4_096,
+        deadlineMs: 600_000,
+      },
+    })
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
+      .toHaveLength(1)
   })
 
   it('commits append generation as an exact replace-range operation', async () => {
@@ -545,12 +594,166 @@ describe('GenerateDirectoryCommand', () => {
       .toHaveLength(1)
     expect(createRuntime).toHaveBeenCalledWith({
       budget: {
-        maxAttempts: 7,
-        maxRequestedOutputTokens: 16_384,
+        maxAttempts: 11,
+        maxRequestedOutputTokens: 45_056,
         maxRequestedOutputTokensPerAttempt: 4_096,
         deadlineMs: 600_000,
       },
     })
+  })
+
+  it('replaces one length-truncated single blueprint in full on the same runtime and commits once', async () => {
+    const invoke = stubIpcInvoke(successfulCommitHandler())
+    const observed: Array<{ range: [number, number]; purpose: string }> = []
+    let attempt = 0
+    const session = generationSession(async (task) => {
+      attempt += 1
+      const range = taskRange(task)
+      observed.push({ range, purpose: task.purpose })
+      if (attempt <= 2) {
+        return {
+          status: 'incomplete',
+          content: '{"blueprints":[',
+          finishReason: 'length',
+          receipt: generationReceipt(attempt, 'length'),
+        }
+      }
+      const chapters = Array.from(
+        { length: range[1] - range[0] + 1 },
+        (_, index) => range[0] + index,
+      )
+      return {
+        status: 'completed',
+        content: blueprintJson(chapters),
+        finishReason: 'stop',
+        receipt: generationReceipt(attempt, 'stop'),
+      }
+    })
+    const createRuntime = vi.fn(async () => testRuntime(session))
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 2 },
+      projectSnapshot,
+      { createRuntime },
+    )
+
+    const result = await command.execute({
+      step: {},
+      context: workflowContext(),
+      callbacks: stepCallbacks(),
+    })
+
+    expect(result.map(item => item.chapterNumber)).toEqual([1, 2])
+    expect(observed).toEqual([
+      { range: [1, 2], purpose: 'chapter-blueprint-directory' },
+      { range: [1, 1], purpose: 'chapter-blueprint-directory' },
+      { range: [1, 1], purpose: 'chapter-blueprint-directory:compact-single:chapter-1' },
+      { range: [2, 2], purpose: 'chapter-blueprint-directory' },
+    ])
+    expect(createRuntime).toHaveBeenCalledOnce()
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
+      .toHaveLength(1)
+  })
+
+  it('commits no directory facts when the single-item replacement is also length-truncated', async () => {
+    const invoke = stubIpcInvoke(successfulCommitHandler())
+    const callbacks = stepCallbacks()
+    let attempt = 0
+    const session = generationSession(async (task) => {
+      attempt += 1
+      return {
+        status: 'incomplete',
+        content: '{"blueprints":[',
+        finishReason: 'length',
+        receipt: generationReceipt(attempt, 'length', task.purpose),
+      }
+    })
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      projectSnapshot,
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+
+    await expect(command.execute({
+      step: {},
+      context: workflowContext(),
+      callbacks,
+    })).rejects.toThrow(
+      /purpose=chapter-blueprint-directory:compact-single:chapter-1 finishReason=length requestedTokens=4096/u,
+    )
+
+    expect(attempt).toBe(2)
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining(
+      'purpose=chapter-blueprint-directory:compact-single:chapter-1 finishReason=length requestedTokens=4096',
+    ))
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert-many')
+  })
+
+  it('replays the observed split sequence and recovers chapter 18 with one bounded compact task', async () => {
+    const invoke = stubIpcInvoke(successfulCommitHandler())
+    const observed: Array<{ range: [number, number]; purpose: string }> = []
+    const lengthAttempts = new Set([1, 3, 6, 8, 10, 11])
+    const session = generationSession(async task => {
+      const attempt = observed.length + 1
+      const range = taskRange(task)
+      observed.push({ range, purpose: task.purpose })
+      if (lengthAttempts.has(attempt)) {
+        return {
+          status: 'incomplete',
+          content: '{"blueprints":[{"chapterNumber":18,"keyEvents":"不可信截断片段',
+          finishReason: 'length',
+          receipt: generationReceipt(attempt, 'length', task.purpose),
+        }
+      }
+      if (task.purpose.includes(':compact-single:')) {
+        const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
+        const taskBytes = task.messages.reduce(
+          (total, message) => total + new TextEncoder().encode(message.content).byteLength,
+          0,
+        )
+        expect(taskBytes).toBeLessThanOrEqual(16_384)
+        expect(prompt).not.toContain('不可信截断片段')
+      }
+      const chapters = Array.from(
+        { length: range[1] - range[0] + 1 },
+        (_, index) => range[0] + index,
+      )
+      return {
+        status: 'completed',
+        content: blueprintJson(chapters),
+        finishReason: 'stop',
+        receipt: generationReceipt(attempt, 'stop', task.purpose),
+      }
+    })
+    const command = new GenerateDirectoryCommand(
+      { mode: 'append', startChapter: 10, count: 11 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 20 } },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+    const context = workflowContext()
+    context.data.architecture = '极长架构事实。'.repeat(20_000)
+
+    const result = await command.execute({ step: {}, context, callbacks: stepCallbacks() })
+
+    expect(result.map(item => item.chapterNumber)).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
+    expect(observed).toEqual([
+      { range: [10, 14], purpose: 'chapter-blueprint-directory' },
+      { range: [10, 11], purpose: 'chapter-blueprint-directory' },
+      { range: [12, 14], purpose: 'chapter-blueprint-directory' },
+      { range: [12, 12], purpose: 'chapter-blueprint-directory' },
+      { range: [13, 14], purpose: 'chapter-blueprint-directory' },
+      { range: [15, 19], purpose: 'chapter-blueprint-directory' },
+      { range: [15, 16], purpose: 'chapter-blueprint-directory' },
+      { range: [17, 19], purpose: 'chapter-blueprint-directory' },
+      { range: [17, 17], purpose: 'chapter-blueprint-directory' },
+      { range: [18, 19], purpose: 'chapter-blueprint-directory' },
+      { range: [18, 18], purpose: 'chapter-blueprint-directory' },
+      { range: [18, 18], purpose: 'chapter-blueprint-directory:compact-single:chapter-18' },
+      { range: [19, 19], purpose: 'chapter-blueprint-directory' },
+      { range: [20, 20], purpose: 'chapter-blueprint-directory' },
+    ])
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
+      .toHaveLength(1)
   })
 
   it('writes nothing when the later split fails after the earlier split validated', async () => {

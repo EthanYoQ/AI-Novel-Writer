@@ -130,6 +130,7 @@ export type AppErrorCode =
   | 'LEGACY_VECTOR_MIGRATION_BLOCKED'
   | 'PROJECT_NOT_OPEN'
   | 'EMBEDDING_MODEL_NOT_CONFIGURED'
+  | 'PROJECT_STORAGE_PATH_UNSUPPORTED'
 
 export interface AppFailure {
   success: false
@@ -174,6 +175,7 @@ export interface ProjectChannels {
       dbReady: boolean
       stale?: boolean
       error?: string
+      errorCode?: AppErrorCode
     }
   }
   'project:open': {
@@ -187,6 +189,7 @@ export interface ProjectChannels {
       dbReady: boolean
       stale?: boolean
       error?: string
+      errorCode?: AppErrorCode
     }
   }
   'project:save': {
@@ -552,6 +555,14 @@ import type {
   CharacterRosterCommitRequest,
   CharacterRosterSnapshot,
 } from './character-roster'
+import type {
+  FinalizedDraftImportReceipt,
+  FinalizedDraftImportRequest,
+} from './finalized-draft-import'
+import type {
+  ImportGlobalFactsReceipt,
+  ImportGlobalFactsRequest,
+} from './import-global-facts'
 
 // ===== 数据库操作 =====
 export interface DatabaseChannels {
@@ -565,6 +576,10 @@ export interface DatabaseChannels {
   'db:project-core-update': {
     args: [data: Partial<ProjectCoreData>, expectedProjectPath: string]
     return: { success: boolean; error?: string }
+  }
+  'db:import-global-facts-commit': {
+    args: [request: ImportGlobalFactsRequest, expectedProjectPath: string]
+    return: { success: boolean; receipt?: ImportGlobalFactsReceipt; error?: string }
   }
   'db:project-clear-generated-data': { args: [options: ProjectClearOptions, expectedProjectPath: string]; return: { success: boolean; cleared?: ProjectClearScope[]; physicalFilesDeleted?: number; error?: string } }
 
@@ -612,6 +627,10 @@ export interface DatabaseChannels {
   }
 
   // 4. drafts
+  'db:draft-import-finalized-batch': {
+    args: [request: FinalizedDraftImportRequest, expectedProjectPath: string]
+    return: { success: boolean; receipt?: FinalizedDraftImportReceipt; error?: string }
+  }
   'db:draft-create': { args: [params: { chapterNumber: number; version: number; source: 'write' | 'rewrite'; content: string; wordCount: number }, expectedProjectPath: string]; return: { success: boolean; id?: number; error?: string } }
   'db:draft-list': { args: [chapterNumber: number, expectedProjectPath: string]; return: DraftMeta[] }
   'db:draft-get-meta': { args: [id: number, expectedProjectPath: string]; return: DraftMeta | null }

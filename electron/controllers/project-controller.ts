@@ -2,6 +2,7 @@ import { ipcMain, dialog } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readJsonFile, writeJsonFile, RECENT_PROJECTS_PATH } from '../utils/config-utils'
+import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
 import { ProjectData, type ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { DIR_PROMPTS } from '../../src/shared/project-paths'
 import { sameProjectPathKey } from '../../src/shared/project-session-context'
@@ -16,6 +17,7 @@ import { ProjectCoreRepository } from '../repositories/project-core-repository'
 import { projectAccess, type ProjectSessionLease } from '../services/project-access'
 import { assertExpectedProjectPath, assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { sanitizeProjectName } from './project-path'
+import { projectStoragePreflightFailure } from '../services/project-storage-preflight'
 
 interface RecentProject {
   name: string
@@ -390,6 +392,7 @@ export function registerProjectController() {
           projectId: '',
           requestToken,
           ...databaseState,
+          ...(projectStoragePreflightFailure(error) ?? {}),
           error: rollbackError
             ? `${String(error)}；回滚失败：${String(rollbackError)}`
             : String(error),
@@ -451,10 +454,10 @@ export function registerProjectController() {
             wordsPerChapter: updatedCoreData.wordsPerChapter,
             plotStructure: updatedCoreData.plotStructure as 'three_act' | 'heros_journey' | 'save_the_cat' | 'kishotenketsu' | 'multi_thread' | 'freeform',
             narrativePOV: updatedCoreData.narrativePov as 'third_limited' | 'first_person' | 'third_omniscient' | 'multi_pov',
-            coreOutline: updatedCoreData.synopsis,      // 旧字段映射
-            worldSetting: updatedCoreData.worldbuilding, // 旧字段映射
+            coreOutline: updatedCoreData.coreOutline,
+            worldSetting: updatedCoreData.worldSetting,
             goldenFinger: updatedCoreData.goldenFinger,
-            protagonistProfile: updatedCoreData.charactersArch, // 旧字段映射
+            protagonistProfile: updatedCoreData.protagonistProfile,
             globalGuidance: updatedCoreData.globalGuidance,
             writingStyle: updatedCoreData.writingStyle,
             referenceWorks: updatedCoreData.referenceWorks,
@@ -531,6 +534,7 @@ export function registerProjectController() {
           project: null,
           requestToken,
           ...databaseState,
+          ...(projectStoragePreflightFailure(error) ?? {}),
           error: errorMessage,
         }
       }
@@ -564,6 +568,9 @@ export function registerProjectController() {
           narrativePov: data.novelConfig.narrativePOV,
           goldenFinger: data.novelConfig.goldenFinger,
           globalGuidance: data.novelConfig.globalGuidance,
+          coreOutline: data.novelConfig.coreOutline,
+          worldSetting: data.novelConfig.worldSetting,
+          protagonistProfile: data.novelConfig.protagonistProfile,
           writingStyle: data.novelConfig.writingStyle ?? '',
           referenceWorks: data.novelConfig.referenceWorks ?? '',
         })
@@ -627,6 +634,9 @@ export function registerProjectController() {
           narrativePov: data.novelConfig.narrativePOV,
           goldenFinger: data.novelConfig.goldenFinger,
           globalGuidance: data.novelConfig.globalGuidance,
+          coreOutline: data.novelConfig.coreOutline,
+          worldSetting: data.novelConfig.worldSetting,
+          protagonistProfile: data.novelConfig.protagonistProfile,
           writingStyle: data.novelConfig.writingStyle ?? '',
           referenceWorks: data.novelConfig.referenceWorks ?? '',
         })
@@ -684,7 +694,7 @@ export function registerProjectController() {
 
     let deletionError: unknown
     try {
-      fs.rmSync(resolvedPath, { recursive: true, force: true })
+      await removeDirectoryWithWindowsRetry(resolvedPath)
     } catch (error) {
       deletionError = error
     }

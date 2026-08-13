@@ -98,6 +98,23 @@ describe('blueprint semantic contract', () => {
       .toContain('code=duplicate_item path=blueprint.characters')
   })
 
+  it('rejects semantically unbounded prose and lists even when the JSON shape is valid', () => {
+    expect(validateBlueprintSemanticItem(validBlueprint({ keyEvents: '事'.repeat(401) })))
+      .toContain('code=invalid_value path=blueprint.keyEvents')
+    expect(validateBlueprintSemanticItem(validBlueprint({
+      characters: Array.from({ length: 13 }, (_, index) => `角色${index}`),
+      relationships: [],
+    }))).toContain('code=invalid_value path=blueprint.characters')
+    expect(validateBlueprintSemanticItem(validBlueprint({
+      characters: ['林岚', '周砚'],
+      relationships: Array.from({ length: 9 }, () => ({
+        from: '林岚',
+        to: '周砚',
+        relation: '不同事件中的临时盟友',
+      })),
+    }))).toContain('code=invalid_value path=blueprint.relationships')
+  })
+
   it('accepts an explicit empty relationship list but rejects malformed or dangling relationships', () => {
     expect(validateBlueprintSemanticItem(validBlueprint({ relationships: [] }))).toBeUndefined()
     expect(validateBlueprintSemanticItem(validBlueprint({

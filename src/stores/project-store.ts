@@ -390,7 +390,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       if (!result.success) {
         console.error('[Project] 创建失败:', result.error)
         alertError(
-          projectError(result.error),
+          projectError(result.errorCode ? result : result.error),
           { title: projectText('创建项目失败', 'Failed to create project') },
         )
         return false
@@ -563,7 +563,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       if (!isLatestRequest()) return false
       console.error('[Project] 打开失败:', result.error)
       alertError(
-        projectError(result.error),
+        projectError(result.errorCode ? result : result.error),
         { title: projectText('打开项目失败', 'Failed to open project') },
       )
       return false

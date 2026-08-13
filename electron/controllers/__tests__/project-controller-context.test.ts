@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   writeJsonFile: vi.fn(),
   recentProjects: [] as Array<{ name: string; path: string; updatedAt: string }>,
   rmSync: vi.fn(),
+  removeDirectoryWithWindowsRetry: vi.fn(),
   projectAccess: {
     createProject: vi.fn(),
     probeExistingProject: vi.fn(),
@@ -86,6 +87,10 @@ vi.mock('../../vector-store', () => ({
   closeConnection: vi.fn(),
 }))
 
+vi.mock('../../utils/remove-directory', () => ({
+  removeDirectoryWithWindowsRetry: mocks.removeDirectoryWithWindowsRetry,
+}))
+
 vi.mock('../../utils/config-utils', () => ({
   RECENT_PROJECTS_PATH: 'recent-projects.json',
   readJsonFile: vi.fn(() => mocks.recentProjects),
@@ -112,6 +117,9 @@ vi.mock('../../repositories/project-core-repository', () => ({
         wordsPerChapter: 3000,
         plotStructure: 'three_act',
         narrativePov: 'third_limited',
+        coreOutline: '独立核心大纲',
+        worldSetting: '独立世界设定',
+        protagonistProfile: '独立主角设定',
         synopsis: '',
         worldbuilding: '',
         goldenFinger: '',
@@ -182,6 +190,7 @@ beforeEach(() => {
   }
   mocks.recentProjects = []
   mocks.rmSync.mockImplementation(() => undefined)
+  mocks.removeDirectoryWithWindowsRetry.mockImplementation(async () => undefined)
   mocks.writeJsonFile.mockImplementation((_target: string, data: unknown) => {
     mocks.recentProjects = data as Array<{ name: string; path: string; updatedAt: string }>
   })
@@ -281,6 +290,11 @@ describe('project controller project identity', () => {
           id: 'project-B',
           path: projectB,
           sessionLease: 'lease-project-B-1',
+          novelConfig: {
+            coreOutline: '独立核心大纲',
+            worldSetting: '独立世界设定',
+            protagonistProfile: '独立主角设定',
+          },
         },
       })
     expect(mocks.projectAccess.probeExistingProject).toHaveBeenCalledWith(projectB)
@@ -402,6 +416,34 @@ describe('project controller project identity', () => {
     expect(mocks.initCalls).not.toContain(ordinaryDirectory)
     expect(mocks.createdVelaDirectories).not.toContain(path.join(ordinaryDirectory, '.vela'))
     expect(mocks.projectAccess.captureCurrentSession).toHaveBeenCalledOnce()
+  })
+
+  it('returns a typed storage-path error before initializing a rejected project database', async () => {
+    mocks.projectAccess.createProject.mockImplementationOnce(() => {
+      throw Object.assign(new Error('请改用更靠近磁盘根目录的位置'), {
+        code: 'PROJECT_STORAGE_PATH_UNSUPPORTED',
+      })
+    })
+
+    await expect(handler('project:create')(
+      {},
+      {
+        name: 'C',
+        path: path.resolve('C:/projects'),
+        genre: 'fantasy',
+        targetAudience: 'all',
+      },
+      'request-create-C-unsafe-storage-path',
+      projectA,
+    )).resolves.toMatchObject({
+      success: false,
+      errorCode: 'PROJECT_STORAGE_PATH_UNSUPPORTED',
+      databaseRestored: true,
+      dbReady: true,
+    })
+
+    expect(mocks.initCalls).toEqual([projectA])
+    expect(mocks.initCalls).not.toContain(projectC)
   })
 
   it('creates from a first-ever neutral runtime, returns to no database or lease, then opens explicitly', async () => {
@@ -766,7 +808,7 @@ describe('project controller project identity', () => {
   })
 
   it('reopens the active database and reports failure when the project directory remains', async () => {
-    mocks.rmSync.mockImplementationOnce(() => {
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(() => {
       throw new Error('directory locked')
     })
 
@@ -782,7 +824,7 @@ describe('project controller project identity', () => {
   })
 
   it('reports that the database was not restored after a failed active-project delete', async () => {
-    mocks.rmSync.mockImplementationOnce(() => {
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(() => {
       throw new Error('directory locked')
     })
     mocks.failInitPaths.add(projectA)
@@ -797,7 +839,7 @@ describe('project controller project identity', () => {
   })
 
   it('reports deletion success when the directory commit succeeds but recent-list cleanup fails', async () => {
-    mocks.rmSync.mockImplementationOnce((target: string) => {
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce((target: string) => {
       mocks.existingPaths.delete(path.resolve(target))
     })
     mocks.writeJsonFile.mockImplementationOnce(() => {
@@ -812,6 +854,7 @@ describe('project controller project identity', () => {
     })
     expect(mocks.currentProjectPath).toBe('')
     expect(mocks.projectAccess.invalidateCurrentSession).toHaveBeenCalledOnce()
+    expect(mocks.removeDirectoryWithWindowsRetry).toHaveBeenCalledWith(projectA)
   })
 
   it('rejects deletion without a current project session context before touching the filesystem', async () => {
@@ -820,7 +863,7 @@ describe('project controller project identity', () => {
       directoryDeleted: false,
       error: expect.stringContaining('缺少项目会话上下文'),
     })
-    expect(mocks.rmSync).not.toHaveBeenCalled()
+    expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
   })
 
   it('rejects a stale session context for deletion even when the same project path is still open', async () => {
@@ -839,7 +882,7 @@ describe('project controller project identity', () => {
       directoryDeleted: false,
       error: expect.stringContaining('项目会话已失效'),
     })
-    expect(mocks.rmSync).not.toHaveBeenCalled()
+    expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
   })
 
   it('rejects a leased deletion when its project is no longer the active database root', async () => {
@@ -851,6 +894,6 @@ describe('project controller project identity', () => {
         directoryDeleted: false,
         error: expect.stringContaining('当前数据库'),
       })
-    expect(mocks.rmSync).not.toHaveBeenCalled()
+    expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
   })
 })

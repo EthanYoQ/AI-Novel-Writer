@@ -2,10 +2,9 @@
 export const MAX_BLUEPRINT_ITEMS_PER_BATCH = 5
 export const DEFAULT_BLUEPRINT_GENERATION_COUNT = MAX_BLUEPRINT_ITEMS_PER_BATCH
 
-const MIN_DIRECTORY_MAX_ATTEMPTS = 7
-const MIN_DIRECTORY_REQUESTED_TOKEN_CALLS = 4
-const DIRECTORY_SPLIT_RESERVE_MULTIPLIER = 2
-const DIRECTORY_MAX_ATTEMPTS_HARD_LIMIT = 20
+const DIRECTORY_MAX_ATTEMPTS_HARD_LIMIT = 32
+const DIRECTORY_MAX_REQUESTED_TOKENS = 131_072
+const DIRECTORY_SYNTAX_REPAIR_RESERVE_CALLS = 1
 export const MAX_BLUEPRINT_CHAPTERS_PER_TASK = 50
 const DIRECTORY_MAX_REQUESTED_TOKENS_PER_ATTEMPT = 4_096
 const DIRECTORY_MIN_DEADLINE_MS = 10 * 60_000
@@ -17,6 +16,9 @@ export interface BlueprintGenerationCostPlan {
   semanticBatchCount: number
   /** Baseline calls when every semantic batch completes without splitting. */
   expectedCalls: number
+  /** Allowed physical-call ceiling after recursive-split/repair planning and the product hard cap. */
+  maxCalls: number
+  maxCompactSingleFallbacks: number
   /** True means the logical scope must be split into separate workflow runs. */
   exceedsHardLimit: boolean
   runtimeBudget: {
@@ -36,23 +38,33 @@ export function planBlueprintGenerationCost(chapterCount: number): BlueprintGene
     ? Math.max(0, Math.floor(chapterCount))
     : 0
   const semanticBatchCount = Math.ceil(normalizedChapterCount / MAX_BLUEPRINT_ITEMS_PER_BATCH)
-  const callsWithSplitReserve = semanticBatchCount * DIRECTORY_SPLIT_RESERVE_MULTIPLIER
-  const uncappedMaxAttempts = Math.max(MIN_DIRECTORY_MAX_ATTEMPTS, callsWithSplitReserve)
-  const maxAttempts = Math.min(DIRECTORY_MAX_ATTEMPTS_HARD_LIMIT, uncappedMaxAttempts)
-  const requestedTokenCalls = Math.min(
-    DIRECTORY_MAX_ATTEMPTS_HARD_LIMIT,
-    Math.max(MIN_DIRECTORY_REQUESTED_TOKEN_CALLS, callsWithSplitReserve),
-  )
+  const maxCompactSingleFallbacks = Math.min(normalizedChapterCount, semanticBatchCount)
+  // For a semantic batch of n items, recursively splitting every non-single
+  // length result creates a full binary tree with 2n-1 physical calls. Across
+  // B initial batches this is 2N-B. The executor additionally permits one
+  // compact fallback per semantic batch (at most once per item key) and one
+  // global syntax repair.
+  const uncappedMaxCalls = normalizedChapterCount === 0
+    ? 0
+    : (2 * normalizedChapterCount)
+      - semanticBatchCount
+      + maxCompactSingleFallbacks
+      + DIRECTORY_SYNTAX_REPAIR_RESERVE_CALLS
+  const maxCalls = Math.min(DIRECTORY_MAX_ATTEMPTS_HARD_LIMIT, uncappedMaxCalls)
 
   return {
     chapterCount: normalizedChapterCount,
     semanticBatchCount,
     expectedCalls: semanticBatchCount,
+    maxCalls,
+    maxCompactSingleFallbacks,
     exceedsHardLimit: normalizedChapterCount > MAX_BLUEPRINT_CHAPTERS_PER_TASK,
     runtimeBudget: {
-      maxAttempts,
-      maxRequestedOutputTokens:
-        requestedTokenCalls * DIRECTORY_MAX_REQUESTED_TOKENS_PER_ATTEMPT,
+      maxAttempts: maxCalls,
+      maxRequestedOutputTokens: Math.min(
+        DIRECTORY_MAX_REQUESTED_TOKENS,
+        maxCalls * DIRECTORY_MAX_REQUESTED_TOKENS_PER_ATTEMPT,
+      ),
       maxRequestedOutputTokensPerAttempt: DIRECTORY_MAX_REQUESTED_TOKENS_PER_ATTEMPT,
       deadlineMs: Math.min(
         DIRECTORY_MAX_DEADLINE_MS,
@@ -69,13 +81,15 @@ export function getBlueprintBatchAdvice(
   locale: 'zh-CN' | 'en-US',
   chapterCount?: number,
 ): string {
-  const expectedCalls = chapterCount === undefined
-    ? null
-    : planBlueprintGenerationCost(chapterCount).expectedCalls
+  const plan = chapterCount === undefined ? null : planBlueprintGenerationCost(chapterCount)
   if (locale === 'en-US') {
-    const estimate = expectedCalls === null ? '' : ` Estimated baseline: ${expectedCalls} model call(s).`
+    const estimate = plan === null
+      ? ''
+      : ` Estimated baseline: ${plan.expectedCalls} model call(s); task allowance: up to ${plan.maxCalls}.`
     return `Each semantic batch contains at most 5 chapters; more chapters take more time and API calls.${estimate} Output-limited batches split automatically.`
   }
-  const estimate = expectedCalls === null ? '' : `预计至少 ${expectedCalls} 次模型调用；`
+  const estimate = plan === null
+    ? ''
+    : `预计至少 ${plan.expectedCalls} 次模型调用，本任务最多允许 ${plan.maxCalls} 次；`
   return `每个语义批次最多 5 章；${estimate}章节越多耗时和调用次数越多，达到输出限制时会自动继续拆分。`
 }

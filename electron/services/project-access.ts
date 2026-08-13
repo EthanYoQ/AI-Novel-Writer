@@ -4,6 +4,11 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
+import {
+  assertProjectCoreStoragePathSupported,
+  assertProjectStoragePathSupported,
+  type ProjectStoragePreflightOptions,
+} from './project-storage-preflight'
 
 export const PROJECT_MANIFEST_RELATIVE_PATH = path.join('.vela', 'project.json')
 const require = createRequire(import.meta.url)
@@ -57,7 +62,7 @@ export interface ProjectSessionCredential {
   leaseId: string
 }
 
-export interface ProjectAccessServiceOptions {
+export interface ProjectAccessServiceOptions extends ProjectStoragePreflightOptions {
   homePath?: string
   newLeaseId?: () => string
 }
@@ -102,6 +107,7 @@ function isProjectManifest(value: unknown): value is ProjectManifest {
 export class ProjectAccessService {
   private readonly homePath: string
   private readonly newLeaseId: () => string
+  private readonly storagePreflightOptions: ProjectStoragePreflightOptions
   private activeSession: ProjectSessionLease | null = null
 
   constructor(options: ProjectAccessServiceOptions = {}) {
@@ -115,6 +121,10 @@ export class ProjectAccessService {
       }
     }
     this.newLeaseId = options.newLeaseId ?? randomUUID
+    this.storagePreflightOptions = {
+      platform: options.platform,
+      maxNativePathCharacters: options.maxNativePathCharacters,
+    }
   }
 
   createProject(parentPath: string, projectName: string): TrustedProject {
@@ -130,6 +140,7 @@ export class ProjectAccessService {
     ) {
       throw new Error('新项目目录必须位于所选父目录内')
     }
+    assertProjectStoragePathSupported(requestedRoot, this.storagePreflightOptions)
     if (fs.existsSync(requestedRoot)) {
       throw new Error('项目目录已存在，已拒绝覆盖')
     }
@@ -141,6 +152,7 @@ export class ProjectAccessService {
 
   probeExistingProject(candidatePath: string): ProjectProbe {
     const rootPath = this.canonicalProjectRoot(candidatePath)
+    assertProjectCoreStoragePathSupported(rootPath, this.storagePreflightOptions)
     const manifestPath = path.join(rootPath, PROJECT_MANIFEST_RELATIVE_PATH)
     if (fs.existsSync(manifestPath) && fs.statSync(manifestPath).isFile()) {
       this.assertProjectChildPath(rootPath, manifestPath, '项目清单')

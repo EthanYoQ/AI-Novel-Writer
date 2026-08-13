@@ -114,6 +114,8 @@ export interface CompletionPort {
 }
 
 export interface GenerationAttemptReceipt {
+  /** Safe semantic task label; never contains prompt, output, endpoint, or credentials. */
+  purpose?: string
   model: FrozenGenerationModelIdentity
   capabilities: ResolvedCapabilityEvidence
   budget: {
@@ -193,6 +195,10 @@ export class GenerationAttemptError extends GenerationHarnessError {
     super(code, message)
     this.name = 'GenerationAttemptError'
   }
+}
+
+function safeReceiptPurpose(purpose: string): string {
+  return /^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(purpose) ? purpose : 'unknown'
 }
 
 const CONTEXT_SAFETY_RESERVE_TOKENS = 512
@@ -338,11 +344,13 @@ export function createGenerationHarness(dependencies: {
       let cumulativeRequestedOutputTokens = 0
 
       const attemptReceipt = (
+        purpose: string,
         attempt: number,
         requestedOutputTokens: number,
         finishReason: LLMFinishReason,
         usage?: TokenUsage,
       ): GenerationAttemptReceipt => ({
+        purpose: safeReceiptPurpose(purpose),
         model: { ...frozenIdentity },
         capabilities: copyCapabilities(capabilities),
         budget: {
@@ -461,6 +469,7 @@ export function createGenerationHarness(dependencies: {
                   ? '生成请求超过会话截止时间。'
                   : '模型请求失败。',
               attemptReceipt(
+                task.purpose,
                 attempt,
                 maxOutputTokens,
                 cancellationCode === 'CANCELLED' ? 'cancelled' : 'error',
@@ -476,6 +485,7 @@ export function createGenerationHarness(dependencies: {
           // this seam normalizes them fail-closed.
           const finishReason = completion.finishReason ?? 'unknown'
           const receipt = attemptReceipt(
+            task.purpose,
             attempt,
             maxOutputTokens,
             finishReason,

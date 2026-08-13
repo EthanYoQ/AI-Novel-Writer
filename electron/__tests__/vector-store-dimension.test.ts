@@ -16,6 +16,7 @@ import {
   search,
   updateChunkVectors,
 } from '../vector-store'
+import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
 
 type VectorConnection = Awaited<ReturnType<typeof getConnection>>
 
@@ -53,12 +54,23 @@ function failNthTableOpen(
 describe('知识库向量维度', () => {
   const projects: string[] = []
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks()
     for (const projectPath of projects.splice(0)) {
       closeConnection(projectPath)
-      fs.rmSync(projectPath, { recursive: true, force: true })
+      await removeDirectoryWithWindowsRetry(projectPath)
     }
+  })
+
+  it('closeConnection 会真正释放缓存的 LanceDB 原生连接', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-close-'))
+    projects.push(projectPath)
+    const db = await getConnection(projectPath)
+
+    expect(db.isOpen()).toBe(true)
+    closeConnection(projectPath)
+
+    expect(db.isOpen()).toBe(false)
   })
 
   it('接受嵌入模型返回的非 2048 维有限向量', async () => {
@@ -803,6 +815,103 @@ describe('知识库向量维度', () => {
       activeGeneration: 1,
       spaces: [expect.objectContaining({ generation: 1, tableName: 'chunks__space_1', status: 'active' })],
     })
+  })
+
+  it('createTable 内部创建代际后失败时清理本次表并让重试复用同一 generation', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-create-owned-'))
+    projects.push(projectPath)
+    const db = await getConnection(projectPath)
+    const space = { modelFingerprint: 'test/create-owned', distanceMetric: 'l2' }
+    const vector = Array.from({ length: 768 }, (_, index) => index / 768)
+    failCreateTableAfterSuccess(db, 'chunks__space_1', 'injected createTable internal failure')
+
+    await expect(addChunks(
+      projectPath,
+      'failed-document',
+      'failed.txt',
+      ['不得留下孤儿代际'],
+      [vector],
+      undefined,
+      undefined,
+      space,
+    )).resolves.toMatchObject({
+      success: false,
+      chunkCount: 0,
+      error: expect.stringContaining('createTable internal failure'),
+    })
+    vi.restoreAllMocks()
+
+    expect(embeddingTableNames(await db.tableNames())).toEqual([])
+    await expect(addChunks(
+      projectPath,
+      'successful-document',
+      'successful.txt',
+      ['重试成功正文'],
+      [vector],
+      undefined,
+      undefined,
+      space,
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+    expect((await getEmbeddingSpaces(projectPath)).spaces).toEqual([
+      expect.objectContaining({ generation: 1, tableName: 'chunks__space_1', status: 'active' }),
+    ])
+  })
+
+  it('安全复用未登记的空物理代际目录，不轮换 generation', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-empty-orphan-'))
+    projects.push(projectPath)
+    const orphanDirectory = path.join(projectPath, '.vela', 'lancedb', 'chunks__space_1.lance')
+    fs.mkdirSync(orphanDirectory, { recursive: true })
+    const vector = Array.from({ length: 768 }, (_, index) => index / 768)
+
+    await expect(addChunks(
+      projectPath,
+      'document',
+      'document.txt',
+      ['空孤儿目录后的成功正文'],
+      [vector],
+      undefined,
+      undefined,
+      { modelFingerprint: 'test/empty-orphan', distanceMetric: 'l2' },
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+
+    expect((await getEmbeddingSpaces(projectPath)).spaces).toEqual([
+      expect.objectContaining({ generation: 1, tableName: 'chunks__space_1', status: 'active' }),
+    ])
+  })
+
+  it('保留未登记的非空物理代际目录并在重试时拒绝覆盖而非继续轮换', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-foreign-orphan-'))
+    projects.push(projectPath)
+    const orphanDirectory = path.join(projectPath, '.vela', 'lancedb', 'chunks__space_1.lance')
+    const markerPath = path.join(orphanDirectory, 'unknown-data')
+    fs.mkdirSync(orphanDirectory, { recursive: true })
+    fs.writeFileSync(markerPath, 'must-not-delete', 'utf8')
+    const vector = Array.from({ length: 768 }, (_, index) => index / 768)
+
+    for (const attempt of [1, 2]) {
+      await expect(addChunks(
+        projectPath,
+        `document-${attempt}`,
+        `document-${attempt}.txt`,
+        [`不得覆盖的正文 ${attempt}`],
+        [vector],
+        undefined,
+        undefined,
+        { modelFingerprint: 'test/foreign-orphan', distanceMetric: 'l2' },
+      )).resolves.toMatchObject({
+        success: false,
+        chunkCount: 0,
+        error: expect.stringContaining('存在未登记数据，已拒绝覆盖'),
+      })
+    }
+
+    expect(fs.readFileSync(markerPath, 'utf8')).toBe('must-not-delete')
+    // LanceDB enumerates any `*.lance` directory as a table name even when it
+    // is not a valid table. The important invariant is that the foreign
+    // directory remains untouched and no new generation is allocated.
+    expect(embeddingTableNames(await (await getConnection(projectPath)).tableNames())).toEqual(['chunks__space_1'])
+    expect(fs.existsSync(path.join(projectPath, '.vela', 'lancedb', 'chunks__space_2.lance'))).toBe(false)
   })
 
   it('首次导入 registry 原子写重复失败不堆积孤儿表或跳 generation', async () => {

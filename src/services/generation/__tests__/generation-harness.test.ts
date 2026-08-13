@@ -271,6 +271,7 @@ describe('GenerationHarness', () => {
       status: 'incomplete',
       finishReason: 'length',
       receipt: {
+        purpose: 'five-chapter-directory',
         budget: {
           requestedOutputTokens: 4096,
           cumulativeRequestedOutputTokens: 4096,

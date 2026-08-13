@@ -12,10 +12,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ImportPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
-import { requireIpcSuccess } from '../../ipc-result'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
-import { normalizeCharacterCardsForPersistence } from '../character-card-normalizer'
-import { characterRosterEntriesFromCards } from '../../character-roster-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
 import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
@@ -23,9 +20,27 @@ import type { ChapterBlueprint } from '../directory-workflow'
 import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
 import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
 import {
+  blueprintSemanticGenerationContract,
   parseBlueprintSemanticResponseText,
   validateBlueprintSemanticItem,
 } from '../../../shared/blueprint-semantic-contract'
+import {
+  IMPORT_INFERENCE_JSON_CONTRACT,
+  decodeImportInferenceJson,
+} from './import-inference-contract'
+import type {
+  FinalizedDraftImportDraftReceipt,
+  FinalizedDraftImportReceipt,
+} from '../../../shared/finalized-draft-import'
+import type { ImportGlobalFactsReceipt } from '../../../shared/import-global-facts'
+import {
+  buildStructuredSyntaxRepairTask,
+  isRepairableDirectJsonSyntaxFailure,
+  MAX_STRUCTURED_REPAIR_CANDIDATE_UTF8_BYTES,
+  MAX_STRUCTURED_REPAIR_CONTRACT_UTF8_BYTES,
+  preservesStructuredJsonEvidence,
+  structuredRepairUtf8Bytes,
+} from '../structured-syntax-repair'
 
 /** 拆分后的章节数据（从 context.data 中传递） */
 export interface ImportedChapter {
@@ -33,6 +48,72 @@ export interface ImportedChapter {
   title: string
   content: string
   wordCount: number
+}
+
+const SHA256_HEX = /^[a-f0-9]{64}$/u
+
+function requireFinalizedDraftImportReceipt(
+  candidate: FinalizedDraftImportReceipt | undefined,
+  operationId: string,
+  expectedChapterNumbers: number[],
+): FinalizedDraftImportReceipt {
+  const chapterNumbers = [...expectedChapterNumbers].sort((left, right) => left - right)
+  if (
+    !candidate
+    || candidate.operationId !== operationId
+    || !SHA256_HEX.test(candidate.payloadHash)
+    || typeof candidate.idempotent !== 'boolean'
+    || !Array.isArray(candidate.chapterNumbers)
+    || !Array.isArray(candidate.drafts)
+    || candidate.chapterNumbers.length !== chapterNumbers.length
+    || candidate.drafts.length !== chapterNumbers.length
+    || candidate.chapterNumbers.some((number, index) => number !== chapterNumbers[index])
+  ) {
+    throw new Error('批量定稿导入收据无效或章节覆盖不完整')
+  }
+  const seenDraftIds = new Set<number>()
+  const seenFinalizationIds = new Set<string>()
+  for (const [index, draft] of candidate.drafts.entries()) {
+    const expectedChapterNumber = chapterNumbers[index]
+    const validDraft = draft as FinalizedDraftImportDraftReceipt
+    if (
+      validDraft.chapterNumber !== expectedChapterNumber
+      || !Number.isInteger(validDraft.draftId)
+      || validDraft.draftId < 1
+      || seenDraftIds.has(validDraft.draftId)
+      || typeof validDraft.finalizationId !== 'string'
+      || validDraft.finalizationId.length === 0
+      || seenFinalizationIds.has(validDraft.finalizationId)
+      || !SHA256_HEX.test(validDraft.contentHash)
+      || typeof validDraft.targetFileName !== 'string'
+      || validDraft.targetFileName.length === 0
+      || validDraft.status !== 'finalized'
+      || validDraft.publicationStatus !== 'pending'
+    ) {
+      throw new Error('批量定稿导入收据缺少可信的定稿事实')
+    }
+    seenDraftIds.add(validDraft.draftId)
+    seenFinalizationIds.add(validDraft.finalizationId)
+  }
+  return candidate
+}
+
+function requireImportGlobalFactsReceipt(
+  candidate: ImportGlobalFactsReceipt | undefined,
+  operationId: string,
+  expectedCharacterCount: number,
+): ImportGlobalFactsReceipt {
+  if (
+    !candidate
+    || candidate.operationId !== operationId
+    || !SHA256_HEX.test(candidate.payloadHash)
+    || typeof candidate.idempotent !== 'boolean'
+    || !candidate.core
+    || !candidate.roster?.snapshot
+    || candidate.roster.snapshot.status !== 'ready'
+    || candidate.roster.snapshot.entries.length !== expectedCharacterCount
+  ) throw new Error('导入全局事实提交收据无效或覆盖不完整')
+  return candidate
 }
 
 export class ImportBlueprintPostCommitSyncError extends Error {
@@ -68,27 +149,35 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
     callbacks.log(`开始作为定稿导入 ${this.chapters.length} 章正文到数据库...`)
     callbacks.setProgress(5)
 
-    // 1. 批量创建草稿并标记为 finalized
-    for (let i = 0; i < this.chapters.length; i++) {
-      this.assertNotCancelled(context)
-      const ch = this.chapters[i]
-
-      // 直接调用 DB 写库（来源设为 write）
-      const result = await ipc.invokeWithProjectSession(projectSession, 'db:draft-create', {
-        chapterNumber: ch.number,
-        version: 1,
-        content: ch.content,
-        wordCount: ch.wordCount,
-        source: 'write'
-      }, context.projectPath)
-      if (!result.success) throw new Error(result.error || `第 ${ch.number} 章导入失败`)
-
-      if (i % 10 === 0) {
-        callbacks.setProgress(5 + Math.round((i / this.chapters.length) * 40))
-        callbacks.log(`  已导入第 ${ch.number} 章（${ch.wordCount} 字）`)
-      }
-    }
-    callbacks.log(`全部 ${this.chapters.length} 章已作为定稿导入数据库`)
+    // 1. 正文、finalized 状态与发布 outbox 由主进程在一个 SQLite transaction
+    // 中提交。渲染进程只接受覆盖全部章节的权威回读收据，不能逐章伪造成功。
+    this.assertNotCancelled(context)
+    const operationId = `novel-import-finalized-${context.runId}`
+    const result = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-import-finalized-batch',
+      {
+        operationId,
+        chapters: this.chapters.map(chapter => ({
+          chapterNumber: chapter.number,
+          title: chapter.title,
+          content: chapter.content,
+          wordCount: chapter.wordCount,
+        })),
+      },
+      context.projectPath,
+    )
+    if (!result.success) throw new Error(result.error || '批量定稿导入失败')
+    const importReceipt = requireFinalizedDraftImportReceipt(
+      result.receipt,
+      operationId,
+      this.chapters.map(chapter => chapter.number),
+    )
+    context.data.finalizedDraftImportReceipt = importReceipt
+    callbacks.log(
+      `全部 ${this.chapters.length} 章的数据库定稿事实已提交；`
+      + `${importReceipt.drafts.length} 个实体稿发布记录已进入待发布队列`,
+    )
     callbacks.setProgress(45)
 
     // 2. 逐章导入知识库（向量化）
@@ -123,6 +212,9 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
       }
     }
     callbacks.log(`知识库构建完成（成功 ${successCount} 章，失败 ${failCount} 章）`)
+    if (failCount > 0) {
+      callbacks.log('数据库定稿事实不受知识库失败影响；可依据导入收据重试待完成步骤。')
+    }
     callbacks.setProgress(90)
 
     // 将章节数据存入 context 供后续步骤使用
@@ -219,124 +311,132 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       // 兼容旧版 Prompt 的 sample_content 变量
       .withSampleContent(`【第1章片段】\n${firstChapter}\n\n【最新章节片段】\n${latestChapter}`)
       .build()
+      + `\n\n${IMPORT_INFERENCE_JSON_CONTRACT}`
 
     callbacks.log('正在调用 AI 推演全局小说配置...')
     callbacks.setProgress(25)
 
-    const rawResult = await this.callLLM(
+    const initial = await this.callLLMResult(
       prompt,
       template.systemRole || '你是一位顶级网文主编和资深阅读分析师。',
       callbacks,
-      { responseFormat: { type: 'json_object' } },
+      { responseFormat: { type: 'json_object' }, purpose: 'import-inference' },
       context,
     )
+    if (initial.finishReason !== 'stop') throw this.createIncompleteCompletionError(initial.finishReason)
+    let rawResult = initial.content
+    if (isRepairableDirectJsonSyntaxFailure(rawResult)) {
+      if (
+        structuredRepairUtf8Bytes(IMPORT_INFERENCE_JSON_CONTRACT) > MAX_STRUCTURED_REPAIR_CONTRACT_UTF8_BYTES
+        || structuredRepairUtf8Bytes(rawResult) > MAX_STRUCTURED_REPAIR_CANDIDATE_UTF8_BYTES
+      ) throw new Error('导入推演 JSON 语法修复证据超过安全字节上限')
+      callbacks.log('导入推演 JSON 存在词法错误，正在执行唯一一次完整替代语法修复...')
+      const repairTask = buildStructuredSyntaxRepairTask({
+        purpose: 'import-inference',
+        output: 'structured-data',
+        messages: [],
+      }, IMPORT_INFERENCE_JSON_CONTRACT, rawResult)
+      const repair = await this.callLLMResult(
+        repairTask.messages[1].content,
+        repairTask.messages[0].content,
+        callbacks,
+        { responseFormat: { type: 'json_object' }, purpose: repairTask.purpose },
+        context,
+      )
+      if (repair.finishReason !== 'stop') throw this.createIncompleteCompletionError(repair.finishReason)
+      if (!preservesStructuredJsonEvidence(rawResult, repair.content)) {
+        throw new Error('导入推演 JSON 语法修复改变了候选事实，已拒绝写入')
+      }
+      rawResult = repair.content
+    }
     this.assertNotCancelled(context)
 
     callbacks.setProgress(70)
     callbacks.log('正在解析 AI 返回结果并写入项目...')
 
     // ===== 解析 JSON 结果 =====
-    const inferResult = this.parseJSON<{
-      novelConfig: Record<string, string>
-      architectureFiles: Record<string, string>
-      characterCards: Array<Record<string, unknown>>
-    }>(rawResult)
+    const inferResult = decodeImportInferenceJson(rawResult)
 
-    // ===== 写入小说配置 =====
-    if (inferResult.novelConfig) {
-      const novelConfig = {
-        ...projectSnapshot.novelConfig,
-        ...inferResult.novelConfig,
-        totalChapters: chapters.length,
-        wordsPerChapter: Math.round(chapters.reduce((s, c) => s + c.wordCount, 0) / chapters.length),
-      }
-      if (!sameProjectSessionContext(
-        projectSession,
-        projectSessionContextFromProject(useProjectStore.getState().currentProject),
-      )) {
-        throw new Error('当前项目已切换，导入配置结果未应用')
-      }
-      this.assertNotCancelled(context)
-      const updatedProject = { ...projectSnapshot, novelConfig }
-      const plainData = {
-        id: updatedProject.id,
-        name: updatedProject.name,
-        path: updatedProject.path,
-        novelConfig: { ...updatedProject.novelConfig },
-        characterStates: updatedProject.characterStates,
-        createdAt: updatedProject.createdAt,
-        updatedAt: updatedProject.updatedAt,
-      }
-      const saveResult = await ipc.invokeWithProjectSession(
-        projectSession,
-        'project:save',
-        plainData.id,
-        plainData,
-        context.projectPath,
-      )
-      requireIpcSuccess(saveResult, '保存推演后的小说配置')
-      this.assertNotCancelled(context)
-      if (!sameProjectSessionContext(
-        projectSession,
-        projectSessionContextFromProject(useProjectStore.getState().currentProject),
-      )) {
-        throw new Error('当前项目已切换，导入配置结果未应用')
-      }
-      useProjectStore.setState({ currentProject: updatedProject })
-      callbacks.log('小说配置已更新')
-
-      // 生成配置摘要供后续步骤使用
-      context.data.novelConfigSummary = `类型: ${novelConfig.genre || '未知'} | 子类型: ${novelConfig.subGenre || '未知'} | 受众: ${novelConfig.targetAudience || '未知'}\n大纲: ${novelConfig.coreOutline || '（无）'}\n世界观: ${novelConfig.worldSetting || '（无）'}\n金手指: ${novelConfig.goldenFinger || '（无）'}\n主角: ${novelConfig.protagonistProfile || '（无）'}`
+    const roster = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:character-roster-read',
+      context.projectPath,
+    )
+    if (roster.status !== 'ready' && roster.status !== 'empty') {
+      throw new Error('角色名单当前不可安全导入；请先完成旧项目修复或处理数据不一致状态')
     }
 
-    // ===== 写入架构信息 =====
-    if (inferResult.architectureFiles) {
-      this.assertNotCancelled(context)
-      const coreResult = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-update', {
-        premise: inferResult.architectureFiles.premise,
-        worldbuilding: inferResult.architectureFiles.worldbuilding,
-        synopsis: inferResult.architectureFiles.synopsis,
-      }, context.projectPath)
-      if (!coreResult.success) throw new Error(coreResult.error || '故事架构写入失败')
-      callbacks.log('非角色架构已持久化到数据库；角色图谱将由结构化角色名单生成')
+    const novelConfig = {
+      ...projectSnapshot.novelConfig,
+      ...inferResult.novelConfig,
+      totalChapters: chapters.length,
+      wordsPerChapter: Math.round(chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0) / chapters.length),
     }
+    if (!sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(useProjectStore.getState().currentProject),
+    )) throw new Error('当前项目已切换，导入配置结果未应用')
+    this.assertNotCancelled(context)
 
-    // ===== 写入角色卡 =====
-    if (inferResult.characterCards && Array.isArray(inferResult.characterCards)) {
-      const cardsToSave = normalizeCharacterCardsForPersistence(inferResult.characterCards)
-      if (cardsToSave.length > 0) {
-        this.assertNotCancelled(context)
-        const rosterEntries = characterRosterEntriesFromCards(cardsToSave)
-        if (rosterEntries.some(entry => entry.legacyRelationshipNotes)) {
-          throw new Error('导入角色卡包含无法验证的自由文本关系；请让模型输出包含目标角色和关系类型的结构化 relationships')
-        }
-        const roster = await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:character-roster-read',
-          context.projectPath,
-        )
-        if (roster.status !== 'ready' && roster.status !== 'empty') {
-          throw new Error('角色名单当前不可安全导入；请先完成旧项目修复或处理数据不一致状态')
-        }
-        this.assertNotCancelled(context)
-        const saveResult = await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:character-roster-commit',
-          {
-            operationId: `novel-import-characters-${context.runId}`,
-            expectedRevision: roster.revision,
-            schemaVersion: 1,
-            intent: 'novel_import',
-            entries: rosterEntries,
-          },
-          context.projectPath,
-        )
-        if (!saveResult.success || !saveResult.receipt) {
-          throw new Error(saveResult.error || '角色卡写入数据库失败')
-        }
-      }
-      callbacks.log(`已生成 ${cardsToSave.length} 张角色卡`)
+    const operationId = `novel-import-global-${context.runId}`
+    const commitResult = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:import-global-facts-commit',
+      {
+        operationId,
+        expectedRosterRevision: roster.revision,
+        core: {
+          genre: novelConfig.genre,
+          subGenre: novelConfig.subGenre,
+          targetAudience: novelConfig.targetAudience,
+          totalChapters: novelConfig.totalChapters,
+          wordsPerChapter: novelConfig.wordsPerChapter,
+          plotStructure: novelConfig.plotStructure,
+          narrativePov: novelConfig.narrativePOV,
+          goldenFinger: novelConfig.goldenFinger,
+          globalGuidance: novelConfig.globalGuidance,
+          coreOutline: novelConfig.coreOutline,
+          worldSetting: novelConfig.worldSetting,
+          protagonistProfile: novelConfig.protagonistProfile,
+          premise: inferResult.architectureFiles.premise,
+          worldbuilding: inferResult.architectureFiles.worldbuilding,
+          synopsis: inferResult.architectureFiles.synopsis,
+        },
+        characterEntries: inferResult.characterCards,
+      },
+      context.projectPath,
+    )
+    if (!commitResult.success) throw new Error(commitResult.error || '导入全局事实原子提交失败')
+    const commitReceipt = requireImportGlobalFactsReceipt(
+      commitResult.receipt,
+      operationId,
+      inferResult.characterCards.length,
+    )
+    context.data.importGlobalFactsReceipt = commitReceipt
+
+    this.assertNotCancelled(context)
+    if (!sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(useProjectStore.getState().currentProject),
+    )) throw new Error('当前项目已切换，导入配置结果未应用')
+    const authoritativeNovelConfig = {
+      ...projectSnapshot.novelConfig,
+      genre: commitReceipt.core.genre,
+      subGenre: commitReceipt.core.subGenre,
+      targetAudience: commitReceipt.core.targetAudience,
+      totalChapters: commitReceipt.core.totalChapters,
+      wordsPerChapter: commitReceipt.core.wordsPerChapter,
+      plotStructure: commitReceipt.core.plotStructure,
+      narrativePOV: commitReceipt.core.narrativePov,
+      goldenFinger: commitReceipt.core.goldenFinger,
+      globalGuidance: commitReceipt.core.globalGuidance,
+      coreOutline: commitReceipt.core.coreOutline,
+      worldSetting: commitReceipt.core.worldSetting,
+      protagonistProfile: commitReceipt.core.protagonistProfile,
     }
+    useProjectStore.setState({ currentProject: { ...projectSnapshot, novelConfig: authoritativeNovelConfig } })
+    context.data.novelConfigSummary = `类型: ${authoritativeNovelConfig.genre || '未知'} | 子类型: ${authoritativeNovelConfig.subGenre || '未知'} | 受众: ${authoritativeNovelConfig.targetAudience || '未知'}\n大纲: ${authoritativeNovelConfig.coreOutline || '（无）'}\n世界观: ${authoritativeNovelConfig.worldSetting || '（无）'}\n金手指: ${authoritativeNovelConfig.goldenFinger || '（无）'}\n主角: ${authoritativeNovelConfig.protagonistProfile || '（无）'}`
+    callbacks.log(`小说配置、非角色架构与 ${commitReceipt.roster.snapshot.entries.length} 张角色卡已原子提交`)
 
     callbacks.setProgress(90)
     this.notifyRefresh(['fileTree', 'characterCards'], context.projectPath, requireWorkflowProjectSession(context))
@@ -413,8 +513,10 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
           .withChapterTitle(items.map(item => item.title).filter(Boolean).join('、'))
           .withNovelConfigSummary(`${configSummary}\n\n【已验证前缀】\n${prior}`)
           .build()
-          + `\n\n【结构化批次合同】\n只输出 JSON 对象 {"blueprints":[...]}。必须恰好覆盖章节号：${activeChapterNumbers.join('、')}；`
-          + '每项包含 chapterNumber、title、role、purpose、keyEvents、characters、relationshipHints（无关系时为空数组）、suspenseHook。不得缺项、重复或输出范围外章节。'
+          + '\n\n【最终不可变输出合同】\n'
+          + '本合同取代上述模板中的任何旧 JSON 示例或字段名，不得沿用缺少字段的旧示例。\n'
+          + `${blueprintSemanticGenerationContract()}\n`
+          + `本批必须且只能完整返回以下 chapterNumber：${activeChapterNumbers.join('、')}。`
         callbacks.log(`  正在推演第 ${activeChapterNumbers[0]}–${activeChapterNumbers.at(-1)} 章...`)
         callbacks.setProgress(5 + Math.round((validatedPrefix.length / orderedChapters.length) * 80))
         return {

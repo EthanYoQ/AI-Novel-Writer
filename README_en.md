@@ -28,15 +28,17 @@
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
-> ## v0.8.1 major stability update
+> ## v0.8.2 major systemic reliability update
 >
-> [v0.8.1](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.1) is a major update spanning model parameters, legacy character data, and recovery from length-limited output.
+> [v0.8.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.2) is a major update spanning long-output mechanics, prompt persistence, and the project-action boundary of the AI assistant.
 >
-> - **#78 model temperature and Kimi compatibility** — The user-configured temperature is now authoritative across connection tests, standard and streaming generation, and workflows. The request policy handles a fixed temperature only when an official provider endpoint explicitly requires it, without misclassifying third-party proxies.
-> - **#84 character sidebar crash** — Legacy character records with missing or unknown roles are normalized when a project opens, with defensive rendering retained for malformed external data so legacy character data can no longer crash the sidebar.
-> - **#85 long-output recovery** — Output stopped by a model length limit now uses bounded continuation with a finite continuation count and context budget. If a complete result cannot be obtained, the operation fails immediately and incomplete drafts or post-processing results are not persisted.
+> - **#87 token and long-output mechanics** — A chapter word target no longer silently lowers the model output budget. Length-limited output enters a continuation chain constrained by the total budget; a low-progress truncated candidate is discarded and gets at most one recovery request. If the final result is still incomplete, the operation fails and incomplete drafts or post-processing data are not persisted.
+> - **#88 global prompt persistence** — PromptCatalog now resolves built-in, global, and project prompts through one boundary. Saved global prompts are immediately visible and survive reloads, while one corrupt prompt file no longer hides unrelated valid prompts.
+> - **#90 real Agent workflow execution** — The AI assistant now performs project actions through project-fact and creative-workflow seams, reporting a workflow start only after a real run is registered and a receipt is returned. An ordinary Markdown file remains a file artifact; it is not a project fact for architecture, characters, blueprints, or chapter content and is not imported implicitly.
 >
-> One Release keeps the exact five assets contract: the Windows x64 assets `ai-novel-writer-setup-0.8.1.exe`, `ai-novel-writer-setup-0.8.1.exe.blockmap`, and `latest.yml`, plus `ai-novel-writer-mac-arm64-0.8.1-installer.dmg` and `ai-novel-writer-mac-arm64-0.8.1-installer.dmg.sha256`. The Windows installer is not code-signed but supports the in-app update. The macOS ARM64 package is unsigned and not notarized, and it still requires a manual update from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
+> A real DeepSeek V4 Flash journey reached 20 chapters, with continuously generated chapters totaling 40,279 visible prose units, while also exercising character state, blueprints, knowledge retrieval, and the Agent toolchain.
+>
+> One Release keeps the exact five assets contract: the Windows x64 assets `ai-novel-writer-setup-0.8.2.exe`, `ai-novel-writer-setup-0.8.2.exe.blockmap`, and `latest.yml`, plus `ai-novel-writer-mac-arm64-0.8.2-installer.dmg` and `ai-novel-writer-mac-arm64-0.8.2-installer.dmg.sha256`. The Windows installer is not code-signed but supports the in-app update. The macOS ARM64 package is distributed ad-hoc or unsigned and is not notarized; it still requires a manual update from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
 
 ## What this product is
 

@@ -113,6 +113,7 @@ const DEFAULT_DISTANCE_METRIC = 'l2'
 
 const connectionPool = new Map<string, lancedb.Connection>()
 const legacyMigrationInFlight = new Map<string, Promise<{ success: boolean; migrated: number; error?: string }>>()
+const embeddingTableCreationOwners = new Set<string>()
 
 function databasePath(projectPath: string): string {
   return path.join(projectPath, '.vela', 'lancedb')
@@ -140,7 +141,10 @@ export async function getConnection(projectPath: string): Promise<lancedb.Connec
 
 /** 关闭指定项目的连接 */
 export function closeConnection(projectPath: string): void {
-  connectionPool.delete(databasePath(projectPath))
+  const dbPath = databasePath(projectPath)
+  const connection = connectionPool.get(dbPath)
+  connectionPool.delete(dbPath)
+  connection?.close()
 }
 
 function canonicalChunkSchema(): ArrowSchema {
@@ -385,9 +389,8 @@ function matchingSpace(
   ))
 }
 
-function nextSpace(registry: EmbeddingSpaceRegistry, tableNames: readonly string[], identity: Required<EmbeddingSpaceIdentity>, dimension: number): EmbeddingSpace {
-  let generation = Math.max(0, ...registry.spaces.map(space => space.generation)) + 1
-  while (tableNames.includes(`${EMBEDDING_TABLE_PREFIX}${generation}`)) generation += 1
+function nextSpace(registry: EmbeddingSpaceRegistry, identity: Required<EmbeddingSpaceIdentity>, dimension: number): EmbeddingSpace {
+  const generation = Math.max(0, ...registry.spaces.map(space => space.generation)) + 1
   return {
     generation,
     tableName: `${EMBEDDING_TABLE_PREFIX}${generation}`,
@@ -396,6 +399,67 @@ function nextSpace(registry: EmbeddingSpaceRegistry, tableNames: readonly string
     vectorDimension: dimension,
     status: 'building',
     createdAt: new Date().toISOString(),
+  }
+}
+
+function embeddingTableDirectory(projectPath: string, tableName: string): string {
+  return path.join(databasePath(projectPath), `${tableName}.lance`)
+}
+
+function removeEmptyUnregisteredTableDirectory(projectPath: string, tableName: string): void {
+  const tableDirectory = embeddingTableDirectory(projectPath, tableName)
+  if (!fs.existsSync(tableDirectory)) return
+  const stat = fs.statSync(tableDirectory)
+  if (!stat.isDirectory() || fs.readdirSync(tableDirectory).length > 0) {
+    throw new Error(`嵌入空间 ${tableName} 存在未登记数据，已拒绝覆盖；请修复知识库后重试`)
+  }
+  fs.rmdirSync(tableDirectory)
+}
+
+async function cleanupOwnedTableCreation(
+  projectPath: string,
+  db: lancedb.Connection,
+  tableName: string,
+): Promise<void> {
+  const registry = readRegistry(projectPath)
+  if (registry?.spaces.some(space => space.tableName === tableName)) return
+  try {
+    if ((await db.tableNames()).includes(tableName)) {
+      await db.dropTable(tableName)
+    } else {
+      removeEmptyUnregisteredTableDirectory(projectPath, tableName)
+    }
+  } catch (cleanupError) {
+    console.warn(`[Vela VectorStore] 清理本次失败的嵌入表 ${tableName} 失败:`, cleanupError)
+  }
+}
+
+async function createOwnedEmbeddingTable(
+  projectPath: string,
+  db: lancedb.Connection,
+  space: EmbeddingSpace,
+  records: ReadonlyArray<Record<string, unknown>>,
+  schema: ArrowSchema,
+): Promise<void> {
+  const ownershipKey = `${databasePath(projectPath)}\0${space.tableName}`
+  if (embeddingTableCreationOwners.has(ownershipKey)) {
+    throw new Error(`嵌入空间 ${space.tableName} 正在创建，请稍后重试`)
+  }
+
+  embeddingTableCreationOwners.add(ownershipKey)
+  try {
+    // A native createTable failure can leave an empty unregistered directory.
+    // Removing only an empty exact candidate is safe and lets the same
+    // generation be retried without deleting any table that contains data.
+    removeEmptyUnregisteredTableDirectory(projectPath, space.tableName)
+    try {
+      await db.createTable(space.tableName, recordsForSchema(records, schema), { schema })
+    } catch (error) {
+      await cleanupOwnedTableCreation(projectPath, db, space.tableName)
+      throw error
+    }
+  } finally {
+    embeddingTableCreationOwners.delete(ownershipKey)
   }
 }
 
@@ -443,9 +507,9 @@ interface EmbeddingWrite {
 }
 
 async function appendEmbeddingRecords(
+  projectPath: string,
   db: lancedb.Connection,
   registry: EmbeddingSpaceRegistry,
-  tableNames: readonly string[],
   records: ReadonlyArray<ChunkRecord>,
   dimension: number,
   identity: Required<EmbeddingSpaceIdentity>,
@@ -456,10 +520,8 @@ async function appendEmbeddingRecords(
     return { space: existing, tableName: existing.tableName, newlyCreated: false }
   }
 
-  const space = nextSpace(registry, tableNames, identity, dimension)
-  await db.createTable(space.tableName, recordsForSchema(records, embeddingChunkSchema(dimension)), {
-    schema: embeddingChunkSchema(dimension),
-  })
+  const space = nextSpace(registry, identity, dimension)
+  await createOwnedEmbeddingTable(projectPath, db, space, records, embeddingChunkSchema(dimension))
   return { space, tableName: space.tableName, newlyCreated: true }
 }
 
@@ -779,11 +841,15 @@ export async function rebuildPlannedEmbeddingSpace(
     if (vectorsById.size !== canonical.length || canonical.some(record => !vectorsById.has(record.id))) {
       return { success: false, count: 0, error: '重建向量缺少文本块，旧索引保持不变' }
     }
-    newSpace = nextSpace(registry, tableNames, plan.identity, plan.vectorDimension)
+    newSpace = nextSpace(registry, plan.identity, plan.vectorDimension)
     const records = canonical.map(record => ({ ...record, vector: vectorsById.get(record.id)! }))
-    await db.createTable(newSpace.tableName, recordsForSchema(records, embeddingChunkSchema(plan.vectorDimension)), {
-      schema: embeddingChunkSchema(plan.vectorDimension),
-    })
+    await createOwnedEmbeddingTable(
+      projectPath,
+      db,
+      newSpace,
+      records,
+      embeddingChunkSchema(plan.vectorDimension),
+    )
     tableCreated = true
 
     if (!(await completeForCanonicalTable(db, newSpace)) || !(await verifyQueryableEmbeddingSpace(db, newSpace))) {
@@ -939,9 +1005,9 @@ export async function addChunks(
         vector: validation.vectors![index],
       }))
       embeddingWrite = await appendEmbeddingRecords(
+        projectPath,
         db,
         registry,
-        tableNames,
         vectorRecords,
         validation.dimension,
         identity,
@@ -1261,9 +1327,9 @@ export async function updateChunkVectors(
 
     const registry = await loadOrRegisterLegacyRegistry(projectPath, db, tableNames)
     write = await appendEmbeddingRecords(
+      projectPath,
       db,
       registry,
-      tableNames,
       records,
       validation.dimension,
       normalizedIdentity(embeddingSpace, validation.dimension),

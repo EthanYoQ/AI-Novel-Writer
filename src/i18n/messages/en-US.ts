@@ -33,6 +33,7 @@ export const enUS = {
   'error.legacyVectorMigrationBlocked': 'Legacy knowledge-base data must be repaired before continuing. Fix vectors.json in the project, then try again.',
   'error.projectNotOpen': 'Open a project first.',
   'error.embeddingModelNotConfigured': 'Configure an embedding model first.',
+  'error.projectStoragePathUnsupported': 'The project path is too deep for some local storage. Move the entire project folder closer to the drive root (for example, D:\\Novels), then try again.',
   'error.unknown': 'Something went wrong: {message}',
   'project.backupUnavailable': 'Backup will be implemented in a later release',
   'project.current': 'Current project: {name}',

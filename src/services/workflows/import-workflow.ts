@@ -2,7 +2,7 @@
  * 导入小说工作流定义
  *
  * 逆向推演全流程：
- * 步骤1: 写入正文 + 构建知识库
+ * 步骤1: 提交数据库定稿事实 + 构建知识库（实体稿独立待发布）
  * 步骤2: 向量采样 + AI 推演全局配置/架构/角色
  * 步骤3: AI 从导入正文提取文风
  * 步骤4: AI 按章推演精准蓝图 + 蓝图入向量库 + 拼装轻量全局摘要
@@ -50,10 +50,10 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
     projectPath: params.projectPath,
     projectSession,
     steps: [
-      // ===== 步骤 1: 写入正文 + 构建知识库 =====
+      // ===== 步骤 1: 提交数据库定稿事实 + 构建知识库 =====
       {
-        name: '写入正文与构建知识库',
-        description: `将 ${params.chapters.length} 章正文写入 manuscript/ 并灌入向量知识库`,
+        name: '提交定稿事实与构建知识库',
+        description: `将 ${params.chapters.length} 章正文提交为数据库定稿事实（实体稿待发布），并灌入向量知识库`,
         executor: async (step, context, callbacks) => {
           const { ImportInitializeCommand } = await import('./commands/import-novel.command')
           const cmd = new ImportInitializeCommand(params.chapters)

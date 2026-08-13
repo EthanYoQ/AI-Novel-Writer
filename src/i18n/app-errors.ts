@@ -7,6 +7,7 @@ const ERROR_KEYS = {
   LEGACY_VECTOR_MIGRATION_BLOCKED: 'error.legacyVectorMigrationBlocked',
   PROJECT_NOT_OPEN: 'error.projectNotOpen',
   EMBEDDING_MODEL_NOT_CONFIGURED: 'error.embeddingModelNotConfigured',
+  PROJECT_STORAGE_PATH_UNSUPPORTED: 'error.projectStoragePathUnsupported',
 } as const
 
 function readCode(error: unknown): AppErrorCode | undefined {

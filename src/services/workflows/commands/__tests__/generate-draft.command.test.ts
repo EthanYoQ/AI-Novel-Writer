@@ -409,6 +409,53 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(runtime.complete).toHaveBeenCalledTimes(2)
   })
 
+  it('recovers once from an output-limited continuation with no visible progress and commits only the recovered draft', async () => {
+    const initial = '初'.repeat(4000)
+    const discarded = '初'.repeat(200)
+    const recovered = `${'续'.repeat(1000)}。`
+    const runtime = fakeOutcomes(
+      outcome(initial, 'length', 1),
+      outcome(discarded, 'length', 2),
+      outcome(recovered, 'stop', 3),
+    )
+    const { invoke, context, callbacks, command } = setup({ runtime })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('续')
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
+      'chapter-draft',
+      'chapter-draft-continuation',
+      'chapter-draft-no-progress-recovery',
+    ])
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(
+      /visibleUnitsBefore=4000 candidateVisibleUnits=200 mergedDelta=0 accepted=false/u,
+    ))
+    const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
+    expect((persisted?.[1] as { content: string }).content).toBe(`${initial}\n\n${recovered}`)
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:draft-create')).toHaveLength(1)
+    expect(JSON.stringify(vi.mocked(callbacks.log).mock.calls)).not.toContain(discarded)
+  })
+
+  it('fails closed after the only no-progress recovery also makes no visible progress', async () => {
+    const initial = '初'.repeat(4000)
+    const runtime = fakeOutcomes(
+      outcome(initial, 'length', 1),
+      outcome('初'.repeat(200), 'length', 2),
+      outcome('初'.repeat(300), 'length', 3),
+    )
+    const { invoke, context, callbacks, command } = setup({ runtime })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow(/恢复请求仍未增加足够的新正文/u)
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
+      'chapter-draft',
+      'chapter-draft-continuation',
+      'chapter-draft-no-progress-recovery',
+    ])
+    expectNoDraftPersistence(invoke)
+  })
+
   it('injects chapter, future blueprint, and user guidance into the semantic initial task', async () => {
     const runtime = fakeOutcomes(outcome(`${'正文'.repeat(2500)}。`, 'stop'))
     const { context, callbacks, command } = setup({

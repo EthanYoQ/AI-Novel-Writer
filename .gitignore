@@ -46,3 +46,5 @@ tailwind.config.js.bak
 .codegraph/
 .superpowers/
 .worktrees/
+.runtime/
+.vibe-owner.json

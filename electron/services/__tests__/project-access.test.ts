@@ -79,6 +79,54 @@ afterEach(() => {
 })
 
 describe('ProjectAccessService project session seam', () => {
+  it('rejects a Windows project whose derived native storage path is unsafe before creating the project root', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-storage-preflight-'))
+    temporaryRoots.push(parent)
+    const options = {
+      homePath: path.join(os.tmpdir(), 'not-the-project-home'),
+      platform: 'win32' as NodeJS.Platform,
+    }
+    const access = new ProjectAccessService(options)
+    const projectName = 'x'.repeat(246 - parent.length - 1)
+    const requestedRoot = path.join(parent, projectName)
+    expect(requestedRoot.length).toBe(246)
+
+    expect(() => access.createProject(parent, projectName)).toThrow(expect.objectContaining({
+      code: 'PROJECT_STORAGE_PATH_UNSUPPORTED',
+    }))
+    expect(fs.existsSync(requestedRoot)).toBe(false)
+  })
+
+  it('rejects opening an existing Windows project with an unsafe derived storage path without changing its files', () => {
+    const root = makeProjectRoot()
+    const before = inventory(root)
+    const options = {
+      homePath: path.join(os.tmpdir(), 'not-the-project-home'),
+      platform: 'win32' as NodeJS.Platform,
+      maxNativePathCharacters: 70,
+    }
+    const access = new ProjectAccessService(options)
+
+    expect(() => access.probeExistingProject(root)).toThrow(expect.objectContaining({
+      code: 'PROJECT_STORAGE_PATH_UNSUPPORTED',
+    }))
+    expect(inventory(root)).toEqual(before)
+  })
+
+  it('keeps an existing project recoverable when SQLite is safe but its knowledge-base path is too deep', () => {
+    const root = makeProjectRoot()
+    const access = new ProjectAccessService({
+      homePath: path.join(os.tmpdir(), 'not-the-project-home'),
+      platform: 'win32',
+      maxNativePathCharacters: 120,
+    })
+
+    expect(access.probeExistingProject(root)).toMatchObject({
+      kind: 'manifest',
+      rootPath: root,
+    })
+  })
+
   it('issues a new lease when the same Windows root is reopened and rejects the old lease', () => {
     const root = makeProjectRoot()
     const access = new ProjectAccessService({

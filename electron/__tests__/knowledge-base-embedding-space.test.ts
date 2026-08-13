@@ -28,16 +28,17 @@ import {
   getEmbeddingSpaces,
   search,
 } from '../vector-store'
+import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
 import { EmbeddingResponseValidationError } from '../services/embedding-response-error'
 
 describe('知识库嵌入空间回填', () => {
   const projects: string[] = []
 
-  afterEach(() => {
+  afterEach(async () => {
     generateEmbeddingsMock.mockReset()
     for (const projectPath of projects.splice(0)) {
       closeConnection(projectPath)
-      fs.rmSync(projectPath, { recursive: true, force: true })
+      await removeDirectoryWithWindowsRetry(projectPath)
     }
   })
 

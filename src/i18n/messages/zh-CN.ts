@@ -35,6 +35,7 @@ export const zhCN = {
   'error.legacyVectorMigrationBlocked': '旧版知识库数据需要先修复后才能继续。请修正项目中的 vectors.json，然后重试。',
   'error.projectNotOpen': '请先打开项目。',
   'error.embeddingModelNotConfigured': '请先配置向量模型。',
+  'error.projectStoragePathUnsupported': '项目路径过深，部分本地存储不可用。请将整个项目文件夹移动到更靠近磁盘根目录的位置（例如 D:\\Novels），然后重试。',
   'error.unknown': '发生错误：{message}',
   'project.backupUnavailable': '备份功能将在后续版本实现',
   'project.current': '当前项目：{name}',

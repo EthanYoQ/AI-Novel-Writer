@@ -298,13 +298,15 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         const initialCompletion = completionFromOutcome(initialOutcome)
         logDraftAttempt(callbacks, '初始生成', initialOutcome.receipt)
         callbacks.log(`  初始生成响应结束：finishReason=${initialCompletion.finishReason}`)
-        callbacks.appendText(sanitizeDraftText(this.stripThinkingTags(initialCompletion.content)))
+        const initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content))
+        callbacks.log(`  初始生成可见单位：visibleUnits=${countDraftUnits(initialVisibleDraft)}`)
+        callbacks.appendText(initialVisibleDraft)
         callbacks.setProgress(90)
         this.assertNotCancelled(context)
         return this.extendDraftIfNeeded({
           session,
           signal: cancellation.signal,
-          initialDraft: sanitizeDraftText(this.stripThinkingTags(initialCompletion.content)),
+          initialDraft: initialVisibleDraft,
           initialFinishReason: initialCompletion.finishReason,
           targetChars,
           callbacks,
@@ -432,6 +434,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     let draft = params.initialDraft
     let rounds = 0
     let lastFinishReason = params.initialFinishReason
+    let noProgressRecoveryUsed = false
+    let recoveryPending = false
 
     if (
       params.reasoning
@@ -452,7 +456,11 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
       const remaining = Math.max(0, params.targetChars - currentChars)
       const visibleTail = sanitizeDraftText(draft).slice(-CONTINUE_PROMPT_MAX_CHARS)
-      const continuationPrompt = `请无缝续写当前章节正文。
+      const recoveryInstruction = recoveryPending
+        ? '上一轮续写达到输出上限且没有增加足够的新正文，已被全部丢弃。\n'
+          + '这是本次任务唯一一次无进展恢复机会：请直接推进下一事件、动作或对话，禁止复述已写末尾。\n\n'
+        : ''
+      const continuationPrompt = `${recoveryInstruction}请无缝续写当前章节正文。
 
 【硬性要求】
 - 只输出新增正文，不要复述已写内容。
@@ -478,7 +486,9 @@ ${params.writingStyle || '（无）'}
 ${visibleTail}`
 
       const outcome = await params.session.complete({
-        purpose: 'chapter-draft-continuation',
+        purpose: recoveryPending
+          ? 'chapter-draft-no-progress-recovery'
+          : 'chapter-draft-continuation',
         output: 'visible-text',
         messages: [
           { role: 'system', content: params.systemRole },
@@ -490,17 +500,33 @@ ${visibleTail}`
       params.callbacks.log(`  自动续写第 ${rounds} 段响应结束：finishReason=${addition.finishReason}`)
       params.callbacks.appendText(sanitizeDraftText(this.stripThinkingTags(addition.content)))
       this.assertNotCancelled(params.context)
-      lastFinishReason = addition.finishReason
       const beforeChars = countDraftUnits(draft)
-      draft = appendVisibleDraftContinuation(
+      const visibleAddition = sanitizeDraftText(this.stripThinkingTags(addition.content))
+      const candidateDraft = appendVisibleDraftContinuation(
         draft,
-        this.stripThinkingTags(addition.content),
+        visibleAddition,
       )
-      const afterChars = countDraftUnits(draft)
-      if (afterChars - beforeChars < 300) {
-        params.callbacks.log('  自动续写增量过短，停止继续请求')
-        break
+      const mergedDelta = countDraftUnits(candidateDraft) - beforeChars
+      const accepted = addition.finishReason === 'stop' || mergedDelta >= 300
+      params.callbacks.log(
+        `  自动续写可见单位：visibleUnitsBefore=${beforeChars} `
+        + `candidateVisibleUnits=${countDraftUnits(visibleAddition)} `
+        + `mergedDelta=${mergedDelta} accepted=${accepted}`,
+      )
+      if (addition.finishReason === 'length' && mergedDelta < 300) {
+        if (noProgressRecoveryUsed) {
+          throw new Error('唯一一次无进展恢复请求仍未增加足够的新正文，结果未保存。请缩短章节目标后重试。')
+        }
+        noProgressRecoveryUsed = true
+        recoveryPending = true
+        lastFinishReason = addition.finishReason
+        params.callbacks.log('  本轮低增量截断内容已丢弃，将使用剩余预算执行一次无进展恢复请求')
+        continue
       }
+      draft = candidateDraft
+      lastFinishReason = addition.finishReason
+      recoveryPending = false
+      if (mergedDelta < 300) break
     }
 
     this.assertNotCancelled(params.context)

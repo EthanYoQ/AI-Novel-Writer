@@ -12,6 +12,7 @@ import {
   type GenerationSession,
   type GenerationTask,
 } from '../../generation/generation-harness'
+import { planBlueprintGenerationCost } from '../blueprint-batch-policy'
 
 type Blueprint = {
   chapterNumber: number
@@ -25,6 +26,14 @@ const blueprintContract: StructuredBatchContract<number, Blueprint> = {
     messages: [{
       role: 'user',
       content: JSON.stringify({ items, validatedPrefix }),
+    }],
+  }),
+  buildCompactSingleTask: ({ item, validatedPrefix }) => ({
+    purpose: 'chapter-blueprints:compact-single',
+    output: 'structured-data',
+    messages: [{
+      role: 'user',
+      content: JSON.stringify({ items: [item], validatedPrefix, compact: true }),
     }],
   }),
   inputKey: chapterNumber => chapterNumber,
@@ -161,6 +170,66 @@ function blueprintJson(chapters: readonly number[]): string {
 }
 
 describe('StructuredBatchExecutor seam', () => {
+  it('uses the eleven-chapter planner budget for recursive splits plus bounded compact singles', async () => {
+    let compactFallbackUsed = false
+    const physicalComplete = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof createGenerationHarness>[0]['completionPort']['complete']>>[0]) => {
+      const payload = taskPayload({
+        purpose: request.purpose,
+        output: request.plan.output,
+        messages: request.messages,
+      })
+      if (payload.items.length > 1) {
+        return { content: '{"blueprints":[', finishReason: 'length' as const }
+      }
+      if (!compactFallbackUsed && !request.purpose.endsWith(':compact-single')) {
+        compactFallbackUsed = true
+        return { content: '{"blueprints":[', finishReason: 'length' as const }
+      }
+      return { content: blueprintJson(payload.items), finishReason: 'stop' as const }
+    })
+    const harness = createGenerationHarness({
+      modelSource: {
+        snapshotDefaultModel: () => ({
+          revision: 'revision-eleven-chapter-budget',
+          model: {
+            id: 'model-eleven-chapter-budget',
+            name: 'Eleven chapter budget',
+            provider: 'custom',
+            protocol: 'openai',
+            modelName: 'eleven-chapter-budget',
+            apiKey: 'test-only',
+            baseUrl: 'https://example.invalid/v1',
+            temperature: 0.7,
+            maxTokens: 4_096,
+            purposes: ['generation'],
+          },
+        }),
+      },
+      completionPort: { complete: physicalComplete },
+      policy: planBlueprintGenerationCost(11).runtimeBudget,
+      now: () => 0,
+    })
+    const executor = createStructuredBatchExecutor({
+      contract: blueprintContract,
+      session: harness.openSession(),
+    })
+
+    const result = await executor.execute({
+      items: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      limits: {
+        maxBatchItems: 5,
+        maxCompactSingleFallbacks: planBlueprintGenerationCost(11).maxCompactSingleFallbacks,
+      },
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: Array.from({ length: 11 }, (_, index) => ({ chapterNumber: index + 1 })),
+      receipt: { calls: 20, requestedTokens: 81_920 },
+    })
+    expect(physicalComplete).toHaveBeenCalledTimes(20)
+  })
+
   it('uses GenerationSession as the sole billable budget gate before another physical attempt starts', async () => {
     const physicalComplete = vi.fn(async () => ({
       content: '{"blueprints":[',
@@ -1127,7 +1196,7 @@ describe('StructuredBatchExecutor seam', () => {
     expect(JSON.stringify(result)).not.toContain('test-secret')
   })
 
-  it('fails once when one output-limited item cannot be split any further', async () => {
+  it('fails after one compact fallback for the same item when it is also length-truncated', async () => {
     const generate = vi.fn<AttemptHandler>(async () => ({
       status: 'incomplete',
       reason: 'output_limit',
@@ -1141,7 +1210,7 @@ describe('StructuredBatchExecutor seam', () => {
 
     const result = await executor.execute({
       items: [1],
-      limits: { maxBatchItems: 5 },
+      limits: { maxBatchItems: 5, maxCompactSingleFallbacks: 1 },
     })
 
     expect(result).toMatchObject({
@@ -1151,11 +1220,124 @@ describe('StructuredBatchExecutor seam', () => {
         reason: 'output_limit',
       },
       receipt: {
-        calls: 1,
+        calls: 2,
         splitCount: 0,
-        requestedTokens: 100,
+        requestedTokens: 200,
       },
     })
-    expect(generate).toHaveBeenCalledTimes(1)
+    expect(generate).toHaveBeenCalledTimes(2)
+  })
+
+  it('rebuilds one output-limited single item compactly on the same session after recursive splitting', async () => {
+    let attempt = 0
+    const observedPurposes: string[] = []
+    const complete = vi.fn<GenerationSession['complete']>(async (task) => {
+      attempt += 1
+      observedPurposes.push(task.purpose)
+      const request = taskPayload(task)
+      if (attempt === 1 || attempt === 2) {
+        return {
+          status: 'incomplete',
+          content: '{"blueprints":[{"chapterNumber":1,"title":"不可信截断片段',
+          finishReason: 'length',
+          receipt: attemptReceipt(attempt, 100, attempt * 100, 'length'),
+        }
+      }
+      if (attempt === 3) {
+        const prompt = task.messages.map(message => message.content).join('\n')
+        expect(task.purpose).toBe('chapter-blueprints:compact-single')
+        expect(prompt).toContain('"compact":true')
+        expect(prompt).not.toContain('不可信截断片段')
+        return {
+          status: 'completed',
+          content: blueprintJson([1]),
+          finishReason: 'stop',
+          receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+        }
+      }
+      return {
+        status: 'completed',
+        content: blueprintJson(request.items),
+        finishReason: 'stop',
+        receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+      }
+    })
+    const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+
+    const result = await executor.execute({
+      items: [1, 2, 3],
+      limits: { maxBatchItems: 3, maxCompactSingleFallbacks: 1 },
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: [{ chapterNumber: 1 }, { chapterNumber: 2 }, { chapterNumber: 3 }],
+      receipt: { calls: 4, splitCount: 1, requestedTokens: 400 },
+    })
+    expect(observedPurposes.filter(purpose => purpose.endsWith(':compact-single')))
+      .toEqual(['chapter-blueprints:compact-single'])
+    expect(complete).toHaveBeenCalledTimes(4)
+  })
+
+  it('returns no items when the compact single fallback is also length-truncated', async () => {
+    let attempt = 0
+    const complete = vi.fn<GenerationSession['complete']>(async () => {
+      attempt += 1
+      return {
+        status: 'incomplete',
+        content: '{"blueprints":[',
+        finishReason: 'length',
+        receipt: attemptReceipt(attempt, 100, attempt * 100, 'length'),
+      }
+    })
+    const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+
+    const result = await executor.execute({
+      items: [1],
+      limits: { maxBatchItems: 1, maxCompactSingleFallbacks: 1 },
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: 'limit_exceeded', reason: 'output_limit' },
+      receipt: { calls: 2, requestedTokens: 200 },
+    })
+    expect(result).not.toHaveProperty('items')
+    expect(complete).toHaveBeenCalledTimes(2)
+  })
+
+  it('allows one compact fallback per item key up to the explicit execution cap', async () => {
+    let attempt = 0
+    const complete = vi.fn<GenerationSession['complete']>(async (task) => {
+      attempt += 1
+      const request = taskPayload(task)
+      if (task.purpose.endsWith(':compact-single')) {
+        return {
+          status: 'completed',
+          content: blueprintJson(request.items),
+          finishReason: 'stop',
+          receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+        }
+      }
+      return {
+        status: 'incomplete',
+        content: '{"blueprints":[',
+        finishReason: 'length',
+        receipt: attemptReceipt(attempt, 100, attempt * 100, 'length'),
+      }
+    })
+    const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+
+    const result = await executor.execute({
+      items: [1, 2],
+      limits: { maxBatchItems: 1, maxCompactSingleFallbacks: 2 },
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: [{ chapterNumber: 1 }, { chapterNumber: 2 }],
+      receipt: { calls: 4, requestedTokens: 400, compactSingleFallbackCount: 2 },
+    })
+    expect(complete).toHaveBeenCalledTimes(4)
   })
 })

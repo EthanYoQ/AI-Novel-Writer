@@ -76,6 +76,9 @@ function createTables(db: BetterSqlite3.Database) {
       reference_works TEXT DEFAULT '',            -- 参考作品
       global_guidance TEXT DEFAULT '',            -- 全局行文指导
       golden_finger TEXT DEFAULT '',              -- 金手指设定
+      core_outline TEXT DEFAULT '',               -- 作者配置核心大纲（独立于推演摘要）
+      world_setting TEXT DEFAULT '',              -- 作者配置世界设定（独立于架构世界观）
+      protagonist_profile TEXT DEFAULT '',        -- 作者配置主角档案（独立于角色名单投影）
       -- [架构四大件]
       premise TEXT DEFAULT '',                    -- 故事前提
       worldbuilding TEXT DEFAULT '',              -- 世界观
@@ -183,6 +186,25 @@ function createTables(db: BetterSqlite3.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_finalization_outbox_status
       ON finalization_outbox(publication_status);
+
+    -- Imported finalized chapters are committed as one idempotent unit. The
+    -- stored receipt is replayed only after the immutable draft/outbox facts
+    -- have been verified again.
+    CREATE TABLE IF NOT EXISTS finalized_draft_import_operations (
+      operation_id TEXT PRIMARY KEY,
+      payload_hash TEXT NOT NULL,
+      receipt_json TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Global facts inferred during import are committed as one idempotent
+    -- unit: project core plus the authoritative structured character roster.
+    CREATE TABLE IF NOT EXISTS import_global_fact_operations (
+      operation_id TEXT PRIMARY KEY,
+      payload_hash TEXT NOT NULL,
+      receipt_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
 
     -- ============================================================
     -- 6. revisions — 修稿（派生自 draft）
@@ -310,6 +332,22 @@ function createTables(db: BetterSqlite3.Database) {
       WHERE content_snapshot = ''
     `)
   }
+
+  // 旧项目把作者配置字段映射到架构字段，导致重开漂移。新列保持独立事实：
+  // 大纲和世界设定可从旧显示来源无损继承；主角档案绝不复制 characters_arch，
+  // 因为后者是结构化角色名单的派生投影。
+  const projectCoreColumns = new Set(
+    (db.prepare('PRAGMA table_info(project_core)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  const addProjectCoreTextColumn = (column: string, legacySource?: string) => {
+    if (projectCoreColumns.has(column)) return
+    db.exec(`ALTER TABLE project_core ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`)
+    if (legacySource) db.exec(`UPDATE project_core SET ${column} = COALESCE(${legacySource}, '')`)
+    projectCoreColumns.add(column)
+  }
+  addProjectCoreTextColumn('core_outline', 'synopsis')
+  addProjectCoreTextColumn('world_setting', 'worldbuilding')
+  addProjectCoreTextColumn('protagonist_profile')
 
   // 兼容旧库：将「无 currentState」的哨兵 0 迁移为 NULL（chapter 0 合法状态不受影响）
   try {

@@ -3,6 +3,7 @@ import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositor
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { DirectoryPromptBuilder } from '../../prompts/prompt-builder'
 import { createGenerationRuntime, type GenerationRuntime } from '../../generation/generation-runtime'
+import type { GenerationTask } from '../../generation/generation-harness'
 import {
   createStructuredBatchExecutor,
   type StructuredBatchContract,
@@ -15,6 +16,7 @@ import {
   type DirectoryWorkflowProjectSnapshot,
 } from '../directory-workflow'
 import {
+  BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST,
   blueprintSemanticGenerationContract,
   validateBlueprintSemanticItem,
 } from '../../../shared/blueprint-semantic-contract'
@@ -90,9 +92,104 @@ export class DirectoryCharacterSyncPendingError extends Error {
 }
 
 export class DirectoryBlueprintContractError extends Error {
-  constructor(readonly diagnostic: { code: string; path: string; field: string }) {
-    super(`结构化合同诊断 code=${diagnostic.code} path=${diagnostic.path} field=${diagnostic.field}`)
+  constructor(
+    readonly diagnostic: { code: string; path: string; field: string },
+    readonly generationSummary?: string,
+  ) {
+    super(
+      `结构化合同诊断 code=${diagnostic.code} path=${diagnostic.path} field=${diagnostic.field}`
+      + (generationSummary ? `；${generationSummary}` : ''),
+    )
     this.name = 'DirectoryBlueprintContractError'
+  }
+}
+
+function directoryGenerationFailureSummary(
+  attempts: readonly { purpose?: string; finishReason: string; budget: { requestedOutputTokens: number } }[],
+): string {
+  if (attempts.length === 0) return 'generationAttempts=none'
+  return attempts.map((attempt, index) => (
+    `attempt=${index + 1} purpose=${attempt.purpose ?? 'unknown'} `
+    + `finishReason=${attempt.finishReason} requestedTokens=${attempt.budget.requestedOutputTokens}`
+  )).join('; ')
+}
+
+const COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES = 16_384
+const COMPACT_ARCHITECTURE_MAX_UTF8_BYTES = 4_800
+const COMPACT_GUIDANCE_MAX_UTF8_BYTES = 1_200
+const COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES = 600
+const COMPACT_RECENT_BLUEPRINTS = 3
+
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength
+}
+
+function boundedFactText(value: string, maxBytes: number): string {
+  if (utf8Bytes(value) <= maxBytes) return value.trim()
+  let bytes = 0
+  let bounded = ''
+  for (const character of value) {
+    const characterBytes = utf8Bytes(character)
+    if (bytes + characterBytes > maxBytes) break
+    bounded += character
+    bytes += characterBytes
+  }
+  const boundary = Math.max(
+    bounded.lastIndexOf('\n'),
+    bounded.lastIndexOf('。'),
+    bounded.lastIndexOf('！'),
+    bounded.lastIndexOf('？'),
+  )
+  return (boundary >= Math.floor(bounded.length * 0.6)
+    ? bounded.slice(0, boundary + 1)
+    : bounded).trim()
+}
+
+function buildCompactBlueprintTask(input: {
+  chapterNumber: number
+  architecture: string
+  previous: readonly ChapterBlueprint[]
+  totalChapters: number
+  genre: string
+  globalGuidance: string
+  pacingGuidance: string
+  systemRole: string
+}): GenerationTask {
+  const facts = {
+    targetChapterNumber: input.chapterNumber,
+    totalChapters: input.totalChapters,
+    genre: boundedFactText(input.genre, 240),
+    architectureExcerpt: boundedFactText(input.architecture, COMPACT_ARCHITECTURE_MAX_UTF8_BYTES),
+    recentBlueprints: input.previous.slice(-COMPACT_RECENT_BLUEPRINTS).map(chapter => ({
+      chapterNumber: chapter.chapterNumber,
+      title: boundedFactText(chapter.title, 240),
+      keyEvents: boundedFactText(chapter.keyEvents, 1_200),
+      suspenseHook: boundedFactText(chapter.suspenseHook, 480),
+    })),
+    globalGuidance: boundedFactText(input.globalGuidance, COMPACT_GUIDANCE_MAX_UTF8_BYTES),
+    pacingGuidance: boundedFactText(input.pacingGuidance, COMPACT_GUIDANCE_MAX_UTF8_BYTES),
+  }
+  const prompt = [
+    '上一次单章蓝图达到输出上限，其内容已丢弃。仅根据下列有界事实重建该章完整蓝图。',
+    '【有界事实】',
+    JSON.stringify(facts),
+    '【输出合同】',
+    blueprintSemanticGenerationContract(),
+    `必须且只能返回 chapterNumber=${input.chapterNumber} 的一项。`,
+    `严格执行字段和列表上限：${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}。`,
+  ].join('\n')
+  const systemRole = boundedFactText(input.systemRole, COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES)
+    || '你是一位经验丰富的网文架构师。'
+  if (utf8Bytes(prompt) + utf8Bytes(systemRole) > COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES) {
+    throw new Error('紧凑单章蓝图任务超过安全字节上限')
+  }
+  return {
+    purpose: `chapter-blueprint-directory:compact-single:chapter-${input.chapterNumber}`,
+    output: 'structured-data',
+    messages: [
+      { role: 'system', content: systemRole },
+      { role: 'user', content: prompt },
+    ],
   }
 }
 
@@ -215,6 +312,16 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           ],
         }
       },
+      buildCompactSingleTask: ({ item, validatedPrefix }) => buildCompactBlueprintTask({
+        chapterNumber: item,
+        architecture,
+        previous: [...existingBlueprints, ...validatedPrefix],
+        totalChapters,
+        genre: novelConfig.genre || '',
+        globalGuidance: novelConfig.globalGuidance || '',
+        pacingGuidance: (context.data.pacingGuidance as string) || '',
+        systemRole: template.systemRole || '你是一位经验丰富的网文架构师。',
+      }),
       inputKey: chapterNumber => chapterNumber,
       outputKey: blueprint => blueprint.chapterNumber,
       decode: content => parseTextBlueprintsStrict(
@@ -239,15 +346,20 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         const executor = createStructuredBatchExecutor({ contract, session })
         return executor.execute({
           items: chapterNumbers,
-          limits: { maxBatchItems: MAX_BLUEPRINT_ITEMS_PER_BATCH },
+          limits: {
+            maxBatchItems: MAX_BLUEPRINT_ITEMS_PER_BATCH,
+            maxCompactSingleFallbacks: costPlan.maxCompactSingleFallbacks,
+          },
           signal: cancellation.signal,
         })
       })
       if (!batchResult.ok) {
+        const generationSummary = directoryGenerationFailureSummary(batchResult.receipt.attempts)
+        callbacks.log(`蓝图生成失败收据：${generationSummary}`)
         if (batchResult.failure.diagnostic) {
-          throw new DirectoryBlueprintContractError(batchResult.failure.diagnostic)
+          throw new DirectoryBlueprintContractError(batchResult.failure.diagnostic, generationSummary)
         }
-        throw new Error(batchResult.failure.message)
+        throw new Error(`${batchResult.failure.message}；${generationSummary}`)
       }
 
       this.assertNotCancelled(context)

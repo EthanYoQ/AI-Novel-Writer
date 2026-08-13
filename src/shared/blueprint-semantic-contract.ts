@@ -24,6 +24,17 @@ export const BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST = Object.freeze({
     requiredFields: Object.freeze(['from', 'to', 'relation'] as const),
     endpointsMustAppearInCharacters: true,
   } as const),
+  outputLimits: Object.freeze({
+    titleCharacters: 60,
+    roleCharacters: 80,
+    purposeCharacters: 160,
+    keyEventsCharacters: 400,
+    suspenseHookCharacters: 160,
+    characterItems: 12,
+    characterNameCharacters: 32,
+    relationshipItems: 8,
+    relationshipCharacters: 80,
+  } as const),
   exactChapterCoverage: true,
 } as const)
 
@@ -34,6 +45,7 @@ chapterNumber 必须覆盖本批每个目标章节且不得重复或越界；tit
 characters 必须是至少含一个唯一非空角色名的字符串数组。
 relationships 必须是数组，无关系时传 []；每项必须含非空 from、to、relation，from/to 必须精确出现在同项 characters 中且不能自指。
 from/to 必须逐字复制同一项 characters 中的完整字符串；任一端点不在 characters 时，删除该关系或使用 []，不得发明别名、简称或补写角色。
+每项长度上限：title ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters} 字符、role ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.roleCharacters} 字符、purpose ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.purposeCharacters} 字符、keyEvents ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters} 字符、suspenseHook ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters} 字符；characters 最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems} 项且姓名最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} 字符；relationships 最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipItems} 项且 relation 最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} 字符。
 不得省略字段、合并章节、输出近义字段、解释、Markdown 或代码围栏。`
 }
 
@@ -68,11 +80,19 @@ function fieldValue(
   return undefined
 }
 
-function requiredText(value: unknown, path: string): string {
+function characterCount(value: string): number {
+  return Array.from(value).length
+}
+
+function requiredText(value: unknown, path: string, maxCharacters?: number): string {
   if (value === undefined) throw new StructuredContractDiagnostic('missing_field', path)
   if (typeof value !== 'string') throw new StructuredContractDiagnostic('invalid_type', path)
   if (!value.trim()) throw new StructuredContractDiagnostic('invalid_value', path)
-  return value.trim()
+  const normalized = value.trim()
+  if (maxCharacters !== undefined && characterCount(normalized) > maxCharacters) {
+    throw new StructuredContractDiagnostic('invalid_value', path)
+  }
+  return normalized
 }
 
 function normalizedChapterNumber(value: Record<string, unknown>, path: string): number {
@@ -92,12 +112,15 @@ function normalizedCharacters(value: unknown, path: string): string[] {
   if (value === undefined) throw new StructuredContractDiagnostic('missing_field', path)
   if (!Array.isArray(value)) throw new StructuredContractDiagnostic('invalid_type', path)
   if (value.length === 0) throw new StructuredContractDiagnostic('invalid_value', path)
+  if (value.length > BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems) {
+    throw new StructuredContractDiagnostic('invalid_value', path)
+  }
   const characters = value.map((candidate, index) => {
-    if (typeof candidate !== 'string') throw new StructuredContractDiagnostic('invalid_type', `${path}[${index}]`)
-    if (!candidate.trim()) {
-      throw new StructuredContractDiagnostic('invalid_value', `${path}[${index}]`)
-    }
-    return candidate.trim()
+    return requiredText(
+      candidate,
+      `${path}[${index}]`,
+      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters,
+    )
   })
   if (new Set(characters).size !== characters.length) {
     throw new StructuredContractDiagnostic('duplicate_item', path)
@@ -112,6 +135,9 @@ function normalizedRelationships(
 ): BlueprintRelationshipFact[] {
   if (value === undefined) throw new StructuredContractDiagnostic('missing_field', path)
   if (!Array.isArray(value)) throw new StructuredContractDiagnostic('invalid_type', path)
+  if (value.length > BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipItems) {
+    throw new StructuredContractDiagnostic('invalid_value', path)
+  }
   const characterSet = new Set(characters)
   const seen = new Set<string>()
   return value.map((candidate, index) => {
@@ -121,7 +147,11 @@ function normalizedRelationships(
     }
     const from = requiredText(fieldValue(candidate, 'from', ['source']), `${relationshipPath}.from`)
     const to = requiredText(fieldValue(candidate, 'to', ['target']), `${relationshipPath}.to`)
-    const relation = requiredText(candidate.relation, `${relationshipPath}.relation`)
+    const relation = requiredText(
+      candidate.relation,
+      `${relationshipPath}.relation`,
+      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters,
+    )
     if (from === to) {
       throw new StructuredContractDiagnostic('relationship_self_reference', relationshipPath)
     }
@@ -155,15 +185,20 @@ export function normalizeBlueprintSemanticItem(value: unknown, path = 'blueprint
   )
   return {
     chapterNumber,
-    title: requiredText(value.title, `${path}.title`),
-    role: requiredText(value.role, `${path}.role`),
-    purpose: requiredText(value.purpose, `${path}.purpose`),
-    keyEvents: requiredText(fieldValue(value, 'keyEvents', ['key_events']), `${path}.keyEvents`),
+    title: requiredText(value.title, `${path}.title`, BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters),
+    role: requiredText(value.role, `${path}.role`, BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.roleCharacters),
+    purpose: requiredText(value.purpose, `${path}.purpose`, BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.purposeCharacters),
+    keyEvents: requiredText(
+      fieldValue(value, 'keyEvents', ['key_events']),
+      `${path}.keyEvents`,
+      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters,
+    ),
     characters,
     relationshipHints,
     suspenseHook: requiredText(
       fieldValue(value, 'suspenseHook', ['suspense_hook']),
       `${path}.suspenseHook`,
+      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters,
     ),
   }
 }

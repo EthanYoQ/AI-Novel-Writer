@@ -21,6 +21,9 @@ export interface ProjectCoreRow {
     reference_works: string
     global_guidance: string
     golden_finger: string
+    core_outline: string
+    world_setting: string
+    protagonist_profile: string
     premise: string
     worldbuilding: string
     characters_arch: string
@@ -44,6 +47,9 @@ export interface ProjectCoreData {
     referenceWorks: string
     globalGuidance: string
     goldenFinger: string
+    coreOutline: string
+    worldSetting: string
+    protagonistProfile: string
     premise: string
     worldbuilding: string
     charactersArch: string
@@ -66,6 +72,9 @@ function rowToData(row: ProjectCoreRow): ProjectCoreData {
         referenceWorks: row.reference_works,
         globalGuidance: row.global_guidance,
         goldenFinger: row.golden_finger,
+        coreOutline: row.core_outline,
+        worldSetting: row.world_setting,
+        protagonistProfile: row.protagonist_profile,
         premise: row.premise,
         worldbuilding: row.worldbuilding,
         charactersArch: row.characters_arch,
@@ -120,6 +129,9 @@ export class ProjectCoreRepository {
             referenceWorks: 'reference_works',
             globalGuidance: 'global_guidance',
             goldenFinger: 'golden_finger',
+            coreOutline: 'core_outline',
+            worldSetting: 'world_setting',
+            protagonistProfile: 'protagonist_profile',
             premise: 'premise',
             worldbuilding: 'worldbuilding',
             synopsis: 'synopsis',
@@ -154,6 +166,9 @@ export class ProjectCoreRepository {
             referenceWorks: '',
             globalGuidance: '',
             goldenFinger: '',
+            coreOutline: '',
+            worldSetting: '',
+            protagonistProfile: '',
             premise: '',
             worldbuilding: '',
             synopsis: '',

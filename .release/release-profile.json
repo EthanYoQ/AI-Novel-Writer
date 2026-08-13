@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "provider": "github-actions",
+  "platforms": {
+    "windows": {
+      "qualificationWorkflow": ".github/workflows/windows-cloud-build-test.yml",
+      "artifactName": "qualified-windows",
+      "architectures": ["x64"],
+      "retentionDays": 14,
+      "acceptanceReceipts": [
+        "acceptance/install.json",
+        "acceptance/launch.json",
+        "acceptance/quiet-window.json",
+        "acceptance/error-dialogs.json",
+        "acceptance/uninstall.json",
+        "acceptance/upgrade-data.json",
+        "acceptance/native-abi.json",
+        "acceptance/packaged-smoke.json",
+        "acceptance/signing.json"
+      ],
+      "signingPolicy": {
+        "mode": "allow-unsigned-with-disclosure",
+        "disclosureRequired": true
+      }
+    },
+    "macos": {
+      "qualificationWorkflow": ".github/workflows/macos-arm64-cloud-build.yml",
+      "artifactName": "qualified-macos",
+      "architectures": ["arm64"],
+      "retentionDays": 14,
+      "acceptanceReceipts": [
+        "acceptance/dmg-mount.json",
+        "acceptance/packaged-smoke.json",
+        "acceptance/signing.json"
+      ],
+      "signingPolicy": {
+        "mode": "allow-unsigned-with-disclosure",
+        "disclosureRequired": true
+      }
+    }
+  },
+  "releaseAssets": [
+    { "name": "ai-novel-writer-setup-{version}.exe", "platform": "windows", "role": "installer" },
+    { "name": "ai-novel-writer-setup-{version}.exe.blockmap", "platform": "windows", "role": "update-metadata" },
+    { "name": "latest.yml", "platform": "windows", "role": "update-metadata" },
+    { "name": "ai-novel-writer-mac-arm64-{version}-installer.dmg", "platform": "macos", "role": "installer" },
+    { "name": "ai-novel-writer-mac-arm64-{version}-installer.dmg.sha256", "platform": "macos", "role": "checksum" }
+  ],
+  "promotion": {
+    "workflow": ".github/workflows/cross-platform-runtime-artifact-promotion.yml",
+    "finalState": "published"
+  },
+  "artifactSelection": "workflow-run-attempt-artifact-id",
+  "releaseChannel": {
+    "draft": false,
+    "prerelease": false,
+    "expectedLatest": true
+  },
+  "retryPolicy": {
+    "maxConsecutiveFailuresPerStage": 2
+  },
+  "hashPolicy": {
+    "binary": "raw-sha256",
+    "text": "raw-plus-newline-canonical-sha256"
+  }
+}

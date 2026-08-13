@@ -16,6 +16,10 @@ import { CharacterRepository } from '../repositories/character-repository'
 import { CharacterRosterRepository } from '../repositories/character-roster-repository'
 import type { CharacterRosterCommitRequest } from '../../src/shared/character-roster'
 import { DraftRepository } from '../repositories/draft-repository'
+import { FinalizedDraftImportRepository } from '../repositories/finalized-draft-import-repository'
+import type { FinalizedDraftImportRequest } from '../../src/shared/finalized-draft-import'
+import { ImportGlobalFactsRepository } from '../repositories/import-global-facts-repository'
+import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
 import { RevisionRepository } from '../repositories/revision-repository'
 import { ReviewRepository } from '../repositories/review-repository'
 import { PostProcessRepository } from '../repositories/post-process-repository'
@@ -29,6 +33,7 @@ type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 const MUTATING_DATABASE_CHANNELS = new Set([
   'db:close',
   'db:project-core-update',
+  'db:import-global-facts-commit',
   'db:project-clear-generated-data',
   'db:blueprint-upsert',
   'db:blueprint-upsert-many',
@@ -38,6 +43,7 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:blueprint-delete',
   'db:blueprint-clear-all',
   'db:character-roster-commit',
+  'db:draft-import-finalized-batch',
   'db:draft-create',
   'db:draft-update-status',
   'db:draft-update-content',
@@ -102,6 +108,15 @@ export function registerDatabaseController() {
       console.error('[db:project-core-update] 失败:', err)
       return { success: false, error: String(err) }
     }
+  })
+
+  ipcMain.handle('db:import-global-facts-commit', async (
+    _event,
+    request: ImportGlobalFactsRequest,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, receipt: ImportGlobalFactsRepository.commit(request) }
   })
 
   ipcMain.handle('db:project-clear-generated-data', async (
@@ -257,6 +272,20 @@ export function registerDatabaseController() {
   // ============================================================
   // 4. drafts — 草稿
   // ============================================================
+  ipcMain.handle('db:draft-import-finalized-batch', async (
+    _event,
+    request: FinalizedDraftImportRequest,
+    expectedProjectPath: string,
+  ) => {
+    const currentProjectPath = getCurrentProjectPath()
+    assertRequiredExpectedProjectPath(currentProjectPath, expectedProjectPath)
+    if (!currentProjectPath) throw new Error('项目数据库未打开')
+    return {
+      success: true,
+      receipt: FinalizedDraftImportRepository.commit(currentProjectPath, request),
+    }
+  })
+
   ipcMain.handle('db:draft-create', async (_event, params: {
     chapterNumber: number
     version: number

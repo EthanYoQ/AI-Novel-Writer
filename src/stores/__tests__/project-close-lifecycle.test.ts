@@ -884,6 +884,36 @@ describe('project close lifecycle', () => {
     )
   })
 
+  it('shows the actionable localized storage-path error returned by project creation', async () => {
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'project:create') {
+        return {
+          success: false,
+          projectId: '',
+          requestToken: args[1],
+          activeProjectPath: project('A').path,
+          databaseRestored: true,
+          dbReady: true,
+          errorCode: 'PROJECT_STORAGE_PATH_UNSUPPORTED',
+          error: 'native storage detail',
+        }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+
+    await expect(useProjectStore.getState().createProject({
+      name: 'B',
+      path: 'C:\\novels',
+      genre: '玄幻',
+      targetAudience: '全龄',
+    })).resolves.toBe(false)
+
+    expect(mocks.alertError).toHaveBeenCalledWith(
+      expect.stringContaining('请将整个项目文件夹移动到更靠近磁盘根目录的位置'),
+      expect.objectContaining({ title: '创建项目失败' }),
+    )
+  })
+
   it('detaches the renderer when project creation cannot restore the old database', async () => {
     mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
       if (channel === 'project:create') {

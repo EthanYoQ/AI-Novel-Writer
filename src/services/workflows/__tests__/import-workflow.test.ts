@@ -91,6 +91,11 @@ describe('createImportWorkflow', () => {
     })
     expect(stepNames).toContain('AI 拆解文风与仿写指南')
     expect(stepNames.indexOf('AI 拆解文风与仿写指南')).toBeLessThan(stepNames.indexOf('AI 逐章推演蓝图'))
+    expect(workflow.steps[0]).toMatchObject({
+      name: '提交定稿事实与构建知识库',
+      description: expect.stringContaining('数据库定稿事实（实体稿待发布）'),
+    })
+    expect(workflow.steps[0].description).not.toContain('写入 manuscript/')
   })
 
   it('fails the workflow when style imitation extraction fails', async () => {

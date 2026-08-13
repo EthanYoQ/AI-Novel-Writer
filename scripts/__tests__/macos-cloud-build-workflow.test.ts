@@ -24,6 +24,34 @@ function namedStep(source: string, name: string) {
 }
 
 describe('macOS ARM64 cloud build workflow contract', () => {
+  it('binds an explicit frozen release/profile contract before installing dependencies', () => {
+    const workflow = readRequired(workflowPath)
+    for (const input of ['expected_sha', 'release_tag', 'release_version', 'profile_path']) {
+      expect(workflow).toContain(`      ${input}:`)
+    }
+    expect(workflow).toContain('default: .release/release-profile.json')
+
+    const checkout = namedStep(workflow, 'Check out source')
+    expect(checkout).toContain('ref: ${{ inputs.expected_sha }}')
+    expect(checkout).toContain('fetch-depth: 0')
+    expect(checkout).toContain('persist-credentials: false')
+
+    const initialize = namedStep(workflow, 'Initialize macOS v2 acceptance evidence')
+    expect(initialize).toContain('EXPECTED_SHA: ${{ inputs.expected_sha }}')
+    expect(initialize).toContain('RELEASE_TAG: ${{ inputs.release_tag }}')
+    expect(initialize).toContain('RELEASE_VERSION: ${{ inputs.release_version }}')
+    expect(initialize).toContain('PROFILE_PATH: ${{ inputs.profile_path }}')
+    expect(initialize).toContain('.release/scripts/freeze-release-contract.mjs')
+    expect(readRequired(path.join(repositoryRoot, '.release', 'scripts', 'freeze-release-contract.mjs'))).toContain('profileRawBytesSha256')
+    expect(readRequired(path.join(repositoryRoot, '.release', 'scripts', 'freeze-release-contract.mjs'))).toContain('contractRawBytesSha256')
+    expect(workflow.indexOf('Initialize macOS v2 acceptance evidence')).toBeLessThan(workflow.indexOf('Install locked dependencies'))
+
+    const upload = namedStep(workflow, 'Upload runtime-verified macOS ARM64 package')
+    expect(upload).toContain('id: upload-qualified')
+    expect(upload).toContain('name: qualified-macos')
+    expect(upload).toContain('retention-days: 14')
+  })
+
   it('uses a manual GitHub-hosted Apple Silicon qualification without Release publication', () => {
     const workflow = readRequired(workflowPath)
     const packageMetadata = JSON.parse(readRequired(packageMetadataPath)) as { scripts?: Record<string, string> }
@@ -33,7 +61,7 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     const vectorRunnerSource = readRequired(vectorRunnerSourcePath)
 
     const triggerBlock = workflow.match(/^on:\r?\n(?<triggers>(?: {2}.*(?:\r?\n|$))*)/m)?.groups?.triggers
-    expect(triggerBlock?.trim()).toBe('workflow_dispatch:')
+    expect(triggerBlock?.trim()).toMatch(/^workflow_dispatch:\r?\n\s+inputs:/)
     expect(workflow).not.toMatch(/^\s{2}(?:push|pull_request|schedule):/m)
     expect(workflow).toMatch(/^permissions:\r?\n\s{2}contents:\s*read\s*$/m)
     expect(workflow).toContain('runs-on: macos-14')
@@ -41,14 +69,14 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(workflow).toMatch(/node-version:\s*['"]?22\.23\.1['"]?/)
     expect(workflow).toMatch(/version:\s*['"]?11\.11\.0['"]?/)
     const checkout = namedStep(workflow, 'Check out source')
-    expect(checkout).toContain('ref: ${{ github.sha }}')
+    expect(checkout).toContain('ref: ${{ inputs.expected_sha }}')
     expect(checkout).toContain('persist-credentials: false')
 
     const initializeEvidence = namedStep(workflow, 'Initialize macOS v2 acceptance evidence')
     expect(initializeEvidence).toContain('release-evidence-v2.mjs init --platform macos')
     expect(initializeEvidence).toContain('--evidence-root "$evidence_root"')
     expect(initializeEvidence).toContain('--repository "$GITHUB_REPOSITORY"')
-    expect(initializeEvidence).toContain('--commit "$GITHUB_SHA"')
+    expect(initializeEvidence).toContain('--commit "$EXPECTED_SHA"')
     expect(initializeEvidence).toContain('--run-id "$GITHUB_RUN_ID"')
     expect(initializeEvidence).toContain('--run-attempt "$GITHUB_RUN_ATTEMPT"')
     expect(initializeEvidence).toContain("--runner-label 'macos-14'")
@@ -95,25 +123,15 @@ describe('macOS ARM64 cloud build workflow contract', () => {
 
     const artifactStep = namedStep(workflow, 'Upload runtime-verified macOS ARM64 package')
     expect(artifactStep).toMatch(/if:\s*\$\{\{\s*success\(\)\s*\}\}/)
-    expect(artifactStep).toContain('retention-days: 7')
-    expect(artifactStep).toContain('ai-novel-writer-mac-arm64-*-installer.dmg')
-    expect(artifactStep).toContain('ai-novel-writer-mac-arm64-*-installer.dmg.sha256')
-    expect(artifactStep).toContain('SHA256SUMS.txt')
-    expect(artifactStep).toContain('manifest.json')
-    expect(artifactStep).toContain('qualification/release-contract.json')
-    expect(artifactStep).toContain('qualification/run-ledger.json')
-    expect(artifactStep).toContain('qualification/packaged-vector-smoke.json')
-    expect(artifactStep).toContain('qualification/packaged-official-homepage-smoke.json')
-    expect(artifactStep).toContain('qualification/packaged-skin-smoke.json')
-    expect(artifactStep).toContain('qualification/macos-dmg-smoke.json')
-    expect(artifactStep).toContain('qualification/acceptance/dmg-mount.json')
-    expect(artifactStep).toContain('qualification/acceptance/packaged-smoke.json')
-    expect(artifactStep).toContain('qualification/acceptance/signing.json')
+    expect(artifactStep).toContain('retention-days: 14')
+    expect(artifactStep).toContain('macos-qualified')
 
     const finalizeEvidence = namedStep(workflow, 'Finalize macOS v2 acceptance receipts')
     expect(finalizeEvidence).toContain('release-evidence-v2.mjs finalize --platform macos')
     expect(finalizeEvidence).toContain('--evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT"')
     expect(finalizeEvidence).toContain('--release-root "release/$version"')
+    expect(finalizeEvidence).toContain('verify-bundle --platform macos')
+    expect(finalizeEvidence).toContain('finalize-legacy-qualification.mjs --platform macos')
     expect(workflow.indexOf('Finalize macOS v2 acceptance receipts')).toBeGreaterThan(workflow.indexOf('Run mounted-DMG smoke'))
     expect(workflow.indexOf('Finalize macOS v2 acceptance receipts')).toBeLessThan(workflow.indexOf('Upload runtime-verified macOS ARM64 package'))
 

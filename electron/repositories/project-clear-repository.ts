@@ -93,6 +93,7 @@ export class ProjectClearRepository {
         try {
             const tx = db.transaction(() => {
                 if (options.generatedText) {
+                    db.prepare('DELETE FROM finalized_draft_import_operations').run()
                     db.prepare('DELETE FROM post_process_steps').run()
                     db.prepare('DELETE FROM post_process_runs').run()
                     db.prepare('DELETE FROM reviews').run()

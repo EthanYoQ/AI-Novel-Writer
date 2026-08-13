@@ -72,12 +72,41 @@ function jobLevelEnvBlocks(source: string) {
 }
 
 describe('Windows cloud build workflow contract', () => {
+  it('binds an explicit frozen release/profile contract before installing dependencies', () => {
+    const workflow = readRequiredFile(workflowPath)
+    for (const input of ['expected_sha', 'release_tag', 'release_version', 'artifact_paths', 'profile_path']) {
+      expect(workflow).toContain(`      ${input}:`)
+    }
+    expect(workflow).toContain('default: .release/release-profile.json')
+
+    const checkout = namedStep(workflow, 'Check out source')
+    expect(checkout).toContain('ref: ${{ inputs.expected_sha }}')
+    expect(checkout).toContain('fetch-depth: 0')
+    expect(checkout).toContain('persist-credentials: false')
+
+    const initialize = namedStep(workflow, 'Initialize frozen Windows release evidence')
+    expect(initialize).toContain('EXPECTED_SHA: ${{ inputs.expected_sha }}')
+    expect(initialize).toContain('RELEASE_TAG: ${{ inputs.release_tag }}')
+    expect(initialize).toContain('RELEASE_VERSION: ${{ inputs.release_version }}')
+    expect(initialize).toContain('ARTIFACT_PATHS: ${{ inputs.artifact_paths }}')
+    expect(initialize).toContain('PROFILE_PATH: ${{ inputs.profile_path }}')
+    expect(initialize).toContain('.release/scripts/freeze-release-contract.mjs')
+    expect(readRequiredFile(path.join(repositoryRoot, '.release', 'scripts', 'freeze-release-contract.mjs'))).toContain('profileRawBytesSha256')
+    expect(readRequiredFile(path.join(repositoryRoot, '.release', 'scripts', 'freeze-release-contract.mjs'))).toContain('contractRawBytesSha256')
+    expect(workflow.indexOf('Initialize frozen Windows release evidence')).toBeLessThan(workflow.indexOf('Install locked dependencies'))
+
+    const upload = namedStep(workflow, 'Upload runtime-verified Windows package')
+    expect(upload).toContain('id: upload-qualified')
+    expect(upload).toContain('name: qualified-windows')
+    expect(upload).toContain('retention-days: 14')
+  })
+
   it('uses an isolated, manual, pinned, runtime-qualified Windows build without release publication', () => {
     const workflow = readRequiredFile(workflowPath)
     const evidenceScript = readRequiredFile(evidenceScriptPath)
 
     const triggerBlock = workflow.match(/^on:\r?\n(?<triggers>(?: {2}.*(?:\r?\n|$))*)/m)?.groups?.triggers
-    expect(triggerBlock?.trim()).toBe('workflow_dispatch:')
+    expect(triggerBlock?.trim()).toMatch(/^workflow_dispatch:\r?\n\s+inputs:/)
     expect(workflow).not.toMatch(/^\s{2}(?:push|pull_request|schedule):/m)
     expect(workflow).toMatch(/^permissions:\r?\n\s{2}contents:\s*read\s*$/m)
     expect(workflow).toContain('runs-on: windows-2022')
@@ -116,12 +145,8 @@ describe('Windows cloud build workflow contract', () => {
     const successfulArtifact = namedStep(workflow, 'Upload runtime-verified Windows package')
     const failedArtifact = namedStep(workflow, 'Upload Windows build diagnostics')
     expect(successfulArtifact).toMatch(/if:\s*\$\{\{\s*success\(\)\s*\}\}/)
-    expect(successfulArtifact).toMatch(/retention-days:\s*7/)
-    expect(successfulArtifact).toContain('manifest.json')
-    expect(successfulArtifact).toContain('SHA256SUMS.txt')
-    expect(successfulArtifact).toContain('qualification/packaged-vector-smoke.json')
-    expect(successfulArtifact).toContain('qualification/packaged-official-homepage-smoke.json')
-    expect(successfulArtifact).toContain('qualification/packaged-skin-smoke.json')
+    expect(successfulArtifact).toMatch(/retention-days:\s*14/)
+    expect(successfulArtifact).toContain('windows-qualified')
     expect(successfulArtifact).not.toContain('win-unpacked')
     expect(successfulArtifact).not.toMatch(/failure\(\)/)
     expect(failedArtifact).toMatch(/if:\s*\$\{\{\s*failure\(\)\s*\}\}/)
@@ -150,7 +175,7 @@ describe('Windows cloud build workflow contract', () => {
     const diagnostics = namedStep(workflow, 'Collect Windows build diagnostics')
     const upload = namedStep(workflow, 'Upload runtime-verified Windows package')
 
-    expect(checkout).toContain('ref: ${{ github.sha }}')
+    expect(checkout).toContain('ref: ${{ inputs.expected_sha }}')
     expect(checkout).toContain('persist-credentials: false')
     expect(workflow.indexOf('Initialize frozen Windows release evidence'))
       .toBeLessThan(workflow.indexOf('Install locked dependencies'))
@@ -182,9 +207,9 @@ describe('Windows cloud build workflow contract', () => {
     }
     expect(finalize).toContain('release-evidence-v2.mjs finalize --platform windows')
     expect(finalize).toContain('--release-root "release/$version"')
-    expect(upload).toContain('release/*/qualification/release-contract.json')
-    expect(upload).toContain('release/*/qualification/run-ledger.json')
-    expect(upload).toContain('release/*/qualification/acceptance/*.json')
+    expect(finalize).toContain('verify-bundle --platform windows')
+    expect(finalize).toContain('finalize-legacy-qualification.mjs --platform windows')
+    expect(upload).toContain('windows-qualified')
     expect(diagnostics).not.toContain('Copy-Item -LiteralPath $_.FullName')
     expect(diagnostics).not.toMatch(/-Recurse\b/)
     expect(diagnostics).not.toContain('monitor-control-log.jsonl')
