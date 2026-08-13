@@ -26,8 +26,8 @@ import { useLocaleStore } from '../../stores/locale-store'
 
 const SOURCE_CONFIG = {
   builtin: { label: '内置', labelEn: 'Built-in', color: 'var(--color-text-muted)', bg: 'var(--color-hover)' },
-  global: { label: '全局', labelEn: 'Global', color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.1)' },
-  project: { label: '项目', labelEn: 'Project', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)' },
+  global: { label: '全局', labelEn: 'Global', color: 'var(--color-info)', bg: 'color-mix(in srgb, var(--color-info) 10%, transparent)' },
+  project: { label: '项目', labelEn: 'Project', color: 'var(--color-success)', bg: 'color-mix(in srgb, var(--color-success) 10%, transparent)' },
 } as const
 
 const PROMPT_META_EN: Record<string, { name: string; description: string }> = {
@@ -392,7 +392,7 @@ function TemplateItem({
           {missingVars.length > 0 && (
             <div
               className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-              style={{ backgroundColor: 'rgba(245, 158, 11, 0.08)', color: '#f59e0b' }}
+              style={{ backgroundColor: 'color-mix(in srgb, var(--color-warning) 8%, transparent)', color: 'var(--color-warning)' }}
             >
               <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
               <span>

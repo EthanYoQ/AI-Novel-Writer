@@ -161,7 +161,7 @@ export default function TitleBar() {
         <span
           className="inline-flex items-center gap-1 text-xs font-medium whitespace-nowrap"
           title={hasDirty ? t('save.dirty') : t('save.saved')}
-          style={{ color: hasDirty ? 'var(--color-warning)' : '#87d27d' }}
+          style={{ color: hasDirty ? 'var(--color-warning)' : 'var(--color-success)' }}
         >
           <CheckCircle2 size={14} strokeWidth={1.9} />
           {hasDirty ? t('save.modified') : t('save.saved')}

@@ -60,7 +60,7 @@ export default function HomeSidebarPanel() {
               type="button"
               title={text('删除项目', 'Delete project')}
               className="writer-command-button"
-              style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-danger)' }}
+              style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-error)' }}
               onClick={(e) => {
                 e.stopPropagation()
                 handleDeleteProject(currentProject)
@@ -132,7 +132,7 @@ export default function HomeSidebarPanel() {
                     type="button"
                   title={text('删除项目', 'Delete project')}
                     className="writer-command-button opacity-70 hover:opacity-100"
-                    style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-danger)' }}
+                    style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-error)' }}
                     onClick={(e) => {
                       e.stopPropagation()
                       handleDeleteProject(p)

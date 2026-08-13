@@ -46,11 +46,11 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
             onClick={onNewProject}
             className="writer-panel-card group flex flex-col items-center gap-2.5 p-5 transition-all hover:scale-[1.02]"
             onMouseEnter={e => {
-              e.currentTarget.style.borderColor = 'rgba(138, 91, 46, 0.42)'
-              e.currentTarget.style.boxShadow = '0 4px 20px rgba(82, 52, 22, 0.10)'
+              e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--color-accent) 42%, transparent)'
+              e.currentTarget.style.boxShadow = '0 4px 20px color-mix(in srgb, var(--color-accent) 10%, transparent)'
             }}
             onMouseLeave={e => {
-              e.currentTarget.style.borderColor = '#d6c09f'
+              e.currentTarget.style.borderColor = 'var(--color-border)'
               e.currentTarget.style.boxShadow = 'none'
             }}
           >
@@ -71,17 +71,17 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
             onClick={onOpenProject}
             className="writer-panel-card group flex flex-col items-center gap-2.5 p-5 transition-all hover:scale-[1.02]"
             onMouseEnter={e => {
-              e.currentTarget.style.borderColor = 'rgba(201, 167, 108, 0.4)'
-              e.currentTarget.style.boxShadow = '0 4px 20px rgba(201, 167, 108, 0.08)'
+              e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--color-info) 40%, transparent)'
+              e.currentTarget.style.boxShadow = '0 4px 20px color-mix(in srgb, var(--color-info) 8%, transparent)'
             }}
             onMouseLeave={e => {
-              e.currentTarget.style.borderColor = '#d6c09f'
+              e.currentTarget.style.borderColor = 'var(--color-border)'
               e.currentTarget.style.boxShadow = 'none'
             }}
           >
             <div
               className="flex items-center justify-center w-10 h-10 rounded-xl transition-transform group-hover:scale-105"
-              style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-text)' }}
+              style={{ backgroundColor: 'color-mix(in srgb, var(--color-info) 12%, transparent)', color: 'var(--color-info)' }}
             >
               <FolderOpen size={20} />
             </div>
@@ -97,17 +97,17 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
             onClick={onImportNovel}
             className="writer-panel-card group flex flex-col items-center gap-2.5 p-5 transition-all hover:scale-[1.02]"
             onMouseEnter={e => {
-              e.currentTarget.style.borderColor = 'rgba(134, 193, 120, 0.4)'
-              e.currentTarget.style.boxShadow = '0 4px 20px rgba(134, 193, 120, 0.10)'
+              e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--color-success) 40%, transparent)'
+              e.currentTarget.style.boxShadow = '0 4px 20px color-mix(in srgb, var(--color-success) 10%, transparent)'
             }}
             onMouseLeave={e => {
-              e.currentTarget.style.borderColor = '#d6c09f'
+              e.currentTarget.style.borderColor = 'var(--color-border)'
               e.currentTarget.style.boxShadow = 'none'
             }}
           >
             <div
               className="flex items-center justify-center w-10 h-10 rounded-xl transition-transform group-hover:scale-105"
-              style={{ backgroundColor: 'rgba(134, 193, 120, 0.12)', color: 'rgb(134, 193, 120)' }}
+              style={{ backgroundColor: 'color-mix(in srgb, var(--color-success) 12%, transparent)', color: 'var(--color-success)' }}
             >
               <FileUp size={20} />
             </div>

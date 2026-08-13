@@ -55,12 +55,12 @@
   font-weight: 500;
 }
 .twm-tag.readonly {
-  background: rgba(100, 116, 139, 0.15);
+  background: var(--color-hover);
   color: var(--color-text-muted);
 }
 .twm-tag.editable {
-  background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
+  background: color-mix(in srgb, var(--color-info) 15%, transparent);
+  color: var(--color-info);
 }
 
 /* 单滚动容器 */
@@ -90,8 +90,8 @@
   border-right: 1px solid var(--color-border);
 }
 .twm-cell.processed { opacity: 0.5; }
-.twm-cell-center.pending { background: rgba(100, 116, 139, 0.04); }
-.twm-cell-center.adopted { background: rgba(34, 197, 94, 0.04); }
+.twm-cell-center.pending { background: color-mix(in srgb, var(--color-text-muted) 6%, transparent); }
+.twm-cell-center.adopted { background: color-mix(in srgb, var(--color-success) 6%, transparent); }
 
 /* contentEditable 编辑区 */
 .twm-editable {
@@ -103,8 +103,8 @@
   cursor: text;
 }
 .twm-editable:focus {
-  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.3);
-  background: rgba(59, 130, 246, 0.03);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-info) 30%, transparent);
+  background: color-mix(in srgb, var(--color-info) 5%, transparent);
 }
 
 /* ===== 行样式 ===== */
@@ -117,15 +117,15 @@
   padding: 0 16px;
   white-space: pre-wrap;
   word-break: break-all;
-  background: rgba(239, 68, 68, 0.08);
-  box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.4);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--color-error) 40%, transparent);
 }
 .twm-line-added {
   padding: 0 16px;
   white-space: pre-wrap;
   word-break: break-all;
-  background: rgba(34, 197, 94, 0.08);
-  box-shadow: inset 3px 0 0 rgba(34, 197, 94, 0.4);
+  background: color-mix(in srgb, var(--color-success) 8%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--color-success) 40%, transparent);
 }
 .twm-line-padding {
   padding: 0 16px;
@@ -156,24 +156,24 @@
   justify-content: center;
   padding-top: 4px;
   border: none;
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
+  background: color-mix(in srgb, var(--color-info) 10%, transparent);
+  color: var(--color-info);
   font-size: 0.9rem;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.15s ease;
-  border-right: 1px solid rgba(59, 130, 246, 0.15);
+  border-right: 1px solid color-mix(in srgb, var(--color-info) 15%, transparent);
 }
 .twm-adopt:hover {
-  background: #3b82f6;
+  background: var(--color-info);
   color: white;
 }
 .twm-adopt.adopted {
-  background: rgba(34, 197, 94, 0.15);
-  color: #22c55e;
+  background: color-mix(in srgb, var(--color-success) 15%, transparent);
+  color: var(--color-success);
 }
 .twm-adopt.adopted:hover {
-  background: #ef4444;
+  background: var(--color-error);
   color: white;
 }
 

@@ -76,22 +76,22 @@ function ToastContainer() {
 const TOAST_STYLE: Record<ToastType, { border: string; bg: string; icon: React.ReactNode }> = {
   success: {
     border: 'var(--color-success)',
-    bg: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(16, 185, 129, 0.04))',
+    bg: 'color-mix(in srgb, var(--color-success) 10%, var(--color-raised))',
     icon: <CheckCircle2 size={15} style={{ color: 'var(--color-success)', flexShrink: 0 }} />
   },
   error: {
     border: 'var(--color-error)',
-    bg: 'linear-gradient(135deg, rgba(244, 63, 94, 0.12), rgba(244, 63, 94, 0.04))',
+    bg: 'color-mix(in srgb, var(--color-error) 10%, var(--color-raised))',
     icon: <AlertTriangle size={15} style={{ color: 'var(--color-error)', flexShrink: 0 }} />
   },
   warning: {
     border: 'var(--color-warning)',
-    bg: 'linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(245, 158, 11, 0.04))',
+    bg: 'color-mix(in srgb, var(--color-warning) 10%, var(--color-raised))',
     icon: <AlertTriangle size={15} style={{ color: 'var(--color-warning)', flexShrink: 0 }} />
   },
   info: {
     border: 'var(--color-accent)',
-    bg: 'linear-gradient(135deg, rgba(var(--color-accent-rgb), 0.12), rgba(var(--color-accent-rgb), 0.04))',
+    bg: 'color-mix(in srgb, var(--color-accent) 10%, var(--color-raised))',
     icon: <Info size={15} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
   },
 }
@@ -117,8 +117,7 @@ function ToastItemView({ item, onRemove }: { item: ToastItem; onRemove: (id: num
         ${isExiting ? 'animate-toast-exit' : 'animate-toast-enter'}
       `}
       style={{
-        background: bg,
-        backgroundColor: 'color-mix(in srgb, var(--color-sidebar) 92%, transparent)',
+        backgroundColor: bg,
         backdropFilter: 'blur(24px)',
         border: `1px solid var(--color-border)`,
         borderLeft: `3px solid ${border}`,

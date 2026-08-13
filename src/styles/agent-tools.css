@@ -56,18 +56,18 @@
 }
 
 .tool-call-source-badge.builtin {
-  background-color: rgba(59, 130, 246, 0.12);
-  color: #3b82f6;
+  background-color: color-mix(in srgb, var(--color-info) 12%, transparent);
+  color: var(--color-info);
 }
 
 .tool-call-source-badge.mcp {
-  background-color: rgba(168, 85, 247, 0.12);
-  color: #a855f7;
+  background-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
 }
 
 .tool-call-source-badge.skill {
-  background-color: rgba(34, 197, 94, 0.12);
-  color: #22c55e;
+  background-color: color-mix(in srgb, var(--color-success) 12%, transparent);
+  color: var(--color-success);
 }
 
 .tool-call-status {
@@ -79,11 +79,11 @@
 }
 
 .tool-call-status.completed {
-  color: #22c55e;
+  color: var(--color-success);
 }
 
 .tool-call-status.failed {
-  color: #ef4444;
+  color: var(--color-error);
 }
 
 .tool-call-status.running {
@@ -91,7 +91,7 @@
 }
 
 .tool-call-status.waiting_confirm {
-  color: #f59e0b;
+  color: var(--color-warning);
 }
 
 .tool-call-body {
@@ -155,8 +155,8 @@
   margin: 6px 0;
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid #f59e0b;
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.05), rgba(245, 158, 11, 0.02));
+  border: 1px solid var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 6%, transparent);
 }
 
 .confirm-card-header {
@@ -166,7 +166,7 @@
   margin-bottom: 8px;
   font-size: 0.75rem;
   font-weight: 600;
-  color: #f59e0b;
+  color: var(--color-warning);
 }
 
 .confirm-card-body {
@@ -193,12 +193,12 @@
 }
 
 .confirm-card-btn.approve {
-  background-color: #22c55e;
+  background-color: var(--color-success);
   color: #fff;
 }
 
 .confirm-card-btn.approve:hover {
-  background-color: #16a34a;
+  background-color: color-mix(in srgb, var(--color-success) 85%, black);
 }
 
 .confirm-card-btn.reject {
@@ -229,7 +229,7 @@
 
 .artifact-card:hover {
   border-color: var(--color-accent);
-  background-color: rgba(var(--accent-rgb, 99, 102, 241), 0.06);
+  background-color: rgba(var(--color-accent-rgb), 0.06);
 }
 
 .artifact-icon {

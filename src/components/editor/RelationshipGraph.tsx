@@ -61,10 +61,10 @@ function parseRelationships(characters: RelationshipGraphProps['characters']): R
 }
 
 const ROLE_COLORS: Record<string, string> = {
-  protagonist: '#6ee7b7',
-  antagonist: '#fca5a5',
-  supporting: '#93c5fd',
-  minor: '#a78bfa',
+  protagonist: '#B5402C',
+  antagonist: '#54666E',
+  supporting: '#527A5B',
+  minor: '#A39D8D',
 }
 
 /** 角色关系网 Canvas 可视化 */
@@ -142,7 +142,7 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
 
       // 绘制节点
       for (const node of nodes) {
-        const color = ROLE_COLORS[node.role] || '#94a3b8'
+        const color = ROLE_COLORS[node.role] || '#6E6A5F'
 
         // 光晕
         ctx.beginPath()

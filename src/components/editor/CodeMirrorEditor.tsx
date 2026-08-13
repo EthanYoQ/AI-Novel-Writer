@@ -389,7 +389,7 @@ export default function CodeMirrorEditor({
               {aiError ? (
                 <div
                   className="text-xs leading-relaxed mb-3"
-                  style={{ color: 'var(--color-danger, #dc2626)' }}
+                  style={{ color: 'var(--color-error)' }}
                 >
                   {aiError}
                 </div>

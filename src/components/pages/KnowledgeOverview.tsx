@@ -276,7 +276,7 @@ export default function KnowledgeOverview() {
         <div className="flex items-center gap-3 mb-6">
           <div
             className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, var(--color-accent), var(--color-accent-hover))' }}
+            style={{ background: 'var(--color-accent)' }}
           >
             <Database size={20} className="text-white" />
           </div>
@@ -319,7 +319,7 @@ export default function KnowledgeOverview() {
             label={text('检索模式', 'Search mode')}
             value={hasVectors ? 'FTS+向量' : 'FTS'}
             badge={hasVectors ? text('混合', 'Hybrid') : text('基础', 'Basic')}
-            badgeColor={hasVectors ? '#22c55e' : '#3b82f6'}
+            badgeColor={hasVectors ? 'var(--color-success)' : 'var(--color-info)'}
           />
         </div>
 
@@ -334,8 +334,8 @@ export default function KnowledgeOverview() {
             )}
             style={{
               backgroundColor: rebuildPresentation.kind === 'missing-vectors'
-                ? 'rgba(245, 158, 11, 0.06)'
-                : 'rgba(59, 130, 246, 0.06)',
+                ? 'color-mix(in srgb, var(--color-warning) 6%, transparent)'
+                : 'color-mix(in srgb, var(--color-info) 6%, transparent)',
             }}
           >
             <div className="flex items-center justify-between px-4 py-3">
@@ -530,7 +530,7 @@ function StatCard({ icon, label, value, accent, badge, badgeColor }: {
         {badge && (
           <span
             className="text-[0.6rem] px-1.5 py-0.5 rounded-full font-medium"
-            style={{ backgroundColor: `${badgeColor}20`, color: badgeColor }}
+            style={{ backgroundColor: `color-mix(in srgb, ${badgeColor} 12%, transparent)`, color: badgeColor }}
           >
             {badge}
           </span>

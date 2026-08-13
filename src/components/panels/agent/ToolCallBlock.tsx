@@ -125,7 +125,7 @@ export default function ToolCallBlock({ toolCall }: Props) {
 
           {/* 错误 */}
           {error && (
-            <div className="tool-call-result" style={{ color: '#ef4444' }}>
+            <div className="tool-call-result" style={{ color: 'var(--color-error)' }}>
               <XCircle size={13} className="inline mr-1" />{error}
             </div>
           )}

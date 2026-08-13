@@ -170,7 +170,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
           {splitError && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
-              style={{ backgroundColor: 'rgba(220, 38, 38, 0.08)', color: 'var(--color-danger, #dc2626)' }}>
+              style={{ backgroundColor: 'color-mix(in srgb, var(--color-error) 8%, transparent)', color: 'var(--color-error)' }}>
               <AlertTriangle size={14} />
               {splitError}
             </div>
