@@ -117,6 +117,7 @@ describe('App image-skin background seam', () => {
     expect(skinCss).toContain('--color-text: var(--skin-text-primary)')
     expect(skinCss).toContain('--color-text-secondary: var(--skin-text-secondary)')
     expect(skinCss).toContain('--color-text-muted: color-mix(in srgb, var(--skin-text-secondary) 78%, var(--skin-text-primary))')
+    expect(skinCss).toContain('--color-warning-text: var(--skin-text-primary)')
     expect(skinCss).toContain('--color-border: var(--skin-border)')
     expect(skinCss).toContain('--skin-welcome-surface: color-mix(in srgb, var(--color-bg) 64%, transparent)')
     expect(skinCss).toContain('--skin-panel-surface: color-mix(in srgb, var(--color-panel) 72%, transparent)')
@@ -134,11 +135,14 @@ describe('App image-skin background seam', () => {
   })
 
   it('keeps classic skin surfaces inside the active color theme instead of leaking the paper palette', () => {
+    const paperPaletteCss = css.slice(css.indexOf('/* ===== CSS 变量'), css.indexOf('/* 星空主题'))
     const writerCss = css.slice(css.indexOf('/* Writer console visual system'), css.indexOf('/* ===== 图片皮肤'))
 
-    for (const theme of ['light', 'galaxy', 'dark']) {
-      expect(writerCss).toContain(`.app-skin-root[data-skin='classic'][data-theme='${theme}']`)
-    }
+    expect(paperPaletteCss).toContain(':root,\n  .paper,\n  .light {')
+    expect(writerCss).toContain(':root,\n  .paper,\n  .light,\n  .dark,\n  .galaxy')
+    expect(writerCss).not.toContain("[data-theme='light']")
+    expect(writerCss).toContain(".app-skin-root[data-skin='classic'][data-theme='galaxy']")
+    expect(writerCss).toContain(".app-skin-root[data-skin='classic'][data-theme='dark']")
 
     for (const declaration of [
       '--writer-surface-topbar: var(--color-titlebar)',

@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { projectLegacyQualificationBundle } from '../../.release/scripts/project-legacy-qualification.mjs'
 
 const roots: string[] = []
-const version = '0.8.2'
+const repositoryRoot = path.resolve(import.meta.dirname, '..', '..')
+const version = (JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')) as { version: string }).version
 const dmg = `ai-novel-writer-mac-arm64-${version}-installer.dmg`
 const checksum = `${dmg}.sha256`
 const acceptance = [

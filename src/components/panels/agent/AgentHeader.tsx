@@ -236,7 +236,7 @@ function MCPSubView({
                 </span>
               )}
               {server.status === 'error' && (
-                <span className="text-[0.65rem] text-red-400 truncate max-w-[80px]" title={server.error}>
+                <span className="text-[0.65rem] text-[var(--color-error-text)] truncate max-w-[80px]" title={server.error}>
                   错误
                 </span>
               )}
@@ -272,7 +272,7 @@ function SkillSubView({
     switch (source) {
       case 'builtin': return { bg: 'color-mix(in srgb, var(--color-info) 12%, transparent)', color: 'var(--color-info)', label: '内置' }
       case 'user': return { bg: 'color-mix(in srgb, var(--color-accent) 12%, transparent)', color: 'var(--color-accent)', label: '用户' }
-      case 'project': return { bg: 'color-mix(in srgb, var(--color-success) 12%, transparent)', color: 'var(--color-success)', label: '项目' }
+      case 'project': return { bg: 'color-mix(in srgb, var(--color-success) 12%, transparent)', color: 'var(--color-success-text)', label: '项目' }
       default: return { bg: 'var(--color-hover)', color: 'var(--color-text-muted)', label: source }
     }
   }

@@ -28,6 +28,12 @@
   <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
 </p>
 
+> ## v0.8.3 纸墨主题更新
+>
+> [v0.8.3](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.3) 完成纸墨主题的系统性收尾：主题迁移会保留用户明确选择的暗色主题，仅将历史 `night` 值确定性迁移为 `dark`；信息文字按实际主题表面满足 WCAG AA 可访问性要求；视觉验收使用相同项目、路由、面板与视口的四主题截图进行比较。
+>
+> 本版继续使用同一个 Release 的五项资产合同：`ai-novel-writer-setup-0.8.3.exe`、`ai-novel-writer-setup-0.8.3.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.3-installer.dmg` 与 `ai-novel-writer-mac-arm64-0.8.3-installer.dmg.sha256`。
+
 > ## v0.8.2 系统性可靠性重大更新
 >
 > [v0.8.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.2) 是一次覆盖长输出机制、提示词持久化和 AI 助手项目操作边界的重大更新。

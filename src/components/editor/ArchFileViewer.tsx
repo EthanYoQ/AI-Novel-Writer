@@ -510,7 +510,7 @@ function ArchFileViewerSession({
           style={{
             color: rosterPresentation.kind === 'ready' || rosterPresentation.kind === 'empty'
               ? 'var(--color-text-secondary)'
-              : 'var(--color-warning)',
+              : 'var(--color-warning-text)',
             backgroundColor: 'var(--color-editor-bg)',
             borderBottom: '1px solid var(--color-border)',
           }}
@@ -554,7 +554,7 @@ function ArchFileViewerSession({
           role="status"
           className="flex items-center gap-2 px-3 py-2 text-xs"
           style={{
-            color: 'var(--color-warning)',
+            color: 'var(--color-warning-text)',
             backgroundColor: 'var(--color-editor-bg)',
             borderBottom: '1px solid var(--color-border)',
           }}

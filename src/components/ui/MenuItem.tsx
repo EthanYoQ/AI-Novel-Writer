@@ -19,7 +19,7 @@ export function MenuItem({ label, onClick, icon, shortcut, disabled, danger }: M
       className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors"
       style={{
         color: danger
-          ? 'var(--color-error)'
+          ? 'var(--color-error-text)'
           : disabled
           ? 'var(--color-text-muted)'
           : 'var(--color-text)',

@@ -57,7 +57,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <pre
             style={{
               fontSize: '0.75rem',
-              color: 'var(--color-error)',
+              color: 'var(--color-error-text)',
               backgroundColor: 'color-mix(in srgb, var(--color-error) 10%, transparent)',
               padding: '8px 12px',
               borderRadius: 'var(--radius-md)',

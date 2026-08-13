@@ -314,9 +314,9 @@ export default function ProjectTree() {
         badge={blueprintCount > 0 ? text(`${blueprintCount}/${nc.totalChapters} 章`, `${blueprintCount}/${nc.totalChapters} chapters`) : text('待生成', 'Pending')}
         badgeColor={
           blueprintCount >= nc.totalChapters
-            ? 'var(--color-success)'
+            ? 'var(--color-success-text)'
             : blueprintCount > 0
-              ? 'var(--color-warning, #eab308)'
+              ? 'var(--color-warning-text, #7A5414)'
               : undefined
         }
         badgeDone={blueprintCount >= nc.totalChapters}
@@ -382,9 +382,9 @@ function WorldBuildingGroup({
           className="text-[0.7rem] flex-shrink-0 ml-1"
           style={{
             color: allDone
-              ? 'var(--color-success)'
+              ? 'var(--color-success-text)'
               : archDone > 0
-                ? 'var(--color-warning, #eab308)'
+                ? 'var(--color-warning-text, #7A5414)'
                 : 'var(--color-text-muted)'
           }}
         >

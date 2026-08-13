@@ -115,7 +115,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
               color: item.disabled
                 ? 'var(--color-text-muted)'
                 : item.danger
-                  ? 'var(--color-error)'
+                  ? 'var(--color-error-text)'
                   : 'var(--color-text)',
               opacity: item.disabled ? 0.45 : 1,
               cursor: item.disabled ? 'not-allowed' : 'pointer',

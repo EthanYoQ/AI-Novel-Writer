@@ -294,7 +294,7 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
           <DialogDescription>
             {text('配置章节参数后启动 AI 创作流水线', 'Configure the chapter, then start the AI writing pipeline.')}
             {loadedFromBlueprint && (
-              <span className="ml-2 text-[0.7rem] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-600 dark:text-green-400">
+              <span className="ml-2 text-[0.7rem] px-1.5 py-0.5 rounded-full bg-green-500/15 text-[var(--color-success-text)]">
                 {text('已从章节蓝图预填', 'Filled from chapter blueprint')}
               </span>
             )}
@@ -423,8 +423,8 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
             </DialogFooter>
             {/* 前置校验失败提示（呈现在 Footer 下方） */}
             {guardError && (
-              <div className="mx-5 mb-4 flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs bg-yellow-500/10 border border-yellow-500/30 text-yellow-600 dark:text-yellow-400">
-                <AlertCircle size={13} className="flex-shrink-0 mt-0.5 text-yellow-500" />
+              <div className="mx-5 mb-4 flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs bg-yellow-500/10 border border-yellow-500/30 text-[var(--color-warning-text)]">
+                <AlertCircle size={13} className="flex-shrink-0 mt-0.5 text-[var(--color-warning)]" />
                 <span className="whitespace-pre-line">{guardError}</span>
               </div>
             )}

@@ -336,7 +336,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                       className="text-xs mt-1 leading-5"
                       style={{
                         color: rosterNeedsAttention
-                          ? 'var(--color-warning)'
+                          ? 'var(--color-warning-text)'
                           : 'var(--color-text-muted)',
                       }}
                     >
@@ -356,8 +356,8 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                             ? 'rgba(245, 158, 11, 0.12)'
                             : 'rgba(34, 197, 94, 0.1)',
                           color: rosterNeedsAttention
-                            ? 'var(--color-warning)'
-                            : 'var(--color-success)',
+                            ? 'var(--color-warning-text)'
+                            : 'var(--color-success-text)',
                         }}
                       >
                         {rosterPresentation.label}
@@ -370,7 +370,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                     </>
                   ) : generated ? (
                     <>
-                      <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-green-600 dark:text-green-400">
+                      <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-[var(--color-success-text)]">
                         已生成
                       </span>
                       <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>

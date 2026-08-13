@@ -408,7 +408,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
             />
           </div>
           {launchError && (
-            <p className="whitespace-pre-line rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2.5 text-xs text-yellow-600 dark:text-yellow-400">
+            <p className="whitespace-pre-line rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2.5 text-xs text-[var(--color-warning-text)]">
               {launchError}
             </p>
           )}

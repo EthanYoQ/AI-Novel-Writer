@@ -214,8 +214,8 @@ export default function ArchitectureConfirmDialog({
                     className={`text-[0.7rem] px-1.5 py-0.5 rounded flex-shrink-0 ${
                       exists
                         ? isChecked
-                          ? 'bg-yellow-500/15 text-yellow-600 dark:text-yellow-400'
-                          : 'bg-green-500/10 text-green-600 dark:text-green-400'
+                          ? 'bg-yellow-500/15 text-[var(--color-warning-text)]'
+                          : 'bg-green-500/10 text-[var(--color-success-text)]'
                         : 'bg-[rgba(var(--color-accent-rgb),0.1)] text-[var(--color-accent)]'
                     }`}
                   >
@@ -262,15 +262,15 @@ export default function ArchitectureConfirmDialog({
           )}
 
           {noneSelected && (
-            <p className="text-xs px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400">
+            <p className="text-xs px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-[var(--color-error-text)]">
               <AlertTriangle size={13} className="inline mr-1" />
               {text('请至少勾选一个步骤', 'Select at least one section.')}
             </p>
           )}
           {/* 前置校验失败提示 */}
           {guardError && (
-            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs bg-yellow-500/10 border border-yellow-500/30 text-yellow-600 dark:text-yellow-400">
-              <AlertCircle size={13} className="flex-shrink-0 mt-0.5 text-yellow-500" />
+            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs bg-yellow-500/10 border border-yellow-500/30 text-[var(--color-warning-text)]">
+              <AlertCircle size={13} className="flex-shrink-0 mt-0.5 text-[var(--color-warning)]" />
               <span className="whitespace-pre-line">{guardError}</span>
             </div>
           )}

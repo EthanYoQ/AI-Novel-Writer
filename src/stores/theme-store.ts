@@ -109,6 +109,11 @@ interface ThemeState {
   setUiFont: (font: FontId) => void
 }
 
+type PersistedThemeState = Pick<
+  ThemeState,
+  'theme' | 'zoom' | 'writingFont' | 'uiFont'
+>
+
 // ─── Store ───────────────────────────────────────────────────────────────
 
 export const useThemeStore = create<ThemeState>()(
@@ -136,21 +141,12 @@ export const useThemeStore = create<ThemeState>()(
           theme = resolveTheme(theme)
           set({ theme })
         }
-        // 如果读到旧版的 'night'，迁移为真的 'dark'
+        // Zustand v5 不会为缺失 version 的历史记录调用 migrate；首次初始化时
+        // 将唯一明确的旧值 night 迁移并按当前持久化版本写回。
         if ((theme as string) === 'night') {
           theme = 'dark'
           set({ theme })
         }
-        // 由于这里我们需要将以前的暗色变为 galaxy，如果用户之前就在用旧版 dark（此时不具备 night 属性），我们在上一个版本已经加过了 night。
-        // 为了安全起见这里不再强转 dark -> galaxy，如果是直接跳版的用户，就把旧版的 dark 继承成新的黑夜 dark 也合情合理。
-        // 但根据需求：“原本的深蓝色改叫 galaxy”，如果用户之前存的是旧版 'dark' (深蓝)，最好迁移。
-        // 如何判断？如果 localStorage 中没有存到某处特征，我们可以直接迁移：
-        if ((theme as string) === 'dark' && localStorage.getItem('ai-novel-writer-theme-migrated') !== '1') {
-          theme = 'galaxy'
-          set({ theme })
-          localStorage.setItem('ai-novel-writer-theme-migrated', '1')
-        }
-
         const resolved = resolveTheme(theme)
         set({ resolvedTheme: resolved })
         applyTheme(resolved)
@@ -201,6 +197,14 @@ export const useThemeStore = create<ThemeState>()(
         writingFont: state.writingFont,
         uiFont: state.uiFont,
       }),
+      version: 1,
+      migrate: (persistedState, version) => {
+        const state = persistedState as { theme?: string }
+        if (version < 1 && state.theme === 'night') {
+          return { ...state, theme: 'dark' } as PersistedThemeState
+        }
+        return persistedState as PersistedThemeState
+      },
     }
   )
 )

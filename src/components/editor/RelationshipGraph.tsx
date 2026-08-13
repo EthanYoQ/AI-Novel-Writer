@@ -60,13 +60,6 @@ function parseRelationships(characters: RelationshipGraphProps['characters']): R
   return edges
 }
 
-const ROLE_COLORS: Record<string, string> = {
-  protagonist: '#B5402C',
-  antagonist: '#54666E',
-  supporting: '#527A5B',
-  minor: '#A39D8D',
-}
-
 /** 角色关系网 Canvas 可视化 */
 export default function RelationshipGraph({ characters }: RelationshipGraphProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -111,6 +104,9 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
       if (!canvas) return
       const ctx = canvas.getContext('2d')
       if (!ctx) return
+      const canvasStyles = getComputedStyle(canvas)
+      const readableTextColor = canvasStyles.color
+      const relationshipLabelColor = canvasStyles.getPropertyValue('--color-text-secondary').trim()
 
       const nodes = nodesRef.current
 
@@ -134,7 +130,7 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
           const mx = (a.x + b.x) / 2
           const my = (a.y + b.y) / 2
           ctx.font = '18px system-ui'
-          ctx.fillStyle = 'rgba(148,163,184,0.6)'
+          ctx.fillStyle = relationshipLabelColor
           ctx.textAlign = 'center'
           ctx.fillText(edge.label, mx, my - 4)
         }
@@ -142,7 +138,11 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
 
       // 绘制节点
       for (const node of nodes) {
-        const color = ROLE_COLORS[node.role] || '#6E6A5F'
+        const role = ['protagonist', 'antagonist', 'supporting', 'minor'].includes(node.role)
+          ? node.role
+          : 'minor'
+        const color = canvasStyles.getPropertyValue(`--color-role-${role}`).trim()
+          || canvasStyles.getPropertyValue('--color-text-secondary').trim()
 
         // 光晕
         ctx.beginPath()
@@ -161,12 +161,23 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
 
         // 名字
         ctx.font = 'bold 22px system-ui'
-        ctx.fillStyle = color
+        ctx.fillStyle = readableTextColor
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
         ctx.fillText(node.name, node.x, node.y + 36)
       }
     }
+
+    const themeObserver = new MutationObserver(drawFrame)
+    const skinRoot = canvas.closest<HTMLElement>('.app-skin-root')
+    const observedThemeRoots = new Set<HTMLElement>([
+      document.documentElement,
+      ...(skinRoot ? [skinRoot] : []),
+    ])
+    for (const themeRoot of observedThemeRoots) themeObserver.observe(themeRoot, {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-theme', 'data-skin', 'data-skin-readability'],
+    })
 
     const simulate = () => {
       const nodes = nodesRef.current
@@ -233,7 +244,10 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
 
     simulate()
 
-    return () => cancelAnimationFrame(animRef.current)
+    return () => {
+      themeObserver.disconnect()
+      cancelAnimationFrame(animRef.current)
+    }
   }, [characters, edges])
 
   if (characters.length === 0) {
@@ -248,7 +262,7 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
     <canvas
       ref={canvasRef}
       className="w-full h-full"
-      style={{ background: 'transparent' }}
+      style={{ background: 'transparent', color: 'var(--color-text)' }}
     />
   )
 }

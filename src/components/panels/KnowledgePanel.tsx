@@ -159,7 +159,7 @@ export default function KnowledgePanel() {
       <div className="flex-1 overflow-y-auto">
 
         {loadError && (
-          <div className="m-3 flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/10 p-2 text-xs text-red-500">
+          <div className="m-3 flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/10 p-2 text-xs text-[var(--color-error-text)]">
             <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />
             <span>{loadError}</span>
           </div>

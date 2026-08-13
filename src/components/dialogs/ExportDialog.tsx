@@ -124,7 +124,7 @@ export default function ExportDialog({ isOpen, onClose }: Props) {
           {result && (
             <div className={cn(
               'p-3 rounded-lg text-xs',
-              result.success ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'
+              result.success ? 'bg-green-500/10 text-[var(--color-success-text)]' : 'bg-red-500/10 text-[var(--color-error-text)]'
             )}>
               {result.success ? <CheckCircle2 size={14} className="inline mr-1" /> : <XCircle size={14} className="inline mr-1" />}
               {result.success ? text(`已导出到：${result.path}`, `Exported to: ${result.path}`) : result.error}

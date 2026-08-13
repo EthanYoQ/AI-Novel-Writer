@@ -57,17 +57,17 @@
 
 .tool-call-source-badge.builtin {
   background-color: color-mix(in srgb, var(--color-info) 12%, transparent);
-  color: var(--color-info);
+  color: var(--color-text);
 }
 
 .tool-call-source-badge.mcp {
   background-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
-  color: var(--color-accent);
+  color: var(--color-text);
 }
 
 .tool-call-source-badge.skill {
   background-color: color-mix(in srgb, var(--color-success) 12%, transparent);
-  color: var(--color-success);
+  color: var(--color-success-text);
 }
 
 .tool-call-status {
@@ -92,6 +92,18 @@
 
 .tool-call-status.waiting_confirm {
   color: var(--color-warning);
+}
+
+.tool-call-status:has(> .completed) > span {
+  color: var(--color-success-text);
+}
+
+.tool-call-status:has(> .failed) > span {
+  color: var(--color-error-text);
+}
+
+.tool-call-status:has(> .waiting_confirm) > span {
+  color: var(--color-warning-text);
 }
 
 .tool-call-body {
@@ -166,7 +178,7 @@
   margin-bottom: 8px;
   font-size: 0.75rem;
   font-weight: 600;
-  color: var(--color-warning);
+  color: var(--color-warning-text);
 }
 
 .confirm-card-body {
@@ -194,7 +206,7 @@
 
 .confirm-card-btn.approve {
   background-color: var(--color-success);
-  color: #fff;
+  color: var(--color-success-foreground);
 }
 
 .confirm-card-btn.approve:hover {

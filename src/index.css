@@ -165,7 +165,9 @@
   /* ===== CSS 变量 — 从 Logo 提取品牌色系 ===== */
   /* Logo 核心色：深邃蓝 #0A1628 · 冰蓝 #7EC8E3 · 星空蓝 #5B9ED6
      薰衣草紫 #9B8EC8 · 星辰金 #C9A76C */
-  :root {
+  :root,
+  .paper,
+  .light {
     /* 浅色主题 — 书卷墨韵（宣纸底、墨色字、朱砂印） */
 
     /* 背景层次（宣纸 → 绢面 → 沉绢） */
@@ -181,7 +183,7 @@
     /* 文字层次（浓墨 → 淡墨 → 灰墨） */
     --color-text: #2B2A26;
     --color-text-secondary: #6E6A5F;
-    --color-text-muted: #A39D8D;
+    --color-text-muted: #655F55;
 
     /* 边框（纸边） */
     --color-border: #E3DCC9;
@@ -196,9 +198,17 @@
 
     /* 语义色（松烟 / 藤黄 / 朱砂 / 黛青） */
     --color-success: #527A5B;
+    --color-success-text: #386042;
+    --color-success-foreground: #FFFFFF;
     --color-warning: #C68A3A;
+    --color-warning-text: #7A5414;
     --color-error: #B5402C;
+    --color-error-text: #8F3020;
+    --color-error-foreground: #FFFFFF;
     --color-info: #54666E;
+    /* 类别标签文字：保持类别区分，同时在纸色表面达到 AA。 */
+    --color-category-progress-text: #355B72;
+    --color-category-review-text: #634A72;
 
     /* Tab 系统 */
     --color-tab-bg: transparent;
@@ -305,9 +315,16 @@
     --color-gold: #C9A76C;
 
     --color-success: #4ade80;
+    --color-success-text: #4ade80;
+    --color-success-foreground: #0A1628;
     --color-warning: #fbbf24;
+    --color-warning-text: #fbbf24;
     --color-error: #fb7185;
+    --color-error-text: #fb7185;
+    --color-error-foreground: #0A1628;
     --color-info: #7EC8E3;
+    --color-category-progress-text: #7EC8E3;
+    --color-category-review-text: #C7A4E8;
 
     --color-tab-bg: transparent;
     --color-tab-active: #0E1E35;
@@ -347,70 +364,15 @@
     --shadow-tooltip: 0 4px 12px rgba(5, 10, 20, 0.5);
   }
 
-  /* 纸质感主题 — 书卷墨韵（与浅色主题同套纸墨令牌，视觉收敛为预期） */
-  .paper {
-    --color-bg: #F7F3E8;
-    --color-raised: #FCFAF3;
-    --color-sidebar: #F0EADA;
-    --color-panel: #F0EADA;
-    --color-titlebar: #FCFAF3;
-    --color-activity-bar: #F0EADA;
-    --color-hover: #EAE3D2;
-    --color-active: #E3DCC9;
-
-    --color-text: #2B2A26;
-    --color-text-secondary: #6E6A5F;
-    --color-text-muted: #A39D8D;
-
-    --color-border: #E3DCC9;
-
-    --color-accent: #B5402C;
-    --color-accent-hover: #9A3524;
-    --color-accent-rgb: 181, 64, 44;
-
-    --color-gold: #54666E;
-
-    --color-success: #527A5B;
-    --color-warning: #C68A3A;
-    --color-error: #B5402C;
-    --color-info: #54666E;
-
-    --color-tab-bg: transparent;
-    --color-tab-active: #FCFAF3;
-    --color-tab-border: transparent;
-    --color-tab-indicator: #B5402C;
-
-    --color-statusbar: #FCFAF3;
-    --color-statusbar-text: #6E6A5F;
-
-    --color-titlebar-text: #2B2A26;
-
-    --color-activity-icon: #A39D8D;
-    --color-activity-icon-active: #B5402C;
-    --color-activity-indicator: #B5402C;
-
-    --color-editor-bg: #FCFAF3;
-    --color-editor-line-highlight: rgba(84, 102, 110, 0.05);
-    --color-editor-selection: rgba(181, 64, 44, 0.12);
-
-    --color-sash: transparent;
-    --color-sash-hover: rgba(181, 64, 44, 0.15);
-
-    /* 语义令牌 */
-    --color-focus-ring: rgba(181, 64, 44, 0.35);
-    --color-backdrop: rgba(43, 42, 38, 0.25);
-    --color-tooltip-bg: #2B2A26;
-    --color-tooltip-text: #FCFAF3;
-    --color-skeleton: rgba(43, 42, 38, 0.06);
-    --color-badge-bg: rgba(181, 64, 44, 0.08);
-    --color-badge-text: #B5402C;
-
-    /* 阴影 */
-    --shadow-sm: 0 1px 2px rgba(43, 42, 38, 0.05);
-    --shadow-md: 0 4px 12px rgba(43, 42, 38, 0.07);
-    --shadow-lg: 0 12px 32px rgba(43, 42, 38, 0.09);
-    --shadow-popover: 0 16px 40px -8px rgba(43, 42, 38, 0.14), 0 4px 16px -4px rgba(43, 42, 38, 0.07);
-    --shadow-tooltip: 0 4px 12px rgba(43, 42, 38, 0.16);
+  :root,
+  .paper,
+  .light,
+  .galaxy,
+  .dark {
+    --color-role-protagonist: #B5402C;
+    --color-role-antagonist: #54666E;
+    --color-role-supporting: #527A5B;
+    --color-role-minor: #A39D8D;
   }
 
   /* Writer console visual system — 书卷墨韵语义别名。
@@ -496,9 +458,16 @@
     --color-gold: #C9A76C;
 
     --color-success: #89D185;
+    --color-success-text: #89D185;
+    --color-success-foreground: #181818;
     --color-warning: #CCA700;
+    --color-warning-text: #CCA700;
     --color-error: #F14C4C;
+    --color-error-text: #FF8A8A;
+    --color-error-foreground: #181818;
     --color-info: #3794FF;
+    --color-category-progress-text: #75BEFF;
+    --color-category-review-text: #D8A8D4;
 
     --color-tab-bg: transparent;
     --color-tab-active: #1E1E1E;
@@ -536,61 +505,8 @@
     --shadow-tooltip: 0 4px 12px rgba(0, 0, 0, 0.5);
   }
 
-  /* The classic skin is a visual treatment, not a second paper-only theme.
-     Bind every large writer surface to the active color theme so light,
-     galaxy, and dark cannot retain warm paper blocks. */
-  .app-skin-root[data-skin='classic'][data-theme='light'],
-  .app-skin-root[data-skin='classic'][data-theme='galaxy'],
-  .app-skin-root[data-skin='classic'][data-theme='dark'] {
-    --writer-surface-topbar: var(--color-titlebar);
-    --writer-topbar-text: var(--color-titlebar-text);
-    --writer-chrome-border: var(--color-border);
-    --writer-topbar-shadow: none;
-    --writer-command-text: var(--color-text-secondary);
-    --writer-command-hover-surface: var(--color-hover);
-    --writer-command-hover-border: var(--color-border);
-    --writer-command-divider: var(--color-border);
-    --writer-brand-mark-surface: var(--color-accent);
-    --writer-brand-mark-border: var(--color-accent-hover);
-    --writer-brand-mark-text: #FCFAF3;
-
-    --writer-primary-surface: var(--color-accent);
-    --writer-primary-border: transparent;
-    --writer-primary-shadow: var(--shadow-sm);
-
-    --writer-surface-project-tree: var(--color-sidebar);
-    --writer-surface-ai-panel: var(--color-panel);
-    --writer-surface-task-table: var(--color-panel);
-    --writer-surface-shell: var(--color-bg);
-    --writer-surface-card: var(--color-raised);
-    --writer-text-primary: var(--color-text);
-    --writer-text-muted: var(--color-text-muted);
-    --writer-panel-border: var(--color-border);
-    --writer-task-border: var(--color-border);
-    --writer-card-border: var(--color-border);
-    --writer-card-shadow: var(--shadow-sm);
-    --writer-input-surface: var(--color-bg);
-    --writer-input-border: var(--color-border);
-    --writer-icon-muted: var(--color-text-muted);
-    --writer-item-hover: var(--color-hover);
-    --writer-item-active: var(--color-active);
-    --writer-item-indicator: var(--color-accent);
-    --writer-task-header: var(--color-hover);
-    --writer-task-row-border: var(--color-border);
-
-    --writer-surface-statusbar: var(--color-statusbar);
-    --writer-statusbar-text: var(--color-text-secondary);
-    --writer-statusbar-hover: var(--color-hover);
-    --writer-surface-left-rail: var(--color-activity-bar);
-    --writer-left-rail-border: var(--color-border);
-    --writer-left-rail-text: var(--color-text-secondary);
-    --writer-left-rail-hover: var(--color-hover);
-    --writer-left-rail-active-surface: var(--color-active);
-    --writer-left-rail-active-text: var(--color-activity-icon-active);
-    --writer-left-rail-active-shadow: inset 3px 0 0 var(--color-activity-indicator);
-    --writer-nav-divider: var(--color-border);
-  }
-
+  /* Classic uses the shared semantic aliases above. Theme-specific overrides
+     are limited to foregrounds that need contrast against their accent. */
   .app-skin-root[data-skin='classic'][data-theme='galaxy'] {
     --writer-primary-text: #0A1628;
     --writer-brand-mark-text: #0A1628;
@@ -1113,7 +1029,7 @@
   }
 
   .ai-task-capsule--complete {
-    color: var(--color-success);
+    color: var(--color-success-text);
     animation: capsule-complete 1.8s ease-out forwards;
   }
 
@@ -1167,6 +1083,18 @@
   .ai-glow:active {
     filter: brightness(0.95);
   }
+
+  .badge-warning {
+    color: var(--color-warning-text);
+  }
+
+  .badge-success {
+    color: var(--color-success-text);
+  }
+
+  .badge-error {
+    color: var(--color-error-text);
+  }
 }
 
 /* ===== 图片皮肤：背景与固定可读性层级 ===== */
@@ -1217,6 +1145,11 @@
   --color-text: var(--skin-text-primary);
   --color-text-secondary: var(--skin-text-secondary);
   --color-text-muted: color-mix(in srgb, var(--skin-text-secondary) 78%, var(--skin-text-primary));
+  --color-success-text: var(--skin-text-primary);
+  --color-warning-text: var(--skin-text-primary);
+  --color-error-text: var(--skin-text-primary);
+  --color-category-progress-text: var(--skin-text-primary);
+  --color-category-review-text: var(--skin-text-primary);
   --color-border: var(--skin-border);
 }
 
@@ -1421,7 +1354,7 @@
 }
 
 .appearance-action-button--danger {
-  color: var(--color-error);
+  color: var(--color-error-text);
 }
 
 .appearance-notice {

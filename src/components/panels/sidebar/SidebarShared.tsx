@@ -45,7 +45,7 @@ export function LeafItem({
       {badge && (
         <span
           className="text-[0.7rem] flex-shrink-0 ml-1"
-          style={{ color: badgeColor || (badgeDone ? 'var(--color-success)' : 'var(--color-text-muted)') }}
+          style={{ color: badgeColor || (badgeDone ? 'var(--color-success-text)' : 'var(--color-text-muted)') }}
         >
           {badge}
         </span>

@@ -301,7 +301,7 @@ function ActiveRunPanel({
             </button>
           )}
           {isBatchTask && run.status === 'running' && run.pauseRequested && (
-            <span className="text-[0.62rem] whitespace-nowrap" style={{ color: 'var(--color-warning)' }} title={text('暂停将在当前章节完成后生效', 'Pause takes effect after the current chapter finishes')}>
+            <span className="text-[0.62rem] whitespace-nowrap" style={{ color: 'var(--color-warning-text)' }} title={text('暂停将在当前章节完成后生效', 'Pause takes effect after the current chapter finishes')}>
               {text('暂停中', 'Pausing')}
             </span>
           )}
@@ -491,7 +491,7 @@ function WorkflowStepItem({
             {step.error && (
               <div
                 className="text-[0.7rem] px-2 py-1 rounded mb-1"
-                style={{ backgroundColor: 'rgba(192,57,74,0.08)', color: 'var(--color-error)' }}
+                style={{ backgroundColor: 'rgba(192,57,74,0.08)', color: 'var(--color-error-text)' }}
               >
                 {step.error}
               </div>
@@ -556,8 +556,8 @@ function LogsView() {
 
   const levelColor = (level: string) => {
     switch (level) {
-      case 'error': return 'var(--color-error)'
-      case 'warn':  return 'var(--color-warning)'
+      case 'error': return 'var(--color-error-text)'
+      case 'warn':  return 'var(--color-warning-text)'
       default:      return 'var(--color-text-secondary)'
     }
   }

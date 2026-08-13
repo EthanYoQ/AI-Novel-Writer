@@ -26,13 +26,13 @@ const badgeVariants = cva(
           'bg-[var(--color-badge-bg)] text-[var(--color-badge-text)]',
         /** 成功 — 绿色系 */
         success:
-          'bg-[color-mix(in_srgb,var(--color-success)_15%,transparent)] text-[var(--color-success)]',
+          'badge-success bg-[color-mix(in_srgb,var(--color-success)_15%,transparent)]',
         /** 警告 — 橙色系 */
         warning:
-          'bg-[color-mix(in_srgb,var(--color-warning)_15%,transparent)] text-[var(--color-warning)]',
+          'badge-warning bg-[color-mix(in_srgb,var(--color-warning)_15%,transparent)]',
         /** 错误 — 红色系 */
         error:
-          'bg-[color-mix(in_srgb,var(--color-error)_15%,transparent)] text-[var(--color-error)]',
+          'badge-error bg-[color-mix(in_srgb,var(--color-error)_15%,transparent)]',
         /** 轮廓 — 透明底 + 边框 */
         outline:
           'border border-[var(--color-border)] text-[var(--color-text-secondary)] bg-transparent',

@@ -28,6 +28,12 @@
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
+> ## v0.8.3 paper-ink theme update
+>
+> [v0.8.3](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.3) completes the paper-ink theme hardening: theme migration preserves an explicitly selected dark theme and only maps the historical `night` value deterministically to `dark`; informational text meets WCAG AA accessibility contrast on its real theme surfaces; and visual QA compares all four themes with the same project, route, panels, and viewport.
+>
+> This version keeps the exact five-asset contract in one Release: `ai-novel-writer-setup-0.8.3.exe`, `ai-novel-writer-setup-0.8.3.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.3-installer.dmg`, and `ai-novel-writer-mac-arm64-0.8.3-installer.dmg.sha256`.
+
 > ## v0.8.2 major systemic reliability update
 >
 > [v0.8.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.2) is a major update spanning long-output mechanics, prompt persistence, and the project-action boundary of the AI assistant.

@@ -103,7 +103,7 @@ export default function ModelSettings() {
                 <Button variant="ghost" size="icon" onClick={() => setEditingModel({ ...model })} title={text('编辑', 'Edit')}>
                   <Save size={14} />
                 </Button>
-                <Button variant="ghost" size="icon" onClick={() => deleteModel(model.id)} title={text('删除', 'Delete')} className="hover:text-red-400">
+                <Button variant="ghost" size="icon" onClick={() => deleteModel(model.id)} title={text('删除', 'Delete')} className="hover:text-[var(--color-error-text)]">
                   <Trash2 size={14} />
                 </Button>
               </div>
@@ -272,7 +272,7 @@ function ModelForm({
         <Button variant="ghost" onClick={onCancel}>{text('取消', 'Cancel')}</Button>
       </div>
       {testResult && (
-        <div className={`text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'} break-all`}>
+        <div className={`text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-[var(--color-success-text)] border border-green-500/20' : 'bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20'} break-all`}>
           {testResult.success
             ? <><CheckCircle2 size={13} className="inline mr-1" />{text('连接成功！', 'Connection succeeded!')}</>
             : <><XCircle size={13} className="inline mr-1" />{text('连接失败：{error}', 'Connection failed: {error}', { error: testResult.error ?? '' })}</>}

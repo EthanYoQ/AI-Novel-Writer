@@ -398,7 +398,7 @@ function ModelCard({
         <button
           onClick={onDelete}
           title={text('删除', 'Delete')}
-          className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-red-400"
+          className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-[var(--color-error-text)]"
         >
           <Trash2 size={14} />
         </button>
@@ -782,7 +782,7 @@ function ModelForm({
         <Button variant="ghost" onClick={onCancel}>{text('取消', 'Cancel')}</Button>
       </div>
       {testResult && (
-        <div className={`text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'} break-all`}>
+        <div className={`text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-[var(--color-success-text)] border border-green-500/20' : 'bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20'} break-all`}>
           {testResult.success ? text('连接成功', 'Connection succeeded') : text(`连接失败：${testResult.error}`, `Connection failed: ${testResult.error}`)}
         </div>
       )}

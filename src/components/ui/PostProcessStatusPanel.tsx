@@ -111,7 +111,7 @@ export function PostProcessStatusPanel({
   if (!hasFailure) {
     return (
       <div className={cn(
-        'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-[var(--color-success,#22c55e)]',
+        'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-[var(--color-success-text,#386042)]',
         'bg-green-500/8',
         className,
       )}>
@@ -172,7 +172,7 @@ export function PostProcessStatusPanel({
                   {step.label}
                 </span>
                 {step.critical && !step.ok && (
-                  <span className="shrink-0 px-1 py-0.5 rounded text-[9px] bg-red-500/15 text-red-400">
+                  <span className="shrink-0 px-1 py-0.5 rounded text-[9px] bg-red-500/15 text-[var(--color-error-text)]">
                     关键
                   </span>
                 )}
@@ -185,7 +185,7 @@ export function PostProcessStatusPanel({
                   </span>
                 ) : (
                   <>
-                    <span className="text-[10px] text-[var(--color-error,#ef4444)] max-w-[120px] truncate" title={step.error}>
+                    <span className="text-[10px] text-[var(--color-error-text,#8F3020)] max-w-[120px] truncate" title={step.error}>
                       {step.error || '失败'}
                     </span>
                     {onRetry && (

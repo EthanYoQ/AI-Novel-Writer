@@ -155,17 +155,17 @@ const SEVERITY_META: Record<ReviewIssue['severity'], {
   borderClass: string
 }> = {
   error: {
-    colorClass: 'text-red-400',
+    colorClass: 'text-[var(--color-error-text)]',
     bgClass: 'bg-red-500/10',
     borderClass: 'border-red-500/30',
   },
   warning: {
-    colorClass: 'text-yellow-400',
+    colorClass: 'text-[var(--color-warning-text)]',
     bgClass: 'bg-yellow-500/10',
     borderClass: 'border-yellow-500/30',
   },
   pass: {
-    colorClass: 'text-green-400',
+    colorClass: 'text-[var(--color-success-text)]',
     bgClass: 'bg-green-500/10',
     borderClass: 'border-green-500/30',
   },
@@ -198,9 +198,9 @@ function severityCopy(
 }
 
 function SeverityIcon({ severity }: { severity: ReviewIssue['severity'] }) {
-  if (severity === 'error') return <AlertTriangle size={14} className="text-red-400 flex-shrink-0" />
-  if (severity === 'warning') return <AlertTriangle size={14} className="text-yellow-400 flex-shrink-0" />
-  return <CheckCircle size={14} className="text-green-400 flex-shrink-0" />
+  if (severity === 'error') return <AlertTriangle size={14} className="flex-shrink-0" style={{ color: 'var(--color-error)' }} />
+  if (severity === 'warning') return <AlertTriangle size={14} className="flex-shrink-0" style={{ color: 'var(--color-warning)' }} />
+  return <CheckCircle size={14} className="flex-shrink-0" style={{ color: 'var(--color-success)' }} />
 }
 
 /** 审稿报告查看器 */
@@ -297,16 +297,16 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
           <h3 className="text-base font-bold text-[var(--color-text)]">{text('审稿报告', 'Review report')}</h3>
           <div className="flex items-center gap-3 text-xs ml-auto">
             {errorCount > 0 && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/20 text-red-400">
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/20 text-[var(--color-error-text)]">
                 <SeverityIcon severity="error" /> {errorCount} {errorCopy.countLabel}
               </span>
             )}
             {warningCount > 0 && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400">
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-500/20 text-[var(--color-warning-text)]">
                 <SeverityIcon severity="warning" /> {warningCount} {warningCopy.countLabel}
               </span>
             )}
-            <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-500/20 text-green-400">
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-500/20 text-[var(--color-success-text)]">
               <SeverityIcon severity="pass" /> {passCount} {passCopy.countLabel}
             </span>
             {/* 图例帮助按钮 */}
@@ -369,7 +369,7 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
         {/* 分类展示 */}
         {issues.length === 0 ? (
           <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
-            <CheckCircle size={32} className="mx-auto mb-2 text-green-400" />
+            <CheckCircle size={32} className="mx-auto mb-2" style={{ color: 'var(--color-success)' }} />
             {text('审稿通过，未发现问题', 'Review passed. No issues found.')}
           </div>
         ) : (

@@ -27,10 +27,10 @@ export type CodeMirrorEditorProps = {
 }
 
 const AI_ACTIONS = [
-  { key: 'refine', label: '润色', color: 'text-blue-400', prompt: '润色这部分，使其更具文学感和感染力。' },
-  { key: 'expand', label: '扩写', color: 'text-amber-400', prompt: '扩写这部分，增加更多细节描写和环境烘托。' },
-  { key: 'continue', label: '续写', color: 'text-purple-400', prompt: '根据上下文，合理续写接下来的情节。' },
-  { key: 'dialogue', label: '对话', color: 'text-emerald-400', prompt: '将这部分改写为更生动传神的对话形式。' },
+  { key: 'refine', label: '润色', color: 'text-[var(--color-category-progress-text)]', prompt: '润色这部分，使其更具文学感和感染力。' },
+  { key: 'expand', label: '扩写', color: 'text-[var(--color-warning-text)]', prompt: '扩写这部分，增加更多细节描写和环境烘托。' },
+  { key: 'continue', label: '续写', color: 'text-[var(--color-category-review-text)]', prompt: '根据上下文，合理续写接下来的情节。' },
+  { key: 'dialogue', label: '对话', color: 'text-[var(--color-success-text)]', prompt: '将这部分改写为更生动传神的对话形式。' },
 ]
 
 const EDITOR_AI_GENERATION_BUDGET = Object.freeze({
@@ -389,7 +389,7 @@ export default function CodeMirrorEditor({
               {aiError ? (
                 <div
                   className="text-xs leading-relaxed mb-3"
-                  style={{ color: 'var(--color-error)' }}
+                  style={{ color: 'var(--color-error-text)' }}
                 >
                   {aiError}
                 </div>

@@ -165,7 +165,7 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
           </div>
 
           {error && (
-            <div className="flex items-start gap-2 rounded-md px-3 py-2 text-xs" style={{ backgroundColor: 'color-mix(in srgb, var(--color-error) 12%, transparent)', color: 'var(--color-error)' }}>
+            <div className="flex items-start gap-2 rounded-md px-3 py-2 text-xs" style={{ backgroundColor: 'color-mix(in srgb, var(--color-error) 12%, transparent)', color: 'var(--color-error-text)' }}>
               <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
               <span>{error}</span>
             </div>

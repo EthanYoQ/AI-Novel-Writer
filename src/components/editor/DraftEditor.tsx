@@ -562,7 +562,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
             {finalizationConflict && (
               <span
                 className="text-[0.7rem] px-1.5 py-0.5 rounded flex-shrink-0"
-                style={{ color: 'var(--color-warning)', backgroundColor: 'var(--color-hover)' }}
+                style={{ color: 'var(--color-warning-text)', backgroundColor: 'var(--color-hover)' }}
                 title={text(
                   '定稿完成事件没有覆盖这次编辑；请先处理本地后续修改与已定稿版本的差异。',
                   'Finalization did not overwrite this edit. Resolve the difference between your later local changes and the finalized version first.',

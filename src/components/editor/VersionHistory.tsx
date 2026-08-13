@@ -187,10 +187,10 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
   }
 
   const TYPE_COLORS: Record<string, string> = {
-    draft: 'bg-blue-500/20 text-blue-400',
-    refined: 'bg-yellow-500/20 text-yellow-400',
-    reviewed: 'bg-purple-500/20 text-purple-400',
-    final: 'bg-green-500/20 text-green-400',
+    draft: 'bg-blue-500/20 text-[var(--color-category-progress-text)]',
+    refined: 'bg-yellow-500/20 text-[var(--color-warning-text)]',
+    reviewed: 'bg-purple-500/20 text-[var(--color-category-review-text)]',
+    final: 'bg-green-500/20 text-[var(--color-success-text)]',
   }
 
   if (loading) {

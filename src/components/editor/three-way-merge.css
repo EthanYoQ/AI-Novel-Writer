@@ -170,7 +170,7 @@
 }
 .twm-adopt.adopted {
   background: color-mix(in srgb, var(--color-success) 15%, transparent);
-  color: var(--color-success);
+  color: var(--color-success-text);
 }
 .twm-adopt.adopted:hover {
   background: var(--color-error);

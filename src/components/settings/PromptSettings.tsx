@@ -27,7 +27,7 @@ import { useLocaleStore } from '../../stores/locale-store'
 const SOURCE_CONFIG = {
   builtin: { label: '内置', labelEn: 'Built-in', color: 'var(--color-text-muted)', bg: 'var(--color-hover)' },
   global: { label: '全局', labelEn: 'Global', color: 'var(--color-info)', bg: 'color-mix(in srgb, var(--color-info) 10%, transparent)' },
-  project: { label: '项目', labelEn: 'Project', color: 'var(--color-success)', bg: 'color-mix(in srgb, var(--color-success) 10%, transparent)' },
+  project: { label: '项目', labelEn: 'Project', color: 'var(--color-success-text)', bg: 'color-mix(in srgb, var(--color-success) 10%, transparent)' },
 } as const
 
 const PROMPT_META_EN: Record<string, { name: string; description: string }> = {
@@ -120,7 +120,7 @@ export default function PromptSettings() {
   return (
     <div className="space-y-2" key={refreshKey}>
       {globalLoadError && (
-        <div className="px-3 py-2 rounded-lg text-xs bg-red-500/10 text-red-500 border border-red-500/20">
+        <div className="px-3 py-2 rounded-lg text-xs bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20">
           <AlertTriangle size={13} className="inline mr-1" />
           {globalLoadError}
         </div>
@@ -128,7 +128,7 @@ export default function PromptSettings() {
       {projectLoadError
         && projectLoadError.projectId === projectSession?.projectId
         && projectLoadError.leaseId === projectSession.leaseId && (
-        <div className="px-3 py-2 rounded-lg text-xs bg-red-500/10 text-red-500 border border-red-500/20">
+        <div className="px-3 py-2 rounded-lg text-xs bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20">
           <AlertTriangle size={13} className="inline mr-1" />
           {projectLoadError.message}
         </div>
@@ -392,9 +392,9 @@ function TemplateItem({
           {missingVars.length > 0 && (
             <div
               className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-              style={{ backgroundColor: 'color-mix(in srgb, var(--color-warning) 8%, transparent)', color: 'var(--color-warning)' }}
+              style={{ backgroundColor: 'color-mix(in srgb, var(--color-warning) 8%, transparent)', color: 'var(--color-warning-text)' }}
             >
-              <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
+              <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" style={{ color: 'var(--color-warning)' }} />
               <span>
                 {text('以下变量在原模板中使用但在当前内容中未找到：', 'Variables used by the built-in template are missing:')}
                 {missingVars.map((v) => (
@@ -446,8 +446,8 @@ function TemplateItem({
               className={cn(
                 'text-xs px-3 py-1.5 rounded-lg',
                 saveResult.type === 'success'
-                  ? 'bg-green-500/10 text-green-500 border border-green-500/20'
-                  : 'bg-red-500/10 text-red-500 border border-red-500/20'
+                  ? 'bg-green-500/10 text-[var(--color-success-text)] border border-green-500/20'
+                  : 'bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20'
               )}
             >
               {saveResult.type === 'success'

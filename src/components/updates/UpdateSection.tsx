@@ -85,7 +85,7 @@ export function UpdateSection() {
       </div>
     </div>
 
-    {officialHomepageError && <p role="alert" className="mt-2 px-1 text-xs" style={{ color: 'var(--color-error)' }}>{officialHomepageError}</p>}
+    {officialHomepageError && <p role="alert" className="mt-2 px-1 text-xs" style={{ color: 'var(--color-error-text)' }}>{officialHomepageError}</p>}
 
     {presentation.visible && <UpdateStatusCard presentation={presentation} state={state} text={text} manualActionError={manualActionError} isDeferring={isDeferring} lastReminderDays={lastReminderDays} onCheck={() => void checkForUpdates()} onDefer={days => void deferReminder(days)} onInstall={handleInstallClick} />}
 

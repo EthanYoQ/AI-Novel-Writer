@@ -227,7 +227,7 @@ function ActiveRunView({
           {!isActive && run.status === 'completed' && (
             <div
               className="flex items-center justify-center gap-1.5 pt-4 pb-2 mb-2 text-xs"
-              style={{ color: 'var(--color-success)', borderTop: '1px dashed var(--color-border)' }}
+              style={{ color: 'var(--color-success-text)', borderTop: '1px dashed var(--color-border)' }}
             >
               <CheckCircle2 size={12} />
               整个工作流已全部完成
@@ -320,7 +320,7 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep }: { s
           backgroundColor: isRunning ? 'var(--color-hover)' : 'transparent',
           color: isRunning ? 'var(--color-text)' :
                  isCompleted ? 'var(--color-text-secondary)' :
-                 isFailed ? 'var(--color-error)' :
+                 isFailed ? 'var(--color-error-text)' :
                  'var(--color-text-muted)',
         }}
         title={rawText ? '点击查看该步骤的历史输出' : undefined}

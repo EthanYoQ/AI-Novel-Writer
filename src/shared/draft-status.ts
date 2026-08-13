@@ -19,8 +19,8 @@ export const DRAFT_STATUS_LABEL: Record<string, string> = {
 /** 草稿状态 → 显示颜色（使用 CSS 变量保证主题适配） */
 export const DRAFT_STATUS_COLOR: Record<string, string> = {
   draft:     'var(--color-text-muted)',
-  revised:   '#60a5fa',           /* 蓝色 — 表示已有改进 */
-  reviewed:  '#a78bfa',           /* 紫色 — 表示已审核 */
-  finalized: 'var(--color-success)',
+  revised:   'var(--color-category-progress-text)',
+  reviewed:  'var(--color-category-review-text)',
+  finalized: 'var(--color-success-text)',
   archived:  'var(--color-text-muted)',
 }

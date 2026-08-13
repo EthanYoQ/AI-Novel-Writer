@@ -298,7 +298,7 @@ export default function KnowledgeOverview() {
         </div>
 
         {loadError && (
-          <div className="mb-6 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-xs text-red-500">
+          <div className="mb-6 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-xs text-[var(--color-error-text)]">
             <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" />
             <span>{loadError}</span>
           </div>
@@ -319,7 +319,7 @@ export default function KnowledgeOverview() {
             label={text('检索模式', 'Search mode')}
             value={hasVectors ? 'FTS+向量' : 'FTS'}
             badge={hasVectors ? text('混合', 'Hybrid') : text('基础', 'Basic')}
-            badgeColor={hasVectors ? 'var(--color-success)' : 'var(--color-info)'}
+            badgeColor={hasVectors ? 'var(--color-success-text)' : 'var(--color-text-secondary)'}
           />
         </div>
 
@@ -344,18 +344,18 @@ export default function KnowledgeOverview() {
                   'w-8 h-8 rounded-lg flex items-center justify-center',
                   rebuildPresentation.kind === 'missing-vectors' ? 'bg-amber-500/15' : 'bg-blue-500/15',
                 )}>
-                  <Zap size={16} className={rebuildPresentation.kind === 'missing-vectors' ? 'text-amber-400' : 'text-blue-400'} />
+                  <Zap size={16} className={rebuildPresentation.kind === 'missing-vectors' ? 'text-[var(--color-warning)]' : 'text-[var(--color-info)]'} />
                 </div>
                 <div>
                   <div className={cn(
                     'text-sm font-medium',
-                    rebuildPresentation.kind === 'missing-vectors' ? 'text-amber-300' : 'text-blue-300',
+                    rebuildPresentation.kind === 'missing-vectors' ? 'text-[var(--color-warning-text)]' : 'text-[var(--color-category-progress-text)]',
                   )}>
                     {text(rebuildPresentation.title.zhCN, rebuildPresentation.title.enUS)}
                   </div>
                   <div className={cn(
                     'text-[0.7rem]',
-                    rebuildPresentation.kind === 'missing-vectors' ? 'text-amber-400/70' : 'text-blue-400/70',
+                    rebuildPresentation.kind === 'missing-vectors' ? 'text-[var(--color-warning-text)]' : 'text-[var(--color-category-progress-text)]',
                   )}>
                     {rebuildPresentation.kind === 'missing-vectors'
                       ? text(
@@ -374,8 +374,8 @@ export default function KnowledgeOverview() {
                 className={cn(
                   'text-xs',
                   rebuildPresentation.kind === 'missing-vectors'
-                    ? 'border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
-                    : 'border-blue-500/30 text-blue-400 hover:bg-blue-500/20',
+                    ? 'border-amber-500/30 text-[var(--color-warning-text)] hover:bg-amber-500/20'
+                    : 'border-blue-500/30 text-[var(--color-category-progress-text)] hover:bg-blue-500/20',
                 )}
                 onClick={handleBackfill}
                 disabled={backfilling}
@@ -413,8 +413,8 @@ export default function KnowledgeOverview() {
             <span className={cn(
               'text-[0.65rem] px-1.5 py-0.5 rounded-full font-medium',
               hasVectors
-                ? 'bg-emerald-500/15 text-emerald-400'
-                : 'bg-blue-500/15 text-blue-400'
+                ? 'bg-emerald-500/15 text-[var(--color-success-text)]'
+                : 'bg-blue-500/15 text-[var(--color-category-progress-text)]'
             )}>
               {searchMode}
             </span>
@@ -480,8 +480,8 @@ export default function KnowledgeOverview() {
                       </span>
                       <span className={cn(
                         'text-[0.7rem] px-1.5 py-0.5 rounded font-mono',
-                        r.score > 0.8 ? 'bg-green-500/20 text-green-400' :
-                        r.score > 0.6 ? 'bg-yellow-500/20 text-yellow-400' :
+                        r.score > 0.8 ? 'bg-green-500/20 text-[var(--color-success-text)]' :
+                        r.score > 0.6 ? 'bg-yellow-500/20 text-[var(--color-warning-text)]' :
                         'bg-[var(--color-hover)] text-[var(--color-text-muted)]'
                       )}>
                         {r.score === 0.5 ? text('全文匹配', 'Text match') : text(`相似度 ${(r.score * 100).toFixed(1)}%`, `${(r.score * 100).toFixed(1)}% similarity`)}

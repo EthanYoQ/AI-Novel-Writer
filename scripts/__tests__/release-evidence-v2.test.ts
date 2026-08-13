@@ -10,6 +10,7 @@ import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = path.resolve(testDirectory, '..', '..')
 const evidenceScript = path.join(repositoryRoot, 'scripts', 'release-evidence-v2.mjs')
+const releaseVersion = (JSON.parse(readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')) as { version: string }).version
 const fixtures: string[] = []
 const WINDOWS_COMMAND_STEPS = [
   'install-locked-dependencies',
@@ -42,7 +43,7 @@ function validWindowsReceipt(name: string, releaseRoot: string) {
   })
   const receipts: Record<string, unknown> = {
     install: { ...base, kind: 'windows-install', direct: { installerExitCode: 0, installedExecutable: 'C:/AI/AI小说作家.exe', installedExecutableExists: true } },
-    launch: { ...base, kind: 'windows-launch', expectedVersion: '0.8.2', direct: { executablePath: 'C:/AI/AI小说作家.exe', productVersion: '0.8.2.0', processId: 101, processStartTimeTicks: '12345', visibleMainWindowCount: 1 } },
+    launch: { ...base, kind: 'windows-launch', expectedVersion: releaseVersion, direct: { executablePath: 'C:/AI/AI小说作家.exe', productVersion: `${releaseVersion}.0`, processId: 101, processStartTimeTicks: '12345', visibleMainWindowCount: 1 } },
     'quiet-window': { ...base, kind: 'windows-final-quiet-window', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', quietWindowSeconds: 5, completedAt: '2026-08-10T14:57:30.3051843Z' } },
     'error-dialogs': { ...base, kind: 'windows-error-dialogs', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', newProductErrorDialogCount: 0, observedThrough: '2026-08-10T14:57:30.3051843Z' } },
     uninstall: { ...base, kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
@@ -53,7 +54,7 @@ function validWindowsReceipt(name: string, releaseRoot: string) {
       reference('packaged-official-homepage-smoke', 'packaged-official-homepage-smoke.json'),
       reference('packaged-skin-smoke', 'packaged-skin-smoke.json'),
     ] },
-    signing: { ...base, kind: 'windows-signing', direct: { authenticodeStatus: 'NotSigned', installerSha256: sha256(path.join(releaseRoot, 'ai-novel-writer-setup-0.8.2.exe')) }, status: 'unsigned', validationResult: 'NotSigned', unsignedDistributionImpact: 'Windows may display an unknown-publisher warning.' },
+    signing: { ...base, kind: 'windows-signing', direct: { authenticodeStatus: 'NotSigned', installerSha256: sha256(path.join(releaseRoot, `ai-novel-writer-setup-${releaseVersion}.exe`)) }, status: 'unsigned', validationResult: 'NotSigned', unsignedDistributionImpact: 'Windows may display an unknown-publisher warning.' },
   }
   return receipts[name]
 }
@@ -104,8 +105,8 @@ describe('release evidence v2 CLI', () => {
       repository: 'EthanYoQ/AI-Novel-Writer',
       frozen: {
         commit,
-        tag: 'v0.8.2',
-        version: '0.8.2',
+        tag: `v${releaseVersion}`,
+        version: releaseVersion,
         platform: 'windows',
         workflow: {
           path: '.github/workflows/windows-cloud-build-test.yml',
@@ -222,7 +223,7 @@ describe('release evidence v2 CLI', () => {
   it('rejects empty command evidence and placeholder receipts before finalizing a semantic Windows bundle', () => {
     const evidenceRoot = fixture()
     const releaseRoot = fixture()
-    const version = '0.8.2'
+    const version = releaseVersion
     const init = spawnSync(process.execPath, [
       evidenceScript,
       'init',
@@ -332,8 +333,8 @@ describe('release evidence v2 CLI', () => {
       expect(invalidTimestampResult.stderr).toContain('Windows error-dialog receipt facts are invalid')
     }
     for (const mutateLaunch of [
-      (receipt: LaunchReceipt) => { receipt.direct.productVersion = '0.8.2.1' },
-      (receipt: LaunchReceipt) => { receipt.direct.productVersion = '0.8.2-beta.1' },
+      (receipt: LaunchReceipt) => { receipt.direct.productVersion = `${releaseVersion}.1` },
+      (receipt: LaunchReceipt) => { receipt.direct.productVersion = `${releaseVersion}-beta.1` },
       (receipt: LaunchReceipt) => { receipt.direct.productVersion = 'garbage' },
       (receipt: LaunchReceipt) => { delete receipt.direct.productVersion },
       (receipt: LaunchReceipt) => { receipt.expectedVersion = '0.8.0' },

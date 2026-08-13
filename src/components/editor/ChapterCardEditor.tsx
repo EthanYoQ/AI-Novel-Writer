@@ -56,11 +56,11 @@ import { LatestRequestGate } from './latest-request-gate'
 const ROLES = ['建置', '铺垫', '发展', '冲突', '高潮', '转折', '收尾']
 
 const ROLE_COLORS: Record<string, string> = {
-  高潮: 'bg-red-500/20 text-red-400',
-  冲突: 'bg-orange-500/20 text-orange-400',
-  转折: 'bg-purple-500/20 text-purple-400',
-  建置: 'bg-blue-500/20 text-blue-400',
-  收尾: 'bg-green-500/20 text-green-400',
+  高潮: 'bg-red-500/20 text-[var(--color-error-text)]',
+  冲突: 'bg-orange-500/20 text-[var(--color-warning-text)]',
+  转折: 'bg-purple-500/20 text-[var(--color-category-review-text)]',
+  建置: 'bg-blue-500/20 text-[var(--color-category-progress-text)]',
+  收尾: 'bg-green-500/20 text-[var(--color-success-text)]',
 }
 
 function readDraftLedgerFromFixedTab() {

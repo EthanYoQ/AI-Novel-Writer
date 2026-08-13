@@ -83,9 +83,9 @@ export default function MonacoDiffViewer({
             {originalLabel}<ArrowRight size={12} aria-hidden="true" />{modifiedLabel}
           </span>
           <span className="text-xs">
-            <span style={{ color: 'var(--color-success)' }}>+{stats.additions}</span>
+            <span style={{ color: 'var(--color-success-text)' }}>+{stats.additions}</span>
             {' '}
-            <span style={{ color: 'var(--color-error)' }}>-{stats.deletions}</span>
+            <span style={{ color: 'var(--color-error-text)' }}>-{stats.deletions}</span>
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -108,7 +108,7 @@ export default function MonacoDiffViewer({
             <button
               onClick={onReject}
               className="flex items-center gap-1 px-2 py-0.5 rounded text-xs"
-              style={{ color: 'var(--color-error)', border: '1px solid var(--color-border)' }}
+              style={{ color: 'var(--color-error-text)', border: '1px solid var(--color-border)' }}
             >
               <X size={12} /> 拒绝
             </button>

@@ -60,9 +60,9 @@ export default function DiffViewer({
             文本对比
           </span>
           <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            <span style={{ color: 'var(--color-success)' }}>+{addCount}</span>
+            <span style={{ color: 'var(--color-success-text)' }}>+{addCount}</span>
             {' '}
-            <span style={{ color: 'var(--color-error)' }}>-{removeCount}</span>
+            <span style={{ color: 'var(--color-error-text)' }}>-{removeCount}</span>
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -83,7 +83,7 @@ export default function DiffViewer({
             <button
               onClick={onReject}
               className="flex items-center gap-1 px-2 py-0.5 rounded text-xs"
-              style={{ color: 'var(--color-error)', border: '1px solid var(--color-border)' }}
+              style={{ color: 'var(--color-error-text)', border: '1px solid var(--color-border)' }}
             >
               <X size={12} /> 拒绝
             </button>
@@ -125,7 +125,7 @@ function SideBySideView({ diffLines, originalLabel, modifiedLabel }: {
           className="px-3 py-1 text-xs font-medium flex-shrink-0"
           style={{
             backgroundColor: 'color-mix(in srgb, var(--color-error) 6%, transparent)',
-            color: 'var(--color-error)',
+            color: 'var(--color-error-text)',
             borderBottom: '1px solid var(--color-border)',
           }}
         >
@@ -140,7 +140,7 @@ function SideBySideView({ diffLines, originalLabel, modifiedLabel }: {
                 className="px-3 py-0.5"
                 style={{
                   backgroundColor: d.type === 'remove' ? 'color-mix(in srgb, var(--color-error) 8%, transparent)' : 'transparent',
-                  color: d.type === 'remove' ? 'var(--color-error)' : 'var(--color-text)',
+                  color: d.type === 'remove' ? 'var(--color-error-text)' : 'var(--color-text)',
                 }}
               >
                 <span className="inline-block w-8 text-right mr-2 opacity-30">{d.lineOld ?? ''}</span>
@@ -157,7 +157,7 @@ function SideBySideView({ diffLines, originalLabel, modifiedLabel }: {
           className="px-3 py-1 text-xs font-medium flex-shrink-0"
           style={{
             backgroundColor: 'color-mix(in srgb, var(--color-success) 6%, transparent)',
-            color: 'var(--color-success)',
+            color: 'var(--color-success-text)',
             borderBottom: '1px solid var(--color-border)',
           }}
         >
@@ -172,7 +172,7 @@ function SideBySideView({ diffLines, originalLabel, modifiedLabel }: {
                 className="px-3 py-0.5"
                 style={{
                   backgroundColor: d.type === 'add' ? 'color-mix(in srgb, var(--color-success) 8%, transparent)' : 'transparent',
-                  color: d.type === 'add' ? 'var(--color-success)' : 'var(--color-text)',
+                  color: d.type === 'add' ? 'var(--color-success-text)' : 'var(--color-text)',
                 }}
               >
                 <span className="inline-block w-8 text-right mr-2 opacity-30">{d.lineNew ?? ''}</span>
@@ -200,8 +200,8 @@ function InlineView({ diffLines }: { diffLines: DiffLine[] }) {
               : d.type === 'remove' ? 'color-mix(in srgb, var(--color-error) 8%, transparent)'
               : 'transparent',
             color:
-              d.type === 'add' ? 'var(--color-success)'
-              : d.type === 'remove' ? 'var(--color-error)'
+              d.type === 'add' ? 'var(--color-success-text)'
+              : d.type === 'remove' ? 'var(--color-error-text)'
               : 'var(--color-text)',
           }}
         >
