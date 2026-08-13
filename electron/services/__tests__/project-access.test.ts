@@ -123,7 +123,8 @@ describe('ProjectAccessService project session seam', () => {
 
     expect(access.probeExistingProject(root)).toMatchObject({
       kind: 'manifest',
-      rootPath: root,
+      projectId: '11111111-1111-4111-8111-111111111111',
+      rootPath: fs.realpathSync.native(root),
     })
   })
 
