@@ -15,19 +15,19 @@
 
 /* ===== 本地内置字体（无需网络，所有字体文件均放置于 public/fonts/） ===== */
 
-/* Sora — 现代几何无衬线，显示性强，独特但不过分 */
+/* Inter — 可变字体，支持 100-900 所有字重，现代 UI 首选 */
 @font-face {
-  font-family: 'Sora';
-  src: url('/fonts/Sora-VariableFont_wght.ttf') format('truetype');
+  font-family: 'Inter';
+  src: url('/fonts/Inter-VariableFont_opsz,wght.ttf') format('truetype');
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 
-/* Sora 斜体 */
+/* Inter 斜体 */
 @font-face {
-  font-family: 'Sora';
-  src: url('/fonts/Sora-VariableFont_wght.ttf') format('truetype');
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Italic-VariableFont_opsz,wght.ttf') format('truetype');
   font-weight: 100 900;
   font-style: italic;
   font-display: swap;
@@ -81,9 +81,9 @@
 
 /* ===== Tailwind v4 设计令牌（精简版 — 仅保留 Tailwind 需要的扩展） ===== */
 @theme {
-  /* 字体栈 - 使用 Sora 替代 Inter，更具个性 */
-  --font-sans: 'Sora', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  /* 字体栈 - 界面默认思源黑体（theme-store 的 applyUiFont 会 inline 覆盖 --font-sans，此处为兜底） */
+  --font-sans: 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Fira Code', Consolas, ui-monospace, monospace;
   --font-writing: 'Noto Serif SC', 'Source Han Serif SC', Georgia, serif;
 
   /* 文字尺寸 */
@@ -270,8 +270,8 @@
     --transition-spring: 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 
     /* 字体 */
-    --font-sans: 'Sora', system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --font-sans: 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Fira Code', Consolas, ui-monospace, monospace;
     --font-writing: 'LXGW WenKai', 'Noto Serif SC', serif;
   }
 
