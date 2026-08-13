@@ -118,7 +118,7 @@ export const useThemeStore = create<ThemeState>()(
       resolvedTheme: 'paper',
       zoom: 1.0,
       writingFont: 'lxgw-wenkai',
-      uiFont: 'inter',
+      uiFont: 'noto-sans-sc',
 
       setTheme: (theme: Theme) => {
         const resolved = resolveTheme(theme)
