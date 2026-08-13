@@ -413,82 +413,63 @@
     --shadow-tooltip: 0 4px 12px rgba(43, 42, 38, 0.16);
   }
 
-  /* Writer console visual system — approved AI小说作家 mock */
+  /* Writer console visual system — 书卷墨韵语义别名。
+     所有别名绑定 --color-* 语义令牌，随当前主题自动解析：
+     light/paper 呈纸墨朱砂，dark/galaxy 外壳跟随各自主题色；
+     图片皮肤由高对比覆盖层（下方 --skin-*）接管。 */
   :root,
   .paper,
   .light,
   .dark,
   .galaxy {
-    --writer-walnut-950: #1b0f06;
-    --writer-walnut-900: #251406;
-    --writer-walnut-850: #2b1708;
-    --writer-walnut-800: #34200f;
-    --writer-walnut-700: #4d3219;
-    --writer-brass-600: #8a5b2e;
-    --writer-brass-500: #a36c35;
-    --writer-brass-400: #c09356;
-    --writer-paper-100: #fff8eb;
-    --writer-paper-150: #fbf1e1;
-    --writer-paper-200: #f4ead8;
-    --writer-paper-250: #eddfc8;
-    --writer-paper-300: #dcc6a8;
-    --writer-ink: #2c2319;
-    --writer-ink-muted: #7a6750;
-    --writer-green: #55a85a;
-    --writer-orange: #f28c2e;
+    --writer-surface-topbar: var(--color-titlebar);
+    --writer-topbar-text: var(--color-titlebar-text);
+    --writer-chrome-border: var(--color-border);
+    --writer-topbar-shadow: none;
+    --writer-command-text: var(--color-text-secondary);
+    --writer-command-hover-surface: var(--color-hover);
+    --writer-command-hover-border: var(--color-border);
+    --writer-command-divider: var(--color-border);
+    --writer-brand-mark-surface: var(--color-accent);
+    --writer-brand-mark-border: var(--color-accent-hover);
+    --writer-brand-mark-text: #FCFAF3;
 
-    /* Writer surfaces default to the approved paper console. The classic skin
-       overrides these aliases per color theme below; image skins retain this
-       exact legacy palette before their dedicated readability overlay applies. */
-    --writer-surface-topbar: linear-gradient(180deg, var(--writer-walnut-850) 0%, var(--writer-walnut-950) 100%);
-    --writer-topbar-text: #fff8e8;
-    --writer-chrome-border: rgba(107, 74, 38, 0.72);
-    --writer-topbar-shadow: inset 0 -1px 0 rgba(255, 244, 223, 0.05);
-    --writer-command-text: #fff4df;
-    --writer-command-hover-surface: rgba(255, 244, 223, 0.08);
-    --writer-command-hover-border: rgba(255, 244, 223, 0.18);
-    --writer-command-divider: rgba(255, 244, 223, 0.24);
-    --writer-brand-mark-surface: linear-gradient(180deg, rgba(255, 239, 205, 0.22), rgba(160, 98, 39, 0.16));
-    --writer-brand-mark-border: rgba(255, 236, 194, 0.18);
-    --writer-brand-gradient-start: #f9e7bd;
-    --writer-brand-gradient-end: #c89445;
+    --writer-primary-surface: var(--color-accent);
+    --writer-primary-text: #FCFAF3;
+    --writer-primary-border: transparent;
+    --writer-primary-shadow: var(--shadow-sm);
 
-    --writer-primary-surface: linear-gradient(180deg, var(--writer-brass-600) 0%, #65401f 100%);
-    --writer-primary-text: #fff8e8;
-    --writer-primary-border: rgba(67, 40, 17, 0.55);
-    --writer-primary-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 1px 2px rgba(54, 31, 12, 0.24);
+    --writer-surface-project-tree: var(--color-sidebar);
+    --writer-surface-ai-panel: var(--color-panel);
+    --writer-surface-task-table: var(--color-panel);
+    --writer-surface-shell: var(--color-bg);
+    --writer-surface-card: var(--color-raised);
+    --writer-text-primary: var(--color-text);
+    --writer-text-muted: var(--color-text-muted);
+    --writer-panel-border: var(--color-border);
+    --writer-task-border: var(--color-border);
+    --writer-card-border: var(--color-border);
+    --writer-card-shadow: var(--shadow-sm);
+    --writer-input-surface: var(--color-bg);
+    --writer-input-border: var(--color-border);
+    --writer-icon-muted: var(--color-text-muted);
+    --writer-item-hover: var(--color-hover);
+    --writer-item-active: var(--color-active);
+    --writer-item-indicator: var(--color-accent);
+    --writer-task-header: var(--color-hover);
+    --writer-task-row-border: var(--color-border);
 
-    --writer-surface-project-tree: var(--writer-paper-200);
-    --writer-surface-ai-panel: var(--writer-paper-200);
-    --writer-surface-task-table: var(--writer-paper-150);
-    --writer-surface-shell: radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.34), transparent 28%), linear-gradient(180deg, var(--writer-paper-100) 0%, var(--writer-paper-150) 100%);
-    --writer-surface-card: rgba(255, 248, 235, 0.78);
-    --writer-text-primary: var(--writer-ink);
-    --writer-text-muted: var(--writer-ink-muted);
-    --writer-panel-border: var(--writer-paper-300);
-    --writer-task-border: #d2ba98;
-    --writer-card-border: #d6c09f;
-    --writer-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58), 0 1px 2px rgba(82, 52, 22, 0.08);
-    --writer-input-surface: rgba(255, 252, 245, 0.78);
-    --writer-input-border: #cdb696;
-    --writer-icon-muted: var(--writer-ink-muted);
-    --writer-item-hover: rgba(142, 92, 42, 0.10);
-    --writer-item-active: #ead8bd;
-    --writer-item-indicator: var(--writer-brass-600);
-    --writer-task-header: rgba(224, 203, 172, 0.34);
-    --writer-task-row-border: rgba(201, 178, 143, 0.72);
-
-    --writer-surface-statusbar: linear-gradient(180deg, var(--writer-walnut-900), var(--writer-walnut-950));
-    --writer-statusbar-text: #efe0c4;
-    --writer-statusbar-hover: rgba(255, 244, 223, 0.08);
-    --writer-surface-left-rail: radial-gradient(circle at 48% 0%, rgba(195, 148, 79, 0.14), transparent 26%), linear-gradient(180deg, var(--writer-walnut-850), var(--writer-walnut-950));
-    --writer-left-rail-border: rgba(132, 93, 46, 0.72);
-    --writer-left-rail-text: rgba(255, 247, 228, 0.78);
-    --writer-left-rail-hover: rgba(255, 244, 223, 0.08);
-    --writer-left-rail-active-surface: linear-gradient(180deg, rgba(138, 91, 46, 0.88), rgba(82, 50, 23, 0.88));
-    --writer-left-rail-active-text: #fff8e8;
-    --writer-left-rail-active-shadow: inset 3px 0 0 var(--writer-brass-400);
-    --writer-nav-divider: rgba(255, 244, 223, 0.16);
+    --writer-surface-statusbar: var(--color-statusbar);
+    --writer-statusbar-text: var(--color-text-secondary);
+    --writer-statusbar-hover: var(--color-hover);
+    --writer-surface-left-rail: var(--color-activity-bar);
+    --writer-left-rail-border: var(--color-border);
+    --writer-left-rail-text: var(--color-text-secondary);
+    --writer-left-rail-hover: var(--color-hover);
+    --writer-left-rail-active-surface: var(--color-active);
+    --writer-left-rail-active-text: var(--color-activity-icon-active);
+    --writer-left-rail-active-shadow: inset 3px 0 0 var(--color-activity-indicator);
+    --writer-nav-divider: var(--color-border);
   }
 
   /* 黑夜主题 — VS Code / IDEA 深灰极客风（真正的暗黑模式） */
@@ -565,14 +546,13 @@
     --writer-topbar-text: var(--color-titlebar-text);
     --writer-chrome-border: var(--color-border);
     --writer-topbar-shadow: none;
-    --writer-command-text: var(--color-titlebar-text);
+    --writer-command-text: var(--color-text-secondary);
     --writer-command-hover-surface: var(--color-hover);
     --writer-command-hover-border: var(--color-border);
     --writer-command-divider: var(--color-border);
-    --writer-brand-mark-surface: color-mix(in srgb, var(--color-accent) 14%, var(--color-titlebar));
-    --writer-brand-mark-border: var(--color-border);
-    --writer-brand-gradient-start: var(--color-accent);
-    --writer-brand-gradient-end: var(--color-gold);
+    --writer-brand-mark-surface: var(--color-accent);
+    --writer-brand-mark-border: var(--color-accent-hover);
+    --writer-brand-mark-text: #FCFAF3;
 
     --writer-primary-surface: var(--color-accent);
     --writer-primary-border: transparent;
@@ -582,7 +562,7 @@
     --writer-surface-ai-panel: var(--color-panel);
     --writer-surface-task-table: var(--color-panel);
     --writer-surface-shell: var(--color-bg);
-    --writer-surface-card: var(--color-panel);
+    --writer-surface-card: var(--color-raised);
     --writer-text-primary: var(--color-text);
     --writer-text-muted: var(--color-text-muted);
     --writer-panel-border: var(--color-border);
@@ -611,27 +591,13 @@
     --writer-nav-divider: var(--color-border);
   }
 
-  .app-skin-root[data-skin='classic'][data-theme='light'] {
-    --writer-primary-text: #102A43;
-  }
-
   .app-skin-root[data-skin='classic'][data-theme='galaxy'] {
     --writer-primary-text: #0A1628;
+    --writer-brand-mark-text: #0A1628;
   }
 
   .app-skin-root[data-skin='classic'][data-theme='dark'] {
     --writer-primary-text: #FFFFFF;
-  }
-
-  /* Keep the paper theme's deliberately warm writer console unchanged. */
-  .app-skin-root[data-skin='classic'][data-theme='paper'] {
-    --writer-surface-topbar: linear-gradient(180deg, var(--writer-walnut-850) 0%, var(--writer-walnut-950) 100%);
-    --writer-surface-project-tree: var(--writer-paper-200);
-    --writer-surface-ai-panel: var(--writer-paper-200);
-    --writer-surface-task-table: var(--writer-paper-150);
-    --writer-surface-shell: radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.34), transparent 28%), linear-gradient(180deg, var(--writer-paper-100) 0%, var(--writer-paper-150) 100%);
-    --writer-surface-statusbar: linear-gradient(180deg, var(--writer-walnut-900), var(--writer-walnut-950));
-    --writer-surface-left-rail: radial-gradient(circle at 48% 0%, rgba(195, 148, 79, 0.14), transparent 26%), linear-gradient(180deg, var(--writer-walnut-850), var(--writer-walnut-950));
   }
 
   /* ===== 全局基础样式 ===== */
@@ -809,6 +775,7 @@
   .writer-brand-mark {
     background: var(--writer-brand-mark-surface);
     border: 1px solid var(--writer-brand-mark-border);
+    color: var(--writer-brand-mark-text);
   }
 
   .writer-command-divider {
@@ -848,15 +815,12 @@
   .writer-panel-card {
     background: var(--writer-surface-card);
     border: 1px solid var(--writer-card-border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     box-shadow: var(--writer-card-shadow);
   }
 
   .writer-topbar .brand-gradient {
-    background: linear-gradient(135deg, var(--writer-brand-gradient-start), var(--writer-brand-gradient-end));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--writer-topbar-text);
   }
 
   .writer-topbar .writer-command-button svg,
@@ -1165,77 +1129,43 @@
     animation: agent-cursor-blink 1s steps(1) infinite;
   }
 
-  /* ===== 品牌渐变文字 — 统一所有品牌标识使用（Logo 冰蓝→薰衣草紫） ===== */
+  /* ===== 品牌文字 — 书卷墨韵后统一浓墨实色（顶栏由 .writer-topbar 作用域覆盖） ===== */
   .brand-gradient {
-    background: linear-gradient(135deg, #7A5732, #B68A4A);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--color-text);
   }
 
-  /* ===== Default 主按钮 — 品牌冰蓝渐变 + 玻璃高光 + 增强动效 ===== */
+  /* ===== Default 主按钮 — 朱砂实色（cva 提供 text-white） ===== */
   .btn-primary {
-    background: linear-gradient(180deg, var(--color-accent), var(--color-accent-hover));
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 2px 4px rgba(0, 0, 0, 0.15),
-      0 0 0 0 rgba(var(--color-accent-rgb), 0);
-    transition: box-shadow var(--transition-normal),
-                transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275),
-                filter 0.15s ease;
+    background: var(--color-accent);
+    border: 1px solid var(--color-accent-hover);
+    box-shadow: var(--shadow-sm);
+    transition: background var(--transition-fast),
+                box-shadow var(--transition-fast);
   }
 
   .btn-primary:hover {
-    filter: brightness(1.12);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.25),
-      0 6px 20px rgba(var(--color-accent-rgb), 0.35),
-      0 0 30px rgba(var(--color-accent-rgb), 0.15);
-    transform: translateY(-2px);
+    background: var(--color-accent-hover);
   }
 
   .btn-primary:active {
-    transform: translateY(0);
     filter: brightness(0.95);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.1),
-      0 1px 2px rgba(0, 0, 0, 0.1);
   }
 
-  /* ===== AI 极光光效按钮 — 所有 AI 功能按钮统一使用（Logo 冰蓝→薰衣草紫） ===== */
+  /* ===== AI 功能按钮 — 朱砂实色，无辉光（cva 提供 text-white） ===== */
   .ai-glow {
-    position: relative;
-    background: linear-gradient(135deg, #7A5732, #B68A4A);
+    background: var(--color-accent);
     color: #fff;
     border: none;
-    transition: box-shadow var(--transition-normal),
-                transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  }
-
-  .ai-glow::before {
-    content: '';
-    position: absolute;
-    inset: -3px;
-    border-radius: inherit;
-    background: linear-gradient(135deg, rgba(126, 200, 227, 0.5), rgba(155, 142, 200, 0.5), rgba(201, 167, 108, 0.3));
-    filter: blur(8px);
-    opacity: 0;
-    transition: opacity var(--transition-normal);
-    z-index: -1;
+    transition: background var(--transition-fast),
+                filter var(--transition-fast);
   }
 
   .ai-glow:hover {
-    box-shadow: 0 6px 24px rgba(126, 200, 227, 0.35), 0 0 32px rgba(155, 142, 200, 0.25);
-    transform: translateY(-2px);
-  }
-
-  .ai-glow:hover::before {
-    opacity: 1;
+    background: var(--color-accent-hover);
   }
 
   .ai-glow:active {
-    transform: translateY(0);
+    filter: brightness(0.95);
   }
 }
 
@@ -1879,13 +1809,6 @@
 }
 .glow-border:hover::before {
   opacity: 0.5;
-}
-
-/* 玻璃态效果 */
-.glass {
-  background: rgba(var(--color-bg), 0.8);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(var(--color-border), 0.5);
 }
 
 /* 渐变文字效果 */

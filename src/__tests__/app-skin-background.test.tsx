@@ -148,7 +148,7 @@ describe('App image-skin background seam', () => {
       '--writer-surface-ai-panel: var(--color-panel)',
       '--writer-surface-task-table: var(--color-panel)',
       '--writer-surface-shell: var(--color-bg)',
-      '--writer-surface-card: var(--color-panel)',
+      '--writer-surface-card: var(--color-raised)',
       '--writer-text-primary: var(--color-text)',
     ]) {
       expect(writerCss).toContain(declaration)
@@ -167,8 +167,9 @@ describe('App image-skin background seam', () => {
       expect(writerCss).toContain(selector)
     }
 
-    expect(writerCss).toContain(".app-skin-root[data-skin='classic'][data-theme='paper']")
-    expect(writerCss).toContain('--writer-surface-project-tree: var(--writer-paper-200)')
-    expect(writerCss).toContain('--writer-surface-topbar: linear-gradient(180deg, var(--writer-walnut-850) 0%, var(--writer-walnut-950) 100%)')
+    // 书卷墨韵后 paper 与其他主题共用同一套语义别名，不再有核桃棕特例。
+    expect(writerCss).not.toContain("[data-theme='paper']")
+    expect(writerCss).not.toContain('--writer-walnut')
+    expect(writerCss).not.toContain('--writer-paper-')
   })
 })

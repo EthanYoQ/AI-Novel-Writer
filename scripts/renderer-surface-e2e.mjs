@@ -340,15 +340,15 @@ async function assertClassicThemeSurfaces(page) {
   return evidence
 }
 
-async function assertClassicPaperStillUsesWarmSurfaces(page) {
+async function assertClassicPaperUsesSemanticSurfaces(page) {
   await openAppearanceSettings(page)
   await selectTheme(page, RENDERER_SURFACE_E2E_CONTRACT.classicThemeSurfaces.paper)
   await closeSettings(page)
   const projectTree = await computedSurface(page, '.writer-project-tree', 'paper classic project tree')
-  const expectedProjectTree = await computedTokenColor(page, '--writer-paper-200')
+  const expectedProjectTree = await computedTokenColor(page, '--color-sidebar')
   assertColorMatches(projectTree.backgroundColor, expectedProjectTree, 'paper classic project tree background')
   const chrome = await page.locator('.writer-topbar, .writer-left-rail').evaluateAll(elements => elements.map((element) => getComputedStyle(element).backgroundImage))
-  assert.ok(chrome.every(backgroundImage => backgroundImage !== 'none'), 'paper classic chrome must retain the warm writer gradients')
+  assert.ok(chrome.every(backgroundImage => backgroundImage === 'none'), 'paper classic chrome must use flat paper-ink surfaces, not warm gradients')
   return { projectTree: projectTree.backgroundColor, chrome }
 }
 
@@ -416,7 +416,7 @@ async function runRendererSurfaceE2e() {
     await openAppearanceSettings(page)
     await selectImageSkin(page, 'classic')
     const classicThemes = await assertClassicThemeSurfaces(page)
-    const classicPaper = await assertClassicPaperStillUsesWarmSurfaces(page)
+    const classicPaper = await assertClassicPaperUsesSemanticSurfaces(page)
 
     return {
       schemaVersion: 1,
