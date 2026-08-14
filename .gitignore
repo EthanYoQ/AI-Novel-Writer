@@ -48,3 +48,19 @@ tailwind.config.js.bak
 .worktrees/
 .runtime/
 .vibe-owner.json
+
+# Never publish internal agent instructions, local review output, or compiler state.
+/AGENTS.md
+/CONTEXT.md
+/.agents/
+/.claude/
+/.codex/
+/.superpowers/
+/docs/superpowers/
+/design-qa.md
+/rule.md
+/rule.lite.md
+/output/
+/public/screenshot/
+/public/logos/
+*.tsbuildinfo
