@@ -8,11 +8,11 @@ The package ships three plugin entries:
 
 - the root Host entry, loaded by `cordis.patch.yml`;
 - `./agent`, mounted only by the bundled `ai-novel-writer` preset;
-- `./client`, currently a no-op browser entry so Harness can discover the declared web client.
+- `./client`, which adds the explicit Preset setup action to the sidebar and renders its setup dialog through the shell overlay.
 
 ## Configuration
 
-The agent entry accepts `assetBytes`, `workingSetBytes`, and `queryMatches`. Defaults are 512 KiB per asset, 512 KiB per working set, and 20 query matches. Invalid limits fail during plugin loading.
+The Host entry accepts `presetRoot`, an absolute path to the user preset root. It defaults to `$DSH_HOME/.agent-presets` (normally `~/.dsh/.agent-presets`). The agent entry accepts `assetBytes`, `workingSetBytes`, and `queryMatches`. Defaults are 512 KiB per asset, 512 KiB per working set, and 20 query matches. Invalid paths or limits fail during plugin loading.
 
 ## Project files
 
@@ -27,6 +27,12 @@ Stable failures distinguish uninitialized and unsupported projects, missing or i
 ### Agent preset
 
 The included `AI 小说作家` preset mounts the novel persona, agent instructions, and `./agent`. It does not mount shell, general filesystem writing, text replacement, or Code Mode.
+
+#### Install the preset
+
+Open “AI 小说作家” from the Harness sidebar and select “安装 AI 小说作家 Preset”. The browser can only call the loopback setup channel and cannot submit a local path. The Host copies the two bundled Preset files into the configured user root with an atomic directory publication.
+
+Repeating installation is a no-op when every byte matches. A same-name directory with different or additional content is reported as a conflict and no user byte is overwritten. After installation, create a new session and choose “AI 小说作家”; an existing session keeps its original Preset.
 
 #### What the model sees
 
@@ -50,7 +56,7 @@ The preset persona and the two tool definitions are stable across turns. Project
 
 ## Known Limitations and Deferred Work
 
-The package does not install the preset into a user profile, expose Host read RPCs, render a context window, import `.vela` projects, provide multi-asset transactions, or publish itself. The shipped client entry has no interface.
+The package does not expose Host project-read RPCs, render the novel context window, import `.vela` projects, provide multi-asset transactions, or publish itself. Preset setup does not initialize a novel project; project initialization remains a native approval-gated conversation action.
 
 Build and run the focused qualification with:
 

@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import { Context } from '@deepseek-ai/cordis'
 import Include, { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -10,12 +11,50 @@ import yaml from 'js-yaml'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+const clientSource = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+if (!clientSource.includes('pluginCss') || !clientSource.includes('aiNovelPresetDialog')) {
+  throw new Error('The emitted Client entry must carry its owned setup styles')
+}
+if (/require\(["']\.\/style\.css["']\)/.test(clientSource)) {
+  throw new Error('The emitted Client entry must not depend on a separately loaded stylesheet')
+}
+let clientHandoff
+runInNewContext(clientSource, {
+  window: { __ModuleLoader__: { load: handoff => { clientHandoff = handoff } } },
+})
+if (clientHandoff?.id !== manifest.name || typeof clientHandoff.factory !== 'function') {
+  throw new Error('The emitted Client entry did not register its declared package id')
+}
+const clientModules = new Map([
+  ['react', await import('react')],
+  ['react/jsx-runtime', await import('react/jsx-runtime')],
+  ['@deepseek-ai/dsh-client-ui-primitives', { IconListPenOutline16: () => null }],
+])
+const clientExports = clientHandoff.factory(specifier => {
+  if (!clientModules.has(specifier)) throw new Error(`Unexpected emitted Client external: ${specifier}`)
+  return clientModules.get(specifier)
+})
+if (typeof clientExports.apply !== 'function' || 'default' in clientExports) {
+  throw new Error('The emitted Client factory must return named apply without a default export')
+}
 const patchPath = join(root, manifest.dsh.bundle.patch)
 const patches = yaml.load(await readFile(patchPath, 'utf8'), { schema: entryListSchema })
 if (!Array.isArray(patches)) throw new TypeError(`${patchPath} must contain a YAML list`)
 
 const host = new Context()
 host.baseUrl = pathToFileURL(root).href + '/'
+let setupRegistered = false
+host.provide('connection', {
+  rpc: {
+    handle(channel, _handler, options) {
+      if (channel !== '/ai-novel' || options.authority !== 'loopback') {
+        throw new Error('The emitted Host entry registered an unexpected setup channel')
+      }
+      setupRegistered = true
+      return async () => {}
+    },
+  },
+})
 await host.plugin(Loader)
 host.loader.builtins.include = Include
 const builtModule = await import(pathToFileURL(join(root, manifest.main)).href)
@@ -36,6 +75,7 @@ try {
   await host.loader.await()
   const entry = [...host.loader.entries()].find(candidate => candidate.options.id === 'ai-novel-writer')
   if (entry?.fiber === undefined) throw new Error('Cordis Loader did not mount the emitted Host entry')
+  if (!setupRegistered) throw new Error('The emitted Host entry did not register its loopback setup channel')
 } finally {
   await host.fiber.dispose()
 }

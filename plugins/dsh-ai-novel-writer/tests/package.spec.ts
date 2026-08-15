@@ -6,7 +6,7 @@ import Include, { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentPresets from '@deepseek-ai/dsh-agent-presets'
 import * as yaml from 'js-yaml'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -19,15 +19,25 @@ async function yamlList(path: string): Promise<unknown[]> {
 describe('installable AI novel bundle', () => {
   it('loads its declared patch through the real Cordis Loader', async () => {
     const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
-      dsh?: { bundle?: { patch?: string }; client?: { platform?: string } }
+      dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } }
     }
     expect(manifest.dsh).toMatchObject({
       bundle: { patch: './cordis.patch.yml' },
-      client: { platform: 'web' },
+      client: {
+        platform: 'web',
+        inject: [
+          '@deepseek-ai/dsh-client-runtime',
+          '@deepseek-ai/dsh-client-connection',
+          '@deepseek-ai/dsh-client-ui-layout',
+          '@deepseek-ai/dsh-client-ui-sidebar',
+        ],
+      },
     })
     const patches = await yamlList(join(root, manifest.dsh!.bundle!.patch!))
     const ctx = new Context()
     ctx.baseUrl = pathToFileURL(root).href + '/'
+    const handle = vi.fn(() => async () => {})
+    ctx.provide('connection' as never, { rpc: { handle } } as never)
     await ctx.plugin(Loader)
     ctx.loader.builtins.include = Include
     try {
@@ -42,6 +52,7 @@ describe('installable AI novel bundle', () => {
       const entry = [...ctx.loader.entries()].find(candidate => candidate.options.id === 'ai-novel-writer')
       expect(entry?.options.name).toBe('@ethanyoq/dsh-ai-novel-writer')
       expect(entry?.fiber).toBeDefined()
+      expect(handle).toHaveBeenCalledWith('/ai-novel', expect.any(Function), { authority: 'loopback' })
     } finally {
       await ctx.fiber.dispose()
     }
