@@ -50,19 +50,21 @@ afterEach(() => {
 describe('resolveOpenAIChatCompletionsUrl', () => {
   it.each([
     ['domain root', 'https://api.openai.com', 'https://api.openai.com/v1/chat/completions'],
+    ['full chat path', 'https://gateway.example/api/v4/chat', 'https://gateway.example/api/v4/chat/completions'],
     ['full endpoint', 'https://gateway.example/api/v4/chat/completions', 'https://gateway.example/api/v4/chat/completions'],
     ['v1 prefix', 'https://gateway.example/v1', 'https://gateway.example/v1/chat/completions'],
     ['v3 prefix', 'https://gateway.example/api/plan/v3', 'https://gateway.example/api/plan/v3/chat/completions'],
     ['v4 prefix', 'https://open.bigmodel.cn/api/paas/v4', 'https://open.bigmodel.cn/api/paas/v4/chat/completions'],
     ['arbitrary versioned prefix', 'https://gateway.example/tenant/openai/v27', 'https://gateway.example/tenant/openai/v27/chat/completions'],
+    ['generic path prefix', 'https://gateway.example/tenant/openai', 'https://gateway.example/tenant/openai/chat/completions'],
     ['trailing slashes', 'https://gateway.example/api/plan/v3///', 'https://gateway.example/api/plan/v3/chat/completions'],
   ])('resolves the %s without replacing its configured prefix', (_case, baseUrl, expectedUrl) => {
-    expect(resolveOpenAIChatCompletionsUrl(baseUrl)).toBe(expectedUrl)
+    expect(resolveOpenAIChatCompletionsUrl(baseUrl, 'custom')).toBe(expectedUrl)
   })
 })
 
 describe('OpenAIProvider NovelAI compatibility', () => {
-  it('preserves an explicitly configured versioned endpoint prefix for normal and streaming generation', async () => {
+  it('preserves an explicitly configured endpoint prefix for normal and streaming generation', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -76,7 +78,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     const model = {
       ...novelAIModel,
       provider: 'custom' as const,
-      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+      baseUrl: 'https://gateway.example/tenant/openai',
     }
 
     await new OpenAIProvider().generate(model, [{ role: 'user', content: '普通正文' }], {
@@ -93,8 +95,8 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions',
-      'https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions',
+      'https://gateway.example/tenant/openai/chat/completions',
+      'https://gateway.example/tenant/openai/chat/completions',
     ])
   })
 

@@ -63,7 +63,7 @@ export class OpenAIProvider implements ILLMProvider {
 
   async generate(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMGenerateOptions): Promise<LLMResponse> {
     try {
-      const url = resolveOpenAIChatCompletionsUrl(model.baseUrl)
+      const url = resolveOpenAIChatCompletionsUrl(model.baseUrl, model.provider)
       const body = this.buildRequestBody(model, messages, opts, false)
 
       const res = await fetch(url, {
@@ -119,7 +119,7 @@ export class OpenAIProvider implements ILLMProvider {
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
     try {
-      const url = resolveOpenAIChatCompletionsUrl(model.baseUrl)
+      const url = resolveOpenAIChatCompletionsUrl(model.baseUrl, model.provider)
       const body = this.buildRequestBody(model, messages, opts, true)
 
       const res = await fetch(url, {
