@@ -1,0 +1,109 @@
+import { describe, expect, it, vi } from 'vitest'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
+import { observeNovelContextSources } from '../src/client/context-observer.ts'
+import { NovelContextController } from '../src/client/context-store.ts'
+import type { NovelContextReady } from '../src/context-types.ts'
+import type { NovelProjectId } from '../src/types.ts'
+
+const SESSION_1 = SessionId('session-1')
+const SESSION_2 = SessionId('session-2')
+const WORKSPACE_1 = WorkspaceId('workspace-1')
+const WORKSPACE_2 = WorkspaceId('workspace-2')
+
+function source<T>(initial: T) {
+  let value = initial
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => value,
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
+    set: (next: T) => { value = next; for (const listener of listeners) listener() },
+  }
+}
+
+const ready: NovelContextReady = {
+  status: 'ready',
+  project: {
+    projectId: '123e4567-e89b-42d3-a456-426614174000' as NovelProjectId, title: '小说', language: 'zh-CN', genre: '悬疑', plannedChapters: 2,
+    targetWordsPerChapter: 2_000, creativeStrategy: 'auto', updatedAt: '2026-08-16T00:00:00.000Z',
+  },
+  progress: { selectedChapter: 1, plannedChapters: 2, status: 'planned', draftPresent: false, draftBytes: 0 },
+  characters: [], storyBlueprint: null, chapterBlueprint: null, draft: null, omittedSources: [],
+}
+
+describe('novel context shell observer', () => {
+  it('follows selection and refreshes only for a completed novel mutation result', async () => {
+    const sessionList = source({ current: SESSION_1 as SessionId | undefined })
+    const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
+    const conversations = new Map([
+      [SESSION_1, source({ nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }> })],
+      [SESSION_2, source({ nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }> })],
+    ])
+    const read = vi.fn(async () => ready)
+    const controller = new NovelContextController({ read }, vi.fn())
+    const dispose = observeNovelContextSources({
+      sessions: {
+        list: sessionList,
+        binding: id => {
+          const session = conversations.get(id)
+          return session === undefined ? undefined : { session }
+        },
+      },
+      workspaces: { list: workspaceList },
+    }, controller)
+
+    await controller.open()
+    expect(read).toHaveBeenCalledTimes(1)
+    conversations.get(SESSION_1)!.set({
+      nodes: [{ kind: 'tool-result', seq: 1, call: { name: 'novel_read' } }],
+    })
+    await controller.whenIdle()
+    expect(read).toHaveBeenCalledTimes(1)
+    conversations.get(SESSION_1)!.set({
+      nodes: [
+        { kind: 'tool-result', seq: 1, call: { name: 'novel_read' } },
+        { kind: 'tool-result', seq: 2, call: { name: 'novel_apply_change' } },
+      ],
+    })
+    await controller.whenIdle()
+    expect(read).toHaveBeenCalledTimes(2)
+
+    workspaceList.set({ items: [{ workspaceId: WORKSPACE_2, sessionIds: [SESSION_2] }] })
+    sessionList.set({ current: SESSION_2 })
+    await controller.whenIdle()
+    expect(read.mock.calls.at(-1)?.slice(0, 2)).toEqual(['workspace-2', 1])
+
+    dispose()
+    conversations.get(SESSION_2)!.set({
+      nodes: [{ kind: 'tool-result', seq: 3, call: { name: 'novel_apply_change' } }],
+    })
+    await controller.whenIdle()
+    expect(read).toHaveBeenCalledTimes(3)
+  })
+
+  it('retries binding when the selected Session materializes after the list row', async () => {
+    const sessionList = source({ current: SESSION_1 as SessionId | undefined })
+    const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
+    const conversation = source({
+      nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }>,
+    })
+    let materialized = false
+    const read = vi.fn(async () => ready)
+    const controller = new NovelContextController({ read }, vi.fn())
+    const dispose = observeNovelContextSources({
+      sessions: {
+        list: sessionList,
+        binding: () => materialized ? { session: conversation } : undefined,
+      },
+      workspaces: { list: workspaceList },
+    }, controller)
+    await controller.open()
+    materialized = true
+    sessionList.set({ current: SESSION_1 })
+    conversation.set({ nodes: [{ kind: 'tool-result', seq: 1, call: { name: 'novel_apply_change' } }] })
+    await controller.whenIdle()
+
+    expect(read).toHaveBeenCalledTimes(2)
+    dispose()
+  })
+})

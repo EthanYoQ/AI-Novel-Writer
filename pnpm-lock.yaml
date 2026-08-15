@@ -362,6 +362,9 @@ importers:
       '@deepseek-ai/dsh-user-approval':
         specifier: 0.1.0-rc.6
         version: 0.1.0-rc.6(dbdaba06c174c5e30e3a58edf3cc27a9)
+      '@deepseek-ai/dsh-workspace':
+        specifier: 0.1.0-rc.6
+        version: 0.1.0-rc.6(1cc52dfbc7fc17aad1b6b9c3711f64fc)
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9

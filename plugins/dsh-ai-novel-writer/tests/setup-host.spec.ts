@@ -17,6 +17,7 @@ describe('preset setup Host RPC', () => {
     })
     const ctx = new Context()
     ctx.provide('connection', { rpc: { handle } } as unknown as HostConnectionHandle)
+    ctx.provide('workspaceRegistry' as never, { get: () => undefined } as never)
     const fiber = ctx.plugin({ inject: [...inject], apply }, { presetRoot })
     await fiber.await()
 

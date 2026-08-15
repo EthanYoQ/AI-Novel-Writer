@@ -8,7 +8,7 @@ The package ships three plugin entries:
 
 - the root Host entry, loaded by `cordis.patch.yml`;
 - `./agent`, mounted only by the bundled `ai-novel-writer` preset;
-- `./client`, which adds the explicit Preset setup action to the sidebar and renders its setup dialog through the shell overlay.
+- `./client`, which adds the read-only “小说上下文” action to the sidebar and renders its responsive side drawer through the shell overlay.
 
 ## Configuration
 
@@ -30,9 +30,15 @@ The included `AI 小说作家` preset mounts the novel persona, agent instructio
 
 #### Install the preset
 
-Open “AI 小说作家” from the Harness sidebar and select “安装 AI 小说作家 Preset”. The browser can only call the loopback setup channel and cannot submit a local path. The Host copies the two bundled Preset files into the configured user root with an atomic directory publication.
+Open “小说上下文” from the Harness sidebar and select “安装 AI 小说作家 Preset”. The browser can only call the loopback setup channel and cannot submit a local path. The Host copies the two bundled Preset files into the configured user root with an atomic directory publication.
 
 Repeating installation is a no-op when every byte matches. A same-name directory with different or additional content is reported as a conflict and no user byte is overwritten. After installation, create a new session and choose “AI 小说作家”; an existing session keeps its original Preset.
+
+#### Read-only project context
+
+The same sidebar action opens a non-modal context drawer for the current registered Workspace. The browser submits only the Workspace id and selected chapter number; the Host resolves the canonical directory through `workspaceRegistry` and rejects unknown ids. The drawer shows project identity, creative strategy, chapter progress, character summaries, story and chapter blueprints, and a bounded prose preview. It contains no project initialization, asset editing, approval, arbitrary path, or file operation.
+
+The drawer reads on open, Workspace or Session selection changes, connection reset, a completed `novel_apply_change` result, and explicit refresh or chapter selection. It does not poll. Wide layouts leave the conversation interactive beside the drawer; narrow layouts use the available width. Escape closes the drawer and restores focus to its sidebar action.
 
 #### What the model sees
 
@@ -58,7 +64,7 @@ The preset persona and the two tool definitions are stable across turns. Project
 
 ## Known Limitations and Deferred Work
 
-The package does not expose Host project-read RPCs, render the novel context window, import `.vela` projects, provide multi-asset transactions, or publish itself. Preset setup does not initialize a novel project; project initialization remains a native approval-gated conversation action.
+The package does not import `.vela` projects, provide multi-asset transactions, edit assets from the context drawer, or publish itself. Preset setup does not initialize a novel project; project initialization remains a native approval-gated conversation action.
 
 Build and run the focused qualification with:
 

@@ -12,8 +12,8 @@ import yaml from 'js-yaml'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 const clientSource = await readFile(join(root, 'lib', 'client.js'), 'utf8')
-if (!clientSource.includes('pluginCss') || !clientSource.includes('aiNovelPresetDialog')) {
-  throw new Error('The emitted Client entry must carry its owned setup styles')
+if (!clientSource.includes('pluginCss') || !clientSource.includes('aiNovelContextDrawer')) {
+  throw new Error('The emitted Client entry must carry its owned context-window styles')
 }
 if (/require\(["']\.\/style\.css["']\)/.test(clientSource)) {
   throw new Error('The emitted Client entry must not depend on a separately loaded stylesheet')
@@ -55,6 +55,7 @@ host.provide('connection', {
     },
   },
 })
+host.provide('workspaceRegistry', { get: () => undefined })
 await host.plugin(Loader)
 host.loader.builtins.include = Include
 const builtModule = await import(pathToFileURL(join(root, manifest.main)).href)

@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { act, type ComponentType } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -9,13 +11,16 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   IconListPenOutline16: () => <span aria-hidden="true" />,
 }))
+const WORKSPACE_ID = WorkspaceId('123e4567-e89b-42d3-a456-426614174111')
+const SESSION_ID = SessionId('session-1')
 import {
   PresetSetupBody,
   apply,
+  createNovelContextPort,
   createPresetSetupPort,
   inject,
-  installPresetSetupStyle,
-  presetSetupCss,
+  installNovelContextStyle,
+  novelContextCss,
 } from '../src/client/index.ts'
 import type { PresetSetupState } from '../src/client/setup-store.ts'
 
@@ -49,7 +54,61 @@ async function loadSlotRegistry(): Promise<new (ctx: Context) => {
   }
 }
 
+function mutableSource<T>(initial: T) {
+  let value = initial
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => value,
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
+    set: (next: T) => { value = next; for (const listener of listeners) listener() },
+  }
+}
+
+function provideNovelContextSources(ctx: Context, selected = false) {
+  const conversation = mutableSource({
+    nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }>,
+  })
+  const sessions = mutableSource({ current: selected ? SESSION_ID : undefined as SessionId | undefined })
+  const workspaces = mutableSource({
+    items: selected ? [{ workspaceId: WORKSPACE_ID, sessionIds: [SESSION_ID] }] : [],
+  })
+  ctx.provide('sessions' as never, {
+    list: sessions,
+    binding: (id: SessionId) => id === SESSION_ID ? { session: conversation } : undefined,
+  } as never)
+  ctx.provide('workspaces' as never, { list: workspaces } as never)
+  return { conversation, sessions, workspaces }
+}
+
 describe('preset setup browser integration', () => {
+  it('maps the opaque context read endpoint and rejects invalid wire values', async () => {
+    const ready = {
+      status: 'ready',
+      project: {
+        projectId: '123e4567-e89b-42d3-a456-426614174000', title: '潮汐来信', language: 'zh-CN', genre: '悬疑',
+        plannedChapters: 2, targetWordsPerChapter: 2_000, creativeStrategy: 'auto', updatedAt: '2026-08-16T00:00:00.000Z',
+      },
+      progress: { selectedChapter: 1, plannedChapters: 2, status: 'planned', draftPresent: false, draftBytes: 0 },
+      characters: [], storyBlueprint: null, chapterBlueprint: null, draft: null, omittedSources: [],
+    }
+    const call = vi.fn()
+      .mockResolvedValueOnce({ ok: true, value: ready })
+      .mockResolvedValueOnce({ ok: true, value: { ...ready, project: { ...ready.project, path: 'C:\\secret' } } })
+      .mockRejectedValueOnce(new Error('network down'))
+    const port = createNovelContextPort({ call })
+    const signals = Array.from({ length: 3 }, () => new AbortController().signal)
+
+    await expect(port.read(WORKSPACE_ID, 1, signals[0]!)).resolves.toEqual(ready)
+    await expect(port.read(WORKSPACE_ID, 1, signals[1]!)).rejects.toThrow('context response is invalid')
+    await expect(port.read(WORKSPACE_ID, 1, signals[2]!)).rejects.toMatchObject({ name: 'NovelContextDisconnectedError' })
+    expect(call.mock.calls.map(args => args.slice(0, 3))).toEqual([
+      ['/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }],
+      ['/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }],
+      ['/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }],
+    ])
+    expect(call.mock.calls.map(args => args[3])).toEqual(signals)
+  })
+
   it('maps the two closed RPC endpoints and distinguishes transport loss', async () => {
     const call = vi.fn()
       .mockResolvedValueOnce({ ok: true, value: { status: 'not-installed' } })
@@ -85,6 +144,7 @@ describe('preset setup browser integration', () => {
       }
     }
     new TestSlots(ctx)
+    provideNovelContextSources(ctx)
     const connection = {
       rpc: { call: vi.fn().mockResolvedValue({ ok: true, value: { status: 'not-installed' } }) },
       hostDescription: { getSnapshot: () => undefined, subscribe: () => () => {} },
@@ -93,33 +153,45 @@ describe('preset setup browser integration', () => {
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
 
-    expect(inject).toEqual(['slots', 'connection'])
-    expect(entries.find(entry => entry.options.name === 'sidebar.footer.action')?.options.id).toBe('ai-novel-preset')
-    expect(entries.find(entry => entry.options.name === 'shell.overlay')?.options.id).toBe('ai-novel-preset')
+    expect(inject).toEqual(['slots', 'connection', 'sessions', 'workspaces'])
+    expect(entries.find(entry => entry.options.name === 'sidebar.footer.action')?.options.id).toBe('ai-novel-context')
+    expect(entries.find(entry => entry.options.name === 'shell.overlay')?.options.id).toBe('ai-novel-context')
     await fiber.dispose()
     expect(entries).toHaveLength(0)
   })
 
-  it('aborts and awaits a pending setup RPC when its client fiber unloads', async () => {
+  it('stops observers, aborts setup and context RPCs, and awaits both when its client fiber unloads', async () => {
     const ctx = new Context()
-    const entries: Array<{ options: { name: string; inject?: () => { controller: { load(): Promise<void> } } } }> = []
+    interface InjectedControllers {
+      setupController: { load(): Promise<void> }
+      contextController: { open(): Promise<void> }
+    }
+    const entries: Array<{ options: { name: string; inject?: () => InjectedControllers } }> = []
     class TestSlots extends Service {
       constructor(owner: Context) { super(owner, 'slots') }
       inject(_name: string, mount: () => () => void): void { this.ctx.effect(mount, 'test slot mount') }
-      register(options: { name: string; inject?: () => { controller: { load(): Promise<void> } } }): () => void {
+      register(options: { name: string; inject?: () => InjectedControllers }): () => void {
         const entry = { options }
         entries.push(entry)
         return () => { entries.splice(entries.indexOf(entry), 1) }
       }
     }
     new TestSlots(ctx)
-    let signal: AbortSignal | undefined
-    let finish: (() => void) | undefined
+    provideNovelContextSources(ctx, true)
+    const signals = new Map<string, AbortSignal>()
+    const finishes = new Map<string, () => void>()
     const connection = {
       rpc: {
-        call: vi.fn((_channel, _endpoint, _payload, requestSignal: AbortSignal) => {
-          signal = requestSignal
-          return new Promise(resolve => { finish = () => { resolve({ ok: true, value: { status: 'not-installed' } }) } })
+        call: vi.fn((_channel, endpoint: string, _payload, requestSignal: AbortSignal) => {
+          signals.set(endpoint, requestSignal)
+          return new Promise(resolve => {
+            finishes.set(endpoint, () => {
+              resolve({
+                ok: true,
+                value: endpoint === 'context/read' ? { status: 'not-initialized' } : { status: 'not-installed' },
+              })
+            })
+          })
         }),
       },
       hostDescription: { getSnapshot: () => ({}), subscribe: () => () => {} },
@@ -127,16 +199,16 @@ describe('preset setup browser integration', () => {
     ctx.provide('connection' as never, connection as never)
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
-    const controller = entries[0]!.options.inject!().controller
-    const loading = controller.load()
-    await vi.waitFor(() => { expect(signal).toBeDefined() })
+    const controllers = entries[0]!.options.inject!()
+    const loading = Promise.all([controllers.setupController.load(), controllers.contextController.open()])
+    await vi.waitFor(() => { expect(signals.size).toBe(2) })
 
     let disposed = false
     const disposing = fiber.dispose().then(() => { disposed = true })
-    await vi.waitFor(() => { expect(signal?.aborted).toBe(true) })
+    await vi.waitFor(() => { expect([...signals.values()].every(signal => signal.aborted)).toBe(true) })
     await Promise.resolve()
     expect(disposed).toBe(false)
-    finish?.()
+    for (const finish of finishes.values()) finish()
     await Promise.all([loading, disposing])
     expect(disposed).toBe(true)
   })
@@ -153,8 +225,13 @@ describe('preset setup browser integration', () => {
         'shell.overlay': { kind: 'list', scope: 'root' },
       },
     } as never, () => null)
+    const contextSources = provideNovelContextSources(ctx, true)
+    const call = vi.fn((_channel: string, endpoint: string) => Promise.resolve({
+      ok: true,
+      value: endpoint === 'context/read' ? { status: 'not-initialized' } : { status: 'not-installed' },
+    }))
     const connection = {
-      rpc: { call: vi.fn().mockResolvedValue({ ok: true, value: { status: 'not-installed' } }) },
+      rpc: { call },
       hostDescription: { getSnapshot: () => ({}), subscribe: () => () => {} },
     } as unknown as ConnectionHandle
     ctx.provide('connection' as never, connection as never)
@@ -165,12 +242,37 @@ describe('preset setup browser integration', () => {
     const overlayEntry = slots.entries('shell.overlay')[0]!
     const Trigger = triggerEntry.component as ComponentType<Record<string, unknown>>
     const Overlay = overlayEntry.component as ComponentType<Record<string, unknown>>
-    const injected = triggerEntry.inject!()
+    const injected = triggerEntry.inject!() as {
+      contextController: { whenIdle(): Promise<void> }
+      setupController: unknown
+    }
+    const sessionState = {
+      ids: [SESSION_ID],
+      byId: {
+        'session-1': {
+          id: 'session-1', displayTitle: '第一章', blank: false, running: false, updatedAt: 1,
+        },
+      },
+      current: SESSION_ID, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined,
+    }
+    const workspaceState = {
+      items: [{
+        workspaceId: WORKSPACE_ID, path: 'not-exposed-to-rpc', title: '小说',
+        createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
+        sessionIds: [SESSION_ID],
+      }],
+      archivedSessionIds: [], state: 'idle', phase: 'ready', error: null,
+      baselinesReady: true, recentWorkspaceId: WORKSPACE_ID,
+    }
+    const standard = {
+      useSessions: (selector: (state: typeof sessionState) => unknown) => selector(sessionState),
+      useWorkspaces: (selector: (state: typeof workspaceState) => unknown) => selector(workspaceState),
+    }
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = createRoot(container)
     await act(async () => {
-      root.render(<><Trigger wide {...injected} /><Overlay {...injected} /></>)
+      root.render(<><Trigger wide {...injected} {...standard} /><Overlay {...injected} {...standard} /></>)
     })
     const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
     trigger.focus()
@@ -181,12 +283,23 @@ describe('preset setup browser integration', () => {
 
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!
     const close = container.querySelector<HTMLButtonElement>('[aria-label^="关闭"]')!
-    const install = [...dialog.querySelectorAll('button')].find(button => button.textContent?.startsWith('安装'))!
     expect(document.activeElement).toBe(close)
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
-    expect(document.activeElement).toBe(install)
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
-    expect(document.activeElement).toBe(close)
+    expect(dialog.getAttribute('aria-modal')).toBe('false')
+    expect(call).toHaveBeenCalledWith(
+      '/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }, expect.any(AbortSignal),
+    )
+    await act(async () => {
+      contextSources.conversation.set({
+        nodes: [{ kind: 'tool-result', seq: 1, call: { name: 'novel_apply_change' } }],
+      })
+      await injected.contextController.whenIdle()
+    })
+    expect(call.mock.calls.filter(args => args[1] === 'context/read')).toHaveLength(2)
+    await act(async () => {
+      ctx.emit('connection/reset')
+      await injected.contextController.whenIdle()
+    })
+    expect(call.mock.calls.filter(args => args[1] === 'context/read')).toHaveLength(3)
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
@@ -199,7 +312,7 @@ describe('preset setup browser integration', () => {
     })
     expect(slots.entries('sidebar.footer.action')).toHaveLength(0)
     expect(slots.entries('shell.overlay')).toHaveLength(0)
-    expect(document.querySelector('style[data-plugin-css="@ethanyoq/dsh-ai-novel-writer/preset-setup"]')).toBeNull()
+    expect(document.querySelector('style[data-plugin-css="@ethanyoq/dsh-ai-novel-writer/context-window"]')).toBeNull()
     container.remove()
   })
 
@@ -212,13 +325,13 @@ describe('preset setup browser integration', () => {
       head: { appendChild },
     } as unknown as Document
 
-    const dispose = installPresetSetupStyle(target)
+    const dispose = installNovelContextStyle(target)
 
     expect(style.dataset).toEqual({
       plugin: '@ethanyoq/dsh-ai-novel-writer',
-      pluginCss: '@ethanyoq/dsh-ai-novel-writer/preset-setup',
+      pluginCss: '@ethanyoq/dsh-ai-novel-writer/context-window',
     })
-    expect(style.textContent).toBe(presetSetupCss)
+    expect(style.textContent).toBe(novelContextCss)
     expect(appendChild).toHaveBeenCalledWith(style)
     dispose()
     expect(remove).toHaveBeenCalledOnce()

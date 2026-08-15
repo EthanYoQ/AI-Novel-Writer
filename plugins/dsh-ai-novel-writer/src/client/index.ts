@@ -1,28 +1,42 @@
 /** Browser entry for the bundle. */
 
 import type { ClientConnectionRpc, ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, ISessions, IWorkspaces } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import { parseNovelContextReadResult } from '../context-types.ts'
+import { NovelContextController, NovelContextDisconnectedError, type NovelContextPort } from './context-store.ts'
 import {
   PresetSetupController,
   PresetSetupDisconnectedError,
   type PresetSetupPort,
 } from './setup-store.ts'
-import { PresetSetupOverlay, PresetSetupTrigger } from './setup-view.tsx'
-import { installPresetSetupStyle } from './setup-style.ts'
+import { NovelContextOverlay, NovelContextTrigger } from './context-view.tsx'
+import { observeNovelContextSources, type NovelContextSelectionSources } from './context-observer.ts'
+import { installNovelContextStyle } from './setup-style.ts'
 
-export { PresetSetupBody, PresetSetupOverlay, PresetSetupTrigger } from './setup-view.tsx'
+export { PresetSetupBody } from './setup-view.tsx'
 export type { PresetSetupBodyProps } from './setup-view.tsx'
+export {
+  installDrawerKeyboardScope,
+  NovelContextBody,
+  NovelContextOverlay,
+  NovelContextTrigger,
+} from './context-view.tsx'
+export type { NovelContextBodyProps } from './context-view.tsx'
+export { observeNovelContextSources } from './context-observer.ts'
+export type { NovelContextSelectionSources } from './context-observer.ts'
 export {
   PresetSetupController,
   PresetSetupDisconnectedError,
 } from './setup-store.ts'
 export type { PresetSetupPort, PresetSetupState } from './setup-store.ts'
-export { installPresetSetupStyle, presetSetupCss } from './setup-style.ts'
+export { NovelContextController, NovelContextDisconnectedError } from './context-store.ts'
+export type { NovelContextPort, NovelContextState, NovelContextTarget } from './context-store.ts'
+export { installNovelContextStyle, novelContextCss } from './setup-style.ts'
 
 /** Required browser services. */
-export const inject = ['slots', 'connection']
+export const inject = ['slots', 'connection', 'sessions', 'workspaces']
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -74,6 +88,27 @@ export function createPresetSetupPort(rpc: Pick<ClientConnectionRpc, 'call'>): P
 }
 
 /**
+ * Adapt the generic Connection RPC caller to the path-free context read interface.
+ *
+ * @param rpc Browser connection RPC caller.
+ * @returns A validated context port accepting only opaque Workspace identity and chapter number.
+ */
+export function createNovelContextPort(rpc: Pick<ClientConnectionRpc, 'call'>): NovelContextPort {
+  return {
+    read: async (workspaceId, chapter, signal) => {
+      let result
+      try {
+        result = await rpc.call('/ai-novel', 'context/read', { workspaceId, chapter }, signal)
+      } catch (error) {
+        throw new NovelContextDisconnectedError(error)
+      }
+      if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+      return parseNovelContextReadResult(result.value)
+    },
+  }
+}
+
+/**
  * Register the sidebar setup trigger and shell overlay over one shared controller.
  *
  * @param ctx Browser Cordis context.
@@ -85,30 +120,55 @@ export function apply(ctx: ClientContext): void {
     createPresetSetupPort(connection.rpc),
     error => { ctx.logger.warn(error) },
   )
-  ctx.effect(() => async () => { await controller.dispose() }, 'ai-novel-writer: preset setup lifecycle')
+  const contextController = new NovelContextController(
+    createNovelContextPort(connection.rpc),
+    error => { ctx.logger.warn(error) },
+  )
+  const sessions = ctx.get('sessions' as never) as ISessions | undefined
+  const workspaces = ctx.get('workspaces' as never) as IWorkspaces | undefined
+  if (sessions === undefined || workspaces === undefined) {
+    throw new Error('AI novel context requires the browser Session and Workspace services')
+  }
+  ctx.effect(() => {
+    const stopObserving = observeNovelContextSources({
+      sessions,
+      workspaces,
+    } satisfies NovelContextSelectionSources, contextController)
+    return async () => {
+      stopObserving()
+      await Promise.all([controller.dispose(), contextController.dispose()])
+    }
+  }, 'ai-novel-writer: setup and context lifecycle')
   if (typeof document !== 'undefined') {
-    ctx.effect(() => installPresetSetupStyle(document), 'ai-novel-writer: setup styles')
+    ctx.effect(() => installNovelContextStyle(document), 'ai-novel-writer: context-window styles')
   }
 
   ctx.effect(() => connection.hostDescription.subscribe(() => {
-    if (connection.hostDescription.getSnapshot() === undefined) controller.disconnected()
+    if (connection.hostDescription.getSnapshot() === undefined) {
+      controller.disconnected()
+      contextController.disconnected()
+    }
   }), 'ai-novel-writer: observe Host connection')
   ctx.effect(() => ctx.on('connection/reset', () => {
     if (controller.getSnapshot().status !== 'idle') void controller.load()
-  }), 'ai-novel-writer: refresh preset setup after reconnect')
+    void contextController.refresh()
+  }), 'ai-novel-writer: refresh setup and context after reconnect')
 
-  const setupInjected = (): { readonly controller: PresetSetupController } => ({ controller })
+  const contextInjected = (): {
+    readonly contextController: NovelContextController
+    readonly setupController: PresetSetupController
+  } => ({ contextController, setupController: controller })
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     name: 'sidebar.footer.action',
-    id: 'ai-novel-preset',
+    id: 'ai-novel-context',
     order: 90,
-    label: 'AI 小说作家 Preset',
-    inject: setupInjected,
-  }, PresetSetupTrigger))
+    label: '小说上下文',
+    inject: contextInjected,
+  }, NovelContextTrigger))
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
-    id: 'ai-novel-preset',
+    id: 'ai-novel-context',
     order: 90,
-    inject: setupInjected,
-  }, PresetSetupOverlay))
+    inject: contextInjected,
+  }, NovelContextOverlay))
 }

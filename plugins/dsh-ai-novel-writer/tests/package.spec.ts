@@ -38,6 +38,7 @@ describe('installable AI novel bundle', () => {
     ctx.baseUrl = pathToFileURL(root).href + '/'
     const handle = vi.fn(() => async () => {})
     ctx.provide('connection' as never, { rpc: { handle } } as never)
+    ctx.provide('workspaceRegistry' as never, { get: () => undefined } as never)
     await ctx.plugin(Loader)
     ctx.loader.builtins.include = Include
     try {
