@@ -1,5 +1,6 @@
 import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
+import { resolveOpenAIChatCompletionsUrl } from './openai-compatible-endpoint'
 
 export class OpenAIProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
@@ -15,22 +16,6 @@ export class OpenAIProvider implements ILLMProvider {
       .replace(/^[\s\S]*?<\/think>\s*/i, '')
       .replace(/<\/?think>/gi, '')
       .trim()
-  }
-
-  private buildUrl(baseUrl: string): string {
-    const base = baseUrl.replace(/\/$/, '')
-    if (base.endsWith('/v1/chat/completions')) {
-      return base
-    }
-    // 如果 baseUrl 已经带了完整 /v1/chat 路径，直接用
-    if (base.endsWith('/v1/chat')) {
-      return `${base}/completions`
-    }
-    if (base.endsWith('/v1')) {
-      return `${base}/chat/completions`
-    }
-    // 否则补全完整路径
-    return `${base}/v1/chat/completions`
   }
 
   private buildRequestBody(
@@ -78,7 +63,7 @@ export class OpenAIProvider implements ILLMProvider {
 
   async generate(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMGenerateOptions): Promise<LLMResponse> {
     try {
-      const url = this.buildUrl(model.baseUrl)
+      const url = resolveOpenAIChatCompletionsUrl(model.baseUrl)
       const body = this.buildRequestBody(model, messages, opts, false)
 
       const res = await fetch(url, {
@@ -134,7 +119,7 @@ export class OpenAIProvider implements ILLMProvider {
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
     try {
-      const url = this.buildUrl(model.baseUrl)
+      const url = resolveOpenAIChatCompletionsUrl(model.baseUrl)
       const body = this.buildRequestBody(model, messages, opts, true)
 
       const res = await fetch(url, {

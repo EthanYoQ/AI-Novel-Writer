@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { OpenAIProvider } from '../openai-provider'
+import { resolveOpenAIChatCompletionsUrl } from '../openai-compatible-endpoint'
 import { resolveGenerationParameters } from '../generation-parameter-policy'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 
@@ -46,7 +47,57 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('resolveOpenAIChatCompletionsUrl', () => {
+  it.each([
+    ['domain root', 'https://api.openai.com', 'https://api.openai.com/v1/chat/completions'],
+    ['full endpoint', 'https://gateway.example/api/v4/chat/completions', 'https://gateway.example/api/v4/chat/completions'],
+    ['v1 prefix', 'https://gateway.example/v1', 'https://gateway.example/v1/chat/completions'],
+    ['v3 prefix', 'https://gateway.example/api/plan/v3', 'https://gateway.example/api/plan/v3/chat/completions'],
+    ['v4 prefix', 'https://open.bigmodel.cn/api/paas/v4', 'https://open.bigmodel.cn/api/paas/v4/chat/completions'],
+    ['arbitrary versioned prefix', 'https://gateway.example/tenant/openai/v27', 'https://gateway.example/tenant/openai/v27/chat/completions'],
+    ['trailing slashes', 'https://gateway.example/api/plan/v3///', 'https://gateway.example/api/plan/v3/chat/completions'],
+  ])('resolves the %s without replacing its configured prefix', (_case, baseUrl, expectedUrl) => {
+    expect(resolveOpenAIChatCompletionsUrl(baseUrl)).toBe(expectedUrl)
+  })
+})
+
 describe('OpenAIProvider NovelAI compatibility', () => {
+  it('preserves an explicitly configured versioned endpoint prefix for normal and streaming generation', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => sseReader('data: [DONE]\n') },
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    const model = {
+      ...novelAIModel,
+      provider: 'custom' as const,
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+    }
+
+    await new OpenAIProvider().generate(model, [{ role: 'user', content: '普通正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+    })
+    await new OpenAIProvider().generateStream(model, [{ role: 'user', content: '流式正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    })
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions',
+      'https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions',
+    ])
+  })
+
   it('uses the OpenAI-compatible URL and Bearer token without unsupported JSON response formatting', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
