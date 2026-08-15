@@ -89,7 +89,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       finalPrompt,
       template.systemRole || '你是一位资深的文学评论家和网文研究者。',
       callbacks,
-      undefined,
+      { purpose: 'analyze-writing-style', reasoningStage: 'review' },
       context,
     )
     this.assertNotCancelled(context)

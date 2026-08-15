@@ -277,7 +277,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   protected async callLLMWithBuilder(
     builder: BasePromptBuilder,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; purpose?: string },
+    options?: WorkflowLLMOptions,
     context?: WorkflowContext
   ): Promise<string> {
     return this.callLLM(builder.build(), builder.getSystemRole(), callbacks, options, context)
@@ -286,7 +286,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   protected async callLLMResultWithBuilder(
     builder: BasePromptBuilder,
     callbacks: StepCallbacks,
-    options?: { responseFormat?: { type: string }; purpose?: string },
+    options?: WorkflowLLMOptions,
     context?: WorkflowContext,
   ): Promise<LLMCompletion> {
     return this.callLLMResult(builder.build(), builder.getSystemRole(), callbacks, options, context)

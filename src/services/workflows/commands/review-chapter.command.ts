@@ -86,7 +86,11 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     const reviewResultRaw = await this.callLLMWithBuilder(
       promptBuilder,
       callbacks,
-      { responseFormat: { type: 'json_object' } },
+      {
+        responseFormat: { type: 'json_object' },
+        purpose: 'review-chapter',
+        reasoningStage: 'review',
+      },
       context,
     )
     this.assertNotCancelled(context)

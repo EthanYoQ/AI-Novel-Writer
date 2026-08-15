@@ -421,6 +421,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         async (messages) => {
           const outcome = await session.complete({
             purpose: 'agent',
+            reasoningStage: 'general',
             output: 'visible-text',
             messages: messages.map(message => ({
               role: message.role,

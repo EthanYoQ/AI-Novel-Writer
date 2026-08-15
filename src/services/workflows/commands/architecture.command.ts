@@ -363,7 +363,11 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
       originalTask,
       promptBuilder.getSystemRole(),
       callbacks,
-      { responseFormat: { type: 'json_object' }, purpose: 'generate-global-config' },
+      {
+        responseFormat: { type: 'json_object' },
+        purpose: 'generate-global-config',
+        reasoningStage: 'planning',
+      },
       context,
     )
     let resultRaw: string
@@ -377,7 +381,11 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
           + '【硬性要求】\n从头完成原始任务，只输出一个完整替代 JSON。不要只补后缀，不要解释、Markdown 或思考过程。',
         promptBuilder.getSystemRole(),
         callbacks,
-        { responseFormat: { type: 'json_object' }, purpose: 'generate-global-config-replacement' },
+        {
+          responseFormat: { type: 'json_object' },
+          purpose: 'generate-global-config-replacement',
+          reasoningStage: 'planning',
+        },
         context,
       )
       if (replacement.finishReason !== 'stop') {
@@ -462,7 +470,12 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
       .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).premise || '')
       .withReferenceWorks(config.referenceWorks || '')
 
-    const result = await this.callLLMWithBuilder(promptBuilder, callbacks, undefined, context)
+    const result = await this.callLLMWithBuilder(
+      promptBuilder,
+      callbacks,
+      { purpose: 'generate-core-seed', reasoningStage: 'planning' },
+      context,
+    )
     if (!result.trim()) throw new Error('故事前提生成失败，AI 返回空内容')
     if (context.cancelled) throw new Error('工作流已取消')
 
@@ -563,6 +576,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       {
         responseFormat: { type: 'json_object' },
         purpose: 'character-architecture-manifest',
+        reasoningStage: 'planning',
       },
       context,
     )
@@ -752,7 +766,12 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       .withGlobalGuidance(config.globalGuidance || '（未填写）')
       .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).worldbuilding || '')
 
-    const result = await this.callLLMWithBuilder(promptBuilder, callbacks, undefined, context)
+    const result = await this.callLLMWithBuilder(
+      promptBuilder,
+      callbacks,
+      { purpose: 'generate-world-building', reasoningStage: 'planning' },
+      context,
+    )
     if (context.cancelled) throw new Error('工作流已取消')
 
     this.assertNotCancelled(context)
@@ -819,7 +838,12 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       .withGlobalGuidance(config.globalGuidance || '（未填写）')
       .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).synopsis || '')
 
-    const result = await this.callLLMWithBuilder(promptBuilder, callbacks, undefined, context)
+    const result = await this.callLLMWithBuilder(
+      promptBuilder,
+      callbacks,
+      { purpose: 'generate-plot-architecture', reasoningStage: 'planning' },
+      context,
+    )
     if (context.cancelled) throw new Error('工作流已取消')
 
     this.assertNotCancelled(context)

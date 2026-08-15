@@ -58,6 +58,7 @@ describe('reasoning policy', () => {
     }
 
     expect(new Set(Object.values(profiles).map(profile => profile.join('|'))).size).toBe(4)
+    expect(profiles.auto).toEqual(['low', 'medium', 'high', 'low'])
     expect(profiles.deep).toEqual(['low', 'max', 'high', 'medium'])
     expect(profiles.consistency).not.toEqual(profiles.deep)
   })
