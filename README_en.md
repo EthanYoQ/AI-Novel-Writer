@@ -28,6 +28,16 @@
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
+> ## v0.8.4 generation reliability and creative strategy
+>
+> [v0.8.4](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.4) fixes three critical reliability boundaries in the writing flow:
+>
+> - **#92 streaming draft preview** — Accepted prose becomes visible before chapter generation finishes; split thinking markers, cancellation, failure, rejected trimming, and late terminal events cannot pollute the draft.
+> - **#99 OpenAI-compatible endpoints** — User-provided endpoint path prefixes are preserved, and normal plus streaming requests share one resolution rule instead of forcing `/v1` onto a path-bearing address.
+> - **#101 creative strategy and reasoning override** — Creative strategy belongs to the novel project and model override belongs to the model profile; the UI shows requested-to-effective reasoning mapping. Unknown custom endpoints do not guess or send provider-private reasoning fields, and raw reasoning is not chapter prose or long-term novel memory.
+>
+> One Release uses the exact five-asset contract: `ai-novel-writer-setup-0.8.4.exe`, `ai-novel-writer-setup-0.8.4.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.4-installer.dmg`, and `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`.
+
 > ## v0.8.3 paper-ink theme update
 >
 > [v0.8.3](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.3) completes the paper-ink theme hardening: theme migration preserves an explicitly selected dark theme and only maps the historical `night` value deterministically to `dark`; informational text meets WCAG AA accessibility contrast on its real theme surfaces; and visual QA compares all four themes with the same project, route, panels, and viewport.

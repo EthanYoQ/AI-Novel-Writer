@@ -28,6 +28,16 @@
   <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
 </p>
 
+> ## v0.8.4 生成可靠性与创作策略
+>
+> [v0.8.4](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.4) 修复了写作流程中的三项关键可靠性边界：
+>
+> - **#92 流式草稿预览**：章节写作在生成尚未结束时即可显示已接受的正文预览；跨分片思考标记、取消、失败、裁剪拒绝和终态后的迟到事件不会污染草稿。
+> - **#99 OpenAI-compatible 端点**：保留用户填写的端点路径前缀，普通与流式请求使用同一解析规则，不再对带路径地址硬插 `/v1`。
+> - **#101 创作策略与推理覆盖**：创作策略属于小说项目，模型覆盖属于模型配置；界面显示请求偏好到实际生效值的映射。未知自定义端点不会猜测或发送供应商私有推理字段，原始推理不会成为章节正文或长期小说记忆。
+>
+> 同一个 Release 使用五项资产合同：`ai-novel-writer-setup-0.8.4.exe`、`ai-novel-writer-setup-0.8.4.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.4-installer.dmg` 与 `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`。
+
 > ## v0.8.3 纸墨主题更新
 >
 > [v0.8.3](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.3) 完成纸墨主题的系统性收尾：主题迁移会保留用户明确选择的暗色主题，仅将历史 `night` 值确定性迁移为 `dark`；信息文字按实际主题表面满足 WCAG AA 可访问性要求；视觉验收使用相同项目、路由、面板与视口的四主题截图进行比较。

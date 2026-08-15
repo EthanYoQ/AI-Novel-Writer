@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-describe('v0.8.3 release metadata', () => {
+describe('v0.8.4 release metadata', () => {
   it('uses the release version in package metadata', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }
-    expect(pkg.version).toBe('0.8.3')
+    expect(pkg.version).toBe('0.8.4')
   })
 
   it('resolves the release tag and exact five-asset contract from the package version', () => {
@@ -13,32 +13,36 @@ describe('v0.8.3 release metadata', () => {
       releaseAssets: Array<{ name: string }>
     }
 
-    expect(`v${pkg.version}`).toBe('v0.8.3')
+    expect(`v${pkg.version}`).toBe('v0.8.4')
     expect(profile.releaseAssets.map(({ name }) => name.replaceAll('{version}', pkg.version))).toEqual([
-      'ai-novel-writer-setup-0.8.3.exe',
-      'ai-novel-writer-setup-0.8.3.exe.blockmap',
+      'ai-novel-writer-setup-0.8.4.exe',
+      'ai-novel-writer-setup-0.8.4.exe.blockmap',
       'latest.yml',
-      'ai-novel-writer-mac-arm64-0.8.3-installer.dmg',
-      'ai-novel-writer-mac-arm64-0.8.3-installer.dmg.sha256',
+      'ai-novel-writer-mac-arm64-0.8.4-installer.dmg',
+      'ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256',
     ])
   })
 
-  it('documents the bilingual v0.8.3 paper-ink release and keeps v0.8.2 history', () => {
+  it('documents the bilingual v0.8.4 reliability release and keeps v0.8.3 history', () => {
     const chineseReadme = readFileSync('README.md', 'utf8')
     const englishReadme = readFileSync('README_en.md', 'utf8')
 
+    expect(chineseReadme).toContain('v0.8.4')
+    expect(chineseReadme).toContain('#92')
+    expect(chineseReadme).toContain('#99')
+    expect(chineseReadme).toContain('#101')
+    expect(chineseReadme).toContain('流式')
+    expect(chineseReadme).toContain('推理')
     expect(chineseReadme).toContain('v0.8.3')
-    expect(chineseReadme).toContain('纸墨主题')
-    expect(chineseReadme).toContain('主题迁移')
-    expect(chineseReadme).toContain('可访问性')
-    expect(chineseReadme).toContain('视觉验收')
     expect(chineseReadme).toContain('v0.8.2')
 
+    expect(englishReadme).toContain('v0.8.4')
+    expect(englishReadme).toContain('#92')
+    expect(englishReadme).toContain('#99')
+    expect(englishReadme).toContain('#101')
+    expect(englishReadme).toContain('streaming')
+    expect(englishReadme).toContain('reasoning')
     expect(englishReadme).toContain('v0.8.3')
-    expect(englishReadme).toContain('paper-ink theme')
-    expect(englishReadme).toContain('theme migration')
-    expect(englishReadme).toContain('accessibility')
-    expect(englishReadme).toContain('visual QA')
     expect(englishReadme).toContain('v0.8.2')
   })
 
