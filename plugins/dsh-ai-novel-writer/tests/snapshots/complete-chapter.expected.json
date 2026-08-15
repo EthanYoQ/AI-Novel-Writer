@@ -1,0 +1,910 @@
+{
+  "loaderProcess": {
+    "preapproval": "manifest absent",
+    "firstHeader": {
+      "config": {
+        "provider": "novel-snapshot",
+        "model": "keyless"
+      },
+      "system": "You are an AI agent powered by DeepSeek Harness.\n\nYou are AI 小说作家, a collaborative fiction-writing agent working in <workspace>.\n\nTreat the Harness novel project as the only writable story source. Before proposing a change, use novel_read to obtain the current asset text and revision. When initializing a project, generate one UUID and one ISO-8601 timestamp, use that timestamp for both createdAt and updatedAt, and include all three values in the proposal so the approval diff is exact. Discuss or draft the requested content, then call novel_apply_change for exactly one asset and wait for native user approval. Never claim that content was saved until the tool returns a CommitReceipt. If the revision is stale, read again and reconcile the user's intent instead of overwriting.\n\nAfter reading project settings, apply its creative strategy only to novel-writing workflow: auto：balance planning, drafting, and consistency checks for the current request; fluent-drafting：prefer continuous prose drafting with only the minimum plan needed; consistency-first：check established facts, character motives, and continuity before drafting; deep-planning：develop structure, causality, and chapter beats before prose. These choices change planning order and writing emphasis only; they never select an LLM provider or reasoning parameter.",
+      "tools": [
+        {
+          "name": "novel_apply_change",
+          "description": "Propose one revision-checked novel asset change. The user must approve it before execution.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "request": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "initialize"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "language": {
+                        "type": "string"
+                      },
+                      "genre": {
+                        "type": "string"
+                      },
+                      "plannedChapters": {
+                        "type": "integer"
+                      },
+                      "targetWordsPerChapter": {
+                        "type": "integer"
+                      },
+                      "creativeStrategy": {
+                        "type": "string",
+                        "enum": [
+                          "auto",
+                          "fluent-drafting",
+                          "consistency-first",
+                          "deep-planning"
+                        ]
+                      },
+                      "createdAt": {
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "projectId",
+                      "title",
+                      "language",
+                      "genre",
+                      "plannedChapters",
+                      "targetWordsPerChapter",
+                      "creativeStrategy",
+                      "createdAt",
+                      "updatedAt"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "replace"
+                      },
+                      "target": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "project"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "characters"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "story-blueprint"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "chapter-blueprint"
+                              },
+                              "chapter": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "chapter"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "chapter-draft"
+                              },
+                              "chapter": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "chapter"
+                            ]
+                          }
+                        ]
+                      },
+                      "baseRevision": {
+                        "type": "string"
+                      },
+                      "baseText": {
+                        "type": "string"
+                      },
+                      "replacement": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "target",
+                      "baseRevision",
+                      "baseText",
+                      "replacement",
+                      "summary"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "request"
+            ]
+          }
+        },
+        {
+          "name": "novel_read",
+          "description": "Read a bounded, revisioned projection of the current Harness novel project.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "request": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "asset"
+                      },
+                      "target": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "project"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "characters"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "story-blueprint"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "chapter-blueprint"
+                              },
+                              "chapter": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "chapter"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "chapter-draft"
+                              },
+                              "chapter": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "chapter"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "target"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "working-set"
+                      },
+                      "chapter": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "query"
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "text"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "request"
+            ]
+          }
+        }
+      ]
+    },
+    "restartHeader": "same-as-first"
+  },
+  "firstSession": [
+    {
+      "type": "user/message",
+      "source": {
+        "kind": "user"
+      },
+      "text": "创建一部一致性优先的小说，并完成第一章。"
+    },
+    {
+      "type": "user/message",
+      "source": {
+        "kind": "plugin",
+        "plugin": "@deepseek-ai/dsh-system-prompt",
+        "form": "snapshot",
+        "sections": [
+          {
+            "name": "approval:policy",
+            "text": "Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed."
+          }
+        ]
+      },
+      "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nApproval policy: ask. Operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed."
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-init",
+      "name": "novel_apply_change",
+      "request": {
+        "kind": "initialize",
+        "projectId": "123e4567-e89b-42d3-a456-426614174000",
+        "createdAt": "2026-08-16T00:00:00.000Z",
+        "updatedAt": "2026-08-16T00:00:00.000Z",
+        "title": "潮汐来信",
+        "language": "zh-CN",
+        "genre": "奇幻悬疑",
+        "plannedChapters": 6,
+        "targetWordsPerChapter": 2000,
+        "creativeStrategy": "consistency-first"
+      }
+    },
+    {
+      "type": "approval/asked",
+      "toolName": "novel_apply_change",
+      "callId": "chapter-01-init",
+      "reason": "批准后仅修改这一个小说资产。"
+    },
+    {
+      "type": "approval/decided",
+      "outcome": "allowed-once"
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-init",
+      "value": {
+        "projectId": "123e4567-e89b-42d3-a456-426614174000",
+        "target": {
+          "kind": "project"
+        },
+        "oldRevision": "absent",
+        "newRevision": "dd798e6c379f7987937cd1f46edde2f1fcd34071ad8fb0c0d80b6e073f1bffce",
+        "bytes": 378
+      }
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-read-characters",
+      "name": "novel_read",
+      "request": {
+        "kind": "asset",
+        "target": {
+          "kind": "characters"
+        }
+      }
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-read-characters",
+      "value": {
+        "kind": "asset",
+        "target": {
+          "kind": "characters"
+        },
+        "source": ".ai-novel/characters.json",
+        "revision": "absent",
+        "bytes": 0,
+        "truncated": false,
+        "omitted": false
+      }
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-write-characters",
+      "name": "novel_apply_change",
+      "request": {
+        "kind": "replace",
+        "target": {
+          "kind": "characters"
+        },
+        "baseRevision": "absent",
+        "baseText": "",
+        "replacement": "{\"characters\":[{\"id\":\"lin-xia\",\"name\":\"林夏\",\"role\":\"灯塔守望人\",\"summary\":\"能听见潮汐中的旧日回声。\",\"goal\":\"找回失踪的弟弟。\",\"relationships\":[],\"notes\":\"害怕深水，却从不离开灯塔。\"}]}",
+        "summary": "建立主要人物"
+      }
+    },
+    {
+      "type": "approval/asked",
+      "toolName": "novel_apply_change",
+      "callId": "chapter-01-write-characters",
+      "reason": "批准后仅修改这一个小说资产。"
+    },
+    {
+      "type": "approval/decided",
+      "outcome": "allowed-once"
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-write-characters",
+      "value": {
+        "projectId": "123e4567-e89b-42d3-a456-426614174000",
+        "target": {
+          "kind": "characters"
+        },
+        "oldRevision": "absent",
+        "newRevision": "2edca42b09163bf9aa969f42e5326999602e3fe9af7d9aa57f7be74cd0fb3d9b",
+        "bytes": 301
+      }
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-read-story",
+      "name": "novel_read",
+      "request": {
+        "kind": "asset",
+        "target": {
+          "kind": "story-blueprint"
+        }
+      }
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-read-story",
+      "value": {
+        "kind": "asset",
+        "target": {
+          "kind": "story-blueprint"
+        },
+        "source": ".ai-novel/blueprints/story.json",
+        "revision": "absent",
+        "bytes": 0,
+        "truncated": false,
+        "omitted": false
+      }
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-write-story",
+      "name": "novel_apply_change",
+      "request": {
+        "kind": "replace",
+        "target": {
+          "kind": "story-blueprint"
+        },
+        "baseRevision": "absent",
+        "baseText": "",
+        "replacement": "{\"premise\":\"退潮后的海床会浮现来自未来的信件。\",\"themes\":[\"记忆\",\"选择\"],\"world\":\"被永夜潮汐包围的群岛。\",\"mainPlot\":\"林夏循着未来信件寻找失踪者。\",\"endingGoal\":\"林夏决定保留真实记忆并点亮全部灯塔。\"}",
+        "summary": "建立故事蓝图"
+      }
+    },
+    {
+      "type": "approval/asked",
+      "toolName": "novel_apply_change",
+      "callId": "chapter-01-write-story",
+      "reason": "批准后仅修改这一个小说资产。"
+    },
+    {
+      "type": "approval/decided",
+      "outcome": "allowed-once"
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-write-story",
+      "value": {
+        "projectId": "123e4567-e89b-42d3-a456-426614174000",
+        "target": {
+          "kind": "story-blueprint"
+        },
+        "oldRevision": "absent",
+        "newRevision": "8b670fba14a857e39ca8cbf9df9386b4dc9919785205303a7fb5562e95e6d7b0",
+        "bytes": 299
+      }
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-read-blueprint",
+      "name": "novel_read",
+      "request": {
+        "kind": "asset",
+        "target": {
+          "kind": "chapter-blueprint",
+          "chapter": 1
+        }
+      }
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-read-blueprint",
+      "value": {
+        "kind": "asset",
+        "target": {
+          "kind": "chapter-blueprint",
+          "chapter": 1
+        },
+        "source": ".ai-novel/blueprints/chapters/0001.json",
+        "revision": "absent",
+        "bytes": 0,
+        "truncated": false,
+        "omitted": false
+      }
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-write-blueprint",
+      "name": "novel_apply_change",
+      "request": {
+        "kind": "replace",
+        "target": {
+          "kind": "chapter-blueprint",
+          "chapter": 1
+        },
+        "baseRevision": "absent",
+        "baseText": "",
+        "replacement": "{\"chapter\":1,\"title\":\"退潮来信\",\"purpose\":\"让林夏收到第一封未来信件。\",\"beats\":[\"夜潮退去\",\"海床显出信匣\",\"信上写着弟弟明日的求救\"],\"characterIds\":[\"lin-xia\"],\"continuityNotes\":[\"灯塔主灯在午夜熄灭\"],\"status\":\"planned\"}",
+        "summary": "建立第一章蓝图"
+      }
+    },
+    {
+      "type": "approval/asked",
+      "toolName": "novel_apply_change",
+      "callId": "chapter-01-write-blueprint",
+      "reason": "批准后仅修改这一个小说资产。"
+    },
+    {
+      "type": "approval/decided",
+      "outcome": "allowed-once"
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-write-blueprint",
+      "value": {
+        "projectId": "123e4567-e89b-42d3-a456-426614174000",
+        "target": {
+          "kind": "chapter-blueprint",
+          "chapter": 1
+        },
+        "oldRevision": "absent",
+        "newRevision": "66307496193de6e99a38cbe1de911b045485bdbda139c1c701d01cc50e3b5cf2",
+        "bytes": 330
+      }
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-read-working-set",
+      "name": "novel_read",
+      "request": {
+        "kind": "working-set",
+        "chapter": 1
+      }
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-read-working-set",
+      "value": {
+        "kind": "working-set",
+        "assets": [
+          {
+            "target": {
+              "kind": "project"
+            },
+            "source": ".ai-novel/project.json",
+            "revision": "dd798e6c379f7987937cd1f46edde2f1fcd34071ad8fb0c0d80b6e073f1bffce",
+            "bytes": 378,
+            "truncated": false,
+            "omitted": false,
+            "creativeStrategy": "consistency-first"
+          },
+          {
+            "target": {
+              "kind": "characters"
+            },
+            "source": ".ai-novel/characters.json",
+            "revision": "2edca42b09163bf9aa969f42e5326999602e3fe9af7d9aa57f7be74cd0fb3d9b",
+            "bytes": 301,
+            "truncated": false,
+            "omitted": false
+          },
+          {
+            "target": {
+              "kind": "story-blueprint"
+            },
+            "source": ".ai-novel/blueprints/story.json",
+            "revision": "8b670fba14a857e39ca8cbf9df9386b4dc9919785205303a7fb5562e95e6d7b0",
+            "bytes": 299,
+            "truncated": false,
+            "omitted": false
+          },
+          {
+            "target": {
+              "kind": "chapter-blueprint",
+              "chapter": 1
+            },
+            "source": ".ai-novel/blueprints/chapters/0001.json",
+            "revision": "66307496193de6e99a38cbe1de911b045485bdbda139c1c701d01cc50e3b5cf2",
+            "bytes": 330,
+            "truncated": false,
+            "omitted": false
+          },
+          {
+            "target": {
+              "kind": "chapter-draft",
+              "chapter": 1
+            },
+            "source": "chapters/0001.md",
+            "revision": "absent",
+            "bytes": 0,
+            "truncated": false,
+            "omitted": false,
+            "text": ""
+          }
+        ],
+        "bytes": 1308,
+        "truncated": false,
+        "omittedSources": []
+      }
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-write-draft",
+      "name": "novel_apply_change",
+      "request": {
+        "kind": "replace",
+        "target": {
+          "kind": "chapter-draft",
+          "chapter": 1
+        },
+        "baseRevision": "absent",
+        "baseText": "",
+        "replacement": "# 退潮来信\n\n午夜，灯塔的主灯第一次熄灭。\n\n林夏在退去的潮水里捡到一封尚未寄出的信。\n",
+        "summary": "起草第一章"
+      }
+    },
+    {
+      "type": "approval/asked",
+      "toolName": "novel_apply_change",
+      "callId": "chapter-01-write-draft",
+      "reason": "批准后仅修改这一个小说资产。"
+    },
+    {
+      "type": "approval/decided",
+      "outcome": "allowed-once"
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-write-draft",
+      "value": {
+        "projectId": "123e4567-e89b-42d3-a456-426614174000",
+        "target": {
+          "kind": "chapter-draft",
+          "chapter": 1
+        },
+        "oldRevision": "absent",
+        "newRevision": "cef052b7c9e9a39504af74783fda9b2e41179a875ad3beb52c11d05e7573d7b2",
+        "bytes": 121
+      }
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-readback",
+      "name": "novel_read",
+      "request": {
+        "kind": "working-set",
+        "chapter": 1
+      }
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-readback",
+      "value": {
+        "kind": "working-set",
+        "assets": [
+          {
+            "target": {
+              "kind": "project"
+            },
+            "source": ".ai-novel/project.json",
+            "revision": "dd798e6c379f7987937cd1f46edde2f1fcd34071ad8fb0c0d80b6e073f1bffce",
+            "bytes": 378,
+            "truncated": false,
+            "omitted": false,
+            "creativeStrategy": "consistency-first"
+          },
+          {
+            "target": {
+              "kind": "characters"
+            },
+            "source": ".ai-novel/characters.json",
+            "revision": "2edca42b09163bf9aa969f42e5326999602e3fe9af7d9aa57f7be74cd0fb3d9b",
+            "bytes": 301,
+            "truncated": false,
+            "omitted": false
+          },
+          {
+            "target": {
+              "kind": "story-blueprint"
+            },
+            "source": ".ai-novel/blueprints/story.json",
+            "revision": "8b670fba14a857e39ca8cbf9df9386b4dc9919785205303a7fb5562e95e6d7b0",
+            "bytes": 299,
+            "truncated": false,
+            "omitted": false
+          },
+          {
+            "target": {
+              "kind": "chapter-blueprint",
+              "chapter": 1
+            },
+            "source": ".ai-novel/blueprints/chapters/0001.json",
+            "revision": "66307496193de6e99a38cbe1de911b045485bdbda139c1c701d01cc50e3b5cf2",
+            "bytes": 330,
+            "truncated": false,
+            "omitted": false
+          },
+          {
+            "target": {
+              "kind": "chapter-draft",
+              "chapter": 1
+            },
+            "source": "chapters/0001.md",
+            "revision": "cef052b7c9e9a39504af74783fda9b2e41179a875ad3beb52c11d05e7573d7b2",
+            "bytes": 121,
+            "truncated": false,
+            "omitted": false,
+            "text": "# 退潮来信\n\n午夜，灯塔的主灯第一次熄灭。\n\n林夏在退去的潮水里捡到一封尚未寄出的信。\n"
+          }
+        ],
+        "bytes": 1429,
+        "truncated": false,
+        "omittedSources": []
+      }
+    },
+    {
+      "type": "assistant/message",
+      "text": "第一章已在收到 CommitReceipt 后保存，并已回读确认。"
+    },
+    {
+      "type": "turn/end",
+      "reason": {
+        "kind": "completed"
+      }
+    }
+  ],
+  "restartSession": [
+    {
+      "type": "user/message",
+      "source": {
+        "kind": "user"
+      },
+      "text": "重启后读取第一章与项目策略。"
+    },
+    {
+      "type": "user/message",
+      "source": {
+        "kind": "plugin",
+        "plugin": "@deepseek-ai/dsh-system-prompt",
+        "form": "snapshot",
+        "sections": [
+          {
+            "name": "approval:policy",
+            "text": "Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed."
+          }
+        ]
+      },
+      "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nApproval policy: ask. Operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed."
+    },
+    {
+      "type": "tool/call",
+      "callId": "chapter-01-restart-read",
+      "name": "novel_read",
+      "request": {
+        "kind": "working-set",
+        "chapter": 1
+      }
+    },
+    {
+      "type": "tool/result",
+      "callId": "chapter-01-restart-read",
+      "value": {
+        "kind": "working-set",
+        "assets": [
+          {
+            "target": {
+              "kind": "project"
+            },
+            "source": ".ai-novel/project.json",
+            "revision": "dd798e6c379f7987937cd1f46edde2f1fcd34071ad8fb0c0d80b6e073f1bffce",
+            "bytes": 378,
+            "truncated": false,
+            "omitted": false,
+            "creativeStrategy": "consistency-first"
+          },
+          {
+            "target": {
+              "kind": "characters"
+            },
+            "source": ".ai-novel/characters.json",
+            "revision": "2edca42b09163bf9aa969f42e5326999602e3fe9af7d9aa57f7be74cd0fb3d9b",
+            "bytes": 301,
+            "truncated": false,
+            "omitted": false
+          },
+          {
+            "target": {
+              "kind": "story-blueprint"
+            },
+            "source": ".ai-novel/blueprints/story.json",
+            "revision": "8b670fba14a857e39ca8cbf9df9386b4dc9919785205303a7fb5562e95e6d7b0",
+            "bytes": 299,
+            "truncated": false,
+            "omitted": false
+          },
+          {
+            "target": {
+              "kind": "chapter-blueprint",
+              "chapter": 1
+            },
+            "source": ".ai-novel/blueprints/chapters/0001.json",
+            "revision": "66307496193de6e99a38cbe1de911b045485bdbda139c1c701d01cc50e3b5cf2",
+            "bytes": 330,
+            "truncated": false,
+            "omitted": false
+          },
+          {
+            "target": {
+              "kind": "chapter-draft",
+              "chapter": 1
+            },
+            "source": "chapters/0001.md",
+            "revision": "cef052b7c9e9a39504af74783fda9b2e41179a875ad3beb52c11d05e7573d7b2",
+            "bytes": 121,
+            "truncated": false,
+            "omitted": false,
+            "text": "# 退潮来信\n\n午夜，灯塔的主灯第一次熄灭。\n\n林夏在退去的潮水里捡到一封尚未寄出的信。\n"
+          }
+        ],
+        "bytes": 1429,
+        "truncated": false,
+        "omittedSources": []
+      }
+    },
+    {
+      "type": "assistant/message",
+      "text": "重启后已读取相同的创作策略与第一章正文。"
+    },
+    {
+      "type": "turn/end",
+      "reason": {
+        "kind": "completed"
+      }
+    }
+  ],
+  "restartReadback": {
+    "matchesFirstReadback": true,
+    "creativeStrategy": "consistency-first",
+    "chapterDraft": "# 退潮来信\n\n午夜，灯塔的主灯第一次熄灭。\n\n林夏在退去的潮水里捡到一封尚未寄出的信。\n"
+  }
+}

@@ -75,7 +75,11 @@ describe('installable AI novel bundle', () => {
     expect(preset?.broken).toBeUndefined()
     expect(preset?.path).toBe(join(presetRoot, 'agent.cordis.yml'))
 
-    const rows = await yamlList(join(presetRoot, 'agent.cordis.yml')) as Array<{ id?: string; name?: string }>
+    const rows = await yamlList(join(presetRoot, 'agent.cordis.yml')) as Array<{
+      id?: string
+      name?: string
+      config?: { text?: string }
+    }>
     expect(rows.map(row => [row.id, row.name])).toEqual([
       ['persona', '@deepseek-ai/dsh-persona'],
       ['agent-instructions', '@deepseek-ai/dsh-agent-instructions'],
@@ -84,6 +88,15 @@ describe('installable AI novel bundle', () => {
     const metadata = yaml.load(await readFile(join(presetRoot, 'preset.yml'), 'utf8'))
     expect(metadata).toMatchObject({ name: 'AI 小说作家' })
     expect(JSON.stringify(rows)).not.toMatch(/bash|shell|tool-fs|str-replace|code-mode/i)
+    const persona = rows.find(row => row.id === 'persona')?.config?.text ?? ''
+    expect(persona).toContain('auto：')
+    expect(persona).toContain('fluent-drafting：')
+    expect(persona).toContain('consistency-first：')
+    expect(persona).toContain('deep-planning：')
+    expect(persona).not.toMatch(/reasoningEffort|reasoning[_ -]?effort/i)
+    const readme = await readFile(join(root, 'README.md'), 'utf8')
+    const documentedPersona = /##### Stable novel persona\r?\n\r?\n```markdown\r?\n([\s\S]*?)\r?\n```/.exec(readme)?.[1]
+    expect(documentedPersona?.replaceAll('\r\n', '\n')).toBe(persona)
     await ctx.fiber.dispose()
   })
 })
