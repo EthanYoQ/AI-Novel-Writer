@@ -3,7 +3,11 @@
  * 所有 IPC 调用都通过此文件定义频道名和参数/返回值类型
  */
 import type { Locale } from '../i18n/types'
-import type { CreativeStrategy, ReasoningOverride } from './reasoning-types'
+import type {
+  CreativeStrategy,
+  GenerationReasoningStage,
+  ReasoningOverride,
+} from './reasoning-types'
 import type { EmbeddingOptions } from './embedding-options'
 import type { ModelCapabilities } from './provider-presets'
 import type { ModelProviderResourceId } from './model-provider-resources'
@@ -439,6 +443,8 @@ export interface LLMRequest {
   purpose?: string
   /** Project-scoped product intent captured by the renderer for this request. */
   creativeStrategy?: CreativeStrategy
+  /** Controlled semantic stage; never inferred from the diagnostic purpose label. */
+  reasoningStage?: GenerationReasoningStage
   /** Frozen project lease. Missing/stale leases are never written to project statistics. */
   projectSession?: ProjectSessionContext
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>

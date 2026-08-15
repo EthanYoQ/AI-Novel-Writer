@@ -11,6 +11,7 @@ import type {
   GenerationAttemptReceipt,
   GenerationSession,
 } from '../../generation/generation-harness'
+import type { GenerationReasoningStage } from '../../../shared/reasoning-types'
 import {
   completeBoundedCompletion,
   createBoundedCompletionError,
@@ -33,6 +34,7 @@ export interface LLMCompletion {
 type WorkflowLLMOptions = {
   responseFormat?: { type: string }
   purpose?: string
+  reasoningStage?: GenerationReasoningStage
 }
 
 export type WorkflowGenerationIntent = 'structured' | 'text' | 'character-architecture'
@@ -235,6 +237,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     try {
       const outcome = await execution.session.complete({
         purpose: options?.purpose ?? 'workflow',
+        reasoningStage: options?.reasoningStage,
         output: options?.responseFormat ? 'structured-data' : 'visible-text',
         messages: [
           { role: 'system', content: systemPrompt },

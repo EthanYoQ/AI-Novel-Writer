@@ -15,11 +15,6 @@ import { useProjectStore } from '../../stores/project-store'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 
-function effortLabel(value: ReasoningEffort | EffectiveReasoningEffort | null): string {
-  if (value === null) return '—'
-  return value === 'max' ? 'Max' : value.charAt(0).toUpperCase() + value.slice(1)
-}
-
 export default function ReasoningPolicySettings({
   model,
   onModelChange,
@@ -33,6 +28,16 @@ export default function ReasoningPolicySettings({
   const saveProject = useProjectStore(state => state.saveProject)
   const [projectSaveState, setProjectSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const creativeStrategy = currentProject?.novelConfig.creativeStrategy ?? 'auto'
+  const effortLabel = (value: ReasoningEffort | EffectiveReasoningEffort | null): string => {
+    if (value === null) return '—'
+    return {
+      off: text('关闭', 'Off'),
+      low: text('低', 'Low'),
+      medium: text('中', 'Medium'),
+      high: text('高', 'High'),
+      max: text('最高', 'Max'),
+    }[value]
+  }
 
   const updateCreativeStrategy = async (value: CreativeStrategy) => {
     const session = projectSessionContextFromProject(currentProject)
@@ -46,17 +51,17 @@ export default function ReasoningPolicySettings({
   const drafting = resolveReasoningPolicy({
     model,
     creativeStrategy,
-    purpose: 'chapter-draft',
+    stage: 'drafting',
   })
   const planning = resolveReasoningPolicy({
     model,
     creativeStrategy,
-    purpose: 'chapter-blueprint',
+    stage: 'planning',
   })
   const review = resolveReasoningPolicy({
     model,
     creativeStrategy,
-    purpose: 'review-chapter',
+    stage: 'review',
   })
 
   const statusLabel = (status: ReasoningResolutionStatus) => ({
@@ -116,11 +121,11 @@ export default function ReasoningPolicySettings({
           aria-label={text('模型推理覆盖（高级）', 'Model reasoning override (advanced)')}
         >
           <option value="auto">{text('自动（遵循项目与阶段）', 'Auto (project and stage)')}</option>
-          <option value="off">Off</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-          <option value="max">Max</option>
+          <option value="off">{text('关闭', 'Off')}</option>
+          <option value="low">{text('低', 'Low')}</option>
+          <option value="medium">{text('中', 'Medium')}</option>
+          <option value="high">{text('高', 'High')}</option>
+          <option value="max">{text('最高', 'Max')}</option>
         </NativeSelect>
         <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
           {text(

@@ -331,6 +331,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         {
           ...(output === 'structured-data' ? { responseFormat: { type: 'json_object' } } : {}),
           purpose: 'post-process',
+          reasoningStage: 'review',
         },
         generationContext,
       ),

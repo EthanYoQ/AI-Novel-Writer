@@ -181,7 +181,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     const resolved = resolveGenerationParameters(xaiModel, {
       maxTokens: 512,
       creativeStrategy: 'fluent-drafting',
-      purpose: 'chapter-draft',
+      reasoningStage: 'drafting',
     })
     await new OpenAIProvider().generate(xaiModel, [{ role: 'user', content: '返回正文' }], resolved)
     await new OpenAIProvider().generateStream(xaiModel, [{ role: 'user', content: '返回正文' }], {

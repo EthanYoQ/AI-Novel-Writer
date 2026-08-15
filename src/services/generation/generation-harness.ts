@@ -4,6 +4,7 @@ import type {
   ModelProfile,
   TokenUsage,
 } from '../../shared/ipc-channels'
+import type { CreativeStrategy, GenerationReasoningStage } from '../../shared/reasoning-types'
 
 export type GenerationOutput = 'visible-text' | 'structured-data'
 
@@ -15,6 +16,8 @@ export interface GenerationMessage {
 /** A semantic generation contract. Physical provider parameters are deliberately absent. */
 export interface GenerationTask {
   purpose: string
+  /** Explicit product semantics; omitted stages derive only from output shape. */
+  reasoningStage?: GenerationReasoningStage
   output: GenerationOutput
   messages: readonly GenerationMessage[]
   /** Physical request controls belong exclusively to this module's plan. */
@@ -97,6 +100,8 @@ export interface PhysicalGenerationRequest {
   /** The only model authorization crossing the completion seam. */
   modelExecutionLeaseId: string | null
   purpose: string
+  creativeStrategy: CreativeStrategy
+  reasoningStage: GenerationReasoningStage
   messages: readonly GenerationMessage[]
   plan: Readonly<PhysicalGenerationPlan>
   signal: AbortSignal
@@ -304,11 +309,13 @@ export function createGenerationHarness(dependencies: {
   modelSource: DefaultModelSource
   completionPort: CompletionPort
   policy: GenerationHarnessPolicy
+  creativeStrategy?: CreativeStrategy
   now?: () => number
 }): GenerationHarness {
   const { modelSource, completionPort } = dependencies
   const policy = Object.freeze({ ...dependencies.policy })
   const now = dependencies.now ?? Date.now
+  const creativeStrategy = dependencies.creativeStrategy ?? 'auto'
   assertGenerationHarnessPolicy(policy)
 
   return {
@@ -453,6 +460,9 @@ export function createGenerationHarness(dependencies: {
               completionPort.complete({
                 modelExecutionLeaseId,
                 purpose: task.purpose,
+                creativeStrategy,
+                reasoningStage: task.reasoningStage
+                  ?? (task.output === 'structured-data' ? 'planning' : 'drafting'),
                 messages: task.messages.map(message => Object.freeze({ ...message })),
                 plan,
                 signal: controller.signal,

@@ -7,6 +7,9 @@ export const CREATIVE_STRATEGIES = [
 
 export type CreativeStrategy = typeof CREATIVE_STRATEGIES[number]
 
+/** Controlled semantic stage used by product callers; never inferred from a diagnostic name. */
+export type GenerationReasoningStage = 'drafting' | 'planning' | 'review' | 'general'
+
 export const REASONING_EFFORTS = ['off', 'low', 'medium', 'high', 'max'] as const
 export type ReasoningEffort = typeof REASONING_EFFORTS[number]
 export type EffectiveReasoningEffort = Exclude<ReasoningEffort, 'max'>

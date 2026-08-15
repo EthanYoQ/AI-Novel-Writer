@@ -21,7 +21,7 @@ describe('reasoning policy', () => {
     expect(resolveReasoningPolicy({
       model: geminiFlashLite,
       creativeStrategy: 'fluent-drafting',
-      purpose: 'chapter-draft',
+      stage: 'drafting',
     })).toMatchObject({
       requested: 'off',
       effective: 'off',
@@ -32,13 +32,34 @@ describe('reasoning policy', () => {
     expect(resolveReasoningPolicy({
       model: geminiFlashLite,
       creativeStrategy: 'deep-planning',
-      purpose: 'chapter-blueprint-directory',
+      stage: 'planning',
     })).toMatchObject({
-      requested: 'high',
+      requested: 'max',
       effective: 'high',
-      status: 'mapped',
+      status: 'capped',
       providerDirective: { adapter: 'gemini-thinking-budget', thinkingBudget: 24_576 },
     })
+  })
+
+  it('defines four distinct strategy profiles without making deep-planning drafts maximal', () => {
+    const requestedProfile = (creativeStrategy: 'auto' | 'fluent-drafting' | 'consistency-first' | 'deep-planning') => (
+      ['drafting', 'planning', 'review', 'general'] as const
+    ).map(stage => resolveReasoningPolicy({
+      model: { ...geminiFlashLite, provider: 'custom', baseUrl: 'https://example.test' },
+      creativeStrategy,
+      stage,
+    }).requested)
+
+    const profiles = {
+      auto: requestedProfile('auto'),
+      fluent: requestedProfile('fluent-drafting'),
+      consistency: requestedProfile('consistency-first'),
+      deep: requestedProfile('deep-planning'),
+    }
+
+    expect(new Set(Object.values(profiles).map(profile => profile.join('|'))).size).toBe(4)
+    expect(profiles.deep).toEqual(['low', 'max', 'high', 'medium'])
+    expect(profiles.consistency).not.toEqual(profiles.deep)
   })
 
   it('lets the model-profile override take precedence without changing the project strategy', () => {
@@ -48,7 +69,7 @@ describe('reasoning policy', () => {
     expect(resolveReasoningPolicy({
       model,
       creativeStrategy: projectStrategy,
-      purpose: 'chapter-draft',
+      stage: 'drafting',
     })).toMatchObject({
       requested: 'high',
       effective: 'high',
@@ -68,7 +89,7 @@ describe('reasoning policy', () => {
       baseUrl: 'https://api.x.ai/v1',
       reasoningOverride: 'max',
     }
-    expect(resolveReasoningPolicy({ model: grok, purpose: 'review-chapter' })).toMatchObject({
+    expect(resolveReasoningPolicy({ model: grok, stage: 'review' })).toMatchObject({
       requested: 'max',
       effective: 'high',
       status: 'capped',
@@ -78,7 +99,7 @@ describe('reasoning policy', () => {
     expect(resolveReasoningPolicy({
       model: { ...grok, reasoningOverride: 'off' },
       creativeStrategy: 'fluent-drafting',
-      purpose: 'chapter-draft',
+      stage: 'drafting',
     })).toMatchObject({ requested: 'off', effective: 'low', status: 'forced' })
   })
 
@@ -91,7 +112,7 @@ describe('reasoning policy', () => {
       modelName: 'gemini-2.5-flash-lite',
       reasoningOverride: 'high' as const,
     }
-    expect(resolveReasoningPolicy({ model: custom, purpose: 'chapter-blueprint' })).toEqual({
+    expect(resolveReasoningPolicy({ model: custom, stage: 'planning' })).toEqual({
       requested: 'high',
       effective: null,
       status: 'unsupported',
@@ -106,7 +127,7 @@ describe('reasoning policy', () => {
       modelName: 'deepseek-v4-flash',
       reasoningOverride: 'high' as const,
     }
-    expect(resolveReasoningPolicy({ model: deepSeek, purpose: 'chapter-blueprint' }))
+    expect(resolveReasoningPolicy({ model: deepSeek, stage: 'planning' }))
       .not.toHaveProperty('providerDirective')
   })
 
@@ -119,7 +140,7 @@ describe('reasoning policy', () => {
     expect(resolveReasoningPolicy({
       model: staleModel,
       creativeStrategy: 'obsolete-strategy' as never,
-      purpose: 'chapter-draft',
+      stage: 'drafting',
     })).toMatchObject({
       requested: 'low',
       effective: 'low',

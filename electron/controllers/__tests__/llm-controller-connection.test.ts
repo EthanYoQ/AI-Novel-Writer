@@ -172,12 +172,14 @@ describe('llm generation parameter policy controller integration', () => {
       messages: [{ role: 'user', content: 'write' }],
       purpose: 'chapter-draft',
       creativeStrategy: 'fluent-drafting',
+      reasoningStage: 'drafting',
     })
     await handler('llm:generate-stream')({ sender: {} }, 'xai-stream', {
       modelId: xaiReasoningModel.id,
       messages: [{ role: 'user', content: 'write' }],
       purpose: 'chapter-draft',
       creativeStrategy: 'fluent-drafting',
+      reasoningStage: 'drafting',
     })
     await connectionHandler()({}, xaiReasoningModel, 'deep-planning')
 

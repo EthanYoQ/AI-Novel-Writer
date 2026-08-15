@@ -1,6 +1,10 @@
 import type { LLMRequest, ModelProfile } from '../../src/shared/ipc-channels'
 import { resolveReasoningPolicy } from '../../src/shared/reasoning-policy'
-import type { CreativeStrategy, ProviderReasoningDirective } from '../../src/shared/reasoning-types'
+import type {
+  CreativeStrategy,
+  GenerationReasoningStage,
+  ProviderReasoningDirective,
+} from '../../src/shared/reasoning-types'
 
 export interface ResolvedGenerationParameters {
   /** `undefined` means the provider must omit this request field. */
@@ -10,8 +14,9 @@ export interface ResolvedGenerationParameters {
   reasoning?: ProviderReasoningDirective
 }
 
-type GenerationParameterRequest = Pick<LLMRequest, 'maxTokens' | 'responseFormat' | 'purpose'> & {
+type GenerationParameterRequest = Pick<LLMRequest, 'maxTokens' | 'responseFormat'> & {
   creativeStrategy?: CreativeStrategy
+  reasoningStage?: GenerationReasoningStage
 }
 
 const OFFICIAL_KIMI_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai'])
@@ -62,7 +67,7 @@ export function resolveGenerationParameters(
   const reasoningResolution = resolveReasoningPolicy({
     model,
     creativeStrategy: request.creativeStrategy,
-    purpose: request.purpose,
+    stage: request.reasoningStage,
   })
 
   return {

@@ -180,17 +180,19 @@ describe('LLM stream completion propagation', () => {
 
     await useLLMStore.getState().generate([{ role: 'user', content: 'plan' }], 'model', {
       purpose: 'chapter-blueprint',
+      reasoningStage: 'planning',
     })
     await useLLMStore.getState().generateStream(
       [{ role: 'user', content: 'draft' }],
       {},
       'model',
-      { purpose: 'chapter-draft' },
+      { purpose: 'chapter-draft', reasoningStage: 'drafting' },
     )
 
     expect(mocks.invoke).toHaveBeenCalledWith('llm:generate', expect.objectContaining({
       purpose: 'chapter-blueprint',
       creativeStrategy: 'consistency-first',
+      reasoningStage: 'planning',
     }))
     expect(mocks.invoke).toHaveBeenCalledWith(
       'llm:generate-stream',
@@ -198,6 +200,7 @@ describe('LLM stream completion propagation', () => {
       expect.objectContaining({
         purpose: 'chapter-draft',
         creativeStrategy: 'consistency-first',
+        reasoningStage: 'drafting',
       }),
     )
   })

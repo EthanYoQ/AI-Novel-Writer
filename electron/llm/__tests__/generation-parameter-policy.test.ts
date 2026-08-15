@@ -21,7 +21,7 @@ describe('generation parameter policy', () => {
     expect(resolveGenerationParameters(openAIModel, {
       maxTokens: 512,
       responseFormat: { type: 'json_object' },
-      purpose: 'chapter-draft',
+      reasoningStage: 'drafting',
       creativeStrategy: 'deep-planning',
     })).toEqual({
       temperature: 1,
@@ -75,7 +75,7 @@ describe('generation parameter policy', () => {
       modelName: 'kimi-k3',
       temperature: 0.3,
       reasoningOverride: 'max',
-    }, { maxTokens: 512, creativeStrategy: 'deep-planning', purpose: 'chapter-blueprint' })).toEqual({
+    }, { maxTokens: 512, creativeStrategy: 'deep-planning', reasoningStage: 'planning' })).toEqual({
       temperature: 0.3,
       maxTokens: 512,
     })
@@ -103,7 +103,7 @@ describe('generation parameter policy', () => {
       modelName: 'grok-4.5',
       baseUrl: 'https://api.x.ai/v1',
       reasoningOverride: 'max',
-    }, { maxTokens: 512, purpose: 'chapter-draft' })).toEqual({
+    }, { maxTokens: 512, reasoningStage: 'drafting' })).toEqual({
       temperature: 1,
       maxTokens: 512,
       reasoning: { adapter: 'openai-reasoning-effort', reasoningEffort: 'high' },

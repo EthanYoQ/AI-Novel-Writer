@@ -3,6 +3,7 @@ import { resolveModelProfileReasoningMapping } from './provider-presets'
 import type {
   CreativeStrategy,
   EffectiveReasoningEffort,
+  GenerationReasoningStage,
   ProviderReasoningDirective,
   ReasoningEffort,
   ReasoningPolicyResolution,
@@ -10,13 +11,11 @@ import type {
 } from './reasoning-types'
 import { CREATIVE_STRATEGIES, REASONING_EFFORTS } from './reasoning-types'
 
-type GenerationStage = 'drafting' | 'planning' | 'review' | 'general'
-
-const STAGE_REQUESTS: Readonly<Record<CreativeStrategy, Readonly<Record<GenerationStage, ReasoningEffort>>>> = {
+const STAGE_REQUESTS: Readonly<Record<CreativeStrategy, Readonly<Record<GenerationReasoningStage, ReasoningEffort>>>> = {
   auto: { drafting: 'low', planning: 'medium', review: 'high', general: 'low' },
   'fluent-drafting': { drafting: 'off', planning: 'low', review: 'low', general: 'low' },
   'consistency-first': { drafting: 'low', planning: 'high', review: 'high', general: 'medium' },
-  'deep-planning': { drafting: 'low', planning: 'high', review: 'high', general: 'medium' },
+  'deep-planning': { drafting: 'low', planning: 'max', review: 'high', general: 'medium' },
 }
 
 const EFFORT_RANK: Readonly<Record<ReasoningEffort, number>> = {
@@ -25,16 +24,6 @@ const EFFORT_RANK: Readonly<Record<ReasoningEffort, number>> = {
   medium: 2,
   high: 3,
   max: 4,
-}
-
-function generationStage(purpose: string): GenerationStage {
-  const normalized = purpose.trim().toLowerCase()
-  if (/(?:review|refin|post-process|revision)/u.test(normalized)) return 'review'
-  if (/(?:architect|blueprint|director|planning|plan|config|character|structured|import-inference|summary)/u.test(normalized)) {
-    return 'planning'
-  }
-  if (/(?:draft|continuation|writing|generation|agent)/u.test(normalized)) return 'drafting'
-  return 'general'
 }
 
 function providerDirective(
@@ -73,13 +62,13 @@ function closestEffectiveEffort(
 
 /**
  * The single reasoning-policy seam. Callers provide product intent; this
- * module owns stage selection, profile precedence, verified capability lookup,
+ * module owns profile precedence, verified capability lookup,
  * provider-level capping and the user-visible resolution receipt.
  */
 export function resolveReasoningPolicy(input: {
   model: ModelProfile
   creativeStrategy?: CreativeStrategy
-  purpose?: string
+  stage?: GenerationReasoningStage
 }): ReasoningPolicyResolution {
   const strategy = CREATIVE_STRATEGIES.includes(input.creativeStrategy as CreativeStrategy)
     ? input.creativeStrategy as CreativeStrategy
@@ -91,7 +80,7 @@ export function resolveReasoningPolicy(input: {
     : 'auto'
   const source = override === 'auto' ? 'project-strategy' : 'model-override'
   const requested = override === 'auto'
-    ? STAGE_REQUESTS[strategy][generationStage(input.purpose ?? 'generation')]
+    ? STAGE_REQUESTS[strategy][input.stage ?? 'general']
     : override
   const mapping = resolveModelProfileReasoningMapping(input.model)
   if (!mapping) return { requested, effective: null, status: 'unsupported', source }

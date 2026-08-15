@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ModelExecutionLeaseReceipt } from '../../../shared/ipc-channels'
+import type { ModelExecutionLeaseReceipt, ProjectData } from '../../../shared/ipc-channels'
+import type { CreativeStrategy } from '../../../shared/reasoning-types'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -21,7 +22,35 @@ vi.mock('../../ipc-client', () => ({
 vi.mock('../../../components/ui/AlertDialog', () => ({ alertError: vi.fn() }))
 
 import { useLLMStore } from '../../../stores/llm-store'
+import { useProjectStore } from '../../../stores/project-store'
 import { createGenerationRuntime } from '../generation-runtime'
+
+function project(id: string, creativeStrategy: CreativeStrategy): ProjectData {
+  return {
+    id,
+    name: id,
+    path: `C:/projects/${id}`,
+    sessionLease: `lease-${id}`,
+    novelConfig: {
+      creativeStrategy,
+      genre: 'fantasy',
+      subGenre: '',
+      targetAudience: 'all',
+      totalChapters: 10,
+      wordsPerChapter: 3000,
+      plotStructure: 'three_act',
+      narrativePOV: 'third_limited',
+      coreOutline: '',
+      worldSetting: '',
+      goldenFinger: '',
+      protagonistProfile: '',
+      globalGuidance: '',
+    },
+    characterStates: '',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    updatedAt: '2026-08-16T00:00:00.000Z',
+  }
+}
 
 const LEASE: ModelExecutionLeaseReceipt = {
   leaseId: 'opaque-main-process-lease',
@@ -57,6 +86,7 @@ describe('GenerationRuntime renderer lease adapter', () => {
       activeRequests: new Map(),
       loaded: true,
     })
+    useProjectStore.setState({ currentProject: project('project-a', 'consistency-first') })
     mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
       if (channel === 'llm:begin-execution-lease') return { success: true, lease: LEASE }
       if (channel === 'llm:close-execution-lease') return { success: true }
@@ -73,6 +103,48 @@ describe('GenerationRuntime renderer lease adapter', () => {
       }
       throw new Error(`unexpected channel: ${channel}`)
     })
+  })
+
+  it('freezes the project strategy for initial and continuation attempts when the current project changes', async () => {
+    const runtime = await createGenerationRuntime({
+      budget: {
+        maxAttempts: 2,
+        maxRequestedOutputTokens: 8192,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+    useProjectStore.setState({ currentProject: project('project-b', 'fluent-drafting') })
+
+    await runtime.execute(async ({ session }) => {
+      await session.complete({
+        purpose: 'chapter-draft',
+        reasoningStage: 'drafting',
+        output: 'visible-text',
+        messages: [{ role: 'user', content: 'initial' }],
+      })
+      await session.complete({
+        purpose: 'chapter-draft-continuation',
+        reasoningStage: 'drafting',
+        output: 'visible-text',
+        messages: [{ role: 'user', content: 'continue' }],
+      })
+    })
+
+    const requests = mocks.invoke.mock.calls
+      .filter(([channel]) => channel === 'llm:generate-stream')
+      .map(([, , request]) => request)
+    expect(requests).toHaveLength(2)
+    expect(requests).toEqual([
+      expect.objectContaining({
+        creativeStrategy: 'consistency-first',
+        reasoningStage: 'drafting',
+      }),
+      expect.objectContaining({
+        creativeStrategy: 'consistency-first',
+        reasoningStage: 'drafting',
+      }),
+    ])
   })
 
   it('binds begin, stream attempts, and close to one lease-authoritative IPC path', async () => {

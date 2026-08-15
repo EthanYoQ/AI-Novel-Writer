@@ -315,6 +315,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           try {
             initialOutcome = await session.complete({
               purpose: 'chapter-draft',
+              reasoningStage: 'drafting',
               output: 'visible-text',
               messages: [
                 { role: 'system', content: promptBuilder.getSystemRole() },
@@ -535,6 +536,7 @@ ${visibleTail}`
           purpose: recoveryPending
             ? 'chapter-draft-no-progress-recovery'
             : 'chapter-draft-continuation',
+          reasoningStage: 'drafting',
           output: 'visible-text',
           messages: [
             { role: 'system', content: params.systemRole },

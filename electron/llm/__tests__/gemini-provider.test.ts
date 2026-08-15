@@ -53,7 +53,7 @@ describe('GeminiProvider', () => {
     const resolved = resolveGenerationParameters(reasoningModel, {
       maxTokens: 512,
       creativeStrategy: 'fluent-drafting',
-      purpose: 'chapter-draft',
+      reasoningStage: 'drafting',
     })
 
     await new GeminiProvider().generate(reasoningModel, [{ role: 'user', content: '写正文' }], resolved)

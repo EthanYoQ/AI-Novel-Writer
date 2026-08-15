@@ -338,7 +338,7 @@ export function registerLLMController() {
           resolveGenerationParameters(model, {
             // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
             maxTokens: CONNECTION_TEST_MAX_TOKENS,
-            purpose: 'connection-test',
+            reasoningStage: 'general',
             creativeStrategy,
           }),
         )

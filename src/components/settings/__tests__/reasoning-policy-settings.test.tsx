@@ -58,7 +58,27 @@ describe('reasoning policy settings', () => {
     expect(markup).toContain('一致性优先')
     expect(markup).toContain('深度规划')
     expect(markup).toContain('模型推理覆盖（高级）')
-    expect(markup).toContain('Max → High')
+    expect(markup).toContain('最高 → 高')
     expect(markup).toContain('已限制')
+    expect(markup).toContain('关闭')
+    expect(markup).toContain('低')
+    expect(markup).toContain('中')
+    expect(markup).toContain('高')
+    expect(markup).toContain('最高')
+  })
+
+  it('localizes every reasoning override effort in English', () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+
+    const markup = renderToStaticMarkup(
+      <ReasoningPolicySettings model={grok} onModelChange={() => {}} />,
+    )
+
+    expect(markup).toContain('>Off<')
+    expect(markup).toContain('>Low<')
+    expect(markup).toContain('>Medium<')
+    expect(markup).toContain('>High<')
+    expect(markup).toContain('>Max<')
+    expect(markup).toContain('Max → High')
   })
 })
