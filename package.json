@@ -37,7 +37,10 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "build-storybook": "storybook build",
+    "plugin:ai-novel:test": "pnpm --filter @ethanyoq/dsh-ai-novel-writer test",
+    "plugin:ai-novel:typecheck": "pnpm --filter @ethanyoq/dsh-ai-novel-writer typecheck",
+    "plugin:ai-novel:build": "pnpm --filter @ethanyoq/dsh-ai-novel-writer build"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",

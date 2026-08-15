@@ -1,0 +1,6 @@
+# Host entry for bundle discovery.
+# Model-facing tools remain absent from the host catalog: the dedicated preset
+# mounts the package's ./agent export into its own standing scope.
+- insert:
+    - id: ai-novel-writer
+      name: '@ethanyoq/dsh-ai-novel-writer'
