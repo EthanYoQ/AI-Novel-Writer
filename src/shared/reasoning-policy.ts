@@ -36,6 +36,18 @@ function providerDirective(
       ? { adapter: mapping.adapter, reasoningEffort: value }
       : undefined
   }
+  if (mapping.adapter === 'deepseek-v4-thinking') {
+    if (effective === 'off' && value === 'disabled') {
+      return { adapter: mapping.adapter, thinking: 'disabled' }
+    }
+    return (effective === 'high' || effective === 'max') && value === effective
+      ? {
+          adapter: mapping.adapter,
+          thinking: 'enabled',
+          reasoningEffort: effective,
+        }
+      : undefined
+  }
   return typeof value === 'number'
     ? { adapter: mapping.adapter, thinkingBudget: value }
     : undefined
@@ -45,7 +57,11 @@ function closestEffectiveEffort(
   requested: ReasoningEffort,
   mapping: VerifiedReasoningMapping,
 ): { effective: EffectiveReasoningEffort; status: 'mapped' | 'capped' | 'forced' } | null {
-  if (requested !== 'max' && mapping.supportedEfforts.includes(requested)) {
+  const documentedAlias = mapping.requestAliases?.[requested]
+  if (documentedAlias && mapping.supportedEfforts.includes(documentedAlias)) {
+    return { effective: documentedAlias, status: 'mapped' }
+  }
+  if (mapping.supportedEfforts.includes(requested)) {
     return { effective: requested, status: 'mapped' }
   }
   const supported = [...mapping.supportedEfforts]

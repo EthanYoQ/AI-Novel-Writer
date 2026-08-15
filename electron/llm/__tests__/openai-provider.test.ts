@@ -28,6 +28,22 @@ const fixedTemperatureKimiModel: ModelProfile = {
   temperature: 0.7,
 }
 
+const legacyDeepSeekV4Model: ModelProfile = {
+  ...novelAIModel,
+  id: 'deepseek-v4-flash',
+  name: 'DeepSeek V4 Flash',
+  provider: 'deepseek',
+  modelName: 'deepseek-v4-flash',
+  baseUrl: 'https://api.deepseek.com',
+  capabilities: {
+    contextWindowTokens: 1_000_000,
+    maxOutputTokens: 384_000,
+    reasoning: false,
+    structuredOutput: true,
+    usage: true,
+  },
+}
+
 function requestBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const request = fetchMock.mock.calls[0][1] as RequestInit
   return JSON.parse(String(request.body)) as Record<string, unknown>
@@ -194,6 +210,89 @@ describe('OpenAIProvider NovelAI compatibility', () => {
 
     for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
       expect(JSON.parse(String(request.body)).reasoning_effort).toBe('high')
+    }
+  })
+
+  it('disables DeepSeek V4 default thinking for fluent drafts in normal and streaming requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => sseReader('data: [DONE]\n') },
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const resolved = resolveGenerationParameters(legacyDeepSeekV4Model, {
+      maxTokens: 512,
+      creativeStrategy: 'fluent-drafting',
+      reasoningStage: 'drafting',
+    })
+    await new OpenAIProvider().generate(
+      legacyDeepSeekV4Model,
+      [{ role: 'user', content: '返回正文' }],
+      resolved,
+    )
+    await new OpenAIProvider().generateStream(
+      legacyDeepSeekV4Model,
+      [{ role: 'user', content: '返回正文' }],
+      {
+        ...resolved,
+        signal: new AbortController().signal,
+        onChunk: vi.fn(),
+        onDone: vi.fn(),
+        onError: vi.fn(),
+      },
+    )
+
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      const body = JSON.parse(String(request.body)) as Record<string, unknown>
+      expect(body.thinking).toEqual({ type: 'disabled' })
+      expect(body).not.toHaveProperty('reasoning_effort')
+    }
+  })
+
+  it('maps auto DeepSeek V4 drafts to enabled high effort in normal and streaming requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => sseReader('data: [DONE]\n') },
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const resolved = resolveGenerationParameters(legacyDeepSeekV4Model, {
+      maxTokens: 512,
+      creativeStrategy: 'auto',
+      reasoningStage: 'drafting',
+    })
+    await new OpenAIProvider().generate(
+      legacyDeepSeekV4Model,
+      [{ role: 'user', content: '返回正文' }],
+      resolved,
+    )
+    await new OpenAIProvider().generateStream(
+      legacyDeepSeekV4Model,
+      [{ role: 'user', content: '返回正文' }],
+      {
+        ...resolved,
+        signal: new AbortController().signal,
+        onChunk: vi.fn(),
+        onDone: vi.fn(),
+        onError: vi.fn(),
+      },
+    )
+
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(JSON.parse(String(request.body))).toMatchObject({
+        thinking: { type: 'enabled' },
+        reasoning_effort: 'high',
+      })
     }
   })
 

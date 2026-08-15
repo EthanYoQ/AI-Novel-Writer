@@ -120,16 +120,73 @@ describe('reasoning policy', () => {
       source: 'model-override',
     })
 
-    const deepSeek = {
+    const unverifiedDeepSeek = {
       ...geminiFlashLite,
       provider: 'deepseek' as const,
       protocol: 'openai' as const,
       baseUrl: 'https://api.deepseek.com',
-      modelName: 'deepseek-v4-flash',
+      modelName: 'deepseek-future-model',
       reasoningOverride: 'high' as const,
     }
-    expect(resolveReasoningPolicy({ model: deepSeek, stage: 'planning' }))
+    expect(resolveReasoningPolicy({ model: unverifiedDeepSeek, stage: 'planning' }))
       .not.toHaveProperty('providerDirective')
+  })
+
+  it('maps the exact official DeepSeek V4 profile without trusting persisted capability flags', () => {
+    const legacyDeepSeek: ModelProfile = {
+      ...geminiFlashLite,
+      provider: 'deepseek',
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com',
+      modelName: 'deepseek-v4-flash',
+      capabilities: {
+        contextWindowTokens: 1_000_000,
+        maxOutputTokens: 384_000,
+        reasoning: false,
+        structuredOutput: true,
+        usage: true,
+      },
+    }
+
+    expect(resolveReasoningPolicy({
+      model: legacyDeepSeek,
+      creativeStrategy: 'fluent-drafting',
+      stage: 'drafting',
+    })).toMatchObject({
+      requested: 'off',
+      effective: 'off',
+      status: 'mapped',
+      providerDirective: { adapter: 'deepseek-v4-thinking', thinking: 'disabled' },
+    })
+
+    expect(resolveReasoningPolicy({
+      model: legacyDeepSeek,
+      creativeStrategy: 'auto',
+      stage: 'drafting',
+    })).toMatchObject({
+      requested: 'low',
+      effective: 'high',
+      status: 'mapped',
+      providerDirective: {
+        adapter: 'deepseek-v4-thinking',
+        thinking: 'enabled',
+        reasoningEffort: 'high',
+      },
+    })
+
+    expect(resolveReasoningPolicy({
+      model: { ...legacyDeepSeek, reasoningOverride: 'max' },
+      stage: 'review',
+    })).toMatchObject({
+      requested: 'max',
+      effective: 'max',
+      status: 'mapped',
+      providerDirective: {
+        adapter: 'deepseek-v4-thinking',
+        thinking: 'enabled',
+        reasoningEffort: 'max',
+      },
+    })
   })
 
   it('normalizes stale persisted policy values instead of sending an unverified parameter', () => {

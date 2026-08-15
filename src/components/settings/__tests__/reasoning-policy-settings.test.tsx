@@ -23,6 +23,23 @@ const grok: ModelProfile = {
   reasoningOverride: 'max',
 }
 
+const legacyDeepSeekV4: ModelProfile = {
+  ...grok,
+  id: 'deepseek-v4-flash',
+  name: 'DeepSeek V4 Flash',
+  provider: 'deepseek',
+  modelName: 'deepseek-v4-flash',
+  baseUrl: 'https://api.deepseek.com',
+  reasoningOverride: 'auto',
+  capabilities: {
+    contextWindowTokens: 1_000_000,
+    maxOutputTokens: 384_000,
+    reasoning: false,
+    structuredOutput: true,
+    usage: true,
+  },
+}
+
 afterEach(() => {
   useProjectStore.setState(originalProjectState)
   useLocaleStore.setState(originalLocaleState)
@@ -80,5 +97,34 @@ describe('reasoning policy settings', () => {
     expect(markup).toContain('>High<')
     expect(markup).toContain('>Max<')
     expect(markup).toContain('Max → High')
+  })
+
+  it('shows verified DeepSeek V4 requested-to-effective mappings instead of unsupported', () => {
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    useProjectStore.setState({
+      currentProject: {
+        id: 'project-deepseek',
+        name: 'DeepSeek Novel',
+        path: 'C:/projects/deepseek',
+        sessionLease: 'lease-deepseek',
+        novelConfig: {
+          creativeStrategy: 'auto',
+          genre: 'fantasy', subGenre: '', targetAudience: 'all', totalChapters: 100,
+          wordsPerChapter: 3000, plotStructure: 'three_act', narrativePOV: 'third_limited',
+          coreOutline: '', worldSetting: '', goldenFinger: '', protagonistProfile: '', globalGuidance: '',
+        },
+        characterStates: '',
+        createdAt: '2026-08-16T00:00:00.000Z',
+        updatedAt: '2026-08-16T00:00:00.000Z',
+      },
+    })
+
+    const markup = renderToStaticMarkup(
+      <ReasoningPolicySettings model={legacyDeepSeekV4} onModelChange={() => {}} />,
+    )
+
+    expect(markup).toContain('低 → 高')
+    expect(markup).toContain('已映射')
+    expect(markup).not.toContain('不支持 / 不发送参数')
   })
 })

@@ -43,6 +43,13 @@ export class OpenAIProvider implements ILLMProvider {
       body.reasoning_effort = opts.reasoning.reasoningEffort
     }
 
+    if (opts.reasoning?.adapter === 'deepseek-v4-thinking' && model.provider === 'deepseek') {
+      body.thinking = { type: opts.reasoning.thinking }
+      if (opts.reasoning.thinking === 'enabled') {
+        body.reasoning_effort = opts.reasoning.reasoningEffort
+      }
+    }
+
     if (opts.responseFormat && !isNovelAI) {
       body.response_format = opts.responseFormat
     }

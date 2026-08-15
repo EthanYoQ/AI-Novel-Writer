@@ -12,7 +12,7 @@ export type GenerationReasoningStage = 'drafting' | 'planning' | 'review' | 'gen
 
 export const REASONING_EFFORTS = ['off', 'low', 'medium', 'high', 'max'] as const
 export type ReasoningEffort = typeof REASONING_EFFORTS[number]
-export type EffectiveReasoningEffort = Exclude<ReasoningEffort, 'max'>
+export type EffectiveReasoningEffort = ReasoningEffort
 export type ReasoningOverride = 'auto' | ReasoningEffort
 
 export type ReasoningResolutionStatus = 'mapped' | 'capped' | 'forced' | 'unsupported'
@@ -26,11 +26,22 @@ export type ProviderReasoningDirective =
       adapter: 'gemini-thinking-budget'
       thinkingBudget: number
     }
+  | {
+      adapter: 'deepseek-v4-thinking'
+      thinking: 'disabled'
+    }
+  | {
+      adapter: 'deepseek-v4-thinking'
+      thinking: 'enabled'
+      reasoningEffort: 'high' | 'max'
+    }
 
 export interface VerifiedReasoningMapping {
   adapter: ProviderReasoningDirective['adapter']
   supportedEfforts: readonly EffectiveReasoningEffort[]
   providerValues: Readonly<Partial<Record<EffectiveReasoningEffort, string | number>>>
+  /** Documented compatibility aliases from a requested product effort to the provider's actual effort. */
+  requestAliases?: Readonly<Partial<Record<ReasoningEffort, EffectiveReasoningEffort>>>
 }
 
 export interface ReasoningPolicyResolution {

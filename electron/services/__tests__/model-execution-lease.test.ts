@@ -111,7 +111,7 @@ describe('ModelExecutionLeaseRegistry', () => {
       subjectFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 8192,
-      reasoning: false,
+      reasoning: true,
       structuredOutput: true,
       usage: true,
     })

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { createProviderCatalog, resolveModelProfileCapabilities } from '../provider-presets'
+import {
+  createProviderCatalog,
+  resolveModelProfileCapabilities,
+  resolveModelProfileReasoningMapping,
+} from '../provider-presets'
 
 describe('provider catalog', () => {
   it('exposes xAI Grok through its documented OpenAI-compatible preset', () => {
@@ -43,7 +47,7 @@ describe('provider catalog', () => {
     expect(resolveModelProfileCapabilities(legacy)).toEqual({
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 384_000,
-      reasoning: false,
+      reasoning: true,
       structuredOutput: true,
       usage: true,
     })
@@ -73,9 +77,16 @@ describe('provider catalog', () => {
     expect(resolveModelProfileCapabilities({ ...legacy, capabilities: explicit })).toEqual({
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 384_000,
-      reasoning: false,
+      reasoning: true,
       structuredOutput: true,
       usage: true,
+    })
+
+    expect(resolveModelProfileReasoningMapping(legacy)).toEqual({
+      adapter: 'deepseek-v4-thinking',
+      supportedEfforts: ['off', 'high', 'max'],
+      providerValues: { off: 'disabled', high: 'high', max: 'max' },
+      requestAliases: { low: 'high', medium: 'high' },
     })
   })
 

@@ -81,6 +81,20 @@ const xaiReasoningModel: ModelProfile = {
   reasoningOverride: 'medium',
 }
 
+const legacyDeepSeekV4Model: ModelProfile = {
+  ...deepSeekModel,
+  id: 'deepseek-v4-flash',
+  name: 'DeepSeek V4 Flash',
+  modelName: 'deepseek-v4-flash',
+  capabilities: {
+    contextWindowTokens: 1_000_000,
+    maxOutputTokens: 384_000,
+    reasoning: false,
+    structuredOutput: true,
+    usage: true,
+  },
+}
+
 function connectionHandler(): IpcHandler {
   const handler = mocks.handlers.get('llm:test-connection')
   if (!handler) throw new Error('Missing llm:test-connection handler')
@@ -193,6 +207,43 @@ describe('llm generation parameter policy controller integration', () => {
       reasoning: { adapter: 'openai-reasoning-effort', reasoningEffort: 'medium' },
     })
     await handler('llm:cancel')({}, 'xai-stream')
+  })
+
+  it('uses the verified DeepSeek V4 policy for normal, streaming, and connection-test requests', async () => {
+    mocks.models = [legacyDeepSeekV4Model]
+
+    await handler('llm:generate')({}, {
+      modelId: legacyDeepSeekV4Model.id,
+      messages: [{ role: 'user', content: 'write fluently' }],
+      creativeStrategy: 'fluent-drafting',
+      reasoningStage: 'drafting',
+    })
+    await handler('llm:generate-stream')({ sender: {} }, 'deepseek-v4-stream', {
+      modelId: legacyDeepSeekV4Model.id,
+      messages: [{ role: 'user', content: 'write automatically' }],
+      creativeStrategy: 'auto',
+      reasoningStage: 'drafting',
+    })
+    await connectionHandler()({}, legacyDeepSeekV4Model, 'auto')
+
+    expect(mocks.generate.mock.calls[0]?.[2]).toMatchObject({
+      reasoning: { adapter: 'deepseek-v4-thinking', thinking: 'disabled' },
+    })
+    expect(mocks.generateStream.mock.calls[0]?.[2]).toMatchObject({
+      reasoning: {
+        adapter: 'deepseek-v4-thinking',
+        thinking: 'enabled',
+        reasoningEffort: 'high',
+      },
+    })
+    expect(mocks.generate.mock.calls.at(-1)?.[2]).toMatchObject({
+      reasoning: {
+        adapter: 'deepseek-v4-thinking',
+        thinking: 'enabled',
+        reasoningEffort: 'high',
+      },
+    })
+    await handler('llm:cancel')({}, 'deepseek-v4-stream')
   })
 
   it('uses the profile temperature for regular generation and each initial/continuation stream request', async () => {

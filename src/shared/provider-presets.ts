@@ -138,9 +138,16 @@ export function createProviderCatalog(): ProviderPreset[] {
         capabilities: {
           contextWindowTokens: 1_000_000,
           maxOutputTokens: 384_000,
-          reasoning: false,
+          reasoning: true,
           structuredOutput: true,
           usage: true,
+        },
+        // https://api-docs.deepseek.com/guides/thinking_mode/
+        reasoningMapping: {
+          adapter: 'deepseek-v4-thinking',
+          supportedEfforts: ['off', 'high', 'max'],
+          providerValues: { off: 'disabled', high: 'high', max: 'max' },
+          requestAliases: { low: 'high', medium: 'high' },
         },
       },
       {
@@ -149,9 +156,16 @@ export function createProviderCatalog(): ProviderPreset[] {
         capabilities: {
           contextWindowTokens: 1_000_000,
           maxOutputTokens: 384_000,
-          reasoning: false,
+          reasoning: true,
           structuredOutput: true,
           usage: true,
+        },
+        // https://api-docs.deepseek.com/guides/thinking_mode/
+        reasoningMapping: {
+          adapter: 'deepseek-v4-thinking',
+          supportedEfforts: ['off', 'high', 'max'],
+          providerValues: { off: 'disabled', high: 'high', max: 'max' },
+          requestAliases: { low: 'high', medium: 'high' },
         },
       },
     ],
@@ -334,5 +348,6 @@ export function resolveModelProfileReasoningMapping(
     adapter: mapping.adapter,
     supportedEfforts: [...mapping.supportedEfforts],
     providerValues: { ...mapping.providerValues },
+    ...(mapping.requestAliases ? { requestAliases: { ...mapping.requestAliases } } : {}),
   }
 }
