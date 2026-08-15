@@ -452,6 +452,7 @@ export function registerProjectController() {
             targetAudience: updatedCoreData.targetAudience,
             totalChapters: updatedCoreData.totalChapters,
             wordsPerChapter: updatedCoreData.wordsPerChapter,
+            creativeStrategy: updatedCoreData.creativeStrategy,
             plotStructure: updatedCoreData.plotStructure as 'three_act' | 'heros_journey' | 'save_the_cat' | 'kishotenketsu' | 'multi_thread' | 'freeform',
             narrativePOV: updatedCoreData.narrativePov as 'third_limited' | 'first_person' | 'third_omniscient' | 'multi_pov',
             coreOutline: updatedCoreData.coreOutline,
@@ -564,6 +565,9 @@ export function registerProjectController() {
           targetAudience: data.novelConfig.targetAudience,
           totalChapters: data.novelConfig.totalChapters,
           wordsPerChapter: data.novelConfig.wordsPerChapter,
+          ...(data.novelConfig.creativeStrategy
+            ? { creativeStrategy: data.novelConfig.creativeStrategy }
+            : {}),
           plotStructure: data.novelConfig.plotStructure,
           narrativePov: data.novelConfig.narrativePOV,
           goldenFinger: data.novelConfig.goldenFinger,
@@ -630,6 +634,9 @@ export function registerProjectController() {
           targetAudience: data.novelConfig.targetAudience,
           totalChapters: data.novelConfig.totalChapters,
           wordsPerChapter: data.novelConfig.wordsPerChapter,
+          ...(data.novelConfig.creativeStrategy
+            ? { creativeStrategy: data.novelConfig.creativeStrategy }
+            : {}),
           plotStructure: data.novelConfig.plotStructure,
           narrativePov: data.novelConfig.narrativePOV,
           goldenFinger: data.novelConfig.goldenFinger,

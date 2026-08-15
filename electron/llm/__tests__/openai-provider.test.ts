@@ -110,7 +110,6 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     await expect(new OpenAIProvider().generate(novelAIModel, [{ role: 'user', content: '写一段正文' }], {
       temperature: 0.2,
       maxTokens: 512,
-      thinking: true,
       responseFormat: { type: 'json_object' },
     })).resolves.toMatchObject({ success: true, content: '正文', finishReason: 'stop' })
 
@@ -119,7 +118,8 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     expect(request.headers).toMatchObject({ Authorization: 'Bearer pst-test-token' })
 
     const body = requestBody(fetchMock)
-    expect(body).toMatchObject({ stream: false, enable_thinking: true })
+    expect(body).toMatchObject({ stream: false })
+    expect(body).not.toHaveProperty('enable_thinking')
     expect(body).not.toHaveProperty('thinking')
     expect(body).not.toHaveProperty('response_format')
   })
@@ -140,7 +140,6 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     await new OpenAIProvider().generateStream(novelAIModel, [{ role: 'user', content: '流式正文' }], {
       temperature: 0.2,
       maxTokens: 512,
-      thinking: true,
       responseFormat: { type: 'json_object' },
       signal: new AbortController().signal,
       onChunk: vi.fn(),
@@ -153,37 +152,49 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     expect(request.headers).toMatchObject({ Authorization: 'Bearer pst-test-token' })
 
     const body = requestBody(fetchMock)
-    expect(body).toMatchObject({ stream: true, enable_thinking: true })
+    expect(body).toMatchObject({ stream: true })
+    expect(body).not.toHaveProperty('enable_thinking')
     expect(body).not.toHaveProperty('thinking')
     expect(body).not.toHaveProperty('response_format')
     expect(onDone).toHaveBeenCalledWith('', undefined, 'stop')
   })
 
-  it('keeps the existing thinking and JSON response parameters for other OpenAI-compatible providers', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: '正文' } }] }),
-    })
+  it('applies the same verified reasoning effort to normal and streaming xAI requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '正文' } }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => sseReader('data: [DONE]\n') },
+      })
     vi.stubGlobal('fetch', fetchMock)
 
-    await new OpenAIProvider().generate({
+    const xaiModel: ModelProfile = {
       ...novelAIModel,
-      provider: 'openai',
-      baseUrl: 'https://api.openai.com',
-    }, [{ role: 'user', content: '返回 JSON' }], {
-      temperature: 0.2,
+      provider: 'xai',
+      modelName: 'grok-4.5',
+      baseUrl: 'https://api.x.ai/v1',
+      reasoningOverride: 'high',
+    }
+    const resolved = resolveGenerationParameters(xaiModel, {
       maxTokens: 512,
-      thinking: true,
-      responseFormat: { type: 'json_object' },
+      creativeStrategy: 'fluent-drafting',
+      purpose: 'chapter-draft',
+    })
+    await new OpenAIProvider().generate(xaiModel, [{ role: 'user', content: '返回正文' }], resolved)
+    await new OpenAIProvider().generateStream(xaiModel, [{ role: 'user', content: '返回正文' }], {
+      ...resolved,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
     })
 
-    const body = requestBody(fetchMock)
-    expect(body).toMatchObject({
-      temperature: 0.2,
-      thinking: { type: 'enabled' },
-      response_format: { type: 'json_object' },
-    })
-    expect(body).not.toHaveProperty('enable_thinking')
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(JSON.parse(String(request.body)).reasoning_effort).toBe('high')
+    }
   })
 
   it('omits Kimi K3 fixed sampling and generic thinking fields for non-stream generation', async () => {
@@ -196,7 +207,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     await new OpenAIProvider().generate(
       fixedTemperatureKimiModel,
       [{ role: 'user', content: '写正文' }],
-      resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512, thinking: true }),
+      resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512 }),
     )
 
     const body = requestBody(fetchMock)
@@ -215,7 +226,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       fixedTemperatureKimiModel,
       [{ role: 'user', content: '写正文' }],
       {
-        ...resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512, thinking: true }),
+        ...resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512 }),
         signal: new AbortController().signal,
         onChunk: vi.fn(),
         onDone: vi.fn(),

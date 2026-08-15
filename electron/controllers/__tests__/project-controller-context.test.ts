@@ -768,6 +768,37 @@ describe('project controller project identity', () => {
     expect(mocks.transaction).toHaveBeenCalled()
   })
 
+  it('persists the project creative strategy independently from model settings', async () => {
+    const data = {
+      path: projectA,
+      sessionLease: 'lease-project-A',
+      name: 'Project A',
+      novelConfig: {
+        genre: 'fantasy',
+        creativeStrategy: 'consistency-first',
+      },
+    }
+
+    await expect(handler('project:save')({}, 'project-A', data, projectA, projectSession()))
+      .resolves.toMatchObject({ success: true })
+    expect(mocks.projectCoreUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      creativeStrategy: 'consistency-first',
+    }))
+  })
+
+  it('does not reset a saved creative strategy during an unrelated partial config write', async () => {
+    const data = {
+      path: projectA,
+      sessionLease: 'lease-project-A',
+      novelConfig: { genre: 'mystery' },
+    }
+
+    await expect(handler('project:update-config')({}, 'project-A', data, projectA, projectSession()))
+      .resolves.toEqual({ success: true })
+    expect(mocks.projectCoreUpdate).toHaveBeenCalledOnce()
+    expect(mocks.projectCoreUpdate.mock.calls[0]?.[0]).not.toHaveProperty('creativeStrategy')
+  })
+
   it('rejects a supplied stale session lease before a project config write commits', async () => {
     mocks.projectAccess.assertCurrentProjectContext.mockImplementationOnce(() => {
       throw new Error('项目会话已失效，已拒绝操作')

@@ -17,16 +17,16 @@ const openAIModel: ModelProfile = {
 }
 
 describe('generation parameter policy', () => {
-  it('forwards generic model settings without a workflow temperature override', () => {
+  it('forwards generic model settings without inventing a reasoning field', () => {
     expect(resolveGenerationParameters(openAIModel, {
       maxTokens: 512,
       responseFormat: { type: 'json_object' },
-      thinking: true,
+      purpose: 'chapter-draft',
+      creativeStrategy: 'deep-planning',
     })).toEqual({
       temperature: 1,
       maxTokens: 512,
       responseFormat: { type: 'json_object' },
-      thinking: true,
     })
   })
 
@@ -34,37 +34,20 @@ describe('generation parameter policy', () => {
     'https://api.moonshot.cn/v1',
     'https://api.moonshot.ai/v1',
   ]
+  const fixedKimiModels = ['kimi-k3', 'kimi-k2.7', 'kimi-k2.6', 'kimi-k2.5']
 
-  const fixedKimiModels = [
-    { modelName: 'kimi-k3', forwardsGenericThinking: false },
-    { modelName: 'kimi-k2.7', forwardsGenericThinking: false },
-    { modelName: 'kimi-k2.6', forwardsGenericThinking: true },
-    { modelName: 'kimi-k2.5', forwardsGenericThinking: true },
-  ]
-
-  it.each(officialKimiHosts.flatMap(baseUrl => fixedKimiModels.map(model => ({ baseUrl, ...model }))))(
+  it.each(officialKimiHosts.flatMap(baseUrl => fixedKimiModels.map(modelName => ({ baseUrl, modelName }))))(
     'omits fixed temperature for $modelName on $baseUrl',
-    ({ baseUrl, modelName, forwardsGenericThinking }) => {
+    ({ baseUrl, modelName }) => {
       const resolved = resolveGenerationParameters({
         ...openAIModel,
         provider: 'custom',
         baseUrl,
         modelName,
         temperature: 0.7,
-      }, {
-        maxTokens: 512,
-        responseFormat: { type: 'json_object' },
-        thinking: true,
-      })
+      }, { maxTokens: 512 })
 
-      expect(resolved.temperature).toBeUndefined()
-      expect(resolved.maxTokens).toBe(512)
-      expect(resolved.responseFormat).toEqual({ type: 'json_object' })
-      if (forwardsGenericThinking) {
-        expect(resolved.thinking).toBe(true)
-      } else {
-        expect(resolved).not.toHaveProperty('thinking')
-      }
+      expect(resolved).toEqual({ temperature: undefined, maxTokens: 512 })
     },
   )
 
@@ -84,57 +67,46 @@ describe('generation parameter policy', () => {
       .toThrow('0 到 1')
   })
 
-  it('does not apply official Kimi rules to a non-official proxy endpoint', () => {
+  it('does not apply official Kimi rules or reasoning fields to a proxy endpoint', () => {
     expect(resolveGenerationParameters({
       ...openAIModel,
       provider: 'custom',
       baseUrl: 'https://kimi-proxy.example.test/v1',
       modelName: 'kimi-k3',
       temperature: 0.3,
-    }, {
-      maxTokens: 512,
-      thinking: true,
-    })).toEqual({
+      reasoningOverride: 'max',
+    }, { maxTokens: 512, creativeStrategy: 'deep-planning', purpose: 'chapter-blueprint' })).toEqual({
       temperature: 0.3,
       maxTokens: 512,
-      thinking: true,
-    })
-  })
-
-  it('does not mistake an invalid Kimi-looking URL for an official endpoint', () => {
-    expect(resolveGenerationParameters({
-      ...openAIModel,
-      provider: 'custom',
-      baseUrl: 'api.moonshot.cn/v1',
-      modelName: 'kimi-k3',
-      temperature: 0.3,
-    }, {
-      maxTokens: 512,
-      thinking: true,
-    })).toEqual({
-      temperature: 0.3,
-      maxTokens: 512,
-      thinking: true,
     })
   })
 
   it.each([
+    'api.moonshot.cn/v1',
     'http://api.moonshot.cn/v1',
     'ftp://api.moonshot.ai/v1',
-  ])('does not apply official Kimi rules to a non-HTTPS endpoint: %s', (baseUrl) => {
+  ])('does not apply official Kimi rules to an invalid or non-HTTPS endpoint: %s', (baseUrl) => {
     expect(resolveGenerationParameters({
       ...openAIModel,
       provider: 'custom',
       baseUrl,
       modelName: 'kimi-k3',
       temperature: 0.3,
-    }, {
+    }, { maxTokens: 512 })).toEqual({ temperature: 0.3, maxTokens: 512 })
+  })
+
+  it('maps the profile override through an exact verified model preset', () => {
+    expect(resolveGenerationParameters({
+      ...openAIModel,
+      id: 'grok-4.5',
+      provider: 'xai',
+      modelName: 'grok-4.5',
+      baseUrl: 'https://api.x.ai/v1',
+      reasoningOverride: 'max',
+    }, { maxTokens: 512, purpose: 'chapter-draft' })).toEqual({
+      temperature: 1,
       maxTokens: 512,
-      thinking: true,
-    })).toEqual({
-      temperature: 0.3,
-      maxTokens: 512,
-      thinking: true,
+      reasoning: { adapter: 'openai-reasoning-effort', reasoningEffort: 'high' },
     })
   })
 })

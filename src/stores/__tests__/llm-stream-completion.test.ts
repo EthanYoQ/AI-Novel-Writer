@@ -19,6 +19,7 @@ vi.mock('../../services/ipc-client', () => ({
 vi.mock('../../components/ui/AlertDialog', () => ({ alertError: vi.fn() }))
 
 import { useLLMStore } from '../llm-store'
+import { useProjectStore } from '../project-store'
 
 describe('LLM stream completion propagation', () => {
   beforeEach(() => {
@@ -30,6 +31,7 @@ describe('LLM stream completion propagation', () => {
       activeRequests: new Map(),
       loaded: true,
     })
+    useProjectStore.setState({ currentProject: null })
   })
 
   it('forwards the IPC finish reason to stream consumers', async () => {
@@ -141,6 +143,61 @@ describe('LLM stream completion propagation', () => {
       expect.objectContaining({
         modelId: 'model',
         modelExecutionLeaseId: 'opaque-model-lease',
+      }),
+    )
+  })
+
+  it('captures the project creative strategy for normal and workflow streaming requests', async () => {
+    useProjectStore.setState({
+      currentProject: {
+        id: 'project-a',
+        name: 'Novel A',
+        path: 'C:/projects/A',
+        sessionLease: 'lease-a',
+        novelConfig: {
+          creativeStrategy: 'consistency-first',
+          genre: 'fantasy',
+          subGenre: '',
+          targetAudience: 'all',
+          totalChapters: 100,
+          wordsPerChapter: 3000,
+          plotStructure: 'three_act',
+          narrativePOV: 'third_limited',
+          coreOutline: '',
+          worldSetting: '',
+          goldenFinger: '',
+          protagonistProfile: '',
+          globalGuidance: '',
+        },
+        characterStates: '',
+        createdAt: '2026-08-16T00:00:00.000Z',
+        updatedAt: '2026-08-16T00:00:00.000Z',
+      },
+    })
+    mocks.invoke.mockImplementation(async (channel: string) => channel === 'llm:generate'
+      ? { success: true, content: 'done', finishReason: 'stop' }
+      : { requestId: 'strategy-stream', started: true })
+
+    await useLLMStore.getState().generate([{ role: 'user', content: 'plan' }], 'model', {
+      purpose: 'chapter-blueprint',
+    })
+    await useLLMStore.getState().generateStream(
+      [{ role: 'user', content: 'draft' }],
+      {},
+      'model',
+      { purpose: 'chapter-draft' },
+    )
+
+    expect(mocks.invoke).toHaveBeenCalledWith('llm:generate', expect.objectContaining({
+      purpose: 'chapter-blueprint',
+      creativeStrategy: 'consistency-first',
+    }))
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      'llm:generate-stream',
+      expect.any(String),
+      expect.objectContaining({
+        purpose: 'chapter-draft',
+        creativeStrategy: 'consistency-first',
       }),
     )
   })

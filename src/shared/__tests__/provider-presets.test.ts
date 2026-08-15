@@ -22,6 +22,11 @@ describe('provider catalog', () => {
         structuredOutput: true,
         usage: true,
       },
+      reasoningMapping: {
+        adapter: 'openai-reasoning-effort',
+        supportedEfforts: ['low', 'medium', 'high'],
+        providerValues: { low: 'low', medium: 'medium', high: 'high' },
+      },
     }))
   })
 
@@ -90,6 +95,11 @@ describe('provider catalog', () => {
         reasoning: true,
         structuredOutput: true,
         usage: true,
+      },
+      reasoningMapping: {
+        adapter: 'gemini-thinking-budget',
+        supportedEfforts: ['off', 'low', 'medium', 'high'],
+        providerValues: { off: 0, low: 1_024, medium: 8_192, high: 24_576 },
       },
     })
     expect(resolveModelProfileCapabilities({

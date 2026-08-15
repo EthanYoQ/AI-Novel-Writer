@@ -39,13 +39,8 @@ export class OpenAIProvider implements ILLMProvider {
       body.temperature = opts.temperature
     }
 
-    if (opts.thinking) {
-      if (isNovelAI) {
-        body.enable_thinking = true
-      } else {
-        // thinking 参数直接放在请求体顶层（非 extra_body，那是 OpenAI SDK 层概念）
-        body.thinking = { type: 'enabled' }
-      }
+    if (opts.reasoning?.adapter === 'openai-reasoning-effort' && !isNovelAI) {
+      body.reasoning_effort = opts.reasoning.reasoningEffort
     }
 
     if (opts.responseFormat && !isNovelAI) {

@@ -3,11 +3,15 @@
  * 渲染进程与主进程共同使用，持久化在 ~/.vela/provider-presets.json
  */
 
+import type { VerifiedReasoningMapping } from './reasoning-types'
+
 /** 单个模型的预设 — name + 该模型的输出 token 上限 */
 export interface ModelPreset {
   name: string
   /** Model-specific capability metadata. `maxTokens` remains the legacy output limit. */
   capabilities?: ModelCapabilities
+  /** Provider request mapping verified against the official model documentation. */
+  reasoningMapping?: VerifiedReasoningMapping
   maxTokens: number
 }
 
@@ -86,6 +90,12 @@ export function createProviderCatalog(): ProviderPreset[] {
           reasoning: true,
           structuredOutput: true,
           usage: true,
+        },
+        // https://docs.x.ai/developers/model-capabilities/text/reasoning
+        reasoningMapping: {
+          adapter: 'openai-reasoning-effort',
+          supportedEfforts: ['low', 'medium', 'high'],
+          providerValues: { low: 'low', medium: 'medium', high: 'high' },
         },
       },
     ],
@@ -179,6 +189,12 @@ export function createProviderCatalog(): ProviderPreset[] {
           reasoning: true,
           structuredOutput: true,
           usage: true,
+        },
+        // https://ai.google.dev/gemini-api/docs/generate-content/thinking
+        reasoningMapping: {
+          adapter: 'gemini-thinking-budget',
+          supportedEfforts: ['off', 'low', 'medium', 'high'],
+          providerValues: { off: 0, low: 1_024, medium: 8_192, high: 24_576 },
         },
       },
       { name: 'gemini-3.1-pro-preview', maxTokens: 65536 },
@@ -285,4 +301,38 @@ export function resolveModelProfileCapabilities(
 
   const model = preset.models.find(candidate => candidate.name === modelName)
   return validatedCapabilities(model?.capabilities)
+}
+
+/**
+ * Resolve only provider request mappings whose endpoint and exact model slug
+ * match an app-maintained built-in preset. User-entered capability flags are
+ * operational hints and never become protocol evidence.
+ */
+export function resolveModelProfileReasoningMapping(
+  profile: ModelCapabilityProfile,
+): VerifiedReasoningMapping | undefined {
+  if (
+    typeof profile.provider !== 'string'
+    || typeof profile.protocol !== 'string'
+    || typeof profile.modelName !== 'string'
+  ) return undefined
+
+  const provider = profile.provider
+  const protocol = profile.protocol
+  const modelName = profile.modelName.trim()
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.provider === provider)
+  if (
+    !preset
+    || preset.protocol !== protocol
+    || normalizedOfficialBaseUrl(profile.baseUrl) !== normalizedOfficialBaseUrl(preset.baseUrl)
+  ) return undefined
+
+  const mapping = preset.models.find(candidate => candidate.name === modelName)
+    ?.reasoningMapping
+  if (!mapping) return undefined
+  return {
+    adapter: mapping.adapter,
+    supportedEfforts: [...mapping.supportedEfforts],
+    providerValues: { ...mapping.providerValues },
+  }
 }

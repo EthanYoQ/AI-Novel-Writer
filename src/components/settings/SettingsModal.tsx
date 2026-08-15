@@ -27,6 +27,7 @@ import { useLayoutStore, type SettingsSection } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { Locale } from '../../i18n/types'
 import { alertError } from '../ui/AlertDialog'
+import ReasoningPolicySettings from './ReasoningPolicySettings'
 
 // ==================== 分类定义 ====================
 
@@ -760,6 +761,10 @@ function ModelForm({
             </div>
           </div>
         </div>
+      )}
+
+      {!isEmbedding && (
+        <ReasoningPolicySettings model={model} onModelChange={onChange} />
       )}
 
       <div className="flex items-center gap-2 pt-1">
