@@ -36,6 +36,67 @@ beforeEach(() => {
 })
 
 describe('workflow pause at a safe step boundary', () => {
+  it('atomically replaces provisional output and reconciles it to the terminal step result', async () => {
+    let finishStep: (() => void) | undefined
+    const completion = useWorkflowStore.getState().startWorkflow({
+      type: 'chapter_creation',
+      title: '流式草稿对账测试',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{
+        name: 'write',
+        description: 'stream and persist',
+        executor: async (_step, _context, callbacks) => {
+          callbacks.appendText('过期临时文本')
+          expect(callbacks.replaceText).toBeTypeOf('function')
+          callbacks.replaceText?.('安全正文预览')
+          await new Promise<void>(resolve => { finishStep = resolve })
+          return '已持久化终稿'
+        },
+      }],
+    })
+
+    await vi.waitFor(() => expect(finishStep).toBeTypeOf('function'))
+    expect(useWorkflowStore.getState().activeRuns[0]?.steps[0]?.result).toBe('安全正文预览')
+
+    finishStep!()
+    await completion
+    expect(useWorkflowStore.getState().history[0]?.steps[0]?.result).toBe('已持久化终稿')
+  })
+
+  it('allows cancellation cleanup but rejects late non-empty output mutations', async () => {
+    let callbacksRef: Parameters<WorkflowDefinition['steps'][number]['executor']>[2] | undefined
+    let finishStep: (() => void) | undefined
+    const completion = useWorkflowStore.getState().startWorkflow({
+      type: 'chapter_creation',
+      title: '取消后的流式输出测试',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{
+        name: 'write',
+        description: 'stream until cancelled',
+        executor: async (_step, _context, callbacks) => {
+          callbacksRef = callbacks
+          callbacks.replaceText?.('取消前安全预览')
+          await new Promise<void>(resolve => { finishStep = resolve })
+        },
+      }],
+    })
+    const runId = useWorkflowStore.getState().activeRuns[0].id
+    await vi.waitFor(() => expect(finishStep).toBeTypeOf('function'))
+
+    useWorkflowStore.getState().cancelWorkflow(runId)
+    callbacksRef?.appendText('晚到追加')
+    callbacksRef?.replaceText?.('晚到替换')
+    expect(useWorkflowStore.getState().activeRuns[0]?.steps[0]?.result).toBe('取消前安全预览')
+
+    callbacksRef?.replaceText?.('')
+    expect(useWorkflowStore.getState().activeRuns[0]?.steps[0]?.result).toBe('')
+    finishStep!()
+    await completion
+    expect(useWorkflowStore.getState().history[0]?.steps[0]?.result).toBe('')
+  })
+
   it('fails closed for a legacy definition that has no frozen project session', async () => {
     const executor = vi.fn(async () => undefined)
 

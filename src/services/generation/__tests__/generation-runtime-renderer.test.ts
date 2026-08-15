@@ -115,6 +115,94 @@ describe('GenerationRuntime renderer lease adapter', () => {
     expect(JSON.stringify(streamCall)).not.toContain('baseUrl')
   })
 
+  it('delivers authored stream text before the terminal completion arrives', async () => {
+    let streamRequestId = ''
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'llm:begin-execution-lease') return { success: true, lease: LEASE }
+      if (channel === 'llm:close-execution-lease') return { success: true }
+      if (channel === 'llm:generate-stream') {
+        const requestId = String(args[0])
+        streamRequestId = requestId
+        queueMicrotask(() => {
+          mocks.listeners.get('llm:stream-chunk')?.({
+            requestId,
+            chunk: '林岚推开门。',
+          } as never)
+        })
+        return { requestId, started: true }
+      }
+      throw new Error(`unexpected channel: ${channel}`)
+    })
+
+    const runtime = await createGenerationRuntime({
+      budget: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+    const streamed = vi.fn()
+    let completed = false
+    const execution = runtime.execute(async ({ session }) => session.complete({
+      purpose: 'renderer-progressive-preview',
+      output: 'visible-text',
+      messages: [{ role: 'user', content: 'write' }],
+    }, { onChunk: streamed })).then(result => {
+      completed = true
+      return result
+    })
+
+    await vi.waitFor(() => expect(streamed).toHaveBeenCalledWith('林岚推开门。'))
+    expect(completed).toBe(false)
+    mocks.listeners.get('llm:stream-done')?.({
+      requestId: streamRequestId,
+      fullText: '林岚推开门。',
+      finishReason: 'stop',
+    } as never)
+    await expect(execution).resolves.toMatchObject({ content: '林岚推开门。' })
+  })
+
+  it('ignores stream chunks that arrive after cancellation', async () => {
+    let streamRequestId = ''
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'llm:begin-execution-lease') return { success: true, lease: LEASE }
+      if (channel === 'llm:close-execution-lease') return { success: true }
+      if (channel === 'llm:cancel') return undefined
+      if (channel === 'llm:generate-stream') {
+        streamRequestId = String(args[0])
+        return { requestId: streamRequestId, started: true }
+      }
+      throw new Error(`unexpected channel: ${channel}`)
+    })
+
+    const runtime = await createGenerationRuntime({
+      budget: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+    const streamed = vi.fn()
+    const cancellation = new AbortController()
+    const execution = runtime.execute(async ({ session }) => session.complete({
+      purpose: 'renderer-cancelled-preview',
+      output: 'visible-text',
+      messages: [{ role: 'user', content: 'write' }],
+    }, { signal: cancellation.signal, onChunk: streamed }))
+    await vi.waitFor(() => expect(streamRequestId).not.toBe(''))
+    const chunkListener = mocks.listeners.get('llm:stream-chunk')
+
+    chunkListener?.({ requestId: streamRequestId, chunk: '取消前正文' } as never)
+    expect(streamed).toHaveBeenLastCalledWith('取消前正文')
+    cancellation.abort()
+    await expect(execution).rejects.toMatchObject({ code: 'CANCELLED' })
+
+    chunkListener?.({ requestId: streamRequestId, chunk: '取消后晚到正文' } as never)
+    expect(streamed).toHaveBeenCalledTimes(1)
+  })
+
   it('maps a typed unknown explicit model result before opening any stream', async () => {
     mocks.invoke.mockImplementation(async (channel: string) => {
       if (channel === 'llm:begin-execution-lease') {

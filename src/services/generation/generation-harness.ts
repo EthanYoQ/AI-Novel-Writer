@@ -100,6 +100,8 @@ export interface PhysicalGenerationRequest {
   messages: readonly GenerationMessage[]
   plan: Readonly<PhysicalGenerationPlan>
   signal: AbortSignal
+  /** Provisional provider text. Callers must reconcile it with the terminal completion. */
+  onChunk?: (chunk: string) => void
 }
 
 export interface ProviderCompletion {
@@ -147,6 +149,8 @@ export type GenerationOutcome =
 
 export interface GenerationExecutionOptions {
   signal?: AbortSignal
+  /** Provisional provider text. It is never terminal or persistence evidence. */
+  onChunk?: (chunk: string) => void
 }
 
 export interface GenerationSessionBudget {
@@ -452,6 +456,7 @@ export function createGenerationHarness(dependencies: {
                 messages: task.messages.map(message => Object.freeze({ ...message })),
                 plan,
                 signal: controller.signal,
+                onChunk: options?.onChunk,
               }),
               terminationPromise,
             ])
