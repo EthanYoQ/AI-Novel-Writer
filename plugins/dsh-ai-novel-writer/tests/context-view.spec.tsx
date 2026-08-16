@@ -41,6 +41,19 @@ function renderBody(state: NovelWorkbenchState): string {
     updateInitialization={vi.fn()}
     previewInitialization={vi.fn()}
     submitInitialization={vi.fn()}
+    openAsset={vi.fn()}
+    backToAssets={vi.fn()}
+    updateProjectSettings={vi.fn()}
+    updateAssetSummary={vi.fn()}
+    previewAssetChange={vi.fn()}
+    submitAssetChange={vi.fn()}
+    discardAssetChanges={vi.fn()}
+    reloadStaleAsset={vi.fn()}
+    setCharacterSearch={vi.fn()}
+    selectCharacter={vi.fn()}
+    createCharacter={vi.fn()}
+    updateCharacter={vi.fn()}
+    deleteCharacter={vi.fn()}
   />)
 }
 
@@ -93,6 +106,7 @@ describe('novel workbench context summary', () => {
       },
       draft: { revision: 'absent', preview: '# 退潮\n\n第一封信。', bytes: 48, truncated: true },
       omittedSources: ['.ai-novel/characters.json'],
+      screen: { kind: 'root' },
     }
 
     const html = renderBody(state)

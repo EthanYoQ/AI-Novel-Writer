@@ -21,7 +21,7 @@ describe('novel workbench initialization', () => {
     const read = vi.fn().mockResolvedValue({ status: 'not-initialized' })
     const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
     const controller = new NovelWorkbenchController(
-      { read, prompt },
+      { read, readAsset: vi.fn(), prompt },
       vi.fn(),
       () => IDENTITY,
     )
@@ -79,6 +79,46 @@ describe('novel workbench initialization', () => {
     })
   })
 
+  it('keeps a submitted initialization locked when reread still reports no project', async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = new NovelWorkbenchController({
+      read: vi.fn().mockResolvedValue({ status: 'not-initialized' }),
+      readAsset: vi.fn(),
+      prompt,
+    }, vi.fn(), () => IDENTITY)
+    controller.setTarget({
+      workspaceId: WORKSPACE_ID,
+      sessionId: SESSION_ID,
+      agentPreset: 'ai-novel-writer',
+      approval: 'ask',
+    })
+    await controller.open()
+    controller.updateInitialization({ title: '潮汐来信', genre: '悬疑' })
+    controller.previewInitialization()
+    const preview = controller.getSnapshot()
+    if (preview.status !== 'not-initialized' || preview.initialization.preview === undefined) {
+      throw new Error('missing initialization preview')
+    }
+
+    await controller.submitInitialization()
+    controller.novelApplySettled({
+      isError: true,
+      code: 'APPROVAL_REJECTED',
+      attribution: {
+        kind: 'initialize',
+        requestJson: preview.initialization.preview.json.replace('潮汐来信', '旧提案'),
+      },
+    })
+    await controller.refresh()
+    await controller.submitInitialization()
+
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'not-initialized',
+      initialization: { phase: 'submitted', preview: preview.initialization.preview },
+    })
+  })
+
   it.each([
     [
       { agentPreset: 'default', approval: 'ask' as const },
@@ -95,7 +135,7 @@ describe('novel workbench initialization', () => {
   ])('refuses submission before prompting when the selected Session cannot approve %#', async (selection, message) => {
     const prompt = vi.fn()
     const controller = new NovelWorkbenchController(
-      { read: vi.fn().mockResolvedValue({ status: 'not-initialized' }), prompt },
+      { read: vi.fn().mockResolvedValue({ status: 'not-initialized' }), readAsset: vi.fn(), prompt },
       vi.fn(),
       () => IDENTITY,
     )
@@ -121,7 +161,7 @@ describe('novel workbench initialization', () => {
     const read = vi.fn()
       .mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
       .mockRejectedValueOnce(new NovelWorkbenchDisconnectedError())
-    const controller = new NovelWorkbenchController({ read, prompt: vi.fn() }, vi.fn())
+    const controller = new NovelWorkbenchController({ read, readAsset: vi.fn(), prompt: vi.fn() }, vi.fn())
     controller.setTarget({
       workspaceId: WORKSPACE_ID,
       sessionId: SESSION_ID,
@@ -152,6 +192,7 @@ describe('novel workbench initialization', () => {
   it('keeps the initialization draft when Session prompt admission is rejected', async () => {
     const controller = new NovelWorkbenchController({
       read: vi.fn().mockResolvedValue({ status: 'not-initialized' }),
+      readAsset: vi.fn(),
       prompt: vi.fn().mockResolvedValue({
         ok: false,
         error: { code: 'agent-busy', message: '当前会话正在运行' },
@@ -183,6 +224,7 @@ describe('novel workbench initialization', () => {
     const createIdentity = vi.fn(() => IDENTITY)
     const controller = new NovelWorkbenchController({
       read: vi.fn().mockResolvedValue({ status: 'not-initialized' }),
+      readAsset: vi.fn(),
       prompt: vi.fn(),
     }, vi.fn(), createIdentity)
     controller.setTarget({
@@ -206,6 +248,7 @@ describe('novel workbench initialization', () => {
     let finish: (() => void) | undefined
     const controller = new NovelWorkbenchController({
       read: vi.fn().mockResolvedValue({ status: 'not-initialized' }),
+      readAsset: vi.fn(),
       prompt: vi.fn(() => new Promise<import('../src/client/workbench-store.ts').NovelPromptResult>(resolve => {
         finish = () => { resolve({ ok: true, value: { accepted: true } }) }
       })),
@@ -238,6 +281,7 @@ describe('novel workbench initialization', () => {
     }))
     const controller = new NovelWorkbenchController({
       read: vi.fn().mockResolvedValue({ status: 'not-initialized' }),
+      readAsset: vi.fn(),
       prompt,
     }, vi.fn(), () => IDENTITY)
     controller.setTarget({
@@ -266,6 +310,7 @@ describe('novel workbench initialization', () => {
     }))
     const controller = new NovelWorkbenchController({
       read: vi.fn().mockResolvedValue({ status: 'not-initialized' }),
+      readAsset: vi.fn(),
       prompt,
     }, vi.fn(), () => IDENTITY)
     controller.setTarget({
@@ -302,6 +347,7 @@ describe('novel workbench initialization', () => {
     let finish: ((value: import('../src/client/workbench-store.ts').NovelPromptResult) => void) | undefined
     const controller = new NovelWorkbenchController({
       read: vi.fn().mockResolvedValue({ status: 'not-initialized' }),
+      readAsset: vi.fn(),
       prompt: vi.fn(() => new Promise<import('../src/client/workbench-store.ts').NovelPromptResult>(resolve => {
         finish = resolve
       })),

@@ -12,6 +12,7 @@ const packageRoot = resolve(import.meta.dirname, '..', '..', '..')
 function normalize(snapshot) {
   return snapshot
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/giu, '{{projectId}}')
+    .replace(/[0-9a-f]{64}/giu, '{{revision}}')
     .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/gu, '{{timestamp}}')
 }
 
@@ -100,6 +101,40 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   const submittedSnapshot = normalize(await drawer.ariaSnapshot())
   await drawer.getByRole('button', { name: '关闭小说工作台' }).click()
 
+  const projectRoot = join(scaffold.workspaceCwd, workspaceName)
+  const assetRoot = join(projectRoot, '.ai-novel')
+  await mkdir(assetRoot, { recursive: true })
+  await writeFile(join(assetRoot, 'project.json'), `${JSON.stringify({
+    formatVersion: 1,
+    kind: 'harness-novel-project',
+    projectId: '123e4567-e89b-42d3-a456-426614174000',
+    title: '潮汐来信',
+    language: 'zh-CN',
+    genre: '悬疑',
+    plannedChapters: 20,
+    targetWordsPerChapter: 3000,
+    creativeStrategy: 'auto',
+    createdAt: '2026-08-16T00:00:00.000Z',
+    updatedAt: '2026-08-16T00:00:00.000Z',
+  }, null, 2)}\n`, 'utf8')
+  await writeFile(join(assetRoot, 'characters.json'), `${JSON.stringify({ characters: [{
+    id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案', goal: '找到真相', relationships: [], notes: '',
+  }] }, null, 2)}\n`, 'utf8')
+  await trigger.click()
+  await drawer.getByRole('heading', { name: '小说资产' }).waitFor({ timeout: 10_000 })
+  const assetRootSnapshot = normalize(await drawer.ariaSnapshot())
+  await drawer.getByRole('button', { name: /项目设置/ }).click()
+  await drawer.getByRole('textbox', { name: '小说标题' }).fill('潮汐之后')
+  await drawer.getByRole('textbox', { name: '修改摘要' }).fill('调整项目定位')
+  await drawer.getByRole('button', { name: '预览修改提案' }).click()
+  await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
+  const projectEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  await drawer.getByRole('button', { name: '返回资产' }).click()
+  await drawer.getByRole('button', { name: /人物设定/ }).click()
+  await drawer.getByRole('textbox', { name: '搜索人物' }).fill('林')
+  const characterEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  await drawer.getByRole('button', { name: '关闭小说工作台' }).click()
+
   await page.getByRole('button', { name: '设置', exact: true }).click()
   const settings = page.getByRole('dialog', { name: '设置' })
   await settings.getByRole('button', { name: '插件' }).click()
@@ -119,6 +154,9 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
     },
     preview: previewSnapshot,
     submitted: submittedSnapshot,
+    assetRoot: assetRootSnapshot,
+    projectEditor: projectEditorSnapshot,
+    characterEditor: characterEditorSnapshot,
     settings: settingsSnapshot,
   }
   } catch (error) {

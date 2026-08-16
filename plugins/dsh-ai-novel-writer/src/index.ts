@@ -7,8 +7,10 @@ import type { ConnectionRpcHandler, HostConnectionHandle } from '@deepseek-ai/ds
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { WorkspaceId, type Workspace } from '@deepseek-ai/dsh-workspace'
 import z from '@deepseek-ai/schemastery'
-import { readNovelContext } from './context-window.ts'
+import { parseNovelAssetRef } from './context-types.ts'
+import { readNovelAsset, readNovelContext } from './context-window.ts'
 import { createPresetInstaller } from './preset-installer.ts'
+import type { AssetRef } from './types.ts'
 
 export { openNovelProject } from './novel-project.ts'
 export type { NovelProjectOptions } from './novel-project.ts'
@@ -101,6 +103,19 @@ function contextRequest(value: unknown): { readonly workspaceId: WorkspaceId; re
   return { workspaceId: WorkspaceId(record.workspaceId), chapter: record.chapter as number }
 }
 
+function assetRequest(value: unknown): { readonly workspaceId: WorkspaceId; readonly target: AssetRef } | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (Object.keys(record).sort().join('\0') !== ['target', 'workspaceId'].join('\0')) return undefined
+  if (typeof record.workspaceId !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.workspaceId)) return undefined
+  try {
+    return { workspaceId: WorkspaceId(record.workspaceId), target: parseNovelAssetRef(record.target) }
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Create the loopback preset setup RPC handler.
  *
@@ -136,7 +151,7 @@ export function createPresetSetupRpcHandler(
  * @param installer Preset installer owned by the Host plugin instance.
  * @param workspaces Authoritative Workspace registry read face.
  * @param reportFailure Host-only diagnostic sink for underlying errors.
- * @returns A handler whose context endpoint accepts only opaque Workspace identity and chapter number.
+ * @returns A handler whose read endpoints accept only opaque Workspace identity and recognized selectors.
  */
 export function createAiNovelRpcHandler(
   installer: ReturnType<typeof createPresetInstaller>,
@@ -148,21 +163,40 @@ export function createAiNovelRpcHandler(
     if (endpoint === 'preset/status' || endpoint === 'preset/install') {
       return setup(endpoint, payload, signal)
     }
-    if (endpoint !== 'context/read') return badRequest(`Unknown AI novel endpoint: ${endpoint}`)
-    const request = contextRequest(payload)
-    if (request === undefined) {
-      return badRequest('Novel context payload must contain only a Workspace UUID and a positive chapter')
+    if (endpoint !== 'context/read' && endpoint !== 'asset/read') {
+      return badRequest(`Unknown AI novel endpoint: ${endpoint}`)
     }
-    const workspace = workspaces.get(request.workspaceId)
-    if (workspace === undefined) return badRequest(`Unknown Workspace: ${request.workspaceId}`)
+    let workspaceId: WorkspaceId
+    let read: (root: string) => Promise<unknown>
+    if (endpoint === 'context/read') {
+      const request = contextRequest(payload)
+      if (request === undefined) {
+        return badRequest('Novel context payload must contain only a Workspace UUID and a positive chapter')
+      }
+      workspaceId = request.workspaceId
+      read = root => readNovelContext(root, request.chapter, signal)
+    } else {
+      const request = assetRequest(payload)
+      if (request === undefined) {
+        return badRequest('Novel asset payload must contain only a Workspace UUID and a recognized target')
+      }
+      workspaceId = request.workspaceId
+      read = root => readNovelAsset(root, request.target, signal)
+    }
+    const workspace = workspaces.get(workspaceId)
+    if (workspace === undefined) return badRequest(`Unknown Workspace: ${workspaceId}`)
     try {
-      return { ok: true, value: await readNovelContext(workspace.path, request.chapter, signal) }
+      return { ok: true, value: await read(workspace.path) }
     } catch (error) {
       if (signal.aborted) {
-        return { ok: false, error: { code: 'cancelled', message: 'Novel context request was cancelled', details: {} } }
+        return { ok: false, error: {
+          code: 'cancelled',
+          message: endpoint === 'context/read' ? 'Novel context request was cancelled' : 'Novel asset request was cancelled',
+          details: {},
+        } }
       }
       reportInternalFailure(reportFailure, error)
-      return internalFailure('Novel context request failed')
+      return internalFailure(endpoint === 'context/read' ? 'Novel context request failed' : 'Novel asset request failed')
     }
   }
 }

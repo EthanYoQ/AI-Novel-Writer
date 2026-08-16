@@ -1,8 +1,36 @@
 /** Framework-independent state and orchestration for the compact novel workbench. */
 
 import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { NovelContextReadResult, NovelContextReady } from '../context-types.ts'
+import type { NovelAssetReadWireResult, NovelContextReadResult, NovelContextReady } from '../context-types.ts'
 import type { CreativeStrategy, NovelProjectId } from '../types.ts'
+import {
+  assetProposalPrompt,
+  parseCharacters,
+  parseProjectManifest,
+  projectDraft,
+  sameCharacters,
+  serializeCharacters,
+  serializeProject,
+  visibleCharacterIds,
+  type NovelCharacterDraft,
+  type NovelCharactersEditorScreen,
+  type NovelProjectEditorScreen,
+  type NovelProjectSettingsDraft,
+  type NovelWorkbenchEditableTarget,
+  type NovelWorkbenchScreen,
+  type ProjectManifestEditorSource,
+} from './asset-editor.ts'
+
+export type {
+  NovelAssetChangePreview,
+  NovelAssetEditorPhase,
+  NovelCharacterDraft,
+  NovelCharactersEditorScreen,
+  NovelProjectEditorScreen,
+  NovelProjectSettingsDraft,
+  NovelWorkbenchEditableTarget,
+  NovelWorkbenchScreen,
+} from './asset-editor.ts'
 
 /** Dedicated Preset id expected on a Session that receives novel proposals. */
 export const AI_NOVEL_PRESET_ID = 'ai-novel-writer'
@@ -26,6 +54,21 @@ export interface NovelInitializationDraft {
 
 /** Known native-approval availability for the selected Session. */
 export type NovelApprovalAvailability = 'ask' | 'never' | 'unknown'
+
+/** Minimal durable tool outcome needed to distinguish approval rejection from a committed change. */
+export interface NovelApplyOutcome {
+  readonly isError: boolean
+  readonly code: string | undefined
+  readonly attribution:
+    | { readonly kind: 'initialize'; readonly requestJson: string }
+    | {
+        readonly kind: 'replace'
+        readonly targetKind: string
+        readonly baseRevision: string
+        readonly replacement: string
+      }
+    | undefined
+}
 
 /** Error emitted when the browser has no live Host connection. */
 export class NovelWorkbenchDisconnectedError extends Error {
@@ -59,6 +102,18 @@ export interface NovelWorkbenchPort {
    * @throws When transport, response validation, project reading, or cancellation fails.
    */
   read(workspaceId: WorkspaceId, chapter: number, signal: AbortSignal): Promise<NovelContextReadResult>
+  /**
+   * @param workspaceId Opaque Workspace registry identity, never a local path.
+   * @param target Recognized project-owned asset without a filesystem path.
+   * @param signal Cancellation signal for the Host transport and filesystem read.
+   * @returns Exact normalized asset text and its authoritative revision.
+   * @throws When transport, response validation, project reading, or cancellation fails.
+   */
+  readAsset(
+    workspaceId: WorkspaceId,
+    target: NovelWorkbenchEditableTarget,
+    signal: AbortSignal,
+  ): Promise<NovelAssetReadWireResult>
   /**
    * @param sessionId Current dedicated Session identity.
    * @param text Deterministic proposal prompt submitted as an ordinary queued turn.
@@ -100,7 +155,7 @@ interface NovelWorkbenchStateBase {
 export type NovelWorkbenchState =
   | ({ readonly status: 'idle' | 'empty' | 'loading' | 'disconnected' } & NovelWorkbenchStateBase)
   | ({ readonly status: 'not-initialized'; readonly initialization: NovelInitializationState } & NovelWorkbenchStateBase)
-  | (NovelContextReady & NovelWorkbenchStateBase)
+  | (NovelContextReady & NovelWorkbenchStateBase & { readonly screen: NovelWorkbenchScreen })
   | ({ readonly status: 'error'; readonly message: string } & NovelWorkbenchStateBase)
 
 const DEFAULT_INITIALIZATION: NovelInitializationDraft = {
@@ -208,6 +263,7 @@ export class NovelWorkbenchController {
   readonly #port: NovelWorkbenchPort
   readonly #reportListenerError: (error: unknown) => void
   readonly #createIdentity: () => NovelInitializationIdentity
+  readonly #now: () => string
   #state: NovelWorkbenchState = { status: 'idle', open: false }
   #target: NovelWorkbenchTarget | undefined
   #draft: NovelInitializationDraft = DEFAULT_INITIALIZATION
@@ -216,6 +272,10 @@ export class NovelWorkbenchController {
   #promptRequest = 0
   #activeRead: { readonly abort: AbortController; readonly done: Promise<void> } | undefined
   #activePrompt: Promise<void> | undefined
+  #projectSource: ProjectManifestEditorSource | undefined
+  #projectOriginal: NovelProjectSettingsDraft | undefined
+  #charactersOriginal: readonly NovelCharacterDraft[] | undefined
+  #staleAsset: NovelAssetReadWireResult | undefined
   #latest: Promise<void> = Promise.resolve()
   #disposed = false
 
@@ -223,15 +283,18 @@ export class NovelWorkbenchController {
    * @param port Closed context-read and Session-prompt operations.
    * @param reportListenerError Error sink for isolated render subscriber failures.
    * @param createIdentity Identity factory invoked only after local form validation succeeds.
+   * @param now Canonical timestamp factory used only when previewing a project-settings replacement.
    */
   public constructor(
     port: NovelWorkbenchPort,
     reportListenerError: (error: unknown) => void,
     createIdentity: () => NovelInitializationIdentity = defaultIdentity,
+    now: () => string = () => new Date().toISOString(),
   ) {
     this.#port = port
     this.#reportListenerError = reportListenerError
     this.#createIdentity = createIdentity
+    this.#now = now
   }
 
   /** @returns Current immutable workbench state. */
@@ -338,6 +401,265 @@ export class NovelWorkbenchController {
   }
 
   /**
+   * Read one recognized editable asset and drill into its compact editor.
+   *
+   * @param target Project settings or the complete characters asset.
+   * @returns Completion after the exact revision read settles.
+   */
+  public openAsset(target: NovelWorkbenchEditableTarget): Promise<void> {
+    if (this.#disposed || this.#state.status !== 'ready') return Promise.resolve()
+    this.#promptRequest += 1
+    this.#staleAsset = undefined
+    return this.#startAssetRead(target, 'open')
+  }
+
+  /** Return from a drill-in editor to the compact asset list. @returns Nothing. */
+  public backToAssets(): void {
+    if (this.#disposed || this.#state.status !== 'ready') return
+    this.#promptRequest += 1
+    this.#cancelRead()
+    this.#staleAsset = undefined
+    this.#setReadyScreen({ kind: 'root' })
+  }
+
+  /**
+   * Update project settings while immutable manifest fields remain controller-owned.
+   *
+   * @param patch Editable fields changed by the user.
+   * @returns Nothing; changes are ignored while prompt admission is pending or approval is awaited.
+   */
+  public updateProjectSettings(patch: Partial<NovelProjectSettingsDraft>): void {
+    const screen = this.#projectScreen()
+    if (screen === undefined || !this.#assetMayChange(screen)) return
+    const draft = { ...screen.draft, ...patch }
+    const dirty = this.#projectOriginal !== undefined && JSON.stringify(draft) !== JSON.stringify(this.#projectOriginal)
+    this.#setReadyScreen({
+      ...screen,
+      draft,
+      dirty,
+      phase: dirty ? 'editing' : 'clean',
+      replacement: undefined,
+      preview: undefined,
+      message: undefined,
+    })
+  }
+
+  /**
+   * Replace the human-readable summary attached to the eventual single-asset proposal.
+   *
+   * @param summary Short explanation shown in the model request and approval card.
+   * @returns Nothing; changes are ignored while prompt admission is pending or approval is awaited.
+   */
+  public updateAssetSummary(summary: string): void {
+    const screen = this.#assetScreen()
+    if (screen === undefined || !this.#assetMayChange(screen)) return
+    this.#setReadyScreen({ ...screen, summary, phase: screen.dirty ? 'editing' : 'clean', preview: undefined, message: undefined })
+  }
+
+  /**
+   * Filter the in-memory characters list without changing durable content.
+   *
+   * @param search Case-insensitive id, name, role, summary, or goal query.
+   * @returns Nothing.
+   */
+  public setCharacterSearch(search: string): void {
+    const screen = this.#charactersScreen()
+    if (screen === undefined) return
+    this.#setReadyScreen({ ...screen, search, visibleCharacterIds: visibleCharacterIds(screen.characters, search) })
+  }
+
+  /**
+   * Select one existing character record.
+   *
+   * @param id Stable character id in the current complete asset.
+   * @returns Nothing.
+   * @throws {Error} When the id is not present.
+   */
+  public selectCharacter(id: string): void {
+    const screen = this.#charactersScreen()
+    if (screen === undefined) return
+    if (!screen.characters.some(character => character.id === id)) throw new Error('Character does not exist')
+    this.#setReadyScreen({ ...screen, selectedId: id })
+  }
+
+  /**
+   * Add and select one empty character draft.
+   *
+   * @param id Optional caller-selected id; otherwise a UUID is generated.
+   * @returns Nothing; duplicate ids are rejected and submitted editors are unchanged.
+   */
+  public createCharacter(id: string = crypto.randomUUID()): void {
+    const screen = this.#charactersScreen()
+    if (screen === undefined || !this.#assetMayChange(screen)) return
+    const normalizedId = id.trim()
+    if (normalizedId === '' || screen.characters.some(character => character.id === normalizedId)) {
+      this.#setReadyScreen({ ...screen, phase: 'error', message: '人物 ID 不能为空或重复。' })
+      return
+    }
+    const characters = [...screen.characters, {
+      id: normalizedId,
+      name: '',
+      role: '',
+      summary: '',
+      goal: '',
+      relationshipsText: '',
+      notes: '',
+    }]
+    this.#setCharactersDraft(screen, characters, normalizedId)
+  }
+
+  /**
+   * Update the selected character record.
+   *
+   * @param patch Editable character fields.
+   * @returns Nothing; changes are ignored without a selection or during prompt admission.
+   */
+  public updateCharacter(patch: Partial<NovelCharacterDraft>): void {
+    const screen = this.#charactersScreen()
+    if (screen === undefined || screen.selectedId === undefined || !this.#assetMayChange(screen)) return
+    const selectedIndex = screen.characters.findIndex(character => character.id === screen.selectedId)
+    const characters = screen.characters.map(character => character.id === screen.selectedId
+      ? { ...character, ...patch }
+      : character)
+    this.#setCharactersDraft(screen, characters, characters[selectedIndex]?.id)
+  }
+
+  /** Remove the selected character from the proposed complete asset. @returns Nothing. */
+  public deleteCharacter(): void {
+    const screen = this.#charactersScreen()
+    if (screen === undefined || screen.selectedId === undefined || !this.#assetMayChange(screen)) return
+    const index = screen.characters.findIndex(character => character.id === screen.selectedId)
+    const characters = screen.characters.filter(character => character.id !== screen.selectedId)
+    const selectedId = characters[Math.min(index, characters.length - 1)]?.id
+    this.#setCharactersDraft(screen, characters, selectedId)
+  }
+
+  /** Validate and expose the exact single-asset replacement prompt. @returns Nothing; errors remain visible in editor state. */
+  public previewAssetChange(): void {
+    const screen = this.#assetScreen()
+    if (screen === undefined || this.#activePrompt !== undefined || screen.phase === 'submitted' || screen.phase === 'stale') return
+    const blocker = submissionBlocker(this.#target)
+    if (blocker !== undefined || !screen.dirty) {
+      this.#setReadyScreen({ ...screen, phase: 'error', message: blocker ?? '没有需要提交的修改。' })
+      return
+    }
+    try {
+      const replacement = screen.kind === 'project'
+        ? serializeProject(this.#requiredProjectSource(), screen.draft, this.#now())
+        : serializeCharacters(screen.characters)
+      const target: NovelWorkbenchEditableTarget = { kind: screen.kind }
+      const prompt = assetProposalPrompt(target, screen.baseRevision, screen.originalText, replacement, screen.summary)
+      this.#setReadyScreen({ ...screen, phase: 'preview', replacement, preview: { prompt, replacement }, message: undefined })
+    } catch (error) {
+      this.#setReadyScreen({ ...screen, phase: 'error', message: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  /**
+   * Submit the exact preview through the selected Session without writing from the browser.
+   *
+   * @returns Completion after Session admission; duplicate and stale submissions return immediately.
+   */
+  public async submitAssetChange(): Promise<void> {
+    const screen = this.#assetScreen()
+    if (this.#disposed
+      || screen === undefined
+      || this.#activePrompt !== undefined
+      || screen.preview === undefined
+      || (screen.phase !== 'preview' && screen.phase !== 'error')) return
+    const target = this.#target
+    const blocker = submissionBlocker(target)
+    if (target === undefined || blocker !== undefined) {
+      this.#setReadyScreen({ ...screen, phase: 'error', message: blocker ?? '请先预览修改。' })
+      return
+    }
+    this.#cancelRead()
+    this.#setReadyScreen({ ...screen, phase: 'submitting', message: undefined })
+    const request = ++this.#promptRequest
+    const done = this.#submitAsset(request, target.sessionId, screen.preview.prompt)
+    this.#activePrompt = done
+    await done
+    if (this.#activePrompt === done) this.#activePrompt = undefined
+  }
+
+  /**
+   * Publish one completed `novel_apply_change` outcome before its authoritative asset reread.
+   *
+   * @param outcome Durable tool error identity; successful values remain filesystem-authoritative.
+   * @returns Nothing; rejected edits stay dirty and no result is interpreted as a browser write.
+   */
+  public novelApplySettled(outcome: NovelApplyOutcome): void {
+    if (this.#disposed) return
+    const editor = this.#assetScreen()
+    if (editor !== undefined
+      && editor.phase === 'submitted'
+      && outcome.isError
+      && outcome.attribution?.kind === 'replace'
+      && outcome.attribution.targetKind === editor.kind
+      && outcome.attribution.baseRevision === editor.baseRevision
+      && outcome.attribution.replacement === editor.replacement) {
+      if (outcome.code === 'STALE_REVISION') {
+        this.#setReadyScreen({
+          ...editor,
+          phase: 'stale',
+          message: '提交使用的 revision 已过期。当前提案仍保留；重新读取最新版本后再核对修改。',
+        })
+        return
+      }
+      const rejected = outcome.code === 'APPROVAL_REJECTED'
+      this.#setReadyScreen({
+        ...editor,
+        phase: 'error',
+        message: rejected
+          ? 'Harness 原生审批已拒绝；磁盘未改变，当前修改仍保留。'
+          : outcome.code === undefined
+            ? '修改未保存；原生审批可能被拒绝或工具执行失败。当前修改仍保留，请查看对话详情。'
+            : `修改未保存：${outcome.code}`,
+      })
+      return
+    }
+    if (this.#state.status === 'not-initialized'
+      && this.#state.initialization.phase === 'submitted'
+      && outcome.isError
+      && outcome.attribution?.kind === 'initialize'
+      && outcome.attribution.requestJson === this.#state.initialization.preview?.json) {
+      this.#setInitializationError(outcome.code === 'APPROVAL_REJECTED'
+        ? 'Harness 原生审批已拒绝；小说项目仍未初始化。'
+        : outcome.code === undefined
+          ? '初始化未保存；原生审批可能被拒绝或工具执行失败。请查看对话详情。'
+          : `初始化未保存：${outcome.code}`)
+    }
+  }
+
+  /** Replace a stale dirty editor with the latest authoritative asset. @returns Nothing. */
+  public reloadStaleAsset(): void {
+    const latest = this.#staleAsset
+    const editor = this.#assetScreen()
+    if (latest === undefined) {
+      if (editor !== undefined && editor.phase === 'stale') {
+        void this.#startAssetRead({ kind: editor.kind }, 'reload')
+      }
+      return
+    }
+    if (this.#state.status !== 'ready') return
+    this.#staleAsset = undefined
+    this.#loadAsset(latest)
+  }
+
+  /** Restore the exact base asset and discard unsent local edits. @returns Nothing. */
+  public discardAssetChanges(): void {
+    const screen = this.#assetScreen()
+    if (screen === undefined || this.#activePrompt !== undefined) return
+    const target: NovelWorkbenchEditableTarget = { kind: screen.kind }
+    this.#loadAsset({
+      target,
+      revision: screen.baseRevision,
+      text: screen.originalText,
+      bytes: new TextEncoder().encode(screen.originalText).byteLength,
+    })
+  }
+
+  /**
    * Select and read one planned chapter while the workbench is open.
    *
    * @param chapter One-based chapter number within the loaded project plan.
@@ -360,7 +682,9 @@ export class NovelWorkbenchController {
    */
   public async submitInitialization(): Promise<void> {
     if (this.#disposed || this.#state.status !== 'not-initialized') return
-    if (this.#activePrompt !== undefined || this.#state.initialization.phase === 'submitting') return
+    if (this.#activePrompt !== undefined
+      || this.#state.initialization.phase === 'submitting'
+      || this.#state.initialization.phase === 'submitted') return
     const target = this.#target
     const blocker = submissionBlocker(target)
     if (blocker !== undefined || target === undefined) {
@@ -383,14 +707,48 @@ export class NovelWorkbenchController {
 
   /** @returns Completion after an explicit reread settles, or immediately while closed. */
   public refresh(): Promise<void> {
-    return this.#state.open ? this.#startRead('refresh') : Promise.resolve()
+    if (this.#activePrompt !== undefined) return Promise.resolve()
+    const screen = this.#assetScreen()
+    if (screen !== undefined) return this.#startAssetRead({ kind: screen.kind }, 'refresh')
+    if (!this.#state.open) return Promise.resolve()
+    return this.#startRead('refresh')
   }
 
   /** Abort the active read and expose disconnected state without waiting for settlement. @returns Nothing. */
   public disconnected(): void {
     if (this.#disposed) return
-    this.#promptRequest += 1
     this.#cancelRead()
+    if (this.#activePrompt !== undefined) {
+      const pendingEditor = this.#assetScreen()
+      if (pendingEditor !== undefined) {
+        this.#setReadyScreen({
+          ...pendingEditor,
+          phase: 'submitting',
+          message: 'Harness 连接已断开；提案是否已进入会话尚未确定，结果返回前不能重试。',
+        }, { kind: 'disconnected', message: 'Harness 连接已断开，正在等待原提案结果。' })
+      } else if (this.#state.status === 'not-initialized') {
+        this.#set({
+          ...this.#state,
+          initialization: {
+            ...this.#state.initialization,
+            phase: 'submitting',
+            message: 'Harness 连接已断开；初始化提案是否已进入会话尚未确定，结果返回前不能重试。',
+          },
+          readFeedback: { kind: 'disconnected', message: 'Harness 连接已断开，正在等待原提案结果。' },
+        })
+      }
+      return
+    }
+    this.#promptRequest += 1
+    const editor = this.#assetScreen()
+    if (editor !== undefined) {
+      this.#setReadyScreen({
+        ...editor,
+        phase: 'error',
+        message: 'Harness 连接已断开；当前未发送修改仍保留在浏览器中。',
+      }, { kind: 'disconnected', message: '读取失败：Harness 连接已断开。' })
+      return
+    }
     this.#set({
       status: 'disconnected',
       open: this.#state.open,
@@ -423,6 +781,111 @@ export class NovelWorkbenchController {
     return latest
   }
 
+  #startAssetRead(target: NovelWorkbenchEditableTarget, reason: 'open' | 'refresh' | 'reload'): Promise<void> {
+    const latest = this.#runAssetRead(target, reason)
+    this.#latest = latest
+    return latest
+  }
+
+  async #runAssetRead(target: NovelWorkbenchEditableTarget, reason: 'open' | 'refresh' | 'reload'): Promise<void> {
+    if (this.#disposed || this.#state.status !== 'ready') return
+    const selected = this.#target
+    if (selected === undefined) return
+    const request = ++this.#request
+    const previous = this.#activeRead
+    previous?.abort.abort()
+    if (reason === 'open') this.#setReadyScreen({ kind: 'asset-loading', target })
+    else this.#set({
+      ...this.#state,
+      readFeedback: { kind: 'loading', message: '正在重新读取当前资产…' },
+    })
+    await previous?.done
+    if (this.#disposed || request !== this.#request) return
+    const abort = new AbortController()
+    const done = this.#settleAssetRead(request, selected, target, reason, abort.signal)
+    const active = { abort, done }
+    this.#activeRead = active
+    await done
+    if (this.#activeRead === active) this.#activeRead = undefined
+  }
+
+  async #settleAssetRead(
+    request: number,
+    selected: NovelWorkbenchTarget,
+    target: NovelWorkbenchEditableTarget,
+    reason: 'open' | 'refresh' | 'reload',
+    signal: AbortSignal,
+  ): Promise<void> {
+    try {
+      const result = await this.#port.readAsset(selected.workspaceId, target, signal)
+      if (this.#disposed || request !== this.#request || this.#state.status !== 'ready') return
+      if (result.target.kind !== target.kind) throw new Error('Host returned a different novel asset')
+      if (reason === 'reload') {
+        this.#staleAsset = undefined
+        this.#loadAsset(result, { kind: 'success', message: '重新载入完成：已载入最新资产 revision。' })
+        return
+      }
+      const current = this.#assetScreen()
+      if (reason === 'refresh' && current?.phase === 'submitted' && result.revision === current.baseRevision) {
+        this.#setReadyScreen({ ...current, message: '提案已发送，正在等待原生审批或资产 revision 更新。' }, {
+          kind: 'success', message: '重新读取完成：资产尚未发生已批准的修改。',
+        })
+        return
+      }
+      if (reason === 'refresh' && current?.phase === 'submitted' && result.revision !== current.baseRevision) {
+        if (current.replacement === result.text) {
+          this.#staleAsset = undefined
+          this.#loadAsset(result, { kind: 'success', message: '重新读取完成：已载入批准后的资产 revision。' })
+        } else {
+          this.#staleAsset = result
+          this.#setReadyScreen({
+            ...current,
+            phase: 'stale',
+            latestRevision: result.revision,
+            message: '资产已被其他修改更新，内容与已提交提案不一致。提案仍保留，请核对后重新载入。',
+          }, { kind: 'success', message: '重新读取完成：发现了不同于已提交提案的资产 revision。' })
+        }
+        return
+      }
+      if (reason === 'refresh' && current !== undefined && current.dirty && result.revision !== current.baseRevision) {
+        this.#staleAsset = result
+        this.#setReadyScreen({
+          ...current,
+          phase: 'stale',
+          latestRevision: result.revision,
+          message: '磁盘内容已变化。当前未发送修改已保留；重新载入后才能继续提交。',
+        }, { kind: 'success', message: '重新读取完成：发现了更新的资产 revision。' })
+        return
+      }
+      if (reason === 'refresh' && current !== undefined && current.dirty) {
+        this.#setReadyScreen(current, { kind: 'success', message: '重新读取完成：当前 revision 未变化。' })
+        return
+      }
+      this.#staleAsset = undefined
+      this.#loadAsset(result, { kind: 'success', message: '读取完成：已载入精确资产 revision。' })
+    } catch (error) {
+      if (this.#disposed || request !== this.#request || this.#state.status !== 'ready') return
+      const message = error instanceof Error ? error.message : String(error)
+      const current = this.#assetScreen()
+      if (current !== undefined) {
+        this.#setReadyScreen({
+          ...current,
+          phase: current.phase === 'stale' ? 'stale' : 'error',
+          message: current.phase === 'stale'
+            ? `提交使用的 revision 已过期；重新读取失败：${message}`
+            : message,
+        }, {
+          kind: error instanceof NovelWorkbenchDisconnectedError ? 'disconnected' : 'error',
+          message: error instanceof NovelWorkbenchDisconnectedError
+            ? '读取失败：Harness 连接已断开。'
+            : `读取失败：${message}`,
+        })
+      } else {
+        this.#setReadyScreen({ kind: 'asset-error', target, message })
+      }
+    }
+  }
+
   async #runRead(reason: 'open' | 'inspect' | 'refresh'): Promise<void> {
     if (this.#disposed) return
     const target = this.#target
@@ -433,14 +896,13 @@ export class NovelWorkbenchController {
     const request = ++this.#request
     const previous = this.#activeRead
     previous?.abort.abort()
-    this.#set({
-      status: 'loading',
-      open: this.#state.open,
-      readFeedback: {
-        kind: 'loading',
-        message: reason === 'refresh' ? '正在重新读取小说项目…' : '正在读取小说项目状态…',
-      },
-    })
+    const feedback: NovelReadFeedback = {
+      kind: 'loading',
+      message: reason === 'refresh' ? '正在重新读取小说项目…' : '正在读取小说项目状态…',
+    }
+    this.#set(reason === 'refresh' && this.#state.status === 'not-initialized'
+      ? { ...this.#state, readFeedback: feedback }
+      : { status: 'loading', open: this.#state.open, readFeedback: feedback })
     await previous?.done
     if (this.#disposed || request !== this.#request) return
     const abort = new AbortController()
@@ -459,6 +921,7 @@ export class NovelWorkbenchController {
         ? {
             ...result,
             open: this.#state.open,
+            screen: { kind: 'root' },
             readFeedback: { kind: 'success', message: '读取完成：小说项目已初始化。' },
           }
         : {
@@ -466,7 +929,14 @@ export class NovelWorkbenchController {
             open: this.#state.open,
             initialization: {
               draft: this.#draft,
-              phase: this.#activePrompt === undefined ? 'editing' : 'submitting',
+              phase: this.#state.status === 'not-initialized'
+                && this.#state.initialization.phase === 'submitted'
+                ? 'submitted'
+                : this.#activePrompt === undefined ? 'editing' : 'submitting',
+              ...(this.#state.status === 'not-initialized'
+                && this.#state.initialization.preview !== undefined
+                ? { preview: this.#state.initialization.preview }
+                : {}),
               ...(submissionBlocker(this.#target) === undefined ? {} : { blocker: submissionBlocker(this.#target) }),
             },
             readFeedback: { kind: 'success', message: '读取完成：当前工作区尚未初始化小说项目。' },
@@ -503,6 +973,28 @@ export class NovelWorkbenchController {
     } catch (error) {
       if (!this.#disposed && request === this.#promptRequest) {
         this.#setInitializationError(`初始化提案未发送：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+
+  async #submitAsset(request: number, sessionId: SessionId, text: string): Promise<void> {
+    try {
+      const result = await this.#port.prompt(sessionId, text)
+      if (this.#disposed || request !== this.#promptRequest) return
+      const screen = this.#assetScreen()
+      if (screen === undefined) return
+      this.#setReadyScreen(result.ok
+        ? { ...screen, phase: 'submitted', message: '修改提案已发送；磁盘仍未改变，等待 Harness 原生审批。' }
+        : { ...screen, phase: 'error', message: `修改提案未发送：${result.error.code}: ${result.error.message}` })
+    } catch (error) {
+      if (this.#disposed || request !== this.#promptRequest) return
+      const screen = this.#assetScreen()
+      if (screen !== undefined) {
+        this.#setReadyScreen({
+          ...screen,
+          phase: 'error',
+          message: `修改提案未发送：${error instanceof Error ? error.message : String(error)}`,
+        })
       }
     }
   }
@@ -545,6 +1037,130 @@ export class NovelWorkbenchController {
         ...(submissionBlocker(this.#target) === undefined ? {} : { blocker: submissionBlocker(this.#target) }),
       },
       ...(this.#state.readFeedback === undefined ? {} : { readFeedback: this.#state.readFeedback }),
+    })
+  }
+
+  #loadAsset(result: NovelAssetReadWireResult, feedback?: NovelReadFeedback): void {
+    if (this.#state.status !== 'ready') return
+    switch (result.target.kind) {
+      case 'project': {
+        const source = parseProjectManifest(result.text)
+        const draft = projectDraft(source)
+        const plannedChapters = Number(source.plannedChapters)
+        const selectedChapter = Math.min(this.#state.progress.selectedChapter, plannedChapters)
+        const retainedChapter = selectedChapter === this.#state.progress.selectedChapter
+        this.#chapter = selectedChapter
+        this.#projectSource = source
+        this.#projectOriginal = draft
+        this.#set({
+          ...this.#state,
+          project: {
+            ...this.#state.project,
+            title: source.title,
+            language: source.language,
+            genre: source.genre,
+            plannedChapters,
+            targetWordsPerChapter: Number(source.targetWordsPerChapter),
+            creativeStrategy: source.creativeStrategy,
+            updatedAt: source.updatedAt,
+          },
+          progress: retainedChapter
+            ? { ...this.#state.progress, plannedChapters, selectedChapter }
+            : {
+                selectedChapter, plannedChapters, status: 'unplanned',
+                draftPresent: false, draftBytes: 0,
+              },
+          chapterBlueprint: retainedChapter ? this.#state.chapterBlueprint : null,
+          draft: retainedChapter ? this.#state.draft : null,
+          screen: {
+            kind: 'project',
+            phase: 'clean',
+            dirty: false,
+            baseRevision: result.revision,
+            originalText: result.text,
+            summary: '',
+            draft,
+          },
+          ...(feedback === undefined ? {} : { readFeedback: feedback }),
+        })
+        return
+      }
+      case 'characters': {
+        const characters = parseCharacters(result.text, result.revision)
+        this.#charactersOriginal = characters
+        this.#set({
+          ...this.#state,
+          characters: characters.map(({ id, name, role, summary }) => ({ id, name, role, summary })),
+          screen: {
+            kind: 'characters',
+            phase: 'clean',
+            dirty: false,
+            baseRevision: result.revision,
+            originalText: result.text,
+            summary: '',
+            characters,
+            selectedId: characters[0]?.id,
+            search: '',
+            visibleCharacterIds: characters.map(character => character.id),
+          },
+          ...(feedback === undefined ? {} : { readFeedback: feedback }),
+        })
+        return
+      }
+      default: throw new Error('Asset is not editable in this workbench slice')
+    }
+  }
+
+  #setCharactersDraft(
+    screen: NovelCharactersEditorScreen,
+    characters: readonly NovelCharacterDraft[],
+    selectedId: string | undefined,
+  ): void {
+    const dirty = this.#charactersOriginal !== undefined && !sameCharacters(characters, this.#charactersOriginal)
+    this.#setReadyScreen({
+      ...screen,
+      characters,
+      selectedId,
+      visibleCharacterIds: visibleCharacterIds(characters, screen.search),
+      dirty,
+      phase: dirty ? 'editing' : 'clean',
+      replacement: undefined,
+      preview: undefined,
+      message: undefined,
+    })
+  }
+
+  #requiredProjectSource(): ProjectManifestEditorSource {
+    if (this.#projectSource === undefined) throw new Error('项目设置原始内容不可用')
+    return this.#projectSource
+  }
+
+  #assetMayChange(screen: NovelProjectEditorScreen | NovelCharactersEditorScreen): boolean {
+    return this.#activePrompt === undefined && screen.phase !== 'submitted' && screen.phase !== 'submitting'
+  }
+
+  #projectScreen(): NovelProjectEditorScreen | undefined {
+    const screen = this.#state.status === 'ready' ? this.#state.screen : undefined
+    return screen?.kind === 'project' ? screen : undefined
+  }
+
+  #charactersScreen(): NovelCharactersEditorScreen | undefined {
+    const screen = this.#state.status === 'ready' ? this.#state.screen : undefined
+    return screen?.kind === 'characters' ? screen : undefined
+  }
+
+  #assetScreen(): NovelProjectEditorScreen | NovelCharactersEditorScreen | undefined {
+    return this.#projectScreen() ?? this.#charactersScreen()
+  }
+
+  #setReadyScreen(screen: NovelWorkbenchScreen, readFeedback?: NovelReadFeedback): void {
+    if (this.#state.status !== 'ready') return
+    this.#set({
+      ...this.#state,
+      screen,
+      ...(readFeedback === undefined
+        ? {}
+        : { readFeedback }),
     })
   }
 

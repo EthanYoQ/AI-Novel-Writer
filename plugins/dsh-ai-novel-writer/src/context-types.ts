@@ -1,6 +1,14 @@
 /** Browser-safe read model for the read-only novel context window. */
 
-import type { CreativeStrategy, NovelProjectId, Revision } from './types.ts'
+import type { AssetRef, CreativeStrategy, NovelProjectId, Revision } from './types.ts'
+
+/** Exact path-free asset bytes returned to the browser editor. */
+export interface NovelAssetReadWireResult {
+  readonly target: AssetRef
+  readonly revision: Revision
+  readonly text: string
+  readonly bytes: number
+}
 
 /** Project identity and writing settings shown by the context window. */
 export interface NovelContextProject {
@@ -105,6 +113,52 @@ function stringsOf(value: unknown): string[] {
 function revisionOf(value: unknown): Revision {
   if (value !== 'absent' && (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value))) throw invalidResponse()
   return value as Revision
+}
+
+/**
+ * Validate one untrusted discriminated asset reference at a wire boundary.
+ *
+ * @param value Unknown target received from Host RPC or browser transport.
+ * @returns One recognized project-owned asset reference with no path fields.
+ * @throws {Error} When the discriminant, chapter, or exact property set is invalid.
+ */
+export function parseNovelAssetRef(value: unknown): AssetRef {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw invalidResponse()
+  const kind = (value as Record<string, unknown>).kind
+  switch (kind) {
+    case 'project':
+    case 'characters':
+    case 'story-blueprint': {
+      recordOf(value, ['kind'])
+      return { kind }
+    }
+    case 'chapter-blueprint':
+    case 'chapter-draft': {
+      const target = recordOf(value, ['kind', 'chapter'])
+      return { kind, chapter: integerOf(target.chapter, 1) }
+    }
+    default: throw invalidResponse()
+  }
+}
+
+/**
+ * Validate one path-free exact asset response before it enters editable browser state.
+ *
+ * @param value Unknown response value from the generic Connection RPC client.
+ * @returns Exact normalized text, revision, byte count, and recognized target.
+ * @throws {Error} When any field or exact property set is invalid.
+ */
+export function parseNovelAssetReadResult(value: unknown): NovelAssetReadWireResult {
+  const record = recordOf(value, ['target', 'revision', 'text', 'bytes'])
+  const text = stringOf(record.text)
+  const bytes = integerOf(record.bytes)
+  if (new TextEncoder().encode(text).byteLength !== bytes) throw invalidResponse()
+  return {
+    target: parseNovelAssetRef(record.target),
+    revision: revisionOf(record.revision),
+    text,
+    bytes,
+  }
 }
 
 /**

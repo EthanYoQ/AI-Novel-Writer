@@ -1,11 +1,51 @@
 /** Deterministic model and approval boundary for the complete-chapter composition. */
-import { access } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { access, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CallId, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 
 const PROJECT_ID = '123e4567-e89b-42d3-a456-426614174000'
 const PROJECT_TIME = '2026-08-16T00:00:00.000Z'
+const PROJECT_MANIFEST = `${JSON.stringify({
+  formatVersion: 1,
+  kind: 'harness-novel-project',
+  projectId: PROJECT_ID,
+  title: '潮汐来信',
+  language: 'zh-CN',
+  genre: '奇幻悬疑',
+  plannedChapters: 6,
+  targetWordsPerChapter: 2_000,
+  creativeStrategy: 'consistency-first',
+  createdAt: PROJECT_TIME,
+  updatedAt: PROJECT_TIME,
+}, null, 2)}\n`
+const PROJECT_REVISION = createHash('sha256').update(PROJECT_MANIFEST).digest('hex')
+
+function initializationCall(callId) {
+  return toolCall(callId, {
+    kind: 'initialize', projectId: PROJECT_ID, createdAt: PROJECT_TIME, updatedAt: PROJECT_TIME,
+    title: '潮汐来信', language: 'zh-CN', genre: '奇幻悬疑', plannedChapters: 6,
+    targetWordsPerChapter: 2_000, creativeStrategy: 'consistency-first',
+  })
+}
+
+function staleRevisionScript() {
+  const replacement = `${JSON.stringify({
+    ...JSON.parse(PROJECT_MANIFEST),
+    title: '已提交的新标题',
+    updatedAt: '2026-08-16T01:00:00.000Z',
+  }, null, 2)}\n`
+  return [
+    initializationCall('stale-init'),
+    toolCall('stale-read-project', { kind: 'asset', target: { kind: 'project' } }),
+    toolCall('stale-replace-project', {
+      kind: 'replace', target: { kind: 'project' }, baseRevision: PROJECT_REVISION,
+      baseText: PROJECT_MANIFEST, replacement, summary: '调整项目标题',
+    }),
+    textResponse('项目 revision 已变化，修改未覆盖外部内容。'),
+  ]
+}
 
 function requestName(request) {
   return request.kind === 'initialize' || request.kind === 'replace'
@@ -59,11 +99,7 @@ function firstRunScript() {
   })
   const draft = '# 退潮来信\n\n午夜，灯塔的主灯第一次熄灭。\n\n林夏在退去的潮水里捡到一封尚未寄出的信。\n'
   return [
-    toolCall('chapter-01-init', {
-      kind: 'initialize', projectId: PROJECT_ID, createdAt: PROJECT_TIME, updatedAt: PROJECT_TIME,
-      title: '潮汐来信', language: 'zh-CN', genre: '奇幻悬疑', plannedChapters: 6,
-      targetWordsPerChapter: 2_000, creativeStrategy: 'consistency-first',
-    }),
+    initializationCall('chapter-01-init'),
     toolCall('chapter-01-read-characters', { kind: 'asset', target: { kind: 'characters' } }),
     toolCall('chapter-01-write-characters', {
       kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent', baseText: '',
@@ -140,7 +176,10 @@ export async function apply(ctx) {
     initialized = false
   }
   const scenario = process.env.DSH_NOVEL_SCENARIO
-  const phase = scenario === 'approval-never' || scenario === 'invalid-args'
+  const phase = scenario === 'approval-never'
+    || scenario === 'invalid-args'
+    || scenario === 'approval-rejected'
+    || scenario === 'stale-revision'
     ? scenario
     : initialized ? 'restart' : 'first'
   const script = phase === 'approval-never'
@@ -152,12 +191,16 @@ export async function apply(ctx) {
           }),
           textResponse('novel_apply_change 需要直接传入 kind 等浅层字段，不能使用字符串化的 request；本次修改已停止，不会重试。'),
         ]
-      : initialized
-        ? [
-        toolCall('chapter-01-restart-read', { kind: 'working-set', chapter: 1 }),
-        textResponse('重启后已读取相同的创作策略与第一章正文。'),
-      ]
-        : firstRunScript()
+      : phase === 'approval-rejected'
+        ? [initializationCall('rejected-init'), textResponse('用户拒绝了小说项目初始化，磁盘未发生变化。')]
+        : phase === 'stale-revision'
+          ? staleRevisionScript()
+          : initialized
+            ? [
+                toolCall('chapter-01-restart-read', { kind: 'working-set', chapter: 1 }),
+                textResponse('重启后已读取相同的创作策略与第一章正文。'),
+              ]
+            : firstRunScript()
   const adapter = new KeylessNovelAdapter(phase, script)
   ctx.effect(() => ctx.llm.registerAdapter(['novel-snapshot'], adapter))
   let approvalCount = 0
@@ -173,6 +216,15 @@ export async function apply(ctx) {
       }
       process.stdout.write(`${JSON.stringify({ type: 'preapproval', phase, manifest: state })}\n`)
       if (state !== 'absent') throw new Error('manifest changed before native approval')
+    }
+    if (phase === 'approval-rejected') return 'rejected'
+    if (phase === 'stale-revision' && approvalCount === 2) {
+      const external = `${JSON.stringify({
+        ...JSON.parse(PROJECT_MANIFEST),
+        title: '外部并发标题',
+        updatedAt: '2026-08-16T00:30:00.000Z',
+      }, null, 2)}\n`
+      await writeFile(manifest, external, 'utf8')
     }
     return 'allowed-once'
   })

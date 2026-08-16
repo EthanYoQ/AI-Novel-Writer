@@ -156,7 +156,24 @@ describe('preset setup browser integration', () => {
 
     expect(prompt).toHaveBeenCalledWith([{ type: 'text', text: 'exact proposal' }], 'queue')
     expect(rpc.call).not.toHaveBeenCalled()
-    expect(Object.keys(port).sort()).toEqual(['prompt', 'read'])
+    expect(Object.keys(port).sort()).toEqual(['prompt', 'read', 'readAsset'])
+  })
+
+  it('reads one recognized asset through the path-free Host endpoint', async () => {
+    const text = '{\n  "characters": []\n}\n'
+    const signal = new AbortController().signal
+    const call = vi.fn().mockResolvedValue({
+      ok: true,
+      value: { target: { kind: 'characters' }, revision: 'absent', text, bytes: new TextEncoder().encode(text).byteLength },
+    })
+    const port = createNovelContextPort({ call })
+
+    await expect(port.readAsset(WORKSPACE_ID, { kind: 'characters' }, signal)).resolves.toMatchObject({
+      target: { kind: 'characters' }, revision: 'absent', text,
+    })
+    expect(call).toHaveBeenCalledWith(
+      '/ai-novel', 'asset/read', { workspaceId: WORKSPACE_ID, target: { kind: 'characters' } }, signal,
+    )
   })
 
   it('maps the two closed RPC endpoints and distinguishes transport loss', async () => {

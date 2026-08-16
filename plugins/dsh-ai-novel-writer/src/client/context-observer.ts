@@ -1,7 +1,7 @@
 /** Selection, Preset, approval, and completed-tool observation for the novel workbench. */
 
 import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { NovelApprovalAvailability, NovelWorkbenchController } from './workbench-store.ts'
+import type { NovelApplyOutcome, NovelApprovalAvailability, NovelWorkbenchController } from './workbench-store.ts'
 
 interface Observable<T> {
   getSnapshot(): T
@@ -11,7 +11,9 @@ interface Observable<T> {
 interface ConversationNodeView {
   readonly kind: string
   readonly seq: number
-  readonly call?: { readonly name: string } | null
+  readonly call?: { readonly name: string; readonly argsRaw?: string } | null
+  readonly isError?: boolean
+  readonly error?: { readonly code: string }
 }
 
 /** Minimal browser-runtime sources needed without exposing Workspace paths to the RPC caller. */
@@ -41,14 +43,65 @@ function approvalAvailability(value: unknown): NovelApprovalAvailability {
   return 'unknown'
 }
 
-function latestNovelApplySeq(nodes: readonly ConversationNodeView[]): number | undefined {
-  let latest: number | undefined
+function latestNovelApplyResult(nodes: readonly ConversationNodeView[]): ConversationNodeView | undefined {
+  let latest: ConversationNodeView | undefined
   for (const node of nodes) {
     if (node.kind === 'tool-result' && node.call?.name === 'novel_apply_change') {
-      latest = latest === undefined ? node.seq : Math.max(latest, node.seq)
+      if (latest === undefined || node.seq > latest.seq) latest = node
     }
   }
   return latest
+}
+
+function applyAttribution(node: ConversationNodeView): NovelApplyOutcome['attribution'] {
+  const argsRaw = node.call?.argsRaw
+  if (argsRaw === undefined) return undefined
+  let value: unknown
+  try {
+    value = JSON.parse(argsRaw)
+  } catch {
+    return undefined
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (record.kind === 'initialize') {
+    const keys = Object.keys(record)
+    if (keys.length !== 10
+      || typeof record.projectId !== 'string'
+      || typeof record.createdAt !== 'string'
+      || typeof record.updatedAt !== 'string'
+      || typeof record.title !== 'string'
+      || typeof record.language !== 'string'
+      || typeof record.genre !== 'string'
+      || typeof record.plannedChapters !== 'number'
+      || typeof record.targetWordsPerChapter !== 'number'
+      || typeof record.creativeStrategy !== 'string') return undefined
+    return {
+      kind: 'initialize',
+      requestJson: JSON.stringify({
+        kind: 'initialize',
+        projectId: record.projectId,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        title: record.title,
+        language: record.language,
+        genre: record.genre,
+        plannedChapters: record.plannedChapters,
+        targetWordsPerChapter: record.targetWordsPerChapter,
+        creativeStrategy: record.creativeStrategy,
+      }, null, 2),
+    }
+  }
+  if (record.kind !== 'replace'
+    || typeof record.targetKind !== 'string'
+    || typeof record.baseRevision !== 'string'
+    || typeof record.replacement !== 'string') return undefined
+  return {
+    kind: 'replace',
+    targetKind: record.targetKind,
+    baseRevision: record.baseRevision,
+    replacement: record.replacement,
+  }
 }
 
 /**
@@ -79,12 +132,19 @@ export function observeNovelContextSources(
     if (binding === undefined) return
     const inspect = (): void => {
       if (disposed) return
-      const latest = latestNovelApplySeq(binding.session.getSnapshot().nodes)
+      const latest = latestNovelApplyResult(binding.session.getSnapshot().nodes)
       if (latest === undefined) return
-      if (latest !== seenApplySeq) void controller.refresh()
-      seenApplySeq = latest
+      if (latest.seq !== seenApplySeq) {
+        controller.novelApplySettled({
+          isError: latest.isError === true,
+          code: latest.error?.code,
+          attribution: applyAttribution(latest),
+        })
+        void controller.refresh()
+      }
+      seenApplySeq = latest.seq
     }
-    seenApplySeq = latestNovelApplySeq(binding.session.getSnapshot().nodes)
+    seenApplySeq = latestNovelApplyResult(binding.session.getSnapshot().nodes)?.seq
     stopConversation = binding.session.subscribe(inspect)
   }
 

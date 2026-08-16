@@ -11,6 +11,58 @@ const WORKSPACE_ID = '123e4567-e89b-42d3-a456-426614174111'
 const UNKNOWN_WORKSPACE_ID = '123e4567-e89b-42d3-a456-426614174112'
 
 describe('novel context Host RPC', () => {
+  it('reads one recognized asset by Workspace identity without returning a filesystem source', async () => {
+    const root = await makeTestWorkspace('asset-host-workspace-')
+    const presetRoot = await makeTestWorkspace('asset-host-preset-')
+    const project = openNovelProject(root)
+    await project.apply({
+      ...TEST_INITIALIZATION_IDENTITY,
+      kind: 'initialize', title: '潮汐来信', language: 'zh-CN', genre: '悬疑',
+      plannedChapters: 2, targetWordsPerChapter: 2_000, creativeStrategy: 'auto',
+    }, signal)
+    const characters = `${JSON.stringify({ characters: [{
+      id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案', goal: '找到真相',
+      relationships: [], notes: '',
+    }] }, null, 2)}\n`
+    const receipt = await project.apply({
+      kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent', baseText: '',
+      replacement: characters, summary: '建立人物设定',
+    }, signal)
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, { get: () => ({ path: root }) })
+
+    const result = await handler('asset/read', {
+      workspaceId: WORKSPACE_ID,
+      target: { kind: 'characters' },
+    }, signal)
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        target: { kind: 'characters' },
+        revision: receipt.newRevision,
+        text: characters,
+        bytes: Buffer.byteLength(characters),
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain(root)
+    expect(JSON.stringify(result)).not.toContain('.ai-novel')
+  })
+
+  it.each([
+    { workspaceId: WORKSPACE_ID, target: { kind: 'unknown' } },
+    { workspaceId: WORKSPACE_ID, target: { kind: 'chapter-blueprint', chapter: 0 } },
+    { workspaceId: WORKSPACE_ID, target: { kind: 'characters' }, path: 'C:\\secret' },
+    { target: { kind: 'project' } },
+  ])('rejects an unrecognized or path-bearing asset request %#', async payload => {
+    const presetRoot = await makeTestWorkspace('asset-host-invalid-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, { get: () => undefined })
+
+    await expect(handler('asset/read', payload, signal))
+      .resolves.toMatchObject({ ok: false, error: { code: 'bad-request' } })
+  })
+
   it('resolves an opaque workspace id through the registry and never accepts a browser path', async () => {
     const root = await makeTestWorkspace('context-host-workspace-')
     const presetRoot = await makeTestWorkspace('context-host-preset-')

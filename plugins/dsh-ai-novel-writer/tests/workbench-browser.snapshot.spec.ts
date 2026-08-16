@@ -9,7 +9,7 @@ const realHarnessIt = harnessRoot === undefined ? it.skip : it
 const expectedPath = join(import.meta.dirname, 'snapshots', 'workbench-browser.expected.json')
 
 describe('AI novel real DSH Web snapshot', () => {
-  realHarnessIt('shows the bounded drawer, exact initialization preview, and Plugin Configuration evidence', async () => {
+  realHarnessIt('shows initialization, revisioned asset drill-ins, and Plugin Configuration evidence', async () => {
     if (harnessRoot === undefined) throw new Error('real browser snapshot requires DSH_HARNESS_ROOT')
     const driverUrl = new URL('./fixtures/workbench-browser/driver.mjs', import.meta.url).href
     const driver = await import(driverUrl) as {

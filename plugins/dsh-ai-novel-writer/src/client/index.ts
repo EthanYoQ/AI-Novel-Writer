@@ -5,7 +5,7 @@ import type { ClientContext, ISessions, IWorkspaces } from '@deepseek-ai/dsh-cli
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
-import { parseNovelContextReadResult } from '../context-types.ts'
+import { parseNovelAssetReadResult, parseNovelContextReadResult } from '../context-types.ts'
 import {
   PresetSetupController,
   PresetSetupDisconnectedError,
@@ -127,7 +127,9 @@ export function createPresetSetupPort(rpc: Pick<ClientConnectionRpc, 'call'>): P
  * @param rpc Browser connection RPC caller.
  * @returns A validated context port accepting only opaque Workspace identity and chapter number.
  */
-export function createNovelContextPort(rpc: Pick<ClientConnectionRpc, 'call'>): Pick<NovelWorkbenchPort, 'read'> {
+export function createNovelContextPort(
+  rpc: Pick<ClientConnectionRpc, 'call'>,
+): Pick<NovelWorkbenchPort, 'read' | 'readAsset'> {
   return {
     read: async (workspaceId, chapter, signal) => {
       let result
@@ -138,6 +140,16 @@ export function createNovelContextPort(rpc: Pick<ClientConnectionRpc, 'call'>): 
       }
       if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
       return parseNovelContextReadResult(result.value)
+    },
+    readAsset: async (workspaceId, target, signal) => {
+      let result
+      try {
+        result = await rpc.call('/ai-novel', 'asset/read', { workspaceId, target }, signal)
+      } catch (error) {
+        throw new NovelWorkbenchDisconnectedError(error)
+      }
+      if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+      return parseNovelAssetReadResult(result.value)
     },
   }
 }
@@ -156,6 +168,7 @@ export function createNovelWorkbenchPort(
   const context = createNovelContextPort(rpc)
   return {
     read: context.read,
+    readAsset: context.readAsset,
     prompt: async (sessionId, text) => {
       const session = sessions.binding(sessionId)?.session
       if (session === undefined) {

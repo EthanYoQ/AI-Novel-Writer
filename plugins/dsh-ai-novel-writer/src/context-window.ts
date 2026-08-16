@@ -2,12 +2,13 @@
 
 import { openNovelProject } from './novel-project.ts'
 import type {
+  NovelAssetReadWireResult,
   NovelContextChapterBlueprint,
   NovelContextCharacter,
   NovelContextReadResult,
   NovelContextStoryBlueprint,
 } from './context-types.ts'
-import type { CreativeStrategy, NovelAssetReadResult, NovelProjectId } from './types.ts'
+import type { AssetRef, CreativeStrategy, NovelAssetReadResult, NovelProjectId } from './types.ts'
 import { NovelProjectError } from './types.ts'
 
 function parseObject(asset: NovelAssetReadResult): Record<string, unknown> | undefined {
@@ -53,6 +54,25 @@ function chapterOf(asset: NovelAssetReadResult | undefined): NovelContextChapter
     continuityNotes: value.continuityNotes as string[],
     status: value.status as NovelContextChapterBlueprint['status'],
   }
+}
+
+/**
+ * Read one exact project-owned asset without exposing its filesystem source.
+ *
+ * @param root Canonical Workspace directory resolved by the Host registry.
+ * @param target Recognized asset identity with no caller-provided path segment.
+ * @param signal Cancellation signal propagated to the domain read.
+ * @returns Normalized text, revision, byte count, and the recognized target.
+ * @throws {@link NovelProjectError} when the project or asset is invalid, unsafe, over budget, or cancelled.
+ */
+export async function readNovelAsset(
+  root: string,
+  target: AssetRef,
+  signal: AbortSignal,
+): Promise<NovelAssetReadWireResult> {
+  const result = await openNovelProject(root).read({ kind: 'asset', target }, signal)
+  if (result.kind !== 'asset') throw new Error('NovelProject returned a non-asset exact read result')
+  return { target: result.target, revision: result.revision, text: result.text, bytes: result.bytes }
 }
 
 /**

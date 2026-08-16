@@ -182,6 +182,19 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
             updateInitialization={patch => { workbenchController.updateInitialization(patch) }}
             previewInitialization={() => { workbenchController.previewInitialization() }}
             submitInitialization={() => { void workbenchController.submitInitialization() }}
+            openAsset={target => { void workbenchController.openAsset(target) }}
+            backToAssets={() => { workbenchController.backToAssets() }}
+            updateProjectSettings={patch => { workbenchController.updateProjectSettings(patch) }}
+            updateAssetSummary={summary => { workbenchController.updateAssetSummary(summary) }}
+            previewAssetChange={() => { workbenchController.previewAssetChange() }}
+            submitAssetChange={() => { void workbenchController.submitAssetChange() }}
+            discardAssetChanges={() => { workbenchController.discardAssetChanges() }}
+            reloadStaleAsset={() => { workbenchController.reloadStaleAsset() }}
+            setCharacterSearch={search => { workbenchController.setCharacterSearch(search) }}
+            selectCharacter={id => { workbenchController.selectCharacter(id) }}
+            createCharacter={() => { workbenchController.createCharacter() }}
+            updateCharacter={patch => { workbenchController.updateCharacter(patch) }}
+            deleteCharacter={() => { workbenchController.deleteCharacter() }}
           />
         </div>
         <section className="aiNovelContextSetup" aria-labelledby="ai-novel-preset-setup-title">

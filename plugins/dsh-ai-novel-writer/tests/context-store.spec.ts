@@ -26,7 +26,7 @@ const ready = (chapter: number): NovelContextReady => ({
 describe('novel context client state', () => {
   it('inspects a selected workspace while closed, follows changes, and selects chapters without polling', async () => {
     const read = vi.fn(async (_workspaceId: typeof WORKSPACE_A, chapter: number) => ready(chapter))
-    const controller = new NovelWorkbenchController({ read, prompt: vi.fn() }, vi.fn())
+    const controller = new NovelWorkbenchController({ read, readAsset: vi.fn(), prompt: vi.fn() }, vi.fn())
 
     controller.setTarget({ workspaceId: WORKSPACE_A, sessionId: SESSION_A, agentPreset: 'ai-novel-writer', approval: 'ask' })
     await controller.whenIdle()
@@ -53,7 +53,7 @@ describe('novel context client state', () => {
       .mockResolvedValueOnce({ status: 'not-initialized' })
       .mockRejectedValueOnce(new Error('invalid project'))
       .mockRejectedValueOnce(new NovelWorkbenchDisconnectedError())
-    const controller = new NovelWorkbenchController({ read, prompt: vi.fn() }, vi.fn())
+    const controller = new NovelWorkbenchController({ read, readAsset: vi.fn(), prompt: vi.fn() }, vi.fn())
 
     await controller.open()
     expect(controller.getSnapshot()).toEqual({ status: 'empty', open: true })
@@ -73,7 +73,9 @@ describe('novel context client state', () => {
       read: (_workspaceId, _chapter, requestSignal) => {
         signal = requestSignal
         return new Promise(resolve => { finish = () => { resolve(ready(1)) } })
-      }, prompt: vi.fn(),
+      },
+      readAsset: vi.fn(),
+      prompt: vi.fn(),
     }, vi.fn())
     controller.setTarget({ workspaceId: WORKSPACE_A, sessionId: SESSION_A, agentPreset: 'ai-novel-writer', approval: 'ask' })
     const opening = controller.open()

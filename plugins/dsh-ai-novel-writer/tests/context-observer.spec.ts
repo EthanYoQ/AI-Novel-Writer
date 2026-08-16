@@ -43,6 +43,7 @@ describe('novel context shell observer', () => {
     const conversation = source({ nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: null }> })
     const controller = new NovelWorkbenchController({
       read: vi.fn().mockResolvedValue({ status: 'not-initialized' }),
+      readAsset: vi.fn(),
       prompt: vi.fn(),
     }, vi.fn())
     const dispose = observeNovelContextSources({
@@ -88,11 +89,16 @@ describe('novel context shell observer', () => {
     const sessionList = source({ current: SESSION_1 as SessionId | undefined })
     const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
     const conversations = new Map([
-      [SESSION_1, source({ nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }> })],
-      [SESSION_2, source({ nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }> })],
+      [SESSION_1, source({ nodes: [] as Array<{
+        kind: 'tool-result'; seq: number; call: { name: string; argsRaw?: string } | null; isError?: boolean
+      }> })],
+      [SESSION_2, source({ nodes: [] as Array<{
+        kind: 'tool-result'; seq: number; call: { name: string; argsRaw?: string } | null; isError?: boolean
+      }> })],
     ])
     const read = vi.fn(async () => ready)
-    const controller = new NovelWorkbenchController({ read, prompt: vi.fn() }, vi.fn())
+    const controller = new NovelWorkbenchController({ read, readAsset: vi.fn(), prompt: vi.fn() }, vi.fn())
+    const settled = vi.spyOn(controller, 'novelApplySettled')
     const dispose = observeNovelContextSources({
       sessions: {
         list: sessionList,
@@ -114,11 +120,56 @@ describe('novel context shell observer', () => {
     conversations.get(SESSION_1)!.set({
       nodes: [
         { kind: 'tool-result', seq: 1, call: { name: 'novel_read' } },
-        { kind: 'tool-result', seq: 2, call: { name: 'novel_apply_change' } },
+        {
+          kind: 'tool-result', seq: 2,
+          call: {
+            name: 'novel_apply_change',
+            argsRaw: JSON.stringify({
+              kind: 'initialize',
+              projectId: '123e4567-e89b-42d3-a456-426614174000',
+              createdAt: '2026-08-16T02:00:00.000Z',
+              updatedAt: '2026-08-16T02:00:00.000Z',
+              title: '潮汐来信',
+              language: 'zh-CN',
+              genre: '悬疑',
+              plannedChapters: 24,
+              targetWordsPerChapter: 3200,
+              creativeStrategy: 'consistency-first',
+            }),
+          },
+        },
       ],
     })
     await controller.whenIdle()
     expect(read).toHaveBeenCalledTimes(2)
+    expect(settled).toHaveBeenLastCalledWith({
+      isError: false,
+      code: undefined,
+      attribution: {
+        kind: 'initialize',
+        requestJson: JSON.stringify({
+          kind: 'initialize',
+          projectId: '123e4567-e89b-42d3-a456-426614174000',
+          createdAt: '2026-08-16T02:00:00.000Z',
+          updatedAt: '2026-08-16T02:00:00.000Z',
+          title: '潮汐来信',
+          language: 'zh-CN',
+          genre: '悬疑',
+          plannedChapters: 24,
+          targetWordsPerChapter: 3200,
+          creativeStrategy: 'consistency-first',
+        }, null, 2),
+      },
+    })
+    conversations.get(SESSION_1)!.set({
+      nodes: [
+        { kind: 'tool-result', seq: 2, call: { name: 'novel_apply_change' } },
+        { kind: 'tool-result', seq: 3, call: { name: 'novel_apply_change' }, isError: true },
+      ],
+    })
+    await controller.whenIdle()
+    expect(read).toHaveBeenCalledTimes(3)
+    expect(settled).toHaveBeenLastCalledWith({ isError: true, code: undefined, attribution: undefined })
 
     workspaceList.set({ items: [{ workspaceId: WORKSPACE_2, sessionIds: [SESSION_2] }] })
     sessionList.set({ current: SESSION_2 })
@@ -130,7 +181,7 @@ describe('novel context shell observer', () => {
       nodes: [{ kind: 'tool-result', seq: 3, call: { name: 'novel_apply_change' } }],
     })
     await controller.whenIdle()
-    expect(read).toHaveBeenCalledTimes(3)
+    expect(read).toHaveBeenCalledTimes(4)
   })
 
   it('retries binding when the selected Session materializes after the list row', async () => {
@@ -141,7 +192,7 @@ describe('novel context shell observer', () => {
     })
     let materialized = false
     const read = vi.fn(async () => ready)
-    const controller = new NovelWorkbenchController({ read, prompt: vi.fn() }, vi.fn())
+    const controller = new NovelWorkbenchController({ read, readAsset: vi.fn(), prompt: vi.fn() }, vi.fn())
     const dispose = observeNovelContextSources({
       sessions: {
         list: sessionList,
