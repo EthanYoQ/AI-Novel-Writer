@@ -16,6 +16,7 @@
 
 <p align="center">
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/tree/codex/dsh-ai-novel-plugin"><img src="https://badgen.net/badge/DSH%20plugin/0.1.0%20preview/blue" alt="DeepSeek Harness plugin 0.1.0 preview" /></a>
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/LICENSE"><img src="https://badgen.net/badge/license/GPL-3.0/blue" alt="GPL-3.0 License" /></a>
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/stargazers"><img src="https://badgen.net/github/stars/EthanYoQ/AI-Novel-Writer" alt="GitHub stars" /></a>
 </p>
@@ -37,6 +38,31 @@
 > - **#101 创作策略与推理覆盖**：创作策略属于小说项目，模型覆盖属于模型配置；界面显示请求偏好到实际生效值的映射。未知自定义端点不会猜测或发送供应商私有推理字段，原始推理不会成为章节正文或长期小说记忆。
 >
 > 同一个 Release 使用五项资产合同：`ai-novel-writer-setup-0.8.4.exe`、`ai-novel-writer-setup-0.8.4.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.4-installer.dmg` 与 `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`。
+
+## DeepSeek Harness 插件版（开发预览）
+
+除了 Windows 与 macOS 桌面版，本仓库还在 [`codex/dsh-ai-novel-plugin`](https://github.com/EthanYoQ/AI-Novel-Writer/tree/codex/dsh-ai-novel-plugin) 分支维护 `@ethanyoq/dsh-ai-novel-writer` `0.1.0` 开发预览。它把项目设置、人物设定、故事蓝图、章节蓝图和章节正文带入 DeepSeek Harness Web，并通过对话中的单文件审批卡片逐项保存；插件使用独立的 Harness 小说项目格式，不读取桌面版 `.vela` 项目。
+
+该插件尚未进入桌面版正式 Release，也未发布到 npm。当前从此分支检出仓库后，以本地链接安装到一个 DSH profile：
+
+```sh
+git clone --branch codex/dsh-ai-novel-plugin --single-branch https://github.com/EthanYoQ/AI-Novel-Writer.git
+cd AI-Novel-Writer
+pnpm install
+pnpm run plugin:ai-novel:build
+dsh plugin --profile web add ./plugins/dsh-ai-novel-writer
+dsh --profile web
+```
+
+如需安装一份不随源码目录继续变化的构建产物，可先打包再安装：
+
+```sh
+pnpm --dir plugins/dsh-ai-novel-writer pack --pack-destination ../../.runtime/cache
+dsh plugin --profile web add ./.runtime/cache/ethanyoq-dsh-ai-novel-writer-0.1.0.tgz
+dsh --profile web
+```
+
+启动 Web 后，打开“小说工作台”，安装“AI 小说作家”Preset；随后新建会话并选择该 Preset。模型生成的修改会在对话中显示 Harness 原生审批，点击一次“允许一次”后才会写入磁盘并回填工作台。完整功能、项目格式、验证范围和卸载方式见[插件说明](plugins/dsh-ai-novel-writer/README.md)。不要使用 `dsh plugin add github:EthanYoQ/AI-Novel-Writer`：仓库根包是桌面应用，不是可激活的 DSH bundle。
 
 
 

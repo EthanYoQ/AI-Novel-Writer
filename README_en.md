@@ -16,6 +16,7 @@
 
 <p align="center">
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/tree/codex/dsh-ai-novel-plugin"><img src="https://badgen.net/badge/DSH%20plugin/0.1.0%20preview/blue" alt="DeepSeek Harness plugin 0.1.0 preview" /></a>
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/LICENSE"><img src="https://badgen.net/badge/license/GPL-3.0/blue" alt="GPL-3.0 License" /></a>
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/stargazers"><img src="https://badgen.net/github/stars/EthanYoQ/AI-Novel-Writer" alt="GitHub stars" /></a>
 </p>
@@ -37,6 +38,31 @@
 > - **#101 creative strategy and reasoning override** — Creative strategy belongs to the novel project and model override belongs to the model profile; the UI shows requested-to-effective reasoning mapping. Unknown custom endpoints do not guess or send provider-private reasoning fields, and raw reasoning is not chapter prose or long-term novel memory.
 >
 > One Release uses the exact five-asset contract: `ai-novel-writer-setup-0.8.4.exe`, `ai-novel-writer-setup-0.8.4.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.4-installer.dmg`, and `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`.
+
+## DeepSeek Harness plugin edition (developer preview)
+
+In addition to the Windows and macOS desktop editions, the [`codex/dsh-ai-novel-plugin`](https://github.com/EthanYoQ/AI-Novel-Writer/tree/codex/dsh-ai-novel-plugin) branch contains the `@ethanyoq/dsh-ai-novel-writer` `0.1.0` developer preview. It brings project settings, characters, story blueprints, chapter blueprints, and chapter drafts into DeepSeek Harness Web, saving one asset at a time through the conversation's approval card. The plugin uses its own Harness novel-project format and does not read desktop `.vela` projects.
+
+The plugin is not part of the desktop application's formal Release and has not been published to npm. Check out this branch and link the local package into a DSH profile:
+
+```sh
+git clone --branch codex/dsh-ai-novel-plugin --single-branch https://github.com/EthanYoQ/AI-Novel-Writer.git
+cd AI-Novel-Writer
+pnpm install
+pnpm run plugin:ai-novel:build
+dsh plugin --profile web add ./plugins/dsh-ai-novel-writer
+dsh --profile web
+```
+
+To install an immutable local build instead of a live source link, pack and install the tarball:
+
+```sh
+pnpm --dir plugins/dsh-ai-novel-writer pack --pack-destination ../../.runtime/cache
+dsh plugin --profile web add ./.runtime/cache/ethanyoq-dsh-ai-novel-writer-0.1.0.tgz
+dsh --profile web
+```
+
+After Web starts, open **Novel Workbench** and install the **AI 小说作家** Preset, then create a new Session with that Preset. Model-generated changes appear as the native Harness approval card in the conversation; the plugin writes and backfills the workbench only after one **Allow once** approval. See the [plugin README](plugins/dsh-ai-novel-writer/README.md) for features, project format, qualification coverage, and removal. Do not run `dsh plugin add github:EthanYoQ/AI-Novel-Writer`: the repository root package is the desktop application, not an activatable DSH bundle.
 
 
 
