@@ -75,4 +75,14 @@ pnpm --filter @ethanyoq/dsh-ai-novel-writer test
 
 The test suite includes a keyless snapshot whose test app boots `cordis.yml` through the real Loader in a child process. It initializes a project, approves each of the five single-asset changes needed for a complete first chapter, verifies the pre-approval filesystem state, reconstructs every model request from canonical session events, and reads the identical working set after a fresh Harness context starts. Set `DSH_SNAPSHOT=refresh` only when intentionally updating `tests/snapshots/complete-chapter.expected.json`.
 
+## Release qualification
+
+The repository-level qualification command requires the clean DeepSeek Harness source checkout at commit `47f943859bef60e4160492346772ded9b24f765a`, `pnpm`, and `tar`. It installs or reuses the matching Playwright Chromium runtime inside the owned qualification cache. Pass the absolute Harness checkout path:
+
+```powershell
+pnpm run plugin:ai-novel:qualify -- --harness-root 'C:\SoftWare\AI Tools\Deepseek Harness'
+```
+
+The command builds Harness, runs the plugin and Electron regression lanes, creates a tarball with `pnpm pack`, and installs only those bytes into an isolated Web profile. It verifies config composition without development paths, packaged Host and Client discovery, a real browser context-window interaction, Preset installation/idempotence/conflict, first-chapter readback in a fresh process, removal, and reinstall. It writes command logs and a machine-readable receipt under the fixed `.runtime/.cache/dsh-ai-novel-qualification` directory; both the evidence root and each retained run carry `.vibe-owner.json` ownership, expiry, retention, and cleanup fields. An existing evidence root must already belong to this ticket and repository.
+
 The package does not modify DeepSeek Harness upstream or its agent loop.

@@ -40,7 +40,8 @@
     "build-storybook": "storybook build",
     "plugin:ai-novel:test": "pnpm --filter @ethanyoq/dsh-ai-novel-writer test",
     "plugin:ai-novel:typecheck": "pnpm --filter @ethanyoq/dsh-ai-novel-writer typecheck",
-    "plugin:ai-novel:build": "pnpm --filter @ethanyoq/dsh-ai-novel-writer build"
+    "plugin:ai-novel:build": "pnpm --filter @ethanyoq/dsh-ai-novel-writer build",
+    "plugin:ai-novel:qualify": "node plugins/dsh-ai-novel-writer/scripts/qualify-release.mjs"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
