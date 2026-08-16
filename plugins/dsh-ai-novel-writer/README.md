@@ -79,6 +79,8 @@ pnpm --filter @ethanyoq/dsh-ai-novel-writer test
 
 The test suite includes a keyless snapshot whose test app boots `cordis.yml` through the real Loader in a child process. It initializes a project, approves each of the five single-asset changes needed for a complete first chapter, verifies the pre-approval filesystem state, reconstructs every model request from canonical session events, and reads the identical working set after a fresh Harness context starts. Set `DSH_SNAPSHOT=refresh` only when intentionally updating `tests/snapshots/complete-chapter.expected.json`.
 
+For the distinction between process-local Cordis Packages and persistently installed npm bundles, the profile installation sequence, and the current Windows path limitation, see [Official DSH plugin installation](docs/official-dsh-plugin-installation.md).
+
 ## Release qualification
 
 The repository-level qualification command requires the clean DeepSeek Harness source checkout at commit `47f943859bef60e4160492346772ded9b24f765a`, `pnpm`, `tar`, and the locally installed Google Chrome browser. Pass the absolute Harness checkout path:
