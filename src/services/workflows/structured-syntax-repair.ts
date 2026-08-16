@@ -25,6 +25,7 @@ export function buildStructuredSyntaxRepairTask(
 ): GenerationTask {
   return {
     purpose: `${originalTask.purpose}:structured-syntax-repair`,
+    reasoningStage: 'planning',
     output: 'structured-data',
     messages: [
       {

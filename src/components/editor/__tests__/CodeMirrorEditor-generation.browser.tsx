@@ -106,6 +106,11 @@ describe('CodeMirror editor AI generation boundary', () => {
     await expect.element(page.getByRole('button', { name: '替换' })).toBeDisabled()
     await expect.element(page.getByText('残缺片段')).not.toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('llm:begin-execution-lease', 'editor-model')
+    expect(invoke).toHaveBeenCalledWith(
+      'llm:generate-stream',
+      expect.any(String),
+      expect.objectContaining({ reasoningStage: 'review' }),
+    )
     expect(invoke).toHaveBeenCalledWith('llm:close-execution-lease', 'editor-generation-lease')
   })
 })

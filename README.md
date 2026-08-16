@@ -28,23 +28,17 @@
   <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
 </p>
 
-> ## v0.8.3 纸墨主题更新
+> ## v0.8.4 生成可靠性与创作策略
 >
-> [v0.8.3](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.3) 完成纸墨主题的系统性收尾：主题迁移会保留用户明确选择的暗色主题，仅将历史 `night` 值确定性迁移为 `dark`；信息文字按实际主题表面满足 WCAG AA 可访问性要求；视觉验收使用相同项目、路由、面板与视口的四主题截图进行比较。
+> [v0.8.4](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.4) 修复了写作流程中的三项关键可靠性边界：
 >
-> 本版继续使用同一个 Release 的五项资产合同：`ai-novel-writer-setup-0.8.3.exe`、`ai-novel-writer-setup-0.8.3.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.3-installer.dmg` 与 `ai-novel-writer-mac-arm64-0.8.3-installer.dmg.sha256`。
+> - **#92 流式草稿预览**：章节写作在生成尚未结束时即可显示已接受的正文预览；跨分片思考标记、取消、失败、裁剪拒绝和终态后的迟到事件不会污染草稿。
+> - **#99 OpenAI-compatible 端点**：保留用户填写的端点路径前缀，普通与流式请求使用同一解析规则，不再对带路径地址硬插 `/v1`。
+> - **#101 创作策略与推理覆盖**：创作策略属于小说项目，模型覆盖属于模型配置；界面显示请求偏好到实际生效值的映射。未知自定义端点不会猜测或发送供应商私有推理字段，原始推理不会成为章节正文或长期小说记忆。
+>
+> 同一个 Release 使用五项资产合同：`ai-novel-writer-setup-0.8.4.exe`、`ai-novel-writer-setup-0.8.4.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.4-installer.dmg` 与 `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`。
 
-> ## v0.8.2 系统性可靠性重大更新
->
-> [v0.8.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.2) 是一次覆盖长输出机制、提示词持久化和 AI 助手项目操作边界的重大更新。
->
-> - **#87 Token 与长输出机制**：章节目标字数不再静默压低模型输出预算；长度截断进入受总预算约束的续写链，低增量截断内容会被丢弃并仅允许一次恢复请求。最终结果仍不完整时立即失败，不完整草稿及后处理数据不落盘。
-> - **#88 全局提示词持久化**：以 PromptCatalog 统一内置、全局和项目提示词解析；全局提示词保存后立即可见，重新加载可稳定回读，单个损坏文件不会遮蔽其他有效提示词。
-> - **#90 真实 Agent 工作流**：AI 助手通过项目事实与创作工作流 seam 执行操作，只有真实注册运行并取得收据后才报告工作流已启动。普通 Markdown 文件只是文件产物，不等于故事架构、角色、蓝图或正文等项目事实，也不会被隐式导入。
->
-> 使用 DeepSeek V4 Flash 完成了真实长程验证：项目达到 20 章，其中连续生成章节累计 40,279 个可见正文单位，并验证角色状态、蓝图、知识库与 Agent 工具链。
->
-> 同一个 Release 严格遵守五项资产合同：Windows x64 安装程序 `ai-novel-writer-setup-0.8.2.exe`、`ai-novel-writer-setup-0.8.2.exe.blockmap`、`latest.yml`，以及 `ai-novel-writer-mac-arm64-0.8.2-installer.dmg` 和 `ai-novel-writer-mac-arm64-0.8.2-installer.dmg.sha256`。Windows 安装包未签名，但支持应用内更新；macOS ARM64 包采用 ad-hoc 或未签名分发、未公证，并且仍需从 Release 页面手动更新。首次安装时，系统安全提示或 Gatekeeper 可能要求用户确认。
+
 
 ## 产品定位
 

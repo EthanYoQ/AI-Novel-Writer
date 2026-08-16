@@ -335,6 +335,84 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  it('previews only authored text before completion and reconciles to the persisted terminal draft', async () => {
+    let resolveAttempt: ((value: GenerationOutcome) => void) | undefined
+    let streamChunk: ((chunk: string) => void) | undefined
+    const runtime = fakeRuntime((_attempt, _task, options) => {
+      streamChunk = (options as { onChunk?: (chunk: string) => void } | undefined)?.onChunk
+      return new Promise<GenerationOutcome>(resolve => { resolveAttempt = resolve })
+    })
+    const setupResult = setup({ runtime })
+    const replaceText = vi.fn()
+    const callbacks = Object.assign(setupResult.callbacks, { replaceText })
+
+    const execution = setupResult.command.execute({
+      step: {},
+      context: setupResult.context,
+      callbacks,
+    })
+    await vi.waitFor(() => expect(streamChunk).toBeTypeOf('function'))
+
+    streamChunk!('<thi')
+    streamChunk!('nk>不得展示的推理')
+    streamChunk!('</thi')
+    streamChunk!('nk>\n林岚推开门。')
+
+    expect(replaceText).toHaveBeenLastCalledWith('林岚推开门。')
+    expect(JSON.stringify(replaceText.mock.calls)).not.toContain('不得展示的推理')
+
+    resolveAttempt!(outcome(`${'终稿正文'.repeat(1250)}。`, 'stop'))
+    await execution
+
+    const persisted = setupResult.invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
+    const persistedText = (persisted?.[1] as { content: string }).content
+    expect(replaceText).toHaveBeenLastCalledWith(persistedText)
+  })
+
+  it('clears provisional text after a failed attempt and ignores its late chunks', async () => {
+    let lateChunk: ((chunk: string) => void) | undefined
+    const runtime = fakeRuntime((_attempt, _task, options) => {
+      lateChunk = (options as { onChunk?: (chunk: string) => void } | undefined)?.onChunk
+      lateChunk?.('不会落盘的正文')
+      throw new Error('provider disconnected')
+    })
+    const setupResult = setup({ runtime })
+    const replaceText = vi.fn()
+    const callbacks = Object.assign(setupResult.callbacks, { replaceText })
+
+    await expect(setupResult.command.execute({
+      step: {},
+      context: setupResult.context,
+      callbacks,
+    })).rejects.toThrow('provider disconnected')
+
+    expect(replaceText).toHaveBeenLastCalledWith('')
+    lateChunk?.('晚到的正文')
+    expect(replaceText).toHaveBeenLastCalledWith('')
+    expect(JSON.stringify(replaceText.mock.calls)).not.toContain('晚到的正文')
+    expectNoDraftPersistence(setupResult.invoke)
+  })
+
+  it('preserves the accepted preview after persistence even if a later refresh fails', async () => {
+    const terminalDraft = `${'已持久化正文'.repeat(800)}。`
+    const runtime = fakeOutcomes(outcome(terminalDraft, 'stop'))
+    const setupResult = setup({ runtime })
+    const replaceText = vi.fn()
+    const callbacks = Object.assign(setupResult.callbacks, { replaceText })
+    useProjectStore.setState({ refreshFileTree: vi.fn().mockRejectedValue(new Error('refresh failed')) })
+
+    await expect(setupResult.command.execute({
+      step: {},
+      context: setupResult.context,
+      callbacks,
+    })).rejects.toThrow('refresh failed')
+
+    const persisted = setupResult.invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
+    const persistedText = (persisted?.[1] as { content: string }).content
+    expect(replaceText).toHaveBeenLastCalledWith(persistedText)
+    expect(replaceText).not.toHaveBeenLastCalledWith('')
+  })
+
   it('does not locally reject a 30K prompt when lease context evidence is unknown', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>(async request => {
       void request

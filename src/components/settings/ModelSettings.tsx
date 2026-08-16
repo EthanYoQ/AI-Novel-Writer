@@ -11,6 +11,7 @@ import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 import { cn } from '../../lib/utils'
 import { useLocaleStore } from '../../stores/locale-store'
+import ReasoningPolicySettings from './ReasoningPolicySettings'
 
 /** 模型设置面板 — 在侧边栏 settings 视图中展示 */
 export default function ModelSettings() {
@@ -250,6 +251,10 @@ function ModelForm({
           />
         </div>
       </div>
+
+      {!model.purposes.includes('embedding') && (
+        <ReasoningPolicySettings model={model} onModelChange={onChange} />
+      )}
 
       {/* 操作按钮 */}
       <div className="flex items-center gap-2 pt-1">

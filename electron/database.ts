@@ -69,6 +69,7 @@ function createTables(db: BetterSqlite3.Database) {
       target_audience TEXT DEFAULT '',            -- 目标受众
       total_chapters INTEGER DEFAULT 100,         -- 预计总章数
       words_per_chapter INTEGER DEFAULT 3000,     -- 单章基准字数
+      creative_strategy TEXT NOT NULL DEFAULT 'auto', -- 项目级创作策略
       -- [写作技法]
       plot_structure TEXT DEFAULT 'three_act',    -- 故事模型
       narrative_pov TEXT DEFAULT 'third_limited', -- 叙事视角
@@ -348,6 +349,10 @@ function createTables(db: BetterSqlite3.Database) {
   addProjectCoreTextColumn('core_outline', 'synopsis')
   addProjectCoreTextColumn('world_setting', 'worldbuilding')
   addProjectCoreTextColumn('protagonist_profile')
+  if (!projectCoreColumns.has('creative_strategy')) {
+    db.exec("ALTER TABLE project_core ADD COLUMN creative_strategy TEXT NOT NULL DEFAULT 'auto'")
+    projectCoreColumns.add('creative_strategy')
+  }
 
   // 兼容旧库：将「无 currentState」的哨兵 0 迁移为 NULL（chapter 0 合法状态不受影响）
   try {

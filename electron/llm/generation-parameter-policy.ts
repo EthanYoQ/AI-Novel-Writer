@@ -1,14 +1,23 @@
 import type { LLMRequest, ModelProfile } from '../../src/shared/ipc-channels'
+import { resolveReasoningPolicy } from '../../src/shared/reasoning-policy'
+import type {
+  CreativeStrategy,
+  GenerationReasoningStage,
+  ProviderReasoningDirective,
+} from '../../src/shared/reasoning-types'
 
 export interface ResolvedGenerationParameters {
   /** `undefined` means the provider must omit this request field. */
   temperature: number | undefined
   maxTokens: number
   responseFormat?: { type: 'json_object' | 'text' }
-  thinking?: boolean
+  reasoning?: ProviderReasoningDirective
 }
 
-type GenerationParameterRequest = Pick<LLMRequest, 'maxTokens' | 'responseFormat' | 'thinking'>
+type GenerationParameterRequest = Pick<LLMRequest, 'maxTokens' | 'responseFormat'> & {
+  creativeStrategy?: CreativeStrategy
+  reasoningStage?: GenerationReasoningStage
+}
 
 const OFFICIAL_KIMI_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai'])
 const KIMI_FIXED_TEMPERATURE_MODEL_PREFIXES = [
@@ -17,7 +26,6 @@ const KIMI_FIXED_TEMPERATURE_MODEL_PREFIXES = [
   'kimi-k2.6',
   'kimi-k2.5',
 ]
-const KIMI_NO_GENERIC_THINKING_MODEL_PREFIXES = ['kimi-k3', 'kimi-k2.7']
 
 function hasModelFamilyPrefix(modelName: string, prefixes: readonly string[]): boolean {
   const normalized = modelName.trim().toLowerCase()
@@ -51,19 +59,23 @@ export function resolveGenerationParameters(
   const isOfficialKimi = isOfficialKimiHost(model.baseUrl)
   const usesFixedKimiTemperature = isOfficialKimi
     && hasModelFamilyPrefix(model.modelName, KIMI_FIXED_TEMPERATURE_MODEL_PREFIXES)
-  const suppressGenericThinking = isOfficialKimi
-    && hasModelFamilyPrefix(model.modelName, KIMI_NO_GENERIC_THINKING_MODEL_PREFIXES)
 
   if (isOfficialKimi && !usesFixedKimiTemperature) {
     validateKimiTemperature(model.temperature)
   }
 
+  const reasoningResolution = resolveReasoningPolicy({
+    model,
+    creativeStrategy: request.creativeStrategy,
+    stage: request.reasoningStage,
+  })
+
   return {
     temperature: usesFixedKimiTemperature ? undefined : model.temperature,
     maxTokens: request.maxTokens ?? model.maxTokens,
     ...(request.responseFormat ? { responseFormat: request.responseFormat } : {}),
-    ...(request.thinking !== undefined && !suppressGenericThinking
-      ? { thinking: request.thinking }
+    ...(reasoningResolution.providerDirective
+      ? { reasoning: reasoningResolution.providerDirective }
       : {}),
   }
 }

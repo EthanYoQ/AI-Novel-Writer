@@ -3,6 +3,11 @@
  * 所有 IPC 调用都通过此文件定义频道名和参数/返回值类型
  */
 import type { Locale } from '../i18n/types'
+import type {
+  CreativeStrategy,
+  GenerationReasoningStage,
+  ReasoningOverride,
+} from './reasoning-types'
 import type { EmbeddingOptions } from './embedding-options'
 import type { ModelCapabilities } from './provider-presets'
 import type { ModelProviderResourceId } from './model-provider-resources'
@@ -338,7 +343,7 @@ export interface LLMChannels {
     return: string | null
   }
   'llm:test-connection': {
-    args: [model: ModelProfile]
+    args: [model: ModelProfile, creativeStrategy?: CreativeStrategy]
     return: { success: boolean; error?: string }
   }
 }
@@ -369,6 +374,8 @@ export interface ProjectData {
 }
 
 export interface NovelConfig {
+  /** Project-scoped writing intent; independent from the selected model. */
+  creativeStrategy?: CreativeStrategy
   genre: string
   subGenre: string
   targetAudience: string
@@ -434,13 +441,16 @@ export interface LLMRequest {
   modelExecutionLeaseId?: string
   /** Stable attribution for per-project call history. */
   purpose?: string
+  /** Project-scoped product intent captured by the renderer for this request. */
+  creativeStrategy?: CreativeStrategy
+  /** Controlled semantic stage; never inferred from the diagnostic purpose label. */
+  reasoningStage?: GenerationReasoningStage
   /** Frozen project lease. Missing/stale leases are never written to project statistics. */
   projectSession?: ProjectSessionContext
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
   maxTokens?: number
   stream?: boolean
   responseFormat?: { type: 'json_object' | 'text' }
-  thinking?: boolean
 }
 
 export type ModelExecutionCapabilityEvidenceSource =
@@ -523,6 +533,8 @@ export interface ModelProfile {
   /** 旧配置和当前执行路径使用的输出 token 上限，保持兼容。 */
   maxTokens: number
   purposes: Array<'generation' | 'refinement' | 'summary' | 'embedding'>
+  /** Profile-scoped advanced request; `auto` defers to project strategy and purpose. */
+  reasoningOverride?: ReasoningOverride
   /** 仅用于 Embedding 模型；旧配置省略时沿用原有默认行为。 */
   embeddingOptions?: EmbeddingOptions
 }

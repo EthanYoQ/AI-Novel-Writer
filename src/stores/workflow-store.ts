@@ -100,6 +100,8 @@ export interface StepCallbacks {
   setProgress: (progress: number) => void
   /** 流式文本追加 */
   appendText: (text: string) => void
+  /** 用一份安全的临时或终态文本替换当前步骤输出。 */
+  replaceText?: (text: string) => void
 }
 
 // ===== 工作流定义 =====
@@ -412,9 +414,26 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         },
         appendText: (text) => {
           const activeRun = get().activeRuns.find(r => r.id === run.id)
-          if (activeRun) {
-            const step = activeRun.steps[i]
-            updateStepById(set, run.id, i, { result: (step.result || '') + text })
+          const step = activeRun?.steps[i]
+          if (
+            activeRun?.status !== 'running'
+            || activeRun.currentStepIndex !== i
+            || step?.status !== 'running'
+          ) return
+          updateStepById(set, run.id, i, { result: (step.result || '') + text })
+        },
+        replaceText: (text) => {
+          const activeRun = get().activeRuns.find(r => r.id === run.id)
+          const step = activeRun?.steps[i]
+          if (
+            !activeRun
+            || activeRun.currentStepIndex !== i
+            || step?.status !== 'running'
+          ) return
+          const isRunningMutation = activeRun.status === 'running'
+          const isCancellationCleanup = activeRun.status === 'cancelling' && text === ''
+          if (isRunningMutation || isCancellationCleanup) {
+            updateStepById(set, run.id, i, { result: text })
           }
         },
       }

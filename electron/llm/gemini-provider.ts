@@ -2,6 +2,14 @@ import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from 
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 
 export class GeminiProvider implements ILLMProvider {
+  private applyReasoning(
+    generationConfig: Record<string, unknown>,
+    opts: LLMGenerateOptions,
+  ): void {
+    if (opts.reasoning?.adapter !== 'gemini-thinking-budget') return
+    generationConfig.thinkingConfig = { thinkingBudget: opts.reasoning.thinkingBudget }
+  }
+
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
     if (reason === 'STOP') return 'stop'
     if (reason === 'MAX_TOKENS') return 'length'
@@ -43,6 +51,7 @@ export class GeminiProvider implements ILLMProvider {
       if (opts.responseFormat?.type === 'json_object') {
         generationConfig.responseMimeType = 'application/json'
       }
+      this.applyReasoning(generationConfig, opts)
 
       const body: Record<string, unknown> = {
         contents,
@@ -119,6 +128,7 @@ export class GeminiProvider implements ILLMProvider {
       if (opts.responseFormat?.type === 'json_object') {
         generationConfig.responseMimeType = 'application/json'
       }
+      this.applyReasoning(generationConfig, opts)
 
       const body: Record<string, unknown> = {
         contents,

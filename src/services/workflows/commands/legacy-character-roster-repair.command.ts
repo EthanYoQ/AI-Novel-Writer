@@ -134,6 +134,7 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
         {
           responseFormat: { type: 'json_object' },
           purpose,
+          reasoningStage: 'planning',
         },
         context,
       ),
@@ -238,6 +239,7 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
       {
         responseFormat: { type: 'json_object' },
         purpose: 'legacy-character-roster-repair',
+        reasoningStage: 'planning',
       },
       context,
     )

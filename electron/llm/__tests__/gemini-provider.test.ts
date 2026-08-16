@@ -17,6 +17,13 @@ const model: ModelProfile = {
   purposes: ['generation'],
 }
 
+const reasoningModel: ModelProfile = {
+  ...model,
+  modelName: 'gemini-2.5-flash-lite',
+  maxTokens: 65_536,
+  reasoningOverride: 'high',
+}
+
 function sseReader(...messages: string[]) {
   const encoder = new TextEncoder()
   const reads: Array<{ done: boolean; value?: Uint8Array }> = messages.map(message => ({
@@ -32,6 +39,38 @@ afterEach(() => {
 })
 
 describe('GeminiProvider', () => {
+  it('applies the same verified thinking budget to normal and streaming requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ candidates: [{ content: { parts: [{ text: '正文' }] } }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => ({ read: vi.fn().mockResolvedValue({ done: true }) }) },
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    const resolved = resolveGenerationParameters(reasoningModel, {
+      maxTokens: 512,
+      creativeStrategy: 'fluent-drafting',
+      reasoningStage: 'drafting',
+    })
+
+    await new GeminiProvider().generate(reasoningModel, [{ role: 'user', content: '写正文' }], resolved)
+    await new GeminiProvider().generateStream(reasoningModel, [{ role: 'user', content: '写正文' }], {
+      ...resolved,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    })
+
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(JSON.parse(String(request.body)).generationConfig.thinkingConfig).toEqual({
+        thinkingBudget: 24_576,
+      })
+    }
+  })
   it('sends the resolved generic profile temperature in both payload forms', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({

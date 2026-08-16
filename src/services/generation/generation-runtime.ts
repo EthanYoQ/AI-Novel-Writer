@@ -2,8 +2,10 @@ import type {
   ModelExecutionCapabilityEvidence,
   ModelExecutionLeaseReceipt,
 } from '../../shared/ipc-channels'
+import type { CreativeStrategy, GenerationReasoningStage } from '../../shared/reasoning-types'
 import { ipc } from '../ipc-client'
 import { useLLMStore } from '../../stores/llm-store'
+import { useProjectStore } from '../../stores/project-store'
 import {
   assertGenerationHarnessPolicy,
   createGenerationHarness,
@@ -21,14 +23,18 @@ export type GenerationRuntimeBudget = GenerationHarnessPolicy
 export interface LeaseCompletionRequest {
   leaseId: string
   purpose: string
+  creativeStrategy: CreativeStrategy
+  reasoningStage: GenerationReasoningStage
   messages: readonly GenerationMessage[]
   plan: Readonly<PhysicalGenerationPlan>
   signal: AbortSignal
+  onChunk?: (chunk: string) => void
 }
 
 /** Renderer adapter for the authoritative main-process model lease seam. */
 export interface GenerationRuntimeEnvironment {
   snapshotDefaultModelId(): string | null
+  snapshotCreativeStrategy?(): CreativeStrategy
   beginModelExecution(modelId: string): Promise<ModelExecutionLeaseReceipt>
   completeWithLease(request: LeaseCompletionRequest): Promise<ProviderCompletion>
   closeModelExecution(leaseId: string): Promise<void>
@@ -122,6 +128,9 @@ function createDefaultEnvironment(): GenerationRuntimeEnvironment {
   const leaseModels = new Map<string, string>()
   return {
     snapshotDefaultModelId: () => useLLMStore.getState().defaultModelId,
+    snapshotCreativeStrategy: () => (
+      useProjectStore.getState().currentProject?.novelConfig.creativeStrategy ?? 'auto'
+    ),
     async beginModelExecution(modelId) {
       const result = await ipc.invoke('llm:begin-execution-lease', modelId)
       if (!result.success || !result.lease) {
@@ -174,6 +183,9 @@ function createDefaultEnvironment(): GenerationRuntimeEnvironment {
         llmStore.generateStream(
           [...request.messages],
           {
+            onChunk: chunk => {
+              if (!settled && !request.signal.aborted) request.onChunk?.(chunk)
+            },
             onDone: (content, usage, finishReason) => succeed({ content, usage, finishReason }),
             onError: fail,
           },
@@ -181,6 +193,8 @@ function createDefaultEnvironment(): GenerationRuntimeEnvironment {
           {
             modelExecutionLeaseId: request.leaseId,
             purpose: request.purpose,
+            creativeStrategy: request.creativeStrategy,
+            reasoningStage: request.reasoningStage,
             maxTokens: request.plan.maxOutputTokens,
             responseFormat: request.plan.responseFormat,
           },
@@ -233,6 +247,7 @@ export async function createGenerationRuntime(
   if (!frozenModelId) {
     throw new GenerationRuntimeError('NO_DEFAULT_MODEL', '未配置默认生成模型。')
   }
+  const frozenCreativeStrategy = environment.snapshotCreativeStrategy?.() ?? 'auto'
 
   let lease: ModelExecutionLeaseReceipt
   try {
@@ -307,13 +322,17 @@ export async function createGenerationRuntime(
         return environment.completeWithLease({
           leaseId: request.modelExecutionLeaseId,
           purpose: request.purpose,
+          creativeStrategy: request.creativeStrategy,
+          reasoningStage: request.reasoningStage,
           messages: request.messages,
           plan: request.plan,
           signal: request.signal,
+          onChunk: request.onChunk,
         })
       },
     },
     policy: budget,
+    creativeStrategy: frozenCreativeStrategy,
   })
   const session = harness.openSession()
 

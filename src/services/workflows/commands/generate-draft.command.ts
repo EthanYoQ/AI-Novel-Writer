@@ -62,6 +62,26 @@ export function sanitizeDraftText(text: string): string {
   return deduped.join('\n\n').trim()
 }
 
+const THINKING_TAGS = ['<think>', '</think>'] as const
+
+/**
+ * Convert the cumulative raw stream into safe provisional prose. A suffix that
+ * could still become a thinking tag is withheld so split tags never flash in
+ * the writing panel before the next chunk arrives.
+ */
+export function visibleDraftStreamText(rawText: string): string {
+  const lower = rawText.toLowerCase()
+  let safeEnd = rawText.length
+  const longestTag = Math.max(...THINKING_TAGS.map(tag => tag.length))
+  for (let length = 1; length < longestTag; length += 1) {
+    const suffix = lower.slice(-length)
+    if (THINKING_TAGS.some(tag => tag.startsWith(suffix))) {
+      safeEnd = rawText.length - length
+    }
+  }
+  return sanitizeDraftText(rawText.slice(0, safeEnd))
+}
+
 function maxDraftCharsForTarget(targetChars: number): number {
   return Math.floor(targetChars * (1 + MAX_TARGET_OVERAGE_RATIO))
 }
@@ -278,127 +298,150 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const maxDraftChars = maxDraftCharsForTarget(targetChars)
 
     callbacks.log('调用 AI 生成章节草稿...')
-    this.assertNotCancelled(context)
-    const cancellation = observeWorkflowCancellation(context)
-    let runtime: GenerationRuntime | null = null
-    let cleanDraftText: string
+    let draftPersisted = false
     try {
-      runtime = await this.dependencies.createRuntime({ budget: DRAFT_GENERATION_BUDGET })
-      cleanDraftText = await runtime.execute(async ({ session }) => {
-        this.assertNotCancelled(context)
-        callbacks.setProgress(10)
-        const initialOutcome = await session.complete({
-          purpose: 'chapter-draft',
-          output: 'visible-text',
-          messages: [
-            { role: 'system', content: promptBuilder.getSystemRole() },
-            { role: 'user', content: prompt },
-          ],
-        }, { signal: cancellation.signal })
-        const initialCompletion = completionFromOutcome(initialOutcome)
-        logDraftAttempt(callbacks, '初始生成', initialOutcome.receipt)
-        callbacks.log(`  初始生成响应结束：finishReason=${initialCompletion.finishReason}`)
-        const initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content))
-        callbacks.log(`  初始生成可见单位：visibleUnits=${countDraftUnits(initialVisibleDraft)}`)
-        callbacks.appendText(initialVisibleDraft)
-        callbacks.setProgress(90)
-        this.assertNotCancelled(context)
-        return this.extendDraftIfNeeded({
-          session,
-          signal: cancellation.signal,
-          initialDraft: initialVisibleDraft,
-          initialFinishReason: initialCompletion.finishReason,
-          targetChars,
-          callbacks,
-          context,
-          systemRole: promptBuilder.getSystemRole(),
-          chapterInfo: this.chapterInfo,
-          futureBlueprints: futureBlueprintsStr,
-          globalGuidance: mergedGuidance,
-          writingStyle: novelConfig.writingStyle || '',
-          reasoning: initialOutcome.receipt.capabilities.reasoning === true,
+      this.assertNotCancelled(context)
+      const cancellation = observeWorkflowCancellation(context)
+      let runtime: GenerationRuntime | null = null
+      let cleanDraftText: string
+      try {
+        runtime = await this.dependencies.createRuntime({ budget: DRAFT_GENERATION_BUDGET })
+        cleanDraftText = await runtime.execute(async ({ session }) => {
+          this.assertNotCancelled(context)
+          callbacks.setProgress(10)
+          let rawPreview = ''
+          let previewActive = true
+          let initialOutcome: GenerationOutcome
+          try {
+            initialOutcome = await session.complete({
+              purpose: 'chapter-draft',
+              reasoningStage: 'drafting',
+              output: 'visible-text',
+              messages: [
+                { role: 'system', content: promptBuilder.getSystemRole() },
+                { role: 'user', content: prompt },
+              ],
+            }, {
+              signal: cancellation.signal,
+              onChunk: chunk => {
+                if (!previewActive || context.cancelled) return
+                rawPreview += chunk
+                callbacks.replaceText?.(visibleDraftStreamText(rawPreview))
+              },
+            })
+          } finally {
+            previewActive = false
+          }
+          const initialCompletion = completionFromOutcome(initialOutcome)
+          logDraftAttempt(callbacks, '初始生成', initialOutcome.receipt)
+          callbacks.log(`  初始生成响应结束：finishReason=${initialCompletion.finishReason}`)
+          const initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content))
+          callbacks.log(`  初始生成可见单位：visibleUnits=${countDraftUnits(initialVisibleDraft)}`)
+          callbacks.replaceText?.(initialVisibleDraft)
+          callbacks.setProgress(90)
+          this.assertNotCancelled(context)
+          return this.extendDraftIfNeeded({
+            session,
+            signal: cancellation.signal,
+            initialDraft: initialVisibleDraft,
+            initialFinishReason: initialCompletion.finishReason,
+            targetChars,
+            callbacks,
+            context,
+            systemRole: promptBuilder.getSystemRole(),
+            chapterInfo: this.chapterInfo,
+            futureBlueprints: futureBlueprintsStr,
+            globalGuidance: mergedGuidance,
+            writingStyle: novelConfig.writingStyle || '',
+            reasoning: initialOutcome.receipt.capabilities.reasoning === true,
+          })
         })
-      })
-    } catch (error) {
-      if (context.cancelled) throw new Error('工作流已取消')
-      throw error
-    } finally {
-      cancellation.dispose()
-      if (runtime) {
-        try { await runtime.close() } catch { /* execute close failure already fails before persistence */ }
+      } catch (error) {
+        if (context.cancelled) throw new Error('工作流已取消')
+        throw error
+      } finally {
+        cancellation.dispose()
+        if (runtime) {
+          try { await runtime.close() } catch { /* execute close failure already fails before persistence */ }
+        }
       }
-    }
-    this.assertNotCancelled(context)
-    const boundedDraftText = capDraftAtNaturalBoundary(cleanDraftText, maxDraftChars)
-    if (!boundedDraftText) {
-      throw new Error('草稿超过目标字数容差，且无法在自然句或段落边界内安全截断，结果未保存。')
-    }
-    if (boundedDraftText !== cleanDraftText) {
-      callbacks.log(`  草稿超过目标容差，已在自然边界收束至约 ${countDraftUnits(boundedDraftText)}/${targetChars} 字`)
-    }
+      this.assertNotCancelled(context)
+      const boundedDraftText = capDraftAtNaturalBoundary(cleanDraftText, maxDraftChars)
+      if (!boundedDraftText) {
+        throw new Error('草稿超过目标字数容差，且无法在自然句或段落边界内安全截断，结果未保存。')
+      }
+      if (boundedDraftText !== cleanDraftText) {
+        callbacks.log(`  草稿超过目标容差，已在自然边界收束至约 ${countDraftUnits(boundedDraftText)}/${targetChars} 字`)
+      }
 
-    // 落于数据库
-    if (!sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) {
-      throw new Error('当前项目已切换，已拒绝保存章节草稿')
-    }
-    this.assertNotCancelled(context)
-    const nextVersion: number = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:draft-next-version',
-      this.chapterInfo.chapterNumber,
-      expectedProjectPath,
-    )
-    this.assertNotCancelled(context)
-    const createResult = await ipc.invokeWithProjectSession(projectSession, 'db:draft-create', {
-      chapterNumber: this.chapterInfo.chapterNumber,
-      version: nextVersion,
-      source: 'write',
-      content: boundedDraftText,
-      wordCount: boundedDraftText.length,
-    }, expectedProjectPath)
-    if (!createResult.success || !createResult.id) {
-      throw new Error(createResult.error || '章节草稿保存失败')
-    }
-    this.assertNotCancelled(context)
-
-    const pseudoPath = createResult.id ? `vela://draft/${createResult.id}` : `vela://draft/ch${this.chapterInfo.chapterNumber}/v${nextVersion}`
-
-    context.data.draft = boundedDraftText
-    context.data.draftContent = boundedDraftText
-    context.data.draftPath = pseudoPath
-    context.data.chapterNumber = this.chapterInfo.chapterNumber
-    context.data.chapterInfo = this.chapterInfo
-    context.data.mergedGuidance = mergedGuidance
-    context.data.shortSummary = ''
-
-    await useProjectStore.getState().refreshFileTree(expectedProjectPath, undefined, projectSession)
-    try {
-      const { useDraftStore } = await import('../../../stores/draft-store')
-      await useDraftStore.getState().loadAllDrafts(expectedProjectPath, projectSession)
-    } catch { /* 忽略 */ }
-
-    try {
+      // 落于数据库
       if (!sameProjectSessionContext(
         projectSession,
         projectSessionContextFromProject(useProjectStore.getState().currentProject),
-      )) throw new Error('当前项目已切换，已拒绝打开旧草稿')
-      const { useEditorStore } = await import('../../../stores/editor-store')
-      useEditorStore.getState().openFile({
-        id: pseudoPath,
-        name: `第${this.chapterInfo.chapterNumber}章 ${this.chapterInfo.title} v${nextVersion}`,
-        type: 'chapter',
-        filePath: pseudoPath,
+      )) {
+        throw new Error('当前项目已切换，已拒绝保存章节草稿')
+      }
+      this.assertNotCancelled(context)
+      const nextVersion: number = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:draft-next-version',
+        this.chapterInfo.chapterNumber,
+        expectedProjectPath,
+      )
+      this.assertNotCancelled(context)
+      const createResult = await ipc.invokeWithProjectSession(projectSession, 'db:draft-create', {
+        chapterNumber: this.chapterInfo.chapterNumber,
+        version: nextVersion,
+        source: 'write',
         content: boundedDraftText,
-        savedContent: boundedDraftText,
-        projectKey: expectedProjectPath,
-      })
-    } catch { /* 忽略 */ }
+        wordCount: boundedDraftText.length,
+      }, expectedProjectPath)
+      if (!createResult.success || !createResult.id) {
+        throw new Error(createResult.error || '章节草稿保存失败')
+      }
+      this.assertNotCancelled(context)
+      draftPersisted = true
+      callbacks.replaceText?.(boundedDraftText)
 
-    callbacks.log(`✅ 草稿已自动入库保存为版本 v${nextVersion}（${boundedDraftText.length} 字）`)
-    return boundedDraftText
+      const pseudoPath = createResult.id ? `vela://draft/${createResult.id}` : `vela://draft/ch${this.chapterInfo.chapterNumber}/v${nextVersion}`
+
+      context.data.draft = boundedDraftText
+      context.data.draftContent = boundedDraftText
+      context.data.draftPath = pseudoPath
+      context.data.chapterNumber = this.chapterInfo.chapterNumber
+      context.data.chapterInfo = this.chapterInfo
+      context.data.mergedGuidance = mergedGuidance
+      context.data.shortSummary = ''
+
+      await useProjectStore.getState().refreshFileTree(expectedProjectPath, undefined, projectSession)
+      try {
+        const { useDraftStore } = await import('../../../stores/draft-store')
+        await useDraftStore.getState().loadAllDrafts(expectedProjectPath, projectSession)
+      } catch { /* 忽略 */ }
+
+      try {
+        if (!sameProjectSessionContext(
+          projectSession,
+          projectSessionContextFromProject(useProjectStore.getState().currentProject),
+        )) throw new Error('当前项目已切换，已拒绝打开旧草稿')
+        const { useEditorStore } = await import('../../../stores/editor-store')
+        useEditorStore.getState().openFile({
+          id: pseudoPath,
+          name: `第${this.chapterInfo.chapterNumber}章 ${this.chapterInfo.title} v${nextVersion}`,
+          type: 'chapter',
+          filePath: pseudoPath,
+          content: boundedDraftText,
+          savedContent: boundedDraftText,
+          projectKey: expectedProjectPath,
+        })
+      } catch { /* 忽略 */ }
+
+      callbacks.log(`✅ 草稿已自动入库保存为版本 v${nextVersion}（${boundedDraftText.length} 字）`)
+      return boundedDraftText
+    } catch (error) {
+      if (!draftPersisted) callbacks.replaceText?.('')
+      throw error
+    }
   }
 
   private shouldAutoContinue(
@@ -485,20 +528,37 @@ ${params.writingStyle || '（无）'}
 【已写正文末尾】
 ${visibleTail}`
 
-      const outcome = await params.session.complete({
-        purpose: recoveryPending
-          ? 'chapter-draft-no-progress-recovery'
-          : 'chapter-draft-continuation',
-        output: 'visible-text',
-        messages: [
-          { role: 'system', content: params.systemRole },
-          { role: 'user', content: continuationPrompt },
-        ],
-      }, { signal: params.signal })
+      let rawPreview = ''
+      let previewActive = true
+      let outcome: GenerationOutcome
+      try {
+        outcome = await params.session.complete({
+          purpose: recoveryPending
+            ? 'chapter-draft-no-progress-recovery'
+            : 'chapter-draft-continuation',
+          reasoningStage: 'drafting',
+          output: 'visible-text',
+          messages: [
+            { role: 'system', content: params.systemRole },
+            { role: 'user', content: continuationPrompt },
+          ],
+        }, {
+          signal: params.signal,
+          onChunk: chunk => {
+            if (!previewActive || params.context.cancelled) return
+            rawPreview += chunk
+            params.callbacks.replaceText?.(appendVisibleDraftContinuation(
+              draft,
+              visibleDraftStreamText(rawPreview),
+            ))
+          },
+        })
+      } finally {
+        previewActive = false
+      }
       const addition = completionFromOutcome(outcome)
       logDraftAttempt(params.callbacks, `自动续写第 ${rounds} 段`, outcome.receipt)
       params.callbacks.log(`  自动续写第 ${rounds} 段响应结束：finishReason=${addition.finishReason}`)
-      params.callbacks.appendText(sanitizeDraftText(this.stripThinkingTags(addition.content)))
       this.assertNotCancelled(params.context)
       const beforeChars = countDraftUnits(draft)
       const visibleAddition = sanitizeDraftText(this.stripThinkingTags(addition.content))
@@ -514,6 +574,7 @@ ${visibleTail}`
         + `mergedDelta=${mergedDelta} accepted=${accepted}`,
       )
       if (addition.finishReason === 'length' && mergedDelta < 300) {
+        params.callbacks.replaceText?.(draft)
         if (noProgressRecoveryUsed) {
           throw new Error('唯一一次无进展恢复请求仍未增加足够的新正文，结果未保存。请缩短章节目标后重试。')
         }
@@ -524,6 +585,7 @@ ${visibleTail}`
         continue
       }
       draft = candidateDraft
+      params.callbacks.replaceText?.(draft)
       lastFinishReason = addition.finishReason
       recoveryPending = false
       if (mergedDelta < 300) break

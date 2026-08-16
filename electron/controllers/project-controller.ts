@@ -13,7 +13,10 @@ import {
   initProjectDatabase,
 } from '../database'
 import { closeConnection as closeVectorConnection } from '../vector-store'
-import { ProjectCoreRepository } from '../repositories/project-core-repository'
+import {
+  ProjectCoreRepository,
+  type ProjectCoreData,
+} from '../repositories/project-core-repository'
 import { projectAccess, type ProjectSessionLease } from '../services/project-access'
 import { assertExpectedProjectPath, assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { sanitizeProjectName } from './project-path'
@@ -72,6 +75,14 @@ function sameProjectPath(left: string | null, right: string | null): boolean {
 // 用主进程 canonical root 优先，失败时退回与渲染端一致的 Windows 词法路径键。
 function sameRecentProjectPath(left: string, right: string): boolean {
   return sameProjectPath(left, right) || sameProjectPathKey(left, right)
+}
+
+function creativeStrategyCoreUpdate(
+  novelConfig: ProjectData['novelConfig'],
+): Pick<Partial<ProjectCoreData>, 'creativeStrategy'> {
+  return novelConfig.creativeStrategy
+    ? { creativeStrategy: novelConfig.creativeStrategy }
+    : {}
 }
 
 /** 项目配置读写必须显式携带当前会话租约，路径本身不是授权。 */
@@ -452,6 +463,7 @@ export function registerProjectController() {
             targetAudience: updatedCoreData.targetAudience,
             totalChapters: updatedCoreData.totalChapters,
             wordsPerChapter: updatedCoreData.wordsPerChapter,
+            creativeStrategy: updatedCoreData.creativeStrategy,
             plotStructure: updatedCoreData.plotStructure as 'three_act' | 'heros_journey' | 'save_the_cat' | 'kishotenketsu' | 'multi_thread' | 'freeform',
             narrativePOV: updatedCoreData.narrativePov as 'third_limited' | 'first_person' | 'third_omniscient' | 'multi_pov',
             coreOutline: updatedCoreData.coreOutline,
@@ -564,6 +576,7 @@ export function registerProjectController() {
           targetAudience: data.novelConfig.targetAudience,
           totalChapters: data.novelConfig.totalChapters,
           wordsPerChapter: data.novelConfig.wordsPerChapter,
+          ...creativeStrategyCoreUpdate(data.novelConfig),
           plotStructure: data.novelConfig.plotStructure,
           narrativePov: data.novelConfig.narrativePOV,
           goldenFinger: data.novelConfig.goldenFinger,
@@ -630,6 +643,7 @@ export function registerProjectController() {
           targetAudience: data.novelConfig.targetAudience,
           totalChapters: data.novelConfig.totalChapters,
           wordsPerChapter: data.novelConfig.wordsPerChapter,
+          ...creativeStrategyCoreUpdate(data.novelConfig),
           plotStructure: data.novelConfig.plotStructure,
           narrativePov: data.novelConfig.narrativePOV,
           goldenFinger: data.novelConfig.goldenFinger,

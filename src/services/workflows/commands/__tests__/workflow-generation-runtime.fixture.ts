@@ -52,6 +52,8 @@ export const workflowRuntimeDependencies: WorkflowGenerationRuntimeDependencies 
           {
             modelExecutionLeaseId: request.leaseId,
             purpose: request.purpose,
+            creativeStrategy: request.creativeStrategy,
+            reasoningStage: request.reasoningStage,
             maxTokens: request.plan.maxOutputTokens,
             responseFormat: request.plan.responseFormat,
           },

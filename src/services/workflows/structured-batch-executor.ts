@@ -161,10 +161,13 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
             message: '结构化生成已取消',
           })
         }
-        const task = contract.buildTask({
-          items: [...items],
-          validatedPrefix: [...validated],
-        })
+        const task = {
+          ...contract.buildTask({
+            items: [...items],
+            validatedPrefix: [...validated],
+          }),
+          reasoningStage: 'planning' as const,
+        }
         if (task.output !== 'structured-data') {
           throw new ExecutionFailure({
             code: 'invalid_output',
@@ -196,10 +199,13 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           receipt.compactSingleFallbackCount = compactFallbackKeys.size
           let compactTask: GenerationTask
           try {
-            compactTask = contract.buildCompactSingleTask({
-              item: items[0]!,
-              validatedPrefix: [...validated],
-            })
+            compactTask = {
+              ...contract.buildCompactSingleTask({
+                item: items[0]!,
+                validatedPrefix: [...validated],
+              }),
+              reasoningStage: 'planning',
+            }
           } catch {
             throw new ExecutionFailure({
               code: 'invalid_output',

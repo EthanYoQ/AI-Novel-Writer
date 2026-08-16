@@ -8,6 +8,7 @@ import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
 import { Sparkles, Bold, Check } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { createGenerationRuntime } from '../../services/generation/generation-runtime'
+import type { GenerationReasoningStage } from '../../shared/reasoning-types'
 
 /** 统计字数（简单字符数统计，包含空格换行等格式符） */
 function countWords(text: string): number {
@@ -26,12 +27,20 @@ export type CodeMirrorEditorProps = {
   mode?: 'document' | 'prose'
 }
 
+type EditorAIAction = {
+  key: 'refine' | 'expand' | 'continue' | 'dialogue'
+  label: string
+  color: string
+  prompt: string
+  reasoningStage: GenerationReasoningStage
+}
+
 const AI_ACTIONS = [
-  { key: 'refine', label: '润色', color: 'text-[var(--color-category-progress-text)]', prompt: '润色这部分，使其更具文学感和感染力。' },
-  { key: 'expand', label: '扩写', color: 'text-[var(--color-warning-text)]', prompt: '扩写这部分，增加更多细节描写和环境烘托。' },
-  { key: 'continue', label: '续写', color: 'text-[var(--color-category-review-text)]', prompt: '根据上下文，合理续写接下来的情节。' },
-  { key: 'dialogue', label: '对话', color: 'text-[var(--color-success-text)]', prompt: '将这部分改写为更生动传神的对话形式。' },
-]
+  { key: 'refine', label: '润色', color: 'text-[var(--color-category-progress-text)]', prompt: '润色这部分，使其更具文学感和感染力。', reasoningStage: 'review' },
+  { key: 'expand', label: '扩写', color: 'text-[var(--color-warning-text)]', prompt: '扩写这部分，增加更多细节描写和环境烘托。', reasoningStage: 'drafting' },
+  { key: 'continue', label: '续写', color: 'text-[var(--color-category-review-text)]', prompt: '根据上下文，合理续写接下来的情节。', reasoningStage: 'drafting' },
+  { key: 'dialogue', label: '对话', color: 'text-[var(--color-success-text)]', prompt: '将这部分改写为更生动传神的对话形式。', reasoningStage: 'drafting' },
+] satisfies readonly EditorAIAction[]
 
 const EDITOR_AI_GENERATION_BUDGET = Object.freeze({
   maxAttempts: 1,
@@ -254,24 +263,25 @@ export default function CodeMirrorEditor({
   }, [mode])
 
   // AI 菜单处理（流式调用，实时显示生成内容）
-  const handleAIAction = async (prompt: string, _actionKey: string) => {
+  const handleAIAction = async (action: EditorAIAction) => {
     let runtime: Awaited<ReturnType<typeof createGenerationRuntime>> | null = null
     try {
       if (!selectionRange || !editorRef.current?.view) return
       const view = editorRef.current.view
       const selectedText = view.state.sliceDoc(selectionRange.from, selectionRange.to)
 
-      setActiveAIAction(AI_ACTIONS.find(a => a.key === _actionKey)?.label || 'AI')
+      setActiveAIAction(action.label)
       setAiResult('')
       setAiError(null)
 
       runtime = await createGenerationRuntime({ budget: EDITOR_AI_GENERATION_BUDGET })
       const outcome = await runtime.execute(({ session }) => session.complete({
-        purpose: `editor-ai-${_actionKey}`,
+        purpose: `editor-ai-${action.key}`,
+        reasoningStage: action.reasoningStage,
         output: 'visible-text',
         messages: [
           { role: 'system', content: '你是一个专业的小说编辑，请根据要求对文本进行处理，只返回处理后的文本，不要有任何解释。' },
-          { role: 'user', content: `要求：${prompt}\n\n文本：\n${selectedText}` },
+          { role: 'user', content: `要求：${action.prompt}\n\n文本：\n${selectedText}` },
         ],
       }))
       if (outcome.status !== 'completed' || outcome.finishReason !== 'stop') {
@@ -461,7 +471,7 @@ export default function CodeMirrorEditor({
                   className={cn('p-1.5 rounded flex items-center gap-1 transition-colors', action.color)}
                   onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-hover)')}
                   onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  onClick={() => handleAIAction(action.prompt, action.key)}
+                  onClick={() => handleAIAction(action)}
                 >
                   <span className="text-[10px] tracking-widest">{action.label}</span>
                 </button>

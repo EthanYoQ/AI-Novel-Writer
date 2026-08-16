@@ -60,7 +60,7 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
       promptBuilder.getSystemRole(),
       callbacks,
       { mode: 'append-visible-text', maxContinuations: 3 },
-      undefined,
+      { purpose: 'refine-from-review', reasoningStage: 'review' },
       context,
     )
     this.assertNotCancelled(context)

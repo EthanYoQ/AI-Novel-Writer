@@ -11,6 +11,7 @@ import {
 import { GenerationHarnessError } from '../../../generation/generation-harness'
 import { RefineDraftCommand } from '../refine-draft.command'
 import { RefineFromReviewCommand } from '../refine-from-review.command'
+import { ReviewChapterCommand } from '../review-chapter.command'
 import type { WorkflowGenerationRuntimeDependencies } from '../base-command'
 
 const PROJECT_PATH = 'C:\\novels\\refine'
@@ -120,6 +121,16 @@ function reviewCommand(
     draftPath: 'vela://draft/1',
     draftContent,
     reviewReport: '{"summary":"修复结尾事实冲突"}',
+    chapterNumber: 1,
+  }, runtimeDependencies(completeWithLease))
+}
+
+function chapterReviewCommand(
+  completeWithLease: GenerationRuntimeEnvironment['completeWithLease'],
+): ReviewChapterCommand {
+  return new ReviewChapterCommand({
+    draftPath: 'vela://draft/1',
+    draftContent: '待审章节正文。',
     chapterNumber: 1,
   }, runtimeDependencies(completeWithLease))
 }
@@ -396,6 +407,8 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     })).resolves.toBe(`${first}\n\n后半修复正文。`)
 
     expect(completeWithLease).toHaveBeenCalledTimes(2)
+    expect(completeWithLease.mock.calls.map(([request]) => request.reasoningStage))
+      .toEqual(['review', 'review'])
     expect(stepCallbacks.log).toHaveBeenCalledWith('  有界生成初始响应：finishReason=length')
     expect(stepCallbacks.log).toHaveBeenCalledWith('  自动续写第 1 轮响应：finishReason=stop')
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining(first))
@@ -419,5 +432,32 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     expect(completeWithLease).toHaveBeenCalledTimes(2)
     expect(invoke).not.toHaveBeenCalled()
     expect(useEditorStore.getState().tabs).toEqual([])
+  })
+})
+
+describe('ReviewChapterCommand reasoning stage', () => {
+  it('routes the public review workflow through the review stage', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '{"summary":"ok","items":[]}', finishReason: 'stop' })
+    stubIpc(vi.fn(async (channel: string) => {
+      if (channel === 'kb:search') return []
+      if (channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:draft-get-meta') {
+        return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: true }
+      throw new Error(`unexpected IPC: ${channel}`)
+    }))
+
+    await chapterReviewCommand(completeWithLease).execute({
+      step: {},
+      context: workflowContext(),
+      callbacks: callbacks(),
+    })
+
+    expect(completeWithLease).toHaveBeenCalledOnce()
+    expect(completeWithLease.mock.calls[0]?.[0].reasoningStage).toBe('review')
   })
 })

@@ -316,7 +316,11 @@ export function registerLLMController() {
     return config.defaultEmbeddingModelId ?? null
   })
 
-  ipcMain.handle('llm:test-connection', async (_event, model: ModelProfile) => {
+  ipcMain.handle('llm:test-connection', async (
+    _event,
+    model: ModelProfile,
+    creativeStrategy: LLMRequest['creativeStrategy'] = 'auto',
+  ) => {
     try {
       applyProxyConfig()
       
@@ -334,6 +338,8 @@ export function registerLLMController() {
           resolveGenerationParameters(model, {
             // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
             maxTokens: CONNECTION_TEST_MAX_TOKENS,
+            reasoningStage: 'general',
+            creativeStrategy,
           }),
         )
         result = { success: res.success, error: res.error }

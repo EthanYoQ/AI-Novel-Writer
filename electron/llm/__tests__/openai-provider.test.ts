@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { OpenAIProvider } from '../openai-provider'
+import { resolveOpenAIChatCompletionsUrl } from '../openai-compatible-endpoint'
 import { resolveGenerationParameters } from '../generation-parameter-policy'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 
@@ -27,6 +28,22 @@ const fixedTemperatureKimiModel: ModelProfile = {
   temperature: 0.7,
 }
 
+const legacyDeepSeekV4Model: ModelProfile = {
+  ...novelAIModel,
+  id: 'deepseek-v4-flash',
+  name: 'DeepSeek V4 Flash',
+  provider: 'deepseek',
+  modelName: 'deepseek-v4-flash',
+  baseUrl: 'https://api.deepseek.com',
+  capabilities: {
+    contextWindowTokens: 1_000_000,
+    maxOutputTokens: 384_000,
+    reasoning: false,
+    structuredOutput: true,
+    usage: true,
+  },
+}
+
 function requestBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const request = fetchMock.mock.calls[0][1] as RequestInit
   return JSON.parse(String(request.body)) as Record<string, unknown>
@@ -46,7 +63,59 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('resolveOpenAIChatCompletionsUrl', () => {
+  it.each([
+    ['domain root', 'https://api.openai.com', 'https://api.openai.com/v1/chat/completions'],
+    ['full chat path', 'https://gateway.example/api/v4/chat', 'https://gateway.example/api/v4/chat/completions'],
+    ['full endpoint', 'https://gateway.example/api/v4/chat/completions', 'https://gateway.example/api/v4/chat/completions'],
+    ['v1 prefix', 'https://gateway.example/v1', 'https://gateway.example/v1/chat/completions'],
+    ['v3 prefix', 'https://gateway.example/api/plan/v3', 'https://gateway.example/api/plan/v3/chat/completions'],
+    ['v4 prefix', 'https://open.bigmodel.cn/api/paas/v4', 'https://open.bigmodel.cn/api/paas/v4/chat/completions'],
+    ['arbitrary versioned prefix', 'https://gateway.example/tenant/openai/v27', 'https://gateway.example/tenant/openai/v27/chat/completions'],
+    ['generic path prefix', 'https://gateway.example/tenant/openai', 'https://gateway.example/tenant/openai/chat/completions'],
+    ['trailing slashes', 'https://gateway.example/api/plan/v3///', 'https://gateway.example/api/plan/v3/chat/completions'],
+  ])('resolves the %s without replacing its configured prefix', (_case, baseUrl, expectedUrl) => {
+    expect(resolveOpenAIChatCompletionsUrl(baseUrl, 'custom')).toBe(expectedUrl)
+  })
+})
+
 describe('OpenAIProvider NovelAI compatibility', () => {
+  it('preserves an explicitly configured endpoint prefix for normal and streaming generation', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => sseReader('data: [DONE]\n') },
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    const model = {
+      ...novelAIModel,
+      provider: 'custom' as const,
+      baseUrl: 'https://gateway.example/tenant/openai',
+    }
+
+    await new OpenAIProvider().generate(model, [{ role: 'user', content: '普通正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+    })
+    await new OpenAIProvider().generateStream(model, [{ role: 'user', content: '流式正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    })
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://gateway.example/tenant/openai/chat/completions',
+      'https://gateway.example/tenant/openai/chat/completions',
+    ])
+  })
+
   it('uses the OpenAI-compatible URL and Bearer token without unsupported JSON response formatting', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -57,7 +126,6 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     await expect(new OpenAIProvider().generate(novelAIModel, [{ role: 'user', content: '写一段正文' }], {
       temperature: 0.2,
       maxTokens: 512,
-      thinking: true,
       responseFormat: { type: 'json_object' },
     })).resolves.toMatchObject({ success: true, content: '正文', finishReason: 'stop' })
 
@@ -66,7 +134,8 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     expect(request.headers).toMatchObject({ Authorization: 'Bearer pst-test-token' })
 
     const body = requestBody(fetchMock)
-    expect(body).toMatchObject({ stream: false, enable_thinking: true })
+    expect(body).toMatchObject({ stream: false })
+    expect(body).not.toHaveProperty('enable_thinking')
     expect(body).not.toHaveProperty('thinking')
     expect(body).not.toHaveProperty('response_format')
   })
@@ -87,7 +156,6 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     await new OpenAIProvider().generateStream(novelAIModel, [{ role: 'user', content: '流式正文' }], {
       temperature: 0.2,
       maxTokens: 512,
-      thinking: true,
       responseFormat: { type: 'json_object' },
       signal: new AbortController().signal,
       onChunk: vi.fn(),
@@ -100,37 +168,132 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     expect(request.headers).toMatchObject({ Authorization: 'Bearer pst-test-token' })
 
     const body = requestBody(fetchMock)
-    expect(body).toMatchObject({ stream: true, enable_thinking: true })
+    expect(body).toMatchObject({ stream: true })
+    expect(body).not.toHaveProperty('enable_thinking')
     expect(body).not.toHaveProperty('thinking')
     expect(body).not.toHaveProperty('response_format')
     expect(onDone).toHaveBeenCalledWith('', undefined, 'stop')
   })
 
-  it('keeps the existing thinking and JSON response parameters for other OpenAI-compatible providers', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: '正文' } }] }),
-    })
+  it('applies the same verified reasoning effort to normal and streaming xAI requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '正文' } }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => sseReader('data: [DONE]\n') },
+      })
     vi.stubGlobal('fetch', fetchMock)
 
-    await new OpenAIProvider().generate({
+    const xaiModel: ModelProfile = {
       ...novelAIModel,
-      provider: 'openai',
-      baseUrl: 'https://api.openai.com',
-    }, [{ role: 'user', content: '返回 JSON' }], {
-      temperature: 0.2,
+      provider: 'xai',
+      modelName: 'grok-4.5',
+      baseUrl: 'https://api.x.ai/v1',
+      reasoningOverride: 'high',
+    }
+    const resolved = resolveGenerationParameters(xaiModel, {
       maxTokens: 512,
-      thinking: true,
-      responseFormat: { type: 'json_object' },
+      creativeStrategy: 'fluent-drafting',
+      reasoningStage: 'drafting',
+    })
+    await new OpenAIProvider().generate(xaiModel, [{ role: 'user', content: '返回正文' }], resolved)
+    await new OpenAIProvider().generateStream(xaiModel, [{ role: 'user', content: '返回正文' }], {
+      ...resolved,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
     })
 
-    const body = requestBody(fetchMock)
-    expect(body).toMatchObject({
-      temperature: 0.2,
-      thinking: { type: 'enabled' },
-      response_format: { type: 'json_object' },
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(JSON.parse(String(request.body)).reasoning_effort).toBe('high')
+    }
+  })
+
+  it('disables DeepSeek V4 default thinking for fluent drafts in normal and streaming requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => sseReader('data: [DONE]\n') },
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const resolved = resolveGenerationParameters(legacyDeepSeekV4Model, {
+      maxTokens: 512,
+      creativeStrategy: 'fluent-drafting',
+      reasoningStage: 'drafting',
     })
-    expect(body).not.toHaveProperty('enable_thinking')
+    await new OpenAIProvider().generate(
+      legacyDeepSeekV4Model,
+      [{ role: 'user', content: '返回正文' }],
+      resolved,
+    )
+    await new OpenAIProvider().generateStream(
+      legacyDeepSeekV4Model,
+      [{ role: 'user', content: '返回正文' }],
+      {
+        ...resolved,
+        signal: new AbortController().signal,
+        onChunk: vi.fn(),
+        onDone: vi.fn(),
+        onError: vi.fn(),
+      },
+    )
+
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      const body = JSON.parse(String(request.body)) as Record<string, unknown>
+      expect(body.thinking).toEqual({ type: 'disabled' })
+      expect(body).not.toHaveProperty('reasoning_effort')
+    }
+  })
+
+  it('maps auto DeepSeek V4 drafts to enabled high effort in normal and streaming requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: { getReader: () => sseReader('data: [DONE]\n') },
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const resolved = resolveGenerationParameters(legacyDeepSeekV4Model, {
+      maxTokens: 512,
+      creativeStrategy: 'auto',
+      reasoningStage: 'drafting',
+    })
+    await new OpenAIProvider().generate(
+      legacyDeepSeekV4Model,
+      [{ role: 'user', content: '返回正文' }],
+      resolved,
+    )
+    await new OpenAIProvider().generateStream(
+      legacyDeepSeekV4Model,
+      [{ role: 'user', content: '返回正文' }],
+      {
+        ...resolved,
+        signal: new AbortController().signal,
+        onChunk: vi.fn(),
+        onDone: vi.fn(),
+        onError: vi.fn(),
+      },
+    )
+
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(JSON.parse(String(request.body))).toMatchObject({
+        thinking: { type: 'enabled' },
+        reasoning_effort: 'high',
+      })
+    }
   })
 
   it('omits Kimi K3 fixed sampling and generic thinking fields for non-stream generation', async () => {
@@ -143,7 +306,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     await new OpenAIProvider().generate(
       fixedTemperatureKimiModel,
       [{ role: 'user', content: '写正文' }],
-      resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512, thinking: true }),
+      resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512 }),
     )
 
     const body = requestBody(fetchMock)
@@ -162,7 +325,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       fixedTemperatureKimiModel,
       [{ role: 'user', content: '写正文' }],
       {
-        ...resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512, thinking: true }),
+        ...resolveGenerationParameters(fixedTemperatureKimiModel, { maxTokens: 512 }),
         signal: new AbortController().signal,
         onChunk: vi.fn(),
         onDone: vi.fn(),

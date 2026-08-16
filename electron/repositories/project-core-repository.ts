@@ -5,6 +5,7 @@
  * 始终只有一行数据 (id = 'main')。
  */
 import { getProjectDb } from '../database'
+import { CREATIVE_STRATEGIES, type CreativeStrategy } from '../../src/shared/reasoning-types'
 
 /** project_core 表行类型 */
 export interface ProjectCoreRow {
@@ -15,6 +16,7 @@ export interface ProjectCoreRow {
     target_audience: string
     total_chapters: number
     words_per_chapter: number
+    creative_strategy: string
     plot_structure: string
     narrative_pov: string
     writing_style: string
@@ -41,6 +43,7 @@ export interface ProjectCoreData {
     targetAudience: string
     totalChapters: number
     wordsPerChapter: number
+    creativeStrategy: CreativeStrategy
     plotStructure: string
     narrativePov: string
     writingStyle: string
@@ -66,6 +69,11 @@ function rowToData(row: ProjectCoreRow): ProjectCoreData {
         targetAudience: row.target_audience,
         totalChapters: row.total_chapters,
         wordsPerChapter: row.words_per_chapter,
+        creativeStrategy: (
+            CREATIVE_STRATEGIES.includes(row.creative_strategy as CreativeStrategy)
+                ? row.creative_strategy
+                : 'auto'
+        ) as CreativeStrategy,
         plotStructure: row.plot_structure,
         narrativePov: row.narrative_pov,
         writingStyle: row.writing_style,
@@ -123,6 +131,7 @@ export class ProjectCoreRepository {
             targetAudience: 'target_audience',
             totalChapters: 'total_chapters',
             wordsPerChapter: 'words_per_chapter',
+            creativeStrategy: 'creative_strategy',
             plotStructure: 'plot_structure',
             narrativePov: 'narrative_pov',
             writingStyle: 'writing_style',

@@ -3,6 +3,7 @@ import { ipc } from '../services/ipc-client'
 import { requireIpcSuccess } from '../services/ipc-result'
 import { alertError } from '../components/ui/AlertDialog'
 import type { LLMFinishReason, ModelProfile, LLMResponse, TokenUsage } from '../shared/ipc-channels'
+import type { CreativeStrategy, GenerationReasoningStage } from '../shared/reasoning-types'
 import { projectSessionContextFromProject } from '../shared/project-session-context'
 import { useProjectStore } from './project-store'
 
@@ -42,14 +43,14 @@ interface LLMState {
   generate: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     modelId?: string,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext; modelExecutionLeaseId?: string }
+    options?: { responseFormat?: { type: string }; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext; modelExecutionLeaseId?: string; creativeStrategy?: CreativeStrategy; reasoningStage?: GenerationReasoningStage }
   ) => Promise<LLMResponse>
   /** 流式生成 */
   generateStream: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     callbacks: StreamCallbacks,
     modelId?: string,
-    options?: { responseFormat?: { type: string }; thinking?: boolean; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext; modelExecutionLeaseId?: string }
+    options?: { responseFormat?: { type: string }; maxTokens?: number; purpose?: string; projectSession?: import('../shared/ipc-channels').ProjectSessionContext; modelExecutionLeaseId?: string; creativeStrategy?: CreativeStrategy; reasoningStage?: GenerationReasoningStage }
   ) => Promise<string>
   /** 取消生成 */
   cancelGeneration: (requestId: string) => Promise<void>
@@ -154,14 +155,19 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     const projectSession = options?.projectSession
       ?? projectSessionContextFromProject(useProjectStore.getState().currentProject)
       ?? undefined
+    const creativeStrategy = options?.creativeStrategy
+      ?? useProjectStore.getState().currentProject?.novelConfig.creativeStrategy
+      ?? 'auto'
     const response = await ipc.invoke('llm:generate', {
       modelId: mid,
       purpose: options?.purpose ?? 'generation',
+      creativeStrategy,
+      reasoningStage: options?.reasoningStage
+        ?? (options?.responseFormat ? 'planning' : 'drafting'),
       projectSession,
       modelExecutionLeaseId: options?.modelExecutionLeaseId,
       messages,
       responseFormat: options?.responseFormat as { type: 'json_object' | 'text' } | undefined,
-      thinking: options?.thinking,
       maxTokens: options?.maxTokens,
     })
     return requireIpcSuccess(response, '模型生成')
@@ -178,6 +184,9 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     const projectSession = options?.projectSession
       ?? projectSessionContextFromProject(useProjectStore.getState().currentProject)
       ?? undefined
+    const creativeStrategy = options?.creativeStrategy
+      ?? useProjectStore.getState().currentProject?.novelConfig.creativeStrategy
+      ?? 'auto'
 
     // 注册流式事件监听
     const unsubChunk = ipc.on('llm:stream-chunk', (data) => {
@@ -220,12 +229,14 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
       started = await ipc.invoke('llm:generate-stream', requestId, {
         modelId: mid,
         purpose: options?.purpose ?? 'generation',
+        creativeStrategy,
+        reasoningStage: options?.reasoningStage
+          ?? (options?.responseFormat ? 'planning' : 'drafting'),
         projectSession,
         modelExecutionLeaseId: options?.modelExecutionLeaseId,
         messages,
         stream: true,
         responseFormat: options?.responseFormat as { type: 'json_object' | 'text' } | undefined,
-        thinking: options?.thinking,
         maxTokens: options?.maxTokens,
       })
     } catch (error) {
@@ -248,6 +259,10 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
   },
 
   testConnection: async (model) => {
-    return ipc.invoke('llm:test-connection', model)
+    return ipc.invoke(
+      'llm:test-connection',
+      model,
+      useProjectStore.getState().currentProject?.novelConfig.creativeStrategy ?? 'auto',
+    )
   },
 }))

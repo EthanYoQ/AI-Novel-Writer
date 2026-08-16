@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { createProviderCatalog, resolveModelProfileCapabilities } from '../provider-presets'
+import {
+  createProviderCatalog,
+  resolveModelProfileCapabilities,
+  resolveModelProfileReasoningMapping,
+} from '../provider-presets'
 
 describe('provider catalog', () => {
   it('exposes xAI Grok through its documented OpenAI-compatible preset', () => {
@@ -22,6 +26,11 @@ describe('provider catalog', () => {
         structuredOutput: true,
         usage: true,
       },
+      reasoningMapping: {
+        adapter: 'openai-reasoning-effort',
+        supportedEfforts: ['low', 'medium', 'high'],
+        providerValues: { low: 'low', medium: 'medium', high: 'high' },
+      },
     }))
   })
 
@@ -38,7 +47,7 @@ describe('provider catalog', () => {
     expect(resolveModelProfileCapabilities(legacy)).toEqual({
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 384_000,
-      reasoning: false,
+      reasoning: true,
       structuredOutput: true,
       usage: true,
     })
@@ -68,9 +77,16 @@ describe('provider catalog', () => {
     expect(resolveModelProfileCapabilities({ ...legacy, capabilities: explicit })).toEqual({
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 384_000,
-      reasoning: false,
+      reasoning: true,
       structuredOutput: true,
       usage: true,
+    })
+
+    expect(resolveModelProfileReasoningMapping(legacy)).toEqual({
+      adapter: 'deepseek-v4-thinking',
+      supportedEfforts: ['off', 'high', 'max'],
+      providerValues: { off: 'disabled', high: 'high', max: 'max' },
+      requestAliases: { low: 'high', medium: 'high' },
     })
   })
 
@@ -90,6 +106,11 @@ describe('provider catalog', () => {
         reasoning: true,
         structuredOutput: true,
         usage: true,
+      },
+      reasoningMapping: {
+        adapter: 'gemini-thinking-budget',
+        supportedEfforts: ['off', 'low', 'medium', 'high'],
+        providerValues: { off: 0, low: 1_024, medium: 8_192, high: 24_576 },
       },
     })
     expect(resolveModelProfileCapabilities({

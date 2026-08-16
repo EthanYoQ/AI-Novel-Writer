@@ -4,6 +4,7 @@ import type {
   ModelProfile,
   TokenUsage,
 } from '../../src/shared/ipc-channels'
+import type { ProviderReasoningDirective } from '../../src/shared/reasoning-types'
 
 /** A provider may report success only with explicit semantic stop evidence. */
 export type LLMResponse = SharedLLMResponse
@@ -13,7 +14,7 @@ export interface LLMGenerateOptions {
   temperature: number | undefined
   maxTokens: number
   responseFormat?: { type: string }
-  thinking?: boolean
+  reasoning?: ProviderReasoningDirective
 }
 
 export interface LLMStreamOptions extends LLMGenerateOptions {

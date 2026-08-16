@@ -320,7 +320,11 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       prompt,
       template.systemRole || '你是一位顶级网文主编和资深阅读分析师。',
       callbacks,
-      { responseFormat: { type: 'json_object' }, purpose: 'import-inference' },
+      {
+        responseFormat: { type: 'json_object' },
+        purpose: 'import-inference',
+        reasoningStage: 'planning',
+      },
       context,
     )
     if (initial.finishReason !== 'stop') throw this.createIncompleteCompletionError(initial.finishReason)
@@ -340,7 +344,11 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         repairTask.messages[1].content,
         repairTask.messages[0].content,
         callbacks,
-        { responseFormat: { type: 'json_object' }, purpose: repairTask.purpose },
+        {
+          responseFormat: { type: 'json_object' },
+          purpose: repairTask.purpose,
+          reasoningStage: 'planning',
+        },
         context,
       )
       if (repair.finishReason !== 'stop') throw this.createIncompleteCompletionError(repair.finishReason)
