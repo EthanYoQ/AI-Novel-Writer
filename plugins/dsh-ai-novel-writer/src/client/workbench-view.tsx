@@ -246,14 +246,14 @@ function AssetGenerationPanel({
   const label = generationLabel(screen)
   const generation = screen.generation ?? { brief: '', phase: 'editing' as const }
   const pending = generationPending(screen)
-  const manualBlocked = screen.dirty || screen.phase !== 'clean'
+  const manualBlocked = screen.phase !== 'clean' && screen.phase !== 'editing'
   return <section className="aiNovelGenerationPanel" aria-labelledby={`ai-novel-generate-${screen.kind}`}>
     <div className="aiNovelGenerationHeader">
       <h4 id={`ai-novel-generate-${screen.kind}`}>AI 生成{label}</h4>
       <p>只会生成当前资产，并通过对话展示原生审批。</p>
     </div>
     <label className="aiNovelWorkbenchField">
-      <span>补充要求</span>
+      <span>补充要求（可选）</span>
       <textarea
         aria-label={`${label} AI 生成要求`}
         value={generation.brief}
@@ -262,8 +262,12 @@ function AssetGenerationPanel({
         onChange={event => { updateBrief(event.currentTarget.value) }}
       />
     </label>
+    <p className="aiNovelContextMuted">留空时，模型会根据当前资产和项目上下文自动完善。</p>
+    {screen.dirty && !manualBlocked && !pending
+      ? <p className="aiNovelContextMuted">当前未提交表单会作为 AI 生成参考；模型结果仍需原生审批。</p>
+      : undefined}
     {manualBlocked && !pending
-      ? <p className="aiNovelContextMuted">请先提交或放弃当前手动修改，再使用 AI 生成。</p>
+      ? <p className="aiNovelContextMuted">当前手动修改已进入提案流程。请在底部提交手动修改到当前会话，或放弃修改后再生成。</p>
       : undefined}
     {blocker === undefined ? undefined : <p role="alert">{blocker}</p>}
     {generation.message !== undefined
@@ -272,7 +276,7 @@ function AssetGenerationPanel({
     <button
       type="button"
       className="aiNovelPresetSecondary aiNovelGenerationButton"
-      disabled={blocker !== undefined || pending || manualBlocked || generation.brief.trim() === ''}
+      disabled={blocker !== undefined || pending || manualBlocked}
       onClick={generate}
     >{generation.phase === 'submitting' ? '正在发送生成请求…' : '让当前模型生成'}</button>
   </section>
@@ -317,7 +321,7 @@ function AssetEditorActions({
     <button type="button" className="aiNovelPresetSecondary" onClick={refresh}>重新读取</button>
     <button type="button" className="aiNovelPresetSecondary" disabled={!dirty || locked} onClick={discard}>放弃修改</button>
     <button type="submit" className="aiNovelPresetPrimary" disabled={!dirty || locked}>
-      {phase === 'submitting' ? '正在发送提案…' : hasPreview ? '提交到当前会话' : '预览修改提案'}
+      {phase === 'submitting' ? '正在发送提案…' : hasPreview ? '提交手动修改到当前会话' : '预览手动修改'}
     </button>
   </div>
 }
@@ -401,22 +405,23 @@ export function NovelWorkbenchBody({
               <h4 id="ai-novel-generate-initialization">AI 生成项目设置</h4>
               <p>描述题材与主角，当前模型会生成一份初始化提案，并通过对话展示原生审批。</p>
             </div>
-            <label className="aiNovelWorkbenchField"><span>生成要求</span><textarea
+            <label className="aiNovelWorkbenchField"><span>生成要求（可选）</span><textarea
               aria-label="项目设置 AI 生成要求"
               value={generation.brief}
               disabled={generationPending}
               placeholder="例如：玄幻题材，主角林凡，规划 12 章"
               onChange={event => { updateInitializationGenerationBrief(event.currentTarget.value) }}
             /></label>
+            <p className="aiNovelContextMuted">留空时，模型会根据当前表单和默认项目规模自动生成。</p>
             {manuallyEdited && !generationPending
-              ? <p className="aiNovelContextMuted">请先清空手动填写的项目设置，再使用 AI 生成。</p>
+              ? <p className="aiNovelContextMuted">当前手填项目设置会作为 AI 生成参考；模型结果仍需原生审批。</p>
               : undefined}
             {generation.message === undefined ? undefined
               : <p role={generation.phase === 'error' ? 'alert' : 'status'}>{generation.message}</p>}
             <button
               type="button"
               className="aiNovelPresetSecondary aiNovelGenerationButton"
-              disabled={blocker !== undefined || manuallyEdited || generationPending || generation.brief.trim() === ''}
+              disabled={blocker !== undefined || generationPending}
               onClick={generateInitialization}
             >{generation.phase === 'submitting' ? '正在发送生成请求…' : '让当前模型生成'}</button>
           </section>

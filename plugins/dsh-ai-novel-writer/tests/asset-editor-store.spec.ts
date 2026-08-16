@@ -110,7 +110,6 @@ describe('novel workbench asset editing', () => {
     await controller.whenIdle()
     await controller.openAsset(target)
 
-    controller.updateAssetGenerationBrief('根据当前项目上下文补全，保持已有设定一致。')
     await controller.generateAsset()
 
     expect(prompt).toHaveBeenCalledOnce()
@@ -119,6 +118,7 @@ describe('novel workbench asset editing', () => {
     expect(submittedPrompt).toContain('恰好调用一次 novel_read')
     expect(submittedPrompt).toContain('恰好调用一次 novel_apply_change')
     expect(submittedPrompt).toContain('Harness 原生审批')
+    expect(submittedPrompt).toContain('没有额外补充要求')
     expect(submittedPrompt).toContain(`"targetKind": "${target.kind}"`)
     expect(submittedPrompt).toContain(`编辑器读取时的 revision：${asset.revision}`)
     expect(submittedPrompt).toContain(`"baseRevision": ${JSON.stringify(asset.revision)}`)
@@ -130,7 +130,7 @@ describe('novel workbench asset editing', () => {
         ...target,
         dirty: false,
         generation: {
-          brief: '根据当前项目上下文补全，保持已有设定一致。',
+          brief: '',
           phase: 'submitted',
           message: '生成请求已发送；等待模型提案与 Harness 原生审批。',
         },
@@ -138,8 +138,8 @@ describe('novel workbench asset editing', () => {
     })
   })
 
-  it('fails closed without losing a dirty local draft or sending a generation prompt', async () => {
-    const prompt = vi.fn()
+  it('uses a dirty local draft as generation guidance without requiring a separate manual proposal', async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
     const controller = targetController(vi.fn().mockResolvedValue(manifest('潮汐来信')), prompt)
     await controller.whenIdle()
     await controller.openAsset({ kind: 'project' })
@@ -148,18 +148,48 @@ describe('novel workbench asset editing', () => {
 
     await controller.generateAsset()
 
-    expect(prompt).not.toHaveBeenCalled()
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(String(prompt.mock.calls[0]?.[1])).toContain('仍需保留的本地标题')
     expect(controller.getSnapshot()).toMatchObject({
       status: 'ready',
       screen: {
         kind: 'project', dirty: true, draft: { title: '仍需保留的本地标题' },
         generation: {
           brief: '改成玄幻小说',
-          phase: 'error',
-          message: '请先提交或放弃当前手动修改，再让模型生成此资产。',
+          phase: 'submitted',
         },
       },
     })
+  })
+
+  it('projects dirty character guidance with domain fields instead of editor-only names', async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const asset: NovelAssetReadWireResult = {
+      target: { kind: 'characters' }, revision: REVISION_A, text: charactersText,
+      bytes: new TextEncoder().encode(charactersText).byteLength,
+    }
+    const controller = targetController(vi.fn().mockResolvedValue(asset), prompt)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'characters' })
+    controller.updateCharacter({ relationshipsText: 'zhou | ally | 共同追查旧案' })
+
+    await controller.generateAsset()
+
+    const submittedPrompt = String(prompt.mock.calls[0]?.[1])
+    expect(submittedPrompt).toContain('"relationships": "zhou | ally | 共同追查旧案"')
+    expect(submittedPrompt).not.toContain('relationshipsText')
+  })
+
+  it('generates an asset from current context when the optional brief is empty', async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = targetController(vi.fn().mockResolvedValue(manifest('潮汐来信')), prompt)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'project' })
+
+    await controller.generateAsset()
+
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(String(prompt.mock.calls[0]?.[1])).toContain('没有额外补充要求')
   })
 
   it.each([

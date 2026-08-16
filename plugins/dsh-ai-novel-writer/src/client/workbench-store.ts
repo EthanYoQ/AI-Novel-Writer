@@ -54,6 +54,10 @@ export type {
 /** Dedicated Preset id expected on a Session that receives novel proposals. */
 export const AI_NOVEL_PRESET_ID = 'ai-novel-writer'
 
+function assertNever(value: never): never {
+  throw new Error(`Unexpected novel workbench value: ${String(value)}`)
+}
+
 function sameAssetTarget(
   left: NovelWorkbenchEditableTarget,
   right: NovelWorkbenchEditableTarget,
@@ -342,7 +346,16 @@ function generationMarkerLine(marker: string): string {
   return `[AI_NOVEL_UI_CORRELATION:${marker}]`
 }
 
-function initializationGenerationPrompt(identity: NovelInitializationIdentity, brief: string): string {
+function resolvedGenerationBrief(brief: string): string {
+  const trimmed = brief.trim()
+  return trimmed === '' ? '没有额外补充要求；请根据当前资产和项目上下文自动完善。' : trimmed
+}
+
+function initializationGenerationPrompt(
+  identity: NovelInitializationIdentity,
+  brief: string,
+  draft: NovelInitializationDraft,
+): string {
   const fixed = JSON.stringify({
     kind: 'initialize',
     projectId: identity.projectId,
@@ -352,7 +365,7 @@ function initializationGenerationPrompt(identity: NovelInitializationIdentity, b
     plannedChapters: '<正整数>', targetWordsPerChapter: '<正整数>',
     creativeStrategy: '<auto | fluent-drafting | consistency-first | deep-planning>',
   }, null, 2)
-  return `请根据用户要求生成当前 Harness 小说项目的完整项目设置。\n\n用户要求：\n${brief}\n\n硬性执行顺序：\n1. 恰好调用一次 novel_read，读取 working-set，并确认结果为 NOT_INITIALIZED。若结果不同，停止且不得调用 novel_apply_change。\n2. 仅当第 1 步确认 NOT_INITIALIZED 时，恰好调用一次 novel_apply_change，kind 必须是 initialize，使用浅层参数，不要嵌套 request。\n3. projectId、createdAt、updatedAt 必须逐字使用下列固定值；createdAt 必须等于 updatedAt，时间格式严格为 YYYY-MM-DDTHH:mm:ss.sssZ。其余占位字段按要求生成：\n${fixed}\n4. 等待 Harness 原生审批。只有收到 CommitReceipt 后才能声明保存成功；拒绝、取消或失败时不得重试写入。`
+  return `请根据用户要求生成当前 Harness 小说项目的完整项目设置。\n\n用户要求：\n${resolvedGenerationBrief(brief)}\n\n当前工作台中的项目设置草稿仅作为用户意图参考，尚未写入磁盘：\n${JSON.stringify(draft, null, 2)}\n\n硬性执行顺序：\n1. 恰好调用一次 novel_read，读取 working-set，并确认结果为 NOT_INITIALIZED。若结果不同，停止且不得调用 novel_apply_change。\n2. 仅当第 1 步确认 NOT_INITIALIZED 时，恰好调用一次 novel_apply_change，kind 必须是 initialize，使用浅层参数，不要嵌套 request。\n3. projectId、createdAt、updatedAt 必须逐字使用下列固定值；createdAt 必须等于 updatedAt，时间格式严格为 YYYY-MM-DDTHH:mm:ss.sssZ。其余占位字段按要求生成：\n${fixed}\n4. 等待 Harness 原生审批。只有收到 CommitReceipt 后才能声明保存成功；拒绝、取消或失败时不得重试写入。`
 }
 
 function generationContext(state: Extract<NovelWorkbenchState, { readonly status: 'ready' }>): string {
@@ -364,6 +377,39 @@ function generationContext(state: Extract<NovelWorkbenchState, { readonly status
     chapterBlueprint: state.chapterBlueprint,
     draftPreview: state.draft?.preview ?? null,
   }, null, 2)
+}
+
+function assetDraftGuidance(screen: NovelAssetEditorScreen): unknown {
+  switch (screen.kind) {
+    case 'project': return screen.draft
+    case 'characters': return screen.characters.map(character => ({
+      id: character.id,
+      name: character.name,
+      role: character.role,
+      summary: character.summary,
+      goal: character.goal,
+      relationships: character.relationshipsText,
+      notes: character.notes,
+    }))
+    case 'story-blueprint': return {
+      premise: screen.draft.premise,
+      themes: screen.draft.themesText,
+      world: screen.draft.world,
+      mainPlot: screen.draft.mainPlot,
+      endingGoal: screen.draft.endingGoal,
+    }
+    case 'chapter-blueprint': return {
+      chapter: screen.chapter,
+      title: screen.draft.title,
+      purpose: screen.draft.purpose,
+      beats: screen.draft.beatsText,
+      characterIds: screen.draft.characterIdsText,
+      continuityNotes: screen.draft.continuityNotesText,
+      status: screen.draft.status,
+    }
+    case 'chapter-draft': return screen.text
+    default: return assertNever(screen)
+  }
 }
 
 function assetGenerationPrompt(
@@ -387,10 +433,18 @@ function assetGenerationPrompt(
     replacement: '<按下述 schema 生成的完整资产文本>',
     summary: `AI 生成${generationTargetLabel(target)}`,
   }, null, 2)
+  const draftGuidance = screen.dirty
+    ? `\n当前工作台中的未提交草稿仅作为用户意图参考，尚未写入磁盘：\n${JSON.stringify(
+        assetDraftGuidance(screen),
+        null,
+        2,
+      )}\n`
+    : ''
   return `请根据用户要求生成并提议更新“${generationTargetLabel(target)}”这一个小说资产。不要修改其他资产。
 
 用户要求：
-${brief}
+${resolvedGenerationBrief(brief)}
+${draftGuidance}
 
 当前工作台上下文仅供生成时保持一致：
 ${generationContext(state)}
@@ -548,7 +602,7 @@ export class NovelWorkbenchController {
     })
   }
 
-  /** Update the model brief for generating the first project settings proposal. @param brief User intent. @returns Nothing. */
+  /** Update the optional model brief for generating the first project settings proposal. @param brief User intent, or empty text to use the current form and defaults. @returns Nothing. */
   public updateInitializationGenerationBrief(brief: string): void {
     if (this.#state.status !== 'not-initialized') return
     if (this.#activePrompt !== undefined
@@ -558,16 +612,13 @@ export class NovelWorkbenchController {
     this.#publishInitializationGeneration()
   }
 
-  /** Ask the selected Session to generate exactly one approval-gated initialization. @returns Session admission completion. */
+  /** Ask the selected Session to generate exactly one approval-gated initialization using the current form as guidance. @returns Session admission completion. */
   public async generateInitialization(): Promise<void> {
     if (this.#disposed || this.#state.status !== 'not-initialized' || this.#activePrompt !== undefined
       || this.#initializationGeneration.phase === 'submitted'
       || this.#initializationGeneration.phase === 'reconciling') return
     const blocker = submissionBlocker(this.#target)
-    const dirty = JSON.stringify(this.#draft) !== JSON.stringify(DEFAULT_INITIALIZATION)
     const message = blocker
-      ?? (this.#initializationGeneration.brief.trim() === '' ? '请先填写 AI 生成要求。' : undefined)
-      ?? (dirty ? '请先清空手动填写的项目设置，再让模型生成。' : undefined)
     if (message !== undefined || this.#target === undefined) {
       this.#initializationGeneration = { ...this.#initializationGeneration, phase: 'error', message }
       this.#publishInitializationGeneration()
@@ -586,7 +637,7 @@ export class NovelWorkbenchController {
     }
     const marker = crypto.randomUUID()
     this.#generationCorrelationMarker = marker
-    const prompt = `${generationMarkerLine(marker)}\n此标记只供小说工作台对账；不得把它写入任何小说资产或工具参数。\n\n${initializationGenerationPrompt(identity, this.#initializationGeneration.brief.trim())}`
+    const prompt = `${generationMarkerLine(marker)}\n此标记只供小说工作台对账；不得把它写入任何小说资产或工具参数。\n\n${initializationGenerationPrompt(identity, this.#initializationGeneration.brief, this.#draft)}`
     this.#initializationGeneration = { ...this.#initializationGeneration, identity, phase: 'submitting', message: undefined }
     this.#publishInitializationGeneration()
     const request = ++this.#promptRequest
@@ -751,7 +802,7 @@ export class NovelWorkbenchController {
     this.#setReadyScreen({ ...screen, summary, phase: screen.dirty ? 'editing' : 'clean', preview: undefined, message: undefined })
   }
 
-  /** Update the selected model's generation brief without changing any asset draft. @param brief User intent for one asset. @returns Nothing. */
+  /** Update the selected model's optional generation brief without changing any asset draft. @param brief User intent, or empty text to rely on current context. @returns Nothing. */
   public updateAssetGenerationBrief(brief: string): void {
     const screen = this.#assetScreen()
     if (screen === undefined || generationBlocksMutation(screen)) return
@@ -761,16 +812,16 @@ export class NovelWorkbenchController {
     })
   }
 
-  /** Ask the selected Session model for one read-then-approval-gated asset proposal. @returns Session admission completion. */
+  /** Ask the selected Session model for one read-then-approval-gated asset proposal, including a dirty form as unsaved guidance. @returns Session admission completion. */
   public async generateAsset(): Promise<void> {
     const screen = this.#assetScreen()
     if (this.#disposed || screen === undefined || this.#activePrompt !== undefined || generationBlocksMutation(screen)) return
     const currentGeneration = generationState(screen)
     const blocker = submissionBlocker(this.#target)
+    const manualProposalPending = screen.phase !== 'clean' && screen.phase !== 'editing'
     const message = blocker
-      ?? (currentGeneration.brief.trim() === '' ? '请先填写 AI 生成要求。' : undefined)
-      ?? (screen.dirty || screen.phase !== 'clean'
-        ? '请先提交或放弃当前手动修改，再让模型生成此资产。'
+      ?? (manualProposalPending
+        ? '当前手动修改已进入提案流程。请在底部提交手动修改到当前会话，或放弃修改后再生成。'
         : undefined)
     if (message !== undefined || this.#target === undefined || this.#state.status !== 'ready') {
       this.#setReadyScreen({
@@ -781,7 +832,7 @@ export class NovelWorkbenchController {
     }
     const marker = crypto.randomUUID()
     this.#generationCorrelationMarker = marker
-    const prompt = `${generationMarkerLine(marker)}\n此标记只供小说工作台对账；不得把它写入任何小说资产或工具参数。\n\n${assetGenerationPrompt(this.#state, screen, currentGeneration.brief.trim())}`
+    const prompt = `${generationMarkerLine(marker)}\n此标记只供小说工作台对账；不得把它写入任何小说资产或工具参数。\n\n${assetGenerationPrompt(this.#state, screen, currentGeneration.brief)}`
     this.#cancelRead()
     this.#setReadyScreen({
       ...screen,

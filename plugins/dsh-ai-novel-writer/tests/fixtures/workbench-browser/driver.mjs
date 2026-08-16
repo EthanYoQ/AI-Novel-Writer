@@ -167,7 +167,10 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await drawer.getByRole('button', { name: /项目设置/ }).click()
   await drawer.getByRole('textbox', { name: '小说标题' }).fill('潮汐之后')
   await drawer.getByRole('textbox', { name: '修改摘要' }).fill('调整项目定位')
-  await drawer.getByRole('button', { name: '预览修改提案' }).click()
+  if (await drawer.getByRole('button', { name: '让当前模型生成' }).isDisabled()) {
+    throw new Error('dirty project draft did not remain available as model generation guidance')
+  }
+  await drawer.getByRole('button', { name: '预览手动修改' }).click()
   await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
   const projectEditorSnapshot = normalize(await drawer.ariaSnapshot())
   if (screenshotDir !== undefined) {
@@ -186,10 +189,9 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   const storyHeading = drawer.getByRole('heading', { name: '故事蓝图', exact: true })
   await drawer.getByRole('textbox', { name: '故事前提' }).waitFor({ timeout: 10_000 })
   await page.waitForFunction(element => document.activeElement === element, await storyHeading.elementHandle())
-  const storyGenerationBrief = drawer.getByRole('textbox', { name: '故事蓝图 AI 生成要求' })
-  await storyGenerationBrief.fill('加强海港世界观，同时保持现有人物一致。')
+  await drawer.getByRole('textbox', { name: '故事前提' }).fill('退潮后，失踪者的信件逐封出现，并指向潮汐站。')
   if (await drawer.getByRole('button', { name: '让当前模型生成' }).isDisabled()) {
-    throw new Error('clean story asset did not enable model generation after a brief was entered')
+    throw new Error('dirty story draft did not remain available as model generation guidance')
   }
   const generationTurn = scaffold.whenTurnSettled()
   await drawer.getByRole('button', { name: '让当前模型生成' }).click()
@@ -212,6 +214,10 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   if (!durableGenerationPrompt.includes('此标记只供小说工作台对账；不得把它写入任何小说资产或工具参数。')) {
     throw new Error('generation prompt omitted correlation-marker non-write semantics')
   }
+  if (!durableGenerationPrompt.includes('退潮后，失踪者的信件逐封出现，并指向潮汐站。')
+    || durableGenerationPrompt.includes('themesText')) {
+    throw new Error('dirty story guidance was missing or exposed editor-only field names')
+  }
   const generationEvidence = {
     durableUserPrompt: normalize(durableGenerationPrompt),
     modelRequestUserPrompt: normalize(requestGenerationPrompt),
@@ -224,10 +230,9 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   if (screenshotDir !== undefined) {
     await page.screenshot({ path: join(screenshotDir, '04-story-ai-generation.png'), fullPage: false })
   }
-  await storyGenerationBrief.fill('')
   await drawer.getByRole('textbox', { name: '结局目标' }).fill('在风暴前公开真相并阻止下一次事故。')
   await drawer.getByRole('textbox', { name: '修改摘要' }).fill('明确故事结局目标')
-  await drawer.getByRole('button', { name: '预览修改提案' }).click()
+  await drawer.getByRole('button', { name: '预览手动修改' }).click()
   await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
   const storyEditorSnapshot = normalize(await drawer.ariaSnapshot())
   await drawer.getByRole('button', { name: '放弃修改' }).click()
@@ -243,7 +248,7 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await drawer.getByRole('heading', { name: '第 2 章蓝图', exact: true }).waitFor({ timeout: 10_000 })
   await drawer.getByRole('textbox', { name: '章节目的' }).fill('让两位调查者交换证据并首次产生分歧。')
   await drawer.getByRole('textbox', { name: '修改摘要' }).fill('细化第二章目的')
-  await drawer.getByRole('button', { name: '预览修改提案' }).click()
+  await drawer.getByRole('button', { name: '预览手动修改' }).click()
   await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
   const chapterBlueprintEditorSnapshot = normalize(await drawer.ariaSnapshot())
   if (screenshotDir !== undefined) {
@@ -262,7 +267,7 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await draftEditor.fill(`${longDraft}\n## 新线索\n\n林澈决定在风暴前公开录音。\n`)
   await drawer.getByRole('textbox', { name: '修改摘要' }).fill('补写第二章新线索')
   await drawer.evaluate(element => { element.scrollTop = element.scrollHeight })
-  const previewButton = drawer.getByRole('button', { name: '预览修改提案' })
+  const previewButton = drawer.getByRole('button', { name: '预览手动修改' })
   const scrolledDrawerBox = await drawer.boundingBox()
   const stickyActionsBox = await drawer.locator('.aiNovelWorkbenchActions').boundingBox()
   if (scrolledDrawerBox === null || stickyActionsBox === null

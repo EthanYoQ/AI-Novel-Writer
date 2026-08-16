@@ -222,7 +222,10 @@ describe('novel workbench presentation', () => {
     expect(html).toContain('AI 生成项目设置')
     expect(html).toContain('只会生成当前资产，并通过对话展示原生审批。')
     expect(html).toContain('aria-label="项目设置 AI 生成要求"')
+    expect(html).toContain('补充要求（可选）')
+    expect(html).toContain('留空时，模型会根据当前资产和项目上下文自动完善。')
     expect(html).toContain('让当前模型生成')
+    expect(html).not.toMatch(/class="aiNovelPresetSecondary aiNovelGenerationButton"[^>]*disabled/)
     expect(html).not.toContain('任务看板')
   })
 
@@ -274,11 +277,13 @@ describe('novel workbench presentation', () => {
       }],
     })} />)
 
-    for (const text of ['搜索人物', '林澈', '人物关系', '关系人物 1', '周遥', '添加关系', '预览修改提案']) {
+    for (const text of ['搜索人物', '林澈', '人物关系', '关系人物 1', '周遥', '添加关系', '预览手动修改']) {
       expect(html).toContain(text)
     }
     expect(html).not.toContain('人物 ID')
     expect(html).toContain('aria-current="true"')
+    expect(html).toContain('当前未提交表单会作为 AI 生成参考')
+    expect(html).not.toMatch(/class="aiNovelPresetSecondary aiNovelGenerationButton"[^>]*disabled/)
   })
 
   it('renders the complete story blueprint as one labeled editor', () => {
@@ -294,7 +299,7 @@ describe('novel workbench presentation', () => {
     for (const text of ['故事蓝图', '故事前提', '主题（每行一项）', '世界设定', '故事主线', '结局目标']) {
       expect(html).toContain(text)
     }
-    expect(html).toContain('预览修改提案')
+    expect(html).toContain('预览手动修改')
   })
 
   it('renders one selected chapter blueprint without adding secondary navigation', () => {

@@ -43,8 +43,8 @@ describe('novel workbench initialization', () => {
     })
   })
 
-  it('preserves a manually edited initialization form instead of generating over it', async () => {
-    const prompt = vi.fn()
+  it('uses a manually edited initialization form as model guidance without requiring a separate submission', async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
     const controller = new NovelWorkbenchController({
       read: vi.fn().mockResolvedValue({ status: 'not-initialized' }), readAsset: vi.fn(), prompt,
     }, vi.fn(), () => IDENTITY)
@@ -55,14 +55,29 @@ describe('novel workbench initialization', () => {
 
     await controller.generateInitialization()
 
-    expect(prompt).not.toHaveBeenCalled()
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(String(prompt.mock.calls[0]?.[1])).toContain('本地手填标题')
     expect(controller.getSnapshot()).toMatchObject({
       status: 'not-initialized',
       initialization: {
         draft: { title: '本地手填标题' },
-        generation: { phase: 'error', message: '请先清空手动填写的项目设置，再让模型生成。' },
+        generation: { phase: 'submitted' },
       },
     })
+  })
+
+  it('generates initialization from project defaults when the optional brief is empty', async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = new NovelWorkbenchController({
+      read: vi.fn().mockResolvedValue({ status: 'not-initialized' }), readAsset: vi.fn(), prompt,
+    }, vi.fn(), () => IDENTITY)
+    controller.setTarget({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, agentPreset: 'ai-novel-writer', approval: 'ask' })
+    await controller.open()
+
+    await controller.generateInitialization()
+
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(String(prompt.mock.calls[0]?.[1])).toContain('没有额外补充要求')
   })
 
   it('locks every manual and generated initialize path while generation awaits reconciliation', async () => {
