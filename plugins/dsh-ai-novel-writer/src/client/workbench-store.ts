@@ -6,16 +6,27 @@ import type { CreativeStrategy, NovelProjectId } from '../types.ts'
 import {
   assetProposalPrompt,
   parseCharacters,
+  parseChapterBlueprint,
   parseProjectManifest,
+  parseStoryBlueprint,
   projectDraft,
   sameCharacters,
   serializeCharacters,
+  serializeChapterBlueprint,
+  serializeChapterDraft,
   serializeProject,
+  serializeStoryBlueprint,
   visibleCharacterIds,
   type NovelCharacterDraft,
+  type NovelChapterBlueprintDraft,
+  type NovelChapterBlueprintEditorScreen,
+  type NovelChapterDraftEditorScreen,
   type NovelCharactersEditorScreen,
+  type NovelAssetEditorScreen,
   type NovelProjectEditorScreen,
   type NovelProjectSettingsDraft,
+  type NovelStoryBlueprintDraft,
+  type NovelStoryBlueprintEditorScreen,
   type NovelWorkbenchEditableTarget,
   type NovelWorkbenchScreen,
   type ProjectManifestEditorSource,
@@ -25,15 +36,32 @@ export type {
   NovelAssetChangePreview,
   NovelAssetEditorPhase,
   NovelCharacterDraft,
+  NovelChapterBlueprintDraft,
+  NovelChapterBlueprintEditorScreen,
+  NovelChapterDraftEditorScreen,
   NovelCharactersEditorScreen,
+  NovelAssetEditorScreen,
   NovelProjectEditorScreen,
   NovelProjectSettingsDraft,
+  NovelStoryBlueprintDraft,
+  NovelStoryBlueprintEditorScreen,
   NovelWorkbenchEditableTarget,
   NovelWorkbenchScreen,
 } from './asset-editor.ts'
 
 /** Dedicated Preset id expected on a Session that receives novel proposals. */
 export const AI_NOVEL_PRESET_ID = 'ai-novel-writer'
+
+function sameAssetTarget(
+  left: NovelWorkbenchEditableTarget,
+  right: NovelWorkbenchEditableTarget,
+): boolean {
+  if (left.kind !== right.kind) return false
+  if (left.kind === 'chapter-blueprint' || left.kind === 'chapter-draft') {
+    return right.kind === left.kind && right.chapter === left.chapter
+  }
+  return true
+}
 
 /** Identity values included verbatim in an initialization proposal. */
 export interface NovelInitializationIdentity {
@@ -64,6 +92,7 @@ export interface NovelApplyOutcome {
     | {
         readonly kind: 'replace'
         readonly targetKind: string
+        readonly chapter?: number
         readonly baseRevision: string
         readonly replacement: string
       }
@@ -182,6 +211,10 @@ function positiveInteger(value: string, label: string): number {
   return parsed
 }
 
+function linesFromDraft(text: string): string[] {
+  return text === '' ? [] : text.split('\n')
+}
+
 interface ValidatedInitializationFields {
   readonly title: string
   readonly language: string
@@ -275,6 +308,9 @@ export class NovelWorkbenchController {
   #projectSource: ProjectManifestEditorSource | undefined
   #projectOriginal: NovelProjectSettingsDraft | undefined
   #charactersOriginal: readonly NovelCharacterDraft[] | undefined
+  #chapterBlueprintOriginal: NovelChapterBlueprintDraft | undefined
+  #chapterDraftOriginal: string | undefined
+  #storyOriginal: NovelStoryBlueprintDraft | undefined
   #staleAsset: NovelAssetReadWireResult | undefined
   #latest: Promise<void> = Promise.resolve()
   #disposed = false
@@ -403,7 +439,7 @@ export class NovelWorkbenchController {
   /**
    * Read one recognized editable asset and drill into its compact editor.
    *
-   * @param target Project settings or the complete characters asset.
+   * @param target One recognized editable asset; chapter assets include their fixed chapter number.
    * @returns Completion after the exact revision read settles.
    */
   public openAsset(target: NovelWorkbenchEditableTarget): Promise<void> {
@@ -413,9 +449,14 @@ export class NovelWorkbenchController {
     return this.#startAssetRead(target, 'open')
   }
 
-  /** Return from a drill-in editor to the compact asset list. @returns Nothing. */
+  /** Return a clean editor to the asset list; unsaved or pending state stays visible until explicitly resolved. @returns Nothing. */
   public backToAssets(): void {
     if (this.#disposed || this.#state.status !== 'ready') return
+    const screen = this.#assetScreen()
+    if (screen !== undefined && (screen.dirty
+      || screen.phase === 'submitting'
+      || screen.phase === 'submitted'
+      || screen.phase === 'stale')) return
     this.#promptRequest += 1
     this.#cancelRead()
     this.#staleAsset = undefined
@@ -436,6 +477,72 @@ export class NovelWorkbenchController {
     this.#setReadyScreen({
       ...screen,
       draft,
+      dirty,
+      phase: dirty ? 'editing' : 'clean',
+      replacement: undefined,
+      preview: undefined,
+      message: undefined,
+    })
+  }
+
+  /**
+   * Update the complete story-blueprint draft.
+   *
+   * @param patch Story fields changed by the user.
+   * @returns Nothing; edits are ignored while prompt admission or approval is pending.
+   */
+  public updateStoryBlueprint(patch: Partial<NovelStoryBlueprintDraft>): void {
+    const screen = this.#storyScreen()
+    if (screen === undefined || !this.#assetMayChange(screen)) return
+    const draft = { ...screen.draft, ...patch }
+    const dirty = this.#storyOriginal !== undefined && JSON.stringify(draft) !== JSON.stringify(this.#storyOriginal)
+    this.#setReadyScreen({
+      ...screen,
+      draft,
+      dirty,
+      phase: dirty ? 'editing' : 'clean',
+      replacement: undefined,
+      preview: undefined,
+      message: undefined,
+    })
+  }
+
+  /**
+   * Update the selected chapter-blueprint draft.
+   *
+   * @param patch Planning fields changed by the user.
+   * @returns Nothing; edits are ignored while prompt admission or approval is pending.
+   */
+  public updateChapterBlueprint(patch: Partial<NovelChapterBlueprintDraft>): void {
+    const screen = this.#chapterBlueprintScreen()
+    if (screen === undefined || !this.#assetMayChange(screen)) return
+    const draft = { ...screen.draft, ...patch }
+    const dirty = this.#chapterBlueprintOriginal !== undefined
+      && JSON.stringify(draft) !== JSON.stringify(this.#chapterBlueprintOriginal)
+    this.#setReadyScreen({
+      ...screen,
+      draft,
+      dirty,
+      phase: dirty ? 'editing' : 'clean',
+      replacement: undefined,
+      preview: undefined,
+      message: undefined,
+    })
+  }
+
+  /**
+   * Replace the selected chapter's complete Markdown draft.
+   *
+   * @param text Complete edited Markdown.
+   * @returns Nothing; edits are ignored while prompt admission or approval is pending.
+   */
+  public updateChapterDraft(text: string): void {
+    const screen = this.#chapterDraftScreen()
+    if (screen === undefined || !this.#assetMayChange(screen)) return
+    const dirty = this.#chapterDraftOriginal !== undefined && text !== this.#chapterDraftOriginal
+    this.#setReadyScreen({
+      ...screen,
+      text,
       dirty,
       phase: dirty ? 'editing' : 'clean',
       replacement: undefined,
@@ -546,8 +653,14 @@ export class NovelWorkbenchController {
     try {
       const replacement = screen.kind === 'project'
         ? serializeProject(this.#requiredProjectSource(), screen.draft, this.#now())
-        : serializeCharacters(screen.characters)
-      const target: NovelWorkbenchEditableTarget = { kind: screen.kind }
+        : screen.kind === 'characters'
+          ? serializeCharacters(screen.characters)
+          : screen.kind === 'story-blueprint'
+            ? serializeStoryBlueprint(screen.draft)
+            : screen.kind === 'chapter-blueprint'
+              ? serializeChapterBlueprint(screen.chapter, screen.draft)
+              : serializeChapterDraft(screen.text)
+      const target = this.#screenTarget(screen)
       const prompt = assetProposalPrompt(target, screen.baseRevision, screen.originalText, replacement, screen.summary)
       this.#setReadyScreen({ ...screen, phase: 'preview', replacement, preview: { prompt, replacement }, message: undefined })
     } catch (error) {
@@ -596,6 +709,7 @@ export class NovelWorkbenchController {
       && outcome.isError
       && outcome.attribution?.kind === 'replace'
       && outcome.attribution.targetKind === editor.kind
+      && outcome.attribution.chapter === ('chapter' in editor ? editor.chapter : undefined)
       && outcome.attribution.baseRevision === editor.baseRevision
       && outcome.attribution.replacement === editor.replacement) {
       if (outcome.code === 'STALE_REVISION') {
@@ -637,7 +751,7 @@ export class NovelWorkbenchController {
     const editor = this.#assetScreen()
     if (latest === undefined) {
       if (editor !== undefined && editor.phase === 'stale') {
-        void this.#startAssetRead({ kind: editor.kind }, 'reload')
+        void this.#startAssetRead(this.#screenTarget(editor), 'reload')
       }
       return
     }
@@ -650,7 +764,7 @@ export class NovelWorkbenchController {
   public discardAssetChanges(): void {
     const screen = this.#assetScreen()
     if (screen === undefined || this.#activePrompt !== undefined) return
-    const target: NovelWorkbenchEditableTarget = { kind: screen.kind }
+    const target = this.#screenTarget(screen)
     this.#loadAsset({
       target,
       revision: screen.baseRevision,
@@ -663,13 +777,21 @@ export class NovelWorkbenchController {
    * Select and read one planned chapter while the workbench is open.
    *
    * @param chapter One-based chapter number within the loaded project plan.
-   * @returns Completion after the read settles, or immediately while closed.
-   * @throws {RangeError} When the selection is not a positive integer or exceeds the loaded plan.
+   * @returns Completion after the read settles; invalid selections publish recoverable feedback without reading.
    */
   public selectChapter(chapter: number): Promise<void> {
     const planned = this.#state.status === 'ready' ? this.#state.project.plannedChapters : undefined
     if (!Number.isSafeInteger(chapter) || chapter <= 0 || (planned !== undefined && chapter > planned)) {
-      throw new RangeError('chapter selection is outside the project plan')
+      if (this.#state.status === 'ready') {
+        this.#set({
+          ...this.#state,
+          readFeedback: {
+            kind: 'error',
+            message: `章节编号必须在 1 到 ${this.#state.project.plannedChapters} 之间。`,
+          },
+        })
+      }
+      return Promise.resolve()
     }
     this.#chapter = chapter
     return this.#state.open ? this.#startRead('refresh') : Promise.resolve()
@@ -709,7 +831,7 @@ export class NovelWorkbenchController {
   public refresh(): Promise<void> {
     if (this.#activePrompt !== undefined) return Promise.resolve()
     const screen = this.#assetScreen()
-    if (screen !== undefined) return this.#startAssetRead({ kind: screen.kind }, 'refresh')
+    if (screen !== undefined) return this.#startAssetRead(this.#screenTarget(screen), 'refresh')
     if (!this.#state.open) return Promise.resolve()
     return this.#startRead('refresh')
   }
@@ -819,7 +941,7 @@ export class NovelWorkbenchController {
     try {
       const result = await this.#port.readAsset(selected.workspaceId, target, signal)
       if (this.#disposed || request !== this.#request || this.#state.status !== 'ready') return
-      if (result.target.kind !== target.kind) throw new Error('Host returned a different novel asset')
+      if (!sameAssetTarget(result.target, target)) throw new Error('Host returned a different novel asset')
       if (reason === 'reload') {
         this.#staleAsset = undefined
         this.#loadAsset(result, { kind: 'success', message: '重新载入完成：已载入最新资产 revision。' })
@@ -1107,6 +1229,104 @@ export class NovelWorkbenchController {
         })
         return
       }
+      case 'story-blueprint': {
+        const draft = parseStoryBlueprint(result.text, result.revision)
+        this.#storyOriginal = draft
+        this.#set({
+          ...this.#state,
+          storyBlueprint: result.revision === 'absent' ? null : {
+            premise: draft.premise,
+            themes: draft.themesText === '' ? [] : draft.themesText.split('\n'),
+            world: draft.world,
+            mainPlot: draft.mainPlot,
+            endingGoal: draft.endingGoal,
+          },
+          screen: {
+            kind: 'story-blueprint',
+            phase: 'clean',
+            dirty: false,
+            baseRevision: result.revision,
+            originalText: result.text,
+            summary: '',
+            draft,
+          },
+          ...(feedback === undefined ? {} : { readFeedback: feedback }),
+        })
+        return
+      }
+      case 'chapter-blueprint': {
+        const draft = parseChapterBlueprint(result.text, result.revision, result.target.chapter)
+        const retainedChapter = this.#state.progress.selectedChapter === result.target.chapter
+        this.#chapter = result.target.chapter
+        this.#chapterBlueprintOriginal = draft
+        this.#set({
+          ...this.#state,
+          progress: {
+            ...this.#state.progress,
+            selectedChapter: result.target.chapter,
+            status: result.revision === 'absent' ? 'unplanned' : draft.status,
+            draftPresent: retainedChapter ? this.#state.progress.draftPresent : false,
+            draftBytes: retainedChapter ? this.#state.progress.draftBytes : 0,
+          },
+          chapterBlueprint: result.revision === 'absent' ? null : {
+            chapter: result.target.chapter,
+            title: draft.title,
+            purpose: draft.purpose,
+            beats: linesFromDraft(draft.beatsText),
+            characterIds: linesFromDraft(draft.characterIdsText),
+            continuityNotes: linesFromDraft(draft.continuityNotesText),
+            status: draft.status,
+          },
+          draft: retainedChapter ? this.#state.draft : null,
+          screen: {
+            kind: 'chapter-blueprint',
+            chapter: result.target.chapter,
+            phase: 'clean',
+            dirty: false,
+            baseRevision: result.revision,
+            originalText: result.text,
+            summary: '',
+            draft,
+          },
+          ...(feedback === undefined ? {} : { readFeedback: feedback }),
+        })
+        return
+      }
+      case 'chapter-draft': {
+        const text = serializeChapterDraft(result.text)
+        const retainedChapter = this.#state.progress.selectedChapter === result.target.chapter
+        this.#chapter = result.target.chapter
+        this.#chapterDraftOriginal = text
+        this.#set({
+          ...this.#state,
+          progress: {
+            ...this.#state.progress,
+            selectedChapter: result.target.chapter,
+            status: retainedChapter ? this.#state.progress.status : 'unplanned',
+            draftPresent: result.revision !== 'absent',
+            draftBytes: result.bytes,
+          },
+          chapterBlueprint: retainedChapter ? this.#state.chapterBlueprint : null,
+          draft: result.revision === 'absent' ? null : {
+            revision: result.revision,
+            preview: text,
+            bytes: result.bytes,
+            truncated: false,
+          },
+          screen: {
+            kind: 'chapter-draft',
+            chapter: result.target.chapter,
+            phase: 'clean',
+            dirty: false,
+            baseRevision: result.revision,
+            originalText: result.text,
+            summary: '',
+            text,
+          },
+          ...(feedback === undefined ? {} : { readFeedback: feedback }),
+        })
+        return
+      }
       default: throw new Error('Asset is not editable in this workbench slice')
     }
   }
@@ -1135,8 +1355,11 @@ export class NovelWorkbenchController {
     return this.#projectSource
   }
 
-  #assetMayChange(screen: NovelProjectEditorScreen | NovelCharactersEditorScreen): boolean {
-    return this.#activePrompt === undefined && screen.phase !== 'submitted' && screen.phase !== 'submitting'
+  #assetMayChange(screen: NovelAssetEditorScreen): boolean {
+    return this.#activePrompt === undefined
+      && screen.phase !== 'submitted'
+      && screen.phase !== 'submitting'
+      && screen.phase !== 'stale'
   }
 
   #projectScreen(): NovelProjectEditorScreen | undefined {
@@ -1149,8 +1372,33 @@ export class NovelWorkbenchController {
     return screen?.kind === 'characters' ? screen : undefined
   }
 
-  #assetScreen(): NovelProjectEditorScreen | NovelCharactersEditorScreen | undefined {
-    return this.#projectScreen() ?? this.#charactersScreen()
+  #storyScreen(): NovelStoryBlueprintEditorScreen | undefined {
+    const screen = this.#state.status === 'ready' ? this.#state.screen : undefined
+    return screen?.kind === 'story-blueprint' ? screen : undefined
+  }
+
+  #chapterBlueprintScreen(): NovelChapterBlueprintEditorScreen | undefined {
+    const screen = this.#state.status === 'ready' ? this.#state.screen : undefined
+    return screen?.kind === 'chapter-blueprint' ? screen : undefined
+  }
+
+  #chapterDraftScreen(): NovelChapterDraftEditorScreen | undefined {
+    const screen = this.#state.status === 'ready' ? this.#state.screen : undefined
+    return screen?.kind === 'chapter-draft' ? screen : undefined
+  }
+
+  #assetScreen(): NovelAssetEditorScreen | undefined {
+    return this.#projectScreen()
+      ?? this.#charactersScreen()
+      ?? this.#storyScreen()
+      ?? this.#chapterBlueprintScreen()
+      ?? this.#chapterDraftScreen()
+  }
+
+  #screenTarget(screen: NovelAssetEditorScreen): NovelWorkbenchEditableTarget {
+    return screen.kind === 'chapter-blueprint' || screen.kind === 'chapter-draft'
+      ? { kind: screen.kind, chapter: screen.chapter }
+      : { kind: screen.kind }
   }
 
   #setReadyScreen(screen: NovelWorkbenchScreen, readFeedback?: NovelReadFeedback): void {

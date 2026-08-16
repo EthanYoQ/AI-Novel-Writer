@@ -82,7 +82,7 @@ function submittedProjectAttribution(controller: NovelWorkbenchController): NonN
   }
 }
 
-describe('novel workbench project and character editing', () => {
+describe('novel workbench asset editing', () => {
   it('drills into project settings, preserves immutable fields, and submits exact replacement text', async () => {
     const readAsset = vi.fn().mockResolvedValue(manifest('潮汐来信'))
     const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
@@ -125,6 +125,24 @@ describe('novel workbench project and character editing', () => {
       summary: '调整项目定位',
     }, null, 2))
     controller.backToAssets()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready', screen: { kind: 'project', phase: 'submitted', draft: { title: '潮汐之后' } },
+    })
+  })
+
+  it('requires explicit discard before leaving an editor with unsaved text', async () => {
+    const controller = targetController(vi.fn().mockResolvedValue(manifest('潮汐来信')))
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'project' })
+    controller.updateProjectSettings({ title: '仍需保留' })
+
+    controller.backToAssets()
+
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready', screen: { kind: 'project', phase: 'editing', dirty: true, draft: { title: '仍需保留' } },
+    })
+    controller.discardAssetChanges()
+    controller.backToAssets()
     expect(controller.getSnapshot()).toMatchObject({ status: 'ready', screen: { kind: 'root' } })
   })
 
@@ -160,6 +178,176 @@ describe('novel workbench project and character editing', () => {
       relationships: [], notes: '谨慎',
     }] })
     expect(state.screen).toMatchObject({ phase: 'preview', dirty: true, selectedId: 'new-id' })
+  })
+
+  it('round-trips an absent story blueprint through one canonical replacement proposal', async () => {
+    const readAsset = vi.fn().mockResolvedValue({
+      target: { kind: 'story-blueprint' }, revision: 'absent', text: '', bytes: 0,
+    })
+    const controller = targetController(readAsset)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'story-blueprint' })
+
+    controller.updateStoryBlueprint({
+      premise: '退潮后，失踪者的信件逐封出现。',
+      themesText: '记忆\n责任',
+      world: '近未来海港城',
+      mainPlot: '记者与调查员追查潮汐站旧案。',
+      endingGoal: '两人公开真相并阻止下一次事故。',
+    })
+    controller.updateAssetSummary('建立故事蓝图')
+    controller.previewAssetChange()
+
+    const state = controller.getSnapshot()
+    if (state.status !== 'ready' || state.screen.kind !== 'story-blueprint') {
+      throw new Error('missing story blueprint editor')
+    }
+    expect(state.screen).toMatchObject({ phase: 'preview', dirty: true, baseRevision: 'absent' })
+    expect(state.screen.replacement).toBe(`${JSON.stringify({
+      premise: '退潮后，失踪者的信件逐封出现。',
+      themes: ['记忆', '责任'],
+      world: '近未来海港城',
+      mainPlot: '记者与调查员追查潮汐站旧案。',
+      endingGoal: '两人公开真相并阻止下一次事故。',
+    }, null, 2)}\n`)
+  })
+
+  it('binds an absent chapter blueprint to the selected chapter and canonical fields', async () => {
+    const readAsset = vi.fn().mockResolvedValue({
+      target: { kind: 'chapter-blueprint', chapter: 2 }, revision: 'absent', text: '', bytes: 0,
+    })
+    const controller = targetController(readAsset)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'chapter-blueprint', chapter: 2 })
+
+    controller.updateChapterBlueprint({
+      title: '潮汐站',
+      purpose: '让两位调查者第一次交换证据。',
+      beatsText: '抵达废弃站\n发现录音\n意见冲突',
+      characterIdsText: 'lin\nzhou',
+      continuityNotesText: '林澈仍隐瞒旧案关系',
+      status: 'planned',
+    })
+    controller.updateAssetSummary('建立第二章蓝图')
+    controller.previewAssetChange()
+
+    const state = controller.getSnapshot()
+    if (state.status !== 'ready' || state.screen.kind !== 'chapter-blueprint') {
+      throw new Error('missing chapter blueprint editor')
+    }
+    expect(state.screen.replacement).toBe(`${JSON.stringify({
+      chapter: 2,
+      title: '潮汐站',
+      purpose: '让两位调查者第一次交换证据。',
+      beats: ['抵达废弃站', '发现录音', '意见冲突'],
+      characterIds: ['lin', 'zhou'],
+      continuityNotes: ['林澈仍隐瞒旧案关系'],
+      status: 'planned',
+    }, null, 2)}\n`)
+  })
+
+  it('edits an absent Markdown draft with normalized newlines and chapter attribution', async () => {
+    const readAsset = vi.fn().mockResolvedValue({
+      target: { kind: 'chapter-draft', chapter: 2 }, revision: 'absent', text: '', bytes: 0,
+    })
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = targetController(readAsset, prompt)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'chapter-draft', chapter: 2 })
+
+    controller.updateChapterDraft('# 第二章\r\n\r\n潮水退去。')
+    controller.updateAssetSummary('起草第二章正文')
+    controller.previewAssetChange()
+    await controller.submitAssetChange()
+
+    const state = controller.getSnapshot()
+    expect(state).toMatchObject({
+      status: 'ready',
+      screen: {
+        kind: 'chapter-draft', chapter: 2, phase: 'submitted', dirty: true,
+        replacement: '# 第二章\n\n潮水退去。',
+      },
+    })
+    expect(prompt.mock.calls[0]?.[1]).toContain(JSON.stringify({
+      kind: 'replace',
+      targetKind: 'chapter-draft',
+      chapter: 2,
+      baseRevision: 'absent',
+      baseText: '',
+      replacement: '# 第二章\n\n潮水退去。',
+      summary: '起草第二章正文',
+    }, null, 2))
+  })
+
+  it('rejects a same-kind response for a different chapter without loading it', async () => {
+    const text = '# 第二章\n\n错误章节。\n'
+    const readAsset = vi.fn().mockResolvedValue({
+      target: { kind: 'chapter-draft', chapter: 2 }, revision: REVISION_A, text,
+      bytes: new TextEncoder().encode(text).byteLength,
+    })
+    const controller = targetController(readAsset)
+    await controller.whenIdle()
+
+    await controller.openAsset({ kind: 'chapter-draft', chapter: 1 })
+
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: {
+        kind: 'asset-error',
+        target: { kind: 'chapter-draft', chapter: 1 },
+        message: 'Host returned a different novel asset',
+      },
+    })
+  })
+
+  it('attributes chapter-draft rejection to the exact chapter and retains the draft for discard', async () => {
+    const text = '# 第二章\n\n旧稿。'
+    const readAsset = vi.fn().mockResolvedValue({
+      target: { kind: 'chapter-draft', chapter: 2 }, revision: REVISION_A, text,
+      bytes: new TextEncoder().encode(text).byteLength,
+    })
+    const controller = targetController(
+      readAsset,
+      vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } }),
+    )
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'chapter-draft', chapter: 2 })
+    controller.updateChapterDraft('# 第二章\n\n新稿。')
+    controller.updateAssetSummary('改写第二章')
+    controller.previewAssetChange()
+    await controller.submitAssetChange()
+    const submitted = controller.getSnapshot()
+    if (submitted.status !== 'ready'
+      || submitted.screen.kind !== 'chapter-draft'
+      || submitted.screen.replacement === undefined) throw new Error('missing submitted chapter draft')
+
+    controller.novelApplySettled({
+      isError: true,
+      code: 'APPROVAL_REJECTED',
+      attribution: {
+        kind: 'replace', targetKind: 'chapter-draft', chapter: 1,
+        baseRevision: REVISION_A, replacement: submitted.screen.replacement,
+      },
+    })
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready', screen: { kind: 'chapter-draft', chapter: 2, phase: 'submitted' },
+    })
+
+    controller.novelApplySettled({
+      isError: true,
+      code: 'APPROVAL_REJECTED',
+      attribution: {
+        kind: 'replace', targetKind: 'chapter-draft', chapter: 2,
+        baseRevision: REVISION_A, replacement: submitted.screen.replacement,
+      },
+    })
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready', screen: { kind: 'chapter-draft', chapter: 2, phase: 'error', text: '# 第二章\n\n新稿。' },
+    })
+    controller.discardAssetChanges()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready', screen: { kind: 'chapter-draft', chapter: 2, phase: 'clean', text },
+    })
   })
 
   it('preserves a dirty unsent form and blocks submission when refresh discovers a stale revision', async () => {

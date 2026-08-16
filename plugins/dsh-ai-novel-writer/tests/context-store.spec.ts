@@ -48,6 +48,25 @@ describe('novel context client state', () => {
     expect(read).toHaveBeenCalledTimes(4)
   })
 
+  it('reports invalid keyboard chapter selections without throwing or reading', async () => {
+    const read = vi.fn(async (_workspaceId: typeof WORKSPACE_A, chapter: number) => ready(chapter))
+    const controller = new NovelWorkbenchController({ read, readAsset: vi.fn(), prompt: vi.fn() }, vi.fn())
+    controller.setTarget({ workspaceId: WORKSPACE_A, sessionId: SESSION_A, agentPreset: 'ai-novel-writer', approval: 'ask' })
+    await controller.whenIdle()
+    await controller.open()
+    read.mockClear()
+
+    await expect(controller.selectChapter(0)).resolves.toBeUndefined()
+    await expect(controller.selectChapter(4)).resolves.toBeUndefined()
+
+    expect(read).not.toHaveBeenCalled()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      progress: { selectedChapter: 1 },
+      readFeedback: { kind: 'error', message: '章节编号必须在 1 到 3 之间。' },
+    })
+  })
+
   it('renders empty, not-initialized, error, and disconnected states', async () => {
     const read = vi.fn()
       .mockResolvedValueOnce({ status: 'not-initialized' })

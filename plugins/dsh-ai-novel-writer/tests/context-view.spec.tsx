@@ -44,6 +44,9 @@ function renderBody(state: NovelWorkbenchState): string {
     openAsset={vi.fn()}
     backToAssets={vi.fn()}
     updateProjectSettings={vi.fn()}
+    updateStoryBlueprint={vi.fn()}
+    updateChapterBlueprint={vi.fn()}
+    updateChapterDraft={vi.fn()}
     updateAssetSummary={vi.fn()}
     previewAssetChange={vi.fn()}
     submitAssetChange={vi.fn()}

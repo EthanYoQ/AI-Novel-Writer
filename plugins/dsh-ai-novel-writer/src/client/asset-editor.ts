@@ -1,9 +1,12 @@
-/** Pure project-and-characters editor model for the compact browser workbench. */
+/** Pure canonical asset codecs and editor models for the compact browser workbench. */
 
 import type { AssetRef, CreativeStrategy, NovelProjectId, Revision } from '../types.ts'
 
-/** Asset kinds editable in the first revision-aware workbench slice. */
-export type NovelWorkbenchEditableTarget = Extract<AssetRef, { readonly kind: 'project' | 'characters' }>
+/** Asset kinds editable in the current revision-aware workbench slice. */
+export type NovelWorkbenchEditableTarget = Extract<
+  AssetRef,
+  { readonly kind: 'project' | 'characters' | 'story-blueprint' | 'chapter-blueprint' | 'chapter-draft' }
+>
 
 /** User-editable project settings; durable identity and timestamps remain controller-owned. */
 export interface NovelProjectSettingsDraft {
@@ -24,6 +27,28 @@ export interface NovelCharacterDraft {
   readonly goal: string
   readonly relationshipsText: string
   readonly notes: string
+}
+
+/** User-editable story blueprint projection with one theme per line. */
+export interface NovelStoryBlueprintDraft {
+  readonly premise: string
+  readonly themesText: string
+  readonly world: string
+  readonly mainPlot: string
+  readonly endingGoal: string
+}
+
+/** Supported durable chapter planning state. */
+export type NovelChapterStatus = 'planned' | 'drafting' | 'drafted' | 'revised' | 'final'
+
+/** User-editable chapter blueprint projection with list fields one item per line. */
+export interface NovelChapterBlueprintDraft {
+  readonly title: string
+  readonly purpose: string
+  readonly beatsText: string
+  readonly characterIdsText: string
+  readonly continuityNotesText: string
+  readonly status: NovelChapterStatus
 }
 
 /** Revision-aware editor phase shown without implying a disk write. */
@@ -69,13 +94,40 @@ export interface NovelCharactersEditorScreen extends NovelAssetEditorBase {
   readonly visibleCharacterIds: readonly string[]
 }
 
+/** Complete story-blueprint editor state backed by one exact revision. */
+export interface NovelStoryBlueprintEditorScreen extends NovelAssetEditorBase {
+  readonly kind: 'story-blueprint'
+  readonly draft: NovelStoryBlueprintDraft
+}
+
+/** One chapter-blueprint editor backed by its exact chapter and revision. */
+export interface NovelChapterBlueprintEditorScreen extends NovelAssetEditorBase {
+  readonly kind: 'chapter-blueprint'
+  readonly chapter: number
+  readonly draft: NovelChapterBlueprintDraft
+}
+
+/** Markdown chapter editor backed by its exact chapter and revision. */
+export interface NovelChapterDraftEditorScreen extends NovelAssetEditorBase {
+  readonly kind: 'chapter-draft'
+  readonly chapter: number
+  readonly text: string
+}
+
+/** Any open revision-aware single-asset editor. */
+export type NovelAssetEditorScreen =
+  | NovelProjectEditorScreen
+  | NovelCharactersEditorScreen
+  | NovelStoryBlueprintEditorScreen
+  | NovelChapterBlueprintEditorScreen
+  | NovelChapterDraftEditorScreen
+
 /** Current compact drawer screen; it never represents a second application shell. */
 export type NovelWorkbenchScreen =
   | { readonly kind: 'root' }
   | { readonly kind: 'asset-loading'; readonly target: NovelWorkbenchEditableTarget }
   | { readonly kind: 'asset-error'; readonly target: NovelWorkbenchEditableTarget; readonly message: string }
-  | NovelProjectEditorScreen
-  | NovelCharactersEditorScreen
+  | NovelAssetEditorScreen
 
 /** Parsed immutable manifest fields retained across a project-settings proposal. */
 export interface ProjectManifestEditorSource extends NovelProjectSettingsDraft {
@@ -304,6 +356,124 @@ export function serializeCharacters(characters: readonly NovelCharacterDraft[]):
   return `${JSON.stringify({ characters: canonical }, null, 2)}\n`
 }
 
+function linesFromText(text: string): string[] {
+  return text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+}
+
+/**
+ * Parse one authoritative story blueprint, including the explicit absent asset.
+ *
+ * @param text Canonical JSON, or empty text for an absent asset.
+ * @param revision Authoritative exact-read revision.
+ * @returns Editable blueprint fields with one theme per line.
+ * @throws {Error} When durable content violates the strict story schema.
+ */
+export function parseStoryBlueprint(text: string, revision: Revision): NovelStoryBlueprintDraft {
+  if (revision === 'absent' && text === '') {
+    return { premise: '', themesText: '', world: '', mainPlot: '', endingGoal: '' }
+  }
+  const record = objectWithKeys(
+    JSON.parse(text),
+    ['premise', 'themes', 'world', 'mainPlot', 'endingGoal'],
+    '故事蓝图',
+  )
+  if (!Array.isArray(record.themes) || record.themes.some(theme => typeof theme !== 'string')) {
+    throw new Error('主题必须是文本列表')
+  }
+  return {
+    premise: nonEmptyString(record.premise, '故事前提'),
+    themesText: record.themes.join('\n'),
+    world: nonEmptyString(record.world, '世界设定'),
+    mainPlot: nonEmptyString(record.mainPlot, '主线'),
+    endingGoal: nonEmptyString(record.endingGoal, '结局目标'),
+  }
+}
+
+/**
+ * Render a story blueprint as the canonical complete asset.
+ *
+ * @param draft Edited story fields.
+ * @returns Strict two-space JSON with one trailing LF.
+ * @throws {Error} When required fields are empty.
+ */
+export function serializeStoryBlueprint(draft: NovelStoryBlueprintDraft): string {
+  return `${JSON.stringify({
+    premise: nonEmptyString(draft.premise.trim(), '故事前提'),
+    themes: linesFromText(draft.themesText),
+    world: nonEmptyString(draft.world.trim(), '世界设定'),
+    mainPlot: nonEmptyString(draft.mainPlot.trim(), '主线'),
+    endingGoal: nonEmptyString(draft.endingGoal.trim(), '结局目标'),
+  }, null, 2)}\n`
+}
+
+/**
+ * Parse one authoritative chapter blueprint, including the explicit absent asset.
+ *
+ * @param text Canonical JSON, or empty text for an absent asset.
+ * @param revision Authoritative exact-read revision.
+ * @param chapter Chapter number encoded by the asset reference.
+ * @returns Editable chapter fields with arrays represented one item per line.
+ * @throws {Error} When durable content violates the strict chapter schema.
+ */
+export function parseChapterBlueprint(
+  text: string,
+  revision: Revision,
+  chapter: number,
+): NovelChapterBlueprintDraft {
+  if (revision === 'absent' && text === '') {
+    return {
+      title: '', purpose: '', beatsText: '', characterIdsText: '', continuityNotesText: '', status: 'planned',
+    }
+  }
+  const record = objectWithKeys(JSON.parse(text), [
+    'chapter', 'title', 'purpose', 'beats', 'characterIds', 'continuityNotes', 'status',
+  ], '章节蓝图')
+  if (record.chapter !== chapter) throw new Error('章节蓝图编号与目标不一致')
+  for (const [value, label] of [
+    [record.beats, '情节节拍'],
+    [record.characterIds, '人物引用'],
+    [record.continuityNotes, '连续性备注'],
+  ] as const) {
+    if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) throw new Error(`${label}必须是文本列表`)
+  }
+  const statuses: readonly NovelChapterStatus[] = ['planned', 'drafting', 'drafted', 'revised', 'final']
+  if (!statuses.includes(record.status as NovelChapterStatus)) throw new Error('章节状态不受支持')
+  return {
+    title: nonEmptyString(record.title, '章节标题'),
+    purpose: nonEmptyString(record.purpose, '章节目的'),
+    beatsText: (record.beats as string[]).join('\n'),
+    characterIdsText: (record.characterIds as string[]).join('\n'),
+    continuityNotesText: (record.continuityNotes as string[]).join('\n'),
+    status: record.status as NovelChapterStatus,
+  }
+}
+
+/**
+ * Render one chapter blueprint as the canonical complete asset.
+ *
+ * @param chapter Chapter number fixed by the asset reference.
+ * @param draft Edited planning fields.
+ * @returns Strict two-space JSON with one trailing LF.
+ * @throws {Error} When the chapter or required fields are invalid.
+ */
+export function serializeChapterBlueprint(chapter: number, draft: NovelChapterBlueprintDraft): string {
+  if (!Number.isSafeInteger(chapter) || chapter <= 0) throw new Error('章节编号无效')
+  return `${JSON.stringify({
+    chapter,
+    title: nonEmptyString(draft.title.trim(), '章节标题'),
+    purpose: nonEmptyString(draft.purpose.trim(), '章节目的'),
+    beats: linesFromText(draft.beatsText),
+    characterIds: linesFromText(draft.characterIdsText),
+    continuityNotes: linesFromText(draft.continuityNotesText),
+    status: draft.status,
+  }, null, 2)}\n`
+}
+
+/** @param text Edited Markdown. @returns Markdown with canonical LF newlines. */
+export function serializeChapterDraft(text: string): string {
+  return text.replace(/\r\n?/g, '\n')
+}
+
 /**
  * Serialize the exact shallow Agent tool arguments for one replacement proposal.
  *
@@ -325,6 +495,7 @@ export function assetProposalPrompt(
   const json = JSON.stringify({
     kind: 'replace',
     targetKind: target.kind,
+    ...('chapter' in target ? { chapter: target.chapter } : {}),
     baseRevision,
     baseText,
     replacement,

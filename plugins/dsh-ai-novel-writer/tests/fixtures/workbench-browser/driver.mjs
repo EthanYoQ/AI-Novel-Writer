@@ -103,7 +103,8 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
 
   const projectRoot = join(scaffold.workspaceCwd, workspaceName)
   const assetRoot = join(projectRoot, '.ai-novel')
-  await mkdir(assetRoot, { recursive: true })
+  await mkdir(join(assetRoot, 'blueprints', 'chapters'), { recursive: true })
+  await mkdir(join(projectRoot, 'chapters'), { recursive: true })
   await writeFile(join(assetRoot, 'project.json'), `${JSON.stringify({
     formatVersion: 1,
     kind: 'harness-novel-project',
@@ -120,6 +121,27 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await writeFile(join(assetRoot, 'characters.json'), `${JSON.stringify({ characters: [{
     id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案', goal: '找到真相', relationships: [], notes: '',
   }] }, null, 2)}\n`, 'utf8')
+  await writeFile(join(assetRoot, 'blueprints', 'story.json'), `${JSON.stringify({
+    premise: '退潮后，失踪者的信件逐封出现。',
+    themes: ['记忆', '责任'],
+    world: '近未来海港城',
+    mainPlot: '记者与调查员追查潮汐站旧案。',
+    endingGoal: '公开真相并阻止下一次事故。',
+  }, null, 2)}\n`, 'utf8')
+  await writeFile(join(assetRoot, 'blueprints', 'chapters', '0002.json'), `${JSON.stringify({
+    chapter: 2,
+    title: '潮汐站',
+    purpose: '让两位调查者第一次交换证据。',
+    beats: ['抵达废弃站', '发现录音'],
+    characterIds: ['lin'],
+    continuityNotes: ['林澈仍隐瞒旧案关系'],
+    status: 'planned',
+  }, null, 2)}\n`, 'utf8')
+  const longDraft = `# 第二章\n\n${Array.from(
+    { length: 120 },
+    (_, index) => `潮水第 ${index + 1} 次退去时，林澈在废弃潮汐站记下新的证据与时间。`,
+  ).join('\n\n')}\n`
+  await writeFile(join(projectRoot, 'chapters', '0002.md'), longDraft, 'utf8')
   await trigger.click()
   await drawer.getByRole('heading', { name: '小说资产' }).waitFor({ timeout: 10_000 })
   const assetRootSnapshot = normalize(await drawer.ariaSnapshot())
@@ -129,10 +151,71 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await drawer.getByRole('button', { name: '预览修改提案' }).click()
   await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
   const projectEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  await drawer.getByRole('button', { name: '放弃修改' }).click()
   await drawer.getByRole('button', { name: '返回资产' }).click()
   await drawer.getByRole('button', { name: /人物设定/ }).click()
   await drawer.getByRole('textbox', { name: '搜索人物' }).fill('林')
   const characterEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  await drawer.getByRole('button', { name: '返回资产' }).click()
+  await drawer.getByRole('button', { name: /故事蓝图/ }).click()
+  const storyHeading = drawer.getByRole('heading', { name: '故事蓝图' })
+  await drawer.getByRole('textbox', { name: '故事前提' }).waitFor({ timeout: 10_000 })
+  await page.waitForFunction(element => document.activeElement === element, await storyHeading.elementHandle())
+  await drawer.getByRole('textbox', { name: '结局目标' }).fill('在风暴前公开真相并阻止下一次事故。')
+  await drawer.getByRole('textbox', { name: '修改摘要' }).fill('明确故事结局目标')
+  await drawer.getByRole('button', { name: '预览修改提案' }).click()
+  await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
+  const storyEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  await drawer.getByRole('button', { name: '放弃修改' }).click()
+  await drawer.getByRole('button', { name: '返回资产' }).click()
+  const assetHeading = drawer.getByRole('heading', { name: '小说资产' })
+  await page.waitForFunction(element => document.activeElement === element, await assetHeading.elementHandle())
+  const chapterSelector = drawer.getByRole('spinbutton', { name: '选择小说章节' })
+  await chapterSelector.press('Backspace')
+  await drawer.getByRole('alert').filter({ hasText: '章节编号必须在 1 到 20 之间。' }).waitFor({ timeout: 10_000 })
+  await chapterSelector.fill('2')
+  await drawer.getByText('第 2 / 20 章').waitFor({ timeout: 10_000 })
+  await drawer.getByRole('button', { name: /章节蓝图/ }).click()
+  await drawer.getByRole('heading', { name: '第 2 章蓝图' }).waitFor({ timeout: 10_000 })
+  await drawer.getByRole('textbox', { name: '章节目的' }).fill('让两位调查者交换证据并首次产生分歧。')
+  await drawer.getByRole('textbox', { name: '修改摘要' }).fill('细化第二章目的')
+  await drawer.getByRole('button', { name: '预览修改提案' }).click()
+  await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
+  const chapterBlueprintEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  await drawer.getByRole('button', { name: '放弃修改' }).click()
+  await drawer.getByRole('button', { name: '返回资产' }).click()
+  await drawer.getByRole('button', { name: /章节正文/ }).click()
+  const draftEditor = drawer.getByRole('textbox', { name: '章节正文 Markdown' })
+  await draftEditor.waitFor({ timeout: 10_000 })
+  const editorScroll = await draftEditor.evaluate(element => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
+  if (editorScroll.scrollHeight <= editorScroll.clientHeight) throw new Error('long chapter draft did not create an editor scroll region')
+  await draftEditor.fill(`${longDraft}\n## 新线索\n\n林澈决定在风暴前公开录音。\n`)
+  await drawer.getByRole('textbox', { name: '修改摘要' }).fill('补写第二章新线索')
+  await drawer.evaluate(element => { element.scrollTop = element.scrollHeight })
+  const previewButton = drawer.getByRole('button', { name: '预览修改提案' })
+  const scrolledDrawerBox = await drawer.boundingBox()
+  const stickyActionsBox = await drawer.locator('.aiNovelWorkbenchActions').boundingBox()
+  if (scrolledDrawerBox === null || stickyActionsBox === null
+    || stickyActionsBox.y + stickyActionsBox.height > scrolledDrawerBox.y + scrolledDrawerBox.height + 1) {
+    throw new Error('chapter draft actions were not visible after scrolling long prose')
+  }
+  await previewButton.click()
+  await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
+  const chapterDraftEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  await page.setViewportSize({ width: 390, height: 844 })
+  const narrowDrawerBox = await drawer.boundingBox()
+  const draftEditorBox = await draftEditor.boundingBox()
+  const actionsBox = await drawer.locator('.aiNovelWorkbenchActions').boundingBox()
+  const narrowOverflow = await drawer.evaluate(element => element.scrollWidth - element.clientWidth)
+  if (narrowDrawerBox === null || draftEditorBox === null || actionsBox === null
+    || narrowDrawerBox.width > 390
+    || draftEditorBox.x + draftEditorBox.width > narrowDrawerBox.x + narrowDrawerBox.width + 1
+    || actionsBox.x + actionsBox.width > narrowDrawerBox.x + narrowDrawerBox.width + 1
+    || narrowOverflow > 1) throw new Error('chapter draft editor overflowed the narrow drawer')
+  await page.setViewportSize({ width: 1440, height: 900 })
   await drawer.getByRole('button', { name: '关闭小说工作台' }).click()
 
   await page.getByRole('button', { name: '设置', exact: true }).click()
@@ -157,6 +240,16 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
     assetRoot: assetRootSnapshot,
     projectEditor: projectEditorSnapshot,
     characterEditor: characterEditorSnapshot,
+    storyEditor: storyEditorSnapshot,
+    chapterBlueprintEditor: chapterBlueprintEditorSnapshot,
+    chapterDraftEditor: chapterDraftEditorSnapshot,
+    narrowDraftGeometry: {
+      viewportWidth: 390,
+      drawerWidth: Math.round(narrowDrawerBox.width),
+      draftRight: Math.round(draftEditorBox.x + draftEditorBox.width),
+      drawerRight: Math.round(narrowDrawerBox.x + narrowDrawerBox.width),
+      horizontalOverflow: narrowOverflow,
+    },
     settings: settingsSnapshot,
   }
   } catch (error) {

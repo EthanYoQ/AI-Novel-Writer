@@ -99,6 +99,7 @@ function applyAttribution(node: ConversationNodeView): NovelApplyOutcome['attrib
   return {
     kind: 'replace',
     targetKind: record.targetKind,
+    ...(typeof record.chapter === 'number' ? { chapter: record.chapter } : {}),
     baseRevision: record.baseRevision,
     replacement: record.replacement,
   }

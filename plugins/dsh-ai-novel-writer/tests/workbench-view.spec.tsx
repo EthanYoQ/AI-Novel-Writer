@@ -28,6 +28,7 @@ const editorActions: Omit<NovelWorkbenchBodyProps, 'state'> = {
   previewAssetChange: vi.fn(), submitAssetChange: vi.fn(), discardAssetChanges: vi.fn(),
   reloadStaleAsset: vi.fn(), setCharacterSearch: vi.fn(), selectCharacter: vi.fn(),
   createCharacter: vi.fn(), updateCharacter: vi.fn(), deleteCharacter: vi.fn(),
+  updateStoryBlueprint: vi.fn(), updateChapterBlueprint: vi.fn(), updateChapterDraft: vi.fn(),
 }
 
 function ready(screen: Extract<NovelWorkbenchState, { status: 'ready' }>['screen']): NovelWorkbenchState {
@@ -154,8 +155,25 @@ describe('novel workbench presentation', () => {
     expect(html).toContain('小说资产')
     expect(html).toContain('项目设置')
     expect(html).toContain('人物设定')
+    expect(html).toContain('故事蓝图')
+    expect(html).toContain('章节蓝图')
+    expect(html).toContain('章节正文')
     expect(html).not.toContain('任务看板')
     expect(html).not.toContain('SSH')
+  })
+
+  it('announces invalid chapter input and exposes focus targets for drill-in and return', () => {
+    const html = renderToStaticMarkup(<NovelWorkbenchBody
+      {...editorActions}
+      state={{
+        ...ready({ kind: 'root' }),
+        readFeedback: { kind: 'error', message: '章节编号必须在 1 到 20 之间。' },
+      }}
+    />)
+
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('章节编号必须在 1 到 20 之间。')
+    expect(html).toMatch(/<h3[^>]*data-ai-novel-screen-focus="true"[^>]*tabindex="-1"[^>]*>小说资产<\/h3>/)
   })
 
   it('renders a stale project editor with revision evidence and an explicit recovery action', () => {
@@ -173,6 +191,7 @@ describe('novel workbench presentation', () => {
     expect(html).toContain('revision aaaaaaaaaaaa')
     expect(html).toContain('本地未发送标题')
     expect(html).toContain('重新载入最新版本')
+    expect(html).toMatch(/class="aiNovelBackButton"[^>]*disabled/)
     expect(html).toMatch(/type="submit"[^>]*disabled/)
   })
 
@@ -190,5 +209,49 @@ describe('novel workbench presentation', () => {
       expect(html).toContain(text)
     }
     expect(html).toContain('aria-current="true"')
+  })
+
+  it('renders the complete story blueprint as one labeled editor', () => {
+    const html = renderToStaticMarkup(<NovelWorkbenchBody {...editorActions} state={ready({
+      kind: 'story-blueprint', phase: 'editing', dirty: true, baseRevision: 'a'.repeat(64) as Revision,
+      originalText: '{}\n', summary: '',
+      draft: {
+        premise: '一封迟到的信', themesText: '记忆\n责任', world: '海港城',
+        mainPlot: '调查旧案', endingGoal: '公开真相',
+      },
+    })} />)
+
+    for (const text of ['故事蓝图', '故事前提', '主题（每行一项）', '世界设定', '故事主线', '结局目标']) {
+      expect(html).toContain(text)
+    }
+    expect(html).toContain('预览修改提案')
+  })
+
+  it('renders one selected chapter blueprint without adding secondary navigation', () => {
+    const html = renderToStaticMarkup(<NovelWorkbenchBody {...editorActions} state={ready({
+      kind: 'chapter-blueprint', chapter: 2, phase: 'clean', dirty: false,
+      baseRevision: 'a'.repeat(64) as Revision, originalText: '{}\n', summary: '',
+      draft: {
+        title: '潮汐站', purpose: '交换证据', beatsText: '抵达\n发现录音',
+        characterIdsText: 'lin\nzhou', continuityNotesText: '旧案仍未公开', status: 'planned',
+      },
+    })} />)
+
+    for (const text of ['第 2 章蓝图', '章节标题', '章节目的', '情节节拍（每行一项）', '人物 ID（每行一项）', '连续性备注（每行一项）', '章节状态']) {
+      expect(html).toContain(text)
+    }
+    expect(html).not.toContain('任务看板')
+  })
+
+  it('renders long Markdown in a labeled full-width draft editor with sticky actions', () => {
+    const html = renderToStaticMarkup(<NovelWorkbenchBody {...editorActions} state={ready({
+      kind: 'chapter-draft', chapter: 2, phase: 'editing', dirty: true,
+      baseRevision: 'a'.repeat(64) as Revision, originalText: '# 旧稿', summary: '', text: '# 第二章\n\n潮水退去。',
+    })} />)
+
+    expect(html).toContain('第 2 章正文')
+    expect(html).toContain('aria-label="章节正文 Markdown"')
+    expect(html).toContain('aiNovelChapterDraftEditor')
+    expect(html).toContain('aiNovelWorkbenchActions')
   })
 })

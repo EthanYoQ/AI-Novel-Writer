@@ -164,12 +164,28 @@ describe('novel context shell observer', () => {
     conversations.get(SESSION_1)!.set({
       nodes: [
         { kind: 'tool-result', seq: 2, call: { name: 'novel_apply_change' } },
-        { kind: 'tool-result', seq: 3, call: { name: 'novel_apply_change' }, isError: true },
+        {
+          kind: 'tool-result', seq: 3, isError: true,
+          call: {
+            name: 'novel_apply_change',
+            argsRaw: JSON.stringify({
+              kind: 'replace', targetKind: 'chapter-draft', chapter: 2,
+              baseRevision: 'a'.repeat(64), replacement: '# 第二章',
+            }),
+          },
+        },
       ],
     })
     await controller.whenIdle()
     expect(read).toHaveBeenCalledTimes(3)
-    expect(settled).toHaveBeenLastCalledWith({ isError: true, code: undefined, attribution: undefined })
+    expect(settled).toHaveBeenLastCalledWith({
+      isError: true,
+      code: undefined,
+      attribution: {
+        kind: 'replace', targetKind: 'chapter-draft', chapter: 2,
+        baseRevision: 'a'.repeat(64), replacement: '# 第二章',
+      },
+    })
 
     workspaceList.set({ items: [{ workspaceId: WORKSPACE_2, sessionIds: [SESSION_2] }] })
     sessionList.set({ current: SESSION_2 })

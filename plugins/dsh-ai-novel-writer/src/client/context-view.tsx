@@ -138,6 +138,10 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
   )
   const drawer = useRef<HTMLDivElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
+  const screenKey = workbenchState.status === 'ready'
+    ? workbenchState.screen.kind
+    : workbenchState.status
+  const previousScreenKey = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!workbenchState.open || drawer.current === null) return
     const releaseLayout = installWorkbenchLayoutReservation(drawer.current)
@@ -152,6 +156,19 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
       releaseKeyboard()
     }
   }, [setupController, workbenchController, workbenchState.open])
+  useEffect(() => {
+    if (!workbenchState.open) {
+      previousScreenKey.current = undefined
+      return
+    }
+    if (previousScreenKey.current === undefined) {
+      previousScreenKey.current = screenKey
+      return
+    }
+    if (previousScreenKey.current === screenKey) return
+    previousScreenKey.current = screenKey
+    drawer.current?.querySelector<HTMLElement>('[data-ai-novel-screen-focus]')?.focus()
+  }, [screenKey, workbenchState.open])
   if (!workbenchState.open) return null
   const close = (): void => { workbenchController.close(); setupController.close() }
   return (
@@ -185,6 +202,9 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
             openAsset={target => { void workbenchController.openAsset(target) }}
             backToAssets={() => { workbenchController.backToAssets() }}
             updateProjectSettings={patch => { workbenchController.updateProjectSettings(patch) }}
+            updateStoryBlueprint={patch => { workbenchController.updateStoryBlueprint(patch) }}
+            updateChapterBlueprint={patch => { workbenchController.updateChapterBlueprint(patch) }}
+            updateChapterDraft={text => { workbenchController.updateChapterDraft(text) }}
             updateAssetSummary={summary => { workbenchController.updateAssetSummary(summary) }}
             previewAssetChange={() => { workbenchController.previewAssetChange() }}
             submitAssetChange={() => { void workbenchController.submitAssetChange() }}
