@@ -12,6 +12,24 @@
 - id: tools
   name: '@deepseek-ai/dsh-tools'
 
+- id: web-server
+  name: '@deepseek-ai/dsh-host-webserver'
+  config:
+    host: 127.0.0.1
+    port: 0
+
+- id: web-ui-all
+  name: __DSH_WEB_UI_ALL_ENTRY__
+
+- id: web-ui-ssh
+  name: __DSH_WEB_UI_SSH_ENTRY__
+  config:
+    enabled: true
+    announceToAgent: false
+
+- id: web-ui-describe-image
+  name: __DSH_WEB_UI_DESCRIBE_ENTRY__
+
 - id: approval
   name: '@deepseek-ai/dsh-user-approval'
   config:
@@ -35,4 +53,4 @@
     includeUserRoot: false
 
 - id: snapshot-backend
-  name: './snapshot-backend.mjs'
+  name: __DSH_SNAPSHOT_BACKEND_ENTRY__

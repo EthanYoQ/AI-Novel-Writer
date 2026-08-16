@@ -13,16 +13,14 @@ import { openNovelProject } from '../src/novel-project.ts'
 import { makeTestWorkspace, TEST_INITIALIZATION_IDENTITY } from './test-workspace.ts'
 
 const initialize = {
-  request: {
-    ...TEST_INITIALIZATION_IDENTITY,
-    kind: 'initialize' as const,
-    title: '潮汐信',
-    language: 'zh-CN',
-    genre: '奇幻',
-    plannedChapters: 6,
-    targetWordsPerChapter: 2_000,
-    creativeStrategy: 'auto' as const,
-  },
+  ...TEST_INITIALIZATION_IDENTITY,
+  kind: 'initialize' as const,
+  title: '潮汐信',
+  language: 'zh-CN',
+  genre: '奇幻',
+  plannedChapters: 6,
+  targetWordsPerChapter: 2_000,
+  creativeStrategy: 'auto' as const,
 }
 
 function fakeAgent(root: string): Agent {
@@ -111,7 +109,7 @@ describe('AI novel native approval integration', () => {
 
   it('rechecks the asset revision after approval before writing', async () => {
     const root = await makeTestWorkspace('approval-race-')
-    await openNovelProject(root).apply(initialize.request, new AbortController().signal)
+    await openNovelProject(root).apply(initialize, new AbortController().signal)
     const ctx = await setup()
     const entered = Promise.withResolvers<void>()
     const release = Promise.withResolvers<ApprovalOutcome>()
@@ -124,10 +122,8 @@ describe('AI novel native approval integration', () => {
       callId: CallId('novel-race'),
       name: 'novel_apply_change',
       arguments: {
-        request: {
-          kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 },
-          baseRevision: 'absent', baseText: '', replacement: '模型提案\n', summary: '写入第一章',
-        },
+        kind: 'replace', targetKind: 'chapter-draft', chapter: 1,
+        baseRevision: 'absent', baseText: '', replacement: '模型提案\n', summary: '写入第一章',
       },
       agent: fakeAgent(root),
       signal: new AbortController().signal,

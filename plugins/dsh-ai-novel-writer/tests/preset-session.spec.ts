@@ -9,7 +9,7 @@ import AgentPresets from '@deepseek-ai/dsh-agent-presets'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ToolRuntime from '@deepseek-ai/dsh-tools'
+import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import { describe, expect, it } from 'vitest'
 import { createPresetInstaller } from '../src/preset-installer.ts'
 import { makeTestWorkspace } from './test-workspace.ts'
@@ -30,6 +30,15 @@ describe('installed AI 小说作家 preset session', () => {
     await ctx.plugin(SessionStore)
     await ctx.plugin(SystemPrompt, { persona: '' })
     await ctx.plugin(ToolRuntime)
+    for (const toolName of ['describe_image', 'ssh_exec']) {
+      ctx.tools.register(defineTool({
+        name: toolName,
+        description: 'global integration probe',
+        parameters: {},
+        output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+        execute: async () => toolName,
+      }))
+    }
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(AgentLoop, { agents: [] })
     await ctx.plugin(AgentPresets, {
@@ -47,7 +56,7 @@ describe('installed AI 小说作家 preset session', () => {
 
     expect(ctx.tools.schemas(handle.agent).map(tool => tool.name).sort())
       .toEqual(['novel_apply_change', 'novel_read'])
-    expect(ctx.tools.schemas()).toEqual([])
+    expect(ctx.tools.schemas().map(tool => tool.name).sort()).toEqual(['describe_image', 'ssh_exec'])
     await ctx.fiber.dispose()
   })
 })

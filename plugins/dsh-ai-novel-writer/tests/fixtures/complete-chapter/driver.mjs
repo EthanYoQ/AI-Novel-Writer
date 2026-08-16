@@ -56,5 +56,12 @@ async function run(phase, task) {
   }
 }
 
-await run('first', '创建一部一致性优先的小说，并完成第一章。')
-await run('restart', '重启后读取第一章与项目策略。')
+const scenario = process.env.DSH_NOVEL_SCENARIO
+if (scenario === 'approval-never') {
+  await run('approval-never', '请初始化小说项目并保存。')
+} else if (scenario === 'invalid-args') {
+  await run('invalid-args', '请初始化小说项目并保存。')
+} else {
+  await run('first', '创建一部一致性优先的小说，并完成第一章。')
+  await run('restart', '重启后读取第一章与项目策略。')
+}

@@ -14,9 +14,15 @@ function requestName(request) {
 }
 
 function toolCall(callId, request) {
+  const { target, ...fields } = request
+  return rawToolCall(callId, requestName(request), target === undefined
+    ? fields
+    : { ...fields, targetKind: target.kind, ...(target.chapter === undefined ? {} : { chapter: target.chapter }) })
+}
+
+function rawToolCall(callId, name, args) {
   const id = CallId(callId)
-  const argumentsJson = JSON.stringify({ request })
-  const name = requestName(request)
+  const argumentsJson = JSON.stringify(args)
   return [
     { type: 'block-start', index: 0, blockType: 'tool-call' },
     { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: argumentsJson },
@@ -133,13 +139,25 @@ export async function apply(ctx) {
     if (error?.code !== 'ENOENT') throw error
     initialized = false
   }
-  const phase = initialized ? 'restart' : 'first'
-  const script = initialized
-    ? [
+  const scenario = process.env.DSH_NOVEL_SCENARIO
+  const phase = scenario === 'approval-never' || scenario === 'invalid-args'
+    ? scenario
+    : initialized ? 'restart' : 'first'
+  const script = phase === 'approval-never'
+    ? [textResponse('当前会话已禁用原生审批，因此无法提交小说修改。请切换到允许审批的权限策略后再试。')]
+    : phase === 'invalid-args'
+      ? [
+          rawToolCall('invalid-nested-request', 'novel_apply_change', {
+            request: JSON.stringify({ kind: 'initialize', title: '错误嵌套' }),
+          }),
+          textResponse('novel_apply_change 需要直接传入 kind 等浅层字段，不能使用字符串化的 request；本次修改已停止，不会重试。'),
+        ]
+      : initialized
+        ? [
         toolCall('chapter-01-restart-read', { kind: 'working-set', chapter: 1 }),
         textResponse('重启后已读取相同的创作策略与第一章正文。'),
       ]
-    : firstRunScript()
+        : firstRunScript()
   const adapter = new KeylessNovelAdapter(phase, script)
   ctx.effect(() => ctx.llm.registerAdapter(['novel-snapshot'], adapter))
   let approvalCount = 0

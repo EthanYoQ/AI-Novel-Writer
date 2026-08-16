@@ -9,7 +9,7 @@ import { deriveEventMessage, foldSurface } from '@deepseek-ai/dsh-session/surfac
 import { describe, expect, it } from 'vitest'
 import { makeTestWorkspace } from './test-workspace.ts'
 
-type Phase = 'first' | 'restart'
+type Phase = 'first' | 'restart' | 'approval-never' | 'invalid-args'
 
 interface ModelRequestLine {
   readonly type: 'model_request'
@@ -169,7 +169,7 @@ function projectEvent(event: SessionEvent): object | undefined {
       type: event.type,
       callId: event.data.callId,
       name: event.data.name,
-      request: (JSON.parse(event.data.arguments) as { request: unknown }).request,
+      arguments: JSON.parse(event.data.arguments) as Record<string, unknown>,
     }
     case 'approval/asked': return {
       type: event.type,
@@ -236,6 +236,8 @@ describe('complete chapter keyless snapshot', () => {
     assertRequestsReconstruct(firstEvents, firstRequests)
     assertRequestsReconstruct(restartEvents, restartRequests)
     expect([...firstRequests, ...restartRequests].every(line => line.request.reasoningEffort === null)).toBe(true)
+    expect([...firstRequests, ...restartRequests].every(line =>
+      line.request.tools.map(tool => tool.name).sort().join(',') === 'novel_apply_change,novel_read')).toBe(true)
 
     expect(linesFor(lines, 'preapproval')).toEqual([
       { type: 'preapproval', phase: 'first', manifest: 'absent' },

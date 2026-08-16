@@ -1,7 +1,8 @@
 /** Agent-scoped novel tools and their native approval policy. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { scopeOf } from '@deepseek-ai/dsh-scope'
+import { defineTool, ToolArgsError } from '@deepseek-ai/dsh-tools'
 import type { PreToolDecision, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
@@ -9,7 +10,9 @@ import {
   canonicalNovelAssetText, canonicalNovelInitialization, novelAssetSource, openNovelProject,
 } from './novel-project.ts'
 import type { NovelProjectOptions } from './novel-project.ts'
-import type { AssetRef, NovelApplyRequest, NovelReadRequest } from './types.ts'
+import type {
+  AssetRef, CreativeStrategy, NovelApplyRequest, NovelProjectId, NovelReadRequest, Revision,
+} from './types.ts'
 
 const DEFAULT_ASSET_BYTES = 512 * 1024
 const DEFAULT_WORKING_SET_BYTES = 512 * 1024
@@ -29,71 +32,121 @@ export const Config: z<Config> = z.object({
   queryMatches: z.number().step(1).min(1).max(20).default(DEFAULT_QUERY_MATCHES),
 })
 
-const assetRef = {
-  oneOf: [
-    { type: 'object', properties: { kind: { type: 'string', const: 'project', required: true } }, additionalProperties: false },
-    { type: 'object', properties: { kind: { type: 'string', const: 'characters', required: true } }, additionalProperties: false },
-    { type: 'object', properties: { kind: { type: 'string', const: 'story-blueprint', required: true } }, additionalProperties: false },
-    {
-      type: 'object', properties: {
-        kind: { type: 'string', const: 'chapter-blueprint', required: true },
-        chapter: { type: 'integer', required: true },
-      }, additionalProperties: false,
-    },
-    {
-      type: 'object', properties: {
-        kind: { type: 'string', const: 'chapter-draft', required: true },
-        chapter: { type: 'integer', required: true },
-      }, additionalProperties: false,
-    },
-  ],
+const TARGET_KINDS = ['project', 'characters', 'story-blueprint', 'chapter-blueprint', 'chapter-draft'] as const
+const CREATIVE_STRATEGIES = ['auto', 'fluent-drafting', 'consistency-first', 'deep-planning'] as const
+
+const readParameters = {
+  kind: { type: 'string', enum: ['asset', 'working-set', 'query'], required: true },
+  targetKind: { type: 'string', enum: TARGET_KINDS },
+  chapter: { type: 'integer' },
+  text: { type: 'string' },
+  limit: { type: 'integer' },
 } as const
 
-const readRequest = {
-  oneOf: [
-    {
-      type: 'object',
-      properties: { kind: { type: 'string', const: 'asset', required: true }, target: { ...assetRef, required: true } },
-      additionalProperties: false,
-    },
-    {
-      type: 'object',
-      properties: { kind: { type: 'string', const: 'working-set', required: true }, chapter: { type: 'integer' } },
-      additionalProperties: false,
-    },
-    {
-      type: 'object', properties: {
-        kind: { type: 'string', const: 'query', required: true },
-        text: { type: 'string', required: true }, limit: { type: 'integer' },
-      }, additionalProperties: false,
-    },
-  ],
+const applyParameters = {
+  kind: { type: 'string', enum: ['initialize', 'replace'], required: true },
+  targetKind: { type: 'string', enum: TARGET_KINDS },
+  chapter: { type: 'integer' },
+  projectId: { type: 'string' },
+  title: { type: 'string' },
+  language: { type: 'string' },
+  genre: { type: 'string' },
+  plannedChapters: { type: 'integer' },
+  targetWordsPerChapter: { type: 'integer' },
+  creativeStrategy: { type: 'string', enum: CREATIVE_STRATEGIES },
+  createdAt: { type: 'string' },
+  updatedAt: { type: 'string' },
+  baseRevision: { type: 'string' },
+  baseText: { type: 'string' },
+  replacement: { type: 'string' },
+  summary: { type: 'string' },
 } as const
 
-const applyRequest = {
-  oneOf: [
-    {
-      type: 'object', properties: {
-        kind: { type: 'string', const: 'initialize', required: true },
-        projectId: { type: 'string', required: true },
-        title: { type: 'string', required: true }, language: { type: 'string', required: true },
-        genre: { type: 'string', required: true }, plannedChapters: { type: 'integer', required: true },
-        targetWordsPerChapter: { type: 'integer', required: true },
-        creativeStrategy: {
-          type: 'string', enum: ['auto', 'fluent-drafting', 'consistency-first', 'deep-planning'], required: true,
-        },
-        createdAt: { type: 'string', required: true }, updatedAt: { type: 'string', required: true },
-      }, additionalProperties: false,
-    },
-    {
-      type: 'object', properties: {
-        kind: { type: 'string', const: 'replace', required: true }, target: { ...assetRef, required: true },
-        baseRevision: { type: 'string', required: true }, baseText: { type: 'string', required: true },
-        replacement: { type: 'string', required: true }, summary: { type: 'string', required: true },
-      }, additionalProperties: false,
-    },
-  ],
-} as const
+function invalid(message: string): never {
+  throw new ToolArgsError([message])
+}
+
+function requiredString(args: Record<string, unknown>, name: string): string {
+  const value = args[name]
+  return typeof value === 'string' ? value : invalid(`missing required property "${name}"`)
+}
+
+function requiredInteger(args: Record<string, unknown>, name: string): number {
+  const value = args[name]
+  return Number.isInteger(value) ? value as number : invalid(`missing required property "${name}"`)
+}
+
+function rejectUnexpected(args: Record<string, unknown>, allowed: readonly string[]): void {
+  const unexpected = Object.keys(args).filter(key => !allowed.includes(key))
+  if (unexpected.length > 0) invalid(`unexpected propert${unexpected.length === 1 ? 'y' : 'ies'} ${unexpected.map(key => `"${key}"`).join(', ')}`)
+}
+
+function targetFrom(args: Record<string, unknown>): AssetRef {
+  const targetKind = requiredString(args, 'targetKind')
+  if (targetKind === 'chapter-blueprint' || targetKind === 'chapter-draft') {
+    return { kind: targetKind, chapter: requiredInteger(args, 'chapter') }
+  }
+  if (targetKind === 'project' || targetKind === 'characters' || targetKind === 'story-blueprint') {
+    if (args.chapter !== undefined) invalid('property "chapter" is only valid for chapter assets')
+    return { kind: targetKind }
+  }
+  return invalid('property "targetKind" must name a supported novel asset')
+}
+
+function parseReadRequest(args: Record<string, unknown>): NovelReadRequest {
+  if (args.kind === 'asset') {
+    rejectUnexpected(args, ['kind', 'targetKind', 'chapter'])
+    return { kind: 'asset', target: targetFrom(args) }
+  }
+  if (args.kind === 'working-set') {
+    rejectUnexpected(args, ['kind', 'chapter'])
+    return args.chapter === undefined
+      ? { kind: 'working-set' }
+      : { kind: 'working-set', chapter: requiredInteger(args, 'chapter') }
+  }
+  if (args.kind === 'query') {
+    rejectUnexpected(args, ['kind', 'text', 'limit'])
+    const text = requiredString(args, 'text')
+    return args.limit === undefined
+      ? { kind: 'query', text }
+      : { kind: 'query', text, limit: requiredInteger(args, 'limit') }
+  }
+  return invalid('property "kind" must be "asset", "working-set", or "query"')
+}
+
+function parseApplyRequest(args: Record<string, unknown>): NovelApplyRequest {
+  if (args.kind === 'initialize') {
+    rejectUnexpected(args, [
+      'kind', 'projectId', 'title', 'language', 'genre', 'plannedChapters', 'targetWordsPerChapter',
+      'creativeStrategy', 'createdAt', 'updatedAt',
+    ])
+    return {
+      kind: 'initialize',
+      projectId: requiredString(args, 'projectId') as NovelProjectId,
+      title: requiredString(args, 'title'),
+      language: requiredString(args, 'language'),
+      genre: requiredString(args, 'genre'),
+      plannedChapters: requiredInteger(args, 'plannedChapters'),
+      targetWordsPerChapter: requiredInteger(args, 'targetWordsPerChapter'),
+      creativeStrategy: requiredString(args, 'creativeStrategy') as CreativeStrategy,
+      createdAt: requiredString(args, 'createdAt'),
+      updatedAt: requiredString(args, 'updatedAt'),
+    }
+  }
+  if (args.kind === 'replace') {
+    rejectUnexpected(args, [
+      'kind', 'targetKind', 'chapter', 'baseRevision', 'baseText', 'replacement', 'summary',
+    ])
+    return {
+      kind: 'replace', target: targetFrom(args),
+      baseRevision: requiredString(args, 'baseRevision') as Revision,
+      baseText: requiredString(args, 'baseText'),
+      replacement: requiredString(args, 'replacement'),
+      summary: requiredString(args, 'summary'),
+    }
+  }
+  return invalid('property "kind" must be "initialize" or "replace"')
+}
 
 function resolvedOptions(config: Config): NovelProjectOptions {
   return {
@@ -177,40 +230,45 @@ export function createNovelToolDefinitions(config: Config = {}): readonly [ToolD
   const options = resolvedOptions(config)
   const read = defineTool({
     name: 'novel_read',
-    description: 'Read a bounded, revisioned projection of the current Harness novel project.',
-    parameters: { request: { ...readRequest, required: true } },
+    description: 'Read a bounded, revisioned projection of the current Harness novel project. Pass kind and its branch fields directly; do not nest or stringify them.',
+    parameters: readParameters,
     output: {
       schema: { type: 'json' },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     },
     isConcurrencySafe: () => true,
     async execute(args, exec) {
+      const request = parseReadRequest(args)
       const value = await openNovelProject(workspaceRoot(exec.agent), options)
-        .read(args.request as NovelReadRequest, exec.signal)
+        .read(request, exec.signal)
       return value as unknown as JsonValue
     },
-    presentCall: args => ({
-      card: 'generic', title: args.request.kind === 'query' ? '查询小说上下文' : '读取小说上下文',
-      kind: args.request.kind === 'query' ? 'search' : 'read', rawInput: args.request,
-    }),
+    presentCall: args => {
+      const request = parseReadRequest(args)
+      return {
+        card: 'generic', title: request.kind === 'query' ? '查询小说上下文' : '读取小说上下文',
+        kind: request.kind === 'query' ? 'search' : 'read', rawInput: request,
+      }
+    },
   })
   const applyDefinition = defineTool({
     name: 'novel_apply_change',
-    description: 'Propose one revision-checked novel asset change. The user must approve it before execution.',
-    parameters: { request: { ...applyRequest, required: true } },
+    description: 'Propose one revision-checked novel asset change with shallow arguments. Initialize before any replacement. Native user approval is required before execution.',
+    parameters: applyParameters,
     output: {
       schema: { type: 'json' },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     },
     async execute(args, exec) {
+      const request = parseApplyRequest(args)
       const value = await openNovelProject(workspaceRoot(exec.agent), options)
-        .apply(args.request as NovelApplyRequest, exec.signal)
+        .apply(request, exec.signal)
       return value as unknown as JsonValue
     },
-    presentCall: args => presentNovelChange(args.request as NovelApplyRequest),
+    presentCall: args => presentNovelChange(parseApplyRequest(args)),
     presentResult: (args, result) => result.isError
       ? { card: 'generic', content: result.content }
-      : presentNovelChange(args.request as NovelApplyRequest),
+      : presentNovelChange(parseApplyRequest(args)),
   })
   return [read, applyDefinition]
 }
@@ -230,5 +288,17 @@ export const inject = ['tools']
  */
 export function apply(ctx: Context, config: Config = {}): void {
   for (const definition of createNovelToolDefinitions(config)) ctx.tools.register(definition)
+  if (scopeOf(ctx) !== undefined) {
+    if (ctx.agent === undefined) {
+      ctx.on('agent/created', ({ agent }) => {
+        ctx.effect(
+          () => agent.ctx.tools.restrict({ allow: ['novel_read', 'novel_apply_change'] }),
+          'dsh-ai-novel-writer.agent-tool-restriction',
+        )
+      })
+    } else {
+      ctx.tools.restrict({ allow: [] })
+    }
+  }
   ctx.on('tools/pre-execute', (exec, next) => novelApprovalGate(exec, next))
 }

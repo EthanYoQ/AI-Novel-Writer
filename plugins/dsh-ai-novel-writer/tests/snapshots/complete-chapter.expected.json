@@ -6,326 +6,121 @@
         "provider": "novel-snapshot",
         "model": "keyless"
       },
-      "system": "You are an AI agent powered by DeepSeek Harness.\n\nYou are AI 小说作家, a collaborative fiction-writing agent working in <workspace>.\n\nTreat the Harness novel project as the only writable story source. Before proposing a change, use novel_read to obtain the current asset text and revision. When initializing a project, generate one UUID and one ISO-8601 timestamp, use that timestamp for both createdAt and updatedAt, and include all three values in the proposal so the approval diff is exact. Discuss or draft the requested content, then call novel_apply_change for exactly one asset and wait for native user approval. Never claim that content was saved until the tool returns a CommitReceipt. If the revision is stale, read again and reconcile the user's intent instead of overwriting.\n\nAfter reading project settings, apply its creative strategy only to novel-writing workflow: auto：balance planning, drafting, and consistency checks for the current request; fluent-drafting：prefer continuous prose drafting with only the minimum plan needed; consistency-first：check established facts, character motives, and continuity before drafting; deep-planning：develop structure, causality, and chapter beats before prose. These choices change planning order and writing emphasis only; they never select an LLM provider or reasoning parameter.",
+      "system": "You are an AI agent powered by DeepSeek Harness.\n\nYou are AI 小说作家, a collaborative fiction-writing agent working in <workspace>.\n\nTreat the Harness novel project as the only writable story source. Pass every tool argument as a shallow JSON object: never nest arguments under request and never stringify an object. Before proposing a change, use novel_read to obtain the current asset text and revision. If that read reports that the project is not initialized, the only permitted mutation is initialize; never replace an asset before initialization succeeds. When initializing a project, generate one UUID and one ISO-8601 timestamp, use that timestamp for both createdAt and updatedAt, and include all three values in the proposal so the approval diff is exact. Discuss or draft the requested content, then call novel_apply_change for exactly one asset and wait for native user approval. If the conversation states that native approval is disabled or the session permission policy is never, explain that saving requires native approval and do not call novel_apply_change. If a tool rejects invalid arguments, explain the validation error once and stop that mutation instead of retrying the same invalid call. Never claim that content was saved until the tool returns a CommitReceipt. If the revision is stale, read again and reconcile the user's intent instead of overwriting.\n\nAfter reading project settings, apply its creative strategy only to novel-writing workflow: auto：balance planning, drafting, and consistency checks for the current request; fluent-drafting：prefer continuous prose drafting with only the minimum plan needed; consistency-first：check established facts, character motives, and continuity before drafting; deep-planning：develop structure, causality, and chapter beats before prose. These choices change planning order and writing emphasis only; they never select an LLM provider or reasoning parameter.",
       "tools": [
         {
           "name": "novel_apply_change",
-          "description": "Propose one revision-checked novel asset change. The user must approve it before execution.",
+          "description": "Propose one revision-checked novel asset change with shallow arguments. Initialize before any replacement. Native user approval is required before execution.",
           "parameters": {
             "type": "object",
             "properties": {
-              "request": {
-                "oneOf": [
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "const": "initialize"
-                      },
-                      "projectId": {
-                        "type": "string"
-                      },
-                      "title": {
-                        "type": "string"
-                      },
-                      "language": {
-                        "type": "string"
-                      },
-                      "genre": {
-                        "type": "string"
-                      },
-                      "plannedChapters": {
-                        "type": "integer"
-                      },
-                      "targetWordsPerChapter": {
-                        "type": "integer"
-                      },
-                      "creativeStrategy": {
-                        "type": "string",
-                        "enum": [
-                          "auto",
-                          "fluent-drafting",
-                          "consistency-first",
-                          "deep-planning"
-                        ]
-                      },
-                      "createdAt": {
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "projectId",
-                      "title",
-                      "language",
-                      "genre",
-                      "plannedChapters",
-                      "targetWordsPerChapter",
-                      "creativeStrategy",
-                      "createdAt",
-                      "updatedAt"
-                    ]
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "const": "replace"
-                      },
-                      "target": {
-                        "oneOf": [
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "project"
-                              }
-                            },
-                            "required": [
-                              "kind"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "characters"
-                              }
-                            },
-                            "required": [
-                              "kind"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "story-blueprint"
-                              }
-                            },
-                            "required": [
-                              "kind"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "chapter-blueprint"
-                              },
-                              "chapter": {
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "kind",
-                              "chapter"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "chapter-draft"
-                              },
-                              "chapter": {
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "kind",
-                              "chapter"
-                            ]
-                          }
-                        ]
-                      },
-                      "baseRevision": {
-                        "type": "string"
-                      },
-                      "baseText": {
-                        "type": "string"
-                      },
-                      "replacement": {
-                        "type": "string"
-                      },
-                      "summary": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "target",
-                      "baseRevision",
-                      "baseText",
-                      "replacement",
-                      "summary"
-                    ]
-                  }
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "initialize",
+                  "replace"
                 ]
+              },
+              "targetKind": {
+                "type": "string",
+                "enum": [
+                  "project",
+                  "characters",
+                  "story-blueprint",
+                  "chapter-blueprint",
+                  "chapter-draft"
+                ]
+              },
+              "chapter": {
+                "type": "integer"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              },
+              "genre": {
+                "type": "string"
+              },
+              "plannedChapters": {
+                "type": "integer"
+              },
+              "targetWordsPerChapter": {
+                "type": "integer"
+              },
+              "creativeStrategy": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "fluent-drafting",
+                  "consistency-first",
+                  "deep-planning"
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "baseRevision": {
+                "type": "string"
+              },
+              "baseText": {
+                "type": "string"
+              },
+              "replacement": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
               }
             },
             "required": [
-              "request"
+              "kind"
             ]
           }
         },
         {
           "name": "novel_read",
-          "description": "Read a bounded, revisioned projection of the current Harness novel project.",
+          "description": "Read a bounded, revisioned projection of the current Harness novel project. Pass kind and its branch fields directly; do not nest or stringify them.",
           "parameters": {
             "type": "object",
             "properties": {
-              "request": {
-                "oneOf": [
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "const": "asset"
-                      },
-                      "target": {
-                        "oneOf": [
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "project"
-                              }
-                            },
-                            "required": [
-                              "kind"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "characters"
-                              }
-                            },
-                            "required": [
-                              "kind"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "story-blueprint"
-                              }
-                            },
-                            "required": [
-                              "kind"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "chapter-blueprint"
-                              },
-                              "chapter": {
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "kind",
-                              "chapter"
-                            ]
-                          },
-                          {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "type": "string",
-                                "const": "chapter-draft"
-                              },
-                              "chapter": {
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "kind",
-                              "chapter"
-                            ]
-                          }
-                        ]
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "target"
-                    ]
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "const": "working-set"
-                      },
-                      "chapter": {
-                        "type": "integer"
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ]
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "const": "query"
-                      },
-                      "text": {
-                        "type": "string"
-                      },
-                      "limit": {
-                        "type": "integer"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "text"
-                    ]
-                  }
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "asset",
+                  "working-set",
+                  "query"
                 ]
+              },
+              "targetKind": {
+                "type": "string",
+                "enum": [
+                  "project",
+                  "characters",
+                  "story-blueprint",
+                  "chapter-blueprint",
+                  "chapter-draft"
+                ]
+              },
+              "chapter": {
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer"
               }
             },
             "required": [
-              "request"
+              "kind"
             ]
           }
         }
@@ -360,7 +155,7 @@
       "type": "tool/call",
       "callId": "chapter-01-init",
       "name": "novel_apply_change",
-      "request": {
+      "arguments": {
         "kind": "initialize",
         "projectId": "123e4567-e89b-42d3-a456-426614174000",
         "createdAt": "2026-08-16T00:00:00.000Z",
@@ -400,11 +195,9 @@
       "type": "tool/call",
       "callId": "chapter-01-read-characters",
       "name": "novel_read",
-      "request": {
+      "arguments": {
         "kind": "asset",
-        "target": {
-          "kind": "characters"
-        }
+        "targetKind": "characters"
       }
     },
     {
@@ -426,15 +219,13 @@
       "type": "tool/call",
       "callId": "chapter-01-write-characters",
       "name": "novel_apply_change",
-      "request": {
+      "arguments": {
         "kind": "replace",
-        "target": {
-          "kind": "characters"
-        },
         "baseRevision": "absent",
         "baseText": "",
         "replacement": "{\"characters\":[{\"id\":\"lin-xia\",\"name\":\"林夏\",\"role\":\"灯塔守望人\",\"summary\":\"能听见潮汐中的旧日回声。\",\"goal\":\"找回失踪的弟弟。\",\"relationships\":[],\"notes\":\"害怕深水，却从不离开灯塔。\"}]}",
-        "summary": "建立主要人物"
+        "summary": "建立主要人物",
+        "targetKind": "characters"
       }
     },
     {
@@ -464,11 +255,9 @@
       "type": "tool/call",
       "callId": "chapter-01-read-story",
       "name": "novel_read",
-      "request": {
+      "arguments": {
         "kind": "asset",
-        "target": {
-          "kind": "story-blueprint"
-        }
+        "targetKind": "story-blueprint"
       }
     },
     {
@@ -490,15 +279,13 @@
       "type": "tool/call",
       "callId": "chapter-01-write-story",
       "name": "novel_apply_change",
-      "request": {
+      "arguments": {
         "kind": "replace",
-        "target": {
-          "kind": "story-blueprint"
-        },
         "baseRevision": "absent",
         "baseText": "",
         "replacement": "{\"premise\":\"退潮后的海床会浮现来自未来的信件。\",\"themes\":[\"记忆\",\"选择\"],\"world\":\"被永夜潮汐包围的群岛。\",\"mainPlot\":\"林夏循着未来信件寻找失踪者。\",\"endingGoal\":\"林夏决定保留真实记忆并点亮全部灯塔。\"}",
-        "summary": "建立故事蓝图"
+        "summary": "建立故事蓝图",
+        "targetKind": "story-blueprint"
       }
     },
     {
@@ -528,12 +315,10 @@
       "type": "tool/call",
       "callId": "chapter-01-read-blueprint",
       "name": "novel_read",
-      "request": {
+      "arguments": {
         "kind": "asset",
-        "target": {
-          "kind": "chapter-blueprint",
-          "chapter": 1
-        }
+        "targetKind": "chapter-blueprint",
+        "chapter": 1
       }
     },
     {
@@ -556,16 +341,14 @@
       "type": "tool/call",
       "callId": "chapter-01-write-blueprint",
       "name": "novel_apply_change",
-      "request": {
+      "arguments": {
         "kind": "replace",
-        "target": {
-          "kind": "chapter-blueprint",
-          "chapter": 1
-        },
         "baseRevision": "absent",
         "baseText": "",
         "replacement": "{\"chapter\":1,\"title\":\"退潮来信\",\"purpose\":\"让林夏收到第一封未来信件。\",\"beats\":[\"夜潮退去\",\"海床显出信匣\",\"信上写着弟弟明日的求救\"],\"characterIds\":[\"lin-xia\"],\"continuityNotes\":[\"灯塔主灯在午夜熄灭\"],\"status\":\"planned\"}",
-        "summary": "建立第一章蓝图"
+        "summary": "建立第一章蓝图",
+        "targetKind": "chapter-blueprint",
+        "chapter": 1
       }
     },
     {
@@ -596,7 +379,7 @@
       "type": "tool/call",
       "callId": "chapter-01-read-working-set",
       "name": "novel_read",
-      "request": {
+      "arguments": {
         "kind": "working-set",
         "chapter": 1
       }
@@ -671,16 +454,14 @@
       "type": "tool/call",
       "callId": "chapter-01-write-draft",
       "name": "novel_apply_change",
-      "request": {
+      "arguments": {
         "kind": "replace",
-        "target": {
-          "kind": "chapter-draft",
-          "chapter": 1
-        },
         "baseRevision": "absent",
         "baseText": "",
         "replacement": "# 退潮来信\n\n午夜，灯塔的主灯第一次熄灭。\n\n林夏在退去的潮水里捡到一封尚未寄出的信。\n",
-        "summary": "起草第一章"
+        "summary": "起草第一章",
+        "targetKind": "chapter-draft",
+        "chapter": 1
       }
     },
     {
@@ -711,7 +492,7 @@
       "type": "tool/call",
       "callId": "chapter-01-readback",
       "name": "novel_read",
-      "request": {
+      "arguments": {
         "kind": "working-set",
         "chapter": 1
       }
@@ -820,7 +601,7 @@
       "type": "tool/call",
       "callId": "chapter-01-restart-read",
       "name": "novel_read",
-      "request": {
+      "arguments": {
         "kind": "working-set",
         "chapter": 1
       }
