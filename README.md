@@ -39,7 +39,7 @@
 >
 > 同一个 Release 使用五项资产合同：`ai-novel-writer-setup-0.8.4.exe`、`ai-novel-writer-setup-0.8.4.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.4-installer.dmg` 与 `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`。
 
-## DeepSeek Harness 插件版（开发预览）
+## 新增额外支持DeepSeek Harness 插件版（开发预览）
 
 除了 Windows 与 macOS 桌面版，本仓库还在 [`codex/dsh-ai-novel-plugin`](https://github.com/EthanYoQ/AI-Novel-Writer/tree/codex/dsh-ai-novel-plugin) 分支维护 `@ethanyoq/dsh-ai-novel-writer` `0.1.0` 开发预览。它把项目设置、人物设定、故事蓝图、章节蓝图和章节正文带入 DeepSeek Harness Web，并通过对话中的单文件审批卡片逐项保存；插件使用独立的 Harness 小说项目格式，不读取桌面版 `.vela` 项目。
 
