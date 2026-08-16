@@ -25,7 +25,7 @@ describe('novel context Host RPC', () => {
       relationships: [], notes: '',
     }] }, null, 2)}\n`
     const receipt = await project.apply({
-      kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent',
       replacement: characters, summary: '建立人物设定',
     }, signal)
     const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)

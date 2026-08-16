@@ -60,7 +60,7 @@ describe('NovelProject commit semantics', () => {
 
     const receipt = await project.apply({
       kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 },
-      baseRevision: 'absent', baseText: '', replacement: '# 第一章\n', summary: '写入第一章',
+      baseRevision: 'absent', replacement: '# 第一章\n', summary: '写入第一章',
     }, controller.signal)
 
     await expect(readFile(join(root, 'chapters', '0001.md'), 'utf8')).resolves.toBe('# 第一章\n')

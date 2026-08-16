@@ -20,7 +20,6 @@ function proposalFromPrompt(text: string): NovelApplyRequest {
   if (value.kind !== 'replace'
     || !['project', 'characters', 'story-blueprint', 'chapter-blueprint', 'chapter-draft'].includes(String(value.targetKind))
     || typeof value.baseRevision !== 'string'
-    || typeof value.baseText !== 'string'
     || typeof value.replacement !== 'string'
     || typeof value.summary !== 'string') throw new Error('proposal prompt contained invalid tool arguments')
   const targetKind = value.targetKind as 'project' | 'characters' | 'story-blueprint' | 'chapter-blueprint' | 'chapter-draft'
@@ -31,7 +30,6 @@ function proposalFromPrompt(text: string): NovelApplyRequest {
     kind: 'replace',
     target,
     baseRevision: value.baseRevision as Revision,
-    baseText: value.baseText,
     replacement: value.replacement,
     summary: value.summary,
   }

@@ -20,21 +20,21 @@ describe('NovelProject bounded reads', () => {
     await initialize(root)
     const writer = openNovelProject(root)
     await writer.apply({
-      kind: 'replace', target: { kind: 'story-blueprint' }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'story-blueprint' }, baseRevision: 'absent',
       replacement: JSON.stringify({
         premise: '失联飞船在返航时收到来自未来的求救。', themes: ['选择', '记忆'],
         world: '近未来太阳系。', mainPlot: '船员追查信号来源。', endingGoal: '决定是否改变历史。',
       }), summary: '建立故事蓝图',
     }, signal)
     await writer.apply({
-      kind: 'replace', target: { kind: 'chapter-blueprint', chapter: 1 }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'chapter-blueprint', chapter: 1 }, baseRevision: 'absent',
       replacement: JSON.stringify({
         chapter: 1, title: '回声', purpose: '发现未来信号', beats: ['接收信号', '识别自己的声音'],
         characterIds: [], continuityNotes: ['飞船时钟慢七秒'], status: 'planned',
       }), summary: '建立第一章蓝图',
     }, signal)
     await writer.apply({
-      kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent',
       replacement: '# 回声\n\n求救信号来自七小时后的飞船。\n', summary: '起草第一章',
     }, signal)
 
@@ -64,11 +64,11 @@ describe('NovelProject bounded reads', () => {
     await initialize(root)
     const project = openNovelProject(root)
     await project.apply({
-      kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent',
       replacement: '灯塔第一次亮起。\n灯塔照见了归航船。\n', summary: '写入第一章',
     }, signal)
     await project.apply({
-      kind: 'replace', target: { kind: 'chapter-draft', chapter: 2 }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'chapter-draft', chapter: 2 }, baseRevision: 'absent',
       replacement: '第二座灯塔没有影子。\n', summary: '写入第二章',
     }, signal)
     await mkdir(join(root, '.vela'), { recursive: true })
@@ -97,7 +97,7 @@ describe('NovelProject bounded reads', () => {
     await initialize(root)
     const project = openNovelProject(root)
     await project.apply({
-      kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent',
       replacement: `灯塔${'很远'.repeat(160)}\n`, summary: '写入长行',
     }, signal)
 

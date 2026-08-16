@@ -6,7 +6,7 @@ import {
   NovelWorkbenchDisconnectedError,
   type NovelInitializationIdentity,
 } from '../src/client/workbench-store.ts'
-import type { NovelProjectId } from '../src/types.ts'
+import type { NovelProjectId, Revision } from '../src/types.ts'
 
 const WORKSPACE_ID = WorkspaceId('workspace-a')
 const SESSION_ID = SessionId('session-a')
@@ -78,6 +78,81 @@ describe('novel workbench initialization', () => {
 
     expect(prompt).toHaveBeenCalledOnce()
     expect(String(prompt.mock.calls[0]?.[1])).toContain('没有额外补充要求')
+  })
+
+  it('opens the generated project settings with visible authoritative fields after approval', async () => {
+    const revision = 'b'.repeat(64) as Revision
+    const projectText = `${JSON.stringify({
+      formatVersion: 1,
+      kind: 'harness-novel-project',
+      ...IDENTITY,
+      title: '雾海问道',
+      language: 'zh-CN',
+      genre: '玄幻',
+      plannedChapters: 12,
+      targetWordsPerChapter: 2100,
+      creativeStrategy: 'consistency-first',
+    }, null, 2)}\n`
+    const readyProject = {
+        status: 'ready',
+        project: {
+          projectId: IDENTITY.projectId,
+          title: '雾海问道', language: 'zh-CN', genre: '玄幻', plannedChapters: 12,
+          targetWordsPerChapter: 2100, creativeStrategy: 'consistency-first', updatedAt: IDENTITY.updatedAt,
+        },
+        progress: { selectedChapter: 1, plannedChapters: 12, status: 'unplanned', draftPresent: false, draftBytes: 0 },
+        characters: [], storyBlueprint: null, chapterBlueprint: null, draft: null, omittedSources: [],
+      } as const
+    const read = vi.fn()
+      .mockResolvedValueOnce({ status: 'not-initialized' })
+      .mockResolvedValue(readyProject)
+    const controller = new NovelWorkbenchController({
+      read,
+      readAsset: vi.fn().mockResolvedValue({
+        target: { kind: 'project' }, revision, text: projectText,
+        bytes: new TextEncoder().encode(projectText).byteLength,
+      }),
+      prompt: vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } }),
+    }, vi.fn(), () => IDENTITY)
+    controller.setTarget({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, agentPreset: 'ai-novel-writer', approval: 'ask' })
+    await controller.open()
+    await controller.generateInitialization()
+    controller.novelApplySettled({
+      isError: false,
+      code: undefined,
+      newRevision: revision,
+      attribution: {
+        kind: 'initialize',
+        requestJson: JSON.stringify({ ...IDENTITY, title: '雾海问道' }),
+      },
+    })
+    controller.generationTurnSettled()
+
+    await controller.refresh()
+
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: {
+        kind: 'project',
+        baseRevision: revision,
+        draft: { title: '雾海问道', genre: '玄幻', targetWordsPerChapter: '2100' },
+        generation: { phase: 'applied', message: expect.stringContaining('上方字段是磁盘中的最终内容') },
+      },
+    })
+    expect(controller.currentGenerationCorrelationMarker()).toBeUndefined()
+
+    controller.backToAssets()
+    await controller.refresh()
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', screen: { kind: 'root' } })
+
+    controller.setTarget({
+      workspaceId: WorkspaceId('workspace-b'),
+      sessionId: SessionId('session-b'),
+      agentPreset: 'ai-novel-writer',
+      approval: 'ask',
+    })
+    await controller.whenIdle()
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', screen: { kind: 'root' } })
   })
 
   it('locks every manual and generated initialize path while generation awaits reconciliation', async () => {

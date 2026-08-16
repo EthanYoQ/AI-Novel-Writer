@@ -252,6 +252,7 @@ function AssetGenerationPanel({
       <h4 id={`ai-novel-generate-${screen.kind}`}>AI 生成{label}</h4>
       <p>只会生成当前资产，并通过对话展示原生审批。</p>
     </div>
+    <p className="aiNovelContextMuted">原生审批就是对话中的单文件差异卡片。点击“允许一次”后会立即保存并回填本页字段，不会再出现第二次审批。</p>
     <label className="aiNovelWorkbenchField">
       <span>补充要求（可选）</span>
       <textarea
@@ -405,6 +406,7 @@ export function NovelWorkbenchBody({
               <h4 id="ai-novel-generate-initialization">AI 生成项目设置</h4>
               <p>描述题材与主角，当前模型会生成一份初始化提案，并通过对话展示原生审批。</p>
             </div>
+            <p className="aiNovelContextMuted">原生审批就是对话中的单文件差异卡片。点击“允许一次”后会创建项目并回填本页字段，不会再出现第二次审批。</p>
             <label className="aiNovelWorkbenchField"><span>生成要求（可选）</span><textarea
               aria-label="项目设置 AI 生成要求"
               value={generation.brief}

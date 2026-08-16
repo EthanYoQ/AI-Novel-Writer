@@ -128,10 +128,6 @@ const applyParameters = {
     type: 'string',
     description: 'Required only when kind is replace. Copy the revision from novel_read; use absent for a missing non-manifest asset.',
   },
-  baseText: {
-    type: 'string',
-    description: 'Required only when kind is replace. Copy text from novel_read; use an empty string with revision absent.',
-  },
   replacement: {
     type: 'string',
     description: 'Required only when kind is replace. The complete replacement text for exactly one asset.',
@@ -212,12 +208,11 @@ function parseApplyRequest(args: Record<string, unknown>): NovelApplyRequest {
   }
   if (args.kind === 'replace') {
     rejectUnexpected(args, [
-      'kind', 'targetKind', 'chapter', 'baseRevision', 'baseText', 'replacement', 'summary',
+      'kind', 'targetKind', 'chapter', 'baseRevision', 'replacement', 'summary',
     ])
     return {
       kind: 'replace', target: targetFrom(args),
       baseRevision: requiredString(args, 'baseRevision') as Revision,
-      baseText: requiredString(args, 'baseText'),
       replacement: requiredString(args, 'replacement'),
       summary: requiredString(args, 'summary'),
     }
@@ -268,7 +263,7 @@ function commitReceiptMeta(value: JsonValue): JsonValue {
  * Render one proposed mutation as a deterministic Harness diff card.
  *
  * @param request Initialization or one-asset replacement proposed by the model.
- * @returns A presentation containing the affected project-relative location and before/after text.
+ * @returns A presentation containing the affected project-relative location and complete final text.
  */
 export function presentNovelChange(request: NovelApplyRequest) {
   if (request.kind === 'initialize') {
@@ -283,7 +278,7 @@ export function presentNovelChange(request: NovelApplyRequest) {
     card: 'diff' as const, title: request.summary,
     diffs: [{
       path,
-      oldText: request.baseRevision === 'absent' ? null : displayReplacement(request.target, request.baseText),
+      oldText: null,
       newText: displayReplacement(request.target, request.replacement),
     }],
     locations: [{ path }],
@@ -338,7 +333,7 @@ export function createNovelToolDefinitions(config: Config = {}): readonly [ToolD
   })
   const applyDefinition = defineTool({
     name: 'novel_apply_change',
-    description: 'Propose one revision-checked novel asset change with shallow arguments. Use initialize only when novel_read reports NOT_INITIALIZED. For every existing project, including project-setting changes, use replace. Missing non-manifest assets also use replace with baseRevision absent and baseText empty. Never mix branch fields: initialize fields: kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, updatedAt; replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, baseText, replacement, summary. Native user approval is required before execution.',
+    description: 'Propose one revision-checked novel asset change with shallow arguments. Use initialize only when novel_read reports NOT_INITIALIZED. For every existing project, including project-setting changes, use replace. Missing non-manifest assets also use replace with baseRevision absent. Never mix branch fields: initialize fields: kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, updatedAt; replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, replacement, summary. Native user approval is required before execution.',
     parameters: applyParameters,
     output: {
       schema: { type: 'json' },

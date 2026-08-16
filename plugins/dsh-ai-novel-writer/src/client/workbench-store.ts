@@ -310,6 +310,13 @@ function generationBlocksMutation(screen: NovelAssetEditorScreen): boolean {
   return generationPending(screen) || generationState(screen).phase === 'reconciling'
 }
 
+function generationAfterAssetEdit(screen: NovelAssetEditorScreen): NovelAssetGenerationState {
+  const generation = generationState(screen)
+  return generation.phase === 'applied'
+    ? { brief: generation.brief, phase: 'editing' }
+    : generation
+}
+
 function generationTargetLabel(target: NovelWorkbenchEditableTarget): string {
   switch (target.kind) {
     case 'project': return '项目设置'
@@ -322,7 +329,7 @@ function generationTargetLabel(target: NovelWorkbenchEditableTarget): string {
 
 function generationSchema(target: NovelWorkbenchEditableTarget): string {
   switch (target.kind) {
-    case 'project': return '完整严格 JSON：formatVersion、kind、projectId、title、language、genre、plannedChapters、targetWordsPerChapter、creativeStrategy、createdAt、updatedAt。保留 formatVersion、kind、projectId、createdAt，只更新用户要求涉及的设置；updatedAt 必须更新为可往返解析的规范 UTC 时间，严格符合 YYYY-MM-DDTHH:mm:ss.sssZ。'
+    case 'project': return '完整严格 JSON：formatVersion、kind、projectId、title、language、genre、plannedChapters、targetWordsPerChapter、creativeStrategy、createdAt、updatedAt。保留 formatVersion、kind、projectId、createdAt；根据要求与上下文重新生成其余项目设置。本次生成至少修改一个用户可见的项目设置字段（title、language、genre、plannedChapters、targetWordsPerChapter、creativeStrategy）；只修改 updatedAt 是无效生成。updatedAt 必须更新为可往返解析的规范 UTC 时间，严格符合 YYYY-MM-DDTHH:mm:ss.sssZ。'
     case 'characters': return '完整严格 JSON：顶层只有 characters；每个人物只能包含 id、name、role、summary、goal、relationships、notes，relationships 项只能包含 characterId、type、summary。'
     case 'story-blueprint': return '完整严格 JSON：只包含 premise、themes、world、mainPlot、endingGoal；themes 是文本数组。'
     case 'chapter-blueprint': return `完整严格 JSON：只包含 chapter、title、purpose、beats、characterIds、continuityNotes、status；chapter 必须是 ${target.chapter}，三个列表字段都是文本数组。`
@@ -365,7 +372,7 @@ function initializationGenerationPrompt(
     plannedChapters: '<正整数>', targetWordsPerChapter: '<正整数>',
     creativeStrategy: '<auto | fluent-drafting | consistency-first | deep-planning>',
   }, null, 2)
-  return `请根据用户要求生成当前 Harness 小说项目的完整项目设置。\n\n用户要求：\n${resolvedGenerationBrief(brief)}\n\n当前工作台中的项目设置草稿仅作为用户意图参考，尚未写入磁盘：\n${JSON.stringify(draft, null, 2)}\n\n硬性执行顺序：\n1. 恰好调用一次 novel_read，读取 working-set，并确认结果为 NOT_INITIALIZED。若结果不同，停止且不得调用 novel_apply_change。\n2. 仅当第 1 步确认 NOT_INITIALIZED 时，恰好调用一次 novel_apply_change，kind 必须是 initialize，使用浅层参数，不要嵌套 request。\n3. projectId、createdAt、updatedAt 必须逐字使用下列固定值；createdAt 必须等于 updatedAt，时间格式严格为 YYYY-MM-DDTHH:mm:ss.sssZ。其余占位字段按要求生成：\n${fixed}\n4. 等待 Harness 原生审批。只有收到 CommitReceipt 后才能声明保存成功；拒绝、取消或失败时不得重试写入。`
+  return `请根据用户要求生成当前 Harness 小说项目的完整项目设置。\n\n用户要求：\n${resolvedGenerationBrief(brief)}\n\n当前工作台中的项目设置草稿仅作为用户意图参考，尚未写入磁盘：\n${JSON.stringify(draft, null, 2)}\n\n硬性执行顺序：\n1. 恰好调用一次 novel_read，读取 working-set，并确认结果为 NOT_INITIALIZED。若结果不同，停止且不得调用 novel_apply_change。\n2. 仅当第 1 步确认 NOT_INITIALIZED 时，恰好调用一次 novel_apply_change，kind 必须是 initialize，使用浅层参数，不要嵌套 request。\n3. projectId、createdAt、updatedAt 必须逐字使用下列固定值；createdAt 必须等于 updatedAt，时间格式严格为 YYYY-MM-DDTHH:mm:ss.sssZ。其余占位字段按要求生成：\n${fixed}\n4. novel_apply_change 会等待 Harness 原生审批结果。只有收到 CommitReceipt 后才能声明保存成功；收到 CommitReceipt 说明原生审批已经完成，最终回复不得再说“等待审批”。拒绝、取消或失败时不得重试写入。`
 }
 
 function generationContext(state: Extract<NovelWorkbenchState, { readonly status: 'ready' }>): string {
@@ -429,7 +436,6 @@ function assetGenerationPrompt(
     kind: 'replace',
     ...toolTarget,
     baseRevision: screen.baseRevision,
-    baseText: screen.originalText,
     replacement: '<按下述 schema 生成的完整资产文本>',
     summary: `AI 生成${generationTargetLabel(target)}`,
   }, null, 2)
@@ -456,7 +462,7 @@ ${read}
 3. 根据 novel_read 返回的完整 text 与上下文生成完整替换文本。格式要求：${generationSchema(target)}
 4. 仅当第 2 步通过时，恰好调用一次 novel_apply_change。使用浅层参数，不要嵌套 request，不要把对象 stringify：
 ${apply}
-5. 第 4 步示例已经显式包含编辑器读取到的 baseRevision 和 baseText；本次 novel_read 与第 2 步一致时必须逐字段保留它们，不得省略。提交后等待 Harness 原生审批；只有收到 CommitReceipt 才能声明保存成功。审批拒绝、取消或工具失败时不得重试写入。`
+5. 第 4 步示例已经显式包含编辑器读取到的 baseRevision；本次 novel_read 与第 2 步一致时必须保留它，不得省略。不要在工具参数中重抄 baseText；SHA-256 revision 是唯一的并发检查值，审批卡会展示完整 replacement。novel_apply_change 会等待 Harness 原生审批结果；只有收到 CommitReceipt 才能声明保存成功。收到 CommitReceipt 说明原生审批已经完成，最终回复不得再说“等待审批”。审批拒绝、取消或工具失败时不得重试写入。`
 }
 
 /**
@@ -721,6 +727,7 @@ export class NovelWorkbenchController {
       replacement: undefined,
       preview: undefined,
       message: undefined,
+      generation: generationAfterAssetEdit(screen),
     })
   }
 
@@ -743,6 +750,7 @@ export class NovelWorkbenchController {
       replacement: undefined,
       preview: undefined,
       message: undefined,
+      generation: generationAfterAssetEdit(screen),
     })
   }
 
@@ -766,6 +774,7 @@ export class NovelWorkbenchController {
       replacement: undefined,
       preview: undefined,
       message: undefined,
+      generation: generationAfterAssetEdit(screen),
     })
   }
 
@@ -787,6 +796,7 @@ export class NovelWorkbenchController {
       replacement: undefined,
       preview: undefined,
       message: undefined,
+      generation: generationAfterAssetEdit(screen),
     })
   }
 
@@ -836,7 +846,7 @@ export class NovelWorkbenchController {
     this.#cancelRead()
     this.#setReadyScreen({
       ...screen,
-      generation: { ...currentGeneration, phase: 'submitting', message: undefined },
+      generation: { brief: currentGeneration.brief, phase: 'submitting' },
     })
     const request = ++this.#promptRequest
     const done = this.#submitGeneration(request, this.#target.sessionId, prompt)
@@ -945,7 +955,7 @@ export class NovelWorkbenchController {
               ? serializeChapterBlueprint(screen.chapter, screen.draft)
               : serializeChapterDraft(screen.text)
       const target = this.#screenTarget(screen)
-      const prompt = assetProposalPrompt(target, screen.baseRevision, screen.originalText, replacement, screen.summary)
+      const prompt = assetProposalPrompt(target, screen.baseRevision, replacement, screen.summary)
       this.#setReadyScreen({ ...screen, phase: 'preview', replacement, preview: { prompt, replacement }, message: undefined })
     } catch (error) {
       this.#setReadyScreen({ ...screen, phase: 'error', message: error instanceof Error ? error.message : String(error) })
@@ -1390,7 +1400,24 @@ export class NovelWorkbenchController {
             && pending.expectedReplacement !== undefined
             && result.text === pending.expectedReplacement)) {
           this.#staleAsset = undefined
-          this.#loadAsset(result, { kind: 'success', message: '重新读取完成：已载入批准后的模型生成资产。' })
+          const message = `模型生成已批准并载入 revision ${result.revision.slice(0, 12)}；上方字段是磁盘中的最终内容。`
+          this.#loadAsset(result, {
+            kind: 'success',
+            message,
+          })
+          const loaded = this.#assetScreen()
+          if (loaded !== undefined && sameAssetTarget(loaded, result.target)) {
+            this.#setReadyScreen({
+              ...loaded,
+              generation: {
+                brief: pending.brief,
+                phase: 'applied',
+                message,
+                expectedRevision: result.revision,
+                expectedReplacement: result.text,
+              },
+            })
+          }
         } else if (pending.expectedReplacement === undefined && result.revision === current.baseRevision) {
           this.#setReadyScreen({
             ...current,
@@ -1502,6 +1529,38 @@ export class NovelWorkbenchController {
     this.#activeRead = active
     await done
     if (this.#activeRead === active) this.#activeRead = undefined
+    const generatedInitialization = this.#initializationGeneration
+    if (this.#disposed
+      || this.#state.status !== 'ready'
+      || generatedInitialization.phase !== 'reconciling'
+      || generatedInitialization.expectedRevision === undefined) return
+    await this.#startAssetRead({ kind: 'project' }, 'open')
+    const project = this.#assetScreen()
+    if (project?.kind !== 'project') return
+    this.#initializationGeneration = { brief: '', phase: 'editing' }
+    this.#generationCorrelationMarker = undefined
+    if (project.baseRevision !== generatedInitialization.expectedRevision) {
+      this.#setReadyScreen({
+        ...project,
+        generation: {
+          brief: generatedInitialization.brief,
+          phase: 'error',
+          message: '项目已初始化，但磁盘 revision 与本次模型生成回执不一致。请核对对话中的工具结果。',
+        },
+      })
+      return
+    }
+    const message = `模型生成已批准并载入 revision ${project.baseRevision.slice(0, 12)}；上方字段是磁盘中的最终内容。`
+    this.#setReadyScreen({
+      ...project,
+      generation: {
+        brief: generatedInitialization.brief,
+        phase: 'applied',
+        message,
+        expectedRevision: project.baseRevision,
+        expectedReplacement: project.originalText,
+      },
+    }, { kind: 'success', message })
   }
 
   async #settleRead(request: number, target: NovelWorkbenchTarget, signal: AbortSignal): Promise<void> {
@@ -1896,6 +1955,7 @@ export class NovelWorkbenchController {
       replacement: undefined,
       preview: undefined,
       message: undefined,
+      generation: generationAfterAssetEdit(screen),
     })
   }
 

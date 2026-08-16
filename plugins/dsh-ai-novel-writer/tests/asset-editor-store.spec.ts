@@ -6,6 +6,7 @@ import {
   type NovelApplyOutcome,
   type NovelWorkbenchPort,
 } from '../src/client/workbench-store.ts'
+import type { NovelWorkbenchEditableTarget } from '../src/client/asset-editor.ts'
 import type { NovelAssetReadWireResult } from '../src/context-types.ts'
 import type { NovelProjectId, Revision } from '../src/types.ts'
 
@@ -14,6 +15,14 @@ const SESSION_ID = SessionId('session-a')
 const PROJECT_ID = '123e4567-e89b-42d3-a456-426614174000' as NovelProjectId
 const REVISION_A = 'a'.repeat(64) as Revision
 const REVISION_B = 'b'.repeat(64) as Revision
+
+interface ApprovedGenerationCase {
+  readonly label: string
+  readonly target: NovelWorkbenchEditableTarget
+  readonly initial: NovelAssetReadWireResult
+  readonly final: NovelAssetReadWireResult
+  readonly visible: Record<string, unknown>
+}
 
 const manifest = (title: string, revision: Revision = REVISION_A): NovelAssetReadWireResult => {
   const text = `${JSON.stringify({
@@ -122,7 +131,8 @@ describe('novel workbench asset editing', () => {
     expect(submittedPrompt).toContain(`"targetKind": "${target.kind}"`)
     expect(submittedPrompt).toContain(`编辑器读取时的 revision：${asset.revision}`)
     expect(submittedPrompt).toContain(`"baseRevision": ${JSON.stringify(asset.revision)}`)
-    expect(submittedPrompt).toContain(`"baseText": ${JSON.stringify(asset.text)}`)
+    expect(submittedPrompt).not.toContain('"baseText"')
+    expect(submittedPrompt).toContain('SHA-256 revision 是唯一的并发检查值')
     expect(submittedPrompt).toContain(schemaEvidence)
     expect(controller.getSnapshot()).toMatchObject({
       status: 'ready',
@@ -136,6 +146,7 @@ describe('novel workbench asset editing', () => {
         },
       },
     })
+
   })
 
   it('uses a dirty local draft as generation guidance without requiring a separate manual proposal', async () => {
@@ -160,6 +171,22 @@ describe('novel workbench asset editing', () => {
         },
       },
     })
+
+  })
+
+  it('requires a visible project-settings change and treats CommitReceipt as completed approval', async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = targetController(vi.fn().mockResolvedValue(manifest('潮汐来信')), prompt)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'project' })
+
+    await controller.generateAsset()
+
+    const submittedPrompt = String(prompt.mock.calls[0]?.[1])
+    expect(submittedPrompt).toContain('至少修改一个用户可见的项目设置字段')
+    expect(submittedPrompt).toContain('只修改 updatedAt 是无效生成')
+    expect(submittedPrompt).toContain('收到 CommitReceipt 说明原生审批已经完成')
+    expect(submittedPrompt).toContain('不得再说“等待审批”')
   })
 
   it('projects dirty character guidance with domain fields instead of editor-only names', async () => {
@@ -322,8 +349,158 @@ describe('novel workbench asset editing', () => {
       screen: {
         kind: 'story-blueprint', phase: 'clean', baseRevision: REVISION_B,
         draft: { premise: generated.premise },
+        generation: {
+          phase: 'applied',
+          message: `模型生成已批准并载入 revision ${REVISION_B.slice(0, 12)}；上方字段是磁盘中的最终内容。`,
+        },
       },
-      readFeedback: { kind: 'success', message: '重新读取完成：已载入批准后的模型生成资产。' },
+      readFeedback: {
+        kind: 'success',
+        message: `模型生成已批准并载入 revision ${REVISION_B.slice(0, 12)}；上方字段是磁盘中的最终内容。`,
+      },
+    })
+
+    controller.updateStoryBlueprint({ premise: '用户随后继续修改。' })
+
+    const edited = controller.getSnapshot()
+    if (edited.status !== 'ready' || edited.screen.kind !== 'story-blueprint') {
+      throw new Error('story editor was not retained after the local edit')
+    }
+    expect(edited.screen).toMatchObject({
+      dirty: true,
+      draft: { premise: '用户随后继续修改。' },
+    })
+    expect(edited.screen.generation).toEqual({ brief: '生成故事蓝图', phase: 'editing' })
+  })
+
+  it('does not reuse an applied revision to certify a later generation that produced no tool call', async () => {
+    const generated = {
+      premise: '林凡追查父亲失踪。', themes: ['选择'], world: '青石山。',
+      mainPlot: '木牌引向问道碑。', endingGoal: '理解力量的代价。',
+    }
+    const canonical = `${JSON.stringify(generated, null, 2)}\n`
+    const readAsset = vi.fn()
+      .mockResolvedValueOnce({ target: { kind: 'story-blueprint' }, revision: 'absent', text: '', bytes: 0 })
+      .mockResolvedValue({
+        target: { kind: 'story-blueprint' }, revision: REVISION_B, text: canonical,
+        bytes: new TextEncoder().encode(canonical).byteLength,
+      })
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = targetController(readAsset, prompt)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'story-blueprint' })
+
+    await controller.generateAsset()
+    controller.novelApplySettled({
+      isError: false,
+      code: undefined,
+      newRevision: REVISION_B,
+      attribution: {
+        kind: 'replace', targetKind: 'story-blueprint', baseRevision: 'absent',
+        replacement: canonical,
+      },
+    })
+    await controller.refresh()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready', screen: { kind: 'story-blueprint', generation: { phase: 'applied' } },
+    })
+
+    await controller.generateAsset()
+    controller.generationTurnSettled()
+    await controller.refresh()
+
+    expect(prompt).toHaveBeenCalledTimes(2)
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: {
+        kind: 'story-blueprint',
+        generation: { phase: 'error', message: expect.stringContaining('未产生可归因的修改') },
+      },
+    })
+  })
+
+  it.each((() => {
+    const finalCharacters = `${JSON.stringify({ characters: [{
+      id: 'lin', name: '林晚', role: '主角', summary: '追查旧案', goal: '找到真相', relationships: [], notes: '',
+    }] }, null, 2)}\n`
+    const finalStory = `${JSON.stringify({
+      premise: '青铜铃指向雾海。', themes: ['选择'], world: '海港城。',
+      mainPlot: '追查潮汐站。', endingGoal: '公开真相。',
+    }, null, 2)}\n`
+    const finalBlueprint = `${JSON.stringify({
+      chapter: 2, title: '雾海铃声', purpose: '建立线索', beats: ['听见铃声'],
+      characterIds: ['lin'], continuityNotes: ['青铜铃首次出现'], status: 'planned',
+    }, null, 2)}\n`
+    const finalDraft = '# 第二章 雾海铃声\n\n青铜铃在雾中响起。\n'
+    const wire = (
+      target: NovelWorkbenchEditableTarget,
+      revision: Revision,
+      text: string,
+    ): NovelAssetReadWireResult => ({
+      target, revision, text, bytes: new TextEncoder().encode(text).byteLength,
+    })
+    return [
+      {
+        label: '项目设置', target: { kind: 'project' },
+        initial: manifest('潮汐来信'), final: manifest('雾海问道', REVISION_B),
+        visible: { kind: 'project', draft: { title: '雾海问道' } },
+      },
+      {
+        label: '人物设定', target: { kind: 'characters' },
+        initial: wire({ kind: 'characters' }, REVISION_A, charactersText),
+        final: wire({ kind: 'characters' }, REVISION_B, finalCharacters),
+        visible: { kind: 'characters', characters: [{ name: '林晚' }] },
+      },
+      {
+        label: '故事蓝图', target: { kind: 'story-blueprint' },
+        initial: wire({ kind: 'story-blueprint' }, 'absent', ''),
+        final: wire({ kind: 'story-blueprint' }, REVISION_B, finalStory),
+        visible: { kind: 'story-blueprint', draft: { premise: '青铜铃指向雾海。' } },
+      },
+      {
+        label: '章节蓝图', target: { kind: 'chapter-blueprint', chapter: 2 },
+        initial: wire({ kind: 'chapter-blueprint', chapter: 2 }, 'absent', ''),
+        final: wire({ kind: 'chapter-blueprint', chapter: 2 }, REVISION_B, finalBlueprint),
+        visible: { kind: 'chapter-blueprint', chapter: 2, draft: { title: '雾海铃声' } },
+      },
+      {
+        label: '章节正文', target: { kind: 'chapter-draft', chapter: 2 },
+        initial: wire({ kind: 'chapter-draft', chapter: 2 }, 'absent', ''),
+        final: wire({ kind: 'chapter-draft', chapter: 2 }, REVISION_B, finalDraft),
+        visible: { kind: 'chapter-draft', chapter: 2, text: finalDraft },
+      },
+    ] satisfies readonly ApprovedGenerationCase[]
+  })())('loads the approved $label generation into its visible editor fields', async ({ target, initial, final, visible }) => {
+    const readAsset = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(final)
+    const controller = targetController(
+      readAsset,
+      vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } }),
+    )
+    await controller.whenIdle()
+    await controller.openAsset(target)
+    await controller.generateAsset()
+    controller.novelApplySettled({
+      isError: false,
+      code: undefined,
+      newRevision: final.revision,
+      attribution: {
+        kind: 'replace',
+        targetKind: target.kind,
+        ...('chapter' in target ? { chapter: target.chapter } : {}),
+        baseRevision: initial.revision,
+        replacement: final.text,
+      },
+    })
+
+    await controller.refresh()
+
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: {
+        ...visible,
+        baseRevision: final.revision,
+        generation: { phase: 'applied', message: expect.stringContaining('上方字段是磁盘中的最终内容') },
+      },
     })
   })
 
@@ -364,7 +541,6 @@ describe('novel workbench asset editing', () => {
       kind: 'replace',
       targetKind: 'project',
       baseRevision: REVISION_A,
-      baseText: manifest('潮汐来信').text,
       replacement: screen.replacement,
       summary: '调整项目定位',
     }, null, 2))
@@ -519,7 +695,6 @@ describe('novel workbench asset editing', () => {
       targetKind: 'chapter-draft',
       chapter: 2,
       baseRevision: 'absent',
-      baseText: '',
       replacement: '# 第二章\n\n潮水退去。',
       summary: '起草第二章正文',
     }, null, 2))

@@ -330,17 +330,19 @@ function normalizeAssetContent(target: AssetRef, replacement: string, currentMan
   if (next.projectId !== currentManifest.projectId || next.createdAt !== currentManifest.createdAt) {
     throw new NovelProjectError('INVALID_CONTENT', 'project identity and createdAt are immutable')
   }
+  if (next.title === currentManifest.title
+    && next.language === currentManifest.language
+    && next.genre === currentManifest.genre
+    && next.plannedChapters === currentManifest.plannedChapters
+    && next.targetWordsPerChapter === currentManifest.targetWordsPerChapter
+    && next.creativeStrategy === currentManifest.creativeStrategy) {
+    throw new NovelProjectError('INVALID_CONTENT', 'project settings replacement must change at least one visible field')
+  }
   return canonical
 }
 
-function baseTextMatches(target: AssetRef, current: NovelAssetReadResult, request: Extract<NovelApplyRequest, { kind: 'replace' }>): boolean {
-  if (current.revision !== request.baseRevision) return false
-  if (current.revision === 'absent') return request.baseText === ''
-  try {
-    return current.text === canonicalNovelAssetText(target, request.baseText)
-  } catch {
-    return false
-  }
+function revisionMatches(current: NovelAssetReadResult, request: Extract<NovelApplyRequest, { kind: 'replace' }>): boolean {
+  return current.revision === request.baseRevision
 }
 
 function validateAssetText(target: AssetRef, text: string): void {
@@ -465,7 +467,7 @@ class FileNovelProject implements NovelProject {
     const filename = join(root, source)
     const parent = resolve(filename, '..')
     const beforeLock = await this.#readAsset(request.target, signal)
-    if (!baseTextMatches(request.target, beforeLock, request)) {
+    if (!revisionMatches(beforeLock, request)) {
       throw new NovelProjectError('STALE_REVISION', `${source} changed since it was read`)
     }
     await this.#rejectSymlinkChain(parent)
@@ -476,7 +478,7 @@ class FileNovelProject implements NovelProject {
       return await withFileLock(filename, async () => {
         requireNotAborted(signal)
         const current = await this.#readAsset(request.target, signal)
-        if (!baseTextMatches(request.target, current, request)) {
+        if (!revisionMatches(current, request)) {
           throw new NovelProjectError('STALE_REVISION', `${source} changed since it was read`)
         }
         requireNotAborted(signal)

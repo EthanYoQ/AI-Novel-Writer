@@ -127,7 +127,7 @@ describe('AI novel native approval integration', () => {
       name: 'novel_apply_change',
       arguments: {
         kind: 'replace', targetKind: 'chapter-draft', chapter: 1,
-        baseRevision: 'absent', baseText: '', replacement: '模型提案\n', summary: '写入第一章',
+        baseRevision: 'absent', replacement: '模型提案\n', summary: '写入第一章',
       },
       agent: fakeAgent(root),
       signal: new AbortController().signal,

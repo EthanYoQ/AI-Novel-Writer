@@ -13,28 +13,28 @@ async function createReadyProject(root: string): Promise<void> {
     plannedChapters: 3, targetWordsPerChapter: 2_000, creativeStrategy: 'consistency-first',
   }, signal)
   await project.apply({
-    kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent', baseText: '',
+    kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent',
     replacement: JSON.stringify({ characters: [{
       id: 'lin-xia', name: '林夏', role: '灯塔管理员', summary: '守护退潮后的信匣。',
       goal: '找到失踪的弟弟', relationships: [], notes: '',
     }] }), summary: '建立人物表',
   }, signal)
   await project.apply({
-    kind: 'replace', target: { kind: 'story-blueprint' }, baseRevision: 'absent', baseText: '',
+    kind: 'replace', target: { kind: 'story-blueprint' }, baseRevision: 'absent',
     replacement: JSON.stringify({
       premise: '退潮后出现来自明日的信。', themes: ['选择'], world: '海岛灯塔',
       mainPlot: '林夏追查信件来源。', endingGoal: '决定是否改变弟弟的命运。',
     }), summary: '建立故事蓝图',
   }, signal)
   await project.apply({
-    kind: 'replace', target: { kind: 'chapter-blueprint', chapter: 1 }, baseRevision: 'absent', baseText: '',
+    kind: 'replace', target: { kind: 'chapter-blueprint', chapter: 1 }, baseRevision: 'absent',
     replacement: JSON.stringify({
       chapter: 1, title: '退潮', purpose: '发现第一封未来信', beats: ['灯灭', '取信'],
       characterIds: ['lin-xia'], continuityNotes: ['午夜退潮'], status: 'drafted',
     }), summary: '建立章节蓝图',
   }, signal)
   await project.apply({
-    kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent', baseText: '',
+    kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent',
     replacement: '# 退潮\n\n林夏在熄灭的灯塔下拾起未来的信。\n', summary: '写入章节正文',
   }, signal)
 }

@@ -2,7 +2,7 @@
 /** Real DSH Web browser journey for the compact AI novel workbench. */
 
 import { createRequire } from 'node:module'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import process from 'node:process'
@@ -94,11 +94,26 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await trigger.click()
   const drawer = page.getByRole('dialog', { name: '小说工作台' })
   await drawer.waitFor({ timeout: 15_000 })
-  await drawer.getByRole('textbox', { name: '小说标题' }).fill('潮汐来信')
-  await drawer.getByRole('textbox', { name: '类型' }).fill('悬疑')
-  await drawer.getByRole('button', { name: '预览初始化提案' }).click()
-  const preview = drawer.locator('.aiNovelInitializationPreview')
-  await preview.waitFor({ timeout: 10_000 })
+  const projectRoot = join(scaffold.workspaceCwd, workspaceName)
+  const assetRoot = join(projectRoot, '.ai-novel')
+  await page.evaluate(() => {
+    const uuids = [
+      '123e4567-e89b-42d3-a456-426614174000',
+      '223e4567-e89b-42d3-a456-426614174000',
+    ]
+    Object.defineProperty(crypto, 'randomUUID', {
+      configurable: true,
+      value: () => uuids.shift() ?? '323e4567-e89b-42d3-a456-426614174000',
+    })
+    const RealDate = Date
+    const fixedTime = new RealDate('2026-08-16T00:00:00.000Z').valueOf()
+    globalThis.Date = class extends RealDate {
+      constructor(...args) { super(...(args.length === 0 ? [fixedTime] : args)) }
+      static now() { return fixedTime }
+    }
+  })
+  await drawer.getByRole('textbox', { name: '项目设置 AI 生成要求' })
+    .fill('悬疑题材，标题为潮汐来信，规划 20 章。')
 
   const frame = page.locator('[class*="frame"]').first()
   const center = page.locator('[class*="centerCol"]').first()
@@ -109,31 +124,52 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
     throw new Error('workbench drawer covered the conversation column')
   }
   const previewSnapshot = normalize(await drawer.ariaSnapshot())
-
   const initializationTurn = scaffold.whenTurnSettled()
-  await drawer.getByRole('button', { name: '提交到当前会话' }).click()
-  await drawer.getByText('初始化提案已发送。').waitFor({ timeout: 10_000 })
-  await initializationTurn
+  await drawer.getByRole('button', { name: '让当前模型生成' }).click()
+  const initializationAllowOnce = page.getByRole('button', { name: '允许一次', exact: true })
+  await initializationAllowOnce.waitFor({ timeout: 10_000 })
   const submittedSnapshot = normalize(await drawer.ariaSnapshot())
-  await drawer.getByRole('button', { name: '关闭小说工作台' }).click()
+  await initializationAllowOnce.click()
+  const initializationSessionId = await initializationTurn
+  await drawer.getByText(/模型生成已批准并载入 revision/).waitFor({ timeout: 10_000 })
+  const initializedTitle = drawer.getByRole('textbox', { name: '小说标题' })
+  await initializedTitle.waitFor({ timeout: 10_000 })
+  if (await initializedTitle.inputValue() !== '潮汐来信'
+    || await drawer.getByRole('textbox', { name: '类型' }).inputValue() !== '悬疑'
+    || await drawer.getByRole('spinbutton', { name: '每章目标字数' }).inputValue() !== '3000') {
+    throw new Error('approved AI initialization did not backfill authoritative project fields')
+  }
+  const initializedProject = JSON.parse(await readFile(join(assetRoot, 'project.json'), 'utf8'))
+  if (initializedProject.title !== '潮汐来信' || initializedProject.genre !== '悬疑') {
+    throw new Error('approved AI initialization did not persist the visible project settings')
+  }
+  const initializationAppliedSnapshot = normalize(await drawer.ariaSnapshot())
+  const initializationSession = scaffold.ctx.agents.get(initializationSessionId)?.session
+  if (initializationSession === undefined) throw new Error('initialization turn did not retain its assembled Session')
+  const durableInitialization = initializationSession.events.findLast(event => event.type === 'user/message'
+    && event.data.source.kind === 'user'
+    && textContent(event.data.content).includes('[AI_NOVEL_UI_CORRELATION:'))
+  if (durableInitialization?.type !== 'user/message') throw new Error('initialization prompt was not durably logged')
+  const durableInitializationPrompt = textContent(durableInitialization.data.content)
+  const requestInitializationPrompt = llmRequests.flatMap(request => request.messages)
+    .filter(message => message.role === 'user')
+    .map(message => textContent(message.content))
+    .find(text => text.includes('[AI_NOVEL_UI_CORRELATION:'))
+  if (requestInitializationPrompt !== durableInitializationPrompt) {
+    throw new Error('durable initialization prompt and model request diverged')
+  }
+  const initializationEvidence = {
+    durableUserPrompt: normalize(durableInitializationPrompt),
+    modelRequestUserPrompt: normalize(requestInitializationPrompt),
+    durableLog: {
+      userMessageSeq: durableInitialization.seq,
+      requestHeaderLogged: initializationSession.events.some(event => event.type === 'request/header'),
+      turnEndSeq: initializationSession.events.findLast(event => event.type === 'turn/end')?.seq,
+    },
+  }
 
-  const projectRoot = join(scaffold.workspaceCwd, workspaceName)
-  const assetRoot = join(projectRoot, '.ai-novel')
   await mkdir(join(assetRoot, 'blueprints', 'chapters'), { recursive: true })
   await mkdir(join(projectRoot, 'chapters'), { recursive: true })
-  await writeFile(join(assetRoot, 'project.json'), `${JSON.stringify({
-    formatVersion: 1,
-    kind: 'harness-novel-project',
-    projectId: '123e4567-e89b-42d3-a456-426614174000',
-    title: '潮汐来信',
-    language: 'zh-CN',
-    genre: '悬疑',
-    plannedChapters: 20,
-    targetWordsPerChapter: 3000,
-    creativeStrategy: 'auto',
-    createdAt: '2026-08-16T00:00:00.000Z',
-    updatedAt: '2026-08-16T00:00:00.000Z',
-  }, null, 2)}\n`, 'utf8')
   await writeFile(join(assetRoot, 'characters.json'), `${JSON.stringify({ characters: [{
     id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案', goal: '找到真相',
     relationships: [{ characterId: 'zhou', type: '同盟', summary: '共同调查潮汐站旧案' }], notes: '',
@@ -161,7 +197,8 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
     (_, index) => `潮水第 ${index + 1} 次退去时，林澈在废弃潮汐站记下新的证据与时间。`,
   ).join('\n\n')}\n`
   await writeFile(join(projectRoot, 'chapters', '0002.md'), longDraft, 'utf8')
-  await trigger.click()
+  await drawer.getByRole('button', { name: '返回小说资产列表' }).click()
+  await drawer.getByRole('button', { name: '刷新' }).click()
   await drawer.getByRole('heading', { name: '小说资产' }).waitFor({ timeout: 10_000 })
   const assetRootSnapshot = normalize(await drawer.ariaSnapshot())
   await drawer.getByRole('button', { name: /项目设置/ }).click()
@@ -195,8 +232,22 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   }
   const generationTurn = scaffold.whenTurnSettled()
   await drawer.getByRole('button', { name: '让当前模型生成' }).click()
+  const allowOnce = page.getByRole('button', { name: '允许一次', exact: true })
+  await allowOnce.waitFor({ timeout: 10_000 })
+  await allowOnce.click()
   const generationSessionId = await generationTurn
-  await drawer.getByText(/未产生可归因的修改/).waitFor({ timeout: 10_000 })
+  await drawer.getByText(/模型生成已批准并载入 revision/).waitFor({ timeout: 10_000 })
+  const approvedPremise = '退潮后，失踪者的信件逐封出现，并在灯塔钟声中指向潮汐站。'
+  const premiseField = drawer.getByRole('textbox', { name: '故事前提' })
+  await premiseField.waitFor({ timeout: 10_000 })
+  if (await premiseField.inputValue() !== approvedPremise) {
+    throw new Error('approved model generation did not backfill the authoritative premise into the open editor')
+  }
+  const approvedStory = JSON.parse(await readFile(join(assetRoot, 'blueprints', 'story.json'), 'utf8'))
+  if (approvedStory.premise !== approvedPremise) {
+    throw new Error('approved model generation did not persist the expected story blueprint bytes')
+  }
+  const approvedGenerationSnapshot = normalize(await drawer.ariaSnapshot())
   const generationSession = scaffold.ctx.agents.get(generationSessionId)?.session
   if (generationSession === undefined) throw new Error('generation turn did not retain its assembled Session')
   const durableGeneration = generationSession.events.findLast(event => event.type === 'user/message'
@@ -309,10 +360,12 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
     },
     preview: previewSnapshot,
     submitted: submittedSnapshot,
+    initializationApplied: initializationAppliedSnapshot,
     assetRoot: assetRootSnapshot,
     projectEditor: projectEditorSnapshot,
     characterEditor: characterEditorSnapshot,
     storyEditor: storyEditorSnapshot,
+    approvedGeneration: approvedGenerationSnapshot,
     chapterBlueprintEditor: chapterBlueprintEditorSnapshot,
     chapterDraftEditor: chapterDraftEditorSnapshot,
     narrowDraftGeometry: {
@@ -323,6 +376,7 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
       horizontalOverflow: narrowOverflow,
     },
     settings: settingsSnapshot,
+    initializationEvidence,
     generationEvidence,
   }
   } catch (error) {

@@ -6,11 +6,11 @@
         "provider": "novel-snapshot",
         "model": "keyless"
       },
-      "system": "You are an AI agent powered by DeepSeek Harness.\n\nYou are AI 小说作家, a collaborative fiction-writing agent working in <workspace>.\n\nTreat the Harness novel project as the only writable story source. Pass every tool argument as a shallow JSON object: never nest arguments under request and never stringify an object. Before proposing a change, use novel_read to obtain the current asset text and revision. Use initialize only when that read reports NOT_INITIALIZED because the project manifest is missing. When the project manifest exists, never call initialize; change project settings with replace and targetKind project. A missing non-manifest asset still uses replace with the explicit string baseRevision absent and baseText as an empty string; never omit either required field. Do not guess or mix fields from the two mutation branches. Initialize uses exactly kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, and updatedAt. Replace uses exactly kind, targetKind, baseRevision, baseText, replacement, and summary, plus chapter only for a chapter-blueprint or chapter-draft. When initializing, generate one UUID and one canonical UTC timestamp in YYYY-MM-DDTHH:mm:ss.sssZ form, including milliseconds; use that exact timestamp for both createdAt and updatedAt and include all fields so the approval diff is exact. When replacing, copy baseRevision and baseText from the latest novel_read result and put the complete next asset text in replacement. Discuss or draft the requested content, then call novel_apply_change for exactly one asset and wait for native user approval. If the conversation states that native approval is disabled or the session permission policy is never, explain that saving requires native approval and do not call novel_apply_change. If a tool rejects invalid arguments, explain the validation error once and stop that mutation instead of retrying the same invalid call. Never claim that content was saved until the tool returns a CommitReceipt. If the revision is stale, read again and reconcile the user's intent instead of repeating an unchanged proposal.\n\nAfter reading project settings, apply its creative strategy only to novel-writing workflow: auto：balance planning, drafting, and consistency checks for the current request; fluent-drafting：prefer continuous prose drafting with only the minimum plan needed; consistency-first：check established facts, character motives, and continuity before drafting; deep-planning：develop structure, causality, and chapter beats before prose. These choices change planning order and writing emphasis only; they never select an LLM provider or reasoning parameter.",
+      "system": "You are an AI agent powered by DeepSeek Harness.\n\nYou are AI 小说作家, a collaborative fiction-writing agent working in <workspace>.\n\nTreat the Harness novel project as the only writable story source. Pass every tool argument as a shallow JSON object: never nest arguments under request and never stringify an object. Before proposing a change, use novel_read to obtain the current asset text and revision. Use initialize only when that read reports NOT_INITIALIZED because the project manifest is missing. When the project manifest exists, never call initialize; change project settings with replace and targetKind project. A missing non-manifest asset still uses replace with the explicit string baseRevision absent; never omit it. Do not guess or mix fields from the two mutation branches. Initialize uses exactly kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, and updatedAt. Replace uses exactly kind, targetKind, baseRevision, replacement, and summary, plus chapter only for a chapter-blueprint or chapter-draft. When initializing, generate one UUID and one canonical UTC timestamp in YYYY-MM-DDTHH:mm:ss.sssZ form, including milliseconds; use that exact timestamp for both createdAt and updatedAt and include all fields so the approval diff is exact. When replacing, copy only baseRevision from the latest novel_read result and put the complete next asset text in replacement; never retype baseText into tool arguments. The SHA-256 revision is the concurrency check, and the approval card shows the complete final replacement. A project-settings replacement must change at least one user-visible setting; changing updatedAt alone is invalid. Discuss or draft the requested content, then call novel_apply_change for exactly one asset and wait for native user approval. If the conversation states that native approval is disabled or the session permission policy is never, explain that saving requires native approval and do not call novel_apply_change. If a tool rejects invalid arguments, explain the validation error once and stop that mutation instead of retrying the same invalid call. Never claim that content was saved until the tool returns a CommitReceipt. novel_apply_change returns only after native approval resolves: a CommitReceipt means approval is complete and the asset is saved, so after receiving it state completion and never say that approval is still pending. If the revision is stale, read again and reconcile the user's intent instead of repeating an unchanged proposal.\n\nAfter reading project settings, apply its creative strategy only to novel-writing workflow: auto：balance planning, drafting, and consistency checks for the current request; fluent-drafting：prefer continuous prose drafting with only the minimum plan needed; consistency-first：check established facts, character motives, and continuity before drafting; deep-planning：develop structure, causality, and chapter beats before prose. These choices change planning order and writing emphasis only; they never select an LLM provider or reasoning parameter.",
       "tools": [
         {
           "name": "novel_apply_change",
-          "description": "Propose one revision-checked novel asset change with shallow arguments. Use initialize only when novel_read reports NOT_INITIALIZED. For every existing project, including project-setting changes, use replace. Missing non-manifest assets also use replace with baseRevision absent and baseText empty. Never mix branch fields: initialize fields: kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, updatedAt; replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, baseText, replacement, summary. Native user approval is required before execution.",
+          "description": "Propose one revision-checked novel asset change with shallow arguments. Use initialize only when novel_read reports NOT_INITIALIZED. For every existing project, including project-setting changes, use replace. Missing non-manifest assets also use replace with baseRevision absent. Never mix branch fields: initialize fields: kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, updatedAt; replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, replacement, summary. Native user approval is required before execution.",
           "parameters": {
             "type": "object",
             "properties": {
@@ -82,10 +82,6 @@
               "baseRevision": {
                 "type": "string",
                 "description": "Required only when kind is replace. Copy the revision from novel_read; use absent for a missing non-manifest asset."
-              },
-              "baseText": {
-                "type": "string",
-                "description": "Required only when kind is replace. Copy text from novel_read; use an empty string with revision absent."
               },
               "replacement": {
                 "type": "string",
@@ -238,7 +234,6 @@
       "arguments": {
         "kind": "replace",
         "baseRevision": "absent",
-        "baseText": "",
         "replacement": "{\"characters\":[{\"id\":\"lin-xia\",\"name\":\"林夏\",\"role\":\"灯塔守望人\",\"summary\":\"能听见潮汐中的旧日回声。\",\"goal\":\"找回失踪的弟弟。\",\"relationships\":[],\"notes\":\"害怕深水，却从不离开灯塔。\"}]}",
         "summary": "建立主要人物",
         "targetKind": "characters"
@@ -298,7 +293,6 @@
       "arguments": {
         "kind": "replace",
         "baseRevision": "absent",
-        "baseText": "",
         "replacement": "{\"premise\":\"退潮后的海床会浮现来自未来的信件。\",\"themes\":[\"记忆\",\"选择\"],\"world\":\"被永夜潮汐包围的群岛。\",\"mainPlot\":\"林夏循着未来信件寻找失踪者。\",\"endingGoal\":\"林夏决定保留真实记忆并点亮全部灯塔。\"}",
         "summary": "建立故事蓝图",
         "targetKind": "story-blueprint"
@@ -360,7 +354,6 @@
       "arguments": {
         "kind": "replace",
         "baseRevision": "absent",
-        "baseText": "",
         "replacement": "{\"chapter\":1,\"title\":\"退潮来信\",\"purpose\":\"让林夏收到第一封未来信件。\",\"beats\":[\"夜潮退去\",\"海床显出信匣\",\"信上写着弟弟明日的求救\"],\"characterIds\":[\"lin-xia\"],\"continuityNotes\":[\"灯塔主灯在午夜熄灭\"],\"status\":\"planned\"}",
         "summary": "建立第一章蓝图",
         "targetKind": "chapter-blueprint",
@@ -473,7 +466,6 @@
       "arguments": {
         "kind": "replace",
         "baseRevision": "absent",
-        "baseText": "",
         "replacement": "# 退潮来信\n\n午夜，灯塔的主灯第一次熄灭。\n\n林夏在退去的潮水里捡到一封尚未寄出的信。\n",
         "summary": "起草第一章",
         "targetKind": "chapter-draft",

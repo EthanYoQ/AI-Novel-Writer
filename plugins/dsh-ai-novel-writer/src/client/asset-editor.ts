@@ -62,7 +62,7 @@ export type NovelAssetEditorPhase =
   | 'error'
 
 /** Session admission state for model-generated one-asset proposals. */
-export type NovelAssetGenerationPhase = 'editing' | 'submitting' | 'submitted' | 'reconciling' | 'error'
+export type NovelAssetGenerationPhase = 'editing' | 'submitting' | 'submitted' | 'reconciling' | 'applied' | 'error'
 
 /** User brief and visible outcome for model generation that never writes from the browser. */
 export interface NovelAssetGenerationState {
@@ -493,7 +493,6 @@ export function serializeChapterDraft(text: string): string {
  *
  * @param target Recognized editable asset.
  * @param baseRevision Revision read before editing.
- * @param baseText Exact original normalized text.
  * @param replacement Exact canonical replacement text.
  * @param summary User-visible modification summary.
  * @returns Deterministic model prompt using the Agent tool's `targetKind` field.
@@ -502,7 +501,6 @@ export function serializeChapterDraft(text: string): string {
 export function assetProposalPrompt(
   target: NovelWorkbenchEditableTarget,
   baseRevision: Revision,
-  baseText: string,
   replacement: string,
   summary: string,
 ): string {
@@ -511,7 +509,6 @@ export function assetProposalPrompt(
     targetKind: target.kind,
     ...('chapter' in target ? { chapter: target.chapter } : {}),
     baseRevision,
-    baseText,
     replacement,
     summary: nonEmptyString(summary, '修改摘要').trim(),
   }, null, 2)

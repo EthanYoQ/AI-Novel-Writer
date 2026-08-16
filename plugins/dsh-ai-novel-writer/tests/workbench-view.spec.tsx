@@ -221,12 +221,35 @@ describe('novel workbench presentation', () => {
     expect(html).toMatch(/class="aiNovelBackButton"[^>]*>.*data-icon="chevron-left"/)
     expect(html).toContain('AI 生成项目设置')
     expect(html).toContain('只会生成当前资产，并通过对话展示原生审批。')
+    expect(html).toContain('对话中的单文件差异卡片')
+    expect(html).toContain('“允许一次”')
+    expect(html).toContain('不会再出现第二次审批')
     expect(html).toContain('aria-label="项目设置 AI 生成要求"')
     expect(html).toContain('补充要求（可选）')
     expect(html).toContain('留空时，模型会根据当前资产和项目上下文自动完善。')
     expect(html).toContain('让当前模型生成')
     expect(html).not.toMatch(/class="aiNovelPresetSecondary aiNovelGenerationButton"[^>]*disabled/)
     expect(html).not.toContain('任务看板')
+  })
+
+  it('keeps the approved generation outcome visible beside the reloaded asset fields', () => {
+    const html = renderToStaticMarkup(<NovelWorkbenchBody {...editorActions} state={{
+      ...ready({
+        kind: 'project', phase: 'clean', dirty: false, baseRevision: 'b'.repeat(64) as Revision,
+        originalText: '{}\n', summary: '',
+        generation: {
+          brief: '', phase: 'applied',
+          message: '模型生成已批准并载入 revision bbbbbbbbbbbb；上方字段是磁盘中的最终内容。',
+        },
+        draft: {
+          title: '凡尘问道', language: 'zh-CN', genre: '玄幻', plannedChapters: '8',
+          targetWordsPerChapter: '2000', creativeStrategy: 'consistency-first',
+        },
+      }),
+    }} />)
+
+    expect(html).toContain('模型生成已批准并载入 revision bbbbbbbbbbbb')
+    expect(html).toContain('上方字段是磁盘中的最终内容')
   })
 
   it('explains why generation is unavailable before the user clicks it', () => {

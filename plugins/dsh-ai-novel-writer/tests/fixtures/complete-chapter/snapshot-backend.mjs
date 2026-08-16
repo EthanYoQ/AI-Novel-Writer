@@ -41,7 +41,7 @@ function staleRevisionScript() {
     toolCall('stale-read-project', { kind: 'asset', target: { kind: 'project' } }),
     toolCall('stale-replace-project', {
       kind: 'replace', target: { kind: 'project' }, baseRevision: PROJECT_REVISION,
-      baseText: PROJECT_MANIFEST, replacement, summary: '调整项目标题',
+      replacement, summary: '调整项目标题',
     }),
     textResponse('项目 revision 已变化，修改未覆盖外部内容。'),
   ]
@@ -102,22 +102,22 @@ function firstRunScript() {
     initializationCall('chapter-01-init'),
     toolCall('chapter-01-read-characters', { kind: 'asset', target: { kind: 'characters' } }),
     toolCall('chapter-01-write-characters', {
-      kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent',
       replacement: characters, summary: '建立主要人物',
     }),
     toolCall('chapter-01-read-story', { kind: 'asset', target: { kind: 'story-blueprint' } }),
     toolCall('chapter-01-write-story', {
-      kind: 'replace', target: { kind: 'story-blueprint' }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'story-blueprint' }, baseRevision: 'absent',
       replacement: story, summary: '建立故事蓝图',
     }),
     toolCall('chapter-01-read-blueprint', { kind: 'asset', target: { kind: 'chapter-blueprint', chapter: 1 } }),
     toolCall('chapter-01-write-blueprint', {
-      kind: 'replace', target: { kind: 'chapter-blueprint', chapter: 1 }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'chapter-blueprint', chapter: 1 }, baseRevision: 'absent',
       replacement: blueprint, summary: '建立第一章蓝图',
     }),
     toolCall('chapter-01-read-working-set', { kind: 'working-set', chapter: 1 }),
     toolCall('chapter-01-write-draft', {
-      kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 }, baseRevision: 'absent',
       replacement: draft, summary: '起草第一章',
     }),
     toolCall('chapter-01-readback', { kind: 'working-set', chapter: 1 }),

@@ -32,12 +32,11 @@ export interface NovelInitializeRequest {
   readonly updatedAt: string
 }
 
-/** Compare-and-replace request for one novel asset. */
+/** Replace one novel asset only when its authoritative SHA-256 revision still matches. */
 export interface NovelReplaceRequest {
   readonly kind: 'replace'
   readonly target: AssetRef
   readonly baseRevision: Revision
-  readonly baseText: string
   readonly replacement: string
   readonly summary: string
 }

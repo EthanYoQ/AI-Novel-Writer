@@ -60,7 +60,6 @@ describe('NovelProject single-asset replacement', () => {
       kind: 'replace',
       target: { kind: 'characters' },
       baseRevision: 'absent',
-      baseText: '',
       replacement,
       summary: '建立主角人物卡',
     }, signal)
@@ -74,7 +73,7 @@ describe('NovelProject single-asset replacement', () => {
     expect(read).toMatchObject({ kind: 'asset', text: disk, revision: receipt.newRevision })
   })
 
-  it('accepts a semantically identical structured base text with different JSON formatting', async () => {
+  it('rejects a stale SHA-256 revision and accepts the current revision', async () => {
     const read = await project.read({ kind: 'asset', target: { kind: 'project' } }, signal)
     if (read.kind !== 'asset') throw new Error('expected one project asset')
     const replacement = JSON.stringify({
@@ -86,17 +85,15 @@ describe('NovelProject single-asset replacement', () => {
     await expect(project.apply({
       kind: 'replace',
       target: { kind: 'project' },
-      baseRevision: read.revision,
-      baseText: JSON.stringify({ ...JSON.parse(read.text) as Record<string, unknown>, title: '伪造旧标题' }),
+      baseRevision: 'a'.repeat(64) as Revision,
       replacement,
-      summary: '使用错误原文更新标题',
+      summary: '使用过期 revision 更新标题',
     }, signal)).rejects.toMatchObject({ code: 'STALE_REVISION' })
 
     const receipt = await project.apply({
       kind: 'replace',
       target: { kind: 'project' },
       baseRevision: read.revision,
-      baseText: JSON.stringify(JSON.parse(read.text)),
       replacement,
       summary: '更新项目标题',
     }, signal)
@@ -109,13 +106,57 @@ describe('NovelProject single-asset replacement', () => {
     })
   })
 
-  it('fails closed when either the revision or original text is stale', async () => {
+  it('uses the matching SHA-256 revision without requiring the model to echo long base text', async () => {
+    const read = await project.read({ kind: 'asset', target: { kind: 'project' } }, signal)
+    if (read.kind !== 'asset') throw new Error('expected one project asset')
+    const replacement = JSON.stringify({
+      ...JSON.parse(read.text) as Record<string, unknown>,
+      title: '雾海问道',
+      updatedAt: '2026-08-16T01:02:05.000Z',
+    })
+
+    const receipt = await project.apply({
+      kind: 'replace', target: { kind: 'project' }, baseRevision: read.revision,
+      replacement, summary: '更新项目标题',
+    }, signal)
+
+    expect(receipt.oldRevision).toBe(read.revision)
+    await expect(project.read({ kind: 'asset', target: { kind: 'project' } }, signal)).resolves.toMatchObject({
+      kind: 'asset', revision: receipt.newRevision, text: expect.stringContaining('"title": "雾海问道"'),
+    })
+  })
+
+  it('rejects a project replacement that changes only hidden update metadata', async () => {
+    const read = await project.read({ kind: 'asset', target: { kind: 'project' } }, signal)
+    if (read.kind !== 'asset') throw new Error('expected one project asset')
+    const replacement = JSON.stringify({
+      ...JSON.parse(read.text) as Record<string, unknown>,
+      updatedAt: '2026-08-16T01:02:04.000Z',
+    })
+
+    await expect(project.apply({
+      kind: 'replace',
+      target: { kind: 'project' },
+      baseRevision: read.revision,
+      replacement,
+      summary: 'AI 生成项目设置',
+    }, signal)).rejects.toMatchObject({
+      code: 'INVALID_CONTENT',
+      message: 'project settings replacement must change at least one visible field',
+    })
+
+    await expect(project.read({ kind: 'asset', target: { kind: 'project' } }, signal)).resolves.toMatchObject({
+      revision: read.revision,
+      text: read.text,
+    })
+  })
+
+  it('fails closed when the revision is stale', async () => {
     const firstText = '# 第一章\n\n海雾吞没了灯塔。\n'
     const first = await project.apply({
       kind: 'replace',
       target: { kind: 'chapter-draft', chapter: 1 },
       baseRevision: 'absent',
-      baseText: '',
       replacement: firstText,
       summary: '起草第一章',
     }, signal)
@@ -124,18 +165,8 @@ describe('NovelProject single-asset replacement', () => {
       kind: 'replace',
       target: { kind: 'chapter-draft', chapter: 1 },
       baseRevision: 'absent',
-      baseText: '',
       replacement: '覆盖内容',
       summary: '使用旧版本覆盖',
-    }, signal)).rejects.toMatchObject({ code: 'STALE_REVISION' })
-
-    await expect(project.apply({
-      kind: 'replace',
-      target: { kind: 'chapter-draft', chapter: 1 },
-      baseRevision: first.newRevision,
-      baseText: '错误的原文',
-      replacement: '覆盖内容',
-      summary: '使用错误原文覆盖',
     }, signal)).rejects.toMatchObject({ code: 'STALE_REVISION' })
 
     const read = await project.read({ kind: 'asset', target: { kind: 'chapter-draft', chapter: 1 } }, signal)
@@ -147,7 +178,7 @@ describe('NovelProject single-asset replacement', () => {
 
     await expect(project.apply({
       kind: 'replace', target: { kind: 'chapter-blueprint', chapter: 1 },
-      baseRevision: 'a'.repeat(64) as Revision, baseText: '',
+      baseRevision: 'a'.repeat(64) as Revision,
       replacement: JSON.stringify({
         chapter: 1, title: '潮声', purpose: '建立冲突', beats: ['发现信号'],
         characterIds: [], continuityNotes: [], status: 'planned',
@@ -163,7 +194,7 @@ describe('NovelProject single-asset replacement', () => {
       themes: ['选择'], premise: '失联飞船收到未来求救。',
     })
     await project.apply({
-      kind: 'replace', target: { kind: 'story-blueprint' }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'story-blueprint' }, baseRevision: 'absent',
       replacement, summary: '建立故事蓝图',
     }, signal)
 
@@ -177,7 +208,7 @@ describe('NovelProject single-asset replacement', () => {
 
   it('rejects invalid schema, unsafe chapter ids, oversize writes, and cancellation', async () => {
     await expect(project.apply({
-      kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent', baseText: '',
+      kind: 'replace', target: { kind: 'characters' }, baseRevision: 'absent',
       replacement: '{"characters":[{"name":"missing fields"}]}', summary: '无效人物表',
     }, signal)).rejects.toMatchObject({ code: 'INVALID_CONTENT' })
 
@@ -187,7 +218,7 @@ describe('NovelProject single-asset replacement', () => {
 
     await expect(project.apply({
       kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 },
-      baseRevision: 'absent', baseText: '', replacement: 'x'.repeat(512 * 1024 + 1), summary: '超限',
+      baseRevision: 'absent', replacement: 'x'.repeat(512 * 1024 + 1), summary: '超限',
     }, signal)).rejects.toMatchObject({ code: 'SIZE_LIMIT_EXCEEDED' })
 
     const cancelled = new AbortController()
@@ -200,7 +231,7 @@ describe('NovelProject single-asset replacement', () => {
   it('requires a real 64-character revision rather than an arbitrary string', async () => {
     await expect(project.apply({
       kind: 'replace', target: { kind: 'chapter-draft', chapter: 1 },
-      baseRevision: 'not-a-revision' as Revision, baseText: '', replacement: '正文', summary: '伪造 revision',
+      baseRevision: 'not-a-revision' as Revision, replacement: '正文', summary: '伪造 revision',
     }, signal)).rejects.toMatchObject({ code: 'INVALID_CONTENT' })
   })
 
@@ -212,7 +243,7 @@ describe('NovelProject single-asset replacement', () => {
 
     await expect(project.apply({
       kind: 'replace', target: { kind: 'chapter-blueprint', chapter: 1 },
-      baseRevision: 'absent', baseText: '',
+      baseRevision: 'absent',
       replacement: JSON.stringify({
         chapter: 1, title: '潮声', purpose: '建立冲突', beats: ['发现信号'],
         characterIds: [], continuityNotes: [], status: 'planned',

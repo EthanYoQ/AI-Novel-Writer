@@ -51,7 +51,7 @@ describe('AI novel agent tools', () => {
     expect(apply.description).toContain('Use initialize only when novel_read reports NOT_INITIALIZED')
     expect(apply.description).toContain('For every existing project, including project-setting changes, use replace')
     expect(apply.description).toContain('initialize fields: kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, updatedAt')
-    expect(apply.description).toContain('replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, baseText, replacement, summary')
+    expect(apply.description).toContain('replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, replacement, summary')
     expect(apply.parameters).toMatchObject({ properties: {
       targetKind: { description: expect.stringContaining('Required only when kind is replace') },
       projectId: { description: expect.stringContaining('Required only when kind is initialize') },
@@ -61,6 +61,14 @@ describe('AI novel agent tools', () => {
     } })
   })
 
+  it('uses revision-only replacement admission so the model never retypes authoritative base bytes', () => {
+    const apply = createNovelToolDefinitions()[1]
+
+    expect(apply.parameters.properties).not.toHaveProperty('baseText')
+    expect(apply.description).toContain('replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, replacement, summary')
+    expect(apply.description).not.toContain('baseRevision, baseText')
+  })
+
   it('renders a replay-safe single-file diff directly from replace arguments', () => {
     const apply = createNovelToolDefinitions()[1]
     expect(apply.presentCall?.({
@@ -68,13 +76,12 @@ describe('AI novel agent tools', () => {
       targetKind: 'chapter-draft',
       chapter: 2,
       baseRevision: 'a'.repeat(64),
-      baseText: '旧正文\r\n',
       replacement: '新正文\r\n',
       summary: '重写第二章开场',
     })).toEqual({
       card: 'diff',
       title: '重写第二章开场',
-      diffs: [{ path: 'chapters/0002.md', oldText: '旧正文\n', newText: '新正文\n' }],
+      diffs: [{ path: 'chapters/0002.md', oldText: null, newText: '新正文\n' }],
       locations: [{ path: 'chapters/0002.md' }],
     })
   })
@@ -113,7 +120,7 @@ describe('AI novel agent tools', () => {
     const apply = createNovelToolDefinitions()[1]
 
     await expect(apply.execute({
-      kind: 'replace', targetKind: 'characters', baseRevision: 'absent', baseText: '',
+      kind: 'replace', targetKind: 'characters', baseRevision: 'absent',
       replacement: '{"characters":[]}', summary: '不能越过初始化',
     }, {
       signal: new AbortController().signal,
@@ -135,7 +142,6 @@ describe('AI novel agent tools', () => {
       kind: 'replace' as const,
       target: { kind: 'story-blueprint' as const },
       baseRevision: 'absent' as const,
-      baseText: '',
       replacement: JSON.stringify({
         endingGoal: '潮汐退去', mainPlot: '寻找失踪的信使', world: '浮岛群',
         themes: ['记忆'], premise: '信件来自明天',
@@ -150,7 +156,7 @@ describe('AI novel agent tools', () => {
     expect(card.diffs[0]?.newText).toBe(asset.kind === 'asset' ? asset.text : undefined)
   })
 
-  it('canonicalizes a reformatted structured base text in the approval diff', async () => {
+  it('presents the complete canonical replacement without model-supplied old bytes', async () => {
     const root = await makeTestWorkspace('canonical-base-diff-')
     const project = openNovelProject(root)
     const signal = new AbortController().signal
@@ -166,12 +172,11 @@ describe('AI novel agent tools', () => {
       kind: 'replace',
       target: { kind: 'project' },
       baseRevision: asset.revision,
-      baseText: JSON.stringify(JSON.parse(asset.text)),
       replacement: asset.text,
       summary: '重写项目设定',
     })
 
-    expect(card.diffs[0]?.oldText).toBe(asset.text)
+    expect(card.diffs[0]).toMatchObject({ oldText: null, newText: asset.text })
   })
 
   it('shows exactly the initialized manifest bytes that approval commits', async () => {
