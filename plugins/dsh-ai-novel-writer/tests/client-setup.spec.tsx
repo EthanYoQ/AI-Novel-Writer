@@ -18,19 +18,31 @@ import {
   apply,
   createNovelContextPort,
   createPresetSetupPort,
+  createNovelWorkbenchPort,
   inject,
   installNovelContextStyle,
   novelContextCss,
 } from '../src/client/index.ts'
 import type { PresetSetupState } from '../src/client/setup-store.ts'
 
+let cachedSlotRegistry: (new (ctx: Context) => {
+  register(options: unknown, component: unknown): () => void
+  entries(key: string): ReadonlyArray<{
+    component: unknown
+    inject?: (...args: never[]) => Record<string, unknown>
+    options: { id?: string }
+  }>
+}) | undefined
+
 async function loadSlotRegistry(): Promise<new (ctx: Context) => {
   register(options: unknown, component: unknown): () => void
   entries(key: string): ReadonlyArray<{
     component: unknown
     inject?: (...args: never[]) => Record<string, unknown>
+    options: { id?: string }
   }>
 }> {
+  if (cachedSlotRegistry !== undefined) return cachedSlotRegistry
   let handoff: { factory(require: (specifier: string) => unknown): Record<string, unknown> } | undefined
   ;(window as unknown as { __ModuleLoader__: { load(value: typeof handoff): void } }).__ModuleLoader__ = {
     load: value => { handoff = value },
@@ -45,13 +57,15 @@ async function loadSlotRegistry(): Promise<new (ctx: Context) => {
     if (!modules.has(specifier)) throw new Error(`Unexpected client runtime external: ${specifier}`)
     return modules.get(specifier)
   })
-  return runtime.SlotRegistry as new (ctx: Context) => {
+  cachedSlotRegistry = runtime.SlotRegistry as new (ctx: Context) => {
     register(options: unknown, component: unknown): () => void
     entries(key: string): ReadonlyArray<{
       component: unknown
       inject?: (...args: never[]) => Record<string, unknown>
+      options: { id?: string }
     }>
   }
+  return cachedSlotRegistry
 }
 
 function mutableSource<T>(initial: T) {
@@ -64,20 +78,38 @@ function mutableSource<T>(initial: T) {
   }
 }
 
+function enterInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  if (setter === undefined) throw new Error('HTMLInputElement value setter is unavailable')
+  setter.call(input, value)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 function provideNovelContextSources(ctx: Context, selected = false) {
   const conversation = mutableSource({
     nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }>,
   })
-  const sessions = mutableSource({ current: selected ? SESSION_ID : undefined as SessionId | undefined })
+  const sessions = mutableSource({
+    current: selected ? SESSION_ID : undefined as SessionId | undefined,
+    byId: selected
+      ? {
+          [SESSION_ID]: {
+            agentPreset: 'ai-novel-writer',
+            projectionValues: { permissions: { currentValue: 'workspace-write' } },
+          },
+        }
+      : {},
+  })
   const workspaces = mutableSource({
     items: selected ? [{ workspaceId: WORKSPACE_ID, sessionIds: [SESSION_ID] }] : [],
   })
+  const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
   ctx.provide('sessions' as never, {
     list: sessions,
-    binding: (id: SessionId) => id === SESSION_ID ? { session: conversation } : undefined,
+    binding: (id: SessionId) => id === SESSION_ID ? { session: { ...conversation, prompt } } : undefined,
   } as never)
   ctx.provide('workspaces' as never, { list: workspaces } as never)
-  return { conversation, sessions, workspaces }
+  return { conversation, sessions, workspaces, prompt }
 }
 
 describe('preset setup browser integration', () => {
@@ -100,13 +132,31 @@ describe('preset setup browser integration', () => {
 
     await expect(port.read(WORKSPACE_ID, 1, signals[0]!)).resolves.toEqual(ready)
     await expect(port.read(WORKSPACE_ID, 1, signals[1]!)).rejects.toThrow('context response is invalid')
-    await expect(port.read(WORKSPACE_ID, 1, signals[2]!)).rejects.toMatchObject({ name: 'NovelContextDisconnectedError' })
+    await expect(port.read(WORKSPACE_ID, 1, signals[2]!)).rejects.toMatchObject({ name: 'NovelWorkbenchDisconnectedError' })
     expect(call.mock.calls.map(args => args.slice(0, 3))).toEqual([
       ['/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }],
       ['/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }],
       ['/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }],
     ])
     expect(call.mock.calls.map(args => args[3])).toEqual(signals)
+  })
+
+  it('submits proposals only through the selected Session face and exposes no browser mutation operation', async () => {
+    const rpc = { call: vi.fn() }
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const port = createNovelWorkbenchPort(rpc, {
+      binding: id => id === SESSION_ID ? { session: { prompt } } as never : undefined,
+    })
+
+    await expect(port.prompt(SESSION_ID, 'exact proposal')).resolves.toEqual({ ok: true, value: { accepted: true } })
+    await expect(port.prompt(SessionId('missing'), 'never sent')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'session-unavailable' },
+    })
+
+    expect(prompt).toHaveBeenCalledWith([{ type: 'text', text: 'exact proposal' }], 'queue')
+    expect(rpc.call).not.toHaveBeenCalled()
+    expect(Object.keys(port).sort()).toEqual(['prompt', 'read'])
   })
 
   it('maps the two closed RPC endpoints and distinguishes transport loss', async () => {
@@ -131,7 +181,7 @@ describe('preset setup browser integration', () => {
     expect(call.mock.calls.map(callArgs => callArgs[3])).toEqual(signals)
   })
 
-  it('registers and removes the sidebar trigger and shell overlay', async () => {
+  it('registers and removes the workbench trigger, overlay, and Plugin Configuration card', async () => {
     const ctx = new Context()
     const entries: Array<{ options: { name: string; id?: string } }> = []
     class TestSlots extends Service {
@@ -154,8 +204,9 @@ describe('preset setup browser integration', () => {
     await fiber.await()
 
     expect(inject).toEqual(['slots', 'connection', 'sessions', 'workspaces'])
-    expect(entries.find(entry => entry.options.name === 'sidebar.footer.action')?.options.id).toBe('ai-novel-context')
-    expect(entries.find(entry => entry.options.name === 'shell.overlay')?.options.id).toBe('ai-novel-context')
+    expect(entries.find(entry => entry.options.name === 'sidebar.footer.action')?.options.id).toBe('ai-novel-workbench')
+    expect(entries.find(entry => entry.options.name === 'shell.overlay')?.options.id).toBe('ai-novel-workbench')
+    expect(entries.find(entry => entry.options.name === 'settings.plugin.item')?.options.id).toBe('ai-novel-writer')
     await fiber.dispose()
     expect(entries).toHaveLength(0)
   })
@@ -164,7 +215,7 @@ describe('preset setup browser integration', () => {
     const ctx = new Context()
     interface InjectedControllers {
       setupController: { load(): Promise<void> }
-      contextController: { open(): Promise<void> }
+      workbenchController: { open(): Promise<void> }
     }
     const entries: Array<{ options: { name: string; inject?: () => InjectedControllers } }> = []
     class TestSlots extends Service {
@@ -200,7 +251,7 @@ describe('preset setup browser integration', () => {
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     const controllers = entries[0]!.options.inject!()
-    const loading = Promise.all([controllers.setupController.load(), controllers.contextController.open()])
+    const loading = Promise.all([controllers.setupController.load(), controllers.workbenchController.open()])
     await vi.waitFor(() => { expect(signals.size).toBe(2) })
 
     let disposed = false
@@ -243,7 +294,7 @@ describe('preset setup browser integration', () => {
     const Trigger = triggerEntry.component as ComponentType<Record<string, unknown>>
     const Overlay = overlayEntry.component as ComponentType<Record<string, unknown>>
     const injected = triggerEntry.inject!() as {
-      contextController: { whenIdle(): Promise<void> }
+      workbenchController: { whenIdle(): Promise<void> }
       setupController: unknown
     }
     const sessionState = {
@@ -272,7 +323,10 @@ describe('preset setup browser integration', () => {
     document.body.appendChild(container)
     const root = createRoot(container)
     await act(async () => {
-      root.render(<><Trigger wide {...injected} {...standard} /><Overlay {...injected} {...standard} /></>)
+      root.render(<>
+        <Trigger wide {...injected} {...standard} />
+        <div data-test-shell-frame><div data-shell-overlay><Overlay {...injected} {...standard} /></div></div>
+      </>)
     })
     const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
     trigger.focus()
@@ -285,26 +339,52 @@ describe('preset setup browser integration', () => {
     const close = container.querySelector<HTMLButtonElement>('[aria-label^="关闭"]')!
     expect(document.activeElement).toBe(close)
     expect(dialog.getAttribute('aria-modal')).toBe('false')
+    expect(container.querySelector('[data-test-shell-frame]')?.classList.contains('aiNovelWorkbenchFrameOpen')).toBe(true)
     expect(call).toHaveBeenCalledWith(
       '/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }, expect.any(AbortSignal),
     )
     await act(async () => {
+      enterInputValue(container.querySelector<HTMLInputElement>('input[name="title"]')!, '潮汐来信')
+      enterInputValue(container.querySelector<HTMLInputElement>('input[name="genre"]')!, '悬疑')
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
+      await Promise.resolve()
+    })
+    expect(contextSources.prompt).not.toHaveBeenCalled()
+    const exactValues = container.querySelector('.aiNovelInitializationPreview pre')!.textContent!
+    expect(exactValues).toMatch(/"projectId": "[0-9a-f-]{36}"/)
+    expect(exactValues).toMatch(/"createdAt": "[^"]+"/)
+    expect(container.textContent).toContain('提交到当前会话')
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
+      await Promise.resolve()
+    })
+    await vi.waitFor(() => { expect(contextSources.prompt).toHaveBeenCalledOnce() })
+    const proposal = contextSources.prompt.mock.calls[0]![0][0].text as string
+    expect(proposal).toContain(exactValues)
+    expect(proposal).toContain('"kind": "initialize"')
+    expect(proposal).toContain('"title": "潮汐来信"')
+    expect(proposal).not.toContain('"request"')
+    expect(call.mock.calls.every(args => args[1] === 'context/read' || args[1] === 'preset/status')).toBe(true)
+    await act(async () => {
       contextSources.conversation.set({
         nodes: [{ kind: 'tool-result', seq: 1, call: { name: 'novel_apply_change' } }],
       })
-      await injected.contextController.whenIdle()
-    })
-    expect(call.mock.calls.filter(args => args[1] === 'context/read')).toHaveLength(2)
-    await act(async () => {
-      ctx.emit('connection/reset')
-      await injected.contextController.whenIdle()
+      await injected.workbenchController.whenIdle()
     })
     expect(call.mock.calls.filter(args => args[1] === 'context/read')).toHaveLength(3)
+    await act(async () => {
+      ctx.emit('connection/reset')
+      await injected.workbenchController.whenIdle()
+    })
+    expect(call.mock.calls.filter(args => args[1] === 'context/read')).toHaveLength(4)
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
     expect(container.querySelector('[role="dialog"]')).toBeNull()
     expect(document.activeElement).toBe(trigger)
+    expect(container.querySelector('[data-test-shell-frame]')?.classList.contains('aiNovelWorkbenchFrameOpen')).toBe(false)
 
     await act(async () => {
       root.unmount()
@@ -313,6 +393,89 @@ describe('preset setup browser integration', () => {
     expect(slots.entries('sidebar.footer.action')).toHaveLength(0)
     expect(slots.entries('shell.overlay')).toHaveLength(0)
     expect(document.querySelector('style[data-plugin-css="@ethanyoq/dsh-ai-novel-writer/context-window"]')).toBeNull()
+    container.remove()
+  })
+
+  it('renders mounted evidence and opens the workbench through the real Plugin Configuration slot', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const ctx = new Context()
+    const SlotRegistry = await loadSlotRegistry()
+    const slots = new SlotRegistry(ctx)
+    slots.register({
+      name: 'root',
+      children: {
+        'sidebar.footer.action': { kind: 'list', scope: 'root' },
+        'shell.overlay': { kind: 'list', scope: 'root' },
+        'settings.plugin.item': { kind: 'list', scope: 'root' },
+      },
+    } as never, () => null)
+    provideNovelContextSources(ctx, true)
+    const call = vi.fn((_channel: string, endpoint: string) => Promise.resolve({
+      ok: true,
+      value: endpoint === 'context/read' ? { status: 'not-initialized' } : { status: 'installed' },
+    }))
+    ctx.provide('connection' as never, {
+      rpc: { call },
+      hostDescription: { getSnapshot: () => ({}), subscribe: () => () => {} },
+    } as never)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+
+    const entry = slots.entries('settings.plugin.item')[0]!
+    const overlayEntry = slots.entries('shell.overlay')[0]!
+    const Card = entry.component as ComponentType<Record<string, unknown>>
+    const Overlay = overlayEntry.component as ComponentType<Record<string, unknown>>
+    const injected = entry.inject!() as Record<string, unknown>
+    const sessionState = {
+      ids: [SESSION_ID],
+      byId: { 'session-1': { id: 'session-1', displayTitle: '第一章', blank: false, running: false, updatedAt: 1 } },
+      current: SESSION_ID, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined,
+    }
+    const workspaceState = {
+      items: [{
+        workspaceId: WORKSPACE_ID, path: 'not-exposed-to-rpc', title: '小说',
+        createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z', sessionIds: [SESSION_ID],
+      }],
+      archivedSessionIds: [], state: 'idle', phase: 'ready', error: null,
+      baselinesReady: true, recentWorkspaceId: WORKSPACE_ID,
+    }
+    const standard = {
+      useSessions: (selector: (state: typeof sessionState) => unknown) => selector(sessionState),
+      useWorkspaces: (selector: (state: typeof workspaceState) => unknown) => selector(workspaceState),
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<>
+      <Card {...injected} />
+      <div data-test-shell-frame><div data-shell-overlay><Overlay {...injected} {...standard} /></div></div>
+    </>) })
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Host 已连接')
+      expect(container.textContent).toContain('Preset 已安装')
+      expect(container.textContent).toContain('Workspace 已选择')
+      expect(container.textContent).toContain('项目未初始化')
+    })
+
+    const open = [...container.querySelectorAll('button')]
+      .find(button => button.textContent === '打开小说工作台')!
+    open.focus()
+    await act(async () => { open.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(container.querySelector('[data-test-shell-frame]')?.classList.contains('aiNovelWorkbenchFrameOpen')).toBe(true)
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(open)
+    expect(slots.entries('settings.plugin.item').map(item => item.options.id)).toEqual(['ai-novel-writer'])
+    expect(call.mock.calls.some(args => args[1] === 'context/read')).toBe(true)
+
+    await act(async () => {
+      root.unmount()
+      await fiber.dispose()
+    })
+    expect(slots.entries('settings.plugin.item')).toHaveLength(0)
     container.remove()
   })
 

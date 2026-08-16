@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import {
-  NovelContextController,
-  NovelContextDisconnectedError,
-  type NovelContextReady,
-} from '../src/client/context-store.ts'
+  NovelWorkbenchController,
+  NovelWorkbenchDisconnectedError,
+} from '../src/client/workbench-store.ts'
+import type { NovelContextReady } from '../src/context-types.ts'
 import type { NovelProjectId } from '../src/types.ts'
 
 const WORKSPACE_A = WorkspaceId('workspace-a')
@@ -24,56 +24,58 @@ const ready = (chapter: number): NovelContextReady => ({
 })
 
 describe('novel context client state', () => {
-  it('loads only while open, follows workspace changes, and selects chapters without polling', async () => {
+  it('inspects a selected workspace while closed, follows changes, and selects chapters without polling', async () => {
     const read = vi.fn(async (_workspaceId: typeof WORKSPACE_A, chapter: number) => ready(chapter))
-    const controller = new NovelContextController({ read }, vi.fn())
+    const controller = new NovelWorkbenchController({ read, prompt: vi.fn() }, vi.fn())
 
-    controller.setTarget({ workspaceId: WORKSPACE_A, sessionId: SESSION_A })
-    expect(read).not.toHaveBeenCalled()
+    controller.setTarget({ workspaceId: WORKSPACE_A, sessionId: SESSION_A, agentPreset: 'ai-novel-writer', approval: 'ask' })
+    await controller.whenIdle()
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', open: false })
     await controller.open()
     expect(controller.getSnapshot()).toMatchObject({ status: 'ready', open: true, progress: { selectedChapter: 1 } })
     await controller.selectChapter(2)
     expect(controller.getSnapshot()).toMatchObject({ status: 'ready', open: true, progress: { selectedChapter: 2 } })
-    controller.setTarget({ workspaceId: WORKSPACE_B, sessionId: SESSION_B })
+    controller.setTarget({ workspaceId: WORKSPACE_B, sessionId: SESSION_B, agentPreset: 'ai-novel-writer', approval: 'ask' })
     await controller.whenIdle()
 
     expect(read.mock.calls.map(args => args.slice(0, 2))).toEqual([
+      ['workspace-a', 1],
       ['workspace-a', 1],
       ['workspace-a', 2],
       ['workspace-b', 1],
     ])
     await Promise.resolve()
-    expect(read).toHaveBeenCalledTimes(3)
+    expect(read).toHaveBeenCalledTimes(4)
   })
 
   it('renders empty, not-initialized, error, and disconnected states', async () => {
     const read = vi.fn()
       .mockResolvedValueOnce({ status: 'not-initialized' })
       .mockRejectedValueOnce(new Error('invalid project'))
-      .mockRejectedValueOnce(new NovelContextDisconnectedError())
-    const controller = new NovelContextController({ read }, vi.fn())
+      .mockRejectedValueOnce(new NovelWorkbenchDisconnectedError())
+    const controller = new NovelWorkbenchController({ read, prompt: vi.fn() }, vi.fn())
 
     await controller.open()
     expect(controller.getSnapshot()).toEqual({ status: 'empty', open: true })
-    controller.setTarget({ workspaceId: WORKSPACE_A, sessionId: SESSION_A })
+    controller.setTarget({ workspaceId: WORKSPACE_A, sessionId: SESSION_A, agentPreset: 'ai-novel-writer', approval: 'ask' })
     await controller.whenIdle()
-    expect(controller.getSnapshot()).toEqual({ status: 'not-initialized', open: true })
+    expect(controller.getSnapshot()).toMatchObject({ status: 'not-initialized', open: true })
     await controller.refresh()
     expect(controller.getSnapshot()).toMatchObject({ status: 'error', open: true, message: 'invalid project' })
     await controller.refresh()
-    expect(controller.getSnapshot()).toEqual({ status: 'disconnected', open: true })
+    expect(controller.getSnapshot()).toMatchObject({ status: 'disconnected', open: true })
   })
 
   it('aborts superseded reads and reaches quiescence on dispose', async () => {
     let finish: (() => void) | undefined
     let signal: AbortSignal | undefined
-    const controller = new NovelContextController({
+    const controller = new NovelWorkbenchController({
       read: (_workspaceId, _chapter, requestSignal) => {
         signal = requestSignal
         return new Promise(resolve => { finish = () => { resolve(ready(1)) } })
-      },
+      }, prompt: vi.fn(),
     }, vi.fn())
-    controller.setTarget({ workspaceId: WORKSPACE_A, sessionId: SESSION_A })
+    controller.setTarget({ workspaceId: WORKSPACE_A, sessionId: SESSION_A, agentPreset: 'ai-novel-writer', approval: 'ask' })
     const opening = controller.open()
     await vi.waitFor(() => { expect(signal).toBeDefined() })
 

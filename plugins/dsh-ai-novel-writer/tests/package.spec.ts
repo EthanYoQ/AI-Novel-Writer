@@ -29,6 +29,7 @@ describe('installable AI novel bundle', () => {
           '@deepseek-ai/dsh-client-runtime',
           '@deepseek-ai/dsh-client-connection',
           '@deepseek-ai/dsh-client-ui-layout',
+          '@deepseek-ai/dsh-client-ui-settings-plugins',
           '@deepseek-ai/dsh-client-ui-sidebar',
         ],
       },

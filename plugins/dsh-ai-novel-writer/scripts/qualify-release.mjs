@@ -570,8 +570,8 @@ async function probeWeb(logRoot, label, harnessRoot, env) {
     ], { cwd: repositoryRoot, env, timeout: 90_000 })
     const browserLine = browser.stdout.trimEnd().split(/\r?\n/).at(-1)
     const browserResult = objectOf(JSON.parse(browserLine ?? ''), 'Browser qualification result')
-    if (browserResult.contextWindowOpened !== true || browserResult.presetInstalled !== true) {
-      fail('Browser did not open the context window and confirm Preset installation')
+    if (browserResult.workbenchOpened !== true || browserResult.presetInstalled !== true) {
+      fail('Browser did not open the novel workbench and confirm Preset installation')
     }
     result = { url: server.url, graphRevision: graph.rev, clientRevision: row.rev, presetInstalled: true }
   } catch (error) {

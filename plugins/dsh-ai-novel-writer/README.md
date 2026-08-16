@@ -8,7 +8,7 @@ The package ships three plugin entries:
 
 - the root Host entry, loaded by `cordis.patch.yml`;
 - `./agent`, mounted only by the bundled `ai-novel-writer` preset;
-- `./client`, which adds the read-only “小说上下文” action to the sidebar and renders its responsive side drawer through the shell overlay.
+- `./client`, which registers an “AI 小说作家” evidence card in Plugin Configuration and adds the compact “小说工作台” side drawer through the shell overlay.
 
 ## Configuration
 
@@ -30,15 +30,17 @@ The included `AI 小说作家` preset mounts the novel persona, agent instructio
 
 #### Install the preset
 
-Open “小说上下文” from the Harness sidebar and select “安装 AI 小说作家 Preset”. The browser can only call the loopback setup channel and cannot submit a local path. The Host copies the two bundled Preset files into the configured user root with an atomic directory publication.
+Open “小说工作台” from the Harness sidebar and select “安装 AI 小说作家 Preset”. The same installation state appears on the “AI 小说作家” card in Settings → Plugins → Plugin Configuration. The browser can only call the loopback setup channel and cannot submit a local path. The Host copies the two bundled Preset files into the configured user root with an atomic directory publication.
 
 Repeating installation is a no-op when every byte matches. A same-name directory with different or additional content is reported as a conflict and no user byte is overwritten. After installation, create a new session and choose “AI 小说作家”; an existing session keeps its original Preset.
 
-#### Read-only project context
+#### Plugin evidence and project initialization
 
-The same sidebar action opens a non-modal context drawer for the current registered Workspace. The browser submits only the Workspace id and selected chapter number; the Host resolves the canonical directory through `workspaceRegistry` and rejects unknown ids. The drawer shows project identity, creative strategy, chapter progress, character summaries, story and chapter blueprints, and a bounded prose preview. It contains no project initialization, asset editing, approval, arbitrary path, or file operation.
+The Plugin Configuration card distinguishes Client mounting, Host connectivity, Preset installation, Workspace selection, and novel-project initialization. Its explicit action and the sidebar entry open one non-modal 400–440 px drawer. On wide screens the shell reserves 440 px for the drawer instead of covering the conversation; narrow screens use the available width. The browser submits only the Workspace id and selected chapter number; the Host resolves the canonical directory through `workspaceRegistry` and rejects unknown ids. An initialized project shows identity, creative strategy, chapter progress, character summaries, story and chapter blueprints, and a bounded prose preview.
 
-The drawer reads on open, Workspace or Session selection changes, connection reset, a completed `novel_apply_change` result, and explicit refresh or chapter selection. It does not poll. Wide layouts leave the conversation interactive beside the drawer; narrow layouts use the available width. Escape closes the drawer and restores focus to its sidebar action.
+An uninitialized project presents title, language, genre, planned-chapter count, target words, and creative strategy as a one-column form. “预览初始化提案” first shows the complete shallow JSON, including the generated project id and timestamps, without sending anything. “提交到当前会话” then sends those exact values through the ordinary Session prompt operation; editing a field invalidates the preview and requires a new one. The browser exposes no mutation RPC and cannot create the manifest. The dedicated agent must call `novel_apply_change`, and only Harness native one-shot approval can commit it. A missing Session, wrong Preset, known approval-disabled mode, disconnected Host, validation failure, or prompt rejection remains visible with a specific recovery message.
+
+The drawer reads on open, Workspace or Session selection changes, connection reset, a completed `novel_apply_change` result, and explicit refresh or chapter selection. It does not poll, and every refresh publishes loading plus its last settled outcome. Wide layouts leave the conversation interactive beside the drawer; narrow layouts use the available width. Tab focus stays inside the open drawer, Escape closes it, and focus returns to its invoking action.
 
 #### What the model sees
 
@@ -64,7 +66,7 @@ The preset persona and the two tool definitions are stable across turns. Project
 
 ## Known Limitations and Deferred Work
 
-The package does not import `.vela` projects, provide multi-asset transactions, edit assets from the context drawer, or publish itself. Preset setup does not initialize a novel project; project initialization remains a native approval-gated conversation action.
+The package does not import `.vela` projects, provide multi-asset transactions, edit initialized assets from the workbench, or publish itself. Project initialization is available through the workbench, but persistence remains a native approval-gated agent action rather than a browser write.
 
 Build and run the focused qualification with:
 

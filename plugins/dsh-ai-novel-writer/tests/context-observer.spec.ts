@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { observeNovelContextSources } from '../src/client/context-observer.ts'
-import { NovelContextController } from '../src/client/context-store.ts'
+import { NovelWorkbenchController } from '../src/client/workbench-store.ts'
 import type { NovelContextReady } from '../src/context-types.ts'
 import type { NovelProjectId } from '../src/types.ts'
 
@@ -32,6 +32,58 @@ const ready: NovelContextReady = {
 }
 
 describe('novel context shell observer', () => {
+  it('projects the selected Preset and known approval mode into pre-submit recovery guidance', async () => {
+    const sessionList = source({
+      current: SESSION_1 as SessionId | undefined,
+      byId: {
+        [SESSION_1]: { agentPreset: 'default', projectionValues: { permissions: { currentValue: 'workspace-write' } } },
+      },
+    })
+    const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
+    const conversation = source({ nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: null }> })
+    const controller = new NovelWorkbenchController({
+      read: vi.fn().mockResolvedValue({ status: 'not-initialized' }),
+      prompt: vi.fn(),
+    }, vi.fn())
+    const dispose = observeNovelContextSources({
+      sessions: { list: sessionList, binding: () => ({ session: conversation }) },
+      workspaces: { list: workspaceList },
+    }, controller)
+    await controller.open()
+    expect(controller.getSnapshot()).toMatchObject({
+      initialization: { blocker: expect.stringContaining('未使用“AI 小说作家”Preset') },
+    })
+
+    sessionList.set({
+      current: SESSION_1,
+      byId: {
+        [SESSION_1]: {
+          agentPreset: 'ai-novel-writer',
+          projectionValues: { permissions: { currentValue: 'danger-full-access' } },
+        },
+      },
+    })
+    await controller.whenIdle()
+    expect(controller.getSnapshot()).toMatchObject({
+      initialization: { blocker: expect.stringContaining('已关闭原生审批') },
+    })
+
+    sessionList.set({
+      current: SESSION_1,
+      byId: {
+        [SESSION_1]: {
+          agentPreset: 'ai-novel-writer',
+          projectionValues: { permissions: { currentValue: 'workspace-write' } },
+        },
+      },
+    })
+    await controller.whenIdle()
+    expect(controller.getSnapshot()).toMatchObject({ initialization: { phase: 'editing' } })
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.status === 'not-initialized' ? snapshot.initialization.blocker : 'wrong state').toBeUndefined()
+    dispose()
+  })
+
   it('follows selection and refreshes only for a completed novel mutation result', async () => {
     const sessionList = source({ current: SESSION_1 as SessionId | undefined })
     const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
@@ -40,7 +92,7 @@ describe('novel context shell observer', () => {
       [SESSION_2, source({ nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }> })],
     ])
     const read = vi.fn(async () => ready)
-    const controller = new NovelContextController({ read }, vi.fn())
+    const controller = new NovelWorkbenchController({ read, prompt: vi.fn() }, vi.fn())
     const dispose = observeNovelContextSources({
       sessions: {
         list: sessionList,
@@ -89,7 +141,7 @@ describe('novel context shell observer', () => {
     })
     let materialized = false
     const read = vi.fn(async () => ready)
-    const controller = new NovelContextController({ read }, vi.fn())
+    const controller = new NovelWorkbenchController({ read, prompt: vi.fn() }, vi.fn())
     const dispose = observeNovelContextSources({
       sessions: {
         list: sessionList,

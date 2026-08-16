@@ -64,10 +64,10 @@ try {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 })
   await page.locator('#root').waitFor({ state: 'attached', timeout: 30_000 })
   await finishOnboarding(page)
-  const trigger = page.getByRole('button', { name: '打开小说上下文' })
+  const trigger = page.getByRole('button', { name: '打开小说工作台' })
   await trigger.waitFor({ state: 'visible', timeout: 60_000 })
   await clickContextTrigger(page, trigger)
-  await page.getByRole('dialog', { name: '小说上下文' }).waitFor({ state: 'visible', timeout: 30_000 })
+  await page.getByRole('dialog', { name: '小说工作台' }).waitFor({ state: 'visible', timeout: 30_000 })
   const install = page.getByRole('button', { name: '安装 AI 小说作家 Preset' })
   const installed = page.getByText('Preset 已安装。')
   await Promise.race([
@@ -78,7 +78,7 @@ try {
   await installed.waitFor({ state: 'visible', timeout: 30_000 })
   const graph = await page.evaluate(() => window.__DSH_BOOT__)
   if (pageErrors.length > 0) throw new Error(`browser page errors: ${pageErrors.join(' | ')}`)
-  result = { graph, contextWindowOpened: true, presetInstalled: true }
+  result = { graph, workbenchOpened: true, presetInstalled: true }
 } catch (error) {
   bodyError = error
 }

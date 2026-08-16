@@ -2,8 +2,9 @@
 export const novelContextCss = String.raw`
 .aiNovelContextTrigger{display:inline-flex;min-height:32px;align-items:center;gap:8px;border:0;border-radius:8px;padding:6px 10px;color:var(--dsw-alias-label-primary);background:transparent;cursor:pointer}
 .aiNovelContextTrigger:hover,.aiNovelContextTrigger:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
+.aiNovelWorkbenchFrameOpen{box-sizing:border-box;padding-right:440px}
 .aiNovelContextOverlay{position:fixed;inset:0;z-index:1000;display:flex;justify-content:flex-end;pointer-events:none}
-.aiNovelContextDrawer{box-sizing:border-box;width:min(440px,calc(100vw - 80px));height:100%;overflow:auto;pointer-events:auto;border-left:1px solid var(--dsw-alias-border-inverted);padding:24px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}
+.aiNovelContextDrawer{box-sizing:border-box;width:440px;min-width:400px;max-width:calc(100vw - 80px);height:100%;overflow:auto;pointer-events:auto;border-left:1px solid var(--dsw-alias-border-inverted);padding:24px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}
 .aiNovelContextHeader,.aiNovelContextSectionHeader{display:flex;align-items:center;justify-content:space-between;gap:16px}
 .aiNovelContextHeader h2,.aiNovelContextSections h3,.aiNovelContextSections h4,.aiNovelContextSections p,.aiNovelContextSetup h3,.aiNovelContextSetup p{margin:0}
 .aiNovelContextBody,.aiNovelContextSetup{margin-top:24px}
@@ -19,7 +20,18 @@ export const novelContextCss = String.raw`
 .aiNovelPresetClose,.aiNovelPresetPrimary,.aiNovelPresetSecondary{min-height:32px;border-radius:8px;padding:6px 12px;cursor:pointer}
 .aiNovelPresetClose,.aiNovelPresetSecondary{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:transparent}
 .aiNovelPresetPrimary{border:1px solid transparent;color:var(--dsw-alias-label-primary-foreground);background:var(--dsw-alias-button-primary-fill)}
-@media(max-width:760px){.aiNovelContextDrawer{width:100%;padding:18px}.aiNovelContextFacts{grid-template-columns:1fr}}
+.aiNovelPresetClose:focus-visible,.aiNovelPresetPrimary:focus-visible,.aiNovelPresetSecondary:focus-visible,.aiNovelWorkbenchField input:focus-visible,.aiNovelWorkbenchField select:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
+.aiNovelPresetPrimary:disabled{opacity:.45;cursor:default}
+.aiNovelWorkbenchForm{display:grid;gap:16px}.aiNovelWorkbenchIntro{display:grid;gap:8px}.aiNovelWorkbenchIntro h3,.aiNovelWorkbenchIntro p{margin:0}
+.aiNovelWorkbenchField{display:grid;gap:6px;font-size:13px;color:var(--dsw-alias-label-secondary)}
+.aiNovelWorkbenchField input,.aiNovelWorkbenchField select{box-sizing:border-box;width:100%;min-height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1)}
+.aiNovelInitializationPreview{display:grid;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px;background:var(--dsw-alias-bg-layer-1)}.aiNovelInitializationPreview h4,.aiNovelInitializationPreview p{margin:0}.aiNovelInitializationPreview pre{margin:0;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--dsw-alias-label-secondary)}
+.aiNovelWorkbenchActions,.aiNovelPluginActions{display:flex;justify-content:flex-end;gap:8px}.aiNovelWorkbenchActions{position:sticky;bottom:-24px;margin:0 -24px -24px;padding:16px 24px;background:var(--dsw-alias-bg-layer-2);border-top:1px solid var(--dsw-alias-border-l2)}
+.aiNovelPluginCard{list-style:none;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;padding:16px;background:var(--dsw-alias-bg-layer-3)}
+.aiNovelPluginCardHeader{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.aiNovelPluginCardHeader strong{font-size:15px}.aiNovelPluginCardHeader p{margin:4px 0 0;color:var(--dsw-alias-label-tertiary);font-size:13px}
+.aiNovelPluginMounted{flex:none;border-radius:999px;padding:2px 8px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-module-platform);font-size:11px}
+.aiNovelPluginFacts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0}.aiNovelPluginFacts div{min-width:0}.aiNovelPluginFacts dt{font-size:12px;color:var(--dsw-alias-label-tertiary)}.aiNovelPluginFacts dd{margin:2px 0 0;font-size:13px;color:var(--dsw-alias-label-primary)}
+@media(max-width:899px){.aiNovelWorkbenchFrameOpen{padding-right:0}.aiNovelContextDrawer{width:100%;min-width:0;max-width:none;padding:18px}.aiNovelContextFacts,.aiNovelPluginFacts{grid-template-columns:1fr}.aiNovelWorkbenchActions{bottom:-18px;margin:0 -18px -18px;padding:14px 18px}}
 `
 
 /**

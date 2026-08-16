@@ -3,27 +3,44 @@
 import type { ClientConnectionRpc, ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { ClientContext, ISessions, IWorkspaces } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { parseNovelContextReadResult } from '../context-types.ts'
-import { NovelContextController, NovelContextDisconnectedError, type NovelContextPort } from './context-store.ts'
 import {
   PresetSetupController,
   PresetSetupDisconnectedError,
   type PresetSetupPort,
 } from './setup-store.ts'
-import { NovelContextOverlay, NovelContextTrigger } from './context-view.tsx'
+import {
+  NovelPluginStatusCard,
+  NovelWorkbenchOverlay,
+  NovelWorkbenchTrigger,
+  type NovelWorkbenchInjected,
+} from './context-view.tsx'
 import { observeNovelContextSources, type NovelContextSelectionSources } from './context-observer.ts'
 import { installNovelContextStyle } from './setup-style.ts'
+import {
+  NovelWorkbenchController,
+  NovelWorkbenchDisconnectedError,
+  type NovelWorkbenchPort,
+} from './workbench-store.ts'
 
 export { PresetSetupBody } from './setup-view.tsx'
 export type { PresetSetupBodyProps } from './setup-view.tsx'
 export {
   installDrawerKeyboardScope,
-  NovelContextBody,
-  NovelContextOverlay,
-  NovelContextTrigger,
+  installWorkbenchLayoutReservation,
+  NovelPluginCardBody,
+  NovelPluginStatusCard,
+  NovelWorkbenchBody,
+  NovelWorkbenchOverlay,
+  NovelWorkbenchTrigger,
 } from './context-view.tsx'
-export type { NovelContextBodyProps } from './context-view.tsx'
+export type {
+  NovelPluginCardBodyProps,
+  NovelWorkbenchBodyProps,
+  NovelWorkbenchInjected,
+} from './context-view.tsx'
 export { observeNovelContextSources } from './context-observer.ts'
 export type { NovelContextSelectionSources } from './context-observer.ts'
 export {
@@ -31,8 +48,25 @@ export {
   PresetSetupDisconnectedError,
 } from './setup-store.ts'
 export type { PresetSetupPort, PresetSetupState } from './setup-store.ts'
-export { NovelContextController, NovelContextDisconnectedError } from './context-store.ts'
-export type { NovelContextPort, NovelContextState, NovelContextTarget } from './context-store.ts'
+export {
+  AI_NOVEL_PRESET_ID,
+  initializationProposalPrompt,
+  NovelWorkbenchController,
+  NovelWorkbenchDisconnectedError,
+} from './workbench-store.ts'
+export type {
+  NovelApprovalAvailability,
+  NovelInitializationDraft,
+  NovelInitializationIdentity,
+  NovelInitializationPhase,
+  NovelInitializationPreview,
+  NovelInitializationState,
+  NovelPromptResult,
+  NovelReadFeedback,
+  NovelWorkbenchPort,
+  NovelWorkbenchState,
+  NovelWorkbenchTarget,
+} from './workbench-store.ts'
 export { installNovelContextStyle, novelContextCss } from './setup-style.ts'
 
 /** Required browser services. */
@@ -93,17 +127,41 @@ export function createPresetSetupPort(rpc: Pick<ClientConnectionRpc, 'call'>): P
  * @param rpc Browser connection RPC caller.
  * @returns A validated context port accepting only opaque Workspace identity and chapter number.
  */
-export function createNovelContextPort(rpc: Pick<ClientConnectionRpc, 'call'>): NovelContextPort {
+export function createNovelContextPort(rpc: Pick<ClientConnectionRpc, 'call'>): Pick<NovelWorkbenchPort, 'read'> {
   return {
     read: async (workspaceId, chapter, signal) => {
       let result
       try {
         result = await rpc.call('/ai-novel', 'context/read', { workspaceId, chapter }, signal)
       } catch (error) {
-        throw new NovelContextDisconnectedError(error)
+        throw new NovelWorkbenchDisconnectedError(error)
       }
       if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
       return parseNovelContextReadResult(result.value)
+    },
+  }
+}
+
+/**
+ * Adapt Host reads and the current Session face to the workbench's closed port.
+ *
+ * @param rpc Browser connection RPC caller.
+ * @param sessions Browser Session registry used only for ordinary prompt submission.
+ * @returns A path-free port with no mutation RPC.
+ */
+export function createNovelWorkbenchPort(
+  rpc: Pick<ClientConnectionRpc, 'call'>,
+  sessions: Pick<ISessions, 'binding'>,
+): NovelWorkbenchPort {
+  const context = createNovelContextPort(rpc)
+  return {
+    read: context.read,
+    prompt: async (sessionId, text) => {
+      const session = sessions.binding(sessionId)?.session
+      if (session === undefined) {
+        return { ok: false, error: { code: 'session-unavailable', message: '当前会话尚未就绪' } }
+      }
+      return session.prompt([{ type: 'text', text }], 'queue')
     },
   }
 }
@@ -120,23 +178,23 @@ export function apply(ctx: ClientContext): void {
     createPresetSetupPort(connection.rpc),
     error => { ctx.logger.warn(error) },
   )
-  const contextController = new NovelContextController(
-    createNovelContextPort(connection.rpc),
-    error => { ctx.logger.warn(error) },
-  )
   const sessions = ctx.get('sessions' as never) as ISessions | undefined
   const workspaces = ctx.get('workspaces' as never) as IWorkspaces | undefined
   if (sessions === undefined || workspaces === undefined) {
     throw new Error('AI novel context requires the browser Session and Workspace services')
   }
+  const workbenchController = new NovelWorkbenchController(
+    createNovelWorkbenchPort(connection.rpc, sessions),
+    error => { ctx.logger.warn(error) },
+  )
   ctx.effect(() => {
     const stopObserving = observeNovelContextSources({
       sessions,
       workspaces,
-    } satisfies NovelContextSelectionSources, contextController)
+    } satisfies NovelContextSelectionSources, workbenchController)
     return async () => {
       stopObserving()
-      await Promise.all([controller.dispose(), contextController.dispose()])
+      await Promise.all([controller.dispose(), workbenchController.dispose()])
     }
   }, 'ai-novel-writer: setup and context lifecycle')
   if (typeof document !== 'undefined') {
@@ -146,29 +204,33 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => connection.hostDescription.subscribe(() => {
     if (connection.hostDescription.getSnapshot() === undefined) {
       controller.disconnected()
-      contextController.disconnected()
+      workbenchController.disconnected()
     }
   }), 'ai-novel-writer: observe Host connection')
   ctx.effect(() => ctx.on('connection/reset', () => {
     if (controller.getSnapshot().status !== 'idle') void controller.load()
-    void contextController.refresh()
+    if (workbenchController.getSnapshot().open) void workbenchController.refresh()
+    else void workbenchController.inspect()
   }), 'ai-novel-writer: refresh setup and context after reconnect')
 
-  const contextInjected = (): {
-    readonly contextController: NovelContextController
-    readonly setupController: PresetSetupController
-  } => ({ contextController, setupController: controller })
+  const workbenchInjected = (): NovelWorkbenchInjected => ({ workbenchController, setupController: controller })
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     name: 'sidebar.footer.action',
-    id: 'ai-novel-context',
+    id: 'ai-novel-workbench',
     order: 90,
-    label: '小说上下文',
-    inject: contextInjected,
-  }, NovelContextTrigger))
+    label: '小说工作台',
+    inject: workbenchInjected,
+  }, NovelWorkbenchTrigger))
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
-    id: 'ai-novel-context',
+    id: 'ai-novel-workbench',
     order: 90,
-    inject: contextInjected,
-  }, NovelContextOverlay))
+    inject: workbenchInjected,
+  }, NovelWorkbenchOverlay))
+  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+    name: 'settings.plugin.item',
+    id: 'ai-novel-writer',
+    order: 90,
+    inject: workbenchInjected,
+  }, NovelPluginStatusCard))
 }

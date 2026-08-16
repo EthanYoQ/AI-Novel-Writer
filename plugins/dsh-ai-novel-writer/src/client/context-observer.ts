@@ -1,7 +1,7 @@
-/** Selection and completed-tool observation for the read-only context window. */
+/** Selection, Preset, approval, and completed-tool observation for the novel workbench. */
 
 import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { NovelContextController } from './context-store.ts'
+import type { NovelApprovalAvailability, NovelWorkbenchController } from './workbench-store.ts'
 
 interface Observable<T> {
   getSnapshot(): T
@@ -17,7 +17,13 @@ interface ConversationNodeView {
 /** Minimal browser-runtime sources needed without exposing Workspace paths to the RPC caller. */
 export interface NovelContextSelectionSources {
   readonly sessions: {
-    readonly list: Observable<{ readonly current: SessionId | undefined }>
+    readonly list: Observable<{
+      readonly current: SessionId | undefined
+      readonly byId?: Readonly<Record<SessionId, {
+        readonly agentPreset?: string
+        readonly projectionValues?: Readonly<Record<string, unknown>>
+      }>>
+    }>
     binding(sessionId: SessionId): { readonly session: Observable<{ readonly nodes: readonly ConversationNodeView[] }> } | undefined
   }
   readonly workspaces: {
@@ -25,6 +31,14 @@ export interface NovelContextSelectionSources {
       readonly items: ReadonlyArray<{ readonly workspaceId: WorkspaceId; readonly sessionIds: readonly SessionId[] }>
     }>
   }
+}
+
+function approvalAvailability(value: unknown): NovelApprovalAvailability {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return 'unknown'
+  const currentValue = (value as { readonly currentValue?: unknown }).currentValue
+  if (currentValue === 'danger-full-access') return 'never'
+  if (typeof currentValue === 'string' && currentValue !== 'custom') return 'ask'
+  return 'unknown'
 }
 
 function latestNovelApplySeq(nodes: readonly ConversationNodeView[]): number | undefined {
@@ -46,7 +60,7 @@ function latestNovelApplySeq(nodes: readonly ConversationNodeView[]): number | u
  */
 export function observeNovelContextSources(
   sources: NovelContextSelectionSources,
-  controller: NovelContextController,
+  controller: NovelWorkbenchController,
 ): () => void {
   let disposed = false
   let boundSessionId: SessionId | undefined
@@ -76,14 +90,20 @@ export function observeNovelContextSources(
 
   const reconcile = (): void => {
     if (disposed) return
-    const sessionId = sources.sessions.list.getSnapshot().current
+    const sessionList = sources.sessions.list.getSnapshot()
+    const sessionId = sessionList.current
     const workspaceId = sessionId === undefined
       ? undefined
       : sources.workspaces.list.getSnapshot().items
         .find(workspace => workspace.sessionIds.includes(sessionId))?.workspaceId
     controller.setTarget(sessionId === undefined || workspaceId === undefined
       ? undefined
-      : { sessionId, workspaceId })
+      : {
+          sessionId,
+          workspaceId,
+          agentPreset: sessionList.byId?.[sessionId]?.agentPreset,
+          approval: approvalAvailability(sessionList.byId?.[sessionId]?.projectionValues?.['permissions']),
+        })
     bindConversation(sessionId)
   }
   const stopSessions = sources.sessions.list.subscribe(reconcile)
