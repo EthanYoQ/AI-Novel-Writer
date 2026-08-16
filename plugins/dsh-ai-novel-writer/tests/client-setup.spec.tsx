@@ -282,6 +282,49 @@ describe('preset setup browser integration', () => {
     expect(disposed).toBe(true)
   })
 
+  it('restarts setup and context reads when Host description recovers without a reset event', async () => {
+    const ctx = new Context()
+    interface InjectedControllers {
+      setupController: { load(): Promise<void> }
+      workbenchController: { open(): Promise<void>; whenIdle(): Promise<void> }
+    }
+    const entries: Array<{ options: { inject?: () => InjectedControllers } }> = []
+    class TestSlots extends Service {
+      constructor(owner: Context) { super(owner, 'slots') }
+      inject(_name: string, mount: () => () => void): void { this.ctx.effect(mount, 'test slot mount') }
+      register(options: { inject?: () => InjectedControllers }): () => void {
+        const entry = { options }
+        entries.push(entry)
+        return () => { entries.splice(entries.indexOf(entry), 1) }
+      }
+    }
+    new TestSlots(ctx)
+    provideNovelContextSources(ctx, true)
+    const hostDescription = mutableSource<object | undefined>({})
+    const call = vi.fn((_channel: string, endpoint: string) => Promise.resolve({
+      ok: true,
+      value: endpoint === 'context/read' ? { status: 'not-initialized' } : { status: 'installed' },
+    }))
+    ctx.provide('connection' as never, {
+      rpc: { call },
+      hostDescription,
+    } as never)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    const controllers = entries[0]!.options.inject!()
+    await Promise.all([controllers.setupController.load(), controllers.workbenchController.open()])
+    const beforeDisconnect = call.mock.calls.length
+
+    hostDescription.set(undefined)
+    hostDescription.set({})
+    await vi.waitFor(() => { expect(call.mock.calls.length).toBeGreaterThan(beforeDisconnect) })
+    await controllers.workbenchController.whenIdle()
+
+    expect(call.mock.calls.filter(args => args[1] === 'preset/status')).toHaveLength(2)
+    expect(call.mock.calls.filter(args => args[1] === 'context/read').length).toBeGreaterThanOrEqual(3)
+    await fiber.dispose()
+  })
+
   it('runs trigger, focus scope, Escape, and cleanup through real slot registrations', async () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     const ctx = new Context()

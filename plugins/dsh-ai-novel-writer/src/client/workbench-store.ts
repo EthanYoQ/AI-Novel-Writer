@@ -198,7 +198,10 @@ interface NovelWorkbenchStateBase {
 export type NovelWorkbenchState =
   | ({ readonly status: 'idle' | 'empty' | 'loading' | 'disconnected' } & NovelWorkbenchStateBase)
   | ({ readonly status: 'not-initialized'; readonly initialization: NovelInitializationState } & NovelWorkbenchStateBase)
-  | (NovelContextReady & NovelWorkbenchStateBase & { readonly screen: NovelWorkbenchScreen })
+  | (NovelContextReady & NovelWorkbenchStateBase & {
+      readonly screen: NovelWorkbenchScreen
+      readonly submissionBlocker?: string
+    })
   | ({ readonly status: 'error'; readonly message: string } & NovelWorkbenchStateBase)
 
 const DEFAULT_INITIALIZATION: NovelInitializationDraft = {
@@ -823,19 +826,18 @@ export class NovelWorkbenchController {
   /**
    * Add and select one empty character draft.
    *
-   * @param id Optional caller-selected id; otherwise a UUID is generated.
-   * @returns Nothing; duplicate ids are rejected and submitted editors are unchanged.
+   * @returns Nothing; the stable internal id is generated automatically and submitted editors are unchanged.
    */
-  public createCharacter(id: string = crypto.randomUUID()): void {
+  public createCharacter(): void {
     const screen = this.#charactersScreen()
     if (screen === undefined || !this.#assetMayChange(screen)) return
-    const normalizedId = id.trim()
-    if (normalizedId === '' || screen.characters.some(character => character.id === normalizedId)) {
-      this.#setReadyScreen({ ...screen, phase: 'error', message: '人物 ID 不能为空或重复。' })
+    const generatedId = crypto.randomUUID()
+    if (screen.characters.some(character => character.id === generatedId)) {
+      this.#setReadyScreen({ ...screen, phase: 'error', message: '无法生成唯一的人物标识，请重试。' })
       return
     }
     const characters = [...screen.characters, {
-      id: normalizedId,
+      id: generatedId,
       name: '',
       role: '',
       summary: '',
@@ -843,7 +845,7 @@ export class NovelWorkbenchController {
       relationshipsText: '',
       notes: '',
     }]
-    this.#setCharactersDraft(screen, characters, normalizedId)
+    this.#setCharactersDraft(screen, characters, generatedId)
   }
 
   /**
@@ -852,7 +854,7 @@ export class NovelWorkbenchController {
    * @param patch Editable character fields.
    * @returns Nothing; changes are ignored without a selection or during prompt admission.
    */
-  public updateCharacter(patch: Partial<NovelCharacterDraft>): void {
+  public updateCharacter(patch: Partial<Omit<NovelCharacterDraft, 'id'>>): void {
     const screen = this.#charactersScreen()
     if (screen === undefined || screen.selectedId === undefined || !this.#assetMayChange(screen)) return
     const selectedIndex = screen.characters.findIndex(character => character.id === screen.selectedId)
@@ -1469,6 +1471,9 @@ export class NovelWorkbenchController {
             ...result,
             open: this.#state.open,
             screen: { kind: 'root' },
+            ...(submissionBlocker(this.#target) === undefined
+              ? {}
+              : { submissionBlocker: submissionBlocker(this.#target) }),
             readFeedback: { kind: 'success', message: '读取完成：小说项目已初始化。' },
           }
         : {

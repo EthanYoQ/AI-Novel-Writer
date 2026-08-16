@@ -121,7 +121,7 @@ describe('novel workbench context summary', () => {
       expect(html).toContain(text)
     }
     expect(html).toContain('type="number"')
-    expect(html).toContain(PROJECT_ID)
+    expect(html).not.toContain(PROJECT_ID)
     expect(html).not.toContain('path=')
   })
 

@@ -214,17 +214,35 @@ export function apply(ctx: ClientContext): void {
     ctx.effect(() => installNovelContextStyle(document), 'ai-novel-writer: context-window styles')
   }
 
-  ctx.effect(() => connection.hostDescription.subscribe(() => {
-    if (connection.hostDescription.getSnapshot() === undefined) {
-      controller.disconnected()
-      workbenchController.disconnected()
+  ctx.effect(() => {
+    let stopped = false
+    let refreshScheduled = false
+    const refreshConnectedState = (): void => {
+      if (stopped || refreshScheduled) return
+      refreshScheduled = true
+      queueMicrotask(() => {
+        refreshScheduled = false
+        if (stopped || connection.hostDescription.getSnapshot() === undefined) return
+        if (controller.getSnapshot().status !== 'idle') void controller.load()
+        if (workbenchController.getSnapshot().open) void workbenchController.refresh()
+        else void workbenchController.inspect()
+      })
     }
-  }), 'ai-novel-writer: observe Host connection')
-  ctx.effect(() => ctx.on('connection/reset', () => {
-    if (controller.getSnapshot().status !== 'idle') void controller.load()
-    if (workbenchController.getSnapshot().open) void workbenchController.refresh()
-    else void workbenchController.inspect()
-  }), 'ai-novel-writer: refresh setup and context after reconnect')
+    const stopDescription = connection.hostDescription.subscribe(() => {
+      if (connection.hostDescription.getSnapshot() === undefined) {
+        controller.disconnected()
+        workbenchController.disconnected()
+        return
+      }
+      refreshConnectedState()
+    })
+    const stopReset = ctx.on('connection/reset', refreshConnectedState)
+    return () => {
+      stopped = true
+      stopReset()
+      stopDescription()
+    }
+  }, 'ai-novel-writer: observe and refresh Host connection')
 
   const workbenchInjected = (): NovelWorkbenchInjected => ({ workbenchController, setupController: controller })
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({

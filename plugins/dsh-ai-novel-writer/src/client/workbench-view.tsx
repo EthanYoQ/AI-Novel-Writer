@@ -40,7 +40,7 @@ export interface NovelWorkbenchBodyProps {
   readonly setCharacterSearch: (search: string) => void
   readonly selectCharacter: (id: string) => void
   readonly createCharacter: () => void
-  readonly updateCharacter: (patch: Partial<NovelCharacterDraft>) => void
+  readonly updateCharacter: (patch: Partial<Omit<NovelCharacterDraft, 'id'>>) => void
   readonly deleteCharacter: () => void
 }
 
@@ -74,14 +74,104 @@ function initializationField(
 
 function characterField(
   label: string,
-  name: keyof NovelCharacterDraft,
+  name: keyof Omit<NovelCharacterDraft, 'id'>,
   value: string,
-  update: (patch: Partial<NovelCharacterDraft>) => void,
+  update: (patch: Partial<Omit<NovelCharacterDraft, 'id'>>) => void,
 ) {
   return <label className="aiNovelWorkbenchField"><span>{label}</span><input
     value={value}
     onChange={event => { update({ [name]: event.currentTarget.value }) }}
   /></label>
+}
+
+interface CharacterRelationshipEditorRow {
+  readonly characterId: string
+  readonly type: string
+  readonly summary: string
+}
+
+function relationshipRows(text: string): CharacterRelationshipEditorRow[] {
+  if (text.trim() === '') return []
+  return text.split(/\r?\n/).filter(line => line.trim() !== '').map(line => {
+    const [characterId = '', type = '', summary = ''] = line.split('|').map(part => part.trim())
+    return { characterId, type, summary }
+  })
+}
+
+function relationshipText(rows: readonly CharacterRelationshipEditorRow[]): string {
+  return rows.map(row => `${row.characterId} | ${row.type} | ${row.summary}`).join('\n')
+}
+
+function CharacterRelationshipsEditor({
+  selected,
+  characters,
+  update,
+}: {
+  readonly selected: NovelCharacterDraft
+  readonly characters: readonly NovelCharacterDraft[]
+  readonly update: (patch: Partial<Omit<NovelCharacterDraft, 'id'>>) => void
+}) {
+  const rows = relationshipRows(selected.relationshipsText)
+  const candidates = characters.filter(character => character.id !== selected.id)
+  const replaceRow = (index: number, patch: Partial<CharacterRelationshipEditorRow>): void => {
+    update({ relationshipsText: relationshipText(rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row)) })
+  }
+  return <fieldset className="aiNovelRelationshipEditor">
+    <legend>人物关系</legend>
+    {rows.length === 0 ? <p className="aiNovelContextMuted">尚未添加人物关系。</p> : rows.map((row, index) => <div className="aiNovelRelationshipRow" key={`${index}:${row.characterId}`}>
+      <label className="aiNovelWorkbenchField"><span>关系人物 {index + 1}</span><select
+        aria-label={`关系人物 ${index + 1}`}
+        value={row.characterId}
+        onChange={event => { replaceRow(index, { characterId: event.currentTarget.value }) }}
+      >
+        {candidates.some(character => character.id === row.characterId) ? undefined : <option value={row.characterId}>未找到的人物</option>}
+        {candidates.map(character => <option value={character.id} key={character.id}>{character.name || '未命名人物'}{character.role === '' ? '' : ` · ${character.role}`}</option>)}
+      </select></label>
+      <label className="aiNovelWorkbenchField"><span>关系类型</span><input value={row.type} onChange={event => { replaceRow(index, { type: event.currentTarget.value }) }} /></label>
+      <label className="aiNovelWorkbenchField"><span>关系说明</span><input value={row.summary} onChange={event => { replaceRow(index, { summary: event.currentTarget.value }) }} /></label>
+      <button type="button" className="aiNovelPresetSecondary" onClick={() => { update({ relationshipsText: relationshipText(rows.filter((_row, rowIndex) => rowIndex !== index)) }) }}>删除关系</button>
+    </div>)}
+    <button
+      type="button"
+      className="aiNovelPresetSecondary"
+      disabled={candidates.length === 0}
+      onClick={() => { update({ relationshipsText: relationshipText([...rows, { characterId: candidates[0]!.id, type: '', summary: '' }]) }) }}
+    >添加关系</button>
+  </fieldset>
+}
+
+function ChapterCastEditor({
+  characters,
+  selectedIdsText,
+  disabled,
+  update,
+}: {
+  readonly characters: Extract<NovelWorkbenchState, { status: 'ready' }>['characters']
+  readonly selectedIdsText: string
+  readonly disabled: boolean
+  readonly update: (characterIdsText: string) => void
+}) {
+  const selectedIds = selectedIdsText.split(/\r?\n/).map(id => id.trim()).filter(Boolean)
+  const selected = new Set(selectedIds)
+  const known = new Set(characters.map(character => character.id))
+  const hiddenCount = selectedIds.filter(id => !known.has(id)).length
+  return <fieldset className="aiNovelCastEditor" disabled={disabled}>
+    <legend>出场人物</legend>
+    {characters.length === 0 ? <p className="aiNovelContextMuted">请先建立人物设定。</p> : characters.map(character => <label key={character.id}>
+      <input
+        type="checkbox"
+        checked={selected.has(character.id)}
+        onChange={event => {
+          const next = event.currentTarget.checked
+            ? [...selectedIds, character.id]
+            : selectedIds.filter(id => id !== character.id)
+          update([...new Set(next)].join('\n'))
+        }}
+      />
+      <span>{character.name || '未命名人物'}{character.role === '' ? '' : ` · ${character.role}`}</span>
+    </label>)}
+    {hiddenCount === 0 ? undefined : <p className="aiNovelContextMuted">已保留 {hiddenCount} 个当前人物列表中未显示的引用。</p>}
+  </fieldset>
 }
 
 function AssetProposalFields({
@@ -144,10 +234,12 @@ function generationPending(screen: NovelAssetEditorScreen): boolean {
 
 function AssetGenerationPanel({
   screen,
+  blocker,
   updateBrief,
   generate,
 }: {
   readonly screen: NovelAssetEditorScreen
+  readonly blocker?: string
   readonly updateBrief: (brief: string) => void
   readonly generate: () => void
 }) {
@@ -173,13 +265,14 @@ function AssetGenerationPanel({
     {manualBlocked && !pending
       ? <p className="aiNovelContextMuted">请先提交或放弃当前手动修改，再使用 AI 生成。</p>
       : undefined}
+    {blocker === undefined ? undefined : <p role="alert">{blocker}</p>}
     {generation.message !== undefined
       ? <p role={generation.phase === 'error' ? 'alert' : 'status'}>{generation.message}</p>
       : undefined}
     <button
       type="button"
       className="aiNovelPresetSecondary aiNovelGenerationButton"
-      disabled={pending || manualBlocked || generation.brief.trim() === ''}
+      disabled={blocker !== undefined || pending || manualBlocked || generation.brief.trim() === ''}
       onClick={generate}
     >{generation.phase === 'submitting' ? '正在发送生成请求…' : '让当前模型生成'}</button>
   </section>
@@ -354,7 +447,7 @@ export function NovelWorkbenchBody({
           {preview !== undefined ? (
             <section className="aiNovelInitializationPreview" aria-labelledby="ai-novel-initialization-preview-title">
               <h4 id="ai-novel-initialization-preview-title">即将提交的完整值</h4>
-              <p>确认项目 ID、时间戳和设置无误后，再提交到当前会话。</p>
+              <p>项目 ID 与时间戳由插件自动生成；确认可读的小说设置后，再提交到当前会话。</p>
               <pre>{preview.json}</pre>
             </section>
           ) : undefined}
@@ -402,7 +495,7 @@ export function NovelWorkbenchBody({
               disabled={disabled}
               onChange={event => { updateProjectSettings({ creativeStrategy: event.currentTarget.value as NovelProjectSettingsDraft['creativeStrategy'] }) }}
             ><option value="auto">自动平衡</option><option value="fluent-drafting">流畅起草</option><option value="consistency-first">一致性优先</option><option value="deep-planning">深度规划</option></select></label>
-            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
+            <AssetGenerationPanel screen={screen} blocker={state.submissionBlocker} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions
@@ -426,20 +519,19 @@ export function NovelWorkbenchBody({
               ? <p className="aiNovelContextMuted">没有匹配的人物。</p>
               : <ul className="aiNovelCharacterList" aria-label="人物列表">{screen.visibleCharacterIds.map(id => {
                   const character = screen.characters.find(item => item.id === id)!
-                  return <li key={id}><button type="button" aria-current={id === screen.selectedId} onClick={() => { selectCharacter(id) }}><strong>{character.name || '未命名人物'}</strong><span>{character.role || character.id}</span></button></li>
+                  return <li key={id}><button type="button" aria-current={id === screen.selectedId} onClick={() => { selectCharacter(id) }}><strong>{character.name || '未命名人物'}</strong><span>{character.role || '角色未填写'}</span></button></li>
                 })}</ul>}
             {selected === undefined ? <p className="aiNovelContextMuted">选择或新建人物后编辑完整设定。</p> : <fieldset className="aiNovelCharacterEditor" disabled={disabled}>
               <legend>{selected.name || '新人物'}</legend>
-              {characterField('人物 ID', 'id', selected.id, updateCharacter)}
               {characterField('姓名', 'name', selected.name, updateCharacter)}
               {characterField('角色', 'role', selected.role, updateCharacter)}
               {characterField('摘要', 'summary', selected.summary, updateCharacter)}
               {characterField('目标', 'goal', selected.goal, updateCharacter)}
-              <label className="aiNovelWorkbenchField"><span>关系（每行：人物 ID | 类型 | 说明）</span><textarea value={selected.relationshipsText} onChange={event => { updateCharacter({ relationshipsText: event.currentTarget.value }) }} /></label>
+              <CharacterRelationshipsEditor selected={selected} characters={screen.characters} update={updateCharacter} />
               <label className="aiNovelWorkbenchField"><span>备注</span><textarea value={selected.notes} onChange={event => { updateCharacter({ notes: event.currentTarget.value }) }} /></label>
               <button type="button" className="aiNovelDangerButton" onClick={deleteCharacter}>删除此人物</button>
             </fieldset>}
-            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
+            <AssetGenerationPanel screen={screen} blocker={state.submissionBlocker} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions dirty={screen.dirty} phase={screen.phase} hasPreview={screen.preview !== undefined} refresh={refresh} discard={discardAssetChanges} />
@@ -456,7 +548,7 @@ export function NovelWorkbenchBody({
             <label className="aiNovelWorkbenchField"><span>世界设定</span><textarea disabled={disabled} value={screen.draft.world} onChange={event => { updateStoryBlueprint({ world: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>故事主线</span><textarea disabled={disabled} value={screen.draft.mainPlot} onChange={event => { updateStoryBlueprint({ mainPlot: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>结局目标</span><textarea disabled={disabled} value={screen.draft.endingGoal} onChange={event => { updateStoryBlueprint({ endingGoal: event.currentTarget.value }) }} /></label>
-            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
+            <AssetGenerationPanel screen={screen} blocker={state.submissionBlocker} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions dirty={screen.dirty} phase={screen.phase} hasPreview={screen.preview !== undefined} refresh={refresh} discard={discardAssetChanges} />
@@ -471,10 +563,15 @@ export function NovelWorkbenchBody({
             <label className="aiNovelWorkbenchField"><span>章节标题</span><input disabled={disabled} value={screen.draft.title} onChange={event => { updateChapterBlueprint({ title: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>章节目的</span><textarea disabled={disabled} value={screen.draft.purpose} onChange={event => { updateChapterBlueprint({ purpose: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>情节节拍（每行一项）</span><textarea disabled={disabled} value={screen.draft.beatsText} onChange={event => { updateChapterBlueprint({ beatsText: event.currentTarget.value }) }} /></label>
-            <label className="aiNovelWorkbenchField"><span>人物 ID（每行一项）</span><textarea disabled={disabled} value={screen.draft.characterIdsText} onChange={event => { updateChapterBlueprint({ characterIdsText: event.currentTarget.value }) }} /></label>
+            <ChapterCastEditor
+              characters={state.characters}
+              selectedIdsText={screen.draft.characterIdsText}
+              disabled={disabled}
+              update={characterIdsText => { updateChapterBlueprint({ characterIdsText }) }}
+            />
             <label className="aiNovelWorkbenchField"><span>连续性备注（每行一项）</span><textarea disabled={disabled} value={screen.draft.continuityNotesText} onChange={event => { updateChapterBlueprint({ continuityNotesText: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>章节状态</span><select disabled={disabled} value={screen.draft.status} onChange={event => { updateChapterBlueprint({ status: event.currentTarget.value as NovelChapterBlueprintDraft['status'] }) }}><option value="planned">已规划</option><option value="drafting">起草中</option><option value="drafted">已起草</option><option value="revised">已修订</option><option value="final">已定稿</option></select></label>
-            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
+            <AssetGenerationPanel screen={screen} blocker={state.submissionBlocker} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions dirty={screen.dirty} phase={screen.phase} hasPreview={screen.preview !== undefined} refresh={refresh} discard={discardAssetChanges} />
@@ -493,7 +590,7 @@ export function NovelWorkbenchBody({
               value={screen.text}
               onChange={event => { updateChapterDraft(event.currentTarget.value) }}
             /></label>
-            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
+            <AssetGenerationPanel screen={screen} blocker={state.submissionBlocker} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions dirty={screen.dirty} phase={screen.phase} hasPreview={screen.preview !== undefined} refresh={refresh} discard={discardAssetChanges} />
@@ -518,7 +615,6 @@ export function NovelWorkbenchBody({
               <h3 id="ai-novel-project-summary">{state.project.title}</h3>
             </div>
             <dl className="aiNovelContextFacts">
-              <div><dt>项目 ID</dt><dd>{state.project.projectId}</dd></div>
               <div><dt>类型</dt><dd>{state.project.genre}</dd></div>
               <div><dt>语言</dt><dd>{state.project.language}</dd></div>
               <div><dt>创作策略</dt><dd>{state.project.creativeStrategy}</dd></div>

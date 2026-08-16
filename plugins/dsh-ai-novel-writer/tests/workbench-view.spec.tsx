@@ -34,7 +34,12 @@ const editorActions: Omit<NovelWorkbenchBodyProps, 'state'> = {
   updateStoryBlueprint: vi.fn(), updateChapterBlueprint: vi.fn(), updateChapterDraft: vi.fn(),
 }
 
-function ready(screen: Extract<NovelWorkbenchState, { status: 'ready' }>['screen']): NovelWorkbenchState {
+function ready(
+  screen: Extract<NovelWorkbenchState, { status: 'ready' }>['screen'],
+  characters: Extract<NovelWorkbenchState, { status: 'ready' }>['characters'] = [
+    { id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案' },
+  ],
+): NovelWorkbenchState {
   return {
     status: 'ready', open: true, screen,
     project: {
@@ -43,7 +48,7 @@ function ready(screen: Extract<NovelWorkbenchState, { status: 'ready' }>['screen
       targetWordsPerChapter: 3000, creativeStrategy: 'auto', updatedAt: '2026-08-16T00:00:00.000Z',
     },
     progress: { selectedChapter: 1, plannedChapters: 20, status: 'unplanned', draftPresent: false, draftBytes: 0 },
-    characters: [{ id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案' }],
+    characters,
     storyBlueprint: null, chapterBlueprint: null, draft: null, omittedSources: [],
   }
 }
@@ -161,6 +166,8 @@ describe('novel workbench presentation', () => {
     expect(html).toContain('故事蓝图')
     expect(html).toContain('章节蓝图')
     expect(html).toContain('章节正文')
+    expect(html).not.toContain('项目 ID')
+    expect(html).not.toContain('123e4567-e89b-42d3-a456-426614174000')
     expect(html).not.toContain('任务看板')
     expect(html).not.toContain('SSH')
   })
@@ -219,6 +226,25 @@ describe('novel workbench presentation', () => {
     expect(html).not.toContain('任务看板')
   })
 
+  it('explains why generation is unavailable before the user clicks it', () => {
+    const state = ready({
+      kind: 'project', phase: 'clean', dirty: false, baseRevision: 'a'.repeat(64) as Revision,
+      originalText: '{}\n', summary: '', generation: { brief: '改成玄幻题材', phase: 'editing' },
+      draft: {
+        title: '潮汐来信', language: 'zh-CN', genre: '悬疑', plannedChapters: '20',
+        targetWordsPerChapter: '3000', creativeStrategy: 'auto',
+      },
+    })
+    if (state.status !== 'ready') throw new Error('expected ready state')
+    const html = renderToStaticMarkup(<NovelWorkbenchBody {...editorActions} state={{
+      ...state,
+      submissionBlocker: '当前会话未使用“AI 小说作家”Preset，请新建或切换到该 Preset 会话。',
+    }} />)
+
+    expect(html).toContain('当前会话未使用“AI 小说作家”Preset')
+    expect(html).toMatch(/class="aiNovelPresetSecondary aiNovelGenerationButton"[^>]*disabled/)
+  })
+
   it('keeps return, manual fields, and another generation locked during authoritative reconciliation', () => {
     const html = renderToStaticMarkup(<NovelWorkbenchBody {...editorActions} state={ready({
       kind: 'project', phase: 'clean', dirty: false, baseRevision: 'a'.repeat(64) as Revision,
@@ -241,13 +267,17 @@ describe('novel workbench presentation', () => {
       originalText: '{"characters":[]}\n', summary: '', search: '林', selectedId: 'lin', visibleCharacterIds: ['lin'],
       characters: [{
         id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案', goal: '找到真相',
+        relationshipsText: 'zhou | 同盟 | 共同调查', notes: '',
+      }, {
+        id: 'zhou', name: '周遥', role: '记者', summary: '调查失踪案', goal: '公开真相',
         relationshipsText: '', notes: '',
       }],
     })} />)
 
-    for (const text of ['搜索人物', '林澈', '人物 ID', '关系（每行：人物 ID | 类型 | 说明）', '预览修改提案']) {
+    for (const text of ['搜索人物', '林澈', '人物关系', '关系人物 1', '周遥', '添加关系', '预览修改提案']) {
       expect(html).toContain(text)
     }
+    expect(html).not.toContain('人物 ID')
     expect(html).toContain('aria-current="true"')
   })
 
@@ -275,11 +305,15 @@ describe('novel workbench presentation', () => {
         title: '潮汐站', purpose: '交换证据', beatsText: '抵达\n发现录音',
         characterIdsText: 'lin\nzhou', continuityNotesText: '旧案仍未公开', status: 'planned',
       },
-    })} />)
+    }, [
+      { id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案' },
+      { id: 'zhou', name: '周遥', role: '记者', summary: '调查失踪案' },
+    ])} />)
 
-    for (const text of ['第 2 章蓝图', '章节标题', '章节目的', '情节节拍（每行一项）', '人物 ID（每行一项）', '连续性备注（每行一项）', '章节状态']) {
+    for (const text of ['第 2 章蓝图', '章节标题', '章节目的', '情节节拍（每行一项）', '出场人物', '林澈', '周遥', '连续性备注（每行一项）', '章节状态']) {
       expect(html).toContain(text)
     }
+    expect(html).not.toContain('人物 ID')
     expect(html).not.toContain('任务看板')
   })
 

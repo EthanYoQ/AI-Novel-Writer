@@ -135,7 +135,10 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
     updatedAt: '2026-08-16T00:00:00.000Z',
   }, null, 2)}\n`, 'utf8')
   await writeFile(join(assetRoot, 'characters.json'), `${JSON.stringify({ characters: [{
-    id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案', goal: '找到真相', relationships: [], notes: '',
+    id: 'lin', name: '林澈', role: '调查者', summary: '追查旧案', goal: '找到真相',
+    relationships: [{ characterId: 'zhou', type: '同盟', summary: '共同调查潮汐站旧案' }], notes: '',
+  }, {
+    id: 'zhou', name: '周遥', role: '记者', summary: '调查失踪案', goal: '公开真相', relationships: [], notes: '',
   }] }, null, 2)}\n`, 'utf8')
   await writeFile(join(assetRoot, 'blueprints', 'story.json'), `${JSON.stringify({
     premise: '退潮后，失踪者的信件逐封出现。',
@@ -149,7 +152,7 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
     title: '潮汐站',
     purpose: '让两位调查者第一次交换证据。',
     beats: ['抵达废弃站', '发现录音'],
-    characterIds: ['lin'],
+    characterIds: ['lin', 'zhou'],
     continuityNotes: ['林澈仍隐瞒旧案关系'],
     status: 'planned',
   }, null, 2)}\n`, 'utf8')
@@ -175,6 +178,9 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await drawer.getByRole('button', { name: /人物设定/ }).click()
   await drawer.getByRole('textbox', { name: '搜索人物' }).fill('林')
   const characterEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  if (screenshotDir !== undefined) {
+    await page.screenshot({ path: join(screenshotDir, '05-character-editor-private-ids.png'), fullPage: false })
+  }
   await drawer.getByRole('button', { name: '返回小说资产列表' }).click()
   await drawer.getByRole('button', { name: /故事蓝图/ }).click()
   const storyHeading = drawer.getByRole('heading', { name: '故事蓝图', exact: true })
@@ -240,6 +246,9 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await drawer.getByRole('button', { name: '预览修改提案' }).click()
   await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
   const chapterBlueprintEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  if (screenshotDir !== undefined) {
+    await page.screenshot({ path: join(screenshotDir, '06-chapter-cast-by-name.png'), fullPage: false })
+  }
   await drawer.getByRole('button', { name: '放弃修改' }).click()
   await drawer.getByRole('button', { name: '返回小说资产列表' }).click()
   await drawer.getByRole('button', { name: /章节正文/ }).click()

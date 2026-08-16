@@ -361,6 +361,8 @@ describe('novel workbench asset editing', () => {
   })
 
   it('searches, creates, edits, and deletes records while proposing the complete characters asset', async () => {
+    const generatedId = '123e4567-e89b-42d3-a456-426614174222'
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue(generatedId)
     const readAsset = vi.fn().mockResolvedValue({
       target: { kind: 'characters' }, revision: REVISION_A, text: charactersText,
       bytes: new TextEncoder().encode(charactersText).byteLength,
@@ -373,8 +375,8 @@ describe('novel workbench asset editing', () => {
     expect(controller.getSnapshot()).toMatchObject({
       status: 'ready', screen: { kind: 'characters', visibleCharacterIds: ['lin'], selectedId: 'lin' },
     })
-    controller.updateCharacter({ goal: '揭开潮汐站秘密', relationshipsText: 'new-id | 同盟 | 共同调查' })
-    controller.createCharacter('new-id')
+    controller.updateCharacter({ goal: '揭开潮汐站秘密', relationshipsText: `${generatedId} | 同盟 | 共同调查` })
+    controller.createCharacter()
     controller.updateCharacter({
       name: '周遥', role: '记者', summary: '外地记者', goal: '追踪失踪案', notes: '谨慎',
     })
@@ -388,10 +390,10 @@ describe('novel workbench asset editing', () => {
       throw new Error('missing characters preview')
     }
     expect(JSON.parse(state.screen.replacement)).toEqual({ characters: [{
-      id: 'new-id', name: '周遥', role: '记者', summary: '外地记者', goal: '追踪失踪案',
+      id: generatedId, name: '周遥', role: '记者', summary: '外地记者', goal: '追踪失踪案',
       relationships: [], notes: '谨慎',
     }] })
-    expect(state.screen).toMatchObject({ phase: 'preview', dirty: true, selectedId: 'new-id' })
+    expect(state.screen).toMatchObject({ phase: 'preview', dirty: true, selectedId: generatedId })
   })
 
   it('round-trips an absent story blueprint through one canonical replacement proposal', async () => {
