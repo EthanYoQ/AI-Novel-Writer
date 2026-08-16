@@ -1,6 +1,6 @@
 /** Pure React bodies for the compact workbench and its Plugin Configuration evidence card. */
 
-import type { ChangeEvent } from 'react'
+import type { ChangeEvent, ReactNode } from 'react'
 import type { PresetSetupState } from './setup-store.ts'
 import type {
   NovelCharacterDraft,
@@ -16,9 +16,12 @@ import type { NovelInitializationDraft, NovelWorkbenchState } from './workbench-
 /** Props for the one-column workbench content. */
 export interface NovelWorkbenchBodyProps {
   readonly state: NovelWorkbenchState
+  readonly backIcon?: ReactNode
   readonly refresh: () => void
   readonly selectChapter: (chapter: number) => void
   readonly updateInitialization: (patch: Partial<NovelInitializationDraft>) => void
+  readonly updateInitializationGenerationBrief: (brief: string) => void
+  readonly generateInitialization: () => void
   readonly previewInitialization: () => void
   readonly submitInitialization: () => void
   readonly openAsset: (target: NovelWorkbenchEditableTarget) => void
@@ -28,6 +31,8 @@ export interface NovelWorkbenchBodyProps {
   readonly updateChapterBlueprint: (patch: Partial<NovelChapterBlueprintDraft>) => void
   readonly updateChapterDraft: (text: string) => void
   readonly updateAssetSummary: (summary: string) => void
+  readonly updateAssetGenerationBrief: (brief: string) => void
+  readonly generateAsset: () => void
   readonly previewAssetChange: () => void
   readonly submitAssetChange: () => void
   readonly discardAssetChanges: () => void
@@ -121,19 +126,82 @@ function assetEditorLocked(phase: NovelAssetEditorPhase): boolean {
   return phase === 'submitting' || phase === 'submitted' || phase === 'stale'
 }
 
+function generationLabel(screen: NovelAssetEditorScreen): string {
+  switch (screen.kind) {
+    case 'project': return '项目设置'
+    case 'characters': return '人物设定'
+    case 'story-blueprint': return '故事蓝图'
+    case 'chapter-blueprint': return `第 ${screen.chapter} 章蓝图`
+    case 'chapter-draft': return `第 ${screen.chapter} 章正文`
+  }
+}
+
+function generationPending(screen: NovelAssetEditorScreen): boolean {
+  return screen.generation?.phase === 'submitting'
+    || screen.generation?.phase === 'submitted'
+    || screen.generation?.phase === 'reconciling'
+}
+
+function AssetGenerationPanel({
+  screen,
+  updateBrief,
+  generate,
+}: {
+  readonly screen: NovelAssetEditorScreen
+  readonly updateBrief: (brief: string) => void
+  readonly generate: () => void
+}) {
+  const label = generationLabel(screen)
+  const generation = screen.generation ?? { brief: '', phase: 'editing' as const }
+  const pending = generationPending(screen)
+  const manualBlocked = screen.dirty || screen.phase !== 'clean'
+  return <section className="aiNovelGenerationPanel" aria-labelledby={`ai-novel-generate-${screen.kind}`}>
+    <div className="aiNovelGenerationHeader">
+      <h4 id={`ai-novel-generate-${screen.kind}`}>AI 生成{label}</h4>
+      <p>只会生成当前资产，并通过对话展示原生审批。</p>
+    </div>
+    <label className="aiNovelWorkbenchField">
+      <span>补充要求</span>
+      <textarea
+        aria-label={`${label} AI 生成要求`}
+        value={generation.brief}
+        disabled={pending}
+        placeholder="例如：玄幻题材，主角林凡，保持现有世界观一致"
+        onChange={event => { updateBrief(event.currentTarget.value) }}
+      />
+    </label>
+    {manualBlocked && !pending
+      ? <p className="aiNovelContextMuted">请先提交或放弃当前手动修改，再使用 AI 生成。</p>
+      : undefined}
+    {generation.message !== undefined
+      ? <p role={generation.phase === 'error' ? 'alert' : 'status'}>{generation.message}</p>
+      : undefined}
+    <button
+      type="button"
+      className="aiNovelPresetSecondary aiNovelGenerationButton"
+      disabled={pending || manualBlocked || generation.brief.trim() === ''}
+      onClick={generate}
+    >{generation.phase === 'submitting' ? '正在发送生成请求…' : '让当前模型生成'}</button>
+  </section>
+}
+
 function AssetEditorHeading({
   title,
   detail,
   back,
   blocked,
+  icon,
 }: {
   readonly title: string
   readonly detail: string
   readonly back: () => void
   readonly blocked: boolean
+  readonly icon: ReactNode
 }) {
   return <div className="aiNovelAssetHeading">
-    <button type="button" className="aiNovelBackButton" disabled={blocked} onClick={back}>返回资产</button>
+    <button type="button" className="aiNovelBackButton" aria-label="返回小说资产列表" disabled={blocked} onClick={back}>
+      {icon}<span>返回小说资产</span>
+    </button>
     <div><h3 data-ai-novel-screen-focus tabIndex={-1}>{title}</h3><p>{detail}</p></div>
   </div>
 }
@@ -169,9 +237,12 @@ function AssetEditorActions({
  */
 export function NovelWorkbenchBody({
   state,
+  backIcon,
   refresh,
   selectChapter,
   updateInitialization,
+  updateInitializationGenerationBrief,
+  generateInitialization,
   previewInitialization,
   submitInitialization,
   openAsset,
@@ -181,6 +252,8 @@ export function NovelWorkbenchBody({
   updateChapterBlueprint,
   updateChapterDraft,
   updateAssetSummary,
+  updateAssetGenerationBrief,
+  generateAsset,
   previewAssetChange,
   submitAssetChange,
   discardAssetChanges,
@@ -209,7 +282,13 @@ export function NovelWorkbenchBody({
     )
     case 'not-initialized': {
       const { blocker, draft, phase, message, preview } = state.initialization
-      const disabled = blocker !== undefined || phase === 'submitting' || phase === 'submitted'
+      const generation = state.initialization.generation ?? { brief: '', phase: 'editing' as const }
+      const generationPending = generation.phase === 'submitting'
+        || generation.phase === 'submitted'
+        || generation.phase === 'reconciling'
+      const manuallyEdited = draft.title !== '' || draft.language !== 'zh-CN' || draft.genre !== ''
+        || draft.plannedChapters !== '20' || draft.targetWordsPerChapter !== '3000' || draft.creativeStrategy !== 'auto'
+      const disabled = blocker !== undefined || phase === 'submitting' || phase === 'submitted' || generationPending
       return (
         <form
           className="aiNovelWorkbenchForm"
@@ -224,6 +303,30 @@ export function NovelWorkbenchBody({
             <h3 id="ai-novel-initialize-title">初始化小说项目</h3>
             <p>填写项目设置后，工作台只会向当前会话发送一份初始化提案。文件仍需经过 Harness 原生审批才会创建。</p>
           </div>
+          <section className="aiNovelGenerationPanel" aria-labelledby="ai-novel-generate-initialization">
+            <div className="aiNovelGenerationHeader">
+              <h4 id="ai-novel-generate-initialization">AI 生成项目设置</h4>
+              <p>描述题材与主角，当前模型会生成一份初始化提案，并通过对话展示原生审批。</p>
+            </div>
+            <label className="aiNovelWorkbenchField"><span>生成要求</span><textarea
+              aria-label="项目设置 AI 生成要求"
+              value={generation.brief}
+              disabled={generationPending}
+              placeholder="例如：玄幻题材，主角林凡，规划 12 章"
+              onChange={event => { updateInitializationGenerationBrief(event.currentTarget.value) }}
+            /></label>
+            {manuallyEdited && !generationPending
+              ? <p className="aiNovelContextMuted">请先清空手动填写的项目设置，再使用 AI 生成。</p>
+              : undefined}
+            {generation.message === undefined ? undefined
+              : <p role={generation.phase === 'error' ? 'alert' : 'status'}>{generation.message}</p>}
+            <button
+              type="button"
+              className="aiNovelPresetSecondary aiNovelGenerationButton"
+              disabled={blocker !== undefined || manuallyEdited || generationPending || generation.brief.trim() === ''}
+              onClick={generateInitialization}
+            >{generation.phase === 'submitting' ? '正在发送生成请求…' : '让当前模型生成'}</button>
+          </section>
           {initializationField('小说标题', 'title', draft.title, updateInitialization, { disabled })}
           {initializationField('语言', 'language', draft.language, updateInitialization, { disabled })}
           {initializationField('类型', 'genre', draft.genre, updateInitialization, { disabled })}
@@ -285,10 +388,10 @@ export function NovelWorkbenchBody({
         </div>
       )
       if (screen.kind === 'project') {
-        const disabled = assetEditorLocked(screen.phase)
+        const disabled = assetEditorLocked(screen.phase) || generationPending(screen)
         return (
           <form className="aiNovelWorkbenchForm" onSubmit={event => { event.preventDefault(); screen.preview === undefined ? previewAssetChange() : submitAssetChange() }}>
-            <AssetEditorHeading title="项目设置" detail={`基于 revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} />
+            <AssetEditorHeading title="项目设置" detail={`基于 revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} icon={backIcon} />
             {initializationField('小说标题', 'title', screen.draft.title, updateProjectSettings, { disabled })}
             {initializationField('语言', 'language', screen.draft.language, updateProjectSettings, { disabled })}
             {initializationField('类型', 'genre', screen.draft.genre, updateProjectSettings, { disabled })}
@@ -299,6 +402,7 @@ export function NovelWorkbenchBody({
               disabled={disabled}
               onChange={event => { updateProjectSettings({ creativeStrategy: event.currentTarget.value as NovelProjectSettingsDraft['creativeStrategy'] }) }}
             ><option value="auto">自动平衡</option><option value="fluent-drafting">流畅起草</option><option value="consistency-first">一致性优先</option><option value="deep-planning">深度规划</option></select></label>
+            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions
@@ -310,10 +414,10 @@ export function NovelWorkbenchBody({
       }
       if (screen.kind === 'characters') {
         const selected = screen.characters.find(character => character.id === screen.selectedId)
-        const disabled = assetEditorLocked(screen.phase)
+        const disabled = assetEditorLocked(screen.phase) || generationPending(screen)
         return (
           <form className="aiNovelWorkbenchForm" onSubmit={event => { event.preventDefault(); screen.preview === undefined ? previewAssetChange() : submitAssetChange() }}>
-            <AssetEditorHeading title="人物设定" detail={`${screen.characters.length} 人 · revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} />
+            <AssetEditorHeading title="人物设定" detail={`${screen.characters.length} 人 · revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} icon={backIcon} />
             <div className="aiNovelCharacterToolbar">
               <label className="aiNovelWorkbenchField"><span>搜索人物</span><input value={screen.search} onChange={event => { setCharacterSearch(event.currentTarget.value) }} /></label>
               <button type="button" className="aiNovelPresetSecondary" disabled={disabled} onClick={createCharacter}>新建人物</button>
@@ -335,6 +439,7 @@ export function NovelWorkbenchBody({
               <label className="aiNovelWorkbenchField"><span>备注</span><textarea value={selected.notes} onChange={event => { updateCharacter({ notes: event.currentTarget.value }) }} /></label>
               <button type="button" className="aiNovelDangerButton" onClick={deleteCharacter}>删除此人物</button>
             </fieldset>}
+            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions dirty={screen.dirty} phase={screen.phase} hasPreview={screen.preview !== undefined} refresh={refresh} discard={discardAssetChanges} />
@@ -342,15 +447,16 @@ export function NovelWorkbenchBody({
         )
       }
       if (screen.kind === 'story-blueprint') {
-        const disabled = assetEditorLocked(screen.phase)
+        const disabled = assetEditorLocked(screen.phase) || generationPending(screen)
         return (
           <form className="aiNovelWorkbenchForm" onSubmit={event => { event.preventDefault(); screen.preview === undefined ? previewAssetChange() : submitAssetChange() }}>
-            <AssetEditorHeading title="故事蓝图" detail={`revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} />
+            <AssetEditorHeading title="故事蓝图" detail={`revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} icon={backIcon} />
             <label className="aiNovelWorkbenchField"><span>故事前提</span><textarea disabled={disabled} value={screen.draft.premise} onChange={event => { updateStoryBlueprint({ premise: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>主题（每行一项）</span><textarea disabled={disabled} value={screen.draft.themesText} onChange={event => { updateStoryBlueprint({ themesText: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>世界设定</span><textarea disabled={disabled} value={screen.draft.world} onChange={event => { updateStoryBlueprint({ world: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>故事主线</span><textarea disabled={disabled} value={screen.draft.mainPlot} onChange={event => { updateStoryBlueprint({ mainPlot: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>结局目标</span><textarea disabled={disabled} value={screen.draft.endingGoal} onChange={event => { updateStoryBlueprint({ endingGoal: event.currentTarget.value }) }} /></label>
+            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions dirty={screen.dirty} phase={screen.phase} hasPreview={screen.preview !== undefined} refresh={refresh} discard={discardAssetChanges} />
@@ -358,16 +464,17 @@ export function NovelWorkbenchBody({
         )
       }
       if (screen.kind === 'chapter-blueprint') {
-        const disabled = assetEditorLocked(screen.phase)
+        const disabled = assetEditorLocked(screen.phase) || generationPending(screen)
         return (
           <form className="aiNovelWorkbenchForm" onSubmit={event => { event.preventDefault(); screen.preview === undefined ? previewAssetChange() : submitAssetChange() }}>
-            <AssetEditorHeading title={`第 ${screen.chapter} 章蓝图`} detail={`revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} />
+            <AssetEditorHeading title={`第 ${screen.chapter} 章蓝图`} detail={`revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} icon={backIcon} />
             <label className="aiNovelWorkbenchField"><span>章节标题</span><input disabled={disabled} value={screen.draft.title} onChange={event => { updateChapterBlueprint({ title: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>章节目的</span><textarea disabled={disabled} value={screen.draft.purpose} onChange={event => { updateChapterBlueprint({ purpose: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>情节节拍（每行一项）</span><textarea disabled={disabled} value={screen.draft.beatsText} onChange={event => { updateChapterBlueprint({ beatsText: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>人物 ID（每行一项）</span><textarea disabled={disabled} value={screen.draft.characterIdsText} onChange={event => { updateChapterBlueprint({ characterIdsText: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>连续性备注（每行一项）</span><textarea disabled={disabled} value={screen.draft.continuityNotesText} onChange={event => { updateChapterBlueprint({ continuityNotesText: event.currentTarget.value }) }} /></label>
             <label className="aiNovelWorkbenchField"><span>章节状态</span><select disabled={disabled} value={screen.draft.status} onChange={event => { updateChapterBlueprint({ status: event.currentTarget.value as NovelChapterBlueprintDraft['status'] }) }}><option value="planned">已规划</option><option value="drafting">起草中</option><option value="drafted">已起草</option><option value="revised">已修订</option><option value="final">已定稿</option></select></label>
+            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions dirty={screen.dirty} phase={screen.phase} hasPreview={screen.preview !== undefined} refresh={refresh} discard={discardAssetChanges} />
@@ -375,10 +482,10 @@ export function NovelWorkbenchBody({
         )
       }
       if (screen.kind === 'chapter-draft') {
-        const disabled = assetEditorLocked(screen.phase)
+        const disabled = assetEditorLocked(screen.phase) || generationPending(screen)
         return (
           <form className="aiNovelWorkbenchForm" onSubmit={event => { event.preventDefault(); screen.preview === undefined ? previewAssetChange() : submitAssetChange() }}>
-            <AssetEditorHeading title={`第 ${screen.chapter} 章正文`} detail={`Markdown · revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} />
+            <AssetEditorHeading title={`第 ${screen.chapter} 章正文`} detail={`Markdown · revision ${screen.baseRevision.slice(0, 12)}`} back={backToAssets} blocked={screen.dirty || disabled} icon={backIcon} />
             <label className="aiNovelWorkbenchField"><span>章节正文 Markdown</span><textarea
               className="aiNovelChapterDraftEditor"
               aria-label="章节正文 Markdown"
@@ -386,6 +493,7 @@ export function NovelWorkbenchBody({
               value={screen.text}
               onChange={event => { updateChapterDraft(event.currentTarget.value) }}
             /></label>
+            <AssetGenerationPanel screen={screen} updateBrief={updateAssetGenerationBrief} generate={generateAsset} />
             <AssetProposalFields screen={screen} disabled={disabled} updateSummary={updateAssetSummary} />
             <AssetEditorFeedback phase={screen.phase} message={screen.message} reload={reloadStaleAsset} />
             <AssetEditorActions dirty={screen.dirty} phase={screen.phase} hasPreview={screen.preview !== undefined} refresh={refresh} discard={discardAssetChanges} />

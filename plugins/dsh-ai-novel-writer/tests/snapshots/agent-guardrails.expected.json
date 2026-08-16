@@ -2,6 +2,9 @@
   "approvalNever": {
     "runtimeContextExplainsDisabledApproval": true,
     "personaForbidsApply": true,
+    "existingProjectUsesReplace": true,
+    "absentAssetUsesReplace": true,
+    "branchFieldsAreExplicit": true,
     "toolCalls": 0,
     "assistant": [
       "当前会话已禁用原生审批，因此无法提交小说修改。请切换到允许审批的权限策略后再试。"

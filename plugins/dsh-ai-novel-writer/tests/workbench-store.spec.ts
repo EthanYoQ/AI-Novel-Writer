@@ -17,6 +17,87 @@ const IDENTITY: NovelInitializationIdentity = {
 }
 
 describe('novel workbench initialization', () => {
+  it('asks the selected model to generate canonical project settings through one approved initialize', async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = new NovelWorkbenchController({
+      read: vi.fn().mockResolvedValue({ status: 'not-initialized' }), readAsset: vi.fn(), prompt,
+    }, vi.fn(), () => IDENTITY)
+    controller.setTarget({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, agentPreset: 'ai-novel-writer', approval: 'ask' })
+    await controller.open()
+
+    controller.updateInitializationGenerationBrief('玄幻题材，主角林凡，规划 12 章。')
+    await controller.generateInitialization()
+
+    expect(prompt).toHaveBeenCalledOnce()
+    const text = String(prompt.mock.calls[0]?.[1])
+    expect(text).toContain('恰好调用一次 novel_read')
+    expect(text).toContain('NOT_INITIALIZED')
+    expect(text).toContain('恰好调用一次 novel_apply_change')
+    expect(text).toContain('"projectId": "123e4567-e89b-42d3-a456-426614174000"')
+    expect(text).toContain('"createdAt": "2026-08-16T02:00:00.000Z"')
+    expect(text).toContain('"updatedAt": "2026-08-16T02:00:00.000Z"')
+    expect(text).toContain('Harness 原生审批')
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'not-initialized',
+      initialization: { generation: { brief: '玄幻题材，主角林凡，规划 12 章。', phase: 'submitted' } },
+    })
+  })
+
+  it('preserves a manually edited initialization form instead of generating over it', async () => {
+    const prompt = vi.fn()
+    const controller = new NovelWorkbenchController({
+      read: vi.fn().mockResolvedValue({ status: 'not-initialized' }), readAsset: vi.fn(), prompt,
+    }, vi.fn(), () => IDENTITY)
+    controller.setTarget({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, agentPreset: 'ai-novel-writer', approval: 'ask' })
+    await controller.open()
+    controller.updateInitialization({ title: '本地手填标题' })
+    controller.updateInitializationGenerationBrief('玄幻题材')
+
+    await controller.generateInitialization()
+
+    expect(prompt).not.toHaveBeenCalled()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'not-initialized',
+      initialization: {
+        draft: { title: '本地手填标题' },
+        generation: { phase: 'error', message: '请先清空手动填写的项目设置，再让模型生成。' },
+      },
+    })
+  })
+
+  it('locks every manual and generated initialize path while generation awaits reconciliation', async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = new NovelWorkbenchController({
+      read: vi.fn().mockResolvedValue({ status: 'not-initialized' }), readAsset: vi.fn(), prompt,
+    }, vi.fn(), () => IDENTITY)
+    controller.setTarget({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, agentPreset: 'ai-novel-writer', approval: 'ask' })
+    await controller.open()
+    controller.updateInitializationGenerationBrief('玄幻题材')
+    await controller.generateInitialization()
+    controller.generationTurnSettled()
+
+    controller.updateInitialization({ title: '不得写入' })
+    controller.previewInitialization()
+    await controller.submitInitialization()
+    await controller.generateInitialization()
+
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'not-initialized',
+      initialization: { draft: { title: '' }, phase: 'editing', generation: { phase: 'reconciling' } },
+    })
+
+    controller.generationPromptLost()
+    controller.updateInitialization({ title: '队列删除后可恢复手填' })
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'not-initialized',
+      initialization: {
+        draft: { title: '队列删除后可恢复手填' },
+        generation: { phase: 'error', message: expect.stringContaining('会话队列移除') },
+      },
+    })
+  })
+
   it('submits one deterministic shallow initialization proposal through the current dedicated Session', async () => {
     const read = vi.fn().mockResolvedValue({ status: 'not-initialized' })
     const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })

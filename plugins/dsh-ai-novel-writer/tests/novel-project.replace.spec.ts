@@ -74,6 +74,41 @@ describe('NovelProject single-asset replacement', () => {
     expect(read).toMatchObject({ kind: 'asset', text: disk, revision: receipt.newRevision })
   })
 
+  it('accepts a semantically identical structured base text with different JSON formatting', async () => {
+    const read = await project.read({ kind: 'asset', target: { kind: 'project' } }, signal)
+    if (read.kind !== 'asset') throw new Error('expected one project asset')
+    const replacement = JSON.stringify({
+      ...JSON.parse(read.text) as Record<string, unknown>,
+      title: '雾海灯塔',
+      updatedAt: '2026-08-16T01:02:04.000Z',
+    })
+
+    await expect(project.apply({
+      kind: 'replace',
+      target: { kind: 'project' },
+      baseRevision: read.revision,
+      baseText: JSON.stringify({ ...JSON.parse(read.text) as Record<string, unknown>, title: '伪造旧标题' }),
+      replacement,
+      summary: '使用错误原文更新标题',
+    }, signal)).rejects.toMatchObject({ code: 'STALE_REVISION' })
+
+    const receipt = await project.apply({
+      kind: 'replace',
+      target: { kind: 'project' },
+      baseRevision: read.revision,
+      baseText: JSON.stringify(JSON.parse(read.text)),
+      replacement,
+      summary: '更新项目标题',
+    }, signal)
+
+    expect(receipt.oldRevision).toBe(read.revision)
+    await expect(project.read({ kind: 'asset', target: { kind: 'project' } }, signal)).resolves.toMatchObject({
+      kind: 'asset',
+      revision: receipt.newRevision,
+      text: expect.stringContaining('"title": "雾海灯塔"'),
+    })
+  })
+
   it('fails closed when either the revision or original text is stale', async () => {
     const firstText = '# 第一章\n\n海雾吞没了灯塔。\n'
     const first = await project.apply({

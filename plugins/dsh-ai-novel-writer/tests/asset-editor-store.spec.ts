@@ -45,6 +45,7 @@ const charactersText = `${JSON.stringify({ characters: [{
 function targetController(
   readAsset: NovelWorkbenchPort['readAsset'],
   prompt: NovelWorkbenchPort['prompt'] = vi.fn(),
+  approval: 'ask' | 'never' | 'unknown' = 'ask',
 ) {
   const controller = new NovelWorkbenchController({
     read: vi.fn().mockResolvedValue({
@@ -64,7 +65,7 @@ function targetController(
     workspaceId: WORKSPACE_ID,
     sessionId: SESSION_ID,
     agentPreset: 'ai-novel-writer',
-    approval: 'ask',
+    approval,
   })
   return controller
 }
@@ -83,6 +84,219 @@ function submittedProjectAttribution(controller: NovelWorkbenchController): NonN
 }
 
 describe('novel workbench asset editing', () => {
+  it.each([
+    [{ kind: 'project' } as const, manifest('潮汐来信'), '项目设置', 'formatVersion'],
+    [{ kind: 'characters' } as const, {
+      target: { kind: 'characters' } as const, revision: REVISION_A, text: charactersText,
+      bytes: new TextEncoder().encode(charactersText).byteLength,
+    }, '人物设定', 'characters'],
+    [{ kind: 'story-blueprint' } as const, {
+      target: { kind: 'story-blueprint' } as const, revision: 'absent' as const, text: '', bytes: 0,
+    }, '故事蓝图', 'premise'],
+    [{ kind: 'chapter-blueprint', chapter: 2 } as const, {
+      target: { kind: 'chapter-blueprint', chapter: 2 } as const, revision: 'absent' as const, text: '', bytes: 0,
+    }, '第 2 章蓝图', 'beats'],
+    [{ kind: 'chapter-draft', chapter: 2 } as const, {
+      target: { kind: 'chapter-draft', chapter: 2 } as const, revision: 'absent' as const, text: '', bytes: 0,
+    }, '第 2 章正文', 'Markdown'],
+  ])('asks the selected model to generate only the current revisioned %s asset', async (
+    target,
+    asset,
+    label,
+    schemaEvidence,
+  ) => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = targetController(vi.fn().mockResolvedValue(asset), prompt)
+    await controller.whenIdle()
+    await controller.openAsset(target)
+
+    controller.updateAssetGenerationBrief('根据当前项目上下文补全，保持已有设定一致。')
+    await controller.generateAsset()
+
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(prompt).toHaveBeenCalledWith(SESSION_ID, expect.stringContaining(`生成并提议更新“${label}”`))
+    const submittedPrompt = String(prompt.mock.calls[0]?.[1])
+    expect(submittedPrompt).toContain('恰好调用一次 novel_read')
+    expect(submittedPrompt).toContain('恰好调用一次 novel_apply_change')
+    expect(submittedPrompt).toContain('Harness 原生审批')
+    expect(submittedPrompt).toContain(`"targetKind": "${target.kind}"`)
+    expect(submittedPrompt).toContain(`编辑器读取时的 revision：${asset.revision}`)
+    expect(submittedPrompt).toContain(`"baseRevision": ${JSON.stringify(asset.revision)}`)
+    expect(submittedPrompt).toContain(`"baseText": ${JSON.stringify(asset.text)}`)
+    expect(submittedPrompt).toContain(schemaEvidence)
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: {
+        ...target,
+        dirty: false,
+        generation: {
+          brief: '根据当前项目上下文补全，保持已有设定一致。',
+          phase: 'submitted',
+          message: '生成请求已发送；等待模型提案与 Harness 原生审批。',
+        },
+      },
+    })
+  })
+
+  it('fails closed without losing a dirty local draft or sending a generation prompt', async () => {
+    const prompt = vi.fn()
+    const controller = targetController(vi.fn().mockResolvedValue(manifest('潮汐来信')), prompt)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'project' })
+    controller.updateProjectSettings({ title: '仍需保留的本地标题' })
+    controller.updateAssetGenerationBrief('改成玄幻小说')
+
+    await controller.generateAsset()
+
+    expect(prompt).not.toHaveBeenCalled()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: {
+        kind: 'project', dirty: true, draft: { title: '仍需保留的本地标题' },
+        generation: {
+          brief: '改成玄幻小说',
+          phase: 'error',
+          message: '请先提交或放弃当前手动修改，再让模型生成此资产。',
+        },
+      },
+    })
+  })
+
+  it.each([
+    ['never' as const, '当前会话已关闭原生审批，请将权限切换为“工作区写入”后再提交。'],
+    ['unknown' as const, '无法确认当前会话的审批策略，请切换到“工作区写入”后再提交。'],
+  ])('does not ask the model to generate when native approval is %s', async (approval, message) => {
+    const prompt = vi.fn()
+    const controller = targetController(vi.fn().mockResolvedValue(manifest('潮汐来信')), prompt, approval)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'project' })
+    controller.updateAssetGenerationBrief('改成玄幻小说')
+
+    await controller.generateAsset()
+
+    expect(prompt).not.toHaveBeenCalled()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: { kind: 'project', generation: { phase: 'error', message } },
+    })
+  })
+
+  it('locks the editor and refuses duplicate generation while Session admission is unresolved', async () => {
+    let finish: ((result: Awaited<ReturnType<NovelWorkbenchPort['prompt']>>) => void) | undefined
+    const prompt: NovelWorkbenchPort['prompt'] = vi.fn(() => new Promise<
+      Awaited<ReturnType<NovelWorkbenchPort['prompt']>>
+    >(resolve => { finish = resolve }))
+    const controller = targetController(vi.fn().mockResolvedValue(manifest('潮汐来信')), prompt)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'project' })
+    controller.updateAssetGenerationBrief('生成玄幻项目设定')
+
+    const first = controller.generateAsset()
+    await vi.waitFor(() => { expect(prompt).toHaveBeenCalledOnce() })
+    controller.updateProjectSettings({ title: '不得写入的并发草稿' })
+    await controller.generateAsset()
+
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: { kind: 'project', draft: { title: '潮汐来信' }, generation: { phase: 'submitting' } },
+    })
+    finish?.({ ok: true, value: { accepted: true } })
+    await first
+  })
+
+  it('reconciles when the durable generation turn ends before prompt admission returns', async () => {
+    let finish: ((result: Awaited<ReturnType<NovelWorkbenchPort['prompt']>>) => void) | undefined
+    const prompt: NovelWorkbenchPort['prompt'] = vi.fn(() => new Promise<
+      Awaited<ReturnType<NovelWorkbenchPort['prompt']>>
+    >(resolve => { finish = resolve }))
+    const readAsset = vi.fn().mockResolvedValue(manifest('潮汐来信'))
+    const controller = targetController(readAsset, prompt)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'project' })
+    controller.updateAssetGenerationBrief('生成玄幻项目设定')
+
+    const generating = controller.generateAsset()
+    await vi.waitFor(() => { expect(prompt).toHaveBeenCalledOnce() })
+    controller.generationTurnSettled()
+    finish?.({ ok: true, value: { accepted: true } })
+    await generating
+
+    expect(readAsset).toHaveBeenCalledTimes(2)
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready', screen: { kind: 'project', generation: { phase: 'error', message: expect.stringContaining('未产生可归因的修改') } },
+    })
+  })
+
+  it('requires authoritative reread after a completed turn has no attributable apply', async () => {
+    const readAsset = vi.fn().mockResolvedValue(manifest('潮汐来信'))
+    const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })
+    const controller = targetController(readAsset, prompt)
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'project' })
+    controller.updateAssetGenerationBrief('改成玄幻项目')
+    await controller.generateAsset()
+
+    controller.novelApplySettled({ isError: true, code: 'INVALID_ARGUMENTS', attribution: undefined })
+    controller.generationTurnSettled()
+    await controller.generateAsset()
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready', screen: { kind: 'project', generation: { phase: 'reconciling' } },
+    })
+
+    await controller.refresh()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: { kind: 'project', generation: { phase: 'error', message: expect.stringContaining('未产生可归因的修改') } },
+    })
+  })
+
+  it('recognizes an approved model generation by its CommitReceipt revision after Host canonicalization', async () => {
+    const generated = {
+      premise: '林凡追查父亲失踪。',
+      themes: ['选择'],
+      world: '青石山连接修行界。',
+      mainPlot: '木牌引向问道碑。',
+      endingGoal: '林凡理解力量的代价。',
+    }
+    const canonical = `${JSON.stringify(generated, null, 2)}\n`
+    const readAsset = vi.fn()
+      .mockResolvedValueOnce({ target: { kind: 'story-blueprint' }, revision: 'absent', text: '', bytes: 0 })
+      .mockResolvedValueOnce({
+        target: { kind: 'story-blueprint' }, revision: REVISION_B, text: canonical,
+        bytes: new TextEncoder().encode(canonical).byteLength,
+      })
+    const controller = targetController(
+      readAsset,
+      vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } }),
+    )
+    await controller.whenIdle()
+    await controller.openAsset({ kind: 'story-blueprint' })
+    controller.updateAssetGenerationBrief('生成故事蓝图')
+    await controller.generateAsset()
+
+    controller.novelApplySettled({
+      isError: false,
+      code: undefined,
+      newRevision: REVISION_B,
+      attribution: {
+        kind: 'replace', targetKind: 'story-blueprint', baseRevision: 'absent',
+        replacement: JSON.stringify(generated),
+      },
+    })
+    await controller.refresh()
+
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      screen: {
+        kind: 'story-blueprint', phase: 'clean', baseRevision: REVISION_B,
+        draft: { premise: generated.premise },
+      },
+      readFeedback: { kind: 'success', message: '重新读取完成：已载入批准后的模型生成资产。' },
+    })
+  })
+
   it('drills into project settings, preserves immutable fields, and submits exact replacement text', async () => {
     const readAsset = vi.fn().mockResolvedValue(manifest('潮汐来信'))
     const prompt = vi.fn().mockResolvedValue({ ok: true, value: { accepted: true } })

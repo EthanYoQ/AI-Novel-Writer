@@ -333,6 +333,16 @@ function normalizeAssetContent(target: AssetRef, replacement: string, currentMan
   return canonical
 }
 
+function baseTextMatches(target: AssetRef, current: NovelAssetReadResult, request: Extract<NovelApplyRequest, { kind: 'replace' }>): boolean {
+  if (current.revision !== request.baseRevision) return false
+  if (current.revision === 'absent') return request.baseText === ''
+  try {
+    return current.text === canonicalNovelAssetText(target, request.baseText)
+  } catch {
+    return false
+  }
+}
+
 function validateAssetText(target: AssetRef, text: string): void {
   if (target.kind === 'chapter-draft') return
   if (target.kind === 'project') {
@@ -455,7 +465,7 @@ class FileNovelProject implements NovelProject {
     const filename = join(root, source)
     const parent = resolve(filename, '..')
     const beforeLock = await this.#readAsset(request.target, signal)
-    if (beforeLock.revision !== request.baseRevision || beforeLock.text !== normalizeText(request.baseText)) {
+    if (!baseTextMatches(request.target, beforeLock, request)) {
       throw new NovelProjectError('STALE_REVISION', `${source} changed since it was read`)
     }
     await this.#rejectSymlinkChain(parent)
@@ -466,7 +476,7 @@ class FileNovelProject implements NovelProject {
       return await withFileLock(filename, async () => {
         requireNotAborted(signal)
         const current = await this.#readAsset(request.target, signal)
-        if (current.revision !== request.baseRevision || current.text !== normalizeText(request.baseText)) {
+        if (!baseTextMatches(request.target, current, request)) {
           throw new NovelProjectError('STALE_REVISION', `${source} changed since it was read`)
         }
         requireNotAborted(signal)

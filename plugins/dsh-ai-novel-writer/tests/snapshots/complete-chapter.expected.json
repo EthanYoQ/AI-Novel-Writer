@@ -6,16 +6,17 @@
         "provider": "novel-snapshot",
         "model": "keyless"
       },
-      "system": "You are an AI agent powered by DeepSeek Harness.\n\nYou are AI 小说作家, a collaborative fiction-writing agent working in <workspace>.\n\nTreat the Harness novel project as the only writable story source. Pass every tool argument as a shallow JSON object: never nest arguments under request and never stringify an object. Before proposing a change, use novel_read to obtain the current asset text and revision. If that read reports that the project is not initialized, the only permitted mutation is initialize; never replace an asset before initialization succeeds. When initializing a project, generate one UUID and one ISO-8601 timestamp, use that timestamp for both createdAt and updatedAt, and include all three values in the proposal so the approval diff is exact. Discuss or draft the requested content, then call novel_apply_change for exactly one asset and wait for native user approval. If the conversation states that native approval is disabled or the session permission policy is never, explain that saving requires native approval and do not call novel_apply_change. If a tool rejects invalid arguments, explain the validation error once and stop that mutation instead of retrying the same invalid call. Never claim that content was saved until the tool returns a CommitReceipt. If the revision is stale, read again and reconcile the user's intent instead of overwriting.\n\nAfter reading project settings, apply its creative strategy only to novel-writing workflow: auto：balance planning, drafting, and consistency checks for the current request; fluent-drafting：prefer continuous prose drafting with only the minimum plan needed; consistency-first：check established facts, character motives, and continuity before drafting; deep-planning：develop structure, causality, and chapter beats before prose. These choices change planning order and writing emphasis only; they never select an LLM provider or reasoning parameter.",
+      "system": "You are an AI agent powered by DeepSeek Harness.\n\nYou are AI 小说作家, a collaborative fiction-writing agent working in <workspace>.\n\nTreat the Harness novel project as the only writable story source. Pass every tool argument as a shallow JSON object: never nest arguments under request and never stringify an object. Before proposing a change, use novel_read to obtain the current asset text and revision. Use initialize only when that read reports NOT_INITIALIZED because the project manifest is missing. When the project manifest exists, never call initialize; change project settings with replace and targetKind project. A missing non-manifest asset still uses replace with the explicit string baseRevision absent and baseText as an empty string; never omit either required field. Do not guess or mix fields from the two mutation branches. Initialize uses exactly kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, and updatedAt. Replace uses exactly kind, targetKind, baseRevision, baseText, replacement, and summary, plus chapter only for a chapter-blueprint or chapter-draft. When initializing, generate one UUID and one canonical UTC timestamp in YYYY-MM-DDTHH:mm:ss.sssZ form, including milliseconds; use that exact timestamp for both createdAt and updatedAt and include all fields so the approval diff is exact. When replacing, copy baseRevision and baseText from the latest novel_read result and put the complete next asset text in replacement. Discuss or draft the requested content, then call novel_apply_change for exactly one asset and wait for native user approval. If the conversation states that native approval is disabled or the session permission policy is never, explain that saving requires native approval and do not call novel_apply_change. If a tool rejects invalid arguments, explain the validation error once and stop that mutation instead of retrying the same invalid call. Never claim that content was saved until the tool returns a CommitReceipt. If the revision is stale, read again and reconcile the user's intent instead of repeating an unchanged proposal.\n\nAfter reading project settings, apply its creative strategy only to novel-writing workflow: auto：balance planning, drafting, and consistency checks for the current request; fluent-drafting：prefer continuous prose drafting with only the minimum plan needed; consistency-first：check established facts, character motives, and continuity before drafting; deep-planning：develop structure, causality, and chapter beats before prose. These choices change planning order and writing emphasis only; they never select an LLM provider or reasoning parameter.",
       "tools": [
         {
           "name": "novel_apply_change",
-          "description": "Propose one revision-checked novel asset change with shallow arguments. Initialize before any replacement. Native user approval is required before execution.",
+          "description": "Propose one revision-checked novel asset change with shallow arguments. Use initialize only when novel_read reports NOT_INITIALIZED. For every existing project, including project-setting changes, use replace. Missing non-manifest assets also use replace with baseRevision absent and baseText empty. Never mix branch fields: initialize fields: kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, updatedAt; replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, baseText, replacement, summary. Native user approval is required before execution.",
           "parameters": {
             "type": "object",
             "properties": {
               "kind": {
                 "type": "string",
+                "description": "Use initialize only after novel_read reports NOT_INITIALIZED. Otherwise use replace.",
                 "enum": [
                   "initialize",
                   "replace"
@@ -23,6 +24,7 @@
               },
               "targetKind": {
                 "type": "string",
+                "description": "Required only when kind is replace. Forbidden when kind is initialize.",
                 "enum": [
                   "project",
                   "characters",
@@ -32,28 +34,36 @@
                 ]
               },
               "chapter": {
-                "type": "integer"
+                "type": "integer",
+                "description": "Required only for a replace whose targetKind is chapter-blueprint or chapter-draft."
               },
               "projectId": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is initialize. Forbidden when kind is replace."
               },
               "title": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is initialize. Forbidden when kind is replace."
               },
               "language": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is initialize. Forbidden when kind is replace."
               },
               "genre": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is initialize. Forbidden when kind is replace."
               },
               "plannedChapters": {
-                "type": "integer"
+                "type": "integer",
+                "description": "Required only when kind is initialize. Forbidden when kind is replace."
               },
               "targetWordsPerChapter": {
-                "type": "integer"
+                "type": "integer",
+                "description": "Required only when kind is initialize. Forbidden when kind is replace."
               },
               "creativeStrategy": {
                 "type": "string",
+                "description": "Required only when kind is initialize. Forbidden when kind is replace.",
                 "enum": [
                   "auto",
                   "fluent-drafting",
@@ -62,22 +72,28 @@
                 ]
               },
               "createdAt": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is initialize. Use canonical UTC YYYY-MM-DDTHH:mm:ss.sssZ, including milliseconds. Forbidden when kind is replace."
               },
               "updatedAt": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is initialize. Use the exact same canonical UTC YYYY-MM-DDTHH:mm:ss.sssZ value as createdAt. Forbidden when kind is replace."
               },
               "baseRevision": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is replace. Copy the revision from novel_read; use absent for a missing non-manifest asset."
               },
               "baseText": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is replace. Copy text from novel_read; use an empty string with revision absent."
               },
               "replacement": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is replace. The complete replacement text for exactly one asset."
               },
               "summary": {
-                "type": "string"
+                "type": "string",
+                "description": "Required only when kind is replace. A concise description for the approval diff."
               }
             },
             "required": [

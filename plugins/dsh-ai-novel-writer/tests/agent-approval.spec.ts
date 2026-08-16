@@ -64,7 +64,11 @@ describe('AI novel native approval integration', () => {
 
     const result = await executeInitialize(ctx, root)
 
-    expect(result).toMatchObject({ isError: false, value: { oldRevision: 'absent' } })
+    expect(result).toMatchObject({
+      isError: false,
+      value: { oldRevision: 'absent', newRevision: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      meta: { newRevision: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    })
     expect(answers).toBe(1)
     await expect(access(join(root, '.ai-novel', 'project.json'))).resolves.toBeUndefined()
   })

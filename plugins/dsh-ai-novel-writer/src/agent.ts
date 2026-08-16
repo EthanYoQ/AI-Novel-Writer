@@ -100,22 +100,43 @@ const readParameters = {
 } as const
 
 const applyParameters = {
-  kind: { type: 'string', enum: ['initialize', 'replace'], required: true },
-  targetKind: { type: 'string', enum: TARGET_KINDS },
-  chapter: { type: 'integer' },
-  projectId: { type: 'string' },
-  title: { type: 'string' },
-  language: { type: 'string' },
-  genre: { type: 'string' },
-  plannedChapters: { type: 'integer' },
-  targetWordsPerChapter: { type: 'integer' },
-  creativeStrategy: { type: 'string', enum: CREATIVE_STRATEGIES },
-  createdAt: { type: 'string' },
-  updatedAt: { type: 'string' },
-  baseRevision: { type: 'string' },
-  baseText: { type: 'string' },
-  replacement: { type: 'string' },
-  summary: { type: 'string' },
+  kind: {
+    type: 'string', enum: ['initialize', 'replace'], required: true,
+    description: 'Use initialize only after novel_read reports NOT_INITIALIZED. Otherwise use replace.',
+  },
+  targetKind: {
+    type: 'string', enum: TARGET_KINDS,
+    description: 'Required only when kind is replace. Forbidden when kind is initialize.',
+  },
+  chapter: {
+    type: 'integer',
+    description: 'Required only for a replace whose targetKind is chapter-blueprint or chapter-draft.',
+  },
+  projectId: { type: 'string', description: 'Required only when kind is initialize. Forbidden when kind is replace.' },
+  title: { type: 'string', description: 'Required only when kind is initialize. Forbidden when kind is replace.' },
+  language: { type: 'string', description: 'Required only when kind is initialize. Forbidden when kind is replace.' },
+  genre: { type: 'string', description: 'Required only when kind is initialize. Forbidden when kind is replace.' },
+  plannedChapters: { type: 'integer', description: 'Required only when kind is initialize. Forbidden when kind is replace.' },
+  targetWordsPerChapter: { type: 'integer', description: 'Required only when kind is initialize. Forbidden when kind is replace.' },
+  creativeStrategy: {
+    type: 'string', enum: CREATIVE_STRATEGIES,
+    description: 'Required only when kind is initialize. Forbidden when kind is replace.',
+  },
+  createdAt: { type: 'string', description: 'Required only when kind is initialize. Use canonical UTC YYYY-MM-DDTHH:mm:ss.sssZ, including milliseconds. Forbidden when kind is replace.' },
+  updatedAt: { type: 'string', description: 'Required only when kind is initialize. Use the exact same canonical UTC YYYY-MM-DDTHH:mm:ss.sssZ value as createdAt. Forbidden when kind is replace.' },
+  baseRevision: {
+    type: 'string',
+    description: 'Required only when kind is replace. Copy the revision from novel_read; use absent for a missing non-manifest asset.',
+  },
+  baseText: {
+    type: 'string',
+    description: 'Required only when kind is replace. Copy text from novel_read; use an empty string with revision absent.',
+  },
+  replacement: {
+    type: 'string',
+    description: 'Required only when kind is replace. The complete replacement text for exactly one asset.',
+  },
+  summary: { type: 'string', description: 'Required only when kind is replace. A concise description for the approval diff.' },
 } as const
 
 function invalid(message: string): never {
@@ -235,6 +256,14 @@ function initializePreview(request: Extract<NovelApplyRequest, { kind: 'initiali
   return canonicalNovelInitialization(request)
 }
 
+function commitReceiptMeta(value: JsonValue): JsonValue {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const newRevision = value.newRevision
+  return typeof newRevision === 'string' && /^[0-9a-f]{64}$/.test(newRevision)
+    ? { newRevision }
+    : {}
+}
+
 /**
  * Render one proposed mutation as a deterministic Harness diff card.
  *
@@ -254,7 +283,7 @@ export function presentNovelChange(request: NovelApplyRequest) {
     card: 'diff' as const, title: request.summary,
     diffs: [{
       path,
-      oldText: request.baseRevision === 'absent' ? null : normalizeLineEndings(request.baseText),
+      oldText: request.baseRevision === 'absent' ? null : displayReplacement(request.target, request.baseText),
       newText: displayReplacement(request.target, request.replacement),
     }],
     locations: [{ path }],
@@ -309,11 +338,12 @@ export function createNovelToolDefinitions(config: Config = {}): readonly [ToolD
   })
   const applyDefinition = defineTool({
     name: 'novel_apply_change',
-    description: 'Propose one revision-checked novel asset change with shallow arguments. Initialize before any replacement. Native user approval is required before execution.',
+    description: 'Propose one revision-checked novel asset change with shallow arguments. Use initialize only when novel_read reports NOT_INITIALIZED. For every existing project, including project-setting changes, use replace. Missing non-manifest assets also use replace with baseRevision absent and baseText empty. Never mix branch fields: initialize fields: kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, updatedAt; replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, baseText, replacement, summary. Native user approval is required before execution.',
     parameters: applyParameters,
     output: {
       schema: { type: 'json' },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+      presentationMeta: (_args, value) => commitReceiptMeta(value),
     },
     async execute(args, exec) {
       const request = parseApplyRequest(args)

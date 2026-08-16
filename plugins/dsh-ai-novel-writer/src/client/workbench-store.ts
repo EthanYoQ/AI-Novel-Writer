@@ -2,7 +2,7 @@
 
 import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { NovelAssetReadWireResult, NovelContextReadResult, NovelContextReady } from '../context-types.ts'
-import type { CreativeStrategy, NovelProjectId } from '../types.ts'
+import type { CreativeStrategy, NovelProjectId, Revision } from '../types.ts'
 import {
   assetProposalPrompt,
   parseCharacters,
@@ -23,6 +23,7 @@ import {
   type NovelChapterDraftEditorScreen,
   type NovelCharactersEditorScreen,
   type NovelAssetEditorScreen,
+  type NovelAssetGenerationState,
   type NovelProjectEditorScreen,
   type NovelProjectSettingsDraft,
   type NovelStoryBlueprintDraft,
@@ -41,6 +42,7 @@ export type {
   NovelChapterDraftEditorScreen,
   NovelCharactersEditorScreen,
   NovelAssetEditorScreen,
+  NovelAssetGenerationState,
   NovelProjectEditorScreen,
   NovelProjectSettingsDraft,
   NovelStoryBlueprintDraft,
@@ -87,6 +89,8 @@ export type NovelApprovalAvailability = 'ask' | 'never' | 'unknown'
 export interface NovelApplyOutcome {
   readonly isError: boolean
   readonly code: string | undefined
+  /** Successful CommitReceipt revision parsed from the durable tool result. */
+  readonly newRevision?: Revision
   readonly attribution:
     | { readonly kind: 'initialize'; readonly requestJson: string }
     | {
@@ -145,7 +149,7 @@ export interface NovelWorkbenchPort {
   ): Promise<NovelAssetReadWireResult>
   /**
    * @param sessionId Current dedicated Session identity.
-   * @param text Deterministic proposal prompt submitted as an ordinary queued turn.
+   * @param text Proposal prompt with a deterministic body and unique correlation marker, submitted as an ordinary queued turn.
    * @returns Host admission result; a successful result does not imply approval or persistence.
    */
   prompt(sessionId: SessionId, text: string): Promise<NovelPromptResult>
@@ -167,6 +171,16 @@ export interface NovelInitializationState {
   readonly preview?: NovelInitializationPreview
   readonly blocker?: string
   readonly message?: string
+  readonly generation?: NovelInitializationGenerationState
+}
+
+/** Model-generation state for an uninitialized project. */
+export interface NovelInitializationGenerationState {
+  readonly brief: string
+  readonly phase: 'editing' | 'submitting' | 'submitted' | 'reconciling' | 'error'
+  readonly message?: string
+  readonly identity?: NovelInitializationIdentity
+  readonly expectedRevision?: Revision
 }
 
 /** Last user-visible read operation outcome. */
@@ -276,6 +290,118 @@ function submissionBlocker(target: NovelWorkbenchTarget | undefined): string | u
   return undefined
 }
 
+function generationState(screen: NovelAssetEditorScreen): NovelAssetGenerationState {
+  return screen.generation ?? { brief: '', phase: 'editing' }
+}
+
+function generationPending(screen: NovelAssetEditorScreen): boolean {
+  const phase = generationState(screen).phase
+  return phase === 'submitting' || phase === 'submitted'
+}
+
+function generationBlocksMutation(screen: NovelAssetEditorScreen): boolean {
+  return generationPending(screen) || generationState(screen).phase === 'reconciling'
+}
+
+function generationTargetLabel(target: NovelWorkbenchEditableTarget): string {
+  switch (target.kind) {
+    case 'project': return '项目设置'
+    case 'characters': return '人物设定'
+    case 'story-blueprint': return '故事蓝图'
+    case 'chapter-blueprint': return `第 ${target.chapter} 章蓝图`
+    case 'chapter-draft': return `第 ${target.chapter} 章正文`
+  }
+}
+
+function generationSchema(target: NovelWorkbenchEditableTarget): string {
+  switch (target.kind) {
+    case 'project': return '完整严格 JSON：formatVersion、kind、projectId、title、language、genre、plannedChapters、targetWordsPerChapter、creativeStrategy、createdAt、updatedAt。保留 formatVersion、kind、projectId、createdAt，只更新用户要求涉及的设置；updatedAt 必须更新为可往返解析的规范 UTC 时间，严格符合 YYYY-MM-DDTHH:mm:ss.sssZ。'
+    case 'characters': return '完整严格 JSON：顶层只有 characters；每个人物只能包含 id、name、role、summary、goal、relationships、notes，relationships 项只能包含 characterId、type、summary。'
+    case 'story-blueprint': return '完整严格 JSON：只包含 premise、themes、world、mainPlot、endingGoal；themes 是文本数组。'
+    case 'chapter-blueprint': return `完整严格 JSON：只包含 chapter、title、purpose、beats、characterIds、continuityNotes、status；chapter 必须是 ${target.chapter}，三个列表字段都是文本数组。`
+    case 'chapter-draft': return '完整 Markdown 正文，不要用 JSON 包裹；保持 UTF-8、LF 换行，并生成可直接保存的整章内容。'
+  }
+}
+
+function canonicalInitializationIdentity(identity: NovelInitializationIdentity): NovelInitializationIdentity {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  const timestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+  if (!uuid.test(identity.projectId)
+    || identity.createdAt !== identity.updatedAt
+    || !timestamp.test(identity.createdAt)
+    || new Date(identity.createdAt).toISOString() !== identity.createdAt) {
+    throw new Error('无法生成规范的项目 ID 或 UTC 时间戳。')
+  }
+  return identity
+}
+
+function generationMarkerLine(marker: string): string {
+  return `[AI_NOVEL_UI_CORRELATION:${marker}]`
+}
+
+function initializationGenerationPrompt(identity: NovelInitializationIdentity, brief: string): string {
+  const fixed = JSON.stringify({
+    kind: 'initialize',
+    projectId: identity.projectId,
+    createdAt: identity.createdAt,
+    updatedAt: identity.updatedAt,
+    title: '<根据用户要求生成>', language: '<BCP 47 语言标签>', genre: '<根据用户要求生成>',
+    plannedChapters: '<正整数>', targetWordsPerChapter: '<正整数>',
+    creativeStrategy: '<auto | fluent-drafting | consistency-first | deep-planning>',
+  }, null, 2)
+  return `请根据用户要求生成当前 Harness 小说项目的完整项目设置。\n\n用户要求：\n${brief}\n\n硬性执行顺序：\n1. 恰好调用一次 novel_read，读取 working-set，并确认结果为 NOT_INITIALIZED。若结果不同，停止且不得调用 novel_apply_change。\n2. 仅当第 1 步确认 NOT_INITIALIZED 时，恰好调用一次 novel_apply_change，kind 必须是 initialize，使用浅层参数，不要嵌套 request。\n3. projectId、createdAt、updatedAt 必须逐字使用下列固定值；createdAt 必须等于 updatedAt，时间格式严格为 YYYY-MM-DDTHH:mm:ss.sssZ。其余占位字段按要求生成：\n${fixed}\n4. 等待 Harness 原生审批。只有收到 CommitReceipt 后才能声明保存成功；拒绝、取消或失败时不得重试写入。`
+}
+
+function generationContext(state: Extract<NovelWorkbenchState, { readonly status: 'ready' }>): string {
+  return JSON.stringify({
+    project: state.project,
+    characters: state.characters,
+    storyBlueprint: state.storyBlueprint,
+    selectedChapter: state.progress.selectedChapter,
+    chapterBlueprint: state.chapterBlueprint,
+    draftPreview: state.draft?.preview ?? null,
+  }, null, 2)
+}
+
+function assetGenerationPrompt(
+  state: Extract<NovelWorkbenchState, { readonly status: 'ready' }>,
+  screen: NovelAssetEditorScreen,
+  brief: string,
+): string {
+  const target = screen.kind === 'chapter-blueprint' || screen.kind === 'chapter-draft'
+    ? { kind: screen.kind, chapter: screen.chapter }
+    : { kind: screen.kind }
+  const toolTarget = {
+    targetKind: target.kind,
+    ...('chapter' in target ? { chapter: target.chapter } : {}),
+  }
+  const read = JSON.stringify({ kind: 'asset', ...toolTarget }, null, 2)
+  const apply = JSON.stringify({
+    kind: 'replace',
+    ...toolTarget,
+    baseRevision: screen.baseRevision,
+    baseText: screen.originalText,
+    replacement: '<按下述 schema 生成的完整资产文本>',
+    summary: `AI 生成${generationTargetLabel(target)}`,
+  }, null, 2)
+  return `请根据用户要求生成并提议更新“${generationTargetLabel(target)}”这一个小说资产。不要修改其他资产。
+
+用户要求：
+${brief}
+
+当前工作台上下文仅供生成时保持一致：
+${generationContext(state)}
+
+硬性执行顺序：
+1. 恰好调用一次 novel_read，并使用以下浅层参数：
+${read}
+2. 检查返回值未截断、未省略，并且 revision 与编辑器读取时的 revision：${screen.baseRevision} 完全一致。若不一致，停止并告知用户重新读取；不得调用 novel_apply_change。
+3. 根据 novel_read 返回的完整 text 与上下文生成完整替换文本。格式要求：${generationSchema(target)}
+4. 仅当第 2 步通过时，恰好调用一次 novel_apply_change。使用浅层参数，不要嵌套 request，不要把对象 stringify：
+${apply}
+5. 第 4 步示例已经显式包含编辑器读取到的 baseRevision 和 baseText；本次 novel_read 与第 2 步一致时必须逐字段保留它们，不得省略。提交后等待 Harness 原生审批；只有收到 CommitReceipt 才能声明保存成功。审批拒绝、取消或工具失败时不得重试写入。`
+}
+
 /**
  * Serialize one initialization proposal into the exact model-visible prompt.
  *
@@ -300,6 +426,8 @@ export class NovelWorkbenchController {
   #state: NovelWorkbenchState = { status: 'idle', open: false }
   #target: NovelWorkbenchTarget | undefined
   #draft: NovelInitializationDraft = DEFAULT_INITIALIZATION
+  #initializationGeneration: NovelInitializationGenerationState = { brief: '', phase: 'editing' }
+  #generationCorrelationMarker: string | undefined
   #chapter = 1
   #request = 0
   #promptRequest = 0
@@ -399,7 +527,10 @@ export class NovelWorkbenchController {
    */
   public updateInitialization(patch: Partial<NovelInitializationDraft>): void {
     if (this.#state.status !== 'not-initialized') throw new Error('Novel project is not awaiting initialization')
-    if (this.#activePrompt !== undefined || this.#state.initialization.phase === 'submitted') return
+    if (this.#activePrompt !== undefined
+      || this.#state.initialization.phase === 'submitted'
+      || this.#initializationGeneration.phase === 'submitted'
+      || this.#initializationGeneration.phase === 'reconciling') return
     this.#draft = { ...this.#draft, ...patch }
     this.#set({
       status: 'not-initialized',
@@ -407,10 +538,60 @@ export class NovelWorkbenchController {
       initialization: {
         draft: this.#draft,
         phase: 'editing',
+        generation: this.#initializationGeneration,
         ...(submissionBlocker(this.#target) === undefined ? {} : { blocker: submissionBlocker(this.#target) }),
       },
       ...(this.#state.readFeedback === undefined ? {} : { readFeedback: this.#state.readFeedback }),
     })
+  }
+
+  /** Update the model brief for generating the first project settings proposal. @param brief User intent. @returns Nothing. */
+  public updateInitializationGenerationBrief(brief: string): void {
+    if (this.#state.status !== 'not-initialized') return
+    if (this.#activePrompt !== undefined
+      || this.#initializationGeneration.phase === 'submitted'
+      || this.#initializationGeneration.phase === 'reconciling') return
+    this.#initializationGeneration = { brief, phase: 'editing' }
+    this.#publishInitializationGeneration()
+  }
+
+  /** Ask the selected Session to generate exactly one approval-gated initialization. @returns Session admission completion. */
+  public async generateInitialization(): Promise<void> {
+    if (this.#disposed || this.#state.status !== 'not-initialized' || this.#activePrompt !== undefined
+      || this.#initializationGeneration.phase === 'submitted'
+      || this.#initializationGeneration.phase === 'reconciling') return
+    const blocker = submissionBlocker(this.#target)
+    const dirty = JSON.stringify(this.#draft) !== JSON.stringify(DEFAULT_INITIALIZATION)
+    const message = blocker
+      ?? (this.#initializationGeneration.brief.trim() === '' ? '请先填写 AI 生成要求。' : undefined)
+      ?? (dirty ? '请先清空手动填写的项目设置，再让模型生成。' : undefined)
+    if (message !== undefined || this.#target === undefined) {
+      this.#initializationGeneration = { ...this.#initializationGeneration, phase: 'error', message }
+      this.#publishInitializationGeneration()
+      return
+    }
+    let identity: NovelInitializationIdentity
+    try {
+      identity = canonicalInitializationIdentity(this.#createIdentity())
+    } catch (error) {
+      this.#initializationGeneration = {
+        ...this.#initializationGeneration, phase: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      }
+      this.#publishInitializationGeneration()
+      return
+    }
+    const marker = crypto.randomUUID()
+    this.#generationCorrelationMarker = marker
+    const prompt = `${generationMarkerLine(marker)}\n此标记只供小说工作台对账；不得把它写入任何小说资产或工具参数。\n\n${initializationGenerationPrompt(identity, this.#initializationGeneration.brief.trim())}`
+    this.#initializationGeneration = { ...this.#initializationGeneration, identity, phase: 'submitting', message: undefined }
+    this.#publishInitializationGeneration()
+    const request = ++this.#promptRequest
+    const done = this.#submitInitializationGeneration(request, this.#target.sessionId, prompt)
+    this.#activePrompt = done
+    await done
+    if (this.#activePrompt === done) this.#activePrompt = undefined
+    if (this.#initializationGeneration.phase === 'reconciling') await this.refresh()
   }
 
   /**
@@ -420,7 +601,10 @@ export class NovelWorkbenchController {
    */
   public previewInitialization(): void {
     if (this.#disposed || this.#state.status !== 'not-initialized') return
-    if (this.#activePrompt !== undefined || this.#state.initialization.phase === 'submitted') return
+    if (this.#activePrompt !== undefined
+      || this.#state.initialization.phase === 'submitted'
+      || this.#initializationGeneration.phase === 'submitted'
+      || this.#initializationGeneration.phase === 'reconciling') return
     const blocker = submissionBlocker(this.#target)
     if (blocker !== undefined) {
       this.#setInitializationError(blocker)
@@ -456,7 +640,8 @@ export class NovelWorkbenchController {
     if (screen !== undefined && (screen.dirty
       || screen.phase === 'submitting'
       || screen.phase === 'submitted'
-      || screen.phase === 'stale')) return
+      || screen.phase === 'stale'
+      || generationBlocksMutation(screen))) return
     this.#promptRequest += 1
     this.#cancelRead()
     this.#staleAsset = undefined
@@ -561,6 +746,52 @@ export class NovelWorkbenchController {
     const screen = this.#assetScreen()
     if (screen === undefined || !this.#assetMayChange(screen)) return
     this.#setReadyScreen({ ...screen, summary, phase: screen.dirty ? 'editing' : 'clean', preview: undefined, message: undefined })
+  }
+
+  /** Update the selected model's generation brief without changing any asset draft. @param brief User intent for one asset. @returns Nothing. */
+  public updateAssetGenerationBrief(brief: string): void {
+    const screen = this.#assetScreen()
+    if (screen === undefined || generationBlocksMutation(screen)) return
+    this.#setReadyScreen({
+      ...screen,
+      generation: { brief, phase: 'editing' },
+    })
+  }
+
+  /** Ask the selected Session model for one read-then-approval-gated asset proposal. @returns Session admission completion. */
+  public async generateAsset(): Promise<void> {
+    const screen = this.#assetScreen()
+    if (this.#disposed || screen === undefined || this.#activePrompt !== undefined || generationBlocksMutation(screen)) return
+    const currentGeneration = generationState(screen)
+    const blocker = submissionBlocker(this.#target)
+    const message = blocker
+      ?? (currentGeneration.brief.trim() === '' ? '请先填写 AI 生成要求。' : undefined)
+      ?? (screen.dirty || screen.phase !== 'clean'
+        ? '请先提交或放弃当前手动修改，再让模型生成此资产。'
+        : undefined)
+    if (message !== undefined || this.#target === undefined || this.#state.status !== 'ready') {
+      this.#setReadyScreen({
+        ...screen,
+        generation: { ...currentGeneration, phase: 'error', message: message ?? '当前会话不可用。' },
+      })
+      return
+    }
+    const marker = crypto.randomUUID()
+    this.#generationCorrelationMarker = marker
+    const prompt = `${generationMarkerLine(marker)}\n此标记只供小说工作台对账；不得把它写入任何小说资产或工具参数。\n\n${assetGenerationPrompt(this.#state, screen, currentGeneration.brief.trim())}`
+    this.#cancelRead()
+    this.#setReadyScreen({
+      ...screen,
+      generation: { ...currentGeneration, phase: 'submitting', message: undefined },
+    })
+    const request = ++this.#promptRequest
+    const done = this.#submitGeneration(request, this.#target.sessionId, prompt)
+    this.#activePrompt = done
+    await done
+    if (this.#activePrompt === done) this.#activePrompt = undefined
+    if (this.#assetScreen() !== undefined && generationState(this.#assetScreen()!).phase === 'reconciling') {
+      await this.refresh()
+    }
   }
 
   /**
@@ -704,6 +935,41 @@ export class NovelWorkbenchController {
   public novelApplySettled(outcome: NovelApplyOutcome): void {
     if (this.#disposed) return
     const editor = this.#assetScreen()
+    const editorGeneration = editor === undefined ? undefined : generationState(editor)
+    if (editor !== undefined
+      && editorGeneration?.phase === 'submitted'
+      && outcome.attribution?.kind === 'replace'
+      && outcome.attribution.targetKind === editor.kind
+      && outcome.attribution.chapter === ('chapter' in editor ? editor.chapter : undefined)
+      && outcome.attribution.baseRevision === editor.baseRevision) {
+      if (!outcome.isError) {
+        this.#setReadyScreen({
+          ...editor,
+          generation: {
+            ...editorGeneration,
+            ...(outcome.newRevision === undefined ? {} : { expectedRevision: outcome.newRevision }),
+            expectedReplacement: outcome.attribution.replacement,
+            message: '模型生成已通过工具执行，正在重新读取已批准的资产。',
+          },
+        })
+        return
+      }
+      this.#setReadyScreen({
+        ...editor,
+        generation: {
+          ...editorGeneration,
+          phase: 'error',
+          message: outcome.code === 'APPROVAL_REJECTED'
+            ? 'Harness 原生审批已拒绝；磁盘未改变。'
+            : outcome.code === 'STALE_REVISION'
+              ? '生成提案使用的 revision 已过期；请重新读取后再生成。'
+              : outcome.code === undefined
+                ? '生成提案未保存；请查看对话中的工具结果。'
+                : `生成提案未保存：${outcome.code}`,
+        },
+      })
+      return
+    }
     if (editor !== undefined
       && editor.phase === 'submitted'
       && outcome.isError
@@ -742,6 +1008,104 @@ export class NovelWorkbenchController {
         : outcome.code === undefined
           ? '初始化未保存；原生审批可能被拒绝或工具执行失败。请查看对话详情。'
           : `初始化未保存：${outcome.code}`)
+      return
+    }
+    if (this.#state.status === 'not-initialized'
+      && this.#initializationGeneration.phase === 'submitted'
+      && outcome.attribution?.kind === 'initialize') {
+      const identity = this.#initializationGeneration.identity
+      let attributed: Record<string, unknown> | undefined
+      try {
+        attributed = JSON.parse(outcome.attribution.requestJson) as Record<string, unknown>
+      } catch {
+        attributed = undefined
+      }
+      if (identity !== undefined
+        && attributed?.projectId === identity.projectId
+        && attributed.createdAt === identity.createdAt
+        && attributed.updatedAt === identity.updatedAt) {
+        this.#initializationGeneration = outcome.isError
+          ? {
+              ...this.#initializationGeneration,
+              phase: 'error',
+              message: outcome.code === 'APPROVAL_REJECTED'
+                ? 'Harness 原生审批已拒绝；小说项目仍未初始化。'
+                : `项目设置生成未保存${outcome.code === undefined ? '。' : `：${outcome.code}`}`,
+            }
+          : {
+              ...this.#initializationGeneration,
+              ...(outcome.newRevision === undefined ? {} : { expectedRevision: outcome.newRevision }),
+              message: '模型生成已通过工具执行，正在重新读取项目。',
+            }
+        this.#publishInitializationGeneration()
+      }
+    }
+  }
+
+  /** Mark the admitted generation turn complete and require an authoritative reread before another generation. @returns Nothing. */
+  public generationTurnSettled(): void {
+    if (this.#disposed) return
+    const editor = this.#assetScreen()
+    if (editor !== undefined
+      && (generationState(editor).phase === 'submitting' || generationState(editor).phase === 'submitted')) {
+      this.#setReadyScreen({
+        ...editor,
+        generation: {
+          ...generationState(editor), phase: 'reconciling',
+          message: '模型轮次已结束，正在通过权威资产读取确认结果。',
+        },
+      })
+      return
+    }
+    if (this.#state.status === 'not-initialized'
+      && (this.#initializationGeneration.phase === 'submitting'
+        || this.#initializationGeneration.phase === 'submitted')) {
+      this.#initializationGeneration = {
+        ...this.#initializationGeneration, phase: 'reconciling',
+        message: '模型轮次已结束，正在通过权威项目读取确认结果。',
+      }
+      this.#publishInitializationGeneration()
+    }
+  }
+
+  /** @returns Correlation marker for the unresolved model-generation prompt, if any. */
+  public currentGenerationCorrelationMarker(): string | undefined {
+    const editor = this.#assetScreen()
+    const editorPhase = editor === undefined ? undefined : generationState(editor).phase
+    const active = editorPhase === 'submitting' || editorPhase === 'submitted' || editorPhase === 'reconciling'
+      || this.#initializationGeneration.phase === 'submitting'
+      || this.#initializationGeneration.phase === 'submitted'
+      || this.#initializationGeneration.phase === 'reconciling'
+    return active ? this.#generationCorrelationMarker : undefined
+  }
+
+  /** Fail an unresolved generation whose admitted queue row vanished before durable execution. @returns Nothing. */
+  public generationPromptLost(): void {
+    if (this.#disposed) return
+    const editor = this.#assetScreen()
+    if (editor !== undefined && generationBlocksMutation(editor)) {
+      this.#promptRequest += 1
+      this.#generationCorrelationMarker = undefined
+      this.#setReadyScreen({
+        ...editor,
+        generation: {
+          ...generationState(editor), phase: 'error',
+          message: '生成请求已从会话队列移除，且未形成可对账的用户消息；未执行小说修改，可以重试。',
+        },
+      })
+      return
+    }
+    if (this.#state.status === 'not-initialized'
+      && (this.#initializationGeneration.phase === 'submitting'
+        || this.#initializationGeneration.phase === 'submitted'
+        || this.#initializationGeneration.phase === 'reconciling')) {
+      this.#promptRequest += 1
+      this.#generationCorrelationMarker = undefined
+      this.#initializationGeneration = {
+        ...this.#initializationGeneration, phase: 'error',
+        message: '生成请求已从会话队列移除，且未形成可对账的用户消息；项目仍未初始化，可以重试。',
+      }
+      this.#publishInitializationGeneration()
     }
   }
 
@@ -806,7 +1170,9 @@ export class NovelWorkbenchController {
     if (this.#disposed || this.#state.status !== 'not-initialized') return
     if (this.#activePrompt !== undefined
       || this.#state.initialization.phase === 'submitting'
-      || this.#state.initialization.phase === 'submitted') return
+      || this.#state.initialization.phase === 'submitted'
+      || this.#initializationGeneration.phase === 'submitted'
+      || this.#initializationGeneration.phase === 'reconciling') return
     const target = this.#target
     const blocker = submissionBlocker(target)
     if (blocker !== undefined || target === undefined) {
@@ -843,11 +1209,20 @@ export class NovelWorkbenchController {
     if (this.#activePrompt !== undefined) {
       const pendingEditor = this.#assetScreen()
       if (pendingEditor !== undefined) {
-        this.#setReadyScreen({
-          ...pendingEditor,
-          phase: 'submitting',
-          message: 'Harness 连接已断开；提案是否已进入会话尚未确定，结果返回前不能重试。',
-        }, { kind: 'disconnected', message: 'Harness 连接已断开，正在等待原提案结果。' })
+        const generation = generationState(pendingEditor)
+        this.#setReadyScreen(generation.phase === 'submitting'
+          ? {
+              ...pendingEditor,
+              generation: {
+                ...generation,
+                message: 'Harness 连接已断开；生成请求是否已进入会话尚未确定，结果返回前不能重试。',
+              },
+            }
+          : {
+              ...pendingEditor,
+              phase: 'submitting',
+              message: 'Harness 连接已断开；提案是否已进入会话尚未确定，结果返回前不能重试。',
+            }, { kind: 'disconnected', message: 'Harness 连接已断开，正在等待原提案结果。' })
       } else if (this.#state.status === 'not-initialized') {
         this.#set({
           ...this.#state,
@@ -954,6 +1329,47 @@ export class NovelWorkbenchController {
         })
         return
       }
+      if (reason === 'refresh' && current !== undefined
+        && (generationState(current).phase === 'submitted' || generationState(current).phase === 'reconciling')) {
+        const pending = generationState(current)
+        if ((pending.expectedRevision !== undefined && result.revision === pending.expectedRevision)
+          || (pending.expectedRevision === undefined
+            && pending.expectedReplacement !== undefined
+            && result.text === pending.expectedReplacement)) {
+          this.#staleAsset = undefined
+          this.#loadAsset(result, { kind: 'success', message: '重新读取完成：已载入批准后的模型生成资产。' })
+        } else if (pending.expectedReplacement === undefined && result.revision === current.baseRevision) {
+          this.#setReadyScreen({
+            ...current,
+            generation: pending.phase === 'reconciling'
+              ? { ...pending, phase: 'error', message: '模型轮次未产生可归因的修改；磁盘仍保持生成前的 revision。可以修改要求后重试。' }
+              : { ...pending, message: '生成请求已发送，正在等待模型提案、原生审批或资产 revision 更新。' },
+          }, { kind: 'success', message: '重新读取完成：资产尚未发生已批准的生成修改。' })
+        } else {
+          this.#staleAsset = result
+          this.#setReadyScreen({
+            ...current,
+            phase: 'stale',
+            latestRevision: result.revision,
+            message: pending.expectedReplacement === undefined
+              ? '模型生成等待审批期间资产发生了其他修改。请重新载入后再生成。'
+              : '批准后的资产内容与模型提交的完整替换文本不一致。请重新载入并核对。',
+            generation: {
+              ...pending,
+              phase: 'error',
+              message: '未把当前磁盘内容识别为本次模型生成结果。',
+            },
+          }, { kind: 'success', message: '重新读取完成：发现了不属于本次生成提案的资产 revision。' })
+        }
+        return
+      }
+      if (reason === 'refresh'
+        && current !== undefined
+        && generationState(current).phase === 'error'
+        && result.revision === current.baseRevision) {
+        this.#setReadyScreen(current, { kind: 'success', message: '重新读取完成：磁盘仍保持生成前的 revision。' })
+        return
+      }
       if (reason === 'refresh' && current?.phase === 'submitted' && result.revision !== current.baseRevision) {
         if (current.replacement === result.text) {
           this.#staleAsset = undefined
@@ -1039,6 +1455,15 @@ export class NovelWorkbenchController {
     try {
       const result = await this.#port.read(target.workspaceId, this.#chapter, signal)
       if (this.#disposed || request !== this.#request) return
+      if (result.status === 'not-initialized' && this.#initializationGeneration.phase === 'reconciling') {
+        this.#initializationGeneration = {
+          ...this.#initializationGeneration,
+          phase: 'error',
+          message: this.#initializationGeneration.expectedRevision === undefined
+            ? '模型轮次未产生可归因的初始化；项目仍未初始化。可以修改要求后重试。'
+            : '工具报告初始化成功，但权威读取仍显示项目未初始化。请先检查对话中的工具结果。',
+        }
+      }
       this.#set(result.status === 'ready'
         ? {
             ...result,
@@ -1055,6 +1480,7 @@ export class NovelWorkbenchController {
                 && this.#state.initialization.phase === 'submitted'
                 ? 'submitted'
                 : this.#activePrompt === undefined ? 'editing' : 'submitting',
+              generation: this.#initializationGeneration,
               ...(this.#state.status === 'not-initialized'
                 && this.#state.initialization.preview !== undefined
                 ? { preview: this.#state.initialization.preview }
@@ -1121,6 +1547,58 @@ export class NovelWorkbenchController {
     }
   }
 
+  async #submitGeneration(request: number, sessionId: SessionId, text: string): Promise<void> {
+    try {
+      const result = await this.#port.prompt(sessionId, text)
+      if (this.#disposed || request !== this.#promptRequest) return
+      const screen = this.#assetScreen()
+      if (screen === undefined) return
+      const generation = generationState(screen)
+      this.#setReadyScreen({
+        ...screen,
+        generation: result.ok
+          ? generation.phase === 'reconciling'
+            ? generation
+            : { ...generation, phase: 'submitted', message: '生成请求已发送；等待模型提案与 Harness 原生审批。' }
+          : { ...generation, phase: 'error', message: `生成请求未发送：${result.error.code}: ${result.error.message}` },
+      })
+    } catch (error) {
+      if (this.#disposed || request !== this.#promptRequest) return
+      const screen = this.#assetScreen()
+      if (screen !== undefined) {
+        const generation = generationState(screen)
+        this.#setReadyScreen({
+          ...screen,
+          generation: {
+            ...generation,
+            phase: 'error',
+            message: `生成请求未发送：${error instanceof Error ? error.message : String(error)}`,
+          },
+        })
+      }
+    }
+  }
+
+  async #submitInitializationGeneration(request: number, sessionId: SessionId, text: string): Promise<void> {
+    try {
+      const result = await this.#port.prompt(sessionId, text)
+      if (this.#disposed || request !== this.#promptRequest) return
+      this.#initializationGeneration = result.ok
+        ? this.#initializationGeneration.phase === 'reconciling'
+          ? this.#initializationGeneration
+          : { ...this.#initializationGeneration, phase: 'submitted', message: '生成请求已发送；等待模型提案与 Harness 原生审批。' }
+        : { ...this.#initializationGeneration, phase: 'error', message: `生成请求未发送：${result.error.code}: ${result.error.message}` }
+      this.#publishInitializationGeneration()
+    } catch (error) {
+      if (this.#disposed || request !== this.#promptRequest) return
+      this.#initializationGeneration = {
+        ...this.#initializationGeneration, phase: 'error',
+        message: `生成请求未发送：${error instanceof Error ? error.message : String(error)}`,
+      }
+      this.#publishInitializationGeneration()
+    }
+  }
+
   #resetStalePromptState(request: number): void {
     if (!this.#disposed
       && request !== this.#promptRequest
@@ -1139,6 +1617,7 @@ export class NovelWorkbenchController {
       initialization: {
         draft: this.#draft,
         phase,
+        generation: this.#initializationGeneration,
         ...(retainedPreview === undefined ? {} : { preview: retainedPreview }),
         ...(submissionBlocker(this.#target) === undefined ? {} : { blocker: submissionBlocker(this.#target) }),
       },
@@ -1155,10 +1634,19 @@ export class NovelWorkbenchController {
         draft: this.#draft,
         phase: 'error',
         message,
+        generation: this.#initializationGeneration,
         ...(preview === undefined ? {} : { preview }),
         ...(submissionBlocker(this.#target) === undefined ? {} : { blocker: submissionBlocker(this.#target) }),
       },
       ...(this.#state.readFeedback === undefined ? {} : { readFeedback: this.#state.readFeedback }),
+    })
+  }
+
+  #publishInitializationGeneration(): void {
+    if (this.#state.status !== 'not-initialized') return
+    this.#set({
+      ...this.#state,
+      initialization: { ...this.#state.initialization, generation: this.#initializationGeneration },
     })
   }
 
@@ -1201,6 +1689,7 @@ export class NovelWorkbenchController {
             baseRevision: result.revision,
             originalText: result.text,
             summary: '',
+            generation: { brief: '', phase: 'editing' },
             draft,
           },
           ...(feedback === undefined ? {} : { readFeedback: feedback }),
@@ -1220,6 +1709,7 @@ export class NovelWorkbenchController {
             baseRevision: result.revision,
             originalText: result.text,
             summary: '',
+            generation: { brief: '', phase: 'editing' },
             characters,
             selectedId: characters[0]?.id,
             search: '',
@@ -1248,6 +1738,7 @@ export class NovelWorkbenchController {
             baseRevision: result.revision,
             originalText: result.text,
             summary: '',
+            generation: { brief: '', phase: 'editing' },
             draft,
           },
           ...(feedback === undefined ? {} : { readFeedback: feedback }),
@@ -1286,6 +1777,7 @@ export class NovelWorkbenchController {
             baseRevision: result.revision,
             originalText: result.text,
             summary: '',
+            generation: { brief: '', phase: 'editing' },
             draft,
           },
           ...(feedback === undefined ? {} : { readFeedback: feedback }),
@@ -1321,6 +1813,7 @@ export class NovelWorkbenchController {
             baseRevision: result.revision,
             originalText: result.text,
             summary: '',
+            generation: { brief: '', phase: 'editing' },
             text,
           },
           ...(feedback === undefined ? {} : { readFeedback: feedback }),
@@ -1357,6 +1850,7 @@ export class NovelWorkbenchController {
 
   #assetMayChange(screen: NovelAssetEditorScreen): boolean {
     return this.#activePrompt === undefined
+      && !generationBlocksMutation(screen)
       && screen.phase !== 'submitted'
       && screen.phase !== 'submitting'
       && screen.phase !== 'stale'

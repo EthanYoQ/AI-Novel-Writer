@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
+  IconChevronLeftOutline14: () => <span aria-hidden="true" />,
   IconListPenOutline16: () => <span aria-hidden="true" />,
 }))
 const WORKSPACE_ID = WorkspaceId('123e4567-e89b-42d3-a456-426614174111')

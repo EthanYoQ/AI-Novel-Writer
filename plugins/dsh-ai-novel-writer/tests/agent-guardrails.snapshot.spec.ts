@@ -70,6 +70,9 @@ describe('AI novel model guardrail snapshots', () => {
       approvalNever: {
         runtimeContextExplainsDisabledApproval: neverVisibleText.includes('Approval prompts are disabled in this session'),
         personaForbidsApply: neverVisibleText.includes('do not call novel_apply_change'),
+        existingProjectUsesReplace: neverVisibleText.includes('When the project manifest exists, never call initialize'),
+        absentAssetUsesReplace: neverVisibleText.includes('A missing non-manifest asset still uses replace'),
+        branchFieldsAreExplicit: neverVisibleText.includes('Do not guess or mix fields from the two mutation branches'),
         toolCalls: neverEvents.filter(event => event.type === 'tool/call').length,
         assistant: neverEvents.filter(event => event.type === 'assistant/message').map(textOf),
       },

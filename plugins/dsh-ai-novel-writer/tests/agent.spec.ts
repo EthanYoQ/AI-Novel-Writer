@@ -45,6 +45,22 @@ describe('AI novel agent tools', () => {
     expect(next).not.toHaveBeenCalled()
   })
 
+  it('describes the two mutation branches without inviting models to mix their fields', () => {
+    const apply = createNovelToolDefinitions()[1]
+
+    expect(apply.description).toContain('Use initialize only when novel_read reports NOT_INITIALIZED')
+    expect(apply.description).toContain('For every existing project, including project-setting changes, use replace')
+    expect(apply.description).toContain('initialize fields: kind, projectId, title, language, genre, plannedChapters, targetWordsPerChapter, creativeStrategy, createdAt, updatedAt')
+    expect(apply.description).toContain('replace fields: kind, targetKind, chapter only for chapter assets, baseRevision, baseText, replacement, summary')
+    expect(apply.parameters).toMatchObject({ properties: {
+      targetKind: { description: expect.stringContaining('Required only when kind is replace') },
+      projectId: { description: expect.stringContaining('Required only when kind is initialize') },
+      baseRevision: { description: expect.stringContaining('use absent for a missing non-manifest asset') },
+      createdAt: { description: expect.stringContaining('YYYY-MM-DDTHH:mm:ss.sssZ') },
+      updatedAt: { description: expect.stringContaining('YYYY-MM-DDTHH:mm:ss.sssZ') },
+    } })
+  })
+
   it('renders a replay-safe single-file diff directly from replace arguments', () => {
     const apply = createNovelToolDefinitions()[1]
     expect(apply.presentCall?.({
@@ -132,6 +148,30 @@ describe('AI novel agent tools', () => {
     const asset = await project.read({ kind: 'asset', target: request.target }, signal)
 
     expect(card.diffs[0]?.newText).toBe(asset.kind === 'asset' ? asset.text : undefined)
+  })
+
+  it('canonicalizes a reformatted structured base text in the approval diff', async () => {
+    const root = await makeTestWorkspace('canonical-base-diff-')
+    const project = openNovelProject(root)
+    const signal = new AbortController().signal
+    await project.apply({
+      ...TEST_INITIALIZATION_IDENTITY,
+      kind: 'initialize', title: '潮汐信', language: 'zh-CN', genre: '奇幻',
+      plannedChapters: 6, targetWordsPerChapter: 2_000, creativeStrategy: 'auto',
+    }, signal)
+    const asset = await project.read({ kind: 'asset', target: { kind: 'project' } }, signal)
+    if (asset.kind !== 'asset') throw new Error('expected one project asset')
+
+    const card = presentNovelChange({
+      kind: 'replace',
+      target: { kind: 'project' },
+      baseRevision: asset.revision,
+      baseText: JSON.stringify(JSON.parse(asset.text)),
+      replacement: asset.text,
+      summary: '重写项目设定',
+    })
+
+    expect(card.diffs[0]?.oldText).toBe(asset.text)
   })
 
   it('shows exactly the initialized manifest bytes that approval commits', async () => {

@@ -39,6 +39,8 @@ function renderBody(state: NovelWorkbenchState): string {
     refresh={vi.fn()}
     selectChapter={vi.fn()}
     updateInitialization={vi.fn()}
+    updateInitializationGenerationBrief={vi.fn()}
+    generateInitialization={vi.fn()}
     previewInitialization={vi.fn()}
     submitInitialization={vi.fn()}
     openAsset={vi.fn()}
@@ -48,6 +50,8 @@ function renderBody(state: NovelWorkbenchState): string {
     updateChapterBlueprint={vi.fn()}
     updateChapterDraft={vi.fn()}
     updateAssetSummary={vi.fn()}
+    updateAssetGenerationBrief={vi.fn()}
+    generateAsset={vi.fn()}
     previewAssetChange={vi.fn()}
     submitAssetChange={vi.fn()}
     discardAssetChanges={vi.fn()}

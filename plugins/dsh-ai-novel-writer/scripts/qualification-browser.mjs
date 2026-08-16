@@ -158,7 +158,7 @@ async function editStory(page, drawer, screenshots) {
 }
 
 async function measureWorkbench(page, drawer, screenshots) {
-  const back = drawer.getByRole('button', { name: '返回资产' })
+  const back = drawer.getByRole('button', { name: '返回小说资产列表' })
   if (await back.isVisible().catch(() => false)) await back.click()
   const frame = page.locator('[class*="frame"]').first()
   const center = page.locator('[class*="centerCol"]').first()

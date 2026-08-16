@@ -11,9 +11,14 @@ const packageRoot = resolve(import.meta.dirname, '..', '..', '..')
 
 function normalize(snapshot) {
   return snapshot
+    .replace(/\[AI_NOVEL_UI_CORRELATION:[0-9a-f-]{36}\]/giu, '[AI_NOVEL_UI_CORRELATION:{{correlationId}}]')
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/giu, '{{projectId}}')
     .replace(/[0-9a-f]{64}/giu, '{{revision}}')
     .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/gu, '{{timestamp}}')
+}
+
+function textContent(blocks) {
+  return blocks.filter(block => block.type === 'text').map(block => block.text).join('')
 }
 
 /**
@@ -23,6 +28,8 @@ function normalize(snapshot) {
  * @returns {Promise<object>} Stable user-visible snapshots and wide-layout geometry.
  */
 export async function runWorkbenchBrowserJourney(harnessRoot) {
+  const screenshotDir = process.env.DSH_WORKBENCH_SCREENSHOT_DIR
+  if (screenshotDir !== undefined) await mkdir(screenshotDir, { recursive: true })
   const workspaceModule = await import(pathToFileURL(join(packageRoot, 'tests', 'test-workspace.ts')).href)
   const overlayRoot = await workspaceModule.makeTestWorkspace('workbench-browser-overlay-')
   const harnessHome = join(overlayRoot, 'harness-home')
@@ -43,6 +50,8 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   let scaffold
   let browser
   let page
+  let stopLlmCapture
+  const llmRequests = []
   const browserMessages = []
   let bodyError
   let result
@@ -50,11 +59,16 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
     scaffold = await scaffoldModule.launchWebScaffold({
       extraOverlayPath: overlayPath,
       harnessHome,
+      replayFixture: join(packageRoot, 'tests', 'fixtures', 'workbench-browser', 'session.jsonl'),
       agentPresets: {
         roots: [{ path: join(packageRoot, 'presets'), trust: 'user' }],
         default: 'ai-novel-writer',
       },
     })
+  stopLlmCapture = scaffold.ctx.on('llm/stream', (options, next) => {
+    llmRequests.push(options)
+    return next()
+  })
   browser = await chromium.launch({ headless: true })
   page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: supportModule.ZH_BROWSER_LOCALE })
   const pageErrors = []
@@ -96,8 +110,10 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   }
   const previewSnapshot = normalize(await drawer.ariaSnapshot())
 
+  const initializationTurn = scaffold.whenTurnSettled()
   await drawer.getByRole('button', { name: '提交到当前会话' }).click()
   await drawer.getByText('初始化提案已发送。').waitFor({ timeout: 10_000 })
+  await initializationTurn
   const submittedSnapshot = normalize(await drawer.ariaSnapshot())
   await drawer.getByRole('button', { name: '关闭小说工作台' }).click()
 
@@ -151,23 +167,65 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await drawer.getByRole('button', { name: '预览修改提案' }).click()
   await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
   const projectEditorSnapshot = normalize(await drawer.ariaSnapshot())
+  if (screenshotDir !== undefined) {
+    await page.screenshot({ path: join(screenshotDir, '03-project-editor-generation.png'), fullPage: false })
+  }
   await drawer.getByRole('button', { name: '放弃修改' }).click()
-  await drawer.getByRole('button', { name: '返回资产' }).click()
+  await drawer.getByRole('button', { name: '返回小说资产列表' }).click()
   await drawer.getByRole('button', { name: /人物设定/ }).click()
   await drawer.getByRole('textbox', { name: '搜索人物' }).fill('林')
   const characterEditorSnapshot = normalize(await drawer.ariaSnapshot())
-  await drawer.getByRole('button', { name: '返回资产' }).click()
+  await drawer.getByRole('button', { name: '返回小说资产列表' }).click()
   await drawer.getByRole('button', { name: /故事蓝图/ }).click()
-  const storyHeading = drawer.getByRole('heading', { name: '故事蓝图' })
+  const storyHeading = drawer.getByRole('heading', { name: '故事蓝图', exact: true })
   await drawer.getByRole('textbox', { name: '故事前提' }).waitFor({ timeout: 10_000 })
   await page.waitForFunction(element => document.activeElement === element, await storyHeading.elementHandle())
+  const storyGenerationBrief = drawer.getByRole('textbox', { name: '故事蓝图 AI 生成要求' })
+  await storyGenerationBrief.fill('加强海港世界观，同时保持现有人物一致。')
+  if (await drawer.getByRole('button', { name: '让当前模型生成' }).isDisabled()) {
+    throw new Error('clean story asset did not enable model generation after a brief was entered')
+  }
+  const generationTurn = scaffold.whenTurnSettled()
+  await drawer.getByRole('button', { name: '让当前模型生成' }).click()
+  const generationSessionId = await generationTurn
+  await drawer.getByText(/未产生可归因的修改/).waitFor({ timeout: 10_000 })
+  const generationSession = scaffold.ctx.agents.get(generationSessionId)?.session
+  if (generationSession === undefined) throw new Error('generation turn did not retain its assembled Session')
+  const durableGeneration = generationSession.events.findLast(event => event.type === 'user/message'
+    && event.data.source.kind === 'user'
+    && textContent(event.data.content).includes('[AI_NOVEL_UI_CORRELATION:'))
+  if (durableGeneration?.type !== 'user/message') throw new Error('generation prompt was not durably logged')
+  const durableGenerationPrompt = textContent(durableGeneration.data.content)
+  const request = llmRequests.at(-1)
+  const requestGenerationPrompt = request?.messages.filter(message => message.role === 'user')
+    .map(message => textContent(message.content)).findLast(text => text.includes('[AI_NOVEL_UI_CORRELATION:'))
+  if (requestGenerationPrompt === undefined) throw new Error('generation prompt did not reach the assembled model request')
+  if (requestGenerationPrompt !== durableGenerationPrompt) {
+    throw new Error('durable generation prompt and model request diverged')
+  }
+  if (!durableGenerationPrompt.includes('此标记只供小说工作台对账；不得把它写入任何小说资产或工具参数。')) {
+    throw new Error('generation prompt omitted correlation-marker non-write semantics')
+  }
+  const generationEvidence = {
+    durableUserPrompt: normalize(durableGenerationPrompt),
+    modelRequestUserPrompt: normalize(requestGenerationPrompt),
+    durableLog: {
+      userMessageSeq: durableGeneration.seq,
+      requestHeaderLogged: generationSession.events.some(event => event.type === 'request/header'),
+      turnEndSeq: generationSession.events.findLast(event => event.type === 'turn/end')?.seq,
+    },
+  }
+  if (screenshotDir !== undefined) {
+    await page.screenshot({ path: join(screenshotDir, '04-story-ai-generation.png'), fullPage: false })
+  }
+  await storyGenerationBrief.fill('')
   await drawer.getByRole('textbox', { name: '结局目标' }).fill('在风暴前公开真相并阻止下一次事故。')
   await drawer.getByRole('textbox', { name: '修改摘要' }).fill('明确故事结局目标')
   await drawer.getByRole('button', { name: '预览修改提案' }).click()
   await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
   const storyEditorSnapshot = normalize(await drawer.ariaSnapshot())
   await drawer.getByRole('button', { name: '放弃修改' }).click()
-  await drawer.getByRole('button', { name: '返回资产' }).click()
+  await drawer.getByRole('button', { name: '返回小说资产列表' }).click()
   const assetHeading = drawer.getByRole('heading', { name: '小说资产' })
   await page.waitForFunction(element => document.activeElement === element, await assetHeading.elementHandle())
   const chapterSelector = drawer.getByRole('spinbutton', { name: '选择小说章节' })
@@ -176,14 +234,14 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   await chapterSelector.fill('2')
   await drawer.getByText('第 2 / 20 章').waitFor({ timeout: 10_000 })
   await drawer.getByRole('button', { name: /章节蓝图/ }).click()
-  await drawer.getByRole('heading', { name: '第 2 章蓝图' }).waitFor({ timeout: 10_000 })
+  await drawer.getByRole('heading', { name: '第 2 章蓝图', exact: true }).waitFor({ timeout: 10_000 })
   await drawer.getByRole('textbox', { name: '章节目的' }).fill('让两位调查者交换证据并首次产生分歧。')
   await drawer.getByRole('textbox', { name: '修改摘要' }).fill('细化第二章目的')
   await drawer.getByRole('button', { name: '预览修改提案' }).click()
   await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 10_000 })
   const chapterBlueprintEditorSnapshot = normalize(await drawer.ariaSnapshot())
   await drawer.getByRole('button', { name: '放弃修改' }).click()
-  await drawer.getByRole('button', { name: '返回资产' }).click()
+  await drawer.getByRole('button', { name: '返回小说资产列表' }).click()
   await drawer.getByRole('button', { name: /章节正文/ }).click()
   const draftEditor = drawer.getByRole('textbox', { name: '章节正文 Markdown' })
   await draftEditor.waitFor({ timeout: 10_000 })
@@ -251,6 +309,7 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
       horizontalOverflow: narrowOverflow,
     },
     settings: settingsSnapshot,
+    generationEvidence,
   }
   } catch (error) {
     if (page === undefined) {
@@ -269,6 +328,7 @@ export async function runWorkbenchBrowserJourney(harnessRoot) {
   if (browser !== undefined) {
     try { await browser.close() } catch (error) { cleanupErrors.push(error) }
   }
+  try { stopLlmCapture?.() } catch (error) { cleanupErrors.push(error) }
   if (scaffold !== undefined) {
     try { await scaffold.close() } catch (error) { cleanupErrors.push(error) }
   }

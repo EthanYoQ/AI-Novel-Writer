@@ -61,6 +61,19 @@ export type NovelAssetEditorPhase =
   | 'stale'
   | 'error'
 
+/** Session admission state for model-generated one-asset proposals. */
+export type NovelAssetGenerationPhase = 'editing' | 'submitting' | 'submitted' | 'reconciling' | 'error'
+
+/** User brief and visible outcome for model generation that never writes from the browser. */
+export interface NovelAssetGenerationState {
+  readonly brief: string
+  readonly phase: NovelAssetGenerationPhase
+  readonly message?: string
+  /** CommitReceipt revision that identifies the approved canonical Host bytes. */
+  readonly expectedRevision?: Revision
+  readonly expectedReplacement?: string
+}
+
 /** Exact single-asset proposal generated before Session admission. */
 export interface NovelAssetChangePreview {
   readonly prompt: string
@@ -77,6 +90,7 @@ interface NovelAssetEditorBase {
   readonly preview?: NovelAssetChangePreview
   readonly latestRevision?: Revision
   readonly message?: string
+  readonly generation?: NovelAssetGenerationState
 }
 
 /** Project settings editor state backed by one exact manifest revision. */

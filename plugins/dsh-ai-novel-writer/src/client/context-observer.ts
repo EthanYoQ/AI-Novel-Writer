@@ -1,6 +1,7 @@
 /** Selection, Preset, approval, and completed-tool observation for the novel workbench. */
 
 import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Revision } from '../types.ts'
 import type { NovelApplyOutcome, NovelApprovalAvailability, NovelWorkbenchController } from './workbench-store.ts'
 
 interface Observable<T> {
@@ -14,6 +15,13 @@ interface ConversationNodeView {
   readonly call?: { readonly name: string; readonly argsRaw?: string } | null
   readonly isError?: boolean
   readonly error?: { readonly code: string }
+  readonly meta?: unknown
+  readonly content?: readonly { readonly type: string; readonly text?: string }[]
+}
+
+interface ConversationQueueMessageView {
+  readonly text: string | null
+  readonly content: readonly { readonly type: string; readonly text?: string }[]
 }
 
 /** Minimal browser-runtime sources needed without exposing Workspace paths to the RPC caller. */
@@ -26,13 +34,37 @@ export interface NovelContextSelectionSources {
         readonly projectionValues?: Readonly<Record<string, unknown>>
       }>>
     }>
-    binding(sessionId: SessionId): { readonly session: Observable<{ readonly nodes: readonly ConversationNodeView[] }> } | undefined
+    binding(sessionId: SessionId): { readonly session: Observable<{
+      readonly nodes: readonly ConversationNodeView[]
+      readonly turnEnds?: ReadonlyMap<number, number>
+      readonly queue?: readonly ConversationQueueMessageView[]
+      readonly running?: boolean
+    }> } | undefined
   }
   readonly workspaces: {
     readonly list: Observable<{
       readonly items: ReadonlyArray<{ readonly workspaceId: WorkspaceId; readonly sessionIds: readonly SessionId[] }>
     }>
   }
+}
+
+function markerUserSeq(nodes: readonly ConversationNodeView[], marker: string): number | undefined {
+  const line = `[AI_NOVEL_UI_CORRELATION:${marker}]`
+  let seq: number | undefined
+  for (const node of nodes) {
+    if (node.kind !== 'user' || !node.content?.some(block => block.type === 'text' && block.text?.includes(line))) continue
+    if (seq === undefined || node.seq > seq) seq = node.seq
+  }
+  return seq
+}
+
+function queueContainsMarker(
+  queue: readonly ConversationQueueMessageView[],
+  marker: string,
+): boolean {
+  const line = `[AI_NOVEL_UI_CORRELATION:${marker}]`
+  return queue.some(item => item.text?.includes(line)
+    || item.content.some(block => block.type === 'text' && block.text?.includes(line)))
 }
 
 function approvalAvailability(value: unknown): NovelApprovalAvailability {
@@ -105,6 +137,16 @@ function applyAttribution(node: ConversationNodeView): NovelApplyOutcome['attrib
   }
 }
 
+/** Read the tool-owned replayable receipt metadata without interpreting model-facing result text. */
+function commitRevision(node: ConversationNodeView): Revision | undefined {
+  if (node.isError === true) return undefined
+  if (typeof node.meta !== 'object' || node.meta === null || Array.isArray(node.meta)) return undefined
+  const revision = (node.meta as { readonly newRevision?: unknown }).newRevision
+  return typeof revision === 'string' && /^[0-9a-f]{64}$/.test(revision)
+    ? revision as Revision
+    : undefined
+}
+
 /**
  * Follow the current registered Workspace and refresh after new completed novel mutations.
  *
@@ -120,6 +162,9 @@ export function observeNovelContextSources(
   let boundSessionId: SessionId | undefined
   let stopConversation: (() => void) | undefined
   let seenApplySeq: number | undefined
+  let observedMarker: string | undefined
+  let settledMarker: string | undefined
+  let queuedMarkerSeen = false
 
   const bindConversation = (sessionId: SessionId | undefined): void => {
     if (sessionId === undefined && boundSessionId === undefined) return
@@ -128,24 +173,62 @@ export function observeNovelContextSources(
     stopConversation = undefined
     boundSessionId = sessionId
     seenApplySeq = undefined
+    observedMarker = undefined
+    settledMarker = undefined
+    queuedMarkerSeen = false
     if (sessionId === undefined) return
     const binding = sources.sessions.binding(sessionId)
     if (binding === undefined) return
     const inspect = (): void => {
       if (disposed) return
-      const latest = latestNovelApplyResult(binding.session.getSnapshot().nodes)
-      if (latest === undefined) return
-      if (latest.seq !== seenApplySeq) {
+      const snapshot = binding.session.getSnapshot()
+      const latest = latestNovelApplyResult(snapshot.nodes)
+      let refresh = false
+      if (latest !== undefined && latest.seq !== seenApplySeq) {
+        const newRevision = commitRevision(latest)
         controller.novelApplySettled({
           isError: latest.isError === true,
           code: latest.error?.code,
+          ...(newRevision === undefined ? {} : { newRevision }),
           attribution: applyAttribution(latest),
         })
-        void controller.refresh()
+        refresh = true
       }
-      seenApplySeq = latest.seq
+      seenApplySeq = latest?.seq
+      const marker = controller.currentGenerationCorrelationMarker()
+      if (marker !== observedMarker) {
+        observedMarker = marker
+        settledMarker = undefined
+        queuedMarkerSeen = false
+      }
+      const userSeq = marker === undefined ? undefined : markerUserSeq(snapshot.nodes, marker)
+      const queued = marker !== undefined && snapshot.queue !== undefined
+        ? queueContainsMarker(snapshot.queue, marker)
+        : false
+      if (queued) queuedMarkerSeen = true
+      const matchingTurnEnd = userSeq === undefined || snapshot.turnEnds === undefined
+        ? undefined
+        : [...snapshot.turnEnds.values()].filter(seq => seq > userSeq).sort((left, right) => left - right)[0]
+      if (marker !== undefined
+        && queuedMarkerSeen
+        && !queued
+        && userSeq === undefined
+        && snapshot.running === false) {
+        controller.generationPromptLost()
+        queuedMarkerSeen = false
+      } else if (marker !== undefined && matchingTurnEnd !== undefined && settledMarker !== marker) {
+        controller.generationTurnSettled()
+        settledMarker = marker
+        refresh = true
+      }
+      if (refresh) void controller.refresh()
     }
-    seenApplySeq = latestNovelApplyResult(binding.session.getSnapshot().nodes)?.seq
+    const initial = binding.session.getSnapshot()
+    seenApplySeq = latestNovelApplyResult(initial.nodes)?.seq
+    observedMarker = controller.currentGenerationCorrelationMarker()
+    queuedMarkerSeen = observedMarker !== undefined && initial.queue !== undefined
+      ? queueContainsMarker(initial.queue, observedMarker)
+      : false
     stopConversation = binding.session.subscribe(inspect)
   }
 

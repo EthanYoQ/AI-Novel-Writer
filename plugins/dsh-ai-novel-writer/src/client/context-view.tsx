@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useSyncExternalStore, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { IconListPenOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconChevronLeftOutline14, IconListPenOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
@@ -197,9 +197,12 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
         <div className="aiNovelContextBody" data-ai-novel-workbench>
           <NovelWorkbenchBody
             state={workbenchState}
+            backIcon={<IconChevronLeftOutline14 />}
             refresh={() => { void workbenchController.refresh() }}
             selectChapter={chapter => { void workbenchController.selectChapter(chapter) }}
             updateInitialization={patch => { workbenchController.updateInitialization(patch) }}
+            updateInitializationGenerationBrief={brief => { workbenchController.updateInitializationGenerationBrief(brief) }}
+            generateInitialization={() => { void workbenchController.generateInitialization() }}
             previewInitialization={() => { workbenchController.previewInitialization() }}
             submitInitialization={() => { void workbenchController.submitInitialization() }}
             openAsset={target => { void workbenchController.openAsset(target) }}
@@ -209,6 +212,8 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
             updateChapterBlueprint={patch => { workbenchController.updateChapterBlueprint(patch) }}
             updateChapterDraft={text => { workbenchController.updateChapterDraft(text) }}
             updateAssetSummary={summary => { workbenchController.updateAssetSummary(summary) }}
+            updateAssetGenerationBrief={brief => { workbenchController.updateAssetGenerationBrief(brief) }}
+            generateAsset={() => { void workbenchController.generateAsset() }}
             previewAssetChange={() => { workbenchController.previewAssetChange() }}
             submitAssetChange={() => { void workbenchController.submitAssetChange() }}
             discardAssetChanges={() => { workbenchController.discardAssetChanges() }}

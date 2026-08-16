@@ -22,9 +22,12 @@ const uninitialized: NovelWorkbenchState = {
 }
 
 const editorActions: Omit<NovelWorkbenchBodyProps, 'state'> = {
+  backIcon: <span aria-hidden="true" data-icon="chevron-left" />,
   refresh: vi.fn(), selectChapter: vi.fn(), updateInitialization: vi.fn(),
+  updateInitializationGenerationBrief: vi.fn(), generateInitialization: vi.fn(),
   previewInitialization: vi.fn(), submitInitialization: vi.fn(), openAsset: vi.fn(),
   backToAssets: vi.fn(), updateProjectSettings: vi.fn(), updateAssetSummary: vi.fn(),
+  updateAssetGenerationBrief: vi.fn(), generateAsset: vi.fn(),
   previewAssetChange: vi.fn(), submitAssetChange: vi.fn(), discardAssetChanges: vi.fn(),
   reloadStaleAsset: vi.fn(), setCharacterSearch: vi.fn(), selectCharacter: vi.fn(),
   createCharacter: vi.fn(), updateCharacter: vi.fn(), deleteCharacter: vi.fn(),
@@ -193,6 +196,43 @@ describe('novel workbench presentation', () => {
     expect(html).toContain('重新载入最新版本')
     expect(html).toMatch(/class="aiNovelBackButton"[^>]*disabled/)
     expect(html).toMatch(/type="submit"[^>]*disabled/)
+  })
+
+  it('makes return navigation prominent and offers model generation inside the compact editor', () => {
+    const html = renderToStaticMarkup(<NovelWorkbenchBody {...editorActions} state={ready({
+      kind: 'project', phase: 'clean', dirty: false, baseRevision: 'a'.repeat(64) as Revision,
+      originalText: '{}\n', summary: '',
+      generation: { brief: '', phase: 'editing' },
+      draft: {
+        title: '潮汐来信', language: 'zh-CN', genre: '悬疑', plannedChapters: '20',
+        targetWordsPerChapter: '3000', creativeStrategy: 'auto',
+      },
+    })} />)
+
+    expect(html).toContain('aria-label="返回小说资产列表"')
+    expect(html).toContain('返回小说资产')
+    expect(html).toMatch(/class="aiNovelBackButton"[^>]*>.*data-icon="chevron-left"/)
+    expect(html).toContain('AI 生成项目设置')
+    expect(html).toContain('只会生成当前资产，并通过对话展示原生审批。')
+    expect(html).toContain('aria-label="项目设置 AI 生成要求"')
+    expect(html).toContain('让当前模型生成')
+    expect(html).not.toContain('任务看板')
+  })
+
+  it('keeps return, manual fields, and another generation locked during authoritative reconciliation', () => {
+    const html = renderToStaticMarkup(<NovelWorkbenchBody {...editorActions} state={ready({
+      kind: 'project', phase: 'clean', dirty: false, baseRevision: 'a'.repeat(64) as Revision,
+      originalText: '{}\n', summary: '',
+      generation: { brief: '玄幻题材', phase: 'reconciling' },
+      draft: {
+        title: '潮汐来信', language: 'zh-CN', genre: '悬疑', plannedChapters: '20',
+        targetWordsPerChapter: '3000', creativeStrategy: 'auto',
+      },
+    })} />)
+
+    expect(html).toMatch(/aria-label="返回小说资产列表"[^>]*disabled/)
+    expect(html).toMatch(/aria-label="项目设置 AI 生成要求"[^>]*disabled/)
+    expect(html).toMatch(/class="aiNovelPresetSecondary aiNovelGenerationButton"[^>]*disabled/)
   })
 
   it('renders character search, one selected record, and complete-asset proposal controls in one column', () => {

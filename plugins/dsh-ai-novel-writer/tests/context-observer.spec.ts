@@ -91,6 +91,7 @@ describe('novel context shell observer', () => {
     const conversations = new Map([
       [SESSION_1, source({ nodes: [] as Array<{
         kind: 'tool-result'; seq: number; call: { name: string; argsRaw?: string } | null; isError?: boolean
+        content?: readonly { type: string; text?: string }[]; meta?: unknown
       }> })],
       [SESSION_2, source({ nodes: [] as Array<{
         kind: 'tool-result'; seq: number; call: { name: string; argsRaw?: string } | null; isError?: boolean
@@ -137,6 +138,8 @@ describe('novel context shell observer', () => {
               creativeStrategy: 'consistency-first',
             }),
           },
+          content: [{ type: 'text', text: 'model-facing prose is not revision metadata' }],
+          meta: { newRevision: 'b'.repeat(64) },
         },
       ],
     })
@@ -145,6 +148,7 @@ describe('novel context shell observer', () => {
     expect(settled).toHaveBeenLastCalledWith({
       isError: false,
       code: undefined,
+      newRevision: 'b'.repeat(64),
       attribution: {
         kind: 'initialize',
         requestJson: JSON.stringify({
@@ -187,6 +191,33 @@ describe('novel context shell observer', () => {
       },
     })
 
+    conversations.get(SESSION_1)!.set({
+      nodes: [{
+        kind: 'tool-result', seq: 4, call: { name: 'novel_apply_change' },
+        meta: { newRevision: 'malformed' },
+        content: [{ type: 'text', text: JSON.stringify({ newRevision: 'c'.repeat(64) }) }],
+      }],
+    })
+    await controller.whenIdle()
+    expect(settled).toHaveBeenLastCalledWith({
+      isError: false,
+      code: undefined,
+      attribution: undefined,
+    })
+
+    conversations.get(SESSION_1)!.set({
+      nodes: [{
+        kind: 'tool-result', seq: 5, call: { name: 'novel_apply_change' },
+        content: [{ type: 'text', text: JSON.stringify({ newRevision: 'd'.repeat(64) }) }],
+      }],
+    })
+    await controller.whenIdle()
+    expect(settled).toHaveBeenLastCalledWith({
+      isError: false,
+      code: undefined,
+      attribution: undefined,
+    })
+
     workspaceList.set({ items: [{ workspaceId: WORKSPACE_2, sessionIds: [SESSION_2] }] })
     sessionList.set({ current: SESSION_2 })
     await controller.whenIdle()
@@ -197,14 +228,19 @@ describe('novel context shell observer', () => {
       nodes: [{ kind: 'tool-result', seq: 3, call: { name: 'novel_apply_change' } }],
     })
     await controller.whenIdle()
-    expect(read).toHaveBeenCalledTimes(4)
+    expect(read).toHaveBeenCalledTimes(6)
   })
 
   it('retries binding when the selected Session materializes after the list row', async () => {
     const sessionList = source({ current: SESSION_1 as SessionId | undefined })
     const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
     const conversation = source({
-      nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }>,
+      nodes: [] as Array<{
+        kind: string
+        seq: number
+        call: { name: string } | null
+        content?: readonly { type: string; text?: string }[]
+      }>,
     })
     let materialized = false
     const read = vi.fn(async () => ready)
@@ -223,6 +259,83 @@ describe('novel context shell observer', () => {
     await controller.whenIdle()
 
     expect(read).toHaveBeenCalledTimes(2)
+    dispose()
+  })
+
+  it('settles only the turn whose durable user message contains the active generation marker', async () => {
+    const sessionList = source({ current: SESSION_1 as SessionId | undefined })
+    const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
+    const conversation = source({
+      nodes: [] as Array<{
+        kind: string
+        seq: number
+        call: { name: string } | null
+        content?: readonly { type: string; text?: string }[]
+      }>,
+      turnEnds: new Map<number, number>(),
+    })
+    const read = vi.fn(async () => ready)
+    const controller = new NovelWorkbenchController({ read, readAsset: vi.fn(), prompt: vi.fn() }, vi.fn())
+    const turnSettled = vi.spyOn(controller, 'generationTurnSettled')
+    vi.spyOn(controller, 'currentGenerationCorrelationMarker').mockReturnValue('marker-116-e')
+    const dispose = observeNovelContextSources({
+      sessions: { list: sessionList, binding: () => ({ session: conversation }) },
+      workspaces: { list: workspaceList },
+    }, controller)
+    await controller.open()
+
+    conversation.set({ nodes: [], turnEnds: new Map([[1, 7]]) })
+    await controller.whenIdle()
+    expect(turnSettled).not.toHaveBeenCalled()
+
+    conversation.set({
+      nodes: [{ kind: 'user', seq: 8, call: null, content: [{ type: 'text', text: 'queued [AI_NOVEL_UI_CORRELATION:marker-116-e]' }] }],
+      turnEnds: new Map([[1, 7]]),
+    })
+    await controller.whenIdle()
+    expect(turnSettled).not.toHaveBeenCalled()
+
+    conversation.set({
+      nodes: [{ kind: 'user', seq: 8, call: null, content: [{ type: 'text', text: 'queued [AI_NOVEL_UI_CORRELATION:marker-116-e]' }] }],
+      turnEnds: new Map([[1, 7], [2, 12]]),
+    })
+    await controller.whenIdle()
+
+    expect(turnSettled).toHaveBeenCalledOnce()
+    const readsAfterTurn = read.mock.calls.length
+    dispose()
+    conversation.set({ nodes: [], turnEnds: new Map([[1, 7], [2, 12], [3, 15]]) })
+    await controller.whenIdle()
+    expect(turnSettled).toHaveBeenCalledOnce()
+    expect(read).toHaveBeenCalledTimes(readsAfterTurn)
+  })
+
+  it('fails a generation closed when its observed queued prompt disappears before becoming durable', async () => {
+    const sessionList = source({ current: SESSION_1 as SessionId | undefined })
+    const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
+    const conversation = source({
+      nodes: [] as Array<{ kind: string; seq: number; content?: readonly { type: string; text?: string }[] }>,
+      turnEnds: new Map<number, number>(),
+      queue: [{ text: '[AI_NOVEL_UI_CORRELATION:marker-deleted]', content: [] }] as Array<{
+        text: string | null
+        content: readonly { type: string; text?: string }[]
+      }>,
+      running: true,
+    })
+    const controller = new NovelWorkbenchController({
+      read: vi.fn(async () => ready), readAsset: vi.fn(), prompt: vi.fn(),
+    }, vi.fn())
+    vi.spyOn(controller, 'currentGenerationCorrelationMarker').mockReturnValue('marker-deleted')
+    const lost = vi.spyOn(controller, 'generationPromptLost')
+    const dispose = observeNovelContextSources({
+      sessions: { list: sessionList, binding: () => ({ session: conversation }) },
+      workspaces: { list: workspaceList },
+    }, controller)
+
+    conversation.set({ nodes: [], turnEnds: new Map(), queue: [], running: false })
+    await controller.whenIdle()
+
+    expect(lost).toHaveBeenCalledOnce()
     dispose()
   })
 })

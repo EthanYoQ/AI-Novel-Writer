@@ -261,12 +261,16 @@ describe('complete chapter keyless snapshot', () => {
       if (call.type !== 'tool/call') throw new Error('apply call projection lost its discriminant')
       const result = firstEvents.find(event =>
         event.type === 'tool/result' && event.data.message.source.callId === call.data.callId)
-      return JSON.parse(result === undefined ? '' : eventResultText(result) ?? '') as {
+      const receipt = JSON.parse(result === undefined ? '' : eventResultText(result) ?? '') as {
         target: { kind: string }
         oldRevision: string
         newRevision: string
         bytes: number
       }
+      expect(result?.type === 'tool/result' ? result.data.meta : undefined).toEqual({
+        newRevision: receipt.newRevision,
+      })
+      return receipt
     })
     expect(receipts.map(receipt => receipt.target.kind)).toEqual([
       'project', 'characters', 'story-blueprint', 'chapter-blueprint', 'chapter-draft',
