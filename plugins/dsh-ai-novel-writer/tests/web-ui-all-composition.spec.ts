@@ -1,21 +1,22 @@
 /** Optional real-profile composition check for dsh-web-ui-all tool isolation. */
 import { execFile } from 'node:child_process'
 import { access, readFile, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { makeTestWorkspace } from './test-workspace.ts'
 
 const execFileAsync = promisify(execFile)
-const packageRoot = resolve(import.meta.dirname, '..')
 const fixtureRoot = join(import.meta.dirname, 'fixtures', 'complete-chapter')
 const profileRoot = process.env.DSH_WEB_PROFILE_ROOT
+const installedPresetRoot = process.env.DSH_NOVEL_PRESET_ROOT
 const realProfileIt = profileRoot === undefined ? it.skip : it
 
 describe('dsh-web-ui-all installed-profile composition', () => {
   realProfileIt('keeps only the two novel tools in every real request header', async () => {
     if (profileRoot === undefined) throw new Error('real-profile test requires DSH_WEB_PROFILE_ROOT')
+    if (installedPresetRoot === undefined) throw new Error('real-profile test requires DSH_NOVEL_PRESET_ROOT')
     const workspace = await makeTestWorkspace('web-ui-all-composition-')
     const packageEntry = (packageName: string) => join(profileRoot, 'node_modules', ...packageName.split('/'), 'lib', 'index.js')
     const entries = {
@@ -39,7 +40,7 @@ describe('dsh-web-ui-all installed-profile composition', () => {
         ...process.env,
         DSH_HOME: join(workspace, '.dsh'),
         DSH_AGENTS_HOME: join(workspace, '.agents'),
-        DSH_NOVEL_PRESET_ROOT: join(packageRoot, 'presets'),
+        DSH_NOVEL_PRESET_ROOT: installedPresetRoot,
       },
       encoding: 'utf8',
       maxBuffer: 20 * 1024 * 1024,

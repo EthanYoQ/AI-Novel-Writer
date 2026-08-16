@@ -28,6 +28,7 @@ if (clientHandoff?.id !== manifest.name || typeof clientHandoff.factory !== 'fun
 const clientModules = new Map([
   ['react', await import('react')],
   ['react/jsx-runtime', await import('react/jsx-runtime')],
+  ['react-dom', await import('react-dom')],
   ['@deepseek-ai/dsh-client-ui-primitives', { IconListPenOutline16: () => null }],
 ])
 const clientExports = clientHandoff.factory(specifier => {

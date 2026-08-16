@@ -54,6 +54,120 @@ describe('release qualification runner', () => {
       .rejects.toMatchObject({ stderr: expect.stringContaining('Qualification requires DeepSeek Harness commit') })
   })
 
+  it('rejects a disposable profile that omits the pinned dsh-web-ui-all bundle', async () => {
+    const root = await makeTestWorkspace('qualification-profile-manifest-')
+    const manifest = join(root, 'package.json')
+    await writeFile(manifest, `${JSON.stringify({
+      dependencies: {
+        '@ethanyoq/dsh-ai-novel-writer': 'file:C:/owned/plugin.tgz',
+        '@linxin666/dsh-web-ui-all': '0.1.16',
+      },
+      dsh: {
+        profile: {
+          bundles: [
+            '@deepseek-ai/dsh-base',
+            '@deepseek-ai/dsh-web-app',
+            '@ethanyoq/dsh-ai-novel-writer',
+          ],
+        },
+      },
+    }, null, 2)}\n`, 'utf8')
+
+    await expect(execFileAsync(process.execPath, [
+      runner, '--validate-profile', manifest, 'plugin.tgz',
+    ], { cwd: packageRoot, encoding: 'utf8' }))
+      .rejects.toMatchObject({ stderr: expect.stringContaining('Profile bundle is missing: @linxin666/dsh-web-ui-all') })
+  })
+
+  it('rejects a packed-profile request header that leaks a dsh-web-ui-all tool', async () => {
+    const root = await makeTestWorkspace('qualification-request-log-')
+    const log = join(root, 'model-requests.jsonl')
+    const schemas = join(root, 'installed-tool-schemas.json')
+    await writeFile(schemas, `${JSON.stringify([
+      { name: 'novel_read', description: 'read', parameters: { type: 'object' } },
+      { name: 'novel_apply_change', description: 'apply', parameters: { type: 'object' } },
+    ])}\n`, 'utf8')
+    await writeFile(log, `${JSON.stringify({
+      type: 'model-request',
+      request: {
+        system: 'novel persona',
+        tools: [
+          { name: 'novel_read', description: 'read', parameters: { type: 'object' } },
+          { name: 'novel_apply_change', description: 'apply', parameters: { type: 'object' } },
+          { name: 'ssh_execute', description: 'ssh', parameters: { type: 'object' } },
+        ],
+      },
+    })}\n`, 'utf8')
+
+    await expect(execFileAsync(process.execPath, [runner, '--validate-model-log', log, schemas], {
+      cwd: packageRoot,
+      encoding: 'utf8',
+    })).rejects.toMatchObject({ stderr: expect.stringContaining('complete installed Preset schemas') })
+  })
+
+  it('rejects same-name model tools whose schemas differ from the installed Preset', async () => {
+    const root = await makeTestWorkspace('qualification-truncated-schema-')
+    const log = join(root, 'model-requests.jsonl')
+    const schemas = join(root, 'installed-tool-schemas.json')
+    const installedTools = [
+      {
+        name: 'novel_read',
+        description: 'Read a bounded novel asset.',
+        parameters: {
+          type: 'object',
+          properties: { kind: { enum: ['asset', 'query', 'working-set'] } },
+          required: ['kind'],
+        },
+      },
+      {
+        name: 'novel_apply_change',
+        description: 'Apply one approved novel change.',
+        parameters: {
+          type: 'object',
+          properties: { kind: { enum: ['initialize', 'replace'] } },
+          required: ['kind'],
+        },
+      },
+    ]
+    await writeFile(schemas, `${JSON.stringify(installedTools)}\n`, 'utf8')
+    await writeFile(log, `${JSON.stringify({
+      type: 'model-request',
+      request: {
+        system: 'novel persona',
+        tools: installedTools.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: { type: 'object' },
+        })),
+      },
+    })}\n`, 'utf8')
+
+    await expect(execFileAsync(process.execPath, [runner, '--validate-model-log', log, schemas], {
+      cwd: packageRoot,
+      encoding: 'utf8',
+    })).rejects.toMatchObject({ stderr: expect.stringContaining('installed Preset schemas') })
+  })
+
+  it('keeps deterministic backend steps isolated between sessions with identical proposal text', async () => {
+    const backend = join(packageRoot, 'scripts', 'qualification-web-backend.mjs').replaceAll('\\', '/')
+    const prompt = '{"kind":"replace","targetKind":"story-blueprint"}\n\n这只是提案。'
+    const probe = [
+      `import { proposalFromMessages } from ${JSON.stringify(`file:///${backend}`)}`,
+      `const prompt = ${JSON.stringify(prompt)}`,
+      "const first = proposalFromMessages([{ id: 'session-a-message', content: [{ type: 'text', text: prompt }] }])",
+      "const continuation = proposalFromMessages([{ id: 'session-a-message', content: [{ type: 'text', text: prompt }] }, { id: 'tool-result', content: [] }])",
+      "const second = proposalFromMessages([{ id: 'session-b-message', content: [{ type: 'text', text: prompt }] }])",
+      'process.stdout.write(JSON.stringify([first?.key, continuation?.key, second?.key]))',
+    ].join(';')
+    const result = await execFileAsync(process.execPath, ['--input-type=module', '--eval', probe], {
+      cwd: packageRoot,
+      encoding: 'utf8',
+    })
+    const [first, continuation, second] = JSON.parse(result.stdout) as string[]
+    expect(continuation).toBe(first)
+    expect(second).not.toBe(first)
+  })
+
   it('times out a real command only after its stubborn subprocess tree is terminated', async () => {
     const root = await makeTestWorkspace('qualification-command-timeout-')
     await expect(execFileAsync(process.execPath, [runner, '--probe-command-timeout', root], {

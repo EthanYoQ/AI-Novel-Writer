@@ -15,6 +15,8 @@ const execFileAsync = promisify(execFile)
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repositoryRoot = resolve(packageRoot, '..', '..')
 const packageName = '@ethanyoq/dsh-ai-novel-writer'
+const webUiAllPackage = '@linxin666/dsh-web-ui-all'
+const webUiAllVersion = '0.1.16'
 const profileName = 'web'
 const supportedHarnessCommit = '47f943859bef60e4160492346772ded9b24f765a'
 const expectedPresetPlugins = [
@@ -35,7 +37,8 @@ const requiredTarballEntries = [
   'package/presets/ai-novel-writer/agent.cordis.yml',
   'package/presets/ai-novel-writer/preset.yml',
 ]
-const chapterText = '# 退潮来信\n\n午夜，灯塔的主灯第一次熄灭。\n\n林夏在退去的潮水里捡到一封尚未寄出的信。\n'
+const expectedProjectTitle = '潮汐来信'
+const expectedStoryPremise = '退潮后的海床会浮现来自未来的信件。'
 
 function fail(message) {
   throw new Error(message)
@@ -85,6 +88,45 @@ async function validatePreset(path) {
   return parsePreset(await readFile(path, 'utf8'))
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, canonicalJson(item)]))
+  }
+  return value
+}
+
+function canonicalToolSchemas(value, subject) {
+  if (!Array.isArray(value)) fail(`${subject} must be an array`)
+  return value.map((item) => {
+    const tool = objectOf(item, `${subject} tool schema`)
+    if (typeof tool.name !== 'string' || typeof tool.description !== 'string') {
+      fail(`${subject} tool schema is incomplete`)
+    }
+    objectOf(tool.parameters, `${subject} tool parameters`)
+    return canonicalJson(tool)
+  }).sort((left, right) => left.name.localeCompare(right.name))
+}
+
+async function validateModelRequestLog(path, installedToolSchemas) {
+  const expectedTools = canonicalToolSchemas(installedToolSchemas, 'Installed Preset')
+  const requests = (await readFile(path, 'utf8')).trimEnd().split(/\r?\n/)
+    .filter(Boolean)
+    .map((line, index) => objectOf(JSON.parse(line), `Model request log row ${index + 1}`))
+    .filter(row => row.type === 'model-request')
+    .map(row => objectOf(row.request, 'Model request'))
+  if (requests.length === 0) fail('Model request log did not contain a request')
+  for (const request of requests) {
+    if (typeof request.system !== 'string' || request.system === '') fail('Model request must include the complete system prompt')
+    const actualTools = canonicalToolSchemas(request.tools, 'Model request')
+    if (JSON.stringify(actualTools) !== JSON.stringify(expectedTools)) {
+      fail('Every model request must match the complete installed Preset schemas')
+    }
+  }
+  return { requests: requests.length, first: requests[0] }
+}
+
 function assertBundlePatch(text) {
   const patches = yaml.load(text)
   if (!Array.isArray(patches) || patches.length !== 1) fail('Bundle patch must contain one insert operation')
@@ -111,6 +153,7 @@ async function checkSource() {
   for (const path of [
     'README.md', 'cordis.patch.yml', 'presets/ai-novel-writer/agent.cordis.yml',
     'presets/ai-novel-writer/preset.yml', 'scripts/qualification-preset.mjs',
+    'scripts/qualification-browser.mjs', 'scripts/qualification-web-backend.mjs',
   ]) {
     if (!(await exists(join(packageRoot, path)))) fail(`Source package artifact is missing: ${path}`)
   }
@@ -138,10 +181,13 @@ function assertProfileInstalled(manifest, tarballName) {
   if (typeof specifier !== 'string' || !specifier.includes(tarballName) || /^(?:link|workspace):/.test(specifier)) {
     fail('Profile must install the plugin from the packed tarball bytes')
   }
+  if (dependencies[webUiAllPackage] !== webUiAllVersion) {
+    fail(`Profile must install ${webUiAllPackage} at ${webUiAllVersion}`)
+  }
   const dsh = objectOf(manifest.dsh, 'Profile dsh manifest')
   const profile = objectOf(dsh.profile, 'Profile bundle manifest')
   if (!Array.isArray(profile.bundles)) fail('Profile bundle list is missing')
-  for (const bundle of ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', packageName]) {
+  for (const bundle of ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', packageName, webUiAllPackage]) {
     if (!profile.bundles.includes(bundle)) fail(`Profile bundle is missing: ${bundle}`)
   }
   return { specifier, bundles: profile.bundles }
@@ -155,6 +201,9 @@ function assertProfileRemoved(manifest) {
   if (packageName in dependencies || !Array.isArray(profile.bundles) || profile.bundles.includes(packageName)) {
     fail('Profile uninstall retained the AI novel dependency or bundle layer')
   }
+  if (dependencies[webUiAllPackage] !== webUiAllVersion || !profile.bundles.includes(webUiAllPackage)) {
+    fail('Profile uninstall must retain the pinned dsh-web-ui-all dependency and bundle')
+  }
 }
 
 function powershellQuote(path) {
@@ -165,7 +214,7 @@ function ownershipRecord(root, sourceProject, purpose, ttlDays, retainReason) {
   const createdAt = new Date().toISOString()
   const expiresAt = new Date(Date.parse(createdAt) + ttlDays * 86_400_000).toISOString()
   return {
-    owner: 'codex-ticket-107',
+    owner: 'codex-ticket-113',
     sourceProject,
     purpose,
     createdAt,
@@ -487,10 +536,10 @@ async function writeWebLogs(logRoot, label, stdout, stderr) {
   ])
 }
 
-async function startWeb(logRoot, label, harnessRoot, env) {
+async function startWeb(logRoot, label, harnessRoot, env, patchPath) {
   const port = await availablePort()
   const url = `http://127.0.0.1:${port}`
-  const launch = dshLaunch(harnessRoot, ['--profile', profileName, '--port', String(port)])
+  const launch = dshLaunch(harnessRoot, ['--profile', profileName, '--patch', patchPath, '--port', String(port)])
   const child = spawn(launch.file, launch.args, {
     cwd: harnessRoot,
     detached: process.platform !== 'win32',
@@ -552,8 +601,8 @@ async function startWeb(logRoot, label, harnessRoot, env) {
   }
 }
 
-async function probeWeb(logRoot, label, harnessRoot, env) {
-  const server = await startWeb(logRoot, `${label}-server`, harnessRoot, env)
+async function probeWeb(logRoot, label, harnessRoot, env, patchPath, workspaceRoot, screenshotRoot, phase) {
+  const server = await startWeb(logRoot, `${label}-server`, harnessRoot, env, patchPath)
   let result
   let bodyError
   try {
@@ -567,13 +616,22 @@ async function probeWeb(logRoot, label, harnessRoot, env) {
     }
     const browser = await recordCommand(logRoot, `${label}-browser`, process.execPath, [
       join(packageRoot, 'scripts', 'qualification-browser.mjs'), server.url, repositoryRoot,
-    ], { cwd: repositoryRoot, env, timeout: 90_000 })
+      workspaceRoot, screenshotRoot, phase,
+    ], { cwd: repositoryRoot, env, timeout: 180_000 })
     const browserLine = browser.stdout.trimEnd().split(/\r?\n/).at(-1)
     const browserResult = objectOf(JSON.parse(browserLine ?? ''), 'Browser qualification result')
-    if (browserResult.workbenchOpened !== true || browserResult.presetInstalled !== true) {
-      fail('Browser did not open the novel workbench and confirm Preset installation')
+    if (browserResult.browser !== 'Google Chrome' || browserResult.phase !== phase || !Array.isArray(browserResult.screenshots)) {
+      fail('Browser did not complete the requested Google Chrome workbench journey')
     }
-    result = { url: server.url, graphRevision: graph.rev, clientRevision: row.rev, presetInstalled: true }
+    result = {
+      url: server.url,
+      graphRevision: graph.rev,
+      clientRevision: row.rev,
+      browser: browserResult.browser,
+      pluginCard: browserResult.pluginCard,
+      geometry: browserResult.geometry,
+      screenshots: browserResult.screenshots,
+    }
   } catch (error) {
     bodyError = error
   }
@@ -655,52 +713,81 @@ async function qualifyPresetTools(logRoot, profileRoot, installedRoot, env) {
   return { agentTools: payload.agentTools, globalTools: payload.globalTools }
 }
 
-async function writeChapter(installedRoot, workspaceRoot) {
-  const module = await import(`${pathToFileURL(join(installedRoot, 'lib', 'index.js')).href}?chapter=${Date.now()}`)
-  if (typeof module.openNovelProject !== 'function') fail('Installed Host export is missing openNovelProject')
-  const project = module.openNovelProject(workspaceRoot)
-  const signal = new AbortController().signal
-  await project.apply({
-    kind: 'initialize', projectId: '123e4567-e89b-42d3-a456-426614174000',
-    createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
-    title: '潮汐来信', language: 'zh-CN', genre: '奇幻悬疑', plannedChapters: 6,
-    targetWordsPerChapter: 2_000, creativeStrategy: 'consistency-first',
-  }, signal)
-  const changes = [
-    {
-      target: { kind: 'characters' }, summary: '建立主要人物',
-      replacement: '{"characters":[{"id":"lin-xia","name":"林夏","role":"灯塔守望人","summary":"能听见潮汐中的旧日回声。","goal":"找回失踪的弟弟。","relationships":[],"notes":"害怕深水，却从不离开灯塔。"}]}',
-    },
-    {
-      target: { kind: 'story-blueprint' }, summary: '建立故事蓝图',
-      replacement: '{"premise":"退潮后的海床会浮现来自未来的信件。","themes":["记忆","选择"],"world":"被永夜潮汐包围的群岛。","mainPlot":"林夏循着未来信件寻找失踪者。","endingGoal":"林夏决定保留真实记忆并点亮全部灯塔。"}',
-    },
-    {
-      target: { kind: 'chapter-blueprint', chapter: 1 }, summary: '建立第一章蓝图',
-      replacement: '{"chapter":1,"title":"退潮来信","purpose":"让林夏收到第一封未来信件。","beats":["夜潮退去","海床显出信匣","信上写着弟弟明日的求救"],"characterIds":["lin-xia"],"continuityNotes":["灯塔主灯在午夜熄灭"],"status":"planned"}',
-    },
-    {
-      target: { kind: 'chapter-draft', chapter: 1 }, summary: '起草第一章', replacement: chapterText,
-    },
-  ]
-  for (const change of changes) {
-    await project.apply({
-      kind: 'replace', target: change.target, baseRevision: 'absent', baseText: '',
-      replacement: change.replacement, summary: change.summary,
-    }, signal)
-  }
-}
-
 async function readback(installedEntry, workspaceRoot) {
   const module = await import(`${pathToFileURL(installedEntry).href}?readback=${Date.now()}`)
   const project = module.openNovelProject(workspaceRoot)
   const result = await project.read({ kind: 'working-set', chapter: 1 }, new AbortController().signal)
-  const draft = result.assets.find(asset => asset.target.kind === 'chapter-draft')
   const manifest = result.assets.find(asset => asset.target.kind === 'project')
-  if (draft?.text !== chapterText) fail('Fresh-process readback did not recover the packaged first chapter')
+  const story = result.assets.find(asset => asset.target.kind === 'story-blueprint')
   const projectData = JSON.parse(manifest?.text ?? '{}')
-  if (projectData.creativeStrategy !== 'consistency-first') fail('Fresh-process readback lost the project strategy')
-  process.stdout.write(`${JSON.stringify({ projectId: projectData.projectId, draftRevision: draft.revision })}\n`)
+  const storyData = JSON.parse(story?.text ?? '{}')
+  if (projectData.title !== expectedProjectTitle || projectData.creativeStrategy !== 'consistency-first') {
+    fail('Fresh-process readback lost the project identity or strategy')
+  }
+  if (storyData.premise !== expectedStoryPremise) fail('Fresh-process readback lost the approved story blueprint')
+  process.stdout.write(`${JSON.stringify({
+    projectId: projectData.projectId,
+    projectRevision: manifest.revision,
+    storyRevision: story.revision,
+    projectBytes: manifest.bytes,
+    storyBytes: story.bytes,
+  })}\n`)
+}
+
+async function writeQualificationOverlay(path, installedRoot) {
+  const backend = pathToFileURL(join(packageRoot, 'scripts', 'qualification-web-backend.mjs')).href
+  await writeFile(path, [
+    '- id: agent-default-model',
+    '  config:',
+    '    provider: novel-qualification',
+    '    model: keyless',
+    '',
+    '- id: agent-presets',
+    '  config:',
+    '    default: ai-novel-writer',
+    '    roots:',
+    `      - path: ${JSON.stringify(join(installedRoot, 'presets'))}`,
+    '        trust: user',
+    '    includeUserRoot: true',
+    '',
+    '- id: directory-picker',
+    '  disabled: true',
+    '',
+    '- insert:',
+    '    - id: qualification-directory-picker',
+    "      name: '@deepseek-ai/dsh-host-directory-picker-browse'",
+    '',
+    '    - id: qualification-directory-picker-ui',
+    "      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'",
+    '',
+    '    - id: ai-novel-qualification-model',
+    `      name: ${JSON.stringify(backend)}`,
+    '',
+  ].join('\n'), 'utf8')
+}
+
+async function writeDesignQa(path, firstWeb, restartWeb) {
+  const lines = [
+    '# AI Novel Writer DSH sidebar design QA',
+    '',
+    'Reference: GitHub issue #108 option 2, Drill-in Asset List. The approved reference is a written interaction direction, not an image artifact.',
+    '',
+    `- Browser: ${firstWeb.browser}`,
+    `- Wide viewport: ${firstWeb.geometry.viewport.width} x ${firstWeb.geometry.viewport.height}`,
+    `- Drawer width: ${firstWeb.geometry.drawerWidth}px (required 400–440px)`,
+    `- Conversation right edge: ${firstWeb.geometry.conversationRight}px; drawer left edge: ${firstWeb.geometry.drawerLeft}px`,
+    `- Narrow drawer width: ${firstWeb.geometry.narrowWidth}px; horizontal overflow: ${firstWeb.geometry.narrowOverflow}px`,
+    '- Navigation: one root asset list drills into one editor; no task board, SSH console, or second application shell appears inside the drawer.',
+    '- Actions: initialization and single-asset replacement both use the conversation Session and native allow-once approval.',
+    `- Restart: ${restartWeb.screenshots.length > 0 ? 'saved project and story blueprint visible' : 'missing evidence'}`,
+    `- Checked layout: wide drawer is ${firstWeb.geometry.drawerWidth}px; the conversation remains beside it; 390px horizontal overflow is ${firstWeb.geometry.narrowOverflow}px.`,
+    '',
+    '## Evidence',
+    '',
+    ...[...firstWeb.screenshots, ...restartWeb.screenshots].map(screenshot => `- ${screenshot}`),
+    '',
+  ]
+  await writeFile(path, lines.join('\n'), 'utf8')
 }
 
 function parseOptions(args) {
@@ -716,21 +803,21 @@ function parseOptions(args) {
   }
   return {
     harnessRoot: resolve(harnessRoot),
-    qualificationRoot: join(repositoryRoot, '.runtime', '.cache', 'dsh-ai-novel-qualification'),
+    qualificationRoot: join(repositoryRoot, '.runtime', '.cache', 'dsh-ai-novel-qualification-113'),
   }
 }
 
 async function qualify(options) {
   const canonicalRepository = await realpath(repositoryRoot)
   const canonicalHarness = await realpath(options.harnessRoot)
-  const qualificationBase = join(canonicalRepository, '.runtime', '.cache', 'dsh-ai-novel-qualification')
+  const qualificationBase = join(canonicalRepository, '.runtime', '.cache', 'dsh-ai-novel-qualification-113')
   const requestedQualificationRoot = resolve(options.qualificationRoot)
   if (requestedQualificationRoot !== qualificationBase) fail('Qualification root must be the fixed repository qualification directory')
   if (await exists(qualificationBase)) {
     const ownerPath = join(qualificationBase, '.vibe-owner.json')
     if (!(await exists(ownerPath))) fail('Existing qualification root is not owned by this ticket')
     const owner = objectOf(JSON.parse(await readFile(ownerPath, 'utf8')), 'Qualification root owner')
-    if (owner.owner !== 'codex-ticket-107' || owner.sourceProject !== canonicalRepository) {
+    if (owner.owner !== 'codex-ticket-113' || owner.sourceProject !== canonicalRepository) {
       fail('Existing qualification root is owned by a different task or project')
     }
   } else {
@@ -763,6 +850,8 @@ async function qualify(options) {
     DSH_HOME: dshHome,
     DSH_AGENTS_HOME: join(runRoot, '.agents'),
     PLAYWRIGHT_BROWSERS_PATH: browserRoot,
+    DSH_PERMISSION_MODE: 'workspace-write',
+    DSH_NOVEL_QUALIFICATION_LOG: join(logRoot, 'model-requests.jsonl'),
   }
   const commands = []
   try {
@@ -781,7 +870,9 @@ async function qualify(options) {
     commands.push(await runPnpm(logRoot, 'electron-typecheck', ['run', 'typecheck'], { cwd: canonicalRepository, timeout: 180_000 }))
     commands.push(await runPnpm(logRoot, 'electron-renderer-tests', ['exec', 'vitest', 'run', 'src'], { cwd: canonicalRepository, timeout: 300_000 }))
     commands.push(await runPnpm(logRoot, 'electron-main-tests', ['exec', 'vitest', 'run', 'electron', '--maxWorkers=1'], { cwd: canonicalRepository, timeout: 300_000 }))
-    commands.push(await runPnpm(logRoot, 'electron-release-tests', ['exec', 'vitest', 'run', 'scripts'], { cwd: canonicalRepository, timeout: 300_000 }))
+    commands.push(await runPnpm(logRoot, 'electron-release-tests', [
+      'exec', 'vitest', 'run', 'scripts', '--maxWorkers=1',
+    ], { cwd: canonicalRepository, timeout: 300_000 }))
     commands.push(await runPnpm(logRoot, 'harness-build', ['run', 'build'], { cwd: canonicalHarness, timeout: 300_000 }))
 
     const tarball = join(artifactsRoot, 'ethanyoq-dsh-ai-novel-writer-0.1.0.tgz')
@@ -794,6 +885,9 @@ async function qualify(options) {
 
     await runDsh(logRoot, 'profile-initialize', canonicalHarness, ['--profile', profileName, '--dump-config'], env, 120_000)
     await runDsh(logRoot, 'profile-install', canonicalHarness, ['plugin', '--profile', profileName, 'add', tarballInstallSpec, '--ignore-scripts'], env, 240_000)
+    await runDsh(logRoot, 'profile-install-web-ui-all', canonicalHarness, [
+      'plugin', '--profile', profileName, 'add', `${webUiAllPackage}@${webUiAllVersion}`, '--save-exact', '--ignore-scripts',
+    ], env, 240_000)
     const profileRoot = join(dshHome, 'profiles', profileName)
     const profileManifestPath = join(profileRoot, 'package.json')
     const installedRoot = await realpath(join(profileRoot, 'node_modules', '@ethanyoq', 'dsh-ai-novel-writer'))
@@ -808,18 +902,32 @@ async function qualify(options) {
     }
     const preset = await qualifyPreset(installedRoot, runRoot)
     const presetTools = await qualifyPresetTools(logRoot, profileRoot, installedRoot, env)
+    commands.push(await runPnpm(logRoot, 'web-ui-all-tool-isolation', [
+      'exec', 'vitest', 'run', 'tests/web-ui-all-composition.spec.ts',
+    ], {
+      cwd: packageRoot,
+      env: {
+        ...env,
+        DSH_WEB_PROFILE_ROOT: profileRoot,
+        DSH_NOVEL_PRESET_ROOT: join(installedRoot, 'presets'),
+      },
+      timeout: 90_000,
+    }))
     const firstHostHash = await sha256(join(installedRoot, 'lib', 'index.js'))
-    await writeChapter(installedRoot, workspaceRoot)
+    const overlayPath = join(runRoot, 'qualification.overlay.yml')
+    const screenshotRoot = join(runRoot, 'design-qa', 'screenshots')
+    await writeQualificationOverlay(overlayPath, installedRoot)
+    const firstWeb = await probeWeb(
+      logRoot, 'web-installed', canonicalHarness, env, overlayPath, workspaceRoot, screenshotRoot, 'first',
+    )
     const readbackResult = await recordCommand(logRoot, 'chapter-restart-readback', process.execPath, [
       fileURLToPath(import.meta.url), '--readback', join(installedRoot, 'lib', 'index.js'), workspaceRoot,
     ], { cwd: runRoot, env, timeout: 60_000 })
     const readbackData = JSON.parse(readbackResult.stdout.trim())
-    commands.push(await runPnpm(logRoot, 'playwright-chromium', ['exec', 'playwright', 'install', 'chromium'], {
-      cwd: canonicalRepository,
-      env,
-      timeout: 300_000,
-    }))
-    const firstWeb = await probeWeb(logRoot, 'web-installed', canonicalHarness, env)
+    const modelRequests = await validateModelRequestLog(env.DSH_NOVEL_QUALIFICATION_LOG, presetTools.agentTools)
+    const restartWeb = await probeWeb(
+      logRoot, 'web-restart', canonicalHarness, env, overlayPath, workspaceRoot, screenshotRoot, 'restart',
+    )
 
     await runDsh(logRoot, 'profile-uninstall', canonicalHarness, ['plugin', '--profile', profileName, 'remove', packageName], env, 240_000)
     assertProfileRemoved(JSON.parse(await readFile(profileManifestPath, 'utf8')))
@@ -834,7 +942,12 @@ async function qualify(options) {
     }
     const finalDump = await runDsh(logRoot, 'profile-dump-reinstalled', canonicalHarness, ['--profile', profileName, '--dump-config'], env, 120_000)
     if (!finalDump.stdout.includes(packageName)) fail('Reinstalled bundle is absent from the composed config')
-    const secondWeb = await probeWeb(logRoot, 'web-reinstalled', canonicalHarness, env)
+    await writeQualificationOverlay(overlayPath, reinstalledRoot)
+    const secondWeb = await probeWeb(
+      logRoot, 'web-reinstalled', canonicalHarness, env, overlayPath, workspaceRoot, screenshotRoot, 'reinstall',
+    )
+    const designQaPath = join(runRoot, 'design-qa', 'design-qa.md')
+    await writeDesignQa(designQaPath, firstWeb, restartWeb)
 
     const finalSourceCommit = (await recordCommand(logRoot, 'source-commit-final', 'git', ['rev-parse', 'HEAD'], { cwd: canonicalRepository })).stdout.trim()
     const finalSourceUnstaged = await recordCommand(logRoot, 'source-unstaged-final', 'git', ['diff', '--name-only'], { cwd: canonicalRepository })
@@ -851,7 +964,7 @@ async function qualify(options) {
 
     const receipt = {
       status: 'passed',
-      ticket: 107,
+      ticket: 113,
       createdAt: new Date().toISOString(),
       source: {
         repository: canonicalRepository,
@@ -860,11 +973,23 @@ async function qualify(options) {
       },
       harness: { repository: canonicalHarness, commit: harnessCommit, clean: true },
       artifact: { path: tarball, sha256: await sha256(tarball), bytes: (await stat(tarball)).size, entries: tarEntries.length },
-      profile: { name: profileName, root: profileRoot, dependency: profileInstalled.specifier, bundles: profileInstalled.bundles },
+      profile: {
+        name: profileName,
+        root: profileRoot,
+        dependency: profileInstalled.specifier,
+        webUiAll: { package: webUiAllPackage, version: webUiAllVersion },
+        bundles: profileInstalled.bundles,
+      },
       preset,
       presetTools,
+      modelRequests: {
+        count: modelRequests.requests,
+        firstHeaderSha256: createHash('sha256').update(JSON.stringify(modelRequests.first)).digest('hex'),
+        first: modelRequests.first,
+      },
       persistence: readbackData,
-      web: { first: firstWeb, afterReinstall: secondWeb },
+      web: { first: firstWeb, restart: restartWeb, afterReinstall: secondWeb },
+      designQa: { path: designQaPath, sha256: await sha256(designQaPath) },
       checks: commands.map(command => ({ label: command.label, startedAt: command.startedAt, finishedAt: command.finishedAt })),
       ownership: { root: join(qualificationRoot, '.vibe-owner.json'), run: join(runRoot, '.vibe-owner.json'), expiresAt: runOwner.expiresAt },
     }
@@ -873,7 +998,7 @@ async function qualify(options) {
     process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`)
   } catch (error) {
     await writeJson(join(runRoot, 'qualification-failure.json'), {
-      status: 'failed', ticket: 107, failedAt: new Date().toISOString(),
+      status: 'failed', ticket: 113, failedAt: new Date().toISOString(),
       message: error instanceof Error ? error.message : String(error), ownership: runOwner,
     })
     throw error
@@ -899,6 +1024,24 @@ async function main() {
     if (commit === undefined) fail('--validate-harness-commit requires a commit')
     assertHarnessCommit(commit)
     process.stdout.write('Harness commit qualification passed\n')
+    return
+  }
+  if (args[0] === '--validate-profile') {
+    const manifestPath = args[1]
+    const tarballName = args[2]
+    if (manifestPath === undefined || tarballName === undefined) fail('--validate-profile requires a manifest path and tarball name')
+    assertProfileInstalled(JSON.parse(await readFile(resolve(manifestPath), 'utf8')), tarballName)
+    process.stdout.write('profile qualification passed\n')
+    return
+  }
+  if (args[0] === '--validate-model-log') {
+    const path = args[1]
+    const schemasPath = args[2]
+    if (path === undefined || schemasPath === undefined) {
+      fail('--validate-model-log requires a JSONL path and installed tool schemas path')
+    }
+    const result = await validateModelRequestLog(resolve(path), JSON.parse(await readFile(resolve(schemasPath), 'utf8')))
+    process.stdout.write(`${JSON.stringify(result)}\n`)
     return
   }
   if (args[0] === '--probe-command-timeout') {

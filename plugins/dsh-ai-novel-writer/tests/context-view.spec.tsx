@@ -122,12 +122,16 @@ describe('novel workbench context summary', () => {
   })
 
   it('defines a side drawer on wide screens and a full-width narrow layout', () => {
+    const overlay = document.createElement('div')
+    overlay.className = 'aiNovelContextOverlay'
     const drawer = document.createElement('div')
     drawer.className = 'aiNovelContextDrawer'
-    document.body.appendChild(drawer)
+    overlay.appendChild(drawer)
+    document.body.appendChild(overlay)
     const dispose = installNovelContextStyle(document)
     try {
       expect(novelContextCss).toContain('pointer-events:none')
+      expect(getComputedStyle(overlay).zIndex).toBe('2147483001')
       expect(getComputedStyle(drawer).boxSizing).toBe('border-box')
       expect(getComputedStyle(drawer).width).toBe('440px')
       expect(getComputedStyle(drawer).minWidth).toBe('400px')
@@ -135,7 +139,7 @@ describe('novel workbench context summary', () => {
       expect(novelContextCss).toContain('width:100%')
     } finally {
       dispose()
-      drawer.remove()
+      overlay.remove()
     }
   })
 

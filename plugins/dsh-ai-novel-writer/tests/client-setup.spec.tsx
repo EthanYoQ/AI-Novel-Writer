@@ -352,8 +352,9 @@ describe('preset setup browser integration', () => {
       await Promise.resolve()
     })
 
-    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!
-    const close = container.querySelector<HTMLButtonElement>('[aria-label^="关闭"]')!
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!
+    const close = document.body.querySelector<HTMLButtonElement>('[aria-label^="关闭"]')!
     expect(document.activeElement).toBe(close)
     expect(dialog.getAttribute('aria-modal')).toBe('false')
     expect(container.querySelector('[data-test-shell-frame]')?.classList.contains('aiNovelWorkbenchFrameOpen')).toBe(true)
@@ -361,20 +362,20 @@ describe('preset setup browser integration', () => {
       '/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }, expect.any(AbortSignal),
     )
     await act(async () => {
-      enterInputValue(container.querySelector<HTMLInputElement>('input[name="title"]')!, '潮汐来信')
-      enterInputValue(container.querySelector<HTMLInputElement>('input[name="genre"]')!, '悬疑')
+      enterInputValue(dialog.querySelector<HTMLInputElement>('input[name="title"]')!, '潮汐来信')
+      enterInputValue(dialog.querySelector<HTMLInputElement>('input[name="genre"]')!, '悬疑')
     })
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
       await Promise.resolve()
     })
     expect(contextSources.prompt).not.toHaveBeenCalled()
-    const exactValues = container.querySelector('.aiNovelInitializationPreview pre')!.textContent!
+    const exactValues = dialog.querySelector('.aiNovelInitializationPreview pre')!.textContent!
     expect(exactValues).toMatch(/"projectId": "[0-9a-f-]{36}"/)
     expect(exactValues).toMatch(/"createdAt": "[^"]+"/)
-    expect(container.textContent).toContain('提交到当前会话')
+    expect(dialog.textContent).toContain('提交到当前会话')
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
+      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
       await Promise.resolve()
     })
     await vi.waitFor(() => { expect(contextSources.prompt).toHaveBeenCalledOnce() })
@@ -399,7 +400,7 @@ describe('preset setup browser integration', () => {
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
-    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
     expect(document.activeElement).toBe(trigger)
     expect(container.querySelector('[data-test-shell-frame]')?.classList.contains('aiNovelWorkbenchFrameOpen')).toBe(false)
 
@@ -478,12 +479,13 @@ describe('preset setup browser integration', () => {
       .find(button => button.textContent === '打开小说工作台')!
     open.focus()
     await act(async () => { open.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull()
     expect(container.querySelector('[data-test-shell-frame]')?.classList.contains('aiNovelWorkbenchFrameOpen')).toBe(true)
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
-    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
     expect(document.activeElement).toBe(open)
     expect(slots.entries('settings.plugin.item').map(item => item.options.id)).toEqual(['ai-novel-writer'])
     expect(call.mock.calls.some(args => args[1] === 'context/read')).toBe(true)

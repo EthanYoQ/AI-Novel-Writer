@@ -1,6 +1,7 @@
 /** React shell surfaces for the compact novel workbench drawer and Settings evidence card. */
 
 import { useEffect, useRef, useSyncExternalStore, type MouseEvent as ReactMouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { IconListPenOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
@@ -68,12 +69,12 @@ export function installDrawerKeyboardScope(
 /**
  * Reserve the drawer's wide-screen column in the owning Harness frame.
  *
- * @param drawer Mounted drawer inside the native shell overlay layer.
+ * @param shellSeat Mounted marker or drawer inside the native shell overlay layer.
  * @returns A disposer that restores the frame's original layout.
- * @throws When the drawer is not mounted inside a Harness shell overlay.
+ * @throws When the shell seat is not mounted inside a Harness shell overlay.
  */
-export function installWorkbenchLayoutReservation(drawer: HTMLElement): () => void {
-  const frame = drawer.closest('[data-shell-overlay]')?.parentElement
+export function installWorkbenchLayoutReservation(shellSeat: HTMLElement): () => void {
+  const frame = shellSeat.closest('[data-shell-overlay]')?.parentElement
   if (frame === null || frame === undefined) throw new Error('AI novel workbench requires the Harness shell overlay')
   frame.classList.add('aiNovelWorkbenchFrameOpen')
   return () => { frame.classList.remove('aiNovelWorkbenchFrameOpen') }
@@ -137,14 +138,15 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
     () => setupController.getSnapshot(),
   )
   const drawer = useRef<HTMLDivElement>(null)
+  const shellSeat = useRef<HTMLSpanElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const screenKey = workbenchState.status === 'ready'
     ? workbenchState.screen.kind
     : workbenchState.status
   const previousScreenKey = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (!workbenchState.open || drawer.current === null) return
-    const releaseLayout = installWorkbenchLayoutReservation(drawer.current)
+    if (!workbenchState.open || drawer.current === null || shellSeat.current === null) return
+    const releaseLayout = installWorkbenchLayoutReservation(shellSeat.current)
     const releaseKeyboard = installDrawerKeyboardScope(
       drawer.current,
       closeButton.current ?? drawer.current,
@@ -171,8 +173,9 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
   }, [screenKey, workbenchState.open])
   if (!workbenchState.open) return null
   const close = (): void => { workbenchController.close(); setupController.close() }
-  return (
-    <div className="aiNovelContextOverlay" role="presentation">
+  return <>
+    <span ref={shellSeat} hidden aria-hidden="true" />
+    {createPortal(<div className="aiNovelContextOverlay" role="presentation">
       <div
         ref={drawer}
         className="aiNovelContextDrawer"
@@ -226,8 +229,8 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
           />
         </section>
       </div>
-    </div>
-  )
+    </div>, document.body)}
+  </>
 }
 
 /**

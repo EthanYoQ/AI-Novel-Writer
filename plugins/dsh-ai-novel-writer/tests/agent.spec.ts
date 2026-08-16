@@ -2,11 +2,7 @@ import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
-import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { CallId } from '@deepseek-ai/dsh-llm'
-import LlmRuntime from '@deepseek-ai/dsh-llm'
-import { bindScopeParent, createScope, scopeOf } from '@deepseek-ai/dsh-scope'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import { describe, expect, it, vi } from 'vitest'
@@ -164,6 +160,7 @@ describe('AI novel agent tools', () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(AgentRegistry)
     const fiber = ctx.plugin(NovelAgent)
     await fiber
     expect(ctx.tools.schemas().map(tool => tool.name)).toEqual(['novel_read', 'novel_apply_change'])
@@ -185,47 +182,4 @@ describe('AI novel agent tools', () => {
     await ctx.fiber.dispose()
   })
 
-  it('restores inherited tools when an agent-scoped plugin fiber unloads', async () => {
-    const ctx = new Context()
-    await ctx.plugin(LlmRuntime)
-    await ctx.plugin(SessionStore)
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    for (const toolName of ['describe_image', 'ssh_exec']) {
-      ctx.tools.register(defineTool({
-        name: toolName,
-        description: 'global lifecycle probe',
-        parameters: {},
-        output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
-        execute: async () => toolName,
-      }))
-    }
-    await ctx.plugin(AgentRegistry)
-    await ctx.plugin(AgentLoop, { agents: [] })
-    const presetKey = { agentPreset: 'ai-novel-writer' }
-    const presetScope = createScope(ctx, presetKey)
-    const fiber = presetScope.ctx.plugin(NovelAgent)
-    await fiber
-    try {
-      const handle = await ctx.agents.create({
-        sessionId: SessionId('novel-agent-hmr'),
-        setup: (agentCtx) => {
-          const agentKey = scopeOf(agentCtx)
-          if (agentKey === undefined) throw new Error('agent creation did not publish a scope key')
-          bindScopeParent(agentKey, presetKey)
-        },
-      })
-      try {
-        expect(ctx.tools.schemas(handle.agent).map(tool => tool.name).sort())
-          .toEqual(['novel_apply_change', 'novel_read'])
-        await fiber.dispose()
-        expect(ctx.tools.schemas(handle.agent).map(tool => tool.name).sort()).toEqual(['describe_image', 'ssh_exec'])
-      } finally {
-        await handle.dispose()
-      }
-    } finally {
-      await presetScope.dispose()
-      await ctx.fiber.dispose()
-    }
-  })
 })

@@ -3,7 +3,7 @@ export const novelContextCss = String.raw`
 .aiNovelContextTrigger{display:inline-flex;min-height:32px;align-items:center;gap:8px;border:0;border-radius:8px;padding:6px 10px;color:var(--dsw-alias-label-primary);background:transparent;cursor:pointer}
 .aiNovelContextTrigger:hover,.aiNovelContextTrigger:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
 .aiNovelWorkbenchFrameOpen{box-sizing:border-box;padding-right:440px}
-.aiNovelContextOverlay{position:fixed;inset:0;z-index:1000;display:flex;justify-content:flex-end;pointer-events:none}
+.aiNovelContextOverlay{position:fixed;inset:0;z-index:2147483001;display:flex;justify-content:flex-end;pointer-events:none}
 .aiNovelContextDrawer{box-sizing:border-box;width:440px;min-width:400px;max-width:calc(100vw - 80px);height:100%;overflow:auto;pointer-events:auto;border-left:1px solid var(--dsw-alias-border-inverted);padding:24px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}
 .aiNovelContextHeader,.aiNovelContextSectionHeader{display:flex;align-items:center;justify-content:space-between;gap:16px}
 .aiNovelContextHeader h2,.aiNovelContextSections h3,.aiNovelContextSections h4,.aiNovelContextSections p,.aiNovelContextSetup h3,.aiNovelContextSetup p{margin:0}

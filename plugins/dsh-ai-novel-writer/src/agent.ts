@@ -1,7 +1,7 @@
 /** Agent-scoped novel tools and their native approval policy. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { scopeOf } from '@deepseek-ai/dsh-scope'
+import type {} from '@deepseek-ai/dsh-agent-presets'
 import { defineTool, ToolArgsError } from '@deepseek-ai/dsh-tools'
 import type { PreToolDecision, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-session'
@@ -17,6 +17,8 @@ import type {
 const DEFAULT_ASSET_BYTES = 512 * 1024
 const DEFAULT_WORKING_SET_BYTES = 512 * 1024
 const DEFAULT_QUERY_MATCHES = 20
+const NOVEL_PRESET_ID = 'ai-novel-writer'
+const NOVEL_TOOL_NAMES: ReadonlySet<string> = new Set(['novel_read', 'novel_apply_change'])
 
 /** Deployment bounds for the model-facing novel tools. */
 export interface Config {
@@ -34,6 +36,60 @@ export const Config: z<Config> = z.object({
 
 const TARGET_KINDS = ['project', 'characters', 'story-blueprint', 'chapter-blueprint', 'chapter-draft'] as const
 const CREATIVE_STRATEGIES = ['auto', 'fluent-drafting', 'consistency-first', 'deep-planning'] as const
+
+/** Keep inherited host plugins out of every agent composed from the dedicated novel Preset. */
+function installDedicatedPresetSurface(ctx: Context): void {
+  ctx.inject(['agentPresets'], (presetCtx) => {
+    const installed = new Map<Agent, () => void>()
+    const owns = (agent: Agent | undefined): agent is Agent => agent !== undefined
+      && presetCtx.agentPresets.composedPreset(agent.ctx) === NOVEL_PRESET_ID
+    const install = (agent: Agent): void => {
+      if (installed.has(agent)) return
+      const disposeRestriction = agent.ctx.tools.restrict({ allow: ['novel_read', 'novel_apply_change'] })
+      let disposeOwner = (): void => undefined
+      let agentDisposing = false
+      const disposeAgentCleanup = agent.ctx.effect(() => () => {
+        installed.delete(agent)
+        agentDisposing = true
+        try {
+          disposeOwner()
+        } finally {
+          agentDisposing = false
+        }
+      }, 'dsh-ai-novel-writer.agent-surface-agent-lifecycle')
+      disposeOwner = presetCtx.effect(() => () => {
+        if (!agentDisposing) disposeAgentCleanup()
+        disposeRestriction()
+        installed.delete(agent)
+      }, 'dsh-ai-novel-writer.agent-surface-isolation')
+      installed.set(agent, disposeOwner)
+    }
+    presetCtx.on('system-prompt/assemble', async (_assembly, context, next) => {
+      const result = await next()
+      if (!owns(context.agent)) return result
+      const tools = result.tools.filter(tool => NOVEL_TOOL_NAMES.has(tool.name))
+      if (tools.length !== NOVEL_TOOL_NAMES.size
+        || tools.some((tool, index) => tools.findIndex(candidate => candidate.name === tool.name) !== index)) {
+        throw new Error('AI 小说作家 requires exactly novel_read and novel_apply_change in every model request')
+      }
+      return { ...result, tools }
+    }, { prepend: true, global: true })
+    presetCtx.on('tools/pre-execute', (exec, next) => {
+      if (!owns(exec.agent) || NOVEL_TOOL_NAMES.has(exec.name)) return next()
+      return Promise.resolve({
+        kind: 'deny',
+        reason: 'AI 小说作家 is dedicated to novel_read and novel_apply_change',
+      })
+    }, { prepend: true, global: true })
+    presetCtx.on('agent/created', ({ agent }) => {
+      if (owns(agent)) install(agent)
+    }, { global: true })
+    presetCtx.on('agent-preset/selected', (sessionId) => {
+      const agent = presetCtx.agents.get(sessionId)
+      if (owns(agent)) install(agent)
+    }, { global: true })
+  })
+}
 
 const readParameters = {
   kind: { type: 'string', enum: ['asset', 'working-set', 'query'], required: true },
@@ -276,8 +332,8 @@ export function createNovelToolDefinitions(config: Config = {}): readonly [ToolD
 /** Stable Cordis plugin name. */
 export const name = 'dsh-ai-novel-writer-agent'
 
-/** Required host service for registering scoped tools and policy. */
-export const inject = ['tools']
+/** Required host services for agent lookup, scoped tools, prompt projection, and policy. */
+export const inject = ['agents', 'systemPrompt', 'tools']
 
 /**
  * Register the two domain tools and their mandatory one-shot approval policy.
@@ -288,17 +344,6 @@ export const inject = ['tools']
  */
 export function apply(ctx: Context, config: Config = {}): void {
   for (const definition of createNovelToolDefinitions(config)) ctx.tools.register(definition)
-  if (scopeOf(ctx) !== undefined) {
-    if (ctx.agent === undefined) {
-      ctx.on('agent/created', ({ agent }) => {
-        ctx.effect(
-          () => agent.ctx.tools.restrict({ allow: ['novel_read', 'novel_apply_change'] }),
-          'dsh-ai-novel-writer.agent-tool-restriction',
-        )
-      })
-    } else {
-      ctx.tools.restrict({ allow: [] })
-    }
-  }
+  installDedicatedPresetSurface(ctx)
   ctx.on('tools/pre-execute', (exec, next) => novelApprovalGate(exec, next))
 }
