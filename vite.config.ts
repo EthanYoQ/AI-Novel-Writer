@@ -67,6 +67,7 @@ export default defineConfig({
       '**/.pnpm-store/**',
       '**/.workbuddy/**',
       '**/.runtime/**',
+      '**/plugins/**',
     ],
   },
   build: {

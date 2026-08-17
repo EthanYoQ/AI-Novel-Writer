@@ -1,0 +1,27 @@
+{
+  "approvalNever": {
+    "runtimeContextExplainsDisabledApproval": true,
+    "personaForbidsApply": true,
+    "existingProjectUsesReplace": true,
+    "absentAssetUsesReplace": true,
+    "branchFieldsAreExplicit": true,
+    "toolCalls": 0,
+    "assistant": [
+      "当前会话已禁用原生审批，因此无法提交小说修改。请切换到允许审批的权限策略后再试。"
+    ]
+  },
+  "invalidArguments": {
+    "toolCalls": [
+      {
+        "name": "novel_apply_change",
+        "arguments": {
+          "request": "{\"kind\":\"initialize\",\"title\":\"错误嵌套\"}"
+        }
+      }
+    ],
+    "result": "Error: invalid arguments: missing required property \"kind\"",
+    "assistant": [
+      "novel_apply_change 需要直接传入 kind 等浅层字段，不能使用字符串化的 request；本次修改已停止，不会重试。"
+    ]
+  }
+}

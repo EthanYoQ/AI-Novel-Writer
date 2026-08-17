@@ -1,0 +1,67 @@
+name: DeepSeek Harness plugin CI
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/dsh-ai-novel-writer/**'
+      - '.github/workflows/dsh-plugin-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-plugin-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: plugins/dsh-ai-novel-writer
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: 11.11.0
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+          cache-dependency-path: plugins/dsh-ai-novel-writer/pnpm-lock.yaml
+
+      - name: Install locked plugin dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm run typecheck
+
+      - name: Build and verify package
+        run: pnpm run build
+
+      - name: Test
+        run: pnpm test
+
+      - name: Verify package contents
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dsh-plugin-pack"
+          pnpm pack --pack-destination "$RUNNER_TEMP/dsh-plugin-pack"
+          tarball=$(find "$RUNNER_TEMP/dsh-plugin-pack" -name '*.tgz' -print -quit)
+          test -n "$tarball"
+          for entry in package/LICENSE package/THIRD_PARTY_NOTICES.md package/cordis.patch.yml package/lib/index.js; do
+            tar -tzf "$tarball" | grep -Fx "$entry"
+          done
+          if tar -tzf "$tarball" | grep -Eq '^package/(src|tests|node_modules)/'; then
+            echo 'Unexpected development content in plugin tarball' >&2
+            exit 1
+          fi

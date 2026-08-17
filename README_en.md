@@ -16,6 +16,7 @@
 
 <p align="center">
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer"><img src="https://badgen.net/badge/DSH%20plugin/0.1.0%20preview/blue" alt="DeepSeek Harness plugin 0.1.0 preview" /></a>
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/LICENSE"><img src="https://badgen.net/badge/license/GPL-3.0/blue" alt="GPL-3.0 License" /></a>
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/stargazers"><img src="https://badgen.net/github/stars/EthanYoQ/AI-Novel-Writer" alt="GitHub stars" /></a>
 </p>
@@ -37,6 +38,50 @@
 > - **#101 creative strategy and reasoning override** — Creative strategy belongs to the novel project and model override belongs to the model profile; the UI shows requested-to-effective reasoning mapping. Unknown custom endpoints do not guess or send provider-private reasoning fields, and raw reasoning is not chapter prose or long-term novel memory.
 >
 > One Release uses the exact five-asset contract: `ai-novel-writer-setup-0.8.4.exe`, `ai-novel-writer-setup-0.8.4.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.4-installer.dmg`, and `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`.
+
+> ## v0.8.3 paper-ink theme update
+>
+> [v0.8.3](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.3) completes the paper-ink theme hardening: theme migration preserves an explicitly selected dark theme and only maps the historical `night` value deterministically to `dark`; informational text meets WCAG AA accessibility contrast on its real theme surfaces; and visual QA compares all four themes with the same project, route, panels, and viewport.
+>
+> This version keeps the exact five-asset contract in one Release: `ai-novel-writer-setup-0.8.3.exe`, `ai-novel-writer-setup-0.8.3.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.3-installer.dmg`, and `ai-novel-writer-mac-arm64-0.8.3-installer.dmg.sha256`.
+
+> ## v0.8.2 major systemic reliability update
+>
+> [v0.8.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.2) is a major update spanning long-output mechanics, prompt persistence, and the project-action boundary of the AI assistant.
+>
+> - **#87 token and long-output mechanics** — A chapter word target no longer silently lowers the model output budget. Length-limited output enters a continuation chain constrained by the total budget; a low-progress truncated candidate is discarded and gets at most one recovery request. If the final result is still incomplete, the operation fails and incomplete drafts or post-processing data are not persisted.
+> - **#88 global prompt persistence** — PromptCatalog now resolves built-in, global, and project prompts through one boundary. Saved global prompts are immediately visible and survive reloads, while one corrupt prompt file no longer hides unrelated valid prompts.
+> - **#90 real Agent workflow execution** — The AI assistant now performs project actions through project-fact and creative-workflow seams, reporting a workflow start only after a real run is registered and a receipt is returned. An ordinary Markdown file remains a file artifact; it is not a project fact for architecture, characters, blueprints, or chapter content and is not imported implicitly.
+>
+> A real DeepSeek V4 Flash journey reached 20 chapters, with continuously generated chapters totaling 40,279 visible prose units, while also exercising character state, blueprints, knowledge retrieval, and the Agent toolchain.
+>
+> One Release keeps the exact five assets contract: the Windows x64 assets `ai-novel-writer-setup-0.8.2.exe`, `ai-novel-writer-setup-0.8.2.exe.blockmap`, and `latest.yml`, plus `ai-novel-writer-mac-arm64-0.8.2-installer.dmg` and `ai-novel-writer-mac-arm64-0.8.2-installer.dmg.sha256`. The Windows installer is not code-signed but supports the in-app update. The macOS ARM64 package is distributed ad-hoc or unsigned and is not notarized; it still requires a manual update from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
+
+## DeepSeek Harness plugin edition (developer preview)
+
+In addition to the Windows and macOS desktop editions, the [plugin directory](https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer) contains the `@ethanyoq/dsh-ai-novel-writer` `0.1.0` developer preview. It brings project settings, characters, story blueprints, chapter blueprints, and chapter drafts into DeepSeek Harness Web, saving one asset at a time through the conversation's approval card. The plugin uses its own Harness novel-project format and does not read desktop `.vela` projects.
+
+The plugin is not part of the desktop application's formal Release and has not been published to npm. It is a separate pnpm workspace with its own lockfile, CI, and MIT license; the repository root remains the GPL-3.0 desktop application. Install it from source in the plugin directory:
+
+```sh
+git clone https://github.com/EthanYoQ/AI-Novel-Writer.git
+cd AI-Novel-Writer/plugins/dsh-ai-novel-writer
+pnpm install
+pnpm run build
+dsh plugin --profile web add .
+dsh --profile web
+```
+
+To install an immutable local build instead of a live source link, pack and install the tarball:
+
+```sh
+pnpm pack --pack-destination ../../.runtime/.cache
+cd ../..
+dsh plugin --profile web add ./.runtime/.cache/ethanyoq-dsh-ai-novel-writer-0.1.0.tgz
+dsh --profile web
+```
+
+After Web starts, open **Novel Workbench** and install the **AI 小说作家** Preset, then create a new Session with that Preset. Model-generated changes appear as the native Harness approval card in the conversation; the plugin writes and backfills the workbench only after one **Allow once** approval. See the [plugin README](plugins/dsh-ai-novel-writer/README.md) for features, project format, qualification coverage, and removal. Do not run `dsh plugin add github:EthanYoQ/AI-Novel-Writer`: the repository root package is the desktop application, not an activatable DSH bundle.
 
 
 
