@@ -175,5 +175,5 @@ describe('release qualification runner', () => {
       encoding: 'utf8',
       timeout: 15_000,
     })).resolves.toMatchObject({ stdout: expect.stringContaining('command timeout cleanup passed') })
-  })
+  }, 15_000)
 })
