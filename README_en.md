@@ -39,23 +39,7 @@
 >
 > One Release uses the exact five-asset contract: `ai-novel-writer-setup-0.8.4.exe`, `ai-novel-writer-setup-0.8.4.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.4-installer.dmg`, and `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`.
 
-> ## v0.8.3 paper-ink theme update
->
-> [v0.8.3](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.3) completes the paper-ink theme hardening: theme migration preserves an explicitly selected dark theme and only maps the historical `night` value deterministically to `dark`; informational text meets WCAG AA accessibility contrast on its real theme surfaces; and visual QA compares all four themes with the same project, route, panels, and viewport.
->
-> This version keeps the exact five-asset contract in one Release: `ai-novel-writer-setup-0.8.3.exe`, `ai-novel-writer-setup-0.8.3.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.3-installer.dmg`, and `ai-novel-writer-mac-arm64-0.8.3-installer.dmg.sha256`.
 
-> ## v0.8.2 major systemic reliability update
->
-> [v0.8.2](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.2) is a major update spanning long-output mechanics, prompt persistence, and the project-action boundary of the AI assistant.
->
-> - **#87 token and long-output mechanics** — A chapter word target no longer silently lowers the model output budget. Length-limited output enters a continuation chain constrained by the total budget; a low-progress truncated candidate is discarded and gets at most one recovery request. If the final result is still incomplete, the operation fails and incomplete drafts or post-processing data are not persisted.
-> - **#88 global prompt persistence** — PromptCatalog now resolves built-in, global, and project prompts through one boundary. Saved global prompts are immediately visible and survive reloads, while one corrupt prompt file no longer hides unrelated valid prompts.
-> - **#90 real Agent workflow execution** — The AI assistant now performs project actions through project-fact and creative-workflow seams, reporting a workflow start only after a real run is registered and a receipt is returned. An ordinary Markdown file remains a file artifact; it is not a project fact for architecture, characters, blueprints, or chapter content and is not imported implicitly.
->
-> A real DeepSeek V4 Flash journey reached 20 chapters, with continuously generated chapters totaling 40,279 visible prose units, while also exercising character state, blueprints, knowledge retrieval, and the Agent toolchain.
->
-> One Release keeps the exact five assets contract: the Windows x64 assets `ai-novel-writer-setup-0.8.2.exe`, `ai-novel-writer-setup-0.8.2.exe.blockmap`, and `latest.yml`, plus `ai-novel-writer-mac-arm64-0.8.2-installer.dmg` and `ai-novel-writer-mac-arm64-0.8.2-installer.dmg.sha256`. The Windows installer is not code-signed but supports the in-app update. The macOS ARM64 package is distributed ad-hoc or unsigned and is not notarized; it still requires a manual update from the Release page. Windows security prompts or Gatekeeper may require manual confirmation on first launch.
 
 ## DeepSeek Harness plugin edition (developer preview)
 
