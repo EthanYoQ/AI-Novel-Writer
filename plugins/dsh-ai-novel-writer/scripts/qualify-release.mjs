@@ -26,6 +26,8 @@ const expectedPresetPlugins = [
 ]
 const requiredTarballEntries = [
   'package/README.md',
+  'package/LICENSE',
+  'package/THIRD_PARTY_NOTICES.md',
   'package/cordis.patch.yml',
   'package/lib/agent.js',
   'package/lib/client.js',

@@ -38,27 +38,14 @@ DSH 对项目级 Skill 有明确的一手约定。[`dsh-skill-filesystem`](https
 1. `<projectRoot>/.dsh/skills`，来源 `project-dsh`，rank 100；
 2. `<projectRoot>/.agents/skills`，来源 `project-agents`，rank 200。
 
-本项目已把这两项官方原文副本安装到仓库根的 `.dsh/skills`，而不是用户级 `~/.dsh/skills`，使它们随分支与 worktree 一起接受评审。每项 Skill 保持单层目录形式：
-
-```text
-.dsh/
-└── skills/
-    ├── cordis-plugin-development/
-    │   └── SKILL.md
-    └── editing-cordis-compositions/
-        └── SKILL.md
-```
-
-该目录只有在当前 session 的 Preset 挂载 `@deepseek-ai/dsh-skill-filesystem` 和 `@deepseek-ai/dsh-tool-skill` 时才会进入模型目录；官方 `standard`、`code` 和 `cordis` Preset 都挂载这两行。Skill 发现以 session cwd 解析项目根，因此启动未来构建会话时，workspace 必须位于本仓库 worktree 内。新增或替换副本后应开启新会话，或确认 watcher 已发布 catalog 变更，再用 `/cordis-plugin-development` 或 `/editing-cordis-compositions` 显式调用。
-
-当前副本固定到 DSH commit `47f943859bef60e4160492346772ded9b24f765a`。项目副本与该 checkout 的源文件逐字节相同；上游 MIT 许可与版权声明保存在仓库根 `.dsh/LICENSE.deepseek-harness`：
+本项目不随插件或桌面应用分发这两份官方 Skill 副本。开发时应在固定版本的 DeepSeek Harness checkout 中读取原文，或按上游说明安装到用户级 `~/.dsh/skills`；发布包只包含插件实现、preset、许可证与说明文件。固定基线为 DSH commit `47f943859bef60e4160492346772ded9b24f765a`：
 
 | Skill | 源文件与项目副本 SHA-256 |
 | --- | --- |
 | `cordis-plugin-development` | `01811d3ee9c03a466abae12d54d229e7de7bd74ca6b730c54ce9d5e696b294aa` |
 | `editing-cordis-compositions` | `8e3081ec066ffe07097e2b9c610c39dca831c7f6bb34dc53f1536be85606e604` |
 
-安装后已用官方 `@deepseek-ai/dsh-skill-filesystem` provider 以本 worktree 为 `cwd` 做真实发现和加载：两项均以 `source: project-dsh` 出现在目录中，且完整正文可以加载。以后升级时应从新的已审查 DSH commit 整体替换两个目录，同步更新本节的 commit 与哈希，再重复 provider 发现、正文加载和 `git diff --check`；不能在项目副本上悄悄分叉。
+此前验证曾用官方 provider 在开发 worktree 中加载这两项 Skill。以后升级开发基线时，应重新审查新 DSH commit 中的原文、更新本节 commit 与哈希，并重复 provider 发现、正文加载和 `git diff --check`；不要在项目内保留悄悄分叉的副本。
 
 ## 动态 Cordis Plugin
 

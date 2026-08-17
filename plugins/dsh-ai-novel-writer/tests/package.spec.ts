@@ -17,6 +17,16 @@ async function yamlList(path: string): Promise<unknown[]> {
 }
 
 describe('installable AI novel bundle', () => {
+  it('keeps an independent private MIT package face', async () => {
+    const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+    expect(manifest.private).toBe(true)
+    expect(manifest.license).toBe('MIT')
+    expect(manifest.packageManager).toBe('pnpm@11.11.0')
+    for (const packagedFile of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+      await expect(readFile(join(root, packagedFile), 'utf8')).resolves.toContain('MIT')
+    }
+  })
+
   it('loads its declared patch through the real Cordis Loader', async () => {
     const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
       dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } }

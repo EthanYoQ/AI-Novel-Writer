@@ -10,6 +10,7 @@ const repositoryRoot = path.resolve('.')
 const chromeExecutable = process.env.CHROME_PATH ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 const describeWithChrome = existsSync(chromeExecutable) ? describe : describe.skip
 const VITE_SERVER_HOOK_TIMEOUT_MS = 30_000
+const COLD_BROWSER_INTERACTION_TIMEOUT_MS = 30_000
 
 describeWithChrome('UpdateSection browser interactions', () => {
   let server: ViteDevServer
@@ -58,7 +59,7 @@ describeWithChrome('UpdateSection browser interactions', () => {
     await page.waitForFunction(() => window.__updateHarness.installCalls === 1)
     expect(await page.evaluate(() => window.__updateHarness.installCalls)).toBe(1)
     await page.close()
-  }, 15_000)
+  }, COLD_BROWSER_INTERACTION_TIMEOUT_MS)
 
   it.each(['running', 'paused', 'waiting', 'completed', 'failed'] as const)(
     'blocks restarting an update while a %s workflow may still have unpersisted results',

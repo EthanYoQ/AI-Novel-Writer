@@ -11,6 +11,12 @@ import yaml from 'js-yaml'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+for (const packagedLicenseFile of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+  await readFile(join(root, packagedLicenseFile), 'utf8')
+  if (!manifest.files.includes(packagedLicenseFile)) {
+    throw new Error(`${packagedLicenseFile} must be declared in package files`)
+  }
+}
 const clientSource = await readFile(join(root, 'lib', 'client.js'), 'utf8')
 if (!clientSource.includes('pluginCss') || !clientSource.includes('aiNovelContextDrawer')) {
   throw new Error('The emitted Client entry must carry its owned context-window styles')

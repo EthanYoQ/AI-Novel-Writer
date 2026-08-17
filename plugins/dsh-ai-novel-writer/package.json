@@ -2,7 +2,9 @@
   "name": "@ethanyoq/dsh-ai-novel-writer",
   "version": "0.1.0",
   "description": "A local-first novel project plugin for DeepSeek Harness",
+  "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.11.0",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
@@ -28,7 +30,9 @@
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "presets/**",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "dsh": {
     "bundle": {
@@ -49,11 +53,11 @@
     "node": "^22.19 || >=24"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsdown && node scripts/verify-built.mjs",
+    "build": "tsc -p tsconfig.build.json && tsdown && node scripts/link-self.mjs && node scripts/verify-built.mjs",
     "bundle": "tsdown",
-    "prepare": "pnpm run build",
     "test": "pnpm run build && vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "qualify": "node scripts/qualify-release.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-atomic-write": "0.1.0-rc.6",
