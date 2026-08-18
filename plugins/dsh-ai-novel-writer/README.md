@@ -22,6 +22,10 @@ Each non-empty asset revision is the SHA-256 digest of its normalized UTF-8 byte
 
 Stable failures distinguish uninitialized and unsupported projects, missing or invalid assets, rejected paths, exceeded size limits, stale revisions, rejected approval, failed writes, and cancellation.
 
+## V2 NovelStore development surface
+
+The root entry also exports `openNovelStore`, the SQLite-backed V2 domain store used by the upcoming sidebar-owned workbench. It is not wired into the shipped V1 Host tools or client yet. A V2 store owns `.ai-novel/novel.db` as a project-portable artifact, stamps its application and schema identity, enforces foreign keys, serializes writes through one exclusive connection, and records workspace binding plus ChangeSet audit data. Project and character identities use distinct stable IDs; DSH Workspace IDs remain opaque strings. The store creates `.ai-novel/.gitignore` for the database, its journal/lock sidecars, and the future V1 archive. Because Git therefore does not back up the authoritative database, local backup is the user's responsibility until export ships. Real-time cloud-synchronized folders and network drives are unsupported.
+
 ## Model Experience
 
 ### Agent preset

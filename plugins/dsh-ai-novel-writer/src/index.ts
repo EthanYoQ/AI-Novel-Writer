@@ -14,6 +14,31 @@ import type { AssetRef } from './types.ts'
 
 export { openNovelProject } from './novel-project.ts'
 export type { NovelProjectOptions } from './novel-project.ts'
+export { NovelStoreError, openNovelStore } from './novel-store.ts'
+export type {
+  NovelAggregateRef,
+  NovelArchitectureAggregate,
+  NovelArchitectureNextValue,
+  NovelChangeAuditRecord,
+  NovelChangeReceipt,
+  NovelChangeSet,
+  NovelChangeProvenance,
+  NovelChapterAggregate,
+  NovelChapterNextValue,
+  NovelCharactersAggregate,
+  NovelCharactersNextValue,
+  NovelProjectAggregate,
+  NovelProjectNextValue,
+  NovelStore,
+  NovelStoreErrorCode,
+  NovelStoreInitializeRequest,
+  NovelStoreSnapshot,
+  NovelStorageDiagnostics,
+  NovelTaskAggregate,
+  NovelTaskKind,
+  NovelTaskNextValue,
+  NovelTaskStatus,
+} from './novel-store.ts'
 export { NovelProjectError } from './types.ts'
 export type {
   AssetRef,
