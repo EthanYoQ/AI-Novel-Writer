@@ -1,0 +1,3 @@
+# DSH 插件使用随项目移动的 SQLite 小说库
+
+DSH 插件 V2 把 `.ai-novel/novel.db` 定义为随 workspace 移动的项目内容 artifact，由插件内的 `NovelStore` 直接管理，而不经过 DSH storage domain。V1 的散落文件和模型权威写入无法承载章节版本、审稿、修稿、定稿、任务恢复和人物状态关系；DSH storage domain 也刻意没有 per-workspace scope 和跨表事务。数据库使用 Node 内建 SQLite，设置稳定 application id、schema version、外键和单进程排他写锁，并在库内记录项目身份与 workspace 绑定。权威写入只来自侧边栏的类型化命令；模型只读项目和提交非权威 proposal。每个 ChangeSet 只修改一个聚合，多资产建议作为 proposal bundle 由侧边栏按顺序应用并显式呈现部分失败。提交审计保存在项目库 changes 表中，不创建仓库外插件自定义 DSH SessionEvent。项目数据可随目录移动并通过显式 re-attach 处理 workspace 变化；代价是数据库不适合提交到 Git 或放入实时云同步目录，插件必须生成忽略规则、检测不支持的存储环境，并要求用户负责本地备份。V1 项目只能通过显式、可重试和可校验的迁移进入 V2。
