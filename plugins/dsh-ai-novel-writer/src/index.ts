@@ -39,6 +39,12 @@ export type {
   NovelTaskNextValue,
   NovelTaskStatus,
 } from './novel-store.ts'
+export { migrateV1NovelProject, previewV1NovelMigration } from './novel-migration.ts'
+export type {
+  NovelMigrationReceipt,
+  NovelV1MigrationPreview,
+  NovelV1SourcePreview,
+} from './novel-migration.ts'
 export { NovelProjectError } from './types.ts'
 export type {
   AssetRef,

@@ -246,6 +246,41 @@ export interface NovelStorageDiagnostics {
   readonly lockingMode: string
 }
 
+/** Receipt for one explicit V1 project import published as a V2 database. */
+export interface NovelMigrationReceipt {
+  readonly projectId: NovelProjectId
+  readonly fingerprint: string
+  readonly archivePath: string
+  readonly sourceCount: number
+  readonly chapterCount: number
+  readonly draftCount: number
+  readonly migratedAt: string
+}
+
+/** Chapter text imported from V1 before the full V2 artifact projection is exposed. */
+export interface NovelArtifactSeed {
+  readonly artifactId: string
+  readonly chapter: number
+  readonly kind: 'draft'
+  readonly content: string
+  readonly createdAt: string
+}
+
+/** Complete initial V2 state imported from one fingerprinted V1 source set. */
+export interface NovelMigrationSeed {
+  readonly projectId: NovelProjectId
+  readonly workspaceId: WorkspaceIdType
+  readonly project: NovelProjectNextValue
+  readonly architecture: NovelArchitectureNextValue
+  readonly characters: NovelCharactersNextValue
+  readonly chapters: readonly NovelChapterNextValue[]
+  readonly artifacts: readonly NovelArtifactSeed[]
+  readonly fingerprint: string
+  readonly archivePath: string
+  readonly sourceCount: number
+  readonly migratedAt: string
+}
+
 /** Complete authoritative projection returned by {@link NovelStore.read}. */
 export interface NovelStoreSnapshot {
   readonly projectId: NovelProjectId
@@ -260,6 +295,7 @@ export interface NovelStoreSnapshot {
   readonly chapters: readonly NovelChapterAggregate[]
   readonly tasks: readonly NovelTaskAggregate[]
   readonly changes: readonly NovelChangeAuditRecord[]
+  readonly migration: NovelMigrationReceipt | undefined
 }
 
 /** Public domain interface for the V2 authoritative project store. */
@@ -588,6 +624,13 @@ function requireIsoTimestamp(value: unknown, field: string): string {
 function requirePositiveInteger(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
     throw new NovelStoreError('INVALID_CONTENT', `${field} must be a positive integer`)
+  }
+  return value
+}
+
+function requireNonNegativeInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new NovelStoreError('INVALID_CONTENT', `${field} must be a non-negative integer`)
   }
   return value
 }
@@ -977,6 +1020,34 @@ function parseChange(row: ChangeRow): NovelChangeAuditRecord {
   }
 }
 
+function validateMigrationReceipt(value: unknown): NovelMigrationReceipt {
+  if (typeof value !== 'object' || value === null) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'migration receipt is invalid')
+  }
+  const record = requireExactKeys(value, [
+    'projectId', 'fingerprint', 'archivePath', 'sourceCount', 'chapterCount', 'draftCount', 'migratedAt',
+  ], 'migration receipt')
+  const projectId = requireNonEmptyString(record.projectId, 'migration receipt.projectId')
+  if (!isUuid(projectId)) throw new NovelStoreError('UNSUPPORTED_FORMAT', 'migration receipt.projectId is invalid')
+  const fingerprint = requireNonEmptyString(record.fingerprint, 'migration receipt.fingerprint')
+  if (!/^[a-f0-9]{64}$/.test(fingerprint)) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'migration receipt.fingerprint is invalid')
+  }
+  const archivePath = requireNonEmptyString(record.archivePath, 'migration receipt.archivePath')
+  if (archivePath !== `.ai-novel/v1-archive/${fingerprint}`) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'migration receipt.archivePath is invalid')
+  }
+  return {
+    projectId: projectId as NovelProjectId,
+    fingerprint,
+    archivePath,
+    sourceCount: requirePositiveInteger(record.sourceCount, 'migration receipt.sourceCount'),
+    chapterCount: requireNonNegativeInteger(record.chapterCount, 'migration receipt.chapterCount'),
+    draftCount: requireNonNegativeInteger(record.draftCount, 'migration receipt.draftCount'),
+    migratedAt: requireIsoTimestamp(record.migratedAt, 'migration receipt.migratedAt'),
+  }
+}
+
 function requireStorage(db: Database, readOnly: boolean): NovelStorageDiagnostics {
   const pragma = (name: string): unknown => {
     const row = db.prepare(`PRAGMA ${name}`).get() as Record<string, unknown>
@@ -1006,7 +1077,7 @@ function requireStorage(db: Database, readOnly: boolean): NovelStorageDiagnostic
   }
 }
 
-async function ensureProjectDirectory(root: string, createArtifact: boolean): Promise<string> {
+export async function ensureProjectDirectory(root: string, createArtifact: boolean): Promise<string> {
   const projectDirectory = join(root, '.ai-novel')
   try {
     const existing = await lstat(projectDirectory)
@@ -1045,6 +1116,183 @@ async function ensureProjectDirectory(root: string, createArtifact: boolean): Pr
     }
   }
   return projectDirectory
+}
+
+function validateMigrationSeed(seed: NovelMigrationSeed): NovelMigrationSeed {
+  requireExactKeys(seed, [
+    'projectId', 'workspaceId', 'project', 'architecture', 'characters', 'chapters', 'artifacts',
+    'fingerprint', 'archivePath', 'sourceCount', 'migratedAt',
+  ], 'migration seed')
+  const record = seed
+  if (!isUuid(record.projectId)) throw new NovelStoreError('INVALID_CONTENT', 'migration seed.projectId is invalid')
+  if (!/^[a-f0-9]{64}$/.test(record.fingerprint)) {
+    throw new NovelStoreError('INVALID_CONTENT', 'migration seed.fingerprint must be a SHA-256 digest')
+  }
+  if (record.archivePath !== `.ai-novel/v1-archive/${record.fingerprint}`) {
+    throw new NovelStoreError('INVALID_CONTENT', 'migration seed.archivePath is invalid')
+  }
+  requirePositiveInteger(record.sourceCount, 'migration seed.sourceCount')
+  requireIsoTimestamp(record.migratedAt, 'migration seed.migratedAt')
+  const project = validateProject(record.project)
+  const architecture = validateArchitecture(record.architecture)
+  const characters = validateCharacters(record.characters)
+  const chapterValues = record.chapters.map(validateChapter)
+  const chapterNumbers = new Set(chapterValues.map(chapter => chapter.chapter))
+  if (chapterNumbers.size !== chapterValues.length) {
+    throw new NovelStoreError('INVALID_CONTENT', 'migration seed chapter numbers must be unique')
+  }
+  const characterIds = new Set(characters.items.map(item => item.characterId))
+  if (chapterValues.some(chapter => chapter.characters.some(id => !characterIds.has(id)))) {
+    throw new NovelStoreError('INVALID_CONTENT', 'migration seed chapter references an unknown character')
+  }
+  const artifactIds = new Set<string>()
+  for (const value of record.artifacts) {
+    const artifact = requireExactKeys(value, ['artifactId', 'chapter', 'kind', 'content', 'createdAt'], 'migration artifact')
+    const artifactId = requireNonEmptyString(artifact.artifactId, 'migration artifact.artifactId')
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(artifactId)) {
+      throw new NovelStoreError('INVALID_CONTENT', 'migration artifact.artifactId is invalid')
+    }
+    if (artifactIds.has(artifactId)) throw new NovelStoreError('INVALID_CONTENT', 'migration artifact.artifactId must be unique')
+    artifactIds.add(artifactId)
+    const chapter = requirePositiveInteger(artifact.chapter, 'migration artifact.chapter')
+    if (!chapterNumbers.has(chapter)) {
+      throw new NovelStoreError('INVALID_CONTENT', 'migration artifact references an unknown chapter')
+    }
+    if (artifact.kind !== 'draft') throw new NovelStoreError('INVALID_CONTENT', 'migration artifact.kind is not supported')
+    requireString(artifact.content, 'migration artifact.content')
+    requireIsoTimestamp(artifact.createdAt, 'migration artifact.createdAt')
+  }
+  return {
+    projectId: record.projectId,
+    workspaceId: record.workspaceId,
+    project,
+    architecture,
+    characters,
+    chapters: chapterValues,
+    artifacts: record.artifacts,
+    fingerprint: record.fingerprint,
+    archivePath: record.archivePath,
+    sourceCount: record.sourceCount,
+    migratedAt: record.migratedAt,
+  }
+}
+
+async function removeDatabaseArtifact(path: string): Promise<void> {
+  await Promise.all([
+    rm(path, { force: true }),
+    rm(`${path}-journal`, { force: true }),
+    rm(`${path}-wal`, { force: true }),
+    rm(`${path}-shm`, { force: true }),
+  ])
+}
+
+/**
+ * Create a fully initialized migration staging database in one import transaction.
+ *
+ * @param databasePath Real staging file path inside the fingerprinted V1 archive.
+ * @param root Canonical final workspace root recorded in the database binding.
+ * @param seed Validated complete V1 projection and migration receipt inputs.
+ * @returns The deterministic migration receipt written inside the staging database.
+ * @throws {@link NovelStoreError} when validation or the single import transaction fails.
+ */
+export async function createMigratedNovelStoreFile(
+  databasePath: string,
+  root: string,
+  seed: NovelMigrationSeed,
+): Promise<NovelMigrationReceipt> {
+  const valid = validateMigrationSeed(seed)
+  const receipt: NovelMigrationReceipt = {
+    projectId: valid.projectId,
+    fingerprint: valid.fingerprint,
+    archivePath: valid.archivePath,
+    sourceCount: valid.sourceCount,
+    chapterCount: valid.chapters.length,
+    draftCount: valid.artifacts.length,
+    migratedAt: valid.migratedAt,
+  }
+  const created = await createDatabaseFile(databasePath)
+  if (!created) throw new NovelStoreError('ALREADY_INITIALIZED', 'migration staging database already exists')
+  const sqlite = await import('node:sqlite')
+  const db = new sqlite.DatabaseSync(databasePath)
+  try {
+    configureWriteConnection(db)
+    createSchema(db)
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.prepare("INSERT INTO meta (key, value) VALUES ('project_id', ?), ('workspace_id', ?), ('workspace_path', ?), ('schema_version', '2'), ('attached_at', ?), ('migration_source_fingerprint', ?), ('migration_receipt', ?)")
+        .run(valid.projectId, valid.workspaceId, root, valid.project.createdAt, valid.fingerprint, stableJson(receipt))
+      db.prepare(`INSERT INTO project (
+        id, title, language, genre, planned_chapters, target_words_per_chapter, creative_strategy,
+        structure_mode, narrative_pov, global_guidance, global_revision, project_revision, created_at, updated_at
+      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`)
+        .run(
+          valid.project.title, valid.project.language, valid.project.genre,
+          valid.project.plannedChapters, valid.project.targetWordsPerChapter,
+          valid.project.creativeStrategy, valid.project.structureMode,
+          valid.project.narrativePov, valid.project.globalGuidance,
+          valid.project.createdAt, valid.project.updatedAt,
+        )
+      db.prepare(`INSERT INTO architecture (
+        id, premise, character_graph, world, plot_outline, style_constraints, reference_works, revision
+      ) VALUES (1, ?, ?, ?, ?, ?, '[]', 0)`)
+        .run(
+          valid.architecture.premise, valid.architecture.characterGraph, valid.architecture.world,
+          valid.architecture.plotOutline, valid.architecture.styleConstraints,
+        )
+      db.prepare('INSERT INTO character_collection (id, revision) VALUES (1, 0)').run()
+      const insertCharacter = db.prepare(`INSERT INTO characters (
+        character_id, name, role, summary, goal, current_state, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      for (const character of valid.characters.items) {
+        insertCharacter.run(
+          character.characterId, character.name, character.role, character.summary,
+          character.goal, character.currentState, character.notes,
+        )
+      }
+      const insertRelationship = db.prepare(`INSERT INTO character_relationships (
+        from_character_id, to_character_id, relation, notes
+      ) VALUES (?, ?, ?, ?)`)
+      for (const relationship of valid.characters.relationships) {
+        insertRelationship.run(
+          relationship.fromCharacterId, relationship.toCharacterId, relationship.relation, relationship.notes,
+        )
+      }
+      const insertChapter = db.prepare(`INSERT INTO chapters (
+        chapter, title, purpose, plot_beats, key_events, suspense, status, revision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`)
+      const insertChapterCharacter = db.prepare('INSERT INTO chapter_characters (chapter, character_id) VALUES (?, ?)')
+      for (const chapter of valid.chapters) {
+        insertChapter.run(
+          chapter.chapter, chapter.title, chapter.purpose, stableJson(chapter.plotBeats),
+          stableJson(chapter.keyEvents), chapter.suspense, chapter.status,
+        )
+        for (const characterId of chapter.characters) insertChapterCharacter.run(chapter.chapter, characterId)
+      }
+      const insertArtifact = db.prepare(`INSERT INTO artifacts (
+        artifact_id, chapter, kind, parent_artifact_id, content, report, created_at
+      ) VALUES (?, ?, 'draft', NULL, ?, NULL, ?)`)
+      for (const artifact of valid.artifacts) {
+        insertArtifact.run(artifact.artifactId, artifact.chapter, artifact.content, artifact.createdAt)
+      }
+      db.exec('COMMIT')
+      db.close()
+      return receipt
+    } catch (error) {
+      if (db.isTransaction) db.exec('ROLLBACK')
+      throw error
+    }
+  } catch (error) {
+    if (db.isOpen) db.close()
+    try {
+      await removeDatabaseArtifact(databasePath)
+    } catch (cleanupError) {
+      throw new NovelStoreError('WRITE_FAILED', 'migration staging database failed and could not be cleaned up', {
+        cause: new AggregateError([error, cleanupError]),
+      })
+    }
+    if (error instanceof NovelStoreError) throw error
+    throw new NovelStoreError('WRITE_FAILED', 'migration staging database import failed', { cause: error })
+  }
 }
 
 async function createDatabaseFile(path: string): Promise<boolean> {
@@ -1260,6 +1508,7 @@ class SqliteNovelStore implements NovelStore {
     const changeRows = this.#db.prepare(`SELECT change_set_id, aggregate_kind, aggregate_id, aggregate_key, operation,
       base_aggregate_revision, base_global_revision, result_aggregate_revision, result_global_revision, status, provenance
       FROM changes ORDER BY committed_at, change_set_id`).all() as unknown as ChangeRow[]
+    const migrationRow = this.#db.prepare("SELECT value FROM meta WHERE key = 'migration_receipt'").get() as { value: string } | undefined
     return {
       projectId: binding.projectId as NovelProjectId,
       workspaceId: WorkspaceId(binding.workspaceId),
@@ -1273,6 +1522,7 @@ class SqliteNovelStore implements NovelStore {
       chapters: chapterRows.map(row => parseChapter(row, chapterCharacters.get(row.chapter) ?? [])),
       tasks: taskRows.map(parseTask),
       changes: changeRows.map(parseChange),
+      migration: migrationRow === undefined ? undefined : validateMigrationReceipt(parseJson(migrationRow.value, 'migration receipt is invalid')),
     }
   }
 
