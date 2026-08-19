@@ -815,7 +815,18 @@ function validateInitialization(request: NovelStoreInitializeRequest): Validated
   }
 }
 
-function validateChange(change: NovelChangeSet): NovelChangeSet {
+/**
+ * Validate one complete ChangeSet against the authoritative single-aggregate semantics.
+ *
+ * This is the shared validation contract used both by {@link NovelStore.applyChange} and by
+ * the loopback command RPC preview path, so a preview never accepts a command the store
+ * would later reject.
+ *
+ * @param change Candidate ChangeSet to validate.
+ * @returns The same ChangeSet once every field satisfies the store contract.
+ * @throws {@link NovelStoreError} with code `INVALID_CONTENT` for any contract violation.
+ */
+export function validateNovelChangeSet(change: NovelChangeSet): NovelChangeSet {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(change.changeSetId)) {
     throw new NovelStoreError('INVALID_CONTENT', 'changeSetId is invalid')
   }
@@ -1421,7 +1432,7 @@ class SqliteNovelStore implements NovelStore {
 
   async applyChange(change: NovelChangeSet, signal: AbortSignal): Promise<NovelChangeReceipt> {
     requireNotAborted(signal)
-    const valid = validateChange(change)
+    const valid = validateNovelChangeSet(change)
     return this.#enqueue(() => {
       this.#requireWritable()
       const existing = this.#existingChange(valid)
@@ -1712,15 +1723,30 @@ function requireNotAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new NovelStoreError('CANCELLED', 'novel store operation was cancelled')
 }
 
+/** Options controlling whether opening a store may create its on-disk artifact. */
+export interface NovelStoreOpenOptions {
+  /**
+   * When false, a missing `.ai-novel` or `novel.db` fails with `NOT_INITIALIZED` and creates
+   * nothing on disk. Defaults to true, preserving the initialization path.
+   */
+  readonly create?: boolean
+}
+
 /**
  * Open the per-workspace authoritative NovelStore artifact.
  *
  * @param root Canonical workspace directory containing `.ai-novel`.
  * @param workspaceId Opaque DSH Workspace identity to bind or verify.
+ * @param options Pass `{ create: false }` for read paths that must not create V2 artifacts.
  * @returns A read-write store for a matching binding, or a read-only store after workspace/path drift.
- * @throws {@link NovelStoreError} when the format is unsupported or another writer holds the exclusive lock.
+ * @throws {@link NovelStoreError} when the format is unsupported, another writer holds the exclusive
+ *   lock, or `{ create: false }` meets an uninitialized workspace.
  */
-export async function openNovelStore(root: string, workspaceId: WorkspaceIdType): Promise<NovelStore> {
+export async function openNovelStore(
+  root: string,
+  workspaceId: WorkspaceIdType,
+  options: NovelStoreOpenOptions = {},
+): Promise<NovelStore> {
   if (!isAbsolute(root)) {
     throw new NovelStoreError('PATH_REJECTED', 'workspace root must be absolute')
   }
@@ -1743,6 +1769,9 @@ export async function openNovelStore(root: string, workspaceId: WorkspaceIdType)
     if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'ENOENT') {
       throw error
     }
+  }
+  if (!databaseExists && options.create === false) {
+    throw new NovelStoreError('NOT_INITIALIZED', 'novel project is not initialized')
   }
   const projectDirectory = await ensureProjectDirectory(canonicalRoot, !databaseExists)
   const databasePath = join(projectDirectory, 'novel.db')

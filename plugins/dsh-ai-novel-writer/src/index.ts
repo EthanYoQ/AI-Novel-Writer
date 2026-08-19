@@ -5,8 +5,9 @@ import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionRpcHandler, HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { WorkspaceId, type Workspace } from '@deepseek-ai/dsh-workspace'
+import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import z from '@deepseek-ai/schemastery'
+import { createAiNovelCommandRpcHandler, type NovelWorkspaceRegistry } from './command-rpc.ts'
 import { parseNovelAssetRef } from './context-types.ts'
 import { readNovelAsset, readNovelContext } from './context-window.ts'
 import { createPresetInstaller } from './preset-installer.ts'
@@ -14,7 +15,7 @@ import type { AssetRef } from './types.ts'
 
 export { openNovelProject } from './novel-project.ts'
 export type { NovelProjectOptions } from './novel-project.ts'
-export { NovelStoreError, openNovelStore } from './novel-store.ts'
+export { NovelStoreError, openNovelStore, validateNovelChangeSet } from './novel-store.ts'
 export type {
   NovelAggregateRef,
   NovelArchitectureAggregate,
@@ -32,6 +33,7 @@ export type {
   NovelStore,
   NovelStoreErrorCode,
   NovelStoreInitializeRequest,
+  NovelStoreOpenOptions,
   NovelStoreSnapshot,
   NovelStorageDiagnostics,
   NovelTaskAggregate,
@@ -66,6 +68,17 @@ export type {
 } from './types.ts'
 export { createPresetInstaller } from './preset-installer.ts'
 export type { PresetInstaller, PresetInstallResult, PresetInstallStatus } from './preset-installer.ts'
+export { createAiNovelCommandRpcHandler } from './command-rpc.ts'
+export type {
+  NovelCommandDiffChange,
+  NovelCommandPreviewResult,
+  NovelLoopbackCommand,
+  NovelProposalListResult,
+  NovelProposalStatus,
+  NovelProposalSummary,
+  NovelStateReadResult,
+  NovelWorkspaceRegistry,
+} from './command-rpc.ts'
 
 /** Stable Host plugin name used by Cordis diagnostics. */
 export const name = 'dsh-ai-novel-writer'
@@ -113,15 +126,6 @@ function isEmptyObject(value: unknown): value is Record<PropertyKey, never> {
     && value !== null
     && Object.getPrototypeOf(value) === Object.prototype
     && Reflect.ownKeys(value).length === 0
-}
-
-/** Minimal read face consumed from the Host Workspace registry. */
-export interface NovelWorkspaceRegistry {
-  /**
-   * @param workspaceId Opaque Workspace identity received from the browser.
-   * @returns The registered canonical directory, or undefined for an unknown id.
-   */
-  get(workspaceId: WorkspaceId): Pick<Workspace, 'path'> | undefined
 }
 
 function contextRequest(value: unknown): { readonly workspaceId: WorkspaceId; readonly chapter: number } | undefined {
@@ -190,9 +194,14 @@ export function createAiNovelRpcHandler(
   reportFailure: (error: unknown) => void = () => {},
 ): ConnectionRpcHandler {
   const setup = createPresetSetupRpcHandler(installer, reportFailure)
+  const command = createAiNovelCommandRpcHandler(workspaces, reportFailure)
   return async (endpoint, payload, signal) => {
     if (endpoint === 'preset/status' || endpoint === 'preset/install') {
       return setup(endpoint, payload, signal)
+    }
+    if (endpoint === 'state/read' || endpoint === 'proposal/list' || endpoint === 'command/preview'
+      || endpoint === 'command/commit' || endpoint === 'task/read') {
+      return command(endpoint, payload, signal)
     }
     if (endpoint !== 'context/read' && endpoint !== 'asset/read') {
       return badRequest(`Unknown AI novel endpoint: ${endpoint}`)

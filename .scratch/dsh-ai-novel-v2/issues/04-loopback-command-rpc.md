@@ -4,13 +4,18 @@
 
 **Blocked by:** 02.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] 支持 state/read、command/preview、command/commit、proposal/list、task/read 封闭端点。
-- [ ] 请求只接受 branded WorkspaceId 和类型化 payload。
-- [ ] Host 解析 workspace 并拒绝未知、路径和任意 JSON patch。
-- [ ] preview 从权威库生成实体级 diff。
-- [ ] commit 在事务内重校验 revision 并写入审计。
-- [ ] 稳定错误不泄漏本地路径。
+- [x] 支持 state/read、command/preview、command/commit、proposal/list、task/read 封闭端点。
+- [x] 请求只接受 branded WorkspaceId 和类型化 payload。
+- [x] Host 解析 workspace 并拒绝未知、路径和任意 JSON patch。
+- [x] preview 从权威库生成实体级 diff。
+- [x] commit 在事务内重校验 revision 并写入审计。
+- [x] 稳定错误不泄漏本地路径。
+
+## Known issues
+
+- [x] K3 Standards MAJOR：command RPC 曾重复实现 nextValue 校验；已改为外层 wire envelope 解析后统一委托 `validateNovelChangeSet`，preview 与 commit 共享同一权威语义。
+- [x] 审查补充：未初始化读路径曾可能创建空库；已为 RPC 读路径使用 `create: false`，失败后不留下 `.ai-novel` 或 `novel.db`。
 
 GitHub: https://github.com/EthanYoQ/AI-Novel-Writer/issues/122
