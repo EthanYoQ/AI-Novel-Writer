@@ -1,10 +1,39 @@
 #!/usr/bin/env node
-/** Google Chrome journey over the packed disposable DSH Web profile. */
+/** Google Chrome journey over the installed V2 sidebar in a disposable DSH Web profile. */
 
 import { mkdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, join } from 'node:path'
 import process from 'node:process'
+
+const V2_WORKSPACE_STATE_ENDPOINT = 'workspace/state/read'
+const V2_INITIALIZE_ENDPOINT = 'workspace/initialize'
+const QUALIFICATION_TOOL_NAMES = ['novel_read', 'novel_propose_change']
+const RESULT_FIELDS = ['phase', 'browser', 'pluginCard', 'geometry', 'screenshots']
+const QUALIFICATION_PROPOSAL_ENVIRONMENT = 'DSH_NOVEL_QUALIFICATION_PROPOSAL_JSON'
+const QUALIFICATION_FINAL_ARTIFACT_ID = 'qualification-chapter-1-draft'
+const QUALIFICATION_PARTIAL_STOP_ARTIFACT_ID = 'qualification-invalid-review'
+const STATIC_RESULT = {
+  kind: 'dsh-ai-novel-v2-browser-journey',
+  browser: 'Google Chrome',
+  workspaceStateEndpoint: V2_WORKSPACE_STATE_ENDPOINT,
+  initializeEndpoint: V2_INITIALIZE_ENDPOINT,
+  tools: QUALIFICATION_TOOL_NAMES,
+  phases: ['first', 'restart', 'reinstall'],
+  output: RESULT_FIELDS,
+  proposalEnvironment: QUALIFICATION_PROPOSAL_ENVIRONMENT,
+  finalArtifactId: QUALIFICATION_FINAL_ARTIFACT_ID,
+  partialStopArtifactId: QUALIFICATION_PARTIAL_STOP_ARTIFACT_ID,
+  chapterContext: { chapter: 2, previousFinalArtifactId: QUALIFICATION_FINAL_ARTIFACT_ID },
+  requiresHarnessRoot: true,
+  directStoreBootstrap: false,
+  userAppliesProposal: true,
+}
+
+if (process.argv[2] === '--check-static') {
+  process.stdout.write(`${JSON.stringify(STATIC_RESULT)}\n`)
+  process.exit(0)
+}
 
 const [url, sourceRoot, workspaceRoot, screenshotRoot, phase = 'first'] = process.argv.slice(2)
 if (url === undefined || sourceRoot === undefined || workspaceRoot === undefined || screenshotRoot === undefined) {
@@ -12,6 +41,23 @@ if (url === undefined || sourceRoot === undefined || workspaceRoot === undefined
 }
 if (phase !== 'first' && phase !== 'restart' && phase !== 'reinstall') {
   throw new Error(`unknown qualification browser phase: ${phase}`)
+}
+
+/**
+ * This journey is only meaningful against the installed Harness Web profile. It deliberately
+ * has no fallback that writes a store, registers a module, or imitates a successful browser run.
+ */
+if (process.env.DSH_HARNESS_ROOT === undefined || process.env.DSH_HARNESS_ROOT === '') {
+  process.stdout.write(`${JSON.stringify({
+    status: 'skipped',
+    reason: 'DSH_HARNESS_ROOT is required for installed-sidebar browser qualification',
+    phase,
+    browser: 'Google Chrome',
+    pluginCard: null,
+    geometry: null,
+    screenshots: [],
+  })}\n`)
+  process.exit(0)
 }
 
 const require = createRequire(join(sourceRoot, 'package.json'))
@@ -69,13 +115,13 @@ async function connectWorkspace(page) {
 }
 
 async function selectNovelPreset(page) {
-  const preset = page.getByRole('button', { name: /^(?:标准模式|Standard mode|AI 小说作家)$/ })
+  const preset = page.getByRole('button', { name: /^(?:标准模式|Standard mode|AI 小说作家 V2)$/ })
   await preset.waitFor({ state: 'visible', timeout: 30_000 })
-  if (!/AI 小说作家/.test(await preset.innerText())) {
+  if (await preset.innerText() !== 'AI 小说作家 V2') {
     await preset.click()
-    await page.getByRole('menuitem', { name: /AI 小说作家/ }).click()
+    await page.getByRole('menuitem', { name: 'AI 小说作家 V2', exact: true }).click()
   }
-  await page.getByRole('button', { name: 'AI 小说作家' }).waitFor({ state: 'visible', timeout: 30_000 })
+  await page.getByRole('button', { name: 'AI 小说作家 V2', exact: true }).waitFor({ state: 'visible', timeout: 30_000 })
   await page.locator('textarea:enabled[placeholder="描述你想要构建的内容"]').waitFor({ timeout: 30_000 })
 }
 
@@ -99,14 +145,6 @@ async function ensurePresetInstalled(drawer) {
   await installed.waitFor({ state: 'visible', timeout: 30_000 })
 }
 
-async function allowOnce(page, screenshots, label) {
-  const panel = page.locator('[data-approval-key]')
-  await panel.waitFor({ state: 'visible', timeout: 60_000 })
-  screenshots.push(await capture(page, `${label}-native-approval`))
-  await panel.getByRole('button', { name: /^(?:允许一次|Allow once)$/ }).click()
-  await panel.waitFor({ state: 'detached', timeout: 60_000 })
-}
-
 async function settingsEvidence(page, screenshots) {
   await page.getByRole('button', { name: '设置', exact: true }).click()
   const settings = page.getByRole('dialog', { name: '设置' })
@@ -123,43 +161,87 @@ async function settingsEvidence(page, screenshots) {
   return text
 }
 
-async function initializeProject(page, drawer, screenshots) {
-  await drawer.getByRole('textbox', { name: '小说标题' }).fill('潮汐来信')
-  await drawer.getByRole('textbox', { name: '类型' }).fill('奇幻悬疑')
-  await drawer.getByRole('spinbutton', { name: '计划章数' }).fill('6')
-  await drawer.getByRole('spinbutton', { name: '每章目标字数' }).fill('2000')
-  await drawer.getByRole('combobox', { name: '创作策略' }).selectOption('consistency-first')
-  await drawer.getByRole('button', { name: '预览初始化提案' }).click()
-  await drawer.locator('.aiNovelInitializationPreview').waitFor({ timeout: 15_000 })
-  screenshots.push(await capture(page, 'initialization-preview'))
-  await drawer.getByRole('button', { name: '提交到当前会话' }).click()
-  await allowOnce(page, screenshots, 'initialization')
-  await drawer.getByRole('heading', { name: '小说资产' }).waitFor({ timeout: 60_000 })
+function assertPathFreeDrawer(drawer) {
+  return drawer.innerText().then(text => {
+    if (text.includes(workspaceRoot) || text.includes(sourceRoot)) {
+      throw new Error('V2 sidebar exposed a local path during workspace initialization')
+    }
+  })
 }
 
-async function editStory(page, drawer, screenshots) {
-  await drawer.getByRole('button', { name: /故事蓝图/ }).click()
-  await drawer.getByRole('textbox', { name: '故事前提' }).fill('退潮后的海床会浮现来自未来的信件。')
-  await drawer.getByRole('textbox', { name: '主题（每行一项）' }).fill('记忆\n选择')
-  await drawer.getByRole('textbox', { name: '世界设定' }).fill('被永夜潮汐包围的群岛。')
-  await drawer.getByRole('textbox', { name: '故事主线' }).fill('林夏循着未来信件寻找失踪者。')
-  await drawer.getByRole('textbox', { name: '结局目标' }).fill('林夏决定保留真实记忆并点亮全部灯塔。')
-  await drawer.getByRole('textbox', { name: '修改摘要' }).fill('建立故事蓝图')
-  await drawer.getByRole('button', { name: '预览修改提案' }).click()
-  await drawer.getByRole('region', { name: '即将提交的完整资产文本' }).waitFor({ timeout: 15_000 })
-  screenshots.push(await capture(page, 'story-preview'))
-  await drawer.getByRole('button', { name: '提交到当前会话' }).click()
-  await allowOnce(page, screenshots, 'story')
-  await drawer.getByText(/^revision (?!absent$)[0-9a-f]{12}$/).waitFor({ timeout: 60_000 })
-  if (await drawer.getByRole('textbox', { name: '修改摘要' }).inputValue() !== '') {
-    throw new Error('Story editor did not reconcile to the authoritative saved revision')
+async function initializeWorkspace(page, drawer, screenshots) {
+  await drawer.getByRole('heading', { name: '创建 V2 项目', exact: true }).waitFor({ timeout: 30_000 })
+  await drawer.getByRole('textbox', { name: '小说标题' }).fill('潮汐来信')
+  await drawer.getByRole('textbox', { name: '语言' }).fill('zh-CN')
+  await drawer.getByRole('textbox', { name: '类型' }).fill('奇幻悬疑')
+  await drawer.getByRole('spinbutton', { name: '计划章数' }).fill('2')
+  await drawer.getByRole('spinbutton', { name: '每章目标字数' }).fill('2000')
+  await drawer.getByRole('combobox', { name: '创作策略' }).selectOption('consistency-first')
+  await drawer.getByRole('combobox', { name: '结构模式' }).selectOption('three-act')
+  await drawer.getByRole('combobox', { name: '叙事视角' }).selectOption('third-limited')
+  await drawer.getByRole('textbox', { name: '全局创作提示' }).fill('保持冷峻而温柔的语气。')
+  await assertPathFreeDrawer(drawer)
+  screenshots.push(await capture(page, 'v2-initialization-form'))
+  await drawer.getByRole('button', { name: '创建 V2 项目', exact: true }).click()
+  await drawer.getByRole('heading', { name: '项目概览', exact: true }).waitFor({ timeout: 60_000 })
+  await drawer.getByText('潮汐来信', { exact: true }).waitFor({ timeout: 30_000 })
+  screenshots.push(await capture(page, 'v2-workspace-ready'))
+}
+
+function qualificationProposalPrompt() {
+  const raw = process.env[QUALIFICATION_PROPOSAL_ENVIRONMENT]
+  if (typeof raw !== 'string' || raw === '') {
+    throw new Error(`${QUALIFICATION_PROPOSAL_ENVIRONMENT} is required for the V2 user proposal journey`)
   }
-  screenshots.push(await capture(page, 'story-saved'))
+  let proposal
+  try {
+    proposal = JSON.parse(raw)
+  } catch {
+    throw new Error('DSH_NOVEL_QUALIFICATION_PROPOSAL_JSON must be one complete JSON object')
+  }
+  if (proposal === null || typeof proposal !== 'object' || Array.isArray(proposal)
+    || !Array.isArray(proposal.changes) || proposal.changes.length === 0) {
+    throw new Error('DSH_NOVEL_QUALIFICATION_PROPOSAL_JSON must contain a non-empty V2 changes array')
+  }
+  return `${JSON.stringify(proposal)}\n\n这只是提案。`
+}
+
+async function submitProposalThroughSession(page, screenshots) {
+  const prompt = qualificationProposalPrompt()
+  const composer = page.locator('textarea:enabled[placeholder="描述你想要构建的内容"]')
+  await composer.fill(prompt)
+  const send = page.getByRole('button', { name: /^(?:发送|Send)$/ })
+  await send.waitFor({ state: 'visible', timeout: 30_000 })
+  await send.click()
+  await page.getByText('提案已记录，等待用户在提案收件箱中审核并应用。', { exact: true }).waitFor({ timeout: 60_000 })
+  screenshots.push(await capture(page, 'v2-proposal-submitted'))
+}
+
+async function applyProposalAndReadChapterContext(page, drawer, screenshots) {
+  await drawer.getByRole('heading', { name: '提案队列', exact: true }).waitFor({ timeout: 60_000 })
+  await drawer.getByRole('button', { name: '依序应用未完成项', exact: true }).waitFor({ timeout: 60_000 })
+  screenshots.push(await capture(page, 'v2-proposal-preview'))
+  await drawer.getByRole('button', { name: '依序应用未完成项', exact: true }).click()
+  await drawer.getByText('部分已应用', { exact: true }).waitFor({ timeout: 60_000 })
+  await drawer.getByText(new RegExp(QUALIFICATION_PARTIAL_STOP_ARTIFACT_ID)).waitFor({ timeout: 30_000 })
+  await drawer.getByRole('button', { name: /第 2 章：/ }).click()
+  await drawer.getByRole('heading', { name: '第 2 章蓝图', exact: true }).waitFor({ timeout: 30_000 })
+  await drawer.getByText('潮水退去，信件显露。', { exact: true }).waitFor({ timeout: 30_000 })
+  screenshots.push(await capture(page, 'v2-partial-final-context'))
+}
+
+async function assertRestartReadback(page, drawer, screenshots) {
+  await drawer.getByRole('heading', { name: '项目概览', exact: true }).waitFor({ timeout: 30_000 })
+  const content = await drawer.innerText()
+  for (const required of ['潮汐来信', '部分已应用', QUALIFICATION_FINAL_ARTIFACT_ID, QUALIFICATION_PARTIAL_STOP_ARTIFACT_ID, '已定稿']) {
+    if (!content.includes(required)) throw new Error(`Restarted V2 sidebar did not render ${required}`)
+  }
+  await drawer.getByRole('button', { name: /第 2 章：/ }).click()
+  await drawer.getByText('潮水退去，信件显露。', { exact: true }).waitFor({ timeout: 30_000 })
+  screenshots.push(await capture(page, 'v2-restart-readback'))
 }
 
 async function measureWorkbench(page, drawer, screenshots) {
-  const back = drawer.getByRole('button', { name: '返回小说资产列表' })
-  if (await back.isVisible().catch(() => false)) await back.click()
   const frame = page.locator('[class*="frame"]').first()
   const center = page.locator('[class*="centerCol"]').first()
   const drawerBox = await drawer.boundingBox()
@@ -172,14 +254,14 @@ async function measureWorkbench(page, drawer, screenshots) {
   if (drawerBox.width < 399 || drawerBox.width > 441 || centerBox.x + centerBox.width > drawerBox.x + 1 || oneColumn.overflow > 1) {
     throw new Error('Workbench did not preserve the compact non-covering DSH drawer geometry')
   }
-  screenshots.push(await capture(page, 'asset-root-wide'))
+  screenshots.push(await capture(page, 'v2-sidebar-wide'))
   await page.setViewportSize({ width: 390, height: 844 })
   const narrowBox = await drawer.boundingBox()
   const narrowOverflow = await drawer.evaluate(root => root.scrollWidth - root.clientWidth)
   if (narrowBox === null || narrowBox.width > 390 || narrowOverflow > 1) {
     throw new Error('Workbench overflowed the narrow Chrome viewport')
   }
-  screenshots.push(await capture(page, 'asset-root-narrow'))
+  screenshots.push(await capture(page, 'v2-sidebar-narrow'))
   await page.setViewportSize({ width: 1440, height: 900 })
   return {
     viewport: { width: 1440, height: 900 },
@@ -221,15 +303,13 @@ try {
   await selectNovelPreset(page)
   drawer = await openWorkbench(page)
   if (phase === 'first') {
-    await initializeProject(page, drawer, screenshots)
-    await editStory(page, drawer, screenshots)
+    await initializeWorkspace(page, drawer, screenshots)
+    await drawer.getByRole('button', { name: '关闭小说工作台' }).click()
+    await submitProposalThroughSession(page, screenshots)
+    drawer = await openWorkbench(page)
+    await applyProposalAndReadChapterContext(page, drawer, screenshots)
   } else {
-    await drawer.getByRole('heading', { name: '小说资产' }).waitFor({ timeout: 30_000 })
-    const content = await drawer.innerText()
-    if (!content.includes('潮汐来信') || !content.includes('退潮后的海床会浮现来自未来的信件。')) {
-      throw new Error('Restarted packed profile did not render the saved project and story blueprint')
-    }
-    screenshots.push(await capture(page, 'restart-readback'))
+    await assertRestartReadback(page, drawer, screenshots)
   }
   const geometry = await measureWorkbench(page, drawer, screenshots)
   if (pageErrors.length > 0) throw new Error(`browser page errors: ${pageErrors.join(' | ')}`)
