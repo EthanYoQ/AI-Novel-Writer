@@ -17,6 +17,7 @@ export interface ImportInferenceResult {
 
 const PLOT_STRUCTURES = ['three_act', 'heros_journey', 'save_the_cat', 'kishotenketsu', 'multi_thread', 'freeform'] as const
 const NARRATIVE_POVS = ['third_limited', 'first_person', 'third_omniscient', 'multi_pov'] as const
+const EDGE_INVISIBLE_WRAPPER_RESIDUE = new Set(['\uFEFF', '\u200B', '\u200C', '\u200D', '\u2060'])
 
 export const IMPORT_INFERENCE_JSON_CONTRACT = `
 【不可变导入推演 JSON 合同】
@@ -42,6 +43,24 @@ export const IMPORT_INFERENCE_JSON_CONTRACT = `
   }]
 }
 characterCards 必须有 3–8 项，name 唯一，至少一个 protagonist；关系不得自指，target 必须在本次 name 集合中。不得省略字段、使用中文枚举或以近义字段替代。`
+
+function trimEdgeWrapperResidue(content: string): string {
+  let start = 0
+  let end = content.length
+  while (start < end && (/\s/u.test(content[start]!) || EDGE_INVISIBLE_WRAPPER_RESIDUE.has(content[start]!))) {
+    start += 1
+  }
+  while (end > start && (/\s/u.test(content[end - 1]!) || EDGE_INVISIBLE_WRAPPER_RESIDUE.has(content[end - 1]!))) {
+    end -= 1
+  }
+  return content.slice(start, end)
+}
+
+function normalizeImportInferenceJsonContent(content: string): string {
+  const trimmed = trimEdgeWrapperResidue(content)
+  const fenced = /^```(?:json)?[^\S\r\n]*(?:\r?\n)([\s\S]*?)(?:\r?\n)?```$/iu.exec(trimmed)
+  return fenced ? trimEdgeWrapperResidue(fenced[1]) : trimmed
+}
 
 function record(value: unknown, path: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -141,7 +160,7 @@ function decodeCards(value: unknown): CharacterRosterEntry[] {
 export function decodeImportInferenceJson(content: string): ImportInferenceResult {
   let parsed: unknown
   try {
-    parsed = JSON.parse(content.trim())
+    parsed = JSON.parse(normalizeImportInferenceJsonContent(content))
   } catch {
     throw new StructuredContractDiagnostic('invalid_json', '$')
   }
