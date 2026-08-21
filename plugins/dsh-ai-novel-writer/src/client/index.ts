@@ -28,7 +28,16 @@ import {
   type NovelV2WorkbenchPort,
 } from './workbench-store.ts'
 import type { NovelStateReadResult } from '../command-rpc.ts'
-import type { NovelAggregateRef, NovelProposalSummary, NovelTaskAggregate } from '../novel-store.ts'
+import type {
+  NovelAggregateRef,
+  NovelChangeReceipt,
+  NovelProposalApplyResult,
+  NovelProposalItem,
+  NovelProposalItemMutationResult,
+  NovelProposalRegenerationResult,
+  NovelProposalSummary,
+  NovelTaskAggregate,
+} from '../novel-store.ts'
 
 export { PresetSetupBody } from './setup-view.tsx'
 export type { PresetSetupBodyProps } from './setup-view.tsx'
@@ -309,13 +318,38 @@ function isV2ChangeAuditRecord(value: unknown): boolean {
     && isNonNegativeInteger(value.globalRevision) && isV2Provenance(value.provenance) && value.status === 'committed'
 }
 
+function isV2ProposalItem(value: unknown): value is NovelProposalItem {
+  return isRecord(value) && isNonEmptyString(value.itemId) && isNonNegativeInteger(value.itemOrder)
+    && isV2ChangeSet(value.change)
+    && (value.status === 'pending' || value.status === 'stale' || value.status === 'applied'
+      || value.status === 'discarded' || value.status === 'superseded' || value.status === 'failed')
+    && isNonNegativeInteger(value.attemptCount)
+    && (value.failure === undefined || isV2ProposalItemFailure(value.failure))
+    && (value.receipt === undefined || isV2ChangeReceipt(value.receipt))
+    && (value.regenerationTicket === undefined || isNonEmptyString(value.regenerationTicket))
+    && (value.supersededByProposalId === undefined || isNonEmptyString(value.supersededByProposalId))
+    && (value.supersededByItemId === undefined || isNonEmptyString(value.supersededByItemId))
+}
+
+function isV2ProposalItemFailure(value: unknown): value is NovelProposalItem['failure'] {
+  return value === 'NOT_INITIALIZED' || value === 'ALREADY_INITIALIZED' || value === 'UNSUPPORTED_FORMAT'
+    || value === 'WORKSPACE_MISMATCH' || value === 'INVALID_CONTENT' || value === 'PATH_REJECTED'
+    || value === 'STALE_REVISION' || value === 'IDEMPOTENCY_CONFLICT' || value === 'PROPOSAL_TOO_LARGE'
+    || value === 'PROPOSAL_LIMIT_REACHED' || value === 'PROPOSAL_CONFLICT' || value === 'PROPOSAL_NOT_FOUND'
+    || value === 'PROPOSAL_ITEM_NOT_FOUND' || value === 'PROPOSAL_ITEM_NOT_RETRYABLE'
+    || value === 'PROPOSAL_ITEM_APPLIED' || value === 'REGENERATION_TICKET_INVALID'
+    || value === 'WRITE_LOCKED' || value === 'WRITE_FAILED' || value === 'CANCELLED'
+}
+
 function isV2Proposal(value: unknown): value is NovelProposalSummary {
   return isRecord(value) && isNonEmptyString(value.proposalId) && isNonEmptyString(value.sessionId)
     && isNonEmptyString(value.callId) && isNonEmptyString(value.argsHash)
-    && (value.status === 'pending' || value.status === 'stale' || value.status === 'applied'
+    && (value.status === 'pending' || value.status === 'partial' || value.status === 'stale' || value.status === 'applied'
       || value.status === 'discarded' || value.status === 'superseded' || value.status === 'failed')
     && isTimestamp(value.createdAt) && isTimestamp(value.updatedAt)
-    && Array.isArray(value.changes) && value.changes.every(isV2ChangeSet)
+    && (value.parentProposalId === undefined || isNonEmptyString(value.parentProposalId))
+    && (value.parentItemId === undefined || isNonEmptyString(value.parentItemId))
+    && Array.isArray(value.items) && value.items.every(isV2ProposalItem)
 }
 
 function isV2MigrationReceipt(value: unknown): boolean {
@@ -344,9 +378,36 @@ function isV2ProposalList(value: unknown): value is { readonly proposals: readon
   return isRecord(value) && Array.isArray(value.proposals) && value.proposals.every(isV2Proposal)
 }
 
+function isV2ChangeReceipt(value: unknown): value is NovelChangeReceipt {
+  return isRecord(value) && isNonEmptyString(value.changeSetId) && isNonEmptyString(value.projectId)
+    && isV2AggregateRef(value.aggregate) && isNonNegativeInteger(value.aggregateRevision)
+    && isNonNegativeInteger(value.globalRevision)
+}
+
+function isV2ProposalApplyResult(value: unknown): value is NovelProposalApplyResult {
+  if (!isRecord(value) || !isV2Proposal(value.proposal)
+    || !Array.isArray(value.appliedItemIds) || !value.appliedItemIds.every(isNonEmptyString)
+    || (value.stoppedItemId !== undefined && !isNonEmptyString(value.stoppedItemId))) return false
+  const itemIds = new Set(value.proposal.items.map(item => item.itemId))
+  return value.appliedItemIds.every(itemId => itemIds.has(itemId))
+    && new Set(value.appliedItemIds).size === value.appliedItemIds.length
+    && (value.stoppedItemId === undefined || itemIds.has(value.stoppedItemId))
+}
+
+function isV2ProposalItemMutationResult(value: unknown): value is NovelProposalItemMutationResult {
+  if (!isRecord(value) || !isV2Proposal(value.proposal) || !isV2ProposalItem(value.item)) return false
+  const item = value.item
+  return value.proposal.items.some(candidate => candidate.itemId === item.itemId)
+}
+
+function isV2ProposalRegenerationResult(value: unknown): value is NovelProposalRegenerationResult {
+  return isRecord(value) && isV2ProposalItemMutationResult(value)
+    && isNonEmptyString(value.regenerationTicket)
+}
+
 async function callV2Workbench(
   rpc: Pick<ClientConnectionRpc, 'call'>,
-  endpoint: 'state/read' | 'proposal/list' | 'task/read',
+  endpoint: 'state/read' | 'proposal/list' | 'task/read' | 'proposal/apply' | 'proposal/retry' | 'proposal/discard' | 'proposal/regenerate',
   payload: Record<string, unknown>,
   signal: AbortSignal,
 ): Promise<unknown> {
@@ -362,8 +423,8 @@ async function callV2Workbench(
 }
 
 /**
- * Adapt only the already-published V2 loopback read contracts to the sidebar shell.
- * It deliberately exposes neither command preview/commit nor task execution.
+ * Adapt existing path-free V2 loopback contracts to the sidebar shell.
+ * Proposal lifecycle is restricted to the Host's opaque bundle/item command contracts.
  */
 export function createNovelV2WorkbenchPort(
   rpc: Pick<ClientConnectionRpc, 'call'>,
@@ -384,6 +445,36 @@ export function createNovelV2WorkbenchPort(
     readTask: async (workspaceId, taskId, signal) => {
       const value = await callV2Workbench(rpc, 'task/read', { workspaceId, taskId }, signal)
       if (!isV2Task(value) || value.taskId !== taskId) throw new Error('AI novel V2 task response is invalid')
+      return value
+    },
+    applyProposal: async (workspaceId, proposalId, signal) => {
+      const value = await callV2Workbench(rpc, 'proposal/apply', { workspaceId, proposalId }, signal)
+      if (!isV2ProposalApplyResult(value) || value.proposal.proposalId !== proposalId) {
+        throw new Error('AI novel V2 proposal apply response is invalid')
+      }
+      return value
+    },
+    retryProposalItem: async (workspaceId, proposalId, itemId, signal) => {
+      const value = await callV2Workbench(rpc, 'proposal/retry', { workspaceId, proposalId, itemId }, signal)
+      if (!isV2ProposalApplyResult(value) || value.proposal.proposalId !== proposalId) {
+        throw new Error('AI novel V2 proposal retry response is invalid')
+      }
+      return value
+    },
+    discardProposalItem: async (workspaceId, proposalId, itemId, signal) => {
+      const value = await callV2Workbench(rpc, 'proposal/discard', { workspaceId, proposalId, itemId }, signal)
+      if (!isV2ProposalItemMutationResult(value)
+        || value.proposal.proposalId !== proposalId || value.item.itemId !== itemId) {
+        throw new Error('AI novel V2 proposal discard response is invalid')
+      }
+      return value
+    },
+    regenerateProposalItem: async (workspaceId, proposalId, itemId, signal) => {
+      const value = await callV2Workbench(rpc, 'proposal/regenerate', { workspaceId, proposalId, itemId }, signal)
+      if (!isV2ProposalRegenerationResult(value)
+        || value.proposal.proposalId !== proposalId || value.item.itemId !== itemId) {
+        throw new Error('AI novel V2 proposal regenerate response is invalid')
+      }
       return value
     },
   }

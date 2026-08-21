@@ -12,11 +12,11 @@ import type {
   NovelWorkbenchEditableTarget,
 } from './asset-editor.ts'
 import type { NovelInitializationDraft, NovelWorkbenchState } from './workbench-store.ts'
-import type { NovelAggregateRef } from '../novel-store.ts'
+import type { NovelAggregateRef, NovelProposalStatus } from '../novel-store.ts'
 import type { NovelV2WorkbenchState } from './workbench-v2.ts'
 
-function proposalStatusLabel(status: 'pending' | 'stale' | 'applied' | 'discarded' | 'superseded' | 'failed'): string {
-  return ({ pending: '待处理', stale: '冲突', applied: '已应用', discarded: '已放弃', superseded: '已替代', failed: '失败' })[status]
+function proposalStatusLabel(status: NovelProposalStatus): string {
+  return ({ pending: '待处理', partial: '部分已应用', stale: '冲突', applied: '已应用', discarded: '已放弃', superseded: '已替代', failed: '失败' })[status]
 }
 
 function taskStatusLabel(status: 'pending' | 'running' | 'blocked' | 'succeeded' | 'failed' | 'cancelled'): string {
@@ -35,6 +35,11 @@ export interface NovelV2WorkbenchBodyProps {
   readonly refresh: () => void
   readonly selectProposal: (proposalId: string | undefined) => void
   readonly openProposalChange: (index: number) => void
+  readonly applySelectedProposal: () => void
+  readonly retryProposalItem: (index: number) => void
+  readonly discardProposalItem: (index: number) => void
+  readonly regenerateProposalItem: (index: number) => void
+  readonly proposalLifecycleAvailable: boolean
   readonly selectTask: (taskId: string | undefined) => void
   readonly selectChapter: (chapter: number) => void
   readonly openAsset: (target: NovelAggregateRef) => void
@@ -47,7 +52,9 @@ export interface NovelV2WorkbenchBodyProps {
  * command preview, commit, and task execution remain explicitly out of this issue.
  */
 export function NovelV2WorkbenchBody({
-  state, refresh, selectProposal, openProposalChange, selectTask, selectChapter, openAsset, updateEditor, discardEditor,
+  state, refresh, selectProposal, openProposalChange, applySelectedProposal,
+  retryProposalItem, discardProposalItem, regenerateProposalItem, proposalLifecycleAvailable,
+  selectTask, selectChapter, openAsset, updateEditor, discardEditor,
 }: NovelV2WorkbenchBodyProps) {
   if (state.status === 'error') return <section className="aiNovelV2Workbench" data-ai-novel-v2-workbench>
       <h3 data-ai-novel-screen-focus tabIndex={-1}>工作台读取失败</h3>
@@ -60,6 +67,8 @@ export function NovelV2WorkbenchBody({
 
   const selectedProposal = state.proposals.items.find(item => item.proposalId === state.proposals.selectedId)
   const selectedTask = state.tasks.items.find(item => item.taskId === state.tasks.selectedId)
+  const selectedItem = selectedProposal?.items[state.proposals.selectedChange ?? -1]
+  const selectedChange = selectedItem?.change
   const editor = state.editor
   return <div className="aiNovelV2Workbench" data-ai-novel-v2-workbench>
     <section className="aiNovelV2Panel" aria-labelledby="ai-novel-v2-overview">
@@ -79,16 +88,30 @@ export function NovelV2WorkbenchBody({
         {state.proposals.items.map(proposal => <li key={proposal.proposalId}>
           <button type="button" aria-current={proposal.proposalId === state.proposals.selectedId || undefined}
             onClick={() => { selectProposal(proposal.proposalId) }}>
-            {proposalStatusLabel(proposal.status)} · {proposal.changes.length} 个聚合变更
+            {proposalStatusLabel(proposal.status)} · {proposal.items.length} 个聚合变更
           </button>
         </li>)}
       </ul>}
       {selectedProposal ? <div className="aiNovelV2DetailList" aria-label="提案变更">
-        {selectedProposal.changes.map((change, index) => <button type="button" key={change.changeSetId}
-          aria-current={state.proposals.selectedChange === index || undefined}
-          onClick={() => { openProposalChange(index) }}>
-          查看 {aggregateLabel(change.aggregate)} 差异 · 基于版本 {change.baseGlobalRevision}
-        </button>)}
+        {selectedProposal.items.map((item, index) => {
+          const change = item.change
+          return <div key={item.itemId}>
+            <button type="button" aria-current={state.proposals.selectedChange === index || undefined}
+              onClick={() => { openProposalChange(index) }}>
+              #{item.itemOrder} · 查看 {aggregateLabel(change.aggregate)} 差异 · 聚合版本 {change.baseAggregateRevision} · 全局版本 {change.baseGlobalRevision}
+            </button>
+            <span> {proposalStatusLabel(item.status)} · 尝试 {item.attemptCount} 次</span>
+            {item.failure === undefined ? undefined : <p role="alert">失败：{item.failure}</p>}
+            {item.receipt === undefined ? undefined : <p>Host 收据：全局版本 {item.receipt.globalRevision}</p>}
+            {item.regenerationTicket === undefined ? undefined : <p>Host 已保存重新生成请求。</p>}
+          </div>
+        })}
+        <div className="aiNovelWorkbenchActions">
+          <button type="button" onClick={applySelectedProposal}
+            disabled={state.workspace.readOnly || selectedProposal.status === 'stale' || selectedProposal.status === 'discarded' || selectedProposal.status === 'superseded'}>
+            依序应用未完成项
+          </button>
+        </div>
       </div> : undefined}
     </section>
 
@@ -130,17 +153,26 @@ export function NovelV2WorkbenchBody({
         {editor.message}
       </p>
       <div className="aiNovelV2Diff" aria-label="当前值与提案下一值差异">
-        <section><h4>当前值</h4><pre>{editor.current}</pre></section>
-        {editor.next === undefined ? undefined : <section><h4>提案下一值（当前 → 下一值）</h4><pre>{editor.next}</pre></section>}
+        <section><h4>{editor.source === 'proposal' ? '本项提案基准值' : '当前值'}</h4><pre>{editor.current}</pre></section>
+        {editor.next === undefined ? undefined : <section><h4>{editor.source === 'proposal' ? '提案下一值（本项基准 → 下一值）' : '提案下一值（当前 → 下一值）'}</h4><pre>{editor.next}</pre></section>}
       </div>
       <textarea aria-label={`${aggregateLabel(editor.target)} JSON 草稿`} value={editor.draft}
         onChange={event => { updateEditor(event.currentTarget.value) }} />
       <div className="aiNovelWorkbenchActions">
         <button type="button" disabled>保存（命令工作流待接入）</button>
-        <button type="button" disabled>应用（命令工作流待接入）</button>
+        {editor.source !== 'proposal' || selectedChange === undefined ? <button type="button" disabled>应用（仅 Proposal Bundle 可应用）</button> : <>
+          <button type="button" onClick={() => { retryProposalItem(state.proposals.selectedChange!) }}
+            disabled={!proposalLifecycleAvailable || state.workspace.readOnly || selectedItem?.status !== 'failed'}>
+            重试此项
+          </button>
+          <button type="button" onClick={() => { discardProposalItem(state.proposals.selectedChange!) }}
+            disabled={!proposalLifecycleAvailable || state.workspace.readOnly || selectedItem?.status === 'applied' || selectedItem?.status === 'discarded' || selectedItem?.status === 'superseded'}>放弃此项</button>
+          <button type="button" onClick={() => { regenerateProposalItem(state.proposals.selectedChange!) }}
+            disabled={!proposalLifecycleAvailable || state.workspace.readOnly || selectedItem?.status === 'applied' || selectedItem?.status === 'superseded'}>重新生成</button>
+        </>}
         <button type="button" onClick={discardEditor}>放弃本地草稿</button>
       </div>
-      <p className="aiNovelContextMuted">冲突、失败与恢复由已读到的 proposal/task 状态呈现；本 shell 不发起 commit 或 retry。</p>
+      <p className="aiNovelContextMuted">Proposal Bundle 的顺序应用、失败停止、部分恢复与逐项生命周期均由 Host 负责；此界面只显示其权威状态与收据。</p>
     </section>}
   </div>
 }

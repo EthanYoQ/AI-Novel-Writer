@@ -5,6 +5,7 @@ import { WorkspaceId, type Workspace } from '@deepseek-ai/dsh-workspace'
 import {
   NovelStoreError,
   openNovelStore,
+  recoverNovelStoreBinding,
   validateNovelChangeSet,
   type NovelAggregateRef,
   type NovelChangeSet,
@@ -14,6 +15,16 @@ import {
   type NovelStoreSnapshot,
   type NovelTaskAggregate,
   type NovelProposalSummary,
+  type NovelProposalItem,
+  type NovelProposalStatus,
+  type NovelProposalItemStatus,
+  type NovelProposalItemFailure,
+  type NovelProposalItemReceipt,
+  type NovelProposalApplyResult,
+  type NovelProposalItemMutationResult,
+  type NovelProposalRegenerationResult,
+  type NovelStoreRecoveryMode,
+  type NovelStoreRecoveryReceipt,
 } from './novel-store.ts'
 
 /** Migration evidence that is safe to expose outside the Host filesystem boundary. */
@@ -48,12 +59,25 @@ export function projectNovelStateRead(snapshot: NovelStoreSnapshot): NovelStateR
 }
 
 /** Summary of one persisted, non-authoritative model proposal. */
-export type { NovelProposalSummary }
+export type {
+  NovelProposalSummary,
+  NovelProposalItem,
+  NovelProposalStatus,
+  NovelProposalItemStatus,
+  NovelProposalItemFailure,
+  NovelProposalItemReceipt,
+  NovelProposalApplyResult,
+  NovelProposalItemMutationResult,
+  NovelProposalRegenerationResult,
+}
 
 /** Proposal inbox projection returned to the sidebar. */
 export interface NovelProposalListResult {
   readonly proposals: readonly NovelProposalSummary[]
 }
+
+/** Path-free result of one explicit Host-authorized workspace recovery. */
+export type NovelWorkspaceRecoveryResult = NovelStoreRecoveryReceipt
 
 /** Closed command shared by preview and commit: one aggregate replacement with its complete next value. */
 export type NovelLoopbackCommand = Omit<NovelChangeSet, 'changeSetId' | 'operation' | 'provenance'>
@@ -94,9 +118,15 @@ const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const ENDPOINT_LABEL: Record<string, string> = {
   'state/read': 'Novel state',
   'proposal/list': 'Novel proposal list',
+  'proposal/apply': 'Novel proposal apply',
+  'proposal/retry': 'Novel proposal retry',
+  'proposal/discard': 'Novel proposal discard',
+  'proposal/regenerate': 'Novel proposal regenerate',
   'task/read': 'Novel task',
   'command/preview': 'command/preview',
   'command/commit': 'command/commit',
+  'workspace/reattach': 'Novel workspace re-attach',
+  'workspace/clone': 'Novel workspace clone',
 }
 
 function badRequest(message: string): CommandRpcResult {
@@ -240,6 +270,21 @@ function taskPayload(value: unknown): { readonly workspaceId: WorkspaceId; reado
   return { workspaceId: WorkspaceId(record.workspaceId), taskId }
 }
 
+/** Parse path-free proposal lifecycle requests; proposal and item ids are opaque UUIDs only. */
+function proposalPayload(
+  value: unknown,
+  withItem: boolean,
+): { readonly workspaceId: WorkspaceId; readonly proposalId: string; readonly itemId?: string } | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (!exactKeys(record, withItem ? ['workspaceId', 'proposalId', 'itemId'] : ['workspaceId', 'proposalId'])) return undefined
+  if (typeof record.workspaceId !== 'string' || !WORKSPACE_ID_PATTERN.test(record.workspaceId)) return undefined
+  if (typeof record.proposalId !== 'string' || !WORKSPACE_ID_PATTERN.test(record.proposalId)) return undefined
+  if (!withItem) return { workspaceId: WorkspaceId(record.workspaceId), proposalId: record.proposalId }
+  if (typeof record.itemId !== 'string' || !WORKSPACE_ID_PATTERN.test(record.itemId)) return undefined
+  return { workspaceId: WorkspaceId(record.workspaceId), proposalId: record.proposalId, itemId: record.itemId }
+}
+
 function entityDiff(before: unknown, after: unknown, path: string, out: NovelCommandDiffChange[]): void {
   if (Array.isArray(before) || Array.isArray(after)
     || typeof before !== 'object' || before === null
@@ -346,7 +391,7 @@ async function disposeQuietly(store: NovelStore, report: (error: unknown) => voi
  *
  * @param workspaces Authoritative Workspace registry read face.
  * @param reportFailure Host-only diagnostic sink for underlying errors.
- * @returns A handler for the V2 state, proposal, task, and command endpoints.
+ * @returns A handler for the V2 state, proposal, task, command, and explicit recovery endpoints.
  */
 export function createAiNovelCommandRpcHandler(
   workspaces: NovelWorkspaceRegistry,
@@ -354,18 +399,27 @@ export function createAiNovelCommandRpcHandler(
 ): ConnectionRpcHandler {
   return async (endpoint, payload, signal) => {
     if (endpoint !== 'state/read' && endpoint !== 'proposal/list' && endpoint !== 'task/read'
-      && endpoint !== 'command/preview' && endpoint !== 'command/commit') {
+      && endpoint !== 'command/preview' && endpoint !== 'command/commit'
+      && endpoint !== 'proposal/apply' && endpoint !== 'proposal/retry'
+      && endpoint !== 'proposal/discard' && endpoint !== 'proposal/regenerate'
+      && endpoint !== 'workspace/reattach' && endpoint !== 'workspace/clone') {
       return badRequest(`Unknown AI novel endpoint: ${endpoint}`)
     }
     let workspaceId: WorkspaceId
     let taskId: string | undefined
     let changeSet: NovelChangeSet | undefined
-    if (endpoint === 'state/read' || endpoint === 'proposal/list') {
+    let recovery: NovelStoreRecoveryMode | undefined
+    let proposalId: string | undefined
+    let itemId: string | undefined
+    if (endpoint === 'state/read' || endpoint === 'proposal/list'
+      || endpoint === 'workspace/reattach' || endpoint === 'workspace/clone') {
       const resolved = workspaceOnlyRequest(payload)
       if (resolved === undefined) {
         return badRequest('Novel command payload must contain only a Workspace UUID')
       }
       workspaceId = resolved
+      if (endpoint === 'workspace/reattach') recovery = 'reattach'
+      if (endpoint === 'workspace/clone') recovery = 'clone'
     } else if (endpoint === 'task/read') {
       const resolved = taskPayload(payload)
       if (resolved === undefined) {
@@ -373,6 +427,18 @@ export function createAiNovelCommandRpcHandler(
       }
       workspaceId = resolved.workspaceId
       taskId = resolved.taskId
+    } else if (endpoint === 'proposal/apply' || endpoint === 'proposal/retry'
+      || endpoint === 'proposal/discard' || endpoint === 'proposal/regenerate') {
+      const resolved = proposalPayload(
+        payload,
+        endpoint === 'proposal/retry' || endpoint === 'proposal/discard' || endpoint === 'proposal/regenerate',
+      )
+      if (resolved === undefined) {
+        return badRequest(`Novel ${endpoint} payload must contain only opaque Workspace, proposal, and required item UUIDs`)
+      }
+      workspaceId = resolved.workspaceId
+      proposalId = resolved.proposalId
+      itemId = resolved.itemId
     } else {
       const resolved = parseCommandPayload(payload, endpoint === 'command/commit')
       if (resolved === undefined) {
@@ -387,6 +453,19 @@ export function createAiNovelCommandRpcHandler(
     }
     const workspace = workspaces.get(workspaceId)
     if (workspace === undefined) return badRequest(`Unknown Workspace: ${workspaceId}`)
+    if (recovery !== undefined) {
+      try {
+        const value: NovelWorkspaceRecoveryResult = await recoverNovelStoreBinding(
+          workspace.path,
+          workspaceId,
+          recovery,
+          signal,
+        )
+        return { ok: true, value }
+      } catch (error) {
+        return stableStoreFailure(endpoint, error, signal, reportFailure)
+      }
+    }
     let store: NovelStore
     try {
       // The loopback read/command face never initializes a project; opening must not create
@@ -400,6 +479,18 @@ export function createAiNovelCommandRpcHandler(
         const proposals = await store.listProposals(signal)
         const value: NovelProposalListResult = { proposals }
         return { ok: true, value }
+      }
+      if (endpoint === 'proposal/apply') {
+        return { ok: true, value: await store.applyProposal(proposalId!, signal) }
+      }
+      if (endpoint === 'proposal/retry') {
+        return { ok: true, value: await store.retryProposalItem(proposalId!, itemId!, signal) }
+      }
+      if (endpoint === 'proposal/discard') {
+        return { ok: true, value: await store.discardProposalItem(proposalId!, itemId!, signal) }
+      }
+      if (endpoint === 'proposal/regenerate') {
+        return { ok: true, value: await store.requestProposalRegeneration(proposalId!, itemId!, signal) }
       }
       if (endpoint === 'task/read') {
         const snapshot = await store.read(signal)

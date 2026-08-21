@@ -130,11 +130,16 @@ describe('V2 proposal inbox keyless snapshot', () => {
         sessionId: 'complete-chapter-v2-proposal',
         callId: 'v2-propose-architecture',
         status: 'pending',
-        changes: [{
-          changeSetId: 'v2-architecture-proposal',
-          operation: 'replace',
-          aggregate: { kind: 'architecture' },
-          provenance: { origin: 'manual' },
+        items: [{
+          itemOrder: 0,
+          status: 'pending',
+          attemptCount: 0,
+          change: {
+            changeSetId: 'v2-architecture-proposal',
+            operation: 'replace',
+            aggregate: { kind: 'architecture' },
+            provenance: { origin: 'model', sessionId: 'complete-chapter-v2-proposal', callId: 'v2-propose-architecture' },
+          },
         }],
       })
     } finally {

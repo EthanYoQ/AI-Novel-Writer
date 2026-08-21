@@ -13,7 +13,7 @@ import type { CreativeStrategy, NovelProjectId } from './types.ts'
 /** Stable SQLite application identity for the AI Novel Writer V2 project artifact. */
 const APPLICATION_ID = 0x41_4e_4f_56
 /** Stable V2 domain schema version. */
-const USER_VERSION = 2
+const USER_VERSION = 3
 /** Exact ignore rules protecting SQLite sidecars and archived V1 sources from Git. */
 const GITIGNORE_TEXT = [
   'novel.db',
@@ -257,6 +257,16 @@ export interface NovelMigrationReceipt {
   readonly migratedAt: string
 }
 
+/** Explicit recovery choices for a V2 project whose persisted binding has drifted. */
+export type NovelStoreRecoveryMode = 'reattach' | 'clone'
+
+/** Path-free evidence returned after an explicit binding recovery. */
+export interface NovelStoreRecoveryReceipt {
+  readonly mode: NovelStoreRecoveryMode
+  readonly projectId: NovelProjectId
+  readonly workspaceId: WorkspaceIdType
+}
+
 /** Chapter text imported from V1 before the full V2 artifact projection is exposed. */
 export interface NovelArtifactSeed {
   readonly artifactId: string
@@ -300,9 +310,45 @@ export interface NovelStoreSnapshot {
 }
 
 /** Lifecycle state of one persisted non-authoritative proposal. */
-export type NovelProposalStatus = 'pending' | 'stale' | 'applied' | 'discarded' | 'superseded' | 'failed'
+export type NovelProposalStatus = 'pending' | 'partial' | 'stale' | 'applied' | 'discarded' | 'superseded' | 'failed'
 
-/** One persisted non-authoritative model proposal available for human review. */
+/** Immutable model-provided replacement payload held by one proposal item. */
+export type NovelProposalChange = Omit<NovelChangeSet, 'operation' | 'provenance'>
+
+/** Item-level lifecycle state. `partial` is a bundle-only projection. */
+export type NovelProposalItemStatus = Exclude<NovelProposalStatus, 'partial'>
+
+/** Derive a resume-aware bundle state from the durable state of its ordered items. */
+function proposalStatusFromItems(statuses: readonly NovelProposalItemStatus[]): NovelProposalStatus {
+  if (statuses.length === 0) throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal has no items')
+  if (statuses.every(status => status === 'applied')) return 'applied'
+  const recoverable = statuses.find(status => status === 'pending' || status === 'stale' || status === 'failed')
+  if (recoverable !== undefined) return statuses.includes('applied') ? 'partial' : recoverable
+  return statuses.find(status => status !== 'applied')!
+}
+
+/** Path-free machine-readable failure retained after an item cannot be applied. */
+export type NovelProposalItemFailure = NovelStoreErrorCode
+
+/** Receipt retained atomically with an item that has changed authoritative state. */
+export type NovelProposalItemReceipt = NovelChangeReceipt
+
+/** One ordered immutable proposed change and its persistent lifecycle evidence. */
+export interface NovelProposalItem {
+  readonly itemId: string
+  readonly itemOrder: number
+  /** Immutable payload plus Host-derived model provenance used for any eventual audit row. */
+  readonly change: NovelChangeSet
+  readonly status: NovelProposalItemStatus
+  readonly attemptCount: number
+  readonly failure?: NovelProposalItemFailure
+  readonly receipt?: NovelProposalItemReceipt
+  readonly regenerationTicket?: string
+  readonly supersededByProposalId?: string
+  readonly supersededByItemId?: string
+}
+
+/** One persisted non-authoritative model proposal bundle available for human review. */
 export interface NovelProposalSummary {
   readonly proposalId: string
   readonly sessionId: string
@@ -311,8 +357,10 @@ export interface NovelProposalSummary {
   readonly status: NovelProposalStatus
   readonly createdAt: string
   readonly updatedAt: string
-  /** Complete validated ChangeSets retained across restarts for sidebar review. */
-  readonly changes: readonly NovelChangeSet[]
+  readonly parentProposalId?: string
+  readonly parentItemId?: string
+  /** Ordered immutable items retained across restarts for sidebar review and recovery. */
+  readonly items: readonly NovelProposalItem[]
 }
 
 /** Complete proposal bundle accepted by the inbox. */
@@ -327,6 +375,24 @@ export interface NovelProposalRequest {
 export interface NovelProposalReceipt {
   readonly proposal: NovelProposalSummary
   readonly duplicate: boolean
+}
+
+/** Result after applying every possible item in a persisted proposal bundle. */
+export interface NovelProposalApplyResult {
+  readonly proposal: NovelProposalSummary
+  readonly appliedItemIds: readonly string[]
+  readonly stoppedItemId?: string
+}
+
+/** Result of a non-writing item lifecycle transition. */
+export interface NovelProposalItemMutationResult {
+  readonly proposal: NovelProposalSummary
+  readonly item: NovelProposalItem
+}
+
+/** Result of recording a regeneration ticket without invoking a model in the Host. */
+export interface NovelProposalRegenerationResult extends NovelProposalItemMutationResult {
+  readonly regenerationTicket: string
 }
 
 /** Deployment limits for the persistent proposal inbox. */
@@ -377,6 +443,14 @@ export interface NovelStore {
    *   `PROPOSAL_CONFLICT` when the bundle violates the inbox contract.
    */
   submitProposal(request: NovelProposalRequest, signal: AbortSignal): Promise<NovelProposalReceipt>
+  /** Apply a persisted bundle in item order, stopping at its first non-applicable item. */
+  applyProposal(proposalId: string, signal: AbortSignal): Promise<NovelProposalApplyResult>
+  /** Retry a failed item only when its retained failure code is retryable. */
+  retryProposalItem(proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalApplyResult>
+  /** Discard one unapplied item. Applied authoritative changes are never discarded. */
+  discardProposalItem(proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalItemMutationResult>
+  /** Persist an opaque regeneration ticket for one unapplied item without generating content. */
+  requestProposalRegeneration(proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalRegenerationResult>
   /**
    * List every persisted proposal summary in insertion order.
    *
@@ -401,6 +475,11 @@ export type NovelStoreErrorCode =
   | 'PROPOSAL_TOO_LARGE'
   | 'PROPOSAL_LIMIT_REACHED'
   | 'PROPOSAL_CONFLICT'
+  | 'PROPOSAL_NOT_FOUND'
+  | 'PROPOSAL_ITEM_NOT_FOUND'
+  | 'PROPOSAL_ITEM_NOT_RETRYABLE'
+  | 'PROPOSAL_ITEM_APPLIED'
+  | 'REGENERATION_TICKET_INVALID'
   | 'WRITE_LOCKED'
   | 'WRITE_FAILED'
   | 'CANCELLED'
@@ -509,6 +588,37 @@ interface ProposalRow {
   readonly payload: string
   readonly canonical_hash: string
   readonly status: string
+  readonly parent_proposal_id: string | null
+  readonly parent_item_id: string | null
+  readonly created_at: string
+  readonly updated_at: string
+}
+
+interface LegacyProposalRow {
+  readonly proposal_id: string
+  readonly session_id: string
+  readonly call_id: string
+  readonly args_hash: string
+  readonly payload: string
+  readonly canonical_hash: string
+  readonly status: string
+  readonly created_at: string
+  readonly updated_at: string
+}
+
+interface ProposalItemRow {
+  readonly item_id: string
+  readonly proposal_id: string
+  readonly item_order: number
+  readonly change_payload: string
+  readonly status: string
+  readonly attempt_count: number
+  readonly failure_code: string | null
+  readonly receipt: string | null
+  readonly regeneration_ticket: string | null
+  readonly regeneration_consumed_at: string | null
+  readonly superseded_by_proposal_id: string | null
+  readonly superseded_by_item_id: string | null
   readonly created_at: string
   readonly updated_at: string
 }
@@ -613,6 +723,8 @@ CREATE TABLE proposals (
   payload TEXT NOT NULL,
   canonical_hash TEXT NOT NULL,
   status TEXT NOT NULL,
+  parent_proposal_id TEXT REFERENCES proposals(proposal_id),
+  parent_item_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 ) STRICT;
@@ -626,6 +738,24 @@ CREATE TABLE proposal_changes (
   next_value TEXT NOT NULL,
   base_aggregate_revision INTEGER NOT NULL,
   base_global_revision INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE proposal_items (
+  item_id TEXT PRIMARY KEY,
+  proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id) ON DELETE CASCADE,
+  item_order INTEGER NOT NULL CHECK (item_order >= 0),
+  change_payload TEXT NOT NULL,
+  status TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
+  failure_code TEXT,
+  receipt TEXT,
+  regeneration_ticket TEXT UNIQUE,
+  regeneration_consumed_at TEXT,
+  superseded_by_proposal_id TEXT REFERENCES proposals(proposal_id),
+  superseded_by_item_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (proposal_id, item_order)
 ) STRICT;
 
 CREATE TABLE tasks (
@@ -829,16 +959,30 @@ function validateProposalRequest(value: NovelProposalRequest): NovelProposalRequ
  * @returns Validated replacement commands, including internal operation and provenance fields.
  * @throws {@link NovelStoreError} with `INVALID_CONTENT` when the bundle shape or any command is invalid.
  */
-export function validateNovelProposalPayload(value: unknown): readonly NovelChangeSet[] {
+interface ValidatedProposalPayload {
+  readonly changes: readonly NovelProposalChange[]
+  readonly regenerationTicket: string | undefined
+}
+
+function validateProposalPayload(value: unknown): ValidatedProposalPayload {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new NovelStoreError('INVALID_CONTENT', 'proposal payload must be an object')
   }
-  const record = requireExactKeys(value, ['changes'], 'proposal payload')
+  const record = value as Record<string, unknown>
+  const allowed = Object.keys(record).sort().join('\0')
+  const expected = ['changes', 'regenerationTicket'].filter(key => record[key] !== undefined).sort().join('\0')
+  if (allowed !== expected) throw new NovelStoreError('INVALID_CONTENT', 'proposal payload has unsupported fields')
   if (!Array.isArray(record.changes) || record.changes.length === 0) {
     throw new NovelStoreError('INVALID_CONTENT', 'proposal payload changes must be a non-empty array')
   }
+  const regenerationTicket = record.regenerationTicket === undefined
+    ? undefined
+    : requireNonEmptyString(record.regenerationTicket, 'proposal payload.regenerationTicket')
+  if (regenerationTicket !== undefined && !isUuid(regenerationTicket)) {
+    throw new NovelStoreError('INVALID_CONTENT', 'proposal payload.regenerationTicket is invalid')
+  }
   const changeSetIds = new Set<string>()
-  return record.changes.map(change => {
+  const changes = record.changes.map(change => {
     if (typeof change !== 'object' || change === null || Array.isArray(change)) {
       throw new NovelStoreError('INVALID_CONTENT', 'proposal change must be an object')
     }
@@ -858,11 +1002,83 @@ export function validateNovelProposalPayload(value: unknown): readonly NovelChan
       throw new NovelStoreError('INVALID_CONTENT', 'proposal changeSetId values must be unique')
     }
     changeSetIds.add(valid.changeSetId)
-    return valid
+    return {
+      changeSetId: valid.changeSetId,
+      aggregate: valid.aggregate,
+      baseAggregateRevision: valid.baseAggregateRevision,
+      baseGlobalRevision: valid.baseGlobalRevision,
+      nextValue: valid.nextValue,
+    } as NovelProposalChange
   })
+  if (regenerationTicket !== undefined && changes.length !== 1) {
+    throw new NovelStoreError('INVALID_CONTENT', 'a regenerated proposal must contain exactly one item')
+  }
+  return { changes, regenerationTicket }
 }
 
-function parseProposal(row: ProposalRow): NovelProposalSummary {
+/** Validate the opaque model proposal payload kept by the persistent inbox. */
+export function validateNovelProposalPayload(value: unknown): readonly NovelProposalChange[] {
+  return validateProposalPayload(value).changes
+}
+
+function storedProposalChange(row: ProposalItemRow): NovelProposalChange {
+  const payload = parseJson(row.change_payload, 'proposal item change payload is invalid')
+  try {
+    return validateProposalPayload({ changes: [payload] }).changes[0]!
+  } catch (error) {
+    if (error instanceof NovelStoreError) throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal item change payload is invalid', { cause: error })
+    throw error
+  }
+}
+
+function parseProposalItem(row: ProposalItemRow, proposal: ProposalRow): NovelProposalItem {
+  const itemId = requireNonEmptyString(row.item_id, 'proposal items.itemId')
+  if (!isUuid(itemId)) throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal items.itemId is invalid')
+  if (!Number.isSafeInteger(row.item_order) || row.item_order < 0) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal items.itemOrder is invalid')
+  }
+  if (!Number.isSafeInteger(row.attempt_count) || row.attempt_count < 0) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal items.attemptCount is invalid')
+  }
+  const stored = storedProposalChange(row)
+  const change: NovelChangeSet = {
+    ...stored,
+    operation: 'replace',
+    provenance: { origin: 'model', sessionId: proposal.session_id, callId: proposal.call_id, argsHash: proposal.args_hash },
+  } as NovelChangeSet
+  const status = requireEnum(row.status, ['pending', 'stale', 'applied', 'discarded', 'superseded', 'failed'], 'proposal items.status')
+  const failure = row.failure_code === null ? undefined
+    : requireEnum(row.failure_code, [
+      'NOT_INITIALIZED', 'ALREADY_INITIALIZED', 'UNSUPPORTED_FORMAT', 'WORKSPACE_MISMATCH', 'INVALID_CONTENT',
+      'PATH_REJECTED', 'STALE_REVISION', 'IDEMPOTENCY_CONFLICT', 'PROPOSAL_TOO_LARGE', 'PROPOSAL_LIMIT_REACHED',
+      'PROPOSAL_CONFLICT', 'PROPOSAL_NOT_FOUND', 'PROPOSAL_ITEM_NOT_FOUND', 'PROPOSAL_ITEM_NOT_RETRYABLE',
+      'PROPOSAL_ITEM_APPLIED', 'REGENERATION_TICKET_INVALID', 'WRITE_LOCKED', 'WRITE_FAILED', 'CANCELLED',
+    ], 'proposal items.failureCode') as NovelStoreErrorCode
+  const receipt = row.receipt === null ? undefined : parseProposalReceipt(row.receipt)
+  if ((status === 'applied') !== (receipt !== undefined)) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal item application receipt is invalid')
+  }
+  const ticket = row.regeneration_ticket === null ? undefined : requireTicket(row.regeneration_ticket, 'proposal items.regenerationTicket')
+  const supersededByProposalId = row.superseded_by_proposal_id === null ? undefined : requireTicket(row.superseded_by_proposal_id, 'proposal items.supersededByProposalId')
+  const supersededByItemId = row.superseded_by_item_id === null ? undefined : requireTicket(row.superseded_by_item_id, 'proposal items.supersededByItemId')
+  if ((status === 'superseded') !== (supersededByProposalId !== undefined && supersededByItemId !== undefined)) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal item supersession is invalid')
+  }
+  return {
+    itemId,
+    itemOrder: row.item_order,
+    change,
+    status,
+    attemptCount: row.attempt_count,
+    ...(failure === undefined ? {} : { failure }),
+    ...(receipt === undefined ? {} : { receipt }),
+    ...(ticket === undefined ? {} : { regenerationTicket: ticket }),
+    ...(supersededByProposalId === undefined ? {} : { supersededByProposalId }),
+    ...(supersededByItemId === undefined ? {} : { supersededByItemId }),
+  }
+}
+
+function parseProposal(row: ProposalRow, items: readonly ProposalItemRow[]): NovelProposalSummary {
   const proposalId = requireNonEmptyString(row.proposal_id, 'proposals.proposal_id')
   if (!isUuid(proposalId)) {
     throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposals.proposal_id is invalid')
@@ -874,30 +1090,84 @@ function parseProposal(row: ProposalRow): NovelProposalSummary {
   if (!/^[a-f0-9]{64}$/.test(argsHash) || !/^[a-f0-9]{64}$/.test(canonicalHash)) {
     throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal identity hashes are invalid')
   }
-  const payload = parseJson(row.payload, 'proposals.payload is invalid')
-  let changes: readonly NovelChangeSet[]
+  const rawPayload = parseJson(row.payload, 'proposals.payload is invalid')
+  let payload: ValidatedProposalPayload
   try {
-    changes = validateNovelProposalPayload(payload)
+    payload = validateProposalPayload(rawPayload)
   } catch (error) {
     if (error instanceof NovelStoreError && error.code === 'INVALID_CONTENT') {
       throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposals.payload is invalid', { cause: error })
     }
     throw error
   }
-  const durableCanonicalPayload = canonicalJson(payload)
+  const durableCanonicalPayload = canonicalJson(rawPayload)
   if (sha256Hex(durableCanonicalPayload) !== canonicalHash || canonicalHash !== argsHash) {
     throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal payload does not match its durable identity hashes')
+  }
+  const parsedItems = items.map(item => parseProposalItem(item, row))
+  if (parsedItems.length !== payload.changes.length
+    || parsedItems.some((item, index) => item.itemOrder !== index || canonicalJson(storedProposalChange(items[index]!)) !== canonicalJson(payload.changes[index]))) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal items do not match the durable payload')
+  }
+  const parentProposalId = row.parent_proposal_id === null ? undefined : requireTicket(row.parent_proposal_id, 'proposals.parentProposalId')
+  const parentItemId = row.parent_item_id === null ? undefined : requireTicket(row.parent_item_id, 'proposals.parentItemId')
+  if ((parentProposalId === undefined) !== (parentItemId === undefined)) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal parent link is invalid')
+  }
+  const persistedStatus = requireEnum(row.status, ['pending', 'partial', 'stale', 'applied', 'discarded', 'superseded', 'failed'], 'proposals.status') as NovelProposalStatus
+  const derivedStatus = proposalStatusFromItems(parsedItems.map(item => item.status))
+  if (persistedStatus !== derivedStatus) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal status does not match durable item statuses')
   }
   return {
     proposalId,
     sessionId,
     callId,
     argsHash,
-    status: requireEnum(row.status, ['pending', 'stale', 'applied', 'discarded', 'superseded', 'failed'], 'proposals.status'),
+    status: derivedStatus,
     createdAt: requireIsoTimestamp(row.created_at, 'proposals.createdAt'),
     updatedAt: requireIsoTimestamp(row.updated_at, 'proposals.updatedAt'),
-    changes,
+    ...(parentProposalId === undefined ? {} : { parentProposalId }),
+    ...(parentItemId === undefined ? {} : { parentItemId }),
+    items: parsedItems,
   }
+}
+
+/** Stable opaque stand-in used only while a legacy V2 inbox is held read-only before recovery. */
+function legacyProposalItemId(proposalId: string, itemOrder: number): string {
+  const hash = sha256Hex(`ai-novel-v2-proposal-item:${proposalId}:${itemOrder}`)
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`
+}
+
+/** Project an immutable V2 proposal payload without writing the V3 item table before explicit recovery. */
+function parseLegacyV2Proposal(row: LegacyProposalRow): NovelProposalSummary {
+  const proposal: ProposalRow = { ...row, parent_proposal_id: null, parent_item_id: null }
+  const rawPayload = parseJson(row.payload, 'proposals.payload is invalid')
+  let payload: ValidatedProposalPayload
+  try {
+    payload = validateProposalPayload(rawPayload)
+  } catch (error) {
+    if (error instanceof NovelStoreError && error.code === 'INVALID_CONTENT') {
+      throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposals.payload is invalid', { cause: error })
+    }
+    throw error
+  }
+  return parseProposal(proposal, payload.changes.map((change, itemOrder): ProposalItemRow => ({
+    item_id: legacyProposalItemId(row.proposal_id, itemOrder),
+    proposal_id: row.proposal_id,
+    item_order: itemOrder,
+    change_payload: stableJson(change),
+    status: 'pending',
+    attempt_count: 0,
+    failure_code: null,
+    receipt: null,
+    regeneration_ticket: null,
+    regeneration_consumed_at: null,
+    superseded_by_proposal_id: null,
+    superseded_by_item_id: null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  })))
 }
 
 function validateArchitecture(value: NovelArchitectureNextValue): NovelArchitectureNextValue {
@@ -1104,6 +1374,44 @@ function parseJson<T>(text: string, message: string): T {
   }
 }
 
+function requireTicket(value: unknown, field: string): string {
+  const ticket = requireNonEmptyString(value, field)
+  if (!isUuid(ticket)) throw new NovelStoreError('UNSUPPORTED_FORMAT', `${field} is invalid`)
+  return ticket
+}
+
+function parseProposalReceipt(text: string): NovelProposalItemReceipt {
+  const value = parseJson<unknown>(text, 'proposal item receipt is invalid')
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal item receipt is invalid')
+  }
+  const record = requireExactKeys(value, [
+    'changeSetId', 'projectId', 'aggregate', 'aggregateRevision', 'globalRevision',
+  ], 'proposal item receipt')
+  const aggregate = record.aggregate
+  if (typeof aggregate !== 'object' || aggregate === null || Array.isArray(aggregate)) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal item receipt.aggregate is invalid')
+  }
+  const aggregateRecord = aggregate as Record<string, unknown>
+  let parsedAggregate: NovelAggregateRef
+  if (aggregateRecord.kind === 'chapter' && Object.keys(aggregateRecord).length === 2) {
+    parsedAggregate = { kind: 'chapter', chapter: requirePositiveInteger(aggregateRecord.chapter, 'proposal item receipt.aggregate.chapter') }
+  } else if (aggregateRecord.kind === 'task' && Object.keys(aggregateRecord).length === 2) {
+    parsedAggregate = { kind: 'task', taskId: requireNonEmptyString(aggregateRecord.taskId, 'proposal item receipt.aggregate.taskId') }
+  } else if (['project', 'architecture', 'characters'].includes(String(aggregateRecord.kind)) && Object.keys(aggregateRecord).length === 1) {
+    parsedAggregate = { kind: aggregateRecord.kind as 'project' | 'architecture' | 'characters' }
+  } else {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal item receipt.aggregate is invalid')
+  }
+  return {
+    changeSetId: requireNonEmptyString(record.changeSetId, 'proposal item receipt.changeSetId'),
+    projectId: requireTicket(record.projectId, 'proposal item receipt.projectId') as NovelProjectId,
+    aggregate: parsedAggregate,
+    aggregateRevision: requireNonNegativeInteger(record.aggregateRevision, 'proposal item receipt.aggregateRevision'),
+    globalRevision: requireNonNegativeInteger(record.globalRevision, 'proposal item receipt.globalRevision'),
+  }
+}
+
 function parseProject(row: ProjectRow): NovelProjectAggregate {
   const value = validateProject({
     title: row.title,
@@ -1260,7 +1568,7 @@ function requireStorage(db: Database, readOnly: boolean): NovelStorageDiagnostic
   const journalMode = pragma('journal_mode')
   const synchronousNumber = pragma('synchronous')
   const lockingMode = pragma('locking_mode')
-  if (applicationId !== APPLICATION_ID || userVersion !== USER_VERSION || foreignKeys !== 1) {
+  if (applicationId !== APPLICATION_ID || (userVersion !== USER_VERSION && (!readOnly || userVersion !== 2)) || foreignKeys !== 1) {
     throw new NovelStoreError('UNSUPPORTED_FORMAT', 'novel.db is not an AI Novel Writer V2 database')
   }
   const expectedJournalMode = 'delete'
@@ -1420,7 +1728,7 @@ export async function createMigratedNovelStoreFile(
     createSchema(db)
     db.exec('BEGIN IMMEDIATE')
     try {
-      db.prepare("INSERT INTO meta (key, value) VALUES ('project_id', ?), ('workspace_id', ?), ('workspace_path', ?), ('schema_version', '2'), ('attached_at', ?), ('migration_source_fingerprint', ?), ('migration_receipt', ?)")
+      db.prepare("INSERT INTO meta (key, value) VALUES ('project_id', ?), ('workspace_id', ?), ('workspace_path', ?), ('schema_version', '3'), ('attached_at', ?), ('migration_source_fingerprint', ?), ('migration_receipt', ?)")
         .run(valid.projectId, valid.workspaceId, root, valid.project.createdAt, valid.fingerprint, stableJson(receipt))
       db.prepare(`INSERT INTO project (
         id, title, language, genre, planned_chapters, target_words_per_chapter, creative_strategy,
@@ -1557,6 +1865,60 @@ function createSchema(db: Database): void {
   }
 }
 
+/** Upgrade the durable inbox from the immutable V2 bundle payload to V3 item lifecycle rows. */
+function migrateSchema(db: Database): void {
+  const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: unknown }).user_version)
+  if (version === USER_VERSION) return
+  if (version !== 2) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'novel.db schema version is not supported')
+  }
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    db.exec('ALTER TABLE proposals ADD COLUMN parent_proposal_id TEXT')
+    db.exec('ALTER TABLE proposals ADD COLUMN parent_item_id TEXT')
+    db.exec(`CREATE TABLE proposal_items (
+      item_id TEXT PRIMARY KEY,
+      proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id) ON DELETE CASCADE,
+      item_order INTEGER NOT NULL CHECK (item_order >= 0),
+      change_payload TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
+      failure_code TEXT,
+      receipt TEXT,
+      regeneration_ticket TEXT UNIQUE,
+      regeneration_consumed_at TEXT,
+      superseded_by_proposal_id TEXT REFERENCES proposals(proposal_id),
+      superseded_by_item_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (proposal_id, item_order)
+    ) STRICT`)
+    const proposals = db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
+      status, parent_proposal_id, parent_item_id, created_at, updated_at FROM proposals ORDER BY created_at, proposal_id`)
+      .all() as unknown as ProposalRow[]
+    const insertItem = db.prepare(`INSERT INTO proposal_items (
+      item_id, proposal_id, item_order, change_payload, status, attempt_count, failure_code, receipt,
+      regeneration_ticket, regeneration_consumed_at, superseded_by_proposal_id, superseded_by_item_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`)
+    for (const proposal of proposals) {
+      const payload = validateProposalPayload(parseJson(proposal.payload, 'proposals.payload is invalid'))
+      if (proposal.status !== 'pending') {
+        throw new NovelStoreError('UNSUPPORTED_FORMAT', 'V2 proposal lifecycle state cannot be migrated')
+      }
+      for (const [itemOrder, change] of payload.changes.entries()) {
+        insertItem.run(randomUUID(), proposal.proposal_id, itemOrder, stableJson(change), 'pending', proposal.created_at, proposal.updated_at)
+      }
+    }
+    db.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run()
+    db.exec(`PRAGMA user_version = ${USER_VERSION}`)
+    db.exec('COMMIT')
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK')
+    if (error instanceof NovelStoreError) throw error
+    throw new NovelStoreError('WRITE_FAILED', 'novel.db schema migration failed', { cause: error })
+  }
+}
+
 function acquireExclusiveLock(db: Database): void {
   db.exec('BEGIN IMMEDIATE')
   db.exec('COMMIT')
@@ -1591,7 +1953,7 @@ class SqliteNovelStore implements NovelStore {
       if (this.#projectRow() !== undefined) throw new NovelStoreError('ALREADY_INITIALIZED', 'novel project is already initialized')
       this.#db.exec('BEGIN IMMEDIATE')
       try {
-        this.#db.prepare("INSERT INTO meta (key, value) VALUES ('project_id', ?), ('workspace_id', ?), ('workspace_path', ?), ('schema_version', '2'), ('attached_at', ?)")
+        this.#db.prepare("INSERT INTO meta (key, value) VALUES ('project_id', ?), ('workspace_id', ?), ('workspace_path', ?), ('schema_version', '3'), ('attached_at', ?)")
           .run(initialization.projectId, initialization.workspaceId, this.#root, initialization.project.createdAt)
         this.#db.prepare(`INSERT INTO project (
           id, title, language, genre, planned_chapters, target_words_per_chapter, creative_strategy,
@@ -1646,19 +2008,19 @@ class SqliteNovelStore implements NovelStore {
     if (payloadBytes > this.#options.maxProposalBytes) {
       throw new NovelStoreError('PROPOSAL_TOO_LARGE', 'proposal bundle exceeds the configured byte limit')
     }
-    const changes = validateNovelProposalPayload(valid.payload)
+    const payload = validateProposalPayload(valid.payload)
     return this.#enqueue(() => {
       this.#requireWritable()
       this.#requireWrittenBinding()
-      const existing = this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
-        status, created_at, updated_at FROM proposals WHERE args_hash = ?`).get(valid.argsHash) as ProposalRow | undefined
+      const existing = this.#db.prepare('SELECT proposal_id FROM proposals WHERE args_hash = ?').get(valid.argsHash) as { proposal_id: string } | undefined
       if (existing !== undefined) {
-        if (existing.canonical_hash !== canonicalHash) {
+        const existingRow = this.#proposalRow(existing.proposal_id)
+        if (existingRow.canonical_hash !== canonicalHash) {
           throw new NovelStoreError('PROPOSAL_CONFLICT', 'proposal argsHash was already used with different content')
         }
-        return { proposal: parseProposal(existing), duplicate: true }
+        return { proposal: this.#proposalSummary(existing.proposal_id), duplicate: true }
       }
-      const pending = this.#db.prepare("SELECT COUNT(*) AS count FROM proposals WHERE status = 'pending'").get() as { count: number }
+      const pending = this.#db.prepare("SELECT COUNT(*) AS count FROM proposals WHERE status IN ('pending', 'partial')").get() as { count: number }
       if (pending.count >= this.#options.maxPendingProposals) {
         throw new NovelStoreError('PROPOSAL_LIMIT_REACHED', 'proposal inbox has reached the configured pending limit')
       }
@@ -1666,24 +2028,35 @@ class SqliteNovelStore implements NovelStore {
       const proposalId = randomUUID()
       this.#db.exec('BEGIN IMMEDIATE')
       try {
+        const regenerated = payload.regenerationTicket === undefined
+          ? undefined
+          : this.#regenerationSource(payload.regenerationTicket)
+        if (regenerated !== undefined && regenerated.status !== 'pending' && regenerated.status !== 'stale' && regenerated.status !== 'failed') {
+          throw new NovelStoreError('REGENERATION_TICKET_INVALID', 'regeneration ticket does not reference an eligible proposal item')
+        }
         this.#db.prepare(`INSERT INTO proposals (
-          proposal_id, session_id, call_id, args_hash, payload, canonical_hash, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
-          .run(proposalId, valid.sessionId, valid.callId, valid.argsHash, payloadText, canonicalHash, now, now)
-        const insertChange = this.#db.prepare(`INSERT INTO proposal_changes (
-          change_set_id, proposal_id, aggregate_kind, aggregate_id, operation, next_value, base_aggregate_revision, base_global_revision
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        for (const change of changes) {
-          insertChange.run(
-            change.changeSetId,
-            proposalId,
-            change.aggregate.kind,
-            change.aggregate.kind === 'chapter' ? change.aggregate.chapter : null,
-            change.operation,
-            stableJson(change.nextValue),
-            change.baseAggregateRevision,
-            change.baseGlobalRevision,
+          proposal_id, session_id, call_id, args_hash, payload, canonical_hash, status,
+          parent_proposal_id, parent_item_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`)
+          .run(
+            proposalId, valid.sessionId, valid.callId, valid.argsHash, payloadText, canonicalHash,
+            regenerated?.proposal_id ?? null, regenerated?.item_id ?? null, now, now,
           )
+        const insertItem = this.#db.prepare(`INSERT INTO proposal_items (
+          item_id, proposal_id, item_order, change_payload, status, attempt_count, failure_code, receipt,
+          regeneration_ticket, regeneration_consumed_at, superseded_by_proposal_id, superseded_by_item_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`)
+        const itemIds: string[] = []
+        for (const [itemOrder, change] of payload.changes.entries()) {
+          const itemId = randomUUID()
+          itemIds.push(itemId)
+          insertItem.run(itemId, proposalId, itemOrder, stableJson(change), now, now)
+        }
+        if (regenerated !== undefined) {
+          this.#db.prepare(`UPDATE proposal_items SET status = 'superseded', regeneration_consumed_at = ?,
+            superseded_by_proposal_id = ?, superseded_by_item_id = ?, updated_at = ? WHERE item_id = ?`)
+            .run(now, proposalId, itemIds[0], now, regenerated.item_id)
+          this.#setProposalStatus(regenerated.proposal_id, now)
         }
         this.#db.exec('COMMIT')
       } catch (error) {
@@ -1691,29 +2064,189 @@ class SqliteNovelStore implements NovelStore {
         if (error instanceof NovelStoreError) throw error
         throw new NovelStoreError('WRITE_FAILED', 'proposal inbox write failed', { cause: error })
       }
-      return {
-        proposal: {
-          proposalId,
-          sessionId: valid.sessionId,
-          callId: valid.callId,
-          argsHash: valid.argsHash,
-          status: 'pending',
-          createdAt: now,
-          updatedAt: now,
-          changes,
-        },
-        duplicate: false,
-      }
+      return { proposal: this.#proposalSummary(proposalId), duplicate: false }
     })
   }
 
   async listProposals(signal: AbortSignal): Promise<readonly NovelProposalSummary[]> {
     requireNotAborted(signal)
     return this.#enqueue(() => {
-      const rows = this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
-        status, created_at, updated_at FROM proposals ORDER BY created_at, proposal_id`).all() as unknown as ProposalRow[]
-      return rows.map(parseProposal)
+      if (this.#legacyReadOnlyV2()) return this.#legacyV2Proposals()
+      const rows = this.#db.prepare('SELECT proposal_id FROM proposals ORDER BY created_at, proposal_id').all() as Array<{ proposal_id: string }>
+      return rows.map(row => this.#proposalSummary(row.proposal_id))
     })
+  }
+
+  async applyProposal(proposalId: string, signal: AbortSignal): Promise<NovelProposalApplyResult> {
+    requireNotAborted(signal)
+    return this.#enqueue(() => {
+      this.#requireWritable()
+      this.#requireWrittenBinding()
+      return this.#applyProposal(proposalId, signal)
+    })
+  }
+
+  async retryProposalItem(proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalApplyResult> {
+    requireNotAborted(signal)
+    return this.#enqueue(() => {
+      this.#requireWritable()
+      const item = this.#proposalItem(proposalId, itemId)
+      if (item.status !== 'failed' || item.failure_code === null || !isRetryableFailure(item.failure_code)) {
+        throw new NovelStoreError('PROPOSAL_ITEM_NOT_RETRYABLE', 'proposal item is not retryable')
+      }
+      const now = new Date().toISOString()
+      this.#db.exec('BEGIN IMMEDIATE')
+      try {
+        this.#db.prepare("UPDATE proposal_items SET status = 'pending', failure_code = NULL, updated_at = ? WHERE item_id = ?").run(now, itemId)
+        this.#setProposalStatus(proposalId, now)
+        this.#db.exec('COMMIT')
+      } catch (error) {
+        this.#rollback()
+        throw error
+      }
+      return this.#applyProposal(proposalId, signal)
+    })
+  }
+
+  async discardProposalItem(proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalItemMutationResult> {
+    requireNotAborted(signal)
+    return this.#enqueue(() => {
+      this.#requireWritable()
+      const item = this.#proposalItem(proposalId, itemId)
+      if (item.status === 'applied') throw new NovelStoreError('PROPOSAL_ITEM_APPLIED', 'applied proposal items cannot be discarded')
+      if (item.status === 'superseded') throw new NovelStoreError('INVALID_CONTENT', 'superseded proposal items cannot be discarded')
+      const now = new Date().toISOString()
+      this.#db.exec('BEGIN IMMEDIATE')
+      try {
+        this.#db.prepare("UPDATE proposal_items SET status = 'discarded', updated_at = ? WHERE item_id = ?").run(now, itemId)
+        this.#setProposalStatus(proposalId, now)
+        this.#db.exec('COMMIT')
+      } catch (error) {
+        this.#rollback()
+        throw error
+      }
+      const proposal = this.#proposalSummary(proposalId)
+      return { proposal, item: proposal.items.find(candidate => candidate.itemId === itemId)! }
+    })
+  }
+
+  async requestProposalRegeneration(proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalRegenerationResult> {
+    requireNotAborted(signal)
+    return this.#enqueue(() => {
+      this.#requireWritable()
+      const item = this.#proposalItem(proposalId, itemId)
+      if (item.status === 'applied' || item.status === 'discarded' || item.status === 'superseded') {
+        throw new NovelStoreError('PROPOSAL_ITEM_APPLIED', 'proposal item cannot be regenerated in its current state')
+      }
+      const ticket = item.regeneration_ticket ?? randomUUID()
+      if (item.regeneration_ticket === null) {
+        this.#db.prepare('UPDATE proposal_items SET regeneration_ticket = ?, updated_at = ? WHERE item_id = ?')
+          .run(ticket, new Date().toISOString(), itemId)
+      }
+      const proposal = this.#proposalSummary(proposalId)
+      return { proposal, item: proposal.items.find(candidate => candidate.itemId === itemId)!, regenerationTicket: ticket }
+    })
+  }
+
+  #proposalRow(proposalId: string): ProposalRow {
+    if (!isUuid(proposalId)) throw new NovelStoreError('PROPOSAL_NOT_FOUND', 'proposal id is invalid')
+    const row = this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
+      status, parent_proposal_id, parent_item_id, created_at, updated_at FROM proposals WHERE proposal_id = ?`)
+      .get(proposalId) as ProposalRow | undefined
+    if (row === undefined) throw new NovelStoreError('PROPOSAL_NOT_FOUND', 'proposal was not found')
+    return row
+  }
+
+  #proposalItems(proposalId: string): readonly ProposalItemRow[] {
+    return this.#db.prepare(`SELECT item_id, proposal_id, item_order, change_payload, status, attempt_count,
+      failure_code, receipt, regeneration_ticket, regeneration_consumed_at, superseded_by_proposal_id,
+      superseded_by_item_id, created_at, updated_at FROM proposal_items WHERE proposal_id = ? ORDER BY item_order`)
+      .all(proposalId) as unknown as ProposalItemRow[]
+  }
+
+  #proposalItem(proposalId: string, itemId: string): ProposalItemRow {
+    this.#proposalRow(proposalId)
+    if (!isUuid(itemId)) throw new NovelStoreError('PROPOSAL_ITEM_NOT_FOUND', 'proposal item id is invalid')
+    const item = this.#proposalItems(proposalId).find(candidate => candidate.item_id === itemId)
+    if (item === undefined) throw new NovelStoreError('PROPOSAL_ITEM_NOT_FOUND', 'proposal item was not found')
+    return item
+  }
+
+  #proposalSummary(proposalId: string): NovelProposalSummary {
+    return parseProposal(this.#proposalRow(proposalId), this.#proposalItems(proposalId))
+  }
+
+  #legacyReadOnlyV2(): boolean {
+    return this.#readOnly && Number((this.#db.prepare('PRAGMA user_version').get() as { user_version: unknown }).user_version) === 2
+  }
+
+  #legacyV2Proposals(): readonly NovelProposalSummary[] {
+    const rows = this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
+      status, created_at, updated_at FROM proposals ORDER BY created_at, proposal_id`).all() as unknown as LegacyProposalRow[]
+    return rows.map(parseLegacyV2Proposal)
+  }
+
+  #regenerationSource(ticket: string): ProposalItemRow {
+    const item = this.#db.prepare(`SELECT item_id, proposal_id, item_order, change_payload, status, attempt_count,
+      failure_code, receipt, regeneration_ticket, regeneration_consumed_at, superseded_by_proposal_id,
+      superseded_by_item_id, created_at, updated_at FROM proposal_items WHERE regeneration_ticket = ?`)
+      .get(ticket) as ProposalItemRow | undefined
+    if (item === undefined || item.regeneration_consumed_at !== null) {
+      throw new NovelStoreError('REGENERATION_TICKET_INVALID', 'regeneration ticket is unknown or already consumed')
+    }
+    return item
+  }
+
+  #setProposalStatus(proposalId: string, now: string): void {
+    const next = proposalStatusFromItems(this.#proposalItems(proposalId).map(item => item.status as NovelProposalItemStatus))
+    this.#db.prepare('UPDATE proposals SET status = ?, updated_at = ? WHERE proposal_id = ?').run(next, now, proposalId)
+  }
+
+  #modelChange(item: ProposalItemRow, proposal: ProposalRow): NovelChangeSet {
+    return parseProposalItem(item, proposal).change
+  }
+
+  #applyProposal(proposalId: string, signal: AbortSignal): NovelProposalApplyResult {
+    const proposal = this.#proposalRow(proposalId)
+    const appliedItemIds: string[] = []
+    for (const item of this.#proposalItems(proposalId)) {
+      if (item.status === 'applied' || item.status === 'discarded' || item.status === 'superseded') continue
+      if (item.status !== 'pending') {
+        return { proposal: this.#proposalSummary(proposalId), appliedItemIds, stoppedItemId: item.item_id }
+      }
+      requireNotAborted(signal)
+      try {
+        this.#db.exec('BEGIN IMMEDIATE')
+        const change = this.#modelChange(item, proposal)
+        const receipt = this.#existingChange(change) ?? this.#commitChangeInTransaction(change)
+        const now = new Date().toISOString()
+        this.#db.prepare(`UPDATE proposal_items SET status = 'applied', attempt_count = attempt_count + 1,
+          failure_code = NULL, receipt = ?, updated_at = ? WHERE item_id = ?`)
+          .run(stableJson(receipt), now, item.item_id)
+        this.#setProposalStatus(proposalId, now)
+        this.#db.exec('COMMIT')
+        appliedItemIds.push(item.item_id)
+      } catch (error) {
+        this.#rollback()
+        if (error instanceof NovelStoreError && error.code === 'CANCELLED') throw error
+        const code: NovelStoreErrorCode = error instanceof NovelStoreError ? error.code : 'WRITE_FAILED'
+        const status: NovelProposalItemStatus = code === 'STALE_REVISION' ? 'stale' : 'failed'
+        const now = new Date().toISOString()
+        this.#db.exec('BEGIN IMMEDIATE')
+        try {
+          this.#db.prepare(`UPDATE proposal_items SET status = ?, attempt_count = attempt_count + 1,
+            failure_code = ?, updated_at = ? WHERE item_id = ?`).run(status, code, now, item.item_id)
+          this.#setProposalStatus(proposalId, now)
+          this.#db.exec('COMMIT')
+        } catch (recordFailure) {
+          this.#rollback()
+          if (recordFailure instanceof NovelStoreError) throw recordFailure
+          throw new NovelStoreError('WRITE_FAILED', 'proposal item failure could not be recorded', { cause: recordFailure })
+        }
+        return { proposal: this.#proposalSummary(proposalId), appliedItemIds, stoppedItemId: item.item_id }
+      }
+    }
+    return { proposal: this.#proposalSummary(proposalId), appliedItemIds }
   }
 
   async dispose(): Promise<void> {
@@ -1794,8 +2327,12 @@ class SqliteNovelStore implements NovelStore {
     const changeRows = this.#db.prepare(`SELECT change_set_id, aggregate_kind, aggregate_id, aggregate_key, operation,
       base_aggregate_revision, base_global_revision, result_aggregate_revision, result_global_revision, status, provenance
       FROM changes ORDER BY committed_at, change_set_id`).all() as unknown as ChangeRow[]
-    const proposalRows = this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
-      status, created_at, updated_at FROM proposals ORDER BY created_at, proposal_id`).all() as unknown as ProposalRow[]
+    const legacyReadOnlyV2 = this.#legacyReadOnlyV2()
+    const proposalRows = legacyReadOnlyV2 ? [] : this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
+      status, parent_proposal_id, parent_item_id, created_at, updated_at FROM proposals ORDER BY created_at, proposal_id`).all() as unknown as ProposalRow[]
+    const proposalItemRows = legacyReadOnlyV2 ? [] : this.#db.prepare(`SELECT item_id, proposal_id, item_order, change_payload, status, attempt_count,
+      failure_code, receipt, regeneration_ticket, regeneration_consumed_at, superseded_by_proposal_id,
+      superseded_by_item_id, created_at, updated_at FROM proposal_items ORDER BY proposal_id, item_order`).all() as unknown as ProposalItemRow[]
     const migrationRow = this.#db.prepare("SELECT value FROM meta WHERE key = 'migration_receipt'").get() as { value: string } | undefined
     return {
       projectId: binding.projectId as NovelProjectId,
@@ -1810,7 +2347,7 @@ class SqliteNovelStore implements NovelStore {
       chapters: chapterRows.map(row => parseChapter(row, chapterCharacters.get(row.chapter) ?? [])),
       tasks: taskRows.map(parseTask),
       changes: changeRows.map(parseChange),
-      proposals: proposalRows.map(parseProposal),
+      proposals: legacyReadOnlyV2 ? this.#legacyV2Proposals() : proposalRows.map(row => parseProposal(row, proposalItemRows.filter(item => item.proposal_id === row.proposal_id))),
       migration: migrationRow === undefined ? undefined : validateMigrationReceipt(parseJson(migrationRow.value, 'migration receipt is invalid')),
     }
   }
@@ -1874,6 +2411,18 @@ class SqliteNovelStore implements NovelStore {
   #commitChange(change: NovelChangeSet): NovelChangeReceipt {
     this.#db.exec('BEGIN IMMEDIATE')
     try {
+      const receipt = this.#commitChangeInTransaction(change)
+      this.#db.exec('COMMIT')
+      return receipt
+    } catch (error) {
+      this.#rollback()
+      if (error instanceof NovelStoreError) throw error
+      throw new NovelStoreError('WRITE_FAILED', 'novel ChangeSet failed', { cause: error })
+    }
+  }
+
+  /** Apply a checked replacement inside the caller's already-open SQLite transaction. */
+  #commitChangeInTransaction(change: NovelChangeSet): NovelChangeReceipt {
       const current = this.#currentRevisions(change.aggregate)
       if (current.aggregate !== change.baseAggregateRevision || current.global !== change.baseGlobalRevision) {
         throw new NovelStoreError('STALE_REVISION', 'novel aggregate changed since it was read')
@@ -1977,7 +2526,6 @@ class SqliteNovelStore implements NovelStore {
           change.baseAggregateRevision, change.baseGlobalRevision, nextRevision, nextGlobal,
           stableJson(change.provenance), new Date().toISOString(),
         )
-      this.#db.exec('COMMIT')
       return {
         changeSetId: change.changeSetId,
         projectId: this.#requireWrittenBinding().projectId as NovelProjectId,
@@ -1985,11 +2533,6 @@ class SqliteNovelStore implements NovelStore {
         aggregateRevision: nextRevision,
         globalRevision: nextGlobal,
       }
-    } catch (error) {
-      this.#rollback()
-      if (error instanceof NovelStoreError) throw error
-      throw new NovelStoreError('WRITE_FAILED', 'novel ChangeSet failed', { cause: error })
-    }
   }
 
   #rollback(): void {
@@ -2001,6 +2544,114 @@ function requireNotAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new NovelStoreError('CANCELLED', 'novel store operation was cancelled')
 }
 
+function isRetryableFailure(code: string): boolean {
+  return code === 'WRITE_LOCKED' || code === 'WRITE_FAILED' || code === 'CANCELLED'
+}
+
+function requireRecoveryMode(mode: NovelStoreRecoveryMode): NovelStoreRecoveryMode {
+  if (mode !== 'reattach' && mode !== 'clone') {
+    throw new NovelStoreError('INVALID_CONTENT', 'novel store recovery mode is not supported')
+  }
+  return mode
+}
+
+/**
+ * Explicitly replace a moved database's workspace binding, or clone its project identity.
+ *
+ * This recovery seam never runs while opening a normal store: a binding mismatch remains
+ * read-only until a Host-selected recovery mode reaches this function. `clone` preserves every
+ * aggregate and audit row while assigning a new project identity to the copied database.
+ *
+ * @param root Canonical workspace directory currently containing the copied or moved artifact.
+ * @param workspaceId Opaque current Workspace identity resolved by the Host.
+ * @param mode `reattach` retains the project identity; `clone` generates a new project identity.
+ * @param signal Cancellation signal checked before any recovery write.
+ * @returns Path-free recovery evidence for the Host RPC projection.
+ */
+export async function recoverNovelStoreBinding(
+  root: string,
+  workspaceId: WorkspaceIdType,
+  mode: NovelStoreRecoveryMode,
+  signal: AbortSignal,
+): Promise<NovelStoreRecoveryReceipt> {
+  requireNotAborted(signal)
+  const recovery = requireRecoveryMode(mode)
+  if (!isAbsolute(root)) {
+    throw new NovelStoreError('PATH_REJECTED', 'workspace root must be absolute')
+  }
+  let canonicalRoot: string
+  try {
+    canonicalRoot = await realpath(root)
+  } catch (cause) {
+    throw new NovelStoreError('PATH_REJECTED', 'workspace root does not exist', { cause })
+  }
+  await ensureProjectDirectory(canonicalRoot, false)
+  const databasePath = join(canonicalRoot, '.ai-novel', 'novel.db')
+  try {
+    const databaseFile = await lstat(databasePath)
+    if (!databaseFile.isFile() || databaseFile.isSymbolicLink()) {
+      throw new NovelStoreError('PATH_REJECTED', '.ai-novel/novel.db must be a real file')
+    }
+  } catch (error) {
+    if (error instanceof NovelStoreError) throw error
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      throw new NovelStoreError('NOT_INITIALIZED', 'novel project is not initialized')
+    }
+    throw error
+  }
+
+  const sqlite = await import('node:sqlite')
+  const db = new sqlite.DatabaseSync(databasePath)
+  try {
+    configureWriteConnection(db)
+    migrateSchema(db)
+    requireStorage(db, false)
+    acquireExclusiveLock(db)
+    const binding = readMetaBinding(db)
+    if (binding === undefined || !hasProjectAggregate(db)) {
+      throw new NovelStoreError('NOT_INITIALIZED', 'novel project is not initialized')
+    }
+    if (binding.workspaceId === workspaceId && binding.workspacePath === canonicalRoot) {
+      throw new NovelStoreError('WORKSPACE_MISMATCH', 'novel project is already attached to this workspace')
+    }
+    const projectId = recovery === 'clone' ? randomUUID() as NovelProjectId : binding.projectId as NovelProjectId
+    const attachedAt = new Date().toISOString()
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const updateMeta = db.prepare('UPDATE meta SET value = ? WHERE key = ?')
+      updateMeta.run(projectId, 'project_id')
+      updateMeta.run(workspaceId, 'workspace_id')
+      updateMeta.run(canonicalRoot, 'workspace_path')
+      updateMeta.run(attachedAt, 'attached_at')
+      if (recovery === 'clone') {
+        const row = db.prepare("SELECT value FROM meta WHERE key = 'migration_receipt'").get() as { value: string } | undefined
+        if (row !== undefined) {
+          const receipt = validateMigrationReceipt(parseJson(row.value, 'migration receipt is invalid'))
+          updateMeta.run(stableJson({ ...receipt, projectId }), 'migration_receipt')
+        }
+        const proposalReceipts = db.prepare("SELECT item_id, receipt FROM proposal_items WHERE receipt IS NOT NULL")
+          .all() as Array<{ item_id: string; receipt: string }>
+        const updateProposalReceipt = db.prepare('UPDATE proposal_items SET receipt = ? WHERE item_id = ?')
+        for (const item of proposalReceipts) {
+          const receipt = parseProposalReceipt(item.receipt)
+          updateProposalReceipt.run(stableJson({ ...receipt, projectId }), item.item_id)
+        }
+      }
+      db.exec('COMMIT')
+    } catch (error) {
+      if (db.isTransaction) db.exec('ROLLBACK')
+      if (error instanceof NovelStoreError) throw error
+      throw new NovelStoreError('WRITE_FAILED', 'novel workspace recovery failed', { cause: error })
+    }
+    return { mode: recovery, projectId, workspaceId }
+  } catch (error) {
+    if (error instanceof NovelStoreError) throw error
+    throw new NovelStoreError('WRITE_LOCKED', 'novel.db is locked by another writer or cannot be recovered', { cause: error })
+  } finally {
+    if (db.isOpen) db.close()
+  }
+}
+
 /** Options controlling whether opening a store may create its on-disk artifact. */
 export interface NovelStoreOpenOptions {
   /**
@@ -2010,7 +2661,7 @@ export interface NovelStoreOpenOptions {
   readonly create?: boolean
   /** Maximum UTF-8 byte size accepted for one proposal bundle. */
   readonly maxProposalBytes?: number
-  /** Maximum number of proposals kept in pending status. */
+  /** Maximum number of unresolved (pending or resumable partial) proposals in the inbox. */
   readonly maxPendingProposals?: number
 }
 
@@ -2113,6 +2764,7 @@ export async function openNovelStore(
     const db = new sqlite.DatabaseSync(databasePath)
     try {
       configureWriteConnection(db)
+      migrateSchema(db)
       const binding = readMetaBinding(db)
       if (binding === undefined) {
         if (hasProjectAggregate(db)) {
@@ -2136,6 +2788,15 @@ export async function openNovelStore(
   try {
     diagnostic = new sqlite.DatabaseSync(databasePath, { readOnly: true })
     configureReadConnection(diagnostic)
+    const schemaVersion = Number((diagnostic.prepare('PRAGMA user_version').get() as { user_version: unknown }).user_version)
+    if (schemaVersion === 2) {
+      const binding = readMetaBinding(diagnostic)
+      diagnostic.close()
+      if (binding === undefined || binding.workspaceId !== workspaceId || binding.workspacePath !== canonicalRoot) {
+        return openReadOnlyStore()
+      }
+      return openReadWriteStore()
+    }
     requireStorage(diagnostic, true)
     const binding = readMetaBinding(diagnostic)
     if (binding === undefined) {

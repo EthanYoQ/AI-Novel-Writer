@@ -247,6 +247,11 @@ export function NovelWorkbenchOverlay({
                 refresh={() => { void v2WorkbenchController.refresh() }}
                 selectProposal={proposalId => { v2WorkbenchController.selectProposal(proposalId) }}
                 openProposalChange={index => { v2WorkbenchController.openProposalChange(index) }}
+                applySelectedProposal={() => { void v2WorkbenchController.applySelectedProposal() }}
+                retryProposalItem={index => { void v2WorkbenchController.retryProposalItem(index) }}
+                discardProposalItem={index => { void v2WorkbenchController.discardProposalItem(index) }}
+                regenerateProposalItem={index => { void v2WorkbenchController.regenerateProposalItem(index) }}
+                proposalLifecycleAvailable={v2WorkbenchController.proposalLifecycleAvailable()}
                 selectTask={taskId => { void v2WorkbenchController.selectTask(taskId) }}
                 selectChapter={chapter => { v2WorkbenchController.selectChapter(chapter) }}
                 openAsset={target => { v2WorkbenchController.openAsset(target) }}

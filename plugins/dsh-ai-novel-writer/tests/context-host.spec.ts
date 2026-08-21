@@ -1,11 +1,12 @@
 import { existsSync } from 'node:fs'
 import { symlink } from 'node:fs/promises'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { createAiNovelRpcHandler } from '../src/index.ts'
 import { projectNovelStateRead } from '../src/command-rpc.ts'
-import { openNovelStore } from '../src/novel-store.ts'
+import { novelProposalArgsHash, openNovelStore } from '../src/novel-store.ts'
 import { openNovelProject } from '../src/novel-project.ts'
 import { createPresetInstaller } from '../src/preset-installer.ts'
 import { makeTestWorkspace, TEST_INITIALIZATION_IDENTITY } from './test-workspace.ts'
@@ -35,6 +36,19 @@ async function initializedV2Workspace(prefix: string): Promise<string> {
     await store.dispose()
   }
   return root
+}
+
+function downgradeDatabaseToV2(root: string): void {
+  const database = new DatabaseSync(join(root, '.ai-novel', 'novel.db'))
+  try {
+    database.exec('DROP TABLE proposal_items')
+    database.exec('ALTER TABLE proposals DROP COLUMN parent_proposal_id')
+    database.exec('ALTER TABLE proposals DROP COLUMN parent_item_id')
+    database.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run()
+    database.exec('PRAGMA user_version = 2')
+  } finally {
+    database.close()
+  }
 }
 
 describe('novel context Host RPC', () => {
@@ -499,6 +513,36 @@ describe('novel context Host RPC', () => {
     expect(JSON.stringify(result)).not.toContain('archivePath')
   })
 
+  it('re-attaches a mismatched workspace through an opaque Host request and never exposes the local path', async () => {
+    const root = await initializedV2Workspace('reattach-host-workspace-')
+    const presetRoot = await makeTestWorkspace('reattach-host-preset-')
+    const reattachedWorkspaceId = '123e4567-e89b-42d3-a456-426614174114'
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, {
+      get: workspaceId => workspaceId === WorkspaceId(reattachedWorkspaceId) ? { path: root } : undefined,
+    })
+
+    const before = await handler('state/read', { workspaceId: reattachedWorkspaceId }, signal)
+    expect(before).toMatchObject({
+      ok: true,
+      value: { readOnly: true },
+    })
+    const result = await handler('workspace/reattach', { workspaceId: reattachedWorkspaceId }, signal)
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { mode: 'reattach', workspaceId: WorkspaceId(reattachedWorkspaceId) },
+    })
+    if (before.ok && result.ok) {
+      expect((result.value as { projectId: string }).projectId).toBe((before.value as { projectId: string }).projectId)
+    }
+    expect(JSON.stringify(result)).not.toContain(root)
+    await expect(handler('state/read', { workspaceId: reattachedWorkspaceId }, signal)).resolves.toMatchObject({
+      ok: true,
+      value: { workspaceId: WorkspaceId(reattachedWorkspaceId), readOnly: false },
+    })
+  })
+
   it('removes a migrated V1 archive location from the state/read wire projection', async () => {
     const root = await initializedV2Workspace('state-host-migration-projection-')
     const store = await openNovelStore(root, WorkspaceId(V2_WORKSPACE_ID), { create: false })
@@ -542,6 +586,117 @@ describe('novel context Host RPC', () => {
 
     await expect(handler('proposal/list', { workspaceId: V2_WORKSPACE_ID }, signal))
       .resolves.toEqual({ ok: true, value: { proposals: [] } })
+  })
+
+  it('projects a V2 mismatch proposal inbox read-only without migrating it before explicit recovery', async () => {
+    const root = await initializedV2Workspace('legacy-v2-proposal-readonly-host-')
+    const alternateWorkspaceId = '123e4567-e89b-42d3-a456-426614174116'
+    const seed = await openNovelStore(root, WorkspaceId(V2_WORKSPACE_ID))
+    let proposalId: string
+    try {
+      const before = await seed.read(signal)
+      const { revision: _ignoredArchitectureRevision, ...architecture } = before.architecture
+      const payload = {
+        changes: [{
+          changeSetId: 'legacy-v2-readonly-proposal',
+          aggregate: { kind: 'architecture' },
+          baseAggregateRevision: before.architecture.revision,
+          baseGlobalRevision: before.globalRevision,
+          nextValue: { ...architecture, premise: '旧 schema 只读展示的持久提案。' },
+        }],
+      }
+      const submitted = await seed.submitProposal({
+        sessionId: 'legacy-v2-session',
+        callId: 'legacy-v2-call',
+        argsHash: novelProposalArgsHash(payload),
+        payload,
+      }, signal)
+      proposalId = submitted.proposal.proposalId
+    } finally {
+      await seed.dispose()
+    }
+    downgradeDatabaseToV2(root)
+    const presetRoot = await makeTestWorkspace('legacy-v2-proposal-readonly-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, {
+      get: workspaceId => workspaceId === WorkspaceId(alternateWorkspaceId) ? { path: root } : undefined,
+    })
+
+    const state = await handler('state/read', { workspaceId: alternateWorkspaceId }, signal)
+    const proposals = await handler('proposal/list', { workspaceId: alternateWorkspaceId }, signal)
+
+    expect(state).toMatchObject({ ok: true, value: { readOnly: true, storage: { userVersion: 2 } } })
+    expect(proposals).toMatchObject({
+      ok: true,
+      value: {
+        proposals: [{
+          proposalId,
+          status: 'pending',
+          items: [{ itemOrder: 0, status: 'pending', attemptCount: 0, change: {
+            changeSetId: 'legacy-v2-readonly-proposal',
+            provenance: { origin: 'model', sessionId: 'legacy-v2-session', callId: 'legacy-v2-call' },
+          } }],
+        }],
+      },
+    })
+    expect(JSON.stringify({ state, proposals })).not.toContain(root)
+    const database = new DatabaseSync(join(root, '.ai-novel', 'novel.db'), { readOnly: true })
+    try {
+      expect((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2)
+    } finally {
+      database.close()
+    }
+
+    await expect(handler('workspace/reattach', { workspaceId: alternateWorkspaceId }, signal)).resolves.toMatchObject({
+      ok: true, value: { mode: 'reattach', workspaceId: WorkspaceId(alternateWorkspaceId) },
+    })
+    await expect(handler('proposal/list', { workspaceId: alternateWorkspaceId }, signal)).resolves.toMatchObject({
+      ok: true,
+      value: { proposals: [{ proposalId, status: 'pending', items: [{ itemOrder: 0, status: 'pending' }] }] },
+    })
+  })
+
+  it('applies one proposal bundle through opaque IDs only and never exposes a workspace path', async () => {
+    const root = await initializedV2Workspace('proposal-apply-host-workspace-')
+    const seed = await openNovelStore(root, WorkspaceId(V2_WORKSPACE_ID))
+    let proposalId: string
+    try {
+      const before = await seed.read(signal)
+      const { revision: _architectureRevision, ...architecture } = before.architecture
+      const payload = {
+        changes: [{
+          changeSetId: 'host-proposal-architecture',
+          aggregate: { kind: 'architecture' },
+          baseAggregateRevision: before.architecture.revision,
+          baseGlobalRevision: before.globalRevision,
+          nextValue: {
+            ...architecture,
+            premise: 'Host 只按已保存的 item 顺序应用。',
+          },
+        }],
+      }
+      const submitted = await seed.submitProposal({
+        sessionId: 'host-proposal-session', callId: 'host-proposal-call',
+        argsHash: novelProposalArgsHash(payload), payload,
+      }, signal)
+      proposalId = submitted.proposal.proposalId
+    } finally {
+      await seed.dispose()
+    }
+    const presetRoot = await makeTestWorkspace('proposal-apply-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, {
+      get: workspaceId => workspaceId === WorkspaceId(V2_WORKSPACE_ID) ? { path: root } : undefined,
+    })
+
+    const result = await handler('proposal/apply', { workspaceId: V2_WORKSPACE_ID, proposalId: proposalId! }, signal)
+    expect(result).toMatchObject({
+      ok: true,
+      value: { proposal: { proposalId, status: 'applied', items: [{ status: 'applied' }] }, appliedItemIds: [expect.any(String)], }
+    })
+    expect(JSON.stringify(result)).not.toContain(root)
+    await expect(handler('proposal/apply', { workspaceId: V2_WORKSPACE_ID, proposalId: proposalId!, path: root }, signal))
+      .resolves.toMatchObject({ ok: false, error: { code: 'bad-request' } })
   })
 
   it('reads one authoritative task by closed identity', async () => {

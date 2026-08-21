@@ -2,8 +2,10 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { createNovelV2ToolDefinitions } from '../src/agent.ts'
+import { createAiNovelCommandRpcHandler } from '../src/command-rpc.ts'
 import { openNovelStore } from '../src/novel-store.ts'
-import type { NovelStoreInitializeRequest } from '../src/novel-store.ts'
+import type { NovelProposalReceipt, NovelStoreInitializeRequest } from '../src/novel-store.ts'
+import type { NovelProposalListResult } from '../src/command-rpc.ts'
 import { makeTestWorkspace } from './test-workspace.ts'
 
 const signal = new AbortController().signal
@@ -107,5 +109,76 @@ describe('AI novel V2 agent tools', () => {
       callId: 'forged-call',
       argsHash: 'a'.repeat(64),
     }, execution(proposalArgs, root))).rejects.toMatchObject({ code: 'INVALID_ARGS' })
+  })
+
+  it('exposes an opaque regeneration ticket only to a later proposal call, which consumes it into one child bundle', async () => {
+    const root = await makeTestWorkspace('v2-agent-regeneration-')
+    const setup = await openNovelStore(root, WORKSPACE_ID)
+    await setup.initialize(initialization, signal)
+    const state = await setup.read(signal)
+    const { revision: _architectureRevision, ...architecture } = state.architecture
+    const sourcePayload = {
+      changes: [{
+        changeSetId: 'agent-regeneration-source', aggregate: { kind: 'architecture' },
+        baseAggregateRevision: state.architecture.revision, baseGlobalRevision: state.globalRevision,
+        nextValue: { ...architecture, premise: '等待重新生成的建议' },
+      }],
+    }
+    const source = await setup.submitProposal({
+      sessionId: 'source-session', callId: 'source-call',
+      argsHash: createHash('sha256').update(canonicalJson(sourcePayload), 'utf8').digest('hex'), payload: sourcePayload,
+    }, signal)
+    const regeneration = await setup.requestProposalRegeneration(source.proposal.proposalId, source.proposal.items[0]!.itemId, signal)
+    await setup.dispose()
+    const command = createAiNovelCommandRpcHandler({
+      get: () => ({ path: root }),
+    }, () => {})
+    const proposalList = await command('proposal/list', { workspaceId: WORKSPACE_ID }, signal)
+    expect(proposalList).toMatchObject({ ok: true, value: { proposals: [{ proposalId: source.proposal.proposalId }] } })
+    if (!proposalList.ok) throw new Error('proposal/list did not return a successful result')
+    const proposalListValue = proposalList.value as NovelProposalListResult
+    const ticketFromProposalList = proposalListValue.proposals
+      .find(proposal => proposal.proposalId === source.proposal.proposalId)
+      ?.items[0]?.regenerationTicket
+    expect(ticketFromProposalList).toBe(regeneration.regenerationTicket)
+    if (ticketFromProposalList === undefined) throw new Error('proposal/list did not expose the persisted regeneration ticket')
+    const registry = { resolveByPath: async (path: string) => path === root ? { id: WORKSPACE_ID, path: root } : undefined }
+    const tools = createNovelV2ToolDefinitions({}, registry)
+    const propose = tools[1]
+    expect(propose.parameters).toMatchObject({ properties: { regenerationTicket: { type: 'string' } } })
+
+    const args = {
+      regenerationTicket: ticketFromProposalList,
+      changes: [{
+        changeSetId: 'agent-regeneration-child', aggregate: { kind: 'architecture' },
+        baseAggregateRevision: state.architecture.revision, baseGlobalRevision: state.globalRevision,
+        nextValue: { ...architecture, premise: '由后续 agent 提交的新建议' },
+      }],
+    }
+    const child = await propose.execute(args, execution(args, root, 'regeneration-call')) as NovelProposalReceipt
+    expect(child).toMatchObject({
+      proposal: {
+        parentProposalId: source.proposal.proposalId,
+        parentItemId: source.proposal.items[0]?.itemId,
+        items: [{ itemOrder: 0, change: { changeSetId: 'agent-regeneration-child' } }],
+      },
+    })
+    expect(JSON.stringify(child)).not.toContain(root)
+    await expect(propose.execute({
+      ...args,
+      changes: [{ ...args.changes[0]!, changeSetId: 'agent-regeneration-ticket-reuse' }],
+    }, execution({
+      ...args,
+      changes: [{ ...args.changes[0]!, changeSetId: 'agent-regeneration-ticket-reuse' }],
+    }, root, 'regeneration-reuse-call'))).rejects.toMatchObject({ code: 'REGENERATION_TICKET_INVALID' })
+    const verify = await openNovelStore(root, WORKSPACE_ID)
+    try {
+      expect((await verify.listProposals(signal)).find(proposal => proposal.proposalId === source.proposal.proposalId)).toMatchObject({
+        status: 'superseded',
+        items: [{ status: 'superseded', supersededByProposalId: child.proposal.proposalId }],
+      })
+    } finally {
+      await verify.dispose()
+    }
   })
 })

@@ -67,20 +67,436 @@ const snapshot = {
 const proposal = {
   proposalId: 'proposal-1', sessionId: 'session-1', callId: 'call-1', argsHash: 'a'.repeat(64),
   status: 'pending', createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T00:00:00.000Z',
-  changes: [{
-    changeSetId: 'proposal-1-project', operation: 'replace', aggregate: { kind: 'project' },
-    baseAggregateRevision: 2, baseGlobalRevision: 7,
-    nextValue: {
-      title: '潮汐来信（修订）', language: 'zh-CN', genre: '奇幻悬疑', plannedChapters: 12,
-      targetWordsPerChapter: 3000, creativeStrategy: 'consistency-first', structureMode: 'three-act',
-      narrativePov: 'third-limited', globalGuidance: '保持克制。',
-      createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T01:00:00.000Z',
+  items: [{
+    itemId: 'proposal-1-item-project', itemOrder: 1, status: 'pending', attemptCount: 0,
+    change: {
+      changeSetId: 'proposal-1-project', operation: 'replace', aggregate: { kind: 'project' },
+      baseAggregateRevision: 2, baseGlobalRevision: 7,
+      nextValue: {
+        title: '潮汐来信（修订）', language: 'zh-CN', genre: '奇幻悬疑', plannedChapters: 12,
+        targetWordsPerChapter: 3000, creativeStrategy: 'consistency-first', structureMode: 'three-act',
+        narrativePov: 'third-limited', globalGuidance: '保持克制。',
+        createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T01:00:00.000Z',
+      },
+      provenance: { origin: 'model', sessionId: 'session-1', callId: 'call-1', argsHash: 'a'.repeat(64) },
     },
-    provenance: { origin: 'model', sessionId: 'session-1', callId: 'call-1', argsHash: 'a'.repeat(64) },
   }],
 } as const
 
 describe('V2 sidebar workbench shell', () => {
+  it('delegates ordered apply and partial recovery to the Host bundle command, then refreshes its item state', async () => {
+    const recovered = {
+      ...proposal,
+      status: 'failed' as const,
+      items: [{
+        ...proposal.items[0], status: 'applied' as const, attemptCount: 1,
+        receipt: {
+          changeSetId: proposal.items[0].change.changeSetId, projectId: snapshot.projectId,
+          aggregate: { kind: 'project' as const }, aggregateRevision: 3, globalRevision: 8,
+        },
+      }],
+    }
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot),
+      listProposals: vi.fn().mockResolvedValueOnce([proposal]).mockResolvedValueOnce([recovered]),
+      readTask: vi.fn(),
+      applyProposal: vi.fn().mockResolvedValue({
+        proposal: recovered, appliedItemIds: [proposal.items[0].itemId], stoppedItemId: undefined,
+      }),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    await controller.applySelectedProposal()
+
+    expect(port.applyProposal).toHaveBeenCalledWith(WORKSPACE_ID, 'proposal-1', expect.any(AbortSignal))
+    expect(port.listProposals).toHaveBeenCalledTimes(2)
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready', proposals: { items: [{ status: 'failed', items: [{
+        itemId: 'proposal-1-item-project', status: 'applied', attemptCount: 1,
+      }] }] },
+    })
+  })
+
+  it('projects a preceding same-aggregate item as the base of a later proposal diff', async () => {
+    const firstNextValue = { ...proposal.items[0].change.nextValue, title: '潮汐来信（第一项）' }
+    const sequenced = {
+      ...proposal,
+      items: [
+        { ...proposal.items[0], itemOrder: 1, change: { ...proposal.items[0].change, nextValue: firstNextValue } },
+        {
+          ...proposal.items[0], itemId: 'proposal-1-item-project-second', itemOrder: 2, status: 'pending' as const,
+          change: {
+            ...proposal.items[0].change, changeSetId: 'proposal-1-project-second',
+            baseAggregateRevision: 3, baseGlobalRevision: 8,
+            nextValue: { ...firstNextValue, title: '潮汐来信（第二项）' },
+          },
+        },
+      ],
+    }
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([sequenced]), readTask: vi.fn(),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    controller.openProposalChange(1)
+
+    const opened = controller.getSnapshot()
+    expect(opened.status).toBe('ready')
+    if (opened.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(JSON.parse(opened.editor.current)).toMatchObject({ title: '潮汐来信（第一项）' })
+    expect(JSON.parse(opened.editor.next ?? '')).toMatchObject({ title: '潮汐来信（第二项）' })
+    expect(opened.editor.baseAggregateRevision).toBe(3)
+    expect(opened.editor.baseGlobalRevision).toBe(8)
+  })
+
+  it('uses the authoritative baseline when same-aggregate items share a base revision', async () => {
+    const firstNextValue = { ...proposal.items[0].change.nextValue, title: '潮汐来信（同基准第一项）' }
+    const sameBase = {
+      ...proposal,
+      items: [
+        { ...proposal.items[0], itemOrder: 1, change: { ...proposal.items[0].change, nextValue: firstNextValue } },
+        {
+          ...proposal.items[0], itemId: 'proposal-1-item-project-same-base', itemOrder: 2, status: 'pending' as const,
+          change: {
+            ...proposal.items[0].change, changeSetId: 'proposal-1-project-same-base',
+            nextValue: { ...firstNextValue, title: '潮汐来信（同基准第二项）' },
+          },
+        },
+      ],
+    }
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([sameBase]), readTask: vi.fn(),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    controller.openProposalChange(1)
+
+    const opened = controller.getSnapshot()
+    expect(opened.status).toBe('ready')
+    if (opened.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(JSON.parse(opened.editor.current)).toMatchObject({ title: '潮汐来信' })
+    expect(JSON.parse(opened.editor.next ?? '')).toMatchObject({ title: '潮汐来信（同基准第二项）' })
+    expect(opened.editor.message).toContain('stale')
+  })
+
+  it('uses the authoritative baseline when aggregate revisions are continuous but global revisions are not', async () => {
+    const firstNextValue = { ...proposal.items[0].change.nextValue, title: '潮汐来信（global 链第一项）' }
+    const globalBroken = {
+      ...proposal,
+      items: [
+        { ...proposal.items[0], itemOrder: 1, change: { ...proposal.items[0].change, nextValue: firstNextValue } },
+        {
+          ...proposal.items[0], itemId: 'proposal-1-item-project-global-broken', itemOrder: 2, status: 'pending' as const,
+          change: {
+            ...proposal.items[0].change, changeSetId: 'proposal-1-project-global-broken',
+            baseAggregateRevision: 3, baseGlobalRevision: 7,
+            nextValue: { ...firstNextValue, title: '潮汐来信（global 链第二项）' },
+          },
+        },
+      ],
+    }
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([globalBroken]), readTask: vi.fn(),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    controller.openProposalChange(1)
+
+    const opened = controller.getSnapshot()
+    expect(opened.status).toBe('ready')
+    if (opened.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(JSON.parse(opened.editor.current)).toMatchObject({ title: '潮汐来信' })
+    expect(opened.editor.message).toContain('stale')
+  })
+
+  it('projects a complete global revision chain across interleaved aggregates', async () => {
+    const projectFirst = { ...proposal.items[0], itemOrder: 1, change: {
+      ...proposal.items[0].change, nextValue: { ...proposal.items[0].change.nextValue, title: '潮汐来信（项目第一项）' },
+    } }
+    const architecture = {
+      itemId: 'proposal-1-item-architecture', itemOrder: 2, status: 'pending' as const, attemptCount: 0,
+      change: {
+        changeSetId: 'proposal-1-architecture', operation: 'replace' as const, aggregate: { kind: 'architecture' as const },
+        baseAggregateRevision: 3, baseGlobalRevision: 8,
+        nextValue: {
+          premise: '一封迟到的信（修订）', characterGraph: '林澈 -> 周遥', world: '海港城',
+          plotOutline: '追查旧案', styleConstraints: '克制', referenceWorks: [],
+        },
+        provenance: { origin: 'model' as const, sessionId: 'session-1', callId: 'call-1', argsHash: 'a'.repeat(64) },
+      },
+    }
+    const projectSecond = {
+      ...proposal.items[0], itemId: 'proposal-1-item-project-after-architecture', itemOrder: 3, status: 'pending' as const,
+      change: {
+        ...proposal.items[0].change, changeSetId: 'proposal-1-project-after-architecture',
+        baseAggregateRevision: 3, baseGlobalRevision: 9,
+        nextValue: { ...projectFirst.change.nextValue, title: '潮汐来信（项目第二项）' },
+      },
+    }
+    const interleaved = { ...proposal, items: [projectFirst, architecture, projectSecond] }
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([interleaved]), readTask: vi.fn(),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    controller.openProposalChange(2)
+
+    const opened = controller.getSnapshot()
+    expect(opened.status).toBe('ready')
+    if (opened.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(JSON.parse(opened.editor.current)).toMatchObject({ title: '潮汐来信（项目第一项）' })
+    expect(JSON.parse(opened.editor.next ?? '')).toMatchObject({ title: '潮汐来信（项目第二项）' })
+  })
+
+  it('projects revision-zero new aggregates through an interleaved pending bundle chain', async () => {
+    const projectFirst = {
+      ...proposal.items[0], itemOrder: 1,
+      change: {
+        ...proposal.items[0].change,
+        nextValue: { ...proposal.items[0].change.nextValue, title: '潮汐来信（创建章节前）' },
+      },
+    }
+    const newChapter = {
+      itemId: 'proposal-1-item-new-chapter', itemOrder: 2, status: 'pending' as const, attemptCount: 0,
+      change: {
+        changeSetId: 'proposal-1-new-chapter', operation: 'replace' as const, aggregate: { kind: 'chapter' as const, chapter: 2 },
+        baseAggregateRevision: 0, baseGlobalRevision: 8,
+        nextValue: {
+          chapter: 2, title: '第二章', purpose: '建立新的线索', plotBeats: ['收到回信'],
+          characters: [], keyEvents: [], suspense: '署名被涂改', status: 'planned' as const,
+        },
+        provenance: { origin: 'model' as const, sessionId: 'session-1', callId: 'call-1', argsHash: 'a'.repeat(64) },
+      },
+    }
+    const projectAfterChapter = {
+      ...proposal.items[0], itemId: 'proposal-1-item-project-after-new-chapter', itemOrder: 3, status: 'pending' as const,
+      change: {
+        ...proposal.items[0].change, changeSetId: 'proposal-1-project-after-new-chapter',
+        baseAggregateRevision: 3, baseGlobalRevision: 9,
+        nextValue: { ...projectFirst.change.nextValue, title: '潮汐来信（创建章节后）' },
+      },
+    }
+    const chained = { ...proposal, items: [projectFirst, newChapter, projectAfterChapter] }
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([chained]), readTask: vi.fn(),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    controller.openProposalChange(1)
+
+    let opened = controller.getSnapshot()
+    expect(opened.status).toBe('ready')
+    if (opened.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(opened.editor.current).toBeUndefined()
+    expect(opened.editor.message).not.toContain('stale')
+
+    controller.openProposalChange(2)
+    opened = controller.getSnapshot()
+    expect(opened.status).toBe('ready')
+    if (opened.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(JSON.parse(opened.editor.current)).toMatchObject({ title: '潮汐来信（创建章节前）' })
+    expect(opened.editor.message).not.toContain('stale')
+  })
+
+  it('does not let discarded or superseded predecessors contaminate a later pending item baseline', async () => {
+    for (const skippedStatus of ['discarded', 'superseded'] as const) {
+      const skipped = {
+        ...proposal,
+        items: [
+          {
+            ...proposal.items[0], itemOrder: 1, status: skippedStatus,
+            change: {
+              ...proposal.items[0].change,
+              nextValue: { ...proposal.items[0].change.nextValue, title: `潮汐来信（${skippedStatus} 项）` },
+            },
+          },
+          {
+            ...proposal.items[0], itemId: `proposal-1-item-after-${skippedStatus}`, itemOrder: 2, status: 'pending' as const,
+            change: {
+              ...proposal.items[0].change, changeSetId: `proposal-1-project-after-${skippedStatus}`,
+              nextValue: { ...proposal.items[0].change.nextValue, title: `潮汐来信（${skippedStatus} 后的待应用项）` },
+            },
+          },
+        ],
+      }
+      const port = {
+        readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([skipped]), readTask: vi.fn(),
+      } satisfies NovelV2WorkbenchPort
+      const controller = new NovelV2WorkbenchController(port)
+
+      controller.setWorkspace(WORKSPACE_ID)
+      await controller.open()
+      controller.openProposalChange(1)
+
+      const opened = controller.getSnapshot()
+      expect(opened.status).toBe('ready')
+      if (opened.status !== 'ready') throw new Error('expected ready workbench state')
+      expect(JSON.parse(opened.editor.current)).toMatchObject({ title: '潮汐来信' })
+      expect(opened.editor.message).not.toContain('stale')
+    }
+  })
+
+  it('does not double-count an applied predecessor already reflected by the authoritative snapshot', async () => {
+    const appliedSnapshot = {
+      ...snapshot,
+      globalRevision: 8,
+      project: { ...snapshot.project, revision: 3, title: '潮汐来信（已应用）' },
+    }
+    const resumed = {
+      ...proposal,
+      status: 'partial' as const,
+      items: [
+        {
+          ...proposal.items[0], itemOrder: 1, status: 'applied' as const, attemptCount: 1,
+          change: {
+            ...proposal.items[0].change,
+            nextValue: { ...proposal.items[0].change.nextValue, title: '潮汐来信（已应用）' },
+          },
+        },
+        {
+          ...proposal.items[0], itemId: 'proposal-1-item-after-applied', itemOrder: 2, status: 'pending' as const,
+          change: {
+            ...proposal.items[0].change, changeSetId: 'proposal-1-project-after-applied',
+            baseAggregateRevision: 3, baseGlobalRevision: 8,
+            nextValue: { ...proposal.items[0].change.nextValue, title: '潮汐来信（恢复后的待应用项）' },
+          },
+        },
+      ],
+    }
+    const port = {
+      readState: vi.fn().mockResolvedValue(appliedSnapshot), listProposals: vi.fn().mockResolvedValue([resumed]), readTask: vi.fn(),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    controller.openProposalChange(1)
+
+    const opened = controller.getSnapshot()
+    expect(opened.status).toBe('ready')
+    if (opened.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(JSON.parse(opened.editor.current)).toMatchObject({ title: '潮汐来信（已应用）' })
+    expect(opened.editor.message).not.toContain('stale')
+  })
+
+  it('refreshes Host-persisted proposal state after a pending apply even when the user selects another bundle', async () => {
+    const otherProposal = {
+      ...proposal, proposalId: 'proposal-2', callId: 'call-2',
+      items: [{ ...proposal.items[0], itemId: 'proposal-2-item-project', change: {
+        ...proposal.items[0].change, changeSetId: 'proposal-2-project',
+      } }],
+    }
+    const persisted = {
+      ...proposal, status: 'partial' as const, items: [{
+        ...proposal.items[0], status: 'applied' as const, attemptCount: 1,
+        receipt: {
+          changeSetId: proposal.items[0].change.changeSetId, projectId: snapshot.projectId,
+          aggregate: { kind: 'project' as const }, aggregateRevision: 3, globalRevision: 8,
+        },
+      }],
+    }
+    const applied = deferred<{ readonly proposal: typeof persisted; readonly appliedItemIds: readonly string[] }>()
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot),
+      listProposals: vi.fn().mockResolvedValueOnce([proposal, otherProposal]).mockResolvedValueOnce([persisted, otherProposal]),
+      readTask: vi.fn(),
+      applyProposal: vi.fn(() => applied.promise),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    const pending = controller.applySelectedProposal()
+    await Promise.resolve()
+    controller.selectProposal('proposal-2')
+    applied.resolve({ proposal: persisted, appliedItemIds: [proposal.items[0].itemId] })
+    await pending
+
+    expect(port.listProposals).toHaveBeenCalledTimes(2)
+    const refreshed = controller.getSnapshot()
+    expect(refreshed.status).toBe('ready')
+    if (refreshed.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(refreshed.proposals.selectedId).toBe('proposal-2')
+    expect(refreshed.proposals.items.find(item => item.proposalId === 'proposal-1')).toMatchObject({
+      status: 'partial', items: [{ status: 'applied', attemptCount: 1 }],
+    })
+  })
+
+  it('does not blindly send a Host-stale bundle to apply', async () => {
+    const stale = { ...proposal, status: 'stale' as const, items: [{
+      ...proposal.items[0], status: 'stale' as const, attemptCount: 1, failure: 'STALE_REVISION' as const,
+    }] }
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([stale]), readTask: vi.fn(),
+      applyProposal: vi.fn(),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    await controller.applySelectedProposal()
+
+    expect(port.applyProposal).not.toHaveBeenCalled()
+    expect(controller.getSnapshot().proposals.message).toContain('冲突')
+  })
+
+  it('keeps a Host partial bundle resumable and labels it as partially applied', async () => {
+    const partial = { ...proposal, status: 'partial' as const }
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([partial]), readTask: vi.fn(),
+      applyProposal: vi.fn().mockResolvedValue({ proposal: partial, appliedItemIds: [] }),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    await controller.applySelectedProposal()
+
+    expect(port.applyProposal).toHaveBeenCalledWith(WORKSPACE_ID, 'proposal-1', expect.any(AbortSignal))
+    expect(renderToStaticMarkup(<NovelV2WorkbenchBody
+      state={controller.getSnapshot()}
+      refresh={() => { void controller.refresh() }} selectProposal={proposalId => { controller.selectProposal(proposalId) }}
+      openProposalChange={index => { controller.openProposalChange(index) }} applySelectedProposal={() => { void controller.applySelectedProposal() }}
+      retryProposalItem={index => { void controller.retryProposalItem(index) }} discardProposalItem={index => { void controller.discardProposalItem(index) }}
+      regenerateProposalItem={index => { void controller.regenerateProposalItem(index) }} proposalLifecycleAvailable={controller.proposalLifecycleAvailable()}
+      selectTask={taskId => { void controller.selectTask(taskId) }} selectChapter={chapter => { controller.selectChapter(chapter) }}
+      openAsset={target => { controller.openAsset(target) }} updateEditor={draft => { controller.updateEditor(draft) }} discardEditor={() => { controller.discardEditor() }}
+    />)).toContain('部分已应用')
+  })
+
+  it('uses only opaque proposal and item IDs for retry, discard, and regeneration', async () => {
+    const failed = { ...proposal, items: [{ ...proposal.items[0], status: 'failed' as const, attemptCount: 1, failure: 'WRITE_FAILED' as const }] }
+    const port = {
+      readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([failed]), readTask: vi.fn(),
+      retryProposalItem: vi.fn().mockResolvedValue({ proposal: failed, appliedItemIds: [], stoppedItemId: 'proposal-1-item-project' }),
+      discardProposalItem: vi.fn().mockResolvedValue({ proposal: failed, item: failed.items[0] }),
+      regenerateProposalItem: vi.fn().mockResolvedValue({ proposal: failed, item: failed.items[0], regenerationTicket: 'ticket-1' }),
+    } satisfies NovelV2WorkbenchPort
+    const controller = new NovelV2WorkbenchController(port)
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    await controller.retryProposalItem(0)
+    await controller.discardProposalItem(0)
+    await controller.regenerateProposalItem(0)
+
+    for (const operation of [port.retryProposalItem, port.discardProposalItem, port.regenerateProposalItem]) {
+      expect(operation).toHaveBeenCalledWith(WORKSPACE_ID, 'proposal-1', 'proposal-1-item-project', expect.any(AbortSignal))
+    }
+  })
+
   it('loads the path-free workspace projection into a one-column overview, proposal, task, and asset workbench', async () => {
     const port = {
       readState: vi.fn().mockResolvedValue(snapshot),
@@ -109,6 +525,11 @@ describe('V2 sidebar workbench shell', () => {
       refresh={() => { void controller.refresh() }}
       selectProposal={proposalId => { controller.selectProposal(proposalId) }}
       openProposalChange={index => { controller.openProposalChange(index) }}
+      applySelectedProposal={() => { void controller.applySelectedProposal() }}
+      retryProposalItem={index => { void controller.retryProposalItem(index) }}
+      discardProposalItem={index => { void controller.discardProposalItem(index) }}
+      regenerateProposalItem={index => { void controller.regenerateProposalItem(index) }}
+      proposalLifecycleAvailable={controller.proposalLifecycleAvailable()}
       selectTask={taskId => { void controller.selectTask(taskId) }}
       selectChapter={chapter => { controller.selectChapter(chapter) }}
       openAsset={target => { controller.openAsset(target) }}
@@ -228,9 +649,12 @@ describe('V2 sidebar workbench shell', () => {
     }
     const refreshedProposal = {
       ...proposal,
-      changes: [{
-        ...proposal.changes[0], baseAggregateRevision: 3, baseGlobalRevision: 8,
-        nextValue: { ...proposal.changes[0].nextValue, title: '潮汐来信（提案新版）' },
+      items: [{
+        ...proposal.items[0],
+        change: {
+          ...proposal.items[0].change, baseAggregateRevision: 3, baseGlobalRevision: 8,
+          nextValue: { ...proposal.items[0].change.nextValue, title: '潮汐来信（提案新版）' },
+        },
       }],
     }
     const port = {
@@ -536,6 +960,11 @@ describe('V2 sidebar workbench shell', () => {
       refresh={() => { void controller.refresh() }}
       selectProposal={proposalId => { controller.selectProposal(proposalId) }}
       openProposalChange={index => { controller.openProposalChange(index) }}
+      applySelectedProposal={() => { void controller.applySelectedProposal() }}
+      retryProposalItem={index => { void controller.retryProposalItem(index) }}
+      discardProposalItem={index => { void controller.discardProposalItem(index) }}
+      regenerateProposalItem={index => { void controller.regenerateProposalItem(index) }}
+      proposalLifecycleAvailable={controller.proposalLifecycleAvailable()}
       selectTask={taskId => { void controller.selectTask(taskId) }}
       selectChapter={chapter => { controller.selectChapter(chapter) }}
       openAsset={target => { controller.openAsset(target) }}

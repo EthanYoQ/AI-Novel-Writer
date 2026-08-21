@@ -15,7 +15,7 @@ import type { AssetRef } from './types.ts'
 
 export { openNovelProject } from './novel-project.ts'
 export type { NovelProjectOptions } from './novel-project.ts'
-export { NovelStoreError, openNovelStore, validateNovelChangeSet } from './novel-store.ts'
+export { NovelStoreError, openNovelStore, recoverNovelStoreBinding, validateNovelChangeSet } from './novel-store.ts'
 export type {
   NovelAggregateRef,
   NovelArchitectureAggregate,
@@ -34,9 +34,19 @@ export type {
   NovelStoreErrorCode,
   NovelStoreInitializeRequest,
   NovelStoreOpenOptions,
+  NovelStoreRecoveryMode,
+  NovelStoreRecoveryReceipt,
   NovelStoreSnapshot,
   NovelStorageDiagnostics,
   NovelProposalOptions,
+  NovelProposalApplyResult,
+  NovelProposalChange,
+  NovelProposalItem,
+  NovelProposalItemFailure,
+  NovelProposalItemMutationResult,
+  NovelProposalItemReceipt,
+  NovelProposalItemStatus,
+  NovelProposalRegenerationResult,
   NovelProposalReceipt,
   NovelProposalRequest,
   NovelProposalStatus,
@@ -80,6 +90,7 @@ export type {
   NovelLoopbackCommand,
   NovelProposalListResult,
   NovelStateReadResult,
+  NovelWorkspaceRecoveryResult,
   NovelWorkspaceRegistry,
 } from './command-rpc.ts'
 
@@ -203,7 +214,10 @@ export function createAiNovelRpcHandler(
       return setup(endpoint, payload, signal)
     }
     if (endpoint === 'state/read' || endpoint === 'proposal/list' || endpoint === 'command/preview'
-      || endpoint === 'command/commit' || endpoint === 'task/read') {
+      || endpoint === 'command/commit' || endpoint === 'task/read'
+      || endpoint === 'proposal/apply' || endpoint === 'proposal/retry'
+      || endpoint === 'proposal/discard' || endpoint === 'proposal/regenerate'
+      || endpoint === 'workspace/reattach' || endpoint === 'workspace/clone') {
       return command(endpoint, payload, signal)
     }
     if (endpoint !== 'context/read' && endpoint !== 'asset/read') {
@@ -244,6 +258,40 @@ export function createAiNovelRpcHandler(
   }
 }
 
+/** Host RPC lifecycle that drains active loopback commands before HMR unregisters the channel. */
+export interface NovelHostRpcLifecycle {
+  readonly handler: ConnectionRpcHandler
+  dispose(): Promise<void>
+}
+
+/**
+ * Reject new loopback commands after disposal begins, then wait for all accepted commands.
+ *
+ * Command handlers dispose their own SQLite stores before they settle, so draining this wrapper
+ * releases a held exclusive database lock before Cordis unregisters the HMR-replaced channel.
+ */
+export function createAiNovelHostRpcLifecycle(handler: ConnectionRpcHandler): NovelHostRpcLifecycle {
+  let closing = false
+  const inFlight = new Set<Promise<unknown>>()
+  let disposal: Promise<void> | undefined
+  const guarded: ConnectionRpcHandler = (endpoint, payload, signal) => {
+    if (closing) return Promise.resolve(internalFailure('AI novel Host is reloading'))
+    const invocation = Promise.resolve().then(() => handler(endpoint, payload, signal))
+    inFlight.add(invocation)
+    return invocation.finally(() => { inFlight.delete(invocation) })
+  }
+  return {
+    handler: guarded,
+    dispose(): Promise<void> {
+      closing = true
+      disposal ??= (async () => {
+        while (inFlight.size > 0) await Promise.allSettled([...inFlight])
+      })()
+      return disposal
+    },
+  }
+}
+
 /**
  * Register the loopback-only preset setup channel.
  *
@@ -257,11 +305,18 @@ export function apply(ctx: Context, config: Config): void {
   const connection = ctx.get('connection') as HostConnectionHandle
   const workspaces = ctx.get('workspaceRegistry') as NovelWorkspaceRegistry
   ctx.effect(
-    () => connection.rpc.handle('/ai-novel', createAiNovelRpcHandler(
-      installer,
-      workspaces,
-      error => { ctx.logger.error('dsh-ai-novel-writer: request failed: %o', error) },
-    ), { authority: 'loopback' }),
+    () => {
+      const lifecycle = createAiNovelHostRpcLifecycle(createAiNovelRpcHandler(
+        installer,
+        workspaces,
+        error => { ctx.logger.error('dsh-ai-novel-writer: request failed: %o', error) },
+      ))
+      const unregister = connection.rpc.handle('/ai-novel', lifecycle.handler, { authority: 'loopback' })
+      return async () => {
+        await lifecycle.dispose()
+        await unregister()
+      }
+    },
     'ai-novel-writer: setup and read-only context RPC',
   )
 }

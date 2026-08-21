@@ -1,9 +1,13 @@
 import { access, copyFile, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { once } from 'node:events'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { WorkspaceId, type WorkspaceId as WorkspaceIdType } from '@deepseek-ai/dsh-workspace'
-import { openNovelStore } from '../src/novel-store.ts'
-import type { NovelStore, NovelStoreInitializeRequest } from '../src/novel-store.ts'
+import { openNovelStore, recoverNovelStoreBinding } from '../src/novel-store.ts'
+import type { NovelProposalRequest, NovelStore, NovelStoreInitializeRequest } from '../src/novel-store.ts'
 import { makeTestWorkspace } from './test-workspace.ts'
 
 const signal = new AbortController().signal
@@ -37,6 +41,78 @@ async function openStore(root: string, workspaceId: WorkspaceIdType = WORKSPACE_
   return store
 }
 
+function canonicalJson(value: unknown): string {
+  if (value === undefined) return 'null'
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (typeof value === 'object' && value !== null) {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'null'
+}
+
+function proposalRequest(payload: unknown): NovelProposalRequest {
+  return {
+    sessionId: 'clone-receipt-session',
+    callId: 'clone-receipt-call',
+    argsHash: createHash('sha256').update(canonicalJson(payload), 'utf8').digest('hex'),
+    payload,
+  }
+}
+
+function downgradeDatabaseToV2(root: string): void {
+  const database = new DatabaseSync(join(root, '.ai-novel', 'novel.db'))
+  try {
+    database.exec('DROP TABLE proposal_items')
+    database.exec('ALTER TABLE proposals DROP COLUMN parent_proposal_id')
+    database.exec('ALTER TABLE proposals DROP COLUMN parent_item_id')
+    database.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run()
+    database.exec('PRAGMA user_version = 2')
+  } finally {
+    database.close()
+  }
+}
+
+async function holdExternalExclusiveWriteLock(databasePath: string): Promise<ChildProcessWithoutNullStreams> {
+  const script = `
+import { DatabaseSync } from 'node:sqlite'
+const db = new DatabaseSync(process.env.AI_NOVEL_LOCK_DATABASE)
+db.exec('PRAGMA foreign_keys = ON')
+db.exec('PRAGMA journal_mode = DELETE')
+db.exec('PRAGMA synchronous = FULL')
+db.exec('PRAGMA locking_mode = EXCLUSIVE')
+db.exec('BEGIN IMMEDIATE')
+process.stdout.write('locked\\n')
+process.stdin.resume()
+process.stdin.once('end', () => {
+  db.exec('ROLLBACK')
+  db.close()
+})
+`
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', script], {
+    env: { ...process.env, AI_NOVEL_LOCK_DATABASE: databasePath },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  await new Promise<void>((resolve, reject) => {
+    let stdout = ''
+    let stderr = ''
+    const fail = (error: Error): void => {
+      child.stdout.removeAllListeners('data')
+      child.stderr.removeAllListeners('data')
+      child.removeAllListeners('error')
+      child.removeAllListeners('exit')
+      reject(error)
+    }
+    child.stdout.on('data', chunk => {
+      stdout += String(chunk)
+      if (stdout.includes('locked\n')) resolve()
+    })
+    child.stderr.on('data', chunk => { stderr += String(chunk) })
+    child.once('error', error => { fail(error) })
+    child.once('exit', code => { fail(new Error(`external SQLite lock process exited before locking (${code}): ${stderr}`)) })
+  })
+  return child
+}
+
 describe('NovelStore SQLite core', () => {
   let root: string
   let store: NovelStore
@@ -60,7 +136,7 @@ describe('NovelStore SQLite core', () => {
       readOnly: false,
       storage: {
         applicationId: 0x41_4e_4f_56,
-        userVersion: 2,
+        userVersion: 3,
         foreignKeys: true,
         journalMode: 'delete',
         synchronous: 'full',
@@ -384,6 +460,241 @@ describe('NovelStore SQLite core', () => {
       provenance: { origin: 'manual' },
     }, signal)).rejects.toMatchObject({ code: 'WORKSPACE_MISMATCH' })
     await otherWorkspace.dispose()
+  })
+
+  it('fails closed when a second OS process holds the database write lock, then recovers after release', async () => {
+    await store.dispose()
+    const child = await holdExternalExclusiveWriteLock(join(root, '.ai-novel', 'novel.db'))
+    try {
+      await expect(openNovelStore(root, WORKSPACE_ID)).rejects.toMatchObject({ code: 'WRITE_LOCKED' })
+    } finally {
+      child.stdin.end()
+      await once(child, 'exit')
+    }
+    const reopened = await openStore(root)
+    expect((await reopened.read(signal)).readOnly).toBe(false)
+    await reopened.dispose()
+  })
+
+  it('requires an explicit re-attach before a moved workspace can write without changing the project identity', async () => {
+    const movedWorkspace = WorkspaceId('123e4567-e89b-42d3-a456-426614174202')
+    const before = await store.read(signal)
+    await store.dispose()
+
+    const detached = await openStore(root, movedWorkspace)
+    expect((await detached.read(signal)).readOnly).toBe(true)
+    await detached.dispose()
+
+    await expect(recoverNovelStoreBinding(root, movedWorkspace, 'reattach', signal)).resolves.toEqual({
+      mode: 'reattach',
+      projectId: before.projectId,
+      workspaceId: movedWorkspace,
+    })
+
+    const reattached = await openStore(root, movedWorkspace)
+    const rebound = await reattached.read(signal)
+    expect(rebound).toMatchObject({
+      projectId: before.projectId,
+      workspaceId: movedWorkspace,
+      workspacePath: root,
+      readOnly: false,
+      project: before.project,
+      changes: before.changes,
+    })
+    const { revision: _ignoredProjectRevision, ...projectValue } = rebound.project
+    await expect(reattached.applyChange({
+      changeSetId: 'reattached-project-write',
+      operation: 'replace',
+      aggregate: { kind: 'project' },
+      baseAggregateRevision: rebound.project.revision,
+      baseGlobalRevision: rebound.globalRevision,
+      nextValue: { ...projectValue, title: '重新绑定后的潮汐来信' },
+      provenance: { origin: 'manual' },
+    }, signal)).resolves.toMatchObject({ globalRevision: rebound.globalRevision + 1 })
+    await reattached.dispose()
+  })
+
+  it('recovers an explicitly re-attached V2 mismatched binding into V3 without losing its content', async () => {
+    const movedWorkspace = WorkspaceId('123e4567-e89b-42d3-a456-426614174204')
+    const before = await store.read(signal)
+    const { revision: _ignoredProjectRevision, ...projectValue } = before.project
+    await store.applyChange({
+      changeSetId: 'v2-reattach-content',
+      operation: 'replace',
+      aggregate: { kind: 'project' },
+      baseAggregateRevision: before.project.revision,
+      baseGlobalRevision: before.globalRevision,
+      nextValue: { ...projectValue, title: 'V2 重绑定后仍保留的标题' },
+      provenance: { origin: 'manual' },
+    }, signal)
+    const source = await store.read(signal)
+    await store.dispose()
+    downgradeDatabaseToV2(root)
+
+    const detached = await openStore(root, movedWorkspace)
+    expect(await detached.read(signal)).toMatchObject({
+      projectId: source.projectId,
+      workspaceId: WORKSPACE_ID,
+      readOnly: true,
+      storage: { userVersion: 2 },
+      project: source.project,
+      changes: source.changes,
+    })
+    const { revision: _ignoredDetachedProjectRevision, ...detachedProjectValue } = source.project
+    await expect(detached.applyChange({
+      changeSetId: 'v2-read-only-reattach-write',
+      operation: 'replace',
+      aggregate: { kind: 'project' },
+      baseAggregateRevision: source.project.revision,
+      baseGlobalRevision: source.globalRevision,
+      nextValue: detachedProjectValue,
+      provenance: { origin: 'manual' },
+    }, signal)).rejects.toMatchObject({ code: 'WORKSPACE_MISMATCH' })
+    await detached.dispose()
+    await expect(recoverNovelStoreBinding(root, movedWorkspace, 'reattach', signal)).resolves.toEqual({
+      mode: 'reattach', projectId: source.projectId, workspaceId: movedWorkspace,
+    })
+    const recovered = await openStore(root, movedWorkspace)
+    expect(await recovered.read(signal)).toMatchObject({
+      projectId: source.projectId,
+      workspaceId: movedWorkspace,
+      readOnly: false,
+      storage: { userVersion: 3 },
+      project: source.project,
+      changes: source.changes,
+    })
+    await recovered.dispose()
+  })
+
+  it('recovers an explicitly cloned V2 mismatched binding into V3 with a new project identity and retained content', async () => {
+    const clonedWorkspace = WorkspaceId('123e4567-e89b-42d3-a456-426614174205')
+    const before = await store.read(signal)
+    const { revision: _ignoredProjectRevision, ...projectValue } = before.project
+    await store.applyChange({
+      changeSetId: 'v2-clone-content',
+      operation: 'replace',
+      aggregate: { kind: 'project' },
+      baseAggregateRevision: before.project.revision,
+      baseGlobalRevision: before.globalRevision,
+      nextValue: { ...projectValue, title: 'V2 克隆后仍保留的标题' },
+      provenance: { origin: 'manual' },
+    }, signal)
+    const source = await store.read(signal)
+    await store.dispose()
+    downgradeDatabaseToV2(root)
+
+    const detached = await openStore(root, clonedWorkspace)
+    expect(await detached.read(signal)).toMatchObject({
+      projectId: source.projectId,
+      workspaceId: WORKSPACE_ID,
+      readOnly: true,
+      storage: { userVersion: 2 },
+      project: source.project,
+      changes: source.changes,
+    })
+    const { revision: _ignoredDetachedProjectRevision, ...detachedProjectValue } = source.project
+    await expect(detached.applyChange({
+      changeSetId: 'v2-read-only-clone-write',
+      operation: 'replace',
+      aggregate: { kind: 'project' },
+      baseAggregateRevision: source.project.revision,
+      baseGlobalRevision: source.globalRevision,
+      nextValue: detachedProjectValue,
+      provenance: { origin: 'manual' },
+    }, signal)).rejects.toMatchObject({ code: 'WORKSPACE_MISMATCH' })
+    await detached.dispose()
+    const clone = await recoverNovelStoreBinding(root, clonedWorkspace, 'clone', signal)
+    expect(clone).toMatchObject({ mode: 'clone', workspaceId: clonedWorkspace })
+    expect(clone.projectId).not.toBe(source.projectId)
+    const recovered = await openStore(root, clonedWorkspace)
+    expect(await recovered.read(signal)).toMatchObject({
+      projectId: clone.projectId,
+      workspaceId: clonedWorkspace,
+      readOnly: false,
+      storage: { userVersion: 3 },
+      project: source.project,
+      changes: source.changes,
+    })
+    await recovered.dispose()
+  })
+
+  it('keeps a copied database read-only until an explicit clone re-ids its project identity', async () => {
+    const copiedRoot = await makeTestWorkspace('novel-store-copied-db-')
+    const copiedWorkspace = WorkspaceId('123e4567-e89b-42d3-a456-426614174203')
+    const beforeChange = await store.read(signal)
+    const { revision: _ignoredProjectRevision, ...projectValue } = beforeChange.project
+    await store.applyChange({
+      changeSetId: 'copied-project-change',
+      operation: 'replace',
+      aggregate: { kind: 'project' },
+      baseAggregateRevision: beforeChange.project.revision,
+      baseGlobalRevision: beforeChange.globalRevision,
+      nextValue: { ...projectValue, title: '复制前已保存的潮汐来信' },
+      provenance: { origin: 'manual' },
+    }, signal)
+    const beforeProposal = await store.read(signal)
+    const { revision: _ignoredArchitectureRevision, ...architectureValue } = beforeProposal.architecture
+    const appliedProposal = await store.submitProposal(proposalRequest({
+      changes: [{
+        changeSetId: 'copied-applied-proposal',
+        aggregate: { kind: 'architecture' },
+        baseAggregateRevision: beforeProposal.architecture.revision,
+        baseGlobalRevision: beforeProposal.globalRevision,
+        nextValue: { ...architectureValue, premise: '克隆后收据必须属于新项目。' },
+      }],
+    }), signal)
+    await store.applyProposal(appliedProposal.proposal.proposalId, signal)
+    const original = await store.read(signal)
+    expect(original.proposals[0]?.items[0]?.receipt?.projectId).toBe(original.projectId)
+    await store.dispose()
+    await mkdir(join(copiedRoot, '.ai-novel'), { recursive: true })
+    await copyFile(join(root, '.ai-novel', '.gitignore'), join(copiedRoot, '.ai-novel', '.gitignore'))
+    await copyFile(join(root, '.ai-novel', 'novel.db'), join(copiedRoot, '.ai-novel', 'novel.db'))
+
+    const detachedCopy = await openStore(copiedRoot, copiedWorkspace)
+    expect((await detachedCopy.read(signal)).readOnly).toBe(true)
+    await detachedCopy.dispose()
+
+    const clone = await recoverNovelStoreBinding(copiedRoot, copiedWorkspace, 'clone', signal)
+    expect(clone).toMatchObject({ mode: 'clone', workspaceId: copiedWorkspace })
+    expect(clone.projectId).not.toBe(original.projectId)
+
+    const clonedStore = await openStore(copiedRoot, copiedWorkspace)
+    const cloned = await clonedStore.read(signal)
+    expect(cloned).toMatchObject({
+      projectId: clone.projectId,
+      workspaceId: copiedWorkspace,
+      readOnly: false,
+    })
+    expect({
+      globalRevision: cloned.globalRevision,
+      project: cloned.project,
+      architecture: cloned.architecture,
+      characters: cloned.characters,
+      chapters: cloned.chapters,
+      tasks: cloned.tasks,
+      changes: cloned.changes,
+      migration: cloned.migration,
+    }).toEqual({
+      globalRevision: original.globalRevision,
+      project: original.project,
+      architecture: original.architecture,
+      characters: original.characters,
+      chapters: original.chapters,
+      tasks: original.tasks,
+      changes: original.changes,
+      migration: original.migration,
+    })
+    const clonedReceiptProjectIds = cloned.proposals.flatMap(proposal => proposal.items.flatMap(item => item.receipt === undefined ? [] : [item.receipt.projectId]))
+    expect(clonedReceiptProjectIds).toEqual([clone.projectId])
+    expect(clonedReceiptProjectIds).not.toContain(original.projectId)
+    await clonedStore.dispose()
+
+    const originalStore = await openStore(root, WORKSPACE_ID)
+    const unchangedOriginal = await originalStore.read(signal)
+    expect(unchangedOriginal.projectId).toBe(original.projectId)
+    expect(unchangedOriginal.proposals[0]?.items[0]?.receipt?.projectId).toBe(original.projectId)
+    await originalStore.dispose()
   })
 
   it('refuses to overwrite an unexpected ignore file', async () => {

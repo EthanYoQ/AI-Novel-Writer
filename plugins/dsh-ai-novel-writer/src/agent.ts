@@ -181,6 +181,10 @@ const v2ProposeParameters = {
     required: true,
     description: 'One or more complete single-aggregate replacement commands. Each item uses exactly changeSetId, aggregate, baseAggregateRevision, baseGlobalRevision, and nextValue.',
   },
+  regenerationTicket: {
+    type: 'string',
+    description: 'Optional opaque Host ticket returned after a user requests regeneration of one prior proposal item. Include it only for the subsequent single-item replacement proposal.',
+  },
 } as const
 
 function invalid(message: string): never {
@@ -268,15 +272,15 @@ function parseApplyRequest(args: Record<string, unknown>): NovelApplyRequest {
   return invalid('property "kind" must be "initialize" or "replace"')
 }
 
-function parseProposalArgs(args: Record<string, unknown>): { readonly changes: readonly unknown[] } {
-  rejectUnexpected(args, ['changes'])
+function parseProposalArgs(args: Record<string, unknown>): { readonly changes: readonly unknown[]; readonly regenerationTicket?: string } {
+  rejectUnexpected(args, ['changes', 'regenerationTicket'])
   try {
     validateNovelProposalPayload(args)
   } catch (error) {
     if (error instanceof Error) throw new ToolArgsError([error.message])
     throw error
   }
-  return args as { readonly changes: readonly unknown[] }
+  return args as { readonly changes: readonly unknown[]; readonly regenerationTicket?: string }
 }
 
 function resolvedOptions(config: Config): NovelProjectOptions {

@@ -84,10 +84,11 @@ describe('NovelStore proposal inbox', () => {
       callId: 'call-0001',
       argsHash: proposalRequest().argsHash,
       status: 'pending',
-      changes: [{
-        ...baseChange,
-        operation: 'replace',
-        provenance: { origin: 'manual' },
+      items: [{
+        itemOrder: 0,
+        status: 'pending',
+        attemptCount: 0,
+        change: baseChange,
       }],
     })
     expect(submitted.proposal.proposalId).toMatch(/^[0-9a-f-]{36}$/i)
@@ -99,6 +100,217 @@ describe('NovelStore proposal inbox', () => {
     expect(after.architecture).toEqual(before.architecture)
     expect(after.proposals).toHaveLength(1)
     expect(after.proposals[0]).toMatchObject({ proposalId: submitted.proposal.proposalId, status: 'pending' })
+  })
+
+  it('applies a persisted bundle in item order and records each item receipt with its audit transaction', async () => {
+    const { store } = await initializedStore('novel-proposals-apply-')
+    const before = await store.read(signal)
+    const { revision: _architectureRevision, ...architecture } = before.architecture
+    const { revision: _projectRevision, ...project } = before.project
+    const submitted = await store.submitProposal(proposalRequest({
+      changes: [
+        {
+          ...baseChange,
+          changeSetId: 'bundle-architecture',
+          aggregate: { kind: 'architecture' },
+          baseAggregateRevision: before.architecture.revision,
+          baseGlobalRevision: before.globalRevision,
+          nextValue: { ...architecture, premise: '潮水会递送尚未写出的信。' },
+        },
+        {
+          changeSetId: 'bundle-project',
+          aggregate: { kind: 'project' },
+          baseAggregateRevision: before.project.revision,
+          baseGlobalRevision: before.globalRevision + 1,
+          nextValue: { ...project, title: '潮汐来信：修订版' },
+        },
+      ],
+    }), signal)
+    const lifecycle = store as NovelStore & {
+      applyProposal(proposalId: string, signal: AbortSignal): Promise<{
+        readonly proposal: { readonly items: readonly { readonly itemOrder: number; readonly status: string; readonly receipt?: { readonly changeSetId: string } }[] }
+        readonly appliedItemIds: readonly string[]
+      }>
+    }
+
+    const result = await lifecycle.applyProposal(submitted.proposal.proposalId, signal)
+
+    expect(result.appliedItemIds).toHaveLength(2)
+    expect(result.proposal.items).toMatchObject([
+      { itemOrder: 0, status: 'applied', receipt: { changeSetId: 'bundle-architecture' } },
+      { itemOrder: 1, status: 'applied', receipt: { changeSetId: 'bundle-project' } },
+    ])
+    const after = await store.read(signal)
+    expect(after.globalRevision).toBe(before.globalRevision + 2)
+    expect(after.architecture.premise).toBe('潮水会递送尚未写出的信。')
+    expect(after.project.title).toBe('潮汐来信：修订版')
+    expect(after.changes.map(change => change.changeSetId)).toEqual(['bundle-architecture', 'bundle-project'])
+    expect(after.proposals[0]).toMatchObject({
+      proposalId: submitted.proposal.proposalId,
+      status: 'applied',
+      items: [
+        { itemOrder: 0, status: 'applied' },
+        { itemOrder: 1, status: 'applied' },
+      ],
+    })
+  })
+
+  it('projects a persisted partial bundle when a stale item follows an applied item, never force-applies it, and skips already applied items on recovery', async () => {
+    const { store } = await initializedStore('novel-proposals-stale-')
+    const before = await store.read(signal)
+    const { revision: _architectureRevision, ...architecture } = before.architecture
+    const { revision: _projectRevision, ...project } = before.project
+    const submitted = await store.submitProposal(proposalRequest({
+      changes: [
+        {
+          ...baseChange,
+          changeSetId: 'stale-prefix-architecture',
+          baseAggregateRevision: before.architecture.revision,
+          baseGlobalRevision: before.globalRevision,
+          nextValue: { ...architecture, premise: '第一项必须先提交。' },
+        },
+        {
+          changeSetId: 'stale-stop-project',
+          aggregate: { kind: 'project' },
+          baseAggregateRevision: before.project.revision,
+          baseGlobalRevision: before.globalRevision,
+          nextValue: { ...project, title: '不得强推的过期标题' },
+        },
+      ],
+    }), signal)
+
+    const first = await store.applyProposal(submitted.proposal.proposalId, signal)
+    expect(first.appliedItemIds).toHaveLength(1)
+    expect(first.stoppedItemId).toBe(submitted.proposal.items[1]?.itemId)
+    expect(first.proposal).toMatchObject({
+      status: 'partial',
+      items: [{ status: 'applied' }, { status: 'stale', failure: 'STALE_REVISION' }],
+    })
+    await expect(store.discardProposalItem(submitted.proposal.proposalId, submitted.proposal.items[0]!.itemId, signal))
+      .rejects.toMatchObject({ code: 'PROPOSAL_ITEM_APPLIED' })
+
+    const recovered = await store.applyProposal(submitted.proposal.proposalId, signal)
+    expect(recovered).toMatchObject({ appliedItemIds: [], stoppedItemId: submitted.proposal.items[1]?.itemId })
+    const after = await store.read(signal)
+    expect(after.globalRevision).toBe(before.globalRevision + 1)
+    expect(after.project.title).toBe(before.project.title)
+    expect(after.changes.map(change => change.changeSetId)).toEqual(['stale-prefix-architecture'])
+  })
+
+  it('rejects retry for a non-retryable failed item and consumes a persisted regeneration ticket into one linked child bundle', async () => {
+    const { store } = await initializedStore('novel-proposals-regenerate-')
+    const before = await store.read(signal)
+    const { revision: _projectRevision, ...project } = before.project
+    await store.applyChange({
+      changeSetId: 'conflicting-item-id',
+      operation: 'replace',
+      aggregate: { kind: 'project' },
+      baseAggregateRevision: before.project.revision,
+      baseGlobalRevision: before.globalRevision,
+      nextValue: { ...project, title: '人工先占用这个变更 ID' },
+      provenance: { origin: 'manual' },
+    }, signal)
+    const changed = await store.read(signal)
+    const failed = await store.submitProposal(proposalRequest({
+      changes: [{
+        changeSetId: 'conflicting-item-id',
+        aggregate: { kind: 'project' },
+        baseAggregateRevision: changed.project.revision,
+        baseGlobalRevision: changed.globalRevision,
+        nextValue: { ...project, title: '模型不能重放这个 ID' },
+      }],
+    }), signal)
+    const failedResult = await store.applyProposal(failed.proposal.proposalId, signal)
+    expect(failedResult.proposal.items[0]).toMatchObject({ status: 'failed', failure: 'IDEMPOTENCY_CONFLICT' })
+    await expect(store.retryProposalItem(failed.proposal.proposalId, failed.proposal.items[0]!.itemId, signal))
+      .rejects.toMatchObject({ code: 'PROPOSAL_ITEM_NOT_RETRYABLE' })
+
+    const ticketed = await store.submitProposal(proposalRequest({ changes: [{
+      ...baseChange,
+      changeSetId: 'regenerate-source',
+      baseAggregateRevision: changed.architecture.revision,
+      baseGlobalRevision: changed.globalRevision,
+    }] }), signal)
+    const ticket = await store.requestProposalRegeneration(ticketed.proposal.proposalId, ticketed.proposal.items[0]!.itemId, signal)
+    expect(ticket.regenerationTicket).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(ticket.item).toMatchObject({ status: 'pending', regenerationTicket: ticket.regenerationTicket })
+
+    const child = await store.submitProposal(proposalRequest({
+      regenerationTicket: ticket.regenerationTicket,
+      changes: [{
+        ...baseChange,
+        changeSetId: 'regenerated-child',
+        baseAggregateRevision: changed.architecture.revision,
+        baseGlobalRevision: changed.globalRevision,
+        nextValue: { ...baseChange.nextValue, premise: '重新生成后才保留的方案' },
+      }],
+    }), signal)
+    expect(child.proposal).toMatchObject({
+      parentProposalId: ticketed.proposal.proposalId,
+      parentItemId: ticketed.proposal.items[0]?.itemId,
+      items: [{ itemOrder: 0, status: 'pending', change: { changeSetId: 'regenerated-child' } }],
+    })
+    const source = (await store.listProposals(signal)).find(proposal => proposal.proposalId === ticketed.proposal.proposalId)
+    expect(source).toMatchObject({
+      status: 'superseded',
+      items: [{ status: 'superseded', supersededByProposalId: child.proposal.proposalId }],
+    })
+  })
+
+  it('skips superseded and discarded items so a later pending bundle item remains reachable', async () => {
+    const { store } = await initializedStore('novel-proposals-regeneration-resume-')
+    const before = await store.read(signal)
+    const { revision: _architectureRevision, ...architecture } = before.architecture
+    const { revision: _projectRevision, ...project } = before.project
+    const source = await store.submitProposal(proposalRequest({
+      changes: [
+        {
+          ...baseChange,
+          changeSetId: 'superseded-first-item',
+          baseAggregateRevision: before.architecture.revision,
+          baseGlobalRevision: before.globalRevision,
+          nextValue: { ...architecture, premise: '此项将重新生成。' },
+        },
+        {
+          ...baseChange,
+          changeSetId: 'discarded-middle-item',
+          baseAggregateRevision: before.architecture.revision,
+          baseGlobalRevision: before.globalRevision,
+          nextValue: { ...architecture, premise: '此项由用户丢弃。' },
+        },
+        {
+          changeSetId: 'reachable-later-project-item',
+          aggregate: { kind: 'project' },
+          baseAggregateRevision: before.project.revision,
+          baseGlobalRevision: before.globalRevision,
+          nextValue: { ...project, title: '后续项目项仍可提交' },
+        },
+      ],
+    }), signal)
+    const ticket = await store.requestProposalRegeneration(source.proposal.proposalId, source.proposal.items[0]!.itemId, signal)
+    await store.discardProposalItem(source.proposal.proposalId, source.proposal.items[1]!.itemId, signal)
+    const child = await store.submitProposal(proposalRequest({
+      regenerationTicket: ticket.regenerationTicket,
+      changes: [{
+        ...baseChange,
+        changeSetId: 'regenerated-first-item',
+        baseAggregateRevision: before.architecture.revision,
+        baseGlobalRevision: before.globalRevision,
+        nextValue: { ...architecture, premise: '子 proposal 的替代项。' },
+      }],
+    }), signal)
+
+    const recoverable = (await store.listProposals(signal)).find(proposal => proposal.proposalId === source.proposal.proposalId)
+    expect(recoverable).toMatchObject({
+      status: 'pending',
+      items: [{ status: 'superseded' }, { status: 'discarded' }, { status: 'pending' }],
+    })
+    const resumed = await store.applyProposal(source.proposal.proposalId, signal)
+    expect(resumed.appliedItemIds).toEqual([source.proposal.items[2]!.itemId])
+    expect(resumed.proposal.items).toMatchObject([{ status: 'superseded' }, { status: 'discarded' }, {
+      status: 'applied', receipt: { changeSetId: 'reachable-later-project-item' },
+    }])
+    expect(child.proposal.status).toBe('pending')
   })
 
   it('deduplicates identical canonical args hashes and never drops the existing proposal', async () => {
@@ -236,11 +448,43 @@ describe('NovelStore proposal inbox', () => {
       sessionId: 'session-alpha',
       callId: 'call-0001',
       status: 'pending',
-      changes: [{
-        ...baseChange,
-        operation: 'replace',
-        provenance: { origin: 'manual' },
+      items: [{
+        itemOrder: 0,
+        status: 'pending',
+        attemptCount: 0,
+        change: baseChange,
       }],
+    })
+  })
+
+  it('migrates a V2 proposal payload into ordered V3 items before any lifecycle operation', async () => {
+    const { root, store } = await initializedStore('novel-proposals-v2-migration-')
+    const submitted = await store.submitProposal(proposalRequest(), signal)
+    await store.dispose()
+    openStores.length = 0
+
+    const database = new DatabaseSync(join(root, '.ai-novel', 'novel.db'))
+    try {
+      database.exec('DROP TABLE proposal_items')
+      database.exec('ALTER TABLE proposals DROP COLUMN parent_proposal_id')
+      database.exec('ALTER TABLE proposals DROP COLUMN parent_item_id')
+      database.exec('PRAGMA user_version = 2')
+      database.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run()
+    } finally {
+      database.close()
+    }
+
+    const migrated = await openNovelStore(root, WORKSPACE_ID)
+    openStores.push(migrated)
+    const proposal = (await migrated.listProposals(signal))[0]
+    expect((await migrated.read(signal)).storage.userVersion).toBe(3)
+    expect(proposal).toMatchObject({
+      proposalId: submitted.proposal.proposalId,
+      status: 'pending',
+      items: [{ itemOrder: 0, status: 'pending', attemptCount: 0, change: { changeSetId: baseChange.changeSetId } }],
+    })
+    await expect(migrated.applyProposal(proposal!.proposalId, signal)).resolves.toMatchObject({
+      proposal: { status: 'applied', items: [{ status: 'applied' }] },
     })
   })
 

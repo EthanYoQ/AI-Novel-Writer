@@ -140,8 +140,9 @@ describe('novel workbench context summary', () => {
         v2State = { ...v2State, open: true }
         for (const listener of listeners) listener()
       }),
-      close: vi.fn(), refresh: vi.fn(), selectProposal: vi.fn(), openProposalChange: vi.fn(), selectTask: vi.fn(),
-      selectChapter: vi.fn(), openAsset: vi.fn(), updateEditor: vi.fn(), discardEditor: vi.fn(),
+      close: vi.fn(), refresh: vi.fn(), selectProposal: vi.fn(), openProposalChange: vi.fn(), applySelectedProposal: vi.fn(),
+      retryProposalItem: vi.fn(), discardProposalItem: vi.fn(), regenerateProposalItem: vi.fn(), proposalLifecycleAvailable: vi.fn(() => true),
+      selectTask: vi.fn(), selectChapter: vi.fn(), openAsset: vi.fn(), updateEditor: vi.fn(), discardEditor: vi.fn(),
     }
     const setupListeners = new Set<() => void>()
     const setupState = { status: 'installed' as const, open: false, changed: false }
@@ -206,9 +207,15 @@ describe('novel workbench context summary', () => {
       proposals: {
         phase: 'ready', selectedId: 'proposal-1', selectedChange: undefined, message: undefined,
         items: [{
-          proposalId: 'proposal-1', status: 'pending', changes: [
-            { changeSetId: 'project-change-1', aggregate: { kind: 'project' }, baseGlobalRevision: 7 },
-            { changeSetId: 'project-change-2', aggregate: { kind: 'project' }, baseGlobalRevision: 7 },
+          proposalId: 'proposal-1', status: 'pending', items: [
+            {
+              itemId: 'proposal-1-item-1', itemOrder: 1, status: 'pending', attemptCount: 0,
+              change: { changeSetId: 'project-change-1', aggregate: { kind: 'project' }, baseGlobalRevision: 7 },
+            },
+            {
+              itemId: 'proposal-1-item-2', itemOrder: 2, status: 'pending', attemptCount: 0,
+              change: { changeSetId: 'project-change-2', aggregate: { kind: 'project' }, baseGlobalRevision: 7 },
+            },
           ],
         }] as never,
       },
@@ -219,7 +226,9 @@ describe('novel workbench context summary', () => {
     const v2 = {
       getSnapshot: () => v2State,
       subscribe: (listener: () => void) => { v2Listeners.add(listener); return () => { v2Listeners.delete(listener) } },
-      open: vi.fn(), close: vi.fn(), refresh: vi.fn(), selectProposal: vi.fn(), selectTask: vi.fn(), selectChapter: vi.fn(),
+      open: vi.fn(), close: vi.fn(), refresh: vi.fn(), selectProposal: vi.fn(), applySelectedProposal: vi.fn(),
+      retryProposalItem: vi.fn(), discardProposalItem: vi.fn(), regenerateProposalItem: vi.fn(), proposalLifecycleAvailable: vi.fn(() => true),
+      selectTask: vi.fn(), selectChapter: vi.fn(),
       openProposalChange: vi.fn((index: number) => {
         v2State = {
           ...v2State,

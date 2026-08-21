@@ -1,21 +1,25 @@
 /** Path-free V2 sidebar state split by workspace, proposal, task, chapter, and editor concerns. */
 
 import type { WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
-import type {
-  NovelProposalListResult,
-  NovelStateReadResult,
-} from '../command-rpc.ts'
+import type { NovelStateReadResult } from '../command-rpc.ts'
 import type {
   NovelAggregateRef,
+  NovelProposalApplyResult,
+  NovelProposalItemMutationResult,
+  NovelProposalRegenerationResult,
   NovelProposalSummary,
   NovelTaskAggregate,
 } from '../novel-store.ts'
 
-/** The V2 browser surface only calls existing read-only loopback endpoints. */
+/** The V2 browser surface crosses only opaque Workspace, proposal, and item identities. */
 export interface NovelV2WorkbenchPort {
   readState(workspaceId: WorkspaceId, signal: AbortSignal): Promise<NovelStateReadResult>
-  listProposals(workspaceId: WorkspaceId, signal: AbortSignal): Promise<NovelProposalListResult['proposals']>
+  listProposals(workspaceId: WorkspaceId, signal: AbortSignal): Promise<readonly NovelProposalSummary[]>
   readTask(workspaceId: WorkspaceId, taskId: string, signal: AbortSignal): Promise<NovelTaskAggregate>
+  applyProposal?(workspaceId: WorkspaceId, proposalId: string, signal: AbortSignal): Promise<NovelProposalApplyResult>
+  retryProposalItem?(workspaceId: WorkspaceId, proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalApplyResult>
+  discardProposalItem?(workspaceId: WorkspaceId, proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalItemMutationResult>
+  regenerateProposalItem?(workspaceId: WorkspaceId, proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalRegenerationResult>
 }
 
 /** One path-free workspace projection shown by the workbench. */
@@ -28,7 +32,7 @@ export interface NovelWorkspacePanelState {
   readonly snapshot: NovelStateReadResult
 }
 
-/** Proposal queue state; proposal execution remains outside the #124 shell. */
+/** Proposal queue state, including only Host-owned bundle and item lifecycle projections. */
 export interface NovelProposalPanelState {
   readonly phase: 'loading' | 'ready' | 'failed'
   readonly items: readonly NovelProposalSummary[]
@@ -166,6 +170,81 @@ function aggregateFromSnapshot(state: NovelStateReadResult, target: NovelAggrega
   }
 }
 
+function aggregateKey(target: NovelAggregateRef): string {
+  if (target.kind === 'chapter') return `chapter:${target.chapter}`
+  if (target.kind === 'task') return `task:${target.taskId}`
+  return target.kind
+}
+
+interface ProposalDiffBase {
+  readonly value: unknown
+  readonly chainBroken: boolean
+}
+
+function proposalDiffBase(
+  state: NovelStateReadResult,
+  proposal: NovelProposalSummary,
+  index: number,
+): ProposalDiffBase | undefined {
+  const item = proposal.items[index]
+  if (item === undefined) return undefined
+  const authoritative = aggregateFromSnapshot(state, item.change.aggregate)
+  const predicted = new Map<string, { readonly value: unknown; readonly revision: number | undefined }>()
+  let globalRevision = state.globalRevision
+  const predictionFor = (target: NovelAggregateRef): { readonly value: unknown; readonly revision: number | undefined } => {
+    const key = aggregateKey(target)
+    const existing = predicted.get(key)
+    if (existing !== undefined) return existing
+    const value = aggregateFromSnapshot(state, target)
+    const initial = { value, revision: value === undefined ? 0 : aggregateRevision(value) }
+    predicted.set(key, initial)
+    return initial
+  }
+  const preceding = proposal.items
+    .filter(candidate => candidate.itemOrder < item.itemOrder)
+    .toSorted((left, right) => left.itemOrder - right.itemOrder)
+  for (const candidate of preceding) {
+    switch (candidate.status) {
+      case 'applied':
+      case 'discarded':
+      case 'superseded':
+        continue
+      case 'stale':
+      case 'failed':
+        return { value: authoritative, chainBroken: true }
+      case 'pending':
+        break
+    }
+    const prediction = predictionFor(candidate.change.aggregate)
+    if (candidate.change.baseGlobalRevision !== globalRevision
+      || candidate.change.baseAggregateRevision !== prediction.revision) {
+      return { value: authoritative, chainBroken: true }
+    }
+    predicted.set(aggregateKey(candidate.change.aggregate), {
+      value: candidate.change.nextValue,
+      revision: candidate.change.baseAggregateRevision + 1,
+    })
+    globalRevision += 1
+  }
+  switch (item.status) {
+    case 'applied':
+    case 'discarded':
+    case 'superseded':
+      return { value: authoritative, chainBroken: false }
+    case 'stale':
+    case 'failed':
+      return { value: authoritative, chainBroken: true }
+    case 'pending':
+      break
+  }
+  const selectedPrediction = predictionFor(item.change.aggregate)
+  if (item.change.baseGlobalRevision !== globalRevision
+    || item.change.baseAggregateRevision !== selectedPrediction.revision) {
+    return { value: authoritative, chainBroken: true }
+  }
+  return { value: selectedPrediction.value, chainBroken: false }
+}
+
 function aggregateRevision(value: unknown): number | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const revision = (value as { readonly revision?: unknown }).revision
@@ -177,9 +256,12 @@ function draftForProposal(
   proposal: NovelProposalSummary,
   index: number,
 ): Pick<NovelEditorPanelState, 'target' | 'source' | 'current' | 'next' | 'aggregateRevision' | 'baseGlobalRevision' | 'baseAggregateRevision' | 'stale'> | undefined {
-  const change = proposal.changes[index]
-  if (change === undefined) return undefined
-  const current = aggregateFromSnapshot(state, change.aggregate)
+  const item = proposal.items[index]
+  if (item === undefined) return undefined
+  const change = item.change
+  const base = proposalDiffBase(state, proposal, index)
+  if (base === undefined) return undefined
+  const current = base.value
   return {
     target: change.aggregate,
     source: 'proposal',
@@ -247,6 +329,8 @@ export class NovelV2WorkbenchController {
   #active: AbortController | undefined
   #taskRequest = 0
   #activeTask: AbortController | undefined
+  #proposalRequest = 0
+  #activeProposal: AbortController | undefined
   #inflight = new Set<Promise<void>>()
   #disposed = false
   #disposePromise: Promise<void> | undefined
@@ -273,6 +357,7 @@ export class NovelV2WorkbenchController {
     this.#retainedReady = undefined
     this.#active?.abort()
     this.#cancelTaskRead()
+    this.#cancelProposalOperation()
     if (workspaceId === undefined) {
       this.#set({
         status: 'idle', open: this.#state.open, workspace: undefined, proposals: EMPTY_PROPOSALS, tasks: EMPTY_TASKS,
@@ -324,7 +409,7 @@ export class NovelV2WorkbenchController {
       const selectedChange = selectedProposalValue !== undefined
         && previous?.proposals.selectedId === selectedProposal
         && previousChange !== undefined
-        && selectedProposalValue.changes[previousChange] !== undefined
+        && selectedProposalValue.items[previousChange] !== undefined
         ? previousChange
         : undefined
       const selectedTask = state.tasks.some(task => task.taskId === previous?.tasks.selectedId)
@@ -382,17 +467,77 @@ export class NovelV2WorkbenchController {
     if (this.#state.status !== 'ready') return
     const proposal = this.#state.proposals.items.find(item => item.proposalId === this.#state.proposals.selectedId)
     if (proposal === undefined) return
+    const base = proposalDiffBase(this.#state.workspace.snapshot, proposal, index)
     const opened = draftForProposal(this.#state.workspace.snapshot, proposal, index)
-    if (opened === undefined) return
+    if (opened === undefined || base === undefined) return
     this.#set({
       ...this.#state,
       proposals: { ...this.#state.proposals, selectedChange: index },
       editor: {
         ...opened,
         phase: 'idle', draft: opened.next ?? '',
-        message: `提案版本基于全局版本 ${opened.baseGlobalRevision}；当前已读全局版本 ${this.#state.workspace.globalRevision}。应用操作由后续命令工作流负责。`,
+        message: `提案版本基于全局版本 ${opened.baseGlobalRevision}；当前已读全局版本 ${this.#state.workspace.globalRevision}。${base.chainBroken
+          ? ' Proposal Bundle 的顺序 revision 链与权威快照不匹配；顺序应用时由 Host 按 stale revision 验证，本项差异以权威快照为基准。'
+          : ' 应用与恢复由 Host Proposal Bundle 生命周期负责。'}`,
       },
     })
+  }
+
+  /** Ask the Host to apply the selected Proposal Bundle in its persisted item order. */
+  public applySelectedProposal(): Promise<void> {
+    if (this.#state.status !== 'ready') return Promise.resolve()
+    const proposal = this.#state.proposals.items.find(item => item.proposalId === this.#state.proposals.selectedId)
+    if (proposal === undefined) return Promise.resolve()
+    if (proposal.status === 'stale') {
+      return this.#proposalOperationUnavailable('Host 报告此 Proposal Bundle 已冲突；请先处理对应项，不能盲目应用。')
+    }
+    const workspaceId = this.#state.workspace.workspaceId
+    const apply = this.port.applyProposal
+    if (apply === undefined) return this.#proposalOperationUnavailable('Host 尚未提供 Proposal Bundle 应用命令。')
+    return this.#runProposalOperation(proposal.proposalId, '提案应用', signal => apply(workspaceId, proposal.proposalId, signal))
+  }
+
+  /** Ask the Host to retry one failed Proposal Bundle item by opaque item identity. */
+  public retryProposalItem(index: number): Promise<void> {
+    if (this.#state.status !== 'ready') return Promise.resolve()
+    const proposal = this.#state.proposals.items.find(item => item.proposalId === this.#state.proposals.selectedId)
+    const item = proposal?.items[index]
+    if (proposal === undefined || item === undefined) return Promise.resolve()
+    const workspaceId = this.#state.workspace.workspaceId
+    const retry = this.port.retryProposalItem
+    if (retry === undefined) return this.#proposalOperationUnavailable('Host 尚未提供 Proposal Bundle 逐项重试命令。')
+    return this.#runProposalOperation(proposal.proposalId, '提案项重试', signal => retry(workspaceId, proposal.proposalId, item.itemId, signal))
+  }
+
+  /** Ask the Host to durably discard one Proposal Bundle item. */
+  public discardProposalItem(index: number): Promise<void> {
+    if (this.#state.status !== 'ready') return Promise.resolve()
+    const proposal = this.#state.proposals.items.find(item => item.proposalId === this.#state.proposals.selectedId)
+    const item = proposal?.items[index]
+    if (proposal === undefined || item === undefined) return Promise.resolve()
+    const workspaceId = this.#state.workspace.workspaceId
+    const discard = this.port.discardProposalItem
+    if (discard === undefined) return this.#proposalOperationUnavailable('Host 尚未提供 Proposal Bundle 逐项放弃命令。')
+    return this.#runProposalOperation(proposal.proposalId, '提案项放弃', signal => discard(workspaceId, proposal.proposalId, item.itemId, signal))
+  }
+
+  /** Ask the Host to regenerate one item; the Host returns and persists the opaque ticket. */
+  public regenerateProposalItem(index: number): Promise<void> {
+    if (this.#state.status !== 'ready') return Promise.resolve()
+    const proposal = this.#state.proposals.items.find(item => item.proposalId === this.#state.proposals.selectedId)
+    const item = proposal?.items[index]
+    if (proposal === undefined || item === undefined) return Promise.resolve()
+    const workspaceId = this.#state.workspace.workspaceId
+    const regenerate = this.port.regenerateProposalItem
+    if (regenerate === undefined) return this.#proposalOperationUnavailable('Host 尚未提供 Proposal Bundle 逐项重新生成命令。')
+    return this.#runProposalOperation(proposal.proposalId, '提案项重新生成', signal => regenerate(workspaceId, proposal.proposalId, item.itemId, signal))
+  }
+
+  /** Whether every Host-owned per-item lifecycle action is wired by the active client port. */
+  public proposalLifecycleAvailable(): boolean {
+    return this.port.retryProposalItem !== undefined
+      && this.port.discardProposalItem !== undefined
+      && this.port.regenerateProposalItem !== undefined
   }
 
   /** Select a persisted task; detail reads stay path-free and use the existing task/read contract. */
@@ -477,6 +622,7 @@ export class NovelV2WorkbenchController {
     this.#active?.abort()
     this.#active = undefined
     this.#cancelTaskRead()
+    this.#cancelProposalOperation()
     this.#set({
       status: 'error', open: this.#state.open, workspace: undefined,
       proposals: { ...EMPTY_PROPOSALS, phase: 'failed', message: 'Harness 连接已断开，恢复连接后重新读取。' },
@@ -492,9 +638,54 @@ export class NovelV2WorkbenchController {
     this.#request += 1
     this.#active?.abort()
     this.#cancelTaskRead()
+    this.#cancelProposalOperation()
     this.#retainedReady = undefined
     this.#disposePromise = this.#settleInflight().then(() => { this.#listeners.clear() })
     return this.#disposePromise
+  }
+
+  #proposalOperationUnavailable(message: string): Promise<void> {
+    this.#setProposalMessage(message)
+    return Promise.resolve()
+  }
+
+  #runProposalOperation(
+    proposalId: string,
+    label: string,
+    operation: (signal: AbortSignal) => Promise<unknown>,
+  ): Promise<void> {
+    if (this.#state.status !== 'ready') return Promise.resolve()
+    if (this.#state.workspace.readOnly) {
+      this.#setProposalMessage('当前 Workspace 为只读，不能变更 Proposal Bundle。')
+      return Promise.resolve()
+    }
+    if (this.#activeProposal !== undefined) {
+      this.#setProposalMessage('Proposal Bundle 生命周期操作正在进行中。')
+      return Promise.resolve()
+    }
+    const workspaceId = this.#state.workspace.workspaceId
+    const request = ++this.#proposalRequest
+    const abort = new AbortController()
+    this.#activeProposal = abort
+    const pending = Promise.resolve().then(() => operation(abort.signal)).then(async () => {
+      if (!this.#isCurrentProposalMutation(abort, request, workspaceId)) return
+      await this.refresh()
+      if (!this.#isCurrentProposalOperation(abort, request, workspaceId, proposalId)) return
+      this.#setProposalMessage(`${label}已由 Host 处理；已刷新权威 Proposal Bundle 状态。`)
+    }).catch(error => {
+      if (abort.signal.aborted) return
+      if (!this.#isCurrentProposalOperation(abort, request, workspaceId, proposalId)) return
+      this.#setProposalMessage(`${label}失败：${messageOf(error)}`)
+    }).finally(() => {
+      if (this.#activeProposal === abort) this.#activeProposal = undefined
+    })
+    this.#track(pending)
+    return pending
+  }
+
+  #setProposalMessage(message: string | undefined): void {
+    if (this.#state.status !== 'ready') return
+    this.#set({ ...this.#state, proposals: { ...this.#state.proposals, message } })
   }
 
   #track(pending: Promise<void>): void {
@@ -515,6 +706,33 @@ export class NovelV2WorkbenchController {
     this.#taskRequest += 1
     this.#activeTask?.abort()
     this.#activeTask = undefined
+  }
+
+  #cancelProposalOperation(): void {
+    this.#proposalRequest += 1
+    this.#activeProposal?.abort()
+    this.#activeProposal = undefined
+  }
+
+  #isCurrentProposalOperation(
+    abort: AbortController,
+    request: number,
+    workspaceId: WorkspaceId,
+    proposalId: string,
+  ): boolean {
+    return this.#isCurrentProposalMutation(abort, request, workspaceId)
+      && this.#state.proposals.selectedId === proposalId
+  }
+
+  #isCurrentProposalMutation(
+    abort: AbortController,
+    request: number,
+    workspaceId: WorkspaceId,
+  ): boolean {
+    return !abort.signal.aborted
+      && request === this.#proposalRequest
+      && this.#state.status === 'ready'
+      && this.#state.workspace.workspaceId === workspaceId
   }
 
   #isCurrentTaskRead(

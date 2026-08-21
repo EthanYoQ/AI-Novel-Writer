@@ -25,10 +25,51 @@ const validState = {
 
 const validProposal = {
   proposalId: 'proposal-1', sessionId: 'session-1', callId: 'call-1', argsHash: 'hash-1', status: 'pending',
-  createdAt: TIMESTAMP, updatedAt: TIMESTAMP, changes: [],
+  createdAt: TIMESTAMP, updatedAt: TIMESTAMP, items: [],
 }
 
 describe('V2 workbench client port', () => {
+  it('uses only opaque Workspace, Proposal, and item IDs for Host-owned bundle lifecycle RPCs', async () => {
+    const { revision: _revision, ...nextValue } = validState.project
+    const item = {
+      itemId: 'proposal-1-item-1', itemOrder: 1, status: 'failed' as const, attemptCount: 1, failure: 'STALE_REVISION',
+      change: {
+        changeSetId: 'proposal-1-project', operation: 'replace' as const, aggregate: { kind: 'project' as const },
+        baseAggregateRevision: 1, baseGlobalRevision: 1, nextValue, provenance: { origin: 'manual' as const },
+      },
+    }
+    const receipt = {
+      changeSetId: item.change.changeSetId, projectId: validState.projectId, aggregate: item.change.aggregate,
+      aggregateRevision: 2, globalRevision: 2,
+    }
+    const appliedProposal = { ...validProposal, status: 'failed' as const, items: [{ ...item, status: 'applied' as const, receipt }] }
+    const applied = { proposal: appliedProposal, appliedItemIds: [item.itemId], stoppedItemId: undefined }
+    const discarded = { proposal: appliedProposal, item: { ...item, status: 'discarded' as const } }
+    const regenerated = { ...discarded, regenerationTicket: 'ticket-1' }
+    const rpc = {
+      call: vi.fn((_channel: string, endpoint: string) => Promise.resolve({
+        ok: true as const,
+        value: endpoint === 'proposal/apply' || endpoint === 'proposal/retry' ? applied
+          : endpoint === 'proposal/discard' ? discarded
+            : endpoint === 'proposal/regenerate' ? regenerated : validState,
+      })),
+    }
+    const port = createNovelV2WorkbenchPort(rpc)
+    const signal = new AbortController().signal
+
+    await expect(port.applyProposal?.(WORKSPACE_ID, 'proposal-1', signal)).resolves.toEqual(applied)
+    await expect(port.retryProposalItem?.(WORKSPACE_ID, 'proposal-1', item.itemId, signal)).resolves.toEqual(applied)
+    await expect(port.discardProposalItem?.(WORKSPACE_ID, 'proposal-1', item.itemId, signal)).resolves.toEqual(discarded)
+    await expect(port.regenerateProposalItem?.(WORKSPACE_ID, 'proposal-1', item.itemId, signal)).resolves.toEqual(regenerated)
+
+    expect(rpc.call).toHaveBeenNthCalledWith(1, '/ai-novel', 'proposal/apply', { workspaceId: WORKSPACE_ID, proposalId: 'proposal-1' }, signal)
+    expect(rpc.call).toHaveBeenNthCalledWith(2, '/ai-novel', 'proposal/retry', { workspaceId: WORKSPACE_ID, proposalId: 'proposal-1', itemId: item.itemId }, signal)
+    expect(rpc.call).toHaveBeenNthCalledWith(3, '/ai-novel', 'proposal/discard', { workspaceId: WORKSPACE_ID, proposalId: 'proposal-1', itemId: item.itemId }, signal)
+    expect(rpc.call).toHaveBeenNthCalledWith(4, '/ai-novel', 'proposal/regenerate', { workspaceId: WORKSPACE_ID, proposalId: 'proposal-1', itemId: item.itemId }, signal)
+    expect(JSON.stringify(rpc.call.mock.calls)).not.toContain('workspacePath')
+    expect(JSON.stringify(rpc.call.mock.calls)).not.toContain('archivePath')
+  })
+
   it('uses only the existing path-free state, proposal, and task loopback reads', async () => {
     const state = validState
     const proposals = [validProposal]
@@ -102,16 +143,19 @@ describe('V2 workbench client port', () => {
     await expect(port.readTask(WORKSPACE_ID, 'chapter-1', signal)).rejects.toThrow('AI novel V2 task response is invalid')
   })
 
-  it('rejects incomplete nested V2 aggregates and proposal change envelopes', async () => {
+  it('rejects incomplete nested V2 aggregates and proposal item change envelopes', async () => {
     const rpc = {
       call: vi.fn((_channel: string, endpoint: string) => Promise.resolve({
         ok: true as const,
         value: endpoint === 'state/read'
           ? { ...validState, architecture: { ...validState.architecture, world: undefined } }
           : endpoint === 'proposal/list'
-            ? { proposals: [{ ...validProposal, changes: [{
-              changeSetId: 'change-1', operation: 'replace', aggregate: { kind: 'project' },
-              baseAggregateRevision: 1, baseGlobalRevision: 1, nextValue: {}, provenance: { origin: 'manual' },
+            ? { proposals: [{ ...validProposal, items: [{
+              itemId: 'proposal-1-item-1', itemOrder: 1, status: 'pending', attemptCount: 0,
+              change: {
+                changeSetId: 'change-1', operation: 'replace', aggregate: { kind: 'project' },
+                baseAggregateRevision: 1, baseGlobalRevision: 1, nextValue: {}, provenance: { origin: 'manual' },
+              },
             }] }] }
             : { revision: 1, taskId: 'chapter-1', kind: 'chapter', stage: 'draft', status: 'unknown', failure: '', resumeCursor: '', createdAt: TIMESTAMP, updatedAt: TIMESTAMP },
       })),
@@ -134,7 +178,9 @@ describe('V2 workbench client port', () => {
       },
       provenance: { origin: 'manual' },
     }
-    const rpc = { call: vi.fn(() => Promise.resolve({ ok: true as const, value: { proposals: [{ ...validProposal, changes: [taskChange] }] } })) }
+    const rpc = { call: vi.fn(() => Promise.resolve({ ok: true as const, value: { proposals: [{ ...validProposal, items: [{
+      itemId: 'proposal-1-item-1', itemOrder: 1, status: 'pending', attemptCount: 0, change: taskChange,
+    }] }] } })) }
     const port = createNovelV2WorkbenchPort(rpc)
 
     await expect(port.listProposals(WORKSPACE_ID, new AbortController().signal))
@@ -150,7 +196,9 @@ describe('V2 workbench client port', () => {
       },
       provenance: { origin: 'manual' },
     }
-    const rpc = { call: vi.fn(() => Promise.resolve({ ok: true as const, value: { proposals: [{ ...validProposal, changes: [chapterChange] }] } })) }
+    const rpc = { call: vi.fn(() => Promise.resolve({ ok: true as const, value: { proposals: [{ ...validProposal, items: [{
+      itemId: 'proposal-1-item-1', itemOrder: 1, status: 'pending', attemptCount: 0, change: chapterChange,
+    }] }] } })) }
     const port = createNovelV2WorkbenchPort(rpc)
 
     await expect(port.listProposals(WORKSPACE_ID, new AbortController().signal))
