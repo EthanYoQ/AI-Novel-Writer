@@ -26,8 +26,11 @@ import {
 } from '../../../shared/blueprint-semantic-contract'
 import {
   IMPORT_INFERENCE_JSON_CONTRACT,
+  type ImportInferenceResult,
   decodeImportInferenceJson,
+  parseImportInferenceJsonObject,
 } from './import-inference-contract'
+import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
 import type {
   FinalizedDraftImportDraftReceipt,
   FinalizedDraftImportReceipt,
@@ -51,6 +54,87 @@ export interface ImportedChapter {
 }
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function deepJsonEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((value, index) => deepJsonEqual(value, right[index]))
+  }
+  if (isRecord(left) || isRecord(right)) {
+    if (!isRecord(left) || !isRecord(right)) return false
+    const leftKeys = Object.keys(left).sort()
+    const rightKeys = Object.keys(right).sort()
+    if (!deepJsonEqual(leftKeys, rightKeys)) return false
+    return leftKeys.every(key => deepJsonEqual(left[key], right[key]))
+  }
+  return false
+}
+
+function importInferenceCards(root: Record<string, unknown>): Array<Record<string, unknown>> {
+  const cards = root.characterCards
+  if (!Array.isArray(cards) || !cards.every(isRecord)) {
+    throw new Error('导入推演受限补卡校正缺少可比较的原始角色卡')
+  }
+  return cards
+}
+
+function unresolvedImportRelationshipTargets(root: Record<string, unknown>): string[] {
+  const cards = importInferenceCards(root)
+  const names = new Set(cards.map(card => card.name).filter((name): name is string => typeof name === 'string'))
+  const unresolved = new Set<string>()
+  for (const card of cards) {
+    const cardName = typeof card.name === 'string' ? card.name : undefined
+    const relationships = card.relationships
+    if (!Array.isArray(relationships)) continue
+    for (const relationship of relationships) {
+      if (!isRecord(relationship) || typeof relationship.target !== 'string') continue
+      if (relationship.target !== cardName && !names.has(relationship.target)) unresolved.add(relationship.target)
+    }
+  }
+  if (unresolved.size === 0) {
+    throw new Error('导入推演受限补卡校正缺少未闭合的关系端点')
+  }
+  return [...unresolved]
+}
+
+function assertImportEndpointCorrection(
+  originalRoot: Record<string, unknown>,
+  correctedRoot: Record<string, unknown>,
+  unresolvedTargets: readonly string[],
+): void {
+  if (!deepJsonEqual(originalRoot.novelConfig, correctedRoot.novelConfig)) {
+    throw new Error('导入推演受限补卡校正必须保留原有配置')
+  }
+  if (!deepJsonEqual(originalRoot.architectureFiles, correctedRoot.architectureFiles)) {
+    throw new Error('导入推演受限补卡校正必须保留原有架构文件')
+  }
+
+  const originalCards = importInferenceCards(originalRoot)
+  const correctedCards = importInferenceCards(correctedRoot)
+  if (correctedCards.length !== originalCards.length + unresolvedTargets.length) {
+    throw new Error('导入推演受限补卡校正只能新增缺失关系端点角色')
+  }
+  for (const [index, originalCard] of originalCards.entries()) {
+    if (!deepJsonEqual(originalCard, correctedCards[index])) {
+      throw new Error('导入推演受限补卡校正必须保留原有角色卡和关系数组')
+    }
+  }
+
+  const expectedAddedNames = new Set(unresolvedTargets)
+  const addedNames = correctedCards.slice(originalCards.length).map(card => card.name)
+  if (
+    addedNames.length !== expectedAddedNames.size
+    || addedNames.some(name => typeof name !== 'string' || !expectedAddedNames.has(name))
+    || new Set(addedNames).size !== addedNames.length
+  ) {
+    throw new Error('导入推演受限补卡校正新增角色必须精确匹配原始未闭合关系端点')
+  }
+}
 
 function requireFinalizedDraftImportReceipt(
   candidate: FinalizedDraftImportReceipt | undefined,
@@ -240,6 +324,52 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
   }
 
+  private async decodeImportInferenceWithEndpointRecovery(
+    rawResult: string,
+    callbacks: CommandExecuteParams['callbacks'],
+    context: CommandExecuteParams['context'],
+  ): Promise<ImportInferenceResult> {
+    try {
+      return decodeImportInferenceJson(rawResult)
+    } catch (error) {
+      if (!(error instanceof StructuredContractDiagnostic)
+        || error.code !== 'relationship_endpoint_not_in_characters') {
+        throw error
+      }
+    }
+
+    const originalRoot = parseImportInferenceJsonObject(rawResult)
+    const unresolvedTargets = unresolvedImportRelationshipTargets(originalRoot)
+    callbacks.log(`导入推演关系端点缺少 ${unresolvedTargets.length} 张角色卡，正在执行一次受限补卡校正`)
+    const correction = await this.callLLMResult(
+      [
+        '【导入推演受限补卡校正】',
+        '上一轮完整 JSON 已可解析，但 characterCards.relationships.target 引用了 characterCards 中不存在的角色名。',
+        '只输出一个完整 JSON 对象，不要 Markdown、解释或思考过程。',
+        `必须新增且只新增这些缺失角色 name：${JSON.stringify(unresolvedTargets)}`,
+        'novelConfig、architectureFiles、原 characterCards 的所有字段和 relationships 数组必须保持完全相同。',
+        '不得删除、重排、改名或改写任何原角色；不得新增任意其他角色。',
+        '新增角色必须完整满足导入推演 JSON 合同，且最终关系端点必须闭合。',
+        '【导入推演 JSON 合同】',
+        IMPORT_INFERENCE_JSON_CONTRACT,
+        '【上一轮完整 JSON】',
+        JSON.stringify(originalRoot),
+      ].join('\n'),
+      '你是导入推演 JSON 受限补卡校正器。只补齐缺失关系端点对应的角色卡，不改变已有事实。',
+      callbacks,
+      {
+        responseFormat: { type: 'json_object' },
+        purpose: 'import-inference:endpoint-card-recovery',
+        reasoningStage: 'planning',
+      },
+      context,
+    )
+    if (correction.finishReason !== 'stop') throw this.createIncompleteCompletionError(correction.finishReason)
+    const correctedRoot = parseImportInferenceJsonObject(correction.content)
+    assertImportEndpointCorrection(originalRoot, correctedRoot, unresolvedTargets)
+    return decodeImportInferenceJson(correction.content)
+  }
+
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
@@ -363,7 +493,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     callbacks.log('正在解析 AI 返回结果并写入项目...')
 
     // ===== 解析 JSON 结果 =====
-    const inferResult = decodeImportInferenceJson(rawResult)
+    const inferResult = await this.decodeImportInferenceWithEndpointRecovery(rawResult, callbacks, context)
 
     const roster = await ipc.invokeWithProjectSession(
       projectSession,

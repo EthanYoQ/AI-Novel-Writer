@@ -62,6 +62,16 @@ function normalizeImportInferenceJsonContent(content: string): string {
   return fenced ? trimEdgeWrapperResidue(fenced[1]) : trimmed
 }
 
+export function parseImportInferenceJsonObject(content: string): Record<string, unknown> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(normalizeImportInferenceJsonContent(content))
+  } catch {
+    throw new StructuredContractDiagnostic('invalid_json', '$')
+  }
+  return record(parsed, '$')
+}
+
 function record(value: unknown, path: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new StructuredContractDiagnostic('invalid_type', path)
@@ -158,13 +168,7 @@ function decodeCards(value: unknown): CharacterRosterEntry[] {
 }
 
 export function decodeImportInferenceJson(content: string): ImportInferenceResult {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(normalizeImportInferenceJsonContent(content))
-  } catch {
-    throw new StructuredContractDiagnostic('invalid_json', '$')
-  }
-  const root = record(parsed, '$')
+  const root = parseImportInferenceJsonObject(content)
   const config = record(required(root, 'novelConfig', '$'), 'novelConfig')
   const architecture = record(required(root, 'architectureFiles', '$'), 'architectureFiles')
   const plotStructure = required(config, 'plotStructure', 'novelConfig')
