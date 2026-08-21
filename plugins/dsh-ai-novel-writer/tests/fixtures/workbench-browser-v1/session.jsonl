@@ -1,0 +1,18 @@
+{"type":"session","version":0,"id":"{{sessionId}}","createdAt":1785974400000,"cwd":"{{cwd}}","agentPreset":"ai-novel-writer"}
+{"type":"user/message","seq":0,"time":1785974400001,"data":{"content":[{"type":"text","text":"workbench AI initialization replay call"}],"source":{"kind":"user","rpcId":"{{rpcId}}"}},"surfaceOp":"append"}
+{"type":"assistant/chunk","seq":1,"time":1785974400002,"data":{"turn":1,"step":1,"chunk":{"type":"block-start","index":0,"blockType":"tool-call"}}}
+{"type":"assistant/chunk","seq":2,"time":1785974400003,"data":{"turn":1,"step":1,"chunk":{"type":"block-end","index":0,"block":{"type":"tool-call","id":"workbench-initialize-read","name":"novel_read","arguments":"{\"kind\":\"working-set\"}"}}}}
+{"type":"assistant/chunk","seq":3,"time":1785974400004,"data":{"turn":1,"step":1,"chunk":{"type":"finish","reason":{"kind":"tool-calls"}}}}
+{"type":"assistant/chunk","seq":4,"time":1785974400005,"data":{"turn":1,"step":2,"chunk":{"type":"block-start","index":0,"blockType":"tool-call"}}}
+{"type":"assistant/chunk","seq":5,"time":1785974400006,"data":{"turn":1,"step":2,"chunk":{"type":"block-end","index":0,"block":{"type":"tool-call","id":"workbench-initialize-apply","name":"novel_apply_change","arguments":"{\"kind\":\"initialize\",\"projectId\":\"123e4567-e89b-42d3-a456-426614174000\",\"createdAt\":\"2026-08-16T00:00:00.000Z\",\"updatedAt\":\"2026-08-16T00:00:00.000Z\",\"title\":\"潮汐来信\",\"language\":\"zh-CN\",\"genre\":\"悬疑\",\"plannedChapters\":20,\"targetWordsPerChapter\":3000,\"creativeStrategy\":\"auto\"}"}}}}
+{"type":"assistant/chunk","seq":6,"time":1785974400007,"data":{"turn":1,"step":2,"chunk":{"type":"finish","reason":{"kind":"tool-calls"}}}}
+{"type":"assistant/chunk","seq":7,"time":1785974400008,"data":{"turn":1,"step":3,"chunk":{"type":"block-start","index":0,"blockType":"text"}}}
+{"type":"assistant/chunk","seq":8,"time":1785974400009,"data":{"turn":1,"step":3,"chunk":{"type":"block-end","index":0,"block":{"type":"text","text":"项目设置已获批准并保存。"}}}}
+{"type":"assistant/chunk","seq":9,"time":1785974400010,"data":{"turn":1,"step":3,"chunk":{"type":"finish","reason":{"kind":"stop"}}}}
+{"type":"user/message","seq":10,"time":1785974400011,"data":{"content":[{"type":"text","text":"workbench generation replay call"}],"source":{"kind":"user","rpcId":"{{rpcId}}"}},"surfaceOp":"append"}
+{"type":"assistant/chunk","seq":11,"time":1785974400012,"data":{"turn":2,"step":1,"chunk":{"type":"block-start","index":0,"blockType":"tool-call"}}}
+{"type":"assistant/chunk","seq":12,"time":1785974400013,"data":{"turn":2,"step":1,"chunk":{"type":"block-end","index":0,"block":{"type":"tool-call","id":"workbench-generated-story","name":"novel_apply_change","arguments":"{\"kind\":\"replace\",\"targetKind\":\"story-blueprint\",\"baseRevision\":\"cf4dd24cfea3d5d2b95672af2bbd0de59b6b7dca67991a306187dc7c9a9db5a6\",\"replacement\":\"{\\n  \\\"premise\\\": \\\"退潮后，失踪者的信件逐封出现，并在灯塔钟声中指向潮汐站。\\\",\\n  \\\"themes\\\": [\\n    \\\"记忆\\\",\\n    \\\"责任\\\"\\n  ],\\n  \\\"world\\\": \\\"近未来海港城\\\",\\n  \\\"mainPlot\\\": \\\"记者与调查员追查潮汐站旧案，并追踪灯塔钟声的来源。\\\",\\n  \\\"endingGoal\\\": \\\"公开真相并阻止下一次事故。\\\"\\n}\\n\",\"summary\":\"AI 生成故事蓝图\"}"}}}}
+{"type":"assistant/chunk","seq":13,"time":1785974400014,"data":{"turn":2,"step":1,"chunk":{"type":"finish","reason":{"kind":"tool-calls"}}}}
+{"type":"assistant/chunk","seq":14,"time":1785974400015,"data":{"turn":2,"step":2,"chunk":{"type":"block-start","index":0,"blockType":"text"}}}
+{"type":"assistant/chunk","seq":15,"time":1785974400016,"data":{"turn":2,"step":2,"chunk":{"type":"block-end","index":0,"block":{"type":"text","text":"故事蓝图已获批准并保存。"}}}}
+{"type":"assistant/chunk","seq":16,"time":1785974400017,"data":{"turn":2,"step":2,"chunk":{"type":"finish","reason":{"kind":"stop"}}}}

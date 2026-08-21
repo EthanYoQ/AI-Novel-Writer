@@ -17,6 +17,7 @@ import {
   validateNovelProposalPayload,
   type NovelStore,
 } from './novel-store.ts'
+import { projectNovelStateRead } from './command-rpc.ts'
 import type {
   AssetRef, CreativeStrategy, NovelApplyRequest, NovelProjectId, NovelReadRequest, Revision,
 } from './types.ts'
@@ -456,8 +457,7 @@ export function createNovelV2ToolDefinitions(
       const workspace = await resolveWorkspace(exec)
       const store = await openNovelStore(workspace.path, workspace.id, options)
       try {
-        const { workspacePath: _workspacePath, ...state } = await store.read(exec.signal)
-        return state as unknown as JsonValue
+        return projectNovelStateRead(await store.read(exec.signal)) as unknown as JsonValue
       } finally {
         await store.dispose()
       }

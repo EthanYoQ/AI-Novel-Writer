@@ -2,4 +2,4 @@
 
 ## Subagent model routing
 
-When spawning subagents for this plugin, do not use SoL, Terra, or Luna models. Prefer GLM 5.3 or K3, and select the highest useful reasoning effort for adversarial review, architecture, implementation, and debugging tasks.
+When spawning subagents for this plugin, use the native gpt-5.6-terra model with xhigh reasoning effort.

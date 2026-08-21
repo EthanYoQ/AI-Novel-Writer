@@ -8,6 +8,7 @@ import {
 } from '../src/client/workbench-view.tsx'
 import type { NovelWorkbenchState } from '../src/client/workbench-store.ts'
 import type { NovelProjectId, Revision } from '../src/types.ts'
+import type { NovelV2WorkbenchState } from '../src/client/workbench-v2.ts'
 
 const uninitialized: NovelWorkbenchState = {
   status: 'not-initialized',
@@ -19,6 +20,22 @@ const uninitialized: NovelWorkbenchState = {
       targetWordsPerChapter: '3000', creativeStrategy: 'auto',
     },
   },
+}
+
+const v2Ready: NovelV2WorkbenchState = {
+  status: 'ready', open: false,
+  workspace: {
+    workspaceId: 'workspace-v2' as never,
+    project: {
+      revision: 1, title: '潮汐来信', language: 'zh-CN', genre: '悬疑', plannedChapters: 12, targetWordsPerChapter: 3000,
+      creativeStrategy: 'auto', structureMode: 'three-act', narrativePov: 'third-limited', globalGuidance: '',
+      createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T00:00:00.000Z',
+    },
+    globalRevision: 1, readOnly: false, snapshot: {} as never,
+  },
+  proposals: { phase: 'ready', items: [], selectedId: undefined, selectedChange: undefined, message: undefined },
+  tasks: { items: [], selectedId: undefined, message: undefined }, chapters: { selected: undefined, items: [] },
+  editor: { target: undefined, phase: 'idle', current: '', next: undefined, aggregateRevision: undefined, draft: '', message: undefined },
 }
 
 const editorActions: Omit<NovelWorkbenchBodyProps, 'state'> = {
@@ -77,6 +94,7 @@ describe('novel workbench presentation', () => {
     const html = renderToStaticMarkup(<NovelPluginCardBody
       setupState={{ status: 'installed', open: false, changed: false }}
       workbenchState={uninitialized}
+      workbenchMode="v1"
       openWorkbench={vi.fn()}
       refresh={vi.fn()}
     />)
@@ -85,6 +103,19 @@ describe('novel workbench presentation', () => {
       'AI 小说作家', 'Host 已连接', 'Client 已挂载', 'Preset 已安装',
       'Workspace 已选择', '项目未初始化', '打开小说工作台',
     ]) expect(html).toContain(text)
+  })
+
+  it('shows the active V2 workbench status instead of V1 project evidence in Plugin Configuration', () => {
+    const html = renderToStaticMarkup(<NovelPluginCardBody
+      setupState={{ status: 'installed', open: false, changed: false }}
+      workbenchState={v2Ready}
+      workbenchMode="v2"
+      openWorkbench={vi.fn()}
+      refresh={vi.fn()}
+    />)
+
+    for (const text of ['V2 单列工作台', 'Workspace 已选择', '项目已加载（V2）']) expect(html).toContain(text)
+    expect(html).not.toContain('项目未初始化')
   })
 
   it('shows a known approval blocker before submission and disables the proposal action', () => {

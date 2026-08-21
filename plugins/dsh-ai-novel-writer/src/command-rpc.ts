@@ -16,8 +16,36 @@ import {
   type NovelProposalSummary,
 } from './novel-store.ts'
 
-/** Authoritative state projection with the Host-only workspace path removed. */
-export type NovelStateReadResult = Omit<NovelStoreSnapshot, 'workspacePath'>
+/** Migration evidence that is safe to expose outside the Host filesystem boundary. */
+export interface NovelMigrationStateReadReceipt {
+  readonly projectId: NovelStoreSnapshot['projectId']
+  readonly fingerprint: string
+  readonly sourceCount: number
+  readonly chapterCount: number
+  readonly draftCount: number
+  readonly migratedAt: string
+}
+
+/** Authoritative state projection with all Host-local paths removed. */
+export type NovelStateReadResult = Omit<NovelStoreSnapshot, 'workspacePath' | 'migration'> & {
+  readonly migration: NovelMigrationStateReadReceipt | undefined
+}
+
+/** Remove Host-local migration archive paths before a `state/read` result crosses the RPC boundary. */
+export function projectNovelStateRead(snapshot: NovelStoreSnapshot): NovelStateReadResult {
+  const { workspacePath: _workspacePath, migration, ...state } = snapshot
+  return {
+    ...state,
+    migration: migration === undefined ? undefined : {
+      projectId: migration.projectId,
+      fingerprint: migration.fingerprint,
+      sourceCount: migration.sourceCount,
+      chapterCount: migration.chapterCount,
+      draftCount: migration.draftCount,
+      migratedAt: migration.migratedAt,
+    },
+  }
+}
 
 /** Summary of one persisted, non-authoritative model proposal. */
 export type { NovelProposalSummary }
@@ -409,8 +437,7 @@ export function createAiNovelCommandRpcHandler(
           return stableStoreFailure(endpoint, error, signal, reportFailure)
         }
       }
-      const { workspacePath: _workspacePath, ...state } = await store.read(signal)
-      return { ok: true, value: state }
+      return { ok: true, value: projectNovelStateRead(await store.read(signal)) }
     } catch (error) {
       return stableStoreFailure(endpoint, error, signal, reportFailure)
     } finally {

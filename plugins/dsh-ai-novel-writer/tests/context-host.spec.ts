@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { createAiNovelRpcHandler } from '../src/index.ts'
+import { projectNovelStateRead } from '../src/command-rpc.ts'
 import { openNovelStore } from '../src/novel-store.ts'
 import { openNovelProject } from '../src/novel-project.ts'
 import { createPresetInstaller } from '../src/preset-installer.ts'
@@ -495,6 +496,40 @@ describe('novel context Host RPC', () => {
     })
     expect(JSON.stringify(result)).not.toContain(root)
     expect(JSON.stringify(result)).not.toContain('workspacePath')
+    expect(JSON.stringify(result)).not.toContain('archivePath')
+  })
+
+  it('removes a migrated V1 archive location from the state/read wire projection', async () => {
+    const root = await initializedV2Workspace('state-host-migration-projection-')
+    const store = await openNovelStore(root, WorkspaceId(V2_WORKSPACE_ID), { create: false })
+    try {
+      const snapshot = await store.read(signal)
+      const projected = projectNovelStateRead({
+        ...snapshot,
+        migration: {
+          projectId: snapshot.projectId,
+          fingerprint: 'a'.repeat(64),
+          archivePath: 'C:\\HostOnly\\v1-archive',
+          sourceCount: 5,
+          chapterCount: 1,
+          draftCount: 1,
+          migratedAt: '2026-08-21T00:00:00.000Z',
+        },
+      })
+
+      expect(projected.migration).toEqual({
+        projectId: snapshot.projectId,
+        fingerprint: 'a'.repeat(64),
+        sourceCount: 5,
+        chapterCount: 1,
+        draftCount: 1,
+        migratedAt: '2026-08-21T00:00:00.000Z',
+      })
+      expect(JSON.stringify(projected)).not.toContain('archivePath')
+      expect(JSON.stringify(projected)).not.toContain('C:\\HostOnly')
+    } finally {
+      await store.dispose()
+    }
   })
 
   it('returns a typed empty proposal inbox before persistent proposals exist', async () => {

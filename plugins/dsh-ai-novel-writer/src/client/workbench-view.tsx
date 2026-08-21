@@ -12,6 +12,138 @@ import type {
   NovelWorkbenchEditableTarget,
 } from './asset-editor.ts'
 import type { NovelInitializationDraft, NovelWorkbenchState } from './workbench-store.ts'
+import type { NovelAggregateRef } from '../novel-store.ts'
+import type { NovelV2WorkbenchState } from './workbench-v2.ts'
+
+function proposalStatusLabel(status: 'pending' | 'stale' | 'applied' | 'discarded' | 'superseded' | 'failed'): string {
+  return ({ pending: '待处理', stale: '冲突', applied: '已应用', discarded: '已放弃', superseded: '已替代', failed: '失败' })[status]
+}
+
+function taskStatusLabel(status: 'pending' | 'running' | 'blocked' | 'succeeded' | 'failed' | 'cancelled'): string {
+  return ({ pending: '等待', running: '进行中', blocked: '阻塞', succeeded: '完成', failed: '失败', cancelled: '已取消' })[status]
+}
+
+function aggregateLabel(target: NovelAggregateRef): string {
+  if (target.kind === 'chapter') return `第 ${target.chapter} 章`
+  if (target.kind === 'task') return `任务 ${target.taskId}`
+  return ({ project: '项目设置', architecture: '故事架构', characters: '人物设定' })[target.kind]
+}
+
+/** Props for the V2 shell; every action remains client-local or path-free. */
+export interface NovelV2WorkbenchBodyProps {
+  readonly state: NovelV2WorkbenchState
+  readonly refresh: () => void
+  readonly selectProposal: (proposalId: string | undefined) => void
+  readonly openProposalChange: (index: number) => void
+  readonly selectTask: (taskId: string | undefined) => void
+  readonly selectChapter: (chapter: number) => void
+  readonly openAsset: (target: NovelAggregateRef) => void
+  readonly updateEditor: (draft: string) => void
+  readonly discardEditor: () => void
+}
+
+/**
+ * V2 single-column shell. It renders Host projections and local draft state only;
+ * command preview, commit, and task execution remain explicitly out of this issue.
+ */
+export function NovelV2WorkbenchBody({
+  state, refresh, selectProposal, openProposalChange, selectTask, selectChapter, openAsset, updateEditor, discardEditor,
+}: NovelV2WorkbenchBodyProps) {
+  if (state.status === 'error') return <section className="aiNovelV2Workbench" data-ai-novel-v2-workbench>
+      <h3 data-ai-novel-screen-focus tabIndex={-1}>工作台读取失败</h3>
+      <p role="alert">{state.message}</p>
+      <button type="button" onClick={refresh}>重试读取</button>
+    </section>
+  if (state.status !== 'ready') return state.status === 'idle'
+    ? <p className="aiNovelContextMuted">请选择一个 Workspace 以打开小说工作台。</p>
+    : <p className="aiNovelContextMuted" aria-live="polite">正在读取工作台状态…</p>
+
+  const selectedProposal = state.proposals.items.find(item => item.proposalId === state.proposals.selectedId)
+  const selectedTask = state.tasks.items.find(item => item.taskId === state.tasks.selectedId)
+  const editor = state.editor
+  return <div className="aiNovelV2Workbench" data-ai-novel-v2-workbench>
+    <section className="aiNovelV2Panel" aria-labelledby="ai-novel-v2-overview">
+      <h3 id="ai-novel-v2-overview" data-ai-novel-screen-focus={editor.target === undefined ? '' : undefined} tabIndex={-1}>项目概览</h3>
+      <dl className="aiNovelV2Summary">
+        <div><dt>项目</dt><dd>{state.workspace.project.title}</dd></div>
+        <div><dt>类型</dt><dd>{state.workspace.project.genre}</dd></div>
+        <div><dt>版本</dt><dd>全局版本 {state.workspace.globalRevision}</dd></div>
+        <div><dt>写入</dt><dd>{state.workspace.readOnly ? '只读' : '可用'}</dd></div>
+      </dl>
+    </section>
+
+    <section className="aiNovelV2Panel" aria-labelledby="ai-novel-v2-proposals">
+      <h3 id="ai-novel-v2-proposals">提案队列</h3>
+      {state.proposals.message ? <p role="alert">{state.proposals.message}</p> : undefined}
+      {state.proposals.items.length === 0 ? <p className="aiNovelContextMuted">没有待审提案。</p> : <ul className="aiNovelV2List">
+        {state.proposals.items.map(proposal => <li key={proposal.proposalId}>
+          <button type="button" aria-current={proposal.proposalId === state.proposals.selectedId || undefined}
+            onClick={() => { selectProposal(proposal.proposalId) }}>
+            {proposalStatusLabel(proposal.status)} · {proposal.changes.length} 个聚合变更
+          </button>
+        </li>)}
+      </ul>}
+      {selectedProposal ? <div className="aiNovelV2DetailList" aria-label="提案变更">
+        {selectedProposal.changes.map((change, index) => <button type="button" key={change.changeSetId}
+          aria-current={state.proposals.selectedChange === index || undefined}
+          onClick={() => { openProposalChange(index) }}>
+          查看 {aggregateLabel(change.aggregate)} 差异 · 基于版本 {change.baseGlobalRevision}
+        </button>)}
+      </div> : undefined}
+    </section>
+
+    <section className="aiNovelV2Panel" aria-labelledby="ai-novel-v2-tasks">
+      <h3 id="ai-novel-v2-tasks">任务</h3>
+      {state.tasks.message ? <p role="alert">{state.tasks.message}</p> : undefined}
+      {state.tasks.items.length === 0 ? <p className="aiNovelContextMuted">当前没有任务。</p> : <ul className="aiNovelV2List">
+        {state.tasks.items.map(task => <li key={task.taskId}>
+          <button type="button" aria-current={task.taskId === selectedTask?.taskId || undefined}
+            onClick={() => { void selectTask(task.taskId) }}>
+            {taskStatusLabel(task.status)} · {task.stage}
+          </button>
+          {task.failure !== '' ? <p role="alert">失败：{task.failure}</p> : undefined}
+          {task.resumeCursor !== '' ? <p>可恢复：Host 已保存进度标记；此工作台仅显示状态。</p> : undefined}
+        </li>)}
+      </ul>}
+    </section>
+
+    <section className="aiNovelV2Panel" aria-labelledby="ai-novel-v2-assets">
+      <h3 id="ai-novel-v2-assets">资产导航</h3>
+      <div className="aiNovelV2AssetNav">
+        <button type="button" onClick={() => { openAsset({ kind: 'project' }) }}>项目设置</button>
+        <button type="button" onClick={() => { openAsset({ kind: 'architecture' }) }}>故事架构</button>
+        <button type="button" onClick={() => { openAsset({ kind: 'characters' }) }}>人物设定</button>
+        {state.chapters.items.map(chapter => <button type="button" key={chapter.chapter}
+          aria-current={chapter.chapter === state.chapters.selected || undefined}
+          onClick={() => {
+            selectChapter(chapter.chapter)
+            openAsset({ kind: 'chapter', chapter: chapter.chapter })
+          }}>第 {chapter.chapter} 章：{chapter.title}</button>)}
+      </div>
+    </section>
+
+    {editor.target === undefined ? undefined : <section className="aiNovelV2Panel aiNovelV2Editor" aria-labelledby="ai-novel-v2-editor">
+       <h3 id="ai-novel-v2-editor" data-ai-novel-screen-focus="" tabIndex={-1}>{aggregateLabel(editor.target)}：编辑 / 差异 / 版本</h3>
+      <p>当前全局版本 {state.workspace.globalRevision}；聚合版本 {editor.aggregateRevision ?? '未知'}。
+        {editor.baseGlobalRevision === undefined ? undefined : ` 此详情基于全局版本 ${editor.baseGlobalRevision}。`}
+        {editor.stale ? <span role="alert">权威值已更新：本地草稿保留为旧版本，保存前必须重新核对。</span> : undefined}
+        {editor.message}
+      </p>
+      <div className="aiNovelV2Diff" aria-label="当前值与提案下一值差异">
+        <section><h4>当前值</h4><pre>{editor.current}</pre></section>
+        {editor.next === undefined ? undefined : <section><h4>提案下一值（当前 → 下一值）</h4><pre>{editor.next}</pre></section>}
+      </div>
+      <textarea aria-label={`${aggregateLabel(editor.target)} JSON 草稿`} value={editor.draft}
+        onChange={event => { updateEditor(event.currentTarget.value) }} />
+      <div className="aiNovelWorkbenchActions">
+        <button type="button" disabled>保存（命令工作流待接入）</button>
+        <button type="button" disabled>应用（命令工作流待接入）</button>
+        <button type="button" onClick={discardEditor}>放弃本地草稿</button>
+      </div>
+      <p className="aiNovelContextMuted">冲突、失败与恢复由已读到的 proposal/task 状态呈现；本 shell 不发起 commit 或 retry。</p>
+    </section>}
+  </div>
+}
 
 /** Props for the one-column workbench content. */
 export interface NovelWorkbenchBodyProps {
@@ -701,7 +833,8 @@ export function NovelWorkbenchBody({
 /** Props for the Plugin Configuration evidence card. */
 export interface NovelPluginCardBodyProps {
   readonly setupState: PresetSetupState
-  readonly workbenchState: NovelWorkbenchState
+  readonly workbenchState: NovelWorkbenchState | NovelV2WorkbenchState | undefined
+  readonly workbenchMode: 'none' | 'v1' | 'v2'
   readonly openWorkbench: (returnFocus: HTMLButtonElement) => void
   readonly refresh: () => void
 }
@@ -722,12 +855,28 @@ function presetStatus(state: PresetSetupState): string {
   }
 }
 
-function workspaceStatus(state: NovelWorkbenchState): string {
-  return state.status === 'empty' || state.status === 'idle' ? 'Workspace 未选择' : 'Workspace 已选择'
+function workspaceStatus(state: NovelWorkbenchState | NovelV2WorkbenchState | undefined, mode: 'none' | 'v1' | 'v2'): string {
+  if (mode === 'none' || state === undefined) return '未绑定小说会话'
+  if (mode === 'v2') {
+    if (state.status === 'ready') return 'Workspace 已选择'
+    if (state.status === 'loading') return '正在检查 Workspace'
+    if (state.status === 'error') return 'Workspace 状态不可用'
+    return 'Workspace 未选择'
+  }
+  const v1 = state as NovelWorkbenchState
+  return v1.status === 'empty' || v1.status === 'idle' ? 'Workspace 未选择' : 'Workspace 已选择'
 }
 
-function projectStatus(state: NovelWorkbenchState): string {
-  switch (state.status) {
+function projectStatus(state: NovelWorkbenchState | NovelV2WorkbenchState | undefined, mode: 'none' | 'v1' | 'v2'): string {
+  if (mode === 'none' || state === undefined) return '请在当前会话选择 AI 小说作家 Preset'
+  if (mode === 'v2') {
+    if (state.status === 'ready') return '项目已加载（V2）'
+    if (state.status === 'loading') return '正在检查项目'
+    if (state.status === 'error') return state.message.includes('连接已断开') ? '项目状态不可用' : '项目读取失败'
+    return '项目尚不可用'
+  }
+  const v1 = state as NovelWorkbenchState
+  switch (v1.status) {
     case 'ready': return '项目已初始化'
     case 'not-initialized': return '项目未初始化'
     case 'loading': return '正在检查项目'
@@ -747,26 +896,29 @@ function projectStatus(state: NovelWorkbenchState): string {
 export function NovelPluginCardBody({
   setupState,
   workbenchState,
+  workbenchMode,
   openWorkbench,
   refresh,
 }: NovelPluginCardBodyProps) {
   return (
     <li className="aiNovelPluginCard">
       <div className="aiNovelPluginCardHeader">
-        <div><strong>AI 小说作家</strong><p>小说项目、专用 Preset 与审批式创作流程</p></div>
+        <div><strong>AI 小说作家</strong><p>{workbenchMode === 'v2' ? 'V2 单列工作台与只读项目投影' : workbenchMode === 'v1' ? '小说项目、专用 Preset 与审批式创作流程' : '当前会话未绑定小说 Preset，不会打开小说工作台。'}</p></div>
         <span className="aiNovelPluginMounted">Client 已挂载</span>
       </div>
       <dl className="aiNovelPluginFacts">
         <div><dt>Host</dt><dd>{hostStatus(setupState)}</dd></div>
         <div><dt>Preset</dt><dd>{presetStatus(setupState)}</dd></div>
-        <div><dt>Workspace</dt><dd>{workspaceStatus(workbenchState)}</dd></div>
-        <div><dt>小说项目</dt><dd>{projectStatus(workbenchState)}</dd></div>
+        <div><dt>工作台</dt><dd>{workbenchMode === 'v2' ? 'V2 单列工作台' : workbenchMode === 'v1' ? 'V1 紧凑编辑器' : '未绑定小说会话'}</dd></div>
+        <div><dt>Workspace</dt><dd>{workspaceStatus(workbenchState, workbenchMode)}</dd></div>
+        <div><dt>小说项目</dt><dd>{projectStatus(workbenchState, workbenchMode)}</dd></div>
       </dl>
       <div className="aiNovelPluginActions">
         <button type="button" className="aiNovelPresetSecondary" onClick={refresh}>刷新状态</button>
         <button
           type="button"
           className="aiNovelPresetPrimary"
+          disabled={workbenchMode === 'none'}
           onClick={event => { openWorkbench(event.currentTarget) }}
         >打开小说工作台</button>
       </div>
