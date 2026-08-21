@@ -9,6 +9,10 @@ import { useProjectStore } from '../../../stores/project-store'
 const styleMocks = vi.hoisted(() => ({
   execute: vi.fn(),
 }))
+const postProcessMocks = vi.hoisted(() => ({
+  loadCharacters: vi.fn(),
+  loadAllDrafts: vi.fn(),
+}))
 
 vi.mock('../commands/analyze-style.command', () => ({
   AnalyzeWritingStyleCommand: vi.fn(function AnalyzeWritingStyleCommandMock() {
@@ -16,6 +20,16 @@ vi.mock('../commands/analyze-style.command', () => ({
     execute: styleMocks.execute,
     }
   }),
+}))
+vi.mock('../../../stores/character-store', () => ({
+  useCharacterStore: {
+    getState: () => ({ loadCharacters: postProcessMocks.loadCharacters }),
+  },
+}))
+vi.mock('../../../stores/draft-store', () => ({
+  useDraftStore: {
+    getState: () => ({ loadAllDrafts: postProcessMocks.loadAllDrafts }),
+  },
 }))
 
 const callbacks: StepCallbacks = {
@@ -37,6 +51,7 @@ const importProjectSession = {
   leaseId: 'lease-test-project',
   projectPath: 'C:\\test-project',
 }
+const originalRefreshFileTree = useProjectStore.getState().refreshFileTree
 
 function source(file: string) {
   return readFileSync(resolve(process.cwd(), file), 'utf8')
@@ -50,6 +65,8 @@ const pseudoIconPattern = new RegExp([
 
 beforeEach(() => {
   vi.clearAllMocks()
+  postProcessMocks.loadCharacters.mockResolvedValue(undefined)
+  postProcessMocks.loadAllDrafts.mockResolvedValue(undefined)
   useProjectStore.setState({
     currentProject: {
       id: 'test-project',
@@ -65,7 +82,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  useProjectStore.setState({ currentProject: null })
+  vi.useRealTimers()
+  useProjectStore.setState({ currentProject: null, refreshFileTree: originalRefreshFileTree })
 })
 
 describe('createImportWorkflow', () => {
@@ -130,5 +148,58 @@ describe('createImportWorkflow', () => {
     ].map(source).join('\n')
 
     expect(combined).not.toMatch(pseudoIconPattern)
+  })
+
+  it('continues post-processing when the derived file-tree refresh is pending', async () => {
+    vi.useFakeTimers()
+    const refreshFileTree = vi.fn(() => new Promise<void>(() => {}))
+    useProjectStore.setState({ refreshFileTree })
+    const workflow = createImportWorkflow({
+      projectPath: 'C:\\test-project',
+      projectSession: importProjectSession,
+      chapters: [{ number: 1, title: '启程', content: '雨声很急。', wordCount: 5 }],
+    })
+    const step = workflow.steps.find(item => item.name === '完成后处理')
+    let settled = false
+    let failure: unknown
+
+    void step?.executor({} as never, context, callbacks).then(
+      () => { settled = true },
+      error => {
+        settled = true
+        failure = error
+      },
+    )
+
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(settled).toBe(true)
+    expect(failure).toBeUndefined()
+    expect(refreshFileTree).toHaveBeenCalledOnce()
+    expect(postProcessMocks.loadCharacters).toHaveBeenCalledOnce()
+    expect(postProcessMocks.loadAllDrafts).toHaveBeenCalledOnce()
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('文件树刷新'))
+    expect(callbacks.log).toHaveBeenCalledWith('小说拆解与仿写准备完成，结构化数据已就位。')
+    expect(callbacks.setProgress).toHaveBeenCalledWith(100)
+  })
+
+  it('continues post-processing when the derived file-tree refresh rejects', async () => {
+    const refreshFileTree = vi.fn(() => Promise.reject(new Error('refresh failed')))
+    useProjectStore.setState({ refreshFileTree })
+    const workflow = createImportWorkflow({
+      projectPath: 'C:\\test-project',
+      projectSession: importProjectSession,
+      chapters: [{ number: 1, title: '启程', content: '雨声很急。', wordCount: 5 }],
+    })
+    const step = workflow.steps.find(item => item.name === '完成后处理')
+
+    await expect(step?.executor({} as never, context, callbacks)).resolves.toBeUndefined()
+
+    expect(refreshFileTree).toHaveBeenCalledOnce()
+    expect(postProcessMocks.loadCharacters).toHaveBeenCalledOnce()
+    expect(postProcessMocks.loadAllDrafts).toHaveBeenCalledOnce()
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('文件树刷新'))
+    expect(callbacks.log).toHaveBeenCalledWith('小说拆解与仿写准备完成，结构化数据已就位。')
+    expect(callbacks.setProgress).toHaveBeenCalledWith(100)
   })
 })

@@ -18,6 +18,7 @@ import {
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
 import type { ImportedChapter } from './commands/import-novel.command'
+import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh'
 import { requireWorkflowProjectSession } from './workflow-project-session'
 
 export interface ImportWorkflowParams {
@@ -107,11 +108,14 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
           callbacks.log('正在刷新项目数据...')
           callbacks.setProgress(30)
 
-          // 刷新文件树
-          await useProjectStore.getState().refreshFileTree(
-            workflowProjectSession.projectPath,
-            undefined,
-            workflowProjectSession,
+          // 派生 UI 文件树刷新不能阻塞后处理中的角色与草稿刷新。
+          await refreshImportDerivedFileTreeBestEffort(
+            () => useProjectStore.getState().refreshFileTree(
+              workflowProjectSession.projectPath,
+              undefined,
+              workflowProjectSession,
+            ),
+            callbacks,
           )
 
           // 加载角色卡

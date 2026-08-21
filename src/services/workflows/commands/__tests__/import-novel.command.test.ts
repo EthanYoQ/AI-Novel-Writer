@@ -25,6 +25,7 @@ const callbacks: StepCallbacks = {
 }
 const originalGenerateStream = useLLMStore.getState().generateStream
 const originalDefaultModelId = useLLMStore.getState().defaultModelId
+const originalRefreshFileTree = useProjectStore.getState().refreshFileTree
 
 function createContext(): WorkflowContext {
   return {
@@ -177,7 +178,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
-  useProjectStore.setState({ currentProject: null })
+  vi.useRealTimers()
+  useProjectStore.setState({ currentProject: null, refreshFileTree: originalRefreshFileTree })
   useLLMStore.setState({
     defaultModelId: originalDefaultModelId,
     generateStream: originalGenerateStream,
@@ -234,6 +236,65 @@ describe('ImportInitializeCommand', () => {
     expect(context.data.finalizedDraftImportReceipt).toEqual(receipt)
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('数据库定稿事实已提交'))
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('实体稿发布记录已进入待发布队列'))
+  })
+
+  it('continues after a pending derived file-tree refresh while preserving the finalized import receipt', async () => {
+    vi.useFakeTimers()
+    const context = createContext()
+    const receipt = finalizedReceipt(context)
+    stubIpcInvoke((channel) => {
+      if (channel === 'db:draft-import-finalized-batch') return { success: true, receipt }
+      if (channel === 'kb:import-text') return { success: true }
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+    const refreshFileTree = vi.fn(() => new Promise<void>(() => {}))
+    useProjectStore.setState({ refreshFileTree })
+    let settled = false
+    let failure: unknown
+
+    void new ImportInitializeCommand(context.data.chapters as never[]).execute({
+      step: {},
+      context,
+      callbacks,
+    }).then(
+      () => { settled = true },
+      error => {
+        settled = true
+        failure = error
+      },
+    )
+
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(settled).toBe(true)
+    expect(failure).toBeUndefined()
+    expect(refreshFileTree).toHaveBeenCalledOnce()
+    expect(context.data.finalizedDraftImportReceipt).toEqual(receipt)
+    expect(context.data.chapters).toEqual(createContext().data.chapters)
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('文件树刷新'))
+  })
+
+  it('continues after a rejected derived file-tree refresh while preserving the finalized import receipt', async () => {
+    const context = createContext()
+    const receipt = finalizedReceipt(context)
+    stubIpcInvoke((channel) => {
+      if (channel === 'db:draft-import-finalized-batch') return { success: true, receipt }
+      if (channel === 'kb:import-text') return { success: true }
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+    const refreshFileTree = vi.fn(() => Promise.reject(new Error('refresh failed')))
+    useProjectStore.setState({ refreshFileTree })
+
+    await expect(new ImportInitializeCommand(context.data.chapters as never[]).execute({
+      step: {},
+      context,
+      callbacks,
+    })).resolves.toBeUndefined()
+
+    expect(refreshFileTree).toHaveBeenCalledOnce()
+    expect(context.data.finalizedDraftImportReceipt).toEqual(receipt)
+    expect(context.data.chapters).toEqual(createContext().data.chapters)
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('文件树刷新'))
   })
 
   it('fails closed on a malformed batch receipt before any knowledge-base write', async () => {

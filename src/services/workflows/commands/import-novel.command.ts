@@ -15,6 +15,7 @@ import { ipc } from '../../ipc-client'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { refreshImportDerivedFileTreeBestEffort } from '../import-derived-refresh'
 import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
 import type { ChapterBlueprint } from '../directory-workflow'
 import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
@@ -307,8 +308,11 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
     context.data.chapters = this.chapters
     context.data.totalChapters = this.chapters.length
 
-    // 刷新文件树
-    await useProjectStore.getState().refreshFileTree(context.projectPath, undefined, projectSession)
+    // 派生 UI 文件树刷新不能阻塞已提交的导入事实与知识库结果。
+    await refreshImportDerivedFileTreeBestEffort(
+      () => useProjectStore.getState().refreshFileTree(context.projectPath, undefined, projectSession),
+      callbacks,
+    )
   }
 }
 
