@@ -1123,7 +1123,7 @@ export function NovelPluginCardBody({
   return (
     <li className="aiNovelPluginCard">
       <div className="aiNovelPluginCardHeader">
-        <div><strong>AI 小说作家</strong><p>{workbenchMode === 'v2' ? 'V2 单列工作台与只读项目投影' : workbenchMode === 'v1' ? '小说项目、专用 Preset 与审批式创作流程' : '当前会话未绑定小说 Preset，不会打开小说工作台。'}</p></div>
+        <div><strong>AI 小说作家</strong><p>{workbenchMode === 'v2' ? 'V2 单列工作台与只读项目投影' : workbenchMode === 'v1' ? '小说项目、专用 Preset 与审批式创作流程' : '当前会话未绑定小说 Preset；打开可查看首次使用引导并安装。'}</p></div>
         <span className="aiNovelPluginMounted">Client 已挂载</span>
       </div>
       <dl className="aiNovelPluginFacts">
@@ -1138,7 +1138,6 @@ export function NovelPluginCardBody({
         <button
           type="button"
           className="aiNovelPresetPrimary"
-          disabled={workbenchMode === 'none'}
           onClick={event => { openWorkbench(event.currentTarget) }}
         >打开小说工作台</button>
       </div>

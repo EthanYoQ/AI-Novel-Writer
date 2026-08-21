@@ -124,9 +124,19 @@ export function NovelWorkbenchTrigger({
     listener => v2WorkbenchController.subscribe(listener),
     () => v2WorkbenchController.getSnapshot(),
   )
+  const setupState = useSyncExternalStore(
+    listener => setupController.subscribe(listener),
+    () => setupController.getSnapshot(),
+  )
   const activeState = mode === 'v2' ? v2State : mode === 'v1' ? v1State : undefined
+  const drawerOpen = mode === 'none' ? setupState.open : activeState?.open ?? false
   const open = (event: ReactMouseEvent<HTMLButtonElement>): void => {
-    if (mode === 'none') return
+    if (mode === 'none') {
+      drawerReturnTargets.set(setupController, event.currentTarget)
+      setupController.open()
+      void setupController.load()
+      return
+    }
     const activeController = mode === 'v2' ? v2WorkbenchController : workbenchController
     drawerReturnTargets.set(activeController, event.currentTarget)
     setupController.open()
@@ -138,8 +148,7 @@ export function NovelWorkbenchTrigger({
       className="aiNovelContextTrigger"
       aria-label="打开小说工作台"
       aria-haspopup="dialog"
-      aria-expanded={activeState?.open ?? false}
-      disabled={mode === 'none'}
+      aria-expanded={drawerOpen}
       onClick={open}
     >
       <IconListPenOutline16 />
@@ -177,27 +186,32 @@ export function NovelWorkbenchOverlay({
   const shellSeat = useRef<HTMLSpanElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const activeState = mode === 'v2' ? v2State : mode === 'v1' ? v1State : undefined
+  const drawerOpen = mode === 'none' ? setupState.open : activeState?.open ?? false
+  const drawerController = mode === 'v2' ? v2WorkbenchController : mode === 'v1' ? workbenchController : setupController
   const screenKey = mode === 'v2'
     ? v2ScreenKey(v2State)
     : v1State.status === 'ready' ? v1State.screen.kind : v1State.status
   const previousScreenKey = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (activeState === undefined || !activeState.open || drawer.current === null || shellSeat.current === null) return
-    const activeController = mode === 'v2' ? v2WorkbenchController : workbenchController
+    if (!drawerOpen || drawer.current === null || shellSeat.current === null) return
     const releaseLayout = installWorkbenchLayoutReservation(shellSeat.current)
     const releaseKeyboard = installDrawerKeyboardScope(
       drawer.current,
       closeButton.current ?? drawer.current,
-      drawerReturnTargets.get(activeController),
-      () => { activeController.close(); setupController.close() },
+      drawerReturnTargets.get(drawerController),
+      () => {
+        if (mode === 'v2') v2WorkbenchController.close()
+        else if (mode === 'v1') workbenchController.close()
+        setupController.close()
+      },
     )
     return () => {
       releaseLayout()
       releaseKeyboard()
     }
-  }, [activeState?.open, mode, setupController, v2WorkbenchController, workbenchController])
+  }, [drawerController, drawerOpen, mode, setupController, v2WorkbenchController, workbenchController])
   useEffect(() => {
-    if (activeState === undefined || !activeState.open) {
+    if (!drawerOpen) {
       previousScreenKey.current = undefined
       return
     }
@@ -212,8 +226,8 @@ export function NovelWorkbenchOverlay({
     if (previousScreenKey.current === screenKey) return
     previousScreenKey.current = screenKey
     drawer.current?.querySelector<HTMLElement>('[data-ai-novel-screen-focus]')?.focus()
-  }, [activeState?.open, activeState?.status, screenKey])
-  if (activeState === undefined || !activeState.open) return null
+  }, [drawerOpen, activeState?.status, screenKey])
+  if (!drawerOpen) return null
   const close = (): void => {
     if (mode === 'v2') v2WorkbenchController.close()
     else if (mode === 'v1') workbenchController.close()
@@ -241,7 +255,13 @@ export function NovelWorkbenchOverlay({
           >关闭</button>
         </div>
         <div className="aiNovelContextBody" data-ai-novel-workbench>
-          {mode === 'v2'
+          {mode === 'none'
+            ? <section className="aiNovelContextSetup" aria-labelledby="ai-novel-first-use-title">
+                <h3 id="ai-novel-first-use-title">首次使用小说工作台</h3>
+                <p>请先安装 AI 小说作家 Preset。安装后请刷新当前页面，再新建会话并选择“AI 小说作家 V2”。</p>
+                <p>“AI 小说作家”是兼容的 V1 选项。</p>
+              </section>
+            : mode === 'v2'
             ? <NovelV2WorkbenchBody
                 state={v2State}
                 refresh={() => { void v2WorkbenchController.refresh() }}
@@ -339,7 +359,12 @@ export function NovelPluginStatusCard({
     workbenchState={activeWorkbenchState}
     workbenchMode={mode}
     openWorkbench={returnFocus => {
-      if (mode === 'none') return
+      if (mode === 'none') {
+        drawerReturnTargets.set(setupController, returnFocus)
+        setupController.open()
+        void setupController.load()
+        return
+      }
       const activeController = mode === 'v2' ? v2WorkbenchController : workbenchController
       drawerReturnTargets.set(activeController, returnFocus)
       setupController.open()

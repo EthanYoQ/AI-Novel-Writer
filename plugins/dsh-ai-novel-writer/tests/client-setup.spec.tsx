@@ -652,4 +652,13 @@ describe('preset setup browser integration', () => {
     expect(html).toContain(text)
     expect(html).not.toContain('path=')
   })
+
+  it.each([
+    [{ status: 'not-installed', open: true }],
+    [{ status: 'installed', open: true, changed: true }],
+  ] satisfies readonly [PresetSetupState][])('tells the user to refresh before selecting V2 after state %#', state => {
+    const html = renderToStaticMarkup(<PresetSetupBody state={state} install={() => {}} retry={() => {}} />)
+    expect(html).toContain('安装后请刷新当前页面，再新建会话并选择“AI 小说作家 V2”Preset。')
+    expect(html).toContain('“AI 小说作家”是兼容的 V1 选项')
+  })
 })

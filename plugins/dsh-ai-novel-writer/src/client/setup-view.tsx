@@ -21,7 +21,8 @@ export function PresetSetupBody({ state, install, retry }: PresetSetupBodyProps)
     case 'not-installed':
       return (
         <div aria-live="polite">
-          <p>安装后，请新建会话并选择“AI 小说作家”Preset。</p>
+          <p>安装后请刷新当前页面，再新建会话并选择“AI 小说作家 V2”Preset。</p>
+          <p>“AI 小说作家”是兼容的 V1 选项。</p>
           <button type="button" className="aiNovelPresetPrimary" onClick={install}>安装 AI 小说作家 Preset</button>
         </div>
       )
@@ -29,7 +30,8 @@ export function PresetSetupBody({ state, install, retry }: PresetSetupBodyProps)
       return (
         <div role="status" aria-live="polite">
           <p>Preset 已安装。</p>
-          <p>请新建会话并选择“AI 小说作家”，现有会话不会被改写。</p>
+          <p>安装后请刷新当前页面，再新建会话并选择“AI 小说作家 V2”Preset。</p>
+          <p>“AI 小说作家”是兼容的 V1 选项；现有会话不会被改写。</p>
         </div>
       )
     case 'conflict':

@@ -107,7 +107,7 @@ function renderBody(state: NovelWorkbenchState): string {
 }
 
 describe('novel workbench context summary', () => {
-  it('keeps the actual trigger, card, and overlay unbound for an unknown Preset without opening either workbench', async () => {
+  it('opens the first-use setup drawer from either entry for an unknown Preset without opening either workbench', async () => {
     const route = new NovelWorkbenchRouteController()
     trackDomTestCleanup(() => { route.dispose() })
     const listeners = new Set<() => void>()
@@ -145,11 +145,20 @@ describe('novel workbench context summary', () => {
       selectTask: vi.fn(), selectChapter: vi.fn(), openAsset: vi.fn(), updateEditor: vi.fn(), discardEditor: vi.fn(),
     }
     const setupListeners = new Set<() => void>()
-    const setupState = { status: 'installed' as const, open: false, changed: false }
+    let setupState = { status: 'not-installed' as const, open: false }
+    const notifySetup = (): void => { for (const listener of setupListeners) listener() }
     const setup = {
       getSnapshot: () => setupState,
       subscribe: (listener: () => void) => { setupListeners.add(listener); return () => { setupListeners.delete(listener) } },
-      open: vi.fn(), close: vi.fn(), load: vi.fn(async () => {}),
+      open: vi.fn(() => {
+        setupState = { ...setupState, open: true }
+        notifySetup()
+      }),
+      close: vi.fn(() => {
+        setupState = { ...setupState, open: false }
+        notifySetup()
+      }),
+      load: vi.fn(async () => {}), install: vi.fn(async () => {}),
     }
     const standard = {
       useSessions: (() => undefined) as never,
@@ -167,13 +176,53 @@ describe('novel workbench context summary', () => {
     })
 
     const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+    const cardOpen = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent === '打开小说工作台')!
     expect(route.getSnapshot()).toBe('none')
-    expect(trigger.disabled).toBe(true)
+    expect(trigger.disabled).toBe(false)
+    expect(cardOpen.disabled).toBe(false)
     expect(container.textContent).toContain('未绑定小说会话')
+    setup.open.mockClear()
+    setup.close.mockClear()
+    setup.load.mockClear()
+    trigger.focus()
     await act(async () => { trigger.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(setup.open).toHaveBeenCalledOnce()
+    expect(setup.load).toHaveBeenCalledOnce()
     expect(v1.open).not.toHaveBeenCalled()
     expect(v2.open).not.toHaveBeenCalled()
+    const firstUseDrawer = document.body.querySelector<HTMLElement>('[role="dialog"]')!
+    const firstUseGuide = firstUseDrawer.querySelector<HTMLElement>('[aria-labelledby="ai-novel-first-use-title"]')!
+    expect(firstUseDrawer.getAttribute('aria-modal')).toBe('false')
+    expect(firstUseDrawer.textContent).toContain('首次使用小说工作台')
+    expect(firstUseGuide.textContent).toContain('刷新当前页面')
+    expect(firstUseDrawer.textContent).toContain('AI 小说作家 V2')
+    expect(firstUseDrawer.textContent).toContain('安装 AI 小说作家 Preset')
+    expect(document.activeElement).toBe(firstUseDrawer.querySelector('[aria-label="关闭小说工作台"]'))
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    expect(setup.close).toHaveBeenCalledOnce()
     expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+
+    setup.open.mockClear()
+    setup.close.mockClear()
+    setup.load.mockClear()
+    cardOpen.focus()
+    await act(async () => { cardOpen.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(setup.open).toHaveBeenCalledOnce()
+    expect(setup.load).toHaveBeenCalledOnce()
+    expect(v1.open).not.toHaveBeenCalled()
+    expect(v2.open).not.toHaveBeenCalled()
+    const cardDrawer = document.body.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(cardDrawer.textContent).toContain('首次使用小说工作台')
+    await act(async () => {
+      cardDrawer.querySelector<HTMLButtonElement>('[aria-label="关闭小说工作台"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(setup.close).toHaveBeenCalledOnce()
+    expect(document.activeElement).toBe(cardOpen)
 
     await act(async () => { route.setPreset('ai-novel-writer') })
     expect(trigger.disabled).toBe(false)
