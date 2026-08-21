@@ -13,7 +13,7 @@ import type { CreativeStrategy, NovelProjectId } from './types.ts'
 /** Stable SQLite application identity for the AI Novel Writer V2 project artifact. */
 const APPLICATION_ID = 0x41_4e_4f_56
 /** Stable V2 domain schema version. */
-const USER_VERSION = 3
+const USER_VERSION = 4
 /** Exact ignore rules protecting SQLite sidecars and archived V1 sources from Git. */
 const GITIGNORE_TEXT = [
   'novel.db',
@@ -276,6 +276,37 @@ export interface NovelArtifactSeed {
   readonly createdAt: string
 }
 
+/** A durable chapter artifact; its id never changes as later versions are added. */
+export interface NovelArtifact {
+  readonly artifactId: string
+  readonly chapter: number
+  readonly kind: 'draft' | 'review' | 'revision'
+  readonly parentArtifactId?: string
+  readonly content?: string
+  readonly report?: string
+  readonly summary: string
+  readonly createdAt: string
+}
+
+/** Explicit user-selected final pointer; finalization never copies an artifact. */
+export interface NovelChapterFinal {
+  readonly chapter: number
+  readonly artifactId: string
+  readonly summary: string
+  readonly selectedAt: string
+}
+
+/** Bounded handoff for drafting one chapter. It intentionally contains no other chapter history. */
+export interface NovelChapterContext {
+  readonly chapter: number
+  readonly previousFinal?: {
+    readonly chapter: number
+    readonly artifactId: string
+    readonly content: string
+    readonly summary: string
+  }
+}
+
 /** Complete initial V2 state imported from one fingerprinted V1 source set. */
 export interface NovelMigrationSeed {
   readonly projectId: NovelProjectId
@@ -303,6 +334,8 @@ export interface NovelStoreSnapshot {
   readonly architecture: NovelArchitectureAggregate
   readonly characters: NovelCharactersAggregate
   readonly chapters: readonly NovelChapterAggregate[]
+  readonly artifacts: readonly NovelArtifact[]
+  readonly chapterFinals: readonly NovelChapterFinal[]
   readonly tasks: readonly NovelTaskAggregate[]
   readonly changes: readonly NovelChangeAuditRecord[]
   readonly proposals: readonly NovelProposalSummary[]
@@ -312,8 +345,43 @@ export interface NovelStoreSnapshot {
 /** Lifecycle state of one persisted non-authoritative proposal. */
 export type NovelProposalStatus = 'pending' | 'partial' | 'stale' | 'applied' | 'discarded' | 'superseded' | 'failed'
 
-/** Immutable model-provided replacement payload held by one proposal item. */
-export type NovelProposalChange = Omit<NovelChangeSet, 'operation' | 'provenance'>
+/** Immutable model-provided single-aggregate replacement held by one proposal item. */
+export type NovelAggregateProposalChange = Omit<NovelChangeSet, 'operation' | 'provenance'>
+
+/** Closed artifact commands; all of them remain non-authoritative until a user applies a proposal. */
+export type NovelArtifactProposalChange =
+  | {
+    readonly kind: 'artifact/draft'
+    readonly artifactId: string
+    readonly chapter: number
+    readonly content: string
+    readonly summary: string
+  }
+  | {
+    readonly kind: 'artifact/review'
+    readonly artifactId: string
+    readonly chapter: number
+    readonly parentArtifactId: string
+    readonly report: string
+    readonly summary: string
+  }
+  | {
+    readonly kind: 'artifact/revision'
+    readonly artifactId: string
+    readonly chapter: number
+    readonly parentArtifactId: string
+    readonly content: string
+    readonly summary: string
+  }
+  | {
+    readonly kind: 'chapter/select-final'
+    readonly chapter: number
+    readonly artifactId: string
+    readonly summary: string
+  }
+
+/** Immutable, typed model payload held by one proposal item. */
+export type NovelProposalChange = NovelAggregateProposalChange | NovelArtifactProposalChange
 
 /** Item-level lifecycle state. `partial` is a bundle-only projection. */
 export type NovelProposalItemStatus = Exclude<NovelProposalStatus, 'partial'>
@@ -330,15 +398,19 @@ function proposalStatusFromItems(statuses: readonly NovelProposalItemStatus[]): 
 /** Path-free machine-readable failure retained after an item cannot be applied. */
 export type NovelProposalItemFailure = NovelStoreErrorCode
 
-/** Receipt retained atomically with an item that has changed authoritative state. */
-export type NovelProposalItemReceipt = NovelChangeReceipt
+/** Receipt retained atomically with a proposal item that has changed durable state. */
+export type NovelProposalItemReceipt = NovelChangeReceipt | {
+  readonly kind: NovelArtifactProposalChange['kind']
+  readonly chapter: number
+  readonly artifactId: string
+}
 
 /** One ordered immutable proposed change and its persistent lifecycle evidence. */
 export interface NovelProposalItem {
   readonly itemId: string
   readonly itemOrder: number
-  /** Immutable payload plus Host-derived model provenance used for any eventual audit row. */
-  readonly change: NovelChangeSet
+  /** Immutable payload plus Host-derived model provenance for aggregate replacements. */
+  readonly change: NovelProposalChange | NovelChangeSet
   readonly status: NovelProposalItemStatus
   readonly attemptCount: number
   readonly failure?: NovelProposalItemFailure
@@ -420,6 +492,8 @@ export interface NovelStore {
    * @throws {@link NovelStoreError} when the store is not initialized or unreadable.
    */
   read(signal: AbortSignal): Promise<NovelStoreSnapshot>
+  /** Read only the selected final of the immediately preceding chapter for a new chapter handoff. */
+  readChapterContext(chapter: number, signal: AbortSignal): Promise<NovelChapterContext>
   /**
    * Commit exactly one aggregate replacement transaction.
    *
@@ -623,6 +697,24 @@ interface ProposalItemRow {
   readonly updated_at: string
 }
 
+interface ArtifactRow {
+  readonly artifact_id: string
+  readonly chapter: number
+  readonly kind: string
+  readonly parent_artifact_id: string | null
+  readonly content: string
+  readonly report: string | null
+  readonly summary: string
+  readonly created_at: string
+}
+
+interface ChapterFinalRow {
+  readonly chapter: number
+  readonly artifact_id: string
+  readonly summary: string
+  readonly selected_at: string
+}
+
 interface MetaBinding {
   readonly projectId: string
   readonly workspaceId: string
@@ -712,7 +804,15 @@ CREATE TABLE artifacts (
   parent_artifact_id TEXT REFERENCES artifacts(artifact_id) ON DELETE SET NULL,
   content TEXT NOT NULL,
   report TEXT,
+  summary TEXT NOT NULL,
   created_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE chapter_finals (
+  chapter INTEGER PRIMARY KEY REFERENCES chapters(chapter) ON DELETE CASCADE,
+  artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
+  summary TEXT NOT NULL,
+  selected_at TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE proposals (
@@ -952,6 +1052,68 @@ function validateProposalRequest(value: NovelProposalRequest): NovelProposalRequ
   return { sessionId, callId, argsHash, payload: record.payload }
 }
 
+function requireArtifactId(value: unknown, field: string): string {
+  const artifactId = requireNonEmptyString(value, field)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(artifactId)) {
+    throw new NovelStoreError('INVALID_CONTENT', `${field} is invalid`)
+  }
+  return artifactId
+}
+
+function isAggregateProposalChange(change: NovelProposalChange): change is NovelAggregateProposalChange {
+  return 'changeSetId' in change
+}
+
+function validateArtifactProposalChange(value: unknown): NovelArtifactProposalChange {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new NovelStoreError('INVALID_CONTENT', 'artifact proposal command must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const kind = record.kind
+  if (kind === 'artifact/draft') {
+    const row = requireExactKeys(record, ['kind', 'artifactId', 'chapter', 'content', 'summary'], 'artifact draft command')
+    return {
+      kind,
+      artifactId: requireArtifactId(row.artifactId, 'artifact draft.artifactId'),
+      chapter: requirePositiveInteger(row.chapter, 'artifact draft.chapter'),
+      content: requireNonEmptyString(row.content, 'artifact draft.content'),
+      summary: requireNonEmptyString(row.summary, 'artifact draft.summary'),
+    }
+  }
+  if (kind === 'artifact/review') {
+    const row = requireExactKeys(record, ['kind', 'artifactId', 'chapter', 'parentArtifactId', 'report', 'summary'], 'artifact review command')
+    return {
+      kind,
+      artifactId: requireArtifactId(row.artifactId, 'artifact review.artifactId'),
+      chapter: requirePositiveInteger(row.chapter, 'artifact review.chapter'),
+      parentArtifactId: requireArtifactId(row.parentArtifactId, 'artifact review.parentArtifactId'),
+      report: requireNonEmptyString(row.report, 'artifact review.report'),
+      summary: requireNonEmptyString(row.summary, 'artifact review.summary'),
+    }
+  }
+  if (kind === 'artifact/revision') {
+    const row = requireExactKeys(record, ['kind', 'artifactId', 'chapter', 'parentArtifactId', 'content', 'summary'], 'artifact revision command')
+    return {
+      kind,
+      artifactId: requireArtifactId(row.artifactId, 'artifact revision.artifactId'),
+      chapter: requirePositiveInteger(row.chapter, 'artifact revision.chapter'),
+      parentArtifactId: requireArtifactId(row.parentArtifactId, 'artifact revision.parentArtifactId'),
+      content: requireNonEmptyString(row.content, 'artifact revision.content'),
+      summary: requireNonEmptyString(row.summary, 'artifact revision.summary'),
+    }
+  }
+  if (kind === 'chapter/select-final') {
+    const row = requireExactKeys(record, ['kind', 'chapter', 'artifactId', 'summary'], 'chapter final command')
+    return {
+      kind,
+      chapter: requirePositiveInteger(row.chapter, 'chapter final.chapter'),
+      artifactId: requireArtifactId(row.artifactId, 'chapter final.artifactId'),
+      summary: requireNonEmptyString(row.summary, 'chapter final.summary'),
+    }
+  }
+  throw new NovelStoreError('INVALID_CONTENT', 'artifact proposal command kind is not supported')
+}
+
 /**
  * Validate a complete non-authoritative proposal bundle at the durable boundary.
  *
@@ -982,9 +1144,21 @@ function validateProposalPayload(value: unknown): ValidatedProposalPayload {
     throw new NovelStoreError('INVALID_CONTENT', 'proposal payload.regenerationTicket is invalid')
   }
   const changeSetIds = new Set<string>()
+  const artifactIds = new Set<string>()
   const changes = record.changes.map(change => {
     if (typeof change !== 'object' || change === null || Array.isArray(change)) {
       throw new NovelStoreError('INVALID_CONTENT', 'proposal change must be an object')
+    }
+    const candidate = change as Record<string, unknown>
+    if ('kind' in candidate) {
+      const valid = validateArtifactProposalChange(change)
+      if (valid.kind !== 'chapter/select-final') {
+        if (artifactIds.has(valid.artifactId)) {
+          throw new NovelStoreError('INVALID_CONTENT', 'proposal artifactId values must be unique')
+        }
+        artifactIds.add(valid.artifactId)
+      }
+      return valid
     }
     const row = requireExactKeys(change, [
       'changeSetId', 'aggregate', 'baseAggregateRevision', 'baseGlobalRevision', 'nextValue',
@@ -1008,7 +1182,7 @@ function validateProposalPayload(value: unknown): ValidatedProposalPayload {
       baseAggregateRevision: valid.baseAggregateRevision,
       baseGlobalRevision: valid.baseGlobalRevision,
       nextValue: valid.nextValue,
-    } as NovelProposalChange
+    } as NovelAggregateProposalChange
   })
   if (regenerationTicket !== undefined && changes.length !== 1) {
     throw new NovelStoreError('INVALID_CONTENT', 'a regenerated proposal must contain exactly one item')
@@ -1041,11 +1215,13 @@ function parseProposalItem(row: ProposalItemRow, proposal: ProposalRow): NovelPr
     throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal items.attemptCount is invalid')
   }
   const stored = storedProposalChange(row)
-  const change: NovelChangeSet = {
-    ...stored,
-    operation: 'replace',
-    provenance: { origin: 'model', sessionId: proposal.session_id, callId: proposal.call_id, argsHash: proposal.args_hash },
-  } as NovelChangeSet
+  const change: NovelProposalItem['change'] = isAggregateProposalChange(stored)
+    ? {
+      ...stored,
+      operation: 'replace',
+      provenance: { origin: 'model', sessionId: proposal.session_id, callId: proposal.call_id, argsHash: proposal.args_hash },
+    } as NovelChangeSet
+    : stored
   const status = requireEnum(row.status, ['pending', 'stale', 'applied', 'discarded', 'superseded', 'failed'], 'proposal items.status')
   const failure = row.failure_code === null ? undefined
     : requireEnum(row.failure_code, [
@@ -1054,7 +1230,7 @@ function parseProposalItem(row: ProposalItemRow, proposal: ProposalRow): NovelPr
       'PROPOSAL_CONFLICT', 'PROPOSAL_NOT_FOUND', 'PROPOSAL_ITEM_NOT_FOUND', 'PROPOSAL_ITEM_NOT_RETRYABLE',
       'PROPOSAL_ITEM_APPLIED', 'REGENERATION_TICKET_INVALID', 'WRITE_LOCKED', 'WRITE_FAILED', 'CANCELLED',
     ], 'proposal items.failureCode') as NovelStoreErrorCode
-  const receipt = row.receipt === null ? undefined : parseProposalReceipt(row.receipt)
+  const receipt = row.receipt === null ? undefined : parseProposalReceipt(row.receipt, stored)
   if ((status === 'applied') !== (receipt !== undefined)) {
     throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal item application receipt is invalid')
   }
@@ -1380,10 +1556,20 @@ function requireTicket(value: unknown, field: string): string {
   return ticket
 }
 
-function parseProposalReceipt(text: string): NovelProposalItemReceipt {
+function parseProposalReceipt(text: string, change: NovelProposalChange): NovelProposalItemReceipt {
   const value = parseJson<unknown>(text, 'proposal item receipt is invalid')
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal item receipt is invalid')
+  }
+  if (!isAggregateProposalChange(change)) {
+    const record = requireExactKeys(value, ['kind', 'chapter', 'artifactId'], 'artifact proposal item receipt')
+    const kind = record.kind
+    if (kind !== change.kind
+      || requirePositiveInteger(record.chapter, 'artifact proposal item receipt.chapter') !== change.chapter
+      || requireArtifactId(record.artifactId, 'artifact proposal item receipt.artifactId') !== change.artifactId) {
+      throw new NovelStoreError('UNSUPPORTED_FORMAT', 'artifact proposal item receipt is invalid')
+    }
+    return { kind: change.kind, chapter: change.chapter, artifactId: change.artifactId }
   }
   const record = requireExactKeys(value, [
     'changeSetId', 'projectId', 'aggregate', 'aggregateRevision', 'globalRevision',
@@ -1507,6 +1693,57 @@ function parseTask(row: TaskRow): NovelTaskAggregate {
   }
 }
 
+function parseArtifact(row: ArtifactRow): NovelArtifact {
+  const artifactId = requireArtifactId(row.artifact_id, 'artifacts.artifactId')
+  const chapter = requirePositiveInteger(row.chapter, 'artifacts.chapter')
+  const kind = requireEnum(row.kind, ['draft', 'review', 'revision'], 'artifacts.kind')
+  const summary = requireNonEmptyString(row.summary, 'artifacts.summary')
+  const createdAt = requireIsoTimestamp(row.created_at, 'artifacts.createdAt')
+  if (kind === 'draft') {
+    if (row.parent_artifact_id !== null || row.report !== null) {
+      throw new NovelStoreError('UNSUPPORTED_FORMAT', 'draft artifact chain is invalid')
+    }
+    return { artifactId, chapter, kind, content: requireNonEmptyString(row.content, 'artifacts.content'), summary, createdAt }
+  }
+  const parentArtifactId = row.parent_artifact_id === null
+    ? undefined
+    : requireArtifactId(row.parent_artifact_id, 'artifacts.parentArtifactId')
+  if (parentArtifactId === undefined) throw new NovelStoreError('UNSUPPORTED_FORMAT', 'artifact parent is required')
+  if (kind === 'review') {
+    return { artifactId, chapter, kind, parentArtifactId, report: requireNonEmptyString(row.report, 'artifacts.report'), summary, createdAt }
+  }
+  if (row.report !== null) throw new NovelStoreError('UNSUPPORTED_FORMAT', 'revision artifact report is invalid')
+  return { artifactId, chapter, kind, parentArtifactId, content: requireNonEmptyString(row.content, 'artifacts.content'), summary, createdAt }
+}
+
+function parseChapterFinal(row: ChapterFinalRow): NovelChapterFinal {
+  return {
+    chapter: requirePositiveInteger(row.chapter, 'chapter finals.chapter'),
+    artifactId: requireArtifactId(row.artifact_id, 'chapter finals.artifactId'),
+    summary: requireNonEmptyString(row.summary, 'chapter finals.summary'),
+    selectedAt: requireIsoTimestamp(row.selected_at, 'chapter finals.selectedAt'),
+  }
+}
+
+/** Reject a corrupt durable chain before it can be presented as authoritative history. */
+function validateArtifactProjection(artifacts: readonly NovelArtifact[], chapterFinals: readonly NovelChapterFinal[]): void {
+  const byId = new Map(artifacts.map(artifact => [artifact.artifactId, artifact]))
+  for (const artifact of artifacts) {
+    if (artifact.kind === 'draft') continue
+    const parent = artifact.parentArtifactId === undefined ? undefined : byId.get(artifact.parentArtifactId)
+    const expectedKind = artifact.kind === 'review' ? 'draft' : 'review'
+    if (parent === undefined || parent.chapter !== artifact.chapter || parent.kind !== expectedKind) {
+      throw new NovelStoreError('UNSUPPORTED_FORMAT', 'artifact version chain is invalid')
+    }
+  }
+  for (const final of chapterFinals) {
+    const target = byId.get(final.artifactId)
+    if (target === undefined || target.chapter !== final.chapter || (target.kind !== 'draft' && target.kind !== 'revision')) {
+      throw new NovelStoreError('UNSUPPORTED_FORMAT', 'chapter final selection is invalid')
+    }
+  }
+}
+
 function parseChange(row: ChangeRow): NovelChangeAuditRecord {
   const aggregate: NovelAggregateRef = row.aggregate_kind === 'chapter'
     ? { kind: 'chapter', chapter: row.aggregate_id ?? 0 }
@@ -1568,7 +1805,7 @@ function requireStorage(db: Database, readOnly: boolean): NovelStorageDiagnostic
   const journalMode = pragma('journal_mode')
   const synchronousNumber = pragma('synchronous')
   const lockingMode = pragma('locking_mode')
-  if (applicationId !== APPLICATION_ID || (userVersion !== USER_VERSION && (!readOnly || userVersion !== 2)) || foreignKeys !== 1) {
+  if (applicationId !== APPLICATION_ID || (userVersion !== USER_VERSION && userVersion !== 3 && (!readOnly || userVersion !== 2)) || foreignKeys !== 1) {
     throw new NovelStoreError('UNSUPPORTED_FORMAT', 'novel.db is not an AI Novel Writer V2 database')
   }
   const expectedJournalMode = 'delete'
@@ -1728,7 +1965,7 @@ export async function createMigratedNovelStoreFile(
     createSchema(db)
     db.exec('BEGIN IMMEDIATE')
     try {
-      db.prepare("INSERT INTO meta (key, value) VALUES ('project_id', ?), ('workspace_id', ?), ('workspace_path', ?), ('schema_version', '3'), ('attached_at', ?), ('migration_source_fingerprint', ?), ('migration_receipt', ?)")
+      db.prepare("INSERT INTO meta (key, value) VALUES ('project_id', ?), ('workspace_id', ?), ('workspace_path', ?), ('schema_version', '4'), ('attached_at', ?), ('migration_source_fingerprint', ?), ('migration_receipt', ?)")
         .run(valid.projectId, valid.workspaceId, root, valid.project.createdAt, valid.fingerprint, stableJson(receipt))
       db.prepare(`INSERT INTO project (
         id, title, language, genre, planned_chapters, target_words_per_chapter, creative_strategy,
@@ -1778,8 +2015,8 @@ export async function createMigratedNovelStoreFile(
         for (const characterId of chapter.characters) insertChapterCharacter.run(chapter.chapter, characterId)
       }
       const insertArtifact = db.prepare(`INSERT INTO artifacts (
-        artifact_id, chapter, kind, parent_artifact_id, content, report, created_at
-      ) VALUES (?, ?, 'draft', NULL, ?, NULL, ?)`)
+        artifact_id, chapter, kind, parent_artifact_id, content, report, summary, created_at
+      ) VALUES (?, ?, 'draft', NULL, ?, NULL, 'Migrated V1 draft.', ?)`)
       for (const artifact of valid.artifacts) {
         insertArtifact.run(artifact.artifactId, artifact.chapter, artifact.content, artifact.createdAt)
       }
@@ -1866,12 +2103,7 @@ function createSchema(db: Database): void {
 }
 
 /** Upgrade the durable inbox from the immutable V2 bundle payload to V3 item lifecycle rows. */
-function migrateSchema(db: Database): void {
-  const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: unknown }).user_version)
-  if (version === USER_VERSION) return
-  if (version !== 2) {
-    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'novel.db schema version is not supported')
-  }
+function migrateSchemaV2ToV3(db: Database): void {
   db.exec('BEGIN IMMEDIATE')
   try {
     db.exec('ALTER TABLE proposals ADD COLUMN parent_proposal_id TEXT')
@@ -1910,13 +2142,50 @@ function migrateSchema(db: Database): void {
       }
     }
     db.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run()
+    db.exec('PRAGMA user_version = 3')
+    db.exec('COMMIT')
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK')
+    if (error instanceof NovelStoreError) throw error
+    throw new NovelStoreError('WRITE_FAILED', 'novel.db V2 to V3 schema migration failed', { cause: error })
+  }
+}
+
+/** Promote existing V3 artifacts into auditable version-chain records and add final selectors. */
+function migrateSchemaV3ToV4(db: Database): void {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    db.exec("ALTER TABLE artifacts ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+    db.prepare("UPDATE artifacts SET summary = 'Migrated V1 draft.' WHERE summary = ''").run()
+    db.exec(`CREATE TABLE chapter_finals (
+      chapter INTEGER PRIMARY KEY REFERENCES chapters(chapter) ON DELETE CASCADE,
+      artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
+      summary TEXT NOT NULL,
+      selected_at TEXT NOT NULL
+    ) STRICT`)
+    db.prepare("UPDATE meta SET value = '4' WHERE key = 'schema_version'").run()
     db.exec(`PRAGMA user_version = ${USER_VERSION}`)
     db.exec('COMMIT')
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')
     if (error instanceof NovelStoreError) throw error
-    throw new NovelStoreError('WRITE_FAILED', 'novel.db schema migration failed', { cause: error })
+    throw new NovelStoreError('WRITE_FAILED', 'novel.db V3 to V4 schema migration failed', { cause: error })
   }
+}
+
+/** Migrate every supported durable schema in order; mismatch readers never reach this write path. */
+function migrateSchema(db: Database): void {
+  let version = Number((db.prepare('PRAGMA user_version').get() as { user_version: unknown }).user_version)
+  if (version === USER_VERSION) return
+  if (version === 2) {
+    migrateSchemaV2ToV3(db)
+    version = 3
+  }
+  if (version === 3) {
+    migrateSchemaV3ToV4(db)
+    return
+  }
+  throw new NovelStoreError('UNSUPPORTED_FORMAT', 'novel.db schema version is not supported')
 }
 
 function acquireExclusiveLock(db: Database): void {
@@ -1953,7 +2222,7 @@ class SqliteNovelStore implements NovelStore {
       if (this.#projectRow() !== undefined) throw new NovelStoreError('ALREADY_INITIALIZED', 'novel project is already initialized')
       this.#db.exec('BEGIN IMMEDIATE')
       try {
-        this.#db.prepare("INSERT INTO meta (key, value) VALUES ('project_id', ?), ('workspace_id', ?), ('workspace_path', ?), ('schema_version', '3'), ('attached_at', ?)")
+        this.#db.prepare("INSERT INTO meta (key, value) VALUES ('project_id', ?), ('workspace_id', ?), ('workspace_path', ?), ('schema_version', '4'), ('attached_at', ?)")
           .run(initialization.projectId, initialization.workspaceId, this.#root, initialization.project.createdAt)
         this.#db.prepare(`INSERT INTO project (
           id, title, language, genre, planned_chapters, target_words_per_chapter, creative_strategy,
@@ -1982,6 +2251,12 @@ class SqliteNovelStore implements NovelStore {
   async read(signal: AbortSignal): Promise<NovelStoreSnapshot> {
     requireNotAborted(signal)
     return this.#enqueue(() => this.#snapshot())
+  }
+
+  async readChapterContext(chapter: number, signal: AbortSignal): Promise<NovelChapterContext> {
+    requireNotAborted(signal)
+    requirePositiveInteger(chapter, 'chapter context.chapter')
+    return this.#enqueue(() => this.#chapterContext(chapter))
   }
 
   async applyChange(change: NovelChangeSet, signal: AbortSignal): Promise<NovelChangeReceipt> {
@@ -2180,6 +2455,11 @@ class SqliteNovelStore implements NovelStore {
     return this.#readOnly && Number((this.#db.prepare('PRAGMA user_version').get() as { user_version: unknown }).user_version) === 2
   }
 
+  #legacyReadOnlyArtifactSchema(): boolean {
+    const version = Number((this.#db.prepare('PRAGMA user_version').get() as { user_version: unknown }).user_version)
+    return this.#readOnly && version < USER_VERSION
+  }
+
   #legacyV2Proposals(): readonly NovelProposalSummary[] {
     const rows = this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
       status, created_at, updated_at FROM proposals ORDER BY created_at, proposal_id`).all() as unknown as LegacyProposalRow[]
@@ -2202,8 +2482,67 @@ class SqliteNovelStore implements NovelStore {
     this.#db.prepare('UPDATE proposals SET status = ?, updated_at = ? WHERE proposal_id = ?').run(next, now, proposalId)
   }
 
-  #modelChange(item: ProposalItemRow, proposal: ProposalRow): NovelChangeSet {
+  #proposalCommand(item: ProposalItemRow, proposal: ProposalRow): NovelProposalItem['change'] {
     return parseProposalItem(item, proposal).change
+  }
+
+  #artifactRow(artifactId: string): ArtifactRow {
+    const row = this.#db.prepare(`SELECT artifact_id, chapter, kind, parent_artifact_id, content, report, summary,
+      created_at FROM artifacts WHERE artifact_id = ?`).get(artifactId) as ArtifactRow | undefined
+    if (row === undefined) throw new NovelStoreError('INVALID_CONTENT', 'artifact parent or final target was not found')
+    return row
+  }
+
+  #requireChapter(chapter: number): void {
+    if (this.#db.prepare('SELECT 1 AS present FROM chapters WHERE chapter = ?').get(chapter) === undefined) {
+      throw new NovelStoreError('INVALID_CONTENT', 'artifact references an unknown chapter blueprint')
+    }
+  }
+
+  /** Commit a closed artifact command and its non-empty summary inside the caller transaction. */
+  #commitArtifactCommandInTransaction(change: NovelArtifactProposalChange): NovelProposalItemReceipt {
+    this.#requireWrittenBinding()
+    this.#requireChapter(change.chapter)
+    const now = new Date().toISOString()
+    if (change.kind === 'chapter/select-final') {
+      const target = parseArtifact(this.#artifactRow(change.artifactId))
+      if (target.chapter !== change.chapter || (target.kind !== 'draft' && target.kind !== 'revision')) {
+        throw new NovelStoreError('INVALID_CONTENT', 'chapter final must select a prose artifact from the same chapter')
+      }
+      this.#db.prepare(`INSERT INTO chapter_finals (chapter, artifact_id, summary, selected_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(chapter) DO UPDATE SET artifact_id = excluded.artifact_id, summary = excluded.summary,
+        selected_at = excluded.selected_at`).run(change.chapter, change.artifactId, change.summary, now)
+      return { kind: change.kind, chapter: change.chapter, artifactId: change.artifactId }
+    }
+    const existing = this.#db.prepare('SELECT 1 AS present FROM artifacts WHERE artifact_id = ?').get(change.artifactId)
+    if (existing !== undefined) throw new NovelStoreError('IDEMPOTENCY_CONFLICT', 'artifactId was already used')
+    if (change.kind === 'artifact/draft') {
+      this.#db.prepare(`INSERT INTO artifacts (
+        artifact_id, chapter, kind, parent_artifact_id, content, report, summary, created_at
+      ) VALUES (?, ?, 'draft', NULL, ?, NULL, ?, ?)`).run(
+        change.artifactId, change.chapter, change.content, change.summary, now,
+      )
+      return { kind: change.kind, chapter: change.chapter, artifactId: change.artifactId }
+    }
+    const parent = parseArtifact(this.#artifactRow(change.parentArtifactId))
+    const expectedParentKind = change.kind === 'artifact/review' ? 'draft' : 'review'
+    if (parent.chapter !== change.chapter || parent.kind !== expectedParentKind) {
+      throw new NovelStoreError('INVALID_CONTENT', `${change.kind} must reference a same-chapter ${expectedParentKind}`)
+    }
+    if (change.kind === 'artifact/review') {
+      this.#db.prepare(`INSERT INTO artifacts (
+        artifact_id, chapter, kind, parent_artifact_id, content, report, summary, created_at
+      ) VALUES (?, ?, 'review', ?, '', ?, ?, ?)`).run(
+        change.artifactId, change.chapter, change.parentArtifactId, change.report, change.summary, now,
+      )
+    } else {
+      this.#db.prepare(`INSERT INTO artifacts (
+        artifact_id, chapter, kind, parent_artifact_id, content, report, summary, created_at
+      ) VALUES (?, ?, 'revision', ?, ?, NULL, ?, ?)`).run(
+        change.artifactId, change.chapter, change.parentArtifactId, change.content, change.summary, now,
+      )
+    }
+    return { kind: change.kind, chapter: change.chapter, artifactId: change.artifactId }
   }
 
   #applyProposal(proposalId: string, signal: AbortSignal): NovelProposalApplyResult {
@@ -2217,8 +2556,18 @@ class SqliteNovelStore implements NovelStore {
       requireNotAborted(signal)
       try {
         this.#db.exec('BEGIN IMMEDIATE')
-        const change = this.#modelChange(item, proposal)
-        const receipt = this.#existingChange(change) ?? this.#commitChangeInTransaction(change)
+        const command = this.#proposalCommand(item, proposal)
+        const receipt = isAggregateProposalChange(command)
+          ? this.#existingChange({
+            ...command,
+            operation: 'replace',
+            provenance: { origin: 'model', sessionId: proposal.session_id, callId: proposal.call_id, argsHash: proposal.args_hash },
+          } as NovelChangeSet) ?? this.#commitChangeInTransaction({
+            ...command,
+            operation: 'replace',
+            provenance: { origin: 'model', sessionId: proposal.session_id, callId: proposal.call_id, argsHash: proposal.args_hash },
+          } as NovelChangeSet)
+          : this.#commitArtifactCommandInTransaction(command)
         const now = new Date().toISOString()
         this.#db.prepare(`UPDATE proposal_items SET status = 'applied', attempt_count = attempt_count + 1,
           failure_code = NULL, receipt = ?, updated_at = ? WHERE item_id = ?`)
@@ -2298,6 +2647,38 @@ class SqliteNovelStore implements NovelStore {
     }
   }
 
+  #chapterContext(chapter: number): NovelChapterContext {
+    this.#db.exec('BEGIN')
+    try {
+      this.#requireWrittenBinding()
+      if (chapter <= 1 || this.#legacyReadOnlyArtifactSchema()) {
+        this.#db.exec('COMMIT')
+        return { chapter }
+      }
+      const row = this.#db.prepare(`SELECT a.artifact_id, a.chapter, a.kind, a.parent_artifact_id, a.content,
+        a.report, a.summary, a.created_at, f.summary AS final_summary
+        FROM chapter_finals f JOIN artifacts a ON a.artifact_id = f.artifact_id WHERE f.chapter = ?`)
+        .get(chapter - 1) as (ArtifactRow & { readonly final_summary: string }) | undefined
+      if (row === undefined) {
+        this.#db.exec('COMMIT')
+        return { chapter }
+      }
+      const artifact = parseArtifact(row)
+      if (artifact.chapter !== chapter - 1 || (artifact.kind !== 'draft' && artifact.kind !== 'revision') || artifact.content === undefined) {
+        throw new NovelStoreError('UNSUPPORTED_FORMAT', 'chapter final does not reference readable prose')
+      }
+      const summary = requireNonEmptyString(row.final_summary, 'chapter final summary')
+      this.#db.exec('COMMIT')
+      return {
+        chapter,
+        previousFinal: { chapter: artifact.chapter, artifactId: artifact.artifactId, content: artifact.content, summary },
+      }
+    } catch (error) {
+      this.#rollback()
+      throw error
+    }
+  }
+
   #readSnapshot(): NovelStoreSnapshot {
     const binding = this.#requireWrittenBinding()
     const projectRow = this.#projectRow()
@@ -2322,6 +2703,19 @@ class SqliteNovelStore implements NovelStore {
       existing.push(row.character_id)
       chapterCharacters.set(row.chapter, existing)
     }
+    const legacyArtifactSchema = this.#legacyReadOnlyArtifactSchema()
+    const artifactRows = (legacyArtifactSchema
+      ? this.#db.prepare(`SELECT artifact_id, chapter, kind, parent_artifact_id, content, report,
+          'Migrated V1 draft.' AS summary, created_at FROM artifacts ORDER BY created_at, artifact_id`).all()
+      : this.#db.prepare(`SELECT artifact_id, chapter, kind, parent_artifact_id, content, report, summary,
+          created_at FROM artifacts ORDER BY created_at, artifact_id`).all()) as unknown as ArtifactRow[]
+    const chapterFinalRows = legacyArtifactSchema
+      ? []
+      : this.#db.prepare(`SELECT chapter, artifact_id, summary, selected_at FROM chapter_finals ORDER BY chapter`)
+        .all() as unknown as ChapterFinalRow[]
+    const artifacts = artifactRows.map(parseArtifact)
+    const chapterFinals = chapterFinalRows.map(parseChapterFinal)
+    validateArtifactProjection(artifacts, chapterFinals)
     const taskRows = this.#db.prepare(`SELECT task_id, kind, stage, status, failure, resume_cursor, revision,
       created_at, updated_at FROM tasks ORDER BY task_id`).all() as unknown as TaskRow[]
     const changeRows = this.#db.prepare(`SELECT change_set_id, aggregate_kind, aggregate_id, aggregate_key, operation,
@@ -2345,6 +2739,8 @@ class SqliteNovelStore implements NovelStore {
       architecture: parseArchitecture(architectureRow),
       characters: parseCharacters(characterCollectionRow, characterRows, relationshipRows),
       chapters: chapterRows.map(row => parseChapter(row, chapterCharacters.get(row.chapter) ?? [])),
+      artifacts,
+      chapterFinals,
       tasks: taskRows.map(parseTask),
       changes: changeRows.map(parseChange),
       proposals: legacyReadOnlyV2 ? this.#legacyV2Proposals() : proposalRows.map(row => parseProposal(row, proposalItemRows.filter(item => item.proposal_id === row.proposal_id))),
@@ -2629,12 +3025,13 @@ export async function recoverNovelStoreBinding(
           const receipt = validateMigrationReceipt(parseJson(row.value, 'migration receipt is invalid'))
           updateMeta.run(stableJson({ ...receipt, projectId }), 'migration_receipt')
         }
-        const proposalReceipts = db.prepare("SELECT item_id, receipt FROM proposal_items WHERE receipt IS NOT NULL")
-          .all() as Array<{ item_id: string; receipt: string }>
+        const proposalReceipts = db.prepare("SELECT item_id, receipt, change_payload FROM proposal_items WHERE receipt IS NOT NULL")
+          .all() as Array<{ item_id: string; receipt: string; change_payload: string }>
         const updateProposalReceipt = db.prepare('UPDATE proposal_items SET receipt = ? WHERE item_id = ?')
         for (const item of proposalReceipts) {
-          const receipt = parseProposalReceipt(item.receipt)
-          updateProposalReceipt.run(stableJson({ ...receipt, projectId }), item.item_id)
+          const change = validateProposalPayload({ changes: [parseJson(item.change_payload, 'proposal item change payload is invalid')] }).changes[0]!
+          const receipt = parseProposalReceipt(item.receipt, change)
+          if ('changeSetId' in receipt) updateProposalReceipt.run(stableJson({ ...receipt, projectId }), item.item_id)
         }
       }
       db.exec('COMMIT')

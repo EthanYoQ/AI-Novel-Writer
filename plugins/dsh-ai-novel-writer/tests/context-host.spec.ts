@@ -41,6 +41,8 @@ async function initializedV2Workspace(prefix: string): Promise<string> {
 function downgradeDatabaseToV2(root: string): void {
   const database = new DatabaseSync(join(root, '.ai-novel', 'novel.db'))
   try {
+    database.exec('DROP TABLE chapter_finals')
+    database.exec('ALTER TABLE artifacts DROP COLUMN summary')
     database.exec('DROP TABLE proposal_items')
     database.exec('ALTER TABLE proposals DROP COLUMN parent_proposal_id')
     database.exec('ALTER TABLE proposals DROP COLUMN parent_item_id')
@@ -94,6 +96,60 @@ describe('novel context Host RPC', () => {
 
     expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
     expect(JSON.stringify(result)).not.toContain(root)
+  })
+
+  it('reads only the previous selected final through the closed chapter/context envelope', async () => {
+    const root = await initializedV2Workspace('chapter-context-host-workspace-')
+    const seed = await openNovelStore(root, WorkspaceId(V2_WORKSPACE_ID), { create: false })
+    try {
+      const before = await seed.read(signal)
+      await seed.applyChange({
+        changeSetId: 'chapter-context-blueprint-1', operation: 'replace', aggregate: { kind: 'chapter', chapter: 1 },
+        baseAggregateRevision: 0, baseGlobalRevision: before.globalRevision,
+        nextValue: {
+          chapter: 1, title: '第一封信', purpose: '建立异常。', plotBeats: [], characters: [],
+          keyEvents: ['信件抵达'], suspense: '寄信人是谁？', status: 'drafting',
+        },
+        provenance: { origin: 'manual' },
+      }, signal)
+      const draftPayload = { changes: [{
+        kind: 'artifact/draft', artifactId: 'host-context-draft-1', chapter: 1,
+        content: '潮水退去时，信匣露出了海面。', summary: '第一章初稿。',
+      }] }
+      const draft = await seed.submitProposal({
+        sessionId: 'host-context-session', callId: 'host-context-draft',
+        argsHash: novelProposalArgsHash(draftPayload), payload: draftPayload,
+      }, signal)
+      await seed.applyProposal(draft.proposal.proposalId, signal)
+      const finalPayload = { changes: [{
+        kind: 'chapter/select-final', chapter: 1, artifactId: 'host-context-draft-1', summary: '选择第一章初稿为定稿。',
+      }] }
+      const final = await seed.submitProposal({
+        sessionId: 'host-context-session', callId: 'host-context-final',
+        argsHash: novelProposalArgsHash(finalPayload), payload: finalPayload,
+      }, signal)
+      await seed.applyProposal(final.proposal.proposalId, signal)
+    } finally {
+      await seed.dispose()
+    }
+    const presetRoot = await makeTestWorkspace('chapter-context-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, {
+      get: workspaceId => workspaceId === WorkspaceId(V2_WORKSPACE_ID) ? { path: root } : undefined,
+    })
+
+    await expect(handler('chapter/context', { workspaceId: V2_WORKSPACE_ID, chapter: 2 }, signal)).resolves.toEqual({
+      ok: true,
+      value: {
+        chapter: 2,
+        previousFinal: {
+          chapter: 1, artifactId: 'host-context-draft-1', content: '潮水退去时，信匣露出了海面。',
+          summary: '选择第一章初稿为定稿。',
+        },
+      },
+    })
+    await expect(handler('chapter/context', { workspaceId: V2_WORKSPACE_ID, chapter: 2, path: root }, signal))
+      .resolves.toMatchObject({ ok: false, error: { code: 'bad-request' } })
   })
 
   it('previews one authoritative command as an entity diff without mutating the store', async () => {

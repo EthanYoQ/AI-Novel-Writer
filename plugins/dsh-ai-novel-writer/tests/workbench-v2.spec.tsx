@@ -54,6 +54,8 @@ const snapshot = {
     revision: 5, chapter: 1, title: '潮汐站', purpose: '交换证据', plotBeats: ['抵达'],
     characters: [], keyEvents: [], suspense: '录音带缺失', status: 'drafting',
   }],
+  artifacts: [],
+  chapterFinals: [],
   tasks: [{
     revision: 6, taskId: 'chapter-1', kind: 'chapter', stage: 'draft', status: 'failed',
     failure: '上下文不足', resumeCursor: 'chapter-1:beat-2',
@@ -1001,5 +1003,183 @@ describe('V2 sidebar workbench shell', () => {
     for (const listener of listeners) listener()
     expect(setWorkspace).toHaveBeenLastCalledWith(undefined)
     stop()
+  })
+
+  it('loads bounded previous-final context for the selected chapter without reconstructing chapter history locally', async () => {
+    const secondChapter = {
+      ...snapshot.chapters[0]!, chapter: 2, title: '回声', purpose: '追查录音来源', status: 'drafting' as const,
+    }
+    const state = { ...snapshot, chapters: [...snapshot.chapters, secondChapter] }
+    const readChapterContext = vi.fn((_workspaceId: typeof WORKSPACE_ID, chapter: number) => Promise.resolve(
+      chapter === 2
+        ? { chapter, previousFinal: { chapter: 1, artifactId: 'revision-1', content: '# 潮汐站（修订）', summary: '已压缩转场' } }
+        : { chapter },
+    ))
+    const controller = new NovelV2WorkbenchController({
+      readState: vi.fn().mockResolvedValue(state), listProposals: vi.fn().mockResolvedValue([]), readTask: vi.fn(), readChapterContext,
+    })
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    await controller.whenIdle()
+    controller.selectChapter(2)
+    await controller.whenIdle()
+
+    expect(readChapterContext).toHaveBeenLastCalledWith(WORKSPACE_ID, 2, expect.any(AbortSignal))
+    const loaded = controller.getSnapshot()
+    expect(loaded.status).toBe('ready')
+    if (loaded.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(loaded.chapters.context).toEqual({
+      phase: 'ready', chapter: 2,
+      previousFinal: { chapter: 1, artifactId: 'revision-1', content: '# 潮汐站（修订）', summary: '已压缩转场' },
+      message: undefined,
+    })
+  })
+
+  it('renders a chapter blueprint, its Host-owned artifact chain, final selection, and bounded previous-final context', () => {
+    const chapterTwo = {
+      revision: 6, chapter: 2, title: '回声', purpose: '追查录音带来源', plotBeats: ['重听录音'],
+      characters: [], keyEvents: ['收到匿名来信'], suspense: '寄件人署名是林澈', status: 'drafting' as const,
+    }
+    const state = {
+      status: 'ready' as const,
+      open: true,
+      workspace: {
+        workspaceId: WORKSPACE_ID,
+        project: snapshot.project,
+        globalRevision: snapshot.globalRevision,
+        readOnly: false,
+        snapshot: {
+          ...snapshot,
+          chapters: [...snapshot.chapters, chapterTwo],
+          artifacts: [
+            { artifactId: 'draft-1', chapter: 1, kind: 'draft', content: '# 潮汐站', summary: '初稿已完成', createdAt: '2026-08-21T00:00:00.000Z' },
+            { artifactId: 'review-1', chapter: 1, kind: 'review', parentArtifactId: 'draft-1', report: '第二幕节奏偏慢。', summary: '需要压缩转场', createdAt: '2026-08-21T00:01:00.000Z' },
+            { artifactId: 'revision-1', chapter: 1, kind: 'revision', parentArtifactId: 'review-1', content: '# 潮汐站（修订）', summary: '已压缩转场', createdAt: '2026-08-21T00:02:00.000Z' },
+            { artifactId: 'draft-2', chapter: 2, kind: 'draft', content: '# 回声', summary: '初稿已完成', createdAt: '2026-08-21T00:04:00.000Z' },
+            { artifactId: 'review-2', chapter: 2, kind: 'review', parentArtifactId: 'draft-2', report: '录音的来源还不够清晰。', summary: '需要补强线索', createdAt: '2026-08-21T00:05:00.000Z' },
+            { artifactId: 'revision-2', chapter: 2, kind: 'revision', parentArtifactId: 'review-2', content: '# 回声（修订）', summary: '已补强线索', createdAt: '2026-08-21T00:06:00.000Z' },
+          ],
+          chapterFinals: [
+            { chapter: 1, artifactId: 'revision-1', summary: '已压缩转场', selectedAt: '2026-08-21T00:03:00.000Z' },
+            { chapter: 2, artifactId: 'revision-2', summary: '已补强线索', selectedAt: '2026-08-21T00:07:00.000Z' },
+          ],
+        },
+      },
+      proposals: { phase: 'ready' as const, items: [], selectedId: undefined, selectedChange: undefined, message: undefined },
+      tasks: { items: [], selectedId: undefined, message: undefined },
+      chapters: {
+        selected: 2,
+        items: [...snapshot.chapters, chapterTwo],
+        context: {
+          phase: 'ready' as const,
+          chapter: 2,
+          previousFinal: {
+            chapter: 1,
+            artifactId: 'revision-1',
+            content: '# 潮汐站（修订）',
+            summary: '已压缩转场',
+          },
+        },
+      },
+      editor: { target: undefined, phase: 'idle' as const, current: '', next: undefined, aggregateRevision: undefined, draft: '', message: undefined },
+    } as unknown as import('../src/client/workbench-v2.ts').NovelV2WorkbenchState
+
+    const html = renderToStaticMarkup(<NovelV2WorkbenchBody
+      state={state}
+      refresh={vi.fn()} selectProposal={vi.fn()} openProposalChange={vi.fn()} applySelectedProposal={vi.fn()}
+      retryProposalItem={vi.fn()} discardProposalItem={vi.fn()} regenerateProposalItem={vi.fn()} proposalLifecycleAvailable={true}
+      selectTask={vi.fn()} selectChapter={vi.fn()} openAsset={vi.fn()} updateEditor={vi.fn()} discardEditor={vi.fn()}
+    />)
+
+    for (const text of [
+      '第 2 章蓝图', '回声', '追查录音带来源', '重听录音', '收到匿名来信',
+      '版本链', 'draft · draft-2', 'review · review-2', 'revision · revision-2',
+      '# 回声', '录音的来源还不够清晰。', '已定稿', '已补强线索', '第 2 章的上一章定稿上下文',
+    ]) expect(html).toContain(text)
+    expect(html).not.toContain('workspacePath')
+  })
+
+  it('renders a closed artifact proposal command as a Host-owned diff without simulating a local version', () => {
+    const artifactProposal = {
+      proposalId: 'proposal-artifact-1', sessionId: 'session-1', callId: 'call-artifact-1', argsHash: 'b'.repeat(64),
+      status: 'pending' as const, createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T00:00:00.000Z',
+      items: [{
+        itemId: 'proposal-artifact-1-item-1', itemOrder: 1, status: 'pending' as const, attemptCount: 0,
+        change: {
+          kind: 'artifact/review' as const, artifactId: 'review-3', chapter: 3, parentArtifactId: 'draft-3',
+          report: '冲突揭示过早，建议延后到章节结尾。', summary: '调整揭示节奏',
+        },
+      }],
+    }
+    const state = {
+      status: 'ready' as const, open: true,
+      workspace: { workspaceId: WORKSPACE_ID, project: snapshot.project, globalRevision: 7, readOnly: false, snapshot },
+      proposals: { phase: 'ready' as const, items: [artifactProposal], selectedId: artifactProposal.proposalId, selectedChange: undefined, message: undefined },
+      tasks: { items: [], selectedId: undefined, message: undefined },
+      chapters: { selected: undefined, items: [] },
+      editor: { target: undefined, phase: 'idle' as const, current: '', next: undefined, aggregateRevision: undefined, draft: '', message: undefined },
+    } as unknown as import('../src/client/workbench-v2.ts').NovelV2WorkbenchState
+
+    const html = renderToStaticMarkup(<NovelV2WorkbenchBody
+      state={state}
+      refresh={vi.fn()} selectProposal={vi.fn()} openProposalChange={vi.fn()} applySelectedProposal={vi.fn()}
+      retryProposalItem={vi.fn()} discardProposalItem={vi.fn()} regenerateProposalItem={vi.fn()} proposalLifecycleAvailable={true}
+      selectTask={vi.fn()} selectChapter={vi.fn()} openAsset={vi.fn()} updateEditor={vi.fn()} discardEditor={vi.fn()}
+    />)
+
+    for (const text of ['artifact/review · review-3 命令差异', '父版本', 'draft-3', '审稿报告', '冲突揭示过早', 'Host 应用 Proposal 后才会写入版本链']) {
+      expect(html).toContain(text)
+    }
+    expect(html).not.toContain('保存（命令工作流待接入）')
+  })
+
+  it('keeps failed artifact proposal item recovery reachable after opening its command detail', async () => {
+    const item = {
+      itemId: 'proposal-artifact-failed-item', itemOrder: 1, status: 'failed' as const, attemptCount: 1, failure: 'STALE_REVISION' as const,
+      change: {
+        kind: 'artifact/review' as const, artifactId: 'review-failed-1', chapter: 1, parentArtifactId: 'draft-1',
+        report: '需要补足因果链。', summary: '补足因果链',
+      },
+    }
+    const failedProposal = {
+      proposalId: 'proposal-artifact-failed', sessionId: 'session-1', callId: 'call-failed', argsHash: 'c'.repeat(64),
+      status: 'failed' as const, createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T00:00:00.000Z', items: [item],
+    }
+    const retryProposalItem = vi.fn().mockResolvedValue({ proposal: failedProposal, appliedItemIds: [], stoppedItemId: item.itemId })
+    const discardProposalItem = vi.fn().mockResolvedValue({ proposal: failedProposal, item })
+    const regenerateProposalItem = vi.fn().mockResolvedValue({ proposal: failedProposal, item, regenerationTicket: 'ticket-1' })
+    const controller = new NovelV2WorkbenchController({
+      readState: vi.fn().mockResolvedValue(snapshot), listProposals: vi.fn().mockResolvedValue([failedProposal]),
+      readChapterContext: vi.fn().mockResolvedValue({ chapter: 1 }), readTask: vi.fn(),
+      applyProposal: vi.fn().mockResolvedValue({ proposal: failedProposal, appliedItemIds: [], stoppedItemId: item.itemId }),
+      retryProposalItem, discardProposalItem, regenerateProposalItem,
+    } as never)
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    controller.openProposalChange(0)
+    const state = controller.getSnapshot()
+    expect(state.status).toBe('ready')
+    if (state.status !== 'ready') throw new Error('expected ready workbench state')
+    expect(state.editor.target).toBeUndefined()
+
+    const html = renderToStaticMarkup(<NovelV2WorkbenchBody
+      state={state}
+      refresh={() => { void controller.refresh() }} selectProposal={proposalId => { controller.selectProposal(proposalId) }}
+      openProposalChange={index => { controller.openProposalChange(index) }} applySelectedProposal={() => { void controller.applySelectedProposal() }}
+      retryProposalItem={index => { void controller.retryProposalItem(index) }} discardProposalItem={index => { void controller.discardProposalItem(index) }}
+      regenerateProposalItem={index => { void controller.regenerateProposalItem(index) }} proposalLifecycleAvailable={true}
+      selectTask={taskId => { void controller.selectTask(taskId) }} selectChapter={chapter => { controller.selectChapter(chapter) }}
+      openAsset={target => { controller.openAsset(target) }} updateEditor={draft => { controller.updateEditor(draft) }} discardEditor={() => { controller.discardEditor() }}
+    />)
+    for (const text of ['依序应用未完成项', '重试此项', '放弃此项', '重新生成']) expect(html).toContain(text)
+    expect(html).not.toMatch(/<button[^>]*disabled[^>]*>重试此项<\/button>/)
+
+    await controller.retryProposalItem(0)
+    await controller.discardProposalItem(0)
+    await controller.regenerateProposalItem(0)
+    for (const action of [retryProposalItem, discardProposalItem, regenerateProposalItem]) {
+      expect(action).toHaveBeenCalledWith(WORKSPACE_ID, failedProposal.proposalId, item.itemId, expect.any(AbortSignal))
+    }
   })
 })

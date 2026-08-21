@@ -4,7 +4,11 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { NovelStateReadResult } from '../command-rpc.ts'
 import type {
   NovelAggregateRef,
+  NovelArtifactProposalChange,
+  NovelChapterContext,
+  NovelChangeSet,
   NovelProposalApplyResult,
+  NovelProposalChange,
   NovelProposalItemMutationResult,
   NovelProposalRegenerationResult,
   NovelProposalSummary,
@@ -15,6 +19,7 @@ import type {
 export interface NovelV2WorkbenchPort {
   readState(workspaceId: WorkspaceId, signal: AbortSignal): Promise<NovelStateReadResult>
   listProposals(workspaceId: WorkspaceId, signal: AbortSignal): Promise<readonly NovelProposalSummary[]>
+  readChapterContext?(workspaceId: WorkspaceId, chapter: number, signal: AbortSignal): Promise<NovelChapterContext>
   readTask(workspaceId: WorkspaceId, taskId: string, signal: AbortSignal): Promise<NovelTaskAggregate>
   applyProposal?(workspaceId: WorkspaceId, proposalId: string, signal: AbortSignal): Promise<NovelProposalApplyResult>
   retryProposalItem?(workspaceId: WorkspaceId, proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalApplyResult>
@@ -52,6 +57,13 @@ export interface NovelTaskPanelState {
 export interface NovelChapterPanelState {
   readonly selected: number | undefined
   readonly items: NovelStateReadResult['chapters']
+  /** Bounded Host context for the selected chapter; it never includes a local chapter-history reconstruction. */
+  readonly context?: {
+    readonly phase: 'idle' | 'loading' | 'ready' | 'failed'
+    readonly chapter: number | undefined
+    readonly previousFinal: NovelChapterContext['previousFinal']
+    readonly message: string | undefined
+  }
 }
 
 /** A single aggregate selected for the shell's editable/diff/version detail area. */
@@ -111,7 +123,11 @@ const EMPTY_PROPOSALS: NovelProposalPanelState = {
   phase: 'ready', items: [], selectedId: undefined, selectedChange: undefined, message: undefined,
 }
 const EMPTY_TASKS: NovelTaskPanelState = { items: [], selectedId: undefined, message: undefined }
-const EMPTY_CHAPTERS: NovelChapterPanelState = { selected: undefined, items: [] }
+const EMPTY_CHAPTERS: NovelChapterPanelState = {
+  selected: undefined,
+  items: [],
+  context: { phase: 'idle', chapter: undefined, previousFinal: undefined, message: undefined },
+}
 const EMPTY_EDITOR: NovelEditorPanelState = {
   target: undefined, phase: 'idle', current: '', next: undefined, aggregateRevision: undefined, draft: '', message: undefined,
 }
@@ -176,6 +192,11 @@ function aggregateKey(target: NovelAggregateRef): string {
   return target.kind
 }
 
+function isArtifactProposalChange(change: NovelProposalChange | NovelChangeSet): change is NovelArtifactProposalChange {
+  return 'kind' in change && (change.kind === 'artifact/draft'
+    || change.kind === 'artifact/review' || change.kind === 'artifact/revision' || change.kind === 'chapter/select-final')
+}
+
 interface ProposalDiffBase {
   readonly value: unknown
   readonly chainBroken: boolean
@@ -188,6 +209,7 @@ function proposalDiffBase(
 ): ProposalDiffBase | undefined {
   const item = proposal.items[index]
   if (item === undefined) return undefined
+  if (isArtifactProposalChange(item.change)) return undefined
   const authoritative = aggregateFromSnapshot(state, item.change.aggregate)
   const predicted = new Map<string, { readonly value: unknown; readonly revision: number | undefined }>()
   let globalRevision = state.globalRevision
@@ -204,6 +226,7 @@ function proposalDiffBase(
     .filter(candidate => candidate.itemOrder < item.itemOrder)
     .toSorted((left, right) => left.itemOrder - right.itemOrder)
   for (const candidate of preceding) {
+    if (isArtifactProposalChange(candidate.change)) continue
     switch (candidate.status) {
       case 'applied':
       case 'discarded':
@@ -259,6 +282,7 @@ function draftForProposal(
   const item = proposal.items[index]
   if (item === undefined) return undefined
   const change = item.change
+  if (isArtifactProposalChange(change)) return undefined
   const base = proposalDiffBase(state, proposal, index)
   if (base === undefined) return undefined
   const current = base.value
@@ -327,6 +351,8 @@ export class NovelV2WorkbenchController {
   #workspaceId: WorkspaceId | undefined
   #request = 0
   #active: AbortController | undefined
+  #contextRequest = 0
+  #activeContext: AbortController | undefined
   #taskRequest = 0
   #activeTask: AbortController | undefined
   #proposalRequest = 0
@@ -356,6 +382,7 @@ export class NovelV2WorkbenchController {
     this.#workspaceId = workspaceId
     this.#retainedReady = undefined
     this.#active?.abort()
+    this.#cancelChapterContextRead()
     this.#cancelTaskRead()
     this.#cancelProposalOperation()
     if (workspaceId === undefined) {
@@ -387,6 +414,7 @@ export class NovelV2WorkbenchController {
     if (this.#disposed || workspaceId === undefined) return Promise.resolve()
     const previous = this.#state.status === 'ready' ? this.#state : this.#retainedReady
     this.#active?.abort()
+    this.#cancelChapterContextRead()
     this.#cancelTaskRead()
     const abort = new AbortController()
     this.#active = abort
@@ -431,6 +459,7 @@ export class NovelV2WorkbenchController {
         chapters: { selected: selectedChapter, items: state.chapters },
         editor,
       })
+      if (selectedChapter !== undefined) void this.#readChapterContext(selectedChapter)
     }).catch(error => {
       if (abort.signal.aborted || request !== this.#request || workspaceId !== this.#workspaceId) return
       if (previous !== undefined) {
@@ -467,6 +496,16 @@ export class NovelV2WorkbenchController {
     if (this.#state.status !== 'ready') return
     const proposal = this.#state.proposals.items.find(item => item.proposalId === this.#state.proposals.selectedId)
     if (proposal === undefined) return
+    const item = proposal.items[index]
+    if (item === undefined) return
+    if (isArtifactProposalChange(item.change)) {
+      this.#set({
+        ...this.#state,
+        proposals: { ...this.#state.proposals, selectedChange: index },
+        editor: EMPTY_EDITOR,
+      })
+      return
+    }
     const base = proposalDiffBase(this.#state.workspace.snapshot, proposal, index)
     const opened = draftForProposal(this.#state.workspace.snapshot, proposal, index)
     if (opened === undefined || base === undefined) return
@@ -581,6 +620,52 @@ export class NovelV2WorkbenchController {
     if (this.#state.status !== 'ready') return
     if (!this.#state.chapters.items.some(item => item.chapter === chapter)) return
     this.#set({ ...this.#state, chapters: { ...this.#state.chapters, selected: chapter } })
+    void this.#readChapterContext(chapter)
+  }
+
+  /** Read only the Host-bounded previous-final context for the selected chapter. */
+  #readChapterContext(chapter: number): Promise<void> {
+    if (this.#disposed || this.#state.status !== 'ready') return Promise.resolve()
+    const readChapterContext = this.port.readChapterContext
+    // Transitional test and embedding ports may predate #126; production wiring always supplies this RPC.
+    if (readChapterContext === undefined) return Promise.resolve()
+    const workspaceId = this.#state.workspace.workspaceId
+    this.#activeContext?.abort()
+    const abort = new AbortController()
+    this.#activeContext = abort
+    const request = ++this.#contextRequest
+    this.#set({
+      ...this.#state,
+      chapters: {
+        ...this.#state.chapters,
+        context: { phase: 'loading', chapter, previousFinal: undefined, message: undefined },
+      },
+    })
+    const pending = readChapterContext(workspaceId, chapter, abort.signal).then(context => {
+      if (!this.#isCurrentChapterContextRead(abort, request, workspaceId, chapter)) return
+      this.#set({
+        ...this.#state,
+        chapters: {
+          ...this.#state.chapters,
+          context: {
+            phase: 'ready', chapter: context.chapter, previousFinal: context.previousFinal, message: undefined,
+          },
+        },
+      })
+    }).catch(error => {
+      if (!this.#isCurrentChapterContextRead(abort, request, workspaceId, chapter)) return
+      this.#set({
+        ...this.#state,
+        chapters: {
+          ...this.#state.chapters,
+          context: { phase: 'failed', chapter, previousFinal: undefined, message: messageOf(error) },
+        },
+      })
+    }).finally(() => {
+      if (this.#activeContext === abort) this.#activeContext = undefined
+    })
+    this.#track(pending)
+    return pending
   }
 
   /** Open one authoritative aggregate only as a local shell draft; it never issues a write. */
@@ -621,6 +706,7 @@ export class NovelV2WorkbenchController {
     this.#request += 1
     this.#active?.abort()
     this.#active = undefined
+    this.#cancelChapterContextRead()
     this.#cancelTaskRead()
     this.#cancelProposalOperation()
     this.#set({
@@ -637,6 +723,7 @@ export class NovelV2WorkbenchController {
     this.#disposed = true
     this.#request += 1
     this.#active?.abort()
+    this.#cancelChapterContextRead()
     this.#cancelTaskRead()
     this.#cancelProposalOperation()
     this.#retainedReady = undefined
@@ -708,6 +795,12 @@ export class NovelV2WorkbenchController {
     this.#activeTask = undefined
   }
 
+  #cancelChapterContextRead(): void {
+    this.#contextRequest += 1
+    this.#activeContext?.abort()
+    this.#activeContext = undefined
+  }
+
   #cancelProposalOperation(): void {
     this.#proposalRequest += 1
     this.#activeProposal?.abort()
@@ -746,6 +839,19 @@ export class NovelV2WorkbenchController {
       && this.#state.status === 'ready'
       && this.#state.workspace.workspaceId === workspaceId
       && this.#state.tasks.selectedId === taskId
+  }
+
+  #isCurrentChapterContextRead(
+    abort: AbortController,
+    request: number,
+    workspaceId: WorkspaceId,
+    chapter: number,
+  ): boolean {
+    return !abort.signal.aborted
+      && request === this.#contextRequest
+      && this.#state.status === 'ready'
+      && this.#state.workspace.workspaceId === workspaceId
+      && this.#state.chapters.selected === chapter
   }
 
   #set(state: NovelV2WorkbenchState): void {

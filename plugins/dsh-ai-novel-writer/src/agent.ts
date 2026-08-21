@@ -172,14 +172,15 @@ const applyParameters = {
 } as const
 
 const v2ReadParameters = {
-  kind: { type: 'string', enum: ['state'], required: true },
+  kind: { type: 'string', enum: ['state', 'chapter-context'], required: true },
+  chapter: { type: 'integer', description: 'Required only when kind is chapter-context; returns only the selected final from the immediately preceding chapter.' },
 } as const
 
 const v2ProposeParameters = {
   changes: {
     type: 'array',
     required: true,
-    description: 'One or more complete single-aggregate replacement commands. Each item uses exactly changeSetId, aggregate, baseAggregateRevision, baseGlobalRevision, and nextValue.',
+    description: 'One or more complete typed commands. Aggregate replacements use changeSetId, aggregate, baseAggregateRevision, baseGlobalRevision, nextValue. Artifact commands use kind artifact/draft, artifact/review, artifact/revision, or chapter/select-final with their closed fields and a non-empty summary.',
   },
   regenerationTicket: {
     type: 'string',
@@ -446,7 +447,7 @@ export function createNovelV2ToolDefinitions(
   }
   const read = defineTool({
     name: 'novel_read',
-    description: 'Read the current authoritative V2 novel project state. The result omits local workspace paths.',
+    description: 'Read authoritative V2 state, or request bounded chapter-context. chapter-context returns only the selected final prose and final-selection summary from the immediately preceding chapter; it returns an explicit empty context when no final is selected.',
     parameters: v2ReadParameters,
     output: {
       schema: { type: 'json' },
@@ -454,14 +455,21 @@ export function createNovelV2ToolDefinitions(
     },
     isConcurrencySafe: () => true,
     async execute(args, exec) {
-      rejectUnexpected(args as Record<string, unknown>, ['kind'])
-      if ((args as { kind?: unknown }).kind !== 'state') {
-        throw new ToolArgsError(['novel_read property "kind" must be "state"'])
-      }
+      const input = args as Record<string, unknown>
+      const kind = input.kind
+      if (kind === 'state') rejectUnexpected(input, ['kind'])
+      else if (kind === 'chapter-context') {
+        rejectUnexpected(input, ['kind', 'chapter'])
+        if (!Number.isSafeInteger(input.chapter) || (input.chapter as number) <= 0) {
+          throw new ToolArgsError(['novel_read property "chapter" must be a positive integer for chapter-context'])
+        }
+      } else throw new ToolArgsError(['novel_read property "kind" must be "state" or "chapter-context"'])
       const workspace = await resolveWorkspace(exec)
       const store = await openNovelStore(workspace.path, workspace.id, options)
       try {
-        return projectNovelStateRead(await store.read(exec.signal)) as unknown as JsonValue
+        return (kind === 'state'
+          ? projectNovelStateRead(await store.read(exec.signal))
+          : await store.readChapterContext(input.chapter as number, exec.signal)) as unknown as JsonValue
       } finally {
         await store.dispose()
       }
@@ -470,7 +478,7 @@ export function createNovelV2ToolDefinitions(
   })
   const propose = defineTool({
     name: 'novel_propose_change',
-    description: 'Persist one non-authoritative proposal bundle for user review. Changes may contain multiple complete single-aggregate replacements, but this tool never writes authoritative project state. Proposal session, call, and canonical args identity are supplied by the Host.',
+    description: 'Persist one non-authoritative proposal bundle for user review. Changes may contain aggregate replacements or closed artifact version commands, but this tool never writes authoritative project state. Proposal session, call, and canonical args identity are supplied by the Host; only a later user-approved proposal apply can create versions or select a final.',
     parameters: v2ProposeParameters,
     output: {
       schema: { type: 'json' },

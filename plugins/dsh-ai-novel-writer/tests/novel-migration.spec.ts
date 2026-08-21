@@ -181,6 +181,14 @@ describe('explicit V1 migration', () => {
       suspense: '',
       status: 'reviewing',
     }])
+    expect(state.artifacts).toEqual([expect.objectContaining({
+      artifactId: `v1-draft-${preview.fingerprint}-chapter-1`,
+      chapter: 1,
+      kind: 'draft',
+      content: '# 第一章\n\n潮水退去时，信匣露出了海面。\n',
+      summary: 'Migrated V1 draft.',
+    })])
+    expect(state.chapterFinals).toEqual([])
 
     await store.dispose()
     openedStores.length = 0

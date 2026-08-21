@@ -12,7 +12,16 @@ import type {
   NovelWorkbenchEditableTarget,
 } from './asset-editor.ts'
 import type { NovelInitializationDraft, NovelWorkbenchState } from './workbench-store.ts'
-import type { NovelAggregateRef, NovelProposalStatus } from '../novel-store.ts'
+import type {
+  NovelAggregateRef,
+  NovelArtifact,
+  NovelArtifactProposalChange,
+  NovelChapterFinal,
+  NovelProposalChange,
+  NovelProposalItem,
+  NovelProposalItemReceipt,
+  NovelProposalStatus,
+} from '../novel-store.ts'
 import type { NovelV2WorkbenchState } from './workbench-v2.ts'
 
 function proposalStatusLabel(status: NovelProposalStatus): string {
@@ -27,6 +36,89 @@ function aggregateLabel(target: NovelAggregateRef): string {
   if (target.kind === 'chapter') return `第 ${target.chapter} 章`
   if (target.kind === 'task') return `任务 ${target.taskId}`
   return ({ project: '项目设置', architecture: '故事架构', characters: '人物设定' })[target.kind]
+}
+
+function isArtifactProposalChange(change: NovelProposalChange | import('../novel-store.ts').NovelChangeSet): change is NovelArtifactProposalChange {
+  return 'kind' in change && (change.kind === 'artifact/draft'
+    || change.kind === 'artifact/review' || change.kind === 'artifact/revision' || change.kind === 'chapter/select-final')
+}
+
+function proposalCommandLabel(change: NovelArtifactProposalChange): string {
+  return `${change.kind} · ${change.artifactId}`
+}
+
+function proposalReceiptLabel(receipt: NovelProposalItemReceipt): string {
+  return 'globalRevision' in receipt
+    ? `Host 收据：全局版本 ${receipt.globalRevision}`
+    : `Host 收据：${receipt.kind} · 第 ${receipt.chapter} 章 · ${receipt.artifactId}`
+}
+
+function ArtifactCommandDiff({ command }: { readonly command: NovelArtifactProposalChange }) {
+  const content = command.kind === 'artifact/review' ? command.report
+    : command.kind === 'chapter/select-final' ? undefined : command.content
+  return <section className="aiNovelV2CommandDiff" aria-label={`${proposalCommandLabel(command)} 命令差异`}>
+    <h4>{proposalCommandLabel(command)} 命令差异</h4>
+    <dl>
+      <div><dt>章节</dt><dd>第 {command.chapter} 章</dd></div>
+      {'parentArtifactId' in command ? <div><dt>父版本</dt><dd>{command.parentArtifactId}</dd></div> : undefined}
+      {'parentArtifactId' in command ? undefined : command.kind === 'chapter/select-final'
+        ? <div><dt>设为定稿</dt><dd>{command.artifactId}</dd></div>
+        : undefined}
+      <div><dt>摘要</dt><dd>{command.summary}</dd></div>
+    </dl>
+    {content === undefined ? undefined : <section>
+      <h5>{command.kind === 'artifact/review' ? '审稿报告' : '正文'}</h5><pre>{content}</pre>
+    </section>}
+    <p className="aiNovelContextMuted">这是待审 proposal command；仅在 Host 应用 Proposal 后才会写入版本链。</p>
+  </section>
+}
+
+function ProposalItemLifecycleActions({
+  index,
+  item,
+  readOnly,
+  available,
+  retry,
+  discard,
+  regenerate,
+}: {
+  readonly index: number
+  readonly item: NovelProposalItem
+  readonly readOnly: boolean
+  readonly available: boolean
+  readonly retry: (index: number) => void
+  readonly discard: (index: number) => void
+  readonly regenerate: (index: number) => void
+}) {
+  return <div className="aiNovelWorkbenchActions aiNovelWorkbenchActionsInline" aria-label="Proposal 项恢复操作">
+    <button type="button" onClick={() => { retry(index) }} disabled={!available || readOnly || item.status !== 'failed'}>重试此项</button>
+    <button type="button" onClick={() => { discard(index) }}
+      disabled={!available || readOnly || item.status === 'applied' || item.status === 'discarded' || item.status === 'superseded'}>放弃此项</button>
+    <button type="button" onClick={() => { regenerate(index) }}
+      disabled={!available || readOnly || item.status === 'applied' || item.status === 'superseded'}>重新生成</button>
+  </div>
+}
+
+function ArtifactVersionChain({
+  artifacts,
+  final,
+}: {
+  readonly artifacts: readonly NovelArtifact[]
+  readonly final: NovelChapterFinal | undefined
+}) {
+  return <section className="aiNovelV2ArtifactChain" aria-label="版本链">
+    <h4>版本链</h4>
+    {artifacts.length === 0 ? <p className="aiNovelContextMuted">本章还没有已应用的版本。</p> : <ol>
+      {artifacts.map(artifact => <li key={artifact.artifactId}>
+        <h5>{artifact.kind} · {artifact.artifactId}</h5>
+        {artifact.parentArtifactId === undefined ? undefined : <p>父版本：{artifact.parentArtifactId}</p>}
+        {artifact.content === undefined ? undefined : <section><h6>正文</h6><pre>{artifact.content}</pre></section>}
+        {artifact.report === undefined ? undefined : <section><h6>审稿报告</h6><pre>{artifact.report}</pre></section>}
+        <p>摘要：{artifact.summary}</p>
+      </li>)}</ol>}
+    {final === undefined ? <p className="aiNovelContextMuted">尚未选择定稿。</p>
+      : <p><strong>已定稿</strong> · {final.artifactId} · {final.summary}</p>}
+  </section>
 }
 
 /** Props for the V2 shell; every action remains client-local or path-free. */
@@ -95,15 +187,23 @@ export function NovelV2WorkbenchBody({
       {selectedProposal ? <div className="aiNovelV2DetailList" aria-label="提案变更">
         {selectedProposal.items.map((item, index) => {
           const change = item.change
+          const artifactCommand = isArtifactProposalChange(change)
           return <div key={item.itemId}>
             <button type="button" aria-current={state.proposals.selectedChange === index || undefined}
               onClick={() => { openProposalChange(index) }}>
-              #{item.itemOrder} · 查看 {aggregateLabel(change.aggregate)} 差异 · 聚合版本 {change.baseAggregateRevision} · 全局版本 {change.baseGlobalRevision}
+              {artifactCommand
+                ? `#${item.itemOrder} · 查看 ${proposalCommandLabel(change)} 命令差异`
+                : `#${item.itemOrder} · 查看 ${aggregateLabel(change.aggregate)} 差异 · 聚合版本 ${change.baseAggregateRevision} · 全局版本 ${change.baseGlobalRevision}`}
             </button>
             <span> {proposalStatusLabel(item.status)} · 尝试 {item.attemptCount} 次</span>
             {item.failure === undefined ? undefined : <p role="alert">失败：{item.failure}</p>}
-            {item.receipt === undefined ? undefined : <p>Host 收据：全局版本 {item.receipt.globalRevision}</p>}
+            {item.receipt === undefined ? undefined : <p>{proposalReceiptLabel(item.receipt)}</p>}
             {item.regenerationTicket === undefined ? undefined : <p>Host 已保存重新生成请求。</p>}
+            {artifactCommand ? <ArtifactCommandDiff command={change} /> : undefined}
+            {artifactCommand && state.proposals.selectedChange === index ? <ProposalItemLifecycleActions
+              index={index} item={item} readOnly={state.workspace.readOnly} available={proposalLifecycleAvailable}
+              retry={retryProposalItem} discard={discardProposalItem} regenerate={regenerateProposalItem}
+            /> : undefined}
           </div>
         })}
         <div className="aiNovelWorkbenchActions">
@@ -144,6 +244,37 @@ export function NovelV2WorkbenchBody({
           }}>第 {chapter.chapter} 章：{chapter.title}</button>)}
       </div>
     </section>
+
+    {(() => {
+      const chapter = state.chapters.items.find(item => item.chapter === state.chapters.selected)
+      if (chapter === undefined) return undefined
+      const artifacts = (state.workspace.snapshot.artifacts ?? []).filter(item => item.chapter === chapter.chapter)
+      const final = (state.workspace.snapshot.chapterFinals ?? []).find(item => item.chapter === chapter.chapter)
+      const context = state.chapters.context ?? { phase: 'idle' as const, chapter: undefined, previousFinal: undefined, message: undefined }
+      return <section className="aiNovelV2Panel" aria-labelledby="ai-novel-v2-chapter">
+        <h3 id="ai-novel-v2-chapter">第 {chapter.chapter} 章蓝图</h3>
+        <dl className="aiNovelV2Summary">
+          <div><dt>标题</dt><dd>{chapter.title}</dd></div>
+          <div><dt>目的</dt><dd>{chapter.purpose}</dd></div>
+          <div><dt>状态</dt><dd>{chapter.status}</dd></div>
+        </dl>
+        <section aria-label={`第 ${chapter.chapter} 章情节节拍`}><h4>情节节拍</h4>
+          {chapter.plotBeats.length === 0 ? <p className="aiNovelContextMuted">尚未记录情节节拍。</p> : <ul>{chapter.plotBeats.map(beat => <li key={beat}>{beat}</li>)}</ul>}
+        </section>
+        <section aria-label={`第 ${chapter.chapter} 章关键事件`}><h4>关键事件</h4>
+          {chapter.keyEvents.length === 0 ? <p className="aiNovelContextMuted">尚未记录关键事件。</p> : <ul>{chapter.keyEvents.map(event => <li key={event}>{event}</li>)}</ul>}
+        </section>
+        <ArtifactVersionChain artifacts={artifacts} final={final} />
+        <section className="aiNovelV2ChapterContext" aria-label={`第 ${chapter.chapter} 章的上一章定稿上下文`}>
+          <h4>第 {chapter.chapter} 章的上一章定稿上下文</h4>
+          {context.chapter !== chapter.chapter || context.phase === 'idle' ? <p className="aiNovelContextMuted">尚未读取本章上下文。</p>
+            : context.phase === 'loading' ? <p className="aiNovelContextMuted" aria-live="polite">正在读取上一章定稿上下文…</p>
+              : context.phase === 'failed' ? <p role="alert">上下文读取失败：{context.message}</p>
+                : context.previousFinal === undefined ? <p className="aiNovelContextMuted">没有上一章已定稿内容可带入本章。</p>
+                  : <><p>第 {context.previousFinal.chapter} 章 · {context.previousFinal.artifactId} · {context.previousFinal.summary}</p><pre>{context.previousFinal.content}</pre></>}
+        </section>
+      </section>
+    })()}
 
     {editor.target === undefined ? undefined : <section className="aiNovelV2Panel aiNovelV2Editor" aria-labelledby="ai-novel-v2-editor">
        <h3 id="ai-novel-v2-editor" data-ai-novel-screen-focus="" tabIndex={-1}>{aggregateLabel(editor.target)}：编辑 / 差异 / 版本</h3>

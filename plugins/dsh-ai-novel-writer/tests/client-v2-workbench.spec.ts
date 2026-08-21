@@ -20,7 +20,7 @@ const validState = {
   },
   architecture: { revision: 1, premise: '', characterGraph: '', world: '', plotOutline: '', styleConstraints: '', referenceWorks: [] },
   characters: { revision: 1, items: [], relationships: [] },
-  chapters: [], tasks: [], changes: [], proposals: [], migration: undefined,
+  chapters: [], artifacts: [], chapterFinals: [], tasks: [], changes: [], proposals: [], migration: undefined,
 }
 
 const validProposal = {
@@ -203,5 +203,87 @@ describe('V2 workbench client port', () => {
 
     await expect(port.listProposals(WORKSPACE_ID, new AbortController().signal))
       .rejects.toThrow('AI novel V2 proposal response is invalid')
+  })
+
+  it('reads the previous selected final through the bounded chapter context RPC', async () => {
+    const context = {
+      chapter: 2,
+      previousFinal: {
+        chapter: 1,
+        artifactId: 'chapter-1-revision-1',
+        content: '# 第一章\n\n灯塔熄灭。',
+        summary: '林澈在灯塔发现了录音带。',
+      },
+    }
+    const rpc = {
+      call: vi.fn(() => Promise.resolve({ ok: true as const, value: context })),
+    }
+    const port = createNovelV2WorkbenchPort(rpc)
+    const signal = new AbortController().signal
+
+    await expect(port.readChapterContext!(WORKSPACE_ID, 2, signal)).resolves.toEqual(context)
+    expect(rpc.call).toHaveBeenCalledWith('/ai-novel', 'chapter/context', { workspaceId: WORKSPACE_ID, chapter: 2 }, signal)
+    expect(JSON.stringify(rpc.call.mock.calls)).not.toContain('workspacePath')
+  })
+
+  it('rejects path-bearing or corrupt artifact/final/context DTOs before they enter browser state', async () => {
+    const artifact = {
+      artifactId: 'draft-1', chapter: 1, kind: 'draft', content: '# 第一章', summary: '第一章初稿',
+      createdAt: TIMESTAMP,
+    }
+    const corruptStates = [
+      { ...validState, artifacts: [{ ...artifact, artifactId: 'C:\\secret' }] },
+      { ...validState, artifacts: [{ ...artifact, content: undefined }] },
+      { ...validState, artifacts: [{ ...artifact, kind: 'review', report: '缺少父版本' }] },
+      {
+        ...validState,
+        artifacts: [artifact, {
+          artifactId: 'revision-1', chapter: 1, kind: 'revision', parentArtifactId: 'draft-1', content: '# 修订', summary: '修订', createdAt: TIMESTAMP,
+        }],
+      },
+      {
+        ...validState,
+        artifacts: [{ ...artifact, kind: 'review', parentArtifactId: 'draft-1', report: '审稿', content: undefined }],
+        chapterFinals: [{ chapter: 1, artifactId: 'draft-1', summary: '错误指向审稿版本', selectedAt: TIMESTAMP }],
+      },
+    ]
+    for (const state of corruptStates) {
+      const port = createNovelV2WorkbenchPort({ call: vi.fn(() => Promise.resolve({ ok: true as const, value: state })) })
+      await expect(port.readState(WORKSPACE_ID, new AbortController().signal))
+        .rejects.toThrow('AI novel V2 state response is invalid')
+    }
+
+    for (const context of [
+      { chapter: 2, previousFinal: { chapter: 2, artifactId: 'revision-1', content: '# 错章', summary: '错误' } },
+      { chapter: 2, previousFinal: { chapter: 1, artifactId: 'C:\\secret', content: '# 路径', summary: '错误' } },
+    ]) {
+      const port = createNovelV2WorkbenchPort({ call: vi.fn(() => Promise.resolve({ ok: true as const, value: context })) })
+      await expect(port.readChapterContext!(WORKSPACE_ID, 2, new AbortController().signal))
+        .rejects.toThrow('AI novel V2 chapter context response is invalid')
+    }
+  })
+
+  it('rejects extra final DTO fields and duplicate chapter finals while accepting a valid projection', async () => {
+    const artifact = {
+      artifactId: 'draft-final-1', chapter: 1, kind: 'draft', content: '# 第一章', summary: '第一章初稿',
+      createdAt: TIMESTAMP,
+    }
+    const final = { chapter: 1, artifactId: 'draft-final-1', summary: '第一章定稿', selectedAt: TIMESTAMP }
+    const validProjection = { ...validState, artifacts: [artifact], chapterFinals: [final] }
+
+    const acceptedPort = createNovelV2WorkbenchPort({ call: vi.fn(() => Promise.resolve({ ok: true as const, value: validProjection })) })
+    await expect(acceptedPort.readState(WORKSPACE_ID, new AbortController().signal)).resolves.toEqual(validProjection)
+
+    for (const state of [
+      { ...validProjection, chapterFinals: [{ ...final, filePath: 'C:\\secret' }] },
+      {
+        ...validProjection,
+        chapterFinals: [final, { chapter: 1, artifactId: 'draft-final-1', summary: '另一份定稿', selectedAt: TIMESTAMP }],
+      },
+    ]) {
+      const port = createNovelV2WorkbenchPort({ call: vi.fn(() => Promise.resolve({ ok: true as const, value: state })) })
+      await expect(port.readState(WORKSPACE_ID, new AbortController().signal))
+        .rejects.toThrow('AI novel V2 state response is invalid')
+    }
   })
 })

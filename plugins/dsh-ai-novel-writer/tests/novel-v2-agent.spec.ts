@@ -181,4 +181,33 @@ describe('AI novel V2 agent tools', () => {
       await verify.dispose()
     }
   })
+
+  it('keeps artifact version commands non-authoritative and exposes bounded chapter-context through novel_read', async () => {
+    const root = await makeTestWorkspace('v2-agent-artifact-')
+    const setup = await openNovelStore(root, WORKSPACE_ID)
+    await setup.initialize(initialization, signal)
+    await setup.dispose()
+    const registry = { resolveByPath: async (path: string) => path === root ? { id: WORKSPACE_ID, path: root } : undefined }
+    const [read, propose] = createNovelV2ToolDefinitions({}, registry)
+    expect(JSON.stringify(read.parameters)).toContain('chapter-context')
+
+    const artifactArgs = { changes: [{
+      kind: 'artifact/draft', artifactId: 'agent-draft-1', chapter: 1,
+      content: '模型仅建议的第一章草稿。', summary: '提交第一章初稿建议。',
+    }] }
+    await expect(propose.execute(artifactArgs, execution(artifactArgs, root, 'artifact-call')))
+      .resolves.toMatchObject({ proposal: { status: 'pending', items: [{ change: { kind: 'artifact/draft' } }] } })
+    await expect(read.execute({ kind: 'chapter-context', chapter: 2 }, execution({ kind: 'chapter-context', chapter: 2 }, root)))
+      .resolves.toEqual({ chapter: 2 })
+
+    const verify = await openNovelStore(root, WORKSPACE_ID)
+    try {
+      const state = await verify.read(signal)
+      expect(state.artifacts).toEqual([])
+      expect(state.chapterFinals).toEqual([])
+      expect(state.proposals).toHaveLength(1)
+    } finally {
+      await verify.dispose()
+    }
+  })
 })

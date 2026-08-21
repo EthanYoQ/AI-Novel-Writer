@@ -465,6 +465,8 @@ describe('NovelStore proposal inbox', () => {
 
     const database = new DatabaseSync(join(root, '.ai-novel', 'novel.db'))
     try {
+      database.exec('DROP TABLE chapter_finals')
+      database.exec('ALTER TABLE artifacts DROP COLUMN summary')
       database.exec('DROP TABLE proposal_items')
       database.exec('ALTER TABLE proposals DROP COLUMN parent_proposal_id')
       database.exec('ALTER TABLE proposals DROP COLUMN parent_item_id')
@@ -477,7 +479,7 @@ describe('NovelStore proposal inbox', () => {
     const migrated = await openNovelStore(root, WORKSPACE_ID)
     openStores.push(migrated)
     const proposal = (await migrated.listProposals(signal))[0]
-    expect((await migrated.read(signal)).storage.userVersion).toBe(3)
+    expect((await migrated.read(signal)).storage.userVersion).toBe(4)
     expect(proposal).toMatchObject({
       proposalId: submitted.proposal.proposalId,
       status: 'pending',

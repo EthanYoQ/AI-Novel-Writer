@@ -35,7 +35,7 @@ const v2State = {
     createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T00:00:00.000Z',
   },
   architecture: { revision: 1, premise: '', characterGraph: '', world: '', plotOutline: '', styleConstraints: '', referenceWorks: [] },
-  characters: { revision: 1, items: [], relationships: [] }, chapters: [], tasks: [], changes: [], proposals: [], migration: undefined,
+  characters: { revision: 1, items: [], relationships: [] }, chapters: [], artifacts: [], chapterFinals: [], tasks: [], changes: [], proposals: [], migration: undefined,
 }
 
 let cachedSlotRegistry: (new (ctx: Context) => {

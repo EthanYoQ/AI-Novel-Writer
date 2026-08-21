@@ -23,6 +23,7 @@ import {
   type NovelProposalApplyResult,
   type NovelProposalItemMutationResult,
   type NovelProposalRegenerationResult,
+  type NovelChapterContext,
   type NovelStoreRecoveryMode,
   type NovelStoreRecoveryReceipt,
 } from './novel-store.ts'
@@ -76,6 +77,15 @@ export interface NovelProposalListResult {
   readonly proposals: readonly NovelProposalSummary[]
 }
 
+/** Exact path-free request envelope for the bounded next-chapter context endpoint. */
+export interface NovelChapterContextRequest {
+  readonly workspaceId: WorkspaceId
+  readonly chapter: number
+}
+
+/** Exact result envelope for the bounded next-chapter context endpoint. */
+export type NovelChapterContextResult = NovelChapterContext
+
 /** Path-free result of one explicit Host-authorized workspace recovery. */
 export type NovelWorkspaceRecoveryResult = NovelStoreRecoveryReceipt
 
@@ -117,6 +127,7 @@ const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 /** Human-readable request labels shared by stable failure messages. */
 const ENDPOINT_LABEL: Record<string, string> = {
   'state/read': 'Novel state',
+  'chapter/context': 'Novel chapter context',
   'proposal/list': 'Novel proposal list',
   'proposal/apply': 'Novel proposal apply',
   'proposal/retry': 'Novel proposal retry',
@@ -270,6 +281,16 @@ function taskPayload(value: unknown): { readonly workspaceId: WorkspaceId; reado
   return { workspaceId: WorkspaceId(record.workspaceId), taskId }
 }
 
+function chapterContextPayload(value: unknown): NovelChapterContextRequest | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (!exactKeys(record, ['workspaceId', 'chapter'])) return undefined
+  if (typeof record.workspaceId !== 'string' || !WORKSPACE_ID_PATTERN.test(record.workspaceId)) return undefined
+  const chapter = requirePositiveInteger(record.chapter)
+  if (chapter === undefined) return undefined
+  return { workspaceId: WorkspaceId(record.workspaceId), chapter }
+}
+
 /** Parse path-free proposal lifecycle requests; proposal and item ids are opaque UUIDs only. */
 function proposalPayload(
   value: unknown,
@@ -398,7 +419,7 @@ export function createAiNovelCommandRpcHandler(
   reportFailure: (error: unknown) => void = () => {},
 ): ConnectionRpcHandler {
   return async (endpoint, payload, signal) => {
-    if (endpoint !== 'state/read' && endpoint !== 'proposal/list' && endpoint !== 'task/read'
+    if (endpoint !== 'state/read' && endpoint !== 'chapter/context' && endpoint !== 'proposal/list' && endpoint !== 'task/read'
       && endpoint !== 'command/preview' && endpoint !== 'command/commit'
       && endpoint !== 'proposal/apply' && endpoint !== 'proposal/retry'
       && endpoint !== 'proposal/discard' && endpoint !== 'proposal/regenerate'
@@ -407,6 +428,7 @@ export function createAiNovelCommandRpcHandler(
     }
     let workspaceId: WorkspaceId
     let taskId: string | undefined
+    let chapter: number | undefined
     let changeSet: NovelChangeSet | undefined
     let recovery: NovelStoreRecoveryMode | undefined
     let proposalId: string | undefined
@@ -427,6 +449,13 @@ export function createAiNovelCommandRpcHandler(
       }
       workspaceId = resolved.workspaceId
       taskId = resolved.taskId
+    } else if (endpoint === 'chapter/context') {
+      const resolved = chapterContextPayload(payload)
+      if (resolved === undefined) {
+        return badRequest('Novel chapter context payload must contain only a Workspace UUID and a positive chapter')
+      }
+      workspaceId = resolved.workspaceId
+      chapter = resolved.chapter
     } else if (endpoint === 'proposal/apply' || endpoint === 'proposal/retry'
       || endpoint === 'proposal/discard' || endpoint === 'proposal/regenerate') {
       const resolved = proposalPayload(
@@ -478,6 +507,10 @@ export function createAiNovelCommandRpcHandler(
       if (endpoint === 'proposal/list') {
         const proposals = await store.listProposals(signal)
         const value: NovelProposalListResult = { proposals }
+        return { ok: true, value }
+      }
+      if (endpoint === 'chapter/context') {
+        const value: NovelChapterContextResult = await store.readChapterContext(chapter!, signal)
         return { ok: true, value }
       }
       if (endpoint === 'proposal/apply') {

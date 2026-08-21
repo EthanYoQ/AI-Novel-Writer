@@ -62,6 +62,8 @@ function proposalRequest(payload: unknown): NovelProposalRequest {
 function downgradeDatabaseToV2(root: string): void {
   const database = new DatabaseSync(join(root, '.ai-novel', 'novel.db'))
   try {
+    database.exec('DROP TABLE chapter_finals')
+    database.exec('ALTER TABLE artifacts DROP COLUMN summary')
     database.exec('DROP TABLE proposal_items')
     database.exec('ALTER TABLE proposals DROP COLUMN parent_proposal_id')
     database.exec('ALTER TABLE proposals DROP COLUMN parent_item_id')
@@ -136,7 +138,7 @@ describe('NovelStore SQLite core', () => {
       readOnly: false,
       storage: {
         applicationId: 0x41_4e_4f_56,
-        userVersion: 3,
+        userVersion: 4,
         foreignKeys: true,
         journalMode: 'delete',
         synchronous: 'full',
@@ -559,7 +561,7 @@ describe('NovelStore SQLite core', () => {
       projectId: source.projectId,
       workspaceId: movedWorkspace,
       readOnly: false,
-      storage: { userVersion: 3 },
+      storage: { userVersion: 4 },
       project: source.project,
       changes: source.changes,
     })
@@ -611,7 +613,7 @@ describe('NovelStore SQLite core', () => {
       projectId: clone.projectId,
       workspaceId: clonedWorkspace,
       readOnly: false,
-      storage: { userVersion: 3 },
+      storage: { userVersion: 4 },
       project: source.project,
       changes: source.changes,
     })
@@ -645,7 +647,8 @@ describe('NovelStore SQLite core', () => {
     }), signal)
     await store.applyProposal(appliedProposal.proposal.proposalId, signal)
     const original = await store.read(signal)
-    expect(original.proposals[0]?.items[0]?.receipt?.projectId).toBe(original.projectId)
+    const originalReceipt = original.proposals[0]?.items[0]?.receipt
+    expect(originalReceipt !== undefined && 'projectId' in originalReceipt ? originalReceipt.projectId : undefined).toBe(original.projectId)
     await store.dispose()
     await mkdir(join(copiedRoot, '.ai-novel'), { recursive: true })
     await copyFile(join(root, '.ai-novel', '.gitignore'), join(copiedRoot, '.ai-novel', '.gitignore'))
@@ -685,7 +688,8 @@ describe('NovelStore SQLite core', () => {
       changes: original.changes,
       migration: original.migration,
     })
-    const clonedReceiptProjectIds = cloned.proposals.flatMap(proposal => proposal.items.flatMap(item => item.receipt === undefined ? [] : [item.receipt.projectId]))
+    const clonedReceiptProjectIds = cloned.proposals.flatMap(proposal => proposal.items.flatMap(item =>
+      item.receipt !== undefined && 'projectId' in item.receipt ? [item.receipt.projectId] : []))
     expect(clonedReceiptProjectIds).toEqual([clone.projectId])
     expect(clonedReceiptProjectIds).not.toContain(original.projectId)
     await clonedStore.dispose()
@@ -693,7 +697,9 @@ describe('NovelStore SQLite core', () => {
     const originalStore = await openStore(root, WORKSPACE_ID)
     const unchangedOriginal = await originalStore.read(signal)
     expect(unchangedOriginal.projectId).toBe(original.projectId)
-    expect(unchangedOriginal.proposals[0]?.items[0]?.receipt?.projectId).toBe(original.projectId)
+    const unchangedOriginalReceipt = unchangedOriginal.proposals[0]?.items[0]?.receipt
+    expect(unchangedOriginalReceipt !== undefined && 'projectId' in unchangedOriginalReceipt
+      ? unchangedOriginalReceipt.projectId : undefined).toBe(original.projectId)
     await originalStore.dispose()
   })
 

@@ -30,9 +30,16 @@ import {
 import type { NovelStateReadResult } from '../command-rpc.ts'
 import type {
   NovelAggregateRef,
+  NovelArtifact,
+  NovelArtifactProposalChange,
+  NovelChapterContext,
+  NovelChapterFinal,
   NovelChangeReceipt,
+  NovelChangeSet,
+  NovelProposalChange,
   NovelProposalApplyResult,
   NovelProposalItem,
+  NovelProposalItemReceipt,
   NovelProposalItemMutationResult,
   NovelProposalRegenerationResult,
   NovelProposalSummary,
@@ -217,11 +224,18 @@ function isNonNegativeInteger(value: unknown): value is number {
 }
 
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value !== ''
+  return typeof value === 'string' && value.trim() !== ''
 }
 
 function isTimestamp(value: unknown): value is string {
-  return isNonEmptyString(value) && !Number.isNaN(Date.parse(value))
+  if (!isNonEmptyString(value)) return false
+  const time = Date.parse(value)
+  return Number.isFinite(time) && new Date(time).toISOString() === value
+}
+
+/** Matches the Host's closed artifact/task identifier grammar and excludes filesystem syntax. */
+function isOpaqueIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
@@ -298,10 +312,12 @@ function isV2Provenance(value: unknown): boolean {
       && isNonEmptyString(value.argsHash)))
 }
 
-function isV2ChangeSet(value: unknown): boolean {
-  if (!isRecord(value) || !isNonEmptyString(value.changeSetId) || value.operation !== 'replace'
+function isV2AggregateProposalChange(value: unknown): value is NovelChangeSet {
+  if (!isRecord(value) || !isNonEmptyString(value.changeSetId)
     || !isV2AggregateRef(value.aggregate) || !isNonNegativeInteger(value.baseAggregateRevision)
-    || !isNonNegativeInteger(value.baseGlobalRevision) || !isV2Provenance(value.provenance) || !isRecord(value.nextValue)) return false
+    || !isNonNegativeInteger(value.baseGlobalRevision) || !isRecord(value.nextValue)) return false
+  if ('operation' in value && value.operation !== 'replace') return false
+  if ('provenance' in value && !isV2Provenance(value.provenance)) return false
   if (value.aggregate.kind === 'project') return isV2Project(value.nextValue, false)
   if (value.aggregate.kind === 'architecture') return isV2Architecture(value.nextValue, false)
   if (value.aggregate.kind === 'characters') return isV2Characters(value.nextValue, false)
@@ -309,6 +325,85 @@ function isV2ChangeSet(value: unknown): boolean {
     return isV2Chapter(value.nextValue, false) && value.nextValue.chapter === value.aggregate.chapter
   }
   return isV2Task({ ...value.nextValue, revision: 0 }) && value.nextValue.taskId === value.aggregate.taskId
+}
+
+function exactKeysOf(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).sort().join('\0') === [...keys].sort().join('\0')
+}
+
+function isV2ArtifactProposalChange(value: unknown): value is NovelArtifactProposalChange {
+  if (!isRecord(value) || !isOpaqueIdentifier(value.artifactId) || !isNonNegativeInteger(value.chapter) || value.chapter === 0
+    || !isNonEmptyString(value.summary) || typeof value.kind !== 'string') return false
+  switch (value.kind) {
+    case 'artifact/draft':
+      return exactKeysOf(value, ['kind', 'artifactId', 'chapter', 'content', 'summary']) && isNonEmptyString(value.content)
+    case 'artifact/review':
+      return exactKeysOf(value, ['kind', 'artifactId', 'chapter', 'parentArtifactId', 'report', 'summary'])
+        && isOpaqueIdentifier(value.parentArtifactId) && isNonEmptyString(value.report)
+    case 'artifact/revision':
+      return exactKeysOf(value, ['kind', 'artifactId', 'chapter', 'parentArtifactId', 'content', 'summary'])
+        && isOpaqueIdentifier(value.parentArtifactId) && isNonEmptyString(value.content)
+    case 'chapter/select-final':
+      return exactKeysOf(value, ['kind', 'chapter', 'artifactId', 'summary'])
+    default: return false
+  }
+}
+
+function isV2ProposalChange(value: unknown): value is NovelProposalChange | NovelChangeSet {
+  return isV2AggregateProposalChange(value) || isV2ArtifactProposalChange(value)
+}
+
+function isV2Artifact(value: unknown): value is NovelArtifact {
+  if (!isRecord(value) || !isOpaqueIdentifier(value.artifactId) || !isNonNegativeInteger(value.chapter) || value.chapter === 0
+    || !isNonEmptyString(value.summary) || !isTimestamp(value.createdAt)
+    || (value.kind !== 'draft' && value.kind !== 'review' && value.kind !== 'revision')) return false
+  if (value.kind === 'draft') {
+    return exactKeysOf(value, ['artifactId', 'chapter', 'kind', 'content', 'summary', 'createdAt']) && isNonEmptyString(value.content)
+  }
+  if (value.kind === 'review') {
+    return exactKeysOf(value, ['artifactId', 'chapter', 'kind', 'parentArtifactId', 'report', 'summary', 'createdAt'])
+      && isOpaqueIdentifier(value.parentArtifactId) && isNonEmptyString(value.report)
+  }
+  return exactKeysOf(value, ['artifactId', 'chapter', 'kind', 'parentArtifactId', 'content', 'summary', 'createdAt'])
+    && isOpaqueIdentifier(value.parentArtifactId) && isNonEmptyString(value.content)
+}
+
+function isV2ChapterFinal(value: unknown): value is NovelChapterFinal {
+  return isRecord(value) && exactKeysOf(value, ['chapter', 'artifactId', 'summary', 'selectedAt'])
+    && isNonNegativeInteger(value.chapter) && value.chapter > 0
+    && isOpaqueIdentifier(value.artifactId) && isNonEmptyString(value.summary) && isTimestamp(value.selectedAt)
+}
+
+function isV2ChapterContext(value: unknown, requestedChapter: number): value is NovelChapterContext {
+  if (!isRecord(value) || (!exactKeysOf(value, ['chapter']) && !exactKeysOf(value, ['chapter', 'previousFinal']))
+    || value.chapter !== requestedChapter || !isNonNegativeInteger(value.chapter) || value.chapter === 0) return false
+  if (value.previousFinal === undefined) return true
+  if (!isRecord(value.previousFinal) || !exactKeysOf(value.previousFinal, ['chapter', 'artifactId', 'content', 'summary'])) return false
+  return requestedChapter > 1 && value.previousFinal.chapter === requestedChapter - 1
+    && isOpaqueIdentifier(value.previousFinal.artifactId) && isNonEmptyString(value.previousFinal.content)
+    && isNonEmptyString(value.previousFinal.summary)
+}
+
+function hasValidArtifactProjection(artifacts: readonly NovelArtifact[], chapterFinals: readonly NovelChapterFinal[]): boolean {
+  const byId = new Map<string, NovelArtifact>()
+  for (const artifact of artifacts) {
+    if (byId.has(artifact.artifactId)) return false
+    byId.set(artifact.artifactId, artifact)
+  }
+  for (const artifact of artifacts) {
+    if (artifact.kind === 'draft') continue
+    const parent = artifact.parentArtifactId === undefined ? undefined : byId.get(artifact.parentArtifactId)
+    const expectedKind = artifact.kind === 'review' ? 'draft' : 'review'
+    if (parent === undefined || parent.chapter !== artifact.chapter || parent.kind !== expectedKind) return false
+  }
+  const finalizedChapters = new Set<number>()
+  for (const final of chapterFinals) {
+    if (finalizedChapters.has(final.chapter)) return false
+    finalizedChapters.add(final.chapter)
+    const artifact = byId.get(final.artifactId)
+    if (artifact === undefined || artifact.chapter !== final.chapter || (artifact.kind !== 'draft' && artifact.kind !== 'revision')) return false
+  }
+  return true
 }
 
 function isV2ChangeAuditRecord(value: unknown): boolean {
@@ -320,12 +415,12 @@ function isV2ChangeAuditRecord(value: unknown): boolean {
 
 function isV2ProposalItem(value: unknown): value is NovelProposalItem {
   return isRecord(value) && isNonEmptyString(value.itemId) && isNonNegativeInteger(value.itemOrder)
-    && isV2ChangeSet(value.change)
+    && isV2ProposalChange(value.change)
     && (value.status === 'pending' || value.status === 'stale' || value.status === 'applied'
       || value.status === 'discarded' || value.status === 'superseded' || value.status === 'failed')
     && isNonNegativeInteger(value.attemptCount)
     && (value.failure === undefined || isV2ProposalItemFailure(value.failure))
-    && (value.receipt === undefined || isV2ChangeReceipt(value.receipt))
+    && (value.receipt === undefined || isV2ProposalItemReceipt(value.receipt))
     && (value.regenerationTicket === undefined || isNonEmptyString(value.regenerationTicket))
     && (value.supersededByProposalId === undefined || isNonEmptyString(value.supersededByProposalId))
     && (value.supersededByItemId === undefined || isNonEmptyString(value.supersededByItemId))
@@ -364,13 +459,16 @@ function isV2StateReadResult(value: unknown): value is NovelStateReadResult {
     || typeof value.workspaceId !== 'string' || value.workspaceId === ''
     || !isNonNegativeInteger(value.globalRevision) || typeof value.readOnly !== 'boolean'
     || !isRecord(value.storage) || !isRecord(value.project) || !isRecord(value.architecture) || !isRecord(value.characters)
-    || !Array.isArray(value.chapters) || !Array.isArray(value.tasks) || !Array.isArray(value.changes)
+    || !Array.isArray(value.chapters) || !Array.isArray(value.artifacts) || !Array.isArray(value.chapterFinals)
+    || !Array.isArray(value.tasks) || !Array.isArray(value.changes)
     || !Array.isArray(value.proposals) || !(value.migration === undefined || isV2MigrationReceipt(value.migration))) return false
   return isNonNegativeInteger(value.storage.applicationId) && isNonNegativeInteger(value.storage.userVersion)
     && typeof value.storage.foreignKeys === 'boolean' && typeof value.storage.journalMode === 'string'
     && typeof value.storage.synchronous === 'string' && typeof value.storage.lockingMode === 'string'
     && isV2Project(value.project, true) && isV2Architecture(value.architecture, true)
     && isV2Characters(value.characters, true) && value.chapters.every(chapter => isV2Chapter(chapter, true))
+    && value.artifacts.every(isV2Artifact) && value.chapterFinals.every(isV2ChapterFinal)
+    && hasValidArtifactProjection(value.artifacts, value.chapterFinals)
     && value.tasks.every(isV2Task) && value.changes.every(isV2ChangeAuditRecord) && value.proposals.every(isV2Proposal)
 }
 
@@ -382,6 +480,14 @@ function isV2ChangeReceipt(value: unknown): value is NovelChangeReceipt {
   return isRecord(value) && isNonEmptyString(value.changeSetId) && isNonEmptyString(value.projectId)
     && isV2AggregateRef(value.aggregate) && isNonNegativeInteger(value.aggregateRevision)
     && isNonNegativeInteger(value.globalRevision)
+}
+
+function isV2ProposalItemReceipt(value: unknown): value is NovelProposalItemReceipt {
+  if (isV2ChangeReceipt(value)) return true
+  return isRecord(value) && exactKeysOf(value, ['kind', 'chapter', 'artifactId'])
+    && (value.kind === 'artifact/draft' || value.kind === 'artifact/review'
+      || value.kind === 'artifact/revision' || value.kind === 'chapter/select-final')
+    && isNonNegativeInteger(value.chapter) && value.chapter > 0 && isOpaqueIdentifier(value.artifactId)
 }
 
 function isV2ProposalApplyResult(value: unknown): value is NovelProposalApplyResult {
@@ -407,7 +513,7 @@ function isV2ProposalRegenerationResult(value: unknown): value is NovelProposalR
 
 async function callV2Workbench(
   rpc: Pick<ClientConnectionRpc, 'call'>,
-  endpoint: 'state/read' | 'proposal/list' | 'task/read' | 'proposal/apply' | 'proposal/retry' | 'proposal/discard' | 'proposal/regenerate',
+  endpoint: 'state/read' | 'chapter/context' | 'proposal/list' | 'task/read' | 'proposal/apply' | 'proposal/retry' | 'proposal/discard' | 'proposal/regenerate',
   payload: Record<string, unknown>,
   signal: AbortSignal,
 ): Promise<unknown> {
@@ -441,6 +547,13 @@ export function createNovelV2WorkbenchPort(
       const value = await callV2Workbench(rpc, 'proposal/list', { workspaceId }, signal)
       if (!isV2ProposalList(value)) throw new Error('AI novel V2 proposal response is invalid')
       return value.proposals
+    },
+    readChapterContext: async (workspaceId, chapter, signal) => {
+      const value = await callV2Workbench(rpc, 'chapter/context', { workspaceId, chapter }, signal)
+      if (!isV2ChapterContext(value, chapter)) {
+        throw new Error('AI novel V2 chapter context response is invalid')
+      }
+      return value
     },
     readTask: async (workspaceId, taskId, signal) => {
       const value = await callV2Workbench(rpc, 'task/read', { workspaceId, taskId }, signal)
