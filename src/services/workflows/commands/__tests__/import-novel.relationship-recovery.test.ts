@@ -230,17 +230,11 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-roster-read')
   })
 
-  it('adds only missing endpoint cards through one bounded correction before the atomic global-facts commit', async () => {
+  it('adds only missing endpoint cards from a strict delta through one bounded correction before the atomic global-facts commit', async () => {
     const invoke = stubSuccessfulImportIpc()
     const initial = withMissingEndpoint()
-    const corrected = {
-      ...initial,
-      characterCards: [
-        ...initial.characterCards,
-        card('韩烁', 'supporting'),
-      ],
-    }
-    const generateStream = respondWith([initial, corrected])
+    const delta = { characterCards: [card('韩烁', 'supporting')] }
+    const generateStream = respondWith([initial, delta])
 
     await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
 
@@ -265,10 +259,10 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
     )
   })
 
-  it('rejects a correction that changes any existing card relationship before commit', async () => {
+  it('rejects a full-object correction before commit even when it includes the missing endpoint card', async () => {
     const invoke = stubNoCommitIpc()
     const initial = withMissingEndpoint()
-    const corrected = {
+    const fullCorrection = {
       ...initial,
       characterCards: [
         {
@@ -280,10 +274,29 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
         card('韩烁', 'supporting'),
       ],
     }
-    const generateStream = respondWith([initial, corrected])
+    const generateStream = respondWith([initial, fullCorrection])
 
     await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
-      .rejects.toThrow(/受限补卡校正|保留原有/)
+      .rejects.toThrow(/受限补卡校正|delta|保留原有/)
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      'kb:search', 'kb:search', 'kb:search', 'kb:search',
+    ])
+  })
+
+  it('rejects a delta card with extra keys before commit', async () => {
+    const invoke = stubNoCommitIpc()
+    const initial = withMissingEndpoint()
+    const delta = {
+      characterCards: [
+        { ...card('韩烁', 'supporting'), extraFact: '不允许的字段' },
+      ],
+    }
+    const generateStream = respondWith([initial, delta])
+
+    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
+      .rejects.toThrow(/受限补卡校正|额外字段/)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
@@ -294,18 +307,37 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
   it('rejects a correction that adds arbitrary extra cards before commit', async () => {
     const invoke = stubNoCommitIpc()
     const initial = withMissingEndpoint()
-    const corrected = {
-      ...initial,
+    const delta = {
       characterCards: [
-        ...initial.characterCards,
         card('韩烁', 'supporting'),
         card('任意新增', 'minor'),
       ],
     }
-    const generateStream = respondWith([initial, corrected])
+    const generateStream = respondWith([initial, delta])
 
     await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
       .rejects.toThrow(/受限补卡校正|新增角色/)
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      'kb:search', 'kb:search', 'kb:search', 'kb:search',
+    ])
+  })
+
+  it('rejects duplicate delta cards that omit another unresolved endpoint before commit', async () => {
+    const invoke = stubNoCommitIpc()
+    const initial = withMissingEndpoint('韩烁')
+    initial.characterCards[1].relationships.push({ target: '叶宁', relation: '暗中相助' })
+    const delta = {
+      characterCards: [
+        card('韩烁', 'supporting'),
+        card('韩烁', 'minor'),
+      ],
+    }
+    const generateStream = respondWith([initial, delta])
+
+    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
+      .rejects.toThrow(/重复|缺失/)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([

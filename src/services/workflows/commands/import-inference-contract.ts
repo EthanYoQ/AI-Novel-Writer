@@ -57,9 +57,58 @@ function trimEdgeWrapperResidue(content: string): string {
 }
 
 function normalizeImportInferenceJsonContent(content: string): string {
-  const trimmed = trimEdgeWrapperResidue(content)
-  const fenced = /^```(?:json)?[^\S\r\n]*(?:\r?\n)([\s\S]*?)(?:\r?\n)?```$/iu.exec(trimmed)
-  return fenced ? trimEdgeWrapperResidue(fenced[1]) : trimmed
+  return extractSingleCompleteJsonObject(trimEdgeWrapperResidue(content))
+}
+
+function findCompleteJsonObjectEnd(source: string, start: number): number | undefined {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (character === '\\') {
+        escaped = true
+      } else if (character === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (character === '"') {
+      inString = true
+    } else if (character === '{') {
+      depth += 1
+    } else if (character === '}') {
+      depth -= 1
+      if (depth === 0) return index
+      if (depth < 0) return undefined
+    }
+  }
+  return undefined
+}
+
+function extractSingleCompleteJsonObject(source: string): string {
+  const candidates: string[] = []
+  let searchFrom = 0
+  while (searchFrom < source.length) {
+    const start = source.indexOf('{', searchFrom)
+    if (start === -1) break
+    const end = findCompleteJsonObjectEnd(source, start)
+    if (end === undefined) throw new StructuredContractDiagnostic('invalid_json', '$')
+
+    const candidate = source.slice(start, end + 1)
+    try {
+      record(JSON.parse(candidate), '$')
+    } catch {
+      throw new StructuredContractDiagnostic('invalid_json', '$')
+    }
+    candidates.push(candidate)
+    searchFrom = end + 1
+  }
+  if (candidates.length !== 1) throw new StructuredContractDiagnostic('invalid_json', '$')
+  return candidates[0]
 }
 
 export function parseImportInferenceJsonObject(content: string): Record<string, unknown> {

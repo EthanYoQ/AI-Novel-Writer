@@ -66,14 +66,27 @@ function expectInvalidJson(content: string) {
 }
 
 describe('decodeImportInferenceJson', () => {
-  it('accepts one complete JSON object inside benign invisible and fenced wrappers', () => {
+  it('accepts one complete JSON object inside benign invisible, prose, and fenced wrappers', () => {
+    const inference = validInference()
+    inference.novelConfig.coreOutline = '主线包含 {旧案} 与 "选择" 的双重压力。'
     const parsed = decodeImportInferenceJson(
-      `\u200B\uFEFF\`\`\`json\n${JSON.stringify(validInference())}\n\`\`\`\u2060`,
+      `\u200B\uFEFF下面是按合同整理的 JSON：\n\n\`\`\`json\n${JSON.stringify(inference)}\n\`\`\`\n\n以上为结构化结果。\u2060`,
     )
 
     expect(parsed.novelConfig.genre).toBe('现实')
     expect(parsed.characterCards.map(card => card.name)).toEqual(['陆舟', '苏绾', '顾岩'])
     expect(parsed.characterCards[0].age).toBe('18')
+    expect(parsed.novelConfig.coreOutline).toBe('主线包含 {旧案} 与 "选择" 的双重压力。')
+  })
+
+  it('rejects output with no complete JSON object', () => {
+    expectInvalidJson('下面是说明性文字，但没有结构化对象。')
+  })
+
+  it('rejects a malformed JSON object candidate instead of scanning past it', () => {
+    const json = JSON.stringify(validInference())
+
+    expectInvalidJson(`先给出一个错误对象：{"novelConfig":,}\n随后给出正确对象：${json}`)
   })
 
   it('rejects multiple complete JSON objects as ambiguous output', () => {
@@ -86,11 +99,5 @@ describe('decodeImportInferenceJson', () => {
     const json = JSON.stringify(validInference())
 
     expectInvalidJson(`${json}\n{"novelConfig":`)
-  })
-
-  it('rejects a non-object prefix before an otherwise valid object as ambiguous output', () => {
-    const json = JSON.stringify(validInference())
-
-    expectInvalidJson(`[]\n${json}`)
   })
 })

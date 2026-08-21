@@ -56,6 +56,31 @@ export interface ImportedChapter {
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u
 const MAX_IMPORT_INFERENCE_CHARACTER_CARDS = 8
+const IMPORT_ENDPOINT_DELTA_CARD_KEYS = [
+  'abilities',
+  'age',
+  'appearance',
+  'arc',
+  'background',
+  'currentState',
+  'gender',
+  'motivation',
+  'name',
+  'notes',
+  'personality',
+  'relationships',
+  'role',
+] as const
+const IMPORT_ENDPOINT_DELTA_CURRENT_STATE_KEYS = [
+  'keyItems',
+  'location',
+  'mentalState',
+  'physicalState',
+  'powerLevel',
+  'recentEvents',
+  'updatedAtChapter',
+] as const
+const IMPORT_ENDPOINT_DELTA_RELATIONSHIP_KEYS = ['relation', 'target'] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -85,6 +110,18 @@ function importInferenceCards(root: Record<string, unknown>): Array<Record<strin
   return cards
 }
 
+function assertExactImportEndpointDeltaKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[],
+  path: string,
+): void {
+  const actualKeys = Object.keys(value).sort()
+  const sortedExpectedKeys = [...expectedKeys].sort()
+  if (!deepJsonEqual(actualKeys, sortedExpectedKeys)) {
+    throw new Error(`导入推演受限补卡校正 delta ${path} 包含缺失或额外字段`)
+  }
+}
+
 function unresolvedImportRelationshipTargets(root: Record<string, unknown>): string[] {
   const cards = importInferenceCards(root)
   const names = new Set(cards.map(card => card.name).filter((name): name is string => typeof name === 'string'))
@@ -104,38 +141,51 @@ function unresolvedImportRelationshipTargets(root: Record<string, unknown>): str
   return [...unresolved]
 }
 
-function assertImportEndpointCorrection(
-  originalRoot: Record<string, unknown>,
-  correctedRoot: Record<string, unknown>,
+function parseImportEndpointCorrectionDelta(
+  content: string,
   unresolvedTargets: readonly string[],
-): void {
-  if (!deepJsonEqual(originalRoot.novelConfig, correctedRoot.novelConfig)) {
-    throw new Error('导入推演受限补卡校正必须保留原有配置')
-  }
-  if (!deepJsonEqual(originalRoot.architectureFiles, correctedRoot.architectureFiles)) {
-    throw new Error('导入推演受限补卡校正必须保留原有架构文件')
-  }
-
-  const originalCards = importInferenceCards(originalRoot)
-  const correctedCards = importInferenceCards(correctedRoot)
-  if (correctedCards.length !== originalCards.length + unresolvedTargets.length) {
+): Array<Record<string, unknown>> {
+  const deltaRoot = parseImportInferenceJsonObject(content)
+  assertExactImportEndpointDeltaKeys(deltaRoot, ['characterCards'], '$')
+  const deltaCards = importInferenceCards(deltaRoot)
+  if (deltaCards.length !== unresolvedTargets.length) {
     throw new Error('导入推演受限补卡校正只能新增缺失关系端点角色')
   }
-  for (const [index, originalCard] of originalCards.entries()) {
-    if (!deepJsonEqual(originalCard, correctedCards[index])) {
-      throw new Error('导入推演受限补卡校正必须保留原有角色卡和关系数组')
+  for (const [index, deltaCard] of deltaCards.entries()) {
+    const path = `characterCards[${index}]`
+    assertExactImportEndpointDeltaKeys(deltaCard, IMPORT_ENDPOINT_DELTA_CARD_KEYS, path)
+    if (isRecord(deltaCard.currentState)) {
+      assertExactImportEndpointDeltaKeys(
+        deltaCard.currentState,
+        IMPORT_ENDPOINT_DELTA_CURRENT_STATE_KEYS,
+        `${path}.currentState`,
+      )
+    }
+    const relationships = deltaCard.relationships
+    if (Array.isArray(relationships)) {
+      relationships.forEach((relationship, relationshipIndex) => {
+        if (isRecord(relationship)) {
+          assertExactImportEndpointDeltaKeys(
+            relationship,
+            IMPORT_ENDPOINT_DELTA_RELATIONSHIP_KEYS,
+            `${path}.relationships[${relationshipIndex}]`,
+          )
+        }
+      })
     }
   }
-
   const expectedAddedNames = new Set(unresolvedTargets)
-  const addedNames = correctedCards.slice(originalCards.length).map(card => card.name)
-  if (
-    addedNames.length !== expectedAddedNames.size
-    || addedNames.some(name => typeof name !== 'string' || !expectedAddedNames.has(name))
-    || new Set(addedNames).size !== addedNames.length
-  ) {
+  const addedNames = deltaCards.map(card => card.name)
+  if (addedNames.some(name => typeof name !== 'string' || !expectedAddedNames.has(name))) {
     throw new Error('导入推演受限补卡校正新增角色必须精确匹配原始未闭合关系端点')
   }
+  if (new Set(addedNames).size !== addedNames.length) {
+    throw new Error('导入推演受限补卡校正 delta 包含重复缺失关系端点角色')
+  }
+  if (addedNames.length !== expectedAddedNames.size) {
+    throw new Error('导入推演受限补卡校正 delta 缺失关系端点角色')
+  }
+  return deltaCards
 }
 
 function requireFinalizedDraftImportReceipt(
@@ -355,16 +405,17 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         '【导入推演受限补卡校正】',
         '上一轮完整 JSON 已可解析，但 characterCards.relationships.target 引用了 characterCards 中不存在的角色名。',
         '只输出一个完整 JSON 对象，不要 Markdown、解释或思考过程。',
-        `必须新增且只新增这些缺失角色 name：${JSON.stringify(unresolvedTargets)}`,
-        'novelConfig、architectureFiles、原 characterCards 的所有字段和 relationships 数组必须保持完全相同。',
-        '不得删除、重排、改名或改写任何原角色；不得新增任意其他角色。',
-        '新增角色必须完整满足导入推演 JSON 合同，且最终关系端点必须闭合。',
-        '【导入推演 JSON 合同】',
-        IMPORT_INFERENCE_JSON_CONTRACT,
-        '【上一轮完整 JSON】',
+        '只允许输出严格 delta，顶层必须且只能包含 characterCards。',
+        `characterCards 必须新增且只新增这些缺失角色 name：${JSON.stringify(unresolvedTargets)}`,
+        '不得回传 novelConfig、architectureFiles 或任何原有角色卡；不得删除、重排、改名或改写任何原角色。',
+        '不得新增任意其他角色；delta 角色卡、currentState 与 relationships 内部不得包含合同外字段。',
+        '应用端会把 delta 追加到上一轮本地原始 characterCards，再执行完整导入推演 JSON 合同校验和关系闭合校验。',
+        '【delta JSON 合同】',
+        '{"characterCards":[{"name":"缺失关系端点精确 name","role":"protagonist | antagonist | supporting | minor","gender":"非空文本","age":"非空文本或有限数字","appearance":"非空文本","personality":"非空文本","background":"非空文本","abilities":"非空文本","motivation":"非空文本","relationships":[{"target":"最终 characterCards 中另一角色的精确 name","relation":"非空关系文本"}],"arc":"非空文本","notes":"非空文本","currentState":{"location":"非空文本","powerLevel":"非空文本","physicalState":"非空文本","mentalState":"非空文本","keyItems":"非空文本","recentEvents":"非空文本","updatedAtChapter":0}}]}',
+        '【上一轮完整 JSON（只用于识别已存在角色，不得回传旧内容）】',
         JSON.stringify(originalRoot),
       ].join('\n'),
-      '你是导入推演 JSON 受限补卡校正器。只补齐缺失关系端点对应的角色卡，不改变已有事实。',
+      '你是导入推演 JSON 受限补卡 delta 生成器。只输出缺失关系端点对应的新增角色卡。',
       callbacks,
       {
         responseFormat: { type: 'json_object' },
@@ -374,9 +425,14 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       context,
     )
     if (correction.finishReason !== 'stop') throw this.createIncompleteCompletionError(correction.finishReason)
-    const correctedRoot = parseImportInferenceJsonObject(correction.content)
-    assertImportEndpointCorrection(originalRoot, correctedRoot, unresolvedTargets)
-    return decodeImportInferenceJson(correction.content)
+    const correctedRoot = {
+      ...originalRoot,
+      characterCards: [
+        ...importInferenceCards(originalRoot),
+        ...parseImportEndpointCorrectionDelta(correction.content, unresolvedTargets),
+      ],
+    }
+    return decodeImportInferenceJson(JSON.stringify(correctedRoot))
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {

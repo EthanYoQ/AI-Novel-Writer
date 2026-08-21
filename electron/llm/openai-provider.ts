@@ -6,7 +6,10 @@ export class OpenAIProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
     if (reason === 'stop') return 'stop'
     if (reason === 'length') return 'length'
+    if (reason === 'model_context_window_exceeded') return 'length'
     if (reason === 'content_filter') return 'content_filter'
+    if (reason === 'sensitive') return 'content_filter'
+    if (reason === 'network_error') return 'error'
     return 'unknown'
   }
 

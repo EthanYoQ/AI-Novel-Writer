@@ -400,7 +400,64 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
-  it('treats [DONE] without finish_reason as transport completion with unknown model completion', async () => {
+  it('preserves an explicit unrecognized stream finish reason as unknown', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => sseReader(
+          'data: {"choices":[{"delta":{"content":"正文"},"finish_reason":"provider_custom"}]}\n',
+          'data: [DONE]\n',
+        ),
+      },
+    }))
+    const onDone = vi.fn()
+    const onError = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone,
+      onError,
+    })
+
+    expect(onDone).toHaveBeenCalledWith('正文', undefined, 'unknown')
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['sensitive', 'content_filter'],
+    ['model_context_window_exceeded', 'length'],
+    ['network_error', 'error'],
+    ['tool_calls', 'unknown'],
+  ] as const)('maps Z.ai stream finish_reason %s to provider-neutral %s', async (providerReason, expectedReason) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => sseReader(
+          `data: {"choices":[{"delta":{"content":"正文"},"finish_reason":"${providerReason}"}]}\n`,
+          'data: [DONE]\n',
+        ),
+      },
+    }))
+    const onDone = vi.fn()
+    const onError = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone,
+      onError,
+    })
+
+    expect(onDone).toHaveBeenCalledWith('正文', undefined, expectedReason)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('treats [DONE] without finish_reason as unknown model completion', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       body: {
