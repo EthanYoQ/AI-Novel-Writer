@@ -45,7 +45,14 @@
 
 In addition to the Windows and macOS desktop editions, the [plugin directory](https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer) contains the `@ethanyoq/dsh-ai-novel-writer` `0.1.0` developer preview. It brings project settings, characters, story blueprints, chapter blueprints, and chapter drafts into DeepSeek Harness Web, saving one asset at a time through the conversation's approval card. The plugin uses its own Harness novel-project format and does not read desktop `.vela` projects.
 
-The plugin is not part of the desktop application's formal Release and has not been published to npm. It is a separate pnpm workspace with its own lockfile, CI, and MIT license; the repository root remains the GPL-3.0 desktop application. Install it from source in the plugin directory:
+The plugin is not part of the desktop application's formal Release, but it is published as a separate npm package with its own lockfile, CI, and MIT license; the repository root remains the GPL-3.0 desktop application. Install it into the DeepSeek Harness `web` profile:
+
+```sh
+dsh plugin --profile web add @ethanyoq/dsh-ai-novel-writer
+dsh --profile web
+```
+
+For development, install it from source in the plugin directory:
 
 ```sh
 git clone https://github.com/EthanYoQ/AI-Novel-Writer.git

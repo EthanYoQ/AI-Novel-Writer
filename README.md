@@ -44,7 +44,14 @@
 
 除了 Windows 与 macOS 桌面版，本仓库还在 [插件目录](https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer) 维护 `@ethanyoq/dsh-ai-novel-writer` `0.1.0` 开发预览。它把项目设置、人物设定、故事蓝图、章节蓝图和章节正文带入 DeepSeek Harness Web，并通过对话中的单文件审批卡片逐项保存；插件使用独立的 Harness 小说项目格式，不读取桌面版 `.vela` 项目。
 
-该插件尚未进入桌面版正式 Release，也未发布到 npm。它是独立 pnpm workspace，拥有独立锁文件、CI 和 MIT 许可；仓库根目录仍为 GPL-3.0 桌面应用。从源码安装时进入插件目录执行：
+该插件尚未进入桌面版正式 Release，但已发布为独立 npm 包，拥有独立锁文件、CI 和 MIT 许可；仓库根目录仍为 GPL-3.0 桌面应用。将它安装到 DeepSeek Harness 的 `web` profile：
+
+```sh
+dsh plugin --profile web add @ethanyoq/dsh-ai-novel-writer
+dsh --profile web
+```
+
+开发时也可以从源码安装：
 
 ```sh
 git clone https://github.com/EthanYoQ/AI-Novel-Writer.git
