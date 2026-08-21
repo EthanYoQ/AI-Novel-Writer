@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useProjectStore } from '../../../../stores/project-store'
 import { useLLMStore } from '../../../../stores/llm-store'
+import { useLocaleStore } from '../../../../stores/locale-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import {
   ImportInitializeCommand,
@@ -26,6 +27,7 @@ const callbacks: StepCallbacks = {
 const originalGenerateStream = useLLMStore.getState().generateStream
 const originalDefaultModelId = useLLMStore.getState().defaultModelId
 const originalRefreshFileTree = useProjectStore.getState().refreshFileTree
+const originalLocale = useLocaleStore.getState().locale
 
 function createContext(): WorkflowContext {
   return {
@@ -148,6 +150,7 @@ function stubIpcInvoke(handler: (channel: string, ...args: unknown[]) => unknown
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({
     currentProject: {
       id: 'project-1',
@@ -184,38 +187,14 @@ afterEach(() => {
     defaultModelId: originalDefaultModelId,
     generateStream: originalGenerateStream,
   })
+  useLocaleStore.setState({ locale: originalLocale })
 })
 
 describe('ImportInitializeCommand', () => {
-  function finalizedReceipt(context: WorkflowContext) {
-    const chapters = context.data.chapters as Array<{
-      number: number
-      content: string
-    }>
-    return {
-      operationId: `novel-import-finalized-${context.runId}`,
-      payloadHash: 'a'.repeat(64),
-      chapterNumbers: chapters.map(chapter => chapter.number),
-      drafts: chapters.map((chapter, index) => ({
-        chapterNumber: chapter.number,
-        draftId: index + 10,
-        finalizationId: `finalization-${chapter.number}`,
-        contentHash: String(index + 1).repeat(64),
-        targetFileName: `第${chapter.number}章.txt`,
-        status: 'finalized' as const,
-        publicationStatus: 'pending' as const,
-      })),
-      idempotent: false,
-    }
-  }
-
-  it('uses one finalized batch commit before any knowledge-base write and records its receipt', async () => {
+  it('logs the new reference-only import flow in English when the UI locale is English', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
     const context = createContext()
-    const receipt = finalizedReceipt(context)
-    const invoke = stubIpcInvoke((channel) => {
-      if (channel === 'db:draft-import-finalized-batch') {
-        return { success: true, receipt }
-      }
+    stubIpcInvoke((channel) => {
       if (channel === 'kb:import-text') return { success: true }
       if (channel === 'fs:list-dir') return []
       throw new Error(`unexpected IPC ${channel}`)
@@ -227,23 +206,43 @@ describe('ImportInitializeCommand', () => {
       callbacks,
     })
 
-    const channels = invoke.mock.calls.map(([channel]) => channel)
-    expect(channels.filter(channel => channel === 'db:draft-import-finalized-batch')).toHaveLength(1)
-    expect(channels).not.toContain('db:draft-create')
-    expect(channels).not.toContain('db:draft-update-status')
-    expect(channels.indexOf('db:draft-import-finalized-batch'))
-      .toBeLessThan(channels.indexOf('kb:import-text'))
-    expect(context.data.finalizedDraftImportReceipt).toEqual(receipt)
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('数据库定稿事实已提交'))
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('实体稿发布记录已进入待发布队列'))
+    expect(callbacks.log).toHaveBeenCalledWith('Importing 1 reference chapter into the knowledge base...')
+    expect(callbacks.log).toHaveBeenCalledWith('Building the vector knowledge base...')
+    expect(callbacks.log).toHaveBeenCalledWith('Knowledge base build complete (1 succeeded, 0 failed)')
   })
 
-  it('continues after a pending derived file-tree refresh while preserving the finalized import receipt', async () => {
+  it('treats imported chapters as reference material: it writes the knowledge base without creating drafts or finalized manuscript chapters', async () => {
+    const context = createContext()
+    const chapters = context.data.chapters as never[]
+    Reflect.deleteProperty(context.data, 'chapters')
+    const invoke = stubIpcInvoke((channel) => {
+      if (channel === 'kb:import-text') return { success: true }
+      if (channel === 'fs:list-dir') return []
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+
+    await new ImportInitializeCommand(chapters).execute({
+      step: {},
+      context,
+      callbacks,
+    })
+
+    const channels = invoke.mock.calls.map(([channel]) => channel)
+    expect(channels).toContain('kb:import-text')
+    expect(channels.filter(channel => channel === 'kb:import-text')).toHaveLength(chapters.length)
+    expect(channels.some(channel => String(channel).startsWith('db:draft-'))).toBe(false)
+    expect(channels).not.toContain('db:draft-create')
+    expect(channels).not.toContain('db:draft-update-status')
+    expect(channels).not.toContain('db:draft-import-finalized-batch')
+    expect(channels.some(channel => String(channel).startsWith('manuscript:'))).toBe(false)
+    expect(context.data.chapters).toEqual(chapters)
+    expect(context.data.finalizedDraftImportReceipt).toBeUndefined()
+  })
+
+  it('continues after a pending derived file-tree refresh while preserving imported reference chapters', async () => {
     vi.useFakeTimers()
     const context = createContext()
-    const receipt = finalizedReceipt(context)
     stubIpcInvoke((channel) => {
-      if (channel === 'db:draft-import-finalized-batch') return { success: true, receipt }
       if (channel === 'kb:import-text') return { success: true }
       throw new Error(`unexpected IPC ${channel}`)
     })
@@ -269,16 +268,13 @@ describe('ImportInitializeCommand', () => {
     expect(settled).toBe(true)
     expect(failure).toBeUndefined()
     expect(refreshFileTree).toHaveBeenCalledOnce()
-    expect(context.data.finalizedDraftImportReceipt).toEqual(receipt)
     expect(context.data.chapters).toEqual(createContext().data.chapters)
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('文件树刷新'))
   })
 
-  it('continues after a rejected derived file-tree refresh while preserving the finalized import receipt', async () => {
+  it('continues after a rejected derived file-tree refresh while preserving imported reference chapters', async () => {
     const context = createContext()
-    const receipt = finalizedReceipt(context)
     stubIpcInvoke((channel) => {
-      if (channel === 'db:draft-import-finalized-batch') return { success: true, receipt }
       if (channel === 'kb:import-text') return { success: true }
       throw new Error(`unexpected IPC ${channel}`)
     })
@@ -292,19 +288,15 @@ describe('ImportInitializeCommand', () => {
     })).resolves.toBeUndefined()
 
     expect(refreshFileTree).toHaveBeenCalledOnce()
-    expect(context.data.finalizedDraftImportReceipt).toEqual(receipt)
     expect(context.data.chapters).toEqual(createContext().data.chapters)
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('文件树刷新'))
   })
 
-  it('fails closed on a malformed batch receipt before any knowledge-base write', async () => {
+  it('keeps the imported reference context when a knowledge-base chapter fails without creating a draft', async () => {
     const context = createContext()
-    const receipt = finalizedReceipt(context)
-    receipt.chapterNumbers = []
     const invoke = stubIpcInvoke((channel) => {
-      if (channel === 'db:draft-import-finalized-batch') {
-        return { success: true, receipt }
-      }
+      if (channel === 'kb:import-text') return { success: false, error: '向量服务不可用' }
+      if (channel === 'fs:list-dir') return []
       throw new Error(`unexpected IPC ${channel}`)
     })
 
@@ -312,10 +304,13 @@ describe('ImportInitializeCommand', () => {
       step: {},
       context,
       callbacks,
-    })).rejects.toThrow(/收据/)
+    })).resolves.toBeUndefined()
 
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('kb:import-text')
+    expect(invoke.mock.calls.map(([channel]) => channel)).toContain('kb:import-text')
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:draft-import-finalized-batch')
     expect(context.data.finalizedDraftImportReceipt).toBeUndefined()
+    expect(context.data.chapters).toEqual(createContext().data.chapters)
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('部分参照文本未能进入知识库'))
   })
 })
 

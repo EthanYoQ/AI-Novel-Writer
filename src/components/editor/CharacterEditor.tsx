@@ -19,6 +19,10 @@ import { NativeSelect } from '../ui/NativeSelect'
 import { useLocaleStore } from '../../stores/locale-store'
 import { CHARACTER_ROLES, getCharacterRoleLabels } from '../../shared/character-role'
 import {
+  formatRelationshipsForEditor,
+  relationshipStorageFromEditor,
+} from '../../shared/relationship-presentation'
+import {
   captureProjectSession,
   isProjectSessionCurrent,
   isProjectSessionPath,
@@ -44,6 +48,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   const saveAll = useCharacterStore(s => s.saveAll)
   const [viewMode, setViewMode] = useState<'edit' | 'state' | 'graph'>('edit')
   const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
   const roleLabel = (role: CharacterCard['role']) => {
     const { zhCN, enUS } = getCharacterRoleLabels(role)
     return text(zhCN, enUS)
@@ -61,6 +66,9 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   const selectedCard = dataReady
     ? characters.find((c) => c.name === selectedName) || null
     : null
+  const relationshipEditorText = selectedCard
+    ? formatRelationshipsForEditor(selectedCard.relationships, { locale })
+    : ''
 
   const handleDelete = async () => {
     const projectSession = captureProjectSession(currentProject)
@@ -258,7 +266,26 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
               <div><Label>{text('背景故事', 'Background')}</Label><Textarea value={selectedCard.background} onChange={(e) => updateCurrentField(selectedCard.name, 'background', e.target.value)} rows={4} placeholder={text('输入背景故事...', 'Describe background...')} /></div>
               <div><Label>{text('能力/技能', 'Abilities / skills')}</Label><Textarea value={selectedCard.abilities} onChange={(e) => updateCurrentField(selectedCard.name, 'abilities', e.target.value)} rows={3} placeholder={text('输入能力/技能...', 'Describe abilities or skills...')} /></div>
               <div><Label>{text('核心动机', 'Core motivation')}</Label><Textarea value={selectedCard.motivation} onChange={(e) => updateCurrentField(selectedCard.name, 'motivation', e.target.value)} rows={2} placeholder={text('输入核心动机...', 'Describe core motivation...')} /></div>
-              <div><Label>{text('关系网', 'Relationships')}</Label><Textarea value={selectedCard.relationships} onChange={(e) => updateCurrentField(selectedCard.name, 'relationships', e.target.value)} rows={3} placeholder={text('输入关系网...', 'Describe relationships...')} /></div>
+              <div>
+                <Label>{text('关系网', 'Relationships')}</Label>
+                <Textarea
+                  value={relationshipEditorText}
+                  onChange={(e) => updateCurrentField(
+                    selectedCard.name,
+                    'relationships',
+                    relationshipStorageFromEditor(e.target.value, {
+                      knownNames: characters.map((character) => character.name),
+                      selfName: selectedCard.name,
+                      previousStorage: selectedCard.relationships,
+                    }),
+                  )}
+                  rows={3}
+                  placeholder={text(
+                    '每行一位角色，例如：陆云飞：竞争对手（权力斗争）',
+                    'One character per line, for example: Lu Yunfei: rival (power struggle)',
+                  )}
+                />
+              </div>
               <div><Label>{text('成长轨迹', 'Character arc')}</Label><Textarea value={selectedCard.arc} onChange={(e) => updateCurrentField(selectedCard.name, 'arc', e.target.value)} rows={3} placeholder={text('输入成长轨迹...', 'Describe the character arc...')} /></div>
               <div><Label>{text('备注', 'Notes')}</Label><Textarea value={selectedCard.notes} onChange={(e) => updateCurrentField(selectedCard.name, 'notes', e.target.value)} rows={2} placeholder={text('输入备注...', 'Enter notes...')} /></div>
             </div>

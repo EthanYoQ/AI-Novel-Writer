@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore } from '../../../../stores/workflow-store'
+import { runAgentLoop } from '../../agent-engine'
+import { toolRegistry } from '../../tool-registry'
 import { launchCreativeWorkflow } from '../../../workflows/creative-workflow-launcher'
 import { PROJECT_FACT_TARGETS } from '../../../project-fact-targets'
 import { createAgentExecutionContext } from '../project-context'
@@ -84,6 +86,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  toolRegistry.unregister('start_workflow')
   vi.unstubAllGlobals()
   useProjectStore.setState({ currentProject: null })
 })
@@ -194,6 +197,42 @@ describe('Issue #90 AI assistant project actions', () => {
     const runId = result.artifacts?.[0]?.runId
     expect(useWorkflowStore.getState().activeRuns).toContainEqual(expect.objectContaining({
       id: runId,
+      projectPath,
+      status: 'running',
+    }))
+  })
+
+  it('executes a confirmed raw start_workflow response through the real draft launcher', async () => {
+    stubWorkflowIpc()
+    toolRegistry.register(startWorkflowTool)
+    const callbacks = {
+      onTextChunk: vi.fn(),
+      onToolCallStart: vi.fn(),
+      onToolCallComplete: vi.fn(),
+      onToolCallConfirmRequired: vi.fn(async () => true),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+    const generate = vi.fn()
+      .mockResolvedValueOnce('start_workflow\n{"workflow":"generate_draft","chapter_number":1}')
+      .mockResolvedValueOnce('已开始生成第一章。')
+
+    await runAgentLoop(
+      'system',
+      [],
+      '生成第一章',
+      'model',
+      generate,
+      callbacks,
+      undefined,
+      createAgentExecutionContext(),
+    )
+
+    expect(callbacks.onToolCallConfirmRequired).toHaveBeenCalledOnce()
+    expect(callbacks.onTextChunk).toHaveBeenCalledWith('已开始生成第一章。')
+    expect(callbacks.onTextChunk).not.toHaveBeenCalledWith(expect.stringContaining('start_workflow'))
+    expect(useWorkflowStore.getState().activeRuns).toContainEqual(expect.objectContaining({
+      type: 'chapter_creation',
       projectPath,
       status: 'running',
     }))

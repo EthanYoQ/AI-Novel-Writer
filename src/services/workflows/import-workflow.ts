@@ -2,7 +2,7 @@
  * 导入小说工作流定义
  *
  * 逆向推演全流程：
- * 步骤1: 提交数据库定稿事实 + 构建知识库（实体稿独立待发布）
+ * 步骤1: 导入参照文本 + 构建知识库（不写入用户草稿或正文）
  * 步骤2: 向量采样 + AI 推演全局配置/架构/角色
  * 步骤3: AI 从导入正文提取文风
  * 步骤4: AI 按章推演精准蓝图 + 蓝图入向量库 + 拼装轻量全局摘要
@@ -11,6 +11,7 @@
 
 import type { WorkflowDefinition } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import {
   projectSessionContextFromProject,
@@ -33,6 +34,8 @@ export interface ImportWorkflowParams {
  * 创建导入小说工作流
  */
 export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefinition {
+  const text = useLocaleStore.getState().text
+  const chapterCountEn = `${params.chapters.length} ${params.chapters.length === 1 ? 'chapter' : 'chapters'}`
   const project = useProjectStore.getState().currentProject
   const currentProjectSession = projectSessionContextFromProject(project)
   if (
@@ -41,20 +44,32 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
     || !sameProjectPathKey(project.path, params.projectPath)
     || !sameProjectSessionContext(params.projectSession, currentProjectSession)
   ) {
-    throw new Error('当前项目已切换，无法启动导入工作流')
+    throw new Error(text(
+      '当前项目已切换，无法启动导入工作流',
+      'The project changed, so the import workflow cannot start.',
+    ))
   }
   // 导入正文 payload 与后处理均属于这个 lease；同路径重新打开也必须失效。
   const projectSession = Object.freeze({ ...params.projectSession })
   return {
     type: 'novel_import',
-    title: `小说拆解与仿写（${params.chapters.length} 章）`,
+    title: text(
+      `小说拆解与仿写（${params.chapters.length} 章）`,
+      `Novel analysis and style study (${chapterCountEn})`,
+    ),
     projectPath: params.projectPath,
     projectSession,
     steps: [
-      // ===== 步骤 1: 提交数据库定稿事实 + 构建知识库 =====
+      // ===== 步骤 1: 导入参照文本 + 构建知识库 =====
       {
-        name: '提交定稿事实与构建知识库',
-        description: `将 ${params.chapters.length} 章正文提交为数据库定稿事实（实体稿待发布），并灌入向量知识库`,
+        name: text(
+          '导入参照文本与构建知识库',
+          'Import reference text and build the knowledge base',
+        ),
+        description: text(
+          `将 ${params.chapters.length} 章参照文本灌入向量知识库，不写入草稿或正文`,
+          `Import ${chapterCountEn} of reference text into the knowledge base without creating drafts or manuscript text`,
+        ),
         executor: async (step, context, callbacks) => {
           const { ImportInitializeCommand } = await import('./commands/import-novel.command')
           const cmd = new ImportInitializeCommand(params.chapters)
@@ -64,8 +79,11 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
 
       // ===== 步骤 2: 向量采样 + AI 推演全局设定 =====
       {
-        name: 'AI 推演全局配置与架构',
-        description: '通过向量检索关键片段，AI 推演小说配置、故事架构、角色卡',
+        name: text('AI 推演全局配置与架构', 'AI infers global configuration and architecture'),
+        description: text(
+          '通过向量检索关键片段，AI 推演小说配置、故事架构、角色卡',
+          'Use vector retrieval to infer the novel configuration, story architecture, and character cards.',
+        ),
         executor: async (step, context, callbacks) => {
           const { InferGlobalSettingsCommand } = await import('./commands/import-novel.command')
           const cmd = new InferGlobalSettingsCommand()
@@ -75,23 +93,35 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
 
       // ===== 步骤 3: 从导入正文拆解文风与仿写约束 =====
       {
-        name: 'AI 拆解文风与仿写指南',
-        description: '从导入 TXT/Markdown 正文中提取风格档案和仿写约束，写入小说配置供后续写稿调用',
+        name: text('AI 拆解文风与仿写指南', 'AI analyzes writing style and imitation guidance'),
+        description: text(
+          '从导入 TXT/Markdown 正文中提取风格档案和仿写约束，写入小说配置供后续写稿调用',
+          'Extract a style profile and imitation guidance for later drafting.',
+        ),
         executor: async (step, context, callbacks) => {
           const { AnalyzeWritingStyleCommand } = await import('./commands/analyze-style.command')
           const cmd = new AnalyzeWritingStyleCommand({ chapters: params.chapters })
           const style = await cmd.execute({ step, context, callbacks })
           if (!style?.trim()) {
-            throw new Error('未提取到可用文风，无法继续建立仿写约束')
+            throw new Error(text(
+              '未提取到可用文风，无法继续建立仿写约束',
+              'No usable writing style was extracted, so imitation guidance cannot be created.',
+            ))
           }
-          return '已提取并保存风格档案与仿写指南'
+          return text(
+            '已提取并保存风格档案与仿写指南',
+            'The style profile and imitation guidance were saved.',
+          )
         },
       },
 
       // ===== 步骤 4: AI 按章推演蓝图 + 蓝图入向量库 + 拼装摘要 =====
       {
-        name: 'AI 逐章推演蓝图',
-        description: `逐章推演蓝图 + 蓝图要点入向量库 + 拼装全局摘要（共 ${params.chapters.length} 章）`,
+        name: text('AI 逐章推演蓝图', 'AI infers chapter blueprints'),
+        description: text(
+          `逐章推演蓝图 + 蓝图要点入向量库 + 拼装全局摘要（共 ${params.chapters.length} 章）`,
+          `Infer each chapter blueprint, index its notes, and build a global summary (${chapterCountEn}).`,
+        ),
         executor: async (step, context, callbacks) => {
           const { InferBlueprintsPerChapterCommand } = await import('./commands/import-novel.command')
           const cmd = new InferBlueprintsPerChapterCommand()
@@ -101,11 +131,11 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
 
       // ===== 步骤 5: 完成后处理 =====
       {
-        name: '完成后处理',
-        description: '刷新项目状态，加载角色卡与蓝图数据',
+        name: text('完成后处理', 'Finish setup'),
+        description: text('刷新项目状态，加载角色卡与蓝图数据', 'Refresh project state and load character cards and blueprints.'),
         executor: async (_step, context, callbacks) => {
           const workflowProjectSession = requireWorkflowProjectSession(context)
-          callbacks.log('正在刷新项目数据...')
+          callbacks.log(text('正在刷新项目数据...', 'Refreshing project data...'))
           callbacks.setProgress(30)
 
           // 派生 UI 文件树刷新不能阻塞后处理中的角色与草稿刷新。
@@ -136,14 +166,20 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
             )
           } catch { /* 忽略 */ }
 
-          callbacks.log('小说拆解与仿写准备完成，结构化数据已就位。')
+          callbacks.log(text(
+            '小说拆解与仿写准备完成，结构化数据已就位。',
+            'Novel analysis and style study are ready; structured data is in place.',
+          ))
           callbacks.setProgress(100)
         },
       },
     ],
     onComplete: {
       mode: 'silent',
-      message: '小说拆解与仿写准备完成，全部结构化数据已生成，可以开始续写。',
+      message: text(
+        '小说拆解与仿写准备完成，全部结构化数据已生成，可以开始续写。',
+        'Novel analysis and style study is ready. You can start writing.',
+      ),
     },
   }
 }

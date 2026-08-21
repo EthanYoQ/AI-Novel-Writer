@@ -309,4 +309,41 @@ describe('chapter-card draft ledger', () => {
       "ipc.invokeWithProjectSession(projectSession, 'db:blueprint-upsert-many', blueprints, expectedProjectPath)",
     )
   })
+
+  it('only exposes writing actions for an actual next blueprint instead of rendering a no-op button', () => {
+    const source = normalizeSourceEol(
+      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
+    )
+
+    expect(source).toContain(
+      'const nextWritableBlueprint = nextWriteChapter === null\n    ? null\n    : visibleBlueprints.find(blueprint => blueprint.chapterNumber === nextWriteChapter)',
+    )
+    expect(source).toContain('{projectDataReady && nextWritableBlueprint && (')
+    expect(source).toContain('onClick={() => handleWriteChapter(nextWritableBlueprint)}')
+    expect(source).not.toContain(
+      "const bp = visibleBlueprints.find(b => b.chapterNumber === nextWriteChapter)\n                if (bp) handleWriteChapter(bp)",
+    )
+  })
+
+  it('offers a confirmed recovery path when legacy imported text creates a writing gap', () => {
+    const source = normalizeSourceEol(
+      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
+    )
+    const handlerStart = source.indexOf('const handleClearLegacyImportedText = async () => {')
+    const handlerEnd = source.indexOf('\n  if (loading)', handlerStart)
+    const recoveryHandler = source.slice(handlerStart, handlerEnd)
+
+    expect(source).toContain(
+      'const canRecoverLegacyImportedText = projectDataReady\n    && visibleBlueprints.length > 0\n    && nextWriteChapter !== null\n    && nextWritableBlueprint === null',
+    )
+    expect(source).toContain('{canRecoverLegacyImportedText && (')
+    expect(source).toContain('onClick={handleClearLegacyImportedText}')
+    expect(recoveryHandler).toContain("confirmText: text('清除误导入正文', 'Clear incorrectly imported text')")
+    expect(recoveryHandler).toContain('danger: true')
+    expect(recoveryHandler).toContain('if (!ok || !isCurrentProjectSession(projectSession)) return')
+    expect(recoveryHandler).toContain('await clearProjectData({ generatedText: true }, projectSession)')
+    expect(recoveryHandler).not.toContain('blueprints: true')
+    expect(recoveryHandler).not.toContain('creativeFields: true')
+    expect(recoveryHandler).toContain('await loadBlueprints()')
+  })
 })

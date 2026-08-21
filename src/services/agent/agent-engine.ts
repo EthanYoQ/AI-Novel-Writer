@@ -198,11 +198,17 @@ export async function runAgentLoop(
           observationParts.push(`<tool_result name="${tc.name}" error="true">\n用户拒绝了此操作\n</tool_result>`)
           continue
         }
+        // The waiting confirmation card already represents this call. Its
+        // completion below updates that same card instead of appending a
+        // second one when execution begins.
+        toolCallInfo.status = 'running'
+      } else {
+        // Non-confirming tools still need one visible lifecycle card.
+        toolCallInfo.status = 'running'
+        callbacks.onToolCallStart(toolCallInfo)
       }
 
       // 执行 Tool
-      toolCallInfo.status = 'running'
-      callbacks.onToolCallStart(toolCallInfo)
 
       try {
         const result = await executeToolWithTimeout(
@@ -258,6 +264,33 @@ interface ParsedToolCall {
 }
 
 /**
+ * Some providers emit a function-style tool call as two plain-text lines
+ * instead of the XML shape requested by the system prompt.  Treat that form
+ * as a command only when it consumes the *entire* response and names a tool
+ * already registered for this agent run.  This keeps ordinary prose and
+ * arbitrary JSON from acquiring side effects.
+ */
+function parseRegisteredRawToolCall(text: string): ParsedToolCall | null {
+  const match = /^\s*([A-Za-z][\w.-]*)[ \t]*\r?\n\s*(\{[\s\S]*\})\s*$/.exec(text)
+  if (!match) return null
+
+  const [, name, rawArguments] = match
+  if (!toolRegistry.get(name)) return null
+
+  try {
+    const argumentsValue: unknown = JSON.parse(rawArguments)
+    if (
+      typeof argumentsValue !== 'object'
+      || argumentsValue === null
+      || Array.isArray(argumentsValue)
+    ) return null
+    return { name, arguments: argumentsValue as Record<string, unknown> }
+  } catch {
+    return null
+  }
+}
+
+/**
  * 从 LLM 输出中解析 <tool_call>...</tool_call> 标签
  *
  * 返回分离后的文本片段和 tool 调用列表。
@@ -267,6 +300,11 @@ export function parseToolCalls(text: string): {
   textParts: string[]
   toolCalls: ParsedToolCall[]
 } {
+  const rawToolCall = parseRegisteredRawToolCall(text)
+  if (rawToolCall) {
+    return { textParts: [], toolCalls: [rawToolCall] }
+  }
+
   const toolCalls: ParsedToolCall[] = []
   const textParts: string[] = []
 

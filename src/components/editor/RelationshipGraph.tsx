@@ -1,4 +1,5 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useMemo } from 'react'
+import { parseRelationshipEdges } from '../../shared/relationship-presentation'
 
 interface CharacterNode {
   name: string
@@ -9,7 +10,7 @@ interface CharacterNode {
   vy: number
 }
 
-interface RelationshipEdge {
+interface RelationshipGraphEdge {
   from: string
   to: string
   label: string
@@ -23,50 +24,25 @@ interface RelationshipGraphProps {
   }>
 }
 
-/** 从角色关系文本中解析出关系边 */
-function parseRelationships(characters: RelationshipGraphProps['characters']): RelationshipEdge[] {
-  const edges: RelationshipEdge[] = []
-
-  for (const char of characters) {
-    if (!char.relationships) continue
-    // 尝试多种格式：JSON 数组 / "名字：关系" / "名字 - 关系"
-    try {
-      const parsed = JSON.parse(char.relationships)
-      if (Array.isArray(parsed)) {
-        for (const rel of parsed) {
-          const targetName = rel.name || rel.target
-          if (targetName && characters.some(c => c.name === targetName)) {
-            edges.push({ from: char.name, to: targetName, label: rel.relation || rel.label || '' })
-          }
-        }
-        continue
-      }
-    } catch { /* 不是 JSON，继续用文本解析 */ }
-
-    // 文本格式解析
-    const lines = char.relationships.split(/[,;，；\n]/).filter(Boolean)
-    for (const line of lines) {
-      const match = line.match(/(.+?)[：:—-]\s*(.+)/)
-      if (match) {
-        const targetName = match[1].trim()
-        const label = match[2].trim()
-        if (characters.some(c => c.name === targetName)) {
-          edges.push({ from: char.name, to: targetName, label })
-        }
-      }
-    }
-  }
-
-  return edges
-}
-
 /** 角色关系网 Canvas 可视化 */
 export default function RelationshipGraph({ characters }: RelationshipGraphProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const nodesRef = useRef<CharacterNode[]>([])
   const animRef = useRef<number>(0)
 
-  const edges = parseRelationships(characters)
+  const edges = useMemo<RelationshipGraphEdge[]>(() => {
+    const knownNames = characters.map((character) => character.name)
+    return characters.flatMap((character) => (
+      parseRelationshipEdges(character.relationships, {
+        knownNames,
+        selfName: character.name,
+      }).map((edge) => ({
+        from: character.name,
+        to: edge.target,
+        label: edge.relation,
+      }))
+    ))
+  }, [characters])
 
   // 初始化节点布局
   useEffect(() => {

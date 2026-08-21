@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Save, BookOpen, RefreshCw, Plus, Trash2,
-  Sparkles, PenLine, ListChecks
+  Sparkles, PenLine, ListChecks, AlertTriangle
 } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLayoutStore } from '../../stores/layout-store'
 import { ipc } from '../../services/ipc-client'
+import { clearProjectData } from '../../services/project-clear-service'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import {
   projectSessionContextFromProject,
@@ -118,6 +119,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
   // 蓝图生成弹窗（替代原 inline 批量面板）
   const [showBlueprintDialog, setShowBlueprintDialog] = useState(false)
   const [showBatchCreationDialog, setShowBatchCreationDialog] = useState(false)
+  const [recoveringLegacyImportedText, setRecoveringLegacyImportedText] = useState(false)
   const roleLabel = (role: string) => text(role, ({
     建置: 'Setup',
     铺垫: 'Foreshadowing',
@@ -566,6 +568,50 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
     })
   }
 
+  /**
+   * 旧版“小说拆解与仿写”曾把参考原文误写为草稿和定稿；此处只给用户一个
+   * 明确确认后的恢复入口，不尝试自动判定或删除任何项目内容。
+   */
+  const handleClearLegacyImportedText = async () => {
+    const projectSession = currentProjectSessionForPath(projectKey)
+    if (
+      !projectMatches
+      || !projectSession
+      || !sameProjectSessionContext(dataProjectSessionRef.current, projectSession)
+    ) return
+
+    const ok = await confirm(text(
+      '仅当当前草稿和正文来自旧版“小说拆解与仿写”导入时，才继续清除。\n\n此操作会永久清除草稿、定稿、审稿和摘要等正文产物；会保留角色、故事架构、章节蓝图与知识库。若只是尚未生成下一章蓝图，请取消并先补充蓝图。',
+      'Continue only if the current drafts and manuscript text came from a legacy “Novel analysis and imitation” import.\n\nThis permanently clears drafts, final manuscript text, reviews, and summaries. Characters, story architecture, chapter blueprints, and the knowledge base are kept. If the next blueprint is simply missing, cancel and add that blueprint first.',
+    ), {
+      title: text('清除误导入正文', 'Clear incorrectly imported text'),
+      confirmText: text('清除误导入正文', 'Clear incorrectly imported text'),
+      danger: true,
+    })
+    if (!ok || !isCurrentProjectSession(projectSession)) return
+
+    setRecoveringLegacyImportedText(true)
+    try {
+      await clearProjectData({ generatedText: true }, projectSession)
+      if (!isCurrentProjectSession(projectSession)) return
+      await loadBlueprints()
+      if (!isCurrentProjectSession(projectSession)) return
+      toast.success(text(
+        '已清除误导入的正文产物；现在可从第 1 章开始写作。',
+        'Incorrectly imported text was cleared. You can now start writing from Chapter 1.',
+      ))
+    } catch (error) {
+      if (!isCurrentProjectSession(projectSession)) return
+      const message = error instanceof Error ? error.message : String(error)
+      toast.error(text(
+        `清除误导入正文失败\n\n${message}`,
+        `Could not clear incorrectly imported text.\n\n${message}`,
+      ))
+    } finally {
+      if (isCurrentProjectSession(projectSession)) setRecoveringLegacyImportedText(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full gap-2" style={{ color: 'var(--color-text-muted)' }}>
@@ -585,6 +631,13 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
 
   const visibleBlueprints = projectDataReady ? blueprints : []
   const visibleDirty = projectDataReady && dirty
+  const nextWritableBlueprint = nextWriteChapter === null
+    ? null
+    : visibleBlueprints.find(blueprint => blueprint.chapterNumber === nextWriteChapter)
+  const canRecoverLegacyImportedText = projectDataReady
+    && visibleBlueprints.length > 0
+    && nextWriteChapter !== null
+    && nextWritableBlueprint === null
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -616,20 +669,17 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
         </div>
         <div className="flex items-center gap-1">
           {/* 写作入口 — 仅下一章可写时显示 */}
-          {projectDataReady && nextWriteChapter !== null && (
+          {projectDataReady && nextWritableBlueprint && (
             <Button
               variant="ai"
               size="sm"
-              onClick={() => {
-                const bp = visibleBlueprints.find(b => b.chapterNumber === nextWriteChapter)
-                if (bp) handleWriteChapter(bp)
-              }}
+              onClick={() => handleWriteChapter(nextWritableBlueprint)}
             >
               <PenLine size={12} />
-              {text(`写作第${nextWriteChapter}章`, `Write Chapter ${nextWriteChapter}`)}
+              {text(`写作第${nextWritableBlueprint.chapterNumber}章`, `Write Chapter ${nextWritableBlueprint.chapterNumber}`)}
             </Button>
           )}
-          {projectDataReady && nextWriteChapter !== null && (
+          {projectDataReady && nextWritableBlueprint && (
             <Button
               variant="outline"
               size="sm"
@@ -675,6 +725,37 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
         </div>
       </div>
 
+      {canRecoverLegacyImportedText && (
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 border-b px-3 py-2 text-xs"
+          style={{
+            borderColor: 'color-mix(in srgb, var(--color-warning) 42%, var(--color-border))',
+            backgroundColor: 'color-mix(in srgb, var(--color-warning) 8%, transparent)',
+          }}
+        >
+          <div className="flex min-w-0 items-start gap-2" style={{ color: 'var(--color-text-secondary)' }}>
+            <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--color-warning)' }} />
+            <p className="max-w-3xl leading-5">
+              {text(
+                `未找到第 ${nextWriteChapter} 章蓝图，暂时不能继续写作。这也可能只是尚未生成下一章蓝图；仅当当前草稿/正文来自旧版“小说拆解与仿写”导入时，才使用“清除误导入正文”。`,
+                `No blueprint was found for Chapter ${nextWriteChapter}, so writing cannot continue yet. This may simply mean the next blueprint has not been generated; use “Clear incorrectly imported text” only if current drafts/manuscript text came from a legacy “Novel analysis and imitation” import.`,
+              )}
+            </p>
+          </div>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleClearLegacyImportedText}
+            disabled={recoveringLegacyImportedText}
+          >
+            <Trash2 size={12} />
+            {recoveringLegacyImportedText
+              ? text('清除中...', 'Clearing...')
+              : text('清除误导入正文', 'Clear incorrectly imported text')}
+          </Button>
+        </div>
+      )}
+
       {/* 蓝图生成配置弹窗 */}
         <DirectoryConfigDialog
         isOpen={showBlueprintDialog}
@@ -682,9 +763,9 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
         existingCount={visibleBlueprints.length}
           onConfirm={handleBatchGenerate}
         />
-        <BatchChapterCreationDialog
+          <BatchChapterCreationDialog
           isOpen={showBatchCreationDialog}
-          startChapterNumber={nextWriteChapter}
+          startChapterNumber={nextWritableBlueprint?.chapterNumber ?? null}
           onClose={() => setShowBatchCreationDialog(false)}
         />
 
@@ -765,7 +846,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
                 </h3>
                 <div className="flex items-center gap-1.5">
                   {/* 仅下一章允许写作 */}
-                  {nextWriteChapter !== null && selected.chapterNumber === nextWriteChapter && (
+                  {nextWritableBlueprint && selected.chapterNumber === nextWritableBlueprint.chapterNumber && (
                     <Button
                       variant="ai"
                       size="sm"

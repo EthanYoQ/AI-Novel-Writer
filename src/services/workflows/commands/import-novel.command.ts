@@ -2,13 +2,14 @@
  * 导入小说 — Command 集合
  *
  * 三个独立 Command 组成逆向推演全链路：
- * 1. ImportInitializeCommand — 写入正文 + 构建知识库
+ * 1. ImportInitializeCommand — 导入参照文本 + 构建知识库
  * 2. InferGlobalSettingsCommand — 向量采样 + AI 推演全局配置/架构/角色
  * 3. InferBlueprintsPerChapterCommand — 按章逐一推演精准蓝图 + 蓝图入向量库 + 拼装轻量全局摘要
  */
 
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
+import { useLocaleStore } from '../../../stores/locale-store'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ImportPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
@@ -32,10 +33,6 @@ import {
   parseImportInferenceJsonObject,
 } from './import-inference-contract'
 import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
-import type {
-  FinalizedDraftImportDraftReceipt,
-  FinalizedDraftImportReceipt,
-} from '../../../shared/finalized-draft-import'
 import type { ImportGlobalFactsReceipt } from '../../../shared/import-global-facts'
 import {
   buildStructuredSyntaxRepairTask,
@@ -188,52 +185,6 @@ function parseImportEndpointCorrectionDelta(
   return deltaCards
 }
 
-function requireFinalizedDraftImportReceipt(
-  candidate: FinalizedDraftImportReceipt | undefined,
-  operationId: string,
-  expectedChapterNumbers: number[],
-): FinalizedDraftImportReceipt {
-  const chapterNumbers = [...expectedChapterNumbers].sort((left, right) => left - right)
-  if (
-    !candidate
-    || candidate.operationId !== operationId
-    || !SHA256_HEX.test(candidate.payloadHash)
-    || typeof candidate.idempotent !== 'boolean'
-    || !Array.isArray(candidate.chapterNumbers)
-    || !Array.isArray(candidate.drafts)
-    || candidate.chapterNumbers.length !== chapterNumbers.length
-    || candidate.drafts.length !== chapterNumbers.length
-    || candidate.chapterNumbers.some((number, index) => number !== chapterNumbers[index])
-  ) {
-    throw new Error('批量定稿导入收据无效或章节覆盖不完整')
-  }
-  const seenDraftIds = new Set<number>()
-  const seenFinalizationIds = new Set<string>()
-  for (const [index, draft] of candidate.drafts.entries()) {
-    const expectedChapterNumber = chapterNumbers[index]
-    const validDraft = draft as FinalizedDraftImportDraftReceipt
-    if (
-      validDraft.chapterNumber !== expectedChapterNumber
-      || !Number.isInteger(validDraft.draftId)
-      || validDraft.draftId < 1
-      || seenDraftIds.has(validDraft.draftId)
-      || typeof validDraft.finalizationId !== 'string'
-      || validDraft.finalizationId.length === 0
-      || seenFinalizationIds.has(validDraft.finalizationId)
-      || !SHA256_HEX.test(validDraft.contentHash)
-      || typeof validDraft.targetFileName !== 'string'
-      || validDraft.targetFileName.length === 0
-      || validDraft.status !== 'finalized'
-      || validDraft.publicationStatus !== 'pending'
-    ) {
-      throw new Error('批量定稿导入收据缺少可信的定稿事实')
-    }
-    seenDraftIds.add(validDraft.draftId)
-    seenFinalizationIds.add(validDraft.finalizationId)
-  }
-  return candidate
-}
-
 function requireImportGlobalFactsReceipt(
   candidate: ImportGlobalFactsReceipt | undefined,
   operationId: string,
@@ -266,7 +217,7 @@ export class ImportBlueprintPostCommitSyncError extends Error {
 }
 
 // =================================================================
-// 1. 初始化：写入正文 + 构建知识库
+// 1. 初始化：导入参照文本 + 构建知识库
 // =================================================================
 
 export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
@@ -275,49 +226,24 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
+    const text = useLocaleStore.getState().text
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(project),
-    )) throw new Error('当前项目已切换，导入已停止')
+    )) throw new Error(text('当前项目已切换，导入已停止', 'The project changed, so the import stopped.'))
 
-    callbacks.log(`开始作为定稿导入 ${this.chapters.length} 章正文到数据库...`)
+    const chapterCountEn = `${this.chapters.length} ${this.chapters.length === 1 ? 'reference chapter' : 'reference chapters'}`
+    callbacks.log(text(
+      `开始导入 ${this.chapters.length} 章参照文本并构建知识库...`,
+      `Importing ${chapterCountEn} into the knowledge base...`,
+    ))
     callbacks.setProgress(5)
 
-    // 1. 正文、finalized 状态与发布 outbox 由主进程在一个 SQLite transaction
-    // 中提交。渲染进程只接受覆盖全部章节的权威回读收据，不能逐章伪造成功。
-    this.assertNotCancelled(context)
-    const operationId = `novel-import-finalized-${context.runId}`
-    const result = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:draft-import-finalized-batch',
-      {
-        operationId,
-        chapters: this.chapters.map(chapter => ({
-          chapterNumber: chapter.number,
-          title: chapter.title,
-          content: chapter.content,
-          wordCount: chapter.wordCount,
-        })),
-      },
-      context.projectPath,
-    )
-    if (!result.success) throw new Error(result.error || '批量定稿导入失败')
-    const importReceipt = requireFinalizedDraftImportReceipt(
-      result.receipt,
-      operationId,
-      this.chapters.map(chapter => chapter.number),
-    )
-    context.data.finalizedDraftImportReceipt = importReceipt
-    callbacks.log(
-      `全部 ${this.chapters.length} 章的数据库定稿事实已提交；`
-      + `${importReceipt.drafts.length} 个实体稿发布记录已进入待发布队列`,
-    )
-    callbacks.setProgress(45)
-
-    // 2. 逐章导入知识库（向量化）
-    callbacks.log('开始构建向量知识库...')
+    // 导入文件是仿写参照，不是用户创作正文。只将其写入知识库；草稿、定稿、
+    // manuscript 与发布队列只能由用户自己的写作工作流创建。
+    callbacks.log(text('开始构建向量知识库...', 'Building the vector knowledge base...'))
     let successCount = 0
     let failCount = 0
     for (let i = 0; i < this.chapters.length; i++) {
@@ -337,19 +263,28 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
         if (result.success) {
           successCount++
         } else {
-          callbacks.log(`导入 ${fileName} 失败: ${result.error}`)
+          callbacks.log(text(
+            `导入 ${fileName} 失败: ${result.error}`,
+            `Failed to import ${fileName}: ${result.error ?? 'unknown error'}`,
+          ))
           failCount++
         }
       } catch {
         failCount++
       }
       if (i % 10 === 0) {
-        callbacks.setProgress(45 + Math.round((i / this.chapters.length) * 45))
+        callbacks.setProgress(5 + Math.round((i / this.chapters.length) * 85))
       }
     }
-    callbacks.log(`知识库构建完成（成功 ${successCount} 章，失败 ${failCount} 章）`)
+    callbacks.log(text(
+      `知识库构建完成（成功 ${successCount} 章，失败 ${failCount} 章）`,
+      `Knowledge base build complete (${successCount} succeeded, ${failCount} failed)`,
+    ))
     if (failCount > 0) {
-      callbacks.log('数据库定稿事实不受知识库失败影响；可依据导入收据重试待完成步骤。')
+      callbacks.log(text(
+        '部分参照文本未能进入知识库；可重新导入以补齐检索材料。',
+        'Some reference text could not be added to the knowledge base; re-import to complete the retrieval material.',
+      ))
     }
     callbacks.setProgress(90)
 
