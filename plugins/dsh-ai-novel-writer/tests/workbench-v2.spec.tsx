@@ -15,6 +15,7 @@ import {
 } from '../src/client/workbench-v2-observer.ts'
 import type { NovelProjectId } from '../src/types.ts'
 import type { NovelProposalSummary, NovelTaskAggregate } from '../src/novel-store.ts'
+import type { NovelStateReadResult, NovelWorkspaceInitializeResult } from '../src/command-rpc.ts'
 
 const WORKSPACE_ID = WorkspaceId('123e4567-e89b-42d3-a456-426614174124')
 const SECOND_WORKSPACE_ID = WorkspaceId('123e4567-e89b-42d3-a456-426614174125')
@@ -86,6 +87,190 @@ const proposal = {
 } as const
 
 describe('V2 sidebar workbench shell', () => {
+  it('keeps an uninitialized V2 workspace distinct from an error and creates it once through the Host port', async () => {
+    const initialization = deferred<NovelWorkspaceInitializeResult>()
+    const initializedState: NovelStateReadResult = { ...snapshot, globalRevision: 0 }
+    const initializeWorkspace = vi.fn(() => initialization.promise)
+    const listProposals = vi.fn().mockResolvedValue([])
+    const controller = new NovelV2WorkbenchController({
+      readWorkspaceState: vi.fn()
+        .mockResolvedValueOnce({ status: 'not-initialized', workspaceId: WORKSPACE_ID })
+        .mockResolvedValue({ status: 'ready', workspaceId: WORKSPACE_ID, state: initializedState }),
+      listProposals, readTask: vi.fn(), initializeWorkspace,
+    })
+    const v2 = controller as unknown as {
+      updateInitialization(patch: { title?: string; genre?: string }): void
+      initializeWorkspace(): Promise<void>
+      getSnapshot(): {
+        status: 'not-initialized' | 'ready' | 'error'
+        initialization?: {
+          phase: 'editing' | 'submitting' | 'error'
+          draft: { title: string; genre: string; language: string; plannedChapters: number; targetWordsPerChapter: number }
+        }
+      }
+    }
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    expect(v2.getSnapshot()).toMatchObject({
+      status: 'not-initialized',
+      initialization: { phase: 'editing', draft: { title: '', genre: '', language: 'zh-CN', plannedChapters: 20, targetWordsPerChapter: 3000 } },
+    })
+    expect(listProposals).not.toHaveBeenCalled()
+
+    v2.updateInitialization({ title: '潮汐来信', genre: '奇幻悬疑' })
+    const first = v2.initializeWorkspace()
+    const second = v2.initializeWorkspace()
+    expect(initializeWorkspace).toHaveBeenCalledTimes(1)
+    expect(v2.getSnapshot()).toMatchObject({ status: 'not-initialized', initialization: { phase: 'submitting' } })
+
+    initialization.resolve({ projectId: snapshot.projectId, globalRevision: 0, state: initializedState })
+    await Promise.all([first, second])
+
+    expect(initializeWorkspace).toHaveBeenCalledWith(WORKSPACE_ID, expect.objectContaining({
+      title: '潮汐来信', genre: '奇幻悬疑', language: 'zh-CN', plannedChapters: 20, targetWordsPerChapter: 3000,
+    }), expect.any(AbortSignal))
+    expect(v2.getSnapshot().status).toBe('ready')
+  })
+
+  it('preserves an uninitialized V2 draft after a Host initialization failure', async () => {
+    const controller = new NovelV2WorkbenchController({
+      readWorkspaceState: vi.fn().mockResolvedValue({ status: 'not-initialized', workspaceId: WORKSPACE_ID }),
+      listProposals: vi.fn().mockResolvedValue([]), readTask: vi.fn(),
+      initializeWorkspace: vi.fn().mockRejectedValue(new Error('WRITE_FAILED: locked')),
+    })
+    const v2 = controller as unknown as {
+      updateInitialization(patch: { title?: string; genre?: string }): void
+      initializeWorkspace(): Promise<void>
+      getSnapshot(): { status: string; initialization?: { phase: string; message?: string; draft: { title: string; genre: string } } }
+    }
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    v2.updateInitialization({ title: '潮汐来信', genre: '奇幻悬疑' })
+    await v2.initializeWorkspace()
+
+    expect(v2.getSnapshot()).toMatchObject({
+      status: 'not-initialized',
+      initialization: { phase: 'error', message: 'WRITE_FAILED: locked', draft: { title: '潮汐来信', genre: '奇幻悬疑' } },
+    })
+  })
+
+  it('re-reads workspace/state/read after an ALREADY_INITIALIZED race and enters ready state', async () => {
+    const initializedState: NovelStateReadResult = { ...snapshot, globalRevision: 0 }
+    const readWorkspaceState = vi.fn()
+      .mockResolvedValueOnce({ status: 'not-initialized', workspaceId: WORKSPACE_ID })
+      .mockResolvedValueOnce({ status: 'ready', workspaceId: WORKSPACE_ID, state: initializedState })
+      .mockResolvedValueOnce({ status: 'ready', workspaceId: WORKSPACE_ID, state: initializedState })
+    const controller = new NovelV2WorkbenchController({
+      readWorkspaceState, listProposals: vi.fn().mockResolvedValue([]), readTask: vi.fn(),
+      initializeWorkspace: vi.fn().mockRejectedValue(new Error('bad-request: Novel workspace initialize request failed: ALREADY_INITIALIZED')),
+    })
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    controller.updateInitialization({ title: '潮汐来信', genre: '奇幻悬疑' })
+    await controller.initializeWorkspace()
+
+    expect(readWorkspaceState).toHaveBeenCalledTimes(3)
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', workspace: { globalRevision: 0 } })
+  })
+
+  it('validates the clean-workspace draft before invoking the Host initialization command', async () => {
+    const initializeWorkspace = vi.fn()
+    const controller = new NovelV2WorkbenchController({
+      readWorkspaceState: vi.fn().mockResolvedValue({ status: 'not-initialized', workspaceId: WORKSPACE_ID }),
+      listProposals: vi.fn().mockResolvedValue([]), readTask: vi.fn(),
+      initializeWorkspace,
+    })
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    controller.updateInitialization({ title: '潮汐来信', genre: '奇幻悬疑', plannedChapters: 0 })
+    await controller.initializeWorkspace()
+
+    expect(initializeWorkspace).not.toHaveBeenCalled()
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'not-initialized',
+      initialization: { phase: 'error', message: '计划章数必须是正整数。', draft: { plannedChapters: 0 } },
+    })
+  })
+
+  it('keeps a Host-readonly mismatched workspace on its read-only screen without a reinitialize action', async () => {
+    const controller = new NovelV2WorkbenchController({
+      readWorkspaceState: vi.fn().mockResolvedValue({
+        status: 'ready', workspaceId: WORKSPACE_ID, state: { ...snapshot, readOnly: true },
+      }), listProposals: vi.fn().mockResolvedValue([]), readTask: vi.fn(),
+    })
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', workspace: { readOnly: true } })
+
+    const html = renderToStaticMarkup(<NovelV2WorkbenchBody
+      state={controller.getSnapshot()}
+      refresh={vi.fn()} selectProposal={vi.fn()} openProposalChange={vi.fn()} applySelectedProposal={vi.fn()}
+      retryProposalItem={vi.fn()} discardProposalItem={vi.fn()} regenerateProposalItem={vi.fn()} proposalLifecycleAvailable={true}
+      selectTask={vi.fn()} selectChapter={vi.fn()} openAsset={vi.fn()} updateEditor={vi.fn()} discardEditor={vi.fn()}
+    />)
+    expect(html).toContain('只读')
+    expect(html).not.toContain('创建 V2 项目')
+  })
+
+  it('ignores a late V2 initialization response after the selected Workspace changes or is disposed', async () => {
+    const initialization = deferred<NovelWorkspaceInitializeResult>()
+    const controller = new NovelV2WorkbenchController({
+      readWorkspaceState: vi.fn().mockImplementation((workspaceId: typeof WORKSPACE_ID | typeof SECOND_WORKSPACE_ID) => Promise.resolve({
+        status: 'not-initialized' as const, workspaceId,
+      })), listProposals: vi.fn().mockResolvedValue([]), readTask: vi.fn(),
+      initializeWorkspace: vi.fn(() => initialization.promise),
+    })
+    const v2 = controller as unknown as {
+      updateInitialization(patch: { title?: string; genre?: string }): void
+      initializeWorkspace(): Promise<void>
+      getSnapshot(): { status: string; initialization?: { draft: { title: string } } }
+    }
+
+    controller.setWorkspace(WORKSPACE_ID)
+    await controller.open()
+    v2.updateInitialization({ title: '第一工作区' })
+    const pending = v2.initializeWorkspace()
+    controller.setWorkspace(SECOND_WORKSPACE_ID)
+    await controller.whenIdle()
+    await controller.dispose()
+    initialization.resolve({ projectId: snapshot.projectId, globalRevision: 0, state: { ...snapshot, globalRevision: 0 } })
+    await pending
+
+    expect(v2.getSnapshot()).toMatchObject({ status: 'not-initialized', initialization: { draft: { title: '' } } })
+  })
+
+  it('renders a V2-only clean-workspace form without a model, proposal, or reinitialization escape hatch', () => {
+    const state = {
+      status: 'not-initialized', open: true, workspace: undefined,
+      proposals: { phase: 'ready', items: [], selectedId: undefined, selectedChange: undefined, message: undefined },
+      tasks: { items: [], selectedId: undefined, message: undefined },
+      chapters: { selected: undefined, items: [] },
+      editor: { target: undefined, phase: 'idle', current: '', next: undefined, aggregateRevision: undefined, draft: '', message: undefined },
+      initialization: {
+        phase: 'editing', message: undefined,
+        draft: {
+          title: '', language: 'zh-CN', genre: '', plannedChapters: 20, targetWordsPerChapter: 3000,
+          creativeStrategy: 'auto', structureMode: 'three-act', narrativePov: 'third-limited', globalGuidance: '',
+        },
+      },
+    } as unknown as import('../src/client/workbench-v2.ts').NovelV2WorkbenchState
+
+    const html = renderToStaticMarkup(<NovelV2WorkbenchBody
+      state={state}
+      refresh={vi.fn()} selectProposal={vi.fn()} openProposalChange={vi.fn()} applySelectedProposal={vi.fn()}
+      retryProposalItem={vi.fn()} discardProposalItem={vi.fn()} regenerateProposalItem={vi.fn()} proposalLifecycleAvailable={true}
+      selectTask={vi.fn()} selectChapter={vi.fn()} openAsset={vi.fn()} updateEditor={vi.fn()} discardEditor={vi.fn()}
+    />)
+
+    for (const text of ['创建 V2 项目', '小说标题', '计划章数', '每章目标字数', '结构模式', '叙事视角']) expect(html).toContain(text)
+    for (const forbidden of ['novel_apply_change', '让当前模型生成', '提交到当前会话', 'workspacePath']) expect(html).not.toContain(forbidden)
+  })
+
   it('delegates ordered apply and partial recovery to the Host bundle command, then refreshes its item state', async () => {
     const recovered = {
       ...proposal,

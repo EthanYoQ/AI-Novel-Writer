@@ -27,7 +27,11 @@ import {
   type NovelWorkbenchPort,
   type NovelV2WorkbenchPort,
 } from './workbench-store.ts'
-import type { NovelStateReadResult } from '../command-rpc.ts'
+import type {
+  NovelStateReadResult,
+  NovelWorkspaceInitializeResult,
+  NovelWorkspaceStateReadResult,
+} from '../command-rpc.ts'
 import type {
   NovelAggregateRef,
   NovelArtifact,
@@ -130,7 +134,10 @@ async function callSetup(
   } catch (error) {
     throw new PresetSetupDisconnectedError(error)
   }
-  if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+  if (!result.ok) {
+    const error = Object.assign(new Error(`${result.error.code}: ${result.error.message}`), { code: result.error.code })
+    throw error
+  }
   return result.value
 }
 
@@ -455,6 +462,10 @@ function isV2MigrationReceipt(value: unknown): boolean {
 
 function isV2StateReadResult(value: unknown): value is NovelStateReadResult {
   if (!isRecord(value)
+    || !exactKeysOf(value, [
+      'projectId', 'workspaceId', 'globalRevision', 'readOnly', 'storage', 'project', 'architecture',
+      'characters', 'chapters', 'artifacts', 'chapterFinals', 'tasks', 'changes', 'proposals', 'migration',
+    ])
     || typeof value.projectId !== 'string' || value.projectId === ''
     || typeof value.workspaceId !== 'string' || value.workspaceId === ''
     || !isNonNegativeInteger(value.globalRevision) || typeof value.readOnly !== 'boolean'
@@ -470,6 +481,13 @@ function isV2StateReadResult(value: unknown): value is NovelStateReadResult {
     && value.artifacts.every(isV2Artifact) && value.chapterFinals.every(isV2ChapterFinal)
     && hasValidArtifactProjection(value.artifacts, value.chapterFinals)
     && value.tasks.every(isV2Task) && value.changes.every(isV2ChangeAuditRecord) && value.proposals.every(isV2Proposal)
+}
+
+function isV2WorkspaceInitializeResult(value: unknown, workspaceId: string): value is NovelWorkspaceInitializeResult {
+  return isRecord(value) && exactKeysOf(value, ['projectId', 'globalRevision', 'state'])
+    && isOpaqueIdentifier(value.projectId) && value.globalRevision === 0
+    && isV2StateReadResult(value.state) && value.state.workspaceId === workspaceId
+    && value.state.projectId === value.projectId && value.state.globalRevision === value.globalRevision
 }
 
 function isV2ProposalList(value: unknown): value is { readonly proposals: readonly NovelProposalSummary[] } {
@@ -511,9 +529,17 @@ function isV2ProposalRegenerationResult(value: unknown): value is NovelProposalR
     && isNonEmptyString(value.regenerationTicket)
 }
 
+/** Decode only the closed successful union emitted by Host `workspace/state/read`. */
+function isV2WorkspaceStateReadResult(value: unknown, workspaceId: string): value is NovelWorkspaceStateReadResult {
+  if (!isRecord(value) || value.workspaceId !== workspaceId) return false
+  if (value.status === 'not-initialized') return exactKeysOf(value, ['status', 'workspaceId'])
+  return value.status === 'ready' && exactKeysOf(value, ['status', 'workspaceId', 'state'])
+    && isV2StateReadResult(value.state) && value.state.workspaceId === workspaceId
+}
+
 async function callV2Workbench(
   rpc: Pick<ClientConnectionRpc, 'call'>,
-  endpoint: 'state/read' | 'chapter/context' | 'proposal/list' | 'task/read' | 'proposal/apply' | 'proposal/retry' | 'proposal/discard' | 'proposal/regenerate',
+  endpoint: 'state/read' | 'workspace/state/read' | 'workspace/initialize' | 'chapter/context' | 'proposal/list' | 'task/read' | 'proposal/apply' | 'proposal/retry' | 'proposal/discard' | 'proposal/regenerate',
   payload: Record<string, unknown>,
   signal: AbortSignal,
 ): Promise<unknown> {
@@ -536,6 +562,13 @@ export function createNovelV2WorkbenchPort(
   rpc: Pick<ClientConnectionRpc, 'call'>,
 ): NovelV2WorkbenchPort {
   return {
+    readWorkspaceState: async (workspaceId, signal) => {
+      const value = await callV2Workbench(rpc, 'workspace/state/read', { workspaceId }, signal)
+      if (!isV2WorkspaceStateReadResult(value, workspaceId)) {
+        throw new Error('AI novel V2 workspace state response is invalid')
+      }
+      return value
+    },
     readState: async (workspaceId, signal) => {
       const value = await callV2Workbench(rpc, 'state/read', { workspaceId }, signal)
       if (!isV2StateReadResult(value) || value.workspaceId !== workspaceId) {
@@ -547,6 +580,13 @@ export function createNovelV2WorkbenchPort(
       const value = await callV2Workbench(rpc, 'proposal/list', { workspaceId }, signal)
       if (!isV2ProposalList(value)) throw new Error('AI novel V2 proposal response is invalid')
       return value.proposals
+    },
+    initializeWorkspace: async (workspaceId, draft, signal) => {
+      const value = await callV2Workbench(rpc, 'workspace/initialize', { workspaceId, ...draft }, signal)
+      if (!isV2WorkspaceInitializeResult(value, workspaceId)) {
+        throw new Error('AI novel V2 workspace initialization response is invalid')
+      }
+      return value
     },
     readChapterContext: async (workspaceId, chapter, signal) => {
       const value = await callV2Workbench(rpc, 'chapter/context', { workspaceId, chapter }, signal)

@@ -22,7 +22,11 @@ import type {
   NovelProposalItemReceipt,
   NovelProposalStatus,
 } from '../novel-store.ts'
-import type { NovelV2WorkbenchState } from './workbench-v2.ts'
+import type {
+  NovelV2WorkbenchState,
+  NovelV2WorkspaceInitializationDraft,
+  NovelV2WorkspaceInitializationState,
+} from './workbench-v2.ts'
 
 function proposalStatusLabel(status: NovelProposalStatus): string {
   return ({ pending: '待处理', partial: '部分已应用', stale: '冲突', applied: '已应用', discarded: '已放弃', superseded: '已替代', failed: '失败' })[status]
@@ -137,6 +141,56 @@ export interface NovelV2WorkbenchBodyProps {
   readonly openAsset: (target: NovelAggregateRef) => void
   readonly updateEditor: (draft: string) => void
   readonly discardEditor: () => void
+  /** User-entered draft fields for the closed one-time V2 workspace initialization command. */
+  readonly updateInitialization?: (patch: Partial<NovelV2WorkspaceInitializationDraft>) => void
+  /** Host-owned one-time V2 workspace initialization command. */
+  readonly initializeWorkspace?: () => void
+}
+
+function V2WorkspaceInitializationForm({
+  initialization,
+  updateInitialization = () => {},
+  initializeWorkspace = () => {},
+}: {
+  readonly initialization: NovelV2WorkspaceInitializationState
+  readonly updateInitialization?: (patch: Partial<NovelV2WorkspaceInitializationDraft>) => void
+  readonly initializeWorkspace?: () => void
+}) {
+  const { draft, phase, message } = initialization
+  const submitting = phase === 'submitting'
+  return <form className="aiNovelV2Workbench aiNovelWorkbenchForm" aria-labelledby="ai-novel-v2-initialize-title"
+    onSubmit={event => { event.preventDefault(); initializeWorkspace() }}>
+    <section className="aiNovelV2Panel">
+      <h3 id="ai-novel-v2-initialize-title" data-ai-novel-screen-focus tabIndex={-1}>创建 V2 项目</h3>
+      <p className="aiNovelContextMuted">这些设置只会通过 Host 的一次性 V2 项目创建命令提交；不会调用模型、创建 Proposal 或写入本地版本链。</p>
+      <label className="aiNovelWorkbenchField"><span>小说标题</span><input aria-label="小说标题" value={draft.title} disabled={submitting}
+        onChange={event => { updateInitialization({ title: event.currentTarget.value }) }} /></label>
+      <label className="aiNovelWorkbenchField"><span>语言</span><input aria-label="语言" value={draft.language} disabled={submitting}
+        onChange={event => { updateInitialization({ language: event.currentTarget.value }) }} /></label>
+      <label className="aiNovelWorkbenchField"><span>类型</span><input aria-label="类型" value={draft.genre} disabled={submitting}
+        onChange={event => { updateInitialization({ genre: event.currentTarget.value }) }} /></label>
+      <label className="aiNovelWorkbenchField"><span>计划章数</span><input aria-label="计划章数" type="number" min={1} value={draft.plannedChapters} disabled={submitting}
+        onChange={event => { updateInitialization({ plannedChapters: Number(event.currentTarget.value) }) }} /></label>
+      <label className="aiNovelWorkbenchField"><span>每章目标字数</span><input aria-label="每章目标字数" type="number" min={1} value={draft.targetWordsPerChapter} disabled={submitting}
+        onChange={event => { updateInitialization({ targetWordsPerChapter: Number(event.currentTarget.value) }) }} /></label>
+      <label className="aiNovelWorkbenchField"><span>创作策略</span><select aria-label="创作策略" value={draft.creativeStrategy} disabled={submitting}
+        onChange={event => { updateInitialization({ creativeStrategy: event.currentTarget.value as NovelV2WorkspaceInitializationDraft['creativeStrategy'] }) }}>
+        <option value="auto">自动平衡</option><option value="fluent-drafting">流畅起草</option><option value="consistency-first">一致性优先</option><option value="deep-planning">深度规划</option>
+      </select></label>
+      <label className="aiNovelWorkbenchField"><span>结构模式</span><select aria-label="结构模式" value={draft.structureMode} disabled={submitting}
+        onChange={event => { updateInitialization({ structureMode: event.currentTarget.value as NovelV2WorkspaceInitializationDraft['structureMode'] }) }}>
+        <option value="episodic">单元剧</option><option value="three-act">三幕式</option><option value="multi-thread">多线叙事</option>
+      </select></label>
+      <label className="aiNovelWorkbenchField"><span>叙事视角</span><select aria-label="叙事视角" value={draft.narrativePov} disabled={submitting}
+        onChange={event => { updateInitialization({ narrativePov: event.currentTarget.value as NovelV2WorkspaceInitializationDraft['narrativePov'] }) }}>
+        <option value="first">第一人称</option><option value="third-limited">第三人称限知</option><option value="third-omniscient">第三人称全知</option><option value="multi-pov">多视角</option>
+      </select></label>
+      <label className="aiNovelWorkbenchField"><span>全局创作提示</span><textarea aria-label="全局创作提示" value={draft.globalGuidance} disabled={submitting}
+        onChange={event => { updateInitialization({ globalGuidance: event.currentTarget.value }) }} /></label>
+      {message === undefined ? undefined : <p role={phase === 'error' ? 'alert' : 'status'}>{message}</p>}
+      <div className="aiNovelWorkbenchActions"><button type="submit" disabled={submitting}>{submitting ? '正在创建 V2 项目…' : '创建 V2 项目'}</button></div>
+    </section>
+  </form>
 }
 
 /**
@@ -146,8 +200,11 @@ export interface NovelV2WorkbenchBodyProps {
 export function NovelV2WorkbenchBody({
   state, refresh, selectProposal, openProposalChange, applySelectedProposal,
   retryProposalItem, discardProposalItem, regenerateProposalItem, proposalLifecycleAvailable,
-  selectTask, selectChapter, openAsset, updateEditor, discardEditor,
+  selectTask, selectChapter, openAsset, updateEditor, discardEditor, updateInitialization, initializeWorkspace,
 }: NovelV2WorkbenchBodyProps) {
+  if (state.status === 'not-initialized') return <V2WorkspaceInitializationForm
+      initialization={state.initialization} updateInitialization={updateInitialization} initializeWorkspace={initializeWorkspace}
+    />
   if (state.status === 'error') return <section className="aiNovelV2Workbench" data-ai-novel-v2-workbench>
       <h3 data-ai-novel-screen-focus tabIndex={-1}>工作台读取失败</h3>
       <p role="alert">{state.message}</p>

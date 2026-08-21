@@ -95,8 +95,11 @@ export type {
   NovelLoopbackCommand,
   NovelProposalListResult,
   NovelStateReadResult,
+  NovelWorkspaceStateReadResult,
   NovelChapterContextRequest,
   NovelChapterContextResult,
+  NovelWorkspaceInitializeRequest,
+  NovelWorkspaceInitializeResult,
   NovelWorkspaceRecoveryResult,
   NovelWorkspaceRegistry,
 } from './command-rpc.ts'
@@ -220,7 +223,7 @@ export function createAiNovelRpcHandler(
     if (endpoint === 'preset/status' || endpoint === 'preset/install') {
       return setup(endpoint, payload, signal)
     }
-    if (endpoint === 'state/read' || endpoint === 'chapter/context' || endpoint === 'proposal/list' || endpoint === 'command/preview'
+    if (endpoint === 'workspace/initialize' || endpoint === 'workspace/state/read' || endpoint === 'state/read' || endpoint === 'chapter/context' || endpoint === 'proposal/list' || endpoint === 'command/preview'
       || endpoint === 'command/commit' || endpoint === 'task/read'
       || endpoint === 'proposal/apply' || endpoint === 'proposal/retry'
       || endpoint === 'proposal/discard' || endpoint === 'proposal/regenerate'

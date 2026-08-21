@@ -1,7 +1,12 @@
 /** Path-free V2 sidebar state split by workspace, proposal, task, chapter, and editor concerns. */
 
 import type { WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { NovelStateReadResult } from '../command-rpc.ts'
+import type {
+  NovelStateReadResult,
+  NovelWorkspaceInitializeRequest,
+  NovelWorkspaceInitializeResult,
+  NovelWorkspaceStateReadResult,
+} from '../command-rpc.ts'
 import type {
   NovelAggregateRef,
   NovelArtifactProposalChange,
@@ -17,14 +22,34 @@ import type {
 
 /** The V2 browser surface crosses only opaque Workspace, proposal, and item identities. */
 export interface NovelV2WorkbenchPort {
-  readState(workspaceId: WorkspaceId, signal: AbortSignal): Promise<NovelStateReadResult>
+  /** The clean-workspace-aware V2 state endpoint; this is the only production state read. */
+  readWorkspaceState?(workspaceId: WorkspaceId, signal: AbortSignal): Promise<NovelV2WorkspaceStateReadResult>
+  /** Compatibility seam for older isolated controller tests; the installed V2 port uses readWorkspaceState. */
+  readState?(workspaceId: WorkspaceId, signal: AbortSignal): Promise<NovelStateReadResult>
   listProposals(workspaceId: WorkspaceId, signal: AbortSignal): Promise<readonly NovelProposalSummary[]>
+  initializeWorkspace?(workspaceId: WorkspaceId, draft: NovelV2WorkspaceInitializationDraft, signal: AbortSignal): Promise<NovelV2WorkspaceInitializeResult>
   readChapterContext?(workspaceId: WorkspaceId, chapter: number, signal: AbortSignal): Promise<NovelChapterContext>
   readTask(workspaceId: WorkspaceId, taskId: string, signal: AbortSignal): Promise<NovelTaskAggregate>
   applyProposal?(workspaceId: WorkspaceId, proposalId: string, signal: AbortSignal): Promise<NovelProposalApplyResult>
   retryProposalItem?(workspaceId: WorkspaceId, proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalApplyResult>
   discardProposalItem?(workspaceId: WorkspaceId, proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalItemMutationResult>
   regenerateProposalItem?(workspaceId: WorkspaceId, proposalId: string, itemId: string, signal: AbortSignal): Promise<NovelProposalRegenerationResult>
+}
+
+/** Closed, path-free values a user may submit only to create an empty V2 workspace. */
+export type NovelV2WorkspaceInitializationDraft = Omit<NovelWorkspaceInitializeRequest, 'workspaceId'>
+
+/** The Host's initial authoritative state after one user-originated V2 initialization. */
+export type NovelV2WorkspaceInitializeResult = NovelWorkspaceInitializeResult
+
+/** Closed success union from Host `workspace/state/read`; it never uses an RPC error as product state. */
+export type NovelV2WorkspaceStateReadResult = NovelWorkspaceStateReadResult
+
+/** Form state for a user-originated initialization; it is never a model prompt or local write. */
+export interface NovelV2WorkspaceInitializationState {
+  readonly phase: 'editing' | 'submitting' | 'error'
+  readonly draft: NovelV2WorkspaceInitializationDraft
+  readonly message: string | undefined
 }
 
 /** One path-free workspace projection shown by the workbench. */
@@ -107,6 +132,16 @@ export type NovelV2WorkbenchState =
     readonly editor: NovelEditorPanelState
   }
   | {
+    readonly status: 'not-initialized'
+    readonly open: boolean
+    readonly workspace: undefined
+    readonly proposals: NovelProposalPanelState
+    readonly tasks: NovelTaskPanelState
+    readonly chapters: NovelChapterPanelState
+    readonly editor: NovelEditorPanelState
+    readonly initialization: NovelV2WorkspaceInitializationState
+  }
+  | {
     readonly status: 'error'
     readonly open: boolean
     readonly workspace: undefined
@@ -132,40 +167,40 @@ const EMPTY_EDITOR: NovelEditorPanelState = {
   target: undefined, phase: 'idle', current: '', next: undefined, aggregateRevision: undefined, draft: '', message: undefined,
 }
 
+function defaultInitializationDraft(): NovelV2WorkspaceInitializationDraft {
+  return {
+    title: '', language: 'zh-CN', genre: '', plannedChapters: 20, targetWordsPerChapter: 3_000,
+    creativeStrategy: 'auto', structureMode: 'three-act', narrativePov: 'third-limited', globalGuidance: '',
+  }
+}
+
+function initializationState(
+  draft: NovelV2WorkspaceInitializationDraft = defaultInitializationDraft(),
+  phase: NovelV2WorkspaceInitializationState['phase'] = 'editing',
+  message: string | undefined = undefined,
+): NovelV2WorkspaceInitializationState {
+  return { draft, phase, message }
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-type SettledRead<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: unknown }
-
-/** Begin both Host reads even if a malformed port throws synchronously. */
-function startRead<T>(read: () => Promise<T>): Promise<T> {
-  try { return read() } catch (error) { return Promise.reject(error) }
+function initializationValidationMessage(draft: NovelV2WorkspaceInitializationDraft): string | undefined {
+  if (draft.title.trim() === '') return '请填写小说标题。'
+  if (draft.language.trim() === '') return '请填写语言。'
+  if (draft.genre.trim() === '') return '请填写类型。'
+  if (!Number.isSafeInteger(draft.plannedChapters) || draft.plannedChapters <= 0) return '计划章数必须是正整数。'
+  if (!Number.isSafeInteger(draft.targetWordsPerChapter) || draft.targetWordsPerChapter <= 0) return '每章目标字数必须是正整数。'
+  if (!['auto', 'fluent-drafting', 'consistency-first', 'deep-planning'].includes(draft.creativeStrategy)) return '创作策略无效。'
+  if (!['episodic', 'three-act', 'multi-thread'].includes(draft.structureMode)) return '结构模式无效。'
+  if (!['first', 'third-limited', 'third-omniscient', 'multi-pov'].includes(draft.narrativePov)) return '叙事视角无效。'
+  return undefined
 }
 
-/**
- * Preserve the first observed Host error, but do not finish its parent operation
- * until every sibling read has settled. This keeps dispose/whenIdle truthful.
- */
-async function firstErrorAfterAllSettled<T, U>(
-  left: Promise<T>,
-  right: Promise<U>,
-): Promise<readonly [T, U]> {
-  let firstFailure: { readonly error: unknown } | undefined
-  const settle = <Value>(read: Promise<Value>): Promise<SettledRead<Value>> => read.then(
-    value => ({ ok: true, value }),
-    error => {
-      if (firstFailure === undefined) firstFailure = { error }
-      return { ok: false, error }
-    },
-  )
-  const [leftResult, rightResult] = await Promise.all([settle(left), settle(right)])
-  if (firstFailure !== undefined) throw firstFailure.error
-  if (!leftResult.ok) throw leftResult.error
-  if (!rightResult.ok) throw rightResult.error
-  return [leftResult.value, rightResult.value]
+/** Begin one Host read even if a malformed port throws synchronously. */
+function startRead<T>(read: () => Promise<T>): Promise<T> {
+  try { return read() } catch (error) { return Promise.reject(error) }
 }
 
 function aggregateLabel(target: NovelAggregateRef): string {
@@ -357,6 +392,8 @@ export class NovelV2WorkbenchController {
   #activeTask: AbortController | undefined
   #proposalRequest = 0
   #activeProposal: AbortController | undefined
+  #initializationRequest = 0
+  #activeInitialization: AbortController | undefined
   #inflight = new Set<Promise<void>>()
   #disposed = false
   #disposePromise: Promise<void> | undefined
@@ -385,6 +422,7 @@ export class NovelV2WorkbenchController {
     this.#cancelChapterContextRead()
     this.#cancelTaskRead()
     this.#cancelProposalOperation()
+    this.#cancelWorkspaceInitialization()
     if (workspaceId === undefined) {
       this.#set({
         status: 'idle', open: this.#state.open, workspace: undefined, proposals: EMPTY_PROPOSALS, tasks: EMPTY_TASKS,
@@ -392,6 +430,10 @@ export class NovelV2WorkbenchController {
       })
       return
     }
+    this.#set({
+      status: 'idle', open: this.#state.open, workspace: undefined, proposals: EMPTY_PROPOSALS, tasks: EMPTY_TASKS,
+      chapters: EMPTY_CHAPTERS, editor: EMPTY_EDITOR,
+    })
     if (this.#state.open) void this.refresh()
   }
 
@@ -408,11 +450,70 @@ export class NovelV2WorkbenchController {
     this.#set({ ...this.#state, open: false })
   }
 
+  /** Update only the transient user form for a clean V2 workspace. */
+  public updateInitialization(patch: Partial<NovelV2WorkspaceInitializationDraft>): void {
+    if (this.#state.status !== 'not-initialized' || this.#state.initialization.phase === 'submitting') return
+    this.#set({
+      ...this.#state,
+      initialization: initializationState({ ...this.#state.initialization.draft, ...patch }),
+    })
+  }
+
+  /** Submit the closed path-free initialization request exactly once while it is in flight. */
+  public initializeWorkspace(): Promise<void> {
+    if (this.#disposed || this.#state.status !== 'not-initialized') return Promise.resolve()
+    if (this.#activeInitialization !== undefined) return Promise.resolve()
+    const workspaceId = this.#workspaceId
+    if (workspaceId === undefined) return Promise.resolve()
+    const draft = this.#state.initialization.draft
+    const validation = initializationValidationMessage(draft)
+    if (validation !== undefined) {
+      this.#set({ ...this.#state, initialization: initializationState(draft, 'error', validation) })
+      return Promise.resolve()
+    }
+    const initialize = this.port.initializeWorkspace
+    if (initialize === undefined) {
+      this.#set({ ...this.#state, initialization: initializationState(draft, 'error', 'Host 尚未提供 V2 项目创建命令。') })
+      return Promise.resolve()
+    }
+    const abort = new AbortController()
+    this.#activeInitialization = abort
+    const request = ++this.#initializationRequest
+    this.#set({ ...this.#state, initialization: initializationState(draft, 'submitting') })
+    const pending = startRead(() => initialize(workspaceId, draft, abort.signal)).then(async () => {
+      if (!this.#isCurrentWorkspaceInitialization(abort, request, workspaceId)) return
+      await this.refresh()
+    }).catch(async error => {
+      if (!this.#isCurrentWorkspaceInitialization(abort, request, workspaceId)) return
+      try {
+        const current = await this.#readWorkspaceState(workspaceId, abort.signal)
+        if (!this.#isCurrentWorkspaceInitialization(abort, request, workspaceId)) return
+        if (current.status === 'ready') {
+          await this.refresh()
+          return
+        }
+      } catch {
+        // Preserve the initialization failure below; runtime read failures are not product-state sentinels.
+      }
+      if (!this.#isCurrentWorkspaceInitialization(abort, request, workspaceId)) return
+      this.#set({
+        status: 'not-initialized', open: this.#state.open, workspace: undefined,
+        proposals: EMPTY_PROPOSALS, tasks: EMPTY_TASKS, chapters: EMPTY_CHAPTERS, editor: EMPTY_EDITOR,
+        initialization: initializationState(draft, 'error', messageOf(error)),
+      })
+    }).finally(() => {
+      if (this.#activeInitialization === abort) this.#activeInitialization = undefined
+    })
+    this.#track(pending)
+    return pending
+  }
+
   /** Refresh the current workspace state and its proposal queue through existing loopback reads. */
   public refresh(): Promise<void> {
     const workspaceId = this.#workspaceId
     if (this.#disposed || workspaceId === undefined) return Promise.resolve()
     const previous = this.#state.status === 'ready' ? this.#state : this.#retainedReady
+    const existingInitialization = this.#state.status === 'not-initialized' ? this.#state.initialization : undefined
     this.#active?.abort()
     this.#cancelChapterContextRead()
     this.#cancelTaskRead()
@@ -424,11 +525,24 @@ export class NovelV2WorkbenchController {
       proposals: { ...this.#state.proposals, phase: 'loading', message: undefined },
       tasks: this.#state.tasks, chapters: this.#state.chapters, editor: this.#state.editor,
     })
-    const pending = firstErrorAfterAllSettled(
-      startRead(() => this.port.readState(workspaceId, abort.signal)),
-      startRead(() => this.port.listProposals(workspaceId, abort.signal)),
-    ).then(([state, proposals]) => {
+    // Older isolated controller ports did not expose the clean-workspace union. Keep their
+    // historical all-settled lifecycle while the installed V2 port always sequences state first.
+    const legacyProposalRead = this.port.readWorkspaceState === undefined
+      ? startRead(() => this.port.listProposals(workspaceId, abort.signal))
+      : undefined
+    const pending = startRead(() => this.#readWorkspaceState(workspaceId, abort.signal)).then(workspaceState => {
       if (abort.signal.aborted || request !== this.#request || workspaceId !== this.#workspaceId) return
+      if (workspaceState.status === 'not-initialized') {
+        this.#set({
+          status: 'not-initialized', open: this.#state.open, workspace: undefined,
+          proposals: EMPTY_PROPOSALS, tasks: EMPTY_TASKS, chapters: EMPTY_CHAPTERS, editor: EMPTY_EDITOR,
+          initialization: existingInitialization ?? initializationState(),
+        })
+        return
+      }
+      const state = workspaceState.state
+      return (legacyProposalRead ?? startRead(() => this.port.listProposals(workspaceId, abort.signal))).then(proposals => {
+        if (abort.signal.aborted || request !== this.#request || workspaceId !== this.#workspaceId) return
       const selectedProposal = proposals.some(proposal => proposal.proposalId === previous?.proposals.selectedId)
         ? previous?.proposals.selectedId
         : proposals[0]?.proposalId
@@ -460,7 +574,9 @@ export class NovelV2WorkbenchController {
         editor,
       })
       if (selectedChapter !== undefined) void this.#readChapterContext(selectedChapter)
-    }).catch(error => {
+      })
+    }).catch(async error => {
+      if (legacyProposalRead !== undefined) await legacyProposalRead.catch(() => {})
       if (abort.signal.aborted || request !== this.#request || workspaceId !== this.#workspaceId) return
       if (previous !== undefined) {
         this.#set({
@@ -709,6 +825,7 @@ export class NovelV2WorkbenchController {
     this.#cancelChapterContextRead()
     this.#cancelTaskRead()
     this.#cancelProposalOperation()
+    this.#cancelWorkspaceInitialization()
     this.#set({
       status: 'error', open: this.#state.open, workspace: undefined,
       proposals: { ...EMPTY_PROPOSALS, phase: 'failed', message: 'Harness 连接已断开，恢复连接后重新读取。' },
@@ -726,6 +843,7 @@ export class NovelV2WorkbenchController {
     this.#cancelChapterContextRead()
     this.#cancelTaskRead()
     this.#cancelProposalOperation()
+    this.#cancelWorkspaceInitialization()
     this.#retainedReady = undefined
     this.#disposePromise = this.#settleInflight().then(() => { this.#listeners.clear() })
     return this.#disposePromise
@@ -789,6 +907,12 @@ export class NovelV2WorkbenchController {
     }
   }
 
+  #readWorkspaceState(workspaceId: WorkspaceId, signal: AbortSignal): Promise<NovelV2WorkspaceStateReadResult> {
+    if (this.port.readWorkspaceState !== undefined) return this.port.readWorkspaceState(workspaceId, signal)
+    if (this.port.readState === undefined) return Promise.reject(new Error('Host 尚未提供 V2 Workspace 状态读取命令。'))
+    return this.port.readState(workspaceId, signal).then(state => ({ status: 'ready', workspaceId, state }))
+  }
+
   #cancelTaskRead(): void {
     this.#taskRequest += 1
     this.#activeTask?.abort()
@@ -805,6 +929,23 @@ export class NovelV2WorkbenchController {
     this.#proposalRequest += 1
     this.#activeProposal?.abort()
     this.#activeProposal = undefined
+  }
+
+  #cancelWorkspaceInitialization(): void {
+    this.#initializationRequest += 1
+    this.#activeInitialization?.abort()
+    this.#activeInitialization = undefined
+  }
+
+  #isCurrentWorkspaceInitialization(
+    abort: AbortController,
+    request: number,
+    workspaceId: WorkspaceId,
+  ): boolean {
+    return !this.#disposed && !abort.signal.aborted
+      && request === this.#initializationRequest
+      && workspaceId === this.#workspaceId
+      && this.#state.status === 'not-initialized'
   }
 
   #isCurrentProposalOperation(

@@ -12,6 +12,7 @@ import {
   type NovelChapterNextValue,
   type NovelCharactersNextValue,
   type NovelStore,
+  type NovelStoreInitializeRequest,
   type NovelStoreSnapshot,
   type NovelTaskAggregate,
   type NovelProposalSummary,
@@ -42,6 +43,11 @@ export interface NovelMigrationStateReadReceipt {
 export type NovelStateReadResult = Omit<NovelStoreSnapshot, 'workspacePath' | 'migration'> & {
   readonly migration: NovelMigrationStateReadReceipt | undefined
 }
+
+/** Path-free V2 workspace state outcome, including the explicit clean-workspace sentinel. */
+export type NovelWorkspaceStateReadResult =
+  | { readonly status: 'not-initialized'; readonly workspaceId: WorkspaceId }
+  | { readonly status: 'ready'; readonly workspaceId: WorkspaceId; readonly state: NovelStateReadResult }
 
 /** Remove Host-local migration archive paths before a `state/read` result crosses the RPC boundary. */
 export function projectNovelStateRead(snapshot: NovelStoreSnapshot): NovelStateReadResult {
@@ -86,6 +92,16 @@ export interface NovelChapterContextRequest {
 /** Exact result envelope for the bounded next-chapter context endpoint. */
 export type NovelChapterContextResult = NovelChapterContext
 
+/** Exact path-free request envelope for the one-time V2 workspace initialization command. */
+export type NovelWorkspaceInitializeRequest = NovelStoreInitializeRequest
+
+/** Path-free receipt and authoritative projection returned after one V2 workspace initialization. */
+export interface NovelWorkspaceInitializeResult {
+  readonly projectId: string
+  readonly globalRevision: 0
+  readonly state: NovelStateReadResult
+}
+
 /** Path-free result of one explicit Host-authorized workspace recovery. */
 export type NovelWorkspaceRecoveryResult = NovelStoreRecoveryReceipt
 
@@ -123,10 +139,14 @@ type CommandRpcResult = Awaited<ReturnType<ConnectionRpcHandler>>
 
 const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const CREATIVE_STRATEGIES = ['auto', 'fluent-drafting', 'consistency-first', 'deep-planning'] as const
+const STRUCTURE_MODES = ['episodic', 'three-act', 'multi-thread'] as const
+const NARRATIVE_POVS = ['first', 'third-limited', 'third-omniscient', 'multi-pov'] as const
 
 /** Human-readable request labels shared by stable failure messages. */
 const ENDPOINT_LABEL: Record<string, string> = {
   'state/read': 'Novel state',
+  'workspace/state/read': 'Novel workspace state',
   'chapter/context': 'Novel chapter context',
   'proposal/list': 'Novel proposal list',
   'proposal/apply': 'Novel proposal apply',
@@ -136,6 +156,7 @@ const ENDPOINT_LABEL: Record<string, string> = {
   'task/read': 'Novel task',
   'command/preview': 'command/preview',
   'command/commit': 'command/commit',
+  'workspace/initialize': 'Novel workspace initialize',
   'workspace/reattach': 'Novel workspace re-attach',
   'workspace/clone': 'Novel workspace clone',
 }
@@ -164,9 +185,48 @@ function workspaceOnlyRequest(value: unknown): WorkspaceId | undefined {
   return WorkspaceId(record.workspaceId)
 }
 
+/** Parse the complete, closed initialization envelope without accepting a browser filesystem path. */
+function workspaceInitializePayload(value: unknown): NovelWorkspaceInitializeRequest | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (!exactKeys(record, [
+    'workspaceId', 'title', 'language', 'genre', 'plannedChapters', 'targetWordsPerChapter',
+    'creativeStrategy', 'structureMode', 'narrativePov', 'globalGuidance',
+  ])) return undefined
+  if (typeof record.workspaceId !== 'string' || !WORKSPACE_ID_PATTERN.test(record.workspaceId)) return undefined
+  const title = requireNonEmptyWireString(record.title)
+  const language = requireNonEmptyWireString(record.language)
+  const genre = requireNonEmptyWireString(record.genre)
+  const plannedChapters = requirePositiveInteger(record.plannedChapters)
+  const targetWordsPerChapter = requirePositiveInteger(record.targetWordsPerChapter)
+  const creativeStrategy = requireWireEnum(record.creativeStrategy, CREATIVE_STRATEGIES)
+  const structureMode = requireWireEnum(record.structureMode, STRUCTURE_MODES)
+  const narrativePov = requireWireEnum(record.narrativePov, NARRATIVE_POVS)
+  if (title === undefined || language === undefined || genre === undefined
+    || plannedChapters === undefined || targetWordsPerChapter === undefined
+    || creativeStrategy === undefined || structureMode === undefined || narrativePov === undefined
+    || typeof record.globalGuidance !== 'string') return undefined
+  return {
+    workspaceId: WorkspaceId(record.workspaceId),
+    title,
+    language,
+    genre,
+    plannedChapters,
+    targetWordsPerChapter,
+    creativeStrategy,
+    structureMode,
+    narrativePov,
+    globalGuidance: record.globalGuidance,
+  }
+}
+
 /** Non-empty, trim-stable string; empty strings are only allowed where the field name opts in. */
 function requireNonEmptyWireString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+function requireWireEnum<T extends string>(value: unknown, choices: readonly T[]): T | undefined {
+  return typeof value === 'string' && (choices as readonly string[]).includes(value) ? value as T : undefined
 }
 
 function requirePositiveInteger(value: unknown): number | undefined {
@@ -412,14 +472,14 @@ async function disposeQuietly(store: NovelStore, report: (error: unknown) => voi
  *
  * @param workspaces Authoritative Workspace registry read face.
  * @param reportFailure Host-only diagnostic sink for underlying errors.
- * @returns A handler for the V2 state, proposal, task, command, and explicit recovery endpoints.
+ * @returns A handler for the V2 initialization, state, proposal, task, command, and explicit recovery endpoints.
  */
 export function createAiNovelCommandRpcHandler(
   workspaces: NovelWorkspaceRegistry,
   reportFailure: (error: unknown) => void = () => {},
 ): ConnectionRpcHandler {
   return async (endpoint, payload, signal) => {
-    if (endpoint !== 'state/read' && endpoint !== 'chapter/context' && endpoint !== 'proposal/list' && endpoint !== 'task/read'
+    if (endpoint !== 'workspace/initialize' && endpoint !== 'workspace/state/read' && endpoint !== 'state/read' && endpoint !== 'chapter/context' && endpoint !== 'proposal/list' && endpoint !== 'task/read'
       && endpoint !== 'command/preview' && endpoint !== 'command/commit'
       && endpoint !== 'proposal/apply' && endpoint !== 'proposal/retry'
       && endpoint !== 'proposal/discard' && endpoint !== 'proposal/regenerate'
@@ -431,9 +491,17 @@ export function createAiNovelCommandRpcHandler(
     let chapter: number | undefined
     let changeSet: NovelChangeSet | undefined
     let recovery: NovelStoreRecoveryMode | undefined
+    let initialization: NovelWorkspaceInitializeRequest | undefined
     let proposalId: string | undefined
     let itemId: string | undefined
-    if (endpoint === 'state/read' || endpoint === 'proposal/list'
+    if (endpoint === 'workspace/initialize') {
+      const resolved = workspaceInitializePayload(payload)
+      if (resolved === undefined) {
+        return badRequest('Novel workspace initialize payload must contain exactly the V2 project settings and a Workspace UUID')
+      }
+      workspaceId = resolved.workspaceId
+      initialization = resolved
+    } else if (endpoint === 'state/read' || endpoint === 'workspace/state/read' || endpoint === 'proposal/list'
       || endpoint === 'workspace/reattach' || endpoint === 'workspace/clone') {
       const resolved = workspaceOnlyRequest(payload)
       if (resolved === undefined) {
@@ -497,13 +565,34 @@ export function createAiNovelCommandRpcHandler(
     }
     let store: NovelStore
     try {
-      // The loopback read/command face never initializes a project; opening must not create
-      // `.ai-novel` or an empty novel.db for an uninitialized workspace.
-      store = await openNovelStore(workspace.path, workspaceId, { create: false })
+      // Only the closed initialization command may create the V2 store. Every other loopback
+      // read or command must not create `.ai-novel` or an empty novel.db.
+      store = await openNovelStore(workspace.path, workspaceId, { create: endpoint === 'workspace/initialize' })
     } catch (error) {
+      if (endpoint === 'workspace/state/read' && error instanceof NovelStoreError && error.code === 'NOT_INITIALIZED') {
+        const value: NovelWorkspaceStateReadResult = { status: 'not-initialized', workspaceId }
+        return { ok: true, value }
+      }
       return stableStoreFailure(endpoint, error, signal, reportFailure)
     }
     try {
+      if (endpoint === 'workspace/initialize') {
+        const initialized = await store.initialize(initialization!, signal)
+        const value: NovelWorkspaceInitializeResult = {
+          projectId: initialized.projectId,
+          globalRevision: 0,
+          state: projectNovelStateRead(await store.read(signal)),
+        }
+        return { ok: true, value }
+      }
+      if (endpoint === 'workspace/state/read') {
+        const value: NovelWorkspaceStateReadResult = {
+          status: 'ready',
+          workspaceId,
+          state: projectNovelStateRead(await store.read(signal)),
+        }
+        return { ok: true, value }
+      }
       if (endpoint === 'proposal/list') {
         const proposals = await store.listProposals(signal)
         const value: NovelProposalListResult = { proposals }
@@ -563,6 +652,10 @@ export function createAiNovelCommandRpcHandler(
       }
       return { ok: true, value: projectNovelStateRead(await store.read(signal)) }
     } catch (error) {
+      if (endpoint === 'workspace/state/read' && error instanceof NovelStoreError && error.code === 'NOT_INITIALIZED') {
+        const value: NovelWorkspaceStateReadResult = { status: 'not-initialized', workspaceId }
+        return { ok: true, value }
+      }
       return stableStoreFailure(endpoint, error, signal, reportFailure)
     } finally {
       await disposeQuietly(store, reportFailure)

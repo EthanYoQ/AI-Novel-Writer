@@ -354,7 +354,9 @@ describe('preset setup browser integration', () => {
     const hostDescription = mutableSource<object | undefined>({})
     const call = vi.fn((_channel: string, endpoint: string) => Promise.resolve({
       ok: true,
-      value: endpoint === 'state/read' ? v2State : endpoint === 'proposal/list' ? { proposals: [] } : { status: 'installed' },
+      value: endpoint === 'workspace/state/read'
+        ? { status: 'ready', workspaceId: WORKSPACE_ID, state: v2State }
+        : endpoint === 'proposal/list' ? { proposals: [] } : { status: 'installed' },
     }))
     ctx.provide('connection' as never, { rpc: { call }, hostDescription } as never)
     const fiber = ctx.plugin({ inject: [...inject], apply })
@@ -362,13 +364,13 @@ describe('preset setup browser integration', () => {
     const controller = entries[0]!.options.inject!().v2WorkbenchController
     await controller.open()
     expect(controller.getSnapshot()).toMatchObject({ status: 'ready', open: true })
-    const stateReadsBeforeDisconnect = call.mock.calls.filter(args => args[1] === 'state/read').length
+    const stateReadsBeforeDisconnect = call.mock.calls.filter(args => args[1] === 'workspace/state/read').length
 
     hostDescription.set(undefined)
     expect(controller.getSnapshot()).toMatchObject({ status: 'error', open: true, message: expect.stringContaining('Harness 连接已断开') })
     hostDescription.set({})
     await vi.waitFor(() => {
-      expect(call.mock.calls.filter(args => args[1] === 'state/read').length).toBeGreaterThan(stateReadsBeforeDisconnect)
+      expect(call.mock.calls.filter(args => args[1] === 'workspace/state/read').length).toBeGreaterThan(stateReadsBeforeDisconnect)
     })
     await controller.whenIdle()
     expect(controller.getSnapshot()).toMatchObject({ status: 'ready', open: true })
@@ -399,7 +401,9 @@ describe('preset setup browser integration', () => {
     const hostDescription = mutableSource<object | undefined>({})
     const call = vi.fn((_channel: string, endpoint: string) => Promise.resolve({
       ok: true,
-      value: endpoint === 'state/read' ? v2State : endpoint === 'proposal/list' ? { proposals: [] } : { status: 'installed' },
+      value: endpoint === 'workspace/state/read'
+        ? { status: 'ready', workspaceId: WORKSPACE_ID, state: v2State }
+        : endpoint === 'proposal/list' ? { proposals: [] } : { status: 'installed' },
     }))
     ctx.provide('connection' as never, { rpc: { call }, hostDescription } as never)
     const fiber = ctx.plugin({ inject: [...inject], apply })

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { symlink } from 'node:fs/promises'
+import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
@@ -15,6 +15,22 @@ const signal = new AbortController().signal
 const WORKSPACE_ID = '123e4567-e89b-42d3-a456-426614174111'
 const UNKNOWN_WORKSPACE_ID = '123e4567-e89b-42d3-a456-426614174112'
 const V2_WORKSPACE_ID = '123e4567-e89b-42d3-a456-426614174113'
+
+function v2InitializePayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    workspaceId: V2_WORKSPACE_ID,
+    title: '潮汐来信',
+    language: 'zh-CN',
+    genre: '奇幻悬疑',
+    plannedChapters: 12,
+    targetWordsPerChapter: 3_000,
+    creativeStrategy: 'consistency-first',
+    structureMode: 'three-act',
+    narrativePov: 'third-limited',
+    globalGuidance: '保持冷峻而温柔的语气。',
+    ...overrides,
+  }
+}
 
 async function initializedV2Workspace(prefix: string): Promise<string> {
   const root = await makeTestWorkspace(prefix)
@@ -54,6 +70,126 @@ function downgradeDatabaseToV2(root: string): void {
 }
 
 describe('novel context Host RPC', () => {
+  it('initializes a clean V2 workspace through the closed Host command without exposing its path', async () => {
+    const root = await makeTestWorkspace('workspace-initialize-host-workspace-')
+    const presetRoot = await makeTestWorkspace('workspace-initialize-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, {
+      get: workspaceId => workspaceId === WorkspaceId(V2_WORKSPACE_ID) ? { path: root } : undefined,
+    })
+
+    const result = await handler('workspace/initialize', {
+      workspaceId: V2_WORKSPACE_ID,
+      title: '潮汐来信',
+      language: 'zh-CN',
+      genre: '奇幻悬疑',
+      plannedChapters: 12,
+      targetWordsPerChapter: 3_000,
+      creativeStrategy: 'consistency-first',
+      structureMode: 'three-act',
+      narrativePov: 'third-limited',
+      globalGuidance: '保持冷峻而温柔的语气。',
+    }, signal)
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        projectId: expect.any(String),
+        globalRevision: 0,
+        state: {
+          workspaceId: WorkspaceId(V2_WORKSPACE_ID),
+          globalRevision: 0,
+          project: { title: '潮汐来信', revision: 0 },
+        },
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain(root)
+    expect(JSON.stringify(result)).not.toContain('workspacePath')
+  })
+
+  it.each([
+    ['an unknown field', v2InitializePayload({ unexpected: true })],
+    ['a browser workspace path', v2InitializePayload({ workspacePath: 'C:\\browser-supplied-root' })],
+    ['an invalid V2 enum value', v2InitializePayload({ creativeStrategy: 'model-writes-directly' })],
+    ['a missing V2 setting', (() => {
+      const { globalGuidance: _globalGuidance, ...withoutGuidance } = v2InitializePayload()
+      return withoutGuidance
+    })()],
+  ])('rejects a workspace/initialize payload with %s before opening a store', async (_caseName, payload) => {
+    const root = await makeTestWorkspace('workspace-initialize-invalid-host-workspace-')
+    const presetRoot = await makeTestWorkspace('workspace-initialize-invalid-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, { get: () => ({ path: root }) })
+
+    const result = await handler('workspace/initialize', payload, signal)
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+    expect(JSON.stringify(result)).not.toContain(root)
+    expect(existsSync(join(root, '.ai-novel'))).toBe(false)
+  })
+
+  it('rejects an exact workspace/initialize request for an unregistered Workspace', async () => {
+    const presetRoot = await makeTestWorkspace('workspace-initialize-unknown-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, { get: () => undefined })
+
+    const result = await handler('workspace/initialize', v2InitializePayload(), signal)
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: 'bad-request',
+        message: `Unknown Workspace: ${V2_WORKSPACE_ID}`,
+        details: { issues: [] },
+      },
+    })
+  })
+
+  it('keeps the first initialization intact when workspace/initialize is repeated', async () => {
+    const root = await makeTestWorkspace('workspace-initialize-repeat-host-workspace-')
+    const presetRoot = await makeTestWorkspace('workspace-initialize-repeat-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, { get: () => ({ path: root }) })
+
+    await expect(handler('workspace/initialize', v2InitializePayload(), signal)).resolves.toMatchObject({
+      ok: true,
+      value: { globalRevision: 0, state: { project: { title: '潮汐来信', revision: 0 } } },
+    })
+    const repeated = await handler('workspace/initialize', v2InitializePayload({ title: '不得覆盖' }), signal)
+    const state = await handler('state/read', { workspaceId: V2_WORKSPACE_ID }, signal)
+
+    expect(repeated).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+    if (!repeated.ok) expect(repeated.error.message).toBe('Novel workspace initialize request failed: ALREADY_INITIALIZED')
+    expect(state).toMatchObject({ ok: true, value: { globalRevision: 0, project: { title: '潮汐来信', revision: 0 } } })
+    expect(JSON.stringify(repeated)).not.toContain(root)
+  })
+
+  it('reports workspace mismatch and write lock through stable path-free initialization failures', async () => {
+    const mismatchedRoot = await initializedV2Workspace('workspace-initialize-mismatch-host-workspace-')
+    const lockedRoot = await makeTestWorkspace('workspace-initialize-locked-host-workspace-')
+    const presetRoot = await makeTestWorkspace('workspace-initialize-failures-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const mismatchedWorkspaceId = '123e4567-e89b-42d3-a456-426614174114'
+    const mismatchHandler = createAiNovelRpcHandler(installer, {
+      get: workspaceId => workspaceId === WorkspaceId(mismatchedWorkspaceId) ? { path: mismatchedRoot } : undefined,
+    })
+    const lockedStore = await openNovelStore(lockedRoot, WorkspaceId(V2_WORKSPACE_ID), { create: true })
+    const lockHandler = createAiNovelRpcHandler(installer, { get: () => ({ path: lockedRoot }) })
+    try {
+      const mismatch = await mismatchHandler('workspace/initialize', v2InitializePayload({ workspaceId: mismatchedWorkspaceId }), signal)
+      const locked = await lockHandler('workspace/initialize', v2InitializePayload(), signal)
+
+      expect(mismatch).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+      expect(locked).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+      if (!mismatch.ok) expect(mismatch.error.message).toBe('Novel workspace initialize request failed: WORKSPACE_MISMATCH')
+      if (!locked.ok) expect(locked.error.message).toBe('Novel workspace initialize request failed: WRITE_LOCKED')
+      expect(JSON.stringify(mismatch)).not.toContain(mismatchedRoot)
+      expect(JSON.stringify(locked)).not.toContain(lockedRoot)
+    } finally {
+      await lockedStore.dispose()
+    }
+  })
+
   it.each(['state/read', 'proposal/list', 'task/read', 'command/preview', 'command/commit'])(
     'returns a stable failure without a local path when %s cannot open an uninitialized store', async endpoint => {
       const root = await makeTestWorkspace('uninitialized-host-workspace-')
@@ -96,6 +232,87 @@ describe('novel context Host RPC', () => {
 
     expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
     expect(JSON.stringify(result)).not.toContain(root)
+  })
+
+  it('reads a clean V2 workspace as a path-free workspace/state/read sentinel without creating a store', async () => {
+    const root = await makeTestWorkspace('workspace-state-clean-host-workspace-')
+    const presetRoot = await makeTestWorkspace('workspace-state-clean-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, { get: () => ({ path: root }) })
+
+    const result = await handler('workspace/state/read', { workspaceId: V2_WORKSPACE_ID }, signal)
+
+    expect(result).toEqual({
+      ok: true,
+      value: { status: 'not-initialized', workspaceId: V2_WORKSPACE_ID },
+    })
+    expect(JSON.stringify(result)).not.toContain(root)
+    expect(existsSync(join(root, '.ai-novel'))).toBe(false)
+    await expect(handler('state/read', { workspaceId: V2_WORKSPACE_ID }, signal)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'bad-request',
+        message: 'Novel state request failed: NOT_INITIALIZED',
+        details: { issues: [] },
+      },
+    })
+  })
+
+  it('reads an initialized V2 workspace through the path-free workspace/state/read ready projection', async () => {
+    const root = await initializedV2Workspace('workspace-state-ready-host-workspace-')
+    const presetRoot = await makeTestWorkspace('workspace-state-ready-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const handler = createAiNovelRpcHandler(installer, { get: () => ({ path: root }) })
+
+    const result = await handler('workspace/state/read', { workspaceId: V2_WORKSPACE_ID }, signal)
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        status: 'ready',
+        workspaceId: V2_WORKSPACE_ID,
+        state: {
+          workspaceId: V2_WORKSPACE_ID,
+          globalRevision: 0,
+          project: { title: '潮汐来信', revision: 0 },
+        },
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain(root)
+    expect(JSON.stringify(result)).not.toContain('workspacePath')
+  })
+
+  it('keeps invalid, unknown, locked, and corrupt workspace/state/read failures out of the clean-workspace sentinel', async () => {
+    const root = await makeTestWorkspace('workspace-state-errors-host-workspace-')
+    const lockedRoot = await makeTestWorkspace('workspace-state-locked-host-workspace-')
+    const corruptRoot = await makeTestWorkspace('workspace-state-corrupt-host-workspace-')
+    const presetRoot = await makeTestWorkspace('workspace-state-errors-host-preset-')
+    const installer = createPresetInstaller(join(import.meta.dirname, '..', 'presets', 'ai-novel-writer'), presetRoot)
+    const invalidHandler = createAiNovelRpcHandler(installer, { get: () => ({ path: root }) })
+    const unknownHandler = createAiNovelRpcHandler(installer, { get: () => undefined })
+    await mkdir(join(corruptRoot, '.ai-novel'), { recursive: true })
+    await writeFile(join(corruptRoot, '.ai-novel', 'novel.db'), 'not a sqlite database', 'utf8')
+    const corruptHandler = createAiNovelRpcHandler(installer, { get: () => ({ path: corruptRoot }) })
+    const lockedStore = await openNovelStore(lockedRoot, WorkspaceId(V2_WORKSPACE_ID), { create: true })
+    const lockedHandler = createAiNovelRpcHandler(installer, { get: () => ({ path: lockedRoot }) })
+    try {
+      const invalid = await invalidHandler('workspace/state/read', { workspaceId: 'not-a-workspace-id' }, signal)
+      const unknown = await unknownHandler('workspace/state/read', { workspaceId: V2_WORKSPACE_ID }, signal)
+      const corrupt = await corruptHandler('workspace/state/read', { workspaceId: V2_WORKSPACE_ID }, signal)
+      const locked = await lockedHandler('workspace/state/read', { workspaceId: V2_WORKSPACE_ID }, signal)
+
+      expect(invalid).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+      expect(unknown).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+      expect(corrupt).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+      expect(locked).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+      if (!locked.ok) expect(locked.error.message).toBe('Novel workspace state request failed: WRITE_LOCKED')
+      expect(JSON.stringify(invalid)).not.toContain(root)
+      expect(JSON.stringify(unknown)).not.toContain(root)
+      expect(JSON.stringify(corrupt)).not.toContain(corruptRoot)
+      expect(JSON.stringify(locked)).not.toContain(lockedRoot)
+    } finally {
+      await lockedStore.dispose()
+    }
   })
 
   it('reads only the previous selected final through the closed chapter/context envelope', async () => {

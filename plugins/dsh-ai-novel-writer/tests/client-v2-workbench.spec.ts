@@ -28,7 +28,77 @@ const validProposal = {
   createdAt: TIMESTAMP, updatedAt: TIMESTAMP, items: [],
 }
 
+const initializationDraft = {
+  title: '潮汐来信', language: 'zh-CN', genre: '奇幻悬疑', plannedChapters: 12, targetWordsPerChapter: 3_000,
+  creativeStrategy: 'consistency-first', structureMode: 'three-act', narrativePov: 'third-limited', globalGuidance: '保持克制。',
+} as const
+
 describe('V2 workbench client port', () => {
+  it('creates a clean V2 workspace through the exact path-free initialization RPC', async () => {
+    const initialized = {
+      projectId: validState.projectId,
+      globalRevision: 0,
+      state: { ...validState, globalRevision: 0 },
+    }
+    const rpc = {
+      call: vi.fn(() => Promise.resolve({ ok: true as const, value: initialized })),
+    }
+    const port = createNovelV2WorkbenchPort(rpc) as ReturnType<typeof createNovelV2WorkbenchPort> & {
+      initializeWorkspace(workspaceId: typeof WORKSPACE_ID, draft: typeof initializationDraft, signal: AbortSignal): Promise<typeof initialized>
+    }
+    const signal = new AbortController().signal
+
+    await expect(port.initializeWorkspace(WORKSPACE_ID, initializationDraft, signal)).resolves.toEqual(initialized)
+    expect(rpc.call).toHaveBeenCalledWith('/ai-novel', 'workspace/initialize', { workspaceId: WORKSPACE_ID, ...initializationDraft }, signal)
+    expect(JSON.stringify(rpc.call.mock.calls)).not.toContain('workspacePath')
+  })
+
+  it('rejects corrupt V2 initialization receipts before they enter browser state', async () => {
+    const valid = { projectId: validState.projectId, globalRevision: 0, state: { ...validState, globalRevision: 0 } }
+    for (const value of [
+      { ...valid, unexpected: 'forbidden' },
+      { ...valid, globalRevision: 1 },
+      { ...valid, projectId: 'C:\\secret' },
+      { ...valid, state: { ...valid.state, projectId: 'different-project' } },
+      { ...valid, state: { ...valid.state, workspaceId: WorkspaceId('123e4567-e89b-42d3-a456-426614174125') } },
+    ]) {
+      const port = createNovelV2WorkbenchPort({ call: vi.fn(() => Promise.resolve({ ok: true as const, value })) })
+      await expect(port.initializeWorkspace!(WORKSPACE_ID, initializationDraft, new AbortController().signal))
+        .rejects.toThrow('AI novel V2 workspace initialization response is invalid')
+    }
+  })
+
+  it('uses only the strict workspace/state/read success union for clean-workspace state', async () => {
+    const clean = { status: 'not-initialized' as const, workspaceId: WORKSPACE_ID }
+    const port = createNovelV2WorkbenchPort({ call: vi.fn(() => Promise.resolve({ ok: true as const, value: clean })) })
+
+    await expect(port.readWorkspaceState!(WORKSPACE_ID, new AbortController().signal)).resolves.toEqual(clean)
+    expect(port.readWorkspaceState).toBeDefined()
+
+    const badRequest = createNovelV2WorkbenchPort({
+      call: vi.fn(() => Promise.resolve({
+        ok: false as const,
+        error: { code: 'bad-request' as const, message: 'NOT_INITIALIZED', details: { issues: [] } },
+      })),
+    })
+    await expect(badRequest.readWorkspaceState!(WORKSPACE_ID, new AbortController().signal))
+      .rejects.toThrow('bad-request: NOT_INITIALIZED')
+
+    for (const malformed of [
+      { status: 'not-initialized', workspaceId: WORKSPACE_ID, state: validState },
+      { status: 'not-initialized', workspaceId: WorkspaceId('123e4567-e89b-42d3-a456-426614174125') },
+      { status: 'ready', workspaceId: WORKSPACE_ID },
+      { status: 'ready', workspaceId: WORKSPACE_ID, state: { ...validState, workspaceId: WorkspaceId('123e4567-e89b-42d3-a456-426614174125') } },
+      { status: 'ready', workspaceId: WORKSPACE_ID, state: { ...validState, filePath: 'C:\\secret' } },
+    ]) {
+      const malformedPort = createNovelV2WorkbenchPort({
+        call: vi.fn(() => Promise.resolve({ ok: true as const, value: malformed })),
+      })
+      await expect(malformedPort.readWorkspaceState!(WORKSPACE_ID, new AbortController().signal))
+        .rejects.toThrow('AI novel V2 workspace state response is invalid')
+    }
+  })
+
   it('uses only opaque Workspace, Proposal, and item IDs for Host-owned bundle lifecycle RPCs', async () => {
     const { revision: _revision, ...nextValue } = validState.project
     const item = {
@@ -86,7 +156,7 @@ describe('V2 workbench client port', () => {
     const port = createNovelV2WorkbenchPort(rpc)
     const signal = new AbortController().signal
 
-    await expect(port.readState(WORKSPACE_ID, signal)).resolves.toBe(state)
+    await expect(port.readState!(WORKSPACE_ID, signal)).resolves.toBe(state)
     await expect(port.listProposals(WORKSPACE_ID, signal)).resolves.toEqual(proposals)
     await expect(port.readTask(WORKSPACE_ID, 'chapter-1', signal)).resolves.toBe(task)
 
@@ -101,7 +171,7 @@ describe('V2 workbench client port', () => {
     const rpc = { call: vi.fn(() => Promise.resolve({ ok: true as const, value: state })) }
     const port = createNovelV2WorkbenchPort(rpc)
 
-    await expect(port.readState(WORKSPACE_ID, new AbortController().signal))
+    await expect(port.readState!(WORKSPACE_ID, new AbortController().signal))
       .rejects.toThrow('AI novel V2 response must not contain a local path')
   })
 
@@ -116,7 +186,7 @@ describe('V2 workbench client port', () => {
       const port = createNovelV2WorkbenchPort(rpc)
       const signal = new AbortController().signal
       const operation = item.method === 'readState'
-        ? port.readState(WORKSPACE_ID, signal)
+        ? port.readState!(WORKSPACE_ID, signal)
         : item.method === 'listProposals'
           ? port.listProposals(WORKSPACE_ID, signal)
           : port.readTask(WORKSPACE_ID, 'chapter-1', signal)
@@ -139,7 +209,7 @@ describe('V2 workbench client port', () => {
     const port = createNovelV2WorkbenchPort(rpc)
     const signal = new AbortController().signal
 
-    await expect(port.readState(WORKSPACE_ID, signal)).rejects.toThrow('AI novel V2 state response is invalid')
+    await expect(port.readState!(WORKSPACE_ID, signal)).rejects.toThrow('AI novel V2 state response is invalid')
     await expect(port.readTask(WORKSPACE_ID, 'chapter-1', signal)).rejects.toThrow('AI novel V2 task response is invalid')
   })
 
@@ -163,7 +233,7 @@ describe('V2 workbench client port', () => {
     const port = createNovelV2WorkbenchPort(rpc)
     const signal = new AbortController().signal
 
-    await expect(port.readState(WORKSPACE_ID, signal)).rejects.toThrow('AI novel V2 state response is invalid')
+    await expect(port.readState!(WORKSPACE_ID, signal)).rejects.toThrow('AI novel V2 state response is invalid')
     await expect(port.listProposals(WORKSPACE_ID, signal)).rejects.toThrow('AI novel V2 proposal response is invalid')
     await expect(port.readTask(WORKSPACE_ID, 'chapter-1', signal)).rejects.toThrow('AI novel V2 task response is invalid')
   })
@@ -249,7 +319,7 @@ describe('V2 workbench client port', () => {
     ]
     for (const state of corruptStates) {
       const port = createNovelV2WorkbenchPort({ call: vi.fn(() => Promise.resolve({ ok: true as const, value: state })) })
-      await expect(port.readState(WORKSPACE_ID, new AbortController().signal))
+      await expect(port.readState!(WORKSPACE_ID, new AbortController().signal))
         .rejects.toThrow('AI novel V2 state response is invalid')
     }
 
@@ -272,7 +342,7 @@ describe('V2 workbench client port', () => {
     const validProjection = { ...validState, artifacts: [artifact], chapterFinals: [final] }
 
     const acceptedPort = createNovelV2WorkbenchPort({ call: vi.fn(() => Promise.resolve({ ok: true as const, value: validProjection })) })
-    await expect(acceptedPort.readState(WORKSPACE_ID, new AbortController().signal)).resolves.toEqual(validProjection)
+    await expect(acceptedPort.readState!(WORKSPACE_ID, new AbortController().signal)).resolves.toEqual(validProjection)
 
     for (const state of [
       { ...validProjection, chapterFinals: [{ ...final, filePath: 'C:\\secret' }] },
@@ -282,7 +352,7 @@ describe('V2 workbench client port', () => {
       },
     ]) {
       const port = createNovelV2WorkbenchPort({ call: vi.fn(() => Promise.resolve({ ok: true as const, value: state })) })
-      await expect(port.readState(WORKSPACE_ID, new AbortController().signal))
+      await expect(port.readState!(WORKSPACE_ID, new AbortController().signal))
         .rejects.toThrow('AI novel V2 state response is invalid')
     }
   })

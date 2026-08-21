@@ -257,6 +257,8 @@ export function NovelWorkbenchOverlay({
                 openAsset={target => { v2WorkbenchController.openAsset(target) }}
                 updateEditor={draft => { v2WorkbenchController.updateEditor(draft) }}
                 discardEditor={() => { v2WorkbenchController.discardEditor() }}
+                updateInitialization={patch => { v2WorkbenchController.updateInitialization(patch) }}
+                initializeWorkspace={() => { void v2WorkbenchController.initializeWorkspace() }}
               />
             : <NovelWorkbenchBody
                 state={v1State}
