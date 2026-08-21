@@ -2,7 +2,18 @@
   "name": "@ethanyoq/dsh-ai-novel-writer",
   "version": "0.1.0",
   "description": "A local-first novel project plugin for DeepSeek Harness",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EthanYoQ/AI-Novel-Writer.git",
+    "directory": "plugins/dsh-ai-novel-writer"
+  },
+  "bugs": {
+    "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues"
+  },
+  "homepage": "https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "packageManager": "pnpm@11.11.0",
   "main": "lib/index.js",

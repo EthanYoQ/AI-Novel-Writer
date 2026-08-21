@@ -17,11 +17,19 @@ async function yamlList(path: string): Promise<unknown[]> {
 }
 
 describe('installable AI novel bundle', () => {
-  it('keeps an independent private MIT package face', async () => {
+  it('keeps an independent public MIT package face linked to its source repository', async () => {
     const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-    expect(manifest.private).toBe(true)
+    expect(manifest.private).toBeUndefined()
     expect(manifest.license).toBe('MIT')
     expect(manifest.packageManager).toBe('pnpm@11.11.0')
+    expect(manifest.publishConfig).toEqual({ access: 'public' })
+    expect(manifest.repository).toEqual({
+      type: 'git',
+      url: 'git+https://github.com/EthanYoQ/AI-Novel-Writer.git',
+      directory: 'plugins/dsh-ai-novel-writer',
+    })
+    expect(manifest.bugs).toEqual({ url: 'https://github.com/EthanYoQ/AI-Novel-Writer/issues' })
+    expect(manifest.homepage).toBe('https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer#readme')
     for (const packagedFile of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
       await expect(readFile(join(root, packagedFile), 'utf8')).resolves.toContain('MIT')
     }
