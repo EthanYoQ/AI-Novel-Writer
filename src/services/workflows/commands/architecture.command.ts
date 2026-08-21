@@ -164,8 +164,63 @@ keyItems 可为非空字符串或非空字符串数组；recentEvents 可为非�
 const CHARACTER_DETAIL_SYSTEM_PROMPT = `你是小说角色详情生成器。只为指定的冻结角色身份补全紧凑资料，不规划或改写角色身份和关系。
 只输出一个可由 JSON.parse 读取的 {"entries":[...]} 对象，不得输出 schemaVersion、relationships、Markdown、解释、代码围栏或思考过程。`
 
+function findCompleteJsonObjectEnd(source: string, start: number): number | undefined {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+    } else if (char === '{') {
+      depth += 1
+    } else if (char === '}') {
+      depth -= 1
+      if (depth === 0) return index
+      if (depth < 0) return undefined
+    }
+  }
+  return undefined
+}
+
+function extractSingleCompleteJsonObject(content: string): string {
+  const source = stripThinkingTags(content).trim()
+  const candidates: string[] = []
+  let searchFrom = 0
+  while (searchFrom < source.length) {
+    const start = source.indexOf('{', searchFrom)
+    if (start === -1) break
+    const end = findCompleteJsonObjectEnd(source, start)
+    if (end === undefined) throw new Error('AI 返回包含截断 JSON 对象片段')
+
+    const candidate = source.slice(start, end + 1)
+    try {
+      if (isRecord(JSON.parse(candidate))) candidates.push(candidate)
+    } catch {
+      // Keep scanning for the one complete JSON object; malformed candidates
+      // are not repaired or accepted.
+    }
+    searchFrom = end + 1
+  }
+
+  if (candidates.length === 1) return candidates[0]
+  if (candidates.length > 1) throw new Error('AI 返回包含多个完整 JSON 对象，无法确定唯一结构化结果')
+  throw new Error('AI 返回未包含一个完整 JSON 对象')
+}
+
 function decodeCharacterIdentityManifest(content: string): CharacterIdentitySlot[] {
-  const parsed = JSON.parse(content) as { slots?: unknown }
+  const parsed = JSON.parse(extractSingleCompleteJsonObject(content)) as { slots?: unknown }
   if (!Array.isArray(parsed.slots)) throw new Error('角色身份清单缺少 slots')
   if (parsed.slots.length < MIN_CHARACTER_SLOTS || parsed.slots.length > MAX_CHARACTER_SLOTS) {
     throw new Error(`角色身份清单必须包含 ${MIN_CHARACTER_SLOTS}–${MAX_CHARACTER_SLOTS} 个角色`)
@@ -619,7 +674,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       inputKey: slot => slot.slotId,
       outputKey: entry => entry.slotId,
       decode: (content) => {
-        const parsed = JSON.parse(content) as { entries?: unknown }
+        const parsed = JSON.parse(extractSingleCompleteJsonObject(content)) as { entries?: unknown }
         if (!Array.isArray(parsed.entries)) throw new Error('角色详情响应缺少 entries')
         return parsed.entries.map((candidate) => {
           if (!isRecord(candidate)) return candidate as unknown as CharacterDetailOutput

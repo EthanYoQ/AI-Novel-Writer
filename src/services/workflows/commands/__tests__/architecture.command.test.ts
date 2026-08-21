@@ -126,6 +126,10 @@ function twoStageResponses(entries: readonly CharacterRosterEntry[]): string[] {
   return [JSON.stringify(manifestFor(entries)), ...detailResponses(entries)]
 }
 
+function fencedJsonWithProse(json: string): string {
+  return `下面是按合同输出的 JSON：\n\n\`\`\`json\n${json}\n\`\`\`\n\n</think`
+}
+
 function createResponseStream(
   responses: readonly string[],
   finishReasons: ReadonlyArray<'stop' | 'length'> = responses.map(() => 'stop'),
@@ -544,6 +548,200 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-save-all')
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:post-process-create-run')
     expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith('角色图谱与 3 张角色卡已生成')
+  })
+
+  it('accepts a fenced manifest with leading prose before strict validation and one atomic roster commit', async () => {
+    const generateStream = createResponseStream([
+      fencedJsonWithProse(JSON.stringify(manifestFor(rosterEntries))),
+      ...detailResponses(rosterEntries),
+    ])
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+
+    const invoke = vi.fn(async (channel: string) => {
+      switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
+        case 'db:project-core-get':
+          return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证带 Markdown 围栏和说明文字的身份清单仍会经过严格结构校验后再原子提交。' }
+        case 'db:character-roster-read':
+          return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
+        case 'db:character-roster-commit':
+          return {
+            success: true,
+            receipt: {
+              operationId: context.runId,
+              payloadHash: 'payload-hash',
+              revision: 1,
+              idempotent: false,
+              snapshot: readyRoster,
+            },
+          }
+        case 'fs:read-json':
+          return { success: true, data: {} }
+        case 'fs:write-json':
+          return { success: true }
+        default:
+          throw new Error(`Unexpected IPC channel: ${channel}`)
+      }
+    })
+    vi.stubGlobal('window', {
+      velaAPI: {
+        invoke,
+        on: vi.fn(),
+        once: vi.fn(),
+        send: vi.fn(),
+        setZoomLevel: vi.fn(),
+        setZoomFactor: vi.fn(),
+        getZoomLevel: vi.fn(),
+      },
+    })
+
+    const command = new GenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
+    })
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .resolves.toBe(readyRoster.renderedMarkdown)
+
+    expect(generateStream).toHaveBeenCalledTimes(4)
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({
+        entries: rosterEntries,
+        intent: 'architecture_generation',
+      }),
+      projectAPath,
+      context.projectSession,
+    )
+  })
+
+  it('rejects a manifest response with a truncated JSON fragment after a complete object before any roster commit', async () => {
+    const generateStream = createResponseStream([
+      `${JSON.stringify(manifestFor(rosterEntries))}\n\n{"slots":[`,
+      ...detailResponses(rosterEntries),
+    ])
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+
+    const invoke = vi.fn(async (channel: string) => {
+      switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
+        case 'db:project-core-get':
+          return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证完整身份清单后追加截断 JSON 片段时必须在角色名单提交前失败关闭。' }
+        case 'db:character-roster-read':
+          return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
+        case 'db:character-roster-commit':
+          return {
+            success: true,
+            receipt: {
+              operationId: context.runId,
+              payloadHash: 'payload-hash',
+              revision: 1,
+              idempotent: false,
+              snapshot: readyRoster,
+            },
+          }
+        case 'fs:read-json':
+          return { success: true, data: {} }
+        case 'fs:write-json':
+          return { success: true }
+        default:
+          throw new Error(`Unexpected IPC channel: ${channel}`)
+      }
+    })
+    vi.stubGlobal('window', {
+      velaAPI: {
+        invoke,
+        on: vi.fn(),
+        once: vi.fn(),
+        send: vi.fn(),
+        setZoomLevel: vi.fn(),
+        setZoomFactor: vi.fn(),
+        getZoomLevel: vi.fn(),
+      },
+    })
+
+    const command = new GenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
+    })
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow(/完整 JSON|截断/u)
+
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-roster-commit')
+  })
+
+  it('accepts fenced detail batches with leading prose after a raw manifest before one atomic roster commit', async () => {
+    const generateStream = createResponseStream([
+      JSON.stringify(manifestFor(rosterEntries)),
+      ...detailResponses(rosterEntries).map(fencedJsonWithProse),
+    ])
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+
+    const invoke = vi.fn(async (channel: string) => {
+      switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
+        case 'db:project-core-get':
+          return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证每个角色详情批次即使包裹说明文字和 Markdown 围栏，也必须先严格校验再原子提交。' }
+        case 'db:character-roster-read':
+          return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
+        case 'db:character-roster-commit':
+          return {
+            success: true,
+            receipt: {
+              operationId: context.runId,
+              payloadHash: 'payload-hash',
+              revision: 1,
+              idempotent: false,
+              snapshot: readyRoster,
+            },
+          }
+        case 'fs:read-json':
+          return { success: true, data: {} }
+        case 'fs:write-json':
+          return { success: true }
+        default:
+          throw new Error(`Unexpected IPC channel: ${channel}`)
+      }
+    })
+    vi.stubGlobal('window', {
+      velaAPI: {
+        invoke,
+        on: vi.fn(),
+        once: vi.fn(),
+        send: vi.fn(),
+        setZoomLevel: vi.fn(),
+        setZoomFactor: vi.fn(),
+        getZoomLevel: vi.fn(),
+      },
+    })
+
+    const command = new GenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
+    })
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .resolves.toBe(readyRoster.renderedMarkdown)
+
+    expect(generateStream).toHaveBeenCalledTimes(4)
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({
+        entries: rosterEntries,
+        intent: 'architecture_generation',
+      }),
+      projectAPath,
+      context.projectSession,
+    )
   })
 
   it('does not issue checkpoint IPC after a readable roster receipt when cancellation has arrived', async () => {
