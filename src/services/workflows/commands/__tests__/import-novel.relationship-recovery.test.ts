@@ -206,6 +206,30 @@ afterEach(() => {
 })
 
 describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
+  it('fails closed without correction when missing endpoint cards would exceed the eight-card contract', async () => {
+    const invoke = stubNoCommitIpc()
+    const initial = validInference()
+    initial.characterCards = [
+      card('陆舟', 'protagonist'),
+      card('苏绾', 'supporting'),
+      card('顾岩', 'antagonist'),
+      card('林照', 'supporting'),
+      card('白榆', 'supporting'),
+      card('沈珩', 'minor'),
+      card('周砚', 'minor'),
+      card('秦若', 'minor'),
+    ]
+    initial.characterCards[0].relationships.push({ target: '韩烁', relation: '旧债牵连' })
+    const generateStream = respondWith([initial])
+
+    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
+      .rejects.toThrow(/角色卡|8|补卡校正/)
+
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:import-global-facts-commit')
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-roster-read')
+  })
+
   it('adds only missing endpoint cards through one bounded correction before the atomic global-facts commit', async () => {
     const invoke = stubSuccessfulImportIpc()
     const initial = withMissingEndpoint()

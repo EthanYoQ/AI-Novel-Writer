@@ -54,6 +54,7 @@ export interface ImportedChapter {
 }
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u
+const MAX_IMPORT_INFERENCE_CHARACTER_CARDS = 8
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -340,6 +341,10 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
     const originalRoot = parseImportInferenceJsonObject(rawResult)
     const unresolvedTargets = unresolvedImportRelationshipTargets(originalRoot)
+    const originalCardCount = importInferenceCards(originalRoot).length
+    if (originalCardCount + unresolvedTargets.length > MAX_IMPORT_INFERENCE_CHARACTER_CARDS) {
+      throw new Error('导入推演受限补卡校正会超过 8 张角色卡上限，已拒绝额外模型请求')
+    }
     callbacks.log(`导入推演关系端点缺少 ${unresolvedTargets.length} 张角色卡，正在执行一次受限补卡校正`)
     const correction = await this.callLLMResult(
       [
