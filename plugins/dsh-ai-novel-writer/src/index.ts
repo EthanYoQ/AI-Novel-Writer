@@ -10,7 +10,7 @@ import z from '@deepseek-ai/schemastery'
 import { createAiNovelCommandRpcHandler, type NovelWorkspaceRegistry } from './command-rpc.ts'
 import { parseNovelAssetRef } from './context-types.ts'
 import { readNovelAsset, readNovelContext } from './context-window.ts'
-import { createPresetInstaller } from './preset-installer.ts'
+import { createBundledPresetInstaller, type PresetInstaller } from './preset-installer.ts'
 import type { AssetRef } from './types.ts'
 
 export { openNovelProject } from './novel-project.ts'
@@ -36,6 +36,11 @@ export type {
   NovelStoreOpenOptions,
   NovelStoreSnapshot,
   NovelStorageDiagnostics,
+  NovelProposalOptions,
+  NovelProposalReceipt,
+  NovelProposalRequest,
+  NovelProposalStatus,
+  NovelProposalSummary,
   NovelTaskAggregate,
   NovelTaskKind,
   NovelTaskNextValue,
@@ -74,8 +79,6 @@ export type {
   NovelCommandPreviewResult,
   NovelLoopbackCommand,
   NovelProposalListResult,
-  NovelProposalStatus,
-  NovelProposalSummary,
   NovelStateReadResult,
   NovelWorkspaceRegistry,
 } from './command-rpc.ts'
@@ -98,7 +101,7 @@ export const Config: z<Config> = z.object({
 })
 
 function templateRoot(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), '..', 'presets', 'ai-novel-writer')
+  return join(dirname(fileURLToPath(import.meta.url)), '..', 'presets')
 }
 
 function badRequest(message: string): Awaited<ReturnType<ConnectionRpcHandler>> {
@@ -159,7 +162,7 @@ function assetRequest(value: unknown): { readonly workspaceId: WorkspaceId; read
  * @returns A handler for the two closed setup endpoints.
  */
 export function createPresetSetupRpcHandler(
-  installer: ReturnType<typeof createPresetInstaller>,
+  installer: PresetInstaller,
   reportFailure: (error: unknown) => void = () => {},
 ): ConnectionRpcHandler {
   return async (endpoint, payload, signal) => {
@@ -189,7 +192,7 @@ export function createPresetSetupRpcHandler(
  * @returns A handler whose read endpoints accept only opaque Workspace identity and recognized selectors.
  */
 export function createAiNovelRpcHandler(
-  installer: ReturnType<typeof createPresetInstaller>,
+  installer: PresetInstaller,
   workspaces: NovelWorkspaceRegistry,
   reportFailure: (error: unknown) => void = () => {},
 ): ConnectionRpcHandler {
@@ -250,7 +253,7 @@ export function createAiNovelRpcHandler(
  */
 export function apply(ctx: Context, config: Config): void {
   const presetRoot = config.presetRoot ?? dshHomePath('.agent-presets')
-  const installer = createPresetInstaller(templateRoot(), presetRoot)
+  const installer = createBundledPresetInstaller(templateRoot(), presetRoot)
   const connection = ctx.get('connection') as HostConnectionHandle
   const workspaces = ctx.get('workspaceRegistry') as NovelWorkspaceRegistry
   ctx.effect(

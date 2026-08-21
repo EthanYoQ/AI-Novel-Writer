@@ -13,23 +13,14 @@ import {
   type NovelStore,
   type NovelStoreSnapshot,
   type NovelTaskAggregate,
+  type NovelProposalSummary,
 } from './novel-store.ts'
 
 /** Authoritative state projection with the Host-only workspace path removed. */
 export type NovelStateReadResult = Omit<NovelStoreSnapshot, 'workspacePath'>
 
-/** Lifecycle state reserved for the persistent V2 proposal inbox. */
-export type NovelProposalStatus = 'pending' | 'stale' | 'applied' | 'discarded' | 'superseded' | 'failed'
-
 /** Summary of one persisted, non-authoritative model proposal. */
-export interface NovelProposalSummary {
-  readonly proposalId: string
-  readonly sessionId: string
-  readonly callId: string
-  readonly status: NovelProposalStatus
-  readonly createdAt: string
-  readonly updatedAt: string
-}
+export type { NovelProposalSummary }
 
 /** Proposal inbox projection returned to the sidebar. */
 export interface NovelProposalListResult {
@@ -378,10 +369,8 @@ export function createAiNovelCommandRpcHandler(
     }
     try {
       if (endpoint === 'proposal/list') {
-        // Open the authoritative store so a workspace without a V2 project fails the same
-        // way state/read does; the persistent inbox arrives with the proposal ticket.
-        await store.read(signal)
-        const value: NovelProposalListResult = { proposals: [] }
+        const proposals = await store.listProposals(signal)
+        const value: NovelProposalListResult = { proposals }
         return { ok: true, value }
       }
       if (endpoint === 'task/read') {

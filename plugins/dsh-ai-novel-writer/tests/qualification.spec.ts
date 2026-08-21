@@ -1,5 +1,5 @@
 /** Static qualification checks for the tarball/profile release runner. */
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { access, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -9,6 +9,49 @@ import { makeTestWorkspace } from './test-workspace.ts'
 const execFileAsync = promisify(execFile)
 const packageRoot = resolve(import.meta.dirname, '..')
 const runner = join(packageRoot, 'scripts', 'qualify-release.mjs')
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false
+    throw error
+  }
+}
+
+async function supportsForcedWindowsTreeTermination(): Promise<boolean> {
+  if (process.platform !== 'win32') return true
+  const source = "const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});process.stdout.write(JSON.stringify([process.pid,child.pid]));setInterval(()=>{},1000)"
+  const root = spawn(process.execPath, ['-e', source], { stdio: ['ignore', 'pipe', 'ignore'] })
+  if (root.stdout === null) throw new Error('Windows process-tree capability probe did not expose stdout')
+  let pids: readonly number[] = []
+  try {
+    pids = await new Promise<readonly number[]>((resolve, reject) => {
+      let buffer = ''
+      root.stdout?.on('data', chunk => {
+        buffer += String(chunk)
+        try { resolve(JSON.parse(buffer) as readonly number[]) } catch {}
+      })
+      root.once('error', reject)
+    })
+    try {
+      await execFileAsync('taskkill.exe', ['/pid', String(root.pid), '/t', '/f'], {
+        encoding: 'utf8', timeout: 2_000, windowsHide: true,
+      })
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 100))
+    return pids.every(pid => !processIsAlive(pid))
+  } finally {
+    for (const pid of pids) {
+      if (!processIsAlive(pid)) continue
+      try { process.kill(pid, 'SIGKILL') } catch {}
+    }
+    if (root.exitCode === null && root.signalCode === null) {
+      try { root.kill('SIGKILL') } catch {}
+    }
+  }
+}
 
 describe('release qualification runner', () => {
   it('accepts the source package only when every shipped entry and dedicated Preset is present', async () => {
@@ -168,7 +211,10 @@ describe('release qualification runner', () => {
     expect(second).not.toBe(first)
   })
 
-  it('times out a real command only after its stubborn subprocess tree is terminated', async () => {
+  it('times out a real command only after its stubborn subprocess tree is terminated', async (context) => {
+    if (!(await supportsForcedWindowsTreeTermination())) {
+      context.skip('Windows cannot force-terminate this test process tree in the current execution environment')
+    }
     const root = await makeTestWorkspace('qualification-command-timeout-')
     await expect(execFileAsync(process.execPath, [runner, '--probe-command-timeout', root], {
       cwd: packageRoot,

@@ -30,14 +30,18 @@ const requiredTarballEntries = [
   'package/THIRD_PARTY_NOTICES.md',
   'package/cordis.patch.yml',
   'package/lib/agent.js',
+  'package/lib/agent-v2.js',
   'package/lib/client.js',
   'package/lib/index.js',
   'package/lib/types/agent.d.ts',
+  'package/lib/types/agent-v2.d.ts',
   'package/lib/types/client/index.d.ts',
   'package/lib/types/index.d.ts',
   'package/package.json',
   'package/presets/ai-novel-writer/agent.cordis.yml',
   'package/presets/ai-novel-writer/preset.yml',
+  'package/presets/ai-novel-writer-v2/agent.cordis.yml',
+  'package/presets/ai-novel-writer-v2/preset.yml',
 ]
 const expectedProjectTitle = '潮汐来信'
 const expectedStoryPremise = '退潮后的海床会浮现来自未来的信件。'
@@ -141,7 +145,7 @@ function assertBundlePatch(text) {
 async function checkSource() {
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
   const exportsField = objectOf(manifest.exports, 'Package exports')
-  for (const key of ['.', './agent', './client', './cordis.patch.yml', './package.json']) {
+  for (const key of ['.', './agent', './agent-v2', './client', './cordis.patch.yml', './package.json']) {
     if (!(key in exportsField)) fail(`Package export is missing: ${key}`)
   }
   const dsh = objectOf(manifest.dsh, 'Package dsh manifest')
@@ -154,7 +158,8 @@ async function checkSource() {
   }
   for (const path of [
     'README.md', 'cordis.patch.yml', 'presets/ai-novel-writer/agent.cordis.yml',
-    'presets/ai-novel-writer/preset.yml', 'scripts/qualification-preset.mjs',
+    'presets/ai-novel-writer/preset.yml', 'presets/ai-novel-writer-v2/agent.cordis.yml',
+    'presets/ai-novel-writer-v2/preset.yml', 'scripts/qualification-preset.mjs',
     'scripts/qualification-browser.mjs', 'scripts/qualification-web-backend.mjs',
   ]) {
     if (!(await exists(join(packageRoot, path)))) fail(`Source package artifact is missing: ${path}`)

@@ -1,5 +1,5 @@
 import { lstat, mkdir, open, realpath, readFile, rm } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { isAbsolute, join } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
@@ -295,7 +295,44 @@ export interface NovelStoreSnapshot {
   readonly chapters: readonly NovelChapterAggregate[]
   readonly tasks: readonly NovelTaskAggregate[]
   readonly changes: readonly NovelChangeAuditRecord[]
+  readonly proposals: readonly NovelProposalSummary[]
   readonly migration: NovelMigrationReceipt | undefined
+}
+
+/** Lifecycle state of one persisted non-authoritative proposal. */
+export type NovelProposalStatus = 'pending' | 'stale' | 'applied' | 'discarded' | 'superseded' | 'failed'
+
+/** One persisted non-authoritative model proposal available for human review. */
+export interface NovelProposalSummary {
+  readonly proposalId: string
+  readonly sessionId: string
+  readonly callId: string
+  readonly argsHash: string
+  readonly status: NovelProposalStatus
+  readonly createdAt: string
+  readonly updatedAt: string
+  /** Complete validated ChangeSets retained across restarts for sidebar review. */
+  readonly changes: readonly NovelChangeSet[]
+}
+
+/** Complete proposal bundle accepted by the inbox. */
+export interface NovelProposalRequest {
+  readonly sessionId: string
+  readonly callId: string
+  readonly argsHash: string
+  readonly payload: unknown
+}
+
+/** Result of submitting one proposal bundle. */
+export interface NovelProposalReceipt {
+  readonly proposal: NovelProposalSummary
+  readonly duplicate: boolean
+}
+
+/** Deployment limits for the persistent proposal inbox. */
+export interface NovelProposalOptions {
+  readonly maxProposalBytes?: number
+  readonly maxPendingProposals?: number
 }
 
 /** Public domain interface for the V2 authoritative project store. */
@@ -326,6 +363,27 @@ export interface NovelStore {
    * @throws {@link NovelStoreError} for stale revisions, idempotency conflicts, validation, lock, or write failures.
    */
   applyChange(change: NovelChangeSet, signal: AbortSignal): Promise<NovelChangeReceipt>
+  /**
+   * Persist one non-authoritative model proposal bundle into the inbox.
+   *
+   * The payload is stored verbatim; no authoritative aggregate, revision, or audit row changes.
+   * Identical canonical args hashes replay as duplicates, and conflicting content for the same
+   * hash fails closed.
+   *
+   * @param request Complete proposal bundle with Host-supplied provenance and canonical hash.
+   * @param signal Cancellation signal checked before the transaction.
+   * @returns The persisted proposal summary and whether the submission was a duplicate replay.
+   * @throws {@link NovelStoreError} with `PROPOSAL_TOO_LARGE`, `PROPOSAL_LIMIT_REACHED`, or
+   *   `PROPOSAL_CONFLICT` when the bundle violates the inbox contract.
+   */
+  submitProposal(request: NovelProposalRequest, signal: AbortSignal): Promise<NovelProposalReceipt>
+  /**
+   * List every persisted proposal summary in insertion order.
+   *
+   * @param signal Cancellation signal checked before reading.
+   * @returns The complete proposal inbox, empty when no proposal has been persisted.
+   */
+  listProposals(signal: AbortSignal): Promise<readonly NovelProposalSummary[]>
   /** Wait for queued operations, close SQLite, and release the exclusive write lock. */
   dispose(): Promise<void>
 }
@@ -340,6 +398,9 @@ export type NovelStoreErrorCode =
   | 'PATH_REJECTED'
   | 'STALE_REVISION'
   | 'IDEMPOTENCY_CONFLICT'
+  | 'PROPOSAL_TOO_LARGE'
+  | 'PROPOSAL_LIMIT_REACHED'
+  | 'PROPOSAL_CONFLICT'
   | 'WRITE_LOCKED'
   | 'WRITE_FAILED'
   | 'CANCELLED'
@@ -438,6 +499,18 @@ interface ChangeRow {
   readonly result_global_revision: number
   readonly status: string
   readonly provenance: string
+}
+
+interface ProposalRow {
+  readonly proposal_id: string
+  readonly session_id: string
+  readonly call_id: string
+  readonly args_hash: string
+  readonly payload: string
+  readonly canonical_hash: string
+  readonly status: string
+  readonly created_at: string
+  readonly updated_at: string
 }
 
 interface MetaBinding {
@@ -594,6 +667,34 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null'
 }
 
+/** Canonical JSON used for proposal deduplication and integrity hashing. */
+function canonicalJson(value: unknown): string {
+  if (value === undefined) return 'null'
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return JSON.stringify(value)
+  if (typeof value === 'string') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const keys = Object.keys(record).filter(key => record[key] !== undefined).sort()
+    return `{${keys.map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+  }
+  return 'null'
+}
+
+function sha256Hex(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+/**
+ * Hash model-facing proposal arguments with the store's canonical JSON encoding.
+ *
+ * @param value Losslessly JSON-serializable tool arguments.
+ * @returns SHA-256 digest of the canonical argument encoding.
+ */
+export function novelProposalArgsHash(value: unknown): string {
+  return sha256Hex(canonicalJson(value))
+}
+
 function requireExactKeys(value: object, keys: readonly string[], field: string): Record<string, unknown> {
   const record = value as Record<string, unknown>
   const actual = Object.keys(record).sort().join('\0')
@@ -707,6 +808,95 @@ function validateProvenance(value: NovelChangeProvenance): NovelChangeProvenance
     sessionId: requireNonEmptyString(record.sessionId, 'model provenance.sessionId'),
     callId: requireNonEmptyString(record.callId, 'model provenance.callId'),
     argsHash,
+  }
+}
+
+function validateProposalRequest(value: NovelProposalRequest): NovelProposalRequest {
+  const record = requireExactKeys(value, ['sessionId', 'callId', 'argsHash', 'payload'], 'proposal request')
+  const sessionId = requireNonEmptyString(record.sessionId, 'proposal request.sessionId')
+  const callId = requireNonEmptyString(record.callId, 'proposal request.callId')
+  const argsHash = requireNonEmptyString(record.argsHash, 'proposal request.argsHash')
+  if (!/^[a-f0-9]{64}$/.test(argsHash)) {
+    throw new NovelStoreError('INVALID_CONTENT', 'proposal request.argsHash must be a SHA-256 digest')
+  }
+  return { sessionId, callId, argsHash, payload: record.payload }
+}
+
+/**
+ * Validate a complete non-authoritative proposal bundle at the durable boundary.
+ *
+ * @param value Unknown tool payload received by the Host.
+ * @returns Validated replacement commands, including internal operation and provenance fields.
+ * @throws {@link NovelStoreError} with `INVALID_CONTENT` when the bundle shape or any command is invalid.
+ */
+export function validateNovelProposalPayload(value: unknown): readonly NovelChangeSet[] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new NovelStoreError('INVALID_CONTENT', 'proposal payload must be an object')
+  }
+  const record = requireExactKeys(value, ['changes'], 'proposal payload')
+  if (!Array.isArray(record.changes) || record.changes.length === 0) {
+    throw new NovelStoreError('INVALID_CONTENT', 'proposal payload changes must be a non-empty array')
+  }
+  const changeSetIds = new Set<string>()
+  return record.changes.map(change => {
+    if (typeof change !== 'object' || change === null || Array.isArray(change)) {
+      throw new NovelStoreError('INVALID_CONTENT', 'proposal change must be an object')
+    }
+    const row = requireExactKeys(change, [
+      'changeSetId', 'aggregate', 'baseAggregateRevision', 'baseGlobalRevision', 'nextValue',
+    ], 'proposal change')
+    const valid = validateNovelChangeSet({
+      changeSetId: row.changeSetId,
+      operation: 'replace',
+      aggregate: row.aggregate,
+      baseAggregateRevision: row.baseAggregateRevision,
+      baseGlobalRevision: row.baseGlobalRevision,
+      nextValue: row.nextValue,
+      provenance: { origin: 'manual' },
+    } as NovelChangeSet)
+    if (changeSetIds.has(valid.changeSetId)) {
+      throw new NovelStoreError('INVALID_CONTENT', 'proposal changeSetId values must be unique')
+    }
+    changeSetIds.add(valid.changeSetId)
+    return valid
+  })
+}
+
+function parseProposal(row: ProposalRow): NovelProposalSummary {
+  const proposalId = requireNonEmptyString(row.proposal_id, 'proposals.proposal_id')
+  if (!isUuid(proposalId)) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposals.proposal_id is invalid')
+  }
+  const sessionId = requireNonEmptyString(row.session_id, 'proposals.sessionId')
+  const callId = requireNonEmptyString(row.call_id, 'proposals.callId')
+  const argsHash = requireNonEmptyString(row.args_hash, 'proposals.argsHash')
+  const canonicalHash = requireNonEmptyString(row.canonical_hash, 'proposals.canonicalHash')
+  if (!/^[a-f0-9]{64}$/.test(argsHash) || !/^[a-f0-9]{64}$/.test(canonicalHash)) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal identity hashes are invalid')
+  }
+  const payload = parseJson(row.payload, 'proposals.payload is invalid')
+  let changes: readonly NovelChangeSet[]
+  try {
+    changes = validateNovelProposalPayload(payload)
+  } catch (error) {
+    if (error instanceof NovelStoreError && error.code === 'INVALID_CONTENT') {
+      throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposals.payload is invalid', { cause: error })
+    }
+    throw error
+  }
+  const durableCanonicalPayload = canonicalJson(payload)
+  if (sha256Hex(durableCanonicalPayload) !== canonicalHash || canonicalHash !== argsHash) {
+    throw new NovelStoreError('UNSUPPORTED_FORMAT', 'proposal payload does not match its durable identity hashes')
+  }
+  return {
+    proposalId,
+    sessionId,
+    callId,
+    argsHash,
+    status: requireEnum(row.status, ['pending', 'stale', 'applied', 'discarded', 'superseded', 'failed'], 'proposals.status'),
+    createdAt: requireIsoTimestamp(row.created_at, 'proposals.createdAt'),
+    updatedAt: requireIsoTimestamp(row.updated_at, 'proposals.updatedAt'),
+    changes,
   }
 }
 
@@ -1377,15 +1567,17 @@ class SqliteNovelStore implements NovelStore {
   readonly #root: string
   readonly #workspaceId: WorkspaceIdType
   readonly #readOnly: boolean
+  readonly #options: Required<NovelProposalOptions>
   #tail: Promise<unknown> = Promise.resolve()
   #closing = false
   #disposePromise: Promise<void> | undefined
 
-  constructor(db: Database, root: string, workspaceId: WorkspaceIdType, readOnly: boolean) {
+  constructor(db: Database, root: string, workspaceId: WorkspaceIdType, readOnly: boolean, options: Required<NovelProposalOptions>) {
     this.#db = db
     this.#root = root
     this.#workspaceId = workspaceId
     this.#readOnly = readOnly
+    this.#options = options
   }
 
   async initialize(request: NovelStoreInitializeRequest, signal: AbortSignal): Promise<{ readonly projectId: NovelProjectId; readonly globalRevision: number }> {
@@ -1438,6 +1630,89 @@ class SqliteNovelStore implements NovelStore {
       const existing = this.#existingChange(valid)
       if (existing !== undefined) return existing
       return this.#commitChange(valid)
+    })
+  }
+
+  async submitProposal(request: NovelProposalRequest, signal: AbortSignal): Promise<NovelProposalReceipt> {
+    requireNotAborted(signal)
+    const valid = validateProposalRequest(request)
+    const canonicalPayload = canonicalJson(valid.payload)
+    const canonicalHash = sha256Hex(canonicalPayload)
+    if (valid.argsHash !== canonicalHash) {
+      throw new NovelStoreError('INVALID_CONTENT', 'proposal request.argsHash must be the canonical payload SHA-256 digest')
+    }
+    const payloadText = canonicalPayload
+    const payloadBytes = Buffer.byteLength(payloadText, 'utf8')
+    if (payloadBytes > this.#options.maxProposalBytes) {
+      throw new NovelStoreError('PROPOSAL_TOO_LARGE', 'proposal bundle exceeds the configured byte limit')
+    }
+    const changes = validateNovelProposalPayload(valid.payload)
+    return this.#enqueue(() => {
+      this.#requireWritable()
+      this.#requireWrittenBinding()
+      const existing = this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
+        status, created_at, updated_at FROM proposals WHERE args_hash = ?`).get(valid.argsHash) as ProposalRow | undefined
+      if (existing !== undefined) {
+        if (existing.canonical_hash !== canonicalHash) {
+          throw new NovelStoreError('PROPOSAL_CONFLICT', 'proposal argsHash was already used with different content')
+        }
+        return { proposal: parseProposal(existing), duplicate: true }
+      }
+      const pending = this.#db.prepare("SELECT COUNT(*) AS count FROM proposals WHERE status = 'pending'").get() as { count: number }
+      if (pending.count >= this.#options.maxPendingProposals) {
+        throw new NovelStoreError('PROPOSAL_LIMIT_REACHED', 'proposal inbox has reached the configured pending limit')
+      }
+      const now = new Date().toISOString()
+      const proposalId = randomUUID()
+      this.#db.exec('BEGIN IMMEDIATE')
+      try {
+        this.#db.prepare(`INSERT INTO proposals (
+          proposal_id, session_id, call_id, args_hash, payload, canonical_hash, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
+          .run(proposalId, valid.sessionId, valid.callId, valid.argsHash, payloadText, canonicalHash, now, now)
+        const insertChange = this.#db.prepare(`INSERT INTO proposal_changes (
+          change_set_id, proposal_id, aggregate_kind, aggregate_id, operation, next_value, base_aggregate_revision, base_global_revision
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        for (const change of changes) {
+          insertChange.run(
+            change.changeSetId,
+            proposalId,
+            change.aggregate.kind,
+            change.aggregate.kind === 'chapter' ? change.aggregate.chapter : null,
+            change.operation,
+            stableJson(change.nextValue),
+            change.baseAggregateRevision,
+            change.baseGlobalRevision,
+          )
+        }
+        this.#db.exec('COMMIT')
+      } catch (error) {
+        this.#rollback()
+        if (error instanceof NovelStoreError) throw error
+        throw new NovelStoreError('WRITE_FAILED', 'proposal inbox write failed', { cause: error })
+      }
+      return {
+        proposal: {
+          proposalId,
+          sessionId: valid.sessionId,
+          callId: valid.callId,
+          argsHash: valid.argsHash,
+          status: 'pending',
+          createdAt: now,
+          updatedAt: now,
+          changes,
+        },
+        duplicate: false,
+      }
+    })
+  }
+
+  async listProposals(signal: AbortSignal): Promise<readonly NovelProposalSummary[]> {
+    requireNotAborted(signal)
+    return this.#enqueue(() => {
+      const rows = this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
+        status, created_at, updated_at FROM proposals ORDER BY created_at, proposal_id`).all() as unknown as ProposalRow[]
+      return rows.map(parseProposal)
     })
   }
 
@@ -1519,6 +1794,8 @@ class SqliteNovelStore implements NovelStore {
     const changeRows = this.#db.prepare(`SELECT change_set_id, aggregate_kind, aggregate_id, aggregate_key, operation,
       base_aggregate_revision, base_global_revision, result_aggregate_revision, result_global_revision, status, provenance
       FROM changes ORDER BY committed_at, change_set_id`).all() as unknown as ChangeRow[]
+    const proposalRows = this.#db.prepare(`SELECT proposal_id, session_id, call_id, args_hash, payload, canonical_hash,
+      status, created_at, updated_at FROM proposals ORDER BY created_at, proposal_id`).all() as unknown as ProposalRow[]
     const migrationRow = this.#db.prepare("SELECT value FROM meta WHERE key = 'migration_receipt'").get() as { value: string } | undefined
     return {
       projectId: binding.projectId as NovelProjectId,
@@ -1533,6 +1810,7 @@ class SqliteNovelStore implements NovelStore {
       chapters: chapterRows.map(row => parseChapter(row, chapterCharacters.get(row.chapter) ?? [])),
       tasks: taskRows.map(parseTask),
       changes: changeRows.map(parseChange),
+      proposals: proposalRows.map(parseProposal),
       migration: migrationRow === undefined ? undefined : validateMigrationReceipt(parseJson(migrationRow.value, 'migration receipt is invalid')),
     }
   }
@@ -1730,6 +2008,10 @@ export interface NovelStoreOpenOptions {
    * nothing on disk. Defaults to true, preserving the initialization path.
    */
   readonly create?: boolean
+  /** Maximum UTF-8 byte size accepted for one proposal bundle. */
+  readonly maxProposalBytes?: number
+  /** Maximum number of proposals kept in pending status. */
+  readonly maxPendingProposals?: number
 }
 
 /**
@@ -1747,6 +2029,12 @@ export async function openNovelStore(
   workspaceId: WorkspaceIdType,
   options: NovelStoreOpenOptions = {},
 ): Promise<NovelStore> {
+  const proposalOptions: Required<NovelProposalOptions> = {
+    maxProposalBytes: options.maxProposalBytes ?? 2 * 1024 * 1024,
+    maxPendingProposals: options.maxPendingProposals ?? 20,
+  }
+  requirePositiveInteger(proposalOptions.maxProposalBytes, 'maxProposalBytes')
+  requirePositiveInteger(proposalOptions.maxPendingProposals, 'maxPendingProposals')
   if (!isAbsolute(root)) {
     throw new NovelStoreError('PATH_REJECTED', 'workspace root must be absolute')
   }
@@ -1787,7 +2075,7 @@ export async function openNovelStore(
       createSchema(db)
       acquireExclusiveLock(db)
       requireStorage(db, false)
-      return new SqliteNovelStore(db, canonicalRoot, workspaceId, false)
+      return new SqliteNovelStore(db, canonicalRoot, workspaceId, false, proposalOptions)
     } catch (error) {
       if (db.isOpen) db.close()
       if (createdThisCall) {
@@ -1814,7 +2102,7 @@ export async function openNovelStore(
     try {
       configureReadConnection(db)
       requireStorage(db, true)
-      return new SqliteNovelStore(db, canonicalRoot, workspaceId, true)
+      return new SqliteNovelStore(db, canonicalRoot, workspaceId, true, proposalOptions)
     } catch (error) {
       if (db.isOpen) db.close()
       throw error
@@ -1837,7 +2125,7 @@ export async function openNovelStore(
       }
       requireStorage(db, false)
       acquireExclusiveLock(db)
-      return new SqliteNovelStore(db, canonicalRoot, workspaceId, false)
+      return new SqliteNovelStore(db, canonicalRoot, workspaceId, false, proposalOptions)
     } catch (error) {
       if (db.isOpen) db.close()
       throw error

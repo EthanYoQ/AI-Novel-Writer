@@ -22,6 +22,29 @@ const PROJECT_MANIFEST = `${JSON.stringify({
 }, null, 2)}\n`
 const PROJECT_REVISION = createHash('sha256').update(PROJECT_MANIFEST).digest('hex')
 
+function v2ProposalScript() {
+  return [
+    rawToolCall('v2-read-state', 'novel_read', { kind: 'state' }),
+    rawToolCall('v2-propose-architecture', 'novel_propose_change', {
+      changes: [{
+        changeSetId: 'v2-architecture-proposal',
+        aggregate: { kind: 'architecture' },
+        baseAggregateRevision: 0,
+        baseGlobalRevision: 0,
+        nextValue: {
+          premise: '信件来自明天',
+          characterGraph: '林夏与弟弟通过未来信件互相牵引。',
+          world: '被永夜潮汐包围的群岛。',
+          plotOutline: '林夏沿未来信件追踪弟弟的下落。',
+          styleConstraints: '冷峻而温柔的短句。',
+          referenceWorks: [],
+        },
+      }],
+    }),
+    textResponse('修改建议已进入待审提案队列，尚未改变权威小说项目。'),
+  ]
+}
+
 function initializationCall(callId) {
   return toolCall(callId, {
     kind: 'initialize', projectId: PROJECT_ID, createdAt: PROJECT_TIME, updatedAt: PROJECT_TIME,
@@ -180,6 +203,7 @@ export async function apply(ctx) {
     || scenario === 'invalid-args'
     || scenario === 'approval-rejected'
     || scenario === 'stale-revision'
+    || scenario === 'v2-proposal'
     ? scenario
     : initialized ? 'restart' : 'first'
   const script = phase === 'approval-never'
@@ -195,7 +219,9 @@ export async function apply(ctx) {
         ? [initializationCall('rejected-init'), textResponse('用户拒绝了小说项目初始化，磁盘未发生变化。')]
         : phase === 'stale-revision'
           ? staleRevisionScript()
-          : initialized
+          : phase === 'v2-proposal'
+            ? v2ProposalScript()
+            : initialized
             ? [
                 toolCall('chapter-01-restart-read', { kind: 'working-set', chapter: 1 }),
                 textResponse('重启后已读取相同的创作策略与第一章正文。'),
@@ -203,6 +229,7 @@ export async function apply(ctx) {
             : firstRunScript()
   const adapter = new KeylessNovelAdapter(phase, script)
   ctx.effect(() => ctx.llm.registerAdapter(['novel-snapshot'], adapter))
+  const presetId = phase === 'v2-proposal' ? 'ai-novel-writer-v2' : 'ai-novel-writer'
   let approvalCount = 0
   ctx.on('approval/request', async () => {
     approvalCount += 1
@@ -230,8 +257,8 @@ export async function apply(ctx) {
   })
   await ctx.agents.create({
     sessionId: SessionId(`complete-chapter-${phase}`),
-    meta: { cwd: process.cwd(), agentPreset: 'ai-novel-writer' },
+    meta: { cwd: process.cwd(), agentPreset: presetId },
     agentOptions: { provider: 'novel-snapshot', model: 'keyless' },
-    setup: async agentCtx => void await ctx.agentPresets.mount(agentCtx, 'ai-novel-writer'),
+    setup: async agentCtx => void await ctx.agentPresets.mount(agentCtx, presetId),
   })
 }

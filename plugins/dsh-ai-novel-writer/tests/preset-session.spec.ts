@@ -12,7 +12,7 @@ import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import { describe, expect, it } from 'vitest'
-import { createPresetInstaller } from '../src/preset-installer.ts'
+import { createBundledPresetInstaller, createPresetInstaller } from '../src/preset-installer.ts'
 import { makeTestWorkspace } from './test-workspace.ts'
 
 const packageRoot = resolve(import.meta.dirname, '..')
@@ -135,6 +135,45 @@ describe('installed AI 小说作家 preset session', () => {
       callId: CallId('recomposed-global'), name: 'ssh_exec', arguments: {}, agent: handle.agent,
       signal: new AbortController().signal,
     })).resolves.toMatchObject({ isError: true, error: { message: expect.stringContaining('dedicated') } })
+    await ctx.fiber.dispose()
+  })
+
+  it('gives the independent V2 preset only the read-and-proposal tool surface', async () => {
+    const presetRoot = await makeTestWorkspace('preset-session-v2-')
+    await createBundledPresetInstaller(join(packageRoot, 'presets'), presetRoot).install()
+
+    const ctx = new Context()
+    ctx.baseUrl = pathToFileURL(packageRoot).href + '/'
+    await ctx.plugin(Loader)
+    ctx.loader.builtins.include = Include
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SystemPrompt, { persona: '' })
+    await ctx.plugin(ToolRuntime)
+    ctx.provide('workspaceRegistry' as never, {
+      resolveByPath: async () => undefined,
+    } as never)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(AgentLoop, { agents: [] })
+    await ctx.plugin(AgentPresets, {
+      default: 'ai-novel-writer-v2',
+      roots: [{ path: presetRoot, trust: 'user' }],
+      includeUserRoot: false,
+    })
+
+    const listed = await ctx.agentPresets.list()
+    expect(listed.map(preset => preset.id)).toContain('ai-novel-writer-v2')
+    expect(listed.map(preset => preset.id)).toContain('ai-novel-writer')
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('ai-novel-v2-isolated'),
+      setup: async agentCtx => void await ctx.agentPresets.mount(agentCtx, 'ai-novel-writer-v2'),
+    })
+
+    expect(ctx.tools.schemas(handle.agent).map(tool => tool.name).sort())
+      .toEqual(['novel_propose_change', 'novel_read'])
+    const assembly = await ctx.systemPrompt.assemble(assembleContextFor(handle.agent))
+    expect(assembly.tools.map(tool => tool.name).sort())
+      .toEqual(['novel_propose_change', 'novel_read'])
     await ctx.fiber.dispose()
   })
 })
