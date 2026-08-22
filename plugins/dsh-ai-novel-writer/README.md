@@ -10,6 +10,17 @@ The package ships three plugin entries:
 - `./agent`, mounted only by the bundled `ai-novel-writer` preset;
 - `./client`, which registers an “AI 小说作家” evidence card in Plugin Configuration and adds the compact “小说工作台” side drawer through the shell overlay.
 
+## Install from npm
+
+Install the published bundle into a DeepSeek Harness profile:
+
+```sh
+dsh plugin --profile web add @ethanyoq/dsh-ai-novel-writer
+dsh --profile web
+```
+
+The desktop application at the repository root is separate and is not an activatable DSH bundle.
+
 ## Configuration
 
 The Host entry accepts `presetRoot`, an absolute path to the user preset root. It defaults to `$DSH_HOME/.agent-presets` (normally `~/.dsh/.agent-presets`). The agent entry accepts `assetBytes`, `workingSetBytes`, and `queryMatches`. Defaults are 512 KiB per asset, 512 KiB per working set, and 20 query matches. Invalid paths or limits fail during plugin loading.
@@ -70,7 +81,7 @@ The preset persona and the two tool definitions are stable across turns. Project
 
 ## Known Limitations and Deferred Work
 
-The package does not import `.vela` projects, provide multi-asset transactions, run batch multi-chapter jobs, or publish itself. All five V1 assets are editable through the compact workbench, but persistence remains a native approval-gated agent action rather than a browser write.
+The package does not import `.vela` projects, provide multi-asset transactions, or run batch multi-chapter jobs. All five V1 assets are editable through the compact workbench, but persistence remains a native approval-gated agent action rather than a browser write.
 
 Build and run the focused qualification with:
 
