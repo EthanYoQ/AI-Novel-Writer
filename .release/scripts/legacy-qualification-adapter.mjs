@@ -40,7 +40,11 @@ export function normalizeLegacyReceipt({ platform, relativePath, rawBytes }) {
     if (platform === 'macos') {
       assert(receipt.status === 'ad_hoc_or_unsigned', 'macOS legacy signing status is not the known public-distribution classification')
       assert(receipt.direct?.codeSigning?.hasDeveloperIdIdentity === false, 'Developer ID identity cannot be normalized to unsigned')
-      assert(receipt.direct?.codeSigning?.observed === 'ad_hoc', 'Unknown macOS signing observation cannot be normalized to unsigned')
+      assert(
+        receipt.direct?.codeSigning?.observed === 'ad_hoc'
+          || receipt.direct?.codeSigning?.observed === 'unsigned',
+        'Unknown macOS signing observation cannot be normalized to unsigned',
+      )
       sourceClassification.signingStatus = receipt.status
       normalized.status = 'unsigned'
     } else {

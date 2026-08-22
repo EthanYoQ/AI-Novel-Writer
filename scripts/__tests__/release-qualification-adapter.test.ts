@@ -47,8 +47,34 @@ describe('legacy qualification receipt adapter', () => {
     })).not.toThrow()
   })
 
+  it('maps a verified unsigned macOS observation without a Developer ID identity', () => {
+    const normalized = normalizeLegacyReceipt({
+      platform: 'macos',
+      relativePath: 'acceptance/signing.json',
+      rawBytes: Buffer.from(JSON.stringify(macSigning({
+        observations: ['codesign verified that the bundle is not signed'],
+        validationResult: 'Verified unsigned bundle; no Developer ID identity.',
+        direct: {
+          codeSigning: { observed: 'unsigned', hasDeveloperIdIdentity: false },
+          notarization: { observed: 'not_notarized' },
+        },
+      }))),
+    })
+
+    expect(normalized).toMatchObject({
+      platform: 'macos',
+      status: 'unsigned',
+      direct: {
+        codeSigning: { observed: 'unsigned', hasDeveloperIdIdentity: false },
+      },
+      sourceClassification: { platform: 'darwin', signingStatus: 'ad_hoc_or_unsigned' },
+    })
+  })
+
   it.each([
     ['Developer ID identity', macSigning({ direct: { codeSigning: { observed: 'developer_id', hasDeveloperIdIdentity: true } } })],
+    ['unsigned observation with a Developer ID identity', macSigning({ direct: { codeSigning: { observed: 'unsigned', hasDeveloperIdIdentity: true } } })],
+    ['unknown signing observation', macSigning({ direct: { codeSigning: { observed: 'unrecognized_signature', hasDeveloperIdIdentity: false } } })],
     ['signed status', macSigning({ status: 'signed' })],
     ['unknown status', macSigning({ status: 'mystery' })],
   ])('fails closed for %s instead of inferring unsigned', (_case, receipt) => {
