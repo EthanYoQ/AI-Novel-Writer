@@ -48,7 +48,7 @@
     "@codemirror/search": "^6.7.1",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.41.0",
-    "@lancedb/lancedb": "^0.27.2",
+    "@lancedb/lancedb": "0.22.3",
     "@lezer/highlight": "^1.2.3",
     "@monaco-editor/react": "^4.7.0",
     "@radix-ui/react-dialog": "^1.1.15",
@@ -116,7 +116,8 @@
     "vitest": "^4.1.4"
   },
   "optionalDependencies": {
-    "@lancedb/lancedb-darwin-arm64": "0.27.2",
-    "@lancedb/lancedb-win32-x64-msvc": "0.27.2"
+    "@lancedb/lancedb-darwin-arm64": "0.22.3",
+    "@lancedb/lancedb-darwin-x64": "0.22.3",
+    "@lancedb/lancedb-win32-x64-msvc": "0.22.3"
   }
 }

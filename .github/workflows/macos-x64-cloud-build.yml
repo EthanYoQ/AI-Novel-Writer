@@ -76,6 +76,10 @@ jobs:
       - name: Install locked dependencies
         run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step install-locked-dependencies -- pnpm install --frozen-lockfile
 
+      - name: Verify Intel LanceDB native binding
+        run: |
+          node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step verify-lancedb-darwin-x64-binding -- env NAPI_RS_ENFORCE_VERSION_CHECK=1 node -e "if (process.platform !== 'darwin' || process.arch !== 'x64') throw new Error('Expected an Intel macOS runner'); const fs = require('node:fs'); const path = require('node:path'); const binding = require('@lancedb/lancedb-darwin-x64'); const lancedb = require('@lancedb/lancedb'); const packageVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(require.resolve('@lancedb/lancedb')), '..', 'package.json'), 'utf8')).version; const bindingVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(require.resolve('@lancedb/lancedb-darwin-x64')), 'package.json'), 'utf8')).version; if (packageVersion !== bindingVersion) throw new Error('LanceDB native binding version does not match the JavaScript package'); if (typeof binding.Connection !== 'function' || typeof lancedb.connect !== 'function') throw new Error('LanceDB Intel native binding did not load')"
+
       - name: Install Playwright Chromium
         run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step install-playwright-chromium -- pnpm exec playwright install chromium
 

@@ -6,16 +6,21 @@ import { describe, expect, it } from 'vitest'
 import { readNormalizedSource } from '../../test/source-contract'
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as {
+  dependencies?: Record<string, string>
   packageManager?: string
   optionalDependencies?: Record<string, string>
   scripts?: Record<string, string>
 }
 
 describe('release dependency contract', () => {
-  it('uses one pinned package manager and exposes every shipped LanceDB native binding', () => {
+  it('uses one pinned package manager and exposes the matching LanceDB native binding for every shipped desktop architecture', () => {
     expect(pkg.packageManager).toBe('pnpm@11.11.0')
-    expect(pkg.optionalDependencies?.['@lancedb/lancedb-darwin-arm64']).toBe('0.27.2')
-    expect(pkg.optionalDependencies?.['@lancedb/lancedb-win32-x64-msvc']).toBe('0.27.2')
+    expect(pkg.dependencies?.['@lancedb/lancedb']).toBe('0.22.3')
+    expect(pkg.optionalDependencies).toMatchObject({
+      '@lancedb/lancedb-darwin-arm64': '0.22.3',
+      '@lancedb/lancedb-darwin-x64': '0.22.3',
+      '@lancedb/lancedb-win32-x64-msvc': '0.22.3',
+    })
     expect(existsSync('package-lock.json')).toBe(false)
   })
 
@@ -36,6 +41,7 @@ describe('release dependency contract', () => {
     expect(resolveMacArtifactName('arm64')).toBe('ai-novel-writer-mac-arm64-0.0.0-installer.dmg')
     expect(resolveMacArtifactName('x64')).toBe('ai-novel-writer-mac-x64-0.0.0-installer.dmg')
     expect(builder).toContain('node_modules/@lancedb/lancedb/**/*')
+    expect(builder).toContain('node_modules/@lancedb/lancedb-darwin-*/**/*')
     expect(builder).toContain('node_modules/@lancedb/lancedb-win32-x64-msvc/**/*')
     expect(builder).toContain('electron/security/windows-safe-file-system.ps1')
     expect(builder).toContain('security/windows-safe-file-system.ps1')

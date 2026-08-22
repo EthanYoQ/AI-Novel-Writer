@@ -13,7 +13,9 @@ import {
   listDocuments,
   getStats,
   migrateFromJSON,
+  removeDocument,
   search,
+  searchWithScope,
   updateChunkVectors,
 } from '../vector-store'
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
@@ -147,6 +149,120 @@ describe('知识库向量维度', () => {
       expect.objectContaining({ fileName: 'fts.txt', text: '全文检索仍然可用' }),
     ])
     await expect(getEmbeddingSpaces(projectPath)).resolves.toEqual({ version: 1, activeGeneration: null, spaces: [] })
+  })
+
+  it('替换同名文档时清理旧的文档元数据', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-superseded-document-'))
+    projects.push(projectPath)
+
+    await expect(addChunks(
+      projectPath,
+      'old-document',
+      'same-name.txt',
+      ['旧文档正文'],
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+    await expect(addChunks(
+      projectPath,
+      'new-document',
+      'same-name.txt',
+      ['新文档正文'],
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+
+    await expect(listDocuments(projectPath)).resolves.toEqual([
+      expect.objectContaining({ id: 'new-document', fileName: 'same-name.txt' }),
+    ])
+  })
+
+  it('删除文档时按驼峰 docId 移除其 chunks', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-remove-document-'))
+    projects.push(projectPath)
+
+    await expect(addChunks(
+      projectPath,
+      'remove-document',
+      'remove-me.txt',
+      ['待删除的正文'],
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+    await expect(removeDocument(projectPath, 'remove-document')).resolves.toBe(true)
+
+    await expect(listDocuments(projectPath)).resolves.toEqual([])
+    await expect(getStats(projectPath)).resolves.toMatchObject({ totalChunks: 0 })
+    await expect(search(projectPath, '待删除')).resolves.toEqual([])
+  })
+
+  it('在大小写敏感的 LanceDB SQL 上按章节范围检索', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-chapter-scope-'))
+    projects.push(projectPath)
+
+    await expect(addChunks(
+      projectPath,
+      'chapter-one',
+      'chapter-one.txt',
+      ['范围检索共同正文'],
+      undefined,
+      undefined,
+      { chapterNumber: 1 },
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+    await expect(addChunks(
+      projectPath,
+      'chapter-two',
+      'chapter-two.txt',
+      ['范围检索共同正文'],
+      undefined,
+      undefined,
+      { chapterNumber: 2 },
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+    await expect(addChunks(
+      projectPath,
+      'chapter-two-unmatched',
+      'chapter-two-unmatched.txt',
+      ['本章不匹配检索条件'],
+      undefined,
+      undefined,
+      { chapterNumber: 2 },
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+
+    await expect(searchWithScope(projectPath, '范围检索', undefined, 5, [2, 2])).resolves.toEqual([
+      expect.objectContaining({ fileName: 'chapter-two.txt' }),
+    ])
+  })
+
+  it('在大小写敏感的 LanceDB SQL 上将向量检索限定在章节范围', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-chapter-scope-vector-'))
+    projects.push(projectPath)
+    const embeddingSpace = { modelFingerprint: 'test/chapter-scope', distanceMetric: 'l2' }
+
+    await expect(addChunks(
+      projectPath,
+      'chapter-one-vector',
+      'chapter-one-vector.txt',
+      ['向量范围检索共同正文'],
+      [[1, 0]],
+      undefined,
+      { chapterNumber: 1 },
+      embeddingSpace,
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+    await expect(addChunks(
+      projectPath,
+      'chapter-two-vector',
+      'chapter-two-vector.txt',
+      ['向量范围检索共同正文'],
+      [[0, 1]],
+      undefined,
+      { chapterNumber: 2 },
+      embeddingSpace,
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+
+    await expect(searchWithScope(
+      projectPath,
+      '向量范围检索',
+      [1, 0],
+      5,
+      [2, 2],
+      embeddingSpace,
+    )).resolves.toEqual([
+      expect.objectContaining({ fileName: 'chapter-two-vector.txt' }),
+    ])
   })
 
   it('安全登记缺少元数据的旧 2048 维 chunks 表并保持可检索', async () => {

@@ -901,7 +901,7 @@ async function pruneSupersededDocumentInfo(
     const docsTable = await db.openTable(DOCS_TABLE_NAME)
     const fileName = docInfo.fileName.replace(/'/g, "''")
     const docId = docInfo.id.replace(/'/g, "''")
-    await docsTable.delete(`fileName = '${fileName}' AND id != '${docId}'`)
+    await docsTable.delete(`\`fileName\` = '${fileName}' AND id != '${docId}'`)
   } catch (error) {
     // 这一步是旧元数据整理，不应将已完成的安全写入变成失败或删除新数据。
     console.warn('[Vela VectorStore] 清理同名旧文档元数据失败:', error)
@@ -1063,7 +1063,7 @@ export async function removeDocument(projectPath: string, docId: string): Promis
     const escapedId = docId.replace(/'/g, "''")
     const targets = new Set<string>([TABLE_NAME, ...registry.spaces.map(space => space.tableName)])
     for (const tableName of targets) {
-      if (tableNames.includes(tableName)) await (await db.openTable(tableName)).delete(`docId = '${escapedId}'`)
+      if (tableNames.includes(tableName)) await (await db.openTable(tableName)).delete(`\`docId\` = '${escapedId}'`)
     }
     if (tableNames.includes(DOCS_TABLE_NAME)) {
       await (await db.openTable(DOCS_TABLE_NAME)).delete(`id = '${escapedId}'`)
@@ -1145,7 +1145,7 @@ export async function searchWithScope(
     let scopeFilter: string | undefined
     if (chapterScope) {
       const [from, to] = chapterScope
-      scopeFilter = `chapterNumber >= ${from} AND chapterNumber <= ${to}`
+      scopeFilter = `\`chapterNumber\` >= ${from} AND \`chapterNumber\` <= ${to}`
     }
 
     if (queryVector && vectorIsUsable(queryVector)) {
@@ -1174,9 +1174,11 @@ export async function searchWithScope(
       const canonicalTable = await db.openTable(TABLE_NAME)
       const escapedQuery = queryText.replace(/'/g, "''")
       const likePattern = `%${escapedQuery.split('').join('%')}%`
-      let query = canonicalTable.query().filter(`text LIKE '${likePattern}'`).limit(topK)
-      if (scopeFilter && await tableSupportsChapterScope(canonicalTable)) query = query.where(scopeFilter)
-      const results = await query.toArray()
+      const textFilter = `text LIKE '${likePattern}'`
+      const filter = scopeFilter && await tableSupportsChapterScope(canonicalTable)
+        ? `${textFilter} AND ${scopeFilter}`
+        : textFilter
+      const results = await canonicalTable.query().filter(filter).limit(topK).toArray()
       return results.map((row: { text: string; fileName: string }) => ({
         text: row.text,
         score: 0.5,
