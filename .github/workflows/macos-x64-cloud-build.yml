@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   package-and-qualify:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
       - name: Check out source
@@ -65,7 +65,7 @@ jobs:
           test "$PROFILE_PATH" = '.release/release-profile.json'
           git ls-files --error-unmatch -- "$PROFILE_PATH" >/dev/null
           evidence_root="$RUNNER_TEMP/ai-novel-release-evidence-$GITHUB_RUN_ID"
-          node scripts/release-evidence-v2.mjs init --platform macos-x64 --evidence-root "$evidence_root" --repository "$GITHUB_REPOSITORY" --commit "$EXPECTED_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --runner-label 'macos-13' --image-os "$ImageOS" --image-version "$ImageVersion" --expected-node-version 22.23.1 --expected-pnpm-version 11.11.0 --workflow-path '.github/workflows/macos-x64-cloud-build.yml' --workflow-name 'macOS Intel x64 cloud package qualification' --actor "$GITHUB_ACTOR" --event "$GITHUB_EVENT_NAME" --dispatch-inputs-json '{}'
+          node scripts/release-evidence-v2.mjs init --platform macos-x64 --evidence-root "$evidence_root" --repository "$GITHUB_REPOSITORY" --commit "$EXPECTED_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --runner-label 'macos-15-intel' --image-os "$ImageOS" --image-version "$ImageVersion" --expected-node-version 22.23.1 --expected-pnpm-version 11.11.0 --workflow-path '.github/workflows/macos-x64-cloud-build.yml' --workflow-name 'macOS Intel x64 cloud package qualification' --actor "$GITHUB_ACTOR" --event "$GITHUB_EVENT_NAME" --dispatch-inputs-json '{}'
           common_root="$RUNNER_TEMP/macos-x64-qualified"
           legacy_release_root="$RUNNER_TEMP/macos-x64-legacy-release"
           node .release/scripts/freeze-release-contract.mjs --repository "$GITHUB_REPOSITORY" --expected-sha "$EXPECTED_SHA" --tag "$RELEASE_TAG" --version "$RELEASE_VERSION" --profile "$PROFILE_PATH" --output-root "$common_root" --platform macos-x64 --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --workflow '.github/workflows/macos-x64-cloud-build.yml' --actor "$GITHUB_ACTOR" --event "$GITHUB_EVENT_NAME"
