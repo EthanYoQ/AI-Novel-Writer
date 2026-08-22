@@ -74,9 +74,10 @@ function jobLevelEnvBlocks(source: string) {
 describe('Windows cloud build workflow contract', () => {
   it('binds an explicit frozen release/profile contract before installing dependencies', () => {
     const workflow = readRequiredFile(workflowPath)
-    for (const input of ['expected_sha', 'release_tag', 'release_version', 'artifact_paths', 'profile_path']) {
+    for (const input of ['expected_sha', 'release_tag', 'release_version', 'profile_path']) {
       expect(workflow).toContain(`      ${input}:`)
     }
+    expect(workflow).not.toContain('      artifact_paths:')
     expect(workflow).toContain('default: .release/release-profile.json')
 
     const checkout = namedStep(workflow, 'Check out source')
@@ -88,8 +89,21 @@ describe('Windows cloud build workflow contract', () => {
     expect(initialize).toContain('EXPECTED_SHA: ${{ inputs.expected_sha }}')
     expect(initialize).toContain('RELEASE_TAG: ${{ inputs.release_tag }}')
     expect(initialize).toContain('RELEASE_VERSION: ${{ inputs.release_version }}')
-    expect(initialize).toContain('ARTIFACT_PATHS: ${{ inputs.artifact_paths }}')
+    expect(initialize).not.toContain('ARTIFACT_PATHS')
     expect(initialize).toContain('PROFILE_PATH: ${{ inputs.profile_path }}')
+    for (const removedArtifactPathFragment of [
+      '$profile = Get-Content',
+      '$expectedNames',
+      '$artifactRoot',
+      '$artifactPaths',
+      '$unsafeArtifactPaths',
+      '$actualNames',
+      'derive exact safe checkout-relative Windows asset paths',
+      'derive exact release paths',
+    ]) {
+      expect(initialize).not.toContain(removedArtifactPathFragment)
+    }
+    expect(initialize).toContain('git ls-files --error-unmatch -- $env:PROFILE_PATH')
     expect(initialize).toContain('.release/scripts/freeze-release-contract.mjs')
     expect(readRequiredFile(path.join(repositoryRoot, '.release', 'scripts', 'freeze-release-contract.mjs'))).toContain('profileRawBytesSha256')
     expect(readRequiredFile(path.join(repositoryRoot, '.release', 'scripts', 'freeze-release-contract.mjs'))).toContain('contractRawBytesSha256')
@@ -144,6 +158,7 @@ describe('Windows cloud build workflow contract', () => {
 
     const successfulArtifact = namedStep(workflow, 'Upload runtime-verified Windows package')
     const failedArtifact = namedStep(workflow, 'Upload Windows build diagnostics')
+    const diagnostics = namedStep(workflow, 'Collect Windows build diagnostics')
     expect(successfulArtifact).toMatch(/if:\s*\$\{\{\s*success\(\)\s*\}\}/)
     expect(successfulArtifact).toMatch(/retention-days:\s*14/)
     expect(successfulArtifact).toContain('windows-qualified')
@@ -153,6 +168,12 @@ describe('Windows cloud build workflow contract', () => {
     expect(failedArtifact).toContain('ai-novel-cloud-build-diagnostics')
     expect(failedArtifact).not.toMatch(/release\/|\.exe|win-unpacked/i)
     expect(failedArtifact).not.toMatch(/success\(\)/)
+    expect(diagnostics).toMatch(/if:\s*\$\{\{\s*failure\(\)\s*\}\}/)
+    expect(diagnostics).not.toMatch(/always\(\)/)
+    expect(workflow.indexOf('Upload runtime-verified Windows package'))
+      .toBeLessThan(workflow.indexOf('Collect Windows build diagnostics'))
+    expect(workflow.indexOf('Collect Windows build diagnostics'))
+      .toBeLessThan(workflow.indexOf('Upload Windows build diagnostics'))
 
     expect(workflow).not.toMatch(/\b(?:gh\s+release|softprops\/action-gh-release|actions\/(?:create-release|upload-release-asset)|git\s+tag|git\s+push\s+.*(?:tag|refs\/tags)|create-release|upload-release|npm\s+publish|signtool|codesign)\b/i)
   })
@@ -184,6 +205,9 @@ describe('Windows cloud build workflow contract', () => {
     expect(initialize).toContain('git rev-parse HEAD')
     expect(initialize).toContain('--expected-node-version 22.23.1')
     expect(initialize).toContain('--expected-pnpm-version 11.11.0')
+    expect(initialize).not.toContain('AI_NOVEL_CLOUD_BUILD_PNPM_VERSION')
+    expect(workflow).not.toContain('- name: Record verified toolchain')
+    expect(workflow).not.toContain('AI_NOVEL_CLOUD_BUILD_PNPM_VERSION')
     expect(initialize).toContain('--run-attempt "$env:GITHUB_RUN_ATTEMPT"')
     expect(initialize).toContain("--workflow-path '.github/workflows/windows-cloud-build-test.yml'")
     expect(initialize).toContain("--workflow-name 'Windows cloud package qualification'")
