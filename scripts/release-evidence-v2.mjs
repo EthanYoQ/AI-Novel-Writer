@@ -99,6 +99,7 @@ export const COMMAND_PROFILES = {
   ],
   'macos-x64': [
     'install-locked-dependencies',
+    'verify-lancedb-darwin-x64-binding',
     'install-playwright-chromium',
     'renderer-browser-tests',
     'build-native-secure-helper',

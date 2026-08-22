@@ -149,32 +149,126 @@ describe('macOS DMG acceptance receipt contract', () => {
     expect(script).not.toMatch(/(?:\.exe|latest\.yml|win-unpacked|NSIS|Start-Process)/i)
   })
 
-  it('finalizes exactly the three macOS receipts into the release acceptance directory', () => {
+  it('accepts the fixed Intel LanceDB binding step and rejects an unknown Intel macOS command step', () => {
+    expect(COMMAND_PROFILES['macos-x64']).toEqual([
+      'install-locked-dependencies',
+      'verify-lancedb-darwin-x64-binding',
+      'install-playwright-chromium',
+      'renderer-browser-tests',
+      'build-native-secure-helper',
+      'test-suite',
+      'build-macos-x64-package',
+      'mounted-dmg-smoke',
+    ])
+    expect(COMMAND_PROFILES['macos-arm64']).not.toContain('verify-lancedb-darwin-x64-binding')
+    expect(COMMAND_PROFILES.windows).not.toContain('verify-lancedb-darwin-x64-binding')
+
+    const evidenceRoot = fixture()
+    const releaseRoot = fixture()
+    const init = spawnSync(process.execPath, [
+      evidenceScript,
+      'init',
+      '--platform', 'macos-x64',
+      '--evidence-root', evidenceRoot,
+      '--repository', 'EthanYoQ/AI-Novel-Writer',
+      '--commit', 'e'.repeat(40),
+      '--run-id', '405',
+      '--run-attempt', '1',
+      '--runner-label', 'macos-15-intel',
+      '--image-os', 'macos-15-intel',
+      '--image-version', '20260726.1',
+      '--expected-node-version', process.versions.node,
+      '--expected-pnpm-version', '11.11.0',
+      '--workflow-path', '.github/workflows/macos-x64-cloud-build.yml',
+      '--workflow-name', 'macOS Intel x64 cloud package qualification',
+      '--actor', 'release-operator',
+      '--event', 'workflow_dispatch',
+      '--dispatch-inputs-json', '{}',
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(init.status, init.stderr).toBe(0)
+    for (const step of COMMAND_PROFILES['macos-x64']) {
+      const recorded = spawnSync(process.execPath, [
+        evidenceScript,
+        'record',
+        '--evidence-root', evidenceRoot,
+        '--step', step,
+        '--', process.execPath, '-e', '',
+      ], { cwd: repositoryRoot, encoding: 'utf8' })
+      expect(recorded.status, recorded.stderr).toBe(0)
+    }
+    const unknown = spawnSync(process.execPath, [
+      evidenceScript,
+      'record',
+      '--evidence-root', evidenceRoot,
+      '--step', 'unexpected-intel-macos-command',
+      '--', process.execPath, '-e', '',
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(unknown.status, unknown.stderr).toBe(0)
+
+    const rejected = spawnSync(process.execPath, [
+      evidenceScript,
+      'finalize',
+      '--platform', 'macos-x64',
+      '--evidence-root', evidenceRoot,
+      '--release-root', releaseRoot,
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(rejected.status).not.toBe(0)
+    expect(rejected.stderr).toContain('Release evidence command set is not exact for macos-x64')
+  })
+
+  it.each([
+    {
+      platform: 'macos-arm64',
+      architecture: 'arm64',
+      runnerMachine: 'arm64',
+      runnerLabel: 'macos-14',
+      imageOs: 'macos-14',
+      workflowPath: '.github/workflows/macos-arm64-cloud-build.yml',
+      workflowName: 'macOS ARM64 cloud package qualification',
+    },
+    {
+      platform: 'macos-x64',
+      architecture: 'x64',
+      runnerMachine: 'x86_64',
+      runnerLabel: 'macos-15-intel',
+      imageOs: 'macos-15-intel',
+      workflowPath: '.github/workflows/macos-x64-cloud-build.yml',
+      workflowName: 'macOS Intel x64 cloud package qualification',
+    },
+  ] as const)('finalizes exactly the three macOS receipts for $platform into the release acceptance directory', ({
+    platform,
+    architecture,
+    runnerMachine,
+    runnerLabel,
+    imageOs,
+    workflowPath,
+    workflowName,
+  }) => {
     const evidenceRoot = fixture()
     const releaseRoot = fixture()
     const version = JSON.parse(readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')).version as string
     const init = spawnSync(process.execPath, [
       evidenceScript,
       'init',
-      '--platform', 'macos-arm64',
+      '--platform', platform,
       '--evidence-root', evidenceRoot,
       '--repository', 'EthanYoQ/AI-Novel-Writer',
       '--commit', 'd'.repeat(40),
       '--run-id', '404',
       '--run-attempt', '1',
-      '--runner-label', 'macos-14',
-      '--image-os', 'macos-14',
+      '--runner-label', runnerLabel,
+      '--image-os', imageOs,
       '--image-version', '20260726.1',
       '--expected-node-version', process.versions.node,
       '--expected-pnpm-version', '11.11.0',
-      '--workflow-path', '.github/workflows/macos-arm64-cloud-build.yml',
-      '--workflow-name', 'macOS ARM64 cloud package qualification',
+      '--workflow-path', workflowPath,
+      '--workflow-name', workflowName,
       '--actor', 'release-operator',
       '--event', 'workflow_dispatch',
       '--dispatch-inputs-json', '{}',
     ], { cwd: repositoryRoot, encoding: 'utf8' })
     expect(init.status, init.stderr).toBe(0)
-    for (const step of COMMAND_PROFILES['macos-arm64']) {
+    for (const step of COMMAND_PROFILES[platform]) {
       const recorded = spawnSync(process.execPath, [
         evidenceScript,
         'record',
@@ -185,11 +279,11 @@ describe('macOS DMG acceptance receipt contract', () => {
       expect(recorded.status, recorded.stderr).toBe(0)
     }
 
-    const dmg = `ai-novel-writer-mac-arm64-${version}-installer.dmg`
+    const dmg = `ai-novel-writer-mac-${architecture}-${version}-installer.dmg`
     writeFileSync(path.join(releaseRoot, dmg), 'macOS DMG', 'utf8')
     const dmgSha256 = createHash('sha256').update('macOS DMG').digest('hex')
     const commandOutputSha256 = 'b'.repeat(64)
-    const architectureEvidence = { target: 'arm64', runnerMachine: 'arm64' }
+    const architectureEvidence = { target: architecture, runnerMachine }
     for (const [file, kind] of [
       ['packaged-vector-smoke.json', 'packaged-vector-smoke'],
       ['packaged-official-homepage-smoke.json', 'packaged-official-homepage-smoke'],
@@ -205,7 +299,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       schemaVersion: 2,
       kind: 'dmg-mount',
       platform: 'darwin',
-      arch: 'arm64',
+      arch: architecture,
       accepted: true,
       observations: ['Mounted the observed DMG before app validation.'],
       direct: {
@@ -223,7 +317,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       schemaVersion: 2,
       kind: 'packaged-smoke',
       platform: 'darwin',
-      arch: 'arm64',
+      arch: architecture,
       accepted: true,
       observations: ['Validated vector, homepage, skin, and direct DMG smoke facts.'],
       direct: {
@@ -246,7 +340,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       schemaVersion: 2,
       kind: 'signing',
       platform: 'darwin',
-      arch: 'arm64',
+      arch: architecture,
       accepted: true,
       status: 'developer_id_signed',
       validationResult: 'Developer ID distribution identity observed.',
@@ -276,7 +370,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const rejectedFinalize = spawnSync(process.execPath, [
       evidenceScript,
       'finalize',
-      '--platform', 'macos-arm64',
+      '--platform', platform,
       '--evidence-root', evidenceRoot,
       '--release-root', releaseRoot,
     ], { cwd: repositoryRoot, encoding: 'utf8' })
@@ -287,7 +381,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       schemaVersion: 2,
       kind: 'signing',
       platform: 'darwin',
-      arch: 'arm64',
+      arch: architecture,
       accepted: true,
       status: 'ad_hoc_or_unsigned',
       validationResult: 'Observed an ad-hoc signature without a Developer ID identity; notarization and Gatekeeper are modeled separately.',
@@ -317,7 +411,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const finalize = spawnSync(process.execPath, [
       evidenceScript,
       'finalize',
-      '--platform', 'macos-arm64',
+      '--platform', platform,
       '--evidence-root', evidenceRoot,
       '--release-root', releaseRoot,
     ], { cwd: repositoryRoot, encoding: 'utf8' })
@@ -333,7 +427,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const manifestPath = path.join(releaseRoot, 'manifest.json')
     const originalManifestText = readFileSync(manifestPath, 'utf8')
     const manifest = JSON.parse(originalManifestText)
-    expect(manifest).toMatchObject({ platform: 'macos-arm64', architecture: 'arm64' })
+    expect(manifest).toMatchObject({ platform, architecture })
     expect(manifest).not.toHaveProperty('arch')
     expect(manifest.acceptanceProfile).toEqual([
       'qualification/acceptance/dmg-mount.json',
@@ -344,7 +438,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const verify = spawnSync(process.execPath, [
       evidenceScript,
       'verify-bundle',
-      '--platform', 'macos-arm64',
+      '--platform', platform,
       '--bundle-root', releaseRoot,
       '--expected-commit', 'd'.repeat(40),
       '--expected-lockfile-sha256', canonicalPnpmLockfileSha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
@@ -353,16 +447,16 @@ describe('macOS DMG acceptance receipt contract', () => {
     ], { cwd: repositoryRoot, encoding: 'utf8' })
     expect(verify.status, verify.stderr).toBe(0)
     expect(JSON.parse(verify.stdout)).toMatchObject({
-      platform: 'macos-arm64',
+      platform,
       releaseFiles: [dmg, `${dmg}.sha256`],
     })
 
-    const deprecatedManifest = { ...manifest, arch: 'arm64' }
+    const deprecatedManifest = { ...manifest, arch: architecture }
     writeFileSync(manifestPath, `${JSON.stringify(deprecatedManifest, null, 2)}\n`, 'utf8')
     const rejectedDeprecatedField = spawnSync(process.execPath, [
       evidenceScript,
       'verify-bundle',
-      '--platform', 'macos-arm64',
+      '--platform', platform,
       '--bundle-root', releaseRoot,
       '--expected-commit', 'd'.repeat(40),
       '--expected-lockfile-sha256', canonicalPnpmLockfileSha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
@@ -377,7 +471,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       schemaVersion: 2,
       kind: 'signing',
       platform: 'darwin',
-      arch: 'arm64',
+      arch: architecture,
       accepted: true,
       status: 'developer_id_signed',
       validationResult: 'Developer ID distribution identity observed.',
@@ -406,7 +500,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const rejectedVerify = spawnSync(process.execPath, [
       evidenceScript,
       'verify-bundle',
-      '--platform', 'macos-arm64',
+      '--platform', platform,
       '--bundle-root', releaseRoot,
       '--expected-commit', 'd'.repeat(40),
       '--expected-lockfile-sha256', canonicalPnpmLockfileSha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
