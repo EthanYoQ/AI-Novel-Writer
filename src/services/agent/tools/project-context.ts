@@ -8,9 +8,11 @@ import {
 
 export const PROJECT_CHANGED_ERROR = '当前项目已切换，本次工具结果已丢弃'
 
-export function createAgentExecutionContext(): AgentExecutionContext {
+export function createAgentExecutionContext(selectedModelId?: string | null): AgentExecutionContext {
+  const frozenModelId = selectedModelId?.trim() || null
   return Object.freeze({
     projectSession: projectSessionContextFromProject(useProjectStore.getState().currentProject),
+    selectedModelId: frozenModelId,
   })
 }
 

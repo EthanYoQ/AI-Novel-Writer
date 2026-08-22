@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle } from 'lucide-react'
-import { useWorkflowStore, type WorkflowRun, type WorkflowStep } from '../../stores/workflow-store'
+import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle, AlertTriangle } from 'lucide-react'
+import {
+  useWorkflowStore,
+  type WorkflowFailureCode,
+  type WorkflowRun,
+  type WorkflowStep,
+} from '../../stores/workflow-store'
 import { useLayoutStore } from '../../stores/layout-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import MarkdownContent from '../ui/MarkdownContent'
+import { presentWorkflowFailure } from './ai-output-failure-presentation'
 
 /**
  * 右侧面板「AI 输出」视图
@@ -118,6 +125,7 @@ function ActiveRunView({
   activeRuns: WorkflowRun[]
   onSwitchRun: (id: string) => void
 }) {
+  const locale = useLocaleStore(s => s.locale)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const isActive = run.status === 'running' || run.status === 'waiting' || run.status === 'paused' || run.status === 'cancelling'
@@ -222,6 +230,19 @@ function ActiveRunView({
               isCurrentStep={i === run.currentStepIndex}
             />
           ))}
+
+          {run.status === 'failed' && (
+            <WorkflowFailureNotice
+              failureCode={run.failureCode ?? currentStep?.failureCode}
+              error={run.error || currentStep?.error}
+              isUnpersistedChapterDraft={
+                run.type === 'chapter_creation'
+                && currentStep?.name === '写稿'
+                && !(currentStep?.result || '').trim()
+              }
+              locale={locale}
+            />
+          )}
 
           {/* 全局完成状态（所有步骤走完之后展示） */}
           {!isActive && run.status === 'completed' && (
@@ -394,6 +415,41 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep }: { s
           等待指令响应...
         </div>
       )}
+    </div>
+  )
+}
+
+function WorkflowFailureNotice({
+  failureCode,
+  error,
+  isUnpersistedChapterDraft,
+  locale,
+}: {
+  failureCode?: WorkflowFailureCode
+  error?: string
+  isUnpersistedChapterDraft: boolean
+  locale: 'zh-CN' | 'en-US'
+}) {
+  const presentation = presentWorkflowFailure(failureCode, error, locale, isUnpersistedChapterDraft)
+
+  return (
+    <div
+      role="alert"
+      className="mt-3 mx-2 flex gap-2 rounded-md px-2.5 py-2 text-xs leading-relaxed"
+      style={{
+        color: 'var(--color-error-text)',
+        backgroundColor: 'color-mix(in srgb, var(--color-error) 10%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--color-error) 35%, transparent)',
+      }}
+    >
+      <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="font-medium m-0">
+          {presentation.heading}
+        </p>
+        <p className="m-0 mt-0.5 break-words">{presentation.reason}</p>
+        {presentation.persistence && <p className="m-0 mt-1">{presentation.persistence}</p>}
+      </div>
     </div>
   )
 }

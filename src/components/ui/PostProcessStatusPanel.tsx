@@ -13,6 +13,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { RefreshCw, CheckCircle2, XCircle, AlertTriangle, Clock, ChevronDown, ChevronUp } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { useProjectStore } from '../../stores/project-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import { readPostProcessStatus, type PostProcessStatus } from '../../services/workflows/workflow-utils'
 import { cn } from '../../lib/utils'
 import { globalEventBus } from '../../shared/event-bus'
@@ -35,6 +36,24 @@ interface PostProcessStatusPanelProps {
   className?: string
 }
 
+type StepPresentation = 'success' | 'pending' | 'failed'
+
+/**
+ * A fresh post-process run persists every step before it attempts any of them.
+ * The database default is `ok = false`, so distinguish that pending shape from
+ * a failed attempt by requiring durable failure evidence.
+ */
+function getStepPresentation(step: PostProcessStatus['steps'][string]): StepPresentation {
+  if (step.ok) return 'success'
+
+  const hasFailureEvidence = Number(step.attemptCount) > 0
+    || Boolean(step.error?.trim())
+    || Boolean(step.lastAttemptAt?.trim())
+    || Boolean(step.completedAt?.trim())
+
+  return hasFailureEvidence ? 'failed' : 'pending'
+}
+
 export function PostProcessStatusPanel({
   scope,
   onRetry,
@@ -46,6 +65,7 @@ export function PostProcessStatusPanel({
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [loading, setLoading] = useState(true)
   const project = useProjectStore(s => s.currentProject)
+  const text = useLocaleStore(s => s.text)
 
   // 加载状态文件
   const loadStatus = useCallback(async () => {
@@ -92,7 +112,9 @@ export function PostProcessStatusPanel({
   // 状态变化时回调给父组件
   useEffect(() => {
     if (!status) return
-    const isFailed = Object.values(status.steps).some(s => !s.ok)
+    const isFailed = Object.values(status.steps).some(
+      step => getStepPresentation(step) === 'failed',
+    )
     if (onStatusLoad) {
       onStatusLoad(isFailed)
     }
@@ -101,12 +123,30 @@ export function PostProcessStatusPanel({
   // 无状态文件 → 不渲染
   if (loading || !status) return null
 
-  const steps = Object.entries(status.steps)
-  const failedSteps = steps.filter(([, s]) => !s.ok)
-  const successCount = steps.filter(([, s]) => s.ok).length
+  const steps = Object.entries(status.steps).map(([key, step]) => ({
+    key,
+    step,
+    presentation: getStepPresentation(step),
+  }))
+  const failedSteps = steps.filter(({ presentation }) => presentation === 'failed')
+  const pendingSteps = steps.filter(({ presentation }) => presentation === 'pending')
+  const successCount = steps.filter(({ presentation }) => presentation === 'success').length
   const totalCount = steps.length
   const hasFailure = failedSteps.length > 0
-  const hasCriticalFailure = failedSteps.some(([, s]) => s.critical)
+  const hasCriticalFailure = failedSteps.some(({ step }) => step.critical)
+
+  if (!hasFailure && pendingSteps.length > 0) {
+    return (
+      <div className={cn(
+        'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-[var(--color-text-secondary)]',
+        'bg-amber-500/8',
+        className,
+      )}>
+        <Clock size={12} className="text-[var(--color-warning,#f59e0b)]" />
+        <span>{status.sourceLabel} {text('正在处理', 'Processing')}（{successCount}/{totalCount}）</span>
+      </div>
+    )
+  }
 
   if (!hasFailure) {
     return (
@@ -154,50 +194,63 @@ export function PostProcessStatusPanel({
       {/* 展开详情 */}
       {expanded && (
         <div className="px-3 pb-2.5 space-y-1">
-          {steps.map(([key, step]) => (
+          {steps.map(({ key, step, presentation }) => (
             <div
               key={key}
               className="flex items-center justify-between gap-2 py-1 text-[11px]"
             >
               <div className="flex items-center gap-1.5 min-w-0">
-                {step.ok ? (
+                {presentation === 'success' ? (
                   <CheckCircle2 size={12} className="text-[var(--color-success,#22c55e)] shrink-0" />
+                ) : presentation === 'pending' ? (
+                  <Clock size={12} className="text-[var(--color-warning,#f59e0b)] shrink-0" />
                 ) : (
                   <XCircle size={12} className="text-[var(--color-error,#ef4444)] shrink-0" />
                 )}
                 <span className={cn(
                   'truncate',
-                  step.ok ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text)]',
+                  presentation === 'success'
+                    ? 'text-[var(--color-text-secondary)]'
+                    : 'text-[var(--color-text)]',
                 )}>
                   {step.label}
                 </span>
-                {step.critical && !step.ok && (
+                {presentation === 'pending' && (
+                  <span className="shrink-0 text-[9px] text-[var(--color-text-muted)]">
+                    {text('处理中', 'In progress')}
+                  </span>
+                )}
+                {step.critical && presentation === 'failed' && (
                   <span className="shrink-0 px-1 py-0.5 rounded text-[9px] bg-red-500/15 text-[var(--color-error-text)]">
-                    关键
+                    {text('关键', 'Critical')}
                   </span>
                 )}
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
-                {step.ok ? (
+                {presentation === 'success' ? (
                   <span className="text-[10px] text-[var(--color-text-muted)]">
                     {step.completedAt ? new Date(step.completedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''}
                   </span>
-                ) : (
+                ) : presentation === 'failed' ? (
                   <>
                     <span className="text-[10px] text-[var(--color-error-text,#8F3020)] max-w-[120px] truncate" title={step.error}>
-                      {step.error || '失败'}
+                      {step.error || text('失败', 'Failed')}
                     </span>
                     {onRetry && (
                       <button
                         onClick={(e) => { e.stopPropagation(); onRetry(key) }}
                         className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors cursor-pointer"
-                        title="重试此步骤"
+                        title={text('重试此步骤', 'Retry this step')}
                       >
                         <RefreshCw size={11} className="text-[var(--color-accent)]" />
                       </button>
                     )}
                   </>
+                ) : (
+                  <span className="text-[10px] text-[var(--color-text-muted)]">
+                    {text('等待执行', 'Waiting')}
+                  </span>
                 )}
               </div>
             </div>
@@ -219,7 +272,7 @@ export function PostProcessStatusPanel({
                 className="gap-1"
               >
                 <RefreshCw size={10} />
-                重试失败步骤
+                {text('重试失败步骤', 'Retry failed steps')}
               </Button>
             )}
           </div>

@@ -368,7 +368,7 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
       }
 
       // 标记修稿为已合并
-      const directRevisionId = /^vela:\/revision\/(\d+)$/.exec(revPath)?.[1]
+      const directRevisionId = /^vela:\/\/revision\/(\d+)$/.exec(revPath)?.[1]
       if (targetDraftId && directRevisionId) {
         requireIpcSuccess(
           await ipc.invokeWithProjectSession(

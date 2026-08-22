@@ -132,6 +132,10 @@ function completionFromOutcome(outcome: GenerationOutcome): LLMCompletion {
   return { content: outcome.content, finishReason: outcome.finishReason, receipt: outcome.receipt }
 }
 
+function workflowGenerationModelId(context: CommandExecuteParams['context']): string | undefined {
+  return context.generationModelId?.trim() || undefined
+}
+
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
 export function appendVisibleDraftContinuation(draft: string, continuation: string): string {
   return appendVisibleTextContinuation(draft, continuation, sanitizeDraftText)
@@ -305,7 +309,11 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       let runtime: GenerationRuntime | null = null
       let cleanDraftText: string
       try {
-        runtime = await this.dependencies.createRuntime({ budget: DRAFT_GENERATION_BUDGET })
+        const generationModelId = workflowGenerationModelId(context)
+        runtime = await this.dependencies.createRuntime({
+          budget: DRAFT_GENERATION_BUDGET,
+          ...(generationModelId ? { modelId: generationModelId } : {}),
+        })
         cleanDraftText = await runtime.execute(async ({ session }) => {
           this.assertNotCancelled(context)
           callbacks.setProgress(10)

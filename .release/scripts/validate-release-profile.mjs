@@ -3,7 +3,15 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const PLATFORM_NAMES = new Set(['windows', 'macos']);
+// A platform key is a qualification entity, not merely an operating-system
+// family. macOS architectures must remain independently qualified so their
+// run identities, artifacts, and signing receipts cannot be interchanged.
+const PLATFORM_NAMES = new Set(['windows', 'macos-arm64', 'macos-x64']);
+const REQUIRED_PLATFORM_ARCHITECTURES = new Map([
+  ['windows', 'x64'],
+  ['macos-arm64', 'arm64'],
+  ['macos-x64', 'x64'],
+]);
 const SIGNING_MODES = new Set(['required', 'allow-unsigned-with-disclosure']);
 const FINAL_STATES = new Set(['draft', 'published']);
 const SAFE_ARCHITECTURE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -86,7 +94,7 @@ export function validateReleaseProfile(profile) {
   if (profile.provider !== 'github-actions') errors.push('provider must equal github-actions.');
 
   const platforms = isRecord(profile.platforms) ? Object.keys(profile.platforms) : [];
-  if (platforms.length === 0) errors.push('platforms must contain windows and/or macos.');
+  if (platforms.length === 0) errors.push('platforms must contain one or more supported qualification entities.');
   for (const platform of platforms) {
     if (!PLATFORM_NAMES.has(platform)) {
       errors.push(`Unsupported platform: ${platform}`);
@@ -114,6 +122,10 @@ export function validateReleaseProfile(profile) {
       if (isNonEmptyString(architecture) && !SAFE_ARCHITECTURE_TOKEN.test(architecture)) {
         errors.push(`platforms.${platform}.architectures[${index}] must be a safe architecture token.`);
       }
+    }
+    const requiredArchitecture = REQUIRED_PLATFORM_ARCHITECTURES.get(platform);
+    if (requiredArchitecture && (architectures.length !== 1 || architectures[0] !== requiredArchitecture)) {
+      errors.push(`platforms.${platform}.architectures must be exactly [${requiredArchitecture}].`);
     }
     if (!Number.isInteger(config.retentionDays) || config.retentionDays < 1 || config.retentionDays > 90) {
       errors.push(`platforms.${platform}.retentionDays must be an integer from 1 to 90.`);
@@ -159,6 +171,10 @@ export function validateReleaseProfile(profile) {
       }
       if (!PLATFORM_NAMES.has(asset.platform) || !platforms.includes(asset.platform)) {
         errors.push(`releaseAssets[${index}].platform must reference a configured platform.`);
+      }
+      const requiredArchitecture = REQUIRED_PLATFORM_ARCHITECTURES.get(asset.platform);
+      if (asset.platform?.startsWith('macos-') && isNonEmptyString(asset.name) && !asset.name.includes(`-mac-${requiredArchitecture}-`)) {
+        errors.push(`releaseAssets[${index}].name must encode the ${requiredArchitecture} macOS architecture.`);
       }
       if (!isNonEmptyString(asset.role)) errors.push(`releaseAssets[${index}].role must be non-empty.`);
     }

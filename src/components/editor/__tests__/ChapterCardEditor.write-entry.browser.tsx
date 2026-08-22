@@ -60,10 +60,22 @@ function blueprint(chapterNumber: number): ChapterBlueprint {
   }
 }
 
-function installIpc() {
-  const invoke = vi.fn(async (channel: string) => {
-    if (channel === 'db:blueprint-get-all') return [blueprint(1)]
-    if (channel === 'db:draft-get-max-finalized-chapter') return null
+function installIpc(options: {
+  blueprints?: ChapterBlueprint[]
+  finalizedChapter?: (chapterNumber: number) => unknown
+  onClearGeneratedText?: () => void
+} = {}) {
+  const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'db:blueprint-get-all') return options.blueprints ?? [blueprint(1)]
+    if (channel === 'db:draft-get-finalized') {
+      const chapterNumber = args[0] as number
+      return options.finalizedChapter?.(chapterNumber) ?? null
+    }
+    if (channel === 'db:project-clear-generated-data') {
+      options.onClearGeneratedText?.()
+      return { success: true, cleared: ['generatedText'] }
+    }
+    if (channel === 'fs:list-dir') return []
     throw new Error(`unexpected IPC ${channel}`)
   })
   Object.defineProperty(window, 'velaAPI', {
@@ -78,6 +90,7 @@ function installIpc() {
       getZoomLevel: vi.fn(() => 0),
     },
   })
+  return invoke
 }
 
 async function renderEditor() {
@@ -124,5 +137,57 @@ describe('ChapterCardEditor writing entry', () => {
       chapterCreationOpen: true,
       chapterCreationPrefill: expect.objectContaining({ chapterNumber: 1, title: '雨夜启程' }),
     })
+  })
+
+  it('requires explicit recovery before writing Chapter 1 when legacy-imported finalized text exists for Chapters 2 through 5', async () => {
+    let legacyImportedTextExists = true
+    const invoke = installIpc({
+      blueprints: [1, 2, 3, 4, 5].map(blueprint),
+      finalizedChapter: (chapterNumber) => (
+        legacyImportedTextExists && chapterNumber >= 2 ? { id: chapterNumber } : null
+      ),
+      onClearGeneratedText: () => { legacyImportedTextExists = false },
+    })
+
+    await renderEditor()
+
+    await vi.waitFor(() => {
+      expect(container?.textContent).toContain('检测到后续正文但第 1 章尚未写作')
+    })
+    expect(container?.textContent).not.toContain('写作第1章')
+    expect(invoke).not.toHaveBeenCalledWith(
+      'db:project-clear-generated-data',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+
+    const recoveryButton = Array.from(container?.querySelectorAll('button') ?? [])
+      .find((button) => button.textContent?.includes('清除误导入正文'))
+    expect(recoveryButton).toBeDefined()
+    await act(async () => recoveryButton?.click())
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[role="dialog"]')).not.toBeNull()
+    })
+    const confirmationButton = Array.from(document.body.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'))
+      .find((button) => button.textContent?.includes('清除误导入正文'))
+    expect(confirmationButton).toBeDefined()
+    await act(async () => {
+      confirmationButton?.click()
+      await new Promise(resolve => setTimeout(resolve, 250))
+    })
+
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'db:project-clear-generated-data',
+        expect.objectContaining({ generatedText: true }),
+        PROJECT_PATH,
+        expect.objectContaining({ projectPath: PROJECT_PATH }),
+      )
+      expect(container?.textContent).toContain('写作第1章')
+    })
+
+    expect(container?.textContent).not.toContain('检测到后续正文但第 1 章尚未写作')
   })
 })

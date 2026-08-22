@@ -3,6 +3,10 @@ import { randomUUID } from '../utils/id'
 import { globalEventBus } from '../shared/event-bus'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import {
+  getBoundedCompletionFailureCode,
+  type BoundedCompletionFailureCode,
+} from '../services/workflows/bounded-completion'
+import {
   isProjectSessionContext,
   projectSessionContextFromProject,
   sameProjectPathKey,
@@ -25,6 +29,9 @@ export type WorkflowStatus =
   | 'paused'
   | 'waiting'
 
+/** Stable non-success terminal state supplied by a bounded model completion. */
+export type WorkflowFailureCode = BoundedCompletionFailureCode
+
 /** 工作流步骤 */
 export interface WorkflowStep {
   id: string
@@ -34,6 +41,8 @@ export interface WorkflowStep {
   progress?: number
   result?: string
   error?: string
+  /** Structured failure cause when a bounded model completion stopped early. */
+  failureCode?: WorkflowFailureCode
   startedAt?: string
   completedAt?: string
   logs: string[]
@@ -46,6 +55,8 @@ export interface WorkflowRun {
   projectPath: string
   /** 启动时从当前项目冻结；缺失时该 run 只能失败，不能执行项目级副作用。 */
   projectSession: ProjectSessionContext | null
+  /** Agent 明确选择并随本次写稿工作流冻结的模型；缺失时使用默认模型。 */
+  generationModelId?: string
   type: WorkflowType
   title: string
   status: WorkflowStatus
@@ -54,6 +65,8 @@ export interface WorkflowRun {
   createdAt: string
   completedAt?: string
   error?: string
+  /** Structured terminal cause mirrored from the failed current step. */
+  failureCode?: WorkflowFailureCode
   /** 已请求在当前步骤完成后的安全边界暂停 */
   pauseRequested?: boolean
 }
@@ -84,6 +97,8 @@ export interface WorkflowContext {
   projectPath: string
   /** 工作流启动时冻结的 IPC 会话，禁止在执行器内重新读取 currentProject。 */
   projectSession: ProjectSessionContext
+  /** Agent 明确选择并随本次写稿工作流冻结的模型；缺失时使用默认模型。 */
+  generationModelId?: string
   /** 步骤间传递的数据 */
   data: Record<string, unknown>
   /** 是否已取消 */
@@ -128,6 +143,11 @@ export interface WorkflowDefinition {
    * 禁止按路径借用当前项目的新 lease。
    */
   projectSession: ProjectSessionContext
+  /**
+   * Renderer-owned model selection for a draft workflow. It must never be
+   * populated from LLM tool arguments.
+   */
+  generationModelId?: string
   steps: Array<{
     name: string
     description: string
@@ -146,6 +166,10 @@ function isCurrentWorkflowSession(
     projectSession,
     projectSessionContextFromProject(useProjectStore.getState().currentProject),
   )
+}
+
+function normalizeGenerationModelId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 // ===== Store =====
@@ -294,6 +318,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       ? Object.freeze({ ...suppliedProjectSession })
       : null
     const runId = definition.runId ?? randomUUID()
+    const generationModelId = normalizeGenerationModelId(definition.generationModelId)
 
     // Runtime callers can still deserialize a legacy definition that predates
     // the required TypeScript field. Reject it before adding an active run or
@@ -331,6 +356,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       id: runId,
       projectPath: definition.projectPath,
       projectSession,
+      ...(generationModelId ? { generationModelId } : {}),
       type: definition.type,
       title: definition.title,
       status: 'running',
@@ -360,6 +386,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       runId: run.id,
       projectPath: definition.projectPath,
       projectSession,
+      ...(generationModelId ? { generationModelId } : {}),
       data: {},
       cancelled: false,
       pauseRequested: false,
@@ -468,12 +495,18 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error)
+        const failureCode = getBoundedCompletionFailureCode(error)
         updateStepById(set, run.id, i, {
           status: 'failed',
           error: errorMsg,
+          ...(failureCode ? { failureCode } : {}),
           completedAt: new Date().toISOString(),
         })
-        updateRunById(set, run.id, { status: 'failed', error: errorMsg })
+        updateRunById(set, run.id, {
+          status: 'failed',
+          error: errorMsg,
+          ...(failureCode ? { failureCode } : {}),
+        })
         get().addLog('error', `[失败] [${definition.title}] 步骤: ${stepDef.name} — ${errorMsg}`)
         break
       }

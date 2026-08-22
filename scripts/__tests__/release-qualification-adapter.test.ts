@@ -26,8 +26,9 @@ describe('legacy qualification receipt adapter', () => {
       rawBytes: Buffer.from(JSON.stringify(macSigning())),
     })
 
-    expect(normalized).toMatchObject({
-      platform: 'macos',
+    const entityReceipt = { ...normalized, platform: 'macos-arm64' }
+    expect(entityReceipt).toMatchObject({
+      platform: 'macos-arm64',
       status: 'unsigned',
       validationResult: 'Observed ad-hoc signing; no Developer ID identity.',
       observations: ['codesign observed an ad-hoc signature without a Developer ID identity'],
@@ -38,11 +39,11 @@ describe('legacy qualification receipt adapter', () => {
     })
     expect(normalized.sourceReceiptRawBytesSha256).toMatch(/^[a-f0-9]{64}$/)
     expect(normalized.sourceClassification).toEqual({ platform: 'darwin', signingStatus: 'ad_hoc_or_unsigned' })
-    expect(() => assertAcceptanceReceipt(normalized, 'macos', 'acceptance/signing.json')).not.toThrow()
-    expect(() => assertSigningReceipt(normalized, {
+    expect(() => assertAcceptanceReceipt(entityReceipt, 'macos-arm64', 'acceptance/signing.json')).not.toThrow()
+    expect(() => assertSigningReceipt(entityReceipt, {
       status: 'unsigned',
-      validationResult: normalized.validationResult,
-      unsignedDistributionImpact: normalized.unsignedDistributionImpact,
+      validationResult: entityReceipt.validationResult,
+      unsignedDistributionImpact: entityReceipt.unsignedDistributionImpact,
     })).not.toThrow()
   })
 

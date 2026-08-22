@@ -98,7 +98,7 @@ export async function runAgentLoop(
   const allArtifacts: ToolArtifact[] = []
   // One agent run gets one immutable project identity. Tool calls later in the
   // loop must not silently borrow a lease issued after a same-path reopen.
-  const executionContext = providedExecutionContext ?? createAgentExecutionContext()
+  const executionContext = providedExecutionContext ?? createAgentExecutionContext(modelId)
 
   // 构建消息列表
   const messages: LLMMessage[] = [

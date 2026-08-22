@@ -32,7 +32,7 @@ function main() {
   for (const key of ['repository', 'expected-sha', 'tag', 'version', 'profile', 'output-root', 'platform', 'run-id', 'run-attempt', 'workflow', 'actor', 'event']) assert(options[key], `--${key} is required`)
   assert(/^[a-f0-9]{40}$/.test(options['expected-sha']), 'expected SHA must be lowercase and full length')
   assert(options.tag === `v${options.version}`, 'tag must equal v<version>')
-  assert(options.platform === 'windows' || options.platform === 'macos', 'platform must equal windows or macos')
+  assert(options.platform === 'windows' || options.platform === 'macos-arm64' || options.platform === 'macos-x64', 'platform must name a supported qualification entity')
   assert(options.event === 'workflow_dispatch', 'event must equal workflow_dispatch')
 
   const profilePath = path.resolve(options.profile)
@@ -40,6 +40,7 @@ function main() {
   const profile = strictJson(profileRaw, 'release profile')
   const profileValidation = validateReleaseProfile(profile)
   assert(profileValidation.ok, `release profile is invalid: ${profileValidation.errors.join('; ')}`)
+  assert(profile.platforms[options.platform], 'qualification entity is not configured in the release profile')
   assert(profile.platforms[options.platform].qualificationWorkflow === options.workflow, 'workflow does not match release profile')
   const packageMetadata = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8'))
   assert(packageMetadata.version === options.version, 'release version does not match package.json')
@@ -57,6 +58,7 @@ function main() {
       version: options.version,
       profilePath: profileRelative,
       profileRawBytesSha256,
+      qualificationEntities: Object.keys(profile.platforms).sort(),
     },
   }
   const outputRoot = path.resolve(options['output-root'])
@@ -67,6 +69,7 @@ function main() {
   const ledger = {
     schemaVersion: 2,
     platform: options.platform,
+    architecture: profile.platforms[options.platform].architectures[0],
     workflow: options.workflow,
     runId: Number(options['run-id']),
     runAttempt: Number(options['run-attempt']),

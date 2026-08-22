@@ -335,6 +335,19 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  it('uses the model frozen by the workflow context instead of reselecting the default model', async () => {
+    const runtime = fakeOutcomes(outcome('正文。'.repeat(500), 'stop'))
+    const { context, callbacks, command } = setup({ runtime, wordsTarget: 500 })
+    ;(context as WorkflowContext & { generationModelId?: string }).generationModelId = 'grok-selected-model'
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('正文')
+
+    expect(runtime.createRuntime).toHaveBeenCalledWith({
+      budget: DRAFT_GENERATION_BUDGET,
+      modelId: 'grok-selected-model',
+    })
+  })
+
   it('previews only authored text before completion and reconciles to the persisted terminal draft', async () => {
     let resolveAttempt: ((value: GenerationOutcome) => void) | undefined
     let streamChunk: ((chunk: string) => void) | undefined

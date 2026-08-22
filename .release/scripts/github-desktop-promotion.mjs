@@ -81,7 +81,7 @@ export function validatePromotionProfile(profile) {
     throw new Error("release profile does not select immutable GitHub Actions artifacts");
   }
   const platforms = Object.keys(profile.platforms || {});
-  if (platforms.length === 0 || platforms.some((platform) => !["windows", "macos"].includes(platform))) throw new Error("release profile platforms are invalid");
+  if (platforms.length === 0 || platforms.some((platform) => !["windows", "macos-arm64", "macos-x64"].includes(platform))) throw new Error("release profile qualification entities are invalid");
   for (const platform of platforms) {
     const policy = profile.platforms[platform];
     if (typeof policy.qualificationWorkflow !== "string" || !policy.qualificationWorkflow.startsWith(".github/workflows/") || typeof policy.artifactName !== "string" || policy.artifactName.length === 0) {
@@ -522,6 +522,17 @@ export async function verifyExtractedQualification({ root, platform, policy, rel
   for (const file of files) actualDigests.set(file.toLowerCase(), await sha256File(join(root, ...file.split("/"))));
   const manifestIndex = verifyManifestIndex({ manifest, checksumText, actualFiles: files, actualDigests, expectedSha });
   const ledger = await loadJson(join(root, "run-ledger.json"));
+  const contract = await loadJson(join(root, "release-contract.json"));
+  const expectedArchitecture = policy.architectures?.[0];
+  if (manifest.platform !== platform || manifest.architecture !== expectedArchitecture) {
+    throw new Error(`${platform} qualification manifest entity mismatch`);
+  }
+  if (ledger.platform !== platform || ledger.architecture !== expectedArchitecture) {
+    throw new Error(`${platform} run ledger entity mismatch`);
+  }
+  if (!Array.isArray(contract?.frozen?.qualificationEntities) || !contract.frozen.qualificationEntities.includes(platform)) {
+    throw new Error(`${platform} release contract does not declare the qualification entity`);
+  }
   if (Number(ledger.runId) !== mapping.runId || Number(ledger.runAttempt) !== mapping.attempt || String(ledger.qualifiedCommit).toLowerCase() !== expectedSha) {
     throw new Error(`${platform} run ledger identity mismatch`);
   }

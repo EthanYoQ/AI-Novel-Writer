@@ -81,6 +81,11 @@ export interface ToolResult {
  */
 export interface AgentExecutionContext {
   readonly projectSession: ProjectSessionContext | null
+  /**
+   * Model explicitly selected for this Agent turn. It is captured outside of
+   * LLM tool arguments so a model response cannot choose a billable model.
+   */
+  readonly selectedModelId: string | null
 }
 
 // ===== Tool 定义 =====

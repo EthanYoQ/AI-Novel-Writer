@@ -171,7 +171,7 @@ describe('release evidence v2 CLI', () => {
     const init = spawnSync(process.execPath, [
       evidenceScript,
       'init',
-      '--platform', 'macos',
+      '--platform', 'macos-arm64',
       '--evidence-root', evidenceRoot,
       '--repository', 'EthanYoQ/AI-Novel-Writer',
       '--commit', 'b'.repeat(40),
@@ -218,6 +218,44 @@ describe('release evidence v2 CLI', () => {
         timedOut: false,
       }),
     ])
+  })
+
+  it('freezes Intel macOS evidence with an x64-only artifact and workflow identity', () => {
+    const evidenceRoot = fixture()
+    const init = spawnSync(process.execPath, [
+      evidenceScript,
+      'init',
+      '--platform', 'macos-x64',
+      '--evidence-root', evidenceRoot,
+      '--repository', 'EthanYoQ/AI-Novel-Writer',
+      '--commit', 'e'.repeat(40),
+      '--run-id', '203',
+      '--run-attempt', '1',
+      '--runner-label', 'macos-13',
+      '--image-os', 'macos13',
+      '--image-version', '20260726.1',
+      '--expected-node-version', process.versions.node,
+      '--expected-pnpm-version', '11.11.0',
+      '--workflow-path', '.github/workflows/macos-x64-cloud-build.yml',
+      '--workflow-name', 'macOS Intel x64 cloud package qualification',
+      '--actor', 'release-operator',
+      '--event', 'workflow_dispatch',
+      '--dispatch-inputs-json', '{}',
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+
+    expect(init.status, init.stderr).toBe(0)
+    const contract = JSON.parse(readFileSync(path.join(evidenceRoot, 'release-contract.json'), 'utf8'))
+    expect(contract.frozen).toMatchObject({
+      platform: 'macos-x64',
+      workflow: {
+        path: '.github/workflows/macos-x64-cloud-build.yml',
+        name: 'macOS Intel x64 cloud package qualification',
+      },
+      artifactSet: [
+        { path: `release/${releaseVersion}/ai-novel-writer-mac-x64-${releaseVersion}-installer.dmg`, role: 'dmg' },
+        { path: `release/${releaseVersion}/ai-novel-writer-mac-x64-${releaseVersion}-installer.dmg.sha256`, role: 'dmg-checksum' },
+      ],
+    })
   })
 
   it('rejects empty command evidence and placeholder receipts before finalizing a semantic Windows bundle', () => {

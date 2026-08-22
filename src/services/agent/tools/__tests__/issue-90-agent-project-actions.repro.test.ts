@@ -238,6 +238,37 @@ describe('Issue #90 AI assistant project actions', () => {
     }))
   })
 
+  it('freezes the Agent-selected model into a confirmed draft workflow instead of falling back to the default model', async () => {
+    stubWorkflowIpc()
+    toolRegistry.register(startWorkflowTool)
+    const callbacks = {
+      onTextChunk: vi.fn(),
+      onToolCallStart: vi.fn(),
+      onToolCallComplete: vi.fn(),
+      onToolCallConfirmRequired: vi.fn(async () => true),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+    const generate = vi.fn()
+      .mockResolvedValueOnce('start_workflow\n{"workflow":"generate_draft","chapter_number":1,"model_id":"untrusted-model"}')
+      .mockResolvedValueOnce('已开始生成第一章。')
+
+    await runAgentLoop(
+      'system',
+      [],
+      '生成第一章',
+      'grok-selected-model',
+      generate,
+      callbacks,
+    )
+
+    expect(useWorkflowStore.getState().activeRuns).toContainEqual(expect.objectContaining({
+      type: 'chapter_creation',
+      projectPath,
+      generationModelId: 'grok-selected-model',
+    }))
+  })
+
   it.each(['review', 'refine', 'finalize'])('fails closed when %s lacks a draft identity', async (workflow) => {
     const result = await startWorkflowTool.execute({
       workflow,

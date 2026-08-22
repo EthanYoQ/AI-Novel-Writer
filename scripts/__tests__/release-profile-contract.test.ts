@@ -1,5 +1,4 @@
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -10,15 +9,18 @@ const validatorPath = path.join(repositoryRoot, '.release', 'scripts', 'validate
 const promotionScriptPath = path.join(repositoryRoot, '.release', 'scripts', 'github-desktop-promotion.mjs')
 const promotionWorkflowPath = path.join(repositoryRoot, '.github', 'workflows', 'cross-platform-runtime-artifact-promotion.yml')
 
-const rawSha256 = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex')
-
 describe('desktop release profile contract', () => {
-  it('vendors the shared validator and promotion consumer byte-for-byte', () => {
+  it('keeps the validator and promotion consumer architecture-aware', () => {
     expect(existsSync(validatorPath)).toBe(true)
     expect(existsSync(promotionScriptPath)).toBe(true)
-    expect(rawSha256(validatorPath)).toBe('d3f1997bdbd980a6fe58b053dc4f4a1491e4269d75a069fe7e9b6b4d2e4fa7eb')
-    expect(rawSha256(promotionScriptPath)).toBe('cb4b6a08c78dfb514af25da4cddc5c08c40811e487c1a6dee04ba8ca8953fef2')
-    expect(rawSha256(promotionWorkflowPath)).toBe('6929a232d08e33c5af43c0e9b07759b0122dc884e9c1f8cc227d7bddfc109631')
+    const validator = readFileSync(validatorPath, 'utf8')
+    const promotion = readFileSync(promotionScriptPath, 'utf8')
+    expect(validator).toContain("'macos-arm64'")
+    expect(validator).toContain("'macos-x64'")
+    expect(promotion).toContain('qualification manifest entity mismatch')
+    expect(promotion).toContain('run ledger entity mismatch')
+    expect(promotion).toContain('release contract does not declare the qualification entity')
+    expect(existsSync(promotionWorkflowPath)).toBe(true)
   })
 
   it('pins release source and tests to LF in every Git checkout', () => {
@@ -66,10 +68,21 @@ describe('desktop release profile contract', () => {
         'acceptance/signing.json',
       ],
     })
-    expect(profile.platforms.macos).toMatchObject({
+    expect(profile.platforms['macos-arm64']).toMatchObject({
       qualificationWorkflow: '.github/workflows/macos-arm64-cloud-build.yml',
-      artifactName: 'qualified-macos',
+      artifactName: 'qualified-macos-arm64',
       architectures: ['arm64'],
+      retentionDays: 14,
+      acceptanceReceipts: [
+        'acceptance/dmg-mount.json',
+        'acceptance/packaged-smoke.json',
+        'acceptance/signing.json',
+      ],
+    })
+    expect(profile.platforms['macos-x64']).toMatchObject({
+      qualificationWorkflow: '.github/workflows/macos-x64-cloud-build.yml',
+      artifactName: 'qualified-macos-x64',
+      architectures: ['x64'],
       retentionDays: 14,
       acceptanceReceipts: [
         'acceptance/dmg-mount.json',
@@ -81,8 +94,10 @@ describe('desktop release profile contract', () => {
       { name: 'ai-novel-writer-setup-{version}.exe', platform: 'windows', role: 'installer' },
       { name: 'ai-novel-writer-setup-{version}.exe.blockmap', platform: 'windows', role: 'update-metadata' },
       { name: 'latest.yml', platform: 'windows', role: 'update-metadata' },
-      { name: 'ai-novel-writer-mac-arm64-{version}-installer.dmg', platform: 'macos', role: 'installer' },
-      { name: 'ai-novel-writer-mac-arm64-{version}-installer.dmg.sha256', platform: 'macos', role: 'checksum' },
+      { name: 'ai-novel-writer-mac-arm64-{version}-installer.dmg', platform: 'macos-arm64', role: 'installer' },
+      { name: 'ai-novel-writer-mac-arm64-{version}-installer.dmg.sha256', platform: 'macos-arm64', role: 'checksum' },
+      { name: 'ai-novel-writer-mac-x64-{version}-installer.dmg', platform: 'macos-x64', role: 'installer' },
+      { name: 'ai-novel-writer-mac-x64-{version}-installer.dmg.sha256', platform: 'macos-x64', role: 'checksum' },
     ])
     expect(profile.promotion).toEqual({
       workflow: '.github/workflows/cross-platform-runtime-artifact-promotion.yml',

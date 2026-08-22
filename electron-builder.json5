@@ -23,7 +23,7 @@
   ],
   "mac": {
     "target": ["dmg"],
-    "artifactName": "ai-novel-writer-mac-arm64-${version}-installer.${ext}",
+    "artifactName": "ai-novel-writer-mac-${arch}-${version}-installer.${ext}",
     "category": "public.app-category.productivity",
     "extraResources": [
       {

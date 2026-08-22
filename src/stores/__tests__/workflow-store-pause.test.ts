@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useWorkflowStore, type WorkflowDefinition } from '../workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
 import { useProjectStore } from '../project-store'
+import { createBoundedCompletionError } from '../../services/workflows/bounded-completion'
 
 const projectPath = 'C:\\test-project'
 
@@ -36,6 +37,33 @@ beforeEach(() => {
 })
 
 describe('workflow pause at a safe step boundary', () => {
+  it('copies a bounded terminal failure code to the failed step and run without changing its message', async () => {
+    const failure = createBoundedCompletionError('content_filter')
+
+    await useWorkflowStore.getState().startWorkflow({
+      type: 'chapter_creation',
+      title: '内容策略失败测试',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{
+        name: '写稿',
+        description: '生成正文',
+        executor: async () => { throw failure },
+      }],
+    })
+
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({
+      status: 'failed',
+      error: 'AI 输出因内容限制而未完成，结果未被保存。',
+      failureCode: 'content_filter',
+      steps: [expect.objectContaining({
+        status: 'failed',
+        error: 'AI 输出因内容限制而未完成，结果未被保存。',
+        failureCode: 'content_filter',
+      })],
+    })
+  })
+
   it('atomically replaces provisional output and reconciles it to the terminal step result', async () => {
     let finishStep: (() => void) | undefined
     const completion = useWorkflowStore.getState().startWorkflow({

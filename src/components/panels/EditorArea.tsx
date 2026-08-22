@@ -683,6 +683,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
             draftPath={activeTab.filePath}
             chapterNumber={activeTab.chapterNumber}
             chapterDir={activeTab.chapterDir}
+            reviewId={activeTab.reviewId}
             projectKey={activeTab.projectKey}
           />
         )}

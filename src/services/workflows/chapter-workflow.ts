@@ -28,6 +28,11 @@ export interface ChapterInfo {
   knowledgeQueryHint?: string
 }
 
+export interface ChapterWorkflowOptions {
+  /** A frozen Agent-originated model choice for this draft run only. */
+  generationModelId?: string
+}
+
 export interface RefineOnlyParams {
   projectPath: string
   chapterNumber: number
@@ -43,8 +48,16 @@ export interface RefineFromReviewParams {
   chapterTitle: string
   draftPath: string
   draftContent: string
-  reviewReport: string
-  reviewFileName: string
+  /** Persisted JSON from the human-confirmation review row. */
+  confirmedReviewContent?: string
+  /** ID of the confirmation review row, recorded on the resulting revision. */
+  reviewSourceId?: number
+  /** @deprecated Raw AI review text must not become a model instruction. */
+  reviewReport?: string
+  reviewFileName?: string
+  /** Renderer-owned selection, frozen onto this workflow rather than LLM input. */
+  generationModelId?: string
+  /** @deprecated Author guidance is part of the confirmation snapshot. */
   userRefinePrompt?: string
 }
 
@@ -168,12 +181,15 @@ export async function updateDraftStatus(
 export function createChapterWorkflow(
   chapterInfo: ChapterInfo,
   sourceProjectSession: ProjectSessionContext,
+  options: ChapterWorkflowOptions = {},
 ): WorkflowDefinition {
+  const generationModelId = options.generationModelId?.trim() || undefined
   return {
     type: 'chapter_creation',
     projectPath: chapterInfo.projectPath,
     projectSession: workflowProjectSession(chapterInfo.projectPath, sourceProjectSession),
-      title: `写稿 — 第 ${chapterInfo.chapterNumber} 章 · ${chapterInfo.title}`,
+    ...(generationModelId ? { generationModelId } : {}),
+    title: `写稿 — 第 ${chapterInfo.chapterNumber} 章 · ${chapterInfo.title}`,
     steps: [
       {
         name: '写稿',
@@ -223,11 +239,13 @@ export function createRefineFromReviewWorkflow(
   params: RefineFromReviewParams,
   sourceProjectSession: ProjectSessionContext,
 ): WorkflowDefinition {
+  const generationModelId = params.generationModelId?.trim() || undefined
   return {
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
-      title: `审稿修复 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    ...(generationModelId ? { generationModelId } : {}),
+    title: `审稿修复 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
         name: '审稿驱动修稿',
@@ -237,10 +255,9 @@ export function createRefineFromReviewWorkflow(
           const cmd = new RefineFromReviewCommand({
             draftPath: params.draftPath,
             draftContent: params.draftContent,
-            reviewReport: params.reviewReport,
-            reviewFileName: params.reviewFileName,
+            confirmedReviewContent: params.confirmedReviewContent,
+            reviewSourceId: params.reviewSourceId,
             chapterNumber: params.chapterNumber,
-            userRefinePrompt: params.userRefinePrompt,
           })
           return cmd.execute({ step, context, callbacks })
         },

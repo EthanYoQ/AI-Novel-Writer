@@ -8,6 +8,7 @@ const scriptPath = fileURLToPath(import.meta.url)
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 const readJson = file => JSON.parse(readFileSync(file, 'utf8'))
 const record = (file, relativePath, role) => ({ path: relativePath, role, sizeBytes: statSync(file).size, rawBytesSha256: sha256(readFileSync(file)), hashMode: 'raw-bytes-sha256' })
+const MACOS_QUALIFICATION_ENTITIES = new Set(['macos-arm64', 'macos-x64'])
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -26,10 +27,11 @@ function main() {
   const input = options(process.argv.slice(2))
   for (const key of ['platform', 'legacy-root', 'output-root', 'profile', 'expected-sha', 'version']) assert(input[key], `--${key} is required`)
   const platform = input.platform
-  assert(platform === 'windows' || platform === 'macos', 'platform must equal windows or macos')
+  assert(platform === 'windows' || MACOS_QUALIFICATION_ENTITIES.has(platform), 'platform must name a supported qualification entity')
   const legacyRoot = path.resolve(input['legacy-root'])
   const outputRoot = path.resolve(input['output-root'])
   const profile = readJson(path.resolve(input.profile))
+  assert(profile.platforms?.[platform], 'qualification entity is not configured in the release profile')
   const contractFile = path.join(outputRoot, 'release-contract.json')
   const ledgerFile = path.join(outputRoot, 'run-ledger.json')
   const contractRaw = readFileSync(contractFile)
@@ -38,6 +40,7 @@ function main() {
   const profileHash = sha256(profileRaw)
   const contractHash = sha256(contractRaw)
   assert(contract.frozen?.commit === input['expected-sha'] && contract.frozen?.version === input.version && contract.frozen?.profileRawBytesSha256 === profileHash, 'common contract/input/profile binding mismatch')
+  assert(contract.frozen?.qualificationEntities?.includes(platform), 'common contract does not declare this qualification entity')
 
   const bundleRoot = path.join(outputRoot, 'release-bundle')
   const acceptanceRoot = path.join(outputRoot, 'acceptance')
@@ -60,7 +63,12 @@ function main() {
     const sourceRelative = relativePath.replace(/^acceptance\//, 'qualification/acceptance/')
     const source = path.join(legacyRoot, ...sourceRelative.split('/'))
     const destination = path.join(outputRoot, ...relativePath.split('/'))
-    const normalized = normalizeLegacyReceipt({ platform, relativePath, rawBytes: readFileSync(source) })
+    const normalized = normalizeLegacyReceipt({
+      platform: MACOS_QUALIFICATION_ENTITIES.has(platform) ? 'macos' : platform,
+      relativePath,
+      rawBytes: readFileSync(source),
+    })
+    if (MACOS_QUALIFICATION_ENTITIES.has(platform)) normalized.platform = platform
     writeFileSync(destination, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8')
     if (relativePath.endsWith('/signing.json')) signing = {
       status: normalized.status,
@@ -73,11 +81,19 @@ function main() {
   assert(signing, 'signing receipt is missing')
 
   const ledger = readJson(ledgerFile)
-  assert(ledger.qualifiedCommit === input['expected-sha'] && ledger.contractRawBytesSha256 === contractHash && ledger.profileRawBytesSha256 === profileHash && ledger.releaseCreated === false, 'common ledger binding mismatch')
+  assert(
+    ledger.platform === platform
+      && ledger.architecture === profile.platforms[platform].architectures[0]
+      && ledger.qualifiedCommit === input['expected-sha']
+      && ledger.contractRawBytesSha256 === contractHash
+      && ledger.profileRawBytesSha256 === profileHash
+      && ledger.releaseCreated === false,
+    'common ledger binding mismatch',
+  )
   ledger.signing = signing
   writeFileSync(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8')
   const evidence = [record(contractFile, 'release-contract.json', 'release-contract'), record(ledgerFile, 'run-ledger.json', 'run-ledger'), ...acceptance]
-  const manifest = { schemaVersion: 2, gateLevel: 'RUNTIME_VERIFIED', releaseCreated: false, commit: input['expected-sha'], contractRawBytesSha256: contractHash, profileRawBytesSha256: profileHash, artifacts, evidence, signing }
+  const manifest = { schemaVersion: 2, platform, architecture: profile.platforms[platform].architectures[0], gateLevel: 'RUNTIME_VERIFIED', releaseCreated: false, commit: input['expected-sha'], contractRawBytesSha256: contractHash, profileRawBytesSha256: profileHash, artifacts, evidence, signing }
   const manifestFile = path.join(outputRoot, 'manifest.json')
   writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
   const paths = [...artifacts, ...evidence].map(item => item.path).concat('manifest.json').sort()

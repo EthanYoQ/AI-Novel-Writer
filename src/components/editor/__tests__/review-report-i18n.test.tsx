@@ -30,7 +30,8 @@ describe('ReviewReport locale behavior', () => {
 
     expect(html).toContain('Review report')
     expect(html).toContain('1 critical')
-    expect(html).toContain('Strongly recommended to fix')
+    expect(html).toContain('Included in this revision')
+    expect(html).toContain('Human-confirmed revision checklist')
     expect(html).not.toContain('审稿报告')
     expect(html).not.toContain('🔴')
   })

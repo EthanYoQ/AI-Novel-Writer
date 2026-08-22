@@ -23,10 +23,25 @@
         "disclosureRequired": true
       }
     },
-    "macos": {
+    "macos-arm64": {
       "qualificationWorkflow": ".github/workflows/macos-arm64-cloud-build.yml",
-      "artifactName": "qualified-macos",
+      "artifactName": "qualified-macos-arm64",
       "architectures": ["arm64"],
+      "retentionDays": 14,
+      "acceptanceReceipts": [
+        "acceptance/dmg-mount.json",
+        "acceptance/packaged-smoke.json",
+        "acceptance/signing.json"
+      ],
+      "signingPolicy": {
+        "mode": "allow-unsigned-with-disclosure",
+        "disclosureRequired": true
+      }
+    },
+    "macos-x64": {
+      "qualificationWorkflow": ".github/workflows/macos-x64-cloud-build.yml",
+      "artifactName": "qualified-macos-x64",
+      "architectures": ["x64"],
       "retentionDays": 14,
       "acceptanceReceipts": [
         "acceptance/dmg-mount.json",
@@ -43,8 +58,10 @@
     { "name": "ai-novel-writer-setup-{version}.exe", "platform": "windows", "role": "installer" },
     { "name": "ai-novel-writer-setup-{version}.exe.blockmap", "platform": "windows", "role": "update-metadata" },
     { "name": "latest.yml", "platform": "windows", "role": "update-metadata" },
-    { "name": "ai-novel-writer-mac-arm64-{version}-installer.dmg", "platform": "macos", "role": "installer" },
-    { "name": "ai-novel-writer-mac-arm64-{version}-installer.dmg.sha256", "platform": "macos", "role": "checksum" }
+    { "name": "ai-novel-writer-mac-arm64-{version}-installer.dmg", "platform": "macos-arm64", "role": "installer" },
+    { "name": "ai-novel-writer-mac-arm64-{version}-installer.dmg.sha256", "platform": "macos-arm64", "role": "checksum" },
+    { "name": "ai-novel-writer-mac-x64-{version}-installer.dmg", "platform": "macos-x64", "role": "installer" },
+    { "name": "ai-novel-writer-mac-x64-{version}-installer.dmg.sha256", "platform": "macos-x64", "role": "checksum" }
   ],
   "promotion": {
     "workflow": ".github/workflows/cross-platform-runtime-artifact-promotion.yml",

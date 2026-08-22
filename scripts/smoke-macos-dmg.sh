@@ -6,7 +6,25 @@ cd "$repository_root"
 
 version="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
 release_directory="$repository_root/release/$version"
-dmg="$release_directory/ai-novel-writer-mac-arm64-$version-installer.dmg"
+target_arch="${AI_NOVEL_RELEASE_TARGET_ARCH:-arm64}"
+case "$target_arch" in
+  arm64)
+    expected_runner_machine_arch='arm64'
+    ;;
+  x64)
+    expected_runner_machine_arch='x86_64'
+    ;;
+  *)
+    echo "Unsupported macOS release target architecture: $target_arch" >&2
+    exit 1
+    ;;
+esac
+runner_machine_arch="$(uname -m)"
+if [[ "$runner_machine_arch" != "$expected_runner_machine_arch" ]]; then
+  echo "macOS runner architecture mismatch: expected $expected_runner_machine_arch for $target_arch, got $runner_machine_arch" >&2
+  exit 1
+fi
+dmg="$release_directory/ai-novel-writer-mac-$target_arch-$version-installer.dmg"
 qualification_directory="$release_directory/qualification"
 evidence_root="${AI_NOVEL_RELEASE_EVIDENCE_ROOT:-$qualification_directory}"
 acceptance_directory="$evidence_root/acceptance"
@@ -33,12 +51,12 @@ packaged_smoke_receipt="$acceptance_directory/packaged-smoke.json"
 signing_receipt="$acceptance_directory/signing.json"
 
 write_dmg_mount_receipt() {
-  node - "$dmg_mount_receipt" "$dmg" "$app" "$executable" "$secure_helper" "$dmg_sha256" "$mount_point" "$unmount_attempted" "$unmount_succeeded" <<'NODE'
+  node - "$dmg_mount_receipt" "$dmg" "$app" "$executable" "$secure_helper" "$dmg_sha256" "$mount_point" "$unmount_attempted" "$unmount_succeeded" "$target_arch" "$runner_machine_arch" <<'NODE'
 const fs = require('node:fs')
 const path = require('node:path')
-const [output, dmg, app, executable, helper, dmgSha256, mountPoint, unmountAttempted, unmountSucceeded] = process.argv.slice(2)
+const [output, dmg, app, executable, helper, dmgSha256, mountPoint, unmountAttempted, unmountSucceeded, targetArch, runnerMachine] = process.argv.slice(2)
 
-for (const [label, value] of Object.entries({ dmg, app, executable, helper, dmgSha256, mountPoint })) {
+for (const [label, value] of Object.entries({ dmg, app, executable, helper, dmgSha256, mountPoint, targetArch, runnerMachine })) {
   if (typeof value !== 'string' || value.length === 0) throw new Error(`Missing observed DMG mount fact: ${label}`)
 }
 if (!/^[a-f0-9]{64}$/i.test(dmgSha256)) throw new Error('Invalid observed DMG SHA-256')
@@ -59,13 +77,14 @@ const direct = {
     succeeded: unmountSucceeded === '1',
     command: 'hdiutil detach -force -quiet',
   },
+  architecture: { target: targetArch, runnerMachine },
 }
 
 fs.writeFileSync(output, `${JSON.stringify({
   schemaVersion: 2,
   kind: 'dmg-mount',
   platform: 'darwin',
-  arch: 'arm64',
+  arch: targetArch,
   accepted: true,
   observations: [
     `Mounted ${path.basename(dmg)} at ${mountPoint} with hdiutil.`,
@@ -145,12 +164,12 @@ spctl --assess --type execute --verbose=4 "$app" > "$spctl_assessment" 2>&1
 spctl_assessment_status=$?
 set -e
 
-node --input-type=module - "$repository_root/scripts/release-evidence-v2.mjs" "$signing_receipt" "$codesign_details_status" "$codesign_verification_status" "$spctl_assessment_status" "$codesign_details" "$codesign_verification" "$spctl_assessment" <<'NODE'
+node --input-type=module - "$repository_root/scripts/release-evidence-v2.mjs" "$signing_receipt" "$codesign_details_status" "$codesign_verification_status" "$spctl_assessment_status" "$codesign_details" "$codesign_verification" "$spctl_assessment" "$target_arch" "$runner_machine_arch" <<'NODE'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-const [evidenceModule, output, detailsStatus, verificationStatus, assessmentStatus, detailsFile, verificationFile, assessmentFile] = process.argv.slice(2)
+const [evidenceModule, output, detailsStatus, verificationStatus, assessmentStatus, detailsFile, verificationFile, assessmentFile, targetArch, runnerMachine] = process.argv.slice(2)
 const { classifyMacosCodeSigning, MACOS_FORMAL_DISTRIBUTION_POLICY } = await import(pathToFileURL(evidenceModule).href)
 
 function observedCommand(command, exitCode, outputFile) {
@@ -199,13 +218,14 @@ const direct = {
   codeSigning,
   notarization,
   gatekeeper,
+  architecture: { target: targetArch, runnerMachine },
 }
 
 fs.writeFileSync(output, `${JSON.stringify({
   schemaVersion: 2,
   kind: 'signing',
   platform: 'darwin',
-  arch: 'arm64',
+  arch: targetArch,
   accepted: true,
   status: MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning,
   validationResult,
@@ -315,16 +335,16 @@ if (skin?.customSkin?.importSucceeded !== true || skin?.customSkin?.readSucceede
 }
 NODE
 
-node - "$qualification_directory/macos-dmg-smoke.json" "$dmg" "$app" <<'NODE'
+node - "$qualification_directory/macos-dmg-smoke.json" "$dmg" "$app" "$target_arch" "$runner_machine_arch" <<'NODE'
 const fs = require('node:fs')
 const crypto = require('node:crypto')
-const [output, dmg, app] = process.argv.slice(2)
+const [output, dmg, app, targetArch, runnerMachine] = process.argv.slice(2)
 const sha256 = crypto.createHash('sha256').update(fs.readFileSync(dmg)).digest('hex')
 fs.writeFileSync(output, `${JSON.stringify({
   schemaVersion: 1,
   kind: 'macos-dmg-smoke',
   platform: 'darwin',
-  arch: 'arm64',
+  arch: targetArch,
   mountedApplication: app.split('/').pop(),
   secureFileSystemHelper: 'security/darwin-safe-file-system',
   secureFileSystemSmoke: true,
@@ -332,14 +352,15 @@ fs.writeFileSync(output, `${JSON.stringify({
   vectorSmoke: true,
   officialHomepageSmoke: true,
   skinSmoke: true,
+  architecture: { target: targetArch, runnerMachine },
 }, null, 2)}\n`)
 NODE
 
-node - "$packaged_smoke_receipt" "$release_directory" "$vector_evidence" "$homepage_evidence" "$skin_evidence" "$qualification_directory/macos-dmg-smoke.json" <<'NODE'
+node - "$packaged_smoke_receipt" "$release_directory" "$vector_evidence" "$homepage_evidence" "$skin_evidence" "$qualification_directory/macos-dmg-smoke.json" "$target_arch" "$runner_machine_arch" <<'NODE'
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
-const [output, releaseDirectory, vectorFile, homepageFile, skinFile, macosDmgSmokeFile] = process.argv.slice(2)
+const [output, releaseDirectory, vectorFile, homepageFile, skinFile, macosDmgSmokeFile, targetArch, runnerMachine] = process.argv.slice(2)
 
 function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -375,13 +396,14 @@ const direct = {
   vectorSmoke: macosDmgSmoke.vectorSmoke,
   officialHomepageSmoke: macosDmgSmoke.officialHomepageSmoke,
   skinSmoke: macosDmgSmoke.skinSmoke,
+  architecture: { target: targetArch, runnerMachine },
 }
 
 fs.writeFileSync(output, `${JSON.stringify({
   schemaVersion: 2,
   kind: 'packaged-smoke',
   platform: 'darwin',
-  arch: 'arm64',
+  arch: targetArch,
   accepted: true,
   references: {
     vector,

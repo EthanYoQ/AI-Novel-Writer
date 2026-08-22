@@ -334,8 +334,10 @@ describe('chapter-card draft ledger', () => {
     const recoveryHandler = source.slice(handlerStart, handlerEnd)
 
     expect(source).toContain(
-      'const canRecoverLegacyImportedText = projectDataReady\n    && visibleBlueprints.length > 0\n    && nextWriteChapter !== null\n    && nextWritableBlueprint === null',
+      'const canRecoverLegacyImportedText = projectDataReady\n    && legacyImportedTextRecoveryChapter !== null',
     )
+    expect(source).toContain('let hasFinalizedTextAfterGap = false')
+    expect(source).toContain('setNextWriteChapter(recoveryChapter === null ? firstUnfinalizedChapterNumber : null)')
     expect(source).toContain('{canRecoverLegacyImportedText && (')
     expect(source).toContain('onClick={handleClearLegacyImportedText}')
     expect(recoveryHandler).toContain("confirmText: text('清除误导入正文', 'Clear incorrectly imported text')")

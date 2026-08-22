@@ -115,6 +115,8 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
   const dirty = dirtyChapterNumbers.size > 0
   // 下一个可写的章节号
   const [nextWriteChapter, setNextWriteChapter] = useState<number | null>(null)
+  // 旧版仿写导入可能造成“前章未写、后续正文已定稿”的异常状态；该状态只能由用户确认恢复。
+  const [legacyImportedTextRecoveryChapter, setLegacyImportedTextRecoveryChapter] = useState<number | null>(null)
 
   // 蓝图生成弹窗（替代原 inline 批量面板）
   const [showBlueprintDialog, setShowBlueprintDialog] = useState(false)
@@ -206,6 +208,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       dataProjectSessionRef.current = null
       setDataProjectSession(null)
       setNextWriteChapter(null)
+      setLegacyImportedTextRecoveryChapter(null)
       setSaving(false)
       applyVisibleDraftState([], new Set())
       setLoading(false)
@@ -217,10 +220,12 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       && isCurrentProjectSession(projectSession)
     )
     setLoading(true)
+    setLegacyImportedTextRecoveryChapter(null)
     if (!sameProjectSessionContext(dataProjectSessionRef.current, projectSession)) {
       dataProjectSessionRef.current = null
       setDataProjectSession(null)
       setNextWriteChapter(null)
+      setLegacyImportedTextRecoveryChapter(null)
       setSaving(false)
       applyVisibleDraftState([], new Set())
     }
@@ -249,14 +254,33 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       if (!restored || !isLatestProjectRequest()) return
       const data = restored.blueprints
       if (data.length > 0) setSelectedIdx(0)
-      // 获取下一个待写章节号
-      const maxFinalized = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:draft-get-max-finalized-chapter',
-        projectKey,
-      )
-      if (!isLatestProjectRequest()) return
-      setNextWriteChapter(maxFinalized !== null ? maxFinalized + 1 : 1)
+      // 从第 1 章开始确认连续的定稿状态。不能以“最大已定稿章节”判断进度：
+      // 旧版异常导入可能留下后续章节的 finalized 记录，而前章仍未写作。
+      let expectedChapterNumber = 1
+      let firstUnfinalizedChapterNumber: number | null = null
+      let hasFinalizedTextAfterGap = false
+      for (const blueprint of [...data].sort((a, b) => a.chapterNumber - b.chapterNumber)) {
+        // 缺少中间蓝图时，不允许跳过它直接写后续章节。
+        if (blueprint.chapterNumber !== expectedChapterNumber) break
+        const finalized = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:draft-get-finalized',
+          blueprint.chapterNumber,
+          projectKey,
+        )
+        if (!isLatestProjectRequest()) return
+        if (!finalized) {
+          firstUnfinalizedChapterNumber ??= blueprint.chapterNumber
+        } else if (firstUnfinalizedChapterNumber !== null) {
+          hasFinalizedTextAfterGap = true
+        }
+        expectedChapterNumber += 1
+      }
+      const recoveryChapter = hasFinalizedTextAfterGap
+        ? firstUnfinalizedChapterNumber
+        : null
+      setLegacyImportedTextRecoveryChapter(recoveryChapter)
+      setNextWriteChapter(recoveryChapter === null ? firstUnfinalizedChapterNumber : null)
     } catch {
       if (isLatestProjectRequest()) addLog('error', text('读取章节蓝图失败', 'Could not load chapter blueprints'))
     } finally {
@@ -295,16 +319,16 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
     })
   }, [loadBlueprints, projectKey])
 
-  // 单章或批量定稿后，都让顶部写作/批量入口立刻指向下一章。
+  // 单章或批量定稿后，重新读取连续定稿状态，避免旧版异常记录造成跳章入口。
   useEffect(() => {
-    return globalEventBus.on('FINALIZE_COMPLETE', ({ chapterNumber, projectPath, projectSession }) => {
+    return globalEventBus.on('FINALIZE_COMPLETE', ({ projectPath, projectSession }) => {
       if (
         !sameProjectPathKey(projectPath, projectKey)
         || !sameProjectSessionContext(projectSession, currentProjectSessionForPath(projectKey))
       ) return
-      setNextWriteChapter((current) => Math.max(current ?? 1, chapterNumber + 1))
+      loadBlueprints()
     })
-  }, [projectKey])
+  }, [projectKey, loadBlueprints])
 
   useEffect(() => {
     return globalEventBus.on('REFRESH_RESOURCE', (payload) => {
@@ -635,9 +659,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
     ? null
     : visibleBlueprints.find(blueprint => blueprint.chapterNumber === nextWriteChapter)
   const canRecoverLegacyImportedText = projectDataReady
-    && visibleBlueprints.length > 0
-    && nextWriteChapter !== null
-    && nextWritableBlueprint === null
+    && legacyImportedTextRecoveryChapter !== null
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -737,8 +759,8 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
             <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--color-warning)' }} />
             <p className="max-w-3xl leading-5">
               {text(
-                `未找到第 ${nextWriteChapter} 章蓝图，暂时不能继续写作。这也可能只是尚未生成下一章蓝图；仅当当前草稿/正文来自旧版“小说拆解与仿写”导入时，才使用“清除误导入正文”。`,
-                `No blueprint was found for Chapter ${nextWriteChapter}, so writing cannot continue yet. This may simply mean the next blueprint has not been generated; use “Clear incorrectly imported text” only if current drafts/manuscript text came from a legacy “Novel analysis and imitation” import.`,
+                `检测到后续正文但第 ${legacyImportedTextRecoveryChapter} 章尚未写作，可能是旧版“小说拆解与仿写”误导入的参考原文。系统不会自动清除任何内容；确认“清除误导入正文”后会保留角色、故事架构、章节蓝图与知识库，并可从第 ${legacyImportedTextRecoveryChapter} 章开始写作。`,
+                `Later manuscript text exists while Chapter ${legacyImportedTextRecoveryChapter} has not been written. This may be reference text incorrectly imported by a legacy “Novel analysis and imitation” workflow. Nothing is cleared automatically; after you confirm “Clear incorrectly imported text”, characters, story architecture, chapter blueprints, and the knowledge base are kept, and you can start writing from Chapter ${legacyImportedTextRecoveryChapter}.`,
               )}
             </p>
           </div>

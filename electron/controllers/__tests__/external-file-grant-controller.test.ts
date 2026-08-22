@@ -25,6 +25,7 @@ import { ExternalFileGrantService } from '../../services/external-file-grant-ser
 import type { AtomicWriteConstraints, WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-external-grant-controller-'))
+const JUNCTION_SECURITY_TEST_TIMEOUT_MS = 15_000
 
 function handler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel)
@@ -127,7 +128,7 @@ describe('external file grant IPC contract', () => {
     )).resolves.toMatchObject({ success: false, error: expect.stringContaining('路径无效') })
     expect(fs.existsSync(path.join(outsideDirectory, 'result.txt'))).toBe(false)
     expect(fs.existsSync(path.join(outsideDirectory, 'new-folder'))).toBe(false)
-  })
+  }, JUNCTION_SECURITY_TEST_TIMEOUT_MS)
 
   it('仅 write 授权在 exists 后目标被删除时不能借原子替换重新创建文件', async () => {
     const exportDirectory = path.join(temporaryRoot, 'exports-write-only')

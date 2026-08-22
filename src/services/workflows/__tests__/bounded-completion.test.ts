@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   appendVisibleTextContinuation,
+  BoundedCompletionFailure,
   completeBoundedCompletion,
   redactVisibleCompletionText,
 } from '../bounded-completion'
@@ -68,6 +69,29 @@ describe('bounded completion', () => {
       expect(requestContinuation).not.toHaveBeenCalled()
     },
   )
+
+  it('retains a content-filter terminal reason as structured failure metadata', async () => {
+    const requestContinuation = vi.fn()
+
+    try {
+      await completeBoundedCompletion({
+        initial: { content: '不可保存的输出', finishReason: 'content_filter' },
+        mode: 'append-visible-text',
+        maxContinuations: 3,
+        originalPrompt: '写一段正文',
+        requestContinuation,
+      })
+      throw new Error('expected a bounded completion failure')
+    } catch (error) {
+      expect(error).toBeInstanceOf(BoundedCompletionFailure)
+      expect(error).toMatchObject({
+        failureCode: 'content_filter',
+        message: 'AI 输出因内容限制而未完成，结果未被保存。',
+      })
+    }
+
+    expect(requestContinuation).not.toHaveBeenCalled()
+  })
 
   it('checks cancellation before requesting a continuation', async () => {
     const requestContinuation = vi.fn()

@@ -42,6 +42,20 @@ const finalizationClient = vi.hoisted(() => ({
 vi.mock('../../../finalization-client', () => finalizationClient)
 
 const PROJECT_PATH = 'C:\\novels\\A'
+const CONFIRMED_REVIEW_CONTENT = JSON.stringify({
+  kind: 'human-confirmed-review',
+  schemaVersion: 1,
+  sourceReviewId: 7,
+  summary: '需要修复连续性问题。',
+  authorGuidance: '',
+  items: [{
+    category: '连续性',
+    severity: 'error',
+    description: '修复角色位置矛盾。',
+    decision: 'apply',
+    origin: 'ai',
+  }],
+})
 
 function callbacks(): StepCallbacks {
   return {
@@ -499,13 +513,17 @@ describe('workflow mutation failure boundaries', () => {
     ['review refinement', () => new RefineFromReviewCommand({
       draftPath: 'vela://draft/1',
       draftContent: '原稿',
-      reviewReport: '{}',
+      confirmedReviewContent: CONFIRMED_REVIEW_CONTENT,
+      reviewSourceId: 7,
       chapterNumber: 1,
     })],
   ])('does not open a diff when %s revision creation fails', async (_label, makeCommand) => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'db:draft-get-meta') {
         return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      }
+      if (channel === 'db:review-get-full') {
+        return { id: 7, baseDraftId: 1, content: CONFIRMED_REVIEW_CONTENT }
       }
       if (channel === 'db:revision-get-pending') return []
       if (channel === 'db:revision-create' || channel === 'db:revision-replace-pending') {

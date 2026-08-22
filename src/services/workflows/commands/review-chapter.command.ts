@@ -139,6 +139,8 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       reportPath: pseudoReviewPath,
       reviewReport: reportContent,
       chapterNumber: this.params.chapterNumber,
+      chapterDir: `vela://draft/ch${this.params.chapterNumber}`,
+      reviewId: createResult.id,
       projectKey: context.projectPath,
     })
 

@@ -50,18 +50,20 @@ function fixture() {
   write(path.join(sourceRoot, 'mac-arm64', 'AI Novel Writer.app', 'Contents', 'Frameworks', 'Electron Framework.framework', 'Electron Framework'), 'unpacked intermediary')
   write(profilePath, JSON.stringify({
     platforms: {
-      macos: {
+      'macos-arm64': {
+        architectures: ['arm64'],
         acceptanceReceipts: acceptance.map(relativePath => relativePath.replace(/^qualification\//, '')),
       },
     },
     releaseAssets: [
-      { name: 'ai-novel-writer-mac-arm64-{version}-installer.dmg', platform: 'macos', role: 'installer' },
-      { name: 'ai-novel-writer-mac-arm64-{version}-installer.dmg.sha256', platform: 'macos', role: 'checksum' },
+      { name: 'ai-novel-writer-mac-arm64-{version}-installer.dmg', platform: 'macos-arm64', role: 'installer' },
+      { name: 'ai-novel-writer-mac-arm64-{version}-installer.dmg.sha256', platform: 'macos-arm64', role: 'checksum' },
     ],
   }))
   const manifest = {
     schemaVersion: 2,
-    platform: 'macos',
+    platform: 'macos-arm64',
+    architecture: 'arm64',
     version,
     acceptanceProfile: acceptance,
     artifacts: [dmg, checksum].map(file => ({ file })),
@@ -87,7 +89,7 @@ afterEach(() => {
 describe('legacy qualification bundle projection', () => {
   it('copies only the profile assets and hash-bound legacy evidence without changing Electron Builder bytes', () => {
     const fixturePaths = fixture()
-    projectLegacyQualificationBundle({ platform: 'macos', version, ...fixturePaths })
+    projectLegacyQualificationBundle({ platform: 'macos-arm64', version, ...fixturePaths })
 
     expect(relativeFiles(fixturePaths.outputRoot)).toEqual([
       'SHA256SUMS.txt',
@@ -107,7 +109,7 @@ describe('legacy qualification bundle projection', () => {
     const fixturePaths = fixture()
     fs.rmSync(path.join(fixturePaths.sourceRoot, dmg))
 
-    expect(() => projectLegacyQualificationBundle({ platform: 'macos', version, ...fixturePaths }))
+    expect(() => projectLegacyQualificationBundle({ platform: 'macos-arm64', version, ...fixturePaths }))
       .toThrow('Projection source must be a non-empty regular file')
     expect(fs.existsSync(fixturePaths.outputRoot)).toBe(false)
   })

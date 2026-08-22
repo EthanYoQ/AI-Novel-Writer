@@ -24,6 +24,16 @@ import {
 } from '../real-provider-generation-qualification.mjs'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const CURRENT_PRICE_SNAPSHOT_TEST_TIME = Date.parse('2026-08-18T00:00:00.000Z')
+
+async function withCurrentPriceSnapshotClock<T>(run: () => Promise<T>): Promise<T> {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(CURRENT_PRICE_SNAPSHOT_TEST_TIME)
+  try {
+    return await run()
+  } finally {
+    clock.mockRestore()
+  }
+}
 
 function createDirtyQualificationRepository() {
   const cacheRoot = path.join(repositoryRoot, '.runtime', '.cache')
@@ -149,11 +159,11 @@ describe('real provider generation qualification contract', () => {
     const fetchSpy = vi.fn(() => Promise.reject(new Error('dry-run must never call fetch')))
     vi.stubGlobal('fetch', fetchSpy)
 
-    const receipt = await runRealProviderGenerationQualification({
+    const receipt = await withCurrentPriceSnapshotClock(() => runRealProviderGenerationQualification({
       mode: 'dry-run',
       profiles: inMemoryProfiles(),
       repositoryRoot,
-    })
+    }))
 
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(receipt).toMatchObject({
@@ -312,11 +322,11 @@ describe('real provider generation qualification contract', () => {
       },
     ])
 
-    const receipt = await runRealProviderGenerationQualification({
+    const receipt = await withCurrentPriceSnapshotClock(() => runRealProviderGenerationQualification({
       mode: 'dry-run',
       profiles: inMemoryProfiles(),
       repositoryRoot,
-    })
+    }))
     for (const provider of receipt.providers) {
       expect(provider.priceEstimateStatus).toBe('current-snapshot')
       expect(provider.estimatedReservedUsd).toBeGreaterThan(0)

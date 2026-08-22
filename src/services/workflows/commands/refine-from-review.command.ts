@@ -8,14 +8,27 @@ import { projectSessionContextFromProject, sameProjectSessionContext } from '../
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
 import { assertMateriallyCompleteRevision } from './refinement-completeness'
+import {
+  hasIncludedReviewItems,
+  parseHumanConfirmedReviewSnapshot,
+  renderHumanConfirmedReviewBrief,
+  serializeHumanConfirmedReviewSnapshot,
+  type HumanConfirmedReviewSnapshot,
+} from '../../../shared/human-confirmed-review'
 
 
 export interface RefineFromReviewParams {
   draftPath: string
   draftContent: string
-  reviewReport: string
+  /** Persisted JSON content of the immutable human-confirmed review snapshot. */
+  confirmedReviewContent?: string
+  /** ID of the review row that stores the confirmed snapshot. */
+  reviewSourceId?: number
+  /** @deprecated Raw AI review content is deliberately never sent to the refiner. */
+  reviewReport?: string
   reviewFileName?: string
   chapterNumber: number
+  /** @deprecated Author guidance must be persisted in the confirmation snapshot. */
   userRefinePrompt?: string
 }
 
@@ -28,10 +41,91 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
-    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+    const confirmedReview = await this.requireConfirmedReview(params)
+    return this.executeWithGenerationRuntime(
+      'text',
+      params,
+      () => this.executeWithinGeneration(params, confirmedReview.snapshot, confirmedReview.reviewSourceId),
+    )
   }
 
-  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  /**
+   * A renderer-provided JSON string is only a request to use a confirmation
+   * record. Before acquiring a generation lease, resolve that record through
+   * the frozen project session and use its persisted content as the source of
+   * truth. This keeps review_source_id traceable to the exact prompt input.
+   */
+  private async requireConfirmedReview({ context }: CommandExecuteParams): Promise<{
+    snapshot: HumanConfirmedReviewSnapshot
+    reviewSourceId: number
+  }> {
+    const reviewSourceId = this.params.reviewSourceId
+    if (
+      typeof reviewSourceId !== 'number'
+      || !Number.isSafeInteger(reviewSourceId)
+      || reviewSourceId <= 0
+    ) {
+      throw new Error('审稿修稿需要已保存的人工确认快照，未调用模型。')
+    }
+
+    const requestedSnapshot = this.params.confirmedReviewContent
+      ? parseHumanConfirmedReviewSnapshot(this.params.confirmedReviewContent)
+      : null
+    if (!requestedSnapshot) {
+      throw new Error('审稿修稿需要有效的人工确认快照，未调用模型。')
+    }
+
+    const projectSession = requireWorkflowProjectSession(context)
+    this.assertNotCancelled(context)
+    const persistedReview = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:review-get-full',
+      reviewSourceId,
+      context.projectPath,
+    )
+    this.assertNotCancelled(context)
+    if (!persistedReview) {
+      throw new Error('找不到已保存的人工确认快照，未调用模型。')
+    }
+    if (persistedReview.id !== reviewSourceId) {
+      throw new Error('人工确认快照记录校验失败，未调用模型。')
+    }
+
+    const persistedSnapshot = parseHumanConfirmedReviewSnapshot(persistedReview.content)
+    if (!persistedSnapshot) {
+      throw new Error('已保存的审稿记录不是有效的人工确认快照，未调用模型。')
+    }
+    if (
+      serializeHumanConfirmedReviewSnapshot(requestedSnapshot)
+      !== serializeHumanConfirmedReviewSnapshot(persistedSnapshot)
+    ) {
+      throw new Error('人工确认快照与已保存记录不一致，请重新确认后再试。')
+    }
+
+    const baseDraft = await readWorkflowDraftMeta(
+      this.params.draftPath,
+      context.projectPath,
+      projectSession,
+    )
+    this.assertNotCancelled(context)
+    if (!baseDraft) {
+      throw new Error('找不到基准草稿版本，未调用模型。')
+    }
+    if (persistedReview.baseDraftId !== baseDraft.id) {
+      throw new Error('人工确认快照不属于当前草稿版本，未调用模型。')
+    }
+    if (!hasIncludedReviewItems(persistedSnapshot)) {
+      throw new Error('人工确认快照没有任何纳入项，未调用模型。')
+    }
+
+    return { snapshot: persistedSnapshot, reviewSourceId }
+  }
+
+  private async executeWithinGeneration(
+    { context, callbacks }: CommandExecuteParams,
+    confirmedReview: HumanConfirmedReviewSnapshot,
+    reviewSourceId: number,
+  ): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
@@ -40,20 +134,20 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
     )) throw new Error('当前项目已切换，修稿已停止')
     const novelConfig = Object.freeze({ ...project.novelConfig })
 
-    callbacks.log('正在根据审稿报告精准修复...')
+    callbacks.log('正在根据已确认的审稿项精准修复...')
 
     const template = await resolvePromptTemplate('refine_from_review', projectSession)
     if (!template) throw new Error('未找到审稿修复模板')
 
-    const userPromptBlock = this.params.userRefinePrompt?.trim()
-      ? `★【用户额外修稿指导（绝对优先级）】★：\n${this.params.userRefinePrompt}`
-      : ''
+    const confirmedReviewBrief = renderHumanConfirmedReviewBrief(confirmedReview)
 
     const promptBuilder = new ChapterPromptBuilder(template)
-      .withReviewReport(this.params.reviewReport)
+      .withReviewReport(confirmedReviewBrief)
       .withDraftContent(this.params.draftContent)
       .withGlobalGuidance(novelConfig.globalGuidance || '')
-      .withUserRefinePrompt(userPromptBlock)
+      // The brief already contains the confirmed author guidance. Do not let
+      // a transient UI field bypass the persisted confirmation snapshot.
+      .withUserRefinePrompt('')
 
     const refined = await this.callLLMWithBoundedCompletion(
       promptBuilder.build(),
@@ -81,7 +175,8 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
       revisionType: 'review-fix',
       content: cleanRefined,
       wordCount: cleanRefined.length,
-      userPrompt: this.params.userRefinePrompt,
+      userPrompt: confirmedReview.authorGuidance || undefined,
+      reviewSourceId,
     }, context.projectPath)
     requireIpcSuccess(createRes, '创建审稿修订稿')
     if (createRes.id === undefined) throw new Error('创建审稿修订稿失败：未返回修订稿编号')

@@ -128,8 +128,10 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     this.assertNotCancelled(params.context)
     const cancellation = observeWorkflowCancellation(params.context)
     try {
+      const generationModelId = params.context.generationModelId?.trim() || undefined
       const runtime = await this.generationDependencies.createRuntime({
         budget: WORKFLOW_GENERATION_BUDGETS[intent],
+        ...(generationModelId ? { modelId: generationModelId } : {}),
       })
       return await runtime.execute(async ({ session }) => {
         this.activeGenerationExecution = {

@@ -23,6 +23,30 @@ export interface BoundedCompletion {
   finishReason: LLMFinishReason
 }
 
+/** A non-stop terminal model state that made a bounded completion fail closed. */
+export type BoundedCompletionFailureCode = Exclude<LLMFinishReason, 'stop'>
+
+/**
+ * Carries the provider-neutral terminal reason without changing the user-safe
+ * message used by commands and workflow logs.
+ */
+export class BoundedCompletionFailure extends Error {
+  readonly failureCode: BoundedCompletionFailureCode
+
+  constructor(failureCode: BoundedCompletionFailureCode, message: string) {
+    super(message)
+    this.name = 'BoundedCompletionFailure'
+    this.failureCode = failureCode
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
+export function getBoundedCompletionFailureCode(
+  error: unknown,
+): BoundedCompletionFailureCode | undefined {
+  return error instanceof BoundedCompletionFailure ? error.failureCode : undefined
+}
+
 /**
  * The continuation module owns prompt composition, so callers provide only
  * the model limits it needs to reserve a bounded input slice. `null` means
@@ -141,20 +165,29 @@ export function appendVisibleTextContinuation(
   return redactVisibleText([visibleExisting, newVisibleText].filter(Boolean).join('\n\n'))
 }
 
-function incompleteCompletionError(finishReason: LLMFinishReason): Error {
+function incompleteCompletionError(finishReason: LLMFinishReason): BoundedCompletionFailure {
+  // `stop` should not reach this path, but preserve fail-closed behavior if a
+  // legacy caller does invoke the public helper with it.
+  const failureCode: BoundedCompletionFailureCode = finishReason === 'stop'
+    ? 'unknown'
+    : finishReason
+
   switch (finishReason) {
     case 'length':
-      return new Error('AI 输出达到模型最大长度，结果不完整。请提高模型最大输出 Tokens 或缩短本次任务后重试。')
+      return new BoundedCompletionFailure(
+        failureCode,
+        'AI 输出达到模型最大长度，结果不完整。请提高模型最大输出 Tokens 或缩短本次任务后重试。',
+      )
     case 'content_filter':
-      return new Error('AI 输出因内容限制而未完成，结果未被保存。')
+      return new BoundedCompletionFailure(failureCode, 'AI 输出因内容限制而未完成，结果未被保存。')
     case 'cancelled':
-      return new Error('AI 生成已取消，结果未被保存。')
+      return new BoundedCompletionFailure(failureCode, 'AI 生成已取消，结果未被保存。')
     default:
-      return new Error('AI 未正常完成生成，结果未被保存。')
+      return new BoundedCompletionFailure(failureCode, 'AI 未正常完成生成，结果未被保存。')
   }
 }
 
-export function createBoundedCompletionError(finishReason: LLMFinishReason): Error {
+export function createBoundedCompletionError(finishReason: LLMFinishReason): BoundedCompletionFailure {
   return incompleteCompletionError(finishReason)
 }
 

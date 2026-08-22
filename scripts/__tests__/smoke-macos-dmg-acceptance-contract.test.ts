@@ -15,6 +15,7 @@ const repositoryRoot = path.resolve(import.meta.dirname, '..', '..')
 const smokeScriptPath = path.join(repositoryRoot, 'scripts', 'smoke-macos-dmg.sh')
 const evidenceScript = path.join(repositoryRoot, 'scripts', 'release-evidence-v2.mjs')
 const fixtures: string[] = []
+const RECEIPT_FINALIZE_TIMEOUT_MS = 15_000
 
 function readRequired(file: string) {
   expect(existsSync(file), `Missing macOS DMG smoke contract: ${file}`).toBe(true)
@@ -107,6 +108,9 @@ describe('macOS DMG acceptance receipt contract', () => {
     expect(MACOS_FORMAL_DISTRIBUTION_POLICY.codeSigning).toBe('ad_hoc_or_unsigned')
     expect(script).toContain('evidence_root="${AI_NOVEL_RELEASE_EVIDENCE_ROOT:-$qualification_directory}"')
     expect(script).toContain('acceptance_directory="$evidence_root/acceptance"')
+    expect(script).toContain('AI_NOVEL_RELEASE_TARGET_ARCH')
+    expect(script).toContain("expected_runner_machine_arch='x86_64'")
+    expect(script).toContain('runner_machine_arch="$(uname -m)"')
     expect(script).toContain('dmg-mount.json')
     expect(script).toContain('packaged-smoke.json')
     expect(script).toContain('signing.json')
@@ -152,7 +156,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const init = spawnSync(process.execPath, [
       evidenceScript,
       'init',
-      '--platform', 'macos',
+      '--platform', 'macos-arm64',
       '--evidence-root', evidenceRoot,
       '--repository', 'EthanYoQ/AI-Novel-Writer',
       '--commit', 'd'.repeat(40),
@@ -170,7 +174,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       '--dispatch-inputs-json', '{}',
     ], { cwd: repositoryRoot, encoding: 'utf8' })
     expect(init.status, init.stderr).toBe(0)
-    for (const step of COMMAND_PROFILES.macos) {
+    for (const step of COMMAND_PROFILES['macos-arm64']) {
       const recorded = spawnSync(process.execPath, [
         evidenceScript,
         'record',
@@ -185,6 +189,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     writeFileSync(path.join(releaseRoot, dmg), 'macOS DMG', 'utf8')
     const dmgSha256 = createHash('sha256').update('macOS DMG').digest('hex')
     const commandOutputSha256 = 'b'.repeat(64)
+    const architectureEvidence = { target: 'arm64', runnerMachine: 'arm64' }
     for (const [file, kind] of [
       ['packaged-vector-smoke.json', 'packaged-vector-smoke'],
       ['packaged-official-homepage-smoke.json', 'packaged-official-homepage-smoke'],
@@ -204,6 +209,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       accepted: true,
       observations: ['Mounted the observed DMG before app validation.'],
       direct: {
+        architecture: architectureEvidence,
         dmg: { path: '/tmp/AI Novel.dmg' },
         app: { path: '/Volumes/AI Novel/AI Novel.app' },
         executable: { path: '/Volumes/AI Novel/AI Novel.app/Contents/MacOS/AI Novel', present: true },
@@ -221,6 +227,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       accepted: true,
       observations: ['Validated vector, homepage, skin, and direct DMG smoke facts.'],
       direct: {
+        architecture: architectureEvidence,
         secureFileSystemSmoke: true,
         vectorSmoke: true,
         officialHomepageSmoke: true,
@@ -247,6 +254,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       gatekeeperImpact: 'Gatekeeper was accepted on this runner but remains independent from code-signing policy.',
       observations: ['codesign and spctl inspection completed.'],
       direct: {
+        architecture: architectureEvidence,
         codeSigning: {
           expected: 'ad_hoc_or_unsigned',
           observed: 'developer_id_signed',
@@ -268,7 +276,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const rejectedFinalize = spawnSync(process.execPath, [
       evidenceScript,
       'finalize',
-      '--platform', 'macos',
+      '--platform', 'macos-arm64',
       '--evidence-root', evidenceRoot,
       '--release-root', releaseRoot,
     ], { cwd: repositoryRoot, encoding: 'utf8' })
@@ -287,6 +295,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       gatekeeperImpact: 'Gatekeeper can require manual confirmation for this unsigned and unnotarized package.',
       observations: ['codesign observed an ad-hoc signature without Developer ID identity.', 'spctl Gatekeeper assessment was recorded separately.'],
       direct: {
+        architecture: architectureEvidence,
         codeSigning: {
           expected: 'ad_hoc_or_unsigned',
           observed: 'ad_hoc',
@@ -308,7 +317,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const finalize = spawnSync(process.execPath, [
       evidenceScript,
       'finalize',
-      '--platform', 'macos',
+      '--platform', 'macos-arm64',
       '--evidence-root', evidenceRoot,
       '--release-root', releaseRoot,
     ], { cwd: repositoryRoot, encoding: 'utf8' })
@@ -321,7 +330,11 @@ describe('macOS DMG acceptance receipt contract', () => {
     expect(readFileSync(path.join(acceptanceDirectory, 'packaged-smoke.json'), 'utf8')).toContain('"packaged-smoke"')
     expect(readFileSync(path.join(acceptanceDirectory, 'signing.json'), 'utf8')).toContain('"ad_hoc_or_unsigned"')
     expect(existsSync(path.join(releaseRoot, `${dmg}.sha256`))).toBe(true)
-    const manifest = JSON.parse(readFileSync(path.join(releaseRoot, 'manifest.json'), 'utf8'))
+    const manifestPath = path.join(releaseRoot, 'manifest.json')
+    const originalManifestText = readFileSync(manifestPath, 'utf8')
+    const manifest = JSON.parse(originalManifestText)
+    expect(manifest).toMatchObject({ platform: 'macos-arm64', architecture: 'arm64' })
+    expect(manifest).not.toHaveProperty('arch')
     expect(manifest.acceptanceProfile).toEqual([
       'qualification/acceptance/dmg-mount.json',
       'qualification/acceptance/packaged-smoke.json',
@@ -331,7 +344,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const verify = spawnSync(process.execPath, [
       evidenceScript,
       'verify-bundle',
-      '--platform', 'macos',
+      '--platform', 'macos-arm64',
       '--bundle-root', releaseRoot,
       '--expected-commit', 'd'.repeat(40),
       '--expected-lockfile-sha256', canonicalPnpmLockfileSha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
@@ -340,9 +353,25 @@ describe('macOS DMG acceptance receipt contract', () => {
     ], { cwd: repositoryRoot, encoding: 'utf8' })
     expect(verify.status, verify.stderr).toBe(0)
     expect(JSON.parse(verify.stdout)).toMatchObject({
-      platform: 'macos',
+      platform: 'macos-arm64',
       releaseFiles: [dmg, `${dmg}.sha256`],
     })
+
+    const deprecatedManifest = { ...manifest, arch: 'arm64' }
+    writeFileSync(manifestPath, `${JSON.stringify(deprecatedManifest, null, 2)}\n`, 'utf8')
+    const rejectedDeprecatedField = spawnSync(process.execPath, [
+      evidenceScript,
+      'verify-bundle',
+      '--platform', 'macos-arm64',
+      '--bundle-root', releaseRoot,
+      '--expected-commit', 'd'.repeat(40),
+      '--expected-lockfile-sha256', canonicalPnpmLockfileSha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
+      '--run-attempt', '1',
+      '--version', version,
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(rejectedDeprecatedField.status).not.toBe(0)
+    expect(rejectedDeprecatedField.stderr).toContain('Qualification manifest must use architecture instead of deprecated arch')
+    writeFileSync(manifestPath, originalManifestText, 'utf8')
 
     writeJson(path.join(acceptanceDirectory, 'signing.json'), {
       schemaVersion: 2,
@@ -356,6 +385,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       gatekeeperImpact: 'Gatekeeper was accepted on this runner but remains independent from code-signing policy.',
       observations: ['codesign observed a signature.'],
       direct: {
+        architecture: architectureEvidence,
         codeSigning: {
           expected: 'ad_hoc_or_unsigned',
           observed: 'developer_id_signed',
@@ -376,7 +406,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const rejectedVerify = spawnSync(process.execPath, [
       evidenceScript,
       'verify-bundle',
-      '--platform', 'macos',
+      '--platform', 'macos-arm64',
       '--bundle-root', releaseRoot,
       '--expected-commit', 'd'.repeat(40),
       '--expected-lockfile-sha256', canonicalPnpmLockfileSha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
@@ -385,5 +415,5 @@ describe('macOS DMG acceptance receipt contract', () => {
     ], { cwd: repositoryRoot, encoding: 'utf8' })
     expect(rejectedVerify.status).not.toBe(0)
     expect(rejectedVerify.stderr).toContain('requires ad-hoc or unsigned code signing without a Developer ID identity')
-  })
+  }, RECEIPT_FINALIZE_TIMEOUT_MS)
 })

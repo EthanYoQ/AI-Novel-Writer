@@ -369,7 +369,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       const modelId = currentConv.modelId ?? undefined
 
       // @ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
-      const executionContext = createAgentExecutionContext()
+      const executionContext = createAgentExecutionContext(modelId)
       // 系统提示词、@ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
       const systemPrompt = buildAgentSystemPrompt(currentConv.mode, executionContext)
 

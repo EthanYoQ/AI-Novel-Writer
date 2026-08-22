@@ -35,6 +35,7 @@ export const startWorkflowTool = buildAgentTool({
     }
     const { project, projectSession } = requireAgentProject(context)
     const projectPath = project.path
+    const generationModelId = context?.selectedModelId?.trim() || undefined
 
     // 需要章节号的工作流
     const chapterWorkflows = ['generate_draft', 'review', 'refine', 'finalize']
@@ -58,7 +59,7 @@ export const startWorkflowTool = buildAgentTool({
       const receipt = await launchCreativeWorkflow({
         workflow,
         ...(chapterNumber === undefined ? {} : { chapterNumber }),
-      } as CreativeIntent, projectSession)
+      } as CreativeIntent, projectSession, { generationModelId })
 
       return {
         success: true,

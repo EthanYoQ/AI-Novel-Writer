@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const repositoryRoot = path.resolve(import.meta.dirname, '..', '..')
 const workflowPath = path.join(repositoryRoot, '.github', 'workflows', 'macos-arm64-cloud-build.yml')
+const x64WorkflowPath = path.join(repositoryRoot, '.github', 'workflows', 'macos-x64-cloud-build.yml')
 const packageMetadataPath = path.join(repositoryRoot, 'package.json')
 const macSmokeScriptPath = path.join(repositoryRoot, 'scripts', 'smoke-macos-dmg.sh')
 const manifestScriptPath = path.join(repositoryRoot, 'scripts', 'generate-macos-cloud-build-manifest.mjs')
@@ -48,7 +49,7 @@ describe('macOS ARM64 cloud build workflow contract', () => {
 
     const upload = namedStep(workflow, 'Upload runtime-verified macOS ARM64 package')
     expect(upload).toContain('id: upload-qualified')
-    expect(upload).toContain('name: qualified-macos')
+    expect(upload).toContain('name: qualified-macos-arm64')
     expect(upload).toContain('retention-days: 14')
   })
 
@@ -73,7 +74,7 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(checkout).toContain('persist-credentials: false')
 
     const initializeEvidence = namedStep(workflow, 'Initialize macOS v2 acceptance evidence')
-    expect(initializeEvidence).toContain('release-evidence-v2.mjs init --platform macos')
+    expect(initializeEvidence).toContain('release-evidence-v2.mjs init --platform macos-arm64')
     expect(initializeEvidence).toContain('--evidence-root "$evidence_root"')
     expect(initializeEvidence).toContain('--repository "$GITHUB_REPOSITORY"')
     expect(initializeEvidence).toContain('--commit "$EXPECTED_SHA"')
@@ -98,8 +99,8 @@ describe('macOS ARM64 cloud build workflow contract', () => {
       ['Run renderer browser tests', 'renderer-browser-tests', 'pnpm run test:browser'],
       ['Build native secure helper for macOS tests', 'build-native-secure-helper', 'clang -fobjc-arc -framework Foundation'],
       ['Run test suite', 'test-suite', 'pnpm test'],
-      ['Build unsigned macOS ARM64 package', 'build-macos-arm64-package', 'pnpm run build:mac:artifacts'],
-      ['Run mounted-DMG smoke', 'mounted-dmg-smoke', 'pnpm run smoke:mac-dmg'],
+      ['Build unsigned macOS ARM64 package', 'build-macos-arm64-package', 'pnpm run build:mac:arm64:artifacts'],
+      ['Run mounted-DMG smoke', 'mounted-dmg-smoke', 'AI_NOVEL_RELEASE_TARGET_ARCH=arm64 pnpm run smoke:mac-dmg'],
     ] as const
     for (const [name, step, command] of expectedRecordedSteps) {
       const recordedStep = namedStep(workflow, name)
@@ -113,7 +114,7 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(helperPreparation).toContain('clang -fobjc-arc -framework Foundation')
     expect(helperPreparation).toContain('electron/security/darwin-safe-file-system.m')
     expect(helperPreparation).toContain('chmod +x electron/security/darwin-safe-file-system')
-    expect(workflow).toContain('pnpm run build:mac:artifacts')
+    expect(workflow).toContain('pnpm run build:mac:arm64:artifacts')
     expect(workflow).toContain('pnpm run smoke:mac-dmg')
     expect(workflow).not.toContain('node scripts/generate-macos-cloud-build-manifest.mjs')
     expect(workflow).not.toMatch(/\b(?:gh\s+release|create-release|upload-release|git\s+tag|git\s+push\s+.*(?:tag|refs\/tags)|codesign|notarytool)\b/i)
@@ -124,25 +125,27 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     const artifactStep = namedStep(workflow, 'Upload runtime-verified macOS ARM64 package')
     expect(artifactStep).toMatch(/if:\s*\$\{\{\s*success\(\)\s*\}\}/)
     expect(artifactStep).toContain('retention-days: 14')
-    expect(artifactStep).toContain('macos-qualified')
+    expect(artifactStep).toContain('macos-arm64-qualified')
 
     const finalizeEvidence = namedStep(workflow, 'Finalize macOS v2 acceptance receipts')
-    expect(finalizeEvidence).toContain('release-evidence-v2.mjs finalize --platform macos')
+    expect(finalizeEvidence).toContain('release-evidence-v2.mjs finalize --platform macos-arm64')
     expect(finalizeEvidence).toContain('--evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT"')
-    expect(finalizeEvidence).toContain('project-legacy-qualification.mjs --platform macos')
+    expect(finalizeEvidence).toContain('project-legacy-qualification.mjs --platform macos-arm64')
     expect(finalizeEvidence).toContain('--source-root "release/$version"')
     expect(finalizeEvidence).toContain('--output-root "$AI_NOVEL_LEGACY_RELEASE_ROOT"')
     expect(finalizeEvidence).toContain('--bundle-root "$AI_NOVEL_LEGACY_RELEASE_ROOT"')
     expect(finalizeEvidence).toContain('--legacy-root "$AI_NOVEL_LEGACY_RELEASE_ROOT"')
-    expect(finalizeEvidence).toContain('verify-bundle --platform macos')
-    expect(finalizeEvidence).toContain('finalize-legacy-qualification.mjs --platform macos')
+    expect(finalizeEvidence).toContain('verify-bundle --platform macos-arm64')
+    expect(finalizeEvidence).toContain('finalize-legacy-qualification.mjs --platform macos-arm64')
     expect(finalizeEvidence.indexOf('release-evidence-v2.mjs finalize')).toBeLessThan(finalizeEvidence.indexOf('project-legacy-qualification.mjs'))
     expect(finalizeEvidence.indexOf('project-legacy-qualification.mjs')).toBeLessThan(finalizeEvidence.indexOf('release-evidence-v2.mjs verify-bundle'))
     expect(workflow.indexOf('Finalize macOS v2 acceptance receipts')).toBeGreaterThan(workflow.indexOf('Run mounted-DMG smoke'))
     expect(workflow.indexOf('Finalize macOS v2 acceptance receipts')).toBeLessThan(workflow.indexOf('Upload runtime-verified macOS ARM64 package'))
 
-    expect(packageMetadata.scripts?.['build:mac:artifacts']).toContain('node scripts/build-release-vector-smoke-runner.mjs')
-    expect(packageMetadata.scripts?.['build:mac:artifacts']).toContain('electron-builder --mac --arm64 --publish never')
+    expect(packageMetadata.scripts?.['build:mac:artifacts']).toContain('build:mac:arm64:artifacts')
+    expect(packageMetadata.scripts?.['build:mac:arm64:artifacts']).toContain('node scripts/build-release-vector-smoke-runner.mjs')
+    expect(packageMetadata.scripts?.['build:mac:arm64:artifacts']).toContain('electron-builder --mac --arm64 --publish never')
+    expect(packageMetadata.scripts?.['build:mac:x64:artifacts']).toContain('electron-builder --mac --x64 --publish never')
     expect(packageMetadata.scripts?.['smoke:mac-dmg']).toContain('scripts/smoke-macos-dmg.sh')
     expect(smokeScript).toContain('hdiutil attach')
     expect(smokeScript).toContain('hdiutil detach')
@@ -167,9 +170,29 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(vectorRunnerSource).toContain('runReleaseVectorSmoke')
     expect(vectorRunnerSource).toContain('Packaged vector smoke timed out after 90 seconds')
     expect(manifestScript).toContain('finalizeReleaseEvidence')
-    expect(manifestScript).toContain("platform: 'macos'")
-    expect(manifestScript).toContain("process.platform === 'darwin'")
-    expect(manifestScript).toContain("process.arch === 'arm64'")
     expect(manifestScript).toContain('AI_NOVEL_RELEASE_EVIDENCE_ROOT')
+  })
+
+  it('qualifies Intel x64 as a separate immutable artifact rather than reusing Apple Silicon evidence', () => {
+    const workflow = readRequired(x64WorkflowPath)
+
+    expect(workflow).toContain('name: macOS Intel x64 cloud package qualification')
+    expect(workflow).toContain('runs-on: macos-13')
+    expect(workflow).toContain('group: macos-x64-cloud-build-${{ inputs.expected_sha }}-${{ inputs.release_version }}')
+    expect(workflow).toContain('ref: ${{ inputs.expected_sha }}')
+    expect(workflow).toContain('persist-credentials: false')
+    expect(workflow).toContain('release-evidence-v2.mjs init --platform macos-x64')
+    expect(workflow).toContain("--runner-label 'macos-13'")
+    expect(workflow).toContain("--workflow-path '.github/workflows/macos-x64-cloud-build.yml'")
+    expect(workflow).toContain("--workflow-name 'macOS Intel x64 cloud package qualification'")
+    expect(workflow).toContain('freeze-release-contract.mjs')
+    expect(workflow).toContain('--platform macos-x64')
+    expect(workflow).toContain('pnpm run build:mac:x64:artifacts')
+    expect(workflow).toContain('AI_NOVEL_RELEASE_TARGET_ARCH=x64 pnpm run smoke:mac-dmg')
+    expect(workflow).toContain("test \"$(uname -m)\" = 'x86_64'")
+    expect(workflow).toContain('name: qualified-macos-x64')
+    expect(workflow).toContain('path: ${{ runner.temp }}/macos-x64-qualified')
+    expect(workflow).not.toContain('qualified-macos-arm64')
+    expect(workflow).not.toMatch(/\b(?:gh\s+release|create-release|upload-release|git\s+tag|git\s+push\s+.*(?:tag|refs\/tags)|codesign|notarytool)\b/i)
   })
 })

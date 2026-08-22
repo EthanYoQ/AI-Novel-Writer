@@ -50,6 +50,8 @@ export interface EditorTab {
   chapterDir?: string
   /** 审稿报告存放路径 */
   reportPath?: string
+  /** 原始 AI 审稿报告的数据库标识；人工确认快照与审稿修稿均以此为来源。 */
+  reviewId?: number
 }
 
 interface EditorState {

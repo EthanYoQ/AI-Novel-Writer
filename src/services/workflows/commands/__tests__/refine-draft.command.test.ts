@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import {
+  createHumanConfirmedReviewSnapshot,
+  serializeHumanConfirmedReviewSnapshot,
+  type HumanConfirmedReviewSnapshotInput,
+} from '../../../../shared/human-confirmed-review'
 import type { ModelExecutionLeaseReceipt } from '../../../../shared/ipc-channels'
 import { useEditorStore } from '../../../../stores/editor-store'
 import { useProjectStore } from '../../../../stores/project-store'
@@ -21,13 +26,43 @@ const PROJECT_SESSION = Object.freeze({
   projectPath: PROJECT_PATH,
 })
 
-function leaseReceipt(): ModelExecutionLeaseReceipt {
+const CONFIRMATION_REVIEW_ID = 91
+
+function confirmedReviewContent(
+  overrides: Partial<HumanConfirmedReviewSnapshotInput> = {},
+): string {
+  const snapshot = createHumanConfirmedReviewSnapshot({
+    sourceReviewId: 41,
+    summary: '原始 AI 总结不能直接作为修稿提示。',
+    authorGuidance: '保留开头的悬念。',
+    items: [
+      {
+        category: '连续性',
+        severity: 'error',
+        description: '角色位置前后矛盾。',
+        decision: 'apply',
+        origin: 'ai',
+      },
+    ],
+    ...overrides,
+  })
+  if (!snapshot) throw new Error('test fixture must form a valid confirmation snapshot')
+  return serializeHumanConfirmedReviewSnapshot(snapshot)
+}
+
+const DEFAULT_CONFIRMED_REVIEW_CONTENT = confirmedReviewContent()
+const RAW_AI_REVIEW_JSON = JSON.stringify({
+  summary: '原始 AI JSON 不是人工确认快照。',
+  items: [{ category: '连续性', severity: 'error', description: '未经确认的原始问题。' }],
+})
+
+function leaseReceipt(modelId = 'model-a'): ModelExecutionLeaseReceipt {
   return {
     leaseId: 'model-lease-refine',
-    modelId: 'model-a',
+    modelId,
     provider: 'custom',
     protocol: 'openai',
-    modelName: 'model-a',
+    modelName: modelId,
     modelRevision: 'a'.repeat(64),
     endpointFingerprint: 'b'.repeat(64),
     capabilityEvidence: {
@@ -61,11 +96,12 @@ function runtimeDependencies(
   }
 }
 
-function workflowContext(): WorkflowContext {
+function workflowContext(options: { generationModelId?: string } = {}): WorkflowContext {
   return {
     runId: 'refine-run',
     projectPath: PROJECT_PATH,
     projectSession: PROJECT_SESSION,
+    ...(options.generationModelId ? { generationModelId: options.generationModelId } : {}),
     data: {},
     cancelled: false,
   }
@@ -116,12 +152,15 @@ function command(
 function reviewCommand(
   completeWithLease: GenerationRuntimeEnvironment['completeWithLease'],
   draftContent: string,
+  overrides: Partial<ConstructorParameters<typeof RefineFromReviewCommand>[0]> = {},
 ): RefineFromReviewCommand {
   return new RefineFromReviewCommand({
     draftPath: 'vela://draft/1',
     draftContent,
-    reviewReport: '{"summary":"修复结尾事实冲突"}',
+    confirmedReviewContent: DEFAULT_CONFIRMED_REVIEW_CONTENT,
+    reviewSourceId: CONFIRMATION_REVIEW_ID,
     chapterNumber: 1,
+    ...overrides,
   }, runtimeDependencies(completeWithLease))
 }
 
@@ -135,11 +174,28 @@ function chapterReviewCommand(
   }, runtimeDependencies(completeWithLease))
 }
 
-function successfulRevisionIpc() {
+function successfulRevisionIpc(options: {
+  reviewContent?: string
+  reviewId?: number
+  reviewBaseDraftId?: number
+} = {}) {
+  const reviewContent = options.reviewContent ?? DEFAULT_CONFIRMED_REVIEW_CONTENT
+  const reviewId = options.reviewId ?? CONFIRMATION_REVIEW_ID
+  const reviewBaseDraftId = options.reviewBaseDraftId ?? 1
   return vi.fn(async (channel: string, ...args: unknown[]) => {
     void args
     if (channel === 'db:draft-get-meta') {
       return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+    }
+    if (channel === 'db:review-get-full') {
+      return {
+        id: reviewId,
+        baseDraftId: reviewBaseDraftId,
+        reviewIndex: 2,
+        contentId: 7,
+        createdAt: '2026-08-22T00:00:00.000Z',
+        content: reviewContent,
+      }
     }
     if (channel === 'db:revision-replace-pending') return { success: true, id: 9, revisionIndex: 2 }
     throw new Error(`unexpected IPC: ${channel}`)
@@ -389,6 +445,175 @@ describe('RefineDraftCommand bounded visible completion', () => {
 })
 
 describe('RefineFromReviewCommand bounded visible completion', () => {
+  it('uses the persisted confirmation row as the only refinement input, records that row on the pending revision, and preserves the draft before merge', async () => {
+    const persistedConfirmation = confirmedReviewContent({
+      sourceReviewId: 41,
+      summary: '原始 AI 总结绝不能进入修稿提示。',
+      authorGuidance: '保留开头的悬念。',
+      items: [
+        {
+          category: '连续性',
+          severity: 'error',
+          description: '只修复这个已确认的问题。',
+          decision: 'apply',
+          origin: 'ai',
+        },
+        {
+          category: '节奏',
+          severity: 'warning',
+          description: '这个被作者忽略，不能送入模型。',
+          decision: 'ignore',
+          origin: 'ai',
+        },
+      ],
+    })
+    const sourceDraft = '原稿正文。'.repeat(250)
+    const revision = '修订正文。'.repeat(250)
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: revision, finishReason: 'stop' })
+    const invoke = successfulRevisionIpc({ reviewContent: persistedConfirmation })
+    stubIpc(invoke)
+
+    const begunModelIds: string[] = []
+    const createRuntime = vi.fn<WorkflowGenerationRuntimeDependencies['createRuntime']>(options => (
+      createGenerationRuntime(options, {
+        snapshotDefaultModelId: () => 'glm-global-default',
+        beginModelExecution: async modelId => {
+          begunModelIds.push(modelId)
+          return leaseReceipt(modelId)
+        },
+        completeWithLease,
+        closeModelExecution: async () => {},
+      })
+    ))
+    const command = new RefineFromReviewCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: sourceDraft,
+      confirmedReviewContent: persistedConfirmation,
+      reviewSourceId: CONFIRMATION_REVIEW_ID,
+      reviewReport: '{"summary":"原始 AI 报告也不能进入模型"}',
+      userRefinePrompt: '瞬态 UI 提示不得绕过确认快照。',
+      chapterNumber: 1,
+    }, { createRuntime })
+
+    await expect(command.execute({
+      step: {},
+      context: workflowContext({ generationModelId: 'grok-selected-model' }),
+      callbacks: callbacks(),
+    })).resolves.toBe(revision)
+
+    expect(invoke).toHaveBeenCalledWith(
+      'db:review-get-full',
+      CONFIRMATION_REVIEW_ID,
+      PROJECT_PATH,
+      PROJECT_SESSION,
+    )
+    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'grok-selected-model' }))
+    expect(begunModelIds).toEqual(['grok-selected-model'])
+    const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
+    expect(prompt).toContain('只修复这个已确认的问题。')
+    expect(prompt).toContain('保留开头的悬念。')
+    expect(prompt).not.toContain('这个被作者忽略，不能送入模型。')
+    expect(prompt).not.toContain('原始 AI 总结绝不能进入修稿提示。')
+    expect(prompt).not.toContain('瞬态 UI 提示不得绕过确认快照。')
+
+    const pendingRevision = invoke.mock.calls.find(([channel]) => channel === 'db:revision-replace-pending')?.[1]
+    expect(pendingRevision).toMatchObject({
+      baseDraftId: 1,
+      revisionType: 'review-fix',
+      reviewSourceId: CONFIRMATION_REVIEW_ID,
+      userPrompt: '保留开头的悬念。',
+      content: revision,
+    })
+    expect(invoke.mock.calls.some(([channel]) => (
+      channel === 'db:draft-create' || channel === 'db:draft-update-content'
+    ))).toBe(false)
+  })
+
+  const allIgnoredConfirmationContent = () => confirmedReviewContent({
+    authorGuidance: '这条补充说明不能单独触发模型。',
+    items: [{
+      category: '连续性',
+      severity: 'error',
+      description: '作者选择忽略的问题。',
+      decision: 'ignore',
+      origin: 'ai',
+    }],
+  })
+
+  it.each([
+    ['the confirmation row is missing', () => null, () => DEFAULT_CONFIRMED_REVIEW_CONTENT],
+    ['the confirmation row contains raw AI JSON', () => ({
+      id: CONFIRMATION_REVIEW_ID,
+      baseDraftId: 1,
+      reviewIndex: 2,
+      contentId: 7,
+      createdAt: '2026-08-22T00:00:00.000Z',
+      content: RAW_AI_REVIEW_JSON,
+    }), () => DEFAULT_CONFIRMED_REVIEW_CONTENT],
+    ['all review items are ignored even when author guidance is non-empty', () => ({
+      id: CONFIRMATION_REVIEW_ID,
+      baseDraftId: 1,
+      reviewIndex: 2,
+      contentId: 7,
+      createdAt: '2026-08-22T00:00:00.000Z',
+      content: allIgnoredConfirmationContent(),
+    }), allIgnoredConfirmationContent],
+    ['the stored confirmation belongs to a different base draft', () => ({
+      id: CONFIRMATION_REVIEW_ID,
+      baseDraftId: 999,
+      reviewIndex: 2,
+      contentId: 7,
+      createdAt: '2026-08-22T00:00:00.000Z',
+      content: DEFAULT_CONFIRMED_REVIEW_CONTENT,
+    }), () => DEFAULT_CONFIRMED_REVIEW_CONTENT],
+    ['the renderer snapshot differs from the persisted confirmation row', () => ({
+      id: CONFIRMATION_REVIEW_ID,
+      baseDraftId: 1,
+      reviewIndex: 2,
+      contentId: 7,
+      createdAt: '2026-08-22T00:00:00.000Z',
+      content: DEFAULT_CONFIRMED_REVIEW_CONTENT,
+    }), () => confirmedReviewContent({
+      items: [{
+        category: '伪造输入',
+        severity: 'error',
+        description: '前端传来的伪造修稿项。',
+        decision: 'apply',
+        origin: 'author',
+      }],
+      authorGuidance: '前端临时指导。',
+    })],
+  ])('does not open a generation runtime when %s', async (_case, storedReview, rendererContent) => {
+    const createRuntime = vi.fn<WorkflowGenerationRuntimeDependencies['createRuntime']>()
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:draft-get-meta') {
+        return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      }
+      if (channel === 'db:review-get-full') return storedReview()
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubIpc(invoke)
+    const command = new RefineFromReviewCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: '原稿正文。'.repeat(100),
+      confirmedReviewContent: rendererContent(),
+      reviewSourceId: CONFIRMATION_REVIEW_ID,
+      chapterNumber: 1,
+    }, { createRuntime })
+
+    await expect(command.execute({
+      step: {},
+      context: workflowContext(),
+      callbacks: callbacks(),
+    })).rejects.toThrow()
+
+    expect(createRuntime).not.toHaveBeenCalled()
+    expect(completeWithLease).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:revision-replace-pending')).toBe(false)
+  })
+
   it('continues a length-limited public workflow and logs only bounded terminal evidence', async () => {
     const overlap = '审稿修复衔接句'.repeat(8)
     const first = `前半修复正文。${overlap}`
@@ -420,7 +645,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
       .mockResolvedValueOnce({ content: partial, finishReason: 'length' })
       .mockResolvedValueOnce({ content: partial, finishReason: 'stop' })
-    const invoke = vi.fn()
+    const invoke = successfulRevisionIpc()
     stubIpc(invoke)
 
     await expect(reviewCommand(completeWithLease, partial).execute({
@@ -430,7 +655,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     })).rejects.toThrow('续写未增加新的可见正文')
 
     expect(completeWithLease).toHaveBeenCalledTimes(2)
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:revision-replace-pending')).toHaveLength(0)
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 })

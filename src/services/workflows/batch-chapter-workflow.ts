@@ -24,6 +24,8 @@ export interface BatchChapterWorkflowParams {
   chapterCount: number
   /** 任务面板中的章节名称跟随应用界面语言 */
   locale?: Locale
+  /** 由批量创作入口选择并冻结；缺失时由草稿命令使用默认生成模型。 */
+  generationModelId?: string
 }
 
 /** 将 UI 或外部输入收敛到安全的 1–10 章范围。 */
@@ -31,6 +33,10 @@ export function normalizeBatchChapterCount(value: number | string | null | undef
   const parsed = Math.trunc(Number(value))
   if (!Number.isFinite(parsed)) return MIN_BATCH_CHAPTERS
   return Math.min(MAX_BATCH_CHAPTERS, Math.max(MIN_BATCH_CHAPTERS, parsed))
+}
+
+function normalizeGenerationModelId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 function toChapterInfo(blueprint: ChapterBlueprint, projectPath: string): ChapterInfo {
@@ -106,11 +112,13 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
   const startChapterNumber = Math.max(1, Math.trunc(Number(params.startChapterNumber) || 1))
   const chapterCount = normalizeBatchChapterCount(params.chapterCount)
   const isEnglish = params.locale === 'en-US'
+  const generationModelId = normalizeGenerationModelId(params.generationModelId)
 
   return {
     type: 'batch_generate',
     projectPath: params.projectPath,
     projectSession: Object.freeze({ ...params.projectSession }),
+    ...(generationModelId ? { generationModelId } : {}),
     title: isEnglish
       ? `Batch writing — Chapters ${startChapterNumber}–${startChapterNumber + chapterCount - 1}`
       : `批量创作 — 第${startChapterNumber}–${startChapterNumber + chapterCount - 1}章`,

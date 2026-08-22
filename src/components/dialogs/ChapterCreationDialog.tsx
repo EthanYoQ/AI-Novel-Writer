@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Sparkles, Play, AlertCircle, Loader2 } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
@@ -27,13 +27,12 @@ import { NativeSelect } from '../ui/NativeSelect'
 import { useLocaleStore } from '../../stores/locale-store'
 import {
   ChapterCreationLoadGate,
-  type ChapterCreationLoadToken,
 } from './chapter-creation-load-gate'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
 } from '../project-session-gate'
-import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { ModelProfile, ProjectSessionContext } from '../../shared/ipc-channels'
 
 const CHAPTER_ROLES = [
   { value: '开篇', en: 'Opening' },
@@ -55,10 +54,42 @@ interface Props {
 /** 章节创作参数持久化路径（相对于项目路径） */
 const CREATION_LOG_REL = '.vela/chapter_creation_log.json'
 
+function isGenerationModel(model: ModelProfile): boolean {
+  return model.purposes.includes('generation')
+}
+
+function availableGenerationModelId(
+  models: ModelProfile[],
+  modelId: string | null | undefined,
+): string | null {
+  return modelId && models.some(model => model.id === modelId && isGenerationModel(model))
+    ? modelId
+    : null
+}
+
+function preferredGenerationModelId(models: ModelProfile[], defaultModelId: string | null): string | null {
+  return availableGenerationModelId(models, defaultModelId)
+    ?? models.find(isGenerationModel)?.id
+    ?? null
+}
+
 /** 章节创作对话框 — 配置并启动章节创作工作流（步进式，每步等待用户确认） */
-export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Props) {
+export default function ChapterCreationDialog(props: Props) {
+  const currentProject = useProjectStore(s => s.currentProject)
+  const projectSession = captureProjectSession(currentProject)
+  const sessionKey = projectSession
+    ? `${projectSession.projectId}:${projectSession.leaseId}`
+    : 'inactive'
+
+  // A closed dialog gets its own instance, so each open snapshots the current
+  // default generation model without persisting a local choice across opens.
+  return <ChapterCreationDialogSession key={`${sessionKey}:${props.isOpen ? 'open' : 'closed'}`} {...props} />
+}
+
+function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
   const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore(s => s.currentProject)
+  const models = useLLMStore(s => s.models)
   const defaultModelId = useLLMStore(s => s.defaultModelId)
   // ✅ action 用 getState() 获取，不订阅 workflow store 高频更新
   const startWorkflow = useWorkflowStore.getState().startWorkflow
@@ -75,8 +106,26 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
   const [loadedFromHistory, setLoadedFromHistory] = useState(false)
   const [loadedFromBlueprint, setLoadedFromBlueprint] = useState(false)
   const [guardError, setGuardError] = useState<string | null>(null)
+  const [generationModelId, setGenerationModelId] = useState<string | null>(() => (
+    preferredGenerationModelId(models, defaultModelId)
+  ))
   const isChapterRunning = useWorkflowStore(s => s.isTypeRunning('chapter_creation'))
   const loadGate = useRef(new ChapterCreationLoadGate())
+  const generationModels = models.filter(isGenerationModel)
+  const fallbackGenerationModelId = preferredGenerationModelId(models, defaultModelId)
+  const selectedGenerationModelId = generationModelId ?? fallbackGenerationModelId
+  const selectedGenerationModel = generationModels.find(model => model.id === selectedGenerationModelId)
+  const modelSelectionError = generationModels.length === 0
+    ? text(
+      '没有已配置且可用于文本生成的模型。请在设置中添加或启用一项生成模型。',
+      'No configured model can generate text. Add or enable a generation model in Settings.',
+    )
+    : !selectedGenerationModel
+      ? text(
+        '所选创作模型已不可用。请选择一项可用于文本生成的模型后再试。',
+        'The selected writing model is no longer available. Select a compatible generation model and try again.',
+      )
+      : null
 
 
   // 如果是在这弹窗里发起的任务，一旦跑完，isChapterRunning 会变成 false，此时自动关闭弹窗
@@ -91,56 +140,6 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
     })
     return unsub
   }, [isOpen, onClose])
-
-  /** 从项目本地 .vela/chapter_creation_log.json 读取上次参数 */
-  const loadLastParams = useCallback(async (
-    projectSession: ProjectSessionContext,
-    defaultWordsTarget: number,
-    requestToken: ChapterCreationLoadToken,
-  ) => {
-    const projectPath = projectSession.projectPath
-    const isCurrentRequest = () => loadGate.current.isCurrent(
-      requestToken,
-      useProjectStore.getState().currentProject?.path,
-    ) && isProjectSessionCurrent(projectSession)
-    try {
-      const result = await ipc.invokeWithProjectSession(
-        projectSession,
-        'fs:read-json',
-        `${projectPath}/${CREATION_LOG_REL}`,
-        projectPath,
-      )
-      if (!isCurrentRequest()) return
-      if (result.success && result.data) {
-        const log = result.data as {
-          lastUsed?: {
-            chapterNumber: number; title?: string; role: string
-            purpose?: string; keyEvents?: string; characters?: string
-            userGuidance?: string; wordsTarget?: number
-          }
-        }
-        if (log.lastUsed) {
-          const last = log.lastUsed
-          // 章节号自动 +1
-          setChapterNumber((last.chapterNumber || 0) + 1)
-          setTitle('') // 标题不继承，让用户自填
-          setRole(last.role || '发展')
-          setPurpose(last.purpose || '')
-          setKeyEvents(last.keyEvents || '')
-          setCharacters(last.characters || '')
-          setUserGuidance(last.userGuidance || '')
-          setWordsTarget(normalizeChapterWordsTarget(last.wordsTarget, defaultWordsTarget))
-          setLoadedFromHistory(true)
-          return
-        }
-      }
-    } catch { /* 文件不存在，使用默认值 */ }
-    if (!isCurrentRequest()) return
-    // 默认值：根据已有稿件数量推断下一章节号
-    setWordsTarget(normalizeChapterWordsTarget(defaultWordsTarget))
-    setChapterNumber(1)
-    setLoadedFromHistory(false)
-  }, [])
 
   // 每次打开时：prefill 优先，其次尝试从历史恢复
   useEffect(() => {
@@ -158,6 +157,46 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
       requestToken,
       useProjectStore.getState().currentProject?.path,
     ) && isProjectSessionCurrent(projectSession)
+    /** 从项目本地 .vela/chapter_creation_log.json 读取上次参数。 */
+    const loadLastParams = async () => {
+      try {
+        const result = await ipc.invokeWithProjectSession(
+          projectSession,
+          'fs:read-json',
+          `${projectPath}/${CREATION_LOG_REL}`,
+          projectPath,
+        )
+        if (!isCurrentRequest()) return
+        if (result.success && result.data) {
+          const log = result.data as {
+            lastUsed?: {
+              chapterNumber: number; title?: string; role: string
+              purpose?: string; keyEvents?: string; characters?: string
+              userGuidance?: string; wordsTarget?: number
+            }
+          }
+          if (log.lastUsed) {
+            const last = log.lastUsed
+            // 章节号自动 +1
+            setChapterNumber((last.chapterNumber || 0) + 1)
+            setTitle('') // 标题不继承，让用户自填
+            setRole(last.role || '发展')
+            setPurpose(last.purpose || '')
+            setKeyEvents(last.keyEvents || '')
+            setCharacters(last.characters || '')
+            setUserGuidance(last.userGuidance || '')
+            setWordsTarget(normalizeChapterWordsTarget(last.wordsTarget, defaultWordsTarget))
+            setLoadedFromHistory(true)
+            return
+          }
+        }
+      } catch { /* 文件不存在，使用默认值 */ }
+      if (!isCurrentRequest()) return
+      // 默认值：根据已有稿件数量推断下一章节号
+      setWordsTarget(normalizeChapterWordsTarget(defaultWordsTarget))
+      setChapterNumber(1)
+      setLoadedFromHistory(false)
+    }
     Promise.resolve().then(() => {
       if (!isCurrentRequest()) return
       if (prefill) {
@@ -174,13 +213,13 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
         setLoadedFromHistory(false)
       } else {
         setLoadedFromBlueprint(false)
-        void loadLastParams(projectSession, defaultWordsTarget, requestToken)
+        void loadLastParams()
       }
     })
     return () => {
       gate.invalidate(requestToken)
     }
-  }, [isOpen, currentProject, prefill, loadLastParams])
+  }, [isOpen, currentProject, prefill])
 
 
 
@@ -224,8 +263,13 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
   }
 
   const handleStart = async () => {
-    if (!defaultModelId) {
-      addLog('error', text('请先配置 AI 模型', 'Configure an AI model first.'))
+    if (modelSelectionError || !selectedGenerationModel) {
+      const message = modelSelectionError ?? text(
+        '请选择一项可用于文本生成的模型。',
+        'Select a compatible generation model before starting.',
+      )
+      setGuardError(message)
+      addLog('error', message)
       return
     }
     const projectSession = captureProjectSession(currentProject)
@@ -242,6 +286,17 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
     const targetChapter = Number(chapterNumber) || 1
     const guard = await guardChapterWriting(targetChapter, projectPath, projectSession)
     if (!isProjectSessionCurrent(projectSession)) return
+    const guardedGenerationModelId = availableGenerationModelId(
+      useLLMStore.getState().models,
+      selectedGenerationModelId,
+    )
+    if (!guardedGenerationModelId) {
+      setGuardError(text(
+        '所选创作模型已不可用。请选择一项可用于文本生成的模型后再试。',
+        'The selected writing model is no longer available. Select a compatible generation model and try again.',
+      ))
+      return
+    }
     if (!guard.ok) {
       setGuardError(guard.message || text('前置条件未满足', 'Prerequisites are not met.'))
       return
@@ -257,6 +312,17 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
     // 持久化本次参数
     await saveParams(projectSession, normalizedWordsTarget)
     if (!isProjectSessionCurrent(projectSession)) return
+    const frozenGenerationModelId = availableGenerationModelId(
+      useLLMStore.getState().models,
+      selectedGenerationModelId,
+    )
+    if (!frozenGenerationModelId) {
+      setGuardError(text(
+        '所选创作模型已不可用。请选择一项可用于文本生成的模型后再试。',
+        'The selected writing model is no longer available. Select a compatible generation model and try again.',
+      ))
+      return
+    }
 
     const workflow = createChapterWorkflow(createChapterInfoFromDialogInput({
       projectPath,
@@ -270,7 +336,7 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
       knowledgeQueryHint: knowledgeHint,
       wordsTarget: normalizedWordsTarget,
       defaultWordsTarget: currentProject?.novelConfig.wordsPerChapter ?? DEFAULT_CHAPTER_WORDS_TARGET,
-    }), projectSession)
+    }), projectSession, { generationModelId: frozenGenerationModelId })
 
     // 启动任务后关闭设定弹窗，由全局 Overlay 接管展示
     if (!isProjectSessionCurrent(projectSession)) return
@@ -308,6 +374,32 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
 
         {/* 表单 */}
         <div className="px-5 py-4 space-y-3">
+              <div>
+                <Label htmlFor="chapter-writing-model">{text('本次创作模型', 'Writing model for this run')}</Label>
+                <NativeSelect
+                  id="chapter-writing-model"
+                  value={selectedGenerationModelId ?? ''}
+                  onChange={(event) => {
+                    setGenerationModelId(event.target.value || null)
+                    setGuardError(null)
+                  }}
+                  disabled={generationModels.length === 0}
+                >
+                  <option value="" disabled>{text('请选择可用生成模型', 'Select a generation model')}</option>
+                  {generationModels.map(model => (
+                    <option key={model.id} value={model.id}>{model.name || model.modelName}</option>
+                  ))}
+                </NativeSelect>
+                <p className="mt-1 text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
+                  {text('仅用于本次创作，不会更改默认模型。', 'Used for this run only; it does not change the default model.')}
+                </p>
+                {modelSelectionError && (
+                  <p className="mt-1 text-xs" role="alert" style={{ color: 'var(--color-error-text)' }}>
+                    {modelSelectionError}
+                  </p>
+                )}
+              </div>
+
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <Label>{text('章节号', 'Chapter number')}</Label>
@@ -406,7 +498,7 @@ export default function ChapterCreationDialog({ isOpen, onClose, prefill }: Prop
               </span>
               <div className="flex items-center gap-2">
                 <Button variant="outline" onClick={onClose}>{text('取消', 'Cancel')}</Button>
-                <Button variant="ai" size="lg" onClick={handleStart} disabled={isChapterRunning}>
+                <Button variant="ai" size="lg" onClick={handleStart} disabled={isChapterRunning || !!modelSelectionError}>
                   {isChapterRunning ? (
                     <span className="flex items-center gap-2">
                       <Loader2 size={13} className="animate-spin" />

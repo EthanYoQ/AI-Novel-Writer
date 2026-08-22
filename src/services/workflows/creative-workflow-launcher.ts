@@ -37,6 +37,15 @@ export interface CreativeWorkflowLaunchReceipt {
   readonly status: WorkflowStatus
 }
 
+/**
+ * A renderer-owned model choice may accompany an Agent-originated draft run.
+ * It is intentionally not part of CreativeIntent, which is built from LLM
+ * tool arguments.
+ */
+export interface CreativeWorkflowLaunchOptions {
+  readonly generationModelId?: string
+}
+
 function requireGuardAccepted(result: GuardResult): void {
   if (!result.ok) throw new Error(result.message ?? '创作工作流前置条件未满足')
 }
@@ -69,6 +78,7 @@ function currentProjectFor(projectSession: ProjectSessionContext) {
 async function definitionFor(
   intent: CreativeIntent,
   projectSession: ProjectSessionContext,
+  generationModelId?: string,
 ): Promise<WorkflowDefinition> {
   const project = currentProjectFor(projectSession)
 
@@ -108,7 +118,7 @@ async function definitionFor(
       suspenseHook: blueprint.suspenseHook,
       userGuidance: blueprint.userGuidance,
       wordsTarget: project.novelConfig.wordsPerChapter,
-    }, projectSession)
+    }, projectSession, { generationModelId })
   }
 
   throw new Error(`${intent.workflow} 需要明确的草稿 ID 和不可变正文快照；请先打开目标草稿后从编辑器启动`)
@@ -118,11 +128,17 @@ async function definitionFor(
 export async function launchCreativeWorkflow(
   intent: CreativeIntent,
   projectSession: ProjectSessionContext,
+  options: CreativeWorkflowLaunchOptions = {},
 ): Promise<CreativeWorkflowLaunchReceipt> {
+  const generationModelId = options.generationModelId?.trim() || undefined
   currentProjectFor(projectSession)
   await guardIntent(intent, projectSession)
   currentProjectFor(projectSession)
-  const definition = await definitionFor(intent, Object.freeze({ ...projectSession }))
+  const definition = await definitionFor(
+    intent,
+    Object.freeze({ ...projectSession }),
+    generationModelId,
+  )
   currentProjectFor(projectSession)
 
   const runId = randomUUID()

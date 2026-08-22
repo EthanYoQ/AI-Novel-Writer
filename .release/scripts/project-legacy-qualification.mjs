@@ -4,14 +4,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const scriptPath = fileURLToPath(import.meta.url)
-const packagedEvidence = {
-  macos: [
-    'qualification/packaged-vector-smoke.json',
-    'qualification/packaged-official-homepage-smoke.json',
-    'qualification/packaged-skin-smoke.json',
-    'qualification/macos-dmg-smoke.json',
-  ],
-}
+const MACOS_QUALIFICATION_ENTITIES = new Set(['macos-arm64', 'macos-x64'])
+const packagedMacosEvidence = [
+  'qualification/packaged-vector-smoke.json',
+  'qualification/packaged-official-homepage-smoke.json',
+  'qualification/packaged-skin-smoke.json',
+  'qualification/macos-dmg-smoke.json',
+]
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -62,7 +61,7 @@ function copyExact(sourceRoot, destinationRoot, relativePath) {
 }
 
 export function projectLegacyQualificationBundle({ platform, version, sourceRoot, outputRoot, profilePath }) {
-  assert(platform === 'macos', 'legacy qualification projection currently supports macos only')
+  assert(MACOS_QUALIFICATION_ENTITIES.has(platform), 'legacy qualification projection requires a specific macOS architecture entity')
   assert(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version), 'version is invalid')
   const resolvedSourceRoot = path.resolve(sourceRoot)
   const resolvedOutputRoot = path.resolve(outputRoot)
@@ -72,9 +71,14 @@ export function projectLegacyQualificationBundle({ platform, version, sourceRoot
     .filter(asset => asset.platform === platform)
     .map(asset => asset.name.replaceAll('{version}', version))
   const acceptance = profile.platforms[platform].acceptanceReceipts.map(relativePath => `qualification/${safeRelativePath(relativePath, 'Acceptance receipt')}`)
-  const evidence = ['qualification/release-contract.json', 'qualification/run-ledger.json', ...acceptance, ...packagedEvidence[platform]]
+  const evidence = ['qualification/release-contract.json', 'qualification/run-ledger.json', ...acceptance, ...packagedMacosEvidence]
   const manifestFile = regularSource(resolvedSourceRoot, 'manifest.json')
   const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'))
+  const expectedArchitecture = profile.platforms[platform]?.architectures?.[0]
+  assert(typeof expectedArchitecture === 'string' && expectedArchitecture.length > 0, 'release profile qualification entity architecture is missing')
+  assert(manifest.platform === platform, 'legacy manifest platform does not match its qualification entity')
+  assert(manifest.architecture === expectedArchitecture, 'legacy manifest architecture does not match its qualification entity')
+  assert(!Object.hasOwn(manifest, 'arch'), 'legacy manifest must use architecture instead of deprecated arch')
   const manifestArtifacts = manifest.artifacts?.map(record => record?.file)
   const manifestEvidence = manifest.evidence?.map(record => record?.file)
   assert(JSON.stringify([...manifestArtifacts].sort()) === JSON.stringify([...releaseAssets].sort()), 'legacy manifest asset set does not match release profile')

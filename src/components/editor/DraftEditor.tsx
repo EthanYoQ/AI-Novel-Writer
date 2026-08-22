@@ -487,6 +487,8 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       reviewReport: reportContent,
       chapterNumber: meta.chapterNumber,
       chapterDir,
+      draftId: meta.id,
+      reviewId: latest.id,
       projectKey,
     })
   }

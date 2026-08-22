@@ -1,13 +1,44 @@
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle, Info, Sparkles, HelpCircle, Quote } from 'lucide-react'
+import {
+  AlertTriangle,
+  CheckCircle,
+  CircleMinus,
+  FileCheck2,
+  HelpCircle,
+  Info,
+  ListChecks,
+  Pencil,
+  Plus,
+  Quote,
+  RotateCcw,
+  Sparkles,
+  X,
+} from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/Button'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
+import { Input } from '../ui/Input'
+import { Label } from '../ui/Label'
+import { NativeSelect } from '../ui/NativeSelect'
+import { Textarea } from '../ui/Textarea'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../project-session-gate'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useLLMStore } from '../../stores/llm-store'
+import { ipc } from '../../services/ipc-client'
+import { requireIpcSuccess } from '../../services/ipc-result'
+import type { ModelProfile } from '../../shared/ipc-channels'
+import {
+  createHumanConfirmedReviewSnapshot,
+  hasIncludedReviewItems,
+  parseHumanConfirmedReviewSnapshot,
+  renderHumanConfirmedReviewBrief,
+  serializeHumanConfirmedReviewSnapshot,
+  type HumanConfirmedReviewItem,
+  type HumanConfirmedReviewSnapshot,
+} from '../../shared/human-confirmed-review'
 
 /** 审稿问题条目（JSON 格式） */
 interface ReviewIssue {
@@ -38,8 +69,22 @@ interface ReviewReportProps {
   chapterNumber?: number
   /** 章节目录 */
   chapterDir?: string
+  /** 原始 AI 审稿报告的数据库 ID；确认快照必须持续指向该记录。 */
+  reviewId?: number
   /** 审稿与草稿所属项目。 */
   projectKey: string
+}
+
+interface EditableReviewItem extends HumanConfirmedReviewItem {
+  id: string
+  severity: ReviewIssue['severity']
+}
+
+interface ConfirmedChecklist {
+  /** The newly appended confirmation row, which is the revision's reviewSourceId. */
+  reviewSourceId: number
+  content: string
+  snapshot: HumanConfirmedReviewSnapshot
 }
 
 // ===== 解析器 =====
@@ -203,91 +248,372 @@ function SeverityIcon({ severity }: { severity: ReviewIssue['severity'] }) {
   return <CheckCircle size={14} className="flex-shrink-0" style={{ color: 'var(--color-success)' }} />
 }
 
+function isGenerationModel(model: ModelProfile): boolean {
+  return model.purposes.includes('generation')
+}
+
+function availableGenerationModelId(
+  models: ModelProfile[],
+  modelId: string | null | undefined,
+): string | null {
+  return modelId && models.some(model => model.id === modelId && isGenerationModel(model))
+    ? modelId
+    : null
+}
+
+function preferredGenerationModelId(models: ModelProfile[], defaultModelId: string | null): string | null {
+  return availableGenerationModelId(models, defaultModelId)
+    ?? models.find(isGenerationModel)?.id
+    ?? null
+}
+
+function isReviewId(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function editableItemsFromReview(
+  issues: ReviewIssue[],
+  snapshot: HumanConfirmedReviewSnapshot | null,
+): EditableReviewItem[] {
+  if (snapshot) {
+    return snapshot.items.map((item, index) => ({
+      ...item,
+      id: item.origin + '-' + (index + 1),
+      severity: normalizeSeverity(item.severity),
+    }))
+  }
+
+  return issues.map((issue, index) => ({
+    id: 'ai-' + (index + 1),
+    category: issue.category,
+    severity: issue.severity,
+    description: issue.description,
+    ...(issue.quote ? { quote: issue.quote } : {}),
+    decision: issue.severity === 'pass' ? 'ignore' : 'apply',
+    origin: 'ai',
+  }))
+}
+
+function confirmationSourceReviewId(
+  snapshot: HumanConfirmedReviewSnapshot | null,
+  reviewId: number | undefined,
+): number | undefined {
+  return snapshot?.sourceReviewId ?? reviewId
+}
+
 /** 审稿报告查看器 */
-export default function ReviewReport({ reportText, draftPath, chapterNumber, chapterDir, projectKey }: ReviewReportProps) {
+export default function ReviewReport(props: ReviewReportProps) {
+  const snapshot = parseHumanConfirmedReviewSnapshot(props.reportText)
+  const reportKey = String(props.reviewId ?? 'untracked')
+    + ':' + String(snapshot?.sourceReviewId ?? 'raw')
+    + ':' + props.reportText
+
+  // A report tab can update in place. A keyed session resets its editable
+  // checklist only when the underlying immutable report changes.
+  return <ReviewReportSession key={reportKey} {...props} initialSnapshot={snapshot} />
+}
+
+interface ReviewReportSessionProps extends ReviewReportProps {
+  initialSnapshot: HumanConfirmedReviewSnapshot | null
+}
+
+function ReviewReportSession({
+  reportText,
+  draftPath,
+  chapterNumber,
+  chapterDir,
+  projectKey,
+  reviewId,
+  initialSnapshot,
+}: ReviewReportSessionProps) {
   const text = useLocaleStore(s => s.text)
-  const { issues, summary } = parseReport(reportText, text('综合检查', 'General review'))
-  const [showRefineDialog, setShowRefineDialog] = useState(false)
-  const [userRefinePrompt, setUserRefinePrompt] = useState('')
+  const parsedReport = parseReport(reportText, text('综合检查', 'General review'))
+  const [items, setItems] = useState<EditableReviewItem[]>(() => (
+    editableItemsFromReview(parsedReport.issues, initialSnapshot)
+  ))
+  const [authorGuidance, setAuthorGuidance] = useState(() => initialSnapshot?.authorGuidance ?? '')
+  const [confirmed, setConfirmed] = useState<ConfirmedChecklist | null>(() => (
+    initialSnapshot && isReviewId(reviewId)
+      ? {
+        reviewSourceId: reviewId,
+        content: reportText,
+        snapshot: initialSnapshot,
+      }
+      : null
+  ))
+  const [editingChecklist, setEditingChecklist] = useState(() => !initialSnapshot || !isReviewId(reviewId))
+  const [checklistError, setChecklistError] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const [showRevisionDialog, setShowRevisionDialog] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [showLegend, setShowLegend] = useState(false)
+  const sourceReviewId = confirmationSourceReviewId(initialSnapshot, reviewId)
+  const summary = initialSnapshot?.summary ?? parsedReport.summary
+  const canManageChecklist = Boolean(draftPath && chapterDir)
 
   // 按分类分组
-  const categories = new Map<string, ReviewIssue[]>()
-  for (const issue of issues) {
-    const list = categories.get(issue.category) || []
-    list.push(issue)
-    categories.set(issue.category, list)
+  const categories = new Map<string, EditableReviewItem[]>()
+  for (const item of items) {
+    const list = categories.get(item.category) || []
+    list.push(item)
+    categories.set(item.category, list)
   }
 
   // 统计
-  const errorCount = issues.filter((i) => i.severity === 'error').length
-  const warningCount = issues.filter((i) => i.severity === 'warning').length
-  const passCount = issues.filter((i) => i.severity === 'pass').length
+  const errorCount = items.filter((i) => i.severity === 'error').length
+  const warningCount = items.filter((i) => i.severity === 'warning').length
+  const passCount = items.filter((i) => i.severity === 'pass').length
   const errorCopy = severityCopy('error', text)
   const warningCopy = severityCopy('warning', text)
   const passCopy = severityCopy('pass', text)
 
-  /** 根据审稿意见修稿 */
-  const doRefineFromReview = async () => {
-    if (!draftPath || !chapterDir) return
+  const updateItem = (itemId: string, patch: Partial<EditableReviewItem>) => {
+    setItems(current => current.map(item => item.id === itemId ? { ...item, ...patch } : item))
+    setChecklistError(null)
+  }
+
+  const addAuthorItem = () => {
+    setItems(current => {
+      const authorItemCount = current.filter(item => item.origin === 'author').length
+      return [
+        ...current,
+        {
+          id: 'author-' + Date.now() + '-' + (authorItemCount + 1),
+          category: text('作者补充', 'Author note'),
+          severity: 'warning',
+          description: '',
+          decision: 'apply',
+          origin: 'author',
+        },
+      ]
+    })
+  }
+
+  const confirmChecklist = async () => {
+    if (!draftPath || !chapterDir) {
+      setChecklistError(text(
+        '此审稿报告未关联到可修稿的草稿，无法确认清单。',
+        'This review is not linked to a revisable draft, so its checklist cannot be confirmed.',
+      ))
+      return
+    }
+    if (!isReviewId(sourceReviewId)) {
+      setChecklistError(text(
+        '此审稿报告缺少原始审稿记录，无法确认。请重新运行 AI 审稿。',
+        'This review has no source record, so it cannot be confirmed. Run AI review again.',
+      ))
+      return
+    }
+
+    if (items.some(item => item.origin === 'author' && !item.description.trim())) {
+      setChecklistError(text(
+        '请填写或移除空白的人工问题后再确认。',
+        'Fill in or remove blank author-added issues before confirming.',
+      ))
+      return
+    }
+
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
-    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    setProcessing(true)
-    setShowRefineDialog(false)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      setChecklistError(text(
+        '当前项目会话已失效，请重新打开该项目后再确认。',
+        'The current project session is no longer active. Reopen the project and try again.',
+      ))
+      return
+    }
+
+    const snapshot = createHumanConfirmedReviewSnapshot({
+      sourceReviewId,
+      summary,
+      authorGuidance,
+      items: items.map(({ category, severity, description, quote, decision, origin }) => ({
+        category,
+        severity,
+        description,
+        ...(quote?.trim() ? { quote: quote.trim() } : {}),
+        decision,
+        origin,
+      })),
+    })
+    if (!snapshot) {
+      setChecklistError(text(
+        '审稿清单包含未填写的分类、问题或严重程度；请补充后再确认。',
+        'The checklist has an empty category, issue, or severity. Complete it before confirming.',
+      ))
+      return
+    }
+
+    setConfirming(true)
     try {
-      const { useWorkflowStore } = await import('../../stores/workflow-store')
+      const { parseDraftMeta } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
-
-      const { createRefineFromReviewWorkflow } = await import('../../services/workflows/chapter-workflow')
-      const { getLatestReview } = await import('../../services/draft-index')
-      const { readDraftBody } = await import('../../stores/draft-store')
-
-      const draftContent = await readDraftBody(
+      const draftMeta = await parseDraftMeta(
         draftPath,
         projectSession.projectPath,
         projectSession,
       )
       if (!isProjectSessionCurrent(projectSession)) return
-      if (!draftContent) return
+      if (!draftMeta) {
+        setChecklistError(text(
+          '找不到关联草稿，无法确认审稿清单。',
+          'The associated draft could not be found, so the review checklist cannot be confirmed.',
+        ))
+        return
+      }
 
-      // 提取版本信息
-      const versionMatch = draftPath.match(/draft_v(\d+)\.md$/)
-      const baseVersion = versionMatch ? parseInt(versionMatch[1]) : 1
-      const chapterNum = chapterNumber || 0
-
-      // 获取最新审稿文件名（用于关联）
-      const latestReview = await getLatestReview(
-        chapterDir,
-        baseVersion,
+      const reviewIndex = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:review-next-index',
+        draftMeta.id,
         projectSession.projectPath,
       )
       if (!isProjectSessionCurrent(projectSession)) return
-      const reviewFileName = latestReview?.fileName || ''
-
-      // 从 index.json 读取章节标题
-      const { readDraftIndex } = await import('../../services/draft-index')
-      const index = await readDraftIndex()
+      const content = serializeHumanConfirmedReviewSnapshot(snapshot)
+      const createResult = requireIpcSuccess(
+        await ipc.invokeWithProjectSession(projectSession, 'db:review-create', {
+          baseDraftId: draftMeta.id,
+          reviewIndex,
+          content,
+        }, projectSession.projectPath),
+        text('保存确认审稿清单', 'Save confirmed review checklist'),
+      )
       if (!isProjectSessionCurrent(projectSession)) return
-      const chapterTitle = index.chapterTitle || `第${chapterNum}章`
+      if (!isReviewId(createResult.id)) {
+        throw new Error(text(
+          '确认审稿清单未返回记录标识。',
+          'The confirmed checklist did not return a record identifier.',
+        ))
+      }
 
+      setConfirmed({
+        reviewSourceId: createResult.id,
+        content,
+        snapshot,
+      })
+      setEditingChecklist(false)
+      setChecklistError(null)
+    } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return
+      setChecklistError(error instanceof Error
+        ? error.message
+        : text('确认审稿清单时发生错误。', 'An error occurred while confirming the review checklist.'))
+    } finally {
+      if (isProjectSessionCurrent(projectSession)) setConfirming(false)
+    }
+  }
+
+  const startConfirmedRevision = async (generationModelId: string): Promise<string | null> => {
+    if (!confirmed || editingChecklist) {
+      return text(
+        '请先确认审稿清单后再启动修稿。',
+        'Confirm the review checklist before starting a revision.',
+      )
+    }
+    if (!hasIncludedReviewItems(confirmed.snapshot)) {
+      const error = text(
+        '未纳入任何审稿项，无法启动修稿。请恢复至少一项错误或建议后重新确认。',
+        'No review item is included. Restore at least one issue or suggestion, then confirm again before revising.',
+      )
+      setChecklistError(error)
+      return error
+    }
+    if (!draftPath || !chapterDir) {
+      return text(
+        '此审稿报告未关联到可修稿的草稿。',
+        'This review is not linked to a revisable draft.',
+      )
+    }
+
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      return text(
+        '当前项目会话已失效，请重新打开该项目后再试。',
+        'The current project session is no longer active. Reopen the project and try again.',
+      )
+    }
+
+    setProcessing(true)
+    try {
+      const { readDraftBody } = await import('../../stores/draft-store')
+      const draftContent = await readDraftBody(
+        draftPath,
+        projectSession.projectPath,
+        projectSession,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return null
+      if (!draftContent) {
+        return text(
+          '关联草稿为空或无法读取，未启动修稿。',
+          'The associated draft is empty or unreadable; revision was not started.',
+        )
+      }
+
+      // Re-check after every asynchronous preflight: a deleted or repurposed
+      // profile must never be frozen into a revision workflow.
+      const currentModelId = availableGenerationModelId(
+        useLLMStore.getState().models,
+        generationModelId,
+      )
+      if (!currentModelId) {
+        return text(
+          '所选修稿模型已不可用。请选择一项可用于文本生成的模型后再试。',
+          'The selected revision model is no longer available. Select a compatible generation model and try again.',
+        )
+      }
+
+      const { createRefineFromReviewWorkflow, parseDraftMeta } = await import('../../services/workflows/chapter-workflow')
+      const draftMeta = await parseDraftMeta(
+        draftPath,
+        projectSession.projectPath,
+        projectSession,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return null
+      if (!draftMeta) {
+        return text(
+          '找不到关联草稿，未启动修稿。',
+          'The associated draft could not be found; revision was not started.',
+        )
+      }
+
+      const frozenGenerationModelId = availableGenerationModelId(
+        useLLMStore.getState().models,
+        currentModelId,
+      )
+      if (!frozenGenerationModelId) {
+        return text(
+          '所选修稿模型已不可用。请选择一项可用于文本生成的模型后再试。',
+          'The selected revision model is no longer available. Select a compatible generation model and try again.',
+        )
+      }
+
+      const chapterNum = draftMeta.chapterNumber || chapterNumber || 0
+      const chapterTitle = draftMeta.chapterTitle || text(
+        '第' + chapterNum + '章',
+        'Chapter ' + chapterNum,
+      )
+      const { useWorkflowStore } = await import('../../stores/workflow-store')
+      if (!isProjectSessionCurrent(projectSession)) return null
       useWorkflowStore.getState().startWorkflow(createRefineFromReviewWorkflow({
         projectPath: projectSession.projectPath,
         chapterNumber: chapterNum,
         chapterTitle,
         draftPath,
         draftContent,
-        reviewReport: reportText,
-        reviewFileName,
-        userRefinePrompt: userRefinePrompt.trim() || undefined,
+        confirmedReviewContent: confirmed.content,
+        reviewSourceId: confirmed.reviewSourceId,
+        generationModelId: frozenGenerationModelId,
       }, projectSession), false)
+      setChecklistError(null)
+      return null
+    } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return null
+      return error instanceof Error
+        ? error.message
+        : text('启动审稿修稿时发生错误。', 'An error occurred while starting the review-driven revision.')
     } finally {
-      setProcessing(false)
+      if (isProjectSessionCurrent(projectSession)) setProcessing(false)
     }
   }
-
-  // 是否可以触发修稿（有草稿路径和章节信息时）
-  const canRefine = !!(draftPath && chapterDir)
 
   return (
     <div className="h-full overflow-y-auto">
@@ -367,7 +693,7 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
         )}
 
         {/* 分类展示 */}
-        {issues.length === 0 ? (
+        {items.length === 0 ? (
           <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
             <CheckCircle size={32} className="mx-auto mb-2" style={{ color: 'var(--color-success)' }} />
             {text('审稿通过，未发现问题', 'Review passed. No issues found.')}
@@ -381,12 +707,14 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
                   {category}
                 </h4>
                 <div className="space-y-1.5 pl-1">
-                  {items.map((item, i) => {
+                  {items.map((item) => {
                     const meta = SEVERITY_META[item.severity]
                     const copy = severityCopy(item.severity, text)
+                    const isPass = item.severity === 'pass'
+                    const isEmptyAuthorIssue = item.origin === 'author' && !item.description.trim()
                     return (
                       <div
-                        key={i}
+                        key={item.id}
                         className={cn(
                           'px-3 py-2 rounded-md border text-xs leading-relaxed',
                           meta.borderClass, meta.bgClass
@@ -394,17 +722,103 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
                       >
                         <div className="flex items-start gap-2">
                           <SeverityIcon severity={item.severity} />
-                          <div className="flex-1 min-w-0">
-                            <span className="text-[var(--color-text-secondary)]">{item.description}</span>
-                            <span
-                              className={cn('ml-2 text-[0.65rem] opacity-70', meta.colorClass)}
-                            >
-                              [{copy.actionLabel}]
-                            </span>
+                          <div className="flex-1 min-w-0 space-y-2">
+                            {editingChecklist && !isPass ? (
+                              <>
+                                <div className="grid grid-cols-[minmax(0,1fr)_130px] gap-2">
+                                  <Input
+                                    aria-label={text('问题分类', 'Issue category')}
+                                    value={item.category}
+                                    onChange={(event) => updateItem(item.id, { category: event.target.value })}
+                                  />
+                                  <NativeSelect
+                                    aria-label={text('严重程度', 'Severity')}
+                                    value={item.severity}
+                                    onChange={(event) => updateItem(item.id, {
+                                      severity: normalizeSeverity(event.target.value),
+                                    })}
+                                  >
+                                    <option value="error">{text('严重问题', 'Critical issue')}</option>
+                                    <option value="warning">{text('改进建议', 'Improvement')}</option>
+                                  </NativeSelect>
+                                </div>
+                                <Textarea
+                                  aria-label={text('审稿问题', 'Review issue')}
+                                  aria-invalid={isEmptyAuthorIssue || undefined}
+                                  aria-describedby={isEmptyAuthorIssue ? `author-issue-hint-${item.id}` : undefined}
+                                  value={item.description}
+                                  placeholder={item.origin === 'author' ? text(
+                                    '请填写需要纳入本次修稿的具体问题',
+                                    'Describe the specific issue to include in this revision',
+                                  ) : undefined}
+                                  onChange={(event) => updateItem(item.id, { description: event.target.value })}
+                                />
+                                {isEmptyAuthorIssue && (
+                                  <p
+                                    id={`author-issue-hint-${item.id}`}
+                                    className="text-[0.7rem] text-[var(--color-warning-text)]"
+                                  >
+                                    {text(
+                                      '请填写具体问题，或移除这一项。',
+                                      'Describe the issue, or remove this item.',
+                                    )}
+                                  </p>
+                                )}
+                                <Input
+                                  aria-label={text('相关原文（可选）', 'Related text (optional)')}
+                                  value={item.quote ?? ''}
+                                  placeholder={text('相关原文（可选）', 'Related text (optional)')}
+                                  onChange={(event) => updateItem(item.id, { quote: event.target.value })}
+                                />
+                              </>
+                            ) : (
+                              <div>
+                                <span className="text-[var(--color-text-secondary)]">{item.description}</span>
+                                <span className={cn('ml-2 text-[0.65rem] opacity-70', meta.colorClass)}>
+                                  [{copy.actionLabel}]
+                                </span>
+                              </div>
+                            )}
+                            {!isPass && editingChecklist && (
+                              <div className="flex items-center justify-between gap-2">
+                                <span className={cn('text-[0.7rem]', meta.colorClass)}>
+                                  {item.decision === 'apply'
+                                    ? text('已纳入本次修稿', 'Included in this revision')
+                                    : text('已忽略，不会传给模型', 'Ignored; not sent to the model')}
+                                </span>
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => updateItem(item.id, {
+                                      decision: item.decision === 'apply' ? 'ignore' : 'apply',
+                                    })}
+                                  >
+                                    {item.decision === 'apply'
+                                      ? <CircleMinus size={12} />
+                                      : <RotateCcw size={12} />}
+                                    {item.decision === 'apply'
+                                      ? text('忽略', 'Ignore')
+                                      : text('恢复', 'Restore')}
+                                  </Button>
+                                  {item.origin === 'author' && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setItems(current => current.filter(candidate => candidate.id !== item.id))}
+                                      title={text('移除人工问题', 'Remove author issue')}
+                                    >
+                                      <X size={12} />
+                                      {text('移除', 'Remove')}
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
                         {/* 引用原文（如有） */}
-                        {item.quote && (
+                        {!editingChecklist && item.quote && (
                           <div
                             className="mt-1.5 ml-5 pl-2 text-[0.7rem] italic"
                             style={{
@@ -425,82 +839,274 @@ export default function ReviewReport({ reportText, draftPath, chapterNumber, cha
           </div>
         )}
 
+        <section className="mt-6 rounded-lg border border-[var(--color-border)] p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-sm font-semibold text-[var(--color-text)] flex items-center gap-1.5">
+                <ListChecks size={15} className="text-[var(--color-accent)]" />
+                {text('人工确认修稿清单', 'Human-confirmed revision checklist')}
+              </h4>
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                {editingChecklist
+                  ? text('错误和建议默认纳入；“通过”仅展示，不会成为修稿任务。', 'Issues and suggestions are included by default; passed checks stay visible but are never revision tasks.')
+                  : text('已保存为新的不可变确认快照；原始 AI 审稿未被修改。', 'Saved as a new immutable confirmation snapshot; the original AI review was not modified.')}
+              </p>
+            </div>
+            {confirmed && !editingChecklist && (
+              <span className="inline-flex items-center gap-1 text-xs text-[var(--color-success-text)]">
+                <FileCheck2 size={14} />
+                {text('已确认', 'Confirmed')}
+              </span>
+            )}
+          </div>
+
+          {editingChecklist && (
+            <>
+              <div>
+                <Label htmlFor="review-author-guidance">
+                  {text('总体修稿指导（可选）', 'Overall revision guidance (optional)')}
+                </Label>
+                <Textarea
+                  id="review-author-guidance"
+                  value={authorGuidance}
+                  onChange={(event) => setAuthorGuidance(event.target.value)}
+                  placeholder={text(
+                    '例如：优先修复角色动机的前后不一致，保持本章克制的叙事节奏。',
+                    'For example: prioritize inconsistent character motivation while keeping this chapter’s restrained pace.',
+                  )}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={addAuthorItem}>
+                  <Plus size={13} />
+                  {text('新增人工问题', 'Add author issue')}
+                </Button>
+                {canManageChecklist ? (
+                  <Button variant="ai" size="sm" onClick={confirmChecklist} disabled={confirming}>
+                    <FileCheck2 size={13} />
+                    {confirmed
+                      ? text('重新确认审稿清单', 'Confirm updated checklist')
+                      : text('确认审稿清单', 'Confirm review checklist')}
+                  </Button>
+                ) : (
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    {text('关联草稿后可确认清单。', 'Link this report to a draft to confirm the checklist.')}
+                  </span>
+                )}
+              </div>
+            </>
+          )}
+
+          {confirmed && !editingChecklist && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setEditingChecklist(true)
+                  setChecklistError(null)
+                }}
+              >
+                <Pencil size={13} />
+                {text('编辑清单', 'Edit checklist')}
+              </Button>
+              <Button
+                variant="ai"
+                size="sm"
+                onClick={() => {
+                  if (!hasIncludedReviewItems(confirmed.snapshot)) {
+                    setChecklistError(text(
+                      '未纳入任何审稿项，无法启动修稿。请恢复至少一项错误或建议后重新确认。',
+                      'No review item is included. Restore at least one issue or suggestion, then confirm again before revising.',
+                    ))
+                    return
+                  }
+                  setChecklistError(null)
+                  setShowRevisionDialog(true)
+                }}
+                disabled={processing}
+              >
+                <Sparkles size={13} />
+                {text('按确认意见修稿', 'Revise from confirmed checklist')}
+              </Button>
+            </div>
+          )}
+
+          {checklistError && (
+            <p role="alert" className="text-xs text-[var(--color-error-text)]">
+              {checklistError}
+            </p>
+          )}
+        </section>
+
         {/* 原始文本折叠 */}
         <details className="mt-6">
           <summary className="text-xs text-[var(--color-text-muted)] cursor-pointer hover:text-[var(--color-text)]">
-            {text('查看原始审稿文本', 'View original review text')}
+            {text(
+              initialSnapshot ? '查看此确认记录原文' : '查看原始 AI 审稿文本',
+              initialSnapshot ? 'View this confirmation record' : 'View original AI review text',
+            )}
           </summary>
           <pre className="mt-2 text-xs whitespace-pre-wrap font-mono leading-5 text-[var(--color-text-secondary)] bg-[var(--color-sidebar)] rounded-md p-3 border border-[var(--color-border)]">
             {reportText}
           </pre>
         </details>
-
-        {/* Revise from review feedback */}
-        {canRefine && (
-          <div className="mt-6 pt-6 border-t border-[var(--color-border)] flex flex-col items-center">
-            <Button
-              variant="ai"
-              className="px-8"
-              onClick={() => { setUserRefinePrompt(''); setShowRefineDialog(true) }}
-              disabled={processing}
-            >
-              <Sparkles size={14} className="mr-1" />
-              {text('AI 一键修稿', 'AI revise')}
-            </Button>
-            <p className="text-[0.7rem] text-center mt-3" style={{ color: 'var(--color-text-muted)' }}>
-              {text('AI 将根据上方审稿报告中发现的问题精准修复草稿，并为您生成对比视图', 'AI will address issues from this review and generate a comparison view.')}
-            </p>
-          </div>
-        )}
       </div>
 
-      {/* 修稿确认弹窗（含自定义提示词） */}
-      <Dialog open={showRefineDialog} onOpenChange={(v) => !v && setShowRefineDialog(false)}>
-        <DialogContent className="max-w-[440px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Sparkles size={15} className="text-[var(--color-accent)]" />
-              {text('根据审稿意见修稿', 'Revise from review feedback')}
-            </DialogTitle>
-            <DialogDescription>
-              {text('AI 将根据审稿报告中的问题精准修复草稿', 'AI will address the issues identified in the review report.')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="px-5 py-2 text-sm space-y-1.5" style={{ color: 'var(--color-text-secondary)' }}>
-            <div className="font-medium text-[var(--color-text)]">{text('本次【审稿修稿】范围：', 'This review-driven revision will:')}</div>
-            <div>{text('1. 重点修复审稿报告中指出的「严重问题」与「改进建议」。', '1. Focus on critical issues and improvement suggestions from the review report.')}</div>
-            <div>{text('2. 可在下方指定的额外修稿要求。', '2. Follow any additional revision guidance below.')}</div>
-          </div>
-          <div className="px-5 pb-2">
-            <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
-              {text('额外修稿指导（可选）：', 'Additional revision guidance (optional):')}
-            </label>
-            <textarea
-              className="w-full px-3 py-2 rounded-md text-sm"
-              style={{
-                background: 'var(--color-bg-elevated)',
-                border: '1px solid var(--color-border)',
-                color: 'var(--color-text)',
-                minHeight: 72,
-                resize: 'vertical',
-                outline: 'none',
-              }}
-              placeholder={text(
-                '例如：优先修复角色对白不一致的问题；忽略报告中关于节奏的建议，保持原有节奏...',
-                'For example: prioritize inconsistent character dialogue; ignore pacing suggestions and keep the existing pace...',
-              )}
-              value={userRefinePrompt}
-              onChange={e => setUserRefinePrompt(e.target.value)}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowRefineDialog(false)}>{text('取消', 'Cancel')}</Button>
-            <Button variant="ai" onClick={doRefineFromReview}>
-              {text('确认修稿', 'Revise')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {showRevisionDialog && confirmed && (
+        <ConfirmedRevisionDialog
+          snapshot={confirmed.snapshot}
+          onClose={() => setShowRevisionDialog(false)}
+          onStart={startConfirmedRevision}
+        />
+      )}
     </div>
+  )
+}
+
+interface ConfirmedRevisionDialogProps {
+  snapshot: HumanConfirmedReviewSnapshot
+  onClose: () => void
+  onStart: (generationModelId: string) => Promise<string | null>
+}
+
+/**
+ * Mounted only while open so every revision gets a fresh local snapshot of the
+ * global default model. The chooser never writes to the global default.
+ */
+function ConfirmedRevisionDialog({ snapshot, onClose, onStart }: ConfirmedRevisionDialogProps) {
+  const text = useLocaleStore(s => s.text)
+  const models = useLLMStore(s => s.models)
+  const defaultModelId = useLLMStore(s => s.defaultModelId)
+  const [generationModelId, setGenerationModelId] = useState<string | null>(() => (
+    preferredGenerationModelId(models, defaultModelId)
+  ))
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
+  const generationModels = models.filter(isGenerationModel)
+  const fallbackGenerationModelId = preferredGenerationModelId(models, defaultModelId)
+  const selectedGenerationModelId = generationModelId ?? fallbackGenerationModelId
+  const selectedGenerationModel = generationModels.find(model => model.id === selectedGenerationModelId)
+  const modelSelectionError = generationModels.length === 0
+    ? text(
+      '没有已配置且可用于文本生成的模型。请在设置中添加或启用一项生成模型。',
+      'No configured model can generate text. Add or enable a generation model in Settings.',
+    )
+    : !selectedGenerationModel
+      ? text(
+        '所选修稿模型已不可用。请选择一项可用于文本生成的模型后再试。',
+        'The selected revision model is no longer available. Select a compatible generation model and try again.',
+      )
+      : null
+  const confirmedBrief = renderHumanConfirmedReviewBrief(snapshot)
+
+  const start = async () => {
+    if (modelSelectionError || !selectedGenerationModelId) {
+      setStartError(modelSelectionError ?? text(
+        '请选择一项可用于文本生成的模型。',
+        'Select a compatible generation model before starting.',
+      ))
+      return
+    }
+
+    const frozenGenerationModelId = availableGenerationModelId(
+      useLLMStore.getState().models,
+      selectedGenerationModelId,
+    )
+    if (!frozenGenerationModelId) {
+      setStartError(text(
+        '所选修稿模型已不可用。请选择一项可用于文本生成的模型后再试。',
+        'The selected revision model is no longer available. Select a compatible generation model and try again.',
+      ))
+      return
+    }
+
+    setStarting(true)
+    try {
+      const error = await onStart(frozenGenerationModelId)
+      if (error) {
+        setStartError(error)
+        return
+      }
+      onClose()
+    } catch (error) {
+      setStartError(error instanceof Error
+        ? error.message
+        : text('启动审稿修稿时发生错误。', 'An error occurred while starting the review-driven revision.'))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => {
+      if (!open && !starting) onClose()
+    }}>
+      <DialogContent className="max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkles size={15} className="text-[var(--color-accent)]" />
+            {text('按确认意见修稿', 'Revise from confirmed checklist')}
+          </DialogTitle>
+          <DialogDescription>
+            {text(
+              '仅将已确认纳入的审稿项和作者指导传给修稿流程；已忽略项与原始 AI 报告不会成为模型指令。',
+              'Only confirmed review items and author guidance are sent to revision. Ignored items and the raw AI report are not model instructions.',
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="px-5 py-2 space-y-3">
+          <div>
+            <Label htmlFor="review-revision-model">
+              {text('本次修稿模型', 'Model for this revision')}
+            </Label>
+            <NativeSelect
+              id="review-revision-model"
+              value={selectedGenerationModelId ?? ''}
+              onChange={(event) => {
+                setGenerationModelId(event.target.value || null)
+                setStartError(null)
+              }}
+              disabled={generationModels.length === 0 || starting}
+            >
+              <option value="" disabled>{text('请选择可用生成模型', 'Select a generation model')}</option>
+              {generationModels.map(model => (
+                <option key={model.id} value={model.id}>{model.name || model.modelName}</option>
+              ))}
+            </NativeSelect>
+            <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
+              {text('仅用于本次修稿，不会更改默认模型。', 'Used for this revision only; it does not change the default model.')}
+            </p>
+            {modelSelectionError && (
+              <p role="alert" className="mt-1 text-xs text-[var(--color-error-text)]">
+                {modelSelectionError}
+              </p>
+            )}
+          </div>
+          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3">
+            <div className="mb-1 text-xs font-medium text-[var(--color-text)]">
+              {text('将传给修稿流程的已确认意见', 'Confirmed guidance sent to revision')}
+            </div>
+            <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap font-sans text-xs leading-5 text-[var(--color-text-secondary)]">
+              {confirmedBrief}
+            </pre>
+          </div>
+          {startError && (
+            <p role="alert" className="text-xs text-[var(--color-error-text)]">
+              {startError}
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={starting}>
+            {text('取消', 'Cancel')}
+          </Button>
+          <Button variant="ai" onClick={start} disabled={starting || Boolean(modelSelectionError)}>
+            <Sparkles size={13} />
+            {text('开始修稿', 'Start revision')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

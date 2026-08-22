@@ -35,7 +35,7 @@ describeWithChrome('UpdateSection browser interactions', () => {
   afterAll(async () => {
     await browser?.close()
     await server?.close()
-  })
+  }, VITE_SERVER_HOOK_TIMEOUT_MS)
 
   async function openHarness(): Promise<Page> {
     const page = await browser.newPage()

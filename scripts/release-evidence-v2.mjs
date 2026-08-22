@@ -18,6 +18,38 @@ import { canonicalPnpmLockfileSha256 } from './canonical-pnpm-lockfile-hash.mjs'
 const scriptPath = fileURLToPath(import.meta.url)
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '..')
 
+const MACOS_QUALIFICATION_ENTITIES = Object.freeze({
+  'macos-arm64': {
+    architecture: 'arm64',
+    runnerMachineArchitecture: 'arm64',
+    workflowPath: '.github/workflows/macos-arm64-cloud-build.yml',
+    workflowName: 'macOS ARM64 cloud package qualification',
+    commandProfileBuildStep: 'build-macos-arm64-package',
+  },
+  'macos-x64': {
+    architecture: 'x64',
+    runnerMachineArchitecture: 'x86_64',
+    workflowPath: '.github/workflows/macos-x64-cloud-build.yml',
+    workflowName: 'macOS Intel x64 cloud package qualification',
+    commandProfileBuildStep: 'build-macos-x64-package',
+  },
+})
+
+function isMacosQualificationEntity(platform) {
+  return Object.hasOwn(MACOS_QUALIFICATION_ENTITIES, platform)
+}
+
+function macosQualificationEntity(platform) {
+  assert(isMacosQualificationEntity(platform), 'platform must name a specific macOS qualification entity')
+  return MACOS_QUALIFICATION_ENTITIES[platform]
+}
+
+const MACOS_ACCEPTANCE_PROFILE = Object.freeze([
+  'qualification/acceptance/dmg-mount.json',
+  'qualification/acceptance/packaged-smoke.json',
+  'qualification/acceptance/signing.json',
+])
+
 export const ACCEPTANCE_PROFILES = {
   windows: [
     'qualification/acceptance/install.json',
@@ -30,11 +62,8 @@ export const ACCEPTANCE_PROFILES = {
     'qualification/acceptance/packaged-smoke.json',
     'qualification/acceptance/signing.json',
   ],
-  macos: [
-    'qualification/acceptance/dmg-mount.json',
-    'qualification/acceptance/packaged-smoke.json',
-    'qualification/acceptance/signing.json',
-  ],
+  'macos-arm64': MACOS_ACCEPTANCE_PROFILE,
+  'macos-x64': MACOS_ACCEPTANCE_PROFILE,
 }
 
 export const QUALIFICATION_WORKFLOWS = {
@@ -42,9 +71,13 @@ export const QUALIFICATION_WORKFLOWS = {
     path: '.github/workflows/windows-cloud-build-test.yml',
     name: 'Windows cloud package qualification',
   },
-  macos: {
-    path: '.github/workflows/macos-arm64-cloud-build.yml',
-    name: 'macOS ARM64 cloud package qualification',
+  'macos-arm64': {
+    path: MACOS_QUALIFICATION_ENTITIES['macos-arm64'].workflowPath,
+    name: MACOS_QUALIFICATION_ENTITIES['macos-arm64'].workflowName,
+  },
+  'macos-x64': {
+    path: MACOS_QUALIFICATION_ENTITIES['macos-x64'].workflowPath,
+    name: MACOS_QUALIFICATION_ENTITIES['macos-x64'].workflowName,
   },
 }
 
@@ -55,13 +88,22 @@ export const COMMAND_PROFILES = {
     'renderer-browser-tests',
     'complete-windows-release-gate',
   ],
-  macos: [
+  'macos-arm64': [
     'install-locked-dependencies',
     'install-playwright-chromium',
     'renderer-browser-tests',
     'build-native-secure-helper',
     'test-suite',
     'build-macos-arm64-package',
+    'mounted-dmg-smoke',
+  ],
+  'macos-x64': [
+    'install-locked-dependencies',
+    'install-playwright-chromium',
+    'renderer-browser-tests',
+    'build-native-secure-helper',
+    'test-suite',
+    'build-macos-x64-package',
     'mounted-dmg-smoke',
   ],
 }
@@ -109,18 +151,21 @@ export function classifyMacosCodeSigning({ detailsExitCode, verificationExitCode
   return { observed, signature, teamIdentifier, authorities, hasDeveloperIdIdentity }
 }
 
+const MACOS_PACKAGED_SMOKE_EVIDENCE = Object.freeze([
+  { file: 'qualification/packaged-vector-smoke.json', kind: 'packaged-vector-smoke' },
+  { file: 'qualification/packaged-official-homepage-smoke.json', kind: 'packaged-official-homepage-smoke' },
+  { file: 'qualification/packaged-skin-smoke.json', kind: 'packaged-skin-smoke' },
+  { file: 'qualification/macos-dmg-smoke.json', kind: 'macos-dmg-smoke' },
+])
+
 const PACKAGED_SMOKE_EVIDENCE = {
   windows: [
     { file: 'qualification/packaged-vector-smoke.json', kind: 'packaged-vector-smoke' },
     { file: 'qualification/packaged-official-homepage-smoke.json', kind: 'packaged-official-homepage-smoke' },
     { file: 'qualification/packaged-skin-smoke.json', kind: 'packaged-skin-smoke' },
   ],
-  macos: [
-    { file: 'qualification/packaged-vector-smoke.json', kind: 'packaged-vector-smoke' },
-    { file: 'qualification/packaged-official-homepage-smoke.json', kind: 'packaged-official-homepage-smoke' },
-    { file: 'qualification/packaged-skin-smoke.json', kind: 'packaged-skin-smoke' },
-    { file: 'qualification/macos-dmg-smoke.json', kind: 'macos-dmg-smoke' },
-  ],
+  'macos-arm64': MACOS_PACKAGED_SMOKE_EVIDENCE,
+  'macos-x64': MACOS_PACKAGED_SMOKE_EVIDENCE,
 }
 
 function assert(condition, message) {
@@ -142,7 +187,7 @@ function requiredOption(options, name) {
 }
 
 function validatePlatform(platform) {
-  assert(platform === 'windows' || platform === 'macos', '--platform must be windows or macos')
+  assert(platform === 'windows' || isMacosQualificationEntity(platform), '--platform must be windows, macos-arm64, or macos-x64')
   return platform
 }
 
@@ -167,7 +212,8 @@ function platformArtifactSet(platform, version) {
     ]
   }
 
-  const dmg = `ai-novel-writer-mac-arm64-${version}-installer.dmg`
+  const { architecture } = macosQualificationEntity(platform)
+  const dmg = `ai-novel-writer-mac-${architecture}-${version}-installer.dmg`
   return [
     { path: relativeArtifactPath(version, dmg), role: 'dmg' },
     { path: relativeArtifactPath(version, `${dmg}.sha256`), role: 'dmg-checksum' },
@@ -597,11 +643,17 @@ function validateWindowsReceipt(receipt, name, bundleRoot, version) {
   }
 }
 
-function validateMacosReceipt(receipt, name, bundleRoot, version) {
+function validateMacosReceipt(receipt, name, bundleRoot, version, platform) {
+  const { architecture, runnerMachineArchitecture } = macosQualificationEntity(platform)
   const direct = receipt.direct
-  const dmgSha256 = sha256File(fileWithin(bundleRoot, `ai-novel-writer-mac-arm64-${version}-installer.dmg`, 'macOS DMG'))
+  const dmg = `ai-novel-writer-mac-${architecture}-${version}-installer.dmg`
+  const dmgSha256 = sha256File(fileWithin(bundleRoot, dmg, 'macOS DMG'))
   const expectedKinds = { 'dmg-mount': 'dmg-mount', 'packaged-smoke': 'packaged-smoke', signing: 'signing' }
-  assert(receipt.kind === expectedKinds[name] && receipt.platform === 'darwin' && receipt.arch === 'arm64', `macOS acceptance receipt identity is invalid: ${name}`)
+  assert(receipt.kind === expectedKinds[name] && receipt.platform === 'darwin' && receipt.arch === architecture, `macOS acceptance receipt identity is invalid: ${name}`)
+  assert(
+    direct?.architecture?.target === architecture && direct.architecture?.runnerMachine === runnerMachineArchitecture,
+    `macOS acceptance receipt architecture evidence is invalid: ${name}`,
+  )
   if (name === 'dmg-mount') {
     assert(direct.executable?.present === true && direct.helper?.present === true && direct.mount?.attached === true && direct.unmount?.attempted === true && direct.unmount?.succeeded === true, 'macOS DMG mount receipt facts are invalid')
     assert(direct.hash?.algorithm === 'sha256' && direct.hash?.value?.toLowerCase() === dmgSha256, 'macOS DMG mount receipt hash is invalid')
@@ -683,7 +735,7 @@ function validateAcceptanceReceipt(file, relativePath, platform, bundleRoot, ver
   }
   const name = path.posix.basename(relativePath, '.json')
   if (platform === 'windows') validateWindowsReceipt(receipt, name, bundleRoot, version)
-  else validateMacosReceipt(receipt, name, bundleRoot, version)
+  else validateMacosReceipt(receipt, name, bundleRoot, version, platform)
   return receipt
 }
 
@@ -723,7 +775,7 @@ function contractArtifactFile(contract, contractPath) {
 }
 
 function ensureMacChecksum(releaseRoot, contract) {
-  if (contract.frozen.platform !== 'macos') return
+  if (!isMacosQualificationEntity(contract.frozen.platform)) return
   const dmgArtifact = contract.frozen.artifactSet.find(artifact => artifact.role === 'dmg')
   const checksumArtifact = contract.frozen.artifactSet.find(artifact => artifact.role === 'dmg-checksum')
   assert(dmgArtifact && checksumArtifact, 'macOS contract artifact set is incomplete')
@@ -787,7 +839,7 @@ export function finalizeReleaseEvidence({ platform, evidenceRoot, releaseRoot })
   const manifest = {
     schemaVersion: 2,
     platform: selectedPlatform,
-    arch: selectedPlatform === 'windows' ? 'x64' : 'arm64',
+    architecture: selectedPlatform === 'windows' ? 'x64' : macosQualificationEntity(selectedPlatform).architecture,
     commit: contract.frozen.commit,
     tag: contract.frozen.tag,
     version: contract.frozen.version,
@@ -806,8 +858,8 @@ export function finalizeReleaseEvidence({ platform, evidenceRoot, releaseRoot })
     acceptanceProfile: contract.frozen.acceptance.evidenceFiles,
     artifacts,
     evidence: [...provenanceEvidence, ...acceptanceEvidence, ...packagedEvidence],
-    ...(selectedPlatform === 'macos'
-      ? { dmgChecksum: `ai-novel-writer-mac-arm64-${contract.frozen.version}-installer.dmg.sha256` }
+    ...(isMacosQualificationEntity(selectedPlatform)
+      ? { dmgChecksum: `ai-novel-writer-mac-${macosQualificationEntity(selectedPlatform).architecture}-${contract.frozen.version}-installer.dmg.sha256` }
       : {}),
   }
   const manifestPath = path.join(resolvedReleaseRoot, 'manifest.json')
@@ -996,6 +1048,9 @@ export function verifyQualificationBundle({
   const manifest = jsonEvidenceFile(manifestPath, 'Qualification manifest')
   assert(manifest?.schemaVersion === 2, 'Qualification manifest schema is invalid')
   assert(manifest.platform === selectedPlatform, 'Qualification manifest platform is invalid')
+  const expectedArchitecture = selectedPlatform === 'windows' ? 'x64' : macosQualificationEntity(selectedPlatform).architecture
+  assert(manifest.architecture === expectedArchitecture, 'Qualification manifest architecture is invalid')
+  assert(!Object.hasOwn(manifest, 'arch'), 'Qualification manifest must use architecture instead of deprecated arch')
   assert(manifest.version === version && manifest.tag === `v${version}`, 'Qualification manifest version/tag is invalid')
   assert(String(manifest.commit ?? '').toLowerCase() === normalizedCommit, 'Qualification manifest commit does not match expected_sha')
   assert(manifest.gateLevel === 'RUNTIME_VERIFIED' && manifest.releaseCreated === false, 'Qualification manifest release state is invalid')
@@ -1016,8 +1071,8 @@ export function verifyQualificationBundle({
   for (const [file, digest] of checksums) {
     assert(sha256File(fileWithin(resolvedBundleRoot, file, 'Checksum file')) === digest, `Qualification SHA-256 mismatch: ${file}`)
   }
-  if (selectedPlatform === 'macos') {
-    const dmg = `ai-novel-writer-mac-arm64-${version}-installer.dmg`
+  if (isMacosQualificationEntity(selectedPlatform)) {
+    const dmg = `ai-novel-writer-mac-${macosQualificationEntity(selectedPlatform).architecture}-${version}-installer.dmg`
     const checksum = `${dmg}.sha256`
     assert(manifest.dmgChecksum === checksum, 'macOS qualification manifest checksum file is invalid')
     assert(readFileSync(fileWithin(resolvedBundleRoot, checksum, 'macOS DMG checksum'), 'utf8').trim() === `${sha256File(fileWithin(resolvedBundleRoot, dmg, 'macOS DMG'))}  ${dmg}`, 'macOS DMG checksum file does not match the DMG')

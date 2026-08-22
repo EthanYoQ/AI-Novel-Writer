@@ -7,7 +7,7 @@ describe('v0.8.4 release metadata', () => {
     expect(pkg.version).toBe('0.8.4')
   })
 
-  it('resolves the release tag and exact five-asset contract from the package version', () => {
+  it('resolves the release tag and exact seven-asset contract from the package version', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }
     const profile = JSON.parse(readFileSync('.release/release-profile.json', 'utf8')) as {
       releaseAssets: Array<{ name: string }>
@@ -20,6 +20,8 @@ describe('v0.8.4 release metadata', () => {
       'latest.yml',
       'ai-novel-writer-mac-arm64-0.8.4-installer.dmg',
       'ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256',
+      'ai-novel-writer-mac-x64-0.8.4-installer.dmg',
+      'ai-novel-writer-mac-x64-0.8.4-installer.dmg.sha256',
     ])
   })
 
