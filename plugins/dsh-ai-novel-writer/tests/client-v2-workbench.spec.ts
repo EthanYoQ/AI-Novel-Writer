@@ -99,6 +99,17 @@ describe('V2 workbench client port', () => {
     }
   })
 
+  it('accepts a ready workspace state when JSON omits an undefined migration receipt', async () => {
+    const { migration: _migration, ...state } = { ...validState }
+    const ready = { status: 'ready' as const, workspaceId: WORKSPACE_ID, state }
+    const rpc = { call: vi.fn(() => Promise.resolve({ ok: true as const, value: ready })) }
+    const port = createNovelV2WorkbenchPort(rpc)
+    const signal = new AbortController().signal
+
+    await expect(port.readWorkspaceState!(WORKSPACE_ID, signal)).resolves.toEqual(ready)
+    expect(rpc.call).toHaveBeenCalledWith('/ai-novel', 'workspace/state/read', { workspaceId: WORKSPACE_ID }, signal)
+  })
+
   it('uses only opaque Workspace, Proposal, and item IDs for Host-owned bundle lifecycle RPCs', async () => {
     const { revision: _revision, ...nextValue } = validState.project
     const item = {

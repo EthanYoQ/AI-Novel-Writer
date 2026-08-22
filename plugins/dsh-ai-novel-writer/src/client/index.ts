@@ -462,10 +462,13 @@ function isV2MigrationReceipt(value: unknown): boolean {
 
 function isV2StateReadResult(value: unknown): value is NovelStateReadResult {
   if (!isRecord(value)
-    || !exactKeysOf(value, [
+    || !(exactKeysOf(value, [
+      'projectId', 'workspaceId', 'globalRevision', 'readOnly', 'storage', 'project', 'architecture',
+      'characters', 'chapters', 'artifacts', 'chapterFinals', 'tasks', 'changes', 'proposals',
+    ]) || exactKeysOf(value, [
       'projectId', 'workspaceId', 'globalRevision', 'readOnly', 'storage', 'project', 'architecture',
       'characters', 'chapters', 'artifacts', 'chapterFinals', 'tasks', 'changes', 'proposals', 'migration',
-    ])
+    ]))
     || typeof value.projectId !== 'string' || value.projectId === ''
     || typeof value.workspaceId !== 'string' || value.workspaceId === ''
     || !isNonNegativeInteger(value.globalRevision) || typeof value.readOnly !== 'boolean'
