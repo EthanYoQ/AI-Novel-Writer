@@ -7,6 +7,9 @@ import { describe, expect, it } from 'vitest'
 const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8')) as {
   scripts?: Record<string, string>
 }
+const VISUAL_EVIDENCE_PREFLIGHT_CHILD_TIMEOUT_MS = 10_000
+// Four bounded child-process preflights can contend with the full parallel suite.
+const VISUAL_EVIDENCE_PREFLIGHT_TEST_TIMEOUT_MS = 45_000
 
 describe('renderer surface E2E runner contract', () => {
   it('rejects an Electron process that exited early without a clean zero-code exit', async () => {
@@ -91,7 +94,7 @@ describe('renderer surface E2E runner contract', () => {
             AI_NOVEL_RENDERER_VISUAL_EVIDENCE_DIR: testCase.outputDirectory,
           },
           encoding: 'utf8',
-          timeout: 10_000,
+          timeout: VISUAL_EVIDENCE_PREFLIGHT_CHILD_TIMEOUT_MS,
           windowsHide: true,
         })
         statuses.push(result.status)
@@ -109,7 +112,7 @@ describe('renderer surface E2E runner contract', () => {
 
     expect(statuses.every(status => status !== 0)).toBe(true)
     expect(residue).toEqual(cases.map(testCase => ({ label: testCase.label, entries: [] })))
-  })
+  }, VISUAL_EVIDENCE_PREFLIGHT_TEST_TIMEOUT_MS)
 
   it('starts a fixed visual-evidence path as a fresh fail-closed run', async () => {
     const outputDirectory = resolve(process.cwd(), '.runtime', '.cache', 'renderer-evidence-contract-test')
