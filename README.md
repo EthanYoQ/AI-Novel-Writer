@@ -22,22 +22,23 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新 Windows 与 macOS ARM64 安装包</a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新 Windows、macOS Apple Silicon 与 macOS Intel 安装包</a>
 </p>
 
 <p align="center">
   <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
 </p>
 
-> ## v0.8.4 生成可靠性与创作策略
+> ## v0.8.5 创作闭环与三架构桌面发布
 >
-> [v0.8.4](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.4) 修复了写作流程中的三项关键可靠性边界：
+> [v0.8.5](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.5) 补齐了从创作到定稿的人工可控闭环，并把 macOS Apple Silicon 与 Intel 安装包纳入同一份可追溯的发布合同：
 >
-> - **#92 流式草稿预览**：章节写作在生成尚未结束时即可显示已接受的正文预览；跨分片思考标记、取消、失败、裁剪拒绝和终态后的迟到事件不会污染草稿。
-> - **#99 OpenAI-compatible 端点**：保留用户填写的端点路径前缀，普通与流式请求使用同一解析规则，不再对带路径地址硬插 `/v1`。
-> - **#101 创作策略与推理覆盖**：创作策略属于小说项目，模型覆盖属于模型配置；界面显示请求偏好到实际生效值的映射。未知自定义端点不会猜测或发送供应商私有推理字段，原始推理不会成为章节正文或长期小说记忆。
+> - **可控创作模型**：单章、批量与审稿修稿都可明确选择并冻结本次生成模型，不会静默回退到全局默认模型；模型未完成会显示实际终止原因，内容策略拦截不会再被泛化为“工作流未完成”。
+> - **人工审稿到修稿**：AI 审稿意见可逐条编辑、忽略、恢复或补充；确认后生成不可变快照，只按确认清单生成待合并修订稿，保留人工差异合并的最后决定权。
+> - **写作与项目可靠性**：修复章节创作入口、定稿后处理状态、结构化 JSON 恢复与关系图谱编辑边界；未完成或未确认的内容不会被错误落盘。
+> - **外观与平台**：继续保留独立主题（`light`、`galaxy`、`paper`、`dark`）与界面皮肤（`classic`、`anime`、`custom`）设置；macOS ARM64 与 x64 各自经过独立的资格合同、构建和收据验证。
 >
-> 同一个 Release 使用五项资产合同：`ai-novel-writer-setup-0.8.4.exe`、`ai-novel-writer-setup-0.8.4.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.4-installer.dmg` 与 `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`。
+> 同一个 Release 使用七项资产合同：`ai-novel-writer-setup-0.8.5.exe`、`ai-novel-writer-setup-0.8.5.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.5-installer.dmg`、`ai-novel-writer-mac-arm64-0.8.5-installer.dmg.sha256`、`ai-novel-writer-mac-x64-0.8.5-installer.dmg` 与 `ai-novel-writer-mac-x64-0.8.5-installer.dmg.sha256`。Windows 安装包未代码签名；两种 macOS 安装包为 ad-hoc 或未签名且未公证，首次打开可能需要按平台安全提示手动确认。
 
 
 ## 新增额外支持DeepSeek Harness 插件版（开发预览）

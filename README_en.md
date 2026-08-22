@@ -22,22 +22,23 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows and macOS ARM64 installers</a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows, macOS Apple Silicon, and macOS Intel installers</a>
 </p>
 
 <p align="center">
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
-> ## v0.8.4 generation reliability and creative strategy
+> ## v0.8.5 authoring loop and three-architecture desktop release
 >
-> [v0.8.4](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.4) fixes three critical reliability boundaries in the writing flow:
+> [v0.8.5](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.5) completes the human-controlled loop from writing through finalization, and brings macOS Apple Silicon and Intel installers into one traceable release contract:
 >
-> - **#92 streaming draft preview** — Accepted prose becomes visible before chapter generation finishes; split thinking markers, cancellation, failure, rejected trimming, and late terminal events cannot pollute the draft.
-> - **#99 OpenAI-compatible endpoints** — User-provided endpoint path prefixes are preserved, and normal plus streaming requests share one resolution rule instead of forcing `/v1` onto a path-bearing address.
-> - **#101 creative strategy and reasoning override** — Creative strategy belongs to the novel project and model override belongs to the model profile; the UI shows requested-to-effective reasoning mapping. Unknown custom endpoints do not guess or send provider-private reasoning fields, and raw reasoning is not chapter prose or long-term novel memory.
+> - **Controlled authoring models** — Single-chapter, batch, and review-driven revision flows can explicitly select and freeze the model for that run instead of silently falling back to the global default. An incomplete model response reports its actual terminal reason, so a policy block is no longer presented as a generic unfinished workflow.
+> - **Human review to revision** — AI review items can be edited, ignored, restored, or supplemented. Confirmation persists an immutable snapshot; revision creates a pending merge revision from that confirmed list, leaving the final diff merge to the author.
+> - **Writing and project reliability** — Repairs cover the chapter writing entry, post-finalization status, structured JSON recovery, and relationship-graph editing boundaries. Incomplete or unconfirmed material is not persisted as completed work.
+> - **Appearance and platforms** — The independent themes (`light`, `galaxy`, `paper`, `dark`) and interface skins (`classic`, `anime`, `custom`) remain available. macOS ARM64 and x64 each have separate qualification contracts, builds, and receipts.
 >
-> One Release uses the exact five-asset contract: `ai-novel-writer-setup-0.8.4.exe`, `ai-novel-writer-setup-0.8.4.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.4-installer.dmg`, and `ai-novel-writer-mac-arm64-0.8.4-installer.dmg.sha256`.
+> One Release uses the exact seven-asset contract: `ai-novel-writer-setup-0.8.5.exe`, `ai-novel-writer-setup-0.8.5.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.5-installer.dmg`, `ai-novel-writer-mac-arm64-0.8.5-installer.dmg.sha256`, `ai-novel-writer-mac-x64-0.8.5-installer.dmg`, and `ai-novel-writer-mac-x64-0.8.5-installer.dmg.sha256`. The Windows installer is not code-signed; both macOS installers are ad-hoc or unsigned and not notarized, so their platform security prompts may require manual confirmation on first launch.
 
 
 
