@@ -214,7 +214,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     ], { cwd: repositoryRoot, encoding: 'utf8' })
     expect(rejected.status).not.toBe(0)
     expect(rejected.stderr).toContain('Release evidence command set is not exact for macos-x64')
-  })
+  }, RECEIPT_FINALIZE_TIMEOUT_MS)
 
   it.each([
     {
