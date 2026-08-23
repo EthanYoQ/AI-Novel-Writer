@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/readme/hero-zh-v2.png" alt="AI 小说作家——本地优先的长篇小说创作桌面工作台" width="100%" />
+  <img src="docs/assets/readme/ui-zh-v085-project-config.png" alt="AI 小说作家 v0.8.5：在本地桌面工作台中配置长篇小说的故事前提、世界观、角色、蓝图与章节" width="100%" />
 </p>
 
 > ## v0.8.5 创作闭环与三架构桌面发布
@@ -94,7 +94,7 @@ flowchart LR
 
 ## 界面预览
 
-![AI 小说作家主界面，展示项目结构、欢迎页、AI 写作助手和任务面板](docs/assets/readme/ui-zh.png)
+![AI 小说作家 v0.8.5 主界面，展示虚构项目、小说配置、项目结构、AI 写作助手和任务面板](docs/assets/readme/ui-zh-v085-project-config.png)
 
 ## 核心能力
 
