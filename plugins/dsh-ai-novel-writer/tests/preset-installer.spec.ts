@@ -1,10 +1,11 @@
-import { access, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createPresetInstaller } from '../src/preset-installer.ts'
+import { createBundledPresetInstaller, createPresetInstaller } from '../src/preset-installer.ts'
 import { makeTestWorkspace } from './test-workspace.ts'
 
 const templateRoot = resolve(import.meta.dirname, '..', 'presets', 'ai-novel-writer')
+const bundledPresetRoot = resolve(import.meta.dirname, '..', 'presets')
 
 describe('AI 小说作家 preset installer', () => {
   it('installs the exact package assets and repeats idempotently', async () => {
@@ -31,6 +32,27 @@ describe('AI 小说作家 preset installer', () => {
     await expect(installer.install()).resolves.toEqual({ status: 'conflict', changed: false })
     await expect(readFile(join(target, 'agent.cordis.yml'), 'utf8')).resolves.toBe('user customization\n')
     await expect(readFile(join(target, 'preset.yml'), 'utf8')).rejects.toThrow()
+  })
+
+  it('installs the independent V2 preset beside the unchanged V1 preset', async () => {
+    const root = await makeTestWorkspace('bundled-preset-install-')
+    const installer = createBundledPresetInstaller(bundledPresetRoot, root)
+
+    await expect(installer.install()).resolves.toEqual({ status: 'installed', changed: true })
+    await expect(installer.status()).resolves.toEqual({ status: 'installed' })
+    expect((await readdir(root)).sort()).toEqual(['ai-novel-writer', 'ai-novel-writer-v2'])
+    await expect(readFile(join(root, 'ai-novel-writer', 'agent.cordis.yml'), 'utf8'))
+      .resolves.toBe(await readFile(join(bundledPresetRoot, 'ai-novel-writer', 'agent.cordis.yml'), 'utf8'))
+    const v2Agent = await readFile(join(root, 'ai-novel-writer-v2', 'agent.cordis.yml'), 'utf8')
+    expect(v2Agent).toContain("name: '@ethanyoq/dsh-ai-novel-writer/agent-v2'")
+    expect(v2Agent).not.toContain('surface: v2')
+    expect(v2Agent).toContain('novel_propose_change')
+    expect(v2Agent).not.toContain('novel_apply_change')
+  })
+
+  it('rejects relative roots before inspecting the bundled presets', async () => {
+    expect(() => createBundledPresetInstaller('relative-presets', 'relative-preset-root'))
+      .toThrow(TypeError)
   })
 
   it.each(['directory', 'symlink'] as const)('treats a %s preset entry as a conflict', async (kind) => {

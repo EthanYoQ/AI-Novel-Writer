@@ -25,6 +25,8 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载桌面版（Windows / macOS）</a> · <a href="https://www.npmjs.com/package/@ethanyoq/dsh-ai-novel-writer">安装 DeepSeek Harness Web 插件</a>
 </p>
 
+> **DeepSeek Harness 插件提示：** 当前插件是早期 MVP，能力不足桌面软件版的 10%，不能替代桌面版。需要完整项目树、批量工作流、成熟编辑器或自动审校时，请使用上方的桌面版。
+
 <p align="center">
   <img src="docs/assets/readme/ui-zh-v085-project-config.png" alt="AI 小说作家 v0.8.5：在本地桌面工作台中配置长篇小说的故事前提、世界观、角色、蓝图与章节" width="100%" />
 </p>
@@ -41,11 +43,13 @@
 > 同一个 Release 使用七项资产合同：`ai-novel-writer-setup-0.8.5.exe`、`ai-novel-writer-setup-0.8.5.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.5-installer.dmg`、`ai-novel-writer-mac-arm64-0.8.5-installer.dmg.sha256`、`ai-novel-writer-mac-x64-0.8.5-installer.dmg` 与 `ai-novel-writer-mac-x64-0.8.5-installer.dmg.sha256`。Windows 安装包未代码签名；两种 macOS 安装包为 ad-hoc 或未签名且未公证，首次打开可能需要按平台安全提示手动确认。
 
 
-## 新增额外支持DeepSeek Harness 插件版（开发预览）
+## DeepSeek Harness 插件（早期 MVP）
 
-除了 Windows 与 macOS 桌面版，本仓库还在 [插件目录](https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer) 维护 `@ethanyoq/dsh-ai-novel-writer` `0.1.0` 开发预览。它把项目设置、人物设定、故事蓝图、章节蓝图和章节正文带入 DeepSeek Harness Web，并通过对话中的单文件审批卡片逐项保存；插件使用独立的 Harness 小说项目格式，不读取桌面版 `.vela` 项目。
+除了 Windows 与 macOS 桌面版，本仓库还在 [插件目录](https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer) 维护 `@ethanyoq/dsh-ai-novel-writer` `0.1.0` 开发预览。DeepSeek Harness 的 V2 工作台是刻意收敛的早期 MVP，当前能力不足桌面软件版的 10%；它不读取桌面版 `.vela` 项目，也不能替代桌面版的项目树、批量工作流、成熟编辑器或自动审校。
 
-该插件尚未进入桌面版正式 Release，但已发布为独立 npm 包，拥有独立锁文件、CI 和 MIT 许可；仓库根目录仍为 GPL-3.0 桌面应用。将它安装到 DeepSeek Harness 的 `web` profile：
+V2 只提供人工审核的最小创作链：项目设置 → 故事架构 → 人物设定 → 全书纲要 → 逐章蓝图 → 逐章正文。模型生成的待审核建议到达 Proposal 收件箱后，会先填入右侧工作台的本地编辑表单，供人工查看和修改；只有用户明确审核并应用 Proposal，权威项目状态才会改变。
+
+该插件不属于桌面版正式 Release，但已发布为独立 npm 包，拥有独立锁文件、CI 和 MIT 许可；仓库根目录仍为 GPL-3.0 桌面应用。将它安装到 DeepSeek Harness 的 `web` profile：
 
 ```sh
 dsh plugin --profile web add @ethanyoq/dsh-ai-novel-writer
@@ -72,7 +76,7 @@ dsh plugin --profile web add ./.runtime/.cache/ethanyoq-dsh-ai-novel-writer-0.1.
 dsh --profile web
 ```
 
-启动 Web 后，打开“小说工作台”，安装“AI 小说作家”Preset；随后新建会话并选择该 Preset。模型生成的修改会在对话中显示 Harness 原生审批，点击一次“允许一次”后才会写入磁盘并回填工作台。完整功能、项目格式、验证范围和卸载方式见[插件说明](plugins/dsh-ai-novel-writer/README.md)。不要使用 `dsh plugin add github:EthanYoQ/AI-Novel-Writer`：仓库根包是桌面应用，不是可激活的 DSH bundle。
+启动 Web 后，打开“小说工作台”，安装 **“AI 小说作家 V2”** Preset；随后新建会话并选择该 Preset。V2 的 AI 起草结果会先回填到右侧工作台的本地编辑表单，供人工修改和审核；点击应用 Proposal 才会写入项目。完整功能、项目格式、验证范围和卸载方式见[插件说明](plugins/dsh-ai-novel-writer/README.md)。不要使用 `dsh plugin add github:EthanYoQ/AI-Novel-Writer`：仓库根包是桌面应用，不是可激活的 DSH bundle。
 
 
 

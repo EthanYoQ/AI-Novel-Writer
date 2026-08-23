@@ -203,6 +203,7 @@ function normalizeHeader(
 ): object {
   return {
     ...header,
+    tools: [...(header.tools ?? [])].sort((left, right) => left.name.localeCompare(right.name)),
     ...header.system === undefined
       ? {}
       : { system: header.system.replaceAll(workspace, '<workspace>').replaceAll(workspace.replaceAll('\\', '/'), '<workspace>') },

@@ -2,7 +2,12 @@
 
 import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { Revision } from '../types.ts'
-import type { NovelApplyOutcome, NovelApprovalAvailability, NovelWorkbenchController } from './workbench-store.ts'
+import {
+  AI_NOVEL_PRESET_ID,
+  type NovelApplyOutcome,
+  type NovelApprovalAvailability,
+  type NovelWorkbenchController,
+} from './workbench-store.ts'
 
 interface Observable<T> {
   getSnapshot(): T
@@ -240,12 +245,18 @@ export function observeNovelContextSources(
       ? undefined
       : sources.workspaces.list.getSnapshot().items
         .find(workspace => workspace.sessionIds.includes(sessionId))?.workspaceId
+    const agentPreset = sessionId === undefined ? undefined : sessionList.byId?.[sessionId]?.agentPreset
+    if (agentPreset !== AI_NOVEL_PRESET_ID) {
+      controller.setTarget(undefined)
+      bindConversation(undefined)
+      return
+    }
     controller.setTarget(sessionId === undefined || workspaceId === undefined
       ? undefined
       : {
           sessionId,
           workspaceId,
-          agentPreset: sessionList.byId?.[sessionId]?.agentPreset,
+          agentPreset,
           approval: approvalAvailability(sessionList.byId?.[sessionId]?.projectionValues?.['permissions']),
         })
     bindConversation(sessionId)

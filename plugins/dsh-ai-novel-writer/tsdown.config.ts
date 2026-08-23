@@ -16,6 +16,7 @@ const nodeEntry = (entry: string): UserConfig => ({
 export default defineConfig([
   nodeEntry('src/index.ts'),
   nodeEntry('src/agent.ts'),
+  nodeEntry('src/agent-v2.ts'),
   {
     entry: { client: 'src/client/index.ts' },
     outDir: 'lib',

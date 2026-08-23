@@ -32,11 +32,34 @@ const ready: NovelContextReady = {
 }
 
 describe('novel context shell observer', () => {
+  it('routes only the explicit V1 Preset into the V1 controller and leaves other sessions inactive', () => {
+    const sessionList = source({
+      current: SESSION_1 as SessionId | undefined,
+      byId: { [SESSION_1]: { agentPreset: 'default' } },
+    })
+    const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
+    const conversation = source({ nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: null }> })
+    const controller = new NovelWorkbenchController({ read: vi.fn(), readAsset: vi.fn(), prompt: vi.fn() }, vi.fn())
+    const setTarget = vi.spyOn(controller, 'setTarget')
+    const dispose = observeNovelContextSources({
+      sessions: { list: sessionList, binding: () => ({ session: conversation }) }, workspaces: { list: workspaceList },
+    }, controller)
+
+    expect(setTarget).toHaveBeenLastCalledWith(undefined)
+    sessionList.set({ current: SESSION_1, byId: { [SESSION_1]: { agentPreset: 'ai-novel-writer' } } })
+    expect(setTarget).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: SESSION_1, workspaceId: WORKSPACE_1 }))
+    sessionList.set({ current: SESSION_1, byId: { [SESSION_1]: { agentPreset: 'ai-novel-writer-v2' } } })
+    expect(setTarget).toHaveBeenLastCalledWith(undefined)
+    sessionList.set({ current: SESSION_1, byId: {} })
+    expect(setTarget).toHaveBeenLastCalledWith(undefined)
+    dispose()
+  })
+
   it('projects the selected Preset and known approval mode into pre-submit recovery guidance', async () => {
     const sessionList = source({
       current: SESSION_1 as SessionId | undefined,
       byId: {
-        [SESSION_1]: { agentPreset: 'default', projectionValues: { permissions: { currentValue: 'workspace-write' } } },
+        [SESSION_1]: { agentPreset: 'ai-novel-writer', projectionValues: { permissions: { currentValue: 'danger-full-access' } } },
       },
     })
     const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
@@ -52,7 +75,7 @@ describe('novel context shell observer', () => {
     }, controller)
     await controller.open()
     expect(controller.getSnapshot()).toMatchObject({
-      initialization: { blocker: expect.stringContaining('未使用“AI 小说作家”Preset') },
+      initialization: { blocker: expect.stringContaining('已关闭原生审批') },
     })
 
     sessionList.set({
@@ -86,7 +109,9 @@ describe('novel context shell observer', () => {
   })
 
   it('follows selection and refreshes only for a completed novel mutation result', async () => {
-    const sessionList = source({ current: SESSION_1 as SessionId | undefined })
+    const sessionList = source({ current: SESSION_1 as SessionId | undefined, byId: {
+      [SESSION_1]: { agentPreset: 'ai-novel-writer' }, [SESSION_2]: { agentPreset: 'ai-novel-writer' },
+    } })
     const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
     const conversations = new Map([
       [SESSION_1, source({ nodes: [] as Array<{
@@ -219,7 +244,9 @@ describe('novel context shell observer', () => {
     })
 
     workspaceList.set({ items: [{ workspaceId: WORKSPACE_2, sessionIds: [SESSION_2] }] })
-    sessionList.set({ current: SESSION_2 })
+    sessionList.set({ current: SESSION_2, byId: {
+      [SESSION_1]: { agentPreset: 'ai-novel-writer' }, [SESSION_2]: { agentPreset: 'ai-novel-writer' },
+    } })
     await controller.whenIdle()
     expect(read.mock.calls.at(-1)?.slice(0, 2)).toEqual(['workspace-2', 1])
 
@@ -232,7 +259,7 @@ describe('novel context shell observer', () => {
   })
 
   it('retries binding when the selected Session materializes after the list row', async () => {
-    const sessionList = source({ current: SESSION_1 as SessionId | undefined })
+    const sessionList = source({ current: SESSION_1 as SessionId | undefined, byId: { [SESSION_1]: { agentPreset: 'ai-novel-writer' } } })
     const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
     const conversation = source({
       nodes: [] as Array<{
@@ -254,7 +281,7 @@ describe('novel context shell observer', () => {
     }, controller)
     await controller.open()
     materialized = true
-    sessionList.set({ current: SESSION_1 })
+    sessionList.set({ current: SESSION_1, byId: { [SESSION_1]: { agentPreset: 'ai-novel-writer' } } })
     conversation.set({ nodes: [{ kind: 'tool-result', seq: 1, call: { name: 'novel_apply_change' } }] })
     await controller.whenIdle()
 
@@ -263,7 +290,7 @@ describe('novel context shell observer', () => {
   })
 
   it('settles only the turn whose durable user message contains the active generation marker', async () => {
-    const sessionList = source({ current: SESSION_1 as SessionId | undefined })
+    const sessionList = source({ current: SESSION_1 as SessionId | undefined, byId: { [SESSION_1]: { agentPreset: 'ai-novel-writer' } } })
     const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
     const conversation = source({
       nodes: [] as Array<{
@@ -311,7 +338,7 @@ describe('novel context shell observer', () => {
   })
 
   it('fails a generation closed when its observed queued prompt disappears before becoming durable', async () => {
-    const sessionList = source({ current: SESSION_1 as SessionId | undefined })
+    const sessionList = source({ current: SESSION_1 as SessionId | undefined, byId: { [SESSION_1]: { agentPreset: 'ai-novel-writer' } } })
     const workspaceList = source({ items: [{ workspaceId: WORKSPACE_1, sessionIds: [SESSION_1] }] })
     const conversation = source({
       nodes: [] as Array<{ kind: string; seq: number; content?: readonly { type: string; text?: string }[] }>,

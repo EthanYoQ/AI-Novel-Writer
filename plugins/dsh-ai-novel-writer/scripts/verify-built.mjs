@@ -71,6 +71,14 @@ const unwrapped = host.loader.unwrapExports(builtModule)
 if (unwrapped !== builtModule || unwrapped.name !== 'dsh-ai-novel-writer' || typeof unwrapped.apply !== 'function') {
   throw new Error('Loader export unwrapping did not preserve the emitted Host plugin')
 }
+const v2AgentModule = await import(pathToFileURL(join(root, 'lib', 'agent-v2.js')).href)
+if ('default' in v2AgentModule) throw new Error('The emitted V2 agent entry must not add a default export')
+const v2Agent = host.loader.unwrapExports(v2AgentModule)
+if (v2Agent !== v2AgentModule || v2Agent.name !== 'dsh-ai-novel-writer-agent-v2'
+  || typeof v2Agent.apply !== 'function'
+  || JSON.stringify(v2Agent.inject) !== JSON.stringify(['agents', 'systemPrompt', 'tools', 'workspaceRegistry'])) {
+  throw new Error('The emitted V2 agent entry must declare its Workspace registry dependency')
+}
 
 try {
   await host.loader.create({
@@ -99,9 +107,12 @@ await roster.plugin(AgentPresets, {
 })
 
 try {
-  const preset = (await roster.agentPresets.list()).find(candidate => candidate.id === 'ai-novel-writer')
-  if (preset === undefined || preset.broken !== undefined || preset.name !== 'AI 小说作家') {
-    throw new Error(`Harness did not discover a usable AI novel preset: ${JSON.stringify(preset)}`)
+  const presets = await roster.agentPresets.list()
+  for (const [id, name] of [['ai-novel-writer', 'AI 小说作家'], ['ai-novel-writer-v2', 'AI 小说作家 V2']]) {
+    const preset = presets.find(candidate => candidate.id === id)
+    if (preset === undefined || preset.broken !== undefined || preset.name !== name) {
+      throw new Error(`Harness did not discover a usable ${id} preset: ${JSON.stringify(preset)}`)
+    }
   }
 } finally {
   await roster.fiber.dispose()

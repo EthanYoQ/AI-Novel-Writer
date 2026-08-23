@@ -26,6 +26,18 @@ import {
 } from '../src/client/index.ts'
 import type { PresetSetupState } from '../src/client/setup-store.ts'
 
+const v2State = {
+  projectId: '123e4567-e89b-42d3-a456-426614174000', workspaceId: WORKSPACE_ID, globalRevision: 1, readOnly: false,
+  storage: { applicationId: 1, userVersion: 2, foreignKeys: true, journalMode: 'wal', synchronous: 'full', lockingMode: 'normal' },
+  project: {
+    revision: 1, title: '潮汐来信', language: 'zh-CN', genre: '悬疑', plannedChapters: 12, targetWordsPerChapter: 3000,
+    creativeStrategy: 'auto', structureMode: 'three-act', narrativePov: 'third-limited', globalGuidance: '',
+    createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T00:00:00.000Z',
+  },
+  architecture: { revision: 1, premise: '', characterGraph: '', world: '', plotOutline: '', styleConstraints: '', referenceWorks: [] },
+  characters: { revision: 1, items: [], relationships: [] }, chapters: [], artifacts: [], chapterFinals: [], tasks: [], changes: [], proposals: [], migration: undefined,
+}
+
 let cachedSlotRegistry: (new (ctx: Context) => {
   register(options: unknown, component: unknown): () => void
   entries(key: string): ReadonlyArray<{
@@ -79,14 +91,7 @@ function mutableSource<T>(initial: T) {
   }
 }
 
-function enterInputValue(input: HTMLInputElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-  if (setter === undefined) throw new Error('HTMLInputElement value setter is unavailable')
-  setter.call(input, value)
-  input.dispatchEvent(new Event('input', { bubbles: true }))
-}
-
-function provideNovelContextSources(ctx: Context, selected = false) {
+function provideNovelContextSources(ctx: Context, selected = false, agentPreset = 'ai-novel-writer') {
   const conversation = mutableSource({
     nodes: [] as Array<{ kind: 'tool-result'; seq: number; call: { name: string } | null }>,
   })
@@ -95,7 +100,7 @@ function provideNovelContextSources(ctx: Context, selected = false) {
     byId: selected
       ? {
           [SESSION_ID]: {
-            agentPreset: 'ai-novel-writer',
+            agentPreset,
             projectionValues: { permissions: { currentValue: 'workspace-write' } },
           },
         }
@@ -110,6 +115,7 @@ function provideNovelContextSources(ctx: Context, selected = false) {
     binding: (id: SessionId) => id === SESSION_ID ? { session: { ...conversation, prompt } } : undefined,
   } as never)
   ctx.provide('workspaces' as never, { list: workspaces } as never)
+  ctx.provide('layout' as never, { acquireSidebarRail: () => () => {} } as never)
   return { conversation, sessions, workspaces, prompt }
 }
 
@@ -221,7 +227,7 @@ describe('preset setup browser integration', () => {
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
 
-    expect(inject).toEqual(['slots', 'connection', 'sessions', 'workspaces'])
+    expect(inject).toEqual(['slots', 'connection', 'sessions', 'workspaces', 'layout'])
     expect(entries.find(entry => entry.options.name === 'sidebar.footer.action')?.options.id).toBe('ai-novel-workbench')
     expect(entries.find(entry => entry.options.name === 'shell.overlay')?.options.id).toBe('ai-novel-workbench')
     expect(entries.find(entry => entry.options.name === 'settings.plugin.item')?.options.id).toBe('ai-novel-writer')
@@ -315,7 +321,7 @@ describe('preset setup browser integration', () => {
     await Promise.all([controllers.setupController.load(), controllers.workbenchController.open()])
     const beforeDisconnect = call.mock.calls.length
 
-    hostDescription.set(undefined)
+    await act(async () => { hostDescription.set(undefined) })
     hostDescription.set({})
     await vi.waitFor(() => { expect(call.mock.calls.length).toBeGreaterThan(beforeDisconnect) })
     await controllers.workbenchController.whenIdle()
@@ -325,7 +331,110 @@ describe('preset setup browser integration', () => {
     await fiber.dispose()
   })
 
-  it('runs trigger, focus scope, Escape, and cleanup through real slot registrations', async () => {
+  it('disconnects and reconnects the active V2 workbench through the Host connection observer', async () => {
+    const ctx = new Context()
+    interface InjectedControllers {
+      v2WorkbenchController: {
+        open(): Promise<void>
+        whenIdle(): Promise<void>
+        getSnapshot(): { status: string; open: boolean; message?: string }
+      }
+    }
+    const entries: Array<{ options: { inject?: () => InjectedControllers } }> = []
+    class TestSlots extends Service {
+      constructor(owner: Context) { super(owner, 'slots') }
+      inject(_name: string, mount: () => () => void): void { this.ctx.effect(mount, 'test slot mount') }
+      register(options: { inject?: () => InjectedControllers }): () => void {
+        const entry = { options }
+        entries.push(entry)
+        return () => { entries.splice(entries.indexOf(entry), 1) }
+      }
+    }
+    new TestSlots(ctx)
+    provideNovelContextSources(ctx, true, 'ai-novel-writer-v2')
+    const hostDescription = mutableSource<object | undefined>({})
+    const call = vi.fn((_channel: string, endpoint: string) => Promise.resolve({
+      ok: true,
+      value: endpoint === 'workspace/state/read'
+        ? { status: 'ready', workspaceId: WORKSPACE_ID, state: v2State }
+        : endpoint === 'proposal/list' ? { proposals: [] } : { status: 'installed' },
+    }))
+    ctx.provide('connection' as never, { rpc: { call }, hostDescription } as never)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    const controller = entries[0]!.options.inject!().v2WorkbenchController
+    await controller.open()
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', open: true })
+    const stateReadsBeforeDisconnect = call.mock.calls.filter(args => args[1] === 'workspace/state/read').length
+
+    hostDescription.set(undefined)
+    expect(controller.getSnapshot()).toMatchObject({ status: 'error', open: true, message: expect.stringContaining('Harness 连接已断开') })
+    hostDescription.set({})
+    await vi.waitFor(() => {
+      expect(call.mock.calls.filter(args => args[1] === 'workspace/state/read').length).toBeGreaterThan(stateReadsBeforeDisconnect)
+    })
+    await controller.whenIdle()
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', open: true })
+    await fiber.dispose()
+  })
+
+  it('renders V2 project evidence in the Plugin Configuration card across disconnect and reconnect', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const ctx = new Context()
+    interface InjectedControllers {
+      workbenchController: unknown
+      v2WorkbenchController: unknown
+      workbenchRoute: unknown
+      setupController: unknown
+    }
+    const entries: Array<{ options: { id?: string; inject?: () => InjectedControllers }; component: unknown }> = []
+    class TestSlots extends Service {
+      constructor(owner: Context) { super(owner, 'slots') }
+      inject(_name: string, mount: () => () => void): void { this.ctx.effect(mount, 'test slot mount') }
+      register(options: { id?: string; inject?: () => InjectedControllers }, component: unknown): () => void {
+        const entry = { options, component }
+        entries.push(entry)
+        return () => { entries.splice(entries.indexOf(entry), 1) }
+      }
+    }
+    new TestSlots(ctx)
+    provideNovelContextSources(ctx, true, 'ai-novel-writer-v2')
+    const hostDescription = mutableSource<object | undefined>({})
+    const call = vi.fn((_channel: string, endpoint: string) => Promise.resolve({
+      ok: true,
+      value: endpoint === 'workspace/state/read'
+        ? { status: 'ready', workspaceId: WORKSPACE_ID, state: v2State }
+        : endpoint === 'proposal/list' ? { proposals: [] } : { status: 'installed' },
+    }))
+    ctx.provide('connection' as never, { rpc: { call }, hostDescription } as never)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    const entry = entries.find(candidate => candidate.options.id === 'ai-novel-writer')!
+    const Card = entry.component as ComponentType<Record<string, unknown>>
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<Card {...entry.options.inject!()} />) })
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('V2 单列工作台')
+      expect(container.textContent).toContain('项目已加载（V2）')
+    })
+
+    await act(async () => { hostDescription.set(undefined) })
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Host 已断开')
+      expect(container.textContent).toContain('项目状态不可用')
+    })
+    await act(async () => { hostDescription.set({}) })
+    const refresh = [...container.querySelectorAll('button')].find(button => button.textContent === '刷新状态')!
+    await act(async () => { refresh.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await vi.waitFor(() => { expect(container.textContent).toContain('项目已加载（V2）') })
+    await act(async () => { root.unmount() })
+    container.remove()
+    await fiber.dispose()
+  })
+
+  it('keeps the V1 preset workbench, focus scope, Escape, and cleanup through real slot registrations', async () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     const ctx = new Context()
     const SlotRegistry = await loadSlotRegistry()
@@ -402,45 +511,14 @@ describe('preset setup browser integration', () => {
     expect(document.activeElement).toBe(close)
     expect(dialog.getAttribute('aria-modal')).toBe('false')
     expect(container.querySelector('[data-test-shell-frame]')?.classList.contains('aiNovelWorkbenchFrameOpen')).toBe(true)
+    expect(dialog.textContent).toContain('初始化小说项目')
     expect(call).toHaveBeenCalledWith(
       '/ai-novel', 'context/read', { workspaceId: WORKSPACE_ID, chapter: 1 }, expect.any(AbortSignal),
     )
-    await act(async () => {
-      enterInputValue(dialog.querySelector<HTMLInputElement>('input[name="title"]')!, '潮汐来信')
-      enterInputValue(dialog.querySelector<HTMLInputElement>('input[name="genre"]')!, '悬疑')
-    })
-    await act(async () => {
-      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
-      await Promise.resolve()
-    })
+    expect(call.mock.calls.map(args => args[1])).not.toContain('state/read')
+    expect(call.mock.calls.map(args => args[1])).not.toContain('proposal/list')
     expect(contextSources.prompt).not.toHaveBeenCalled()
-    const exactValues = dialog.querySelector('.aiNovelInitializationPreview pre')!.textContent!
-    expect(exactValues).toMatch(/"projectId": "[0-9a-f-]{36}"/)
-    expect(exactValues).toMatch(/"createdAt": "[^"]+"/)
-    expect(dialog.textContent).toContain('提交到当前会话')
-    await act(async () => {
-      dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
-      await Promise.resolve()
-    })
-    await vi.waitFor(() => { expect(contextSources.prompt).toHaveBeenCalledOnce() })
-    const proposal = contextSources.prompt.mock.calls[0]![0][0].text as string
-    expect(proposal).toContain(exactValues)
-    expect(proposal).toContain('"kind": "initialize"')
-    expect(proposal).toContain('"title": "潮汐来信"')
-    expect(proposal).not.toContain('"request"')
-    expect(call.mock.calls.every(args => args[1] === 'context/read' || args[1] === 'preset/status')).toBe(true)
-    await act(async () => {
-      contextSources.conversation.set({
-        nodes: [{ kind: 'tool-result', seq: 1, call: { name: 'novel_apply_change' } }],
-      })
-      await injected.workbenchController.whenIdle()
-    })
-    expect(call.mock.calls.filter(args => args[1] === 'context/read')).toHaveLength(3)
-    await act(async () => {
-      ctx.emit('connection/reset')
-      await injected.workbenchController.whenIdle()
-    })
-    expect(call.mock.calls.filter(args => args[1] === 'context/read')).toHaveLength(4)
+    expect(call.mock.calls.map(args => args[1])).not.toContain('command/commit')
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
@@ -563,6 +641,11 @@ describe('preset setup browser integration', () => {
     expect(remove).toHaveBeenCalledOnce()
   })
 
+  it('keeps artifact proposal content within the review dock', () => {
+    expect(novelContextCss).toContain('.aiNovelV2DetailList>div,.aiNovelV2CommandDiff,.aiNovelV2CommandDiff section,.aiNovelV2Diff section{min-width:0}')
+    expect(novelContextCss).toContain('.aiNovelV2CommandDiff pre,.aiNovelV2Diff pre{margin:0;max-width:100%;max-height:240px;overflow:auto;overflow-wrap:anywhere;white-space:pre-wrap')
+  })
+
   it.each([
     [{ status: 'loading', open: true }, '正在检查安装状态'],
     [{ status: 'not-installed', open: true }, '安装 AI 小说作家 Preset'],
@@ -574,5 +657,14 @@ describe('preset setup browser integration', () => {
     const html = renderToStaticMarkup(<PresetSetupBody state={state} install={() => {}} retry={() => {}} />)
     expect(html).toContain(text)
     expect(html).not.toContain('path=')
+  })
+
+  it.each([
+    [{ status: 'not-installed', open: true }],
+    [{ status: 'installed', open: true, changed: true }],
+  ] satisfies readonly [PresetSetupState][])('tells the user to refresh before selecting V2 after state %#', state => {
+    const html = renderToStaticMarkup(<PresetSetupBody state={state} install={() => {}} retry={() => {}} />)
+    expect(html).toContain('安装后请刷新当前页面，再新建会话并选择“AI 小说作家 V2”Preset。')
+    expect(html).toContain('“AI 小说作家”是兼容的 V1 选项')
   })
 })
