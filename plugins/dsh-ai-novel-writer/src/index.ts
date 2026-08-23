@@ -5,15 +5,68 @@ import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionRpcHandler, HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { WorkspaceId, type Workspace } from '@deepseek-ai/dsh-workspace'
+import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import z from '@deepseek-ai/schemastery'
+import { createAiNovelCommandRpcHandler, type NovelWorkspaceRegistry } from './command-rpc.ts'
 import { parseNovelAssetRef } from './context-types.ts'
 import { readNovelAsset, readNovelContext } from './context-window.ts'
-import { createPresetInstaller } from './preset-installer.ts'
+import { createBundledPresetInstaller, type PresetInstaller } from './preset-installer.ts'
 import type { AssetRef } from './types.ts'
 
 export { openNovelProject } from './novel-project.ts'
 export type { NovelProjectOptions } from './novel-project.ts'
+export { NovelStoreError, openNovelStore, recoverNovelStoreBinding, validateNovelChangeSet } from './novel-store.ts'
+export type {
+  NovelAggregateRef,
+  NovelArchitectureAggregate,
+  NovelArchitectureNextValue,
+  NovelChangeAuditRecord,
+  NovelChangeReceipt,
+  NovelChangeSet,
+  NovelChangeProvenance,
+  NovelChapterAggregate,
+  NovelChapterContext,
+  NovelChapterFinal,
+  NovelChapterNextValue,
+  NovelCharactersAggregate,
+  NovelCharactersNextValue,
+  NovelProjectAggregate,
+  NovelProjectNextValue,
+  NovelStore,
+  NovelStoreErrorCode,
+  NovelStoreInitializeRequest,
+  NovelStoreOpenOptions,
+  NovelStoreRecoveryMode,
+  NovelStoreRecoveryReceipt,
+  NovelStoreSnapshot,
+  NovelStorageDiagnostics,
+  NovelProposalOptions,
+  NovelProposalApplyResult,
+  NovelProposalChange,
+  NovelProposalItem,
+  NovelProposalItemFailure,
+  NovelProposalItemMutationResult,
+  NovelProposalItemReceipt,
+  NovelProposalItemStatus,
+  NovelProposalRegenerationResult,
+  NovelProposalReceipt,
+  NovelProposalRequest,
+  NovelProposalStatus,
+  NovelProposalSummary,
+  NovelArtifact,
+  NovelArtifactProposalChange,
+  NovelAggregateProposalChange,
+  NovelTaskAggregate,
+  NovelTaskKind,
+  NovelTaskNextValue,
+  NovelTaskStatus,
+} from './novel-store.ts'
+export { migrateV1NovelProject, previewV1NovelMigration } from './novel-migration.ts'
+export type {
+  NovelMigrationReceipt,
+  NovelV1MigrationPreview,
+  NovelV1SourcePreview,
+} from './novel-migration.ts'
 export { NovelProjectError } from './types.ts'
 export type {
   AssetRef,
@@ -35,6 +88,21 @@ export type {
 } from './types.ts'
 export { createPresetInstaller } from './preset-installer.ts'
 export type { PresetInstaller, PresetInstallResult, PresetInstallStatus } from './preset-installer.ts'
+export { createAiNovelCommandRpcHandler } from './command-rpc.ts'
+export type {
+  NovelCommandDiffChange,
+  NovelCommandPreviewResult,
+  NovelLoopbackCommand,
+  NovelProposalListResult,
+  NovelStateReadResult,
+  NovelWorkspaceStateReadResult,
+  NovelChapterContextRequest,
+  NovelChapterContextResult,
+  NovelWorkspaceInitializeRequest,
+  NovelWorkspaceInitializeResult,
+  NovelWorkspaceRecoveryResult,
+  NovelWorkspaceRegistry,
+} from './command-rpc.ts'
 
 /** Stable Host plugin name used by Cordis diagnostics. */
 export const name = 'dsh-ai-novel-writer'
@@ -54,7 +122,7 @@ export const Config: z<Config> = z.object({
 })
 
 function templateRoot(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), '..', 'presets', 'ai-novel-writer')
+  return join(dirname(fileURLToPath(import.meta.url)), '..', 'presets')
 }
 
 function badRequest(message: string): Awaited<ReturnType<ConnectionRpcHandler>> {
@@ -82,15 +150,6 @@ function isEmptyObject(value: unknown): value is Record<PropertyKey, never> {
     && value !== null
     && Object.getPrototypeOf(value) === Object.prototype
     && Reflect.ownKeys(value).length === 0
-}
-
-/** Minimal read face consumed from the Host Workspace registry. */
-export interface NovelWorkspaceRegistry {
-  /**
-   * @param workspaceId Opaque Workspace identity received from the browser.
-   * @returns The registered canonical directory, or undefined for an unknown id.
-   */
-  get(workspaceId: WorkspaceId): Pick<Workspace, 'path'> | undefined
 }
 
 function contextRequest(value: unknown): { readonly workspaceId: WorkspaceId; readonly chapter: number } | undefined {
@@ -124,7 +183,7 @@ function assetRequest(value: unknown): { readonly workspaceId: WorkspaceId; read
  * @returns A handler for the two closed setup endpoints.
  */
 export function createPresetSetupRpcHandler(
-  installer: ReturnType<typeof createPresetInstaller>,
+  installer: PresetInstaller,
   reportFailure: (error: unknown) => void = () => {},
 ): ConnectionRpcHandler {
   return async (endpoint, payload, signal) => {
@@ -154,14 +213,22 @@ export function createPresetSetupRpcHandler(
  * @returns A handler whose read endpoints accept only opaque Workspace identity and recognized selectors.
  */
 export function createAiNovelRpcHandler(
-  installer: ReturnType<typeof createPresetInstaller>,
+  installer: PresetInstaller,
   workspaces: NovelWorkspaceRegistry,
   reportFailure: (error: unknown) => void = () => {},
 ): ConnectionRpcHandler {
   const setup = createPresetSetupRpcHandler(installer, reportFailure)
+  const command = createAiNovelCommandRpcHandler(workspaces, reportFailure)
   return async (endpoint, payload, signal) => {
     if (endpoint === 'preset/status' || endpoint === 'preset/install') {
       return setup(endpoint, payload, signal)
+    }
+    if (endpoint === 'workspace/initialize' || endpoint === 'workspace/state/read' || endpoint === 'state/read' || endpoint === 'chapter/context' || endpoint === 'proposal/list' || endpoint === 'command/preview'
+      || endpoint === 'command/commit' || endpoint === 'task/read'
+      || endpoint === 'proposal/apply' || endpoint === 'proposal/retry'
+      || endpoint === 'proposal/discard' || endpoint === 'proposal/regenerate'
+      || endpoint === 'workspace/reattach' || endpoint === 'workspace/clone') {
+      return command(endpoint, payload, signal)
     }
     if (endpoint !== 'context/read' && endpoint !== 'asset/read') {
       return badRequest(`Unknown AI novel endpoint: ${endpoint}`)
@@ -201,6 +268,40 @@ export function createAiNovelRpcHandler(
   }
 }
 
+/** Host RPC lifecycle that drains active loopback commands before HMR unregisters the channel. */
+export interface NovelHostRpcLifecycle {
+  readonly handler: ConnectionRpcHandler
+  dispose(): Promise<void>
+}
+
+/**
+ * Reject new loopback commands after disposal begins, then wait for all accepted commands.
+ *
+ * Command handlers dispose their own SQLite stores before they settle, so draining this wrapper
+ * releases a held exclusive database lock before Cordis unregisters the HMR-replaced channel.
+ */
+export function createAiNovelHostRpcLifecycle(handler: ConnectionRpcHandler): NovelHostRpcLifecycle {
+  let closing = false
+  const inFlight = new Set<Promise<unknown>>()
+  let disposal: Promise<void> | undefined
+  const guarded: ConnectionRpcHandler = (endpoint, payload, signal) => {
+    if (closing) return Promise.resolve(internalFailure('AI novel Host is reloading'))
+    const invocation = Promise.resolve().then(() => handler(endpoint, payload, signal))
+    inFlight.add(invocation)
+    return invocation.finally(() => { inFlight.delete(invocation) })
+  }
+  return {
+    handler: guarded,
+    dispose(): Promise<void> {
+      closing = true
+      disposal ??= (async () => {
+        while (inFlight.size > 0) await Promise.allSettled([...inFlight])
+      })()
+      return disposal
+    },
+  }
+}
+
 /**
  * Register the loopback-only preset setup channel.
  *
@@ -210,15 +311,22 @@ export function createAiNovelRpcHandler(
  */
 export function apply(ctx: Context, config: Config): void {
   const presetRoot = config.presetRoot ?? dshHomePath('.agent-presets')
-  const installer = createPresetInstaller(templateRoot(), presetRoot)
+  const installer = createBundledPresetInstaller(templateRoot(), presetRoot)
   const connection = ctx.get('connection') as HostConnectionHandle
   const workspaces = ctx.get('workspaceRegistry') as NovelWorkspaceRegistry
   ctx.effect(
-    () => connection.rpc.handle('/ai-novel', createAiNovelRpcHandler(
-      installer,
-      workspaces,
-      error => { ctx.logger.error('dsh-ai-novel-writer: request failed: %o', error) },
-    ), { authority: 'loopback' }),
+    () => {
+      const lifecycle = createAiNovelHostRpcLifecycle(createAiNovelRpcHandler(
+        installer,
+        workspaces,
+        error => { ctx.logger.error('dsh-ai-novel-writer: request failed: %o', error) },
+      ))
+      const unregister = connection.rpc.handle('/ai-novel', lifecycle.handler, { authority: 'loopback' })
+      return async () => {
+        await lifecycle.dispose()
+        await unregister()
+      }
+    },
     'ai-novel-writer: setup and read-only context RPC',
   )
 }

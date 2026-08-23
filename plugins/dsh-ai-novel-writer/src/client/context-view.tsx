@@ -8,10 +8,17 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { PresetSetupController } from './setup-store.ts'
 import { PresetSetupBody } from './setup-view.tsx'
-import type { NovelWorkbenchController } from './workbench-store.ts'
-import { NovelPluginCardBody, NovelWorkbenchBody } from './workbench-view.tsx'
+import type { NovelV2WorkbenchController, NovelWorkbenchController } from './workbench-store.ts'
+import { NovelPluginCardBody, NovelV2WorkbenchBody, NovelWorkbenchBody } from './workbench-view.tsx'
+import type { NovelWorkbenchRouteController } from './workbench-v2-observer.ts'
+import type { NovelV2WorkbenchState } from './workbench-v2.ts'
 
-const drawerReturnTargets = new WeakMap<NovelWorkbenchController, HTMLElement>()
+const drawerReturnTargets = new WeakMap<object, HTMLElement>()
+
+function v2ScreenKey(state: NovelV2WorkbenchState): string {
+  if (state.status !== 'ready') return state.status
+  return `authoring:${state.authoring.stage ?? 'overview'}:${state.authoring.chapter ?? 'none'}:${state.proposals.selectedId ?? 'none'}:${state.proposals.selectedChange ?? 'none'}`
+}
 
 function focusableElements(drawer: HTMLElement): HTMLElement[] {
   return [...drawer.querySelectorAll<HTMLElement>(
@@ -70,20 +77,29 @@ export function installDrawerKeyboardScope(
  * Reserve the drawer's wide-screen column in the owning Harness frame.
  *
  * @param shellSeat Mounted marker or drawer inside the native shell overlay layer.
+ * @param v2 Whether this reservation belongs to the V2 focused workbench.
  * @returns A disposer that restores the frame's original layout.
  * @throws When the shell seat is not mounted inside a Harness shell overlay.
  */
-export function installWorkbenchLayoutReservation(shellSeat: HTMLElement): () => void {
+export function installWorkbenchLayoutReservation(shellSeat: HTMLElement, v2 = false): () => void {
   const frame = shellSeat.closest('[data-shell-overlay]')?.parentElement
   if (frame === null || frame === undefined) throw new Error('AI novel workbench requires the Harness shell overlay')
   frame.classList.add('aiNovelWorkbenchFrameOpen')
-  return () => { frame.classList.remove('aiNovelWorkbenchFrameOpen') }
+  if (v2) frame.classList.add('aiNovelWorkbenchFrameOpenV2')
+  return () => {
+    frame.classList.remove('aiNovelWorkbenchFrameOpen')
+    if (v2) frame.classList.remove('aiNovelWorkbenchFrameOpenV2')
+  }
 }
 
 /** Controllers shared by the sidebar, overlay, and Plugin Configuration card. */
 export interface NovelWorkbenchInjected {
   readonly workbenchController: NovelWorkbenchController
+  readonly v2WorkbenchController: NovelV2WorkbenchController
+  readonly workbenchRoute: NovelWorkbenchRouteController
   readonly setupController: PresetSetupController
+  /** Official Host rail lease; calling it reports an explicit compatibility error on an older runtime. */
+  readonly acquireSidebarRail: () => () => void
 }
 
 type NovelWorkbenchTriggerProps = PropsRuntime<'sidebar.footer.action'> & NovelWorkbenchInjected
@@ -96,16 +112,37 @@ type NovelWorkbenchOverlayProps = PropsRuntime<'shell.overlay'> & NovelWorkbench
  * @returns A keyboard-operable DSH-native button.
  */
 export function NovelWorkbenchTrigger({
-  wide, workbenchController, setupController,
+  wide, workbenchController, v2WorkbenchController, workbenchRoute, setupController,
 }: NovelWorkbenchTriggerProps) {
-  const workbenchState = useSyncExternalStore(
+  const mode = useSyncExternalStore(
+    listener => workbenchRoute.subscribe(listener),
+    () => workbenchRoute.getSnapshot(),
+  )
+  const v1State = useSyncExternalStore(
     listener => workbenchController.subscribe(listener),
     () => workbenchController.getSnapshot(),
   )
+  const v2State = useSyncExternalStore(
+    listener => v2WorkbenchController.subscribe(listener),
+    () => v2WorkbenchController.getSnapshot(),
+  )
+  const setupState = useSyncExternalStore(
+    listener => setupController.subscribe(listener),
+    () => setupController.getSnapshot(),
+  )
+  const activeState = mode === 'v2' ? v2State : mode === 'v1' ? v1State : undefined
+  const drawerOpen = mode === 'none' ? setupState.open : activeState?.open ?? false
   const open = (event: ReactMouseEvent<HTMLButtonElement>): void => {
-    drawerReturnTargets.set(workbenchController, event.currentTarget)
+    if (mode === 'none') {
+      drawerReturnTargets.set(setupController, event.currentTarget)
+      setupController.open()
+      void setupController.load()
+      return
+    }
+    const activeController = mode === 'v2' ? v2WorkbenchController : workbenchController
+    drawerReturnTargets.set(activeController, event.currentTarget)
     setupController.open()
-    void Promise.all([workbenchController.open(), setupController.load()])
+    void Promise.all([activeController.open(), setupController.load()])
   }
   return (
     <button
@@ -113,7 +150,7 @@ export function NovelWorkbenchTrigger({
       className="aiNovelContextTrigger"
       aria-label="打开小说工作台"
       aria-haspopup="dialog"
-      aria-expanded={workbenchState.open}
+      aria-expanded={drawerOpen}
       onClick={open}
     >
       <IconListPenOutline16 />
@@ -123,15 +160,28 @@ export function NovelWorkbenchTrigger({
 }
 
 /**
- * Render the 400–440 px non-modal workbench in the root shell overlay slot.
+ * Render the non-modal workbench in the root shell overlay slot.
+ *
+ * V2 uses the official sidebar-rail lease for its focused responsive canvas;
+ * V1 and first-use setup retain the compact 400–440 px drawer.
  *
  * @param props Shared workbench and Preset setup controllers.
  * @returns The controlled drawer while open, otherwise null.
  */
-export function NovelWorkbenchOverlay({ workbenchController, setupController }: NovelWorkbenchOverlayProps) {
-  const workbenchState = useSyncExternalStore(
+export function NovelWorkbenchOverlay({
+  workbenchController, v2WorkbenchController, workbenchRoute, setupController, acquireSidebarRail,
+}: NovelWorkbenchOverlayProps) {
+  const mode = useSyncExternalStore(
+    listener => workbenchRoute.subscribe(listener),
+    () => workbenchRoute.getSnapshot(),
+  )
+  const v1State = useSyncExternalStore(
     listener => workbenchController.subscribe(listener),
     () => workbenchController.getSnapshot(),
+  )
+  const v2State = useSyncExternalStore(
+    listener => v2WorkbenchController.subscribe(listener),
+    () => v2WorkbenchController.getSnapshot(),
   )
   const setupState = useSyncExternalStore(
     listener => setupController.subscribe(listener),
@@ -140,45 +190,64 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
   const drawer = useRef<HTMLDivElement>(null)
   const shellSeat = useRef<HTMLSpanElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
-  const screenKey = workbenchState.status === 'ready'
-    ? workbenchState.screen.kind
-    : workbenchState.status
+  const activeState = mode === 'v2' ? v2State : mode === 'v1' ? v1State : undefined
+  const drawerOpen = mode === 'none' ? setupState.open : activeState?.open ?? false
+  const drawerController = mode === 'v2' ? v2WorkbenchController : mode === 'v1' ? workbenchController : setupController
+  const screenKey = mode === 'v2'
+    ? v2ScreenKey(v2State)
+    : v1State.status === 'ready' ? v1State.screen.kind : v1State.status
   const previousScreenKey = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (!workbenchState.open || drawer.current === null || shellSeat.current === null) return
-    const releaseLayout = installWorkbenchLayoutReservation(shellSeat.current)
+    if (!drawerOpen || drawer.current === null || shellSeat.current === null) return
+    // The Host owns sidebar state. A V2 workbench merely holds the official rail
+    // lease while visible; V1 and preset setup continue to use their existing drawer.
+    const releaseSidebarRail = mode === 'v2' ? acquireSidebarRail() : undefined
+    const releaseLayout = installWorkbenchLayoutReservation(shellSeat.current, mode === 'v2')
     const releaseKeyboard = installDrawerKeyboardScope(
       drawer.current,
       closeButton.current ?? drawer.current,
-      drawerReturnTargets.get(workbenchController),
-      () => { workbenchController.close(); setupController.close() },
+      drawerReturnTargets.get(drawerController),
+      () => {
+        if (mode === 'v2') v2WorkbenchController.close()
+        else if (mode === 'v1') workbenchController.close()
+        setupController.close()
+      },
     )
     return () => {
+      releaseSidebarRail?.()
       releaseLayout()
       releaseKeyboard()
     }
-  }, [setupController, workbenchController, workbenchState.open])
+  }, [acquireSidebarRail, drawerController, drawerOpen, mode, setupController, v2WorkbenchController, workbenchController])
   useEffect(() => {
-    if (!workbenchState.open) {
+    if (!drawerOpen) {
       previousScreenKey.current = undefined
       return
     }
     if (previousScreenKey.current === undefined) {
       previousScreenKey.current = screenKey
+      if (mode === 'v2' && (v2State.status === 'error' || v2State.status === 'ready')) {
+        drawer.current?.querySelector<HTMLElement>('[data-ai-novel-screen-focus]')?.focus()
+      }
       return
     }
     if (previousScreenKey.current === screenKey) return
     previousScreenKey.current = screenKey
     drawer.current?.querySelector<HTMLElement>('[data-ai-novel-screen-focus]')?.focus()
-  }, [screenKey, workbenchState.open])
-  if (!workbenchState.open) return null
-  const close = (): void => { workbenchController.close(); setupController.close() }
+  }, [drawerOpen, activeState?.status, screenKey])
+  if (!drawerOpen) return null
+  const v2Drawer = mode === 'v2'
+  const close = (): void => {
+    if (mode === 'v2') v2WorkbenchController.close()
+    else if (mode === 'v1') workbenchController.close()
+    setupController.close()
+  }
   return <>
     <span ref={shellSeat} hidden aria-hidden="true" />
-    {createPortal(<div className="aiNovelContextOverlay" role="presentation">
+    {createPortal(<div className={`aiNovelContextOverlay${v2Drawer ? ' aiNovelContextOverlayV2' : ''}`} role="presentation">
       <div
         ref={drawer}
-        className="aiNovelContextDrawer"
+        className={`aiNovelContextDrawer${v2Drawer ? ' aiNovelContextDrawerV2' : ''}`}
         role="dialog"
         aria-modal="false"
         aria-labelledby="ai-novel-workbench-title"
@@ -195,35 +264,64 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
           >关闭</button>
         </div>
         <div className="aiNovelContextBody" data-ai-novel-workbench>
-          <NovelWorkbenchBody
-            state={workbenchState}
-            backIcon={<IconChevronLeftOutline14 />}
-            refresh={() => { void workbenchController.refresh() }}
-            selectChapter={chapter => { void workbenchController.selectChapter(chapter) }}
-            updateInitialization={patch => { workbenchController.updateInitialization(patch) }}
-            updateInitializationGenerationBrief={brief => { workbenchController.updateInitializationGenerationBrief(brief) }}
-            generateInitialization={() => { void workbenchController.generateInitialization() }}
-            previewInitialization={() => { workbenchController.previewInitialization() }}
-            submitInitialization={() => { void workbenchController.submitInitialization() }}
-            openAsset={target => { void workbenchController.openAsset(target) }}
-            backToAssets={() => { workbenchController.backToAssets() }}
-            updateProjectSettings={patch => { workbenchController.updateProjectSettings(patch) }}
-            updateStoryBlueprint={patch => { workbenchController.updateStoryBlueprint(patch) }}
-            updateChapterBlueprint={patch => { workbenchController.updateChapterBlueprint(patch) }}
-            updateChapterDraft={text => { workbenchController.updateChapterDraft(text) }}
-            updateAssetSummary={summary => { workbenchController.updateAssetSummary(summary) }}
-            updateAssetGenerationBrief={brief => { workbenchController.updateAssetGenerationBrief(brief) }}
-            generateAsset={() => { void workbenchController.generateAsset() }}
-            previewAssetChange={() => { workbenchController.previewAssetChange() }}
-            submitAssetChange={() => { void workbenchController.submitAssetChange() }}
-            discardAssetChanges={() => { workbenchController.discardAssetChanges() }}
-            reloadStaleAsset={() => { workbenchController.reloadStaleAsset() }}
-            setCharacterSearch={search => { workbenchController.setCharacterSearch(search) }}
-            selectCharacter={id => { workbenchController.selectCharacter(id) }}
-            createCharacter={() => { workbenchController.createCharacter() }}
-            updateCharacter={patch => { workbenchController.updateCharacter(patch) }}
-            deleteCharacter={() => { workbenchController.deleteCharacter() }}
-          />
+          {mode === 'none'
+            ? <section className="aiNovelContextSetup" aria-labelledby="ai-novel-first-use-title">
+                <h3 id="ai-novel-first-use-title">首次使用小说工作台</h3>
+                <p>请先安装 AI 小说作家 Preset。安装后请刷新当前页面，再新建会话并选择“AI 小说作家 V2”。</p>
+                <p>“AI 小说作家”是兼容的 V1 选项。</p>
+              </section>
+            : mode === 'v2'
+            ? <NovelV2WorkbenchBody
+                state={v2State}
+                refresh={() => { void v2WorkbenchController.refresh() }}
+                selectProposal={proposalId => { v2WorkbenchController.selectProposal(proposalId) }}
+                openProposalChange={index => { v2WorkbenchController.openProposalChange(index) }}
+                applySelectedProposal={() => { void v2WorkbenchController.applySelectedProposal() }}
+                retryProposalItem={index => { void v2WorkbenchController.retryProposalItem(index) }}
+                discardProposalItem={index => { void v2WorkbenchController.discardProposalItem(index) }}
+                regenerateProposalItem={index => { void v2WorkbenchController.regenerateProposalItem(index) }}
+                selectTask={taskId => { void v2WorkbenchController.selectTask(taskId) }}
+                selectChapter={chapter => { v2WorkbenchController.selectChapter(chapter) }}
+                prepareAuthoring={(stage, chapter) => { v2WorkbenchController.prepareAuthoring(stage, chapter) }}
+                authoringBlocker={(stage, chapter, replacingPendingDraft) => v2WorkbenchController.authoringBlocker(stage, chapter, replacingPendingDraft)}
+                updateDraftBrief={brief => { v2WorkbenchController.updateDraftBrief(brief) }}
+                startDraft={(stage, chapter) => { void v2WorkbenchController.startDraft(stage, chapter) }}
+                updateAuthoringInput={input => { v2WorkbenchController.updateAuthoringInput(input) }}
+                reproposeManualDraft={() => { void v2WorkbenchController.reproposeManualDraft() }}
+                selectArtifact={artifactId => { v2WorkbenchController.selectArtifact(artifactId) }}
+                selectFinal={artifactId => { v2WorkbenchController.selectFinal(artifactId) }}
+                updateInitialization={patch => { v2WorkbenchController.updateInitialization(patch) }}
+                initializeWorkspace={() => { void v2WorkbenchController.initializeWorkspace() }}
+              />
+            : <NovelWorkbenchBody
+                state={v1State}
+                backIcon={<IconChevronLeftOutline14 />}
+                refresh={() => { void workbenchController.refresh() }}
+                selectChapter={chapter => { void workbenchController.selectChapter(chapter) }}
+                updateInitialization={patch => { workbenchController.updateInitialization(patch) }}
+                updateInitializationGenerationBrief={brief => { workbenchController.updateInitializationGenerationBrief(brief) }}
+                generateInitialization={() => { void workbenchController.generateInitialization() }}
+                previewInitialization={() => { workbenchController.previewInitialization() }}
+                submitInitialization={() => { void workbenchController.submitInitialization() }}
+                openAsset={target => { void workbenchController.openAsset(target) }}
+                backToAssets={() => { workbenchController.backToAssets() }}
+                updateProjectSettings={patch => { workbenchController.updateProjectSettings(patch) }}
+                updateStoryBlueprint={patch => { workbenchController.updateStoryBlueprint(patch) }}
+                updateChapterBlueprint={patch => { workbenchController.updateChapterBlueprint(patch) }}
+                updateChapterDraft={text => { workbenchController.updateChapterDraft(text) }}
+                updateAssetSummary={summary => { workbenchController.updateAssetSummary(summary) }}
+                updateAssetGenerationBrief={brief => { workbenchController.updateAssetGenerationBrief(brief) }}
+                generateAsset={() => { void workbenchController.generateAsset() }}
+                previewAssetChange={() => { workbenchController.previewAssetChange() }}
+                submitAssetChange={() => { void workbenchController.submitAssetChange() }}
+                discardAssetChanges={() => { workbenchController.discardAssetChanges() }}
+                reloadStaleAsset={() => { workbenchController.reloadStaleAsset() }}
+                setCharacterSearch={search => { workbenchController.setCharacterSearch(search) }}
+                selectCharacter={id => { workbenchController.selectCharacter(id) }}
+                createCharacter={() => { workbenchController.createCharacter() }}
+                updateCharacter={patch => { workbenchController.updateCharacter(patch) }}
+                deleteCharacter={() => { workbenchController.deleteCharacter() }}
+              />}
         </div>
         <section className="aiNovelContextSetup" aria-labelledby="ai-novel-preset-setup-title">
           <h3 id="ai-novel-preset-setup-title">AI 小说作家 Preset</h3>
@@ -244,29 +342,55 @@ export function NovelWorkbenchOverlay({ workbenchController, setupController }: 
  * @param props Shared controllers owned by the client plugin fiber.
  * @returns One card contribution with live Host, Preset, Workspace, and project evidence.
  */
-export function NovelPluginStatusCard({ workbenchController, setupController }: NovelWorkbenchInjected) {
+export function NovelPluginStatusCard({
+  workbenchController, v2WorkbenchController, workbenchRoute, setupController,
+}: NovelWorkbenchInjected) {
+  const mode = useSyncExternalStore(
+    listener => workbenchRoute.subscribe(listener),
+    () => workbenchRoute.getSnapshot(),
+  )
   const workbenchState = useSyncExternalStore(
     listener => workbenchController.subscribe(listener),
     () => workbenchController.getSnapshot(),
+  )
+  const v2WorkbenchState = useSyncExternalStore(
+    listener => v2WorkbenchController.subscribe(listener),
+    () => v2WorkbenchController.getSnapshot(),
   )
   const setupState = useSyncExternalStore(
     listener => setupController.subscribe(listener),
     () => setupController.getSnapshot(),
   )
   useEffect(() => {
-    void Promise.all([setupController.load(), workbenchController.inspect()])
-  }, [setupController, workbenchController])
+    void setupController.load()
+    if (mode === 'v2') void v2WorkbenchController.refresh()
+    else if (mode === 'v1') void workbenchController.inspect()
+  }, [mode, setupController, v2WorkbenchController, workbenchController])
+  const activeWorkbenchState = mode === 'v2' ? v2WorkbenchState : mode === 'v1' ? workbenchState : undefined
   return <NovelPluginCardBody
     setupState={setupState}
-    workbenchState={workbenchState}
+    workbenchState={activeWorkbenchState}
+    workbenchMode={mode}
     openWorkbench={returnFocus => {
-      drawerReturnTargets.set(workbenchController, returnFocus)
+      if (mode === 'none') {
+        drawerReturnTargets.set(setupController, returnFocus)
+        setupController.open()
+        void setupController.load()
+        return
+      }
+      const activeController = mode === 'v2' ? v2WorkbenchController : workbenchController
+      drawerReturnTargets.set(activeController, returnFocus)
       setupController.open()
-      void Promise.all([setupController.load(), workbenchController.open()])
+      void Promise.all([setupController.load(), activeController.open()])
     }}
-    refresh={() => { void Promise.all([setupController.load(), workbenchController.inspect()]) }}
+    refresh={() => {
+      void setupController.load()
+      if (mode === 'v2') void v2WorkbenchController.refresh()
+      else if (mode === 'v1') void workbenchController.inspect()
+    }}
   />
 }
 
 export { NovelPluginCardBody, NovelWorkbenchBody } from './workbench-view.tsx'
-export type { NovelPluginCardBodyProps, NovelWorkbenchBodyProps } from './workbench-view.tsx'
+export { NovelV2WorkbenchBody } from './workbench-view.tsx'
+export type { NovelPluginCardBodyProps, NovelV2WorkbenchBodyProps, NovelWorkbenchBodyProps } from './workbench-view.tsx'

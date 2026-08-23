@@ -1,13 +1,16 @@
 # AI Novel Writer for DeepSeek Harness
 
-This out-of-tree bundle adds a revisioned, local-first novel project format to DeepSeek Harness. Its dedicated agent sees only `novel_read` and `novel_apply_change`; every mutation is presented as a one-file diff and passes through Harness native one-shot approval before execution.
+This out-of-tree bundle adds a revisioned, local-first novel project format to DeepSeek Harness. The legacy V1 dedicated agent sees only `novel_read` and `novel_apply_change`; every V1 mutation is presented as a one-file diff and passes through Harness native one-shot approval before execution.
+
+> **Early V2 MVP.** The DeepSeek Harness V2 workbench is an intentionally narrow proof of the authoring chain. It currently offers less than 10% of the desktop application's capabilities and is not a replacement for the desktop product, its project workspace, batch workflows, mature editor, or automated review features.
 
 The V1 project is independent from the desktop application's `.vela` format. It stores a manifest and structured planning assets under `.ai-novel/`, with chapter drafts under `chapters/`. Model inputs use discriminated asset references rather than local paths, writes compare the last-read SHA-256 revision, and commits use atomic replacement.
 
-The package ships three plugin entries:
+The package ships four plugin entries:
 
 - the root Host entry, loaded by `cordis.patch.yml`;
-- `./agent`, mounted only by the bundled `ai-novel-writer` preset;
+- `./agent`, mounted only by the bundled V1 `ai-novel-writer` preset;
+- `./agent-v2`, mounted only by the bundled V2 `ai-novel-writer-v2` preset;
 - `./client`, which registers an “AI 小说作家” evidence card in Plugin Configuration and adds the compact “小说工作台” side drawer through the shell overlay.
 
 ## Install from npm
@@ -23,7 +26,7 @@ The desktop application at the repository root is separate and is not an activat
 
 ## Configuration
 
-The Host entry accepts `presetRoot`, an absolute path to the user preset root. It defaults to `$DSH_HOME/.agent-presets` (normally `~/.dsh/.agent-presets`). The agent entry accepts `assetBytes`, `workingSetBytes`, and `queryMatches`. Defaults are 512 KiB per asset, 512 KiB per working set, and 20 query matches. Invalid paths or limits fail during plugin loading.
+The Host entry accepts `presetRoot`, an absolute path to the user preset root. It defaults to `$DSH_HOME/.agent-presets` (normally `~/.dsh/.agent-presets`). The agent entry accepts `surface`, whose default `v1` preserves the original approval-gated file surface and whose `v2` value is set by the V2 Preset. V1 also accepts `assetBytes`, `workingSetBytes`, and `queryMatches`, with defaults of 512 KiB per asset, 512 KiB per working set, and 20 query matches. V2 accepts `maxProposalBytes` and `maxPendingProposals`, with defaults of 2 MiB and 20 pending proposals. Invalid paths or limits fail during plugin loading.
 
 ## Project files
 
@@ -33,17 +36,30 @@ Each non-empty asset revision is the SHA-256 digest of its normalized UTF-8 byte
 
 Stable failures distinguish uninitialized and unsupported projects, missing or invalid assets, rejected paths, exceeded size limits, stale revisions, rejected approval, failed writes, and cancellation.
 
+## V2 NovelStore development surface
+
+The root entry also exports `openNovelStore`, `previewV1NovelMigration`, and `migrateV1NovelProject` as the SQLite-backed V2 development surface for the sidebar-owned workbench. A V2 store owns `.ai-novel/novel.db` as a project-portable artifact, stamps its application and schema identity, enforces foreign keys, serializes writes through one exclusive connection, and records workspace binding plus ChangeSet audit data. Its persistent proposal inbox stores non-authoritative model bundles with `proposals` and `proposal_changes`, derives deduplication from canonical argument bytes, records Host-provided session and call provenance, and restores pending proposals after restart. New bundles are rejected after the configured pending cap, currently 20 by default; the default bundle size limit is 2 MiB. Project and character identities use distinct stable IDs; DSH Workspace IDs remain opaque strings. An explicit V1 migration first fingerprints the five source assets, then copies their unchanged bytes into `.ai-novel/v1-archive/<fingerprint>/`, rechecks the source snapshot before publication, imports them through a fully closed staging database, and publishes it without replacement; the receipt and converted state are read back from the published database. If verification fails after publication, the database remains published and the error says so. The store creates `.ai-novel/.gitignore` for the database, its journal/lock sidecars, and the V1 archive. Because Git therefore does not back up the authoritative database, local backup is the user's responsibility until export ships. Real-time cloud-synchronized folders and network drives are unsupported.
+No-replacement publication uses a hard link inside the same workspace; a cross-device archive or database layout fails with stable `WRITE_FAILED` rather than replacing an existing database.
+
 ## Model Experience
+
+### V2 workbench (early MVP)
+
+V2 offers only the reviewed authoring sequence: project settings, story architecture, characters, whole-book outline, one chapter blueprint, and one chapter draft at a time. When the current V2 Session records a matching pending `novel_propose_change`, the workbench copies that proposal's generated values into the selected browser-local editor immediately. The author can inspect or edit those values before reviewing the Proposal. This local form draft is not a write, does not alter the pending Proposal, and is never restored as authority after reload; explicit Proposal application remains the only action that updates the project.
 
 ### Agent preset
 
-The included `AI 小说作家` preset mounts the novel persona, agent instructions, and `./agent`. It does not mount shell, general filesystem writing, text replacement, or Code Mode.
+The package installs the original `AI 小说作家` preset beside the independent `AI 小说作家 V2` preset. V1 keeps `novel_read` and approval-gated `novel_apply_change` for existing sessions. V2 exposes only `novel_read` and `novel_propose_change`; its proposal tool records a pending non-authoritative bundle and never changes authoritative project state. Neither preset mounts shell, general filesystem writing, text replacement, or Code Mode.
 
 #### Install the preset
 
-Open “小说工作台” from the Harness sidebar and select “安装 AI 小说作家 Preset”. The same installation state appears on the “AI 小说作家” card in Settings → Plugins → Plugin Configuration. The browser can only call the loopback setup channel and cannot submit a local path. The Host copies the two bundled Preset files into the configured user root with an atomic directory publication.
+Open “小说工作台” from the Harness sidebar and select “安装 AI 小说作家 Preset”. The same installation state appears on the “AI 小说作家” card in Settings → Plugins → Plugin Configuration. The browser can only call the loopback setup channel and cannot submit a local path. The Host copies both preset directories, each with its two immutable files, into the configured user root with atomic directory publication.
 
-Repeating installation is a no-op when every byte matches. A same-name directory with different or additional content is reported as a conflict and no user byte is overwritten. After installation, create a new session and choose “AI 小说作家”; an existing session keeps its original Preset.
+The V2 workbench uses the closed `/ai-novel` loopback channel for authoritative reads, one-time empty-workspace initialization, and Proposal lifecycle actions. The browser sends only an opaque `WorkspaceId` plus a strictly typed payload; it never supplies a filesystem path or calls a direct project-write endpoint. It can read the workspace, state, chapter context, task, and Proposal inbox, then apply, retry, discard, or request regeneration of an existing Proposal item. The Host resolves the canonical workspace directory through the Workspace registry and rejects unknown ids, browser-supplied paths, and JSON patches. Failures return stable codes without local paths.
+
+For authoring, the V2 browser queues a stage-specific instruction on the selected Harness Session. The model reads authoritative state and submits a non-authoritative `novel_propose_change` bundle. When a matching draft Proposal arrives, its prose immediately fills the right-side editor for review and human editing; editing remains local until the human either replaces that pending Proposal or applies it. Applying a Proposal is the only action that creates an artifact or changes the authoritative project state.
+
+Repeating installation is a no-op when every bundled byte matches. A same-name directory with different or additional content is reported as a conflict and no user byte is overwritten. After installation, create a new session and choose either “AI 小说作家” or “AI 小说作家 V2”; an existing session keeps its original Preset.
 
 #### Plugin evidence and project initialization
 
@@ -59,7 +75,7 @@ The drawer reads on open, Workspace or Session selection changes, restored Host 
 
 #### What the model sees
 
-The model receives `novel_read` and `novel_apply_change`. Its persona requires reading the current revision before proposing one asset change, waiting for native user approval, and claiming a save only after a `CommitReceipt`. The writing strategy changes the novel workflow and does not select a provider or reasoning parameter.
+The V1 model receives `novel_read` and `novel_apply_change`; it must read the current revision, wait for native user approval, and claim a save only after a `CommitReceipt`. The V2 model receives `novel_read` and `novel_propose_change`; successful proposals remain pending in the sidebar-owned inbox and never change authoritative state. The writing strategy changes the novel workflow and does not select a provider or reasoning parameter. The persona below is the stable V1 persona; V2 ships its own persona beside the V2 Preset.
 
 ##### Stable novel persona
 
@@ -81,7 +97,7 @@ The preset persona and the two tool definitions are stable across turns. Project
 
 ## Known Limitations and Deferred Work
 
-The package does not import `.vela` projects, provide multi-asset transactions, or run batch multi-chapter jobs. All five V1 assets are editable through the compact workbench, but persistence remains a native approval-gated agent action rather than a browser write.
+The package does not import `.vela` projects, provide multi-asset transactions, run batch multi-chapter jobs, or publish itself. All five V1 assets are editable through the compact workbench, but persistence remains a native approval-gated agent action rather than a browser write.
 
 Build and run the focused qualification with:
 
@@ -100,9 +116,11 @@ For the distinction between process-local Cordis Packages and persistently insta
 The repository-level qualification command requires the clean DeepSeek Harness source checkout at commit `47f943859bef60e4160492346772ded9b24f765a`, `pnpm`, `tar`, and the locally installed Google Chrome browser. Pass the absolute Harness checkout path:
 
 ```powershell
-pnpm run qualify -- --harness-root 'C:\SoftWare\AI Tools\Deepseek Harness'
+pnpm run qualify -- --harness-root '<path-to-deepseek-harness>'
 ```
 
-The command builds Harness, runs the plugin and Electron regression lanes, creates a tarball with `pnpm pack`, and installs only those bytes plus pinned `@linxin666/dsh-web-ui-all@0.1.16` into an isolated Web profile. Google Chrome proves the Plugin Configuration card and compact workbench are visible, submits initialization and one story-blueprint replacement through the dedicated Session, and answers the real Harness approval card with “允许一次”. A fresh Node process reads the saved project identity, strategy, story content, byte counts, and revisions from the installed Host entry; a subsequent Chrome Web restart verifies that the saved title and story premise remain visible. Every recorded model request must contain exactly the complete `novel_read` and `novel_apply_change` schemas exposed by the installed Preset even while the profile mounts SSH and image features. The run also verifies Preset installation/idempotence/conflict, removal, reinstall, 1440 × 900 and 390 × 844 drawer geometry, and writes screenshots plus `design-qa.md`. Logs and a machine-readable receipt live under `.runtime/.cache/dsh-ai-novel-qualification-113`; both the evidence root and each retained run carry `.vibe-owner.json` ownership, expiry, retention, and cleanup fields. An existing evidence root must already belong to this ticket and repository.
+This maintainer-only command packs the plugin, installs those bytes into an isolated Web profile, and verifies the derived user-preset root without overwriting shipped presets. It then uses Chrome to prove the V2 workbench: `novel_read` and `novel_propose_change` are the exact model-tool set (order is not a contract), a user applies the Proposal and sees its partial status on the same page, and restart reads durable state back. A browser skipped result is not qualified.
+
+The precise runtime gates, evidence order, and failure triage live in [V2 development gates](docs/v2-development-gates.md). Logs, screenshots, and the machine-readable receipt live under `.runtime/.cache/dsh-ai-novel-qualification-128` with `.vibe-owner.json` ownership and expiry. This keyless snapshot does not replace native gpt-5.6-terra manual qualification.
 
 The package does not modify DeepSeek Harness upstream or its agent loop.

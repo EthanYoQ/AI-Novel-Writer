@@ -51,6 +51,18 @@ export type {
   NovelWorkbenchScreen,
 } from './asset-editor.ts'
 
+export {
+  NovelV2WorkbenchController,
+} from './workbench-v2.ts'
+export type {
+  NovelChapterPanelState,
+  NovelProposalPanelState,
+  NovelTaskPanelState,
+  NovelV2WorkbenchPort,
+  NovelV2WorkbenchState,
+  NovelWorkspacePanelState,
+} from './workbench-v2.ts'
+
 /** Dedicated Preset id expected on a Session that receives novel proposals. */
 export const AI_NOVEL_PRESET_ID = 'ai-novel-writer'
 

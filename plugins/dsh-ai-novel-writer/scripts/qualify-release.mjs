@@ -2,7 +2,7 @@
 /** Tarball, disposable-profile, browser, persistence, and Electron regression qualification. */
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { access, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
@@ -19,10 +19,72 @@ const webUiAllPackage = '@linxin666/dsh-web-ui-all'
 const webUiAllVersion = '0.1.16'
 const profileName = 'web'
 const supportedHarnessCommit = '47f943859bef60e4160492346772ded9b24f765a'
+const qualificationTicket = 128
+const qualificationOwner = `codex-ticket-${qualificationTicket}`
+const qualificationCacheDirectory = `dsh-ai-novel-qualification-${qualificationTicket}`
+const qualificationPresetId = 'ai-novel-writer-v2'
+const qualificationToolNames = ['novel_read', 'novel_propose_change']
+const qualificationProposal = {
+  changes: [
+    {
+      changeSetId: 'qualification-chapter-1-blueprint',
+      aggregate: { kind: 'chapter', chapter: 1 },
+      baseAggregateRevision: 0,
+      baseGlobalRevision: 0,
+      nextValue: {
+        chapter: 1,
+        title: '第一封信',
+        purpose: '建立异常。',
+        plotBeats: ['潮汐退去'],
+        characters: [],
+        keyEvents: ['未来信件抵达'],
+        suspense: '寄信人知道灯塔守会读信。',
+        status: 'drafting',
+      },
+    },
+    {
+      changeSetId: 'qualification-chapter-2-blueprint',
+      aggregate: { kind: 'chapter', chapter: 2 },
+      baseAggregateRevision: 0,
+      baseGlobalRevision: 1,
+      nextValue: {
+        chapter: 2,
+        title: '第二封信',
+        purpose: '承接第一章定稿。',
+        plotBeats: ['循线前行'],
+        characters: [],
+        keyEvents: ['读到旧信'],
+        suspense: '信件指向灯塔。',
+        status: 'drafting',
+      },
+    },
+    {
+      kind: 'artifact/draft',
+      artifactId: 'qualification-chapter-1-draft',
+      chapter: 1,
+      content: '潮水退去，信件显露。',
+      summary: '创建第一章草稿。',
+    },
+    {
+      kind: 'chapter/select-final',
+      chapter: 1,
+      artifactId: 'qualification-chapter-1-draft',
+      summary: '用户选择第一章草稿为定稿。',
+    },
+    {
+      kind: 'artifact/review',
+      artifactId: 'qualification-invalid-review',
+      chapter: 1,
+      parentArtifactId: 'qualification-missing-draft',
+      report: '此项必须停止。',
+      summary: '无效审稿。',
+    },
+  ],
+}
 const expectedPresetPlugins = [
   '@deepseek-ai/dsh-persona',
   '@deepseek-ai/dsh-agent-instructions',
-  '@ethanyoq/dsh-ai-novel-writer/agent',
+  '@ethanyoq/dsh-ai-novel-writer/agent-v2',
 ]
 const requiredTarballEntries = [
   'package/README.md',
@@ -30,17 +92,19 @@ const requiredTarballEntries = [
   'package/THIRD_PARTY_NOTICES.md',
   'package/cordis.patch.yml',
   'package/lib/agent.js',
+  'package/lib/agent-v2.js',
   'package/lib/client.js',
   'package/lib/index.js',
   'package/lib/types/agent.d.ts',
+  'package/lib/types/agent-v2.d.ts',
   'package/lib/types/client/index.d.ts',
   'package/lib/types/index.d.ts',
   'package/package.json',
   'package/presets/ai-novel-writer/agent.cordis.yml',
   'package/presets/ai-novel-writer/preset.yml',
+  'package/presets/ai-novel-writer-v2/agent.cordis.yml',
+  'package/presets/ai-novel-writer-v2/preset.yml',
 ]
-const expectedProjectTitle = '潮汐来信'
-const expectedStoryPremise = '退潮后的海床会浮现来自未来的信件。'
 
 function fail(message) {
   throw new Error(message)
@@ -80,8 +144,10 @@ function parsePreset(text) {
   }
   const persona = objectOf(rows[0], 'Persona row')
   const config = objectOf(persona.config, 'Persona config')
-  if (typeof config.text !== 'string' || !config.text.includes('novel_read') || !config.text.includes('novel_apply_change')) {
-    fail('Preset persona must describe both novel tools')
+  if (typeof config.text !== 'string') fail('Preset persona must describe the V2 tool surface')
+  const personaToolNames = [...new Set([...config.text.matchAll(/\bnovel_[a-z_]+\b/g)].map(match => match[0]))].sort()
+  if (JSON.stringify(personaToolNames) !== JSON.stringify([...qualificationToolNames].sort())) {
+    fail('Preset persona must describe exactly novel_read and novel_propose_change')
   }
   return { names }
 }
@@ -111,22 +177,40 @@ function canonicalToolSchemas(value, subject) {
   }).sort((left, right) => left.name.localeCompare(right.name))
 }
 
+function canonicalQualificationToolSchemas(value, subject) {
+  const schemas = canonicalToolSchemas(value, subject)
+  const names = schemas.map(schema => schema.name)
+  if (JSON.stringify(names) !== JSON.stringify([...qualificationToolNames].sort())) {
+    fail(`${subject} must expose exactly novel_read and novel_propose_change`)
+  }
+  return schemas
+}
+
 async function validateModelRequestLog(path, installedToolSchemas) {
-  const expectedTools = canonicalToolSchemas(installedToolSchemas, 'Installed Preset')
-  const requests = (await readFile(path, 'utf8')).trimEnd().split(/\r?\n/)
+  const expectedTools = canonicalQualificationToolSchemas(installedToolSchemas, 'Installed Preset')
+  const rows = (await readFile(path, 'utf8')).trimEnd().split(/\r?\n/)
     .filter(Boolean)
     .map((line, index) => objectOf(JSON.parse(line), `Model request log row ${index + 1}`))
+  const requests = rows
     .filter(row => row.type === 'model-request')
     .map(row => objectOf(row.request, 'Model request'))
   if (requests.length === 0) fail('Model request log did not contain a request')
   for (const request of requests) {
     if (typeof request.system !== 'string' || request.system === '') fail('Model request must include the complete system prompt')
-    const actualTools = canonicalToolSchemas(request.tools, 'Model request')
+    const actualTools = canonicalQualificationToolSchemas(request.tools, 'Model request')
     if (JSON.stringify(actualTools) !== JSON.stringify(expectedTools)) {
       fail('Every model request must match the complete installed Preset schemas')
     }
   }
-  return { requests: requests.length, first: requests[0] }
+  const toolCalls = rows.filter(row => row.type === 'model-tool-call')
+  if (toolCalls.length !== 2
+    || toolCalls[0].name !== 'novel_read'
+    || JSON.stringify(canonicalJson(toolCalls[0].arguments)) !== JSON.stringify(canonicalJson({ kind: 'state' }))
+    || toolCalls[1].name !== 'novel_propose_change'
+    || JSON.stringify(canonicalJson(toolCalls[1].arguments)) !== JSON.stringify(canonicalJson(qualificationProposal))) {
+    fail('Model tool calls must be exactly one novel_read followed by one novel_propose_change with the fixed V2 proposal')
+  }
+  return { requests: requests.length, toolCalls: toolCalls.length, first: requests[0] }
 }
 
 function assertBundlePatch(text) {
@@ -141,7 +225,7 @@ function assertBundlePatch(text) {
 async function checkSource() {
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
   const exportsField = objectOf(manifest.exports, 'Package exports')
-  for (const key of ['.', './agent', './client', './cordis.patch.yml', './package.json']) {
+  for (const key of ['.', './agent', './agent-v2', './client', './cordis.patch.yml', './package.json']) {
     if (!(key in exportsField)) fail(`Package export is missing: ${key}`)
   }
   const dsh = objectOf(manifest.dsh, 'Package dsh manifest')
@@ -153,13 +237,14 @@ async function checkSource() {
     fail('Published files must include declared artifacts and exclude the client source map')
   }
   for (const path of [
-    'README.md', 'cordis.patch.yml', 'presets/ai-novel-writer/agent.cordis.yml',
-    'presets/ai-novel-writer/preset.yml', 'scripts/qualification-preset.mjs',
-    'scripts/qualification-browser.mjs', 'scripts/qualification-web-backend.mjs',
+    'README.md', 'cordis.patch.yml', 'presets/ai-novel-writer-v2/agent.cordis.yml',
+    'presets/ai-novel-writer-v2/preset.yml',
+    'scripts/qualification-browser.mjs', 'scripts/qualification-v2-preset.mjs',
+    'scripts/qualification-web-backend.mjs',
   ]) {
     if (!(await exists(join(packageRoot, path)))) fail(`Source package artifact is missing: ${path}`)
   }
-  await validatePreset(join(packageRoot, 'presets', 'ai-novel-writer', 'agent.cordis.yml'))
+  await validatePreset(join(packageRoot, 'presets', qualificationPresetId, 'agent.cordis.yml'))
   assertBundlePatch(await readFile(join(packageRoot, 'cordis.patch.yml'), 'utf8'))
   return manifest
 }
@@ -175,6 +260,40 @@ function assertTarballEntries(entries) {
     || entry.endsWith('.js.map')
     || entry.endsWith('.ts') && !entry.endsWith('.d.ts'))
   if (forbidden !== undefined) fail(`Tarball contains a development-only artifact: ${forbidden}`)
+}
+
+function requiredInstalledRelativePaths() {
+  return requiredTarballEntries.map((entry) => {
+    if (!entry.startsWith('package/')) fail(`Required tarball artifact is outside package/: ${entry}`)
+    return entry.slice('package/'.length)
+  })
+}
+
+async function assertInstalledTarballContent(packedPackageRoot, installedRoot) {
+  const contents = []
+  for (const relativePath of requiredInstalledRelativePaths()) {
+    let packed
+    let installed
+    try {
+      packed = await readFile(join(packedPackageRoot, relativePath))
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        fail(`Packed tarball content is missing: ${relativePath}`)
+      }
+      throw error
+    }
+    try {
+      installed = await readFile(join(installedRoot, relativePath))
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        fail(`Installed artifact is missing from packed tarball content: ${relativePath}`)
+      }
+      throw error
+    }
+    if (!packed.equals(installed)) fail(`Installed artifact does not match packed tarball content: ${relativePath}`)
+    contents.push({ path: relativePath, sha256: createHash('sha256').update(installed).digest('hex') })
+  }
+  return contents
 }
 
 function assertProfileInstalled(manifest, tarballName) {
@@ -216,7 +335,7 @@ function ownershipRecord(root, sourceProject, purpose, ttlDays, retainReason) {
   const createdAt = new Date().toISOString()
   const expiresAt = new Date(Date.parse(createdAt) + ttlDays * 86_400_000).toISOString()
   return {
-    owner: 'codex-ticket-113',
+    owner: qualificationOwner,
     sourceProject,
     purpose,
     createdAt,
@@ -603,6 +722,15 @@ async function startWeb(logRoot, label, harnessRoot, env, patchPath) {
   }
 }
 
+function assertBrowserQualificationResult(value, phase) {
+  const result = objectOf(value, 'Browser qualification result')
+  if (result.status === 'skipped') fail('Browser qualification was skipped and is not qualified')
+  if (result.browser !== 'Google Chrome' || result.phase !== phase || !Array.isArray(result.screenshots)) {
+    fail('Browser did not complete the requested Google Chrome workbench journey')
+  }
+  return result
+}
+
 async function probeWeb(logRoot, label, harnessRoot, env, patchPath, workspaceRoot, screenshotRoot, phase) {
   const server = await startWeb(logRoot, `${label}-server`, harnessRoot, env, patchPath)
   let result
@@ -616,15 +744,17 @@ async function probeWeb(logRoot, label, harnessRoot, env, patchPath, workspaceRo
     if (!bundleResponse.ok || !(await bundleResponse.text()).includes('__ModuleLoader__')) {
       fail('Installed client bundle endpoint did not serve the packaged browser entry')
     }
+    const browserEnv = {
+      ...env,
+      DSH_HARNESS_ROOT: harnessRoot,
+      DSH_NOVEL_QUALIFICATION_PROPOSAL_JSON: JSON.stringify(qualificationProposal),
+    }
     const browser = await recordCommand(logRoot, `${label}-browser`, process.execPath, [
       join(packageRoot, 'scripts', 'qualification-browser.mjs'), server.url, repositoryRoot,
       workspaceRoot, screenshotRoot, phase,
-    ], { cwd: repositoryRoot, env, timeout: 180_000 })
+    ], { cwd: repositoryRoot, env: browserEnv, timeout: 180_000 })
     const browserLine = browser.stdout.trimEnd().split(/\r?\n/).at(-1)
-    const browserResult = objectOf(JSON.parse(browserLine ?? ''), 'Browser qualification result')
-    if (browserResult.browser !== 'Google Chrome' || browserResult.phase !== phase || !Array.isArray(browserResult.screenshots)) {
-      fail('Browser did not complete the requested Google Chrome workbench journey')
-    }
+    const browserResult = assertBrowserQualificationResult(JSON.parse(browserLine ?? ''), phase)
     result = {
       url: server.url,
       graphRevision: graph.rev,
@@ -651,28 +781,20 @@ async function probeWeb(logRoot, label, harnessRoot, env, patchPath, workspaceRo
   return result
 }
 
-async function qualifyPreset(installedRoot, runRoot) {
-  const module = await import(`${pathToFileURL(join(installedRoot, 'lib', 'index.js')).href}?qualification=${Date.now()}`)
-  if (typeof module.createPresetInstaller !== 'function') fail('Installed Host export is missing createPresetInstaller')
-  const presetRoot = join(runRoot, 'preset-root')
-  const templateRoot = join(installedRoot, 'presets', 'ai-novel-writer')
-  const installer = module.createPresetInstaller(templateRoot, presetRoot)
-  const before = await installer.status()
-  const first = await installer.install()
-  const second = await installer.install()
-  await writeFile(join(presetRoot, 'ai-novel-writer', 'agent.cordis.yml'), '\n# qualification conflict\n', { flag: 'a' })
-  const conflict = await installer.install()
-  await rm(join(presetRoot, 'ai-novel-writer'), { recursive: true, force: true })
-  const restored = await installer.install()
-  await validatePreset(join(presetRoot, 'ai-novel-writer', 'agent.cordis.yml'))
-  if (before.status !== 'not-installed'
-    || first.status !== 'installed' || first.changed !== true
-    || second.status !== 'installed' || second.changed !== false
-    || conflict.status !== 'conflict' || conflict.changed !== false
-    || restored.status !== 'installed' || restored.changed !== true) {
-    fail('Installed Preset did not preserve install, idempotence, conflict, and restore behavior')
+async function qualifyPreset(installedRoot) {
+  const presetRoot = join(installedRoot, 'presets', qualificationPresetId)
+  const agentPath = join(presetRoot, 'agent.cordis.yml')
+  const descriptorPath = join(presetRoot, 'preset.yml')
+  await validatePreset(agentPath)
+  const descriptor = objectOf(yaml.load(await readFile(descriptorPath, 'utf8')), 'Installed V2 Preset descriptor')
+  if (descriptor.name !== 'AI 小说作家 V2' || typeof descriptor.description !== 'string') {
+    fail('Installed V2 Preset descriptor is invalid')
   }
-  return { before, first, second, conflict, restored }
+  return {
+    presetId: qualificationPresetId,
+    agentCordisSha256: await sha256(agentPath),
+    descriptorSha256: await sha256(descriptorPath),
+  }
 }
 
 async function qualifyPresetTools(logRoot, profileRoot, installedRoot, env) {
@@ -687,11 +809,11 @@ async function qualifyPresetTools(logRoot, profileRoot, installedRoot, env) {
     "- id: approval\n  name: '@deepseek-ai/dsh-user-approval'\n  config:\n    policy: ask",
     "- id: agents\n  name: '@deepseek-ai/dsh-agent'",
     "- id: agent-loop\n  name: '@deepseek-ai/dsh-agent-loop'\n  config:\n    agents: []",
-    "- id: presets\n  name: '@deepseek-ai/dsh-agent-presets'\n  config:\n    default: ai-novel-writer\n    roots:\n      - path: !!js process.env.DSH_NOVEL_PRESET_ROOT\n        trust: user\n    includeUserRoot: false",
+    `- id: presets\n  name: '@deepseek-ai/dsh-agent-presets'\n  config:\n    default: ${qualificationPresetId}\n    roots:\n      - path: !!js process.env.DSH_NOVEL_PRESET_ROOT\n        trust: user\n    includeUserRoot: false`,
     '',
   ].join('\n\n'), 'utf8')
   const result = await recordCommand(logRoot, 'installed-preset-tools', process.execPath, [
-    join(packageRoot, 'scripts', 'qualification-preset.mjs'), configPath,
+    join(packageRoot, 'scripts', 'qualification-v2-preset.mjs'), configPath,
   ], {
     cwd: repositoryRoot,
     env: { ...env, DSH_NOVEL_PRESET_ROOT: join(installedRoot, 'presets') },
@@ -701,42 +823,70 @@ async function qualifyPresetTools(logRoot, profileRoot, installedRoot, env) {
   if (!Array.isArray(payload.agentTools) || !Array.isArray(payload.globalTools)) {
     fail('Installed Preset tool probe did not return tool arrays')
   }
-  const names = payload.agentTools.map((schema) => {
-    const tool = objectOf(schema, 'Installed Preset tool schema')
-    if (typeof tool.name !== 'string' || typeof tool.description !== 'string') {
-      fail('Installed Preset tool schema is incomplete')
-    }
-    objectOf(tool.parameters, 'Installed Preset tool parameters')
-    return tool.name
-  })
-  if (JSON.stringify(names) !== JSON.stringify(['novel_read', 'novel_apply_change']) || payload.globalTools.length !== 0) {
-    fail('Installed Preset must expose only novel_read and novel_apply_change to its agent and no root tools')
+  const agentTools = canonicalQualificationToolSchemas(payload.agentTools, 'Installed Preset')
+  if (payload.globalTools.length !== 0) {
+    fail('Installed Preset must expose only novel_read and novel_propose_change to its agent and no root tools')
   }
-  return { agentTools: payload.agentTools, globalTools: payload.globalTools }
+  return { agentTools, globalTools: payload.globalTools }
 }
 
 async function readback(installedEntry, workspaceRoot) {
   const module = await import(`${pathToFileURL(installedEntry).href}?readback=${Date.now()}`)
-  const project = module.openNovelProject(workspaceRoot)
-  const result = await project.read({ kind: 'working-set', chapter: 1 }, new AbortController().signal)
-  const manifest = result.assets.find(asset => asset.target.kind === 'project')
-  const story = result.assets.find(asset => asset.target.kind === 'story-blueprint')
-  const projectData = JSON.parse(manifest?.text ?? '{}')
-  const storyData = JSON.parse(story?.text ?? '{}')
-  if (projectData.title !== expectedProjectTitle || projectData.creativeStrategy !== 'consistency-first') {
-    fail('Fresh-process readback lost the project identity or strategy')
+  if (typeof module.openNovelStore !== 'function') fail('Installed Host export is missing openNovelStore')
+  const signal = new AbortController().signal
+  const store = await module.openNovelStore(workspaceRoot, 'qualification-v2-workspace', { create: false })
+  try {
+    const state = await store.read(signal)
+    const proposals = await store.listProposals(signal)
+    if (state.storage.userVersion !== 4) fail('Fresh-process readback requires V2 schema 4')
+    const partials = proposals.filter(proposal => proposal.status === 'partial')
+    const partial = partials[0]
+    if (partials.length !== 1 || partial === undefined
+      || JSON.stringify(partial.items.map(item => item.status)) !== JSON.stringify(['applied', 'applied', 'applied', 'applied', 'failed'])) {
+      fail('Fresh-process readback requires the fixed five-item V2 proposal lifecycle')
+    }
+    const failedItem = partial.items[4]
+    const failedChange = objectOf(failedItem.change, 'Failed V2 proposal item')
+    if (failedItem.failure !== 'INVALID_CONTENT'
+      || failedChange.kind !== 'artifact/review'
+      || failedChange.artifactId !== 'qualification-invalid-review'
+      || failedChange.parentArtifactId !== 'qualification-missing-draft') {
+      fail('Fresh-process readback requires the fixed invalid review failure')
+    }
+    const finalArtifact = state.artifacts.find(artifact => artifact.artifactId === 'qualification-chapter-1-draft')
+    const selectedFinal = state.chapterFinals.find(final => final.chapter === 1)
+    if (finalArtifact?.chapter !== 1 || finalArtifact.kind !== 'draft'
+      || selectedFinal?.artifactId !== 'qualification-chapter-1-draft') {
+      fail('Fresh-process readback requires the expected selected final artifact')
+    }
+    const chapterContext = await store.readChapterContext(2, signal)
+    if (chapterContext.previousFinal?.chapter !== 1
+      || chapterContext.previousFinal.artifactId !== 'qualification-chapter-1-draft') {
+      fail('Fresh-process readback requires the chapter 2 bounded prior-final artifact')
+    }
+    process.stdout.write(`${JSON.stringify({
+      schemaVersion: state.storage.userVersion,
+      globalRevision: state.globalRevision,
+      proposals: proposals.map(proposal => ({
+        proposalId: proposal.proposalId, status: proposal.status, itemCount: proposal.items.length,
+        itemStatuses: proposal.items.map(item => item.status),
+      })),
+      artifacts: state.artifacts.map(artifact => ({ artifactId: artifact.artifactId, chapter: artifact.chapter, kind: artifact.kind })),
+      chapterFinals: state.chapterFinals.map(final => ({ chapter: final.chapter, artifactId: final.artifactId })),
+      chapterContext: {
+        chapter: chapterContext.chapter,
+        previousFinal: chapterContext.previousFinal === undefined ? undefined : {
+          chapter: chapterContext.previousFinal.chapter,
+          artifactId: chapterContext.previousFinal.artifactId,
+        },
+      },
+    })}\n`)
+  } finally {
+    await store.dispose()
   }
-  if (storyData.premise !== expectedStoryPremise) fail('Fresh-process readback lost the approved story blueprint')
-  process.stdout.write(`${JSON.stringify({
-    projectId: projectData.projectId,
-    projectRevision: manifest.revision,
-    storyRevision: story.revision,
-    projectBytes: manifest.bytes,
-    storyBytes: story.bytes,
-  })}\n`)
 }
 
-async function writeQualificationOverlay(path, installedRoot) {
+async function writeQualificationOverlay(path) {
   const backend = pathToFileURL(join(packageRoot, 'scripts', 'qualification-web-backend.mjs')).href
   await writeFile(path, [
     '- id: agent-default-model',
@@ -746,10 +896,7 @@ async function writeQualificationOverlay(path, installedRoot) {
     '',
     '- id: agent-presets',
     '  config:',
-    '    default: ai-novel-writer',
-    '    roots:',
-    `      - path: ${JSON.stringify(join(installedRoot, 'presets'))}`,
-    '        trust: user',
+    `    default: ${qualificationPresetId}`,
     '    includeUserRoot: true',
     '',
     '- id: directory-picker',
@@ -780,8 +927,8 @@ async function writeDesignQa(path, firstWeb, restartWeb) {
     `- Conversation right edge: ${firstWeb.geometry.conversationRight}px; drawer left edge: ${firstWeb.geometry.drawerLeft}px`,
     `- Narrow drawer width: ${firstWeb.geometry.narrowWidth}px; horizontal overflow: ${firstWeb.geometry.narrowOverflow}px`,
     '- Navigation: one root asset list drills into one editor; no task board, SSH console, or second application shell appears inside the drawer.',
-    '- Actions: initialization and single-asset replacement both use the conversation Session and native allow-once approval.',
-    `- Restart: ${restartWeb.screenshots.length > 0 ? 'saved project and story blueprint visible' : 'missing evidence'}`,
+    '- Actions: V2 initialization and typed change proposals use the conversation Session and native allow-once approval.',
+    `- Restart: ${restartWeb.screenshots.length > 0 ? 'saved V2 project state and selected chapter final visible' : 'missing evidence'}`,
     `- Checked layout: wide drawer is ${firstWeb.geometry.drawerWidth}px; the conversation remains beside it; 390px horizontal overflow is ${firstWeb.geometry.narrowOverflow}px.`,
     '',
     '## Evidence',
@@ -805,21 +952,21 @@ function parseOptions(args) {
   }
   return {
     harnessRoot: resolve(harnessRoot),
-    qualificationRoot: join(repositoryRoot, '.runtime', '.cache', 'dsh-ai-novel-qualification-113'),
+    qualificationRoot: join(repositoryRoot, '.runtime', '.cache', qualificationCacheDirectory),
   }
 }
 
 async function qualify(options) {
   const canonicalRepository = await realpath(repositoryRoot)
   const canonicalHarness = await realpath(options.harnessRoot)
-  const qualificationBase = join(canonicalRepository, '.runtime', '.cache', 'dsh-ai-novel-qualification-113')
+  const qualificationBase = join(canonicalRepository, '.runtime', '.cache', qualificationCacheDirectory)
   const requestedQualificationRoot = resolve(options.qualificationRoot)
   if (requestedQualificationRoot !== qualificationBase) fail('Qualification root must be the fixed repository qualification directory')
   if (await exists(qualificationBase)) {
     const ownerPath = join(qualificationBase, '.vibe-owner.json')
     if (!(await exists(ownerPath))) fail('Existing qualification root is not owned by this ticket')
     const owner = objectOf(JSON.parse(await readFile(ownerPath, 'utf8')), 'Qualification root owner')
-    if (owner.owner !== 'codex-ticket-113' || owner.sourceProject !== canonicalRepository) {
+    if (owner.owner !== qualificationOwner || owner.sourceProject !== canonicalRepository) {
       fail('Existing qualification root is owned by a different task or project')
     }
   } else {
@@ -883,6 +1030,11 @@ async function qualify(options) {
     const tarList = await recordCommand(logRoot, 'tarball-list', 'tar', ['-tf', tarball], { cwd: runRoot })
     const tarEntries = tarList.stdout.trimEnd().split(/\r?\n/)
     assertTarballEntries(tarEntries)
+    const packedContentRoot = join(artifactsRoot, 'packed-content')
+    await mkdir(packedContentRoot, { recursive: true })
+    await recordCommand(logRoot, 'tarball-extract', 'tar', ['-xf', tarball, '-C', packedContentRoot], { cwd: runRoot })
+    const packedPackageRoot = join(packedContentRoot, 'package')
+    if (!(await exists(packedPackageRoot))) fail('Tarball extract did not contain package root')
     const tarballInstallSpec = process.platform === 'win32' && /\s/.test(tarball) ? `"${tarball}"` : tarball
 
     await runDsh(logRoot, 'profile-initialize', canonicalHarness, ['--profile', profileName, '--dump-config'], env, 120_000)
@@ -897,12 +1049,13 @@ async function qualify(options) {
     if (installedManifest.name !== packageName || installedManifest.version !== sourceManifest.version) {
       fail('Installed profile package identity does not match the packed source manifest')
     }
+    const installedContent = await assertInstalledTarballContent(packedPackageRoot, installedRoot)
     const profileInstalled = assertProfileInstalled(JSON.parse(await readFile(profileManifestPath, 'utf8')), basename(tarball))
     const dump = await runDsh(logRoot, 'profile-dump-installed', canonicalHarness, ['--profile', profileName, '--dump-config'], env, 120_000)
     if (!dump.stdout.includes(packageName) || dump.stdout.includes(canonicalRepository) || dump.stdout.includes('/src/index.ts')) {
       fail('Composed config did not resolve the installed bundle independently of development paths')
     }
-    const preset = await qualifyPreset(installedRoot, runRoot)
+    const preset = await qualifyPreset(installedRoot)
     const presetTools = await qualifyPresetTools(logRoot, profileRoot, installedRoot, env)
     commands.push(await runPnpm(logRoot, 'web-ui-all-tool-isolation', [
       'exec', 'vitest', 'run', 'tests/web-ui-all-composition.spec.ts',
@@ -915,10 +1068,9 @@ async function qualify(options) {
       },
       timeout: 90_000,
     }))
-    const firstHostHash = await sha256(join(installedRoot, 'lib', 'index.js'))
     const overlayPath = join(runRoot, 'qualification.overlay.yml')
     const screenshotRoot = join(runRoot, 'design-qa', 'screenshots')
-    await writeQualificationOverlay(overlayPath, installedRoot)
+    await writeQualificationOverlay(overlayPath)
     const firstWeb = await probeWeb(
       logRoot, 'web-installed', canonicalHarness, env, overlayPath, workspaceRoot, screenshotRoot, 'first',
     )
@@ -939,11 +1091,15 @@ async function qualify(options) {
     await runDsh(logRoot, 'profile-reinstall', canonicalHarness, ['plugin', '--profile', profileName, 'add', tarballInstallSpec, '--ignore-scripts'], env, 240_000)
     const reinstalledRoot = await realpath(join(profileRoot, 'node_modules', '@ethanyoq', 'dsh-ai-novel-writer'))
     assertProfileInstalled(JSON.parse(await readFile(profileManifestPath, 'utf8')), basename(tarball))
-    if (await sha256(join(reinstalledRoot, 'lib', 'index.js')) !== firstHostHash) {
-      fail('Reinstalled Host entry bytes differ from the first tarball installation')
-    }
+    const reinstalledContent = await assertInstalledTarballContent(packedPackageRoot, reinstalledRoot)
+    const reinstalledPreset = await qualifyPreset(reinstalledRoot)
+    const reinstalledPresetTools = await qualifyPresetTools(logRoot, profileRoot, reinstalledRoot, env)
     const finalDump = await runDsh(logRoot, 'profile-dump-reinstalled', canonicalHarness, ['--profile', profileName, '--dump-config'], env, 120_000)
     if (!finalDump.stdout.includes(packageName)) fail('Reinstalled bundle is absent from the composed config')
+    const reinstalledReadbackResult = await recordCommand(logRoot, 'chapter-reinstall-readback', process.execPath, [
+      fileURLToPath(import.meta.url), '--readback', join(reinstalledRoot, 'lib', 'index.js'), workspaceRoot,
+    ], { cwd: runRoot, env, timeout: 60_000 })
+    const reinstalledReadbackData = JSON.parse(reinstalledReadbackResult.stdout.trim())
     await writeQualificationOverlay(overlayPath, reinstalledRoot)
     const secondWeb = await probeWeb(
       logRoot, 'web-reinstalled', canonicalHarness, env, overlayPath, workspaceRoot, screenshotRoot, 'reinstall',
@@ -966,7 +1122,7 @@ async function qualify(options) {
 
     const receipt = {
       status: 'passed',
-      ticket: 113,
+      ticket: qualificationTicket,
       createdAt: new Date().toISOString(),
       source: {
         repository: canonicalRepository,
@@ -974,7 +1130,10 @@ async function qualify(options) {
         stagedDiffSha256: sourceDiffSha256,
       },
       harness: { repository: canonicalHarness, commit: harnessCommit, clean: true },
-      artifact: { path: tarball, sha256: await sha256(tarball), bytes: (await stat(tarball)).size, entries: tarEntries.length },
+      artifact: {
+        path: tarball, sha256: await sha256(tarball), bytes: (await stat(tarball)).size, entries: tarEntries.length,
+        installedContent: { initial: installedContent, afterReinstall: reinstalledContent },
+      },
       profile: {
         name: profileName,
         root: profileRoot,
@@ -982,14 +1141,14 @@ async function qualify(options) {
         webUiAll: { package: webUiAllPackage, version: webUiAllVersion },
         bundles: profileInstalled.bundles,
       },
-      preset,
-      presetTools,
+      preset: { initial: preset, afterReinstall: reinstalledPreset },
+      presetTools: { initial: presetTools, afterReinstall: reinstalledPresetTools },
       modelRequests: {
         count: modelRequests.requests,
         firstHeaderSha256: createHash('sha256').update(JSON.stringify(modelRequests.first)).digest('hex'),
         first: modelRequests.first,
       },
-      persistence: readbackData,
+      persistence: { initial: readbackData, afterReinstall: reinstalledReadbackData },
       web: { first: firstWeb, restart: restartWeb, afterReinstall: secondWeb },
       designQa: { path: designQaPath, sha256: await sha256(designQaPath) },
       checks: commands.map(command => ({ label: command.label, startedAt: command.startedAt, finishedAt: command.finishedAt })),
@@ -1000,7 +1159,7 @@ async function qualify(options) {
     process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`)
   } catch (error) {
     await writeJson(join(runRoot, 'qualification-failure.json'), {
-      status: 'failed', ticket: 113, failedAt: new Date().toISOString(),
+      status: 'failed', ticket: qualificationTicket, failedAt: new Date().toISOString(),
       message: error instanceof Error ? error.message : String(error), ownership: runOwner,
     })
     throw error
@@ -1034,6 +1193,34 @@ async function main() {
     if (manifestPath === undefined || tarballName === undefined) fail('--validate-profile requires a manifest path and tarball name')
     assertProfileInstalled(JSON.parse(await readFile(resolve(manifestPath), 'utf8')), tarballName)
     process.stdout.write('profile qualification passed\n')
+    return
+  }
+  if (args[0] === '--validate-installed-content') {
+    const packedPackageRoot = args[1]
+    const installedRoot = args[2]
+    if (packedPackageRoot === undefined || installedRoot === undefined) {
+      fail('--validate-installed-content requires packed package and installed roots')
+    }
+    await assertInstalledTarballContent(resolve(packedPackageRoot), resolve(installedRoot))
+    process.stdout.write('installed content qualification passed\n')
+    return
+  }
+  if (args[0] === '--validate-installed-preset') {
+    const installedRoot = args[1]
+    if (installedRoot === undefined) fail('--validate-installed-preset requires an installed package root')
+    process.stdout.write(`${JSON.stringify(await qualifyPreset(resolve(installedRoot)))}\n`)
+    return
+  }
+  if (args[0] === '--validate-browser-result') {
+    const serialized = args[1]
+    const phase = args[2] ?? 'first'
+    if (serialized === undefined) fail('--validate-browser-result requires a browser result JSON object')
+    assertBrowserQualificationResult(JSON.parse(serialized), phase)
+    process.stdout.write('browser qualification result passed\n')
+    return
+  }
+  if (args[0] === '--qualification-proposal') {
+    process.stdout.write(`${JSON.stringify(qualificationProposal)}\n`)
     return
   }
   if (args[0] === '--validate-model-log') {

@@ -8,6 +8,8 @@ function fail(message) {
   throw new Error(message)
 }
 
+const qualificationToolNames = ['novel_read', 'novel_propose_change']
+
 function allStrings(value, output = []) {
   if (typeof value === 'string') output.push(value)
   else if (Array.isArray(value)) {
@@ -69,16 +71,31 @@ function textResponse(text) {
   ]
 }
 
-function readRequest(proposal) {
-  if (proposal.kind === 'initialize') return { kind: 'working-set', chapter: 1 }
-  if (proposal.kind !== 'replace' || typeof proposal.targetKind !== 'string') {
-    fail('Qualification proposal must initialize or replace one recognized asset')
+function assertV2Proposal(proposal) {
+  if (!Array.isArray(proposal.changes) || proposal.changes.length === 0) {
+    fail('Qualification proposal must be a non-empty V2 typed bundle')
   }
-  return {
-    kind: 'asset',
-    targetKind: proposal.targetKind,
-    ...Number.isSafeInteger(proposal.chapter) ? { chapter: proposal.chapter } : {},
+  return proposal
+}
+
+/**
+ * @param {unknown} tools Model-visible tool schemas.
+ * @returns {void} Nothing when their names are exactly the V2 set.
+ */
+export function assertQualificationToolSchemas(tools) {
+  if (!Array.isArray(tools)) fail('Qualification model request must contain V2 tool schemas')
+  const names = tools.map(tool => tool !== null && typeof tool === 'object' ? tool.name : undefined)
+  if (
+    names.length !== qualificationToolNames.length
+    || new Set(names).size !== qualificationToolNames.length
+    || !qualificationToolNames.every(name => names.includes(name))
+  ) {
+    fail('Qualification model request must expose exactly novel_read and novel_propose_change')
   }
+}
+
+async function appendLog(path, value) {
+  await appendFile(path, `${JSON.stringify(value)}\n`, 'utf8')
 }
 
 class QualificationAdapter extends LlmAdapter {
@@ -90,14 +107,15 @@ class QualificationAdapter extends LlmAdapter {
 
   async * stream(options) {
     const proposal = proposalFromMessages(options.messages)
-    const novelTools = (options.tools ?? []).filter(tool => tool.name === 'novel_read' || tool.name === 'novel_apply_change')
-    if (proposal === undefined || novelTools.length === 0) {
+    if (proposal === undefined) {
       for (const chunk of textResponse('AI 小说创作')) yield chunk
       return
     }
+    const request = assertV2Proposal(proposal.request)
+    assertQualificationToolSchemas(options.tools)
     const logPath = process.env.DSH_NOVEL_QUALIFICATION_LOG
     if (typeof logPath !== 'string' || logPath === '') fail('DSH_NOVEL_QUALIFICATION_LOG is required')
-    await appendFile(logPath, `${JSON.stringify({
+    await appendLog(logPath, {
       type: 'model-request',
       request: {
         provider: options.provider,
@@ -106,14 +124,20 @@ class QualificationAdapter extends LlmAdapter {
         tools: options.tools ?? [],
         messages: options.messages,
       },
-    })}\n`, 'utf8')
+    })
     const step = this.#steps.get(proposal.key) ?? 0
     this.#steps.set(proposal.key, step + 1)
-    const chunks = step === 0
-      ? toolCall(`qualification-read-${this.#steps.size}-${step}`, 'novel_read', readRequest(proposal.request))
+    const call = step === 0
+      ? { name: 'novel_read', args: { kind: 'state' } }
       : step === 1
-        ? toolCall(`qualification-apply-${this.#steps.size}-${step}`, 'novel_apply_change', proposal.request)
-        : textResponse('已收到 CommitReceipt，小说资产已保存。')
+        ? { name: 'novel_propose_change', args: request }
+        : undefined
+    if (call !== undefined) {
+      await appendLog(logPath, { type: 'model-tool-call', name: call.name, arguments: call.args })
+    }
+    const chunks = call === undefined
+      ? textResponse('提案已记录，等待用户在提案收件箱中审核并应用。')
+      : toolCall(`qualification-${call.name}-${this.#steps.size}-${step}`, call.name, call.args)
     for (const chunk of chunks) yield chunk
   }
 }

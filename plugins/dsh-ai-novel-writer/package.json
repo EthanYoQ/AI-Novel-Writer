@@ -27,6 +27,10 @@
       "types": "./lib/types/agent.d.ts",
       "default": "./lib/agent.js"
     },
+    "./agent-v2": {
+      "types": "./lib/types/agent-v2.d.ts",
+      "default": "./lib/agent-v2.js"
+    },
     "./client": {
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
@@ -37,6 +41,7 @@
   "files": [
     "lib/index.js",
     "lib/agent.js",
+    "lib/agent-v2.js",
     "lib/client.js",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
