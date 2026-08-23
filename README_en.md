@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download the latest Windows, macOS Apple Silicon, and macOS Intel installers</a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download desktop (Windows / macOS)</a> · <a href="https://www.npmjs.com/package/@ethanyoq/dsh-ai-novel-writer">Install the DeepSeek Harness Web plugin</a>
 </p>
 
 <p align="center">
@@ -168,24 +168,25 @@ ai-novel-writer-setup-<version>.exe
 
 The installer is not code-signed at present. Windows may show publisher or reputation warnings; continue only after confirming that the download page is this repository's official GitHub Release.
 
-### macOS Apple Silicon (ARM64)
+### macOS (Apple Silicon and Intel)
 
-Download this file from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest):
+Download the installer matching your Mac architecture from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest):
 
 ```text
 ai-novel-writer-mac-arm64-<version>-installer.dmg
+ai-novel-writer-mac-x64-<version>-installer.dmg
 ```
 
-1. This package supports Apple Silicon Macs only (M1, M2, M3, M4, and later ARM64 devices); no Intel Mac installer is provided.
+1. `arm64` supports Apple Silicon Macs (M1, M2, M3, M4, and later); `x64` supports Intel Macs.
 2. Drag the app from the DMG to Applications. This macOS release has no in-app updater; download future versions manually from the same Release page.
-3. This package is unsigned and not notarized. If Gatekeeper blocks it, confirm that the source is this repository's official GitHub Release, then Control-click the app in Finder and choose **Open**, or allow it in **System Settings → Privacy & Security**.
+3. Neither installer has a Developer ID signature or notarization (ARM64 is ad-hoc signed; x64 is unsigned). If Gatekeeper blocks it, confirm that the source is this repository's official GitHub Release, then Control-click the app in Finder and choose **Open**, or allow it in **System Settings → Privacy & Security**.
 
 ## Current limits
 
 - A URL and key do not guarantee support for every third-party API; only implemented protocols and presets are in scope.
 - The app does not replace authorial judgment, fact checking, or copyright decisions. Review AI output before using it.
 - It does not provide online publishing, a reading community, or cloud-model accounts.
-- Formal installers are built in GitHub Actions. Windows and macOS ARM64 candidates each pass their own qualification before both are listed in one GitHub Release.
+- Formal installers are built in GitHub Actions. Windows, macOS ARM64, and macOS x64 candidates each pass their own qualification before they are listed in one GitHub Release.
 
 ## License
 

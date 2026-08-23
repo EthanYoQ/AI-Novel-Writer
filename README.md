@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载最新 Windows、macOS Apple Silicon 与 macOS Intel 安装包</a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载桌面版（Windows / macOS）</a> · <a href="https://www.npmjs.com/package/@ethanyoq/dsh-ai-novel-writer">安装 DeepSeek Harness Web 插件</a>
 </p>
 
 <p align="center">
@@ -167,24 +167,25 @@ ai-novel-writer-setup-<版本号>.exe
 
 当前安装程序尚未进行代码签名。Windows 可能显示发布者或信誉提示；请确认下载页面属于本项目的官方 GitHub Release 后再继续。
 
-### macOS Apple Silicon（ARM64）
+### macOS（Apple Silicon 与 Intel）
 
-从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载：
+从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载与你的 Mac 架构对应的安装包：
 
 ```text
 ai-novel-writer-mac-arm64-<版本号>-installer.dmg
+ai-novel-writer-mac-x64-<版本号>-installer.dmg
 ```
 
-1. 此包仅适用于 Apple Silicon Mac（M1、M2、M3、M4 等 ARM64 机型），不提供 Intel Mac 安装包。
+1. `arm64` 适用于 Apple Silicon Mac（M1、M2、M3、M4 等）；`x64` 适用于 Intel Mac。
 2. 将 DMG 中的应用拖入“应用程序”文件夹后启动；本版本不提供 macOS 应用内更新，请从同一 Release 页面手动下载后续版本。
-3. 该包未签名、未公证。若 Gatekeeper 阻止打开，请确认来源是本项目的官方 GitHub Release，然后在 Finder 中按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。
+3. 两个安装包均未使用 Developer ID 签名且未公证（ARM64 为 ad-hoc 签名，x64 为未签名）。若 Gatekeeper 阻止打开，请确认来源是本项目的官方 GitHub Release，然后在 Finder 中按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。
 
 ## 当前限制
 
 - 不承诺任意第三方 API 都能仅靠 URL 和 Key 接入；只保证已实现协议与预设范围内的行为。
 - 不替代作者的创意、事实核查或版权判断；AI 输出需要作者审阅。
 - 不提供在线发布、阅读社区或云端模型账号。
-- 正式安装包由 GitHub Actions 云端构建；Windows 与 macOS ARM64 会各自通过资格检查后，才会进入同一个 GitHub Release。
+- 正式安装包由 GitHub Actions 云端构建；Windows、macOS ARM64 与 macOS x64 会各自通过资格检查后，才会进入同一个 GitHub Release。
 
 ## 许可证
 
