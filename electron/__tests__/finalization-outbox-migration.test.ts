@@ -90,6 +90,14 @@ describe('finalization outbox migration', () => {
     const columns = db!.prepare('PRAGMA table_info(finalization_outbox)').all() as Array<{ name: string }>
 
     expect(columns.map(column => column.name)).toContain('content_snapshot')
+    expect(columns.map(column => column.name)).toContain('knowledge_document_id')
+    expect(db!.prepare(`
+      SELECT knowledge_document_id FROM finalization_outbox WHERE finalization_id = ?
+    `).get('legacy-finalization-1')).toEqual({ knowledge_document_id: '' })
+    expect(db!.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'chapter_deletion_operations'
+    `).get()).toEqual({ name: 'chapter_deletion_operations' })
     expect(db!.prepare(`
       SELECT content_snapshot FROM finalization_outbox WHERE finalization_id = ?
     `).get('legacy-finalization-1')).toEqual({ content_snapshot: '旧版本已提交的正文' })

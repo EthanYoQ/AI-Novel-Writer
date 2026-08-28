@@ -23,6 +23,7 @@ export interface FinalizationRecord {
   contentHash: string
   contentRevision: number
   targetFileName: string
+  knowledgeDocumentId: string
   publicationStatus: PublicationStatus
   lastError: string
   publishedAt: string | null
@@ -36,6 +37,7 @@ interface FinalizationRow {
   content_hash: string
   content_revision: number
   target_file_name: string
+  knowledge_document_id: string
   publication_status: PublicationStatus
   last_error: string
   published_at: string | null
@@ -52,6 +54,7 @@ function rowToRecord(row: FinalizationRow): FinalizationRecord {
     contentHash: row.content_hash,
     contentRevision: row.content_revision,
     targetFileName: row.target_file_name,
+    knowledgeDocumentId: row.knowledge_document_id ?? '',
     publicationStatus: row.publication_status,
     lastError: row.last_error ?? '',
     publishedAt: row.published_at ?? null,
@@ -145,6 +148,7 @@ export class FinalizationRepository {
         contentHash: input.contentHash,
         contentRevision: input.contentRevision,
         targetFileName: input.targetFileName,
+        knowledgeDocumentId: '',
         publicationStatus: 'pending' as const,
         lastError: '',
         publishedAt: null,
@@ -167,6 +171,21 @@ export class FinalizationRepository {
       SELECT * FROM finalization_outbox WHERE draft_id = ?
     `).get(draftId) as FinalizationRow | undefined
     return row ? rowToRecord(row) : null
+  }
+
+  static linkKnowledgeDocument(draftId: number, documentId: string): FinalizationRecord {
+    const normalizedDocumentId = documentId.trim()
+    if (!normalizedDocumentId) throw new Error('知识库文档身份不能为空')
+    const db = requireDatabase()
+    const result = db.prepare(`
+      UPDATE finalization_outbox
+      SET knowledge_document_id = ?, updated_at = datetime('now')
+      WHERE draft_id = ?
+    `).run(normalizedDocumentId, draftId)
+    if (result.changes !== 1) throw new Error(`草稿缺少定稿提交：${draftId}`)
+    const record = FinalizationRepository.getByDraftId(draftId)
+    if (!record) throw new Error(`草稿缺少定稿提交：${draftId}`)
+    return record
   }
 
   static markPublicationPending(finalizationId: string, error: string): FinalizationRecord {

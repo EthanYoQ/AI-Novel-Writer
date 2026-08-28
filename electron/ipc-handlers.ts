@@ -11,6 +11,7 @@ import { registerWindowController } from './controllers/window-controller'
 import { registerOfficialHomepageController } from './controllers/official-homepage-controller'
 import { registerModelProviderResourceController } from './controllers/model-provider-resource-controller'
 import { registerFinalizationController } from './controllers/finalization-controller'
+import { registerChapterLifecycleController } from './controllers/chapter-lifecycle-controller'
 import { registerExternalFileGrantController } from './controllers/external-file-grant-controller'
 import { registerAppDataController } from './controllers/app-data-controller'
 import { registerSkinController } from './controllers/skin-controller'
@@ -44,6 +45,7 @@ export function registerIPCHandlers() {
   registerLLMController()
   registerDatabaseController()
   registerFinalizationController()
+  registerChapterLifecycleController()
   registerKBController()
   registerImportController()
 

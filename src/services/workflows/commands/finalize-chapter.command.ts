@@ -76,6 +76,7 @@ export function buildFinalizePostProcessSteps(
   chapterTitle: string,
   draftContent: string,
   generation: FinalizePostProcessGeneration,
+  finalizedDraftId?: number,
 ): PostProcessStep[] {
   const steps: PostProcessStep[] = []
 
@@ -97,8 +98,19 @@ export function buildFinalizePostProcessSteps(
         draftContent,
         contentFileName,
         _project.path,
-      ) as { success: boolean; error?: string; chunkCount?: number }
+      ) as { success: boolean; error?: string; chunkCount?: number; docId?: string }
       requireIpcSuccess(result, '导入知识库')
+      if (finalizedDraftId !== undefined) {
+        if (!result.docId) throw new Error('知识库导入成功但缺少文档身份收据')
+        const linked = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:finalization-link-knowledge-document',
+          finalizedDraftId,
+          result.docId,
+          _project.path,
+        )
+        requireIpcSuccess(linked, '登记定稿知识文档身份')
+      }
       callbacks.log(`正文章节已导入知识库（${result.chunkCount} 块）`)
     },
   })
@@ -306,6 +318,7 @@ export interface RunFinalizePostProcessParams {
   chapterNumber: number
   chapterTitle: string
   draftContent: string
+  draftId: number
   sourceLabel: string
   stopOnFailure?: boolean
   onlyFailed?: boolean
@@ -342,6 +355,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       this.params.chapterTitle,
       this.params.draftContent,
       generation,
+      this.params.draftId,
     )
     return runPostProcessPipeline(
       this.params.project.path,
@@ -426,6 +440,7 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
       chapterNumber: snapshot.chapterNumber,
       chapterTitle: snapshot.chapterTitle,
       draftContent: refinedDraftText,
+      draftId: commit.draftId,
       sourceLabel,
       stopOnFailure: this.params.stopOnPostProcessFailure,
     }).execute({ step: {}, context, callbacks })

@@ -178,6 +178,7 @@ function createTables(db: BetterSqlite3.Database) {
       content_revision INTEGER NOT NULL,
       content_snapshot TEXT NOT NULL DEFAULT '',
       target_file_name TEXT NOT NULL,
+      knowledge_document_id TEXT NOT NULL DEFAULT '',
       publication_status TEXT NOT NULL DEFAULT 'pending',
       last_error TEXT NOT NULL DEFAULT '',
       published_at TEXT DEFAULT NULL,
@@ -187,6 +188,30 @@ function createTables(db: BetterSqlite3.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_finalization_outbox_status
       ON finalization_outbox(publication_status);
+
+    -- 已定稿章节删除：SQLite 事实删除与投影清理收据在同一事务登记。
+    -- 实体稿和知识库跨存储清理失败后，可按冻结身份幂等重试。
+    CREATE TABLE IF NOT EXISTS chapter_deletion_operations (
+      operation_id TEXT PRIMARY KEY,
+      draft_id INTEGER NOT NULL UNIQUE,
+      chapter_number INTEGER NOT NULL,
+      chapter_title TEXT NOT NULL DEFAULT '',
+      finalization_id TEXT NOT NULL,
+      target_file_name TEXT NOT NULL DEFAULT '',
+      knowledge_document_id TEXT NOT NULL DEFAULT '',
+      post_process_run_ids TEXT NOT NULL DEFAULT '[]',
+      manuscript_status TEXT NOT NULL DEFAULT 'pending',
+      manuscript_error TEXT NOT NULL DEFAULT '',
+      knowledge_status TEXT NOT NULL DEFAULT 'pending',
+      knowledge_error TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      completed_at TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_chapter_deletion_status
+      ON chapter_deletion_operations(status);
 
     -- Imported finalized chapters are committed as one idempotent unit. The
     -- stored receipt is replayed only after the immutable draft/outbox facts
@@ -331,6 +356,12 @@ function createTables(db: BetterSqlite3.Database) {
         WHERE drafts.id = finalization_outbox.draft_id
       ), '')
       WHERE content_snapshot = ''
+    `)
+  }
+  if (!outboxColumns.some(column => column.name === 'knowledge_document_id')) {
+    db.exec(`
+      ALTER TABLE finalization_outbox
+      ADD COLUMN knowledge_document_id TEXT NOT NULL DEFAULT ''
     `)
   }
 

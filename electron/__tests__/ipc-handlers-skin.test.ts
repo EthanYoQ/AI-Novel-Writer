@@ -31,6 +31,7 @@ vi.mock('../controllers/import-controller', () => ({ registerImportController: v
 vi.mock('../controllers/official-homepage-controller', () => ({ registerOfficialHomepageController: vi.fn() }))
 vi.mock('../controllers/model-provider-resource-controller', () => ({ registerModelProviderResourceController: vi.fn() }))
 vi.mock('../controllers/finalization-controller', () => ({ registerFinalizationController: vi.fn() }))
+vi.mock('../controllers/chapter-lifecycle-controller', () => ({ registerChapterLifecycleController: vi.fn() }))
 vi.mock('../controllers/external-file-grant-controller', () => ({ registerExternalFileGrantController: vi.fn() }))
 vi.mock('../controllers/app-data-controller', () => ({ registerAppDataController: vi.fn() }))
 

@@ -25,6 +25,7 @@ import {
   searchWithScope as storeSearchWithScope,
   listDocuments as storeListDocuments,
   getStats as storeGetStats,
+  resolveDocumentIdByExactContent as storeResolveDocumentIdByExactContent,
   migrateFromJSON,
   getChunksWithoutVectors as storeGetChunksWithoutVectors,
   getCanonicalChunksForEmbeddingRebuild,
@@ -207,6 +208,15 @@ export async function searchKnowledge(
  */
 export function listDocuments(projectPath: string) {
   return ensureMigration(projectPath).then(() => storeListDocuments(projectPath))
+}
+
+export async function resolveFinalizedDocumentId(
+  projectPath: string,
+  fileName: string,
+  content: string,
+) {
+  await ensureMigration(projectPath)
+  return storeResolveDocumentIdByExactContent(projectPath, fileName, content)
 }
 
 /**

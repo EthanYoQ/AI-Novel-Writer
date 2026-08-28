@@ -2,9 +2,10 @@
  * ManuscriptGroup — 正文章节折叠组（已定稿章节列表）
  */
 
-import { useState, useEffect } from 'react'
-import { ChevronRight, ChevronDown, FileText, FolderOpen, Copy, PenTool, Trash2 } from 'lucide-react'
+import { useCallback, useState, useEffect } from 'react'
+import { AlertTriangle, ChevronRight, ChevronDown, FileText, FolderOpen, Copy, PenTool, RotateCcw, Trash2 } from 'lucide-react'
 import type { FileNode, ProjectSessionContext } from '../../../shared/ipc-channels'
+import type { ChapterDeletionOperation } from '../../../shared/chapter-deletion'
 import { ipc } from '../../../services/ipc-client'
 import { useProjectStore } from '../../../stores/project-store'
 import { useDraftStore } from '../../../stores/draft-store'
@@ -90,6 +91,13 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
   const [open, setOpen] = useState(true)
   const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore(s => s.currentProject)
+  const [deletionState, setDeletionState] = useState<{
+    projectPath: string
+    operations: ChapterDeletionOperation[]
+  }>({ projectPath: '', operations: [] })
+  const incompleteDeletions = deletionState.projectPath === projectPath
+    ? deletionState.operations
+    : []
   // 文件路径 → 显示名称的映射（异步加载）
   const [titleMap, setTitleMap] = useState<Record<string, string>>({})
 
@@ -137,16 +145,48 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
   // 只显示正文章节（过滤掉旧的 _notes 文件）
   const chapterFiles = files.filter(f => !f.name.includes('_notes'))
 
-  const deleteManuscriptChapter = async (filePath: string, displayName: string) => {
+  const fetchIncompleteDeletions = useCallback(async (projectSession: ProjectSessionContext) => {
+    const result = await ipc.invokeWithProjectSession(
+      projectSession,
+      'chapter:list-incomplete-deletions',
+      projectPath,
+    )
+    if (!isProjectSessionCurrent(projectSession)) return null
+    return result.success ? result.operations ?? [] : []
+  }, [projectPath])
+
+  const loadIncompleteDeletions = useCallback(async (projectSession: ProjectSessionContext) => {
+    const operations = await fetchIncompleteDeletions(projectSession)
+    if (operations === null) return
+    setDeletionState({
+      projectPath,
+      operations,
+    })
+  }, [fetchIncompleteDeletions, projectPath])
+
+  useEffect(() => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectPath)) return
+    void fetchIncompleteDeletions(projectSession).then(operations => {
+      if (operations === null) return
+      setDeletionState({ projectPath, operations })
+    })
+  }, [currentProject, fetchIncompleteDeletions, projectPath])
+
+  const deleteManuscriptChapter = async (
+    filePath: string,
+    displayName: string,
+    chapterNumber: number | undefined,
+  ) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectPath)) return
     const match = filePath.match(/^vela:\/\/manuscript\/(\d+)$/)
-    if (!match) {
+    if (!match || chapterNumber === undefined) {
       toast.error(text('当前章节路径不支持直接删除', 'This chapter path cannot be deleted directly.'))
       return
     }
 
-    const ok = await confirm(text(`确认删除正文「${displayName}」？\n此操作会删除该定稿正文记录及关联的审稿/修稿产物，不会删除蓝图。`, `Delete manuscript “${displayName}”?\nThis removes the finalized draft and related review/revision artifacts, but preserves the blueprint.`), {
+    const ok = await confirm(text(`确认删除正文「${displayName}」？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；蓝图会保留。清理失败时可在正文章节下重试。`, `Delete manuscript “${displayName}”?\nThis removes the finalized fact and cleans its manuscript file, knowledge document, and post-processing projections. The blueprint is preserved, and failed cleanup can be retried below Manuscript chapters.`), {
       title: text('删除正文', 'Delete manuscript'),
       confirmText: text('删除', 'Delete'),
       danger: true,
@@ -155,12 +195,12 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
 
     const result = await ipc.invokeWithProjectSession(
       projectSession,
-      'db:draft-delete',
-      Number(match[1]),
+      'chapter:delete-finalized',
+      { draftId: Number(match[1]), chapterNumber },
       projectPath,
     )
     if (!isProjectSessionCurrent(projectSession)) return
-    if (!result.success) {
+    if (!result.committed) {
       toast.error(text(`删除失败\n\n${result.error ?? '未知错误'}`, `Delete failed\n\n${result.error ?? 'Unknown error'}`))
       return
     }
@@ -178,7 +218,41 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
       projectPath,
       projectSession,
     })
-    toast.success(text(`已删除正文「${displayName}」`, `Deleted manuscript “${displayName}”`))
+    await loadIncompleteDeletions(projectSession)
+    if (result.success) {
+      toast.success(text(`已删除正文「${displayName}」及其派生投影`, `Deleted manuscript “${displayName}” and its derived projections.`))
+    } else {
+      toast.warning(text(
+        `正文已删除，但派生投影仍待清理：${result.error ?? '未知错误'}。请使用“重试清理”。`,
+        `The manuscript fact was deleted, but derived projections still need cleanup: ${result.error ?? 'Unknown error'}. Use “Retry cleanup”.`,
+      ), 8000)
+    }
+  }
+
+  const retryDeletion = async (operation: ChapterDeletionOperation) => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectPath)) return
+    const result = await ipc.invokeWithProjectSession(
+      projectSession,
+      'chapter:retry-deletion',
+      operation.operationId,
+      projectPath,
+    )
+    if (!isProjectSessionCurrent(projectSession)) return
+    await loadIncompleteDeletions(projectSession)
+    if (result.success) {
+      globalEventBus.emit('REFRESH_RESOURCE', {
+        resources: ['drafts', 'fileTree'],
+        projectPath,
+        projectSession,
+      })
+      toast.success(text(`第${operation.chapterNumber}章派生投影清理完成`, `Chapter ${operation.chapterNumber} projection cleanup completed.`))
+    } else {
+      toast.error(text(
+        `重试清理失败\n\n${result.error ?? '未知错误'}`,
+        `Cleanup retry failed\n\n${result.error ?? 'Unknown error'}`,
+      ))
+    }
   }
 
   return (
@@ -202,6 +276,34 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
       </div>
       {open && (
         <div>
+          {incompleteDeletions.map(operation => {
+            const details = [
+              operation.manuscriptStatus === 'failed' ? operation.manuscriptError : '',
+              operation.knowledgeStatus === 'failed' ? operation.knowledgeError : '',
+            ].filter(Boolean).join('；')
+            return (
+              <div
+                key={operation.operationId}
+                className="flex items-center gap-1.5 py-1 pr-2"
+                style={{ paddingLeft: 30, color: 'var(--color-warning)' }}
+                title={details}
+              >
+                <AlertTriangle size={11} style={{ flexShrink: 0 }} />
+                <span className="text-xs flex-1 truncate">
+                  {text(`第${operation.chapterNumber}章清理${operation.status === 'failed' ? '失败' : '待完成'}`, `Chapter ${operation.chapterNumber} cleanup ${operation.status === 'failed' ? 'failed' : 'pending'}`)}
+                </span>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[0.7rem] hover:bg-[var(--color-hover)]"
+                  title={text('重试清理', 'Retry cleanup')}
+                  onClick={() => void retryDeletion(operation)}
+                >
+                  <RotateCcw size={10} />
+                  {text('重试清理', 'Retry cleanup')}
+                </button>
+              </div>
+            )
+          })}
           {chapterFiles.length === 0 ? (
             <div className="text-xs py-1" style={{ paddingLeft: 34, color: 'var(--color-text-muted)' }}>
               {text('暂无定稿章节', 'No finalized chapters')}
@@ -209,6 +311,8 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
           ) : (
             chapterFiles.map(f => {
               const displayName = getDisplay(f)
+              const chapterMatch = f.name.replace(/\.[^.]+$/, '').match(/^chapter_(\d+)$/)
+              const chapterNumber = chapterMatch ? Number(chapterMatch[1]) : undefined
               return (
                 <div
                   key={f.path}
@@ -235,7 +339,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
                       label: text('删除正文', 'Delete manuscript'),
                       icon: <Trash2 size={13} />,
                       danger: true,
-                      onClick: () => deleteManuscriptChapter(f.path, displayName),
+                      onClick: () => deleteManuscriptChapter(f.path, displayName, chapterNumber),
                     },
                   ], e)}
                   title={text(`点击打开 — ${displayName}`, `Open — ${displayName}`)}
@@ -250,7 +354,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
                     title={text('删除正文', 'Delete manuscript')}
                     onClick={(e) => {
                       e.stopPropagation()
-                      deleteManuscriptChapter(f.path, displayName)
+                      deleteManuscriptChapter(f.path, displayName, chapterNumber)
                     }}
                     style={{ color: 'var(--color-text-muted)' }}
                   >

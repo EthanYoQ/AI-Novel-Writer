@@ -24,6 +24,11 @@ import type {
   SkinReadCustomAssetResponse,
   SkinState,
 } from './skin-types'
+import type {
+  ChapterDeletionOperation,
+  ChapterDeletionResult,
+  DeleteFinalizedChapterRequest,
+} from './chapter-deletion'
 
 // ===== 全局配置 =====
 export interface ConfigChannels {
@@ -654,6 +659,10 @@ export interface DatabaseChannels {
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:draft-update-content': { args: [id: number, content: string, wordCount: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:draft-delete': { args: [id: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
+  'db:finalization-link-knowledge-document': {
+    args: [draftId: number, documentId: string, expectedProjectPath: string]
+    return: { success: boolean; finalization?: { knowledgeDocumentId: string }; error?: string }
+  }
 
   // 5. revisions
   'db:revision-create': { args: [params: { baseDraftId: number; revisionType: 'refine' | 'review-fix'; userPrompt?: string; reviewSourceId?: number; content: string; wordCount: number }, expectedProjectPath: string]; return: { success: boolean; id?: number; revisionIndex?: number; error?: string } }
@@ -744,6 +753,26 @@ export interface ImportChannels {
   }
 }
 
+// ===== 章节生命周期 =====
+export interface ChapterLifecycleChannels {
+  'chapter:delete-finalized': {
+    args: [request: DeleteFinalizedChapterRequest, expectedProjectPath: string]
+    return: ChapterDeletionResult
+  }
+  'chapter:retry-deletion': {
+    args: [operationId: string, expectedProjectPath: string]
+    return: ChapterDeletionResult
+  }
+  'chapter:get-deletion': {
+    args: [operationId: string, expectedProjectPath: string]
+    return: { success: boolean; operation?: ChapterDeletionOperation | null; error?: string }
+  }
+  'chapter:list-incomplete-deletions': {
+    args: [expectedProjectPath: string]
+    return: { success: boolean; operations?: ChapterDeletionOperation[]; error?: string }
+  }
+}
+
 // ===== MCP =====
 export interface MCPChannels {
   'mcp:load-config': { args: [configPath?: string]; return: { success: boolean; configs: unknown[]; error?: string } }
@@ -758,7 +787,7 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ImportChannels & MCPChannels
+export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
 export type AllEventChannels = LLMStreamEvents & UpdateStateEvents
 
 /** 提取 invoke 频道名 */

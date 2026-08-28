@@ -243,19 +243,33 @@ function DraftItem({
   const deleteDraft = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    const deletingFinalizedChapter = draft.status === 'finalized'
     const ok = await confirm(
-      text(`确认删除 "${chapterTitleText} v${draft.version}"？\n此操作会删除该稿正文记录及关联的审稿/修稿产物，不可撤销。`, `Delete “${chapterTitleText} v${draft.version}”?\nThis permanently removes the draft and related review/revision artifacts.`),
+      deletingFinalizedChapter
+        ? text(
+            `确认删除 "${chapterTitleText} v${draft.version}"？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；失败的投影清理可在正文章节下重试。`,
+            `Delete “${chapterTitleText} v${draft.version}”?\nThis removes the finalized fact and cleans its manuscript, knowledge, and post-processing projections. Failed cleanup can be retried below Manuscript chapters.`,
+          )
+        : text(`确认删除 "${chapterTitleText} v${draft.version}"？\n此操作会删除该稿正文记录及关联的审稿/修稿产物，不可撤销。`, `Delete “${chapterTitleText} v${draft.version}”?\nThis permanently removes the draft and related review/revision artifacts.`),
       { title: text('删除这一稿', 'Delete draft'), confirmText: text('删除', 'Delete'), danger: true }
     )
     if (!ok || !isProjectSessionCurrent(projectSession)) return
-    const result = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:draft-delete',
-      draft.id,
-      projectKey,
-    )
+    const result = deletingFinalizedChapter
+      ? await ipc.invokeWithProjectSession(
+          projectSession,
+          'chapter:delete-finalized',
+          { draftId: draft.id, chapterNumber: draft.chapterNumber },
+          projectKey,
+        )
+      : await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:draft-delete',
+          draft.id,
+          projectKey,
+        )
     if (!isProjectSessionCurrent(projectSession)) return
-    if (!result.success) {
+    const committed = 'committed' in result ? result.committed : result.success
+    if (!result.success && !committed) {
       toast.error(text(`删除失败\n\n${result.error ?? '未知错误'}`, `Delete failed\n\n${result.error ?? 'Unknown error'}`))
       return
     }
@@ -275,7 +289,14 @@ function DraftItem({
       projectPath: projectKey,
       projectSession,
     })
-    toast.success(text(`已删除 ${chapterTitleText} v${draft.version}`, `Deleted ${chapterTitleText} v${draft.version}`))
+    if (result.success) {
+      toast.success(text(`已删除 ${chapterTitleText} v${draft.version}`, `Deleted ${chapterTitleText} v${draft.version}`))
+    } else {
+      toast.warning(text(
+        `正文已删除，但派生投影仍待清理：${result.error ?? '未知错误'}。请在正文章节下使用“重试清理”。`,
+        `The manuscript fact was deleted, but derived projections still need cleanup: ${result.error ?? 'Unknown error'}. Use “Retry cleanup” below Manuscript chapters.`,
+      ), 8000)
+    }
   }
 
   const isFinalized = draft.status === 'finalized'

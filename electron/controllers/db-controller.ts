@@ -17,6 +17,7 @@ import { CharacterRosterRepository } from '../repositories/character-roster-repo
 import type { CharacterRosterCommitRequest } from '../../src/shared/character-roster'
 import { DraftRepository } from '../repositories/draft-repository'
 import { FinalizedDraftImportRepository } from '../repositories/finalized-draft-import-repository'
+import { FinalizationRepository } from '../repositories/finalization-repository'
 import type { FinalizedDraftImportRequest } from '../../src/shared/finalized-draft-import'
 import { ImportGlobalFactsRepository } from '../repositories/import-global-facts-repository'
 import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
@@ -48,6 +49,7 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:draft-update-status',
   'db:draft-update-content',
   'db:draft-delete',
+  'db:finalization-link-knowledge-document',
   'db:revision-create',
   'db:revision-replace-pending',
   'db:revision-mark-merged',
@@ -366,6 +368,23 @@ export function registerDatabaseController() {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       DraftRepository.delete(id)
       return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:finalization-link-knowledge-document', async (
+    _event,
+    draftId: number,
+    documentId: string,
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      return {
+        success: true,
+        finalization: FinalizationRepository.linkKnowledgeDocument(draftId, documentId),
+      }
     } catch (err) {
       return { success: false, error: String(err) }
     }

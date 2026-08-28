@@ -383,6 +383,7 @@ export function createRepairFinalizeWorkflow(
             chapterNumber,
             chapterTitle,
             draftContent: full.content,
+            draftId: draftMeta.id,
             sourceLabel: `第${chapterNumber}章定稿`,
             onlyFailed: true,
           }).execute({ step: {}, context, callbacks })

@@ -287,6 +287,36 @@ describe('workflow mutation failure boundaries', () => {
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('剧情要点提取完成'))
   })
 
+  it('records the finalized knowledge document identity before marking import complete', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'kb:import-text') {
+        return { success: true, docId: 'knowledge-document-41', chunkCount: 1 }
+      }
+      if (channel === 'db:finalization-link-knowledge-document') {
+        return { success: true, finalization: { knowledgeDocumentId: 'knowledge-document-41' } }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      '第一章',
+      '正文',
+      testPostProcessGeneration(),
+      41,
+    ).find(candidate => candidate.key === 'kb_import')
+
+    await expect(step!.executor(callbacks(), context())).resolves.toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith(
+      'db:finalization-link-knowledge-document',
+      41,
+      'knowledge-document-41',
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+    )
+  })
+
   it('records a length-limited chapter-notes step as failed with zero writes, then retries it successfully', async () => {
     let runCreated = false
     let stepState: 'new' | 'failed' | 'ok' = 'new'

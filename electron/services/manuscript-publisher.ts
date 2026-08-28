@@ -122,6 +122,19 @@ export async function publishManuscript(input: PublishManuscriptInput): Promise<
   }
 }
 
+/**
+ * 删除 outbox 中已冻结的实体稿目标。缺失文件表示投影已经清理，按幂等成功处理。
+ */
+export async function removePublishedManuscript(
+  projectRoot: string,
+  targetFileName: string,
+): Promise<void> {
+  const target = resolveStoredManuscriptTarget(projectRoot, targetFileName)
+  if (!fs.existsSync(target.absolutePath)) return
+  fs.unlinkSync(target.absolutePath)
+}
+
 export const manuscriptPublisher = {
   publish: publishManuscript,
+  remove: removePublishedManuscript,
 }

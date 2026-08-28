@@ -36,10 +36,14 @@ describe('generated content deletion affordances', () => {
 
     expect(draftBox).toContain('删除这一稿')
     expect(draftBox).toContain('db:draft-delete')
+    expect(draftBox).toContain('chapter:delete-finalized')
     expect(manuscript).toContain('删除正文')
-    expect(manuscript).toContain('db:draft-delete')
+    expect(manuscript).toContain('chapter:delete-finalized')
+    expect(manuscript).toContain('chapter:list-incomplete-deletions')
+    expect(manuscript).toContain('chapter:retry-deletion')
+    expect(manuscript).toContain('重试清理')
     expect(dbController).toContain("'db:draft-delete'")
-    expect(ipcChannels).toContain("'db:draft-delete'")
+    expect(ipcChannels).toContain("'chapter:delete-finalized'")
   })
 
   it('supports clearing the entire knowledge base from the knowledge page', () => {
