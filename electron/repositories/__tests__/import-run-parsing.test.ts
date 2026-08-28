@@ -36,6 +36,26 @@ function begin(runId = 'parse-run') {
   })
 }
 
+function reauthorize(overrides: {
+  runId?: string
+  sourceIds?: string[]
+  sourceFingerprints?: string[]
+  sourceDisplay?: Array<{ displayName: string; mediaType: string; size: number }>
+} = {}) {
+  return ImportRunRepository.beginParsing({
+    runId: overrides.runId ?? 'reauthorized-run',
+    purpose: 'reference',
+    sourceFingerprint: 'a'.repeat(64),
+    sourceIds: overrides.sourceIds ?? [SOURCE_A, SOURCE_B],
+    sourceFingerprints: overrides.sourceFingerprints ?? ['b'.repeat(64), 'c'.repeat(64)],
+    sourceDisplay: overrides.sourceDisplay ?? [
+      { displayName: 'renamed-a.txt', mediaType: 'text/plain', size: 37 },
+      { displayName: 'renamed-b.txt', mediaType: 'text/plain', size: 41 },
+    ],
+    locale: 'en-US',
+  })
+}
+
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-import-parsing-'))
   initProjectDatabase(root)
@@ -65,6 +85,36 @@ describe('persisted per-source parsing', () => {
     expect(prepared).toMatchObject({ classification: 'new', run: { stage: 'prepared', totalChapters: 3 } })
     expect(ImportRunRepository.startOrResume('parse-run', 'renderer')).toMatchObject({
       run: { stage: 'knowledge', status: 'running' },
+    })
+  })
+
+  it('resumes the stable source set after names and file sizes change and refreshes display metadata', () => {
+    begin()
+    ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, [chapter(1)])
+
+    expect(reauthorize()).toMatchObject({
+      id: 'parse-run',
+      completedSources: 1,
+      sourceDisplay: [
+        { displayName: 'renamed-a.txt', mediaType: 'text/plain', size: 37 },
+        { displayName: 'renamed-b.txt', mediaType: 'text/plain', size: 41 },
+      ],
+    })
+  })
+
+  it('rejects a different stable source key even when the caller reuses the collection fingerprint', () => {
+    begin()
+
+    expect(() => reauthorize({
+      sourceIds: [SOURCE_A, '33333333-3333-4333-8333-333333333333'],
+      sourceFingerprints: ['b'.repeat(64), 'd'.repeat(64)],
+    })).toThrow(/来源清单|重新授权/)
+    expect(ImportRunRepository.get('parse-run')).toMatchObject({
+      id: 'parse-run',
+      sourceDisplay: [
+        { displayName: 'a.txt', mediaType: 'text/plain', size: 20 },
+        { displayName: 'b.txt', mediaType: 'text/plain', size: 20 },
+      ],
     })
   })
 

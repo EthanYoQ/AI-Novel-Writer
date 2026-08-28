@@ -1135,16 +1135,38 @@ export class ImportRunRepository {
           SELECT source_id, source_fingerprint, legacy_source_fingerprint, display_json
           FROM import_run_sources WHERE run_id = ? ORDER BY source_index
         `).all(existing.id) as Array<{ source_id: string; source_fingerprint: string; legacy_source_fingerprint: string; display_json: string }>
+        const sourcesById = new Map(sources.map(source => [source.source_id, source]))
         if (
           sources.length !== sourceIds.length
-          || sources.some((source, index) => (
-            source.source_id !== sourceIds[index]
-            || source.source_fingerprint !== sourceFingerprints[index]
-            || source.legacy_source_fingerprint !== legacySourceFingerprints[index]
-            || source.display_json !== JSON.stringify(sourceDisplay[index])
+          || sourceIds.some((sourceId, index) => (
+            sourcesById.get(sourceId)?.source_fingerprint !== sourceFingerprints[index]
           ))
         ) throw new Error('未完成导入的来源清单与本次重新授权不一致')
-        return rowToSnapshot(existing)
+        db().prepare(`
+          UPDATE import_run_sources
+          SET source_index = source_index + ?
+          WHERE run_id = ?
+        `).run(MAX_IMPORT_SOURCE_FILES, existing.id)
+        const updateSource = db().prepare(`
+          UPDATE import_run_sources
+          SET source_index = ?, legacy_source_fingerprint = ?, display_json = ?, updated_at = datetime('now')
+          WHERE run_id = ? AND source_id = ? AND source_fingerprint = ?
+        `)
+        sourceIds.forEach((sourceId, index) => {
+          const changed = updateSource.run(
+            index,
+            legacySourceFingerprints[index],
+            JSON.stringify(sourceDisplay[index]),
+            existing.id,
+            sourceId,
+            sourceFingerprints[index],
+          )
+          if (changed.changes !== 1) throw new Error('未完成导入的来源清单与本次重新授权不一致')
+        })
+        db().prepare(`
+          UPDATE import_runs SET source_display_json = ?, updated_at = datetime('now') WHERE id = ?
+        `).run(JSON.stringify(sourceDisplay), existing.id)
+        return this.get(existing.id)!
       }
       if (readRunRow(runId)) throw new Error('导入运行 ID 已存在')
       db().prepare(`
@@ -1838,6 +1860,15 @@ export class ImportRunRepository {
           FROM import_run_sources WHERE run_id = ? ORDER BY source_index
         `).run(normalizedNextId, runId)
       } else {
+        db().prepare(`
+          INSERT INTO import_run_sources (
+            run_id, source_index, source_id, source_fingerprint, legacy_source_fingerprint, display_json, status,
+            manifest_fingerprint, chapter_count, content_size, word_count, last_error
+          )
+          SELECT ?, source_index, source_id, source_fingerprint, legacy_source_fingerprint, display_json, status,
+                 manifest_fingerprint, chapter_count, content_size, word_count, last_error
+          FROM import_run_sources WHERE run_id = ? ORDER BY source_index
+        `).run(normalizedNextId, runId)
         db().prepare(`
           INSERT INTO import_run_chapters (
             run_id, chapter_number, source_id, source_chapter_number,

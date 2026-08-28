@@ -525,6 +525,32 @@ describe('ImportRunRepository', () => {
       .toEqual([expect.objectContaining({ number: 3, content: 'B chapter' })])
   })
 
+  it('restarts a prepared import with its completed source ledger and still blocks overlapping sources', () => {
+    const finalizeA = prepareParsedRun('restart-source', [
+      { id: SOURCE_A, fingerprint: 'a'.repeat(64), content: 'A chapter' },
+    ])
+    expect(finalizeA()).toMatchObject({ classification: 'new' })
+    const execution = ImportRunRepository.startOrResume('restart-source', 'restart-worker').execution
+    ImportRunRepository.fail('restart-source', 'knowledge', 'provider unavailable', execution)
+
+    expect(ImportRunRepository.restart('restart-source', 'restarted-source')).toMatchObject({
+      id: 'restarted-source',
+      stage: 'knowledge',
+      status: 'ready',
+      completedSources: 1,
+      totalSources: 1,
+      progressCompleted: 0,
+      progressTotal: 1,
+    })
+    expect(ImportRunRepository.parsedSourceStatus('restarted-source', SOURCE_A)).toBe('completed')
+
+    const finalizeOverlap = prepareParsedRun('overlapping-source', [
+      { id: SOURCE_A, fingerprint: 'a'.repeat(64), content: 'changed A chapter' },
+    ])
+    expect(() => finalizeOverlap()).toThrow(/相同来源/)
+    expect(ImportRunRepository.get('overlapping-source')).toMatchObject({ stage: 'parsing', status: 'ready' })
+  })
+
   it('applies cancellation only when a completed batch reaches a safe boundary', () => {
     const chapters = [chapter(1), chapter(2)]
     ImportRunRepository.prepare(request(chapters))
