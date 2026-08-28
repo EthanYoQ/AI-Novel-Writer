@@ -1,10 +1,9 @@
 /**
  * 导入小说 — Command 集合
  *
- * 三个独立 Command 组成逆向推演全链路：
- * 1. ImportInitializeCommand — 导入参照文本 + 构建知识库
- * 2. InferGlobalSettingsCommand — 向量采样 + AI 推演全局配置/架构/角色
- * 3. InferBlueprintsPerChapterCommand — 按章逐一推演精准蓝图 + 蓝图入向量库 + 拼装轻量全局摘要
+ * 两个独立 Command 组成逆向推演生成阶段：
+ * 1. InferGlobalSettingsCommand — 向量采样 + AI 推演全局配置/架构/角色
+ * 2. InferBlueprintsPerChapterCommand — 按章逐一推演精准蓝图 + 蓝图入向量库 + 拼装轻量全局摘要
  */
 
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
@@ -20,11 +19,13 @@ import {
   workflowWritingLanguage,
 } from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
-import { refreshImportDerivedFileTreeBestEffort } from '../import-derived-refresh'
 import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
 import type { ChapterBlueprint } from '../directory-workflow'
 import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
-import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
+import type {
+  BlueprintRangeCommitReceipt,
+  BlueprintRangeCommitRequest,
+} from '../../../../electron/repositories/blueprint-repository'
 import {
   blueprintSemanticGenerationContract,
   parseBlueprintSemanticResponseText,
@@ -37,7 +38,10 @@ import {
   parseImportInferenceJsonObject,
 } from './import-inference-contract'
 import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
-import type { ImportGlobalFactsReceipt } from '../../../shared/import-global-facts'
+import type {
+  ImportGlobalFactsReceipt,
+  ImportGlobalFactsRequest,
+} from '../../../shared/import-global-facts'
 import {
   buildStructuredSyntaxRepairTask,
   isRepairableDirectJsonSyntaxFailure,
@@ -255,106 +259,14 @@ export class ImportBlueprintPostCommitSyncError extends Error {
 }
 
 // =================================================================
-// 1. 初始化：导入参照文本 + 构建知识库
-// =================================================================
-
-export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
-  constructor(private chapters: ImportedChapter[]) {
-    super()
-  }
-
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
-    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
-    const writingLanguage = workflowWritingLanguage(context)
-    const projectSession = requireWorkflowProjectSession(context)
-    const project = useProjectStore.getState().currentProject
-    if (!project || !sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(project),
-    )) throw new Error(text('当前项目已切换，导入已停止', 'The project changed, so the import stopped.'))
-
-    const chapterCountEn = `${this.chapters.length} ${this.chapters.length === 1 ? 'reference chapter' : 'reference chapters'}`
-    callbacks.log(text(
-      `开始导入 ${this.chapters.length} 章参照文本并构建知识库...`,
-      `Importing ${chapterCountEn} into the knowledge base...`,
-    ))
-    callbacks.setProgress(5)
-
-    // 导入文件是仿写参照，不是用户创作正文。只将其写入知识库；草稿、定稿、
-    // manuscript 与发布队列只能由用户自己的写作工作流创建。
-    callbacks.log(text('开始构建向量知识库...', 'Building the vector knowledge base...'))
-    let successCount = 0
-    let failCount = 0
-    for (let i = 0; i < this.chapters.length; i++) {
-      this.assertNotCancelled(context)
-      const ch = this.chapters[i]
-      try {
-        const fileName = ch.title
-          ? promptLanguageText(
-              writingLanguage,
-              `第${ch.number}章 ${ch.title}.txt`,
-              `Chapter ${ch.number} ${ch.title}.txt`,
-            )
-          : promptLanguageText(
-              writingLanguage,
-              `第${ch.number}章.txt`,
-              `Chapter ${ch.number}.txt`,
-            )
-        const result = await ipc.invokeWithProjectSession(
-          projectSession,
-          'kb:import-text',
-          ch.content,
-          fileName,
-          context.projectPath,
-        ) as { success: boolean; error?: string }
-        if (result.success) {
-          successCount++
-        } else {
-          callbacks.log(text(
-            `导入 ${fileName} 失败: ${result.error}`,
-            `Failed to import ${fileName}: ${result.error ?? 'unknown error'}`,
-          ))
-          failCount++
-        }
-      } catch {
-        failCount++
-      }
-      if (i % 10 === 0) {
-        callbacks.setProgress(5 + Math.round((i / this.chapters.length) * 85))
-      }
-    }
-    callbacks.log(text(
-      `知识库构建完成（成功 ${successCount} 章，失败 ${failCount} 章）`,
-      `Knowledge base build complete (${successCount} succeeded, ${failCount} failed)`,
-    ))
-    if (failCount > 0) {
-      callbacks.log(text(
-        '部分参照文本未能进入知识库；可重新导入以补齐检索材料。',
-        'Some reference text could not be added to the knowledge base; re-import to complete the retrieval material.',
-      ))
-    }
-    callbacks.setProgress(90)
-
-    // 将章节数据存入 context 供后续步骤使用
-    this.assertNotCancelled(context)
-    context.data.chapters = this.chapters
-    context.data.totalChapters = this.chapters.length
-
-    // 派生 UI 文件树刷新不能阻塞已提交的导入事实与知识库结果。
-    await refreshImportDerivedFileTreeBestEffort(
-      () => useProjectStore.getState().refreshFileTree(context.projectPath, undefined, projectSession),
-      callbacks,
-      text,
-    )
-  }
-}
-
-// =================================================================
-// 2. 向量采样 + AI 推演全局配置/架构/角色
+// 1. 向量采样 + AI 推演全局配置/架构/角色
 // =================================================================
 
 export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
-  constructor(generationDependencies?: WorkflowGenerationRuntimeDependencies) {
+  constructor(
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+    private readonly commitGlobalFacts?: (request: ImportGlobalFactsRequest) => Promise<ImportGlobalFactsReceipt>,
+  ) {
     super(generationDependencies)
   }
 
@@ -623,8 +535,17 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     const novelConfig = {
       ...projectSnapshot.novelConfig,
       ...inferResult.novelConfig,
-      totalChapters: chapters.length,
-      wordsPerChapter: Math.round(chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0) / chapters.length),
+      totalChapters: typeof context.data.importRunTotalChapters === 'number'
+        ? context.data.importRunTotalChapters
+        : chapters.length,
+      wordsPerChapter: Math.max(1, Math.round(
+        (typeof context.data.importRunTotalWords === 'number'
+          ? context.data.importRunTotalWords
+          : chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0))
+        / (typeof context.data.importRunTotalChapters === 'number'
+          ? context.data.importRunTotalChapters
+          : chapters.length),
+      )),
     }
     if (!sameProjectSessionContext(
       projectSession,
@@ -636,10 +557,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     this.assertNotCancelled(context)
 
     const operationId = `novel-import-global-${context.runId}`
-    const commitResult = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:import-global-facts-commit',
-      {
+    const commitRequest: ImportGlobalFactsRequest = {
         operationId,
         expectedRosterRevision: roster.revision,
         core: {
@@ -660,15 +578,25 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
           synopsis: inferResult.architectureFiles.synopsis,
         },
         characterEntries: inferResult.characterCards,
-      },
-      context.projectPath,
-    )
-    if (!commitResult.success) throw new Error(commitResult.error || text(
-      '导入全局事实原子提交失败',
-      'The imported global facts could not be committed atomically.',
-    ))
+      }
+    let rawCommitReceipt: ImportGlobalFactsReceipt | undefined
+    if (this.commitGlobalFacts) {
+      rawCommitReceipt = await this.commitGlobalFacts(commitRequest)
+    } else {
+      const commitResult = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:import-global-facts-commit',
+        commitRequest,
+        context.projectPath,
+      )
+      if (!commitResult.success) throw new Error(commitResult.error || text(
+        '导入全局事实原子提交失败',
+        'The imported global facts could not be committed atomically.',
+      ))
+      rawCommitReceipt = commitResult.receipt
+    }
     const commitReceipt = requireImportGlobalFactsReceipt(
-      commitResult.receipt,
+      rawCommitReceipt,
       operationId,
       inferResult.characterCards.length,
       text,
@@ -727,14 +655,19 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
 
 // =================================================================
-// 3. 按章逐一推演精准蓝图（限流并发）
+// 2. 按章逐一推演精准蓝图（限流并发）
 // =================================================================
 
 export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> {
   private static readonly MAX_CHAPTERS_PER_OPERATION = 50
   private static readonly MAX_ITEMS_PER_BATCH = 5
 
-  constructor(generationDependencies?: WorkflowGenerationRuntimeDependencies) {
+  constructor(
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+    private readonly commitBlueprintRange?: (
+      request: BlueprintRangeCommitRequest,
+    ) => Promise<BlueprintRangeCommitReceipt>,
+  ) {
     super(generationDependencies)
   }
 
@@ -871,26 +804,37 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     ))
 
     this.assertNotCancelled(context)
-    const commit = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:blueprint-commit-range',
-      {
+    const commitRequest: BlueprintRangeCommitRequest = {
         mode: 'replace-range',
         operationId: `import-blueprints-${context.runId}-${startChapter}-${endChapter}`,
         startChapter,
         endChapter,
         blueprints: [...batch.items],
-      },
-      context.projectPath,
-    )
-    if (!commit.success || !commit.receipt || commit.receipt.snapshot.length !== orderedChapters.length) {
-      throw new Error(commit.error || text(
-        '导入蓝图未能作为完整范围一次提交并回读。',
-        'The imported blueprints could not be committed and read back as one complete range.',
+      }
+    let commitReceipt: BlueprintRangeCommitReceipt
+    if (this.commitBlueprintRange) {
+      commitReceipt = await this.commitBlueprintRange(commitRequest)
+    } else {
+      const commit = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:blueprint-commit-range',
+        commitRequest,
+        context.projectPath,
+      )
+      if (!commit.success || !commit.receipt) {
+        throw new Error(commit.error || text(
+          '导入蓝图未能作为完整范围一次提交并回读。',
+          'The imported blueprints could not be committed and read back as one complete range.',
+        ))
+      }
+      commitReceipt = commit.receipt
+    }
+    if (commitReceipt.snapshot.length !== orderedChapters.length) {
+      throw new Error(text(
+        '导入蓝图提交回执覆盖不完整。',
+        'The imported blueprint commit receipt is incomplete.',
       ))
     }
-
-    const commitReceipt = commit.receipt
     context.data.blueprintCommitReceipt = commitReceipt
     try {
       const syncReceipt = await retryDirectoryCharacterSync(

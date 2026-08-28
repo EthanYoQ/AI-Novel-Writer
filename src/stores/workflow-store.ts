@@ -160,6 +160,8 @@ export interface WorkflowDefinition {
    * populated from LLM tool arguments.
    */
   generationModelId?: string
+  /** Persisted workflows may freeze the UI locale independently of the current app setting. */
+  uiLocale?: Locale
   steps: Array<{
     name: string
     description: string
@@ -335,7 +337,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     const runId = definition.runId ?? randomUUID()
     const generationModelId = normalizeGenerationModelId(definition.generationModelId)
     const writingLanguage = resolveWritingLanguage(currentProject?.novelConfig.writingLanguage)
-    const uiLocale = useLocaleStore.getState().locale
+    const uiLocale = definition.uiLocale ?? useLocaleStore.getState().locale
 
     // Runtime callers can still deserialize a legacy definition that predates
     // the required TypeScript field. Reject it before adding an active run or

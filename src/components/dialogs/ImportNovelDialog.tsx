@@ -1,11 +1,11 @@
-import { useState, useCallback } from 'react'
-import { FileUp, FolderOpen, BookOpen, Zap, Clock, AlertTriangle } from 'lucide-react'
+import { useState, useCallback, useEffect } from 'react'
+import { FileUp, FolderOpen, BookOpen, Zap, Clock, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
 import type { ExternalFileGrant } from '../../shared/ipc-channels'
+import type { ImportInspectionSummary, ImportRunSnapshot } from '../../shared/import-run'
 import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
-import type { ImportedChapter } from '../../services/workflows/commands/import-novel.command'
 import { inferImportedNovelProjectName } from './import-novel-paths'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
@@ -15,6 +15,7 @@ import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
 import { useLocaleStore } from '../../stores/locale-store'
 import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
+import { randomUUID } from '../../utils/id'
 
 interface ImportNovelDialogProps {
   open: boolean
@@ -24,6 +25,7 @@ interface ImportNovelDialogProps {
 /** 小说拆解与仿写向导对话框 */
 export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogProps) {
   const createProject = useProjectStore((s) => s.createProject)
+  const currentProject = useProjectStore((s) => s.currentProject)
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow)
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
@@ -32,16 +34,41 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [name, setName] = useState('')
   const [savePath, setSavePath] = useState('')
   const [selectedFiles, setSelectedFiles] = useState<ExternalFileGrant[]>([])
+  const [targetMode, setTargetMode] = useState<'new' | 'current'>('new')
 
   // 拆章结果
-  const [chapters, setChapters] = useState<ImportedChapter[]>([])
-  const [totalWords, setTotalWords] = useState(0)
+  const [inspection, setInspection] = useState<ImportInspectionSummary | null>(null)
   const [splitting, setSplitting] = useState(false)
   const [splitDone, setSplitDone] = useState(false)
   const [splitError, setSplitError] = useState('')
 
   // 导入流程
   const [importing, setImporting] = useState(false)
+  const [importNotice, setImportNotice] = useState('')
+  const [resumableState, setResumableState] = useState<{
+    projectLeaseId: string
+    run: ImportRunSnapshot
+  } | null>(null)
+  const resumableRun = resumableState && currentProject?.sessionLease === resumableState.projectLeaseId
+    ? resumableState.run
+    : null
+
+  useEffect(() => {
+    if (!open || !currentProject) return
+    const session = captureProjectSession(currentProject)
+    if (!session) return
+    let active = true
+    void ipc.invokeWithProjectSession(session, 'db:import-run-list-resumable', currentProject.path)
+      .then(runs => {
+        if (active && isProjectSessionCurrent(session)) {
+          setResumableState(runs[0] ? { projectLeaseId: session.leaseId, run: runs[0] } : null)
+        }
+      })
+      .catch(() => {
+        if (active && isProjectSessionCurrent(session)) setResumableState(null)
+      })
+    return () => { active = false }
+  }, [open, currentProject])
 
   /** 选择文件 */
   const handleSelectFiles = useCallback(async () => {
@@ -51,7 +78,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     setSelectedFiles(files)
     setSplitDone(false)
     setSplitError('')
-    setChapters([])
+    setImportNotice('')
+    setInspection(null)
 
     // 自动推断项目名称（取第一个文件名去掉后缀）
     if (!name.trim()) {
@@ -62,10 +90,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     // 自动拆章预览
     setSplitting(true)
     try {
-      const result = await ipc.invoke('import:split-chapters', files.map(file => file.grantId))
-      if (result.success) {
-        setChapters(result.chapters)
-        setTotalWords(result.totalWords)
+      const result = await ipc.invoke('import:inspect-source', files.map(file => file.grantId))
+      if (result.success && result.inspection) {
+        setInspection(result.inspection)
         setSplitDone(true)
       } else {
         setSplitError(result.error || text('拆章失败', 'Could not split chapters'))
@@ -83,45 +110,140 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     if (selected) setSavePath(selected)
   }, [])
 
+  const launchRun = useCallback((run: ImportRunSnapshot) => {
+    const project = useProjectStore.getState().currentProject
+    const projectSession = captureProjectSession(project)
+    if (!project || !projectSession) {
+      throw new Error(text('当前项目会话已失效，无法启动导入', 'The project session expired, so the import cannot start.'))
+    }
+    const workflow = createImportWorkflow({
+      run,
+      projectPath: project.path,
+      projectSession,
+      executionOwner: randomUUID(),
+    })
+    void startWorkflow(workflow, false).catch(error => {
+      console.error('[ImportNovel] 导入工作流失败:', error)
+    })
+    if (isProjectSessionCurrent(projectSession)) onClose()
+  }, [onClose, startWorkflow, text])
+
   /** 执行导入 */
   const handleImport = useCallback(async () => {
-    if (!name.trim() || !savePath.trim() || chapters.length === 0) return
+    if (
+      !inspection
+      || (targetMode === 'new' && (!name.trim() || !savePath.trim()))
+      || (targetMode === 'current' && !currentProject)
+    ) return
 
     setImporting(true)
+    setSplitError('')
+    setImportNotice('')
     try {
-      // 1. 创建项目骨架
-      const success = await createProject({
-        name: name.trim(),
-        path: savePath.trim(),
-        genre: '',
-        targetAudience: '',
-        writingLanguage: locale,
-      })
+      let project = useProjectStore.getState().currentProject
+      let projectSession = captureProjectSession(project)
+      if (targetMode === 'new') {
+        const success = await createProject({
+          name: name.trim(),
+          path: savePath.trim(),
+          genre: '',
+          targetAudience: '',
+          writingLanguage: locale,
+        })
+        if (!success) return
+        project = useProjectStore.getState().currentProject
+        projectSession = captureProjectSession(project)
+      }
+      if (!project || !projectSession) throw new Error(text(
+        '目标项目缺少有效会话，已拒绝导入',
+        'The target project has no valid session, so the import was rejected.',
+      ))
 
-      if (!success) {
-        setImporting(false)
+      const prepared = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:import-run-prepare-inspection',
+        {
+          runId: randomUUID(),
+          inspectionId: inspection.inspectionId,
+          purpose: 'reference',
+          locale,
+        },
+        project.path,
+      )
+      if (!prepared.success || !prepared.preparation) throw new Error(prepared.error || text(
+        '无法创建导入运行', 'Could not create the import run.',
+      ))
+      setInspection(null)
+      setSplitDone(false)
+      const preparation = prepared.preparation
+      if (preparation.classification === 'exact-duplicate') {
+        setImportNotice(text(
+          '该来源与已完成导入完全一致；未创建任务，也未调用模型。',
+          'This source exactly matches a completed import. No task or model call was created.',
+        ))
         return
       }
-
-      // 2. 启动导入工作流
-      const currentProject = useProjectStore.getState().currentProject
-      const projectSession = captureProjectSession(currentProject)
-      const projectPath = currentProject?.path
-      if (!projectPath || !projectSession) throw new Error('新项目未成功打开，无法启动导入工作流')
-      const workflow = createImportWorkflow({ chapters, projectPath, projectSession })
-      await startWorkflow(workflow, true) // 步进模式，方便用户观察
-
-      if (isProjectSessionCurrent(projectSession)) onClose()
+      if (preparation.classification === 'conflict') {
+        const chaptersText = preparation.conflictChapterNumbers.join(', ')
+        setSplitError(text(
+          `以下章节号已有不同参照内容，请先调整编号或拆分文件：${chaptersText}`,
+          `These chapter numbers already contain different reference content. Renumber or split them before importing: ${chaptersText}`,
+        ))
+        return
+      }
+      if (preparation.classification === 'resumable' && preparation.run) {
+        setResumableState({ projectLeaseId: projectSession.leaseId, run: preparation.run })
+        setImportNotice(text(
+          '发现同一来源的未完成导入，请选择继续或重新开始。',
+          'An unfinished import for this source is available. Continue it or start over.',
+        ))
+        return
+      }
+      if (!preparation.run) throw new Error(text('导入运行缺少持久化记录', 'The import run has no persisted record.'))
+      launchRun(preparation.run)
     } catch (e) {
       console.error('[ImportNovel] 导入失败:', e)
+      setSplitError(e instanceof Error ? e.message : String(e))
     } finally {
       setImporting(false)
     }
-  }, [name, savePath, chapters, createProject, startWorkflow, onClose, locale])
+  }, [
+    inspection, targetMode, currentProject,
+    name, savePath, createProject, locale, text, launchRun,
+  ])
+
+  const handleResume = useCallback(() => {
+    if (resumableRun) launchRun(resumableRun)
+  }, [launchRun, resumableRun])
+
+  const handleRestart = useCallback(async () => {
+    if (!resumableRun) return
+    const project = useProjectStore.getState().currentProject
+    const session = captureProjectSession(project)
+    if (!project || !session) return
+    setImporting(true)
+    try {
+      const result = await ipc.invokeWithProjectSession(
+        session,
+        'db:import-run-restart',
+        resumableRun.id,
+        randomUUID(),
+        project.path,
+      )
+      if (!result.success || !result.run) throw new Error(result.error || text(
+        '无法重新开始导入', 'Could not restart the import.',
+      ))
+      launchRun(result.run)
+    } catch (error) {
+      setSplitError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setImporting(false)
+    }
+  }, [launchRun, resumableRun, text])
 
   // 成本预估
-  const costEstimate = splitDone && chapters.length > 0
-    ? estimateImportCost(totalWords, chapters.length)
+  const costEstimate = splitDone && inspection
+    ? estimateImportCost(inspection.totalWords, inspection.chapterCount)
     : null
 
   return (
@@ -136,6 +258,65 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         </DialogHeader>
 
         <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+          <div>
+            <Label>{text('导入目标', 'Import destination')}</Label>
+            <div className="grid grid-cols-2 gap-2" role="group" aria-label={text('导入目标', 'Import destination')}>
+              <Button
+                type="button"
+                variant={targetMode === 'new' ? 'default' : 'outline'}
+                aria-pressed={targetMode === 'new'}
+                data-testid="import-target-new"
+                onClick={() => setTargetMode('new')}
+              >
+                {text('创建新项目', 'Create new project')}
+              </Button>
+              <Button
+                type="button"
+                variant={targetMode === 'current' ? 'default' : 'outline'}
+                aria-pressed={targetMode === 'current'}
+                data-testid="import-target-current"
+                disabled={!currentProject}
+                onClick={() => setTargetMode('current')}
+              >
+                {text('导入当前项目', 'Import into current project')}
+              </Button>
+            </div>
+            {targetMode === 'current' && currentProject && (
+              <div className="mt-2 text-xs" style={{ color: 'var(--color-text-secondary)' }} data-testid="import-current-project-name">
+                {text(`当前项目：${currentProject.name}`, `Current project: ${currentProject.name}`)}
+              </div>
+            )}
+          </div>
+
+          {targetMode === 'current' && resumableRun && (
+            <div
+              className="rounded-lg px-3 py-3 space-y-2"
+              style={{ border: '1px solid var(--color-warning)', backgroundColor: 'var(--color-hover)' }}
+              data-testid="import-resumable-run"
+            >
+              <div className="flex items-center gap-2 text-xs font-medium">
+                <RotateCcw size={14} />
+                {text('发现可继续的导入', 'Resumable import found')}
+              </div>
+              <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                {text(
+                  `阶段：${resumableRun.stage}；进度：${resumableRun.completedChapters}/${resumableRun.totalChapters}`,
+                  `Stage: ${resumableRun.stage}; progress: ${resumableRun.completedChapters}/${resumableRun.totalChapters}`,
+                )}
+                {resumableRun.lastError ? ` — ${resumableRun.lastError}` : ''}
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" onClick={handleResume} disabled={importing}>
+                  {text('继续导入', 'Continue import')}
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={handleRestart} disabled={importing}>
+                  <RotateCcw size={13} />
+                  {text('重新开始', 'Start over')}
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* ===== 文件选择 ===== */}
           <div>
             <Label>{text('选择小说文件', 'Reference files')}</Label>
@@ -177,28 +358,38 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             </div>
           )}
 
-          {splitDone && chapters.length > 0 && (
+          {importNotice && (
+            <div
+              className="px-3 py-2 rounded-lg text-xs"
+              style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-text-secondary)' }}
+              data-testid="import-classification-notice"
+            >
+              {importNotice}
+            </div>
+          )}
+
+          {splitDone && inspection && (
             <div className="rounded-lg overflow-hidden"
               style={{ border: '1px solid var(--color-border)' }}>
               {/* 统计头 */}
               <div className="flex items-center gap-4 px-3 py-2"
                 style={{ backgroundColor: 'var(--color-hover)' }}>
                 <span className="text-xs font-medium" style={{ color: 'var(--color-text)' }}>
-                  {text(`共 ${chapters.length} 章`, `${chapters.length} chapters`)}
+                  {text(`共 ${inspection.chapterCount} 章`, `${inspection.chapterCount} chapters`)}
                 </span>
                 <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  {text(`${totalWords.toLocaleString()} 字`, `${totalWords.toLocaleString()} words`)}
+                  {text(`${inspection.totalWords.toLocaleString()} 字`, `${inspection.totalWords.toLocaleString()} words`)}
                 </span>
                 <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
                   {text(
-                    `平均 ${Math.round(totalWords / chapters.length).toLocaleString()} 字/章`,
-                    `Average ${Math.round(totalWords / chapters.length).toLocaleString()} words/chapter`,
+                    `平均 ${Math.round(inspection.totalWords / inspection.chapterCount).toLocaleString()} 字/章`,
+                    `Average ${Math.round(inspection.totalWords / inspection.chapterCount).toLocaleString()} words/chapter`,
                   )}
                 </span>
               </div>
               {/* 章节列表（最多显示 8 行 + 省略） */}
               <div className="px-3 py-2 space-y-1" style={{ maxHeight: '160px', overflowY: 'auto' }}>
-                {chapters.slice(0, 8).map((ch) => (
+                {inspection.preview.map((ch) => (
                   <div key={ch.number} className="flex items-center justify-between text-xs">
                     <span style={{ color: 'var(--color-text-secondary)' }}>
                       {text(`第${ch.number}章 ${ch.title}`, `Chapter ${ch.number} ${ch.title}`)}
@@ -208,9 +399,12 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                     </span>
                   </div>
                 ))}
-                {chapters.length > 8 && (
+                {inspection.chapterCount > inspection.preview.length && (
                   <div className="text-xs text-center py-1" style={{ color: 'var(--color-text-muted)' }}>
-                    {text(`还有 ${chapters.length - 8} 章`, `${chapters.length - 8} more chapters`)}
+                    {text(
+                      `还有 ${inspection.chapterCount - inspection.preview.length} 章`,
+                      `${inspection.chapterCount - inspection.preview.length} more chapters`,
+                    )}
                   </div>
                 )}
               </div>
@@ -218,30 +412,34 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
           )}
 
           {/* ===== 项目信息 ===== */}
-          <div>
-            <Label>{text('新项目名称', 'New project name')}</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={text('拆解后创建的新项目名称', 'Name for the analyzed project')}
-            />
-          </div>
+          {targetMode === 'new' && (
+            <>
+              <div>
+                <Label>{text('新项目名称', 'New project name')}</Label>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={text('拆解后创建的新项目名称', 'Name for the analyzed project')}
+                />
+              </div>
 
-          <div>
-            <Label>{text('保存位置', 'Save location')}</Label>
-            <div className="flex gap-2">
-              <Input
-                value={savePath}
-                onChange={(e) => setSavePath(e.target.value)}
-                placeholder={text('选择项目保存目录', 'Choose a project folder')}
-                className="flex-1"
-              />
-              <Button variant="outline" onClick={handleSelectFolder}>
-                <FolderOpen size={14} />
-                {text('选择', 'Choose')}
-              </Button>
-            </div>
-          </div>
+              <div>
+                <Label>{text('保存位置', 'Save location')}</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={savePath}
+                    onChange={(e) => setSavePath(e.target.value)}
+                    placeholder={text('选择项目保存目录', 'Choose a project folder')}
+                    className="flex-1"
+                  />
+                  <Button variant="outline" onClick={handleSelectFolder}>
+                    <FolderOpen size={14} />
+                    {text('选择', 'Choose')}
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* ===== Token 预估 ===== */}
           {costEstimate && (
@@ -280,12 +478,19 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
           <Button variant="ghost" onClick={onClose}>{text('取消', 'Cancel')}</Button>
           <Button
             onClick={handleImport}
-            disabled={importing || !name.trim() || !savePath.trim() || chapters.length === 0}
+            disabled={
+              importing
+              || !inspection
+              || (targetMode === 'new' && (!name.trim() || !savePath.trim()))
+              || (targetMode === 'current' && !currentProject)
+            }
           >
             <FileUp size={14} />
             {importing
               ? text('拆解中...', 'Analyzing...')
-              : text(`开始拆解仿写（${chapters.length} 章）`, `Start analysis (${chapters.length} chapters)`)}
+              : targetMode === 'current'
+                ? text(`导入当前项目（${inspection?.chapterCount ?? 0} 章）`, `Import into current project (${inspection?.chapterCount ?? 0} chapters)`)
+                : text(`开始拆解仿写（${inspection?.chapterCount ?? 0} 章）`, `Start analysis (${inspection?.chapterCount ?? 0} chapters)`)}
           </Button>
         </DialogFooter>
       </DialogContent>

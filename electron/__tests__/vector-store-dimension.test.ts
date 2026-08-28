@@ -9,6 +9,7 @@ import {
   closeConnection,
   getChunksForBackfill,
   getConnection,
+  getDocumentIntegrity,
   getEmbeddingSpaces,
   listDocuments,
   getStats,
@@ -294,6 +295,20 @@ describe('知识库向量维度', () => {
       totalChunks: 1,
       importedAt: '2026-01-01T00:00:00.000Z',
     }], { schema: legacySchema })
+    const legacyDocumentSchema = new ArrowSchema([
+      new Field('id', new Utf8()),
+      new Field('fileName', new Utf8()),
+      new Field('importedAt', new Utf8()),
+      new Field('chunkCount', new Int32()),
+      new Field('filePath', new Utf8()),
+    ])
+    await db.createTable('documents', [{
+      id: 'legacy-document',
+      fileName: 'legacy.txt',
+      importedAt: '2026-01-01T00:00:00.000Z',
+      chunkCount: 1,
+      filePath: '',
+    }], { schema: legacyDocumentSchema })
 
     await expect(getEmbeddingSpaces(projectPath)).resolves.toEqual({
       version: 1,
@@ -309,7 +324,15 @@ describe('知识库向量维度', () => {
     await expect(search(projectPath, '旧知识库', legacyVector)).resolves.toEqual([
       expect.objectContaining({ fileName: 'legacy.txt', text: '旧知识库正文' }),
     ])
-    expect(await db.tableNames()).toEqual(['chunks'])
+    await expect(listDocuments(projectPath)).resolves.toEqual([
+      expect.objectContaining({ id: 'legacy-document', corpusKind: 'unknown' }),
+    ])
+    await expect(getDocumentIntegrity(projectPath, 'legacy-document')).resolves.toMatchObject({
+      corpusKind: 'unknown',
+      complete: true,
+      chunkCount: 1,
+    })
+    expect((await db.tableNames()).sort()).toEqual(['chunks', 'documents'])
   })
 
   it('旧 vectors.json 按真实 1536 维迁移，而不是回退到固定 2048', async () => {
@@ -799,6 +822,7 @@ describe('知识库向量维度', () => {
       new Field('chunkIndex', new Int32()),
       new Field('totalChunks', new Int32()),
       new Field('importedAt', new Utf8()),
+      new Field('corpusKind', new Utf8()),
     ])
     await db.createTable(candidate.tableName, [
       ...canonicalRows.map(row => ({ ...(row as Record<string, unknown>), vector: candidateVector })),
@@ -813,6 +837,7 @@ describe('知识库向量维度', () => {
         chunkIndex: 0,
         totalChunks: 1,
         importedAt: '2026-07-26T00:00:00.000Z',
+        corpusKind: 'unknown',
       },
     ], { schema: candidateSchema })
     fs.writeFileSync(path.join(projectPath, '.vela', 'embedding-spaces.json'), `${JSON.stringify({
@@ -1214,6 +1239,7 @@ describe('知识库向量维度', () => {
       new Field('chunkIndex', new Int32()),
       new Field('totalChunks', new Int32()),
       new Field('importedAt', new Utf8()),
+      new Field('corpusKind', new Utf8()),
     ])
     await db.createTable(candidate.tableName, [{
       ...(canonicalRows[0] as Record<string, unknown>),

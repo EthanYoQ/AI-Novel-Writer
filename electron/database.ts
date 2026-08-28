@@ -333,6 +333,127 @@ function createTables(db: BetterSqlite3.Database) {
 
     -- 索引
     CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls(created_at);
+
+    -- Reference imports are recoverable project facts, not generic workflow history.
+    CREATE TABLE IF NOT EXISTS import_runs (
+      id TEXT PRIMARY KEY,
+      purpose TEXT NOT NULL DEFAULT 'reference'
+        CHECK(purpose IN ('reference', 'author-manuscript')),
+      root_run_id TEXT NOT NULL,
+      effect_namespace TEXT NOT NULL,
+      source_fingerprint TEXT NOT NULL,
+      manifest_fingerprint TEXT NOT NULL,
+      source_display_json TEXT NOT NULL DEFAULT '[]',
+      locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
+      stage TEXT NOT NULL DEFAULT 'knowledge'
+        CHECK(stage IN ('knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed')),
+      status TEXT NOT NULL DEFAULT 'ready'
+        CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
+      completed_batches_json TEXT NOT NULL DEFAULT '{}',
+      last_error TEXT NOT NULL DEFAULT '',
+      resumable INTEGER NOT NULL DEFAULT 1 CHECK(resumable IN (0, 1)),
+      cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0, 1)),
+      execution_owner TEXT NOT NULL DEFAULT '',
+      execution_epoch INTEGER NOT NULL DEFAULT 0,
+      lease_expires_at INTEGER NOT NULL DEFAULT 0,
+      total_chapters INTEGER NOT NULL,
+      total_content_size INTEGER NOT NULL DEFAULT 0,
+      manifest_chapter_count INTEGER NOT NULL,
+      manifest_content_size INTEGER NOT NULL DEFAULT 0,
+      manifest_word_count INTEGER NOT NULL DEFAULT 0,
+      completed_chapters INTEGER NOT NULL DEFAULT 0,
+      base_run_id TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT DEFAULT NULL,
+      FOREIGN KEY (base_run_id) REFERENCES import_runs(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_runs_source_status
+      ON import_runs(source_fingerprint, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_import_runs_resumable
+      ON import_runs(resumable, status, updated_at);
+
+    CREATE TABLE IF NOT EXISTS import_run_chapters (
+      run_id TEXT NOT NULL,
+      chapter_number INTEGER NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      content_fingerprint TEXT NOT NULL,
+      content_size INTEGER NOT NULL,
+      content_snapshot TEXT NOT NULL,
+      PRIMARY KEY (run_id, chapter_number),
+      FOREIGN KEY (run_id) REFERENCES import_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_run_chapters_page
+      ON import_run_chapters(run_id, chapter_number);
+
+    CREATE TABLE IF NOT EXISTS import_source_identity (
+      id TEXT PRIMARY KEY,
+      salt_hex TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS import_run_receipts (
+      run_id TEXT NOT NULL,
+      effect_namespace TEXT NOT NULL,
+      effect_key TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      batch_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'prepared' CHECK(state IN ('prepared', 'committed')),
+      effect_receipt_json TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (run_id, stage, batch_id),
+      UNIQUE (effect_namespace, effect_key),
+      FOREIGN KEY (run_id) REFERENCES import_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_run_receipts_state
+      ON import_run_receipts(run_id, state, stage);
+
+    CREATE TABLE IF NOT EXISTS import_reference_documents (
+      document_id TEXT PRIMARY KEY,
+      idempotency_key_hash TEXT NOT NULL UNIQUE,
+      content_hash TEXT NOT NULL,
+      chunk_set_hash TEXT NOT NULL,
+      expected_chunk_count INTEGER NOT NULL,
+      corpus_kind TEXT NOT NULL CHECK(corpus_kind = 'reference'),
+      state TEXT NOT NULL DEFAULT 'prepared' CHECK(state IN ('prepared', 'committed')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `)
+
+  // Import-run columns were introduced incrementally during pre-release development.
+  // Existing project databases must receive the same lease and manifest invariants.
+  const importRunColumns = new Set(
+    (db.prepare('PRAGMA table_info(import_runs)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  const addImportRunColumn = (name: string, definition: string) => {
+    if (importRunColumns.has(name)) return
+    db.exec(`ALTER TABLE import_runs ADD COLUMN ${name} ${definition}`)
+    importRunColumns.add(name)
+  }
+  addImportRunColumn('execution_owner', "TEXT NOT NULL DEFAULT ''")
+  addImportRunColumn('execution_epoch', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('lease_expires_at', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('manifest_chapter_count', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('manifest_content_size', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('manifest_word_count', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('purpose', "TEXT NOT NULL DEFAULT 'reference'")
+  addImportRunColumn('root_run_id', "TEXT NOT NULL DEFAULT ''")
+  addImportRunColumn('effect_namespace', "TEXT NOT NULL DEFAULT ''")
+  db.exec(`
+    UPDATE import_runs
+    SET manifest_chapter_count = CASE WHEN manifest_chapter_count = 0 THEN total_chapters ELSE manifest_chapter_count END,
+        manifest_content_size = CASE WHEN manifest_content_size = 0 THEN total_content_size ELSE manifest_content_size END,
+        root_run_id = CASE WHEN root_run_id = '' THEN id ELSE root_run_id END,
+        effect_namespace = CASE WHEN effect_namespace = '' THEN 'import:reference:' || id ELSE effect_namespace END
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_import_runs_purpose_source_status
+      ON import_runs(purpose, source_fingerprint, status, updated_at)
   `)
 
   // 角色事实继续存放于 characters；这里仅建立 revision、迁移与幂等元数据。

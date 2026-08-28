@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { chunkText, generateEmbeddings } from './embedding'
 import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
 import { EmbeddingResponseValidationError } from './services/embedding-response-error'
@@ -28,11 +28,14 @@ import {
   migrateFromJSON,
   getChunksWithoutVectors as storeGetChunksWithoutVectors,
   getCanonicalChunksForEmbeddingRebuild,
+  getDocumentIntegrity,
+  hashCanonicalChunkSet,
   planEmbeddingRebuild,
   activatePlannedEmbeddingSpace,
   rebuildPlannedEmbeddingSpace,
   type EmbeddingSpaceIdentity,
 } from './vector-store'
+import { getProjectDb } from './database'
 
 // ===== 迁移状态跟踪 =====
 
@@ -330,7 +333,7 @@ function parseChapterMetaFromFileName(fileName: string): { chapterNumber?: numbe
   return undefined
 }
 
-export async function importText(
+async function importTextInternal(
   text: string,
   fileName: string,
   projectPath: string,
@@ -342,11 +345,11 @@ export async function importText(
 
     await ensureMigration(projectPath)
 
+    const docId = randomUUID()
+
     // 分块
     const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
     const chunks = chunkText(text, embeddingOptions.chunkSize, embeddingOptions.chunkOverlap)
-    const docId = randomUUID()
-
     // 解析章节元数据（从文件名提取）
     const chapterMeta = parseChapterMetaFromFileName(fileName)
 
@@ -384,6 +387,146 @@ export async function importText(
     }
 
     return { success: true, docId, chunkCount: chunks.length }
+  } catch (error) {
+    return { success: false, ...migrationFailureDetails(error) }
+  }
+}
+
+export async function importText(
+  text: string,
+  fileName: string,
+  projectPath: string,
+  protocol: 'openai' | 'gemini',
+  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
+  return importTextInternal(
+    text,
+    fileName,
+    projectPath,
+    protocol,
+    model,
+  )
+}
+
+/** Reference-import-only seam with a stable identity; ordinary/finalized text keeps legacy behavior. */
+export async function importReferenceText(
+  text: string,
+  fileName: string,
+  idempotencyKey: string,
+  projectPath: string,
+  protocol: 'openai' | 'gemini',
+  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+): Promise<{ success: boolean; docId?: string; chunkCount?: number; idempotent?: boolean; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
+  const stableKey = idempotencyKey.trim()
+  if (!stableKey || stableKey.length > 512 || !/^[\w:.-]+$/u.test(stableKey)) {
+    return { success: false, error: '参照导入幂等键无效' }
+  }
+  const documentId = createHash('sha256').update(`reference-import:${stableKey}`, 'utf8').digest('hex')
+  try {
+    if (!text.trim()) return { success: false, error: '文本内容为空' }
+    await ensureMigration(projectPath)
+    const projectDb = getProjectDb()
+    if (!projectDb) return { success: false, error: '项目数据库未打开' }
+    const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
+    const chunks = chunkText(text, embeddingOptions.chunkSize, embeddingOptions.chunkOverlap)
+    const contentHash = createHash('sha256').update(text, 'utf8').digest('hex')
+    const chunkSetHash = hashCanonicalChunkSet(chunks)
+    const keyHash = createHash('sha256').update(stableKey, 'utf8').digest('hex')
+
+    const receipt = projectDb.prepare(`
+      SELECT document_id, idempotency_key_hash, content_hash, chunk_set_hash,
+             expected_chunk_count, corpus_kind, state
+      FROM import_reference_documents
+      WHERE document_id = ? OR idempotency_key_hash = ?
+    `).get(documentId, keyHash) as {
+      document_id: string
+      idempotency_key_hash: string
+      content_hash: string
+      chunk_set_hash: string
+      expected_chunk_count: number
+      corpus_kind: string
+      state: 'prepared' | 'committed'
+    } | undefined
+    if (receipt && (
+      receipt.document_id !== documentId
+      || receipt.idempotency_key_hash !== keyHash
+      || receipt.content_hash !== contentHash
+      || receipt.chunk_set_hash !== chunkSetHash
+      || receipt.expected_chunk_count !== chunks.length
+      || receipt.corpus_kind !== 'reference'
+    )) return { success: false, error: '参照导入幂等键已绑定不同内容' }
+    if (!receipt) {
+      projectDb.prepare(`
+        INSERT INTO import_reference_documents (
+          document_id, idempotency_key_hash, content_hash, chunk_set_hash,
+          expected_chunk_count, corpus_kind, state
+        ) VALUES (?, ?, ?, ?, ?, 'reference', 'prepared')
+      `).run(documentId, keyHash, contentHash, chunkSetHash, chunks.length)
+    }
+
+    const existingIntegrity = await getDocumentIntegrity(projectPath, documentId)
+    if (
+      existingIntegrity?.complete
+      && existingIntegrity.corpusKind === 'reference'
+      && existingIntegrity.chunkCount === chunks.length
+      && existingIntegrity.chunkSetHash === chunkSetHash
+    ) {
+      projectDb.prepare(`
+        UPDATE import_reference_documents
+        SET state = 'committed', updated_at = datetime('now')
+        WHERE document_id = ?
+      `).run(documentId)
+      return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: true }
+    }
+    if (existingIntegrity && !await removeDocFromStore(projectPath, documentId)) {
+      return { success: false, error: '残缺参照文档无法安全清理' }
+    }
+    projectDb.prepare(`
+      UPDATE import_reference_documents
+      SET state = 'prepared', updated_at = datetime('now')
+      WHERE document_id = ?
+    `).run(documentId)
+
+    let vectors: number[][] | undefined
+    if (model.apiKey) {
+      try {
+        vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
+      } catch (error) {
+        if (error instanceof EmbeddingResponseValidationError) throw error
+        console.warn('[Vela KB] reference import embedding failed; using FTS-only:', error)
+      }
+    }
+    const result = await addChunks(
+      projectPath,
+      documentId,
+      fileName,
+      chunks,
+      vectors,
+      undefined,
+      {
+        ...parseChapterMetaFromFileName(fileName),
+        corpusKind: 'reference',
+        replacementMode: 'stable-id',
+      },
+      embeddingSpaceFor(protocol, model),
+    )
+    if (!result.success) return { success: false, error: result.error }
+    const committedIntegrity = await getDocumentIntegrity(projectPath, documentId)
+    if (
+      !committedIntegrity?.complete
+      || committedIntegrity.corpusKind !== 'reference'
+      || committedIntegrity.chunkCount !== chunks.length
+      || committedIntegrity.chunkSetHash !== chunkSetHash
+    ) {
+      await removeDocFromStore(projectPath, documentId)
+      return { success: false, error: '参照文档完整性校验失败' }
+    }
+    projectDb.prepare(`
+      UPDATE import_reference_documents
+      SET state = 'committed', updated_at = datetime('now')
+      WHERE document_id = ?
+    `).run(documentId)
+    return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: false }
   } catch (error) {
     return { success: false, ...migrationFailureDetails(error) }
   }

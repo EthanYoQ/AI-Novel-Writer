@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { closeProjectDatabase, getCurrentProjectPath } from '../database'
 import { projectAccess } from '../services/project-access'
@@ -21,6 +21,15 @@ import { FinalizationRepository } from '../repositories/finalization-repository'
 import type { FinalizedDraftImportRequest } from '../../src/shared/finalized-draft-import'
 import { ImportGlobalFactsRepository } from '../repositories/import-global-facts-repository'
 import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
+import { ImportRunRepository } from '../repositories/import-run-repository'
+import type {
+  ImportRunExecutionLease,
+  ImportRunPrepareEffectReceiptRequest,
+  ImportRunPrepareFromInspectionRequest,
+  ImportRunStage,
+} from '../../src/shared/import-run'
+import { ImportSourceIdentityRepository } from '../repositories/import-source-identity-repository'
+import { importInspectionStore } from '../services/import-inspection-store'
 import { RevisionRepository } from '../repositories/revision-repository'
 import { ReviewRepository } from '../repositories/review-repository'
 import { PostProcessRepository } from '../repositories/post-process-repository'
@@ -36,6 +45,18 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:project-core-update',
   'db:import-global-facts-commit',
   'db:project-clear-generated-data',
+  'db:import-run-prepare-inspection',
+  'db:import-run-start-resume',
+  'db:import-run-effect-receipt-prepare',
+  'db:import-run-effect-receipt-commit',
+  'db:import-run-renew-execution',
+  'db:import-run-restart',
+  'db:import-run-request-cancel',
+  'db:import-run-cancel-at-boundary',
+  'db:import-run-complete-batch',
+  'db:import-run-advance-stage',
+  'db:import-run-fail',
+  'db:import-run-complete',
   'db:blueprint-upsert',
   'db:blueprint-upsert-many',
   'db:blueprint-commit-range',
@@ -134,6 +155,188 @@ export function registerDatabaseController() {
       console.error('[db:project-clear-generated-data] 失败:', err)
       return { success: false, error: String(err) }
     }
+  })
+
+  ipcMain.handle('db:import-run-prepare-inspection', async (
+    event,
+    request: ImportRunPrepareFromInspectionRequest,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    if (request.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
+    const inspection = importInspectionStore.consume(
+      request.inspectionId,
+      (event as IpcMainInvokeEvent).sender.id,
+    )
+    const sourceFingerprint = ImportSourceIdentityRepository.digest(
+      inspection.sources.map(source => ({ stableFileId: source.stableFileId })),
+      request.purpose,
+    )
+    return {
+      success: true,
+      preparation: ImportRunRepository.prepare({
+        runId: request.runId,
+        purpose: request.purpose,
+        sourceFingerprint,
+        sourceDisplay: inspection.sources.map(source => ({
+          displayName: source.displayName,
+          mediaType: source.mediaType,
+          size: source.size,
+        })),
+        locale: request.locale,
+        chapters: inspection.chapters,
+      }),
+    }
+  })
+
+  ipcMain.handle('db:import-run-get', async (_event, runId: string, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return ImportRunRepository.get(runId)
+  })
+
+  ipcMain.handle('db:import-run-list-resumable', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return ImportRunRepository.listResumable()
+  })
+
+  ipcMain.handle('db:import-run-list-chapters', async (
+    _event,
+    runId: string,
+    afterChapterNumber: number,
+    limit: number,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return ImportRunRepository.listChapterBatch(runId, { afterChapterNumber, limit })
+  })
+
+  ipcMain.handle('db:import-run-effect-receipt-get', async (
+    _event,
+    runId: string,
+    stage: ImportRunStage,
+    batchId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return ImportRunRepository.getEffectReceipt(runId, stage, batchId)
+  })
+
+  ipcMain.handle('db:import-run-effect-receipt-prepare', async (
+    _event,
+    request: ImportRunPrepareEffectReceiptRequest,
+    execution: ImportRunExecutionLease,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, receipt: ImportRunRepository.prepareEffectReceipt(request, execution) }
+  })
+
+  ipcMain.handle('db:import-run-effect-receipt-commit', async (
+    _event,
+    runId: string,
+    stage: ImportRunStage,
+    batchId: string,
+    execution: ImportRunExecutionLease,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, result: ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution) }
+  })
+
+  ipcMain.handle('db:import-run-start-resume', async (
+    _event,
+    runId: string,
+    owner: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, start: ImportRunRepository.startOrResume(runId, owner) }
+  })
+
+  ipcMain.handle('db:import-run-renew-execution', async (
+    _event,
+    runId: string,
+    execution: ImportRunExecutionLease,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, execution: ImportRunRepository.renewExecution(runId, execution) }
+  })
+
+  ipcMain.handle('db:import-run-restart', async (
+    _event,
+    runId: string,
+    nextRunId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, run: ImportRunRepository.restart(runId, nextRunId) }
+  })
+
+  ipcMain.handle('db:import-run-request-cancel', async (
+    _event,
+    runId: string,
+    execution: ImportRunExecutionLease,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, run: ImportRunRepository.requestCancel(runId, execution) }
+  })
+
+  ipcMain.handle('db:import-run-cancel-at-boundary', async (
+    _event,
+    runId: string,
+    execution: ImportRunExecutionLease,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, run: ImportRunRepository.cancelAtBoundary(runId, execution) }
+  })
+
+  ipcMain.handle('db:import-run-complete-batch', async (
+    _event,
+    runId: string,
+    stage: ImportRunStage,
+    batchId: string,
+    execution: ImportRunExecutionLease,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, ...ImportRunRepository.completeBatch(runId, stage, batchId, execution) }
+  })
+
+  ipcMain.handle('db:import-run-advance-stage', async (
+    _event,
+    runId: string,
+    completedStage: ImportRunStage,
+    nextStage: ImportRunStage,
+    execution: ImportRunExecutionLease,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, run: ImportRunRepository.advanceStage(runId, completedStage, nextStage, execution) }
+  })
+
+  ipcMain.handle('db:import-run-fail', async (
+    _event,
+    runId: string,
+    stage: ImportRunStage,
+    errorMessage: string,
+    execution: ImportRunExecutionLease,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, run: ImportRunRepository.fail(runId, stage, errorMessage, execution) }
+  })
+
+  ipcMain.handle('db:import-run-complete', async (
+    _event,
+    runId: string,
+    execution: ImportRunExecutionLease,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, run: ImportRunRepository.complete(runId, execution) }
   })
 
   // ============================================================

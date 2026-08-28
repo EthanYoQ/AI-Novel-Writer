@@ -1,6 +1,9 @@
 import { app, ipcMain, dialog } from 'electron'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { realpathSync, statSync } from 'node:fs'
 import { externalFileGrants } from '../services/external-file-grant-service'
+import { importInspectionStore } from '../services/import-inspection-store'
 import { mainText } from '../i18n'
 import {
   windowsSafeFileSystem,
@@ -32,6 +35,15 @@ const RE_MD_HEADING = /^#{1,3}\s+(?:第[一二三四五六七八九十百千零\
 const CHAPTER_PATTERNS = [RE_CN_CHAPTER, RE_EN_CHAPTER, RE_MD_HEADING]
 
 const IMPORT_GRANT_TTL_MS = 5 * 60 * 1000
+
+export type ImportFileIdentityProvider = (filePath: string) => string
+
+/** Raw identities never leave main-process memory; project storage only receives a salted HMAC. */
+function defaultFileIdentity(filePath: string): string {
+  const stats = statSync(filePath, { bigint: true })
+  if (stats.ino !== 0n) return `dev:${stats.dev.toString()}:ino:${stats.ino.toString()}`
+  return `canonical:${realpathSync.native(filePath)}`
+}
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
@@ -107,6 +119,16 @@ interface ParsedChapter {
   title: string
   content: string
   wordCount: number
+  contentFingerprint?: string
+  contentSize?: number
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function sourceMediaType(displayName: string): string {
+  return path.extname(displayName).toLowerCase() === '.md' ? 'text/markdown' : 'text/plain'
 }
 
 /** 将单个文件内容拆分为章节数组 */
@@ -170,7 +192,9 @@ function hasChapterHeadings(content: string): boolean {
 
 export function registerImportController(
   fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
+  fileIdentity: ImportFileIdentityProvider = defaultFileIdentity,
 ) {
+  const grantSourceIdentities = new Map<string, string>()
   // ===== 文件选择对话框 =====
   ipcMain.handle('dialog:select-novel-files', async (event) => {
     const result = await dialog.showOpenDialog({
@@ -182,7 +206,8 @@ export function registerImportController(
       properties: ['openFile', 'multiSelections'],
     })
     if (result.canceled || result.filePaths.length === 0) return null
-    return result.filePaths.map((filePath) => {
+    const grants = result.filePaths.map((filePath) => {
+      const stableFileId = fileIdentity(filePath)
       const grant = externalFileGrants.issueFile({
         webContentsId: event.sender.id,
         filePath,
@@ -190,29 +215,50 @@ export function registerImportController(
         ttlMs: IMPORT_GRANT_TTL_MS,
         maxUses: 1,
       })
-      event.sender.once('destroyed', () => externalFileGrants.revoke(grant.grantId))
+      grantSourceIdentities.set(grant.grantId, stableFileId)
       return { grantId: grant.grantId, displayName: path.basename(filePath) }
     })
+    event.sender.once('destroyed', () => {
+      for (const grant of grants) {
+        externalFileGrants.revoke(grant.grantId)
+        grantSourceIdentities.delete(grant.grantId)
+      }
+      importInspectionStore.revokeForWebContents(event.sender.id)
+    })
+    return grants
   })
 
   // ===== 读取并拆分章节 =====
-  ipcMain.handle('import:split-chapters', async (event, grantIds: string[]) => {
+  ipcMain.handle('import:inspect-source', async (event, grantIds: string[]) => {
     try {
       const allChapters: ParsedChapter[] = []
       if (!Array.isArray(grantIds) || grantIds.length === 0) {
         throw new Error(text('未选择可导入的小说文件', 'No novel files were selected for import'))
       }
-      const fileCapabilities = grantIds.map((grantId) => externalFileGrants.resolve({
-        grantId,
-        webContentsId: event.sender.id,
-        operation: 'read',
-      }))
+      const fileCapabilities = grantIds.map((grantId) => {
+        const stableFileId = grantSourceIdentities.get(grantId)
+        if (!stableFileId) throw new Error('IMPORT_SOURCE_IDENTITY_MISSING')
+        const capability = externalFileGrants.resolve({
+          grantId,
+          webContentsId: event.sender.id,
+          operation: 'read',
+        })
+        grantSourceIdentities.delete(grantId)
+        return { capability, stableFileId }
+      })
+      const sources: Array<{ stableFileId: string; displayName: string; mediaType: string; size: number }> = []
 
       if (fileCapabilities.length === 1) {
         // ===== 单文件模式 =====
-        const fileCapability = fileCapabilities[0]
-        const content = await fileSystem.readText(fileCapability)
-        const fileName = path.basename(fileCapability.relativePath)
+        const selected = fileCapabilities[0]
+        let content = await fileSystem.readText(selected.capability)
+        const fileName = path.basename(selected.capability.relativePath)
+        sources.push({
+          stableFileId: selected.stableFileId,
+          displayName: fileName,
+          mediaType: sourceMediaType(fileName),
+          size: Buffer.byteLength(content, 'utf8'),
+        })
 
         if (hasChapterHeadings(content)) {
           // 文件内含章节标题 → 正则拆章
@@ -220,25 +266,34 @@ export function registerImportController(
           allChapters.push(...chapters)
         } else {
           // 无章节标题 → 整文件视为一章
+          const trimmed = content.trim()
           allChapters.push({
             number: 1,
             title: path.basename(fileName, path.extname(fileName)),
-            content: content.trim(),
-            wordCount: content.trim().length,
+            content: trimmed,
+            wordCount: trimmed.length,
           })
         }
+        content = ''
       } else {
         // ===== 多文件模式 =====
         // 按文件名自然排序
         const sorted = [...fileCapabilities].sort((a, b) => {
-          const nameA = path.basename(a.relativePath)
-          const nameB = path.basename(b.relativePath)
+          const nameA = path.basename(a.capability.relativePath)
+          const nameB = path.basename(b.capability.relativePath)
           return nameA.localeCompare(nameB, 'zh-CN', { numeric: true })
         })
 
         for (let i = 0; i < sorted.length; i++) {
-          const fileCapability = sorted[i]
-          const content = (await fileSystem.readText(fileCapability)).trim()
+          const selected = sorted[i]
+          let content = (await fileSystem.readText(selected.capability)).trim()
+          const sourceFileName = path.basename(selected.capability.relativePath)
+          sources.push({
+            stableFileId: selected.stableFileId,
+            displayName: sourceFileName,
+            mediaType: sourceMediaType(sourceFileName),
+            size: Buffer.byteLength(content, 'utf8'),
+          })
           if (!content) continue
 
           // 尝试从文件内容中检测章节标题
@@ -248,7 +303,6 @@ export function registerImportController(
             allChapters.push(...chapters)
           } else {
             // 文件内无章节标题 → 整文件视为一章
-            const sourceFileName = path.basename(fileCapability.relativePath)
             const fileName = path.basename(sourceFileName, path.extname(sourceFileName))
             const num = extractChapterNumber(fileName) || (allChapters.length + 1)
             allChapters.push({
@@ -258,6 +312,7 @@ export function registerImportController(
               wordCount: content.length,
             })
           }
+          content = ''
         }
       }
 
@@ -265,20 +320,17 @@ export function registerImportController(
       const renumbered = allChapters.map((ch, idx) => ({
         ...ch,
         number: idx + 1,
+        contentFingerprint: sha256(ch.content),
+        contentSize: Buffer.byteLength(ch.content, 'utf8'),
       }))
-
-      const totalWords = renumbered.reduce((sum, ch) => sum + ch.wordCount, 0)
 
       return {
         success: true,
-        chapters: renumbered,
-        totalWords,
+        inspection: importInspectionStore.create({ webContentsId: event.sender.id, sources, chapters: renumbered }),
       }
     } catch {
       return {
         success: false,
-        chapters: [],
-        totalWords: 0,
         error: text('无法读取所选文件；请重新选择后再试。', 'Could not read the selected files. Please choose them again.'),
       }
     }

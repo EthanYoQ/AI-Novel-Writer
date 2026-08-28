@@ -236,6 +236,27 @@ export function registerKBController(
     return knowledgeBaseLoader.run((kb) => kb.importText(text, fileName, projectPath, protocol, model))
   })
 
+  ipcMain.handle('kb:import-reference-text', async (
+    _event,
+    text: string,
+    fileName: string,
+    idempotencyKey: string,
+    expectedProjectPath: string,
+  ) => {
+    const projectPath = requireProjectPath(expectedProjectPath)
+    const embConfig = getEmbeddingConfig()
+    const protocol = embConfig?.protocol ?? 'openai'
+    const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
+    return knowledgeBaseLoader.run((kb) => kb.importReferenceText(
+      text,
+      fileName,
+      idempotencyKey,
+      projectPath,
+      protocol,
+      model,
+    ))
+  })
+
   ipcMain.handle('kb:search', async (_event, query: string, topK: number | undefined, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()

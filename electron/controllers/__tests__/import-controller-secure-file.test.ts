@@ -51,11 +51,16 @@ describe('novel import external-file capability', () => {
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [selected] })
 
     const selection = await handler('dialog:select-novel-files')(event()) as Array<{ grantId: string }>
-    await expect(handler('import:split-chapters')(event(), [selection[0].grantId])).resolves.toMatchObject({
+    const result = await handler('import:inspect-source')(event(), [selection[0].grantId])
+    expect(result).toMatchObject({
       success: true,
-      totalWords: '正常内容'.length,
-      chapters: [{ number: 1, content: '正常内容' }],
+      inspection: {
+        chapterCount: 1,
+        totalWords: '正常内容'.length,
+        preview: [{ number: 1 }],
+      },
     })
+    expect(JSON.stringify(result)).not.toContain('正常内容')
   })
 
   it('does not import outside content when the selected file parent becomes a junction after grant issuance', async () => {
@@ -73,10 +78,8 @@ describe('novel import external-file capability', () => {
     fs.rmSync(guardedDirectory, { recursive: true, force: true })
     fs.symlinkSync(outsideDirectory, guardedDirectory, 'junction')
 
-    await expect(handler('import:split-chapters')(event(), [selection[0].grantId])).resolves.toMatchObject({
+    await expect(handler('import:inspect-source')(event(), [selection[0].grantId])).resolves.toMatchObject({
       success: false,
-      chapters: [],
-      totalWords: 0,
     })
   })
 })

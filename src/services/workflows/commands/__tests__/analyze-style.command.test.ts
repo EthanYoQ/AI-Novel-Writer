@@ -105,6 +105,30 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
     )
   })
 
+  it('uses the durable import commit adapter instead of a separate project-core write', async () => {
+    const invoke = stubIpcInvoke()
+    const persistWritingStyle = vi.fn(async () => undefined)
+    const command = new RuntimeAnalyzeWritingStyleCommand(
+      { sampleTexts: ['短句密集，动作推进快，对话有压迫感。'] },
+      workflowRuntimeDependencies,
+      persistWritingStyle,
+    )
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+      '节奏偏快，动作描写密集，对话短促有压迫感。',
+    )
+
+    const result = await command.execute({ step: {}, context, callbacks })
+
+    expect(persistWritingStyle).toHaveBeenCalledOnce()
+    expect(persistWritingStyle).toHaveBeenCalledWith(result)
+    expect(invoke).not.toHaveBeenCalledWith(
+      'db:project-core-update',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
   it('keeps visible analysis logs in the frozen English UI locale', async () => {
     stubIpcInvoke()
     const englishContext: WorkflowContext = {

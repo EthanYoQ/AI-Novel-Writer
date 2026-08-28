@@ -28,6 +28,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
   constructor(
     private options: AnalyzeWritingStyleOptions = {},
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
+    private readonly persistWritingStyle?: (writingStyle: string) => Promise<void>,
   ) {
     super(generationDependencies)
   }
@@ -116,14 +117,18 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
 
     // 先持久化，成功后再更新内存态，避免 DB 保存失败时 UI 残留未落库的文风。
     this.assertNotCancelled(context)
-    const saveResult = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:project-core-update',
-      { writingStyle: cleanResult },
-      context.projectPath,
-    )
-    if (!saveResult.success) {
-      throw new Error(saveResult.error || text('文风特征保存失败', 'Failed to save the writing-style profile.'))
+    if (this.persistWritingStyle) {
+      await this.persistWritingStyle(cleanResult)
+    } else {
+      const saveResult = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:project-core-update',
+        { writingStyle: cleanResult },
+        context.projectPath,
+      )
+      if (!saveResult.success) {
+        throw new Error(saveResult.error || text('文风特征保存失败', 'Failed to save the writing-style profile.'))
+      }
     }
     if (!sameProjectSessionContext(
       projectSession,
