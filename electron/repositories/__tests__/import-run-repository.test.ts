@@ -547,7 +547,9 @@ describe('ImportRunRepository', () => {
     ])
 
     expect(finalizeA()).toMatchObject({ classification: 'new', newChapterNumbers: [1] })
-    expect(() => finalizeAPlusB()).toThrow(/相同来源/)
+    expect(() => finalizeAPlusB()).toThrow(
+      'Another resumable import already contains the same source. Complete or cancel that import, then try again.',
+    )
     expect(ImportRunRepository.get('run-a-plus-b')).toMatchObject({ stage: 'parsing', status: 'ready' })
     expect(ImportRunRepository.listChapterBatch('run-a-plus-b', { afterChapterNumber: 0, limit: 10 }))
       .toEqual([])
@@ -585,7 +587,9 @@ describe('ImportRunRepository', () => {
     const finalizeOverlap = prepareParsedRun('overlapping-source', [
       { id: SOURCE_A, fingerprint: 'a'.repeat(64), content: 'changed A chapter' },
     ])
-    expect(() => finalizeOverlap()).toThrow(/相同来源/)
+    expect(() => finalizeOverlap()).toThrow(
+      'Another resumable import already contains the same source. Complete or cancel that import, then try again.',
+    )
     expect(ImportRunRepository.get('overlapping-source')).toMatchObject({ stage: 'parsing', status: 'ready' })
   })
 
