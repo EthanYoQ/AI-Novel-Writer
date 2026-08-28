@@ -51,6 +51,7 @@ function authorizedReference(content: string, sourceIdentity: string) {
   ).stableKey
   return {
     idempotencyKey,
+    release: () => ImportRunRepository.cancelAtBoundary(prepared.run!.id, started.execution),
     import: (fileName: string) => importReferenceText(
       content,
       fileName,
@@ -279,10 +280,12 @@ describe('stable reference knowledge receipt', () => {
   })
 
   it('keeps same-name reference documents from distinct source identities and marks their corpus', async () => {
-    const first = await authorizedReference('Source A reference', 'source-a').import('Chapter 1.txt')
+    const firstReference = authorizedReference('Source A reference', 'source-a')
+    const first = await firstReference.import('Chapter 1.txt')
+    expect(first).toMatchObject({ success: true, idempotent: false })
+    expect(firstReference.release()).toMatchObject({ status: 'cancelled' })
     const second = await authorizedReference('Source B reference', 'source-b').import('Chapter 1.txt')
 
-    expect(first).toMatchObject({ success: true, idempotent: false })
     expect(second).toMatchObject({ success: true, idempotent: false })
     expect(second.docId).not.toBe(first.docId)
     const documents = await listDocuments(projectPath)
