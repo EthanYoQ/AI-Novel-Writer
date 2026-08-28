@@ -21,9 +21,32 @@ vi.mock('electron', () => ({
 }))
 
 import { registerImportController } from '../import-controller'
-import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
+import {
+  windowsSafeFileSystem,
+  type WindowsSafeFileSystem,
+} from '../../security/windows-safe-file-system'
+import { ExternalFileGrantService } from '../../services/external-file-grant-service'
+import { ImportInspectionStore } from '../../services/import-inspection-store'
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-import-secure-'))
+let grants: ExternalFileGrantService
+let inspections: ImportInspectionStore
+let nextGrantId = 0
+
+function register(
+  fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
+  fileIdentity = (filePath: string) => ({ canonicalLocation: filePath }),
+  limits: { maxSourceFiles?: number; maxChapters?: number; maxTotalBytes?: number } = {},
+) {
+  registerImportController(
+    fileSystem,
+    fileIdentity,
+    limits,
+    grants,
+    inspections,
+    Buffer.alloc(32, 42),
+  )
+}
 
 function handler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel)
@@ -62,7 +85,10 @@ describe('novel import external-file capability', () => {
   beforeEach(() => {
     mocks.handlers.clear()
     mocks.showOpenDialog.mockReset()
-    registerImportController()
+    nextGrantId = 0
+    grants = new ExternalFileGrantService({ newGrantId: () => `import-grant-${++nextGrantId}` })
+    inspections = new ImportInspectionStore()
+    register()
   })
 
   afterAll(() => {
@@ -74,10 +100,7 @@ describe('novel import external-file capability', () => {
     fs.writeFileSync(selected, '第1章 开始\n正常内容', 'utf8')
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [selected] })
 
-    const selection = await handler('dialog:select-novel-files')(event()) as Array<{ grantId: string }>
-    expect(JSON.stringify(selection)).not.toContain(temporaryRoot)
-    expect(JSON.stringify(selection)).not.toContain('dev:')
-    const result = await handler('import:inspect-source')(event(), [selection[0].grantId])
+    const result = await handler('dialog:select-novel-files')(event())
     expect(result).toMatchObject({
       success: true,
       inspection: {
@@ -89,6 +112,11 @@ describe('novel import external-file capability', () => {
     expect(JSON.stringify(result)).not.toContain('正常内容')
     expect(JSON.stringify(result)).not.toContain(temporaryRoot)
     expect(JSON.stringify(result)).not.toContain('dev:')
+    expect(JSON.stringify(result)).not.toContain('grantId')
+    expect(JSON.stringify(result)).not.toContain('canonicalLocation')
+    expect(JSON.stringify(result)).not.toContain('fileIdentity')
+    expect(grants.activeCount()).toBe(0)
+    expect(inspections.activeCount()).toBe(1)
   })
 
   it('does not import outside content when the selected file parent becomes a junction after grant issuance', async () => {
@@ -102,13 +130,21 @@ describe('novel import external-file capability', () => {
     fs.writeFileSync(path.join(outsideDirectory, 'novel.txt'), '第1章 外部\n外部内容', 'utf8')
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [selected] })
 
-    const selection = await handler('dialog:select-novel-files')(event()) as Array<{ grantId: string }>
-    fs.rmSync(guardedDirectory, { recursive: true, force: true })
-    fs.symlinkSync(outsideDirectory, guardedDirectory, 'junction')
+    mocks.handlers.clear()
+    const swappingFileSystem = {
+      ...windowsSafeFileSystem,
+      readText: vi.fn(async (capability, maxBytes) => {
+        fs.rmSync(guardedDirectory, { recursive: true, force: true })
+        fs.symlinkSync(outsideDirectory, guardedDirectory, 'junction')
+        return windowsSafeFileSystem.readText(capability, maxBytes)
+      }),
+    } as WindowsSafeFileSystem
+    register(swappingFileSystem, filePath => ({ canonicalLocation: fs.realpathSync.native(filePath) }))
 
-    await expect(handler('import:inspect-source')(event(), [selection[0].grantId])).resolves.toMatchObject({
+    await expect(handler('dialog:select-novel-files')(event())).resolves.toMatchObject({
       success: false,
     })
+    expect(grants.activeCount()).toBe(0)
   })
 
   it('rejects aggregate source bytes before reading any selected file', async () => {
@@ -119,18 +155,18 @@ describe('novel import external-file capability', () => {
     })
     const { fileSystem, readText } = boundedReader({})
     mocks.handlers.clear()
-    registerImportController(fileSystem, filePath => ({ canonicalLocation: filePath }), {
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }), {
       maxSourceFiles: 5_000,
       maxChapters: 5_000,
       maxTotalBytes: 10,
     })
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: selected })
 
-    const selection = await handler('dialog:select-novel-files')(event()) as Array<{ grantId: string }>
-    const result = await handler('import:inspect-source')(event(), selection.map(file => file.grantId))
+    const result = await handler('dialog:select-novel-files')(event())
 
     expect(result).toMatchObject({ success: false })
     expect(readText).not.toHaveBeenCalled()
+    expect(grants.activeCount()).toBe(0)
   })
 
   it('rejects the third grown file before decoding it when only a smaller byte budget remains', async () => {
@@ -145,15 +181,14 @@ describe('novel import external-file capability', () => {
       'growth-c.txt': '1234',
     })
     mocks.handlers.clear()
-    registerImportController(fileSystem, filePath => ({ canonicalLocation: filePath }), {
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }), {
       maxSourceFiles: 5_000,
       maxChapters: 5_000,
       maxTotalBytes: 10,
     })
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: selected })
 
-    const selection = await handler('dialog:select-novel-files')(event()) as Array<{ grantId: string }>
-    const result = await handler('import:inspect-source')(event(), selection.map(file => file.grantId))
+    const result = await handler('dialog:select-novel-files')(event())
 
     expect(result).toMatchObject({ success: false })
     expect(readText.mock.calls.map(([capability, maxBytes]) => ({
@@ -165,6 +200,8 @@ describe('novel import external-file capability', () => {
       { relativePath: 'growth-c.txt', maxBytes: 2 },
     ])
     expect(decodedFiles).toEqual(['growth-a.txt', 'growth-b.txt'])
+    expect(grants.activeCount()).toBe(0)
+    expect(inspections.activeCount()).toBe(0)
   })
 
   it('rejects 5001 source grants before reading any file', async () => {
@@ -172,17 +209,17 @@ describe('novel import external-file capability', () => {
     fs.writeFileSync(selected, 'x', 'utf8')
     const { fileSystem, readText } = boundedReader({ 'too-many-files.txt': 'x' })
     mocks.handlers.clear()
-    registerImportController(fileSystem, filePath => ({ canonicalLocation: filePath }))
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }))
     mocks.showOpenDialog.mockResolvedValue({
       canceled: false,
       filePaths: Array.from({ length: 5_001 }, () => selected),
     })
 
-    const selection = await handler('dialog:select-novel-files')(event()) as Array<{ grantId: string }>
-    const result = await handler('import:inspect-source')(event(), selection.map(file => file.grantId))
+    const result = await handler('dialog:select-novel-files')(event())
 
     expect(result).toMatchObject({ success: false })
     expect(readText).not.toHaveBeenCalled()
+    expect(grants.activeCount()).toBe(0)
   })
 
   it('stops after detecting chapter 5001 without reading a later file', async () => {
@@ -200,14 +237,14 @@ describe('novel import external-file capability', () => {
       'chapters-b.txt': '第1章 后续\n不应读取',
     })
     mocks.handlers.clear()
-    registerImportController(fileSystem, filePath => ({ canonicalLocation: filePath }))
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }))
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: selected })
 
-    const selection = await handler('dialog:select-novel-files')(event()) as Array<{ grantId: string }>
-    const result = await handler('import:inspect-source')(event(), selection.map(file => file.grantId))
+    const result = await handler('dialog:select-novel-files')(event())
 
     expect(result).toMatchObject({ success: false })
     expect(readText).toHaveBeenCalledTimes(1)
     expect(readText.mock.calls[0][0].relativePath).toBe('chapters-a.txt')
+    expect(grants.activeCount()).toBe(0)
   })
 })

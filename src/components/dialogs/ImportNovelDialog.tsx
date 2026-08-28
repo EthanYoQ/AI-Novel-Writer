@@ -3,7 +3,6 @@ import { FileUp, FolderOpen, BookOpen, Zap, Clock, AlertTriangle, RotateCcw } fr
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
-import type { ExternalFileGrant } from '../../shared/ipc-channels'
 import type { ImportInspectionSummary, ImportRunSnapshot } from '../../shared/import-run'
 import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
 import { inferImportedNovelProjectName } from './import-novel-paths'
@@ -33,7 +32,6 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   // 表单状态
   const [name, setName] = useState('')
   const [savePath, setSavePath] = useState('')
-  const [selectedFiles, setSelectedFiles] = useState<ExternalFileGrant[]>([])
   const [targetMode, setTargetMode] = useState<'new' | 'current'>('new')
 
   // 拆章结果
@@ -79,28 +77,20 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
   /** 选择文件 */
   const handleSelectFiles = useCallback(async () => {
-    const files = await ipc.invoke('dialog:select-novel-files')
-    if (!files || files.length === 0) return
-
-    setSelectedFiles(files)
-    setSplitDone(false)
-    setSplitError('')
-    setImportNotice('')
-    setInspection(null)
-
-    // 自动推断项目名称（取第一个文件名去掉后缀）
-    if (!name.trim()) {
-      const firstFile = files[0]
-      setName(inferImportedNovelProjectName(firstFile.displayName))
-    }
-
-    // 自动拆章预览
     setSplitting(true)
     try {
-      const result = await ipc.invoke('import:inspect-source', files.map(file => file.grantId))
+      const result = await ipc.invoke('dialog:select-novel-files')
+      if (!result) return
+      setSplitDone(false)
+      setSplitError('')
+      setImportNotice('')
+      setInspection(null)
       if (result.success && result.inspection) {
         setInspection(result.inspection)
         setSplitDone(true)
+        if (!name.trim() && result.inspection.sourceDisplayNames[0]) {
+          setName(inferImportedNovelProjectName(result.inspection.sourceDisplayNames[0]))
+        }
       } else {
         setSplitError(result.error || text('拆章失败', 'Could not split chapters'))
       }
@@ -357,12 +347,12 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 style={{
                   backgroundColor: 'var(--color-input)',
                   border: '1px solid var(--color-border)',
-                  color: selectedFiles.length > 0 ? 'var(--color-text)' : 'var(--color-text-muted)',
+                  color: inspection ? 'var(--color-text)' : 'var(--color-text-muted)',
                 }}
               >
                 <BookOpen size={14} style={{ flexShrink: 0 }} />
-                {selectedFiles.length > 0
-                  ? text(`${selectedFiles.length} 个文件已选择`, `${selectedFiles.length} files selected`)
+                {inspection
+                  ? text(`${inspection.sourceCount} 个文件已选择`, `${inspection.sourceCount} files selected`)
                   : text('支持 .txt / .md 文件（单个或多个）', 'Supports one or more .txt / .md files')}
               </div>
               <Button variant="outline" onClick={handleSelectFiles} disabled={splitting}>

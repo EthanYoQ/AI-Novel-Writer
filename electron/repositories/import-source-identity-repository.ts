@@ -9,6 +9,13 @@ interface SourceAliasRow {
   source_id: string
 }
 
+export interface EncodedImportSourceIdentity {
+  locationAliasDigest: string
+  fileAliasDigest?: string
+}
+
+const SHA256 = /^[a-f0-9]{64}$/u
+
 function database() {
   const current = getProjectDb()
   if (!current) throw new Error('项目数据库未打开')
@@ -38,20 +45,41 @@ function aliasDigest(secret: Buffer, kind: 'location' | 'file', value: string): 
 }
 
 export class ImportSourceIdentityRepository {
-  static digest(
+  static encodeSources(
     sources: ImportSourceFileIdentity[],
     purpose: ImportPurpose,
     applicationSecret: Buffer,
-  ): string {
+  ): EncodedImportSourceIdentity[] {
     if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('导入用途无效')
     if (!Array.isArray(sources) || sources.length === 0 || sources.length > MAX_IMPORT_SOURCE_FILES) {
       throw new Error('导入来源身份无效')
     }
     const secret = requireSecret(applicationSecret)
-    const normalized = sources.map(source => ({
-      location: normalizedLocation(source.canonicalLocation),
-      file: normalizedFileIdentity(source.fileIdentity),
-    }))
+    return sources.map(source => {
+      const location = normalizedLocation(source.canonicalLocation)
+      const file = normalizedFileIdentity(source.fileIdentity)
+      return {
+        locationAliasDigest: aliasDigest(secret, 'location', location),
+        ...(file ? { fileAliasDigest: aliasDigest(secret, 'file', file) } : {}),
+      }
+    })
+  }
+
+  static resolveEncodedSources(
+    sources: EncodedImportSourceIdentity[],
+    purpose: ImportPurpose,
+    applicationSecret: Buffer,
+  ): { sourceIds: string[]; sourceFingerprint: string; sourceFingerprints: string[] } {
+    if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('导入用途无效')
+    if (!Array.isArray(sources) || sources.length === 0 || sources.length > MAX_IMPORT_SOURCE_FILES) {
+      throw new Error('导入来源身份无效')
+    }
+    for (const source of sources) {
+      if (!SHA256.test(source.locationAliasDigest) || (source.fileAliasDigest && !SHA256.test(source.fileAliasDigest))) {
+        throw new Error('导入来源别名无效')
+      }
+    }
+    const secret = requireSecret(applicationSecret)
     const db = database()
 
     return db.transaction(() => {
@@ -63,22 +91,47 @@ export class ImportSourceIdentityRepository {
         VALUES (?, ?, ?)
         ON CONFLICT(alias_digest) DO UPDATE SET alias_kind = excluded.alias_kind, source_id = excluded.source_id
       `)
-      const sourceIds = normalized.map(source => {
-        const locationAlias = aliasDigest(secret, 'location', source.location)
-        const fileAlias = source.file ? aliasDigest(secret, 'file', source.file) : undefined
-        const locationRow = findAlias.get(locationAlias) as SourceAliasRow | undefined
-        const fileRow = fileAlias ? findAlias.get(fileAlias) as SourceAliasRow | undefined : undefined
+      const sourceIds = sources.map(source => {
+        const locationRow = findAlias.get(source.locationAliasDigest) as SourceAliasRow | undefined
+        const fileRow = source.fileAliasDigest
+          ? findAlias.get(source.fileAliasDigest) as SourceAliasRow | undefined
+          : undefined
         // Location is primary so replacing a file in place preserves source
         // identity. The file alias links a later rename to the same opaque id.
         const sourceId = locationRow?.source_id ?? fileRow?.source_id ?? randomUUID()
-        upsertAlias.run(locationAlias, 'location', sourceId)
-        if (fileAlias) upsertAlias.run(fileAlias, 'file', sourceId)
+        upsertAlias.run(source.locationAliasDigest, 'location', sourceId)
+        if (source.fileAliasDigest) upsertAlias.run(source.fileAliasDigest, 'file', sourceId)
         return sourceId
       })
-      sourceIds.sort((left, right) => left.localeCompare(right, 'en-US'))
-      return createHmac('sha256', secret)
-        .update(JSON.stringify({ version: 1, purpose, sourceIds }), 'utf8')
+      const sortedSourceIds = [...sourceIds].sort((left, right) => left.localeCompare(right, 'en-US'))
+      const fingerprint = (ids: string[]) => createHmac('sha256', secret)
+        .update(JSON.stringify({ version: 1, purpose, sourceIds: [...ids].sort((left, right) => left.localeCompare(right, 'en-US')) }), 'utf8')
         .digest('hex')
+      return {
+        sourceIds,
+        sourceFingerprint: fingerprint(sortedSourceIds),
+        sourceFingerprints: sourceIds.map(sourceId => fingerprint([sourceId])),
+      }
     })()
+  }
+
+  static resolveSources(
+    sources: ImportSourceFileIdentity[],
+    purpose: ImportPurpose,
+    applicationSecret: Buffer,
+  ): { sourceIds: string[]; sourceFingerprint: string; sourceFingerprints: string[] } {
+    return this.resolveEncodedSources(
+      this.encodeSources(sources, purpose, applicationSecret),
+      purpose,
+      applicationSecret,
+    )
+  }
+
+  static digest(
+    sources: ImportSourceFileIdentity[],
+    purpose: ImportPurpose,
+    applicationSecret: Buffer,
+  ): string {
+    return this.resolveSources(sources, purpose, applicationSecret).sourceFingerprint
   }
 }

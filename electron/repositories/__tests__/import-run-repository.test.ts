@@ -3,11 +3,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ImportRunRepository } from '../import-run-repository'
 import type { ImportRunPrepareRequest } from '../../../src/shared/import-run'
+import {
+  ImportRunOrchestrator,
+  type ImportRunOrchestratorDependencies,
+} from '../../../src/services/workflows/import-run-orchestrator'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -137,6 +141,49 @@ describe('ImportRunRepository', () => {
     ]))
   })
 
+  it('migrates legacy chapter rows to opaque source affiliations and stable mappings', () => {
+    ImportRunRepository.prepare(request())
+    const execution = ImportRunRepository.startOrResume('import-run-1', 'migration-fixture').execution
+    ImportRunRepository.complete('import-run-1', execution)
+    closeProjectDatabase()
+
+    const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+    legacy.pragma('foreign_keys = OFF')
+    legacy.exec(`
+      DROP TABLE import_source_chapter_map;
+      ALTER TABLE import_run_chapters RENAME TO import_run_chapters_current;
+      CREATE TABLE import_run_chapters (
+        run_id TEXT NOT NULL,
+        chapter_number INTEGER NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        content_fingerprint TEXT NOT NULL,
+        content_size INTEGER NOT NULL,
+        content_snapshot TEXT NOT NULL,
+        PRIMARY KEY (run_id, chapter_number)
+      );
+      INSERT INTO import_run_chapters (
+        run_id, chapter_number, title, content_fingerprint, content_size, content_snapshot
+      )
+      SELECT run_id, chapter_number, title, content_fingerprint, content_size, content_snapshot
+      FROM import_run_chapters_current;
+      DROP TABLE import_run_chapters_current;
+    `)
+    legacy.close()
+
+    initProjectDatabase(root)
+    const columns = getProjectDb()!.prepare('PRAGMA table_info(import_run_chapters)').all() as Array<{ name: string }>
+    expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'source_id', 'source_chapter_number',
+    ]))
+    expect(getProjectDb()!.prepare(`
+      SELECT source_id, source_chapter_number FROM import_run_chapters WHERE run_id = 'import-run-1'
+    `).get()).toEqual({ source_id: `legacy:${'a'.repeat(64)}`, source_chapter_number: 1 })
+    expect(getProjectDb()!.prepare(`
+      SELECT chapter_number FROM import_source_chapter_map
+      WHERE purpose = 'reference' AND source_chapter_number = 1
+    `).get()).toEqual({ chapter_number: 1 })
+  })
+
   it('backfills a legacy manifest word count from its frozen chapter snapshots', () => {
     installLegacyRun(['甲😀', 'second'], 2)
 
@@ -256,6 +303,94 @@ describe('ImportRunRepository', () => {
       classification: 'conflict',
       conflictChapterNumbers: [1],
       run: undefined,
+    })
+  })
+
+  it('imports only chapters from newly added sources and keeps their global chapter numbers stable', async () => {
+    const sourceA = '11111111-1111-4111-8111-111111111111'
+    const sourceB = '22222222-2222-4222-8222-222222222222'
+    const fromSource = (sourceIndex: number, sourceChapterNumber: number, content: string) => ({
+      ...chapter(sourceChapterNumber, content),
+      sourceIndex,
+      sourceChapterNumber,
+    })
+
+    ImportRunRepository.prepare(request([fromSource(0, 1, 'A chapter')], {
+      sourceDisplay: [{ displayName: 'a.txt', mediaType: 'text/plain', size: 9 }],
+    }))
+    let execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
+    ImportRunRepository.complete('import-run-1', execution)
+
+    const extended = ImportRunRepository.prepare(request([
+      fromSource(0, 1, 'A chapter'),
+      fromSource(1, 1, 'B chapter'),
+    ], {
+      runId: 'a-plus-b',
+      sourceFingerprint: 'b'.repeat(64),
+      sourceIds: [sourceA, sourceB],
+      sourceFingerprints: ['a'.repeat(64), 'd'.repeat(64)],
+      sourceDisplay: [
+        { displayName: 'a.txt', mediaType: 'text/plain', size: 9 },
+        { displayName: 'b.txt', mediaType: 'text/plain', size: 9 },
+      ],
+    }))
+
+    expect(extended).toMatchObject({
+      classification: 'new',
+      newChapterNumbers: [2],
+      duplicateChapterNumbers: [1],
+    })
+    expect(ImportRunRepository.listChapterBatch('a-plus-b', { afterChapterNumber: 0, limit: 10 }))
+      .toEqual([expect.objectContaining({ number: 2, content: 'B chapter' })])
+    const importedByWorkflow: Array<{ number: number; content: string }> = []
+    const workflowOwner = 'repository-workflow-proof'
+    const workflowDependencies: ImportRunOrchestratorDependencies = {
+      getRun: async runId => ImportRunRepository.get(runId),
+      startOrResume: async (runId, owner) => ImportRunRepository.startOrResume(runId, owner),
+      renewExecution: async (runId, lease) => ImportRunRepository.renewExecution(runId, lease),
+      getEffectReceipt: vi.fn(async () => null),
+      prepareEffectReceipt: vi.fn(async () => { throw new Error('not used in knowledge stage') }),
+      commitEffectReceipt: vi.fn(async () => { throw new Error('not used in knowledge stage') }),
+      replayCommittedEffect: vi.fn(async () => undefined),
+      listChapters: async (runId, afterChapterNumber, limit) => (
+        ImportRunRepository.listChapterBatch(runId, { afterChapterNumber, limit })
+      ),
+      importReference: async item => { importedByWorkflow.push({ number: item.number, content: item.content }) },
+      inferGlobal: vi.fn(async () => undefined),
+      analyzeStyle: vi.fn(async () => undefined),
+      inferBlueprints: vi.fn(async () => undefined),
+      refresh: vi.fn(async () => undefined),
+      completeBatch: async (runId, stage, batchId, lease) => (
+        ImportRunRepository.completeBatch(runId, stage, batchId, lease)
+      ),
+      advanceStage: async (runId, stage, nextStage, lease) => (
+        ImportRunRepository.advanceStage(runId, stage, nextStage, lease)
+      ),
+      fail: async (runId, stage, error, lease) => ImportRunRepository.fail(runId, stage, error, lease),
+      cancelAtBoundary: async (runId, lease) => ImportRunRepository.cancelAtBoundary(runId, lease),
+      complete: async (runId, lease) => ImportRunRepository.complete(runId, lease),
+    }
+    await new ImportRunOrchestrator(workflowDependencies).executeStage(
+      'a-plus-b',
+      'knowledge',
+      workflowOwner,
+      { cancelled: false },
+      { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
+    )
+    expect(importedByWorkflow).toEqual([{ number: 2, content: 'B chapter' }])
+    expect(ImportRunRepository.get('a-plus-b')).toMatchObject({ stage: 'global' })
+    execution = ImportRunRepository.startOrResume('a-plus-b', workflowOwner).execution
+    ImportRunRepository.complete('a-plus-b', execution)
+
+    expect(ImportRunRepository.prepare(request([fromSource(0, 1, 'B chapter')], {
+      runId: 'only-b',
+      sourceFingerprint: 'c'.repeat(64),
+      sourceIds: [sourceB],
+      sourceFingerprints: ['d'.repeat(64)],
+      sourceDisplay: [{ displayName: 'renamed-b.txt', mediaType: 'text/plain', size: 9 }],
+    }))).toMatchObject({
+      classification: 'exact-duplicate',
+      duplicateChapterNumbers: [2],
     })
   })
 

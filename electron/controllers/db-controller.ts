@@ -170,10 +170,10 @@ export function registerDatabaseController() {
       request.inspectionId,
       (event as IpcMainInvokeEvent).sender.id,
     )
-    const sourceFingerprint = ImportSourceIdentityRepository.digest(
+    const sourceIdentity = ImportSourceIdentityRepository.resolveEncodedSources(
       inspection.sources.map(source => ({
-        canonicalLocation: source.canonicalLocation,
-        fileIdentity: source.fileIdentity,
+        locationAliasDigest: source.locationAliasDigest,
+        fileAliasDigest: source.fileAliasDigest,
       })),
       request.purpose,
       loadApplicationImportSourceSecret(),
@@ -183,7 +183,9 @@ export function registerDatabaseController() {
       preparation: ImportRunRepository.prepare({
         runId: request.runId,
         purpose: request.purpose,
-        sourceFingerprint,
+        sourceFingerprint: sourceIdentity.sourceFingerprint,
+        sourceIds: sourceIdentity.sourceIds,
+        sourceFingerprints: sourceIdentity.sourceFingerprints,
         sourceDisplay: inspection.sources.map(source => ({
           displayName: source.displayName,
           mediaType: source.mediaType,

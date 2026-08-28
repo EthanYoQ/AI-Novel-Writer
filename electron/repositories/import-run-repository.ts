@@ -67,6 +67,8 @@ interface ImportRunRow {
 
 interface ImportRunChapterRow {
   chapter_number: number
+  source_id: string
+  source_chapter_number: number
   title: string
   content_fingerprint: string
   content_size: number
@@ -76,6 +78,11 @@ interface ImportRunChapterRow {
 interface ImportRunCheckpointChapterRow {
   chapter_number: number
   content_fingerprint: string
+}
+
+interface NormalizedImportRunChapter extends ImportRunChapterInput {
+  sourceId: string
+  sourceChapterNumber: number
 }
 
 interface ImportRunEffectReceiptRow {
@@ -95,6 +102,7 @@ interface ImportRunEffectReceiptRow {
 }
 
 const SHA256 = /^[a-f0-9]{64}$/u
+const OPAQUE_SOURCE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 const MAX_CHAPTER_BYTES = 16 * 1024 * 1024
 const MAX_PAGE_SIZE = 100
 const INSERT_BATCH_SIZE = 50
@@ -120,16 +128,18 @@ function db() {
   return current
 }
 
-function canonicalManifest(purpose: ImportPurpose, chapters: ImportRunChapterInput[]): string {
+function canonicalManifest(purpose: ImportPurpose, chapters: NormalizedImportRunChapter[]): string {
   return JSON.stringify({ purpose, chapters: chapters.map(chapter => ({
     number: chapter.number,
+    sourceId: chapter.sourceId,
+    sourceChapterNumber: chapter.sourceChapterNumber,
     title: chapter.title,
     contentFingerprint: chapter.contentFingerprint,
     contentSize: chapter.contentSize,
   })) })
 }
 
-function hashManifest(purpose: ImportPurpose, chapters: ImportRunChapterInput[]): string {
+function hashManifest(purpose: ImportPurpose, chapters: NormalizedImportRunChapter[]): string {
   return createHash('sha256').update(canonicalManifest(purpose, chapters), 'utf8').digest('hex')
 }
 
@@ -343,17 +353,57 @@ function normalizeDisplay(items: ImportSourceDisplayMetadata[]): ImportSourceDis
   })
 }
 
-function normalizeChapters(items: ImportRunChapterInput[]): ImportRunChapterInput[] {
+function normalizeSourceIds(
+  items: string[] | undefined,
+  sourceDisplay: ImportSourceDisplayMetadata[],
+  sourceFingerprint: string,
+): string[] {
+  if (items === undefined) return [`legacy:${sourceFingerprint}`]
+  if (!Array.isArray(items) || items.length !== sourceDisplay.length || items.length === 0) {
+    throw new Error('导入来源身份与展示信息不匹配')
+  }
+  const normalized = items.map(item => item?.trim())
+  if (normalized.some(item => !OPAQUE_SOURCE_ID.test(item)) || new Set(normalized).size !== normalized.length) {
+    throw new Error('导入来源身份无效或重复')
+  }
+  return normalized
+}
+
+function normalizeSourceFingerprints(items: string[] | undefined, sourceIds: string[]): string[] {
+  if (items === undefined) return []
+  if (
+    !Array.isArray(items)
+    || items.length !== sourceIds.length
+    || items.some(item => !SHA256.test(item))
+  ) throw new Error('导入来源单文件指纹无效')
+  return items
+}
+
+function normalizeChapters(
+  items: ImportRunChapterInput[],
+  sourceIds: string[],
+): NormalizedImportRunChapter[] {
   if (!Array.isArray(items) || items.length === 0 || items.length > MAX_IMPORT_CHAPTERS) {
     throw new Error('导入章节清单无效')
   }
-  const numbers = new Set<number>()
+  const sourceChapters = new Set<string>()
   let aggregateBytes = 0
   const normalized = items.map(item => {
-    if (!Number.isSafeInteger(item.number) || item.number < 1 || numbers.has(item.number)) {
-      throw new Error('导入章节号无效或重复')
-    }
-    numbers.add(item.number)
+    const sourceIndex = item.sourceIndex ?? 0
+    const sourceChapterNumber = item.sourceChapterNumber ?? item.number
+    if (
+      !Number.isSafeInteger(item.number)
+      || item.number < 1
+      || !Number.isSafeInteger(sourceIndex)
+      || sourceIndex < 0
+      || sourceIndex >= sourceIds.length
+      || !Number.isSafeInteger(sourceChapterNumber)
+      || sourceChapterNumber < 1
+    ) throw new Error('导入章节归属无效')
+    const sourceId = sourceIds[sourceIndex]
+    const affiliation = `${sourceId}:${sourceChapterNumber}`
+    if (sourceChapters.has(affiliation)) throw new Error('导入章节来源归属重复')
+    sourceChapters.add(affiliation)
     const bytes = Buffer.byteLength(item.content, 'utf8')
     if (
       typeof item.title !== 'string'
@@ -366,9 +416,9 @@ function normalizeChapters(items: ImportRunChapterInput[]): ImportRunChapterInpu
     ) throw new Error(`导入章节 ${item.number} 快照无效`)
     aggregateBytes += bytes
     if (aggregateBytes > MAX_IMPORT_TOTAL_BYTES) throw new Error('导入正文总字节数超过安全上限')
-    return { ...item, title: item.title.trim() }
+    return { ...item, title: item.title.trim(), sourceIndex, sourceId, sourceChapterNumber }
   })
-  return normalized.sort((left, right) => left.number - right.number)
+  return normalized
 }
 
 function readRunRow(runId: string): ImportRunRow | undefined {
@@ -556,27 +606,143 @@ function applyBatchCheckpoint(
   return { newlyCompleted, cancelApplied }
 }
 
+function sourceChapterKey(sourceId: string, sourceChapterNumber: number): string {
+  return `${sourceId}:${sourceChapterNumber}`
+}
+
 function completedChapterManifest(
   purpose: ImportPurpose,
-  sourceFingerprint: string,
-): Map<number, { title: string; contentFingerprint: string; contentSize: number }> {
+  sourceIds: string[],
+): Map<string, { number: number; title: string; contentFingerprint: string; contentSize: number }> {
+  const placeholders = sourceIds.map(() => '?').join(', ')
   const rows = db().prepare(`
-    SELECT chapters.chapter_number, chapters.title, chapters.content_fingerprint, chapters.content_size
+    SELECT source_map.chapter_number, chapters.source_id, chapters.source_chapter_number,
+           chapters.title, chapters.content_fingerprint, chapters.content_size
     FROM import_run_chapters AS chapters
     JOIN import_runs AS runs ON runs.id = chapters.run_id
-    WHERE runs.purpose = ? AND runs.source_fingerprint = ? AND runs.status = 'completed'
+    JOIN import_source_chapter_map AS source_map
+      ON source_map.purpose = runs.purpose
+      AND source_map.source_id = chapters.source_id
+      AND source_map.source_chapter_number = chapters.source_chapter_number
+    WHERE runs.purpose = ? AND runs.status = 'completed'
+      AND chapters.source_id IN (${placeholders})
     ORDER BY runs.completed_at ASC, runs.rowid ASC, chapters.chapter_number ASC
-  `).all(purpose, sourceFingerprint) as Array<{
+  `).all(purpose, ...sourceIds) as Array<{
     chapter_number: number
+    source_id: string
+    source_chapter_number: number
     title: string
     content_fingerprint: string
     content_size: number
   }>
-  return new Map(rows.map(row => [row.chapter_number, {
+  return new Map(rows.map(row => [sourceChapterKey(row.source_id, row.source_chapter_number), {
+    number: row.chapter_number,
     title: row.title,
     contentFingerprint: row.content_fingerprint,
     contentSize: row.content_size,
   }]))
+}
+
+function assignStableChapterNumbers(
+  purpose: ImportPurpose,
+  chapters: NormalizedImportRunChapter[],
+): {
+  chapters: NormalizedImportRunChapter[]
+  newMappings: Array<{ sourceId: string; sourceChapterNumber: number; chapterNumber: number }>
+} {
+  const readMapping = db().prepare(`
+    SELECT chapter_number FROM import_source_chapter_map
+    WHERE purpose = ? AND source_id = ? AND source_chapter_number = ?
+  `)
+  let nextChapterNumber = (db().prepare(`
+    SELECT COALESCE(MAX(chapter_number), 0) AS value
+    FROM import_source_chapter_map WHERE purpose = ?
+  `).get(purpose) as { value: number }).value
+  const newMappings: Array<{ sourceId: string; sourceChapterNumber: number; chapterNumber: number }> = []
+  const numbered = chapters.map(chapter => {
+    const row = readMapping.get(
+      purpose,
+      chapter.sourceId,
+      chapter.sourceChapterNumber,
+    ) as { chapter_number: number } | undefined
+    const number = row?.chapter_number ?? ++nextChapterNumber
+    if (!row) newMappings.push({
+      sourceId: chapter.sourceId,
+      sourceChapterNumber: chapter.sourceChapterNumber,
+      chapterNumber: number,
+    })
+    return { ...chapter, number }
+  })
+  return { chapters: numbered.sort((left, right) => left.number - right.number), newMappings }
+}
+
+function adoptLegacyCompletedRun(
+  purpose: ImportPurpose,
+  legacyFingerprint: string,
+  candidateChapters: NormalizedImportRunChapter[],
+): void {
+  if (candidateChapters.length === 0) return
+  const legacySourceId = `legacy:${legacyFingerprint}`
+  const legacyRun = db().prepare(`
+    SELECT id FROM import_runs
+    WHERE purpose = ? AND source_fingerprint = ? AND status = 'completed'
+    ORDER BY completed_at DESC, rowid DESC LIMIT 1
+  `).get(purpose, legacyFingerprint) as { id: string } | undefined
+  if (!legacyRun) return
+  const legacyChapters = db().prepare(`
+    SELECT chapter_number, source_chapter_number, title, content_fingerprint, content_size
+    FROM import_run_chapters
+    WHERE run_id = ? AND source_id = ?
+    ORDER BY chapter_number
+  `).all(legacyRun.id, legacySourceId) as Array<{
+    chapter_number: number
+    source_chapter_number: number
+    title: string
+    content_fingerprint: string
+    content_size: number
+  }>
+  const orderedCandidates = [...candidateChapters].sort((left, right) => (
+    left.number - right.number || left.sourceChapterNumber - right.sourceChapterNumber
+  ))
+  if (
+    legacyChapters.length !== orderedCandidates.length
+    || legacyChapters.some((chapter, index) => {
+      const candidate = orderedCandidates[index]
+      return chapter.title !== candidate.title
+        || chapter.content_fingerprint !== candidate.contentFingerprint
+        || chapter.content_size !== candidate.contentSize
+    })
+  ) return
+
+  const updateMapping = db().prepare(`
+    UPDATE import_source_chapter_map
+    SET source_id = ?, source_chapter_number = ?
+    WHERE purpose = ? AND source_id = ? AND source_chapter_number = ?
+  `)
+  const updateChapters = db().prepare(`
+    UPDATE import_run_chapters
+    SET source_id = ?, source_chapter_number = ?
+    WHERE source_id = ? AND source_chapter_number = ?
+      AND run_id IN (SELECT id FROM import_runs WHERE purpose = ? AND source_fingerprint = ?)
+  `)
+  legacyChapters.forEach((chapter, index) => {
+    const candidate = orderedCandidates[index]
+    updateMapping.run(
+      candidate.sourceId,
+      candidate.sourceChapterNumber,
+      purpose,
+      legacySourceId,
+      chapter.source_chapter_number,
+    )
+    updateChapters.run(
+      candidate.sourceId,
+      candidate.sourceChapterNumber,
+      legacySourceId,
+      chapter.source_chapter_number,
+      purpose,
+      legacyFingerprint,
+    )
+  })
 }
 
 function matchingResumableRun(purpose: ImportPurpose, sourceFingerprint: string, manifestFingerprint: string): ImportRunRow | undefined {
@@ -605,12 +771,24 @@ export class ImportRunRepository {
     if (candidate.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
     if (candidate.locale !== 'zh-CN' && candidate.locale !== 'en-US') throw new Error('导入运行语言无效')
     const sourceDisplay = normalizeDisplay(candidate.sourceDisplay)
-    const chapters = normalizeChapters(candidate.chapters)
-    const manifestFingerprint = hashManifest(candidate.purpose, chapters)
-    const manifestContentSize = chapters.reduce((sum, chapter) => sum + chapter.contentSize, 0)
-    const manifestWordCount = chapters.reduce((sum, chapter) => sum + chapter.content.length, 0)
+    const sourceIds = normalizeSourceIds(candidate.sourceIds, sourceDisplay, candidate.sourceFingerprint)
+    const sourceFingerprints = normalizeSourceFingerprints(candidate.sourceFingerprints, sourceIds)
+    const normalizedChapters = normalizeChapters(candidate.chapters, sourceIds)
 
     return db().transaction(() => {
+      sourceFingerprints.forEach((fingerprint, sourceIndex) => {
+        adoptLegacyCompletedRun(
+          candidate.purpose,
+          fingerprint,
+          normalizedChapters.filter(chapter => chapter.sourceIndex === sourceIndex),
+        )
+      })
+      adoptLegacyCompletedRun(candidate.purpose, candidate.sourceFingerprint, normalizedChapters)
+      const assignment = assignStableChapterNumbers(candidate.purpose, normalizedChapters)
+      const chapters = assignment.chapters
+      const manifestFingerprint = hashManifest(candidate.purpose, chapters)
+      const manifestContentSize = chapters.reduce((sum, chapter) => sum + chapter.contentSize, 0)
+      const manifestWordCount = chapters.reduce((sum, chapter) => sum + chapter.content.length, 0)
       const resumable = matchingResumableRun(candidate.purpose, candidate.sourceFingerprint, manifestFingerprint)
       if (resumable) {
         return {
@@ -623,12 +801,10 @@ export class ImportRunRepository {
       }
 
       const completed = latestCompletedRun(candidate.purpose, candidate.sourceFingerprint)
-      const completedManifest = completed
-        ? completedChapterManifest(candidate.purpose, candidate.sourceFingerprint)
-        : new Map<number, { title: string; contentFingerprint: string; contentSize: number }>()
+      const completedManifest = completedChapterManifest(candidate.purpose, sourceIds)
       const conflictChapterNumbers = chapters
         .filter(chapter => {
-          const previous = completedManifest.get(chapter.number)
+          const previous = completedManifest.get(sourceChapterKey(chapter.sourceId, chapter.sourceChapterNumber))
           return previous !== undefined && (
             previous.title !== chapter.title
             || previous.contentFingerprint !== chapter.contentFingerprint
@@ -638,14 +814,16 @@ export class ImportRunRepository {
         .map(chapter => chapter.number)
       const duplicateChapterNumbers = chapters
         .filter(chapter => {
-          const previous = completedManifest.get(chapter.number)
+          const previous = completedManifest.get(sourceChapterKey(chapter.sourceId, chapter.sourceChapterNumber))
           return previous !== undefined
             && previous.title === chapter.title
             && previous.contentFingerprint === chapter.contentFingerprint
             && previous.contentSize === chapter.contentSize
         })
         .map(chapter => chapter.number)
-      const newChapters = chapters.filter(chapter => !completedManifest.has(chapter.number))
+      const newChapters = chapters.filter(chapter => (
+        !completedManifest.has(sourceChapterKey(chapter.sourceId, chapter.sourceChapterNumber))
+      ))
 
       if (conflictChapterNumbers.length > 0) {
         return {
@@ -656,17 +834,7 @@ export class ImportRunRepository {
           duplicateChapterNumbers,
         }
       }
-      if (completed && newChapters.length === 0 && completed.manifest_fingerprint === manifestFingerprint) {
-        return {
-          classification: 'exact-duplicate' as const,
-          run: undefined,
-          newChapterNumbers: [],
-          conflictChapterNumbers: [],
-          duplicateChapterNumbers,
-        }
-      }
-
-      const chaptersToPersist = completed ? newChapters : chapters
+      const chaptersToPersist = newChapters
       if (chaptersToPersist.length === 0) {
         return {
           classification: 'exact-duplicate' as const,
@@ -677,6 +845,20 @@ export class ImportRunRepository {
         }
       }
       if (readRunRow(runId)) throw new Error('导入运行 ID 已存在')
+
+      const insertMapping = db().prepare(`
+        INSERT INTO import_source_chapter_map (
+          purpose, source_id, source_chapter_number, chapter_number
+        ) VALUES (?, ?, ?, ?)
+      `)
+      for (const mapping of assignment.newMappings) {
+        insertMapping.run(
+          candidate.purpose,
+          mapping.sourceId,
+          mapping.sourceChapterNumber,
+          mapping.chapterNumber,
+        )
+      }
 
       db().prepare(`
         INSERT INTO import_runs (
@@ -702,14 +884,17 @@ export class ImportRunRepository {
       )
       const insertChapter = db().prepare(`
         INSERT INTO import_run_chapters (
-          run_id, chapter_number, title, content_fingerprint, content_size, content_snapshot
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          run_id, chapter_number, source_id, source_chapter_number,
+          title, content_fingerprint, content_size, content_snapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
       for (let offset = 0; offset < chaptersToPersist.length; offset += INSERT_BATCH_SIZE) {
         for (const chapter of chaptersToPersist.slice(offset, offset + INSERT_BATCH_SIZE)) {
           insertChapter.run(
             runId,
             chapter.number,
+            chapter.sourceId,
+            chapter.sourceChapterNumber,
             chapter.title,
             chapter.contentFingerprint,
             chapter.contentSize,
@@ -749,7 +934,8 @@ export class ImportRunRepository {
   ): ImportRunChapterSnapshot[] {
     const limit = Math.max(1, Math.min(MAX_PAGE_SIZE, Math.floor(options.limit)))
     const rows = db().prepare(`
-      SELECT chapter_number, title, content_fingerprint, content_size, content_snapshot
+      SELECT chapter_number, source_id, source_chapter_number,
+             title, content_fingerprint, content_size, content_snapshot
       FROM import_run_chapters
       WHERE run_id = ? AND chapter_number > ?
       ORDER BY chapter_number ASC LIMIT ?
@@ -967,9 +1153,11 @@ export class ImportRunRepository {
       )
       db().prepare(`
         INSERT INTO import_run_chapters (
-          run_id, chapter_number, title, content_fingerprint, content_size, content_snapshot
+          run_id, chapter_number, source_id, source_chapter_number,
+          title, content_fingerprint, content_size, content_snapshot
         )
-        SELECT ?, chapter_number, title, content_fingerprint, content_size, content_snapshot
+        SELECT ?, chapter_number, source_id, source_chapter_number,
+               title, content_fingerprint, content_size, content_snapshot
         FROM import_run_chapters WHERE run_id = ? ORDER BY chapter_number
       `).run(normalizedNextId, runId)
       return this.get(normalizedNextId)!

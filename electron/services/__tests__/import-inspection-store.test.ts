@@ -4,7 +4,8 @@ import { ImportInspectionStore } from '../import-inspection-store'
 
 function chapter(number: number, content = 'x') {
   return {
-    number, title: `Chapter ${number}`, content, wordCount: content.length,
+    number, sourceIndex: 0, sourceChapterNumber: number,
+    title: `Chapter ${number}`, content, wordCount: content.length,
     contentFingerprint: number.toString(16).padStart(64, '0'),
     contentSize: Buffer.byteLength(content),
   }
@@ -16,7 +17,7 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ now: () => now, ttlMs: 100, maxActive: 2, maxAggregateBytes: 100 })
     const summary = store.create({
       webContentsId: 7,
-      sources: [{ canonicalLocation: 'C:/books/book.txt', fileIdentity: 'device:file', displayName: 'book.txt', mediaType: 'text/plain', size: 1 }],
+      sources: [{ locationAliasDigest: 'a'.repeat(64), fileAliasDigest: 'b'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(1)],
     })
     expect(JSON.stringify(summary)).not.toContain('content')
@@ -24,15 +25,14 @@ describe('ImportInspectionStore bounds', () => {
     expect(JSON.stringify(summary)).not.toContain('device:file')
     const consumed = store.consume(summary.inspectionId, 7)
     expect(consumed.chapters[0].content).toBe('x')
-    expect(consumed.sources[0]).toMatchObject({
-      canonicalLocation: 'C:/books/book.txt',
-      fileIdentity: 'device:file',
-    })
+    expect(summary).toMatchObject({ sourceCount: 1, sourceDisplayNames: ['book.txt'] })
+    expect(JSON.stringify(consumed.sources[0])).not.toContain('canonicalLocation')
+    expect(JSON.stringify(consumed.sources[0])).not.toContain('fileIdentity')
     expect(() => store.consume(summary.inspectionId, 7)).toThrow(/失效/)
 
     const expiring = store.create({
       webContentsId: 7,
-      sources: [{ canonicalLocation: 'C:/books/book2.txt', fileIdentity: 'device:file-2', displayName: 'book2.txt', mediaType: 'text/plain', size: 1 }],
+      sources: [{ locationAliasDigest: 'c'.repeat(64), fileAliasDigest: 'd'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(2)],
     })
     now = 1_101
@@ -43,14 +43,24 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ maxAggregateBytes: 10 })
     expect(() => store.create({
       webContentsId: 7,
-      sources: [{ canonicalLocation: 'C:/books/book.txt', fileIdentity: 'device:file', displayName: 'book.txt', mediaType: 'text/plain', size: 5_001 }],
+      sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 5_001 }],
       chapters: Array.from({ length: 5_001 }, (_, index) => chapter(index + 1)),
     })).toThrow(/5000/)
     expect(() => store.create({
       webContentsId: 7,
-      sources: [{ canonicalLocation: 'C:/books/book.txt', fileIdentity: 'device:file', displayName: 'book.txt', mediaType: 'text/plain', size: 11 }],
+      sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 11 }],
       chapters: [chapter(1, '12345678901')],
     })).toThrow(/字节/)
+    expect(store.activeCount()).toBe(0)
+  })
+
+  it('rejects unsafe display names or malformed opaque aliases before renderer serialization', () => {
+    const store = new ImportInspectionStore()
+    expect(() => store.create({
+      webContentsId: 7,
+      sources: [{ locationAliasDigest: 'not-an-alias', displayName: 'C:/private/book.txt', mediaType: 'text/plain', size: 1 }],
+      chapters: [chapter(1)],
+    })).toThrow(/来源/)
     expect(store.activeCount()).toBe(0)
   })
 
@@ -58,12 +68,12 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ maxActive: 1, maxAggregateBytes: 10 })
     store.create({
       webContentsId: 7,
-      sources: [{ canonicalLocation: 'C:/books/book.txt', fileIdentity: 'device:file', displayName: 'book.txt', mediaType: 'text/plain', size: 6 }],
+      sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 6 }],
       chapters: [chapter(1, '123456')],
     })
     expect(() => store.create({
       webContentsId: 8,
-      sources: [{ canonicalLocation: 'C:/books/book2.txt', fileIdentity: 'device:file-2', displayName: 'book2.txt', mediaType: 'text/plain', size: 1 }],
+      sources: [{ locationAliasDigest: 'b'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(2, 'x')],
     })).toThrow(/待处理导入检查过多/)
   })
@@ -72,13 +82,13 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ maxAggregateBytes: 10 })
     const valid = store.create({
       webContentsId: 7,
-      sources: [{ canonicalLocation: 'C:/books/book.txt', fileIdentity: 'device:file', displayName: 'book.txt', mediaType: 'text/plain', size: 1 }],
+      sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(1)],
     })
 
     expect(() => store.create({
       webContentsId: 7,
-      sources: [{ canonicalLocation: 'C:/books/book2.txt', fileIdentity: 'device:file-2', displayName: 'book2.txt', mediaType: 'text/plain', size: 11 }],
+      sources: [{ locationAliasDigest: 'b'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 11 }],
       chapters: [chapter(2, '12345678901')],
     })).toThrow(/字节/)
 
@@ -89,12 +99,12 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ maxActive: 1, maxAggregateBytes: 10 })
     const previous = store.create({
       webContentsId: 7,
-      sources: [{ canonicalLocation: 'C:/books/book.txt', fileIdentity: 'device:file', displayName: 'book.txt', mediaType: 'text/plain', size: 6 }],
+      sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 6 }],
       chapters: [chapter(1, '123456')],
     })
     const replacement = store.create({
       webContentsId: 7,
-      sources: [{ canonicalLocation: 'C:/books/book2.txt', fileIdentity: 'device:file-2', displayName: 'book2.txt', mediaType: 'text/plain', size: 10 }],
+      sources: [{ locationAliasDigest: 'b'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 10 }],
       chapters: [chapter(2, '1234567890')],
     })
 

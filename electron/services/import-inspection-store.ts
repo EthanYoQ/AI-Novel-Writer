@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import type { ImportInspectionSummary, ImportSourceFileIdentity } from '../../src/shared/import-run'
+import type { ImportInspectionSummary } from '../../src/shared/import-run'
+import type { EncodedImportSourceIdentity } from '../repositories/import-source-identity-repository'
 import {
   MAX_IMPORT_CHAPTERS,
   MAX_IMPORT_SOURCE_FILES,
@@ -13,6 +14,8 @@ const MAX_IMPORT_CHAPTER_BYTES = 16 * 1024 * 1024
 
 export interface InspectedImportChapter {
   number: number
+  sourceIndex: number
+  sourceChapterNumber: number
   title: string
   content: string
   wordCount: number
@@ -20,7 +23,7 @@ export interface InspectedImportChapter {
   contentSize: number
 }
 
-export interface InspectedImportSource extends ImportSourceFileIdentity {
+export interface InspectedImportSource extends EncodedImportSourceIdentity {
   displayName: string
   mediaType: string
   size: number
@@ -69,7 +72,24 @@ export class ImportInspectionStore {
     if (input.sources.length === 0 || input.sources.length > MAX_IMPORT_SOURCE_FILES) {
       throw new Error('导入来源数量无效')
     }
+    for (const source of input.sources) {
+      if (
+        !SHA256.test(source.locationAliasDigest)
+        || (source.fileAliasDigest !== undefined && !SHA256.test(source.fileAliasDigest))
+        || !source.displayName
+        || source.displayName.length > 255
+        || source.displayName.includes('/')
+        || source.displayName.includes('\\')
+        || source.displayName.includes('\0')
+        || !source.mediaType
+        || source.mediaType.length > 100
+        || !Number.isSafeInteger(source.size)
+        || source.size < 0
+        || source.size > MAX_IMPORT_TOTAL_BYTES
+      ) throw new Error('导入来源检查数据无效')
+    }
     const chapterNumbers = new Set<number>()
+    const sourceChapters = new Set<string>()
     let totalBytes = 0
     for (const chapter of input.chapters) {
       const bytes = Buffer.byteLength(chapter.content, 'utf8')
@@ -77,12 +97,19 @@ export class ImportInspectionStore {
         !Number.isSafeInteger(chapter.number)
         || chapter.number < 1
         || chapterNumbers.has(chapter.number)
+        || !Number.isSafeInteger(chapter.sourceIndex)
+        || chapter.sourceIndex < 0
+        || chapter.sourceIndex >= input.sources.length
+        || !Number.isSafeInteger(chapter.sourceChapterNumber)
+        || chapter.sourceChapterNumber < 1
+        || sourceChapters.has(`${chapter.sourceIndex}:${chapter.sourceChapterNumber}`)
         || typeof chapter.title !== 'string'
         || !SHA256.test(chapter.contentFingerprint)
         || chapter.contentSize !== bytes
         || bytes > MAX_IMPORT_CHAPTER_BYTES
       ) throw new Error('导入章节检查数据无效')
       chapterNumbers.add(chapter.number)
+      sourceChapters.add(`${chapter.sourceIndex}:${chapter.sourceChapterNumber}`)
       totalBytes += bytes
       if (totalBytes > MAX_IMPORT_TOTAL_BYTES) throw new Error('导入正文总字节数超过安全上限')
     }
@@ -107,6 +134,8 @@ export class ImportInspectionStore {
     this.inspections.set(inspectionId, inspection)
     return {
       inspectionId,
+      sourceCount: inspection.sources.length,
+      sourceDisplayNames: inspection.sources.map(source => source.displayName),
       chapterCount: inspection.chapters.length,
       totalWords: inspection.totalWords,
       totalBytes,

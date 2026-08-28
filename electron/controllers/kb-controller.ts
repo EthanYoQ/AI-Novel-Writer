@@ -187,18 +187,18 @@ export function registerKBController(
     const projectPath = requireProjectPath(expectedProjectPath)
     let importedFiles: Array<{ fileName: string; content: string }>
     try {
-      externalFileGrants.resolve({
-        grantId,
-        webContentsId: event.sender.id,
-        operation: 'list',
-      })
       // Directory enumeration alone is not authority to read every discovered
-      // file. Revalidate the separate read operation without consuming another
-      // renderer use before handing root-relative children to the helper.
+      // file. Validate the separate read operation before the one-use list
+      // capability is consumed and deleted.
       const readableFolder = externalFileGrants.revalidate({
         grantId,
         webContentsId: event.sender.id,
         operation: 'read',
+      })
+      externalFileGrants.resolve({
+        grantId,
+        webContentsId: event.sender.id,
+        operation: 'list',
       })
       importedFiles = await readGrantedKnowledgeFolder(fileSystem, readableFolder)
     } catch {

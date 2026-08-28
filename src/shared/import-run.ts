@@ -159,6 +159,10 @@ export interface ImportSourceFileIdentity {
 
 export interface ImportRunChapterInput {
   number: number
+  /** Index into the main-process source list; never supplied by renderer input. */
+  sourceIndex?: number
+  /** Stable chapter affiliation within one source. */
+  sourceChapterNumber?: number
   title: string
   contentFingerprint: string
   contentSize: number
@@ -166,12 +170,23 @@ export interface ImportRunChapterInput {
   content: string
 }
 
-export type ImportRunChapterSnapshot = ImportRunChapterInput
+/** Renderer-safe frozen chapter snapshot; source affiliations remain main-process-only. */
+export interface ImportRunChapterSnapshot {
+  number: number
+  title: string
+  contentFingerprint: string
+  contentSize: number
+  content: string
+}
 
 export interface ImportRunPrepareRequest {
   runId: string
   purpose: ImportPurpose
   sourceFingerprint: string
+  /** Opaque per-source IDs aligned with sourceDisplay. Main-process only. */
+  sourceIds?: string[]
+  /** Legacy single-source collection fingerprints aligned with sourceIds. Main-process only. */
+  sourceFingerprints?: string[]
   sourceDisplay: ImportSourceDisplayMetadata[]
   locale: ImportRunLocale
   chapters: ImportRunChapterInput[]
@@ -180,6 +195,8 @@ export interface ImportRunPrepareRequest {
 /** Renderer-safe inspection metadata. Chapter content and source identities stay in main memory. */
 export interface ImportInspectionSummary {
   inspectionId: string
+  sourceCount: number
+  sourceDisplayNames: string[]
   chapterCount: number
   totalWords: number
   totalBytes: number

@@ -65,6 +65,7 @@ interface ExternalFileGrantRecord {
   operations: ReadonlySet<ExternalFileGrantOperation>
   expiresAt: number
   usesRemaining: number
+  deleteOnConsume: boolean
 }
 
 function assertSafeRelativePath(relativePath: string): void {
@@ -149,6 +150,10 @@ export class ExternalFileGrantService {
     }
   }
 
+  activeCount(): number {
+    return this.grants.size
+  }
+
   private issue(options: {
     webContentsId: number
     scope: 'file' | 'directory'
@@ -178,6 +183,7 @@ export class ExternalFileGrantService {
       operations: new Set(options.operations),
       expiresAt,
       usesRemaining: maxUses,
+      deleteOnConsume: maxUses === 1,
     })
     return { grantId, expiresAt }
   }
@@ -231,6 +237,7 @@ export class ExternalFileGrantService {
     }
     if (consumeUse) {
       grant.usesRemaining -= 1
+      if (grant.usesRemaining === 0 && grant.deleteOnConsume) this.grants.delete(request.grantId)
     }
     return {
       rootPath: grant.rootPath,

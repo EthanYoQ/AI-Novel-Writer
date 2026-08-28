@@ -812,14 +812,13 @@ export interface KnowledgeBaseChannels {
 
 // ===== 导入小说 =====
 export interface ImportChannels {
-  'dialog:select-novel-files': { args: []; return: ExternalFileGrant[] | null }
-  'import:inspect-source': {
-    args: [grantIds: string[], options?: { separator?: string }]
+  'dialog:select-novel-files': {
+    args: []
     return: {
       success: boolean
       inspection?: ImportInspectionSummary
       error?: string
-    }
+    } | null
   }
 }
 

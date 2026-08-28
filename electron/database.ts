@@ -377,6 +377,8 @@ function createTables(db: BetterSqlite3.Database) {
     CREATE TABLE IF NOT EXISTS import_run_chapters (
       run_id TEXT NOT NULL,
       chapter_number INTEGER NOT NULL,
+      source_id TEXT NOT NULL DEFAULT '',
+      source_chapter_number INTEGER NOT NULL DEFAULT 0,
       title TEXT NOT NULL DEFAULT '',
       content_fingerprint TEXT NOT NULL,
       content_size INTEGER NOT NULL,
@@ -395,6 +397,15 @@ function createTables(db: BetterSqlite3.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_import_source_aliases_source
       ON import_source_aliases(source_id);
+
+    CREATE TABLE IF NOT EXISTS import_source_chapter_map (
+      purpose TEXT NOT NULL CHECK(purpose IN ('reference', 'author-manuscript')),
+      source_id TEXT NOT NULL,
+      source_chapter_number INTEGER NOT NULL,
+      chapter_number INTEGER NOT NULL,
+      PRIMARY KEY (purpose, source_id, source_chapter_number),
+      UNIQUE (purpose, chapter_number)
+    );
 
     CREATE TABLE IF NOT EXISTS import_run_receipts (
       run_id TEXT NOT NULL,
@@ -456,6 +467,80 @@ function createTables(db: BetterSqlite3.Database) {
         root_run_id = CASE WHEN root_run_id = '' THEN id ELSE root_run_id END,
         effect_namespace = CASE WHEN effect_namespace = '' THEN 'import:reference:' || id ELSE effect_namespace END
   `)
+  const importChapterColumns = new Set(
+    (db.prepare('PRAGMA table_info(import_run_chapters)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!importChapterColumns.has('source_id')) {
+    db.exec("ALTER TABLE import_run_chapters ADD COLUMN source_id TEXT NOT NULL DEFAULT ''")
+  }
+  if (!importChapterColumns.has('source_chapter_number')) {
+    db.exec('ALTER TABLE import_run_chapters ADD COLUMN source_chapter_number INTEGER NOT NULL DEFAULT 0')
+  }
+  db.exec(`
+    UPDATE import_run_chapters
+    SET source_id = 'legacy:' || COALESCE((
+          SELECT runs.source_fingerprint FROM import_runs AS runs WHERE runs.id = import_run_chapters.run_id
+        ), run_id),
+        source_chapter_number = chapter_number
+    WHERE source_id = '' OR source_chapter_number = 0;
+
+    CREATE TABLE IF NOT EXISTS import_source_chapter_map (
+      purpose TEXT NOT NULL CHECK(purpose IN ('reference', 'author-manuscript')),
+      source_id TEXT NOT NULL,
+      source_chapter_number INTEGER NOT NULL,
+      chapter_number INTEGER NOT NULL,
+      PRIMARY KEY (purpose, source_id, source_chapter_number),
+      UNIQUE (purpose, chapter_number)
+    );
+
+    INSERT OR IGNORE INTO import_source_chapter_map (
+      purpose, source_id, source_chapter_number, chapter_number
+    )
+    SELECT runs.purpose, chapters.source_id, chapters.source_chapter_number, chapters.chapter_number
+    FROM import_run_chapters AS chapters
+    JOIN import_runs AS runs ON runs.id = chapters.run_id
+    ORDER BY runs.created_at, runs.rowid, chapters.chapter_number;
+  `)
+  const unmappedLegacyChapters = db.prepare(`
+    SELECT DISTINCT runs.purpose, chapters.source_id, chapters.source_chapter_number
+    FROM import_run_chapters AS chapters
+    JOIN import_runs AS runs ON runs.id = chapters.run_id
+    LEFT JOIN import_source_chapter_map AS source_map
+      ON source_map.purpose = runs.purpose
+      AND source_map.source_id = chapters.source_id
+      AND source_map.source_chapter_number = chapters.source_chapter_number
+    WHERE source_map.chapter_number IS NULL
+    ORDER BY runs.created_at, runs.rowid, chapters.chapter_number
+  `).all() as Array<{
+    purpose: 'reference' | 'author-manuscript'
+    source_id: string
+    source_chapter_number: number
+  }>
+  const nextLegacyChapterByPurpose = new Map<string, number>()
+  const insertLegacySourceMapping = db.prepare(`
+    INSERT INTO import_source_chapter_map (
+      purpose, source_id, source_chapter_number, chapter_number
+    ) VALUES (?, ?, ?, ?)
+  `)
+  db.transaction(() => {
+    for (const chapter of unmappedLegacyChapters) {
+      let next = nextLegacyChapterByPurpose.get(chapter.purpose)
+      if (next === undefined) {
+        next = (db.prepare(`
+          SELECT COALESCE(MAX(chapter_number), 0) AS value
+          FROM import_source_chapter_map WHERE purpose = ?
+        `).get(chapter.purpose) as { value: number }).value
+      }
+      next += 1
+      nextLegacyChapterByPurpose.set(chapter.purpose, next)
+      insertLegacySourceMapping.run(
+        chapter.purpose,
+        chapter.source_id,
+        chapter.source_chapter_number,
+        next,
+      )
+    }
+  })()
   const legacyManifestRuns = db.prepare(`
     SELECT id, locale, manifest_chapter_count
     FROM import_runs

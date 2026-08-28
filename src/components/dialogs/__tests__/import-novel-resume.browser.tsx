@@ -79,11 +79,11 @@ beforeEach(async () => {
   }
   invoke = vi.fn(async (channel: string) => {
     if (channel === 'db:import-run-list-resumable') return []
-    if (channel === 'dialog:select-novel-files') return [{ grantId: 'grant-1', displayName: 'reference.txt' }]
-    if (channel === 'import:inspect-source') return {
+    if (channel === 'dialog:select-novel-files') return {
       success: true,
       inspection: {
-        inspectionId: 'inspection-1', chapterCount: 1, totalWords: 16, totalBytes: 16,
+        inspectionId: 'inspection-1', sourceCount: 1, sourceDisplayNames: ['reference.txt'],
+        chapterCount: 1, totalWords: 16, totalBytes: 16,
         preview: [{ number: 1, title: 'Start', wordCount: 16 }],
       },
     }
@@ -137,9 +137,19 @@ describe('current-project reference import', () => {
     expect(startWorkflow).toHaveBeenCalledOnce()
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'persisted-import', uiLocale: 'zh-CN' })
     expect(invoke.mock.calls.some(([channel]) => channel === 'project:create')).toBe(false)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'import:inspect-source')).toBe(false)
     await expect.element(page.getByText('Current Project', { exact: true })).toBeVisible()
     await expect.element(page.getByText('导入参照文本与构建知识库', { exact: true })).toBeVisible()
     await expect.element(page.getByText('参照章节 1 正在写入知识库', { exact: true })).toBeVisible()
+  })
+
+  it('shows the merged new-import inspection in English without a renderer grant step', async () => {
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await act(async () => page.getByRole('button', { name: 'Choose' }).first().click())
+
+    await expect.element(page.getByText('1 files selected', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('1 chapters', { exact: true })).toBeVisible()
+    expect(invoke.mock.calls.some(([channel]) => channel === 'import:inspect-source')).toBe(false)
   })
 
   it('reports an exact duplicate as a no-op with no task, KB, or model side effects', async () => {
