@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ImportRunRepository } from '../import-run-repository'
-import type { ImportRunPrepareRequest } from '../../../src/shared/import-run'
+import { createImportRunChapterBatchCheckpointId, type ImportRunPrepareRequest, type ImportRunExecutionAuthority } from '../../../src/shared/import-run'
 import {
   ImportRunOrchestrator,
   type ImportRunOrchestratorDependencies,
@@ -38,6 +38,28 @@ function request(chapters = [chapter(1)], overrides: Partial<ImportRunPrepareReq
     chapters,
     ...overrides,
   }
+}
+
+function commitKnowledge(runId: string, authority: ImportRunExecutionAuthority, chapters: ReturnType<typeof chapter>[]) {
+  for (const item of chapters) {
+    const binding = ImportRunRepository.resolveReferenceImportAuthority(runId, authority, item.number)
+    const documentId = createHash('sha256').update(`reference-import:${binding.stableKey}`).digest('hex')
+    getProjectDb()!.prepare(`
+      INSERT OR IGNORE INTO import_reference_documents (
+        document_id, idempotency_key_hash, content_hash, chunk_set_hash,
+        expected_chunk_count, corpus_kind, state
+      ) VALUES (?, ?, ?, ?, 1, 'reference', 'committed')
+    `).run(
+      documentId,
+      createHash('sha256').update(binding.stableKey).digest('hex'),
+      binding.contentFingerprint,
+      createHash('sha256').update(`chunks:${item.number}`).digest('hex'),
+    )
+    ImportRunRepository.commitReferenceImportReceipt(
+      runId, authority, item.number, documentId,
+    )
+  }
+  return createImportRunChapterBatchCheckpointId(chapters)
 }
 
 function markRunCompleted(runId: string): void {
@@ -223,6 +245,8 @@ describe('ImportRunRepository', () => {
     expect(serialized).not.toContain('grantId')
     expect(serialized).not.toContain('apiKey')
     expect(serialized).not.toContain('C:\\')
+    expect(serialized).not.toContain('sourceFingerprint')
+    expect(serialized).not.toContain('manifestFingerprint')
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_run_chapters').get())
       .toEqual({ count: 1 })
   })
@@ -236,11 +260,13 @@ describe('ImportRunRepository', () => {
   })
 
   it('records batch checkpoints idempotently and exposes a resumable failure', () => {
-    ImportRunRepository.prepare(request([chapter(1), chapter(2)]))
+    const chapters = [chapter(1), chapter(2)]
+    ImportRunRepository.prepare(request(chapters))
     const execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
+    const checkpoint = commitKnowledge('import-run-1', execution, chapters)
 
-    expect(ImportRunRepository.completeBatch('import-run-1', 'knowledge', '1-2', execution)).toMatchObject({ newlyCompleted: true })
-    expect(ImportRunRepository.completeBatch('import-run-1', 'knowledge', '1-2', execution)).toMatchObject({ newlyCompleted: false })
+    expect(ImportRunRepository.completeBatch('import-run-1', 'knowledge', checkpoint, execution)).toMatchObject({ newlyCompleted: true })
+    expect(ImportRunRepository.completeBatch('import-run-1', 'knowledge', checkpoint, execution)).toMatchObject({ newlyCompleted: false })
     ImportRunRepository.fail('import-run-1', 'knowledge', 'provider unavailable', execution)
 
     expect(ImportRunRepository.listResumable()).toEqual([
@@ -249,16 +275,18 @@ describe('ImportRunRepository', () => {
         stage: 'knowledge',
         status: 'failed',
         resumable: true,
-        completedBatches: { knowledge: ['1-2'] },
+        completedBatches: { knowledge: [checkpoint] },
         lastError: 'provider unavailable',
       }),
     ])
   })
 
   it('derives resumable knowledge progress from validated checkpoints across reopen and later stages', () => {
-    ImportRunRepository.prepare(request([chapter(1), chapter(2), chapter(3)]))
+    const chapters = [chapter(1), chapter(2), chapter(3)]
+    ImportRunRepository.prepare(request(chapters))
     let execution = ImportRunRepository.startOrResume('import-run-1', 'progress-runner').execution
-    ImportRunRepository.completeBatch('import-run-1', 'knowledge', '1-2', execution)
+    const firstCheckpoint = commitKnowledge('import-run-1', execution, chapters.slice(0, 2))
+    ImportRunRepository.completeBatch('import-run-1', 'knowledge', firstCheckpoint, execution)
     expect(ImportRunRepository.get('import-run-1')).toMatchObject({
       completedChapters: 2, progressCompleted: 2, progressTotal: 3,
     })
@@ -269,16 +297,40 @@ describe('ImportRunRepository', () => {
     expect(ImportRunRepository.get('import-run-1')).toMatchObject({ completedChapters: 2 })
 
     execution = ImportRunRepository.startOrResume('import-run-1', 'progress-runner-2').execution
-    ImportRunRepository.completeBatch('import-run-1', 'knowledge', '3-3', execution)
+    const secondCheckpoint = commitKnowledge('import-run-1', execution, chapters.slice(2))
+    ImportRunRepository.completeBatch('import-run-1', 'knowledge', secondCheckpoint, execution)
     expect(ImportRunRepository.advanceStage('import-run-1', 'knowledge', 'global', execution)).toMatchObject({
       completedChapters: 3, progressCompleted: 0, progressTotal: 1,
     })
   })
 
-  it('reopens the same project database with the frozen run and checkpoint intact', () => {
-    ImportRunRepository.prepare(request([chapter(1), chapter(2)]))
+  it('rejects a knowledge checkpoint until every exact frozen chapter receipt is committed', () => {
+    const chapters = [chapter(1), chapter(2)]
+    ImportRunRepository.prepare(request(chapters))
     const execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
-    ImportRunRepository.completeBatch('import-run-1', 'knowledge', '1-2', execution)
+    const checkpoint = createImportRunChapterBatchCheckpointId(chapters)
+
+    expect(() => ImportRunRepository.completeBatch(
+      'import-run-1', 'knowledge', checkpoint, execution,
+    )).toThrow(/receipt/)
+
+    commitKnowledge('import-run-1', execution, [chapters[0]!])
+    expect(() => ImportRunRepository.completeBatch(
+      'import-run-1', 'knowledge', checkpoint, execution,
+    )).toThrow(/receipt/)
+
+    commitKnowledge('import-run-1', execution, [chapters[1]!])
+    expect(ImportRunRepository.completeBatch(
+      'import-run-1', 'knowledge', checkpoint, execution,
+    )).toMatchObject({ newlyCompleted: true })
+  })
+
+  it('reopens the same project database with the frozen run and checkpoint intact', () => {
+    const chapters = [chapter(1), chapter(2)]
+    ImportRunRepository.prepare(request(chapters))
+    const execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
+    const checkpoint = commitKnowledge('import-run-1', execution, chapters)
+    ImportRunRepository.completeBatch('import-run-1', 'knowledge', checkpoint, execution)
     ImportRunRepository.advanceStage('import-run-1', 'knowledge', 'global', execution)
     ImportRunRepository.fail('import-run-1', 'global', 'restart fixture', execution)
 
@@ -287,7 +339,7 @@ describe('ImportRunRepository', () => {
 
     expect(ImportRunRepository.get('import-run-1')).toMatchObject({
       stage: 'global', status: 'failed', resumable: true,
-      completedBatches: { knowledge: ['1-2'] },
+      completedBatches: { knowledge: [checkpoint] },
     })
     expect(ImportRunRepository.listChapterBatch('import-run-1', { afterChapterNumber: 0, limit: 1 }))
       .toEqual([expect.objectContaining({ number: 1, content: 'reference-1' })])
@@ -373,7 +425,10 @@ describe('ImportRunRepository', () => {
       listChapters: async (runId, afterChapterNumber, limit) => (
         ImportRunRepository.listChapterBatch(runId, { afterChapterNumber, limit })
       ),
-      importReference: async item => { importedByWorkflow.push({ number: item.number, content: item.content }) },
+      importReference: async (item, _run, authority) => {
+        importedByWorkflow.push({ number: item.number, content: item.content })
+        commitKnowledge('a-plus-b', authority, [chapter(item.number, item.content)])
+      },
       inferGlobal: vi.fn(async () => undefined),
       analyzeStyle: vi.fn(async () => undefined),
       inferBlueprints: vi.fn(async () => undefined),
@@ -412,12 +467,14 @@ describe('ImportRunRepository', () => {
   })
 
   it('applies cancellation only when a completed batch reaches a safe boundary', () => {
-    ImportRunRepository.prepare(request([chapter(1), chapter(2)]))
+    const chapters = [chapter(1), chapter(2)]
+    ImportRunRepository.prepare(request(chapters))
     const execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
+    const checkpoint = commitKnowledge('import-run-1', execution, [chapters[0]!])
     ImportRunRepository.requestCancel('import-run-1', execution)
 
     expect(ImportRunRepository.get('import-run-1')).toMatchObject({ status: 'running', cancelRequested: true })
-    expect(ImportRunRepository.completeBatch('import-run-1', 'knowledge', '1-1', execution)).toMatchObject({
+    expect(ImportRunRepository.completeBatch('import-run-1', 'knowledge', checkpoint, execution)).toMatchObject({
       cancelApplied: true,
       run: { status: 'cancelled', resumable: true },
     })

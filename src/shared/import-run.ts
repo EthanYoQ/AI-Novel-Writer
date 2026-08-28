@@ -240,8 +240,6 @@ export interface ImportRunSnapshot {
   purpose: ImportPurpose
   rootRunId: string
   effectNamespace: string
-  sourceFingerprint: string
-  manifestFingerprint: string
   sourceDisplay: ImportSourceDisplayMetadata[]
   locale: ImportRunLocale
   stage: ImportRunStage

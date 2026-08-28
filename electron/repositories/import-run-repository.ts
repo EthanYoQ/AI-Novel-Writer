@@ -127,7 +127,6 @@ const INSERT_BATCH_SIZE = 50
 const MAX_DISPLAY_SOURCES = MAX_IMPORT_SOURCE_FILES
 const DEFAULT_EXECUTION_LEASE_MS = 15 * 60_000
 const MAX_EFFECT_RECEIPT_PAYLOAD_BYTES = 16 * 1024 * 1024
-const KNOWLEDGE_BATCH_CHECKPOINT = /^([1-9]\d*)-([1-9]\d*)$/u
 const IMPORT_RUN_STAGE_VALUES = new Set<ImportRunStage>([
   'parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed',
 ])
@@ -436,8 +435,6 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
     purpose: row.purpose,
     rootRunId: row.root_run_id,
     effectNamespace: row.effect_namespace,
-    sourceFingerprint: row.source_fingerprint,
-    manifestFingerprint: row.manifest_fingerprint,
     sourceDisplay: parseJson<ImportSourceDisplayMetadata[]>(row.source_display_json, []),
     locale: row.locale,
     stage: row.stage,
@@ -610,28 +607,7 @@ function chapterRowsForRange(
   `).all(runId, startChapter, endChapter) as ImportRunCheckpointChapterRow[]
 }
 
-function knowledgeCheckpointRange(batchId: string): { startChapter: number; endChapter: number } | null {
-  const match = KNOWLEDGE_BATCH_CHECKPOINT.exec(batchId)
-  if (!match) return null
-  const startChapter = Number(match[1])
-  const endChapter = Number(match[2])
-  if (
-    !Number.isSafeInteger(startChapter)
-    || !Number.isSafeInteger(endChapter)
-    || endChapter < startChapter
-  ) return null
-  return { startChapter, endChapter }
-}
-
-function checkpointRange(
-  stage: 'knowledge' | 'blueprints',
-  batchId: string,
-): { startChapter: number; endChapter: number } {
-  if (stage === 'knowledge') {
-    const parsed = knowledgeCheckpointRange(batchId)
-    if (!parsed) throw new Error('导入批次 ID 无效')
-    return parsed
-  }
+function checkpointRange(batchId: string): { startChapter: number; endChapter: number } {
   const parsed = parseImportRunChapterBatchCheckpointId(batchId)
   if (!parsed) throw new Error('导入批次 ID 无效')
   return parsed
@@ -639,15 +615,54 @@ function checkpointRange(
 
 function checkpointChapterNumbers(row: ImportRunRow, stage: 'knowledge' | 'blueprints', batchId: string): number[] {
   if (stage === 'knowledge') {
-    const range = knowledgeCheckpointRange(batchId)
-    if (!range) throw new Error('导入批次 ID 无效')
-    const chapters = chapterRowsForRange(row.id, range.startChapter, range.endChapter)
+    const parsed = parseImportRunChapterBatchCheckpointId(batchId)
+    if (!parsed || parsed.contentFingerprintPrefixes.length > IMPORT_RUN_KNOWLEDGE_BATCH_SIZE) {
+      throw new Error('导入批次 ID 无效')
+    }
+    const chapters = chapterRowsForRange(row.id, parsed.startChapter, parsed.endChapter)
     if (
-      chapters.length === 0
-      || chapters.length > IMPORT_RUN_KNOWLEDGE_BATCH_SIZE
-      || chapters[0]!.chapter_number !== range.startChapter
-      || chapters.at(-1)!.chapter_number !== range.endChapter
+      chapters.length !== parsed.contentFingerprintPrefixes.length
+      || chapters.some((chapter, index) => (
+        chapter.chapter_number !== parsed.startChapter + index
+        || !chapter.content_fingerprint.startsWith(parsed.contentFingerprintPrefixes[index]!)
+      ))
     ) throw new Error('导入批次 ID 无效')
+    const receipts = db().prepare(`
+      SELECT chapter_number, purpose, source_id, source_chapter_number,
+             content_fingerprint, document_id, state
+      FROM import_run_knowledge_receipts
+      WHERE run_id = ? AND chapter_number BETWEEN ? AND ?
+      ORDER BY chapter_number ASC
+    `).all(row.id, parsed.startChapter, parsed.endChapter) as Array<{
+      chapter_number: number
+      purpose: string
+      source_id: string
+      source_chapter_number: number
+      content_fingerprint: string
+      document_id: string
+      state: string
+    }>
+    const affiliations = db().prepare(`
+      SELECT chapter_number, source_id, source_chapter_number, content_fingerprint
+      FROM import_run_chapters
+      WHERE run_id = ? AND chapter_number BETWEEN ? AND ?
+      ORDER BY chapter_number ASC
+    `).all(row.id, parsed.startChapter, parsed.endChapter) as Array<{
+      chapter_number: number
+      source_id: string
+      source_chapter_number: number
+      content_fingerprint: string
+    }>
+    if (receipts.length !== affiliations.length || receipts.some((receipt, index) => {
+      const affiliation = affiliations[index]!
+      return receipt.chapter_number !== affiliation.chapter_number
+        || receipt.purpose !== row.purpose
+        || receipt.source_id !== affiliation.source_id
+        || receipt.source_chapter_number !== affiliation.source_chapter_number
+        || receipt.content_fingerprint !== affiliation.content_fingerprint
+        || !SHA256.test(receipt.document_id)
+        || receipt.state !== 'committed'
+    })) throw new Error('参照知识 receipt 未完成或与冻结章节不匹配')
     return chapters.map(chapter => chapter.chapter_number)
   }
 
@@ -684,11 +699,11 @@ function assertCheckpointCanApply(
   }
 
   checkpointChapterNumbers(row, stage, batchId)
-  const range = checkpointRange(stage, batchId)
+  const range = checkpointRange(batchId)
   const existing = completedBatches(row)[stage] ?? []
   for (const existingBatchId of existing) {
     if (existingBatchId === batchId) continue
-    const existingRange = checkpointRange(stage, existingBatchId)
+    const existingRange = checkpointRange(existingBatchId)
     if (range.startChapter <= existingRange.endChapter && existingRange.startChapter <= range.endChapter) {
       throw new Error('导入批次与已完成 checkpoint 重叠')
     }
@@ -930,35 +945,118 @@ export class ImportRunRepository {
     assertExecutionAuthority(runId, authority, now)
   }
 
-  static assertReferenceImportAuthority(
+  static resolveReferenceImportAuthority(
     runId: string,
     authority: ImportRunExecutionAuthority,
-    idempotencyKey: string,
-    content: string,
+    chapterNumber: number,
     now = Date.now(),
-  ): void {
+  ): {
+    chapterNumber: number
+    title: string
+    content: string
+    contentFingerprint: string
+    stableKey: string
+  } {
     const run = assertExecutionAuthority(runId, authority, now)
-    const prefix = `${run.purpose}:${run.source_fingerprint}:`
-    const binding = idempotencyKey.startsWith(prefix)
-      ? /^(\d+):([a-f0-9]{64})$/u.exec(idempotencyKey.slice(prefix.length))
-      : null
-    if (run.purpose !== 'reference' || run.stage !== 'knowledge' || !binding) {
+    if (
+      run.purpose !== 'reference'
+      || run.stage !== 'knowledge'
+      || run.cancel_requested === 1
+      || !Number.isSafeInteger(chapterNumber)
+      || chapterNumber < 1
+    ) {
       throw new Error('参照知识写入未绑定当前导入的冻结章节')
     }
-    const chapterNumber = Number(binding[1])
     const chapter = db().prepare(`
-      SELECT content_fingerprint, content_snapshot
+      SELECT source_id, source_chapter_number, title, content_fingerprint, content_snapshot
       FROM import_run_chapters
       WHERE run_id = ? AND chapter_number = ?
     `).get(runId, chapterNumber) as {
+      source_id: string
+      source_chapter_number: number
+      title: string
       content_fingerprint: string
       content_snapshot: string
     } | undefined
-    if (
-      !chapter
-      || chapter.content_fingerprint !== binding[2]
-      || chapter.content_snapshot !== content
-    ) throw new Error('参照知识写入未绑定当前导入的冻结章节')
+    if (!chapter) throw new Error('参照知识写入未绑定当前导入的冻结章节')
+    const affiliationHash = createHash('sha256').update(JSON.stringify({
+      purpose: run.purpose,
+      sourceId: chapter.source_id,
+      sourceChapterNumber: chapter.source_chapter_number,
+      contentFingerprint: chapter.content_fingerprint,
+    })).digest('hex')
+    return {
+      chapterNumber,
+      title: chapter.title,
+      content: chapter.content_snapshot,
+      contentFingerprint: chapter.content_fingerprint,
+      stableKey: `reference:${affiliationHash}`,
+    }
+  }
+
+  static commitReferenceImportReceipt(
+    runId: string,
+    authority: ImportRunExecutionAuthority,
+    chapterNumber: number,
+    documentId: string,
+  ): void {
+    if (!SHA256.test(documentId)) throw new Error('参照知识文档身份无效')
+    db().transaction(() => {
+      const binding = this.resolveReferenceImportAuthority(runId, authority, chapterNumber)
+      const expectedDocumentId = createHash('sha256')
+        .update(`reference-import:${binding.stableKey}`, 'utf8')
+        .digest('hex')
+      const committedDocument = db().prepare(`
+        SELECT document_id, content_hash, state
+        FROM import_reference_documents WHERE document_id = ?
+      `).get(expectedDocumentId) as {
+        document_id: string
+        content_hash: string
+        state: string
+      } | undefined
+      if (
+        documentId !== expectedDocumentId
+        || committedDocument?.document_id !== expectedDocumentId
+        || committedDocument.content_hash !== binding.contentFingerprint
+        || committedDocument.state !== 'committed'
+      ) throw new Error('参照知识文档尚未按冻结章节完整提交')
+      const row = db().prepare(`
+        SELECT source_id, source_chapter_number
+        FROM import_run_chapters WHERE run_id = ? AND chapter_number = ?
+      `).get(runId, chapterNumber) as { source_id: string; source_chapter_number: number }
+      const existing = db().prepare(`
+        SELECT document_id, purpose, source_id, source_chapter_number, content_fingerprint, state
+        FROM import_run_knowledge_receipts WHERE run_id = ? AND chapter_number = ?
+      `).get(runId, chapterNumber) as {
+        document_id: string
+        purpose: string
+        source_id: string
+        source_chapter_number: number
+        content_fingerprint: string
+        state: string
+      } | undefined
+      if (existing && (
+        existing.document_id !== documentId
+        || existing.purpose !== 'reference'
+        || existing.source_id !== row.source_id
+        || existing.source_chapter_number !== row.source_chapter_number
+        || existing.content_fingerprint !== binding.contentFingerprint
+        || existing.state !== 'committed'
+      )) throw new Error('参照知识 receipt 已绑定不同效果')
+      if (!existing) db().prepare(`
+        INSERT INTO import_run_knowledge_receipts (
+          run_id, chapter_number, purpose, source_id, source_chapter_number,
+          content_fingerprint, document_id, state
+        ) VALUES (?, ?, 'reference', ?, ?, ?, ?, 'committed')
+      `).run(
+        runId,
+        chapterNumber,
+        row.source_id,
+        row.source_chapter_number,
+        binding.contentFingerprint,
+        documentId,
+      )
+    })()
   }
 
   static beginParsing(candidate: ImportRunBeginParsingRequest): ImportRunSnapshot {

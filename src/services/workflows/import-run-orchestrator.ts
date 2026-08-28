@@ -67,7 +67,6 @@ export interface ImportRunOrchestratorDependencies {
   ) => Promise<ImportRunChapterSnapshot[]>
   importReference: (
     chapter: ImportRunChapterSnapshot,
-    idempotencyKey: string,
     run: ImportRunSnapshot,
     executionAuthority: ImportRunExecutionAuthority,
   ) => Promise<void>
@@ -281,7 +280,7 @@ export class ImportRunOrchestrator {
     while (page.length > 0) {
       for (let offset = 0; offset < page.length; offset += IMPORT_KNOWLEDGE_BATCH_SIZE) {
         const batch = page.slice(offset, offset + IMPORT_KNOWLEDGE_BATCH_SIZE)
-        const checkpoint = `${batch[0].number}-${batch.at(-1)!.number}`
+        const checkpoint = createImportRunChapterBatchCheckpointId(batch)
         if (!run.completedBatches.knowledge?.includes(checkpoint)) {
           if (context.cancelled) throw new Error('Import cancelled at a safe boundary.')
           for (const chapter of batch) {
@@ -291,7 +290,6 @@ export class ImportRunOrchestrator {
               execution,
               lease => this.dependencies.importReference(
                 chapter,
-                `${run.purpose}:${run.sourceFingerprint}:${chapter.number}:${chapter.contentFingerprint}`,
                 run,
                 lease.authority,
               ),

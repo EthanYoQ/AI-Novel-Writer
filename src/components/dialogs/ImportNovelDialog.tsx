@@ -26,6 +26,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const createProject = useProjectStore((s) => s.createProject)
   const currentProject = useProjectStore((s) => s.currentProject)
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow)
+  const activeWorkflows = useWorkflowStore((s) => s.activeRuns)
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
 
@@ -54,6 +55,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const resumableRun = resumableRuns.find(run => run.id === selectedResumableRunId)
     ?? resumableRuns[0]
     ?? null
+  const resumableRunIsActive = resumableRun
+    ? activeWorkflows.some(workflow => workflow.id === resumableRun.id)
+    : false
 
   useEffect(() => {
     if (!open || !currentProject) return
@@ -327,10 +331,10 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 {resumableRun.lastError ? ` — ${resumableRun.lastError}` : ''}
               </div>
               <div className="flex gap-2">
-                <Button type="button" size="sm" onClick={handleResume} disabled={importing}>
+                <Button type="button" size="sm" onClick={handleResume} disabled={importing || resumableRunIsActive}>
                   {text('继续导入', 'Continue import')}
                 </Button>
-                <Button type="button" size="sm" variant="outline" onClick={handleRestart} disabled={importing}>
+                <Button type="button" size="sm" variant="outline" onClick={handleRestart} disabled={importing || resumableRunIsActive}>
                   <RotateCcw size={13} />
                   {text('重新开始', 'Start over')}
                 </Button>

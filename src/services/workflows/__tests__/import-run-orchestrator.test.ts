@@ -16,7 +16,6 @@ import {
 function runSnapshot(overrides: Partial<ImportRunSnapshot> = {}): ImportRunSnapshot {
   return {
     id: 'run-1', purpose: 'reference', rootRunId: 'run-1', effectNamespace: 'import:reference:run-1',
-    sourceFingerprint: 'a'.repeat(64), manifestFingerprint: 'b'.repeat(64),
     sourceDisplay: [{ displayName: 'reference.txt', mediaType: 'text/plain', size: 1 }],
     locale: 'en-US', stage: 'knowledge', status: 'running', completedBatches: {},
     lastError: '', resumable: true, cancelRequested: false, totalChapters: 25,
@@ -316,7 +315,9 @@ describe('ImportRunOrchestrator', () => {
 
     await expect(orchestrator.executeStage('run-1', 'knowledge', 'test-runner', context, callbacks))
       .rejects.toThrow('injected KB failure')
-    expect(getRun().completedBatches.knowledge).toEqual(['1-10'])
+    expect(getRun().completedBatches.knowledge).toEqual([
+      `1-10-${Array.from({ length: 10 }, () => '00000000').join('.')}`,
+    ])
 
     await orchestrator.executeStage('run-1', 'knowledge', 'test-runner', context, callbacks)
     expect(calls.filter(number => number <= 10)).toHaveLength(10)

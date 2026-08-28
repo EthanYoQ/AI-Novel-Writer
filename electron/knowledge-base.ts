@@ -423,7 +423,8 @@ type ReferenceImportResult = {
 interface ReferenceImportAuthorityRequest {
   runId: string
   executionAuthority: ImportRunExecutionAuthority
-  idempotencyKey: string
+  chapterNumber: number
+  stableKey: string
   content: string
 }
 
@@ -441,12 +442,14 @@ function referenceImportProjectIdentity(projectPath: string): string {
 }
 
 function assertReferenceImportAuthority(request: ReferenceImportAuthorityRequest): void {
-  ImportRunRepository.assertReferenceImportAuthority(
+  const binding = ImportRunRepository.resolveReferenceImportAuthority(
     request.runId,
     request.executionAuthority,
-    request.idempotencyKey,
-    request.content,
+    request.chapterNumber,
   )
+  if (binding.stableKey !== request.stableKey || binding.content !== request.content) {
+    throw new Error('参照知识写入未绑定当前导入的冻结章节')
+  }
 }
 
 function currentFlightAuthority(flight: ReferenceImportFlight): void {
@@ -651,19 +654,20 @@ async function performReferenceTextImport(
 export async function importReferenceText(
   text: string,
   fileName: string,
-  idempotencyKey: string,
+  stableImportKey: string,
+  chapterNumber: number,
   runId: string,
   executionAuthority: ImportRunExecutionAuthority,
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
 ): Promise<ReferenceImportResult> {
-  const stableKey = idempotencyKey.trim()
+  const stableKey = stableImportKey.trim()
   if (!stableKey || stableKey.length > 512 || !/^[\w:.-]+$/u.test(stableKey)) {
     return { success: false, error: '参照导入幂等键无效' }
   }
   const documentId = createHash('sha256').update(`reference-import:${stableKey}`, 'utf8').digest('hex')
-  const authority = { runId, executionAuthority, idempotencyKey: stableKey, content: text }
+  const authority = { runId, executionAuthority, chapterNumber, stableKey, content: text }
   try {
     const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
     const bindingHash = createHash('sha256').update(JSON.stringify({

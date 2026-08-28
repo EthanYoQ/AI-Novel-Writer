@@ -240,33 +240,40 @@ export function registerKBController(
 
   ipcMain.handle('kb:import-reference-text', async (
     _event,
-    text: string,
+    chapterNumber: number,
     fileName: string,
-    idempotencyKey: string,
     runId: string,
     executionAuthority: ImportRunExecutionAuthority,
-    expectedProjectPath: string,
   ) => {
-    const projectPath = requireProjectPath(expectedProjectPath)
-    ImportRunRepository.assertReferenceImportAuthority(
+    const projectPath = getCurrentProjectPath()
+    if (!projectPath) throw new Error(text('项目数据库未打开', 'The project database is not open.'))
+    const binding = ImportRunRepository.resolveReferenceImportAuthority(
       runId,
       executionAuthority,
-      idempotencyKey,
-      text,
+      chapterNumber,
     )
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
-    return knowledgeBaseLoader.run((kb) => kb.importReferenceText(
-      text,
-      fileName,
-      idempotencyKey,
-      runId,
-      executionAuthority,
-      projectPath,
-      protocol,
-      model,
-    ))
+    return knowledgeBaseLoader.run(async (kb) => {
+      const result = await kb.importReferenceText(
+        binding.content,
+        fileName,
+        binding.stableKey,
+        chapterNumber,
+        runId,
+        executionAuthority,
+        projectPath,
+        protocol,
+        model,
+      )
+      if (result.success && result.docId) {
+        ImportRunRepository.commitReferenceImportReceipt(
+          runId, executionAuthority, chapterNumber, result.docId,
+        )
+      }
+      return result
+    })
   })
 
   ipcMain.handle('kb:search', async (_event, query: string, topK: number | undefined, expectedProjectPath: string) => {

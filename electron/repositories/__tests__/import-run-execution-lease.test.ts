@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ImportRunRepository } from '../import-run-repository'
 import type { ImportRunPrepareRequest } from '../../../src/shared/import-run'
+import { createImportRunChapterBatchCheckpointId } from '../../../src/shared/import-run'
+import { createHash } from 'node:crypto'
 
 let root = ''
 const request: ImportRunPrepareRequest = {
@@ -45,16 +47,25 @@ describe('import execution lease', () => {
   it('authorizes only the frozen chapter bound to the active reference-import epoch', () => {
     const started = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
     const authority = { owner: started.execution.owner, epoch: started.execution.epoch }
-    const expectedKey = `reference:${'a'.repeat(64)}:1:${'b'.repeat(64)}`
-
-    expect(() => ImportRunRepository.assertReferenceImportAuthority(
-      'leased-run', authority, expectedKey, 'x', 1_050,
-    )).not.toThrow()
-    expect(() => ImportRunRepository.assertReferenceImportAuthority(
-      'leased-run', authority, expectedKey, 'changed', 1_050,
+    expect(ImportRunRepository.resolveReferenceImportAuthority(
+      'leased-run', authority, 1, 1_050,
+    )).toMatchObject({ chapterNumber: 1, content: 'x', contentFingerprint: 'b'.repeat(64) })
+    expect(() => ImportRunRepository.resolveReferenceImportAuthority(
+      'leased-run', authority, 2, 1_050,
     )).toThrow(/冻结章节/)
-    expect(() => ImportRunRepository.assertReferenceImportAuthority(
-      'leased-run', authority, 'reference:forged:1:key', 'x', 1_050,
+  })
+
+  it('revokes knowledge and embedding authority as soon as cancellation is requested', () => {
+    const started = ImportRunRepository.startOrResume('leased-run', 'renderer-a')
+    const authority = { owner: started.execution.owner, epoch: started.execution.epoch }
+    expect(() => ImportRunRepository.resolveReferenceImportAuthority(
+      'leased-run', authority, 1,
+    )).not.toThrow()
+
+    ImportRunRepository.requestCancel('leased-run', started.execution)
+
+    expect(() => ImportRunRepository.resolveReferenceImportAuthority(
+      'leased-run', authority, 1,
     )).toThrow(/冻结章节/)
   })
 
@@ -91,9 +102,26 @@ describe('import execution lease', () => {
   it('releases and fences cancellation and completion terminal boundaries', () => {
     const base = Date.now()
     const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', base, 60_000)
+    const binding = ImportRunRepository.resolveReferenceImportAuthority('leased-run', first.execution, 1)
+    const documentId = createHash('sha256').update(`reference-import:${binding.stableKey}`).digest('hex')
+    getProjectDb()!.prepare(`
+      INSERT INTO import_reference_documents (
+        document_id, idempotency_key_hash, content_hash, chunk_set_hash,
+        expected_chunk_count, corpus_kind, state
+      ) VALUES (?, ?, ?, ?, 1, 'reference', 'committed')
+    `).run(
+      documentId,
+      createHash('sha256').update(binding.stableKey).digest('hex'),
+      binding.contentFingerprint,
+      createHash('sha256').update('chunks:1').digest('hex'),
+    )
+    ImportRunRepository.commitReferenceImportReceipt(
+      'leased-run', first.execution, 1, documentId,
+    )
+    const checkpoint = createImportRunChapterBatchCheckpointId([{ number: 1, contentFingerprint: 'b'.repeat(64) }])
     ImportRunRepository.requestCancel('leased-run', first.execution)
     expect(ImportRunRepository.completeBatch(
-      'leased-run', 'knowledge', '1-1', first.execution,
+      'leased-run', 'knowledge', checkpoint, first.execution,
     )).toMatchObject({ cancelApplied: true, run: { status: 'cancelled' } })
 
     const resumed = ImportRunRepository.startOrResume('leased-run', 'renderer-b', base + 1, 60_000)

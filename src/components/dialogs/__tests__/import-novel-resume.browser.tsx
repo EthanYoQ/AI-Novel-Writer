@@ -35,7 +35,6 @@ function importRun(overrides: Partial<ImportRunSnapshot> = {}): ImportRunSnapsho
   return {
     id: 'persisted-import', purpose: 'reference', rootRunId: 'persisted-import',
     effectNamespace: 'import:reference:persisted-import',
-    sourceFingerprint: 'a'.repeat(64), manifestFingerprint: 'b'.repeat(64),
     sourceDisplay: [{ displayName: 'reference.txt', mediaType: 'text/plain', size: 20 }],
     locale: 'zh-CN', stage: 'knowledge', status: 'ready', completedBatches: {}, lastError: '',
     resumable: true, cancelRequested: false, totalChapters: 1, totalContentSize: 20,
@@ -189,7 +188,21 @@ describe('current-project reference import', () => {
     await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
     await act(async () => page.getByTestId('import-target-current').click())
     await expect.element(page.getByTestId('import-resumable-run')).toHaveTextContent('provider unavailable')
+    await act(async () => {
+      useWorkflowStore.setState({
+        activeRuns: [{
+          id: resumable.id,
+          projectPath: project.path,
+          projectSession: { projectId: project.id, leaseId: project.sessionLease, projectPath: project.path },
+          writingLanguage: 'zh-CN', uiLocale: 'zh-CN', type: 'novel_import', title: 'Active import',
+          status: 'running', currentStepIndex: 0, createdAt: '2026-01-01', steps: [],
+        }],
+      })
+    })
+    await expect.element(page.getByRole('button', { name: '继续导入' })).toBeDisabled()
+    await expect.element(page.getByRole('button', { name: '重新开始' })).toBeDisabled()
 
+    await act(async () => useWorkflowStore.setState({ activeRuns: [] }))
     await act(async () => page.getByRole('button', { name: '继续导入' }).click())
 
     expect(startWorkflow).toHaveBeenCalledOnce()

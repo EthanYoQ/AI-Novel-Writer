@@ -22,7 +22,6 @@ const executionOwner = 'test-import-executor'
 function run(overrides: Partial<ImportRunSnapshot> = {}): ImportRunSnapshot {
   return {
     id: 'import-run-1', purpose: 'reference', rootRunId: 'import-run-1', effectNamespace: 'import:reference:import-run-1',
-    sourceFingerprint: 'a'.repeat(64), manifestFingerprint: 'b'.repeat(64),
     sourceDisplay: [{ displayName: 'reference.txt', mediaType: 'text/plain', size: 20 }],
     locale: 'zh-CN', stage: 'knowledge', status: 'running', completedBatches: {},
     lastError: '', resumable: true, cancelRequested: false, totalChapters: 1,
@@ -117,12 +116,10 @@ describe('createImportWorkflow', () => {
     expect(ipcMocks.invoke).toHaveBeenCalledWith(
       session,
       'kb:import-reference-text',
-      'frozen reference',
+      1,
       '第1章 Start.txt',
-      `reference:${'a'.repeat(64)}:1:${'c'.repeat(64)}`,
       'import-run-1',
       { owner: executionOwner, epoch: 1 },
-      session.projectPath,
     )
     expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('db:draft-create')
   })

@@ -472,6 +472,26 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     CREATE INDEX IF NOT EXISTS idx_import_run_receipts_state
       ON import_run_receipts(run_id, state, stage);
 
+    CREATE TABLE IF NOT EXISTS import_run_knowledge_receipts (
+      run_id TEXT NOT NULL,
+      chapter_number INTEGER NOT NULL,
+      purpose TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_chapter_number INTEGER NOT NULL,
+      content_fingerprint TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state = 'committed'),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (run_id, chapter_number),
+      FOREIGN KEY (run_id, chapter_number)
+        REFERENCES import_run_chapters(run_id, chapter_number) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_run_knowledge_receipts_affiliation
+      ON import_run_knowledge_receipts(
+        purpose, source_id, source_chapter_number, content_fingerprint, state
+      );
+
     CREATE TABLE IF NOT EXISTS import_reference_documents (
       document_id TEXT PRIMARY KEY,
       idempotency_key_hash TEXT NOT NULL UNIQUE,

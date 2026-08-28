@@ -784,12 +784,10 @@ export interface KnowledgeBaseChannels {
   'kb:import-text': { args: [text: string, fileName: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
   'kb:import-reference-text': {
     args: [
-      text: string,
+      chapterNumber: number,
       fileName: string,
-      idempotencyKey: string,
       runId: string,
       executionAuthority: ImportRunExecutionAuthority,
-      expectedProjectPath: string,
     ]
     return: { success: boolean; docId?: string; chunkCount?: number; idempotent?: boolean; error?: string; errorCode?: AppErrorCode }
   }

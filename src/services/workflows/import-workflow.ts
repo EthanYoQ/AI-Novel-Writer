@@ -5,6 +5,7 @@ import {
   type ImportRunChapterSnapshot,
   type ImportRunSnapshot,
   type ImportRunStage,
+  type ImportRunExecutionLease,
 } from '../../shared/import-run'
 import type { ImportGlobalFactsReceipt } from '../../shared/import-global-facts'
 import type { BlueprintRangeCommitReceipt } from '../../../electron/repositories/blueprint-repository'
@@ -62,16 +63,24 @@ function productionDependencies(
   const projectPath = context.projectPath
   return {
     getRun: runId => ipc.invokeWithProjectSession(session, 'db:import-run-get', runId, projectPath),
-    startOrResume: async (runId, owner) => required(
-      await ipc.invokeWithProjectSession(session, 'db:import-run-start-resume', runId, owner, projectPath),
-      'Could not start or resume the import run.',
-    ).start!,
-    renewExecution: async (runId, execution) => required(
-      await ipc.invokeWithProjectSession(
-        session, 'db:import-run-renew-execution', runId, execution, projectPath,
-      ),
-      'Could not renew the import execution lease.',
-    ).execution!,
+    startOrResume: async (runId, owner) => {
+      const start = required(
+        await ipc.invokeWithProjectSession(session, 'db:import-run-start-resume', runId, owner, projectPath),
+        'Could not start or resume the import run.',
+      ).start!
+      context.data.importRunExecution = start.execution
+      return start
+    },
+    renewExecution: async (runId, execution) => {
+      const renewed = required(
+        await ipc.invokeWithProjectSession(
+          session, 'db:import-run-renew-execution', runId, execution, projectPath,
+        ),
+        'Could not renew the import execution lease.',
+      ).execution!
+      context.data.importRunExecution = renewed
+      return renewed
+    },
     getEffectReceipt: (runId, stage, checkpoint) => ipc.invokeWithProjectSession(
       session,
       'db:import-run-effect-receipt-get',
@@ -163,7 +172,7 @@ function productionDependencies(
     listChapters: (runId, after, limit) => ipc.invokeWithProjectSession(
       session, 'db:import-run-list-chapters', runId, after, limit, projectPath,
     ),
-    importReference: async (chapter, idempotencyKey, run, executionAuthority) => {
+    importReference: async (chapter, run, executionAuthority) => {
       const fileName = textForLocale(
         run.locale,
         `第${chapter.number}章 ${chapter.title || '无标题'}.txt`,
@@ -172,12 +181,10 @@ function productionDependencies(
       const result = await ipc.invokeWithProjectSession(
         session,
         'kb:import-reference-text',
-        chapter.content,
+        chapter.number,
         fileName,
-        idempotencyKey,
         run.id,
         executionAuthority,
-        projectPath,
       )
       if (!result.success) throw new Error(result.error || textForLocale(
         run.locale,
@@ -316,6 +323,53 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
     projectPath: params.projectPath,
     projectSession: session,
     uiLocale: params.run.locale,
+    onCancelRequested: async context => {
+      const execution = context.data.importRunExecution as ImportRunExecutionLease | undefined
+      if (!execution) return
+      const result = await ipc.invokeWithProjectSession(
+        session,
+        'db:import-run-request-cancel',
+        params.run.id,
+        execution,
+        params.projectPath,
+      )
+      if (!result.success) throw new Error(result.error || textForLocale(
+        params.run.locale,
+        '无法保存导入取消请求',
+        'Could not persist the import cancellation request.',
+      ))
+    },
+    onCancelledAtBoundary: async context => {
+      const durableRun = await ipc.invokeWithProjectSession(
+        session, 'db:import-run-get', params.run.id, params.projectPath,
+      )
+      if (!durableRun || durableRun.status === 'cancelled') return
+      const execution = context.data.importRunExecution as ImportRunExecutionLease | undefined
+      if (!execution) return
+      const renewed = required(
+        await ipc.invokeWithProjectSession(
+          session,
+          'db:import-run-renew-execution',
+          params.run.id,
+          execution,
+          params.projectPath,
+        ),
+        textForLocale(params.run.locale, '无法续租导入取消边界', 'Could not renew the import cancellation boundary.'),
+      ).execution!
+      context.data.importRunExecution = renewed
+      const result = await ipc.invokeWithProjectSession(
+        session,
+        'db:import-run-cancel-at-boundary',
+        params.run.id,
+        renewed,
+        params.projectPath,
+      )
+      if (!result.success) throw new Error(result.error || textForLocale(
+        params.run.locale,
+        '无法完成导入取消',
+        'Could not finalize import cancellation.',
+      ))
+    },
     steps: [
       importStep(params.run, params.executionOwner, 'knowledge',
         ['导入参照文本与构建知识库', 'Import reference text and build the knowledge base'],
