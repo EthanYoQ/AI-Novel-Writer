@@ -143,8 +143,7 @@ describe('ImportRunRepository', () => {
 
   it('migrates legacy chapter rows to opaque source affiliations and stable mappings', () => {
     ImportRunRepository.prepare(request())
-    const execution = ImportRunRepository.startOrResume('import-run-1', 'migration-fixture').execution
-    ImportRunRepository.complete('import-run-1', execution)
+    markRunCompleted('import-run-1')
     closeProjectDatabase()
 
     const legacy = new Database(path.join(root, '.vela', 'vela.db'))
@@ -318,8 +317,7 @@ describe('ImportRunRepository', () => {
     ImportRunRepository.prepare(request([fromSource(0, 1, 'A chapter')], {
       sourceDisplay: [{ displayName: 'a.txt', mediaType: 'text/plain', size: 9 }],
     }))
-    let execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
-    ImportRunRepository.complete('import-run-1', execution)
+    markRunCompleted('import-run-1')
 
     const extended = ImportRunRepository.prepare(request([
       fromSource(0, 1, 'A chapter'),
@@ -379,8 +377,7 @@ describe('ImportRunRepository', () => {
     )
     expect(importedByWorkflow).toEqual([{ number: 2, content: 'B chapter' }])
     expect(ImportRunRepository.get('a-plus-b')).toMatchObject({ stage: 'global' })
-    execution = ImportRunRepository.startOrResume('a-plus-b', workflowOwner).execution
-    ImportRunRepository.complete('a-plus-b', execution)
+    markRunCompleted('a-plus-b')
 
     expect(ImportRunRepository.prepare(request([fromSource(0, 1, 'B chapter')], {
       runId: 'only-b',
