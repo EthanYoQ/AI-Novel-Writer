@@ -6,6 +6,7 @@ import type {
   ImportRunSnapshot,
   ImportRunStage,
 } from '../../../shared/import-run'
+import { createImportRunChapterBatchCheckpointId } from '../../../shared/import-run'
 import {
   IMPORT_CHAPTER_PAGE_SIZE,
   IMPORT_KNOWLEDGE_BATCH_SIZE,
@@ -323,6 +324,35 @@ describe('ImportRunOrchestrator', () => {
     expect(calls.filter(number => number <= 10)).toHaveLength(10)
     expect(calls.filter(number => number === 11)).toHaveLength(2)
     expect(limits.every(limit => limit <= IMPORT_CHAPTER_PAGE_SIZE)).toBe(true)
+    expect(getRun().stage).toBe('global')
+  })
+
+  it('checkpoints non-contiguous knowledge chapters in exact bounded ranges', async () => {
+    const { deps, calls, getRun } = harness(2)
+    const sparseChapters = [chapter(1), chapter(3)]
+    deps.listChapters = vi.fn(async (_runId, after, limit) => (
+      sparseChapters.filter(item => item.number > after).slice(0, limit)
+    ))
+
+    await new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'knowledge', 'test-runner', { cancelled: false }, callbacks,
+    )
+
+    expect(calls).toEqual([1, 3])
+    expect(deps.completeBatch).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      'knowledge',
+      createImportRunChapterBatchCheckpointId([chapter(1)]),
+      expect.any(Object),
+    )
+    expect(deps.completeBatch).toHaveBeenNthCalledWith(
+      2,
+      'run-1',
+      'knowledge',
+      createImportRunChapterBatchCheckpointId([chapter(3)]),
+      expect.any(Object),
+    )
     expect(getRun().stage).toBe('global')
   })
 

@@ -111,12 +111,15 @@ function stageIndex(stage: ImportRunStage): number {
   return STAGES.indexOf(stage)
 }
 
-function splitContiguousBatches(chapters: ImportRunChapterSnapshot[]): ImportRunChapterSnapshot[][] {
+function splitContiguousBatches(
+  chapters: ImportRunChapterSnapshot[],
+  maxBatchSize: number,
+): ImportRunChapterSnapshot[][] {
   const batches: ImportRunChapterSnapshot[][] = []
   let current: ImportRunChapterSnapshot[] = []
   for (const chapter of chapters) {
     const previous = current.at(-1)
-    if (current.length >= IMPORT_BLUEPRINT_BATCH_SIZE || (previous && chapter.number !== previous.number + 1)) {
+    if (current.length >= maxBatchSize || (previous && chapter.number !== previous.number + 1)) {
       batches.push(current)
       current = []
     }
@@ -278,8 +281,7 @@ export class ImportRunOrchestrator {
     let visited = 0
     let page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)
     while (page.length > 0) {
-      for (let offset = 0; offset < page.length; offset += IMPORT_KNOWLEDGE_BATCH_SIZE) {
-        const batch = page.slice(offset, offset + IMPORT_KNOWLEDGE_BATCH_SIZE)
+      for (const batch of splitContiguousBatches(page, IMPORT_KNOWLEDGE_BATCH_SIZE)) {
         const checkpoint = createImportRunChapterBatchCheckpointId(batch)
         if (!run.completedBatches.knowledge?.includes(checkpoint)) {
           if (context.cancelled) throw new Error('Import cancelled at a safe boundary.')
@@ -415,7 +417,7 @@ export class ImportRunOrchestrator {
     let visited = 0
     let page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)
     while (page.length > 0) {
-      for (const batch of splitContiguousBatches(page)) {
+      for (const batch of splitContiguousBatches(page, IMPORT_BLUEPRINT_BATCH_SIZE)) {
         const checkpoint = createImportRunChapterBatchCheckpointId(batch)
         if (!run.completedBatches.blueprints?.includes(checkpoint)) {
           if (context.cancelled) throw new Error('Import cancelled at a safe boundary.')

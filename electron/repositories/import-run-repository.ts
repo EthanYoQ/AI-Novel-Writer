@@ -955,6 +955,24 @@ function latestCompletedRun(purpose: ImportPurpose, sourceFingerprint: string): 
   `).get(purpose, sourceFingerprint) as ImportRunRow | undefined
 }
 
+function overlappingResumableSourceRun(runId: string, purpose: ImportPurpose): ImportRunRow | undefined {
+  return db().prepare(`
+    SELECT DISTINCT other_runs.*
+    FROM import_runs AS other_runs
+    JOIN import_run_sources AS other_sources ON other_sources.run_id = other_runs.id
+    JOIN import_run_sources AS current_sources
+      ON current_sources.run_id = ?
+      AND current_sources.source_fingerprint = other_sources.source_fingerprint
+    WHERE other_runs.id <> ?
+      AND other_runs.purpose = ?
+      AND other_runs.stage <> 'parsing'
+      AND other_runs.resumable = 1
+      AND other_runs.status IN ('ready', 'running', 'failed', 'cancelled')
+    ORDER BY other_runs.updated_at DESC, other_runs.rowid DESC
+    LIMIT 1
+  `).get(runId, runId, purpose) as ImportRunRow | undefined
+}
+
 export class ImportRunRepository {
   static parsedSourceStatus(runId: string, sourceId: string): 'pending' | 'completed' | 'failed' | undefined {
     const row = db().prepare(`
@@ -1325,6 +1343,9 @@ export class ImportRunRepository {
           conflictChapterNumbers: [],
           duplicateChapterNumbers: chapters.map(chapter => chapter.number),
         }
+      }
+      if (overlappingResumableSourceRun(runId, run.purpose)) {
+        throw new Error('另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试')
       }
       const sourceIds = sources.map(source => source.source_id)
       const completed = latestCompletedRun(run.purpose, run.source_fingerprint)

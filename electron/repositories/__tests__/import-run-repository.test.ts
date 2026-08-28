@@ -72,6 +72,36 @@ function markRunCompleted(runId: string): void {
   `).run(runId)
 }
 
+const SOURCE_A = '11111111-1111-4111-8111-111111111111'
+const SOURCE_B = '22222222-2222-4222-8222-222222222222'
+const SOURCE_C = '33333333-3333-4333-8333-333333333333'
+
+function prepareParsedRun(
+  runId: string,
+  sources: Array<{ id: string; fingerprint: string; content: string }>,
+) {
+  const sourceFingerprint = createHash('sha256')
+    .update(sources.map(source => source.fingerprint).join(':'))
+    .digest('hex')
+  ImportRunRepository.beginParsing({
+    runId,
+    purpose: 'reference',
+    sourceFingerprint,
+    sourceIds: sources.map(source => source.id),
+    sourceFingerprints: sources.map(source => source.fingerprint),
+    sourceDisplay: sources.map((source, index) => ({
+      displayName: `source-${index + 1}.txt`,
+      mediaType: 'text/plain',
+      size: Buffer.byteLength(source.content, 'utf8'),
+    })),
+    locale: 'en-US',
+  })
+  for (const source of sources) {
+    ImportRunRepository.commitParsedSource(runId, source.id, [chapter(1, source.content)])
+  }
+  return () => ImportRunRepository.finalizeParsing(runId)
+}
+
 function installLegacyRun(snapshots: string[], totalChapters: number): void {
   closeProjectDatabase()
   const legacy = new Database(path.join(root, '.vela', 'vela.db'))
@@ -464,6 +494,35 @@ describe('ImportRunRepository', () => {
       classification: 'exact-duplicate',
       duplicateChapterNumbers: [2],
     })
+  })
+
+  it('serializes overlapping prepared source sets while allowing disjoint runs', () => {
+    const finalizeA = prepareParsedRun('run-a', [
+      { id: SOURCE_A, fingerprint: 'a'.repeat(64), content: 'A chapter' },
+    ])
+    const finalizeAPlusB = prepareParsedRun('run-a-plus-b', [
+      { id: SOURCE_A, fingerprint: 'a'.repeat(64), content: 'A chapter' },
+      { id: SOURCE_B, fingerprint: 'b'.repeat(64), content: 'B chapter' },
+    ])
+    const finalizeC = prepareParsedRun('run-c', [
+      { id: SOURCE_C, fingerprint: 'c'.repeat(64), content: 'C chapter' },
+    ])
+
+    expect(finalizeA()).toMatchObject({ classification: 'new', newChapterNumbers: [1] })
+    expect(() => finalizeAPlusB()).toThrow(/相同来源/)
+    expect(ImportRunRepository.get('run-a-plus-b')).toMatchObject({ stage: 'parsing', status: 'ready' })
+    expect(ImportRunRepository.listChapterBatch('run-a-plus-b', { afterChapterNumber: 0, limit: 10 }))
+      .toEqual([])
+    expect(finalizeC()).toMatchObject({ classification: 'new', newChapterNumbers: [2] })
+
+    markRunCompleted('run-a')
+    expect(finalizeAPlusB()).toMatchObject({
+      classification: 'new',
+      newChapterNumbers: [3],
+      duplicateChapterNumbers: [1],
+    })
+    expect(ImportRunRepository.listChapterBatch('run-a-plus-b', { afterChapterNumber: 0, limit: 10 }))
+      .toEqual([expect.objectContaining({ number: 3, content: 'B chapter' })])
   })
 
   it('applies cancellation only when a completed batch reaches a safe boundary', () => {
