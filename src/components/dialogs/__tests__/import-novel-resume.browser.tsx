@@ -185,4 +185,80 @@ describe('current-project reference import', () => {
     expect(startWorkflow).toHaveBeenCalledOnce()
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'persisted-import' })
   })
+
+  it('lists two unfinished runs in Chinese and continues the run the user selects', async () => {
+    const first = importRun({
+      id: 'first-run',
+      sourceDisplay: [{ displayName: '星河.txt', mediaType: 'text/plain', size: 20 }],
+      status: 'failed',
+      stage: 'style',
+    })
+    const second = importRun({
+      id: 'second-run',
+      sourceDisplay: [{ displayName: '雨城.txt', mediaType: 'text/plain', size: 40 }],
+      status: 'cancelled',
+      stage: 'blueprints',
+      completedChapters: 3,
+      totalChapters: 8,
+    })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [first, second]
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await expect.element(page.getByTestId('import-resumable-runs')).toBeVisible()
+    await expect.element(page.getByText('星河.txt', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('雨城.txt', { exact: true })).toBeVisible()
+    await act(async () => page.getByTestId('import-resumable-choice-second-run').click())
+    await act(async () => page.getByRole('button', { name: '继续导入' }).click())
+
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'second-run' })
+  })
+
+  it('lists two unfinished runs in English and restarts the run the user selects', async () => {
+    const first = importRun({
+      id: 'first-run',
+      locale: 'en-US',
+      sourceDisplay: [{ displayName: 'stars.txt', mediaType: 'text/plain', size: 20 }],
+      status: 'failed',
+      stage: 'global',
+    })
+    const second = importRun({
+      id: 'second-run',
+      locale: 'en-US',
+      sourceDisplay: [{ displayName: 'rain.txt', mediaType: 'text/plain', size: 40 }],
+      status: 'cancelled',
+      stage: 'blueprints',
+    })
+    const restarted = importRun({ id: 'restarted-second', locale: 'en-US', status: 'ready' })
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-list-resumable') return [first, second]
+      if (channel === 'db:import-run-restart') {
+        expect(args[0]).toBe('second-run')
+        return { success: true, run: restarted }
+      }
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => {
+      useLocaleStore.setState({ locale: 'en-US' })
+      useProjectStore.setState({ currentProject: { ...project } as never })
+    })
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await expect.element(page.getByText('Resumable imports', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('stars.txt', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('rain.txt', { exact: true })).toBeVisible()
+    await act(async () => page.getByTestId('import-resumable-choice-second-run').click())
+    await act(async () => page.getByRole('button', { name: 'Start over' }).click())
+
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'restarted-second', uiLocale: 'en-US' })
+  })
 })

@@ -36,6 +36,51 @@ function request(chapters = [chapter(1)], overrides: Partial<ImportRunPrepareReq
   }
 }
 
+function installLegacyRun(snapshots: string[], totalChapters: number): void {
+  closeProjectDatabase()
+  const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+  legacy.exec(`
+    DROP TABLE import_runs;
+    CREATE TABLE import_runs (
+      id TEXT PRIMARY KEY,
+      source_fingerprint TEXT NOT NULL,
+      manifest_fingerprint TEXT NOT NULL,
+      source_display_json TEXT NOT NULL DEFAULT '[]',
+      locale TEXT NOT NULL,
+      stage TEXT NOT NULL DEFAULT 'knowledge',
+      status TEXT NOT NULL DEFAULT 'ready',
+      completed_batches_json TEXT NOT NULL DEFAULT '{}',
+      last_error TEXT NOT NULL DEFAULT '',
+      resumable INTEGER NOT NULL DEFAULT 1,
+      cancel_requested INTEGER NOT NULL DEFAULT 0,
+      total_chapters INTEGER NOT NULL,
+      total_content_size INTEGER NOT NULL DEFAULT 0,
+      completed_chapters INTEGER NOT NULL DEFAULT 0,
+      base_run_id TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT DEFAULT NULL
+    );
+    INSERT INTO import_runs (
+      id, source_fingerprint, manifest_fingerprint, locale, total_chapters, total_content_size
+    ) VALUES ('legacy-run', '${'a'.repeat(64)}', '${'b'.repeat(64)}', 'en-US', ${totalChapters}, 999);
+  `)
+  const insert = legacy.prepare(`
+    INSERT INTO import_run_chapters (
+      run_id, chapter_number, title, content_fingerprint, content_size, content_snapshot
+    ) VALUES ('legacy-run', ?, ?, ?, ?, ?)
+  `)
+  snapshots.forEach((content, index) => insert.run(
+    index + 1,
+    `Legacy ${index + 1}`,
+    createHash('sha256').update(content).digest('hex'),
+    Buffer.byteLength(content, 'utf8'),
+    content,
+  ))
+  legacy.close()
+  initProjectDatabase(root)
+}
+
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-import-run-'))
   initProjectDatabase(root)
@@ -80,6 +125,36 @@ describe('ImportRunRepository', () => {
     expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
       'purpose', 'root_run_id', 'effect_namespace', 'execution_epoch', 'manifest_chapter_count',
     ]))
+  })
+
+  it('backfills a legacy manifest word count from its frozen chapter snapshots', () => {
+    installLegacyRun(['甲😀', 'second'], 2)
+
+    expect(ImportRunRepository.get('legacy-run')).toMatchObject({
+      manifestChapterCount: 2,
+      manifestWordCount: '甲😀'.length + 'second'.length,
+      resumable: true,
+    })
+  })
+
+  it('marks a legacy run non-resumable when its frozen snapshots cannot reconstruct the manifest', () => {
+    installLegacyRun(['only one frozen chapter'], 2)
+
+    expect(ImportRunRepository.get('legacy-run')).toMatchObject({
+      status: 'failed',
+      resumable: false,
+      lastError: expect.stringContaining('cannot be resumed'),
+      manifestWordCount: 0,
+    })
+    expect(() => ImportRunRepository.startOrResume('legacy-run', 'renderer-a'))
+      .toThrow(/cannot be resumed|不可恢复/i)
+  })
+
+  it('rejects an empty frozen manifest before it can become a zero-word resumable run', () => {
+    expect(() => ImportRunRepository.prepare(request([chapter(1, '')])))
+      .toThrow(/快照无效/)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_runs').get())
+      .toEqual({ count: 0 })
   })
 
   it('migrates a bounded chapter snapshot and never persists paths, grants, or credentials', () => {

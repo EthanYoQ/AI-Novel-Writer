@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, initProjectDatabase } from '../database'
@@ -79,6 +80,56 @@ describe('stable reference knowledge receipt', () => {
       complete: true,
       chunkCount: expectedChunks.length,
     })
+  })
+
+  it('purges an embedding-only crash across reopen before replaying the stable reference', async () => {
+    const content = 'Reference content that must have exactly one durable copy.'
+    const key = 'source-embedding-only:chapter-1'
+    const documentId = createHash('sha256').update(`reference-import:${key}`, 'utf8').digest('hex')
+    const first = await importReferenceText(
+      content, 'Chapter 1.txt', key, projectPath, 'openai', model,
+    )
+    expect(first).toMatchObject({ success: true, docId: documentId })
+    await expect(removeDocument(projectPath, documentId)).resolves.toBe(true)
+
+    const chunks = chunkText(content)
+    const vector = [0.1, 0.2, 0.3, 0.4]
+    await expect(addChunks(
+      projectPath,
+      documentId,
+      'Chapter 1.txt',
+      chunks,
+      chunks.map(() => vector),
+      undefined,
+      { corpusKind: 'reference', replacementMode: 'stable-id' },
+      { modelFingerprint: 'test/embedding-only-replay', distanceMetric: 'l2' },
+    )).resolves.toEqual({ success: true, chunkCount: chunks.length })
+    const connection = await getConnection(projectPath)
+    await (await connection.openTable('chunks')).delete(`\`docId\` = '${documentId}'`)
+    await (await connection.openTable('documents')).delete(`id = '${documentId}'`)
+    closeConnection(projectPath)
+
+    await expect(getDocumentIntegrity(projectPath, documentId)).resolves.toMatchObject({
+      complete: false,
+      chunkCount: 0,
+      embeddingGenerations: [expect.objectContaining({
+        chunkCount: chunks.length,
+        complete: false,
+      })],
+    })
+    const replay = await importReferenceText(
+      content, 'Chapter 1.txt', key, projectPath, 'openai', model,
+    )
+    expect(replay).toMatchObject({ success: true, idempotent: false, docId: documentId })
+    await expect(getDocumentIntegrity(projectPath, documentId)).resolves.toMatchObject({
+      complete: true,
+      chunkCount: chunks.length,
+    })
+    const reopened = await getConnection(projectPath)
+    for (const tableName of (await reopened.tableNames()).filter(name => name.startsWith('chunks__space_'))) {
+      expect(await (await reopened.openTable(tableName)).query()
+        .filter(`\`docId\` = '${documentId}'`).toArray()).toEqual([])
+    }
   })
 
   it.each(['chunks', 'document'] as const)(

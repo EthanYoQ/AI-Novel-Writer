@@ -8,7 +8,11 @@ vi.mock('../../ipc-client', () => ({
 }))
 
 import { createImportWorkflow } from '../import-workflow'
-import type { ImportRunSnapshot } from '../../../shared/import-run'
+import {
+  IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+  type ImportRunEffectReceipt,
+  type ImportRunSnapshot,
+} from '../../../shared/import-run'
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import { useProjectStore } from '../../../stores/project-store'
 
@@ -128,6 +132,64 @@ describe('createImportWorkflow', () => {
       run: run(),
       executionOwner,
     })).toThrow('当前项目已切换')
+  })
+
+  it('re-reads and rejects a committed effect receipt that differs from durable storage', async () => {
+    const snapshot = run({ stage: 'global' })
+    const receipt: ImportRunEffectReceipt = {
+      schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+      runId: snapshot.id,
+      effectNamespace: snapshot.effectNamespace,
+      effectKey: 'global-facts',
+      stage: 'global',
+      batchId: 'done',
+      kind: 'project-global-facts',
+      payloadHash: 'c'.repeat(64),
+      state: 'committed',
+      payload: {},
+      effectReceipt: {},
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    }
+    let receiptReads = 0
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-start-resume') return {
+        success: true,
+        start: {
+          run: snapshot,
+          execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+        },
+      }
+      if (channel === 'db:import-run-renew-execution') return {
+        success: true,
+        execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+      }
+      if (channel === 'db:import-run-list-chapters') return []
+      if (channel === 'db:import-run-effect-receipt-get') {
+        receiptReads += 1
+        return receiptReads === 1 ? receipt : { ...receipt, payloadHash: 'd'.repeat(64) }
+      }
+      if (channel === 'db:import-run-effect-receipt-commit') return {
+        success: true,
+        result: { receipt, run: snapshot, cancelApplied: false },
+      }
+      if (channel === 'db:import-run-fail') return {
+        success: true,
+        run: { ...snapshot, status: 'failed' },
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({
+      projectPath: session.projectPath,
+      projectSession: session,
+      run: snapshot,
+      executionOwner,
+    })
+
+    await expect(workflow.steps[1].executor({} as never, context(), callbacks))
+      .rejects.toThrow(/does not match durable storage/)
+    expect(receiptReads).toBe(2)
   })
 
   it('fails closed before creating an author-manuscript stage plan', () => {

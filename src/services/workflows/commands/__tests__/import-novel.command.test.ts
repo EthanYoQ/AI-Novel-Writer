@@ -230,7 +230,7 @@ describe('InferBlueprintsPerChapterCommand', () => {
     }))
     useLLMStore.setState({
       defaultModelId: 'model-a',
-      generateStream: vi.fn(async (messages, streamCallbacks) => {
+      generateStream: vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(async (messages, streamCallbacks) => {
         observed.push(messages)
         streamCallbacks.onDone?.(observed.length === 1 ? malformed : valid, undefined, 'stop')
         return `import-blueprint-language-${observed.length}`
@@ -451,6 +451,34 @@ describe('InferBlueprintsPerChapterCommand', () => {
 })
 
 describe('InferGlobalSettingsCommand', () => {
+  it('uses the frozen full manifest chapter count instead of the bounded sample size', async () => {
+    successfulInferenceIpc()
+    const workflowContext = createContext()
+    workflowContext.data.chapters = Array.from({ length: 5 }, (_, index) => ({
+      number: index + 1,
+      title: `样本 ${index + 1}`,
+      content: `有界样本 ${index + 1}`,
+      wordCount: 6,
+    }))
+    workflowContext.data.importRunTotalChapters = 23
+    let prompt = ''
+    useLLMStore.setState({
+      defaultModelId: 'model-a',
+      generateStream: vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(async (messages, streamCallbacks) => {
+        prompt = messages.map(message => message.content).join('\n')
+        streamCallbacks.onDone?.(JSON.stringify(validInference()), undefined, 'stop')
+        return 'full-manifest-count'
+      }),
+    })
+
+    await new InferGlobalSettingsCommand().execute({
+      step: {}, context: workflowContext, callbacks,
+    })
+
+    expect(prompt).toContain('【总章数】23 章')
+    expect(prompt).not.toContain('【总章数】5 章')
+  })
+
   it('uses the frozen English writing language for inference and syntax repair without rewriting imported UTF-8', async () => {
     const invoke = successfulInferenceIpc()
     const importedText = 'The sign reads “夜航 Café” — déjà vu.'

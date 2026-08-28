@@ -16,6 +16,7 @@ export type ImportRunEffectKind =
   | 'chapter-blueprint-range'
 
 export type ImportRunEffectReceiptState = 'prepared' | 'committed'
+export const IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION = 1 as const
 
 export interface ImportRunExecutionLease {
   owner: string
@@ -29,6 +30,7 @@ export interface ImportRunStartResult {
 }
 
 export interface ImportRunEffectReceipt {
+  schemaVersion: typeof IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION
   runId: string
   effectNamespace: string
   effectKey: string
@@ -41,6 +43,36 @@ export interface ImportRunEffectReceipt {
   effectReceipt?: unknown
   createdAt: string
   updatedAt: string
+}
+
+export function expectedImportRunEffectKey(
+  kind: ImportRunEffectKind,
+  stage: ImportRunStage,
+  batchId: string,
+): string | null {
+  if (kind === 'project-global-facts' && stage === 'global' && batchId === 'done') return 'global-facts'
+  if (kind === 'project-writing-style' && stage === 'style' && batchId === 'done') return 'writing-style'
+  if (kind === 'chapter-blueprint-range' && stage === 'blueprints' && /^\d+-\d+$/u.test(batchId)) {
+    return `blueprints:${batchId}`
+  }
+  return null
+}
+
+/** Common binding checks used before storage commit and renderer replay. */
+export function assertImportRunEffectReceiptMetadata(
+  receipt: ImportRunEffectReceipt,
+  run: ImportRunSnapshot,
+): void {
+  const expectedNamespace = `import:${run.purpose}:${run.id}`
+  const expectedKey = expectedImportRunEffectKey(receipt.kind, receipt.stage, receipt.batchId)
+  if (
+    receipt.schemaVersion !== IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION
+    || receipt.runId !== run.id
+    || run.effectNamespace !== expectedNamespace
+    || receipt.effectNamespace !== expectedNamespace
+    || !expectedKey
+    || receipt.effectKey !== expectedKey
+  ) throw new Error('导入 effect receipt 元数据损坏')
 }
 
 export interface ImportRunPrepareEffectReceiptRequest {
@@ -63,6 +95,12 @@ export interface ImportSourceDisplayMetadata {
   displayName: string
   mediaType: string
   size: number
+}
+
+/** Main-process-only aliases captured while the external file grant is issued. */
+export interface ImportSourceFileIdentity {
+  canonicalLocation: string
+  fileIdentity?: string
 }
 
 export interface ImportRunChapterInput {

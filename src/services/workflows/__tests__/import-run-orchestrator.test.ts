@@ -49,6 +49,7 @@ function harness(total = 25, overrides: Partial<ImportRunSnapshot> = {}) {
     getEffectReceipt: vi.fn(async (_runId, stage, checkpoint) => receipts.get(receiptKey(stage, checkpoint)) ?? null),
     prepareEffectReceipt: vi.fn(async request => {
       const receipt: ImportRunEffectReceipt = {
+        schemaVersion: 1,
         runId: request.runId,
         effectNamespace: run.effectNamespace,
         effectKey: request.effectKey,

@@ -43,4 +43,69 @@ describe('import execution lease', () => {
     expect(() => ImportRunRepository.cancelAtBoundary('leased-run', first.execution)).toThrow(/执行租约/)
     expect(() => ImportRunRepository.complete('leased-run', first.execution)).toThrow(/执行租约/)
   })
+
+  it('releases and fences the execution lease on failure so another owner can resume immediately', () => {
+    const base = Date.now()
+    const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', base, 60_000)
+
+    expect(ImportRunRepository.fail(
+      'leased-run', 'knowledge', 'provider unavailable', first.execution,
+    )).toMatchObject({ status: 'failed' })
+
+    const resumed = ImportRunRepository.startOrResume('leased-run', 'renderer-b', base + 1, 60_000)
+    expect(resumed.execution.epoch).toBeGreaterThan(first.execution.epoch)
+    expect(() => ImportRunRepository.completeBatch(
+      'leased-run', 'knowledge', 'late-old-runner', first.execution,
+    )).toThrow(/执行租约/)
+  })
+
+  it('releases and fences cancellation and completion terminal boundaries', () => {
+    const base = Date.now()
+    const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', base, 60_000)
+    ImportRunRepository.requestCancel('leased-run', first.execution)
+    expect(ImportRunRepository.completeBatch(
+      'leased-run', 'knowledge', 'cancel-boundary', first.execution,
+    )).toMatchObject({ cancelApplied: true, run: { status: 'cancelled' } })
+
+    const resumed = ImportRunRepository.startOrResume('leased-run', 'renderer-b', base + 1, 60_000)
+    expect(resumed.execution.epoch).toBeGreaterThan(first.execution.epoch)
+    expect(() => ImportRunRepository.cancelAtBoundary('leased-run', first.execution)).toThrow(/执行租约/)
+
+    expect(ImportRunRepository.complete('leased-run', resumed.execution))
+      .toMatchObject({ status: 'completed', resumable: false })
+    expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-c', base + 2, 60_000))
+      .toThrow(/不可启动/)
+    expect(() => ImportRunRepository.fail(
+      'leased-run', 'knowledge', 'late-after-complete', resumed.execution,
+    )).toThrow(/执行租约/)
+  })
+
+  it('fences a running lease when the project database reopens and allows immediate takeover', () => {
+    const base = Date.now()
+    const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', base, 60_000)
+
+    closeProjectDatabase()
+    initProjectDatabase(root)
+
+    const resumed = ImportRunRepository.startOrResume('leased-run', 'renderer-b', base + 1, 60_000)
+    expect(resumed.execution.epoch).toBeGreaterThan(first.execution.epoch)
+    expect(() => ImportRunRepository.fail(
+      'leased-run', 'knowledge', 'stale process', first.execution,
+    )).toThrow(/执行租约/)
+  })
+
+  it('restarts only terminal or expired-running runs and fences the old execution epoch', () => {
+    expect(() => ImportRunRepository.restart('leased-run', 'ready-restart', 1_000))
+      .toThrow(/不可重新开始/)
+
+    const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
+    expect(() => ImportRunRepository.restart('leased-run', 'active-restart', 1_050))
+      .toThrow(/不可重新开始/)
+
+    expect(ImportRunRepository.restart('leased-run', 'expired-restart', 1_101))
+      .toMatchObject({ id: 'expired-restart', status: 'ready' })
+    expect(() => ImportRunRepository.completeBatch(
+      'leased-run', 'knowledge', 'late-after-restart', first.execution,
+    )).toThrow(/执行租约/)
+  })
 })

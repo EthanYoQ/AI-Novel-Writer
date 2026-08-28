@@ -1,6 +1,11 @@
 /** Persisted, resumable reference-import workflow. */
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
-import type { ImportRunChapterSnapshot, ImportRunSnapshot, ImportRunStage } from '../../shared/import-run'
+import {
+  assertImportRunEffectReceiptMetadata,
+  type ImportRunChapterSnapshot,
+  type ImportRunSnapshot,
+  type ImportRunStage,
+} from '../../shared/import-run'
 import type { ImportGlobalFactsReceipt } from '../../shared/import-global-facts'
 import type { BlueprintRangeCommitReceipt } from '../../../electron/repositories/blueprint-repository'
 import { sameProjectSessionContext, projectSessionContextFromProject } from '../../shared/project-session-context'
@@ -97,9 +102,25 @@ function productionDependencies(
       ),
       'Could not commit the generated import output.',
     ).result!,
-    replayCommittedEffect: async receipt => {
-      if (receipt.kind === 'chapter-blueprint-range') {
-        const committed = receipt.effectReceipt as BlueprintRangeCommitReceipt | undefined
+    replayCommittedEffect: async (receipt, run) => {
+      // Re-read through the main-process repository so replay receives the
+      // same canonical rehash and schema checks as get/commit, then reject any
+      // renderer-side object that differs from that durable receipt.
+      const durableReceipt = await ipc.invokeWithProjectSession(
+        session,
+        'db:import-run-effect-receipt-get',
+        run.id,
+        receipt.stage,
+        receipt.batchId,
+        projectPath,
+      )
+      if (!durableReceipt || JSON.stringify(durableReceipt) !== JSON.stringify(receipt)) {
+        throw new Error('Committed import effect receipt does not match durable storage.')
+      }
+      assertImportRunEffectReceiptMetadata(durableReceipt, run)
+      if (durableReceipt.state !== 'committed') throw new Error('Prepared import effects cannot be replayed.')
+      if (durableReceipt.kind === 'chapter-blueprint-range') {
+        const committed = durableReceipt.effectReceipt as BlueprintRangeCommitReceipt | undefined
         if (!committed?.characterSyncOperation?.operationId) {
           throw new Error('Committed blueprint import receipt is incomplete.')
         }

@@ -1086,12 +1086,41 @@ export async function removeDocument(projectPath: string, docId: string): Promis
     const tableNames = await db.tableNames()
     const registry = await loadOrRegisterLegacyRegistry(projectPath, db, tableNames)
     const escapedId = docId.replace(/'/g, "''")
-    const targets = new Set<string>([TABLE_NAME, ...registry.spaces.map(space => space.tableName)])
+    const targets = new Set<string>([
+      TABLE_NAME,
+      ...tableNames.filter(tableName => tableName.startsWith(EMBEDDING_TABLE_PREFIX)),
+      ...registry.spaces.map(space => space.tableName),
+    ])
     for (const tableName of targets) {
       if (tableNames.includes(tableName)) await (await db.openTable(tableName)).delete(`\`docId\` = '${escapedId}'`)
     }
     if (tableNames.includes(DOCS_TABLE_NAME)) {
       await (await db.openTable(DOCS_TABLE_NAME)).delete(`id = '${escapedId}'`)
+    }
+
+    // LanceDB cannot atomically delete across physical generations.  A retry is
+    // safe only after proving that every registered and orphan generation has
+    // reached the same zero-row postcondition.
+    const remainingTableNames = await db.tableNames()
+    const remainingTargets = new Set<string>([
+      TABLE_NAME,
+      ...remainingTableNames.filter(tableName => tableName.startsWith(EMBEDDING_TABLE_PREFIX)),
+      ...registry.spaces.map(space => space.tableName),
+    ])
+    for (const tableName of remainingTargets) {
+      if (!remainingTableNames.includes(tableName)) continue
+      const rows = await (await db.openTable(tableName)).query()
+        .filter(`\`docId\` = '${escapedId}'`)
+        .limit(1)
+        .toArray()
+      if (rows.length > 0) return false
+    }
+    if (remainingTableNames.includes(DOCS_TABLE_NAME)) {
+      const rows = await (await db.openTable(DOCS_TABLE_NAME)).query()
+        .filter(`id = '${escapedId}'`)
+        .limit(1)
+        .toArray()
+      if (rows.length > 0) return false
     }
     return true
   } catch (error) {
@@ -1245,6 +1274,13 @@ export interface DocumentIntegrity {
   chunkCount: number
   chunkSetHash: string
   complete: boolean
+  embeddingGenerations: Array<{
+    generation: number | null
+    tableName: string
+    status: EmbeddingSpaceStatus | 'unregistered'
+    chunkCount: number
+    complete: boolean
+  }>
 }
 
 export function hashCanonicalChunkSet(chunks: readonly string[]): string {
@@ -1258,15 +1294,14 @@ export async function getDocumentIntegrity(
 ): Promise<DocumentIntegrity | null> {
   const db = await getConnection(projectPath)
   const tableNames = await db.tableNames()
-  if (!tableNames.includes(TABLE_NAME) && !tableNames.includes(DOCS_TABLE_NAME)) return null
   const escapedId = docId.replace(/'/g, "''")
-  let chunkRows: Array<{ chunkIndex: number; totalChunks: number; text: string; corpusKind?: KnowledgeCorpusKind }> = []
+  let chunkRows: Array<{ id: string; chunkIndex: number; totalChunks: number; text: string; corpusKind?: KnowledgeCorpusKind }> = []
   if (tableNames.includes(TABLE_NAME)) {
     const chunksTable = await db.openTable(TABLE_NAME)
     await ensureCorpusKindColumn(chunksTable)
     chunkRows = await chunksTable.query()
       .filter(`\`docId\` = '${escapedId}'`)
-      .select(['chunkIndex', 'totalChunks', 'text', 'corpusKind'])
+      .select(['id', 'chunkIndex', 'totalChunks', 'text', 'corpusKind'])
       .toArray() as typeof chunkRows
   }
   let documentRows: Array<{ id: string; chunkCount: number; corpusKind?: KnowledgeCorpusKind }> = []
@@ -1278,25 +1313,92 @@ export async function getDocumentIntegrity(
       .select(['id', 'chunkCount', 'corpusKind'])
       .toArray() as typeof documentRows
   }
-  if (documentRows.length === 0 && chunkRows.length === 0) return null
   const ordered = [...chunkRows].sort((left, right) => left.chunkIndex - right.chunkIndex)
   const document = documentRows[0]
   const corpusKind = document?.corpusKind ?? ordered[0]?.corpusKind ?? 'unknown'
-  const complete = documentRows.length === 1
+  const canonicalComplete = documentRows.length === 1
     && ordered.length > 0
     && document?.chunkCount === ordered.length
+    && new Set(ordered.map(row => row.id)).size === ordered.length
     && ordered.every((row, index) => (
       row.chunkIndex === index
       && row.totalChunks === ordered.length
       && (row.corpusKind ?? 'unknown') === corpusKind
       && typeof row.text === 'string'
     ))
+
+  const registry = readRegistry(projectPath) ?? await inferLegacyRegistry(db, tableNames)
+  const registeredByTable = new Map(registry.spaces.map(space => [space.tableName, space] as const))
+  const physicalEmbeddingTables = new Set(
+    tableNames.filter(tableName => tableName.startsWith(EMBEDDING_TABLE_PREFIX)),
+  )
+  for (const space of registry.spaces) {
+    physicalEmbeddingTables.add(space.tableName)
+  }
+  const canonicalByIndex = new Map(ordered.map(row => [row.chunkIndex, row] as const))
+  const embeddingGenerations: DocumentIntegrity['embeddingGenerations'] = []
+  for (const tableName of [...physicalEmbeddingTables].sort()) {
+    let rows: Array<{
+      id?: unknown
+      chunkIndex?: unknown
+      totalChunks?: unknown
+      text?: unknown
+      vector?: unknown
+      corpusKind?: KnowledgeCorpusKind
+    }> = []
+    if (tableNames.includes(tableName)) {
+      const table = await db.openTable(tableName)
+      await ensureCorpusKindColumn(table)
+      rows = await table.query()
+        .filter(`\`docId\` = '${escapedId}'`)
+        .toArray() as typeof rows
+    }
+    const registered = registeredByTable.get(tableName)
+    const required = rows.length > 0 || registered?.generation === registry.activeGeneration
+    const orderedEmbeddingRows = [...rows].sort((left, right) => (
+      typeof left.chunkIndex === 'number' && typeof right.chunkIndex === 'number'
+        ? left.chunkIndex - right.chunkIndex
+        : 0
+    ))
+    const indexes = orderedEmbeddingRows.map(row => row.chunkIndex)
+    const exactSequence = canonicalComplete
+      && !!registered
+      && orderedEmbeddingRows.length === ordered.length
+      && new Set(indexes).size === orderedEmbeddingRows.length
+      && orderedEmbeddingRows.every((row, index) => {
+        const canonical = canonicalByIndex.get(index)
+        return row.chunkIndex === index
+          && row.totalChunks === ordered.length
+          && row.id === canonical?.id
+          && row.text === canonical?.text
+          && (row.corpusKind ?? 'unknown') === corpusKind
+          && vectorIsUsable(row.vector, registered.vectorDimension)
+      })
+    embeddingGenerations.push({
+      generation: registered?.generation ?? null,
+      tableName,
+      status: registered?.status ?? 'unregistered',
+      chunkCount: rows.length,
+      complete: !required || (!!registered && exactSequence),
+    })
+  }
+  if (
+    documentRows.length === 0
+    && chunkRows.length === 0
+    && embeddingGenerations.every(generation => generation.chunkCount === 0)
+  ) return null
   return {
     docId,
     corpusKind,
     chunkCount: ordered.length,
     chunkSetHash: hashCanonicalChunkSet(ordered.map(row => row.text)),
-    complete,
+    // A building generation is intentionally allowed to contain a bounded
+    // prefix while backfill is running.  Active/inactive registry entries are
+    // durable completion markers; unregistered rows are crash residue.
+    complete: canonicalComplete && embeddingGenerations.every(generation => (
+      generation.status === 'building' || generation.complete
+    )),
+    embeddingGenerations,
   }
 }
 

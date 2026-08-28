@@ -38,7 +38,7 @@ export interface AtomicWriteConstraints {
 }
 
 export interface SecureFileSystem {
-  readText(capability: SecureFileCapability): Promise<string>
+  readText(capability: SecureFileCapability, maxBytes?: number): Promise<string>
   writeTextAtomically(
     capability: SecureFileCapability,
     content: string,
@@ -65,6 +65,7 @@ interface HelperRequest {
   rootIdentity: SecureRootIdentity
   contentBase64?: string
   mustAlreadyExist?: boolean
+  maxBytes?: number
 }
 
 interface HelperResponse {
@@ -101,6 +102,14 @@ const unsignedDecimal = /^(?:0|[1-9]\d*)$/
 
 function secureError(code: string): Error {
   return new Error(code)
+}
+
+function normalizeReadByteLimit(maxBytes: number | undefined): number {
+  if (maxBytes === undefined) return MAX_TEXT_BYTES
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw secureError('SECURE_FS_INVALID_OPERATION')
+  }
+  return Math.min(maxBytes, MAX_TEXT_BYTES)
 }
 
 function validatedUnsignedDecimal(value: unknown, maximum: bigint): string | null {
@@ -523,6 +532,7 @@ export function createSecureFileSystem(
     operation: HelperOperation,
     capability: SecureFileCapability,
     contentBase64?: string,
+    maxBytes?: number,
   ): Promise<HelperResponse> => {
     const safeCapability = validateCapability(capability)
     const response = await invoke({
@@ -531,19 +541,25 @@ export function createSecureFileSystem(
       relativePath: safeCapability.relativePath,
       rootIdentity: safeCapability.rootIdentity,
       ...(contentBase64 === undefined ? {} : { contentBase64 }),
+      ...(maxBytes === undefined ? {} : { maxBytes }),
     })
     if (!response.ok) responseError(response)
     return response
   }
 
   return {
-    async readText(capability) {
-      const response = await run('read', capability)
+    async readText(capability, maxBytes) {
+      const readByteLimit = normalizeReadByteLimit(maxBytes)
+      const response = await run('read', capability, undefined, readByteLimit)
       if (typeof response.contentBase64 !== 'string') {
         throw secureError('SECURE_FS_HELPER_INVALID_RESPONSE')
       }
+      const maximumEncodedLength = Math.ceil(readByteLimit / 3) * 4
+      if (response.contentBase64.length > maximumEncodedLength) {
+        throw secureError('SECURE_FS_FILE_TOO_LARGE')
+      }
       const buffer = Buffer.from(response.contentBase64, 'base64')
-      if (buffer.length > MAX_TEXT_BYTES) throw secureError('SECURE_FS_FILE_TOO_LARGE')
+      if (buffer.length > readByteLimit) throw secureError('SECURE_FS_FILE_TOO_LARGE')
       try {
         return new TextDecoder('utf-8', { fatal: true }).decode(buffer)
       } catch {

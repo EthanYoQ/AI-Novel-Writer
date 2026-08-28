@@ -5,6 +5,7 @@
  * 具体业务逻辑由 /repositories 提供。
  */
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs'
 
@@ -386,14 +387,18 @@ function createTables(db: BetterSqlite3.Database) {
     CREATE INDEX IF NOT EXISTS idx_import_run_chapters_page
       ON import_run_chapters(run_id, chapter_number);
 
-    CREATE TABLE IF NOT EXISTS import_source_identity (
-      id TEXT PRIMARY KEY,
-      salt_hex TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS import_source_aliases (
+      alias_digest TEXT PRIMARY KEY,
+      alias_kind TEXT NOT NULL CHECK(alias_kind IN ('location', 'file')),
+      source_id TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE INDEX IF NOT EXISTS idx_import_source_aliases_source
+      ON import_source_aliases(source_id);
 
     CREATE TABLE IF NOT EXISTS import_run_receipts (
       run_id TEXT NOT NULL,
+      schema_version INTEGER NOT NULL DEFAULT 1,
       effect_namespace TEXT NOT NULL,
       effect_key TEXT NOT NULL,
       stage TEXT NOT NULL,
@@ -451,9 +456,84 @@ function createTables(db: BetterSqlite3.Database) {
         root_run_id = CASE WHEN root_run_id = '' THEN id ELSE root_run_id END,
         effect_namespace = CASE WHEN effect_namespace = '' THEN 'import:reference:' || id ELSE effect_namespace END
   `)
+  const legacyManifestRuns = db.prepare(`
+    SELECT id, locale, manifest_chapter_count
+    FROM import_runs
+    WHERE manifest_word_count = 0 AND status <> 'completed' AND resumable = 1
+  `).all() as Array<{
+    id: string
+    locale: 'zh-CN' | 'en-US'
+    manifest_chapter_count: number
+  }>
+  const readLegacySnapshots = db.prepare(`
+    SELECT content_fingerprint, content_size, content_snapshot
+    FROM import_run_chapters
+    WHERE run_id = ?
+    ORDER BY chapter_number
+  `)
+  const saveLegacyWordCount = db.prepare(`
+    UPDATE import_runs
+    SET manifest_word_count = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `)
+  const rejectLegacyResume = db.prepare(`
+    UPDATE import_runs
+    SET status = 'failed', resumable = 0, cancel_requested = 0, last_error = ?,
+        execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+        updated_at = datetime('now')
+    WHERE id = ?
+  `)
+  db.transaction(() => {
+    for (const run of legacyManifestRuns) {
+      const snapshots = readLegacySnapshots.all(run.id) as Array<{
+        content_fingerprint: string
+        content_size: number
+        content_snapshot: string
+      }>
+      const snapshotsAreComplete = run.manifest_chapter_count > 0
+        && snapshots.length === run.manifest_chapter_count
+        && snapshots.every(snapshot =>
+          snapshot.content_snapshot.length > 0
+          && Buffer.byteLength(snapshot.content_snapshot, 'utf8') === snapshot.content_size
+          && createHash('sha256').update(snapshot.content_snapshot).digest('hex') === snapshot.content_fingerprint,
+        )
+      if (snapshotsAreComplete) {
+        saveLegacyWordCount.run(
+          snapshots.reduce((total, snapshot) => total + snapshot.content_snapshot.length, 0),
+          run.id,
+        )
+        continue
+      }
+      rejectLegacyResume.run(
+        run.locale === 'en-US'
+          ? 'This legacy import is missing complete frozen chapter snapshots and cannot be resumed. Select the source again to restart.'
+          : '该旧导入缺少完整的冻结章节快照，不可恢复；请重新选择来源后开始。',
+        run.id,
+      )
+    }
+  })()
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_import_runs_purpose_source_status
       ON import_runs(purpose, source_fingerprint, status, updated_at)
+  `)
+  const importReceiptColumns = new Set(
+    (db.prepare('PRAGMA table_info(import_run_receipts)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!importReceiptColumns.has('schema_version')) {
+    db.exec('ALTER TABLE import_run_receipts ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1')
+  }
+  // The early pre-release schema kept its HMAC key inside the project DB,
+  // which made offline path guessing possible. It is never user data and must
+  // not survive once application-secret aliases are available.
+  db.exec('DROP TABLE IF EXISTS import_source_identity')
+  // Opening a project database is a process/session boundary. Any persisted
+  // running owner belonged to the previous handle and must be fenced before a
+  // new renderer can resume the run.
+  db.exec(`
+    UPDATE import_runs
+    SET execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+        updated_at = datetime('now')
+    WHERE status = 'running' AND (execution_owner <> '' OR lease_expires_at <> 0)
   `)
 
   // 角色事实继续存放于 characters；这里仅建立 revision、迁移与幂等元数据。

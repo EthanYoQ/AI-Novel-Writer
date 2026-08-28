@@ -63,6 +63,30 @@ afterEach(() => {
   }
 })
 
+describe('bounded secure text reads', () => {
+  it('passes the caller byte budget to the helper and enforces it on the response', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const requests: Array<Record<string, unknown>> = []
+    fs.mkdirSync(selectedRoot)
+    const safeFileSystem = createWindowsSafeFileSystem({
+      invoke: async (request) => {
+        requests.push({ ...request })
+        return {
+          ok: true,
+          contentBase64: Buffer.from('1234', 'utf8').toString('base64'),
+        }
+      },
+    })
+
+    await expect(safeFileSystem.readText(capability(selectedRoot, 'chapter.txt'), 3))
+      .rejects.toThrow('SECURE_FS_FILE_TOO_LARGE')
+    expect(requests).toEqual([
+      expect.objectContaining({ operation: 'read', maxBytes: 3 }),
+    ])
+  })
+})
+
 describe('Darwin handle-bound secure file system', () => {
   it('fails closed in packaged mode when the bundled Darwin helper is missing', async () => {
     const fixture = fixtureRoot()
@@ -82,6 +106,19 @@ describe('Darwin handle-bound secure file system', () => {
 })
 
 describe.runIf(process.platform === 'win32')('Windows handle-bound secure file system', () => {
+  it('rejects a selected file that grows past the caller byte budget', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const selectedPath = path.join(selectedRoot, 'chapter.txt')
+    fs.mkdirSync(selectedRoot)
+    fs.writeFileSync(selectedPath, '123', 'utf8')
+    const grantedCapability = capability(selectedRoot, 'chapter.txt')
+    fs.writeFileSync(selectedPath, '1234', 'utf8')
+
+    await expect(createWindowsSafeFileSystem().readText(grantedCapability, 3))
+      .rejects.toThrow('SECURE_FS_FILE_TOO_LARGE')
+  })
+
   it('fails closed in packaged mode when the resources helper is missing even if cwd contains a source helper', async () => {
     const fixture = fixtureRoot()
     const selectedRoot = path.join(fixture, 'selected')
@@ -459,6 +496,23 @@ describe.runIf(process.platform === 'win32')('Windows handle-bound secure file s
 })
 
 describe.runIf(process.platform === 'darwin')('Darwin handle-bound secure file system', () => {
+  it('rejects a selected file that grows past the caller byte budget', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const selectedPath = path.join(selectedRoot, 'chapter.txt')
+    fs.mkdirSync(selectedRoot)
+    fs.writeFileSync(selectedPath, '123', 'utf8')
+    const grantedCapability = capability(selectedRoot, 'chapter.txt')
+    fs.writeFileSync(selectedPath, '1234', 'utf8')
+    const safeFileSystem = createWindowsSafeFileSystem({
+      platform: 'darwin',
+      helperPath: buildDarwinHelper(fixture),
+    })
+
+    await expect(safeFileSystem.readText(grantedCapability, 3))
+      .rejects.toThrow('SECURE_FS_FILE_TOO_LARGE')
+  }, REAL_WINDOWS_MULTI_HELPER_TIMEOUT_MS)
+
   it('rejects symlink escapes for reads, mkdir, and atomic writes', async () => {
     const fixture = fixtureRoot()
     const selectedRoot = path.join(fixture, 'selected')

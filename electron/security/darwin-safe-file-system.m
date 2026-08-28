@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,6 +96,21 @@ static BOOL GetString(NSDictionary *request, NSString *key, NSString **output, N
     return NO;
   }
   *output = (NSString *)value;
+  return YES;
+}
+
+static BOOL GetReadByteLimit(NSDictionary *request, NSUInteger *output, NSString **errorCode) {
+  id value = request[@"maxBytes"];
+  if (![value isKindOfClass:[NSNumber class]] || IsJsonBoolean(value)) {
+    *errorCode = @"SECURE_FS_INVALID_OPERATION";
+    return NO;
+  }
+  double numeric = [(NSNumber *)value doubleValue];
+  if (!isfinite(numeric) || numeric < 0 || floor(numeric) != numeric || numeric > kMaxTextBytes) {
+    *errorCode = @"SECURE_FS_INVALID_OPERATION";
+    return NO;
+  }
+  *output = (NSUInteger)numeric;
   return YES;
 }
 
@@ -231,7 +247,7 @@ static BOOL RequireRegularFile(int fd, NSString **errorCode) {
   return YES;
 }
 
-static BOOL ReadAll(int fd, NSMutableData **output, NSString **errorCode) {
+static BOOL ReadAll(int fd, NSUInteger maxBytes, NSMutableData **output, NSString **errorCode) {
   NSMutableData *data = [NSMutableData data];
   unsigned char buffer[8192];
   for (;;) {
@@ -242,7 +258,7 @@ static BOOL ReadAll(int fd, NSMutableData **output, NSString **errorCode) {
       *errorCode = kOpenFailed;
       return NO;
     }
-    if (data.length + (NSUInteger)count > kMaxTextBytes) {
+    if ((NSUInteger)count > maxBytes - data.length) {
       *errorCode = @"SECURE_FS_FILE_TOO_LARGE";
       return NO;
     }
@@ -271,7 +287,7 @@ static BOOL WriteAll(int fd, NSData *content, NSString **errorCode) {
   return YES;
 }
 
-static NSDictionary *ReadText(NSString *rootPath, NSArray<NSString *> *segments) {
+static NSDictionary *ReadText(NSString *rootPath, NSArray<NSString *> *segments, NSUInteger maxBytes) {
   NSString *errorCode = nil;
   NSString *leaf = nil;
   int parent = OpenParentDirectory(rootPath, segments, &leaf, &errorCode);
@@ -288,8 +304,19 @@ static NSDictionary *ReadText(NSString *rootPath, NSArray<NSString *> *segments)
     close(parent);
     return Failure(errorCode);
   }
+  struct stat information;
+  if (fstat(file, &information) < 0) {
+    close(file);
+    close(parent);
+    return Failure(CodeForErrno(errno));
+  }
+  if (information.st_size < 0 || (uint64_t)information.st_size > maxBytes) {
+    close(file);
+    close(parent);
+    return Failure(@"SECURE_FS_FILE_TOO_LARGE");
+  }
   NSMutableData *content = nil;
-  BOOL ok = ReadAll(file, &content, &errorCode);
+  BOOL ok = ReadAll(file, maxBytes, &content, &errorCode);
   close(file);
   close(parent);
   if (!ok) return Failure(errorCode);
@@ -536,7 +563,12 @@ int main(void) {
       return 0;
     }
     if ([operation isEqualToString:@"read"]) {
-      WriteResponse(ReadText(rootPath, segments));
+      NSUInteger maxBytes = 0;
+      if (!GetReadByteLimit(request, &maxBytes, &errorCode)) {
+        WriteResponse(Failure(errorCode));
+        return 0;
+      }
+      WriteResponse(ReadText(rootPath, segments, maxBytes));
     } else if ([operation isEqualToString:@"write"]) {
       WriteAtomically(request, rootPath, segments);
     } else if ([operation isEqualToString:@"mkdir"]) {

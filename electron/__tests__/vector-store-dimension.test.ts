@@ -191,6 +191,179 @@ describe('知识库向量维度', () => {
     await expect(search(projectPath, '待删除')).resolves.toEqual([])
   })
 
+  it('重开后能发现并清理未登记代际中的 embedding-only 半写文档', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-embedding-only-crash-'))
+    projects.push(projectPath)
+    const vector = [0.1, 0.2, 0.3, 0.4]
+    const space = { modelFingerprint: 'test/embedding-only-crash', distanceMetric: 'l2' }
+    await expect(addChunks(
+      projectPath,
+      'seed-document',
+      'seed.txt',
+      ['seed'],
+      [vector],
+      undefined,
+      undefined,
+      space,
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+
+    const db = await getConnection(projectPath)
+    const registry = await getEmbeddingSpaces(projectPath)
+    const active = registry.spaces.find(item => item.generation === registry.activeGeneration)!
+    const activeTable = await db.openTable(active.tableName)
+    const [template] = await activeTable.query().toArray()
+    await db.createTable('chunks__space_99', [{
+      ...(template as Record<string, unknown>),
+      id: 'embedding-only-chunk',
+      docId: 'embedding-only-document',
+      fileName: 'crashed.txt',
+      text: '只写入了向量代际',
+      vector,
+      chunkIndex: 0,
+      totalChunks: 1,
+      importedAt: '2026-08-29T00:00:00.000Z',
+      corpusKind: 'reference',
+    }], { schema: await activeTable.schema() })
+    closeConnection(projectPath)
+
+    await expect(getDocumentIntegrity(projectPath, 'embedding-only-document')).resolves.toMatchObject({
+      docId: 'embedding-only-document',
+      complete: false,
+      chunkCount: 0,
+    })
+    await expect(removeDocument(projectPath, 'embedding-only-document')).resolves.toBe(true)
+
+    const reopened = await getConnection(projectPath)
+    expect(await (await reopened.openTable('chunks__space_99')).query()
+      .filter("`docId` = 'embedding-only-document'").toArray()).toEqual([])
+    await expect(getDocumentIntegrity(projectPath, 'embedding-only-document')).resolves.toBeNull()
+  })
+
+  it.each([
+    ['重复', 0],
+    ['缺口', 2],
+  ])('完整性检查拒绝 embedding 代际的%s chunk index', async (_label, corruptIndex) => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-generation-index-'))
+    projects.push(projectPath)
+    const vector = [0.1, 0.2, 0.3, 0.4]
+    const space = { modelFingerprint: 'test/generation-index', distanceMetric: 'l2' }
+    await expect(addChunks(
+      projectPath,
+      'indexed-document',
+      'indexed.txt',
+      ['first', 'second'],
+      [vector, vector],
+      undefined,
+      undefined,
+      space,
+    )).resolves.toEqual({ success: true, chunkCount: 2 })
+
+    const db = await getConnection(projectPath)
+    const registry = await getEmbeddingSpaces(projectPath)
+    const active = registry.spaces.find(item => item.generation === registry.activeGeneration)!
+    const table = await db.openTable(active.tableName)
+    const rows = await table.query().filter("`docId` = 'indexed-document'").toArray()
+    await table.delete("`docId` = 'indexed-document'")
+    await table.add(rows.map((row, index) => ({
+      ...(row as Record<string, unknown>),
+      vector,
+      chunkIndex: index === 1 ? corruptIndex : 0,
+    })))
+    closeConnection(projectPath)
+
+    await expect(getDocumentIntegrity(projectPath, 'indexed-document')).resolves.toMatchObject({
+      complete: false,
+      embeddingGenerations: [expect.objectContaining({
+        generation: active.generation,
+        chunkCount: 2,
+        complete: false,
+      })],
+    })
+  })
+
+  it('removeDocument 在任一物理代际仍有残留时返回 false，重试后达到全代际零行', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-remove-postcondition-'))
+    projects.push(projectPath)
+    const vector = [0.1, 0.2, 0.3, 0.4]
+    const space = { modelFingerprint: 'test/remove-postcondition', distanceMetric: 'l2' }
+    await expect(addChunks(
+      projectPath,
+      'postcondition-document',
+      'postcondition.txt',
+      ['must be removed everywhere'],
+      [vector],
+      undefined,
+      undefined,
+      space,
+    )).resolves.toEqual({ success: true, chunkCount: 1 })
+
+    const db = await getConnection(projectPath)
+    const registry = await getEmbeddingSpaces(projectPath)
+    const active = registry.spaces.find(item => item.generation === registry.activeGeneration)!
+    const originalOpenTable = db.openTable
+    let skippedDelete = false
+    vi.spyOn(db, 'openTable').mockImplementation(async (...args) => {
+      const table = await Reflect.apply(originalOpenTable, db, args)
+      if (!skippedDelete && String(args[0]) === active.tableName) {
+        skippedDelete = true
+        vi.spyOn(table, 'delete').mockResolvedValue({ version: 0 })
+      }
+      return table
+    })
+
+    await expect(removeDocument(projectPath, 'postcondition-document')).resolves.toBe(false)
+    vi.restoreAllMocks()
+    await expect(getDocumentIntegrity(projectPath, 'postcondition-document')).resolves.toMatchObject({
+      complete: false,
+      chunkCount: 0,
+      embeddingGenerations: [expect.objectContaining({ chunkCount: 1, complete: false })],
+    })
+    await expect(removeDocument(projectPath, 'postcondition-document')).resolves.toBe(true)
+    await expect(getDocumentIntegrity(projectPath, 'postcondition-document')).resolves.toBeNull()
+  })
+
+  it('任一非活跃 embedding generation 存在缺块时仍判定文档不完整', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-all-generations-'))
+    projects.push(projectPath)
+    const oldIdentity = { modelFingerprint: 'test/all-generations-old', distanceMetric: 'l2' }
+    const nextIdentity = { modelFingerprint: 'test/all-generations-next', distanceMetric: 'l2' }
+    const oldVector = [0.1, 0.2, 0.3, 0.4]
+    const nextVector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    await expect(addChunks(
+      projectPath,
+      'multi-generation-document',
+      'multi-generation.txt',
+      ['first', 'second'],
+      [oldVector, oldVector],
+      undefined,
+      undefined,
+      oldIdentity,
+    )).resolves.toEqual({ success: true, chunkCount: 2 })
+    const candidates = await getChunksForBackfill(projectPath, 10, nextIdentity)
+    await expect(updateChunkVectors(
+      projectPath,
+      candidates.map(candidate => ({ id: candidate.id, vector: nextVector })),
+      nextIdentity,
+    )).resolves.toEqual({ success: true, count: 2 })
+
+    const db = await getConnection(projectPath)
+    const registry = await getEmbeddingSpaces(projectPath)
+    const inactive = registry.spaces.find(item => item.status === 'inactive')!
+    const active = registry.spaces.find(item => item.generation === registry.activeGeneration)!
+    const inactiveTable = await db.openTable(inactive.tableName)
+    const inactiveRows = await inactiveTable.query()
+      .filter("`docId` = 'multi-generation-document'").toArray()
+    await inactiveTable.delete(`id = '${String((inactiveRows[1] as { id: unknown }).id)}'`)
+
+    await expect(getDocumentIntegrity(projectPath, 'multi-generation-document')).resolves.toMatchObject({
+      complete: false,
+      embeddingGenerations: expect.arrayContaining([
+        expect.objectContaining({ generation: inactive.generation, chunkCount: 1, complete: false }),
+        expect.objectContaining({ generation: active.generation, chunkCount: 2, complete: true }),
+      ]),
+    })
+  })
+
   it('在大小写敏感的 LanceDB SQL 上按章节范围检索', async () => {
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-chapter-scope-'))
     projects.push(projectPath)

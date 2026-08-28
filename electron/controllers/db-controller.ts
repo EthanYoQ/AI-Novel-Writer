@@ -30,6 +30,7 @@ import type {
 } from '../../src/shared/import-run'
 import { ImportSourceIdentityRepository } from '../repositories/import-source-identity-repository'
 import { importInspectionStore } from '../services/import-inspection-store'
+import { loadApplicationImportSourceSecret } from '../services/import-source-identity-secret'
 import { RevisionRepository } from '../repositories/revision-repository'
 import { ReviewRepository } from '../repositories/review-repository'
 import { PostProcessRepository } from '../repositories/post-process-repository'
@@ -169,8 +170,12 @@ export function registerDatabaseController() {
       (event as IpcMainInvokeEvent).sender.id,
     )
     const sourceFingerprint = ImportSourceIdentityRepository.digest(
-      inspection.sources.map(source => ({ stableFileId: source.stableFileId })),
+      inspection.sources.map(source => ({
+        canonicalLocation: source.canonicalLocation,
+        fileIdentity: source.fileIdentity,
+      })),
       request.purpose,
+      loadApplicationImportSourceSecret(),
     )
     return {
       success: true,

@@ -47,11 +47,15 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [importNotice, setImportNotice] = useState('')
   const [resumableState, setResumableState] = useState<{
     projectLeaseId: string
-    run: ImportRunSnapshot
+    runs: ImportRunSnapshot[]
   } | null>(null)
-  const resumableRun = resumableState && currentProject?.sessionLease === resumableState.projectLeaseId
-    ? resumableState.run
-    : null
+  const [selectedResumableRunId, setSelectedResumableRunId] = useState('')
+  const resumableRuns = resumableState && currentProject?.sessionLease === resumableState.projectLeaseId
+    ? resumableState.runs
+    : []
+  const resumableRun = resumableRuns.find(run => run.id === selectedResumableRunId)
+    ?? resumableRuns[0]
+    ?? null
 
   useEffect(() => {
     if (!open || !currentProject) return
@@ -61,7 +65,10 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     void ipc.invokeWithProjectSession(session, 'db:import-run-list-resumable', currentProject.path)
       .then(runs => {
         if (active && isProjectSessionCurrent(session)) {
-          setResumableState(runs[0] ? { projectLeaseId: session.leaseId, run: runs[0] } : null)
+          setResumableState(runs.length > 0 ? { projectLeaseId: session.leaseId, runs } : null)
+          setSelectedResumableRunId(selected => (
+            runs.some(run => run.id === selected) ? selected : (runs[0]?.id ?? '')
+          ))
         }
       })
       .catch(() => {
@@ -192,7 +199,14 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         return
       }
       if (preparation.classification === 'resumable' && preparation.run) {
-        setResumableState({ projectLeaseId: projectSession.leaseId, run: preparation.run })
+        setResumableState(previous => {
+          const previousRuns = previous?.projectLeaseId === projectSession.leaseId ? previous.runs : []
+          return {
+            projectLeaseId: projectSession.leaseId,
+            runs: [preparation.run!, ...previousRuns.filter(run => run.id !== preparation.run!.id)],
+          }
+        })
+        setSelectedResumableRunId(preparation.run.id)
         setImportNotice(text(
           '发现同一来源的未完成导入，请选择继续或重新开始。',
           'An unfinished import for this source is available. Continue it or start over.',
@@ -296,7 +310,24 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             >
               <div className="flex items-center gap-2 text-xs font-medium">
                 <RotateCcw size={14} />
-                {text('发现可继续的导入', 'Resumable import found')}
+                {text('可继续的导入', 'Resumable imports')}
+              </div>
+              <div className="space-y-1" data-testid="import-resumable-runs">
+                {resumableRuns.map(run => (
+                  <Button
+                    key={run.id}
+                    type="button"
+                    size="sm"
+                    variant={run.id === resumableRun.id ? 'default' : 'outline'}
+                    aria-pressed={run.id === resumableRun.id}
+                    className="w-full justify-between"
+                    data-testid={`import-resumable-choice-${run.id}`}
+                    onClick={() => setSelectedResumableRunId(run.id)}
+                  >
+                    <span className="truncate">{run.sourceDisplay[0]?.displayName ?? run.id}</span>
+                    <span>{run.completedChapters}/{run.totalChapters}</span>
+                  </Button>
+                ))}
               </div>
               <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
                 {text(

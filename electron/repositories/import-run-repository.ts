@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto'
 
+import {
+  assertImportRunEffectReceiptMetadata,
+  IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+} from '../../src/shared/import-run'
 import type {
   ImportRunChapterInput,
   ImportRunChapterSnapshot,
@@ -21,6 +25,11 @@ import { getProjectDb } from '../database'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from './blueprint-repository'
 import { ImportGlobalFactsRepository } from './import-global-facts-repository'
 import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
+import {
+  MAX_IMPORT_CHAPTERS,
+  MAX_IMPORT_SOURCE_FILES,
+  MAX_IMPORT_TOTAL_BYTES,
+} from '../../src/shared/import-limits'
 import { ProjectCoreRepository } from './project-core-repository'
 
 interface ImportRunRow {
@@ -63,6 +72,7 @@ interface ImportRunChapterRow {
 
 interface ImportRunEffectReceiptRow {
   run_id: string
+  schema_version: number
   effect_namespace: string
   effect_key: string
   stage: ImportRunStage
@@ -77,12 +87,10 @@ interface ImportRunEffectReceiptRow {
 }
 
 const SHA256 = /^[a-f0-9]{64}$/u
-export const MAX_IMPORT_RUN_CHAPTERS = 5_000
-export const MAX_IMPORT_RUN_TOTAL_BYTES = 128 * 1024 * 1024
 const MAX_CHAPTER_BYTES = 16 * 1024 * 1024
 const MAX_PAGE_SIZE = 100
 const INSERT_BATCH_SIZE = 50
-const MAX_DISPLAY_SOURCES = MAX_IMPORT_RUN_CHAPTERS
+const MAX_DISPLAY_SOURCES = MAX_IMPORT_SOURCE_FILES
 const DEFAULT_EXECUTION_LEASE_MS = 15 * 60_000
 const MAX_EFFECT_RECEIPT_PAYLOAD_BYTES = 16 * 1024 * 1024
 
@@ -133,20 +141,108 @@ function canonicalPayload(payload: unknown): { json: string; hash: string } {
   return { json, hash: createHash('sha256').update(json, 'utf8').digest('hex') }
 }
 
-function rowToEffectReceipt(row: ImportRunEffectReceiptRow): ImportRunEffectReceipt {
-  return {
-    runId: row.run_id,
-    effectNamespace: row.effect_namespace,
-    effectKey: row.effect_key,
-    stage: row.stage,
-    batchId: row.batch_id,
-    kind: row.kind,
-    payloadHash: row.payload_hash,
-    state: row.state,
-    payload: parseJson(row.payload_json, null),
-    effectReceipt: row.effect_receipt_json ? parseJson(row.effect_receipt_json, null) : undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const sortedExpected = [...expected].sort()
+  return actual.length === sortedExpected.length
+    && actual.every((key, index) => key === sortedExpected[index])
+}
+
+function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown): void {
+  if (!isRecord(payload)) throw new Error()
+  if (kind === 'project-writing-style') {
+    if (!exactKeys(payload, ['writingStyle']) || typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()) {
+      throw new Error()
+    }
+    return
+  }
+  if (kind === 'project-global-facts') {
+    if (
+      !exactKeys(payload, ['operationId', 'expectedRosterRevision', 'core', 'characterEntries'])
+      || typeof payload.operationId !== 'string'
+      || !Number.isSafeInteger(payload.expectedRosterRevision)
+      || !isRecord(payload.core)
+      || !Array.isArray(payload.characterEntries)
+      || payload.characterEntries.length === 0
+    ) throw new Error()
+    return
+  }
+  if (
+    !exactKeys(payload, ['mode', 'operationId', 'startChapter', 'endChapter', 'blueprints'])
+    || payload.mode !== 'replace-range'
+    || typeof payload.operationId !== 'string'
+    || !Number.isSafeInteger(payload.startChapter)
+    || !Number.isSafeInteger(payload.endChapter)
+    || !Array.isArray(payload.blueprints)
+    || payload.blueprints.length === 0
+  ) throw new Error()
+}
+
+function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown, effectReceipt: unknown): void {
+  if (!isRecord(payload) || !isRecord(effectReceipt)) throw new Error()
+  if (kind === 'project-writing-style') {
+    if (!exactKeys(effectReceipt, ['writingStyle']) || effectReceipt.writingStyle !== payload.writingStyle) throw new Error()
+    return
+  }
+  if (kind === 'project-global-facts') {
+    if (
+      effectReceipt.operationId !== payload.operationId
+      || typeof effectReceipt.payloadHash !== 'string'
+      || !isRecord(effectReceipt.core)
+      || !isRecord(effectReceipt.roster)
+    ) throw new Error()
+    return
+  }
+  if (
+    effectReceipt.operationId !== payload.operationId
+    || effectReceipt.mode !== payload.mode
+    || effectReceipt.startChapter !== payload.startChapter
+    || effectReceipt.endChapter !== payload.endChapter
+    || typeof effectReceipt.payloadHash !== 'string'
+    || !isRecord(effectReceipt.characterSyncOperation)
+  ) throw new Error()
+}
+
+function corruptedReceipt(): never {
+  throw new Error('导入 effect receipt 损坏，已拒绝重放')
+}
+
+function rowToEffectReceipt(row: ImportRunEffectReceiptRow, run: ImportRunRow): ImportRunEffectReceipt {
+  try {
+    if (row.state !== 'prepared' && row.state !== 'committed') corruptedReceipt()
+    const payload = JSON.parse(row.payload_json) as unknown
+    const canonical = canonicalPayload(payload)
+    if (canonical.json !== row.payload_json || canonical.hash !== row.payload_hash) corruptedReceipt()
+    assertEffectPayloadSchema(row.kind, payload)
+    const effectReceipt = row.effect_receipt_json ? JSON.parse(row.effect_receipt_json) as unknown : undefined
+    if ((row.state === 'prepared' && effectReceipt !== undefined) || (row.state === 'committed' && effectReceipt === undefined)) {
+      corruptedReceipt()
+    }
+    if (row.state === 'committed') assertCommittedEffectSchema(row.kind, payload, effectReceipt)
+    const receipt: ImportRunEffectReceipt = {
+      schemaVersion: row.schema_version as typeof IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+      runId: row.run_id,
+      effectNamespace: row.effect_namespace,
+      effectKey: row.effect_key,
+      stage: row.stage,
+      batchId: row.batch_id,
+      kind: row.kind,
+      payloadHash: row.payload_hash,
+      state: row.state,
+      payload,
+      effectReceipt,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }
+    assertImportRunEffectReceiptMetadata(receipt, rowToSnapshot(run))
+    return receipt
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('receipt 损坏')) throw error
+    return corruptedReceipt()
   }
 }
 
@@ -216,7 +312,7 @@ function normalizeDisplay(items: ImportSourceDisplayMetadata[]): ImportSourceDis
 }
 
 function normalizeChapters(items: ImportRunChapterInput[]): ImportRunChapterInput[] {
-  if (!Array.isArray(items) || items.length === 0 || items.length > MAX_IMPORT_RUN_CHAPTERS) {
+  if (!Array.isArray(items) || items.length === 0 || items.length > MAX_IMPORT_CHAPTERS) {
     throw new Error('导入章节清单无效')
   }
   const numbers = new Set<number>()
@@ -233,10 +329,11 @@ function normalizeChapters(items: ImportRunChapterInput[]): ImportRunChapterInpu
       || !SHA256.test(item.contentFingerprint)
       || !Number.isSafeInteger(item.contentSize)
       || item.contentSize !== bytes
+      || bytes === 0
       || bytes > MAX_CHAPTER_BYTES
     ) throw new Error(`导入章节 ${item.number} 快照无效`)
     aggregateBytes += bytes
-    if (aggregateBytes > MAX_IMPORT_RUN_TOTAL_BYTES) throw new Error('导入正文总字节数超过安全上限')
+    if (aggregateBytes > MAX_IMPORT_TOTAL_BYTES) throw new Error('导入正文总字节数超过安全上限')
     return { ...item, title: item.title.trim() }
   })
   return normalized.sort((left, right) => left.number - right.number)
@@ -273,9 +370,19 @@ function applyBatchCheckpoint(
     SET completed_batches_json = ?,
         status = CASE WHEN ? = 1 THEN 'cancelled' ELSE status END,
         resumable = 1,
+        execution_owner = CASE WHEN ? = 1 THEN '' ELSE execution_owner END,
+        execution_epoch = execution_epoch + CASE WHEN ? = 1 THEN 1 ELSE 0 END,
+        lease_expires_at = CASE WHEN ? = 1 THEN 0 ELSE lease_expires_at END,
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(JSON.stringify(completed), cancelApplied ? 1 : 0, row.id)
+  `).run(
+    JSON.stringify(completed),
+    cancelApplied ? 1 : 0,
+    cancelApplied ? 1 : 0,
+    cancelApplied ? 1 : 0,
+    cancelApplied ? 1 : 0,
+    row.id,
+  )
   return { newlyCompleted, cancelApplied }
 }
 
@@ -489,7 +596,10 @@ export class ImportRunRepository {
       SELECT * FROM import_run_receipts
       WHERE run_id = ? AND stage = ? AND batch_id = ?
     `).get(runId, stage, batchId) as ImportRunEffectReceiptRow | undefined
-    return row ? rowToEffectReceipt(row) : null
+    if (!row) return null
+    const run = readRunRow(runId)
+    if (!run) return corruptedReceipt()
+    return rowToEffectReceipt(row, run)
   }
 
   static prepareEffectReceipt(
@@ -518,14 +628,15 @@ export class ImportRunRepository {
           || existing.kind !== request.kind
           || existing.payload_hash !== payload.hash
         ) throw new Error('导入 effect receipt 已绑定不同载荷')
-        return rowToEffectReceipt(existing)
+        return rowToEffectReceipt(existing, run)
       }
       db().prepare(`
         INSERT INTO import_run_receipts (
-          run_id, effect_namespace, effect_key, stage, batch_id, kind, payload_json, payload_hash
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          run_id, schema_version, effect_namespace, effect_key, stage, batch_id, kind, payload_json, payload_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         request.runId,
+        IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
         run.effect_namespace,
         effectKey,
         request.stage,
@@ -552,10 +663,10 @@ export class ImportRunRepository {
         WHERE run_id = ? AND stage = ? AND batch_id = ?
       `).get(runId, stage, batchId) as ImportRunEffectReceiptRow | undefined
       if (!row) throw new Error('导入 effect receipt 不存在')
-      if (row.effect_namespace !== run.effect_namespace) throw new Error('导入 effect receipt namespace 不匹配')
+      const validatedReceipt = rowToEffectReceipt(row, run)
       if (row.state === 'committed') {
         return {
-          receipt: rowToEffectReceipt(row),
+          receipt: validatedReceipt,
           run: this.get(runId)!,
           cancelApplied: run.cancel_requested === 1,
         }
@@ -608,8 +719,10 @@ export class ImportRunRepository {
     if (!normalizedOwner || normalizedOwner.length > 160 || leaseMs < 1) throw new Error('导入执行器身份无效')
     return db().transaction(() => {
       const row = readRunRow(runId)
-      if (!row || !['ready', 'running', 'failed', 'cancelled'].includes(row.status)) {
-        throw new Error('导入运行当前不可启动')
+      if (!row || row.resumable !== 1 || !['ready', 'running', 'failed', 'cancelled'].includes(row.status)) {
+        throw new Error(row?.resumable === 0 && row.last_error
+          ? row.last_error
+          : '导入运行当前不可启动')
       }
       if (row.execution_owner && row.execution_owner !== normalizedOwner && row.lease_expires_at > now) {
         throw new Error('导入运行正在由另一执行器运行')
@@ -639,15 +752,26 @@ export class ImportRunRepository {
     return { ...execution, expiresAt }
   }
 
-  static restart(runId: string, nextRunId: string): ImportRunSnapshot {
+  static restart(runId: string, nextRunId: string, now = Date.now()): ImportRunSnapshot {
     const normalizedNextId = nextRunId.trim()
     if (!normalizedNextId || normalizedNextId.length > 160) throw new Error('新导入运行 ID 无效')
     return db().transaction(() => {
       const source = readRunRow(runId)
-      if (!source || source.status === 'completed' || source.resumable !== 1) {
+      const restartable = source?.status === 'failed'
+        || source?.status === 'cancelled'
+        || (source?.status === 'running' && source.lease_expires_at <= now)
+      if (!source || !restartable || source.resumable !== 1) {
         throw new Error('导入运行当前不可重新开始')
       }
       if (readRunRow(normalizedNextId)) throw new Error('新导入运行 ID 已存在')
+      const fenced = db().prepare(`
+        UPDATE import_runs
+        SET resumable = 0, cancel_requested = 0, last_error = 'Restarted by user',
+            execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+            updated_at = datetime('now')
+        WHERE id = ? AND execution_epoch = ?
+      `).run(runId, source.execution_epoch)
+      if (fenced.changes !== 1) throw new Error('导入运行重新开始时已被其他执行器接管')
       db().prepare(`
         INSERT INTO import_runs (
           id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint, source_display_json, locale,
@@ -677,12 +801,6 @@ export class ImportRunRepository {
         SELECT ?, chapter_number, title, content_fingerprint, content_size, content_snapshot
         FROM import_run_chapters WHERE run_id = ? ORDER BY chapter_number
       `).run(normalizedNextId, runId)
-      db().prepare(`
-        UPDATE import_runs
-        SET resumable = 0, cancel_requested = 0, last_error = 'Restarted by user',
-            updated_at = datetime('now')
-        WHERE id = ?
-      `).run(runId)
       return this.get(normalizedNextId)!
     })()
   }
@@ -698,15 +816,18 @@ export class ImportRunRepository {
   }
 
   static cancelAtBoundary(runId: string, execution: ImportRunExecutionLease): ImportRunSnapshot {
-    assertExecution(runId, execution)
-    const result = db().prepare(`
-      UPDATE import_runs
-      SET status = 'cancelled', resumable = 1, cancel_requested = 1,
-          updated_at = datetime('now')
-      WHERE id = ? AND status IN ('ready', 'running', 'failed')
-    `).run(runId)
-    if (result.changes === 0) throw new Error('导入运行当前不可在安全边界取消')
-    return this.get(runId)!
+    return db().transaction(() => {
+      assertExecution(runId, execution)
+      const result = db().prepare(`
+        UPDATE import_runs
+        SET status = 'cancelled', resumable = 1, cancel_requested = 1,
+            execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+            updated_at = datetime('now')
+        WHERE id = ? AND status IN ('ready', 'running', 'failed')
+      `).run(runId)
+      if (result.changes === 0) throw new Error('导入运行当前不可在安全边界取消')
+      return this.get(runId)!
+    })()
   }
 
   static completeBatch(runId: string, stage: ImportRunStage, batchId: string, execution: ImportRunExecutionLease): {
@@ -736,30 +857,32 @@ export class ImportRunRepository {
   }
 
   static fail(runId: string, stage: ImportRunStage, error: string, execution: ImportRunExecutionLease): ImportRunSnapshot {
-    assertExecution(runId, execution)
-    const result = db().prepare(`
-      UPDATE import_runs
-      SET stage = ?, status = 'failed', last_error = ?, resumable = 1,
-          updated_at = datetime('now') WHERE id = ? AND status <> 'completed'
-    `).run(stage, error.slice(0, 2_000), runId)
-    if (result.changes === 0) throw new Error('导入运行当前不可标记失败')
-    return this.get(runId)!
+    return db().transaction(() => {
+      assertExecution(runId, execution)
+      const result = db().prepare(`
+        UPDATE import_runs
+        SET stage = ?, status = 'failed', last_error = ?, resumable = 1,
+            execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+            updated_at = datetime('now') WHERE id = ? AND status <> 'completed'
+      `).run(stage, error.slice(0, 2_000), runId)
+      if (result.changes === 0) throw new Error('导入运行当前不可标记失败')
+      return this.get(runId)!
+    })()
   }
 
   static complete(runId: string, execution: ImportRunExecutionLease): ImportRunSnapshot {
-    assertExecution(runId, execution)
-    const result = db().prepare(`
-      UPDATE import_runs
-      SET stage = 'completed', status = 'completed', completed_chapters = total_chapters,
-          resumable = 0, cancel_requested = 0, last_error = '',
-          completed_at = datetime('now'), updated_at = datetime('now')
-      WHERE id = ? AND status <> 'completed'
-    `).run(runId)
-    if (result.changes === 0) {
-      const existing = this.get(runId)
-      if (existing?.status === 'completed') return existing
-      throw new Error('导入运行当前不可完成')
-    }
-    return this.get(runId)!
+    return db().transaction(() => {
+      assertExecution(runId, execution)
+      const result = db().prepare(`
+        UPDATE import_runs
+        SET stage = 'completed', status = 'completed', completed_chapters = total_chapters,
+            resumable = 0, cancel_requested = 0, last_error = '',
+            execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+            completed_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ? AND status <> 'completed'
+      `).run(runId)
+      if (result.changes === 0) throw new Error('导入运行当前不可完成')
+      return this.get(runId)!
+    })()
   }
 }

@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import type { ImportInspectionSummary } from '../../src/shared/import-run'
+import type { ImportInspectionSummary, ImportSourceFileIdentity } from '../../src/shared/import-run'
+import {
+  MAX_IMPORT_CHAPTERS,
+  MAX_IMPORT_SOURCE_FILES,
+  MAX_IMPORT_TOTAL_BYTES,
+} from '../../src/shared/import-limits'
 
-export const MAX_IMPORT_CHAPTERS = 5_000
-export const MAX_IMPORT_TOTAL_BYTES = 128 * 1024 * 1024
+export { MAX_IMPORT_CHAPTERS, MAX_IMPORT_SOURCE_FILES, MAX_IMPORT_TOTAL_BYTES }
 export const IMPORT_INSPECTION_TTL_MS = 10 * 60 * 1_000
 const SHA256 = /^[a-f0-9]{64}$/u
 const MAX_IMPORT_CHAPTER_BYTES = 16 * 1024 * 1024
@@ -16,8 +20,7 @@ export interface InspectedImportChapter {
   contentSize: number
 }
 
-export interface InspectedImportSource {
-  stableFileId: string
+export interface InspectedImportSource extends ImportSourceFileIdentity {
   displayName: string
   mediaType: string
   size: number
@@ -63,7 +66,7 @@ export class ImportInspectionStore {
     if (input.chapters.length === 0 || input.chapters.length > MAX_IMPORT_CHAPTERS) {
       throw new Error(`导入章节数必须在 1–${MAX_IMPORT_CHAPTERS} 之间`)
     }
-    if (input.sources.length === 0 || input.sources.length > MAX_IMPORT_CHAPTERS) {
+    if (input.sources.length === 0 || input.sources.length > MAX_IMPORT_SOURCE_FILES) {
       throw new Error('导入来源数量无效')
     }
     const chapterNumbers = new Set<number>()

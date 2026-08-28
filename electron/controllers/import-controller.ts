@@ -9,6 +9,11 @@ import {
   windowsSafeFileSystem,
   type WindowsSafeFileSystem,
 } from '../security/windows-safe-file-system'
+import {
+  DEFAULT_IMPORT_RESOURCE_LIMITS,
+  type ImportResourceLimits,
+} from '../../src/shared/import-limits'
+import type { ImportSourceFileIdentity } from '../../src/shared/import-run'
 
 /**
  * 导入小说控制器 — 处理文件选择与章节拆分
@@ -36,13 +41,18 @@ const CHAPTER_PATTERNS = [RE_CN_CHAPTER, RE_EN_CHAPTER, RE_MD_HEADING]
 
 const IMPORT_GRANT_TTL_MS = 5 * 60 * 1000
 
-export type ImportFileIdentityProvider = (filePath: string) => string
+export type ImportFileIdentityProvider = (filePath: string) => ImportSourceFileIdentity
 
 /** Raw identities never leave main-process memory; project storage only receives a salted HMAC. */
-function defaultFileIdentity(filePath: string): string {
-  const stats = statSync(filePath, { bigint: true })
-  if (stats.ino !== 0n) return `dev:${stats.dev.toString()}:ino:${stats.ino.toString()}`
-  return `canonical:${realpathSync.native(filePath)}`
+function defaultFileIdentity(filePath: string): ImportSourceFileIdentity {
+  const canonicalLocation = realpathSync.native(filePath)
+  const stats = statSync(canonicalLocation, { bigint: true })
+  return {
+    canonicalLocation,
+    ...(stats.ino === 0n
+      ? {}
+      : { fileIdentity: `dev:${stats.dev.toString()}:ino:${stats.ino.toString()}` }),
+  }
 }
 
 function text(zhCNText: string, enUSText: string): string {
@@ -132,11 +142,18 @@ function sourceMediaType(displayName: string): string {
 }
 
 /** 将单个文件内容拆分为章节数组 */
-function splitSingleFileContent(content: string): ParsedChapter[] {
+function splitSingleFileContent(content: string, maxChapters: number): ParsedChapter[] {
   const lines = content.split('\n')
   const chapters: ParsedChapter[] = []
   let currentChapter: { headerLine: string; lines: string[] } | null = null
   let autoNumber = 0
+
+  const appendChapter = (chapter: ParsedChapter) => {
+    if (chapters.length >= maxChapters) {
+      throw new Error(`导入章节数不能超过 ${maxChapters}`)
+    }
+    chapters.push(chapter)
+  }
 
   for (const line of lines) {
     if (isChapterHeading(line)) {
@@ -146,7 +163,7 @@ function splitSingleFileContent(content: string): ParsedChapter[] {
         const num = extractChapterNumber(currentChapter.headerLine) || autoNumber
         const text = currentChapter.lines.join('\n').trim()
         if (text.length > 0) {
-          chapters.push({
+          appendChapter({
             number: num,
             title: extractTitle(currentChapter.headerLine),
             content: text,
@@ -172,7 +189,7 @@ function splitSingleFileContent(content: string): ParsedChapter[] {
     const num = extractChapterNumber(currentChapter.headerLine) || autoNumber
     const text = currentChapter.lines.join('\n').trim()
     if (text.length > 0) {
-      chapters.push({
+      appendChapter({
         number: num,
         title: extractTitle(currentChapter.headerLine),
         content: text,
@@ -193,8 +210,20 @@ function hasChapterHeadings(content: string): boolean {
 export function registerImportController(
   fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
   fileIdentity: ImportFileIdentityProvider = defaultFileIdentity,
+  limitOverrides: Partial<ImportResourceLimits> = {},
 ) {
-  const grantSourceIdentities = new Map<string, string>()
+  const limits: ImportResourceLimits = {
+    ...DEFAULT_IMPORT_RESOURCE_LIMITS,
+    ...limitOverrides,
+  }
+  for (const [key, value] of Object.entries(limits) as Array<[keyof ImportResourceLimits, number]>) {
+    if (
+      !Number.isSafeInteger(value)
+      || value < 1
+      || value > DEFAULT_IMPORT_RESOURCE_LIMITS[key]
+    ) throw new Error(`导入资源限制 ${key} 无效`)
+  }
+  const grantSourceIdentities = new Map<string, ImportSourceFileIdentity & { selectedSize: number }>()
   // ===== 文件选择对话框 =====
   ipcMain.handle('dialog:select-novel-files', async (event) => {
     const result = await dialog.showOpenDialog({
@@ -207,7 +236,11 @@ export function registerImportController(
     })
     if (result.canceled || result.filePaths.length === 0) return null
     const grants = result.filePaths.map((filePath) => {
-      const stableFileId = fileIdentity(filePath)
+      const sourceIdentity = fileIdentity(filePath)
+      const selectedSize = statSync(sourceIdentity.canonicalLocation).size
+      if (!Number.isSafeInteger(selectedSize) || selectedSize < 0) {
+        throw new Error('IMPORT_SOURCE_SIZE_INVALID')
+      }
       const grant = externalFileGrants.issueFile({
         webContentsId: event.sender.id,
         filePath,
@@ -215,7 +248,7 @@ export function registerImportController(
         ttlMs: IMPORT_GRANT_TTL_MS,
         maxUses: 1,
       })
-      grantSourceIdentities.set(grant.grantId, stableFileId)
+      grantSourceIdentities.set(grant.grantId, { ...sourceIdentity, selectedSize })
       return { grantId: grant.grantId, displayName: path.basename(filePath) }
     })
     event.sender.once('destroyed', () => {
@@ -235,44 +268,84 @@ export function registerImportController(
       if (!Array.isArray(grantIds) || grantIds.length === 0) {
         throw new Error(text('未选择可导入的小说文件', 'No novel files were selected for import'))
       }
+      if (grantIds.length > limits.maxSourceFiles) {
+        throw new Error(`导入来源文件不能超过 ${limits.maxSourceFiles} 个`)
+      }
+      let selectedBytes = 0
       const fileCapabilities = grantIds.map((grantId) => {
-        const stableFileId = grantSourceIdentities.get(grantId)
-        if (!stableFileId) throw new Error('IMPORT_SOURCE_IDENTITY_MISSING')
+        const sourceIdentity = grantSourceIdentities.get(grantId)
+        if (!sourceIdentity) throw new Error('IMPORT_SOURCE_IDENTITY_MISSING')
+        if (sourceIdentity.selectedSize > limits.maxTotalBytes - selectedBytes) {
+          throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
+        }
+        selectedBytes += sourceIdentity.selectedSize
         const capability = externalFileGrants.resolve({
           grantId,
           webContentsId: event.sender.id,
           operation: 'read',
         })
         grantSourceIdentities.delete(grantId)
-        return { capability, stableFileId }
+        return {
+          capability,
+          canonicalLocation: sourceIdentity.canonicalLocation,
+          fileIdentity: sourceIdentity.fileIdentity,
+        }
       })
-      const sources: Array<{ stableFileId: string; displayName: string; mediaType: string; size: number }> = []
+      const sources: Array<{
+        canonicalLocation: string
+        fileIdentity?: string
+        displayName: string
+        mediaType: string
+        size: number
+      }> = []
+      let consumedBytes = 0
+
+      const reserveSourceBytes = (content: string): number => {
+        const contentBytes = Buffer.byteLength(content, 'utf8')
+        if (contentBytes > limits.maxTotalBytes - consumedBytes) {
+          throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
+        }
+        consumedBytes += contentBytes
+        return contentBytes
+      }
+
+      const appendChapters = (chapters: ParsedChapter[]) => {
+        if (chapters.length > limits.maxChapters - allChapters.length) {
+          throw new Error(`导入章节数不能超过 ${limits.maxChapters}`)
+        }
+        allChapters.push(...chapters)
+      }
 
       if (fileCapabilities.length === 1) {
         // ===== 单文件模式 =====
         const selected = fileCapabilities[0]
-        let content = await fileSystem.readText(selected.capability)
+        let content = await fileSystem.readText(
+          selected.capability,
+          limits.maxTotalBytes - consumedBytes,
+        )
         const fileName = path.basename(selected.capability.relativePath)
+        const contentBytes = reserveSourceBytes(content)
         sources.push({
-          stableFileId: selected.stableFileId,
+          canonicalLocation: selected.canonicalLocation,
+          fileIdentity: selected.fileIdentity,
           displayName: fileName,
           mediaType: sourceMediaType(fileName),
-          size: Buffer.byteLength(content, 'utf8'),
+          size: contentBytes,
         })
 
         if (hasChapterHeadings(content)) {
           // 文件内含章节标题 → 正则拆章
-          const chapters = splitSingleFileContent(content)
-          allChapters.push(...chapters)
+          const chapters = splitSingleFileContent(content, limits.maxChapters)
+          appendChapters(chapters)
         } else {
           // 无章节标题 → 整文件视为一章
           const trimmed = content.trim()
-          allChapters.push({
+          appendChapters([{
             number: 1,
             title: path.basename(fileName, path.extname(fileName)),
             content: trimmed,
             wordCount: trimmed.length,
-          })
+          }])
         }
         content = ''
       } else {
@@ -286,31 +359,40 @@ export function registerImportController(
 
         for (let i = 0; i < sorted.length; i++) {
           const selected = sorted[i]
-          let content = (await fileSystem.readText(selected.capability)).trim()
+          let content = await fileSystem.readText(
+            selected.capability,
+            limits.maxTotalBytes - consumedBytes,
+          )
           const sourceFileName = path.basename(selected.capability.relativePath)
+          const contentBytes = reserveSourceBytes(content)
           sources.push({
-            stableFileId: selected.stableFileId,
+            canonicalLocation: selected.canonicalLocation,
+            fileIdentity: selected.fileIdentity,
             displayName: sourceFileName,
             mediaType: sourceMediaType(sourceFileName),
-            size: Buffer.byteLength(content, 'utf8'),
+            size: contentBytes,
           })
+          content = content.trim()
           if (!content) continue
 
           // 尝试从文件内容中检测章节标题
           if (hasChapterHeadings(content)) {
             // 文件内含多章 → 拆分
-            const chapters = splitSingleFileContent(content)
-            allChapters.push(...chapters)
+            const chapters = splitSingleFileContent(
+              content,
+              limits.maxChapters - allChapters.length,
+            )
+            appendChapters(chapters)
           } else {
             // 文件内无章节标题 → 整文件视为一章
             const fileName = path.basename(sourceFileName, path.extname(sourceFileName))
             const num = extractChapterNumber(fileName) || (allChapters.length + 1)
-            allChapters.push({
+            appendChapters([{
               number: num,
               title: fileName,
               content,
               wordCount: content.length,
-            })
+            }])
           }
           content = ''
         }

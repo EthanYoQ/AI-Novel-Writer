@@ -371,6 +371,12 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
     const chapters = context.data.chapters as ImportedChapter[]
     if (!chapters || chapters.length === 0) throw new Error(text('无章节数据', 'No chapter data is available.'))
+    const importRunTotalChapters = context.data.importRunTotalChapters
+    const totalChapters = typeof importRunTotalChapters === 'number'
+      && Number.isSafeInteger(importRunTotalChapters)
+      && importRunTotalChapters > 0
+      ? importRunTotalChapters
+      : chapters.length
 
     callbacks.log(text(
       '通过向量知识库检索关键片段...',
@@ -443,7 +449,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       .withSampledStyle(sampledContent.style || '')
       .withFirstChapter(firstChapter)
       .withLatestChapter(latestChapter)
-      .withTotalChapters(chapters.length)
+      .withTotalChapters(totalChapters)
       // 兼容旧版 Prompt 的 sample_content 变量
       .withSampleContent(promptLanguageText(
         writingLanguage,
@@ -535,16 +541,12 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     const novelConfig = {
       ...projectSnapshot.novelConfig,
       ...inferResult.novelConfig,
-      totalChapters: typeof context.data.importRunTotalChapters === 'number'
-        ? context.data.importRunTotalChapters
-        : chapters.length,
+      totalChapters,
       wordsPerChapter: Math.max(1, Math.round(
         (typeof context.data.importRunTotalWords === 'number'
           ? context.data.importRunTotalWords
           : chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0))
-        / (typeof context.data.importRunTotalChapters === 'number'
-          ? context.data.importRunTotalChapters
-          : chapters.length),
+        / totalChapters,
       )),
     }
     if (!sameProjectSessionContext(
