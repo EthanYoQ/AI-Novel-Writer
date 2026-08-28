@@ -21,7 +21,18 @@ import {
   DEFAULT_IMPORT_RESOURCE_LIMITS,
   type ImportResourceLimits,
 } from '../../src/shared/import-limits'
-import type { ImportPurpose, ImportSourceFileIdentity } from '../../src/shared/import-run'
+import type {
+  ImportNovelFileSelectionRequest,
+  ImportPurpose,
+  ImportRunChapterInput,
+  ImportRunLocale,
+  ImportSourceFileIdentity,
+} from '../../src/shared/import-run'
+import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { getCurrentProjectPath, getProjectDb } from '../database'
+import { projectAccess } from '../services/project-access'
+import { assertRequiredExpectedProjectPath } from '../utils/project-context'
+import { ImportRunRepository } from '../repositories/import-run-repository'
 
 /**
  * 导入小说控制器 — 处理文件选择与章节拆分
@@ -65,6 +76,44 @@ function defaultFileIdentity(filePath: string): ImportSourceFileIdentity {
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
+}
+
+function importText(locale: ImportRunLocale | undefined, zhCNText: string, enUSText: string): string {
+  return locale === 'en-US' ? enUSText : locale === 'zh-CN' ? zhCNText : text(zhCNText, enUSText)
+}
+
+function importSelectionErrorMessage(
+  error: unknown,
+  locale: ImportRunLocale | undefined,
+  limits: ImportResourceLimits,
+): string {
+  const code = error instanceof Error ? error.message : ''
+  if (code === 'IMPORT_SOURCE_COUNT_EXCEEDED') {
+    return importText(
+      locale,
+      `所选文件数量超过导入上限（最多 ${limits.maxSourceFiles} 个）。`,
+      `The import source-file limit was exceeded (limit: ${limits.maxSourceFiles}).`,
+    )
+  }
+  if (code === 'IMPORT_SOURCE_BYTES_EXCEEDED' || code === 'SECURE_FS_FILE_TOO_LARGE') {
+    return importText(
+      locale,
+      `所选文件总大小超过导入上限（最多 ${limits.maxTotalBytes} 字节）。`,
+      `The import source-size limit was exceeded (limit: ${limits.maxTotalBytes} bytes).`,
+    )
+  }
+  if (code === 'IMPORT_CHAPTER_COUNT_EXCEEDED') {
+    return importText(
+      locale,
+      `拆分后的章节数超过导入上限（最多 ${limits.maxChapters} 章）。`,
+      `The import chapter limit was exceeded (limit: ${limits.maxChapters}).`,
+    )
+  }
+  return importText(
+    locale,
+    '无法读取所选文件；请重新选择后再试。',
+    'Could not read the selected files. Please choose them again.',
+  )
 }
 
 /** 中文数字到阿拉伯数字的映射 */
@@ -158,7 +207,7 @@ function splitSingleFileContent(content: string, maxChapters: number): ParsedCha
 
   const appendChapter = (chapter: ParsedChapter) => {
     if (chapters.length >= maxChapters) {
-      throw new Error(`导入章节数不能超过 ${maxChapters}`)
+      throw new Error('IMPORT_CHAPTER_COUNT_EXCEEDED')
     }
     chapters.push(chapter)
   }
@@ -236,14 +285,37 @@ export function registerImportController(
   }
   // Selection, bounded reading, and inspection are one main-process operation.
   // The renderer receives only the final inspection token and safe display facts.
-  ipcMain.handle('dialog:select-novel-files', async (event, requestedPurpose?: ImportPurpose) => {
+  ipcMain.handle('dialog:select-novel-files', async (
+    event,
+    request?: ImportPurpose | ImportNovelFileSelectionRequest,
+    projectSession?: ProjectSessionContext,
+  ) => {
     event.sender.once('destroyed', () => {
       grantService.revokeWebContents(event.sender.id)
       inspectionStore.revokeForWebContents(event.sender.id)
     })
+    const structuredRequest = typeof request === 'object' && request !== null ? request : undefined
+    const purpose: ImportPurpose = typeof request === 'string' ? request : (structuredRequest?.purpose ?? 'reference')
+    let frozenProject: { rootPath: string; session: ProjectSessionContext } | undefined
+    let responseLocale = structuredRequest?.locale
+    const assertFrozenProject = () => {
+      if (!frozenProject) return
+      const active = projectAccess.assertCurrentProjectContext(
+        frozenProject.session,
+        getCurrentProjectPath(),
+      )
+      assertRequiredExpectedProjectPath(active.rootPath, frozenProject.rootPath)
+    }
     try {
-      const purpose: ImportPurpose = requestedPurpose ?? 'reference'
       if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('IMPORT_PURPOSE_INVALID')
+      if (structuredRequest) {
+        const active = projectAccess.assertCurrentProjectContext(projectSession, getCurrentProjectPath())
+        assertRequiredExpectedProjectPath(active.rootPath, structuredRequest.expectedProjectPath)
+        frozenProject = {
+          rootPath: active.rootPath,
+          session: Object.freeze({ ...projectSession }) as ProjectSessionContext,
+        }
+      }
       const result = await dialog.showOpenDialog({
         title: purpose === 'author-manuscript'
           ? text('选择作者原稿文件', 'Choose author manuscript files')
@@ -254,6 +326,7 @@ export function registerImportController(
         ],
         properties: ['openFile', 'multiSelections'],
       })
+      assertFrozenProject()
       if (result.canceled || result.filePaths.length === 0) return null
       inspectionStore.revokeForWebContents(event.sender.id)
       if (result.filePaths.length > limits.maxSourceFiles) {
@@ -273,15 +346,55 @@ export function registerImportController(
           throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
         }
         selectedBytes += selectedSize
-        return { filePath, identity, displayName: path.basename(filePath) }
+        return { filePath, identity, displayName: path.basename(filePath), selectedSize }
       }).sort((left, right) => left.displayName.localeCompare(right.displayName, 'zh-CN', { numeric: true }))
       const encodedIdentities = ImportSourceIdentityRepository.encodeSources(
         selected.map(source => source.identity),
         purpose,
         applicationSecret ?? loadApplicationImportSourceSecret(),
       )
+      const parsingContext = structuredRequest?.purpose === 'reference'
+        ? (() => {
+            assertFrozenProject()
+            const projectDb = getProjectDb()
+            if (!projectDb) throw new Error('项目数据库未打开')
+            return projectDb.transaction(() => {
+              const resolvedIdentity = ImportSourceIdentityRepository.resolveEncodedSources(
+                encodedIdentities,
+                structuredRequest.purpose,
+                applicationSecret ?? loadApplicationImportSourceSecret(),
+              )
+              const parsingRun = ImportRunRepository.beginParsing({
+                runId: structuredRequest.runId,
+                purpose: structuredRequest.purpose,
+                sourceFingerprint: resolvedIdentity.sourceFingerprint,
+                sourceIds: resolvedIdentity.sourceIds,
+                sourceFingerprints: resolvedIdentity.sourceFingerprints,
+                legacySourceFingerprints: resolvedIdentity.legacySourceFingerprints,
+                legacyCollectionFingerprint: resolvedIdentity.legacyCollectionFingerprint,
+                sourceDisplay: selected.map(source => ({
+                  displayName: source.displayName,
+                  mediaType: sourceMediaType(source.displayName),
+                  size: source.selectedSize,
+                })),
+                locale: structuredRequest.locale,
+              })
+              if (parsingRun.totalContentSize > limits.maxTotalBytes - selectedBytes) {
+                throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
+              }
+              return { resolvedIdentity, parsingRun }
+            })()
+          })()
+        : undefined
+      const resolvedIdentity = parsingContext?.resolvedIdentity
+      const parsingRun = parsingContext?.parsingRun
+      // An ordinary selection may discover an unfinished run by source
+      // identity even when the renderer supplied a fresh run id and a changed
+      // UI locale. From this point onward, the durable run owns user-facing
+      // parsing copy as well as persisted failures.
+      responseLocale = parsingRun?.locale ?? responseLocale
 
-      let chapterCount = 0
+      let chapterCount = parsingRun?.completedChapters ?? 0
       const sources: Array<{
         locationAliasDigest: string
         fileAliasDigest?: string
@@ -289,7 +402,7 @@ export function registerImportController(
         mediaType: string
         size: number
       }> = []
-      let consumedBytes = 0
+      let consumedBytes = parsingRun?.totalContentSize ?? 0
 
       const reserveSourceBytes = (content: string): number => {
         const contentBytes = Buffer.byteLength(content, 'utf8')
@@ -302,15 +415,23 @@ export function registerImportController(
 
       const appendChapters = (chapters: ParsedChapter[]) => {
         if (chapters.length > limits.maxChapters - chapterCount) {
-          throw new Error(`导入章节数不能超过 ${limits.maxChapters}`)
+          throw new Error('IMPORT_CHAPTER_COUNT_EXCEEDED')
         }
         chapterCount += chapters.length
       }
 
       const inspectedChapters: Array<ParsedChapter & { sourceIndex: number; sourceChapterNumber: number }> = []
+      let emptySourceFound = false
+      let titleOnlySourceFound = false
       for (let sourceIndex = 0; sourceIndex < selected.length; sourceIndex++) {
         const source = selected[sourceIndex]
         const encoded = encodedIdentities[sourceIndex]
+        const opaqueSourceId = resolvedIdentity?.sourceIds[sourceIndex]
+        assertFrozenProject()
+        if (parsingRun && opaqueSourceId
+          && ImportRunRepository.parsedSourceStatus(parsingRun.id, opaqueSourceId) === 'completed') {
+          continue
+        }
         let grantId = ''
         try {
           const grant = grantService.issueFile({
@@ -327,6 +448,7 @@ export function registerImportController(
             operation: 'read',
           })
           let content = await fileSystem.readText(capability, limits.maxTotalBytes - consumedBytes)
+          assertFrozenProject()
           const contentBytes = reserveSourceBytes(content)
           const sourceFileName = source.displayName
           sources.push({
@@ -336,7 +458,18 @@ export function registerImportController(
             size: contentBytes,
           })
           content = content.trim()
-          if (!content) continue
+          if (!content) {
+            emptySourceFound = true
+            if (parsingRun && opaqueSourceId) {
+              assertFrozenProject()
+              ImportRunRepository.failParsedSource(
+                parsingRun.id,
+                opaqueSourceId,
+                importText(responseLocale, '所选来源文件为空', 'Selected source file is empty'),
+              )
+            }
+            continue
+          }
           const parsed = hasChapterHeadings(content)
             ? splitSingleFileContent(content, limits.maxChapters - chapterCount)
             : [{
@@ -345,9 +478,26 @@ export function registerImportController(
                 content,
                 wordCount: content.length,
               }]
+          if (parsed.length === 0) {
+            titleOnlySourceFound = true
+            if (parsingRun && opaqueSourceId) {
+              assertFrozenProject()
+              ImportRunRepository.failParsedSource(
+                parsingRun.id,
+                opaqueSourceId,
+                importText(
+                  responseLocale,
+                  '所选来源文件只有章节标题，没有可导入的正文',
+                  'The selected source file contains chapter headings but no body text',
+                ),
+              )
+            }
+            continue
+          }
           appendChapters(parsed)
           const usedLocalNumbers = new Set<number>()
           let nextLocalNumber = 1
+          const firstInspectedChapter = inspectedChapters.length
           for (const chapter of parsed) {
             let sourceChapterNumber = chapter.number
             if (!Number.isSafeInteger(sourceChapterNumber) || sourceChapterNumber < 1 || usedLocalNumbers.has(sourceChapterNumber)) {
@@ -357,10 +507,73 @@ export function registerImportController(
             usedLocalNumbers.add(sourceChapterNumber)
             inspectedChapters.push({ ...chapter, sourceIndex, sourceChapterNumber })
           }
+          if (parsingRun && opaqueSourceId) {
+            const sourceChapters: ImportRunChapterInput[] = parsed.map((chapter, index) => {
+              const persisted = inspectedChapters[firstInspectedChapter + index]
+              const sourceChapterNumber = persisted?.sourceChapterNumber ?? chapter.number
+              return {
+                number: sourceChapterNumber,
+                sourceChapterNumber,
+                title: chapter.title,
+                content: chapter.content,
+                contentFingerprint: sha256(chapter.content),
+                contentSize: Buffer.byteLength(chapter.content, 'utf8'),
+              }
+            })
+            assertFrozenProject()
+            ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, sourceChapters)
+          }
           content = ''
+        } catch (error) {
+          let projectStillCurrent = false
+          try {
+            assertFrozenProject()
+            projectStillCurrent = true
+          } catch {
+            // A stale project session must not turn a read failure into a write
+            // against the newly active project's database.
+          }
+          if (projectStillCurrent && parsingRun && opaqueSourceId
+            && ImportRunRepository.parsedSourceStatus(parsingRun.id, opaqueSourceId) !== 'completed') {
+            assertFrozenProject()
+            ImportRunRepository.failParsedSource(
+              parsingRun.id,
+              opaqueSourceId,
+              importSelectionErrorMessage(error, responseLocale, limits),
+            )
+          }
+          throw error
         } finally {
           if (grantId) grantService.revoke(grantId)
         }
+      }
+
+      if (emptySourceFound) {
+        const error = responseLocale === 'en-US'
+          ? 'One or more selected files are empty. Add novel text and choose the unfinished files again.'
+          : responseLocale === 'zh-CN'
+            ? '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。'
+            : text(
+                '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。',
+                'One or more selected files are empty. Add novel text and choose the unfinished files again.',
+              )
+        return { success: false, error }
+      }
+
+      if (titleOnlySourceFound) {
+        return {
+          success: false,
+          error: importText(
+            responseLocale,
+            '一个或多个所选文件只有章节标题，没有可导入的正文。请补充小说正文后，重新选择未完成的文件。',
+            'One or more selected files contain chapter headings but no body text. Add novel text and choose the unfinished files again.',
+          ),
+        }
+      }
+
+      if (parsingRun) {
+        assertFrozenProject()
+        return { success: true, preparation: ImportRunRepository.finalizeParsing(parsingRun.id) }
       }
 
       // Preview numbers are renderer-only. Stable global numbers are assigned
@@ -396,7 +609,7 @@ export function registerImportController(
               `作者原稿包含重复的第 ${duplicateChapter[1]} 章；请修正章节号后重新选择。`,
               `The author manuscript contains duplicate Chapter ${duplicateChapter[1]}. Correct the chapter numbers and choose the files again.`,
             )
-          : text('无法读取所选文件；请重新选择后再试。', 'Could not read the selected files. Please choose them again.'),
+          : importSelectionErrorMessage(error, responseLocale, limits),
       }
     }
   })

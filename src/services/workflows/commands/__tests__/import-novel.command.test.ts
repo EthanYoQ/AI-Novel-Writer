@@ -238,7 +238,7 @@ describe('InferBlueprintsPerChapterCommand', () => {
     })
     const context = createContext()
     context.writingLanguage = 'en-US'
-    context.uiLocale = 'en-US'
+    context.uiLocale = 'zh-CN'
     const configSummary = 'A time-loop mystery at “夜航 Café”.'
     context.data.novelConfigSummary = configSummary
     context.data.chapters = [{
@@ -271,8 +271,8 @@ describe('InferBlueprintsPerChapterCommand', () => {
     )
     expect(initialBuiltIn).not.toMatch(CJK_TEXT)
     expect(repairBuiltIn).not.toMatch(CJK_TEXT)
-    expect(callbacks.log).toHaveBeenCalledWith('Inferring blueprints in batches (1 chapter; at most 1 model call)...')
-    expect(callbacks.log).toHaveBeenCalledWith('  Inferring Chapters 1–1...')
+    expect(callbacks.log).toHaveBeenCalledWith('开始分批推演蓝图（共 1 章，预计至多 1 次调用）...')
+    expect(callbacks.log).toHaveBeenCalledWith('  正在推演第 1–1 章...')
   })
 
   it('performs zero per-chapter writes and throws when the one range commit fails', async () => {

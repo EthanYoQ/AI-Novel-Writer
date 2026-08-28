@@ -66,11 +66,11 @@ function realDependencies(
     importReference: async () => { throw new Error('unexpected knowledge stage') },
     inferGlobal: async () => { throw new Error('unexpected global stage') },
     analyzeStyle: async () => { throw new Error('unexpected style stage') },
-    inferBlueprints: async (chapters, checkpoint, _run, commit) => {
+    inferBlueprints: async (chapters, _checkpoint, run, commit) => {
       modelCalls.push(chapters.map(item => item.number))
       await commit({
         mode: 'replace-range',
-        operationId: `import-blueprint:${checkpoint}`,
+        operationId: `import-blueprints-${run.id}-${chapters[0]!.number}-${chapters.at(-1)!.number}`,
         startChapter: chapters[0]!.number,
         endChapter: chapters.at(-1)!.number,
         blueprints: chapters.map(item => blueprint(item.number)),
@@ -115,6 +115,66 @@ afterEach(() => {
 })
 
 describe('ImportRunOrchestrator with the real import repository', () => {
+  it('imports sparse historical chapter numbers with exact knowledge checkpoints', async () => {
+    ImportRunRepository.prepare({
+      runId: 'sparse-run',
+      purpose: 'reference',
+      sourceFingerprint: 'b'.repeat(64),
+      sourceDisplay: [{ displayName: 'sparse.txt', mediaType: 'text/plain', size: 22 }],
+      locale: 'en-US',
+      chapters: [chapter(1), chapter(2)],
+    })
+    getProjectDb()!.transaction(() => {
+      getProjectDb()!.prepare(`
+        UPDATE import_source_chapter_map
+        SET chapter_number = 5
+        WHERE purpose = 'reference' AND source_id = ? AND source_chapter_number = 2
+      `).run(`legacy:${'b'.repeat(64)}`)
+      getProjectDb()!.prepare(`
+        UPDATE import_run_chapters SET chapter_number = 5
+        WHERE run_id = 'sparse-run' AND chapter_number = 4
+      `).run()
+    })()
+    const imported: number[] = []
+    const dependencies = realDependencies([], { current: false })
+    dependencies.importReference = async (item, _run, authority) => {
+      imported.push(item.number)
+      const binding = ImportRunRepository.resolveReferenceImportAuthority('sparse-run', authority, item.number)
+      const documentId = createHash('sha256').update(`reference-import:${binding.stableKey}`).digest('hex')
+      getProjectDb()!.prepare(`
+        INSERT INTO import_reference_documents (
+          document_id, idempotency_key_hash, content_hash, chunk_set_hash,
+          expected_chunk_count, corpus_kind, state
+        ) VALUES (?, ?, ?, ?, 1, 'reference', 'committed')
+      `).run(
+        documentId,
+        createHash('sha256').update(binding.stableKey).digest('hex'),
+        binding.contentFingerprint,
+        createHash('sha256').update(`chunks:${item.number}`).digest('hex'),
+      )
+      ImportRunRepository.commitReferenceImportReceipt('sparse-run', authority, item.number, documentId)
+    }
+
+    await new ImportRunOrchestrator(dependencies).executeStage(
+      'sparse-run',
+      'knowledge',
+      'sparse-runner',
+      { cancelled: false },
+      { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
+    )
+
+    expect(imported).toEqual([3, 5])
+    expect(ImportRunRepository.get('sparse-run')).toMatchObject({
+      stage: 'global',
+      completedBatches: {
+        knowledge: [
+          expect.stringMatching(/^3-3-[a-f0-9]{8}$/u),
+          expect.stringMatching(/^5-5-[a-f0-9]{8}$/u),
+        ],
+      },
+    })
+  })
+
   it('resumes after reopen without recalling the model or repeating a committed blueprint effect', async () => {
     const modelCalls: number[][] = []
     const crashAfterFirstCommit = { current: true }

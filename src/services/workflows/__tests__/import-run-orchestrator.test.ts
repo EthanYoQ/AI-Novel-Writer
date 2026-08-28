@@ -6,6 +6,7 @@ import type {
   ImportRunSnapshot,
   ImportRunStage,
 } from '../../../shared/import-run'
+import { createImportRunChapterBatchCheckpointId } from '../../../shared/import-run'
 import type { FinalizedDraftImportReceipt } from '../../../shared/finalized-draft-import'
 import {
   IMPORT_CHAPTER_PAGE_SIZE,
@@ -17,7 +18,6 @@ import {
 function runSnapshot(overrides: Partial<ImportRunSnapshot> = {}): ImportRunSnapshot {
   return {
     id: 'run-1', purpose: 'reference', rootRunId: 'run-1', effectNamespace: 'import:reference:run-1',
-    sourceFingerprint: 'a'.repeat(64), manifestFingerprint: 'b'.repeat(64),
     sourceDisplay: [{ displayName: 'reference.txt', mediaType: 'text/plain', size: 1 }],
     locale: 'en-US', stage: 'knowledge', status: 'running', completedBatches: {},
     lastError: '', resumable: true, cancelRequested: false, totalChapters: 25,
@@ -406,12 +406,43 @@ describe('ImportRunOrchestrator', () => {
 
     await expect(orchestrator.executeStage('run-1', 'knowledge', 'test-runner', context, callbacks))
       .rejects.toThrow('injected KB failure')
-    expect(getRun().completedBatches.knowledge).toEqual(['1-10'])
+    expect(getRun().completedBatches.knowledge).toEqual([
+      `1-10-${Array.from({ length: 10 }, () => '00000000').join('.')}`,
+    ])
 
     await orchestrator.executeStage('run-1', 'knowledge', 'test-runner', context, callbacks)
     expect(calls.filter(number => number <= 10)).toHaveLength(10)
     expect(calls.filter(number => number === 11)).toHaveLength(2)
     expect(limits.every(limit => limit <= IMPORT_CHAPTER_PAGE_SIZE)).toBe(true)
+    expect(getRun().stage).toBe('global')
+  })
+
+  it('checkpoints non-contiguous knowledge chapters in exact bounded ranges', async () => {
+    const { deps, calls, getRun } = harness(2)
+    const sparseChapters = [chapter(1), chapter(3)]
+    deps.listChapters = vi.fn(async (_runId, after, limit) => (
+      sparseChapters.filter(item => item.number > after).slice(0, limit)
+    ))
+
+    await new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'knowledge', 'test-runner', { cancelled: false }, callbacks,
+    )
+
+    expect(calls).toEqual([1, 3])
+    expect(deps.completeBatch).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      'knowledge',
+      createImportRunChapterBatchCheckpointId([chapter(1)]),
+      expect.any(Object),
+    )
+    expect(deps.completeBatch).toHaveBeenNthCalledWith(
+      2,
+      'run-1',
+      'knowledge',
+      createImportRunChapterBatchCheckpointId([chapter(3)]),
+      expect.any(Object),
+    )
     expect(getRun().stage).toBe('global')
   })
 
@@ -532,6 +563,74 @@ describe('ImportRunOrchestrator', () => {
     expect(generated.filter(numbers => numbers[0] === 6)).toHaveLength(2)
     expect(generated.at(-1)).toEqual([11, 12])
     expect(getRun().stage).toBe('refresh')
+  })
+
+  it('replays a checkpointed blueprint effect so pending character sync finishes without another model call', async () => {
+    const firstBatch = Array.from({ length: 5 }, (_, index) => chapter(index + 1))
+    const checkpoint = createImportRunChapterBatchCheckpointId(firstBatch)
+    const { deps, receipts, getRun } = harness(5, {
+      stage: 'blueprints',
+      completedBatches: { blueprints: [checkpoint] },
+    })
+    receipts.set(`blueprints:${checkpoint}`, {
+      schemaVersion: 1,
+      runId: 'run-1',
+      effectNamespace: 'import:reference:run-1',
+      effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints',
+      batchId: checkpoint,
+      kind: 'chapter-blueprint-range',
+      payloadHash: 'f'.repeat(64),
+      state: 'committed',
+      payload: { blueprints: true },
+      effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    })
+    deps.replayCommittedEffect = vi.fn()
+
+    await new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks,
+    )
+
+    expect(deps.inferBlueprints).not.toHaveBeenCalled()
+    expect(deps.replayCommittedEffect).toHaveBeenCalledTimes(1)
+    expect(getRun().stage).toBe('refresh')
+  })
+
+  it('fails closed when a checkpointed blueprint receipt cannot be verified during replay', async () => {
+    const firstBatch = Array.from({ length: 5 }, (_, index) => chapter(index + 1))
+    const checkpoint = createImportRunChapterBatchCheckpointId(firstBatch)
+    const { deps, receipts, getRun } = harness(5, {
+      stage: 'blueprints',
+      completedBatches: { blueprints: [checkpoint] },
+    })
+    receipts.set(`blueprints:${checkpoint}`, {
+      schemaVersion: 1,
+      runId: 'run-1',
+      effectNamespace: 'import:reference:run-1',
+      effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints',
+      batchId: checkpoint,
+      kind: 'chapter-blueprint-range',
+      payloadHash: 'f'.repeat(64),
+      state: 'committed',
+      payload: { blueprints: true },
+      effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    })
+    deps.replayCommittedEffect = vi.fn(async () => {
+      throw new Error('Committed import effect receipt does not match durable storage.')
+    })
+
+    await expect(new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks,
+    )).rejects.toThrow(/does not match durable storage/)
+
+    expect(deps.inferBlueprints).not.toHaveBeenCalled()
+    expect(deps.advanceStage).not.toHaveBeenCalled()
+    expect(getRun()).toMatchObject({ stage: 'blueprints', status: 'failed' })
   })
 
   it.each([

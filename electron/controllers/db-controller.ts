@@ -48,6 +48,7 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:import-global-facts-commit',
   'db:project-clear-generated-data',
   'db:import-run-prepare-inspection',
+  'db:import-run-finalize-parsing',
   'db:import-run-start-resume',
   'db:import-run-effect-receipt-prepare',
   'db:import-run-effect-receipt-commit',
@@ -188,27 +189,72 @@ export function registerDatabaseController() {
       request.purpose,
       loadApplicationImportSourceSecret(),
     )
-    return {
-      success: true,
-      preparation: ImportRunRepository.prepare({
-        runId: request.runId,
-        purpose: request.purpose,
-        sourceFingerprint: sourceIdentity.sourceFingerprint,
-        sourceIds: sourceIdentity.sourceIds,
-        sourceFingerprints: sourceIdentity.sourceFingerprints,
-        sourceDisplay: inspection.sources.map(source => ({
-          displayName: source.displayName,
-          mediaType: source.mediaType,
-          size: source.size,
-        })),
-        locale: request.locale,
-        ...(request.purpose === 'author-manuscript' ? {
+    const sourceDisplay = inspection.sources.map(source => ({
+      displayName: source.displayName,
+      mediaType: source.mediaType,
+      size: source.size,
+    }))
+    if (request.purpose === 'author-manuscript') {
+      return {
+        success: true,
+        preparation: ImportRunRepository.prepare({
+          runId: request.runId,
+          purpose: request.purpose,
+          sourceFingerprint: sourceIdentity.sourceFingerprint,
+          sourceIds: sourceIdentity.sourceIds,
+          sourceFingerprints: sourceIdentity.sourceFingerprints,
+          sourceDisplay,
+          locale: request.locale,
           authorityFingerprint: request.authorityFingerprint,
           expectedManifestFingerprint: request.manifestFingerprint,
-        } : {}),
-        chapters: inspection.chapters,
-      }),
+          chapters: inspection.chapters,
+        }),
+      }
     }
+    const parsingRun = ImportRunRepository.beginParsing({
+      runId: request.runId,
+      purpose: request.purpose,
+      sourceFingerprint: sourceIdentity.sourceFingerprint,
+      sourceIds: sourceIdentity.sourceIds,
+      sourceFingerprints: sourceIdentity.sourceFingerprints,
+      legacySourceFingerprints: sourceIdentity.legacySourceFingerprints,
+      legacyCollectionFingerprint: sourceIdentity.legacyCollectionFingerprint,
+      sourceDisplay,
+      locale: request.locale,
+    })
+    for (let sourceIndex = 0; sourceIndex < sourceIdentity.sourceIds.length; sourceIndex++) {
+      const sourceId = sourceIdentity.sourceIds[sourceIndex]!
+      const chapters = inspection.chapters
+        .filter(chapter => chapter.sourceIndex === sourceIndex)
+        .map(chapter => ({
+          number: chapter.sourceChapterNumber,
+          sourceChapterNumber: chapter.sourceChapterNumber,
+          title: chapter.title,
+          content: chapter.content,
+          contentFingerprint: chapter.contentFingerprint,
+          contentSize: chapter.contentSize,
+        }))
+      try {
+        ImportRunRepository.commitParsedSource(parsingRun.id, sourceId, chapters)
+      } catch (error) {
+        ImportRunRepository.failParsedSource(
+          parsingRun.id,
+          sourceId,
+          error instanceof Error ? error.message : String(error),
+        )
+        throw error
+      }
+    }
+    return { success: true, preparation: ImportRunRepository.finalizeParsing(parsingRun.id) }
+  })
+
+  ipcMain.handle('db:import-run-finalize-parsing', async (
+    _event,
+    runId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, preparation: ImportRunRepository.finalizeParsing(runId) }
   })
 
   ipcMain.handle('db:import-run-author-preview', async (

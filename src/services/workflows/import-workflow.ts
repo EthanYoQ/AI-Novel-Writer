@@ -5,6 +5,7 @@ import {
   type ImportRunChapterSnapshot,
   type ImportRunSnapshot,
   type ImportRunStage,
+  type ImportRunExecutionLease,
 } from '../../shared/import-run'
 import type { ImportGlobalFactsReceipt } from '../../shared/import-global-facts'
 import type { BlueprintRangeCommitReceipt } from '../../../electron/repositories/blueprint-repository'
@@ -17,6 +18,7 @@ import { ImportRunOrchestrator, type ImportRunOrchestratorDependencies } from '.
 import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh'
 import { promptLanguageText } from '../prompt-language'
 import { retryDirectoryCharacterSync } from './directory-character-sync-recovery'
+import type { WritingLanguage } from '../../shared/writing-language'
 
 export interface ImportWorkflowParams {
   projectPath: string
@@ -44,12 +46,14 @@ function importedChapter(chapter: ImportRunChapterSnapshot) {
   }
 }
 
-function currentNovelConfigSummary(locale: ImportRunSnapshot['locale']): string {
+function currentNovelConfigSummary(writingLanguage: WritingLanguage): string {
   const config = useProjectStore.getState().currentProject?.novelConfig
-  if (!config) return textForLocale(locale, '（配置概要不可用）', '(configuration summary unavailable)')
-  const none = textForLocale(locale, '（无）', '(none)')
+  if (!config) return promptLanguageText(
+    writingLanguage, '（配置概要不可用）', '(configuration summary unavailable)',
+  )
+  const none = promptLanguageText(writingLanguage, '（无）', '(none)')
   return promptLanguageText(
-    locale,
+    writingLanguage,
     `类型: ${config.genre || none}\n大纲: ${config.coreOutline || none}\n世界观: ${config.worldSetting || none}\n主角: ${config.protagonistProfile || none}`,
     `Genre: ${config.genre || none}\nOutline: ${config.coreOutline || none}\nWorld: ${config.worldSetting || none}\nProtagonist: ${config.protagonistProfile || none}`,
   )
@@ -63,16 +67,24 @@ function productionDependencies(
   const projectPath = context.projectPath
   return {
     getRun: runId => ipc.invokeWithProjectSession(session, 'db:import-run-get', runId, projectPath),
-    startOrResume: async (runId, owner) => required(
-      await ipc.invokeWithProjectSession(session, 'db:import-run-start-resume', runId, owner, projectPath),
-      'Could not start or resume the import run.',
-    ).start!,
-    renewExecution: async (runId, execution) => required(
-      await ipc.invokeWithProjectSession(
-        session, 'db:import-run-renew-execution', runId, execution, projectPath,
-      ),
-      'Could not renew the import execution lease.',
-    ).execution!,
+    startOrResume: async (runId, owner) => {
+      const start = required(
+        await ipc.invokeWithProjectSession(session, 'db:import-run-start-resume', runId, owner, projectPath),
+        'Could not start or resume the import run.',
+      ).start!
+      context.data.importRunExecution = start.execution
+      return start
+    },
+    renewExecution: async (runId, execution) => {
+      const renewed = required(
+        await ipc.invokeWithProjectSession(
+          session, 'db:import-run-renew-execution', runId, execution, projectPath,
+        ),
+        'Could not renew the import execution lease.',
+      ).execution!
+      context.data.importRunExecution = renewed
+      return renewed
+    },
     getEffectReceipt: (runId, stage, checkpoint) => ipc.invokeWithProjectSession(
       session,
       'db:import-run-effect-receipt-get',
@@ -168,26 +180,18 @@ function productionDependencies(
           },
         },
       })
-      context.data.novelConfigSummary = currentNovelConfigSummary(context.uiLocale)
+      context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
     },
     listChapters: (runId, after, limit) => ipc.invokeWithProjectSession(
       session, 'db:import-run-list-chapters', runId, after, limit, projectPath,
     ),
-    importReference: async (chapter, idempotencyKey, run, executionAuthority) => {
-      const fileName = textForLocale(
-        run.locale,
-        `第${chapter.number}章 ${chapter.title || '无标题'}.txt`,
-        `Chapter ${chapter.number} ${chapter.title || 'Untitled'}.txt`,
-      )
+    importReference: async (chapter, run, executionAuthority) => {
       const result = await ipc.invokeWithProjectSession(
         session,
         'kb:import-reference-text',
-        chapter.content,
-        fileName,
-        idempotencyKey,
+        chapter.number,
         run.id,
         executionAuthority,
-        projectPath,
       )
       if (!result.success) throw new Error(result.error || textForLocale(
         run.locale,
@@ -225,14 +229,14 @@ function productionDependencies(
     },
     inferBlueprints: async (chapters, _checkpoint, _run, commit) => {
       context.data.chapters = chapters.map(importedChapter)
-      context.data.novelConfigSummary = currentNovelConfigSummary(context.uiLocale)
+      context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
       const { InferBlueprintsPerChapterCommand } = await import('./commands/import-novel.command')
       await new InferBlueprintsPerChapterCommand(undefined, async request => (
         await commit(request)
       ) as BlueprintRangeCommitReceipt).execute({ step: {} as never, context, callbacks })
     },
     commitAuthorManuscript: async (run, commit) => {
-      if (!run.authorityFingerprint) {
+      if (!run.authorityFingerprint || !run.manifestFingerprint) {
         throw new Error(textForLocale(
           run.locale,
           '作者原稿导入缺少权威状态指纹',
@@ -433,6 +437,53 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
     projectPath: params.projectPath,
     projectSession: session,
     uiLocale: params.run.locale,
+    onCancelRequested: async context => {
+      const execution = context.data.importRunExecution as ImportRunExecutionLease | undefined
+      if (!execution) return
+      const result = await ipc.invokeWithProjectSession(
+        session,
+        'db:import-run-request-cancel',
+        params.run.id,
+        execution,
+        params.projectPath,
+      )
+      if (!result.success) throw new Error(result.error || textForLocale(
+        params.run.locale,
+        '无法保存导入取消请求',
+        'Could not persist the import cancellation request.',
+      ))
+    },
+    onCancelledAtBoundary: async context => {
+      const durableRun = await ipc.invokeWithProjectSession(
+        session, 'db:import-run-get', params.run.id, params.projectPath,
+      )
+      if (!durableRun || durableRun.status === 'cancelled') return
+      const execution = context.data.importRunExecution as ImportRunExecutionLease | undefined
+      if (!execution) return
+      const renewed = required(
+        await ipc.invokeWithProjectSession(
+          session,
+          'db:import-run-renew-execution',
+          params.run.id,
+          execution,
+          params.projectPath,
+        ),
+        textForLocale(params.run.locale, '无法续租导入取消边界', 'Could not renew the import cancellation boundary.'),
+      ).execution!
+      context.data.importRunExecution = renewed
+      const result = await ipc.invokeWithProjectSession(
+        session,
+        'db:import-run-cancel-at-boundary',
+        params.run.id,
+        renewed,
+        params.projectPath,
+      )
+      if (!result.success) throw new Error(result.error || textForLocale(
+        params.run.locale,
+        '无法完成导入取消',
+        'Could not finalize import cancellation.',
+      ))
+    },
     steps: [
       importStep(params.run, params.executionOwner, 'knowledge',
         ['导入参照文本与构建知识库', 'Import reference text and build the knowledge base'],

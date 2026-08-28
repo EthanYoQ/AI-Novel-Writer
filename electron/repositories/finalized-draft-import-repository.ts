@@ -267,6 +267,25 @@ export class FinalizedDraftImportRepository {
     return sequenceFromRows(authorityRows())
   }
 
+  static getCommittedOperation(
+    operationId: string,
+    input: FinalizedDraftImportChapter[],
+  ): FinalizedDraftImportReceipt | null {
+    const current = getProjectDb()
+    if (!current) throw new Error('项目数据库未打开')
+    const normalizedOperationId = requireNonEmptyOperationId(operationId)
+    const chapters = normalizeChapters(input)
+    const row = current.prepare(`
+      SELECT operation_id, payload_hash, receipt_json
+      FROM finalized_draft_import_operations
+      WHERE operation_id = ?
+    `).get(normalizedOperationId) as ImportOperationRow | undefined
+    if (!row) return null
+    const receipt = parseStoredReceipt(row)
+    verifyStoredFacts(receipt, chapters)
+    return receipt
+  }
+
   static preview(input: FinalizedDraftImportChapter[]): AuthorManuscriptImportPreview {
     const chapters = normalizeChapters(input)
     const rows = authorityRows()

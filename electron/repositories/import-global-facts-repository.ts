@@ -107,6 +107,27 @@ function ensureLedger(): void {
 
 /** Atomic import seam for config, non-character architecture and roster facts. */
 export class ImportGlobalFactsRepository {
+  /** Read-only authoritative evidence for a previously committed import operation. */
+  static getCommittedOperation(operationId: string): ImportGlobalFactsReceipt | null {
+    if (!operationId.trim()) throw new Error('导入全局事实 operationId 无效')
+    const db = getProjectDb()
+    if (!db) throw new Error('项目数据库未打开')
+    ensureLedger()
+    const row = db.prepare(`
+      SELECT operation_id, payload_hash, receipt_json
+      FROM import_global_fact_operations WHERE operation_id = ?
+    `).get(operationId) as OperationRow | undefined
+    if (!row) return null
+    const stored = parseReceipt(row)
+    const currentCore = coreSnapshot()
+    const currentRoster = CharacterRosterRepository.read()
+    if (
+      JSON.stringify(currentCore) !== JSON.stringify(stored.core)
+      || currentRoster.factHash !== stored.roster.snapshot.factHash
+    ) throw new Error('导入全局事实已被后续修改，不能将历史操作冒充为当前事实')
+    return stored
+  }
+
   static commit(candidate: ImportGlobalFactsRequest): ImportGlobalFactsReceipt {
     const db = getProjectDb()
     if (!db) throw new Error('项目数据库未打开')

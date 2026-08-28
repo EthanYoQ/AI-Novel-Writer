@@ -44,13 +44,19 @@ function authorizedReference(content: string, sourceIdentity: string) {
   const chapterNumber = prepared.newChapterNumbers[0]
   if (!Number.isSafeInteger(chapterNumber)) throw new Error('Expected one new import chapter')
   const started = ImportRunRepository.startOrResume(prepared.run.id, `test-owner-${authorizedRunIndex}`)
-  const idempotencyKey = `reference:${sourceFingerprint}:${chapterNumber}:${contentFingerprint}`
+  const idempotencyKey = ImportRunRepository.resolveReferenceImportAuthority(
+    prepared.run.id,
+    { owner: started.execution.owner, epoch: started.execution.epoch },
+    chapterNumber,
+  ).stableKey
   return {
     idempotencyKey,
+    release: () => ImportRunRepository.cancelAtBoundary(prepared.run!.id, started.execution),
     import: (fileName: string) => importReferenceText(
       content,
       fileName,
       idempotencyKey,
+      chapterNumber,
       prepared.run!.id,
       { owner: started.execution.owner, epoch: started.execution.epoch },
       projectPath,
@@ -81,7 +87,7 @@ describe('stable reference knowledge receipt', () => {
     const content = 'Delayed reference content'
     const sourceFingerprint = 'a'.repeat(64)
     const contentFingerprint = createHash('sha256').update(content).digest('hex')
-    const idempotencyKey = `reference:${sourceFingerprint}:1:${contentFingerprint}`
+    let idempotencyKey = ''
     ImportRunRepository.prepare({
       runId: 'delayed-authority-run',
       purpose: 'reference',
@@ -97,6 +103,9 @@ describe('stable reference knowledge receipt', () => {
       }],
     })
     const started = ImportRunRepository.startOrResume('delayed-authority-run', 'renderer-a', 1_000, 100)
+    idempotencyKey = ImportRunRepository.resolveReferenceImportAuthority(
+      'delayed-authority-run', { owner: started.execution.owner, epoch: started.execution.epoch }, 1, 1_000,
+    ).stableKey
     let finishEmbedding!: (response: Response) => void
     const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
       finishEmbedding = resolve
@@ -107,6 +116,7 @@ describe('stable reference knowledge receipt', () => {
       content,
       'Chapter 1.txt',
       idempotencyKey,
+      1,
       'delayed-authority-run',
       { owner: started.execution.owner, epoch: started.execution.epoch },
       projectPath,
@@ -132,7 +142,7 @@ describe('stable reference knowledge receipt', () => {
     const content = 'Single-flight reference content'
     const sourceFingerprint = 'c'.repeat(64)
     const contentFingerprint = createHash('sha256').update(content).digest('hex')
-    const idempotencyKey = `reference:${sourceFingerprint}:1:${contentFingerprint}`
+    let idempotencyKey = ''
     ImportRunRepository.prepare({
       runId: 'single-flight-run',
       purpose: 'reference',
@@ -148,6 +158,9 @@ describe('stable reference knowledge receipt', () => {
       }],
     })
     const first = ImportRunRepository.startOrResume('single-flight-run', 'renderer-a', 2_000, 100)
+    idempotencyKey = ImportRunRepository.resolveReferenceImportAuthority(
+      'single-flight-run', { owner: first.execution.owner, epoch: first.execution.epoch }, 1, 2_000,
+    ).stableKey
     const embeddingResponse = () => new Response(JSON.stringify({
       data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -166,6 +179,7 @@ describe('stable reference knowledge receipt', () => {
       content,
       'Chapter 1.txt',
       idempotencyKey,
+      1,
       'single-flight-run',
       { owner: first.execution.owner, epoch: first.execution.epoch },
       projectPath,
@@ -180,6 +194,7 @@ describe('stable reference knowledge receipt', () => {
       content,
       'Chapter 1.txt',
       idempotencyKey,
+      1,
       'single-flight-run',
       { owner: takeover.execution.owner, epoch: takeover.execution.epoch },
       projectPath,
@@ -209,7 +224,7 @@ describe('stable reference knowledge receipt', () => {
     const content = 'x'.repeat(250)
     const sourceFingerprint = 'd'.repeat(64)
     const contentFingerprint = createHash('sha256').update(content).digest('hex')
-    const idempotencyKey = `reference:${sourceFingerprint}:1:${contentFingerprint}`
+    let idempotencyKey = ''
     ImportRunRepository.prepare({
       runId: 'batch-authority-run',
       purpose: 'reference',
@@ -225,6 +240,9 @@ describe('stable reference knowledge receipt', () => {
       }],
     })
     const started = ImportRunRepository.startOrResume('batch-authority-run', 'renderer-a', 3_000, 100)
+    idempotencyKey = ImportRunRepository.resolveReferenceImportAuthority(
+      'batch-authority-run', { owner: started.execution.owner, epoch: started.execution.epoch }, 1, 3_000,
+    ).stableKey
     const embeddingResponse = () => new Response(JSON.stringify({
       data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -240,6 +258,7 @@ describe('stable reference knowledge receipt', () => {
       content,
       'Chapter 1.txt',
       idempotencyKey,
+      1,
       'batch-authority-run',
       { owner: started.execution.owner, epoch: started.execution.epoch },
       projectPath,
@@ -261,10 +280,12 @@ describe('stable reference knowledge receipt', () => {
   })
 
   it('keeps same-name reference documents from distinct source identities and marks their corpus', async () => {
-    const first = await authorizedReference('Source A reference', 'source-a').import('Chapter 1.txt')
+    const firstReference = authorizedReference('Source A reference', 'source-a')
+    const first = await firstReference.import('Chapter 1.txt')
+    expect(first).toMatchObject({ success: true, idempotent: false })
+    expect(firstReference.release()).toMatchObject({ status: 'cancelled' })
     const second = await authorizedReference('Source B reference', 'source-b').import('Chapter 1.txt')
 
-    expect(first).toMatchObject({ success: true, idempotent: false })
     expect(second).toMatchObject({ success: true, idempotent: false })
     expect(second.docId).not.toBe(first.docId)
     const documents = await listDocuments(projectPath)

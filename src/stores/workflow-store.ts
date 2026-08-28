@@ -167,6 +167,10 @@ export interface WorkflowDefinition {
     description: string
     executor: StepExecutor
   }>
+  /** Persist cancellation before waiting for the current operation to yield. */
+  onCancelRequested?: (context: WorkflowContext) => void | Promise<void>
+  /** Commit terminal cancellation after a step/pause boundary is reached. */
+  onCancelledAtBoundary?: (context: WorkflowContext) => void | Promise<void>
   /** 工作流完成后的通知/跳转动作（可选） */
   onComplete?: WorkflowCompleteAction
 }
@@ -247,6 +251,8 @@ const activeContexts = new Map<string, WorkflowContext>()
 const continueResolveRefs = new Map<string, () => void>()
 /** 批量任务：存储「等待恢复」的 Promise resolve（runId → resolve） */
 const pauseResolveRefs = new Map<string, () => void>()
+const cancelRequestedHooks = new Map<string, (context: WorkflowContext) => void | Promise<void>>()
+const cancelBoundaryHooks = new Map<string, (context: WorkflowContext) => void | Promise<void>>()
 
 /** 计算兼容字段的辅助函数 */
 function computeCompat(activeRuns: WorkflowRun[], waitingRuns: Record<string, { waitingForConfirm: boolean; waitingAfterStepIndex: number }>) {
@@ -325,6 +331,13 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
   },
 
   startWorkflow: async (definition, stepByStep = false) => {
+    // A caller-supplied durable run ID is also the renderer's single-flight key.
+    // Reject the duplicate before reading mutable project state or constructing a
+    // second context; the original executor and its frozen context remain owned
+    // by the first call.
+    if (definition.runId && get().activeRuns.some(run => run.id === definition.runId)) {
+      return definition.runId
+    }
     const currentProject = useProjectStore.getState().currentProject
     const currentProjectSession = projectSessionContextFromProject(currentProject)
     const suppliedProjectSession = definition.projectSession
@@ -429,6 +442,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       pauseRequested: false,
     }
     activeContexts.set(run.id, context)
+    if (definition.onCancelRequested) cancelRequestedHooks.set(run.id, definition.onCancelRequested)
+    if (definition.onCancelledAtBoundary) cancelBoundaryHooks.set(run.id, definition.onCancelledAtBoundary)
 
     const waitForResumeAtSafeBoundary = async () => {
       if (!context.pauseRequested || context.cancelled) return
@@ -594,6 +609,18 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     // 检查是否全部完成
     let finalRun = get().activeRuns.find(r => r.id === run.id)
     if (finalRun?.status === 'cancelling' || context.cancelled) {
+      const finalizeCancellation = cancelBoundaryHooks.get(run.id)
+      if (finalizeCancellation) {
+        try {
+          await finalizeCancellation(context)
+        } catch (error) {
+          get().addLog('error', uiText(
+            context.uiLocale,
+            `[取消失败] 工作流「${definition.title}」未能持久化安全边界：${String(error)}`,
+            `[Cancellation failed] Workflow "${definition.title}" could not persist its safe boundary: ${String(error)}`,
+          ), context.uiLocale)
+        }
+      }
       updateRunById(set, run.id, {
         status: 'failed',
         error: uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'),
@@ -674,6 +701,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     activeContexts.delete(run.id)
     continueResolveRefs.delete(run.id)
     pauseResolveRefs.delete(run.id)
+    cancelRequestedHooks.delete(run.id)
+    cancelBoundaryHooks.delete(run.id)
 
     return run.id
   },
@@ -689,6 +718,14 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       if (ctx) {
         ctx.cancelled = true
         ctx.pauseRequested = false
+        const persistCancellation = cancelRequestedHooks.get(runId)
+        if (persistCancellation) void Promise.resolve(persistCancellation(ctx)).catch(error => {
+          get().addLog('error', uiText(
+            targetRun.uiLocale,
+            `[取消失败] 未能立即保存取消请求：${String(error)}`,
+            `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
+          ), targetRun.uiLocale)
+        })
       }
       // 如果在步进等待，解除 Promise
       const resolve = continueResolveRefs.get(runId)
@@ -731,6 +768,14 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         if (!run || run.status === 'completed' || run.status === 'failed') continue
         ctx.cancelled = true
         ctx.pauseRequested = false
+        const persistCancellation = cancelRequestedHooks.get(id)
+        if (persistCancellation) void Promise.resolve(persistCancellation(ctx)).catch(error => {
+          get().addLog('error', uiText(
+            run.uiLocale,
+            `[取消失败] 未能立即保存取消请求：${String(error)}`,
+            `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
+          ), run.uiLocale)
+        })
         const resolve = continueResolveRefs.get(id)
         if (resolve) { resolve(); continueResolveRefs.delete(id) }
         const pauseResolve = pauseResolveRefs.get(id)

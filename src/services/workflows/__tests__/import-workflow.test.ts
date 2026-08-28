@@ -3,8 +3,21 @@ import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const ipcMocks = vi.hoisted(() => ({ invoke: vi.fn() }))
+const characterSyncMocks = vi.hoisted(() => ({ retry: vi.fn() }))
+const commandMocks = vi.hoisted(() => ({ blueprintContext: undefined as WorkflowContext | undefined }))
 vi.mock('../../ipc-client', () => ({
   ipc: { invokeWithProjectSession: ipcMocks.invoke },
+}))
+vi.mock('../directory-character-sync-recovery', () => ({
+  retryDirectoryCharacterSync: characterSyncMocks.retry,
+}))
+vi.mock('../commands/import-novel.command', () => ({
+  InferBlueprintsPerChapterCommand: class {
+    async execute(params: { context: WorkflowContext }): Promise<void> {
+      commandMocks.blueprintContext = params.context
+      throw new Error('stop-after-blueprint-prompt-context')
+    }
+  },
 }))
 
 import { createImportWorkflow } from '../import-workflow'
@@ -22,7 +35,6 @@ const executionOwner = 'test-import-executor'
 function run(overrides: Partial<ImportRunSnapshot> = {}): ImportRunSnapshot {
   return {
     id: 'import-run-1', purpose: 'reference', rootRunId: 'import-run-1', effectNamespace: 'import:reference:import-run-1',
-    sourceFingerprint: 'a'.repeat(64), manifestFingerprint: 'b'.repeat(64),
     sourceDisplay: [{ displayName: 'reference.txt', mediaType: 'text/plain', size: 20 }],
     locale: 'zh-CN', stage: 'knowledge', status: 'running', completedBatches: {},
     lastError: '', resumable: true, cancelRequested: false, totalChapters: 1,
@@ -44,6 +56,7 @@ function context(): WorkflowContext {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  characterSyncMocks.retry.mockResolvedValue({ operationId: 'sync-1' })
   useProjectStore.setState({
     currentProject: {
       id: 'test-project', sessionLease: 'lease-test-project', name: '测试项目', path: session.projectPath,
@@ -75,6 +88,55 @@ describe('createImportWorkflow', () => {
     })
     expect(workflow.title).toBe('Novel analysis and style study (1 chapter)')
     expect(workflow.steps[0].name).toBe('Import reference text and build the knowledge base')
+  })
+
+  it('builds blueprint prompt context in the frozen project writing language, not the UI locale', async () => {
+    const snapshot = run({ stage: 'blueprints' })
+    useProjectStore.setState({
+      currentProject: {
+        ...useProjectStore.getState().currentProject!,
+        novelConfig: {
+          writingLanguage: 'en-US',
+          genre: 'Mystery',
+          coreOutline: 'Find the missing witness',
+          worldSetting: 'A coastal city',
+          protagonistProfile: 'A patient investigator',
+        } as never,
+      },
+    })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-start-resume') return {
+        success: true,
+        start: {
+          run: snapshot,
+          execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+        },
+      }
+      if (channel === 'db:import-run-renew-execution') return {
+        success: true,
+        execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+      }
+      if (channel === 'db:import-run-list-chapters') {
+        return (args[1] as number) === 0 ? [{
+          number: 1, title: 'Start', content: 'frozen reference',
+          contentFingerprint: 'c'.repeat(64), contentSize: 16,
+        }] : []
+      }
+      if (channel === 'db:import-run-effect-receipt-get') return null
+      if (channel === 'db:import-run-fail') return { success: true, run: { ...snapshot, status: 'failed' } }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({
+      projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner,
+    })
+    const frozenContext = { ...context(), writingLanguage: 'en-US' as const, uiLocale: 'zh-CN' as const }
+
+    await expect(workflow.steps[3].executor({} as never, frozenContext, callbacks))
+      .rejects.toThrow('stop-after-blueprint-prompt-context')
+
+    expect(commandMocks.blueprintContext?.data.novelConfigSummary).toContain('Genre: Mystery')
+    expect(commandMocks.blueprintContext?.data.novelConfigSummary).not.toContain('类型:')
   })
 
   it('imports the frozen snapshot through the reference-only idempotent channel and checkpoints it', async () => {
@@ -117,12 +179,9 @@ describe('createImportWorkflow', () => {
     expect(ipcMocks.invoke).toHaveBeenCalledWith(
       session,
       'kb:import-reference-text',
-      'frozen reference',
-      '第1章 Start.txt',
-      `reference:${'a'.repeat(64)}:1:${'c'.repeat(64)}`,
+      1,
       'import-run-1',
       { owner: executionOwner, epoch: 1 },
-      session.projectPath,
     )
     expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('db:draft-create')
   })
@@ -192,6 +251,79 @@ describe('createImportWorkflow', () => {
     await expect(workflow.steps[1].executor({} as never, context(), callbacks))
       .rejects.toThrow(/does not match durable storage/)
     expect(receiptReads).toBe(2)
+  })
+
+  it('resumes a checkpointed blueprint batch by completing its pending character sync without generation', async () => {
+    const checkpoint = '1-1-cccccccc'
+    let snapshot = run({
+      stage: 'blueprints',
+      completedBatches: { blueprints: [checkpoint] },
+    })
+    const receipt: ImportRunEffectReceipt = {
+      schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+      runId: snapshot.id,
+      effectNamespace: snapshot.effectNamespace,
+      effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints',
+      batchId: checkpoint,
+      kind: 'chapter-blueprint-range',
+      payloadHash: 'c'.repeat(64),
+      state: 'committed',
+      payload: { blueprints: [{ chapterNumber: 1 }] },
+      effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    }
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-start-resume') return {
+        success: true,
+        start: {
+          run: snapshot,
+          execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+        },
+      }
+      if (channel === 'db:import-run-renew-execution') return {
+        success: true,
+        execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+      }
+      if (channel === 'db:import-run-list-chapters') {
+        const after = args[1] as number
+        return after === 0 ? [{
+          number: 1,
+          title: 'Start',
+          content: 'frozen reference',
+          contentFingerprint: 'c'.repeat(64),
+          contentSize: 16,
+        }] : []
+      }
+      if (channel === 'db:import-run-effect-receipt-get') return receipt
+      if (channel === 'db:import-run-effect-receipt-commit') return {
+        success: true,
+        result: { receipt, run: snapshot, cancelApplied: false },
+      }
+      if (channel === 'db:import-run-advance-stage') {
+        snapshot = { ...snapshot, stage: 'refresh' }
+        return { success: true, run: snapshot }
+      }
+      if (channel === 'db:import-run-fail') return {
+        success: true,
+        run: { ...snapshot, status: 'failed' },
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({
+      projectPath: session.projectPath,
+      projectSession: session,
+      run: snapshot,
+      executionOwner,
+    })
+
+    await workflow.steps[3].executor({} as never, context(), callbacks)
+
+    expect(characterSyncMocks.retry).toHaveBeenCalledWith('sync-1', session.projectPath, session)
+    expect(snapshot.stage).toBe('refresh')
+    expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('llm:generate')
   })
 
   it('creates an author-only finalization plan without reference analysis stages', () => {

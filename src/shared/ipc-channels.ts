@@ -38,6 +38,7 @@ import type {
   ImportRunExecutionLease,
   ImportInspectionSummary,
   ImportPurpose,
+  ImportNovelFileSelectionRequest,
   ImportRunPreparationResult,
   ImportRunPrepareFromInspectionRequest,
   ImportRunPrepareEffectReceiptRequest,
@@ -640,6 +641,10 @@ export interface DatabaseChannels {
     args: [inspectionId: string, expectedProjectPath: string]
     return: AuthorManuscriptImportPreview
   }
+  'db:import-run-finalize-parsing': {
+    args: [runId: string, expectedProjectPath: string]
+    return: { success: boolean; preparation?: ImportRunPreparationResult; error?: string }
+  }
   'db:import-run-get': { args: [runId: string, expectedProjectPath: string]; return: ImportRunSnapshot | null }
   'db:import-run-list-resumable': { args: [expectedProjectPath: string]; return: ImportRunSnapshot[] }
   'db:import-run-list-chapters': {
@@ -793,12 +798,9 @@ export interface KnowledgeBaseChannels {
   'kb:import-text': { args: [text: string, fileName: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
   'kb:import-reference-text': {
     args: [
-      text: string,
-      fileName: string,
-      idempotencyKey: string,
+      chapterNumber: number,
       runId: string,
       executionAuthority: ImportRunExecutionAuthority,
-      expectedProjectPath: string,
     ]
     return: { success: boolean; docId?: string; chunkCount?: number; idempotent?: boolean; error?: string; errorCode?: AppErrorCode }
   }
@@ -828,13 +830,14 @@ export interface KnowledgeBaseChannels {
   'kb:backfill-vectors': { args: [expectedProjectPath: string]; return: { success: boolean; processed: number; failed: number; error?: string; errorCode?: AppErrorCode } }
 }
 
-// ===== 导入小说 =====
+  // ===== 导入小说 =====
 export interface ImportChannels {
   'dialog:select-novel-files': {
-    args: [purpose?: ImportPurpose]
+    args: [request?: ImportPurpose | ImportNovelFileSelectionRequest, projectSession?: ProjectSessionContext]
     return: {
       success: boolean
       inspection?: ImportInspectionSummary
+      preparation?: ImportRunPreparationResult
       error?: string
     } | null
   }

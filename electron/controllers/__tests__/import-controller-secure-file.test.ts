@@ -179,7 +179,10 @@ describe('novel import external-file capability', () => {
 
     const result = await handler('dialog:select-novel-files')(event())
 
-    expect(result).toMatchObject({ success: false })
+    expect(result).toEqual({
+      success: false,
+      error: '所选文件总大小超过导入上限（最多 10 字节）。',
+    })
     expect(readText).not.toHaveBeenCalled()
     expect(grants.activeCount()).toBe(0)
   })
@@ -205,7 +208,10 @@ describe('novel import external-file capability', () => {
 
     const result = await handler('dialog:select-novel-files')(event())
 
-    expect(result).toMatchObject({ success: false })
+    expect(result).toEqual({
+      success: false,
+      error: '所选文件总大小超过导入上限（最多 10 字节）。',
+    })
     expect(readText.mock.calls.map(([capability, maxBytes]) => ({
       relativePath: capability.relativePath,
       maxBytes,
@@ -232,7 +238,10 @@ describe('novel import external-file capability', () => {
 
     const result = await handler('dialog:select-novel-files')(event())
 
-    expect(result).toMatchObject({ success: false })
+    expect(result).toEqual({
+      success: false,
+      error: '所选文件数量超过导入上限（最多 5000 个）。',
+    })
     expect(readText).not.toHaveBeenCalled()
     expect(grants.activeCount()).toBe(0)
   })
@@ -257,7 +266,10 @@ describe('novel import external-file capability', () => {
 
     const result = await handler('dialog:select-novel-files')(event())
 
-    expect(result).toMatchObject({ success: false })
+    expect(result).toEqual({
+      success: false,
+      error: '拆分后的章节数超过导入上限（最多 5000 章）。',
+    })
     expect(readText).toHaveBeenCalledTimes(1)
     expect(readText.mock.calls[0][0].relativePath).toBe('chapters-a.txt')
     expect(grants.activeCount()).toBe(0)

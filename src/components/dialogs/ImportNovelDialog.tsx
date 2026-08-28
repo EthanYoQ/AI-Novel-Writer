@@ -3,15 +3,16 @@ import { FileUp, FolderOpen, BookOpen, FileText, Zap, Clock, AlertTriangle, Rota
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type {
   ImportInspectionSummary,
   ImportPurpose,
+  ImportRunPreparationResult,
   ImportRunPrepareFromInspectionRequest,
   ImportRunSnapshot,
 } from '../../shared/import-run'
 import type { AuthorManuscriptImportPreview } from '../../shared/author-manuscript-import'
 import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
-import { inferImportedNovelProjectName } from './import-novel-paths'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
@@ -32,6 +33,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const createProject = useProjectStore((s) => s.createProject)
   const currentProject = useProjectStore((s) => s.currentProject)
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow)
+  const activeWorkflows = useWorkflowStore((s) => s.activeRuns)
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
 
@@ -48,6 +50,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [splitError, setSplitError] = useState('')
   const [authorPreview, setAuthorPreview] = useState<AuthorManuscriptImportPreview | null>(null)
   const [authorPreviewLoading, setAuthorPreviewLoading] = useState(false)
+  const [selectionPreparation, setSelectionPreparation] = useState<ImportRunPreparationResult | null>(null)
+  const [selectionProjectLeaseId, setSelectionProjectLeaseId] = useState('')
 
   // 导入流程
   const [importing, setImporting] = useState(false)
@@ -63,6 +67,16 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const resumableRun = resumableRuns.find(run => run.id === selectedResumableRunId)
     ?? resumableRuns[0]
     ?? null
+  const resumableRunIsActive = resumableRun
+    ? activeWorkflows.some(workflow => workflow.id === resumableRun.id)
+    : false
+  const resumableRunCanRestart = resumableRun
+    ? ['failed', 'cancelled', 'running'].includes(resumableRun.status)
+    : false
+  const runProgress = (run: ImportRunSnapshot) => ({
+    completed: run.progressCompleted ?? run.completedChapters,
+    total: run.progressTotal ?? run.totalChapters,
+  })
 
   useEffect(() => {
     if (!open || !currentProject) return
@@ -133,6 +147,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     setInspection(null)
     setAuthorPreview(null)
     setAuthorPreviewLoading(false)
+    setSelectionPreparation(null)
+    setSelectionProjectLeaseId('')
     setSplitDone(false)
     setSplitError('')
     setImportNotice('')
@@ -140,32 +156,89 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   }, [])
 
   /** 选择文件 */
-  const handleSelectFiles = useCallback(async () => {
+  const handleSelectFiles = useCallback(async (
+    explicitRun?: Pick<ImportRunSnapshot, 'id' | 'locale'>,
+  ) => {
     setSplitting(true)
+    setSplitError('')
+    let operationSession: ReturnType<typeof captureProjectSession> = null
     try {
-      const result = await ipc.invoke('dialog:select-novel-files', purpose)
+      let project = useProjectStore.getState().currentProject
+      let projectSession = captureProjectSession(project)
+      if (targetMode === 'new' && !explicitRun) {
+        if (!name.trim() || !savePath.trim()) throw new Error(text(
+          '请先填写新项目名称和保存位置，再选择小说文件。',
+          'Enter the new project name and save location before choosing novel files.',
+        ))
+        const success = await createProject({
+          name: name.trim(),
+          path: savePath.trim(),
+          genre: '',
+          targetAudience: '',
+          writingLanguage: locale,
+        })
+        if (!success) return
+        project = useProjectStore.getState().currentProject
+        projectSession = captureProjectSession(project)
+        setTargetMode('current')
+      }
+      if (!project || !projectSession) throw new Error(text(
+        '目标项目缺少有效会话，已拒绝读取小说文件。',
+        'The target project has no valid session, so the novel files were not read.',
+      ))
+      operationSession = projectSession
+      const runId = explicitRun?.id ?? randomUUID()
+      const runLocale = explicitRun?.locale ?? locale
+      const result = await ipc.invoke('dialog:select-novel-files', {
+        runId,
+        purpose,
+        locale: runLocale,
+        expectedProjectPath: project.path,
+      }, projectSession)
+      if (!isProjectSessionCurrent(projectSession)) return
       if (!result) return
       setSplitDone(false)
       setSplitError('')
       setImportNotice('')
       setInspection(null)
       setAuthorPreview(null)
-      if (result.success && result.inspection) {
-        if (purpose === 'author-manuscript') setAuthorPreviewLoading(true)
+      setAuthorPreviewLoading(false)
+      setSelectionPreparation(null)
+      setSelectionProjectLeaseId('')
+      if (purpose === 'author-manuscript' && result.success && result.inspection) {
+        setAuthorPreviewLoading(true)
         setInspection(result.inspection)
         setSplitDone(true)
-        if (!name.trim() && result.inspection.sourceDisplayNames[0]) {
-          setName(inferImportedNovelProjectName(result.inspection.sourceDisplayNames[0]))
-        }
+      } else if (purpose === 'reference' && result.success && result.preparation) {
+        const prepared = result.preparation
+        setSelectionPreparation(prepared)
+        setSelectionProjectLeaseId(projectSession.leaseId)
+        const preparedRun = prepared.run
+        const chapterCount = preparedRun?.totalChapters
+          ?? prepared.newChapterNumbers.length
+          + prepared.duplicateChapterNumbers.length
+          + prepared.conflictChapterNumbers.length
+        setInspection(prepared.inspection ?? {
+          inspectionId: runId,
+          purpose,
+          sourceCount: preparedRun?.sourceDisplay.length ?? 0,
+          sourceDisplayNames: preparedRun?.sourceDisplay.map(source => source.displayName) ?? [],
+          chapterCount,
+          totalWords: preparedRun?.manifestWordCount ?? 0,
+          totalBytes: preparedRun?.totalContentSize ?? 0,
+          preview: [],
+        })
+        setSplitDone(true)
       } else {
         setSplitError(result.error || text('拆章失败', 'Could not split chapters'))
       }
     } catch (e) {
+      if (operationSession && !isProjectSessionCurrent(operationSession)) return
       setSplitError(String(e))
     } finally {
       setSplitting(false)
     }
-  }, [name, purpose, text])
+  }, [createProject, locale, name, purpose, savePath, targetMode, text])
 
   /** 选择保存路径 */
   const handleSelectFolder = useCallback(async () => {
@@ -191,53 +264,93 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     if (isProjectSessionCurrent(projectSession)) onClose()
   }, [onClose, startWorkflow, text])
 
+  const applyPreparation = useCallback((
+    preparation: ImportRunPreparationResult,
+    projectSession: ProjectSessionContext,
+    consumedRunId?: string,
+  ) => {
+    if (consumedRunId) {
+      setResumableState(previous => {
+        if (previous?.projectLeaseId !== projectSession.leaseId) return previous
+        const runs = previous.runs.filter(run => run.id !== consumedRunId)
+        return runs.length > 0 ? { ...previous, runs } : null
+      })
+    }
+    if (preparation.classification === 'exact-duplicate') {
+      setImportNotice(text(
+        '该来源与已完成导入完全一致；未创建任务，也未调用模型。',
+        'This source exactly matches a completed import. No task or model call was created.',
+      ))
+      return
+    }
+    if (preparation.classification === 'conflict') {
+      const chaptersText = preparation.conflictChapterNumbers.join(', ')
+      setSplitError(text(
+        `以下章节号已有不同参照内容，请先调整编号或拆分文件：${chaptersText}`,
+        `These chapter numbers already contain different reference content. Renumber or split them before importing: ${chaptersText}`,
+      ))
+      return
+    }
+    if (preparation.classification === 'resumable' && preparation.run) {
+      setResumableState(previous => {
+        const previousRuns = previous?.projectLeaseId === projectSession.leaseId ? previous.runs : []
+        return {
+          projectLeaseId: projectSession.leaseId,
+          runs: [preparation.run!, ...previousRuns.filter(run => run.id !== preparation.run!.id)],
+        }
+      })
+      setSelectedResumableRunId(preparation.run.id)
+      setImportNotice(text(
+        '发现同一来源的未完成导入，请选择继续或重新开始。',
+        'An unfinished import for this source is available. Continue it or start over.',
+      ))
+      return
+    }
+    if (!preparation.run) throw new Error(text('导入运行缺少持久化记录', 'The import run has no persisted record.'))
+    launchRun(preparation.run)
+  }, [launchRun, text])
+
   /** 执行导入 */
   const handleImport = useCallback(async () => {
     if (
       !inspection
       || (purpose === 'author-manuscript' && (!authorPreview || authorPreview.classification === 'conflict'))
-      || (targetMode === 'new' && (!name.trim() || !savePath.trim()))
-      || (targetMode === 'current' && !currentProject)
+      || (purpose === 'reference' && (
+        !selectionPreparation
+        || currentProject?.sessionLease !== selectionProjectLeaseId
+      ))
+      || !currentProject
     ) return
 
     setImporting(true)
     setSplitError('')
     setImportNotice('')
     try {
-      let project = useProjectStore.getState().currentProject
-      let projectSession = captureProjectSession(project)
-      if (targetMode === 'new') {
-        const success = await createProject({
-          name: name.trim(),
-          path: savePath.trim(),
-          genre: '',
-          targetAudience: '',
-          writingLanguage: locale,
-        })
-        if (!success) return
-        project = useProjectStore.getState().currentProject
-        projectSession = captureProjectSession(project)
-      }
+      const project = useProjectStore.getState().currentProject
+      const projectSession = captureProjectSession(project)
       if (!project || !projectSession) throw new Error(text(
         '目标项目缺少有效会话，已拒绝导入',
         'The target project has no valid session, so the import was rejected.',
       ))
 
-      const prepareRequest: ImportRunPrepareFromInspectionRequest = purpose === 'author-manuscript'
-        ? {
-            runId: randomUUID(),
-            inspectionId: inspection.inspectionId,
-            purpose,
-            locale,
-            authorityFingerprint: authorPreview!.authorityFingerprint,
-            manifestFingerprint: authorPreview!.manifestFingerprint,
-          }
-        : {
-            runId: randomUUID(),
-            inspectionId: inspection.inspectionId,
-            purpose,
-            locale,
-          }
+      if (purpose === 'reference') {
+        setInspection(null)
+        setSplitDone(false)
+        const preparation = selectionPreparation!
+        setSelectionPreparation(null)
+        setSelectionProjectLeaseId('')
+        applyPreparation(preparation, projectSession)
+        return
+      }
+
+      const prepareRequest: ImportRunPrepareFromInspectionRequest = {
+        runId: randomUUID(),
+        inspectionId: inspection.inspectionId,
+        purpose,
+        locale,
+        authorityFingerprint: authorPreview!.authorityFingerprint,
+        manifestFingerprint: authorPreview!.manifestFingerprint,
+      }
       const prepared = await ipc.invokeWithProjectSession(
         projectSession,
         'db:import-run-prepare-inspection',
@@ -251,23 +364,17 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       setSplitDone(false)
       const preparation = prepared.preparation
       if (preparation.classification === 'exact-duplicate') {
-        setImportNotice(purpose === 'author-manuscript' ? text(
+        setImportNotice(text(
           '这些章节已是相同的权威定稿；未重复发布，也未创建任务。',
           'These chapters already exist as identical authoritative finalized text. Nothing was republished and no task was created.',
-        ) : text(
-          '该来源与已完成导入完全一致；未创建任务，也未调用模型。',
-          'This source exactly matches a completed import. No task or model call was created.',
         ))
         return
       }
       if (preparation.classification === 'conflict') {
         const chaptersText = preparation.conflictChapterNumbers.join(', ')
-        setSplitError(purpose === 'author-manuscript' ? text(
+        setSplitError(text(
           `原稿预览已过期或章节与权威正文冲突：${chaptersText || '请重新预览'}。`,
           `The manuscript preview is stale or conflicts with authoritative text: ${chaptersText || 'preview again'}.`,
-        ) : text(
-          `以下章节号已有不同参照内容，请先调整编号或拆分文件：${chaptersText}`,
-          `These chapter numbers already contain different reference content. Renumber or split them before importing: ${chaptersText}`,
         ))
         return
       }
@@ -300,12 +407,47 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       setImporting(false)
     }
   }, [
-    inspection, purpose, authorPreview, targetMode, currentProject,
-    name, savePath, createProject, locale, text, launchRun,
+    applyPreparation, authorPreview, currentProject, inspection, launchRun, locale, purpose,
+    selectionPreparation, selectionProjectLeaseId, text,
   ])
 
-  const handleResume = () => {
-    if (resumableRun) launchRun(resumableRun)
+  const handleResume = async () => {
+    if (!resumableRun) return
+    if (resumableRun.stage === 'parsing') {
+      const completed = resumableRun.progressCompleted ?? resumableRun.completedSources ?? 0
+      const total = resumableRun.progressTotal ?? resumableRun.totalSources ?? 0
+      if (total < 1 || completed !== total) {
+        void handleSelectFiles(resumableRun)
+        return
+      }
+      const project = useProjectStore.getState().currentProject
+      const projectSession = captureProjectSession(project)
+      if (!project || !projectSession) return
+      setImporting(true)
+      setSplitError('')
+      setImportNotice('')
+      try {
+        const result = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:import-run-finalize-parsing',
+          resumableRun.id,
+          project.path,
+        )
+        if (!isProjectSessionCurrent(projectSession)) return
+        if (!result.success || !result.preparation) throw new Error(result.error || text(
+          '无法完成已解析的导入，请重试。',
+          'Could not finalize the parsed import. Please try again.',
+        ))
+        applyPreparation(result.preparation, projectSession, resumableRun.id)
+      } catch (error) {
+        if (!isProjectSessionCurrent(projectSession)) return
+        setSplitError(error instanceof Error ? error.message : String(error))
+      } finally {
+        setImporting(false)
+      }
+      return
+    }
+    launchRun(resumableRun)
   }
 
   const handleRestart = async () => {
@@ -314,6 +456,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     const session = captureProjectSession(project)
     if (!project || !session) return
     setImporting(true)
+    setSplitError('')
     try {
       const result = await ipc.invokeWithProjectSession(
         session,
@@ -322,11 +465,29 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         randomUUID(),
         project.path,
       )
+      if (!isProjectSessionCurrent(session)) return
       if (!result.success || !result.run) throw new Error(result.error || text(
         '无法重新开始导入', 'Could not restart the import.',
       ))
+      if (result.run.stage === 'parsing') {
+        const restartedRun = result.run
+        setResumableState(previous => {
+          const previousRuns = previous?.projectLeaseId === session.leaseId ? previous.runs : []
+          return {
+            projectLeaseId: session.leaseId,
+            runs: [restartedRun, ...previousRuns.filter(run => (
+              run.id !== resumableRun.id && run.id !== restartedRun.id
+            ))],
+          }
+        })
+        setSelectedResumableRunId(restartedRun.id)
+        await handleSelectFiles(restartedRun)
+        if (!isProjectSessionCurrent(session)) return
+        return
+      }
       launchRun(result.run)
     } catch (error) {
+      if (!isProjectSessionCurrent(session)) return
       setSplitError(error instanceof Error ? error.message : String(error))
     } finally {
       setImporting(false)
@@ -390,7 +551,15 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 aria-pressed={targetMode === 'new'}
                 data-testid="import-target-new"
                 disabled={purpose === 'author-manuscript'}
-                onClick={() => setTargetMode('new')}
+                onClick={() => {
+                  setTargetMode('new')
+                  setInspection(null)
+                  setAuthorPreview(null)
+                  setAuthorPreviewLoading(false)
+                  setSelectionPreparation(null)
+                  setSelectionProjectLeaseId('')
+                  setSplitDone(false)
+                }}
               >
                 {text('创建新项目', 'Create new project')}
               </Button>
@@ -400,7 +569,15 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 aria-pressed={targetMode === 'current'}
                 data-testid="import-target-current"
                 disabled={!currentProject}
-                onClick={() => setTargetMode('current')}
+                onClick={() => {
+                  setTargetMode('current')
+                  setInspection(null)
+                  setAuthorPreview(null)
+                  setAuthorPreviewLoading(false)
+                  setSelectionPreparation(null)
+                  setSelectionProjectLeaseId('')
+                  setSplitDone(false)
+                }}
               >
                 {text('导入当前项目', 'Import into current project')}
               </Button>
@@ -439,26 +616,44 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                     data-testid={`import-resumable-choice-${run.id}`}
                     onClick={() => setSelectedResumableRunId(run.id)}
                   >
-                    <span className="truncate">{run.sourceDisplay[0]?.displayName ?? run.id}</span>
-                    <span>{run.completedChapters}/{run.totalChapters}</span>
+                    <span className="truncate">{
+                      (run.stage === 'parsing' ? run.unfinishedSourceDisplay?.[0]?.displayName : undefined)
+                      ?? run.sourceDisplay[0]?.displayName
+                      ?? run.id
+                    }</span>
+                    <span>{runProgress(run).completed}/{runProgress(run).total}</span>
                   </Button>
                 ))}
               </div>
               <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
                 {text(
-                  `阶段：${resumableRun.stage}；进度：${resumableRun.completedChapters}/${resumableRun.totalChapters}`,
-                  `Stage: ${resumableRun.stage}; progress: ${resumableRun.completedChapters}/${resumableRun.totalChapters}`,
+                  `阶段：${resumableRun.stage}；进度：${runProgress(resumableRun).completed}/${runProgress(resumableRun).total}`,
+                  `Stage: ${resumableRun.stage}; progress: ${runProgress(resumableRun).completed}/${runProgress(resumableRun).total}`,
                 )}
                 {resumableRun.lastError ? ` — ${resumableRun.lastError}` : ''}
               </div>
+              {resumableRun.stage === 'parsing' && (resumableRun.unfinishedSourceDisplay?.length ?? 0) > 0 && (
+                <div
+                  className="text-xs"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                  data-testid="import-unfinished-sources"
+                >
+                  {text(
+                    `需要重新选择：${resumableRun.unfinishedSourceDisplay!.map(source => source.displayName).join('、')}`,
+                    `Re-select required: ${resumableRun.unfinishedSourceDisplay!.map(source => source.displayName).join(', ')}`,
+                  )}
+                </div>
+              )}
               <div className="flex gap-2">
-                <Button type="button" size="sm" onClick={handleResume} disabled={importing}>
+                <Button type="button" size="sm" onClick={handleResume} disabled={importing || resumableRunIsActive}>
                   {text('继续导入', 'Continue import')}
                 </Button>
-                <Button type="button" size="sm" variant="outline" onClick={handleRestart} disabled={importing}>
-                  <RotateCcw size={13} />
-                  {text('重新开始', 'Start over')}
-                </Button>
+                {resumableRunCanRestart && (
+                  <Button type="button" size="sm" variant="outline" onClick={handleRestart} disabled={importing || resumableRunIsActive}>
+                    <RotateCcw size={13} />
+                    {text('重新开始', 'Start over')}
+                  </Button>
+                )}
               </div>
             </div>
           )}
@@ -482,7 +677,12 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                   ? text(`${inspection.sourceCount} 个文件已选择`, `${inspection.sourceCount} files selected`)
                   : text('支持 .txt / .md 文件（单个或多个）', 'Supports one or more .txt / .md files')}
               </div>
-              <Button data-testid="import-source-choose" variant="outline" onClick={handleSelectFiles} disabled={splitting}>
+              <Button
+                data-testid="import-source-choose"
+                variant="outline"
+                onClick={() => { void handleSelectFiles() }}
+                disabled={splitting}
+              >
                 <FolderOpen size={14} />
                 {text('选择', 'Choose')}
               </Button>
@@ -543,7 +743,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                   ? authorPreview.chapters
                   : inspection.preview).map((ch) => (
                   <div key={ch.number} className="flex items-center justify-between text-xs">
-                    <span style={{ color: 'var(--color-text-secondary)' }}>
+                    <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
                       {text(`第${ch.number}章 ${ch.title}`, `Chapter ${ch.number} ${ch.title}`)}
                     </span>
                     <span className="flex items-center gap-2" style={{ color: 'var(--color-text-muted)' }}>
@@ -557,14 +757,31 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                               : text('冲突（阻止）', 'Conflict (blocked)')}
                         </span>
                       )}
+                      {purpose === 'reference' && 'targetStatus' in ch && ch.targetStatus && (
+                        <span
+                          style={{ color: 'var(--color-text-secondary)' }}
+                          data-testid={`import-preview-status-${ch.number}`}
+                        >
+                          {ch.targetStatus === 'new'
+                            ? text('新增', 'New')
+                            : ch.targetStatus === 'duplicate'
+                              ? text('重复', 'Duplicate')
+                              : text('冲突', 'Conflict')}
+                        </span>
+                      )}
                     </span>
                   </div>
                 ))}
-                {purpose === 'reference' && inspection.chapterCount > inspection.preview.length && (
-                  <div className="text-xs text-center py-1" style={{ color: 'var(--color-text-muted)' }}>
+                {purpose === 'reference'
+                  && (inspection.previewRemaining ?? inspection.chapterCount - inspection.preview.length) > 0 && (
+                  <div
+                    className="text-xs text-center py-1"
+                    style={{ color: 'var(--color-text-muted)' }}
+                    data-testid="import-preview-summary"
+                  >
                     {text(
-                      `还有 ${inspection.chapterCount - inspection.preview.length} 章`,
-                      `${inspection.chapterCount - inspection.preview.length} more chapters`,
+                      `已显示 ${inspection.preview.length}/${inspection.chapterCount}；剩余 ${inspection.previewRemaining ?? inspection.chapterCount - inspection.preview.length} 章`,
+                      `Showing ${inspection.preview.length} of ${inspection.chapterCount}; ${inspection.previewRemaining ?? inspection.chapterCount - inspection.preview.length} remaining`,
                     )}
                   </div>
                 )}
@@ -659,8 +876,11 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
               || !inspection
               || authorPreviewLoading
               || (purpose === 'author-manuscript' && (!authorPreview || authorPreview.classification === 'conflict'))
-              || (targetMode === 'new' && (!name.trim() || !savePath.trim()))
-              || (targetMode === 'current' && !currentProject)
+              || (purpose === 'reference' && (
+                !selectionPreparation
+                || currentProject?.sessionLease !== selectionProjectLeaseId
+              ))
+              || !currentProject
             }
           >
             <FileUp size={14} />

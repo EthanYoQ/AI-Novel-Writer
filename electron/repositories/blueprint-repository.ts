@@ -518,6 +518,44 @@ export class BlueprintRepository {
         tx()
     }
 
+    /** Pure read-back of the operation ledger and its currently bound range/sync evidence. */
+    static getCommittedRangeOperation(operationId: string): BlueprintRangeCommitReceipt | null {
+        if (!operationId.trim()) throw new Error('蓝图提交缺少操作 ID')
+        const db = requireProjectDb()
+        ensureBlueprintCommitSchema(db)
+        const operation = db.prepare(`
+          SELECT operation_id, payload_hash, mode, start_chapter, end_chapter, character_sync_input
+          FROM blueprint_commit_operations
+          WHERE operation_id = ?
+        `).get(operationId) as BlueprintCommitOperationRow | undefined
+        if (!operation) return null
+        const characterSyncInput = readCharacterSyncInput(operation)
+        const persisted = readExactRange(db, {
+            mode: operation.mode,
+            operationId: operation.operation_id,
+            startChapter: operation.start_chapter,
+            endChapter: operation.end_chapter,
+        })
+        const snapshot = snapshotWithRelationshipHints(persisted, characterSyncInput)
+        const characterSyncOperation = readCharacterSyncOperation(
+            db,
+            characterSyncOperationId(operation.operation_id),
+        )
+        if (!characterSyncOperation) throw new Error('蓝图提交缺少可恢复的角色同步操作')
+        return {
+            mode: operation.mode,
+            operationId: operation.operation_id,
+            payloadHash: operation.payload_hash,
+            idempotent: false,
+            startChapter: operation.start_chapter,
+            endChapter: operation.end_chapter,
+            chapterNumbers: snapshot.map(blueprint => blueprint.chapterNumber),
+            snapshot,
+            characterSyncInput,
+            characterSyncOperation,
+        }
+    }
+
     /** 完整逻辑范围只提交一次，并在同一事务内回读验证后返回收据。 */
     static commitRange(request: BlueprintRangeCommitRequest): BlueprintRangeCommitReceipt {
         assertExactRange(request)

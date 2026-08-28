@@ -25,6 +25,32 @@ function chapter(number: number) {
   }
 }
 
+function commitKnowledge(chapters: ReturnType<typeof chapter>[]): string {
+  for (const item of chapters) {
+    const binding = ImportRunRepository.resolveReferenceImportAuthority(
+      'state-run', execution, item.number,
+    )
+    const documentId = createHash('sha256')
+      .update(`reference-import:${binding.stableKey}`)
+      .digest('hex')
+    getProjectDb()!.prepare(`
+      INSERT INTO import_reference_documents (
+        document_id, idempotency_key_hash, content_hash, chunk_set_hash,
+        expected_chunk_count, corpus_kind, state
+      ) VALUES (?, ?, ?, ?, 1, 'reference', 'committed')
+    `).run(
+      documentId,
+      createHash('sha256').update(binding.stableKey).digest('hex'),
+      binding.contentFingerprint,
+      createHash('sha256').update(`chunks:${item.number}`).digest('hex'),
+    )
+    ImportRunRepository.commitReferenceImportReceipt(
+      'state-run', execution, item.number, documentId,
+    )
+  }
+  return createImportRunChapterBatchCheckpointId(chapters)
+}
+
 function expectRejectedWithoutMutation(action: () => unknown, message: RegExp): void {
   const beforeBytes = getProjectDb()!.serialize()
   const beforeRun = ImportRunRepository.get('state-run')
@@ -76,7 +102,8 @@ describe('ImportRunRepository state machine', () => {
       /checkpoint.*未完成|检查点.*未完成/i,
     )
 
-    ImportRunRepository.completeBatch('state-run', 'knowledge', '1-2', execution)
+    const checkpoint = commitKnowledge([chapter(1), chapter(2)])
+    ImportRunRepository.completeBatch('state-run', 'knowledge', checkpoint, execution)
     expectRejectedWithoutMutation(
       () => ImportRunRepository.advanceStage('state-run', 'knowledge', 'style', execution),
       /下一阶段|转换.*无效/,

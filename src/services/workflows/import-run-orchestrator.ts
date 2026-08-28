@@ -68,7 +68,6 @@ export interface ImportRunOrchestratorDependencies {
   ) => Promise<ImportRunChapterSnapshot[]>
   importReference: (
     chapter: ImportRunChapterSnapshot,
-    idempotencyKey: string,
     run: ImportRunSnapshot,
     executionAuthority: ImportRunExecutionAuthority,
   ) => Promise<void>
@@ -140,12 +139,15 @@ function requiredAuthorDependency<T>(value: T | undefined, name: string): T {
   return value
 }
 
-function splitContiguousBatches(chapters: ImportRunChapterSnapshot[]): ImportRunChapterSnapshot[][] {
+function splitContiguousBatches(
+  chapters: ImportRunChapterSnapshot[],
+  maxBatchSize: number,
+): ImportRunChapterSnapshot[][] {
   const batches: ImportRunChapterSnapshot[][] = []
   let current: ImportRunChapterSnapshot[] = []
   for (const chapter of chapters) {
     const previous = current.at(-1)
-    if (current.length >= IMPORT_BLUEPRINT_BATCH_SIZE || (previous && chapter.number !== previous.number + 1)) {
+    if (current.length >= maxBatchSize || (previous && chapter.number !== previous.number + 1)) {
       batches.push(current)
       current = []
     }
@@ -324,9 +326,8 @@ export class ImportRunOrchestrator {
     let visited = 0
     let page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)
     while (page.length > 0) {
-      for (let offset = 0; offset < page.length; offset += IMPORT_KNOWLEDGE_BATCH_SIZE) {
-        const batch = page.slice(offset, offset + IMPORT_KNOWLEDGE_BATCH_SIZE)
-        const checkpoint = `${batch[0].number}-${batch.at(-1)!.number}`
+      for (const batch of splitContiguousBatches(page, IMPORT_KNOWLEDGE_BATCH_SIZE)) {
+        const checkpoint = createImportRunChapterBatchCheckpointId(batch)
         if (!run.completedBatches.knowledge?.includes(checkpoint)) {
           if (context.cancelled) throw new Error('Import cancelled at a safe boundary.')
           for (const chapter of batch) {
@@ -336,7 +337,6 @@ export class ImportRunOrchestrator {
               execution,
               lease => this.dependencies.importReference(
                 chapter,
-                `${run.purpose}:${run.sourceFingerprint}:${chapter.number}:${chapter.contentFingerprint}`,
                 run,
                 lease.authority,
               ),
@@ -420,6 +420,28 @@ export class ImportRunOrchestrator {
     return { run, execution: execution.current }
   }
 
+  private async replayCheckpointedEffect(
+    run: ImportRunSnapshot,
+    execution: ImportRunExecutionState,
+    stage: ImportRunStage,
+    batchId: string,
+  ): Promise<{ run: ImportRunSnapshot; execution: ImportRunExecutionLease }> {
+    const existing = await this.dependencies.getEffectReceipt(run.id, stage, batchId)
+    if (!existing) {
+      throw new Error('A completed import checkpoint is missing its durable effect receipt.')
+    }
+    execution.current = await this.dependencies.renewExecution(run.id, execution.current)
+    const committed = await this.dependencies.commitEffectReceipt(
+      run.id, stage, batchId, execution.current,
+    )
+    await this.withLeaseHeartbeat(
+      run.id,
+      execution,
+      () => this.dependencies.replayCommittedEffect(committed.receipt, committed.run),
+    )
+    return { run: committed.run, execution: execution.current }
+  }
+
   private async executeGlobal(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
     if (!run.completedBatches.global?.includes('done')) {
       if (context.cancelled) throw new Error('Import cancelled at a safe boundary.')
@@ -462,9 +484,18 @@ export class ImportRunOrchestrator {
     let visited = 0
     let page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)
     while (page.length > 0) {
-      for (const batch of splitContiguousBatches(page)) {
+      for (const batch of splitContiguousBatches(page, IMPORT_BLUEPRINT_BATCH_SIZE)) {
         const checkpoint = createImportRunChapterBatchCheckpointId(batch)
-        if (!run.completedBatches.blueprints?.includes(checkpoint)) {
+        if (run.completedBatches.blueprints?.includes(checkpoint)) {
+          const replayed = await this.replayCheckpointedEffect(
+            run,
+            execution,
+            'blueprints',
+            checkpoint,
+          )
+          run = replayed.run
+          execution.current = replayed.execution
+        } else {
           if (context.cancelled) throw new Error('Import cancelled at a safe boundary.')
           const committed = await this.executeDurableEffect(
             run,

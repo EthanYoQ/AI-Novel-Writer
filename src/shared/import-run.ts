@@ -2,6 +2,8 @@ export type ImportRunLocale = 'zh-CN' | 'en-US'
 export type ImportPurpose = 'reference' | 'author-manuscript'
 
 export type ImportRunStage =
+  | 'parsing'
+  | 'prepared'
   | 'knowledge'
   | 'global'
   | 'style'
@@ -213,7 +215,29 @@ export interface ImportRunPrepareRequest {
   chapters: ImportRunChapterInput[]
 }
 
+export interface ImportRunBeginParsingRequest {
+  runId: string
+  purpose: ImportPurpose
+  sourceFingerprint: string
+  sourceIds: string[]
+  sourceFingerprints?: string[]
+  legacySourceFingerprints?: string[]
+  legacyCollectionFingerprint?: string
+  sourceDisplay: ImportSourceDisplayMetadata[]
+  locale: ImportRunLocale
+}
+
 /** Renderer-safe inspection metadata. Chapter content and source identities stay in main memory. */
+export type ImportChapterTargetStatus = 'new' | 'duplicate' | 'conflict'
+
+export interface ImportChapterPreview {
+  number: number
+  title: string
+  wordCount: number
+  /** Present once the durable project ledger has classified the target chapter. */
+  targetStatus?: ImportChapterTargetStatus
+}
+
 export interface ImportInspectionSummary {
   inspectionId: string
   purpose: ImportPurpose
@@ -222,7 +246,14 @@ export interface ImportInspectionSummary {
   chapterCount: number
   totalWords: number
   totalBytes: number
-  preview: Array<{ number: number; title: string; wordCount: number }>
+  preview: ImportChapterPreview[]
+  /** Present for bounded durable previews; legacy in-memory inspections may omit it. */
+  previewRemaining?: number
+}
+
+export interface ImportRunPreparationInspection extends ImportInspectionSummary {
+  preview: Array<ImportChapterPreview & { targetStatus: ImportChapterTargetStatus }>
+  previewRemaining: number
 }
 
 export type ImportRunPrepareFromInspectionRequest = {
@@ -239,15 +270,25 @@ export type ImportRunPrepareFromInspectionRequest = {
   manifestFingerprint: string
 }
 
+/** Current-project selection binds parsing to one frozen project lease before any source is read. */
+export interface ImportNovelFileSelectionRequest {
+  runId: string
+  purpose: ImportPurpose
+  locale: ImportRunLocale
+  expectedProjectPath: string
+}
+
 export interface ImportRunSnapshot {
   id: string
   purpose: ImportPurpose
   rootRunId: string
   effectNamespace: string
-  sourceFingerprint: string
-  manifestFingerprint: string
+  /** Author-manuscript snapshots expose only the hashes needed to resume their confirmed commit. */
+  manifestFingerprint?: string
   authorityFingerprint?: string
   sourceDisplay: ImportSourceDisplayMetadata[]
+  /** Safe display facts for sources that still need user reauthorization. */
+  unfinishedSourceDisplay?: ImportSourceDisplayMetadata[]
   locale: ImportRunLocale
   stage: ImportRunStage
   status: ImportRunStatus
@@ -261,6 +302,10 @@ export interface ImportRunSnapshot {
   manifestContentSize: number
   manifestWordCount: number
   completedChapters: number
+  completedSources?: number
+  totalSources?: number
+  progressCompleted?: number
+  progressTotal?: number
   baseRunId?: string
   createdAt: string
   updatedAt: string
@@ -275,4 +320,6 @@ export interface ImportRunPreparationResult {
   newChapterNumbers: number[]
   conflictChapterNumbers: number[]
   duplicateChapterNumbers: number[]
+  /** Bounded renderer-safe view derived from the main-process frozen manifest. */
+  inspection?: ImportRunPreparationInspection
 }
