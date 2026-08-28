@@ -2,7 +2,13 @@ import { create } from 'zustand'
 import { ipc } from '../services/ipc-client'
 import { requireIpcSuccess } from '../services/ipc-result'
 import { alertError } from '../components/ui/AlertDialog'
-import type { LLMFinishReason, ModelProfile, LLMResponse, TokenUsage } from '../shared/ipc-channels'
+import type {
+  LLMFinishReason,
+  ModelDiscoveryResult,
+  ModelProfile,
+  LLMResponse,
+  TokenUsage,
+} from '../shared/ipc-channels'
 import type { CreativeStrategy, GenerationReasoningStage } from '../shared/reasoning-types'
 import { projectSessionContextFromProject } from '../shared/project-session-context'
 import { useProjectStore } from './project-store'
@@ -56,6 +62,8 @@ interface LLMState {
   cancelGeneration: (requestId: string) => Promise<void>
   /** 测试模型连接 */
   testConnection: (model: ModelProfile) => Promise<{ success: boolean; error?: string }>
+  /** 仅以已保存 profile ID 主动发现 provider 模型。 */
+  discoverModels: (profileId: string) => Promise<ModelDiscoveryResult>
 }
 
 let initializationFlight: Promise<void> | null = null
@@ -265,4 +273,6 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
       useProjectStore.getState().currentProject?.novelConfig.creativeStrategy ?? 'auto',
     )
   },
+
+  discoverModels: async (profileId) => ipc.invoke('llm:discover-models', profileId),
 }))

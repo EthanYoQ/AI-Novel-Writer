@@ -297,6 +297,26 @@ export interface FileChannels {
 }
 
 // ===== LLM 调用 =====
+export interface DiscoveredModel {
+  /** Provider-owned model identifier exactly as returned by the list API. */
+  id: string
+  /** Provider-owned display name, falling back to the identifier. */
+  name: string
+  /** Value that can be saved in ModelProfile.modelName. */
+  value: string
+}
+
+export type ModelDiscoveryErrorCode =
+  | 'auth'
+  | 'unsupported'
+  | 'network'
+  | 'invalid_response'
+  | 'empty'
+
+export type ModelDiscoveryResult =
+  | { success: true; models: DiscoveredModel[] }
+  | { success: false; errorCode: ModelDiscoveryErrorCode }
+
 export interface LLMChannels {
   'llm:begin-execution-lease': {
     args: [modelId: string]
@@ -326,6 +346,11 @@ export interface LLMChannels {
   'llm:list-models': {
     args: []
     return: ModelProfile[]
+  }
+  'llm:discover-models': {
+    /** Discovery always uses the currently saved main-process profile snapshot. */
+    args: [profileId: string]
+    return: ModelDiscoveryResult
   }
   'llm:save-model': {
     args: [model: ModelProfile]

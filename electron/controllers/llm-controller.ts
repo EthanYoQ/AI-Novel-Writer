@@ -18,6 +18,7 @@ import {
   ModelExecutionLeaseError,
   ModelExecutionLeaseRegistry,
 } from '../services/model-execution-lease'
+import { ModelDiscoveryService } from '../services/model-discovery-service'
 
 interface ActiveStream {
   controller: AbortController
@@ -89,6 +90,7 @@ function recordProviderOutcome(
 
 export function registerLLMController() {
   const modelExecutionLeases = new ModelExecutionLeaseRegistry({ loadModel: getModelConfig })
+  const modelDiscovery = new ModelDiscoveryService({ loadModel: getModelConfig })
   const closedExecutionLeaseTombstones = new Map<string, number>()
 
   const pruneClosedExecutionLeaseTombstones = (now: number) => {
@@ -222,6 +224,15 @@ export function registerLLMController() {
   })
 
   ipcMain.handle('llm:list-models', async () => loadModelConfigs())
+
+  ipcMain.handle('llm:discover-models', async (_event, profileId: string) => {
+    try {
+      applyProxyConfig()
+      return await modelDiscovery.discoverModels(profileId)
+    } catch {
+      return { success: false, errorCode: 'invalid_response' as const }
+    }
+  })
 
   ipcMain.handle('llm:save-model', async (_event, model: ModelProfile) => {
     try {
