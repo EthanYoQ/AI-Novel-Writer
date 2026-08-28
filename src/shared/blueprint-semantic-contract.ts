@@ -1,3 +1,7 @@
+import { StructuredContractDiagnostic } from './structured-contract-diagnostic'
+import type { WritingLanguage } from './writing-language'
+import { resolveWritingLanguage } from './writing-language'
+
 export interface BlueprintRelationshipFact {
   from: string
   to: string
@@ -38,7 +42,16 @@ export const BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST = Object.freeze({
   exactChapterCoverage: true,
 } as const)
 
-export function blueprintSemanticGenerationContract(): string {
+export function blueprintSemanticGenerationContract(writingLanguage?: WritingLanguage): string {
+  if (resolveWritingLanguage(writingLanguage) === 'en-US') {
+    return `[Immutable blueprint JSON contract]
+Output {"blueprints":[...]} only. Every item must contain all of these fields: ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.requiredFields.join(', ')}.
+chapterNumber must cover every target chapter exactly once, without duplicates or out-of-range values. title, role, purpose, keyEvents, and suspenseHook must be non-empty strings.
+characters must be an array containing at least one unique, non-empty full character name.
+relationships is required and may be []; every item must contain non-empty from, to, and relation fields. from and to must exactly copy full names from the same item's characters array and may not self-reference.
+Limits: title ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters} characters; role ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.roleCharacters}; purpose ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.purposeCharacters}; keyEvents ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters}; suspenseHook ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters}; characters at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems} items with names at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} characters; relationships at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipItems} items with relation at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} characters.
+Do not omit fields, combine chapters, rename fields, explain, or output Markdown or code fences.`
+  }
   return `【不可变蓝图 JSON 合同】
 只输出 {"blueprints":[...]}，每项必须完整包含：${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.requiredFields.join('、')}。
 chapterNumber 必须覆盖本批每个目标章节且不得重复或越界；title、role、purpose、keyEvents、suspenseHook 必须是非空字符串。
@@ -260,4 +273,3 @@ export function parseBlueprintSemanticResponseText(
   }
   return decodeBlueprintSemanticPayload(parsed, expectedChapterNumbers)
 }
-import { StructuredContractDiagnostic } from './structured-contract-diagnostic'

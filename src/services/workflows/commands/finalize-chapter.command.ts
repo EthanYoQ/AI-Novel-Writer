@@ -20,7 +20,7 @@ import {
 } from '../workflow-utils'
 import type { ChapterInfo } from '../chapter-workflow'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
-import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
 import type { CharacterRosterEntry, CharacterRosterRole } from '../../../shared/character-roster'
 
 export interface FinalizeChapterParams {
@@ -124,9 +124,10 @@ export function buildFinalizePostProcessSteps(
         if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
         if (context.cancelled) throw new Error('工作流已取消')
         const projectSession = requireWorkflowProjectSession(context)
-        const notesTemplate = await resolvePromptTemplate('generate_chapter_notes', projectSession)
+        const writingLanguage = workflowWritingLanguage(context)
+        const notesTemplate = await resolvePromptTemplate('generate_chapter_notes', projectSession, writingLanguage)
         if (!notesTemplate) throw new Error('未找到章节要点模板')
-        const notesBuilder = new PostProcessPromptBuilder(notesTemplate)
+        const notesBuilder = new PostProcessPromptBuilder(notesTemplate, writingLanguage)
           .withChapterContent(draftContent)
           .withChapterNumber(chapterNumber)
           .withChapterTitle(chapterTitle)
@@ -157,7 +158,8 @@ export function buildFinalizePostProcessSteps(
         if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
         if (context.cancelled) throw new Error('工作流已取消')
         const projectSession = requireWorkflowProjectSession(context)
-        const cardTemplate = await resolvePromptTemplate('update_character_cards', projectSession)
+        const writingLanguage = workflowWritingLanguage(context)
+        const cardTemplate = await resolvePromptTemplate('update_character_cards', projectSession, writingLanguage)
         if (!cardTemplate) throw new Error('未找到角色状态模板')
         // 章节定稿只读取并提交结构化角色名单。状态、新角色、图谱投影和
         // revision 由同一个 roster receipt 结算，绝不逐张卡片部分成功。
@@ -173,7 +175,7 @@ export function buildFinalizePostProcessSteps(
         if (context?.cancelled) throw new Error('工作流已取消')
         const simpleCards = allChars.map((c) => ({ name: c.name, role: c.role }))
 
-        const cardBuilder = new PostProcessPromptBuilder(cardTemplate)
+        const cardBuilder = new PostProcessPromptBuilder(cardTemplate, writingLanguage)
           .withChapterContent(draftContent.slice(0, 5000))
           .withChapterNumber(chapterNumber)
           .withExistingCardsJson(simpleCards)

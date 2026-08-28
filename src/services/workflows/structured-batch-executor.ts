@@ -6,6 +6,7 @@ import {
   type GenerationTask,
 } from '../generation/generation-harness'
 import { structuredContractDiagnostic } from '../../shared/structured-contract-diagnostic'
+import type { WritingLanguage } from '../../shared/writing-language'
 import {
   buildStructuredSyntaxRepairTask,
   isRepairableDirectJsonSyntaxFailure,
@@ -101,8 +102,9 @@ export interface StructuredBatchExecutor<TInput, TOutput> {
 export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
   contract: StructuredBatchContract<TInput, TOutput>
   session: Pick<GenerationSession, 'complete'>
+  writingLanguage?: WritingLanguage
 }): StructuredBatchExecutor<TInput, TOutput> {
-  const { contract, session } = dependencies
+  const { contract, session, writingLanguage = 'zh-CN' } = dependencies
 
   class ExecutionFailure extends Error {
     constructor(readonly failure: StructuredBatchFailure) {
@@ -294,7 +296,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           repairUsed = true
           syntaxRepairApplied = true
           const repaired = await session.complete(
-            buildStructuredSyntaxRepairTask(task, repairContract, outcome.content),
+            buildStructuredSyntaxRepairTask(task, repairContract, outcome.content, writingLanguage),
             { signal: input.signal },
           )
           recordAttempt(repaired.receipt)

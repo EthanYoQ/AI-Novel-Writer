@@ -6,7 +6,8 @@ import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
-import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
+import { promptLanguageText } from '../../prompt-language'
 import { assertMateriallyCompleteRevision } from './refinement-completeness'
 
 import type { ChapterInfo } from '../chapter-workflow'
@@ -35,6 +36,7 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
+    const writingLanguage = workflowWritingLanguage(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
       projectSession,
@@ -47,21 +49,26 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
 
     callbacks.log('正在进行大神级修稿...')
 
-    const template = await resolvePromptTemplate('refine_chapter', projectSession)
+    const template = await resolvePromptTemplate('refine_chapter', projectSession, writingLanguage)
     if (!template) throw new Error('未找到修稿模板')
 
     const mergedGuidance = this.params.mergedGuidance || novelConfig.globalGuidance || ''
     const userPromptBlock = this.params.userRefinePrompt?.trim()
-      ? `★【用户额外修稿指导（绝对优先级）】★：\n${this.params.userRefinePrompt}`
+      ? promptLanguageText(
+          writingLanguage,
+          `★【用户额外修稿指导（绝对优先级）】★：\n${this.params.userRefinePrompt}`,
+          `[Additional author revision guidance — highest priority]\n${this.params.userRefinePrompt}`,
+        )
       : ''
 
-    const promptBuilder = new ChapterPromptBuilder(template)
+    const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       .withDraftContent(draft)
       .withChapterInfo(this.params.chapterInfo)
       .withGlobalGuidance(mergedGuidance)
       .withGlobalSummary(this.params.shortSummary || '')
       .withShortSummary(this.params.shortSummary || '')
       .withWordNumber(novelConfig.wordsPerChapter)
+      .withWritingStyle(novelConfig.writingStyle || '')
       .withUserRefinePrompt(userPromptBlock)
 
     const refined = await this.callLLMWithBoundedCompletion(

@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { randomUUID } from '../utils/id'
 import { globalEventBus } from '../shared/event-bus'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
+import type { WritingLanguage } from '../shared/writing-language'
+import { resolveWritingLanguage } from '../shared/writing-language'
 import {
   getBoundedCompletionFailureCode,
   type BoundedCompletionFailureCode,
@@ -57,6 +59,8 @@ export interface WorkflowRun {
   projectSession: ProjectSessionContext | null
   /** Agent 明确选择并随本次写稿工作流冻结的模型；缺失时使用默认模型。 */
   generationModelId?: string
+  /** Project writing language frozen when the workflow starts. */
+  writingLanguage?: WritingLanguage
   type: WorkflowType
   title: string
   status: WorkflowStatus
@@ -99,6 +103,8 @@ export interface WorkflowContext {
   projectSession: ProjectSessionContext
   /** Agent 明确选择并随本次写稿工作流冻结的模型；缺失时使用默认模型。 */
   generationModelId?: string
+  /** Project writing language frozen when the workflow starts. */
+  writingLanguage?: WritingLanguage
   /** 步骤间传递的数据 */
   data: Record<string, unknown>
   /** 是否已取消 */
@@ -307,9 +313,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
   },
 
   startWorkflow: async (definition, stepByStep = false) => {
-    const currentProjectSession = projectSessionContextFromProject(
-      useProjectStore.getState().currentProject,
-    )
+    const currentProject = useProjectStore.getState().currentProject
+    const currentProjectSession = projectSessionContextFromProject(currentProject)
     const suppliedProjectSession = definition.projectSession
     const projectSession = isProjectSessionContext(suppliedProjectSession)
       && currentProjectSession
@@ -319,6 +324,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       : null
     const runId = definition.runId ?? randomUUID()
     const generationModelId = normalizeGenerationModelId(definition.generationModelId)
+    const writingLanguage = resolveWritingLanguage(currentProject?.novelConfig.writingLanguage)
 
     // Runtime callers can still deserialize a legacy definition that predates
     // the required TypeScript field. Reject it before adding an active run or
@@ -356,6 +362,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       id: runId,
       projectPath: definition.projectPath,
       projectSession,
+      writingLanguage,
       ...(generationModelId ? { generationModelId } : {}),
       type: definition.type,
       title: definition.title,
@@ -386,6 +393,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       runId: run.id,
       projectPath: definition.projectPath,
       projectSession,
+      writingLanguage,
       ...(generationModelId ? { generationModelId } : {}),
       data: {},
       cancelled: false,

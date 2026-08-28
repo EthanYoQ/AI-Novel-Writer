@@ -165,6 +165,51 @@ afterEach(() => {
 })
 
 describe('workflow mutation failure boundaries', () => {
+  it('sends both finalization post-process requests in the frozen English writing language', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:blueprint-update-notes') return { success: true }
+      if (channel === 'db:character-roster-read') {
+        return { status: 'empty', revision: 0, entries: [] }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const observedMessages: Array<Array<{ role: string; content: string }>> = []
+    useLLMStore.setState({
+      defaultModelId: 'model',
+      generateStream: vi.fn(async (messages, streamCallbacks) => {
+        observedMessages.push(messages)
+        streamCallbacks.onDone?.(
+          observedMessages.length === 2
+            ? '{"updates":[],"newCharacters":[]}'
+            : '# Chapter 1 Notes\n\n## Plot Events\n- [Trigger] The café opens.',
+          undefined,
+          'stop',
+        )
+        return `request-${observedMessages.length}`
+      }),
+    })
+    const steps = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      'Night Café 夜航',
+      'The sign reads “夜航 Café”.',
+      testPostProcessGeneration(),
+    )
+    const workflowContext = { ...context(), writingLanguage: 'en-US' as const }
+
+    await steps.find(step => step.key === 'chapter_notes')!.executor(callbacks(), workflowContext)
+    await steps.find(step => step.key === 'character_cards')!.executor(callbacks(), workflowContext)
+
+    expect(observedMessages).toHaveLength(2)
+    expect(observedMessages[0]?.[0]?.content).toContain('You are a professional fiction structure analyst')
+    expect(observedMessages[0]?.[1]?.content).toContain('Generate precise structured chapter notes')
+    expect(observedMessages[0]?.[1]?.content).toContain('The sign reads “夜航 Café”.')
+    expect(observedMessages[1]?.[0]?.content).toContain('You maintain rigorous character records')
+    expect(observedMessages[1]?.[1]?.content).toContain('Existing character records')
+    expect(observedMessages[1]?.[1]?.content).not.toContain('【任务要求】')
+  })
+
   it('treats committed-but-pending manuscript publication as a failed finalization step', async () => {
     finalizationClient.commitFinalizationSnapshot.mockResolvedValue({
       success: false,

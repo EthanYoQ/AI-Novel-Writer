@@ -9,10 +9,17 @@
 
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { Locale } from '../i18n/types'
+import type { WritingLanguage } from '../shared/writing-language'
+import { resolveWritingLanguage } from '../shared/writing-language'
 import {
   getActiveProjectSessionContext,
 } from '../shared/project-session-context'
 import { PromptCatalog, ipcPromptPersistence } from './prompt-catalog'
+import {
+  EN_US_BUILTIN_PROMPTS,
+  isCoreLocalizedBuiltinPromptKey,
+  type PromptLanguageTemplate,
+} from './prompt-language'
 
 export interface PromptTemplate {
   /** 模板唯一标识 */
@@ -1244,6 +1251,23 @@ severity 取值：error=严重矛盾强烈建议修复, warning=轻微不一致�
   },
 ]
 
+/** Resolve only model-facing built-ins through the project's writing language. */
+export function getBuiltinPromptTemplate(
+  key: string,
+  writingLanguage?: WritingLanguage,
+): PromptTemplate | undefined {
+  const builtin = BUILTIN_PROMPTS.find(template => template.key === key)
+  if (!builtin) return undefined
+  if (resolveWritingLanguage(writingLanguage) !== 'en-US') return builtin
+  const translated: PromptLanguageTemplate | undefined = EN_US_BUILTIN_PROMPTS[
+    key as keyof typeof EN_US_BUILTIN_PROMPTS
+  ]
+  if (!translated && isCoreLocalizedBuiltinPromptKey(key)) {
+    throw new Error(`Missing en-US built-in prompt contract: ${key}`)
+  }
+  return translated ? { ...builtin, ...translated } : builtin
+}
+
 /** 提示词生命周期唯一所有者；工作流通过 async resolve 自动完成水合。 */
 export const promptCatalog = new PromptCatalog(
   BUILTIN_PROMPTS,
@@ -1278,8 +1302,13 @@ export function getPromptTemplate(
 export async function resolvePromptTemplate(
   key: string,
   projectSession?: ProjectSessionContext,
+  writingLanguage?: WritingLanguage,
 ): Promise<PromptTemplate | undefined> {
-  return (await promptCatalog.resolve(key, projectSession))?.template
+  const resolved = await promptCatalog.resolve(key, projectSession)
+  if (!resolved) return undefined
+  return resolved.source === 'builtin'
+    ? getBuiltinPromptTemplate(key, writingLanguage)
+    : resolved.template
 }
 
 /** 获取指定模板当前生效的来源 */
@@ -1324,14 +1353,18 @@ export async function deleteProjectCustomPrompt(
 }
 
 /** 渲染 Prompt 模板（填充变量 + 自动追加内置 systemSuffix + 空段落裁剪） */
-export function renderPrompt(template: PromptTemplate, variables: Record<string, string>): string {
+export function renderPrompt(
+  template: PromptTemplate,
+  variables: Record<string, string>,
+  writingLanguage?: WritingLanguage,
+): string {
   let content = template.content
   for (const [key, value] of Object.entries(variables)) {
     content = content.replaceAll(`{{${key}}}`, value)
   }
 
   // 自动追加系统约束（始终从内置模板获取，不受用户自定义影响）
-  const builtinTemplate = BUILTIN_PROMPTS.find(p => p.key === template.key)
+  const builtinTemplate = getBuiltinPromptTemplate(template.key, writingLanguage)
   const suffix = builtinTemplate?.systemSuffix
   if (suffix) {
     let renderedSuffix = suffix

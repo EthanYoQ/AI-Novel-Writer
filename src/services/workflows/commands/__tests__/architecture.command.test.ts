@@ -2,11 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
+import { useLocaleStore } from '../../../../stores/locale-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import type { CharacterRosterEntry, CharacterRosterSnapshot } from '../../../../shared/character-roster'
 import {
   GenerateCharactersCommand as RuntimeGenerateCharactersCommand,
   GenerateConfigCommand as RuntimeGenerateConfigCommand,
+  GenerateCoreSeedCommand,
+  GenerateWorldBuildingCommand,
+  GeneratePlotArchitectureCommand,
 } from '../architecture.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 
@@ -209,6 +213,45 @@ afterEach(() => {
 })
 
 describe('GenerateConfigCommand error boundaries', () => {
+  it.each([
+    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的网络小说主编', unexpected: 'You are an experienced web-fiction editor' },
+    { uiLocale: 'en-US', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的网络小说主编', unexpected: 'You are an experienced web-fiction editor' },
+    { uiLocale: 'zh-CN', writingLanguage: 'en-US', expected: 'You are an experienced web-fiction editor', unexpected: '你是一位经验丰富的网络小说主编' },
+    { uiLocale: 'en-US', writingLanguage: 'en-US', expected: 'You are an experienced web-fiction editor', unexpected: '你是一位经验丰富的网络小说主编' },
+  ] as const)(
+    'sends $writingLanguage configuration instructions through the provider request in a $uiLocale interface',
+    async ({ uiLocale, writingLanguage, expected, unexpected }) => {
+      useLocaleStore.setState({ locale: uiLocale })
+      useProjectStore.setState({
+        currentProject: {
+          ...project(projectAPath),
+          novelConfig: { writingLanguage },
+        } as never,
+        saveProject: vi.fn().mockResolvedValue(true),
+      })
+      const runContext = { ...context, writingLanguage }
+      let observedMessages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0] = []
+      useLLMStore.setState({
+        defaultModelId: 'model-1',
+        generateStream: vi.fn(async (messages, streamCallbacks) => {
+          observedMessages = messages
+          streamCallbacks.onDone?.(validConfigJson, undefined, 'stop')
+          return 'config-language-request'
+        }),
+      })
+      const authorIdea = 'A café named “夜航 Café” survives at the edge of two timelines.'
+      const command = new GenerateConfigCommand(authorIdea, 100, 3000, vi.fn())
+
+      await command.execute({ step: {}, context: runContext, callbacks })
+
+      const system = observedMessages.find(message => message.role === 'system')?.content ?? ''
+      const user = observedMessages.find(message => message.role === 'user')?.content ?? ''
+      expect(system).toContain(expected)
+      expect(system).not.toContain(unexpected)
+      expect(user).toContain(authorIdea)
+    },
+  )
+
   it('sends the same exact config JSON contract on the initial and length-replacement requests', async () => {
     const observedPrompts: string[] = []
     const generateStream = vi.fn((
@@ -302,6 +345,79 @@ describe('GenerateConfigCommand error boundaries', () => {
 })
 
 describe('GenerateCharactersCommand structured roster seam', () => {
+  it('sends English built-in instructions for premise, character, world, and synopsis requests', async () => {
+    const novelConfig = {
+      writingLanguage: 'en-US',
+      genre: 'speculative thriller',
+      subGenre: 'time-loop mystery',
+      targetAudience: 'general',
+      totalChapters: 20,
+      wordsPerChapter: 2500,
+      plotStructure: 'three_act',
+      narrativePOV: 'third_limited',
+      coreOutline: 'A café exists in two timelines.',
+      worldSetting: 'Two cities overlap at midnight.',
+      goldenFinger: 'The protagonist remembers each reset.',
+      protagonistProfile: 'Mara is cautious but stubborn.',
+      globalGuidance: 'Preserve causal continuity.',
+    } as const
+    useProjectStore.setState({
+      currentProject: {
+        ...project(projectAPath),
+        novelConfig,
+      } as never,
+    })
+    const runContext = { ...context, writingLanguage: 'en-US' as const }
+    const observed = new Map<string, string>()
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream: vi.fn(async (
+        messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
+        streamCallbacks,
+        _modelId,
+        options,
+      ) => {
+        observed.set(options?.purpose ?? 'unknown', messages.map(message => message.content).join('\n'))
+        streamCallbacks.onError?.('captured request')
+        return 'architecture-language-request'
+      }),
+    })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:project-core-get') {
+        return {
+          premise: 'A sufficiently detailed premise for the language contract and character planning request.',
+          charactersArch: 'Mara and Jules pursue conflicting goals.',
+          worldbuilding: 'The overlapping cities obey a midnight boundary.',
+          synopsis: 'The investigation escalates across three acts.',
+        }
+      }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+    })
+    const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
+    const commands = [
+      new GenerateCoreSeedCommand(snapshot, workflowRuntimeDependencies),
+      new GenerateCharactersCommand(snapshot),
+      new GenerateWorldBuildingCommand(snapshot, workflowRuntimeDependencies),
+      new GeneratePlotArchitectureCommand(['synopsis'], snapshot, workflowRuntimeDependencies),
+    ]
+    for (const command of commands) {
+      await expect(command.execute({ step: {}, context: runContext, callbacks })).rejects.toThrow()
+    }
+
+    expect(observed.get('generate-core-seed')).toContain('Build a compact story premise')
+    expect(observed.get('character-architecture-manifest')).toContain('You plan character identities')
+    expect(observed.get('generate-world-building')).toContain('Design the world as a conflict system')
+    expect(observed.get('generate-plot-architecture')).toContain('Build the complete plot architecture')
+    for (const request of observed.values()) {
+      expect(request).not.toContain('你是一位网络小说策划专家与故事架构师')
+    }
+  })
+
   it('generates an eight-slot manifest then bounded individual details before one atomic roster commit', async () => {
     const names = ['江砚', '沈微澜', '顾沉舟', '白榆', '闻策', '唐霁', '陆衡', '乔岚']
     const manifest = {

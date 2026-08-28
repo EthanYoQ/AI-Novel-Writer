@@ -6,7 +6,7 @@ import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
-import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
 import { assertMateriallyCompleteRevision } from './refinement-completeness'
 import {
   hasIncludedReviewItems,
@@ -133,15 +133,16 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
       projectSessionContextFromProject(project),
     )) throw new Error('当前项目已切换，修稿已停止')
     const novelConfig = Object.freeze({ ...project.novelConfig })
+    const writingLanguage = workflowWritingLanguage(context)
 
     callbacks.log('正在根据已确认的审稿项精准修复...')
 
-    const template = await resolvePromptTemplate('refine_from_review', projectSession)
+    const template = await resolvePromptTemplate('refine_from_review', projectSession, writingLanguage)
     if (!template) throw new Error('未找到审稿修复模板')
 
-    const confirmedReviewBrief = renderHumanConfirmedReviewBrief(confirmedReview)
+    const confirmedReviewBrief = renderHumanConfirmedReviewBrief(confirmedReview, writingLanguage)
 
-    const promptBuilder = new ChapterPromptBuilder(template)
+    const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       .withReviewReport(confirmedReviewBrief)
       .withDraftContent(this.params.draftContent)
       .withGlobalGuidance(novelConfig.globalGuidance || '')

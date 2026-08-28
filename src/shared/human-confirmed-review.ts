@@ -1,3 +1,5 @@
+import type { WritingLanguage } from './writing-language'
+
 /**
  * Immutable, user-confirmed review snapshot persisted in the existing
  * `reviews.content` JSON field. The source AI review remains a separate,
@@ -152,16 +154,23 @@ export function hasIncludedReviewWork(snapshot: HumanConfirmedReviewSnapshot): b
  * author guidance. It intentionally omits ignored items, the raw AI report,
  * and the AI-produced summary.
  */
-export function renderHumanConfirmedReviewBrief(snapshot: HumanConfirmedReviewSnapshot): string {
+export function renderHumanConfirmedReviewBrief(
+  snapshot: HumanConfirmedReviewSnapshot,
+  writingLanguage: WritingLanguage = 'zh-CN',
+): string {
   const appliedItems = snapshot.items.filter(item => item.decision === 'apply')
   const sections: string[] = []
 
   if (appliedItems.length > 0) {
     sections.push([
-      '【已确认纳入本次修稿的审稿项】',
+      writingLanguage === 'en-US'
+        ? '[Confirmed review items included in this revision]'
+        : '【已确认纳入本次修稿的审稿项】',
       ...appliedItems.map((item, index) => {
         const quote = item.quote?.trim()
-          ? `\n  相关原文：${item.quote.trim()}`
+          ? writingLanguage === 'en-US'
+            ? `\n  Source excerpt: ${item.quote.trim()}`
+            : `\n  相关原文：${item.quote.trim()}`
           : ''
         return `${index + 1}. [${item.category} / ${item.severity}] ${item.description}${quote}`
       }),
@@ -170,7 +179,9 @@ export function renderHumanConfirmedReviewBrief(snapshot: HumanConfirmedReviewSn
 
   const authorGuidance = snapshot.authorGuidance.trim()
   if (authorGuidance) {
-    sections.push(`【作者补充修稿指导】\n${authorGuidance}`)
+    sections.push(writingLanguage === 'en-US'
+      ? `[Confirmed author guidance]\n${authorGuidance}`
+      : `【作者补充修稿指导】\n${authorGuidance}`)
   }
 
   return sections.join('\n\n')

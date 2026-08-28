@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { useProjectStore } from '../../../../stores/project-store'
+import { useLocaleStore } from '../../../../stores/locale-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import type {
   LLMFinishReason,
@@ -210,6 +211,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     premise?: string
     blueprints?: Array<{ chapterNumber: number; title: string; keyEvents: string }>
     userGuidance?: string
+    writingLanguage?: 'zh-CN' | 'en-US'
+    chapterNumber?: number
   }) {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
@@ -246,6 +249,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         path: projectPath,
         sessionLease: 'lease-generation-runtime',
         novelConfig: {
+          writingLanguage: options.writingLanguage ?? 'zh-CN',
           totalChapters: 10,
           wordsPerChapter: options.wordsPerChapter ?? 5000,
         },
@@ -262,7 +266,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       },
       data: {},
       cancelled: false,
-    }
+      writingLanguage: options.writingLanguage ?? 'zh-CN',
+    } as WorkflowContext
     const callbacks: StepCallbacks = {
       log: vi.fn(),
       setProgress: vi.fn(),
@@ -270,8 +275,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     }
     const command = new GenerateDraftCommand({
       projectPath,
-      chapterNumber: 1,
-      title: '第一章',
+      chapterNumber: options.chapterNumber ?? 1,
+      title: options.chapterNumber === 2 ? 'Chapter Two' : '第一章',
       role: '开端',
       purpose: '建立冲突',
       keyEvents: '开端',
@@ -286,6 +291,59 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(invoke).not.toHaveBeenCalledWith('db:draft-next-version', expect.anything(), expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   }
+
+  it.each([
+    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', expected: '你是一位笔力精湛的网络小说家', unexpected: 'You are an accomplished web-fiction novelist' },
+    { uiLocale: 'en-US', writingLanguage: 'zh-CN', expected: '你是一位笔力精湛的网络小说家', unexpected: 'You are an accomplished web-fiction novelist' },
+    { uiLocale: 'zh-CN', writingLanguage: 'en-US', expected: 'You are an accomplished web-fiction novelist', unexpected: '你是一位笔力精湛的网络小说家' },
+    { uiLocale: 'en-US', writingLanguage: 'en-US', expected: 'You are an accomplished web-fiction novelist', unexpected: '你是一位笔力精湛的网络小说家' },
+  ] as const)(
+    'sends $writingLanguage built-in instructions through the provider request in a $uiLocale interface',
+    async ({ uiLocale, writingLanguage, expected, unexpected }) => {
+      useLocaleStore.setState({ locale: uiLocale })
+      let observedTask: GenerationTask | undefined
+      const runtime = fakeRuntime((_attempt, task) => {
+        observedTask = task
+        return outcome('English draft prose. '.repeat(500), 'stop')
+      })
+      const authorGuidance = 'Keep the author\'s café sign “夜航 Café” exactly as written.'
+      const { context, callbacks, command } = setup({
+        runtime,
+        writingLanguage,
+        wordsTarget: 500,
+        userGuidance: authorGuidance,
+      })
+
+      await command.execute({ step: {}, context, callbacks })
+
+      const messages = observedTask?.messages ?? []
+      const system = messages.find(message => message.role === 'system')?.content ?? ''
+      const user = messages.find(message => message.role === 'user')?.content ?? ''
+      expect(system).toContain(expected)
+      expect(system).not.toContain(unexpected)
+      expect(user).toContain(authorGuidance)
+    },
+  )
+
+  it('sends English continuation-stage instructions for an English project', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('Continuation prose. '.repeat(500), 'stop')
+    })
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage: 'en-US',
+      chapterNumber: 2,
+      wordsTarget: 500,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const requestText = observedTask?.messages.map(message => message.content).join('\n') ?? ''
+    expect(requestText).toContain('You are serializing the latest chapter.')
+    expect(requestText).not.toContain('你正在连载写作最新章节')
+  })
 
   it('freezes one lease and one budget across initial and continuation attempts after model/config changes', async () => {
     let selectedModelId: string | null = 'model-a'
@@ -525,6 +583,40 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect((persisted?.[1] as { content: string }).content).toBe(`${initial}\n\n${recovered}`)
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:draft-create')).toHaveLength(1)
     expect(JSON.stringify(vi.mocked(callbacks.log).mock.calls)).not.toContain(discarded)
+  })
+
+  it('keeps empty context wrappers and private no-progress recovery instructions in English', async () => {
+    const initial = 'opening '.repeat(4000)
+    const discarded = 'opening '.repeat(200)
+    const recovered = `${'advance '.repeat(1000)}.`
+    const runtime = fakeOutcomes(
+      outcome(initial, 'length', 1),
+      outcome(discarded, 'length', 2),
+      outcome(recovered, 'stop', 3),
+    )
+    const authorGuidance = 'Keep “夜航 Café” exactly; do not translate café.'
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage: 'en-US',
+      chapterNumber: 2,
+      userGuidance: authorGuidance,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompts = runtime.complete.mock.calls.map(([task]) => (
+      task.messages.find(message => message.role === 'user')?.content ?? ''
+    ))
+    expect(prompts).toHaveLength(3)
+    expect(prompts[0]).toContain(authorGuidance)
+    expect(prompts[0]).toContain('(no future chapter blueprints)')
+    expect(prompts[0]).toContain('(no chapter notes)')
+    expect(prompts[0]).toContain('(no previous manuscript)')
+    expect(prompts[0]).toContain('(knowledge-base search unavailable)')
+    expect(prompts[0]).toContain('(no character state records)')
+    expect(prompts[1]).toContain('Continue the current chapter seamlessly')
+    expect(prompts[2]).toContain('This is the only no-progress recovery attempt')
+    expect(prompts.join('\n')).not.toMatch(/【(?:硬性要求|本章蓝图|后续章节大纲预告|角色状态档案|第\d+章)/u)
   })
 
   it('fails closed after the only no-progress recovery also makes no visible progress', async () => {

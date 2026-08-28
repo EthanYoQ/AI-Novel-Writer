@@ -223,6 +223,61 @@ afterEach(() => {
 })
 
 describe('RefineDraftCommand bounded visible completion', () => {
+  it('sends English built-in instructions for direct refinement, review, and confirmed-review refinement', async () => {
+    useProjectStore.setState((state) => ({
+      currentProject: state.currentProject
+        ? {
+            ...state.currentProject,
+            novelConfig: {
+              ...state.currentProject.novelConfig,
+              writingLanguage: 'en-US',
+            },
+          }
+        : null,
+    }))
+    const observed = new Map<string, string>()
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>(async request => {
+      observed.set(request.purpose, request.messages.map(message => message.content).join('\n'))
+      throw new Error('captured request')
+    })
+    stubIpc(vi.fn(async (channel: string) => {
+      if (channel === 'db:draft-get-meta') {
+        return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      }
+      if (channel === 'db:review-get-full') {
+        return {
+          id: CONFIRMATION_REVIEW_ID,
+          baseDraftId: 1,
+          reviewIndex: 2,
+          contentId: 7,
+          createdAt: '2026-08-22T00:00:00.000Z',
+          content: DEFAULT_CONFIRMED_REVIEW_CONTENT,
+        }
+      }
+      if (channel === 'kb:search' || channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      throw new Error(`unexpected IPC: ${channel}`)
+    }))
+    const context = { ...workflowContext(), writingLanguage: 'en-US' as const }
+    const commands = [
+      command(completeWithLease, 'Original café sign: “夜航 Café”.'),
+      chapterReviewCommand(completeWithLease),
+      reviewCommand(completeWithLease, 'Original café sign: “夜航 Café”.'),
+    ]
+    for (const target of commands) {
+      await expect(target.execute({ step: {}, context, callbacks: callbacks() })).rejects.toThrow()
+    }
+
+    expect(observed.get('refine-draft')).toContain('Revise the chapter manuscript')
+    expect(observed.get('review-chapter')).toContain('Review the chapter for objective continuity')
+    expect(observed.get('refine-from-review')).toContain('Revise the chapter using only the confirmed review checklist')
+    for (const request of observed.values()) {
+      expect(request).not.toContain('你是一位功力深厚的文学编辑')
+      expect(request).not.toContain('你是一位严谨的小说质量监督编辑')
+      expect(request).not.toContain('你是一位严谨的小说编辑')
+    }
+  })
+
   it('merges an overlap after length and persists one complete revision only after the final stop', async () => {
     const overlap = '重叠句'.repeat(16)
     const first = `第一段修订正文。${overlap}`

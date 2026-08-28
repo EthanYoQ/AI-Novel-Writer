@@ -37,6 +37,45 @@ beforeEach(() => {
 })
 
 describe('workflow pause at a safe step boundary', () => {
+  it('freezes the project writing language into both the run and command context', async () => {
+    const project = useProjectStore.getState().currentProject!
+    useProjectStore.setState({
+      currentProject: {
+        ...project,
+        novelConfig: { ...project.novelConfig, writingLanguage: 'en-US' },
+      },
+    })
+    const observedLanguages: unknown[] = []
+
+    await useWorkflowStore.getState().startWorkflow({
+      type: 'chapter_creation',
+      title: 'Frozen writing language',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{
+        name: 'write',
+        description: 'capture context',
+        executor: async (_step, context) => {
+          observedLanguages.push(context.writingLanguage)
+          const current = useProjectStore.getState().currentProject!
+          useProjectStore.setState({
+            currentProject: {
+              ...current,
+              novelConfig: { ...current.novelConfig, writingLanguage: 'zh-CN' },
+            },
+          })
+          observedLanguages.push(context.writingLanguage)
+        },
+      }],
+    })
+
+    expect(observedLanguages).toEqual(['en-US', 'en-US'])
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({
+      writingLanguage: 'en-US',
+      status: 'completed',
+    })
+  })
+
   it('copies a bounded terminal failure code to the failed step and run without changing its message', async () => {
     const failure = createBoundedCompletionError('content_filter')
 

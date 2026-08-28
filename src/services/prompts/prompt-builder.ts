@@ -1,5 +1,6 @@
 import type { PromptTemplate } from '../prompt-templates'
-import { BUILTIN_PROMPTS, pruneEmptyOptionalPromptSections } from '../prompt-templates'
+import { getBuiltinPromptTemplate, pruneEmptyOptionalPromptSections } from '../prompt-templates'
+import type { WritingLanguage } from '../../shared/writing-language'
 
 /**
  * 基础抽象 Prompt 建造者
@@ -9,7 +10,7 @@ export class BasePromptBuilder {
   protected template: PromptTemplate;
   protected variables: Record<string, string> = {};
 
-  constructor(template: PromptTemplate) {
+  constructor(template: PromptTemplate, private readonly writingLanguage?: WritingLanguage) {
     this.template = template;
   }
 
@@ -28,7 +29,7 @@ export class BasePromptBuilder {
     }
 
     // 自动追加 systemSuffix（始终从内置模板获取，与 renderPrompt 行为对齐）
-    const builtinTemplate = BUILTIN_PROMPTS.find(p => p.key === this.template.key)
+    const builtinTemplate = getBuiltinPromptTemplate(this.template.key, this.writingLanguage)
     const suffix = builtinTemplate?.systemSuffix
     if (suffix) {
       let renderedSuffix = suffix

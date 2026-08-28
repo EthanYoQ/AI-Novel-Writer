@@ -18,6 +18,7 @@ import {
   redactVisibleCompletionText,
   type BoundedCompletionMode,
 } from '../bounded-completion'
+import { workflowWritingLanguage } from '../workflow-project-session'
 
 export interface CommandExecuteParams {
   step: unknown
@@ -195,6 +196,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       mode: continuation.mode,
       maxContinuations: continuation.maxContinuations,
       originalPrompt: prompt,
+      writingLanguage: context ? workflowWritingLanguage(context) : 'zh-CN',
       promptBudget: {
         contextWindowTokens: completion.receipt.capabilities.contextWindowTokens,
         maxOutputTokens: completion.receipt.budget.requestedOutputTokens,

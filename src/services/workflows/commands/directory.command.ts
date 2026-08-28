@@ -20,7 +20,8 @@ import {
   blueprintSemanticGenerationContract,
   validateBlueprintSemanticItem,
 } from '../../../shared/blueprint-semantic-contract'
-import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
+import { promptLanguageText } from '../../prompt-language'
 import {
   listPendingDirectoryCharacterSyncs,
   retryDirectoryCharacterSync,
@@ -154,6 +155,7 @@ function buildCompactBlueprintTask(input: {
   globalGuidance: string
   pacingGuidance: string
   systemRole: string
+  writingLanguage: NonNullable<CommandExecuteParams['context']['writingLanguage']>
 }): GenerationTask {
   const facts = {
     targetChapterNumber: input.chapterNumber,
@@ -170,16 +172,16 @@ function buildCompactBlueprintTask(input: {
     pacingGuidance: boundedFactText(input.pacingGuidance, COMPACT_GUIDANCE_MAX_UTF8_BYTES),
   }
   const prompt = [
-    '上一次单章蓝图达到输出上限，其内容已丢弃。仅根据下列有界事实重建该章完整蓝图。',
-    '【有界事实】',
+    promptLanguageText(input.writingLanguage, '上一次单章蓝图达到输出上限，其内容已丢弃。仅根据下列有界事实重建该章完整蓝图。', 'The previous single-chapter blueprint reached the output limit and was discarded. Rebuild the complete chapter blueprint from only the bounded facts below.'),
+    promptLanguageText(input.writingLanguage, '【有界事实】', '[Bounded facts]'),
     JSON.stringify(facts),
-    '【输出合同】',
-    blueprintSemanticGenerationContract(),
-    `必须且只能返回 chapterNumber=${input.chapterNumber} 的一项。`,
-    `严格执行字段和列表上限：${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}。`,
+    promptLanguageText(input.writingLanguage, '【输出合同】', '[Output contract]'),
+    blueprintSemanticGenerationContract(input.writingLanguage),
+    promptLanguageText(input.writingLanguage, `必须且只能返回 chapterNumber=${input.chapterNumber} 的一项。`, `Return exactly one item whose chapterNumber is ${input.chapterNumber}.`),
+    promptLanguageText(input.writingLanguage, `严格执行字段和列表上限：${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}。`, `Enforce these field and list limits exactly: ${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}.`),
   ].join('\n')
   const systemRole = boundedFactText(input.systemRole, COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES)
-    || '你是一位经验丰富的网文架构师。'
+    || promptLanguageText(input.writingLanguage, '你是一位经验丰富的网文架构师。', 'You are an experienced web-fiction architect.')
   if (utf8Bytes(prompt) + utf8Bytes(systemRole) > COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES) {
     throw new Error('紧凑单章蓝图任务超过安全字节上限')
   }
@@ -222,6 +224,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<ChapterBlueprint[]> {
     const projectSession = requireWorkflowProjectSession(context)
+    const writingLanguage = workflowWritingLanguage(context)
     const architecture = context.data.architecture as string
     const existingBlueprints = (context.data.existingBlueprints || []) as ChapterBlueprint[]
     const { expectedProjectPath, novelConfig } = this.projectSnapshot
@@ -267,7 +270,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       { length: chapterCount },
       (_, index) => startChapter + index,
     )
-    const template = await resolvePromptTemplate('chapter_blueprint_chunk', projectSession)
+    const template = await resolvePromptTemplate('chapter_blueprint_chunk', projectSession, writingLanguage)
     if (!template) throw new Error('模板丢失')
 
     let activeRange = { startChapter, endChapter }
@@ -286,11 +289,15 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
 
         const previous = [...existingBlueprints, ...validatedPrefix]
         const chapterList = previous.slice(-100)
-          .map(chapter => `第${chapter.chapterNumber}章 ${chapter.title}：${chapter.keyEvents}`)
+          .map(chapter => promptLanguageText(
+            writingLanguage,
+            `第${chapter.chapterNumber}章 ${chapter.title}：${chapter.keyEvents}`,
+            `Chapter ${chapter.chapterNumber} — ${chapter.title}: ${chapter.keyEvents}`,
+          ))
           .join('\n')
-        const prompt = new DirectoryPromptBuilder(template)
+        const prompt = new DirectoryPromptBuilder(template, writingLanguage)
           .withNovelArchitecture(architecture)
-          .withChapterList(chapterList || '（首批生成，尚无前置章节）')
+          .withChapterList(chapterList || promptLanguageText(writingLanguage, '（首批生成，尚无前置章节）', '(first batch; no preceding chapters)'))
           .withNumberOfChapters(totalChapters)
           .withN(batchStart)
           .withM(batchEnd)
@@ -298,7 +305,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           .withGenre(novelConfig.genre || '')
           .withPacingGuidance((context.data.pacingGuidance as string) || '')
           .build()
-          + `\n\n${blueprintSemanticGenerationContract()}`
+          + `\n\n${blueprintSemanticGenerationContract(writingLanguage)}`
 
         return {
           purpose: 'chapter-blueprint-directory',
@@ -306,7 +313,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           messages: [
             {
               role: 'system',
-              content: template.systemRole || '你是一位经验丰富的网文架构师。',
+              content: template.systemRole || promptLanguageText(writingLanguage, '你是一位经验丰富的网文架构师。', 'You are an experienced web-fiction architect.'),
             },
             { role: 'user', content: prompt },
           ],
@@ -320,7 +327,8 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         genre: novelConfig.genre || '',
         globalGuidance: novelConfig.globalGuidance || '',
         pacingGuidance: (context.data.pacingGuidance as string) || '',
-        systemRole: template.systemRole || '你是一位经验丰富的网文架构师。',
+        systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位经验丰富的网文架构师。', 'You are an experienced web-fiction architect.'),
+        writingLanguage,
       }),
       inputKey: chapterNumber => chapterNumber,
       outputKey: blueprint => blueprint.chapterNumber,
@@ -331,8 +339,12 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       ),
       validateItem: validateBlueprintSemanticItem,
       syntaxRepairContract: ({ items }) => (
-        `${blueprintSemanticGenerationContract()}\n`
-        + `本次必须且只能完整返回以下 chapterNumber：${items.join('、')}。`
+        `${blueprintSemanticGenerationContract(writingLanguage)}\n`
+        + promptLanguageText(
+          writingLanguage,
+          `本次必须且只能完整返回以下 chapterNumber：${items.join('、')}。`,
+          `Return complete items for exactly these chapterNumber values: ${items.join(', ')}.`,
+        )
       ),
     }
 
@@ -343,7 +355,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         budget: costPlan.runtimeBudget,
       })
       const batchResult = await runtime.execute(async ({ session }) => {
-        const executor = createStructuredBatchExecutor({ contract, session })
+        const executor = createStructuredBatchExecutor({ contract, session, writingLanguage })
         return executor.execute({
           items: chapterNumbers,
           limits: {

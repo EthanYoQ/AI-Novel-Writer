@@ -8,7 +8,8 @@ import { unwrapKnowledgeValue } from '../../knowledge-service'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
-import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
+import { promptLanguageText } from '../../prompt-language'
 
 
 export interface ReviewChapterParams {
@@ -33,6 +34,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
+    const writingLanguage = workflowWritingLanguage(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
       projectSession,
@@ -46,7 +48,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     callbacks.log('  检索全书设定档案...')
 
     // 使用向量检索获取与待审章节相关的历史上下文（替代全局摘要）
-    let contextSummary = '（无上下文参考）'
+    let contextSummary = promptLanguageText(writingLanguage, '（无上下文参考）', '(no relevant prior context)')
     try {
       // 从待审内容中提取前 200 字作为检索 query
       const queryText = draft.slice(0, 200)
@@ -60,20 +62,24 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       if (results.length > 0) {
         contextSummary = results
           .map((r: { fileName: string; score: number; text: string }, i: number) =>
-            `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`)
+            promptLanguageText(
+              writingLanguage,
+              `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
+              `[${i + 1}] (${r.fileName}, relevance ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
+            ))
           .join('\n\n')
       }
     } catch {
-      contextSummary = '（知识库检索不可用）'
+      contextSummary = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
     }
 
-    const characterState = await this.readCharacterStates(context.projectPath, projectSession)
-    const worldBuilding = await this.readWorldBuilding(context.projectPath, projectSession)
+    const characterState = await this.readCharacterStates(context.projectPath, projectSession, writingLanguage)
+    const worldBuilding = await this.readWorldBuilding(context.projectPath, projectSession, writingLanguage)
 
-    const template = await resolvePromptTemplate('consistency_check', projectSession)
+    const template = await resolvePromptTemplate('consistency_check', projectSession, writingLanguage)
     if (!template) throw new Error('未找到审稿模板')
 
-    const promptBuilder = new ReviewPromptBuilder(template)
+    const promptBuilder = new ReviewPromptBuilder(template, writingLanguage)
       .withChapterContent(draft)
       .withCharacterStates(characterState)
       .withGlobalSummary(contextSummary)
@@ -151,6 +157,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
   private async readCharacterStates(
     projectPath: string,
     projectSession: ProjectSessionContext,
+    writingLanguage: NonNullable<CommandExecuteParams['context']['writingLanguage']>,
   ): Promise<string> {
     try {
       const allChars = await ipc.invokeWithProjectSession(projectSession, 'db:character-get-all', projectPath)
@@ -158,18 +165,23 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       for (const card of allChars) {
         if (card.name && card.currentState) {
           const cs = card.currentState
-          states.push(`${card.name}（${card.role || '未知'}）: ${cs.powerLevel || ''}, ${cs.location || ''}, ${cs.physicalState || ''}, ${cs.mentalState || ''}, 最近：${cs.recentEvents || ''}`)
+          states.push(promptLanguageText(
+            writingLanguage,
+            `${card.name}（${card.role || '未知'}）: ${cs.powerLevel || ''}, ${cs.location || ''}, ${cs.physicalState || ''}, ${cs.mentalState || ''}, 最近：${cs.recentEvents || ''}`,
+            `${card.name} (${card.role || 'unknown'}): power ${cs.powerLevel || ''}; location ${cs.location || ''}; physical ${cs.physicalState || ''}; mental ${cs.mentalState || ''}; recent ${cs.recentEvents || ''}`,
+          ))
         }
       }
-      return states.length > 0 ? states.join('\n') : '（暂无）'
-    } catch { return '（读取失败）' }
+      return states.length > 0 ? states.join('\n') : promptLanguageText(writingLanguage, '（暂无）', '(none)')
+    } catch { return promptLanguageText(writingLanguage, '（读取失败）', '(unavailable)') }
   }
 
   private async readWorldBuilding(
     projectPath: string,
     projectSession: ProjectSessionContext,
+    writingLanguage: NonNullable<CommandExecuteParams['context']['writingLanguage']>,
   ): Promise<string> {
     const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath)
-    return core?.worldbuilding || '（暂无）'
+    return core?.worldbuilding || promptLanguageText(writingLanguage, '（暂无）', '(none)')
   }
 }

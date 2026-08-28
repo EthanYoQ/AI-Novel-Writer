@@ -1,6 +1,8 @@
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
 import type { WorkflowContext } from '../../stores/workflow-store'
+import type { WritingLanguage } from '../../shared/writing-language'
+import { resolveWritingLanguage } from '../../shared/writing-language'
 
 /**
  * 取出工作流启动时冻结的项目会话。
@@ -14,4 +16,9 @@ export function requireWorkflowProjectSession(context: WorkflowContext): Project
     throw new Error('工作流缺少匹配的冻结项目会话，已拒绝项目数据访问')
   }
   return session
+}
+
+/** Legacy workflows without an explicit snapshot retain the historical Chinese behavior. */
+export function workflowWritingLanguage(context: WorkflowContext): WritingLanguage {
+  return resolveWritingLanguage(context.writingLanguage)
 }

@@ -8,6 +8,46 @@ import {
 } from '../bounded-completion'
 
 describe('bounded completion', () => {
+  it.each([
+    {
+      mode: 'replace-structured-output' as const,
+      initial: '{"chapters":[',
+      continuation: '{"chapters":[]}',
+      expectedInstruction: 'The previous structured output stopped at the length limit',
+    },
+    {
+      mode: 'append-visible-text' as const,
+      initial: 'The aircraft door opened beside the 夜航 Café sign.',
+      continuation: 'The aircraft door opened beside the 夜航 Café sign.\n\nMara stepped onto the wet tarmac.',
+      expectedInstruction: 'The previous text stopped at the length limit',
+    },
+  ])('builds an English $mode continuation while preserving the original UTF-8 task', async ({
+    mode,
+    initial,
+    continuation,
+    expectedInstruction,
+  }) => {
+    const originalPrompt = 'Continue from the sign “夜航 Café”; preserve café exactly.'
+    const requestContinuation = vi.fn().mockResolvedValue({
+      content: continuation,
+      finishReason: 'stop',
+    })
+
+    await completeBoundedCompletion({
+      initial: { content: initial, finishReason: 'length' },
+      mode,
+      maxContinuations: 1,
+      originalPrompt,
+      writingLanguage: 'en-US',
+      requestContinuation,
+    })
+
+    const continuationPrompt = requestContinuation.mock.calls[0]?.[0] as string
+    expect(continuationPrompt).toContain(expectedInstruction)
+    expect(continuationPrompt).toContain(originalPrompt)
+    expect(continuationPrompt).not.toContain('上一轮')
+  })
+
   it('replaces a partial structured response only after a complete replacement arrives', async () => {
     const requestContinuation = vi.fn()
       .mockResolvedValueOnce({ content: '{"chapters":[', finishReason: 'length' })

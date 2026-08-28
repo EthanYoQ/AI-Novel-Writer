@@ -308,6 +308,90 @@ afterEach(() => {
 })
 
 describe('GenerateDirectoryCommand', () => {
+  it('sends English blueprint instructions through the provider request for an English project', async () => {
+    stubIpcInvoke(successfulCommitHandler())
+    let observedTask: GenerationTask | undefined
+    const session = generationSession(async task => {
+      observedTask = task
+      return {
+        status: 'completed',
+        content: blueprintJson([1]),
+        finishReason: 'stop',
+        receipt: generationReceipt(1, 'stop'),
+      }
+    })
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      {
+        ...projectSnapshot,
+        novelConfig: {
+          ...projectSnapshot.novelConfig,
+          totalChapters: 1,
+        },
+      },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+    const context = {
+      ...workflowContext(),
+      writingLanguage: 'en-US' as const,
+      data: { architecture: 'The sign “夜航 Café” must remain byte-for-byte unchanged.' },
+    }
+
+    await command.execute({ step: {}, context, callbacks: stepCallbacks() })
+
+    const system = observedTask?.messages.find(message => message.role === 'system')?.content ?? ''
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(system).toContain('You are an experienced web-fiction architect')
+    expect(user).toContain('Generate chapter blueprints from chapter 1 through chapter 1')
+    expect(user).toContain('The sign “夜航 Café” must remain byte-for-byte unchanged.')
+    expect(user).not.toContain('【不可变蓝图 JSON 合同】')
+  })
+
+  it('keeps an English project in English when the actual blueprint request enters syntax repair', async () => {
+    stubIpcInvoke(successfulCommitHandler())
+    const completeBlueprint = JSON.stringify({
+      blueprints: [modelBlueprint(1, { title: 'Café 夜航' })],
+    })
+    const malformedBlueprint = completeBlueprint.slice(0, -2)
+    let attempt = 0
+    const session = generationSession(async task => {
+      attempt += 1
+      if (attempt === 1) {
+        return {
+          status: 'completed',
+          content: malformedBlueprint,
+          finishReason: 'stop',
+          receipt: generationReceipt(attempt, 'stop', task.purpose),
+        }
+      }
+
+      const system = task.messages.find(message => message.role === 'system')?.content ?? ''
+      const user = task.messages.find(message => message.role === 'user')?.content ?? ''
+      expect(task.purpose).toBe('chapter-blueprint-directory:structured-syntax-repair')
+      expect(system).toContain('You repair JSON syntax')
+      expect(system).not.toContain('你是结构化 JSON 语法修复器')
+      expect(user).toContain(malformedBlueprint)
+      expect(user).toContain('Café 夜航')
+      return {
+        status: 'completed',
+        content: completeBlueprint,
+        finishReason: 'stop',
+        receipt: generationReceipt(attempt, 'stop', task.purpose),
+      }
+    })
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 1 } },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+    const context = { ...workflowContext(), writingLanguage: 'en-US' as const }
+
+    const result = await command.execute({ step: {}, context, callbacks: stepCallbacks() })
+
+    expect(result[0]?.title).toBe('Café 夜航')
+    expect(attempt).toBe(2)
+  })
+
   it('blocks a new billable directory run while a durable character sync is pending', async () => {
     const operation = {
       operationId: 'blueprint-sync-previous-run',

@@ -6,7 +6,7 @@ import { ipc } from '../../ipc-client'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
-import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
 import {
   DIR_PROMPTS
 } from '../../../shared/project-paths'
@@ -24,6 +24,8 @@ import type {
   GenerationOutcome,
   GenerationSession,
 } from '../../generation/generation-harness'
+import type { WritingLanguage } from '../../../shared/writing-language'
+import { promptLanguageText } from '../../prompt-language'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MIN_TARGET_COMPLETION_RATIO = 0.82
@@ -209,15 +211,28 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       throw new Error('当前项目已切换，章节生成已停止')
     }
     const novelConfig = Object.freeze({ ...project.novelConfig })
+    const writingLanguage = workflowWritingLanguage(context)
 
     callbacks.log('拼装章节上下文 (强类型注入中)...')
 
     const architecture = await this.readArchitecture(expectedProjectPath, projectSession)
-    const projectPrompts = await this.readProjectPrompts(expectedProjectPath, projectSession)
+    const projectPrompts = await this.readProjectPrompts(
+      expectedProjectPath,
+      projectSession,
+      writingLanguage,
+    )
     const mergedGuidance = [novelConfig.globalGuidance || '', projectPrompts].filter(Boolean).join('\n\n')
 
-    const characterState = await this.readCharacterStates(expectedProjectPath, projectSession)
-    let futureBlueprintsStr = '（无后续蓝图）'
+    const characterState = await this.readCharacterStates(
+      expectedProjectPath,
+      projectSession,
+      writingLanguage,
+    )
+    let futureBlueprintsStr = promptLanguageText(
+      writingLanguage,
+      '（无后续蓝图）',
+      '(no future chapter blueprints)',
+    )
     try {
       const { loadDirectoryBlueprints } = await import('../directory-workflow')
       const allBlueprints = await loadDirectoryBlueprints(expectedProjectPath, projectSession)
@@ -225,20 +240,24 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         b => b.chapterNumber > this.chapterInfo.chapterNumber && b.chapterNumber <= this.chapterInfo.chapterNumber + 5
       )
       if (futureBlueprintsArr.length > 0) {
-        futureBlueprintsStr = futureBlueprintsArr.map(b => `第${b.chapterNumber}章 ${b.title}：${b.keyEvents}`).join('\n')
+        futureBlueprintsStr = futureBlueprintsArr.map(b => promptLanguageText(
+          writingLanguage,
+          `第${b.chapterNumber}章 ${b.title}：${b.keyEvents}`,
+          `Chapter ${b.chapterNumber}: ${b.title} — ${b.keyEvents}`,
+        )).join('\n')
       }
     } catch { /* 忽略 */ }
 
     const isFirstChapter = this.chapterInfo.chapterNumber === 1
     const templateKey = isFirstChapter ? 'first_chapter_draft' : 'next_chapter_draft'
-    const template = await resolvePromptTemplate(templateKey, projectSession)
+    const template = await resolvePromptTemplate(templateKey, projectSession, writingLanguage)
     if (!template) throw new Error(`未找到模板: ${templateKey}`)
 
     // ==========================================
     // Prompt 构建——按「稳定前缀 → 可变后缀」排列
     // 以最大化 LLM 上下文缓存命中率
     // ==========================================
-    const promptBuilder = new ChapterPromptBuilder(template)
+    const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       // ---- 缓存命中区（跨章稳定，前缀对齐）----
       .withArchitecture(architecture)
       .withGlobalGuidance(mergedGuidance)
@@ -248,11 +267,20 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       // ---- 章节公共区（首章与后续章都必须完整注入）----
       .withChapterInfo(this.chapterInfo)
       .withFutureBlueprints(futureBlueprintsStr)
-      .withUserGuidance(this.chapterInfo.userGuidance?.trim() || '（无微操指导）')
+      .withUserGuidance(this.chapterInfo.userGuidance?.trim() || promptLanguageText(
+        writingLanguage,
+        '（无微操指导）',
+        '(no author guidance)',
+      ))
 
     if (!isFirstChapter) {
       // 从蓝图 JSON 的 notes 字段读取章节要点时间线（按序拼装，利于前缀缓存）
-      const chapterTimeline = await this.readChapterNotesTimeline(expectedProjectPath, this.chapterInfo.chapterNumber, projectSession)
+      const chapterTimeline = await this.readChapterNotesTimeline(
+        expectedProjectPath,
+        this.chapterInfo.chapterNumber,
+        projectSession,
+        writingLanguage,
+      )
       callbacks.log(`  📋 已加载章节要点时间线（${chapterTimeline.length} 字）`)
 
       let previousEnding = ''
@@ -281,10 +309,14 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           expectedProjectPath,
         ))
         filteredContext = results.length > 0
-          ? results.map((r: { fileName: string; score: number; text: string }, i: number) => `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`).join('\n\n')
-          : '（知识库中无相关内容）'
+          ? results.map((r: { fileName: string; score: number; text: string }, i: number) => promptLanguageText(
+              writingLanguage,
+              `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
+              `[${i + 1}] (${r.fileName}, relevance ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
+            )).join('\n\n')
+          : promptLanguageText(writingLanguage, '（知识库中无相关内容）', '(no relevant knowledge-base context)')
       } catch {
-        filteredContext = '（知识库检索不可用）'
+        filteredContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
       }
 
       promptBuilder
@@ -292,7 +324,11 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         .withGlobalSummary(chapterTimeline)
         .withCharacterStates(characterState)
         // ---- 缓存失效区（逐章变化）----
-        .withPreviousEnding(previousEnding || '（无前文）')
+        .withPreviousEnding(previousEnding || promptLanguageText(
+          writingLanguage,
+          '（无前文）',
+          '(no previous manuscript)',
+        ))
         .withFilteredContext(filteredContext)
         .withShortSummary('')
     }
@@ -361,6 +397,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             futureBlueprints: futureBlueprintsStr,
             globalGuidance: mergedGuidance,
             writingStyle: novelConfig.writingStyle || '',
+            writingLanguage,
             reasoning: initialOutcome.receipt.capabilities.reasoning === true,
           })
         })
@@ -480,6 +517,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     futureBlueprints: string
     globalGuidance: string
     writingStyle: string
+    writingLanguage: WritingLanguage
     reasoning: boolean
   }): Promise<string> {
     let draft = params.initialDraft
@@ -508,10 +546,17 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const remaining = Math.max(0, params.targetChars - currentChars)
       const visibleTail = sanitizeDraftText(draft).slice(-CONTINUE_PROMPT_MAX_CHARS)
       const recoveryInstruction = recoveryPending
-        ? '上一轮续写达到输出上限且没有增加足够的新正文，已被全部丢弃。\n'
-          + '这是本次任务唯一一次无进展恢复机会：请直接推进下一事件、动作或对话，禁止复述已写末尾。\n\n'
+        ? promptLanguageText(
+            params.writingLanguage,
+            '上一轮续写达到输出上限且没有增加足够的新正文，已被全部丢弃。\n'
+              + '这是本次任务唯一一次无进展恢复机会：请直接推进下一事件、动作或对话，禁止复述已写末尾。\n\n',
+            'The previous continuation reached the output limit without adding enough new prose, so it was discarded in full.\n'
+              + 'This is the only no-progress recovery attempt: advance directly to the next event, action, or line of dialogue without repeating the existing ending.\n\n',
+          )
         : ''
-      const continuationPrompt = `${recoveryInstruction}请无缝续写当前章节正文。
+      const continuationPrompt = promptLanguageText(
+        params.writingLanguage,
+        `${recoveryInstruction}请无缝续写当前章节正文。
 
 【硬性要求】
 - 只输出新增正文，不要复述已写内容。
@@ -534,7 +579,32 @@ ${params.globalGuidance}
 ${params.writingStyle || '（无）'}
 
 【已写正文末尾】
-${visibleTail}`
+${visibleTail}`,
+        `${recoveryInstruction}Continue the current chapter seamlessly.
+
+[Requirements]
+- Output only new manuscript prose; do not repeat existing text.
+- Continue naturally from the existing ending, preserving the same scene logic or making a justified transition.
+- Complete as much as possible of the remaining approximately ${remaining} words; if that is not possible, stop at a natural paragraph boundary.
+- Do not output a title, explanation, summary, Markdown, reasoning, or an interface continuation prompt.
+- Avoid repeating complete sentences, paragraphs, action sequences, or imagery from the existing manuscript.
+- Complete only the current chapter blueprint; do not advance later chapters.
+
+[Current chapter blueprint]
+${JSON.stringify(params.chapterInfo, null, 2)}
+
+[Upcoming chapter blueprints]
+${params.futureBlueprints}
+
+[Project-wide writing guidance]
+${params.globalGuidance}
+
+[Writing style]
+${params.writingStyle || '(none)'}
+
+[End of existing manuscript]
+${visibleTail}`,
+      )
 
       let rawPreview = ''
       let previewActive = true
@@ -629,7 +699,11 @@ ${visibleTail}`
     return parts.join('\n\n---\n\n')
   }
 
-  private async readProjectPrompts(projectPath: string, projectSession: ProjectSessionContext): Promise<string> {
+  private async readProjectPrompts(
+    projectPath: string,
+    projectSession: ProjectSessionContext,
+    writingLanguage: WritingLanguage,
+  ): Promise<string> {
     try {
       const files = await ipc.invokeWithProjectSession(
         projectSession,
@@ -643,33 +717,53 @@ ${visibleTail}`
       for (const f of mdFiles) {
         const result = await ipc.invokeWithProjectSession(projectSession, 'fs:read-file', f.path, projectPath)
         if (result.success && result.content.trim()) {
-          parts.push(`## 项目专属指导（${f.name.replace(/\.md$/, '')}）\n${result.content.trim()}`)
+          parts.push(promptLanguageText(
+            writingLanguage,
+            `## 项目专属指导（${f.name.replace(/\.md$/, '')}）\n${result.content.trim()}`,
+            `## Project-specific guidance (${f.name.replace(/\.md$/, '')})\n${result.content.trim()}`,
+          ))
         }
       }
       return parts.join('\n\n')
     } catch { return '' }
   }
 
-  private async readCharacterStates(projectPath: string, projectSession: ProjectSessionContext): Promise<string> {
+  private async readCharacterStates(
+    projectPath: string,
+    projectSession: ProjectSessionContext,
+    writingLanguage: WritingLanguage,
+  ): Promise<string> {
     try {
       const allChars = await ipc.invokeWithProjectSession(projectSession, 'db:character-get-all', projectPath)
       const states: string[] = []
       for (const card of allChars) {
         if (card.name && card.currentState) {
           const cs = card.currentState
-          states.push(
-            `${card.name}（${card.role || '未知'}）| ` +
-            `境界：${cs.powerLevel || '未知'} | ` +
-            `位置：${cs.location || '未知'} | ` +
-            `身体：${cs.physicalState || '正常'} | ` +
-            `心理：${cs.mentalState || '正常'} | ` +
-            `道具：${cs.keyItems || '无'} | ` +
-            `最近：第${cs.updatedAtChapter || 0}章 ${cs.recentEvents || ''}`
-          )
+          states.push(promptLanguageText(
+            writingLanguage,
+            `${card.name}（${card.role || '未知'}）| `
+              + `境界：${cs.powerLevel || '未知'} | `
+              + `位置：${cs.location || '未知'} | `
+              + `身体：${cs.physicalState || '正常'} | `
+              + `心理：${cs.mentalState || '正常'} | `
+              + `道具：${cs.keyItems || '无'} | `
+              + `最近：第${cs.updatedAtChapter || 0}章 ${cs.recentEvents || ''}`,
+            `${card.name} (${card.role || 'unknown'}) | `
+              + `power: ${cs.powerLevel || 'unknown'} | `
+              + `location: ${cs.location || 'unknown'} | `
+              + `physical: ${cs.physicalState || 'normal'} | `
+              + `mental: ${cs.mentalState || 'normal'} | `
+              + `key items: ${cs.keyItems || 'none'} | `
+              + `recent: chapter ${cs.updatedAtChapter || 0} ${cs.recentEvents || ''}`,
+          ))
         }
       }
-      return states.length > 0 ? `【角色状态档案】\n${states.join('\n')}` : '（暂无角色状态档案）'
-    } catch { return '（角色状态档案读取失败）' }
+      return states.length > 0
+        ? promptLanguageText(writingLanguage, `【角色状态档案】\n${states.join('\n')}`, `[Character state records]\n${states.join('\n')}`)
+        : promptLanguageText(writingLanguage, '（暂无角色状态档案）', '(no character state records)')
+    } catch {
+      return promptLanguageText(writingLanguage, '（角色状态档案读取失败）', '(character state records unavailable)')
+    }
   }
 
   /**
@@ -681,6 +775,7 @@ ${visibleTail}`
     projectPath: string,
     currentChapter: number,
     projectSession: ProjectSessionContext,
+    writingLanguage: WritingLanguage,
   ): Promise<string> {
     const FULL_WINDOW = 5  // 近 N 章完整收录
     const MAX_CHARS = 3000 // 总量上限
@@ -694,10 +789,18 @@ ${visibleTail}`
 
         if (isRecent && bp.notes?.trim()) {
           // 近 N 章：完整收录要点
-          lines.push(`【第${i}章 ${bp.title || ''}】\n${bp.notes.trim()}`)
+          lines.push(promptLanguageText(
+            writingLanguage,
+            `【第${i}章 ${bp.title || ''}】\n${bp.notes.trim()}`,
+            `[Chapter ${i}: ${bp.title || ''}]\n${bp.notes.trim()}`,
+          ))
         } else {
           // 远期章节：仅保留标题行（节省 Token）
-          lines.push(`【第${i}章 ${bp.title || ''}】`)
+          lines.push(promptLanguageText(
+            writingLanguage,
+            `【第${i}章 ${bp.title || ''}】`,
+            `[Chapter ${i}: ${bp.title || ''}]`,
+          ))
         }
       } catch { /* 忽略单章读取失败 */ }
     }
@@ -709,6 +812,6 @@ ${visibleTail}`
       result = result.slice(-MAX_CHARS)
     }
 
-    return result || '（无章节要点）'
+    return result || promptLanguageText(writingLanguage, '（无章节要点）', '(no chapter notes)')
   }
 }

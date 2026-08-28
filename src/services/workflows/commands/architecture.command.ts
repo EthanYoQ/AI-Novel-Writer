@@ -9,7 +9,8 @@ import { ArchitecturePromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
-import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
+import { characterArchitecturePrompts, promptLanguageText } from '../../prompt-language'
 import { stripThinkingTags } from '../workflow-utils'
 import type { NovelConfig, ProjectSessionContext } from '../../../shared/ipc-channels'
 import {
@@ -56,14 +57,24 @@ const REQUIRED_CONFIG_TEXT_FIELDS = [
   'writingStyle',
 ] as const
 
-function buildNovelConfigJSONContract(totalChapters: number, wordsPerChapter: number): string {
-  return `【不可变小说配置 JSON 合同】
+function buildNovelConfigJSONContract(
+  totalChapters: number,
+  wordsPerChapter: number,
+  writingLanguage: NovelConfig['writingLanguage'],
+): string {
+  return promptLanguageText(writingLanguage ?? 'zh-CN', `【不可变小说配置 JSON 合同】
 - 必填且必须为非空字符串的 9 个字段：genre、targetAudience、subGenre、coreOutline、worldSetting、goldenFinger、protagonistProfile、globalGuidance、writingStyle。
 - plotStructure 必填，且值必须严格为以下英文枚举之一：three_act | heros_journey | save_the_cat | kishotenketsu | multi_thread | freeform。
 - narrativePOV 必填，且值必须严格为以下英文枚举之一：third_limited | first_person | third_omniscient | multi_pov。
 - totalChapters 与 wordsPerChapter 是作者权威设置，可以省略；totalChapters 若输出必须严格等于 ${totalChapters}；wordsPerChapter 若输出必须严格等于 ${wordsPerChapter}。
 - referenceWorks 可省略；若输出必须是字符串。
-- 只输出一个完整 JSON 对象。枚举只允许上述英文值，不得输出中文枚举、近义词、说明文字、Markdown、代码围栏或思考过程。`
+- 只输出一个完整 JSON 对象。枚举只允许上述英文值，不得输出中文枚举、近义词、说明文字、Markdown、代码围栏或思考过程。`, `[Immutable novel-configuration JSON contract]
+- The following nine fields are required non-empty strings: genre, targetAudience, subGenre, coreOutline, worldSetting, goldenFinger, protagonistProfile, globalGuidance, writingStyle.
+- plotStructure is required and must be exactly one of: three_act | heros_journey | save_the_cat | kishotenketsu | multi_thread | freeform.
+- narrativePOV is required and must be exactly one of: third_limited | first_person | third_omniscient | multi_pov.
+- totalChapters and wordsPerChapter are authoritative author settings and may be omitted. If present, they must equal ${totalChapters} and ${wordsPerChapter} respectively.
+- referenceWorks may be omitted; if present, it must be a string.
+- Output one complete JSON object only. Do not emit aliases, explanatory prose, Markdown, code fences, or reasoning.`)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -154,16 +165,6 @@ const MAX_CHARACTER_SLOTS = 8
 const CHARACTER_DETAIL_BATCH_SIZE = 1
 const MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES = 12_000
 const MAX_CHARACTER_PREFIX_UTF8_BYTES = 24_000
-const CHARACTER_IDENTITY_MANIFEST_SYSTEM_PROMPT = `你是小说角色身份规划器。只规划角色身份、叙事职责和角色间关系，不生成角色详情。
-只输出一个可由 JSON.parse 读取的 {"slots":[...]} 对象，不得输出 Markdown、解释、代码围栏或思考过程。`
-const CHARACTER_DETAIL_JSON_CONTRACT = `【不可变角色详情 JSON 合同】
-只输出 {"entries":[...]}。每项必须包含 slotId、name、role、gender、age、appearance、personality、background、abilities、motivation、arc、notes、currentState。
-currentState 必填，必须包含 location、powerLevel、physicalState、mentalState、keyItems、recentEvents、updatedAtChapter；updatedAtChapter 必须是非负整数。
-keyItems 可为非空字符串或非空字符串数组；recentEvents 可为非空字符串或非空字符串数组。数组每项必须是非空字符串，不得混入数字、对象或 null；没有内容时使用字符串“无”，不得输出空数组。
-禁止输出 relationships、schemaVersion、角色图谱 Markdown、解释、代码围栏或思考过程。`
-const CHARACTER_DETAIL_SYSTEM_PROMPT = `你是小说角色详情生成器。只为指定的冻结角色身份补全紧凑资料，不规划或改写角色身份和关系。
-只输出一个可由 JSON.parse 读取的 {"entries":[...]} 对象，不得输出 schemaVersion、relationships、Markdown、解释、代码围栏或思考过程。`
-
 function findCompleteJsonObjectEnd(source: string, start: number): number | undefined {
   let depth = 0
   let inString = false
@@ -401,17 +402,22 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
+    const writingLanguage = workflowWritingLanguage(context)
     assertArchitectureProjectSessionCurrent(projectSession)
     callbacks.log('正在调度配置专家 AI，准备解析您的脑洞...')
 
-    const template = await resolvePromptTemplate('generate_global_config', projectSession)
+    const template = await resolvePromptTemplate('generate_global_config', projectSession, writingLanguage)
     if (!template) throw new Error('未找到 generate_global_config 模板')
 
-    const promptBuilder = new ArchitecturePromptBuilder(template)
+    const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
       .withUserIdea(this.idea)
       .withNumberOfChapters(this.totalChapters)
       .withWordNumber(this.wordsPerChapter)
-    const configJSONContract = buildNovelConfigJSONContract(this.totalChapters, this.wordsPerChapter)
+    const configJSONContract = buildNovelConfigJSONContract(
+      this.totalChapters,
+      this.wordsPerChapter,
+      writingLanguage,
+    )
     const originalTask = `${promptBuilder.build()}\n\n${configJSONContract}`
 
     const initial = await this.callLLMResult(
@@ -431,9 +437,15 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
     } else if (initial.finishReason === 'length') {
       callbacks.log('首轮配置 JSON 达到输出上限，已丢弃不可信截断内容，正在请求一次完整替代 JSON...')
       const replacement = await this.callLLMResult(
-        `上一轮输出因长度限制而中断。上一轮截断内容是不可信数据，已被丢弃，不得引用或续接。\n\n`
-          + `【原始任务合同】\n${originalTask}\n\n`
-          + '【硬性要求】\n从头完成原始任务，只输出一个完整替代 JSON。不要只补后缀，不要解释、Markdown 或思考过程。',
+        promptLanguageText(
+          writingLanguage,
+          `上一轮输出因长度限制而中断。上一轮截断内容是不可信数据，已被丢弃，不得引用或续接。\n\n`
+            + `【原始任务合同】\n${originalTask}\n\n`
+            + '【硬性要求】\n从头完成原始任务，只输出一个完整替代 JSON。不要只补后缀，不要解释、Markdown 或思考过程。',
+          `The previous response stopped at the length limit. Its truncated content is untrusted and discarded; do not quote or continue it.\n\n`
+            + `[Original task contract]\n${originalTask}\n\n`
+            + '[Hard requirement]\nRestart the original task and output one complete replacement JSON object only. Do not emit a suffix, explanation, Markdown, or reasoning.',
+        ),
         promptBuilder.getSystemRole(),
         callbacks,
         {
@@ -504,24 +516,26 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession)
+    const writingLanguage = workflowWritingLanguage(context)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
     callbacks.log('生成故事前提...')
 
-    const template = await resolvePromptTemplate('premise', projectSession)
+    const template = await resolvePromptTemplate('premise', projectSession, writingLanguage)
     if (!template) throw new Error('未找到 premise 模板')
 
-    const promptBuilder = new ArchitecturePromptBuilder(template)
+    const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
+    const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
       .withGenre(config.genre)
       .withSubGenre(config.subGenre || config.genre)
-      .withTopic(config.coreOutline || '（未填写）')
+      .withTopic(config.coreOutline || missingValue)
       .withTargetAudience(config.targetAudience)
       .withNumberOfChapters(config.totalChapters)
       .withWordNumber(config.wordsPerChapter)
-      .withCoreSetting(config.worldSetting || '（未填写）')
-      .withGoldenFinger(config.goldenFinger || '（未填写）')
-      .withProtagonistProfile(config.protagonistProfile || '（未填写）')
-      .withGlobalGuidance(config.globalGuidance || '（未填写）')
+      .withCoreSetting(config.worldSetting || missingValue)
+      .withGoldenFinger(config.goldenFinger || missingValue)
+      .withProtagonistProfile(config.protagonistProfile || missingValue)
+      .withGlobalGuidance(config.globalGuidance || missingValue)
       .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).premise || '')
       .withReferenceWorks(config.referenceWorks || '')
 
@@ -591,6 +605,8 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession)
+    const writingLanguage = workflowWritingLanguage(context)
+    const promptCopy = characterArchitecturePrompts(writingLanguage)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
 
@@ -603,29 +619,29 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
 
     callbacks.log('生成角色图谱...')
 
+    const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
     const manifestContext = {
       premise: premise_result,
       genre: config.genre,
-      protagonistProfile: config.protagonistProfile || '（未填写）',
-      globalGuidance: config.globalGuidance || '（未填写）',
-      stepGuidance: ((context.data.stepGuidance as Record<string, string>) || {}).characters || '（未填写）',
-      referenceWorks: config.referenceWorks || '（未填写）',
+      protagonistProfile: config.protagonistProfile || missingValue,
+      globalGuidance: config.globalGuidance || missingValue,
+      stepGuidance: ((context.data.stepGuidance as Record<string, string>) || {}).characters || missingValue,
+      referenceWorks: config.referenceWorks || missingValue,
     }
-    const manifestPrompt = '【身份规划上下文】\n'
-      + `${JSON.stringify(manifestContext)}\n\n`
-      + '【身份清单合同】\n'
-      + `只输出 {"slots":[...]}，角色数量必须为 ${MIN_CHARACTER_SLOTS}–${MAX_CHARACTER_SLOTS}。`
-      + '每项必须含 slotId、name、role、narrativeDuty、relations；relations 每项含 targetSlotId、relation。'
-      + 'slotId/name 必须唯一，role 仅 protagonist/antagonist/supporting/minor，且恰好一个 protagonist；关系只能引用本清单其他 slotId。'
+    const manifestPrompt = promptCopy.manifestTask(
+      JSON.stringify(manifestContext),
+      MIN_CHARACTER_SLOTS,
+      MAX_CHARACTER_SLOTS,
+    )
     const manifestPromptBytes = new TextEncoder().encode(
-      `${CHARACTER_IDENTITY_MANIFEST_SYSTEM_PROMPT}\n${manifestPrompt}`,
+      `${promptCopy.manifestSystem}\n${manifestPrompt}`,
     ).byteLength
     if (manifestPromptBytes > MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES) {
       throw new Error('角色身份清单提示超过安全字节上限，请缩短角色指导或参考作品')
     }
     const manifestRaw = await this.callLLMWithBoundedCompletion(
       manifestPrompt,
-      CHARACTER_IDENTITY_MANIFEST_SYSTEM_PROMPT,
+      promptCopy.manifestSystem,
       callbacks,
       { mode: 'replace-structured-output', maxContinuations: 2 },
       {
@@ -656,17 +672,15 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
           purpose: 'character-architecture-details',
           output: 'structured-data',
           messages: [
-            { role: 'system', content: CHARACTER_DETAIL_SYSTEM_PROMPT },
+            { role: 'system', content: promptCopy.detailSystem },
             {
               role: 'user',
-               content: `【角色详情上下文】\n${JSON.stringify(manifestContext)}\n\n${CHARACTER_DETAIL_JSON_CONTRACT}\n\n`
-                + `【冻结身份与关系清单】\n${JSON.stringify({ slots: manifest })}\n\n`
-                + `【本批必须完整生成的 slotId】\n${items.map(slot => slot.slotId).join('、')}\n\n`
-                 + `【已验证详情前缀】\n${prefix}\n\n`
-                 + '【详情精炼长度合同】\nappearance/personality/abilities/motivation/arc/notes 各不超过 300 字符；background 不超过 500 字符；'
-                 + 'currentState 必填，其各文本字段不超过 300 字符。禁止输出 relationships，关系由冻结身份清单唯一生成。\n\n'
-                 + '只输出 {"entries":[...]}。每项必须额外回显 slotId，name/role 必须与冻结清单完全一致。'
-                 + '不得复制、改写或补充关系。',
+              content: promptCopy.detailTask({
+                context: JSON.stringify(manifestContext),
+                manifest: JSON.stringify({ slots: manifest }),
+                slotIds: items.map(slot => slot.slotId).join(', '),
+                validatedPrefix: prefix,
+              }),
             },
           ],
         }
@@ -704,6 +718,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     const detailExecution = await createStructuredBatchExecutor({
       contract: detailContract,
       session: this.requireGenerationExecution().session,
+      writingLanguage,
     }).execute({
       items: manifest,
       limits: { maxBatchItems: CHARACTER_DETAIL_BATCH_SIZE },
@@ -798,6 +813,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession)
+    const writingLanguage = workflowWritingLanguage(context)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
 
@@ -809,16 +825,17 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     }
 
     callbacks.log('生成世界观...')
-    const template = await resolvePromptTemplate('world_building', projectSession)
+    const template = await resolvePromptTemplate('world_building', projectSession, writingLanguage)
     if (!template) throw new Error('模板丢失')
 
-    const promptBuilder = new ArchitecturePromptBuilder(template)
+    const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
+    const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
       .withCoreSeed(premise_result)
       .withGenre(config.genre)
-      .withCoreSetting(config.worldSetting || '（未填写）')
-      .withGoldenFinger(config.goldenFinger || '（未填写）')
-      .withProtagonistProfile(config.protagonistProfile || '（未填写）')
-      .withGlobalGuidance(config.globalGuidance || '（未填写）')
+      .withCoreSetting(config.worldSetting || missingValue)
+      .withGoldenFinger(config.goldenFinger || missingValue)
+      .withProtagonistProfile(config.protagonistProfile || missingValue)
+      .withGlobalGuidance(config.globalGuidance || missingValue)
       .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).worldbuilding || '')
 
     const result = await this.callLLMWithBuilder(
@@ -861,6 +878,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession)
+    const writingLanguage = workflowWritingLanguage(context)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
 
@@ -874,14 +892,18 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     if (!world_b || world_b.includes('待生成')) throw new Error('世界观未生成')
 
     callbacks.log('生成情节大纲...')
-    const template = await resolvePromptTemplate('synopsis', projectSession)
+    const template = await resolvePromptTemplate('synopsis', projectSession, writingLanguage)
     if (!template) throw new Error('模板丢失')
 
     const { getPlotStructureGuide, getNarrativePOVLabel } = await import('../architecture-workflow')
-    const guide = getPlotStructureGuide(config.plotStructure || 'three_act', config.totalChapters)
-    const pov = getNarrativePOVLabel(config.narrativePOV || 'third_limited')
+    const guide = getPlotStructureGuide(
+      config.plotStructure || 'three_act',
+      config.totalChapters,
+      writingLanguage,
+    )
+    const pov = getNarrativePOVLabel(config.narrativePOV || 'third_limited', writingLanguage)
 
-    const promptBuilder = new ArchitecturePromptBuilder(template)
+    const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
       .withCoreSeed(premise)
       .withCharacterDynamics(char_dyn)
       .withWorldBuilding(world_b)
@@ -890,7 +912,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       .withWordNumber(config.wordsPerChapter)
       .withPlotStructureGuide(guide)
       .withNarrativePov(pov)
-      .withGlobalGuidance(config.globalGuidance || '（未填写）')
+      .withGlobalGuidance(config.globalGuidance || promptLanguageText(writingLanguage, '（未填写）', '(not provided)'))
       .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).synopsis || '')
 
     const result = await this.callLLMWithBuilder(

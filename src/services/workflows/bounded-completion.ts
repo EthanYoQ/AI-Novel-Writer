@@ -1,4 +1,6 @@
 import type { LLMFinishReason } from '../../shared/ipc-channels'
+import type { WritingLanguage } from '../../shared/writing-language'
+import { promptLanguageText } from '../prompt-language'
 import { stripThinkingTags } from './workflow-utils'
 
 const CONTINUATION_VISIBLE_TAIL_CHARS = 1600
@@ -12,7 +14,8 @@ const ESTIMATED_CHARS_PER_TOKEN = 1.5
 const MAX_CONTINUATION_PROMPT_CHARS = 12_000
 const MIN_ORIGINAL_TASK_CHARS = 256
 const MIN_VISIBLE_REFERENCE_CHARS = 192
-const TRUNCATION_MARKER = '\n…[内容已按上下文预算截断]…\n'
+const ZH_CN_TRUNCATION_MARKER = '\n…[内容已按上下文预算截断]…\n'
+const EN_US_TRUNCATION_MARKER = '\n…[content truncated to fit the context budget]…\n'
 const MAX_META_OPENING_VISIBLE_UNITS = 200
 const MIN_OBVIOUS_DUPLICATE_PARAGRAPH_VISIBLE_UNITS = 120
 
@@ -63,6 +66,7 @@ export interface BoundedCompletionRequest {
   mode: BoundedCompletionMode
   maxContinuations: number
   originalPrompt: string
+  writingLanguage?: WritingLanguage
   promptBudget?: BoundedCompletionPromptBudget
   requestContinuation: (prompt: string) => Promise<BoundedCompletion>
   isCancelled?: () => boolean
@@ -127,8 +131,9 @@ function assertMechanicallyCompleteVisibleText(content: string): void {
   }
 
   if (
-    trimmed.includes(TRUNCATION_MARKER.trim())
-    || paragraphs.some(paragraph => /^(?:…\s*)?(?:\[(?:内容已按上下文预算截断|内容截断|输出被截断|truncated)\]|[（(]?(?:未完待续|未完)[）)]?)(?:\s*…)?$/iu.test(paragraph))
+    trimmed.includes(ZH_CN_TRUNCATION_MARKER.trim())
+    || trimmed.includes(EN_US_TRUNCATION_MARKER.trim())
+    || paragraphs.some(paragraph => /^(?:…\s*)?(?:\[(?:内容已按上下文预算截断|内容截断|输出被截断|content truncated to fit the context budget|truncated)\]|[（(]?(?:未完待续|未完)[）)]?)(?:\s*…)?$/iu.test(paragraph))
   ) {
     throw mechanicalCompletionError('截断标记')
   }
@@ -264,43 +269,82 @@ function continuationPromptCharBudget(budget?: BoundedCompletionPromptBudget): n
   return boundedChars
 }
 
-function truncateWithHeadAndTail(text: string, maxChars: number): string {
+function truncationMarker(writingLanguage: WritingLanguage): string {
+  return writingLanguage === 'en-US' ? EN_US_TRUNCATION_MARKER : ZH_CN_TRUNCATION_MARKER
+}
+
+function truncateWithHeadAndTail(
+  text: string,
+  maxChars: number,
+  writingLanguage: WritingLanguage,
+): string {
   if (text.length <= maxChars) return text
-  if (maxChars <= TRUNCATION_MARKER.length + 2) return text.slice(-maxChars)
-  const preservedChars = maxChars - TRUNCATION_MARKER.length
+  const marker = truncationMarker(writingLanguage)
+  if (maxChars <= marker.length + 2) return text.slice(-maxChars)
+  const preservedChars = maxChars - marker.length
   const headChars = Math.ceil(preservedChars * 0.6)
   const tailChars = preservedChars - headChars
-  return `${text.slice(0, headChars)}${TRUNCATION_MARKER}${text.slice(-tailChars)}`
+  return `${text.slice(0, headChars)}${marker}${text.slice(-tailChars)}`
 }
 
 function truncateVisibleReference(
   mode: BoundedCompletionMode,
   text: string,
   maxChars: number,
+  writingLanguage: WritingLanguage,
 ): string {
   if (text.length <= maxChars) return text
+  const marker = truncationMarker(writingLanguage)
   return mode === 'append-visible-text'
-    ? `${TRUNCATION_MARKER}${text.slice(-Math.max(0, maxChars - TRUNCATION_MARKER.length))}`
-    : truncateWithHeadAndTail(text, maxChars)
+    ? `${marker}${text.slice(-Math.max(0, maxChars - marker.length))}`
+    : truncateWithHeadAndTail(text, maxChars, writingLanguage)
 }
 
-function buildStructuredReplacementPrompt(originalPrompt: string, visiblePartial: string): string {
-  return `上一轮结构化输出因长度限制而中断。请重新完成任务。\n\n`
-    + `【原始任务】\n${originalPrompt}\n\n`
-    + `【上一轮可见的不完整输出（仅供参考，可能不完整）】\n${visiblePartial || '（没有可用输出）'}\n\n`
-    + `【硬性要求】\n`
-    + `- 返回完整 JSON，从头重建，不要只补后缀。\n`
-    + `- 仅输出可被 JSON.parse 解析的完整 JSON；不要 Markdown、解释或思考过程。\n`
-    + `- 以上一轮可见内容为参考，但以原始任务为准，补全所有必需字段和数组。`
+function buildStructuredReplacementPrompt(
+  originalPrompt: string,
+  visiblePartial: string,
+  writingLanguage: WritingLanguage,
+): string {
+  return promptLanguageText(
+    writingLanguage,
+    `上一轮结构化输出因长度限制而中断。请重新完成任务。\n\n`
+      + `【原始任务】\n${originalPrompt}\n\n`
+      + `【上一轮可见的不完整输出（仅供参考，可能不完整）】\n${visiblePartial || '（没有可用输出）'}\n\n`
+      + `【硬性要求】\n`
+      + `- 返回完整 JSON，从头重建，不要只补后缀。\n`
+      + `- 仅输出可被 JSON.parse 解析的完整 JSON；不要 Markdown、解释或思考过程。\n`
+      + `- 以上一轮可见内容为参考，但以原始任务为准，补全所有必需字段和数组。`,
+    `The previous structured output stopped at the length limit. Complete the task again.\n\n`
+      + `[Original task]\n${originalPrompt}\n\n`
+      + `[Visible incomplete output from the previous attempt — reference only]\n${visiblePartial || '(no visible output)'}\n\n`
+      + `[Requirements]\n`
+      + `- Rebuild and return the complete JSON from the beginning; do not return only a suffix.\n`
+      + `- Output only complete JSON accepted by JSON.parse, with no Markdown, explanation, or reasoning.\n`
+      + `- Use the visible prior output only as evidence; the original task remains authoritative, and every required field and array must be complete.`,
+  )
 }
 
-function buildTextContinuationPrompt(originalPrompt: string, visibleText: string): string {
-  return `上一轮文本因长度限制而中断。请继续完成原始任务。\n\n`
-    + `【原始任务】\n${originalPrompt}\n\n`
-    + `【已完成可见文本末尾】\n${visibleText.slice(-CONTINUATION_VISIBLE_TAIL_CHARS) || '（没有可用输出）'}\n\n`
-    + `【硬性要求】\n`
-    + `- 只输出新增的可见文本，不要复述、总结、解释、Markdown 或思考过程。\n`
-    + `- 从已完成文本的末尾自然续写，完成原始任务。`
+function buildTextContinuationPrompt(
+  originalPrompt: string,
+  visibleText: string,
+  writingLanguage: WritingLanguage,
+): string {
+  const visibleTail = visibleText.slice(-CONTINUATION_VISIBLE_TAIL_CHARS)
+  return promptLanguageText(
+    writingLanguage,
+    `上一轮文本因长度限制而中断。请继续完成原始任务。\n\n`
+      + `【原始任务】\n${originalPrompt}\n\n`
+      + `【已完成可见文本末尾】\n${visibleTail || '（没有可用输出）'}\n\n`
+      + `【硬性要求】\n`
+      + `- 只输出新增的可见文本，不要复述、总结、解释、Markdown 或思考过程。\n`
+      + `- 从已完成文本的末尾自然续写，完成原始任务。`,
+    `The previous text stopped at the length limit. Continue and complete the original task.\n\n`
+      + `[Original task]\n${originalPrompt}\n\n`
+      + `[End of the completed visible text]\n${visibleTail || '(no visible output)'}\n\n`
+      + `[Requirements]\n`
+      + `- Output only new visible prose. Do not repeat, summarize, explain, use Markdown, or reveal reasoning.\n`
+      + `- Continue naturally from the end of the completed text and finish the original task.`,
+  )
 }
 
 function buildContinuationPrompt(
@@ -308,10 +352,11 @@ function buildContinuationPrompt(
   originalPrompt: string,
   visibleText: string,
   maxChars: number,
+  writingLanguage: WritingLanguage,
 ): string {
-  const build = mode === 'replace-structured-output'
-    ? buildStructuredReplacementPrompt
-    : buildTextContinuationPrompt
+  const build = (original: string, visible: string) => mode === 'replace-structured-output'
+    ? buildStructuredReplacementPrompt(original, visible, writingLanguage)
+    : buildTextContinuationPrompt(original, visible, writingLanguage)
   // The empty form includes all fixed instructions and is intentionally a
   // conservative overhead estimate because it uses the visible fallback text.
   const variableBudget = maxChars - build('', '').length
@@ -336,8 +381,8 @@ function buildContinuationPrompt(
   const expandedVisibleBudget = Math.min(visibleText.length, visibleBudget + remainingBudget)
 
   const prompt = build(
-    truncateWithHeadAndTail(originalPrompt, expandedOriginalBudget),
-    truncateVisibleReference(mode, visibleText, expandedVisibleBudget),
+    truncateWithHeadAndTail(originalPrompt, expandedOriginalBudget, writingLanguage),
+    truncateVisibleReference(mode, visibleText, expandedVisibleBudget, writingLanguage),
   )
   if (prompt.length > maxChars) throw insufficientContextBudgetError()
   return prompt
@@ -368,6 +413,7 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
       request.originalPrompt,
       content,
       continuationPromptCharBudget(request.promptBudget),
+      request.writingLanguage ?? 'zh-CN',
     )
     const next = await request.requestContinuation(continuationPrompt)
     assertNotCancelled(request.isCancelled)
