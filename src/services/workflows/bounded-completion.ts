@@ -68,6 +68,7 @@ export interface BoundedCompletionRequest {
   originalPrompt: string
   writingLanguage: WritingLanguage
   promptBudget?: BoundedCompletionPromptBudget
+  preserveCompleteStructuredPrompt?: boolean
   requestContinuation: (prompt: string) => Promise<BoundedCompletion>
   isCancelled?: () => boolean
   redactVisibleText?: (text: string) => string
@@ -408,13 +409,20 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
       throw continuationLimitExceededError(request.maxContinuations)
     }
 
-    const continuationPrompt = buildContinuationPrompt(
-      request.mode,
-      request.originalPrompt,
-      content,
-      continuationPromptCharBudget(request.promptBudget),
-      request.writingLanguage,
-    )
+    const continuationPrompt = request.mode === 'replace-structured-output'
+      && request.preserveCompleteStructuredPrompt
+      ? buildStructuredReplacementPrompt(
+          request.originalPrompt,
+          content,
+          request.writingLanguage,
+        )
+      : buildContinuationPrompt(
+          request.mode,
+          request.originalPrompt,
+          content,
+          continuationPromptCharBudget(request.promptBudget),
+          request.writingLanguage,
+        )
     const next = await request.requestContinuation(continuationPrompt)
     assertNotCancelled(request.isCancelled)
     continuationCount += 1

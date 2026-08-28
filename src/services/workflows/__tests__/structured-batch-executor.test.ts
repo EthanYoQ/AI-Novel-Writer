@@ -1032,53 +1032,89 @@ describe('StructuredBatchExecutor seam', () => {
   it.each([
     ['candidate', false],
     ['contract', true],
-  ] as const)('refuses syntax repair when the complete %s evidence exceeds its UTF-8 byte limit', async (_case, oversizedContract) => {
-    const complete = vi.fn<GenerationSession['complete']>(async () => ({
-      status: 'completed',
-      content: oversizedContract ? '{"blueprints":[' : `{"blueprints":"${'界'.repeat(11_000)}`,
-      finishReason: 'stop',
-      receipt: attemptReceipt(1, 100, 100, 'stop'),
-    }))
-    const contract: StructuredBatchContract<number, Blueprint> = oversizedContract
-      ? {
-          ...blueprintContract,
-          buildTask: ({ items, validatedPrefix }) => ({
-            purpose: 'oversized-contract',
-            output: 'structured-data',
-            messages: [{
-              role: 'user',
-              content: JSON.stringify({ items, validatedPrefix, contract: '界'.repeat(11_000) }),
-            }],
-          }),
-        }
-      : blueprintContract
-    const executor = createStructuredBatchExecutor({ contract, session: { complete } })
-
-    const result = await executor.execute({ items: [1], limits: { maxBatchItems: 5 } })
-
-    expect(result).toMatchObject({
-      ok: false,
-      failure: { code: 'invalid_output', reason: 'malformed_output' },
-      receipt: { calls: 1, requestedTokens: 100 },
+  ] as const)('routes oversized 32,769-byte repair %s evidence through the typed shared preflight', async (
+    oversizedSection,
+    oversizedContract,
+  ) => {
+    const oversizedEvidence = (oversizedContract ? 'c' : '{').repeat(32_769)
+    const physicalRepair = vi.fn<Parameters<typeof createGenerationHarness>[0]['completionPort']['complete']>()
+      .mockResolvedValue({ content: blueprintJson([1]), finishReason: 'stop' })
+    const repairHarness = createGenerationHarness({
+      modelSource: {
+        snapshotDefaultModel: () => ({
+          revision: 'repair-section-limit',
+          model: {
+            id: 'repair-section-limit-model',
+            name: 'Repair section limit model',
+            provider: 'custom',
+            protocol: 'openai',
+            modelName: 'repair-section-limit-model',
+            apiKey: 'test-only',
+            baseUrl: 'https://example.invalid/v1',
+            temperature: 0.7,
+            maxTokens: 100,
+            purposes: ['generation'],
+          },
+        }),
+      },
+      completionPort: { complete: physicalRepair },
+      policy: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 100,
+        maxRequestedOutputTokensPerAttempt: 100,
+        deadlineMs: 60_000,
+      },
+      now: () => 0,
     })
-    expect(result).not.toHaveProperty('items')
-    expect(complete).toHaveBeenCalledTimes(1)
-  })
-
-  it('refuses syntax repair before a second call when compact contract exceeds its UTF-8 byte limit', async () => {
-    const complete = vi.fn<GenerationSession['complete']>(async () => ({
-      status: 'completed', content: '{"blueprints":[', finishReason: 'stop',
-      receipt: attemptReceipt(1, 100, 100, 'stop'),
-    }))
+    const repairSession = repairHarness.openSession()
+    let initial = true
+    const complete = vi.fn<GenerationSession['complete']>(async (task, options) => {
+      if (initial) {
+        initial = false
+        return {
+          status: 'completed',
+          content: oversizedContract ? '{"blueprints":[' : oversizedEvidence,
+          finishReason: 'stop',
+          receipt: attemptReceipt(1, 100, 100, 'stop'),
+        }
+      }
+      return repairSession.complete(task, options)
+    })
     const executor = createStructuredBatchExecutor({
-      contract: { ...blueprintContract, syntaxRepairContract: () => '界'.repeat(11_000) },
+      contract: {
+        ...blueprintContract,
+        ...(oversizedContract ? { syntaxRepairContract: () => oversizedEvidence } : {}),
+      },
       session: { complete },
     })
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => undefined)
 
-    const result = await executor.execute({ items: [1], limits: { maxBatchItems: 1 } })
+    let failure: unknown
+    try {
+      await executor.execute({ items: [1], limits: { maxBatchItems: 1 } })
+    } catch (error) {
+      failure = error
+    }
 
-    expect(result).toMatchObject({ ok: false, failure: { reason: 'malformed_output' }, receipt: { calls: 1 } })
-    expect(complete).toHaveBeenCalledOnce()
+    expect(failure).toMatchObject({
+      name: 'PromptBudgetExceededError',
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: {
+        sections: expect.arrayContaining([
+          { sectionName: `repair-${oversizedSection}`, utf8Bytes: 32_769 },
+        ]),
+      },
+    })
+    expect(physicalRepair).not.toHaveBeenCalled()
+    expect(failure).not.toHaveProperty('receipt')
+
+    const recovered = await repairSession.complete({
+      purpose: 'after-repair-preflight',
+      output: 'visible-text',
+      messages: [{ role: 'user', content: 'recover' }],
+    })
+    expect(recovered.receipt.budget.attempt).toBe(1)
+    diagnostic.mockRestore()
   })
 
   it('allows at most one syntax repair across all batches in one executor run', async () => {

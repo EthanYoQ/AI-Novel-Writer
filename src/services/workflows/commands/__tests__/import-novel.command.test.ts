@@ -733,6 +733,41 @@ describe('InferGlobalSettingsCommand', () => {
     expect(JSON.stringify(repairReport)).not.toContain(malformed)
   })
 
+  it('routes an oversized direct-repair candidate through the typed shared preflight', async () => {
+    const invoke = successfulInferenceIpc()
+    const oversizedCandidate = '{'.repeat(32_769)
+    const generateStream = vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(
+      async (_messages, streamCallbacks) => {
+        streamCallbacks.onDone?.(oversizedCandidate, undefined, 'stop')
+        return 'initial-import-inference'
+      },
+    )
+    useLLMStore.setState({ defaultModelId: 'model-a', generateStream })
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+
+    let failure: unknown
+    try {
+      await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+    } catch (error) {
+      failure = error
+    } finally {
+      diagnostic.mockRestore()
+    }
+
+    expect(failure).toMatchObject({
+      name: 'PromptBudgetExceededError',
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: {
+        sections: expect.arrayContaining([
+          { sectionName: 'repair-candidate', utf8Bytes: 32_769 },
+        ]),
+      },
+    })
+    expect(failure).not.toHaveProperty('receipt')
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:import-global-facts-commit')
+  })
+
   it('does not repair parseable semantic omissions and performs zero writes', async () => {
     const invoke = stubIpcInvoke((channel) => {
       if (channel === 'kb:search') return []

@@ -83,8 +83,18 @@ export function buildStructuredSyntaxRepairTask(
         + MAX_STRUCTURED_REPAIR_CANDIDATE_UTF8_BYTES,
       sections: [
         { sectionName: 'system-instructions', messageIndex: 0, finalText: systemMessage },
-        { sectionName: 'repair-contract', messageIndex: 1, finalText: repairContract },
-        { sectionName: 'repair-candidate', messageIndex: 1, finalText: malformedCandidate },
+        {
+          sectionName: 'repair-contract',
+          messageIndex: 1,
+          finalText: repairContract,
+          limitUtf8Bytes: MAX_STRUCTURED_REPAIR_CONTRACT_UTF8_BYTES,
+        },
+        {
+          sectionName: 'repair-candidate',
+          messageIndex: 1,
+          finalText: malformedCandidate,
+          limitUtf8Bytes: MAX_STRUCTURED_REPAIR_CANDIDATE_UTF8_BYTES,
+        },
       ],
     },
   }

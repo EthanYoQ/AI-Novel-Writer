@@ -7,9 +7,15 @@ import {
   type WorkflowStep,
 } from '../../stores/workflow-store'
 import { useLayoutStore } from '../../stores/layout-store'
-import { useLocaleStore } from '../../stores/locale-store'
 import { useEditorStore } from '../../stores/editor-store'
 import { useProjectStore } from '../../stores/project-store'
+import {
+  projectSessionContextFromProject,
+  sameProjectPathKey,
+  sameProjectSessionContext,
+} from '../../shared/project-session-context'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { PromptBudgetReport } from '../../services/generation/generation-harness'
 import MarkdownContent from '../ui/MarkdownContent'
 import { presentWorkflowFailure } from './ai-output-failure-presentation'
 
@@ -127,7 +133,7 @@ function ActiveRunView({
   activeRuns: WorkflowRun[]
   onSwitchRun: (id: string) => void
 }) {
-  const locale = useLocaleStore(s => s.locale)
+  const locale = run.uiLocale
   const scrollRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const isActive = run.status === 'running' || run.status === 'waiting' || run.status === 'paused' || run.status === 'cancelling'
@@ -237,6 +243,9 @@ function ActiveRunView({
             <WorkflowFailureNotice
               failureCode={run.failureCode ?? currentStep?.failureCode}
               error={run.error || currentStep?.error}
+              promptBudgetReport={run.promptBudgetReport ?? currentStep?.promptBudgetReport}
+              projectPath={run.projectPath}
+              projectSession={run.projectSession}
               isUnpersistedChapterDraft={
                 run.type === 'chapter_creation'
                 && currentStep?.name === '写稿'
@@ -424,23 +433,44 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep }: { s
 function WorkflowFailureNotice({
   failureCode,
   error,
+  promptBudgetReport,
+  projectPath,
+  projectSession,
   isUnpersistedChapterDraft,
   locale,
 }: {
   failureCode?: WorkflowFailureCode
   error?: string
+  promptBudgetReport?: PromptBudgetReport
+  projectPath: string
+  projectSession: ProjectSessionContext | null
   isUnpersistedChapterDraft: boolean
   locale: 'zh-CN' | 'en-US'
 }) {
-  const presentation = presentWorkflowFailure(failureCode, error, locale, isUnpersistedChapterDraft)
+  const currentProject = useProjectStore(s => s.currentProject)
+  const presentation = presentWorkflowFailure(
+    failureCode,
+    error,
+    locale,
+    isUnpersistedChapterDraft,
+    promptBudgetReport,
+  )
+  const matchesCurrentProject = sameProjectPathKey(projectPath, currentProject?.path)
+    && sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(currentProject),
+    )
   const openNovelConfiguration = () => {
     const project = useProjectStore.getState().currentProject
-    if (!project) return
+    if (
+      !sameProjectPathKey(projectPath, project?.path)
+      || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(project))
+    ) return
     useEditorStore.getState().openFile({
       id: 'config',
       name: locale === 'zh-CN' ? '小说配置' : 'Novel configuration',
       type: 'config',
-      projectKey: project.path,
+      projectKey: projectPath,
     })
   }
 
@@ -461,20 +491,31 @@ function WorkflowFailureNotice({
         </p>
         <p className="m-0 mt-0.5 break-words">{presentation.reason}</p>
         {presentation.persistence && <p className="m-0 mt-1">{presentation.persistence}</p>}
+        {presentation.guidance && <p className="m-0 mt-1">{presentation.guidance}</p>}
         {presentation.action === 'open-novel-config' && presentation.actionLabel && (
           <button
             type="button"
             onClick={openNovelConfiguration}
+            disabled={!matchesCurrentProject}
             className="mt-2 inline-flex items-center gap-1.5 rounded px-2 py-1 font-medium transition-colors"
             style={{
               color: 'var(--color-text)',
               backgroundColor: 'var(--color-hover)',
               border: '1px solid var(--color-border)',
+              opacity: matchesCurrentProject ? 1 : 0.55,
+              cursor: matchesCurrentProject ? 'pointer' : 'not-allowed',
             }}
           >
             <SlidersHorizontal size={12} aria-hidden="true" />
             {presentation.actionLabel}
           </button>
+        )}
+        {presentation.action === 'open-novel-config' && !matchesCurrentProject && (
+          <p className="m-0 mt-1" style={{ color: 'var(--color-text-muted)' }}>
+            {locale === 'zh-CN'
+              ? '此结果属于另一项目会话。请切回该项目后再打开小说配置。'
+              : 'This result belongs to another project session. Switch back to that project before opening Novel configuration.'}
+          </p>
         )}
       </div>
     </div>

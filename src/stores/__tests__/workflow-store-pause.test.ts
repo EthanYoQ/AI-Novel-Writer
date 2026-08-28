@@ -295,7 +295,11 @@ describe('workflow pause at a safe step boundary', () => {
     expect(run).toMatchObject({
       status: 'failed',
       failureCode: 'prompt_budget_exhausted',
-      steps: [expect.objectContaining({ failureCode: 'prompt_budget_exhausted' })],
+      promptBudgetReport: failure.report,
+      steps: [expect.objectContaining({
+        failureCode: 'prompt_budget_exhausted',
+        promptBudgetReport: failure.report,
+      })],
     })
     expect(run?.error).toContain('提示词共 13,000 UTF-8 字节')
     expect(run?.error).toContain('全局指导 12,020')

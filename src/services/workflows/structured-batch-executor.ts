@@ -11,10 +11,7 @@ import type { WritingLanguage } from '../../shared/writing-language'
 import {
   buildStructuredSyntaxRepairTask,
   isRepairableDirectJsonSyntaxFailure,
-  MAX_STRUCTURED_REPAIR_CANDIDATE_UTF8_BYTES,
-  MAX_STRUCTURED_REPAIR_CONTRACT_UTF8_BYTES,
   preservesStructuredJsonEvidence,
-  structuredRepairUtf8Bytes,
 } from './structured-syntax-repair'
 
 export type StructuredItemKey = string | number
@@ -281,17 +278,11 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
               message: '结构化语法修复合同构建失败',
             })
           }
-          if (
-            repairUsed
-            || structuredRepairUtf8Bytes(repairContract) > MAX_STRUCTURED_REPAIR_CONTRACT_UTF8_BYTES
-            || structuredRepairUtf8Bytes(candidateContent) > MAX_STRUCTURED_REPAIR_CANDIDATE_UTF8_BYTES
-          ) {
+          if (repairUsed) {
             throw new ExecutionFailure({
               code: 'invalid_output',
               reason: 'malformed_output',
-              message: repairUsed
-                ? '结构化输出无法按合同解码，且本次执行已使用过唯一一次语法修复'
-                : '结构化输出语法修复证据超过安全字节上限，已拒绝不完整证据修复',
+              message: '结构化输出无法按合同解码，且本次执行已使用过唯一一次语法修复',
             })
           }
           repairUsed = true

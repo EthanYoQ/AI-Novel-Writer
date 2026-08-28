@@ -349,6 +349,144 @@ describe('GenerationHarness', () => {
     diagnostic.mockRestore()
   })
 
+  it.each([
+    ['repair-contract', 'c'.repeat(32_769), 'candidate'],
+    ['repair-candidate', 'contract', 'd'.repeat(32_769)],
+  ] as const)('enforces the protected %s byte limit before a provider attempt', async (
+    oversizedSection,
+    repairContract,
+    repairCandidate,
+  ) => {
+    const complete = vi.fn<CompletionPort['complete']>().mockResolvedValue({
+      content: '{"ok":true}',
+      finishReason: 'stop',
+    })
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    const harness = createGenerationHarness({
+      modelSource: {
+        snapshotDefaultModel: () => ({ revision: 'section-limit', model: model() }),
+      },
+      completionPort: { complete },
+      policy: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+    const userMessage = `${repairContract}\n${repairCandidate}`
+
+    let failure: unknown
+    try {
+      await harness.openSession().complete({
+        purpose: 'section-limit-preflight',
+        output: 'structured-data',
+        messages: [{ role: 'user', content: userMessage }],
+        promptBudget: {
+          limitUtf8Bytes: 70_000,
+          sections: [
+            {
+              sectionName: 'repair-contract',
+              messageIndex: 0,
+              finalText: repairContract,
+              limitUtf8Bytes: 32_768,
+            },
+            {
+              sectionName: 'repair-candidate',
+              messageIndex: 0,
+              finalText: repairCandidate,
+              limitUtf8Bytes: 32_768,
+            },
+          ],
+        },
+      })
+    } catch (error) {
+      failure = error
+    } finally {
+      diagnostic.mockRestore()
+    }
+
+    expect(failure).toMatchObject({
+      name: 'PromptBudgetExceededError',
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: {
+        errorCode: 'PROMPT_BUDGET_EXHAUSTED',
+        sections: expect.arrayContaining([
+          { sectionName: oversizedSection, utf8Bytes: 32_769 },
+        ]),
+      },
+    })
+    expect(complete).not.toHaveBeenCalled()
+    expect(failure).not.toHaveProperty('receipt')
+  })
+
+  it('reports a protected byte overflow before the generic context-window failure', async () => {
+    const complete = vi.fn<CompletionPort['complete']>().mockResolvedValue({
+      content: 'recovered',
+      finishReason: 'stop',
+    })
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    const harness = createGenerationHarness({
+      modelSource: {
+        snapshotDefaultModel: () => ({
+          revision: 'small-context',
+          model: model({ maxTokens: 100 }),
+          modelExecutionLeaseId: 'lease-small-context',
+          endpointFingerprint: 'small-context-endpoint',
+          resolvedCapabilities: {
+            contextWindowTokens: 600,
+            maxOutputTokens: 100,
+            reasoning: false,
+            structuredOutput: true,
+            usage: true,
+            source: {
+              contextWindowTokens: 'verified-provider-preset',
+              maxOutputTokens: 'verified-provider-preset',
+              featureFlags: 'verified-provider-preset',
+            },
+          },
+        }),
+      },
+      completionPort: { complete },
+      policy: {
+        maxAttempts: 2,
+        maxRequestedOutputTokens: 200,
+        maxRequestedOutputTokensPerAttempt: 100,
+        deadlineMs: 60_000,
+      },
+    })
+    const session = harness.openSession()
+    const oversized = 'x'.repeat(100)
+
+    await expect(session.complete({
+      purpose: 'double-budget-overflow',
+      output: 'structured-data',
+      messages: [{ role: 'user', content: oversized }],
+      promptBudget: {
+        limitUtf8Bytes: 99,
+        sections: [{ sectionName: 'global-guidance', messageIndex: 0, finalText: oversized }],
+      },
+    })).rejects.toMatchObject({
+      name: 'PromptBudgetExceededError',
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: {
+        totalUtf8Bytes: 100,
+        limitUtf8Bytes: 99,
+        reservedOutputTokens: 100,
+        sections: [{ sectionName: 'global-guidance', utf8Bytes: 100 }],
+      },
+    })
+    expect(complete).not.toHaveBeenCalled()
+
+    const recovered = await session.complete({
+      purpose: 'after-double-overflow',
+      output: 'visible-text',
+      messages: [{ role: 'user', content: 'x' }],
+    })
+    expect(recovered.receipt.budget).toMatchObject({ attempt: 1, cumulativeRequestedOutputTokens: 87 })
+    diagnostic.mockRestore()
+  })
+
   it('sends an in-budget protected author section unchanged and records only its size in the receipt', async () => {
     const complete = vi.fn<CompletionPort['complete']>().mockResolvedValue({
       content: '{"ok":true}',

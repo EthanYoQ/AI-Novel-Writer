@@ -52,24 +52,25 @@ export function formatPromptBudgetFailure(report: PromptBudgetReport, locale: Lo
     return [
       `提示词共 ${formatInteger(report.totalUtf8Bytes, locale)} UTF-8 字节，超过上限 ${formatInteger(report.limitUtf8Bytes, locale)} 字节；输出保留空间为 ${formatInteger(report.reservedOutputTokens, locale)} tokens。`,
       `主要占用：${contributors}。`,
-      `模型：${report.modelId}；结果码：${report.errorCode}。请在小说配置中缩短上述字段后重试。`,
+      `模型：${report.modelId}；结果码：${report.errorCode}。`,
     ].join('')
   }
 
   return [
     `The prompt uses ${formatInteger(report.totalUtf8Bytes, locale)} UTF-8 bytes, exceeding the ${formatInteger(report.limitUtf8Bytes, locale)}-byte limit; ${formatInteger(report.reservedOutputTokens, locale)} tokens are reserved for output. `,
     `Top contributors: ${contributors}. `,
-    `Model: ${report.modelId}; result code: ${report.errorCode}. Shorten those fields in Novel configuration, then try again.`,
+    `Model: ${report.modelId}; result code: ${report.errorCode}.`,
   ].join('')
 }
 
 export function promptBudgetFailureFromError(
   error: unknown,
   locale: Locale,
-): { failureCode: PromptBudgetFailureCode; message: string } | undefined {
+): { failureCode: PromptBudgetFailureCode; message: string; report: PromptBudgetReport } | undefined {
   if (!(error instanceof PromptBudgetExceededError)) return undefined
   return {
     failureCode: PROMPT_BUDGET_FAILURE_CODE,
     message: formatPromptBudgetFailure(error.report, locale),
+    report: error.report,
   }
 }

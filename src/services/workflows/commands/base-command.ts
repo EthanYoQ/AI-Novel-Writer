@@ -208,6 +208,8 @@ export abstract class BaseWorkflowCommand<TResult = string> {
         maxOutputTokens: completion.receipt.budget.requestedOutputTokens,
         systemPromptChars: systemPrompt.length,
       },
+      preserveCompleteStructuredPrompt: continuation.mode === 'replace-structured-output'
+        && options?.promptBudget !== undefined,
       isCancelled: () => context.cancelled,
       redactVisibleText: text => this.stripThinkingTags(text),
       requestContinuation: async continuationPrompt => {
@@ -220,26 +222,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
           continuationPrompt,
           systemPrompt,
           callbacks,
-          options?.promptBudget
-            ? {
-                ...options,
-                promptBudget: {
-                  limitUtf8Bytes: options.promptBudget.limitUtf8Bytes,
-                  sections: [
-                    {
-                      sectionName: 'system-instructions',
-                      messageIndex: 0,
-                      finalText: systemPrompt,
-                    },
-                    {
-                      sectionName: 'continuation-request',
-                      messageIndex: 1,
-                      finalText: continuationPrompt,
-                    },
-                  ],
-                },
-              }
-            : options,
+          options,
           context,
         )
         callbacks.log(text(

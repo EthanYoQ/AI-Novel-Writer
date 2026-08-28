@@ -13,6 +13,7 @@ import {
   promptBudgetFailureFromError,
   type PromptBudgetFailureCode,
 } from '../services/generation/prompt-budget-failure'
+import type { PromptBudgetReport } from '../services/generation/generation-harness'
 import {
   isProjectSessionContext,
   projectSessionContextFromProject,
@@ -51,6 +52,8 @@ export interface WorkflowStep {
   error?: string
   /** Structured failure cause when a bounded model completion stopped early. */
   failureCode?: WorkflowFailureCode
+  /** Safe structured byte attribution for a prompt-budget preflight failure. */
+  promptBudgetReport?: PromptBudgetReport
   startedAt?: string
   completedAt?: string
   logs: string[]
@@ -79,6 +82,8 @@ export interface WorkflowRun {
   error?: string
   /** Structured terminal cause mirrored from the failed current step. */
   failureCode?: WorkflowFailureCode
+  /** Safe structured byte attribution mirrored from the failed current step. */
+  promptBudgetReport?: PromptBudgetReport
   /** 已请求在当前步骤完成后的安全边界暂停 */
   pauseRequested?: boolean
 }
@@ -580,12 +585,14 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           status: 'failed',
           error: errorMsg,
           ...(failureCode ? { failureCode } : {}),
+          ...(promptBudgetFailure ? { promptBudgetReport: promptBudgetFailure.report } : {}),
           completedAt: new Date().toISOString(),
         })
         updateRunById(set, run.id, {
           status: 'failed',
           error: errorMsg,
           ...(failureCode ? { failureCode } : {}),
+          ...(promptBudgetFailure ? { promptBudgetReport: promptBudgetFailure.report } : {}),
         })
         get().addLog('error', uiText(
           context.uiLocale,

@@ -1297,6 +1297,161 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).toContain('db:character-roster-commit')
   })
 
+  it('keeps the complete protected author guidance on a length replacement request', async () => {
+    const promptBudgetDiagnostic = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const authorGuidance = [
+      'AUTHOR_GUIDANCE_BEGIN',
+      'Preserve every relationship, motive, and causal turn. '.repeat(85),
+      'AUTHOR_GUIDANCE_END',
+    ].join('\n')
+    const responses = ['{"slots":[', JSON.stringify(manifestFor(rosterEntries)), ...detailResponses(rosterEntries)]
+    const generateStream = createResponseStream(
+      responses,
+      responses.map((_, index) => index === 0 ? 'length' : 'stop'),
+    )
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const invoke = vi.fn(async (channel: string) => {
+      switch (channel) {
+        case 'prompt:load-global':
+          return []
+        case 'fs:check-exists':
+          return false
+        case 'db:project-core-get':
+          return { premise: 'A sufficiently detailed premise for a protected character-manifest continuation request.' }
+        case 'db:character-roster-read':
+          return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
+        case 'db:character-roster-commit':
+          return {
+            success: true,
+            receipt: {
+              operationId: context.runId,
+              payloadHash: 'payload-hash',
+              revision: 1,
+              idempotent: false,
+              snapshot: readyRoster,
+            },
+          }
+        case 'fs:read-json':
+          return { success: true, data: {} }
+        case 'fs:write-json':
+          return { success: true }
+        default:
+          throw new Error(`Unexpected IPC channel: ${channel}`)
+      }
+    })
+    vi.stubGlobal('window', {
+      velaAPI: {
+        invoke,
+        on: vi.fn(),
+        once: vi.fn(),
+        send: vi.fn(),
+        setZoomLevel: vi.fn(),
+        setZoomFactor: vi.fn(),
+        getZoomLevel: vi.fn(),
+      },
+    })
+    const runContext = {
+      ...context,
+      writingLanguage: 'en-US' as const,
+      uiLocale: 'en-US' as const,
+      data: { stepGuidance: { characters: '' } },
+      cancelled: false,
+    }
+    const command = new GenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: {
+        genre: 'fantasy',
+        totalChapters: 100,
+        wordsPerChapter: 3000,
+        globalGuidance: authorGuidance,
+      } as never,
+    })
+
+    await expect(command.execute({ step: {}, context: runContext, callbacks }))
+      .resolves.toBe(readyRoster.renderedMarkdown)
+
+    expect(generateStream).toHaveBeenCalledTimes(5)
+    const continuationPrompt = generateStream.mock.calls[1]?.[0]
+      .find(message => message.role === 'user')?.content ?? ''
+    expect(continuationPrompt).toContain(JSON.stringify({ globalGuidance: authorGuidance }).slice(1, -1))
+    expect(continuationPrompt).not.toContain('[content truncated to fit the context budget]')
+    expect(promptBudgetDiagnostic.mock.calls[1]?.[1]).toMatchObject({
+      sections: expect.arrayContaining([
+        expect.objectContaining({ sectionName: 'global-guidance' }),
+      ]),
+    })
+    expect(promptBudgetDiagnostic.mock.calls[1]?.[1]).not.toMatchObject({
+      sections: expect.arrayContaining([
+        expect.objectContaining({ sectionName: 'continuation-request' }),
+      ]),
+    })
+    expect(invoke.mock.calls.map(([channel]) => channel)).toContain('db:character-roster-commit')
+  })
+
+  it('fails the protected length replacement before an additional provider call when its complete prompt exceeds the product budget', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const generateStream = createResponseStream(['{"slots":['], ['length'])
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return []
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:project-core-get') {
+        return { premise: 'A sufficiently detailed premise for a protected character-manifest continuation request.' }
+      }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', {
+      velaAPI: {
+        invoke,
+        on: vi.fn(),
+        once: vi.fn(),
+        send: vi.fn(),
+        setZoomLevel: vi.fn(),
+        setZoomFactor: vi.fn(),
+        getZoomLevel: vi.fn(),
+      },
+    })
+    const runContext = {
+      ...context,
+      writingLanguage: 'en-US' as const,
+      uiLocale: 'en-US' as const,
+      data: { stepGuidance: { characters: '' } },
+      cancelled: false,
+    }
+    const command = new GenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: {
+        genre: 'fantasy',
+        totalChapters: 100,
+        wordsPerChapter: 3000,
+        globalGuidance: 'G'.repeat(10_900),
+      } as never,
+    })
+
+    let failure: unknown
+    try {
+      await command.execute({ step: {}, context: runContext, callbacks })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toMatchObject({
+      name: 'PromptBudgetExceededError',
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: {
+        limitUtf8Bytes: 12_000,
+        errorCode: 'PROMPT_BUDGET_EXHAUSTED',
+        sections: expect.arrayContaining([
+          { sectionName: 'global-guidance', utf8Bytes: 10_919 },
+          expect.objectContaining({ sectionName: 'prompt-overhead' }),
+        ]),
+      },
+    })
+    expect(failure).not.toHaveProperty('receipt')
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+  })
+
   it('repairs one syntactically invalid detail batch before committing the complete roster', async () => {
     const details = detailResponses(rosterEntries)
     const malformed = details[0]!.slice(0, -2)

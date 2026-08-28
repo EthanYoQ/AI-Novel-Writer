@@ -37,6 +37,8 @@ export interface PromptBudgetSection {
   messageIndex: number
   /** Exact fragment from the final assembled request; never copied into reports or logs. */
   finalText: string
+  /** Optional independent ceiling for one protected evidence section. */
+  limitUtf8Bytes?: number
 }
 
 export interface PromptBudgetPolicy {
@@ -273,12 +275,14 @@ function createPromptBudgetReport(input: {
   }
 
   const cursors = new Map<number, number>()
-  const sections = input.policy.sections.map((section): PromptBudgetSectionReport => {
+  const sectionEvaluations = input.policy.sections.map((section) => {
     if (
       !/^[a-z0-9][a-z0-9-]{0,63}$/u.test(section.sectionName)
       || !Number.isSafeInteger(section.messageIndex)
       || section.messageIndex < 0
       || !section.finalText
+      || (section.limitUtf8Bytes !== undefined
+        && (!Number.isSafeInteger(section.limitUtf8Bytes) || section.limitUtf8Bytes <= 0))
     ) {
       throw new GenerationHarnessError('INVALID_POLICY', '提示词预算区段定义无效。')
     }
@@ -292,11 +296,15 @@ function createPromptBudgetReport(input: {
       throw new GenerationHarnessError('INVALID_POLICY', '提示词预算区段与最终请求不一致。')
     }
     cursors.set(section.messageIndex, start + section.finalText.length)
-    return Object.freeze({
-      sectionName: section.sectionName,
-      utf8Bytes: utf8Bytes(section.finalText),
-    })
+    return {
+      report: Object.freeze({
+        sectionName: section.sectionName,
+        utf8Bytes: utf8Bytes(section.finalText),
+      }),
+      limitUtf8Bytes: section.limitUtf8Bytes,
+    }
   })
+  const sections: PromptBudgetSectionReport[] = sectionEvaluations.map(section => section.report)
 
   const totalUtf8Bytes = input.messages.reduce(
     (total, message) => total + utf8Bytes(message.content),
@@ -313,12 +321,24 @@ function createPromptBudgetReport(input: {
       utf8Bytes: overheadUtf8Bytes,
     }))
   }
-  const errorCode: PromptBudgetResultCode = totalUtf8Bytes > input.policy.limitUtf8Bytes
+  const exceededSectionLimits = sectionEvaluations.filter(section => (
+    section.limitUtf8Bytes !== undefined
+    && section.report.utf8Bytes > section.limitUtf8Bytes
+  ))
+  const effectiveLimitUtf8Bytes = exceededSectionLimits.length > 0
+    ? Math.min(
+        input.policy.limitUtf8Bytes,
+        ...exceededSectionLimits.map(section => (
+          totalUtf8Bytes - section.report.utf8Bytes + section.limitUtf8Bytes!
+        )),
+      )
+    : input.policy.limitUtf8Bytes
+  const errorCode: PromptBudgetResultCode = totalUtf8Bytes > effectiveLimitUtf8Bytes
     ? 'PROMPT_BUDGET_EXHAUSTED'
     : 'OK'
   return Object.freeze({
     totalUtf8Bytes,
-    limitUtf8Bytes: input.policy.limitUtf8Bytes,
+    limitUtf8Bytes: effectiveLimitUtf8Bytes,
     reservedOutputTokens: input.reservedOutputTokens,
     sections: Object.freeze(sections),
     modelId: input.modelId,
@@ -523,6 +543,23 @@ export function createGenerationHarness(dependencies: {
           }
 
           const estimatedInputTokens = estimateInputTokens(task.messages)
+          const intentOutputTokens = Math.min(
+            capabilities.maxOutputTokens,
+            remainingRequestedTokens,
+            sessionBudget.maxRequestedOutputTokensPerAttempt,
+          )
+          const promptBudgetCandidate = task.promptBudget
+            ? createPromptBudgetReport({
+                messages: task.messages,
+                policy: task.promptBudget,
+                reservedOutputTokens: intentOutputTokens,
+                modelId: frozenIdentity.id,
+              })
+            : undefined
+          if (promptBudgetCandidate?.errorCode === 'PROMPT_BUDGET_EXHAUSTED') {
+            logPromptBudgetReport(promptBudgetCandidate)
+            throw new PromptBudgetExceededError(promptBudgetCandidate)
+          }
           const contextAvailableOutputTokens = capabilities.contextWindowTokens === null
             ? null
             : capabilities.contextWindowTokens - estimatedInputTokens - CONTEXT_SAFETY_RESERVE_TOKENS
@@ -534,24 +571,14 @@ export function createGenerationHarness(dependencies: {
           }
 
           const maxOutputTokens = Math.min(
-            capabilities.maxOutputTokens,
-            remainingRequestedTokens,
-            sessionBudget.maxRequestedOutputTokensPerAttempt,
+            intentOutputTokens,
             contextAvailableOutputTokens ?? Number.POSITIVE_INFINITY,
           )
-          const promptBudget = task.promptBudget
-            ? createPromptBudgetReport({
-                messages: task.messages,
-                policy: task.promptBudget,
-                reservedOutputTokens: maxOutputTokens,
-                modelId: frozenIdentity.id,
-              })
+          const promptBudget = promptBudgetCandidate
+            ? Object.freeze({ ...promptBudgetCandidate, reservedOutputTokens: maxOutputTokens })
             : undefined
           if (promptBudget) {
             logPromptBudgetReport(promptBudget)
-            if (promptBudget.errorCode === 'PROMPT_BUDGET_EXHAUSTED') {
-              throw new PromptBudgetExceededError(promptBudget)
-            }
           }
           const attempt = attempts + 1
           const plan = Object.freeze({

@@ -41,10 +41,7 @@ import type { ImportGlobalFactsReceipt } from '../../../shared/import-global-fac
 import {
   buildStructuredSyntaxRepairTask,
   isRepairableDirectJsonSyntaxFailure,
-  MAX_STRUCTURED_REPAIR_CANDIDATE_UTF8_BYTES,
-  MAX_STRUCTURED_REPAIR_CONTRACT_UTF8_BYTES,
   preservesStructuredJsonEvidence,
-  structuredRepairUtf8Bytes,
 } from '../structured-syntax-repair'
 
 /** 拆分后的章节数据（从 context.data 中传递） */
@@ -561,13 +558,6 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     if (initial.finishReason !== 'stop') throw this.createIncompleteCompletionError(initial.finishReason)
     let rawResult = initial.content
     if (isRepairableDirectJsonSyntaxFailure(rawResult)) {
-      if (
-        structuredRepairUtf8Bytes(inferenceContract) > MAX_STRUCTURED_REPAIR_CONTRACT_UTF8_BYTES
-        || structuredRepairUtf8Bytes(rawResult) > MAX_STRUCTURED_REPAIR_CANDIDATE_UTF8_BYTES
-      ) throw new Error(text(
-        '导入推演 JSON 语法修复证据超过安全字节上限',
-        'The import-inference JSON repair evidence exceeds the safe byte limit.',
-      ))
       callbacks.log(text(
         '导入推演 JSON 存在词法错误，正在执行唯一一次完整替代语法修复...',
         'The import-inference JSON has a syntax error; running the single full-replacement syntax repair...',
