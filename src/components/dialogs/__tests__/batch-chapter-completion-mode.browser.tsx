@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 import type { FileNode, ModelExecutionLeaseReceipt, ModelProfile, ProjectData } from '../../../shared/ipc-channels'
@@ -14,6 +14,9 @@ import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
+import DraftEditor from '../../editor/DraftEditor'
+import BottomPanel from '../../panels/BottomPanel'
+import ProjectTree from '../../panels/sidebar/ProjectTree'
 import BatchChapterCreationDialog from '../BatchChapterCreationDialog'
 
 const PROJECT_PATH = 'C:\\novels\\batch-completion-mode'
@@ -23,6 +26,8 @@ const PROJECT_SESSION = {
   projectPath: PROJECT_PATH,
 }
 const DRAFT_TEXT = `${'雨'.repeat(98)}。终。`
+const FIRST_DRAFT_TAIL = '第一章尾部唯一线索：银色怀表在午夜停摆。'
+const FIRST_DRAFT_TEXT = `${'雨'.repeat(70)}。${FIRST_DRAFT_TAIL}`
 const originalDraftState = useDraftStore.getState()
 const originalEditorState = useEditorStore.getState()
 const originalLayoutState = useLayoutStore.getState()
@@ -46,6 +51,11 @@ let draftRecord: {
   content: string
 } | null
 let postProcessRunCreated: boolean
+let draftCompletionIndex: number
+let draftCompletions: string[]
+let deferDraftCompletion: boolean
+let pendingDraftCompletions: Array<() => void>
+let changeDefaultAfterFirstDraft: boolean
 let postProcessSteps: Array<{
   stepKey: string
   label: string
@@ -96,6 +106,37 @@ function generationModel(): ModelProfile {
     maxTokens: 4096,
     purposes: ['generation'],
   }
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- browser-only integration shell
+function VisibleBatchShell() {
+  const [dialogOpen, setDialogOpen] = useState(true)
+  const activeChapterTab = useEditorStore(state => {
+    const activeTab = state.tabs.find(tab => tab.id === state.activeTabId)
+    return activeTab?.type === 'chapter' ? activeTab : undefined
+  })
+
+  return (
+    <div>
+      <BatchChapterCreationDialog
+        isOpen={dialogOpen}
+        startChapterNumber={1}
+        onClose={() => setDialogOpen(false)}
+      />
+      <div data-testid="project-tree"><ProjectTree /></div>
+      <div data-testid="chapter-editor">
+        {activeChapterTab?.filePath && activeChapterTab.projectKey && (
+          <DraftEditor
+            tabId={activeChapterTab.id}
+            filePath={activeChapterTab.filePath}
+            content={activeChapterTab.content ?? ''}
+            projectKey={activeChapterTab.projectKey}
+          />
+        )}
+      </div>
+      <div data-testid="task-panel"><BottomPanel /></div>
+    </div>
+  )
 }
 
 function blueprint(chapterNumber = 1) {
@@ -176,16 +217,24 @@ function installIpc() {
         ? request.responseFormat?.type === 'json_object'
           ? '{"updates":[],"newCharacters":[]}'
           : '本章收到匿名信并开始调查。'
-        : DRAFT_TEXT
-      queueMicrotask(() => {
+        : draftCompletions[draftCompletionIndex++] ?? DRAFT_TEXT
+      if (changeDefaultAfterFirstDraft && request.purpose === 'chapter-draft' && draftCompletionIndex === 1) {
+        useLLMStore.setState({ defaultModelId: 'changed-default-model' })
+      }
+      const complete = () => {
         emit('llm:stream-chunk', { requestId, chunk: completion })
         emit('llm:stream-done', { requestId, fullText: completion, finishReason: 'stop' })
-      })
+      }
+      if (deferDraftCompletion && request.purpose === 'chapter-draft') {
+        pendingDraftCompletions.push(complete)
+      } else {
+        queueMicrotask(complete)
+      }
       return { requestId, started: true }
     }
     if (channel === 'fs:check-exists') return false
     if (channel === 'fs:list-dir') return args[0] === PROJECT_PATH ? fileTree() : []
-    if (channel === 'db:blueprint-get-all') return [blueprint()]
+    if (channel === 'db:blueprint-get-all') return [blueprint(), blueprint(2)]
     if (channel === 'db:blueprint-get') return blueprint(Number(args[0]))
     if (channel === 'db:character-get-all') {
       return [{ id: 1, name: '沈砺', role: 'protagonist', currentState: null }]
@@ -193,7 +242,11 @@ function installIpc() {
     if (channel === 'db:project-core-get') {
       return { premise: '雨夜来信开启调查。', charactersArch: '', worldbuilding: '', synopsis: '' }
     }
-    if (channel === 'db:draft-get-latest') return draftRecord
+    if (channel === 'db:draft-get-latest') {
+      return draftRecord?.chapterNumber === Number(args[0]) ? draftRecord : null
+    }
+    if (channel === 'db:draft-get-finalized') return null
+    if (channel === 'db:draft-get-full') return draftRecord
     if (channel === 'db:draft-next-version') return 1
     if (channel === 'db:draft-create') {
       const input = args[0] as { chapterNumber: number; version: number; content: string; wordCount: number }
@@ -211,6 +264,10 @@ function installIpc() {
     }
     if (channel === 'db:draft-list') return draftRecord ? [draftRecord] : []
     if (channel === 'db:draft-get-meta') return draftRecord
+    if (channel === 'db:revision-get-pending' || channel === 'db:review-list') return []
+    if (channel === 'chapter:list-incomplete-deletions') {
+      return { success: true, operations: [] }
+    }
     if (channel === 'finalization:commit') {
       if (!draftRecord) throw new Error('Missing generated draft before finalization')
       draftRecord = { ...draftRecord, status: 'finalized' }
@@ -310,6 +367,11 @@ function installIpc() {
 
 beforeEach(() => {
   draftRecord = null
+  draftCompletionIndex = 0
+  draftCompletions = [DRAFT_TEXT]
+  deferDraftCompletion = false
+  pendingDraftCompletions = []
+  changeDefaultAfterFirstDraft = false
   postProcessRunCreated = false
   postProcessSteps = []
   disposeProjectService()
@@ -336,6 +398,7 @@ beforeEach(() => {
     addLog: originalWorkflowState.addLog,
   })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
+  useLayoutStore.setState({ bottomPanelOpen: true, bottomTab: 'tasks' })
   useDraftStore.setState({
     draftsByChapter: {},
     loading: false,
@@ -368,6 +431,139 @@ afterEach(async () => {
 })
 
 describe('batch chapter completion mode browser flow', () => {
+  it.each([
+    {
+      locale: 'zh-CN',
+      mode: 'draft_review',
+      modeLabel: '生成草稿待审',
+      startLabel: '启动批量创作',
+      taskLog: '开始第1章：生成草稿待审。',
+      treeSection: '草稿箱',
+      chapterLabel: '第1章 雨夜来信',
+      editorState: '草稿',
+      reviewLabel: 'AI 审稿',
+    },
+    {
+      locale: 'en-US',
+      mode: 'draft_review',
+      modeLabel: 'Generate review drafts',
+      startLabel: 'Start batch writing',
+      taskLog: 'Starting Chapter 1: generate a review draft.',
+      treeSection: 'Draft box',
+      chapterLabel: 'Chapter 1 雨夜来信',
+      editorState: 'Draft',
+      reviewLabel: 'AI review',
+    },
+    {
+      locale: 'zh-CN',
+      mode: 'auto_finalize',
+      modeLabel: '自动定稿',
+      startLabel: '确认自动定稿并启动',
+      taskLog: '开始第1章：生成草稿、自动定稿并完成后处理。',
+      treeSection: '正文章节',
+      chapterLabel: '第1章 雨夜来信',
+      editorState: '已定稿（只读）',
+      reviewLabel: 'AI 审稿',
+    },
+    {
+      locale: 'en-US',
+      mode: 'auto_finalize',
+      modeLabel: 'Auto-finalize',
+      startLabel: 'Confirm auto-finalize and start',
+      taskLog: 'Starting Chapter 1: generate, auto-finalize, and post-process.',
+      treeSection: 'Manuscript chapters',
+      chapterLabel: 'Chapter 1 雨夜来信',
+      editorState: 'Finalized (read-only)',
+      reviewLabel: 'AI review',
+    },
+  ] as const)(
+    'renders visible $locale $mode tree, editor, review, and task-log state',
+    async ({ locale, mode, modeLabel, startLabel, taskLog, treeSection, chapterLabel, editorState, reviewLabel }) => {
+      useLocaleStore.setState({ locale })
+      deferDraftCompletion = true
+      initProjectService()
+      await act(async () => root?.render(<VisibleBatchShell />))
+
+      await act(async () => page.getByRole('radio', { name: modeLabel }).click())
+      if (mode === 'auto_finalize') {
+        await act(async () => page.getByRole('button', {
+          name: locale === 'en-US' ? 'Review auto-finalize' : '继续确认自动定稿',
+        }).click())
+      }
+      await act(async () => page.getByRole('button', { name: startLabel }).click())
+
+      await vi.waitFor(() => expect(pendingDraftCompletions).toHaveLength(1))
+      await vi.waitFor(() => {
+        expect(container?.querySelector('[data-testid="task-panel"]')?.textContent).toContain(taskLog)
+      })
+
+      await act(async () => pendingDraftCompletions.shift()?.())
+      await vi.waitFor(() => {
+        expect(useWorkflowStore.getState().history[0]?.status).toBe('completed')
+      })
+      await vi.waitFor(() => {
+        const treeText = container?.querySelector('[data-testid="project-tree"]')?.textContent ?? ''
+        const editor = container?.querySelector('[data-testid="chapter-editor"]')
+        expect(treeText).toContain(treeSection)
+        expect(treeText).toContain(chapterLabel)
+        expect(editor?.textContent).toContain(editorState)
+        if (mode === 'draft_review') {
+          expect(editor?.textContent).toContain(reviewLabel)
+        } else {
+          expect(editor?.textContent).not.toContain(reviewLabel)
+        }
+      })
+
+      const prose = page.getByTestId('chapter-editor').getByRole('textbox')
+      if (mode === 'draft_review') {
+        const editedText = locale === 'en-US'
+          ? 'Author-editable batch draft prose.'
+          : '作者可编辑的批量草稿正文。'
+        await act(async () => prose.fill(editedText))
+        await expect.element(prose).toHaveTextContent(editedText)
+      } else {
+        await expect.element(prose).toHaveTextContent(DRAFT_TEXT)
+      }
+    },
+  )
+
+  it('feeds the frozen first review draft tail into the second provider prompt without finalized or post-process work', async () => {
+    draftCompletions = [FIRST_DRAFT_TEXT, DRAFT_TEXT]
+    changeDefaultAfterFirstDraft = true
+    await act(async () => {
+      root?.render(<BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />)
+    })
+
+    await act(async () => page.getByRole('spinbutton', { name: '本次章节数' }).fill('2'))
+    await act(async () => page.getByRole('button', { name: '启动批量创作' }).click())
+
+    await vi.waitFor(() => {
+      expect(useWorkflowStore.getState().history[0]?.status).toBe('completed')
+    })
+
+    const draftRequests = invoke.mock.calls
+      .filter(([channel, , request]) => (
+        channel === 'llm:generate-stream'
+        && (request as { purpose?: string } | undefined)?.purpose === 'chapter-draft'
+      ))
+      .map(([, , request]) => request as { messages: Array<{ content: string }> })
+    expect(draftRequests).toHaveLength(2)
+    expect(draftRequests[1].messages.map(message => message.content).join('\n')).toContain(FIRST_DRAFT_TAIL)
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'llm:begin-execution-lease'))
+      .toEqual([
+        ['llm:begin-execution-lease', 'grok-browser'],
+        ['llm:begin-execution-lease', 'grok-browser'],
+      ])
+    expect(invoke.mock.calls.some(([channel]) => (
+      channel === 'db:draft-get-finalized'
+      || channel === 'finalization:commit'
+      || channel === 'kb:import-text'
+      || channel === 'db:blueprint-update-notes'
+      || String(channel).startsWith('db:character-roster-')
+      || String(channel).startsWith('db:post-process-')
+    ))).toBe(false)
+  })
+
   it('creates an editable draft in the project tree without finalization side effects', async () => {
     await act(async () => {
       root?.render(<BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />)

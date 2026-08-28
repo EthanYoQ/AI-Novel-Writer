@@ -8,6 +8,7 @@ import {
   type BatchChapterWorkflowParams,
 } from '../batch-chapter-workflow'
 import { useProjectStore } from '../../../stores/project-store'
+import { useLLMStore } from '../../../stores/llm-store'
 import { useWorkflowStore, type WorkflowContext } from '../../../stores/workflow-store'
 
 const doubles = vi.hoisted(() => ({
@@ -29,6 +30,7 @@ vi.mock('../../ipc-client', () => ({
 }))
 
 vi.mock('../commands/generate-draft.command', () => ({
+  previousChapterEnding: (content: string) => content.slice(-1000),
   GenerateDraftCommand: class {
     execute = doubles.generateDraftExecute
   },
@@ -126,6 +128,7 @@ describe('batch chapter workflow limits', () => {
       },
       startChapterNumber: 4,
       chapterCount: 99,
+      generationModelId: 'batch-model',
       completionMode: 'auto_finalize',
     })
 
@@ -138,7 +141,7 @@ describe('batch chapter workflow limits', () => {
 })
 
 describe('batch chapter workflow generation model selection', () => {
-  it('freezes a selected Grok model into the definition and every draft command context', async () => {
+  it('freezes a selected Grok model into the definition and every draft command context when the default changes mid-run', async () => {
     const params = {
       projectPath,
       projectSession: projectSession(),
@@ -153,34 +156,39 @@ describe('batch chapter workflow generation model selection', () => {
     params.generationModelId = 'glm-default-model'
     expect(workflow.generationModelId).toBe('grok-selected-model')
 
+    useLLMStore.setState({ defaultModelId: 'default-before-run' })
+    doubles.generateDraftExecute.mockImplementationOnce(async ({ context }: { context: WorkflowContext }) => {
+      context.data.draftPath = `draft-${context.runId}`
+      useLLMStore.setState({ defaultModelId: 'default-changed-mid-run' })
+      return 'generated draft'
+    })
+
     await useWorkflowStore.getState().startWorkflow(workflow)
 
     expect(doubles.generateDraftExecute).toHaveBeenCalledTimes(2)
     expect(doubles.generateDraftExecute.mock.calls.map(([args]) => (
       (args as { context: WorkflowContext }).context.generationModelId
     ))).toEqual(['grok-selected-model', 'grok-selected-model'])
+    expect(useLLMStore.getState().defaultModelId).toBe('default-changed-mid-run')
     expect(useWorkflowStore.getState().history[0]).toMatchObject({
       generationModelId: 'grok-selected-model',
       status: 'completed',
     })
   })
 
-  it('leaves the generation model unset so the draft command retains its default-model fallback', async () => {
-    const workflow = createBatchChapterWorkflow({
+  it.each([
+    ['zh-CN', '批量创作必须冻结一项可用的生成模型。'],
+    ['en-US', 'Batch writing requires a frozen generation model.'],
+  ] as const)('fails closed for an empty generation model in %s', (locale, expectedError) => {
+    expect(() => createBatchChapterWorkflow({
       projectPath,
       projectSession: projectSession(),
       startChapterNumber: 1,
       chapterCount: 1,
+      generationModelId: '   ',
       completionMode: 'auto_finalize',
-    })
-
-    expect(workflow).not.toHaveProperty('generationModelId')
-    await useWorkflowStore.getState().startWorkflow(workflow)
-
-    expect(doubles.generateDraftExecute).toHaveBeenCalledTimes(1)
-    expect((doubles.generateDraftExecute.mock.calls[0][0] as { context: WorkflowContext })
-      .context.generationModelId).toBeUndefined()
-    expect(useWorkflowStore.getState().history[0]).not.toHaveProperty('generationModelId')
+      locale,
+    })).toThrow(expectedError)
   })
 })
 
@@ -244,6 +252,7 @@ describe('batch chapter workflow completion mode', () => {
       projectSession: projectSession(),
       startChapterNumber: 1,
       chapterCount: 1,
+      generationModelId: 'grok-selected-model',
       completionMode: 'draft_review',
       locale: 'en-US',
     })
@@ -268,6 +277,7 @@ describe('batch chapter workflow completion mode', () => {
       projectSession: projectSession(),
       startChapterNumber: 1,
       chapterCount: 2,
+      generationModelId: 'grok-selected-model',
       completionMode: 'draft_review',
     })
 
@@ -287,6 +297,7 @@ describe('batch chapter workflow completion mode', () => {
       projectSession: projectSession(),
       startChapterNumber: 1,
       chapterCount: 3,
+      generationModelId: 'grok-selected-model',
       completionMode: 'auto_finalize',
       locale: 'en-US',
     })
@@ -330,6 +341,7 @@ describe('batch chapter workflow completion mode', () => {
       projectSession: projectSession(),
       startChapterNumber: 1,
       chapterCount: 2,
+      generationModelId: 'grok-selected-model',
       completionMode: 'draft_review',
       locale: 'en-US',
     })

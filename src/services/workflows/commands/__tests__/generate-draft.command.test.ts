@@ -283,7 +283,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       characters: [],
       wordsTarget: options.wordsTarget,
       userGuidance: options.userGuidance,
-    }, { createRuntime: options.runtime.createRuntime })
+    }, { dependencies: { createRuntime: options.runtime.createRuntime } })
     return { invoke, context, callbacks, command }
   }
 

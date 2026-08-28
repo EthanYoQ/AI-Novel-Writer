@@ -31,6 +31,7 @@ const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MIN_TARGET_COMPLETION_RATIO = 0.82
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const MAX_TARGET_OVERAGE_RATIO = 0.12
+const PREVIOUS_ENDING_MAX_CHARS = 1000
 const CHINESE_CHARACTER_PATTERN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu
 const ENGLISH_WORD_PATTERN = /[A-Za-z]+(?:['’][A-Za-z]+)*/g
 const WHITESPACE_OR_PUNCTUATION_PATTERN = /[\s\p{P}\p{S}]/gu
@@ -99,8 +100,22 @@ export interface GenerateDraftCommandDependencies {
   createRuntime(options: CreateGenerationRuntimeOptions): Promise<GenerationRuntime>
 }
 
+export interface GenerateDraftCommandOptions {
+  /**
+   * Ephemeral ending from the immediately preceding draft in the same batch.
+   * It is prompt-only context and must never be persisted as finalized state.
+   */
+  readonly previousDraftEnding?: string
+  readonly dependencies?: Partial<GenerateDraftCommandDependencies>
+}
+
 const DEFAULT_DEPENDENCIES: GenerateDraftCommandDependencies = {
   createRuntime: options => createGenerationRuntime(options),
+}
+
+/** Use the same bounded previous-ending window for finalized and in-batch prose. */
+export function previousChapterEnding(content: string): string {
+  return content.slice(-PREVIOUS_ENDING_MAX_CHARS)
 }
 
 function observeWorkflowCancellation(context: CommandExecuteParams['context']): {
@@ -191,13 +206,17 @@ function capDraftAtNaturalBoundary(text: string, maxChars: number): string {
 
 export class GenerateDraftCommand extends BaseWorkflowCommand {
   private readonly dependencies: GenerateDraftCommandDependencies
+  private readonly previousDraftEnding: string | undefined
 
   constructor(
     private chapterInfo: ChapterInfo,
-    dependencies: Partial<GenerateDraftCommandDependencies> = {},
+    options: GenerateDraftCommandOptions = {},
   ) {
     super()
-    this.dependencies = { ...DEFAULT_DEPENDENCIES, ...dependencies }
+    this.dependencies = { ...DEFAULT_DEPENDENCIES, ...options.dependencies }
+    this.previousDraftEnding = options.previousDraftEnding
+      ? previousChapterEnding(options.previousDraftEnding)
+      : undefined
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
@@ -283,15 +302,17 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       )
       callbacks.log(`  📋 已加载章节要点时间线（${chapterTimeline.length} 字）`)
 
-      let previousEnding = ''
-      try {
-        const prevNum = this.chapterInfo.chapterNumber - 1
-        const meta = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-finalized', prevNum, expectedProjectPath)
-        if (meta) {
-          const full = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', meta.id, expectedProjectPath)
-          if (full?.content) previousEnding = full.content.slice(-1000)
-        }
-      } catch { /* 忽略 */ }
+      let previousEnding = this.previousDraftEnding ?? ''
+      if (!previousEnding) {
+        try {
+          const prevNum = this.chapterInfo.chapterNumber - 1
+          const meta = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-finalized', prevNum, expectedProjectPath)
+          if (meta) {
+            const full = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', meta.id, expectedProjectPath)
+            if (full?.content) previousEnding = previousChapterEnding(full.content)
+          }
+        } catch { /* 忽略 */ }
+      }
 
       let filteredContext = ''
       try {

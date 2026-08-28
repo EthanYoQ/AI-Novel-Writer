@@ -3,7 +3,7 @@ import { ipc } from '../ipc-client'
 import { guardChapterWriting } from '../workflow-guards'
 import type { ChapterInfo } from './chapter-workflow'
 import type { ChapterBlueprint } from './directory-workflow'
-import { GenerateDraftCommand } from './commands/generate-draft.command'
+import { GenerateDraftCommand, previousChapterEnding } from './commands/generate-draft.command'
 import { FinalizeChapterCommand } from './commands/finalize-chapter.command'
 import type { Locale } from '../../i18n/types'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
@@ -27,13 +27,15 @@ export interface BatchChapterWorkflowParams {
   chapterCount: number
   /** 任务面板中的章节名称跟随应用界面语言 */
   locale?: Locale
-  /** 由批量创作入口选择并冻结；缺失时由草稿命令使用默认生成模型。 */
-  generationModelId?: string
+  /** 由批量创作入口选择并冻结；批量任务禁止回退到运行时默认模型。 */
+  generationModelId: string
   /** 点击开始时冻结；草稿待审与自动定稿在同一批次内不得混用。 */
   completionMode: BatchChapterCompletionMode
 }
 
 export interface BatchChapterWorkflowDefinition extends WorkflowDefinition {
+  /** 批量任务必须携带启动时冻结的非空生成模型。 */
+  generationModelId: string
   /** 随定义冻结的批量完成模式，供启动收据与 UI 验证。 */
   completionMode: BatchChapterCompletionMode
 }
@@ -144,6 +146,7 @@ async function runOneBatchChapter(
   step: WorkflowStep,
   context: WorkflowContext,
   callbacks: StepCallbacks,
+  draftReviewContinuity: Map<number, string>,
 ): Promise<string> {
   const projectSession = requireWorkflowProjectSession(context)
   // 草稿待审模式不会把本批次前一章变成定稿事实；首章仍遵守外部连续性门禁，
@@ -191,10 +194,18 @@ async function runOneBatchChapter(
     ))
   callbacks.setProgress(5)
 
-  const draftContent = await new GenerateDraftCommand(chapterInfo).execute({ step, context, callbacks })
+  const previousDraftEnding = completionMode === 'draft_review'
+    ? draftReviewContinuity.get(chapterNumber - 1)
+    : undefined
+  const draftContent = await new GenerateDraftCommand(chapterInfo, {
+    ...(previousDraftEnding ? { previousDraftEnding } : {}),
+  }).execute({ step, context, callbacks })
   throwIfCancelled(context, uiLocale)
 
   if (completionMode === 'draft_review') {
+    // This prompt-only context exists only inside this workflow definition. It
+    // deliberately bypasses finalized/manuscript/fact projections.
+    draftReviewContinuity.set(chapterNumber, previousChapterEnding(draftContent))
     callbacks.setProgress(100)
     return localeText(
       uiLocale,
@@ -257,14 +268,22 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
   const chapterCount = normalizeBatchChapterCount(params.chapterCount)
   const uiLocale: Locale = params.locale === 'en-US' ? 'en-US' : 'zh-CN'
   const generationModelId = normalizeGenerationModelId(params.generationModelId)
+  if (!generationModelId) {
+    throw new Error(localeText(
+      uiLocale,
+      '批量创作必须冻结一项可用的生成模型。',
+      'Batch writing requires a frozen generation model.',
+    ))
+  }
   const completionMode = normalizeCompletionMode(params.completionMode)
   const endChapterNumber = startChapterNumber + chapterCount - 1
+  const draftReviewContinuity = new Map<number, string>()
 
   return {
     type: 'batch_generate',
     projectPath,
     projectSession: Object.freeze({ ...params.projectSession }),
-    ...(generationModelId ? { generationModelId } : {}),
+    generationModelId,
     completionMode,
     title: completionMode === 'draft_review'
       ? localeText(
@@ -311,6 +330,7 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
           step,
           context,
           callbacks,
+          draftReviewContinuity,
         ),
       }
     }),
