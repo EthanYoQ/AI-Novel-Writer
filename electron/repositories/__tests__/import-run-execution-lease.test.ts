@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ImportRunRepository } from '../import-run-repository'
 import type { ImportRunPrepareRequest } from '../../../src/shared/import-run'
 
@@ -64,13 +64,18 @@ describe('import execution lease', () => {
     const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', base, 60_000)
     ImportRunRepository.requestCancel('leased-run', first.execution)
     expect(ImportRunRepository.completeBatch(
-      'leased-run', 'knowledge', 'cancel-boundary', first.execution,
+      'leased-run', 'knowledge', '1-1', first.execution,
     )).toMatchObject({ cancelApplied: true, run: { status: 'cancelled' } })
 
     const resumed = ImportRunRepository.startOrResume('leased-run', 'renderer-b', base + 1, 60_000)
     expect(resumed.execution.epoch).toBeGreaterThan(first.execution.epoch)
     expect(() => ImportRunRepository.cancelAtBoundary('leased-run', first.execution)).toThrow(/执行租约/)
 
+    getProjectDb()!.prepare(`
+      UPDATE import_runs
+      SET stage = 'refresh', completed_batches_json = '{"refresh":["done"]}'
+      WHERE id = 'leased-run'
+    `).run()
     expect(ImportRunRepository.complete('leased-run', resumed.execution))
       .toMatchObject({ status: 'completed', resumable: false })
     expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-c', base + 2, 60_000))

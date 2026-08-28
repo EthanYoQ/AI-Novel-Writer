@@ -28,6 +28,7 @@ import type {
   ImportRunPrepareFromInspectionRequest,
   ImportRunStage,
 } from '../../src/shared/import-run'
+import { isImportRunDirectCheckpointStage } from '../../src/shared/import-run'
 import { ImportSourceIdentityRepository } from '../repositories/import-source-identity-repository'
 import { importInspectionStore } from '../services/import-inspection-store'
 import { loadApplicationImportSourceSecret } from '../services/import-source-identity-secret'
@@ -307,6 +308,7 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    if (!isImportRunDirectCheckpointStage(stage)) throw new Error('该导入阶段不接受直接 checkpoint')
     return { success: true, ...ImportRunRepository.completeBatch(runId, stage, batchId, execution) }
   })
 

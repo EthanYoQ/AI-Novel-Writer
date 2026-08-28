@@ -10,6 +10,7 @@ export type ImportRunStage =
   | 'completed'
 
 export type ImportRunStatus = 'ready' | 'running' | 'failed' | 'cancelled' | 'completed'
+export type ImportRunDirectCheckpointStage = 'knowledge' | 'refresh'
 export type ImportRunEffectKind =
   | 'project-global-facts'
   | 'project-writing-style'
@@ -17,6 +18,12 @@ export type ImportRunEffectKind =
 
 export type ImportRunEffectReceiptState = 'prepared' | 'committed'
 export const IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION = 1 as const
+export const IMPORT_RUN_KNOWLEDGE_BATCH_SIZE = 10
+export const IMPORT_RUN_BLUEPRINT_BATCH_SIZE = 5
+
+export function isImportRunDirectCheckpointStage(stage: unknown): stage is ImportRunDirectCheckpointStage {
+  return stage === 'knowledge' || stage === 'refresh'
+}
 
 export interface ImportRunExecutionLease {
   owner: string
@@ -45,6 +52,49 @@ export interface ImportRunEffectReceipt {
   updatedAt: string
 }
 
+export interface ImportRunChapterBatchCheckpoint {
+  startChapter: number
+  endChapter: number
+  contentFingerprintPrefixes: string[]
+}
+
+const IMPORT_RUN_CONTENT_FINGERPRINT = /^[a-f0-9]{64}$/u
+const IMPORT_RUN_CHAPTER_BATCH_CHECKPOINT = /^([1-9]\d*)-([1-9]\d*)-([a-f0-9]{8}(?:\.[a-f0-9]{8})*)$/u
+
+/** Canonical identity shared by blueprint batching, durable receipts, and repository checkpoints. */
+export function createImportRunChapterBatchCheckpointId(
+  chapters: readonly Pick<ImportRunChapterInput, 'number' | 'contentFingerprint'>[],
+): string {
+  if (chapters.length === 0) throw new Error('导入章节批次不能为空')
+  for (const [index, chapter] of chapters.entries()) {
+    if (!Number.isSafeInteger(chapter.number) || chapter.number < 1) throw new Error('导入章节批次章号无效')
+    if (!IMPORT_RUN_CONTENT_FINGERPRINT.test(chapter.contentFingerprint)) throw new Error('导入章节批次内容指纹无效')
+    if (index > 0 && chapter.number !== chapters[index - 1]!.number + 1) {
+      throw new Error('导入章节批次必须连续')
+    }
+  }
+  return `${chapters[0]!.number}-${chapters.at(-1)!.number}-${chapters
+    .map(chapter => chapter.contentFingerprint.slice(0, 8))
+    .join('.')}`
+}
+
+export function parseImportRunChapterBatchCheckpointId(
+  checkpointId: string,
+): ImportRunChapterBatchCheckpoint | null {
+  const match = IMPORT_RUN_CHAPTER_BATCH_CHECKPOINT.exec(checkpointId)
+  if (!match) return null
+  const startChapter = Number(match[1])
+  const endChapter = Number(match[2])
+  const contentFingerprintPrefixes = match[3]!.split('.')
+  if (
+    !Number.isSafeInteger(startChapter)
+    || !Number.isSafeInteger(endChapter)
+    || endChapter < startChapter
+    || contentFingerprintPrefixes.length !== endChapter - startChapter + 1
+  ) return null
+  return { startChapter, endChapter, contentFingerprintPrefixes }
+}
+
 export function expectedImportRunEffectKey(
   kind: ImportRunEffectKind,
   stage: ImportRunStage,
@@ -52,7 +102,11 @@ export function expectedImportRunEffectKey(
 ): string | null {
   if (kind === 'project-global-facts' && stage === 'global' && batchId === 'done') return 'global-facts'
   if (kind === 'project-writing-style' && stage === 'style' && batchId === 'done') return 'writing-style'
-  if (kind === 'chapter-blueprint-range' && stage === 'blueprints' && /^\d+-\d+$/u.test(batchId)) {
+  if (
+    kind === 'chapter-blueprint-range'
+    && stage === 'blueprints'
+    && parseImportRunChapterBatchCheckpointId(batchId)
+  ) {
     return `blueprints:${batchId}`
   }
   return null

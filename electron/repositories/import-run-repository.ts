@@ -3,6 +3,9 @@ import { createHash } from 'node:crypto'
 import {
   assertImportRunEffectReceiptMetadata,
   IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+  IMPORT_RUN_BLUEPRINT_BATCH_SIZE,
+  IMPORT_RUN_KNOWLEDGE_BATCH_SIZE,
+  parseImportRunChapterBatchCheckpointId,
 } from '../../src/shared/import-run'
 import type {
   ImportRunChapterInput,
@@ -70,6 +73,11 @@ interface ImportRunChapterRow {
   content_snapshot: string
 }
 
+interface ImportRunCheckpointChapterRow {
+  chapter_number: number
+  content_fingerprint: string
+}
+
 interface ImportRunEffectReceiptRow {
   run_id: string
   schema_version: number
@@ -93,6 +101,18 @@ const INSERT_BATCH_SIZE = 50
 const MAX_DISPLAY_SOURCES = MAX_IMPORT_SOURCE_FILES
 const DEFAULT_EXECUTION_LEASE_MS = 15 * 60_000
 const MAX_EFFECT_RECEIPT_PAYLOAD_BYTES = 16 * 1024 * 1024
+const KNOWLEDGE_BATCH_CHECKPOINT = /^([1-9]\d*)-([1-9]\d*)$/u
+const IMPORT_RUN_STAGE_VALUES = new Set<ImportRunStage>([
+  'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed',
+])
+const NEXT_IMPORT_RUN_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>>> = {
+  knowledge: 'global',
+  global: 'style',
+  style: 'blueprints',
+  blueprints: 'refresh',
+}
+
+type ImportRunCheckpointSource = 'direct' | 'receipt'
 
 function db() {
   const current = getProjectDb()
@@ -182,6 +202,17 @@ function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown):
   ) throw new Error()
 }
 
+function assertEffectPayloadBinding(kind: ImportRunEffectKind, batchId: string, payload: unknown): void {
+  if (kind !== 'chapter-blueprint-range') return
+  const checkpoint = parseImportRunChapterBatchCheckpointId(batchId)
+  if (
+    !checkpoint
+    || !isRecord(payload)
+    || payload.startChapter !== checkpoint.startChapter
+    || payload.endChapter !== checkpoint.endChapter
+  ) throw new Error()
+}
+
 function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown, effectReceipt: unknown): void {
   if (!isRecord(payload) || !isRecord(effectReceipt)) throw new Error()
   if (kind === 'project-writing-style') {
@@ -218,6 +249,7 @@ function rowToEffectReceipt(row: ImportRunEffectReceiptRow, run: ImportRunRow): 
     const canonical = canonicalPayload(payload)
     if (canonical.json !== row.payload_json || canonical.hash !== row.payload_hash) corruptedReceipt()
     assertEffectPayloadSchema(row.kind, payload)
+    assertEffectPayloadBinding(row.kind, row.batch_id, payload)
     const effectReceipt = row.effect_receipt_json ? JSON.parse(row.effect_receipt_json) as unknown : undefined
     if ((row.state === 'prepared' && effectReceipt !== undefined) || (row.state === 'committed' && effectReceipt === undefined)) {
       corruptedReceipt()
@@ -355,12 +387,150 @@ function assertExecution(runId: string, execution: ImportRunExecutionLease, now 
   return row
 }
 
+function completedBatches(row: ImportRunRow): Partial<Record<ImportRunStage, string[]>> {
+  const parsed = parseJson<unknown>(row.completed_batches_json, null)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('导入运行 checkpoint 损坏')
+  }
+  for (const [stage, batches] of Object.entries(parsed)) {
+    if (!IMPORT_RUN_STAGE_VALUES.has(stage as ImportRunStage)) {
+      throw new Error('导入运行 checkpoint 损坏')
+    }
+    if (!Array.isArray(batches) || batches.some(batch => typeof batch !== 'string')) {
+      throw new Error('导入运行 checkpoint 损坏')
+    }
+  }
+  return parsed as Partial<Record<ImportRunStage, string[]>>
+}
+
+function chapterRowsForRange(
+  runId: string,
+  startChapter: number,
+  endChapter: number,
+): ImportRunCheckpointChapterRow[] {
+  return db().prepare(`
+    SELECT chapter_number, content_fingerprint
+    FROM import_run_chapters
+    WHERE run_id = ? AND chapter_number BETWEEN ? AND ?
+    ORDER BY chapter_number ASC
+  `).all(runId, startChapter, endChapter) as ImportRunCheckpointChapterRow[]
+}
+
+function knowledgeCheckpointRange(batchId: string): { startChapter: number; endChapter: number } | null {
+  const match = KNOWLEDGE_BATCH_CHECKPOINT.exec(batchId)
+  if (!match) return null
+  const startChapter = Number(match[1])
+  const endChapter = Number(match[2])
+  if (
+    !Number.isSafeInteger(startChapter)
+    || !Number.isSafeInteger(endChapter)
+    || endChapter < startChapter
+  ) return null
+  return { startChapter, endChapter }
+}
+
+function checkpointRange(
+  stage: 'knowledge' | 'blueprints',
+  batchId: string,
+): { startChapter: number; endChapter: number } {
+  if (stage === 'knowledge') {
+    const parsed = knowledgeCheckpointRange(batchId)
+    if (!parsed) throw new Error('导入批次 ID 无效')
+    return parsed
+  }
+  const parsed = parseImportRunChapterBatchCheckpointId(batchId)
+  if (!parsed) throw new Error('导入批次 ID 无效')
+  return parsed
+}
+
+function checkpointChapterNumbers(row: ImportRunRow, stage: 'knowledge' | 'blueprints', batchId: string): number[] {
+  if (stage === 'knowledge') {
+    const range = knowledgeCheckpointRange(batchId)
+    if (!range) throw new Error('导入批次 ID 无效')
+    const chapters = chapterRowsForRange(row.id, range.startChapter, range.endChapter)
+    if (
+      chapters.length === 0
+      || chapters.length > IMPORT_RUN_KNOWLEDGE_BATCH_SIZE
+      || chapters[0]!.chapter_number !== range.startChapter
+      || chapters.at(-1)!.chapter_number !== range.endChapter
+    ) throw new Error('导入批次 ID 无效')
+    return chapters.map(chapter => chapter.chapter_number)
+  }
+
+  const parsed = parseImportRunChapterBatchCheckpointId(batchId)
+  if (!parsed || parsed.contentFingerprintPrefixes.length > IMPORT_RUN_BLUEPRINT_BATCH_SIZE) {
+    throw new Error('导入批次 ID 无效')
+  }
+  const chapters = chapterRowsForRange(row.id, parsed.startChapter, parsed.endChapter)
+  if (
+    chapters.length !== parsed.contentFingerprintPrefixes.length
+    || chapters.some((chapter, index) => (
+      chapter.chapter_number !== parsed.startChapter + index
+      || !chapter.content_fingerprint.startsWith(parsed.contentFingerprintPrefixes[index]!)
+    ))
+  ) throw new Error('导入批次 ID 无效')
+  return chapters.map(chapter => chapter.chapter_number)
+}
+
+function assertCheckpointCanApply(
+  row: ImportRunRow,
+  stage: ImportRunStage,
+  batchId: string,
+  source: ImportRunCheckpointSource,
+): void {
+  if (row.status !== 'running' || row.stage !== stage) throw new Error('导入批次与当前阶段不匹配')
+  if (stage === 'completed') throw new Error('导入批次 ID 无效')
+  const receiptStage = stage === 'global' || stage === 'style' || stage === 'blueprints'
+  if ((receiptStage && source !== 'receipt') || (!receiptStage && source !== 'direct')) {
+    throw new Error(receiptStage ? '该导入阶段必须通过 receipt 提交' : '该导入阶段不接受 receipt 提交')
+  }
+  if (stage === 'global' || stage === 'style' || stage === 'refresh') {
+    if (batchId !== 'done') throw new Error('导入批次 ID 无效')
+    return
+  }
+
+  checkpointChapterNumbers(row, stage, batchId)
+  const range = checkpointRange(stage, batchId)
+  const existing = completedBatches(row)[stage] ?? []
+  for (const existingBatchId of existing) {
+    if (existingBatchId === batchId) continue
+    const existingRange = checkpointRange(stage, existingBatchId)
+    if (range.startChapter <= existingRange.endChapter && existingRange.startChapter <= range.endChapter) {
+      throw new Error('导入批次与已完成 checkpoint 重叠')
+    }
+  }
+}
+
+function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage): void {
+  const batches = completedBatches(row)[stage] ?? []
+  if (stage === 'global' || stage === 'style' || stage === 'refresh') {
+    if (batches.length !== 1 || batches[0] !== 'done') throw new Error('导入阶段 checkpoint 未完成')
+    return
+  }
+  if (stage !== 'knowledge' && stage !== 'blueprints') throw new Error('导入阶段 checkpoint 未完成')
+
+  const allChapters = chapterRowsForRange(row.id, 1, Number.MAX_SAFE_INTEGER)
+  const covered = new Set<number>()
+  for (const batchId of batches) {
+    for (const chapterNumber of checkpointChapterNumbers(row, stage, batchId)) {
+      if (covered.has(chapterNumber)) throw new Error('导入阶段 checkpoint 重叠')
+      covered.add(chapterNumber)
+    }
+  }
+  if (
+    covered.size !== allChapters.length
+    || allChapters.some(chapter => !covered.has(chapter.chapter_number))
+  ) throw new Error('导入阶段 checkpoint 未完成')
+}
+
 function applyBatchCheckpoint(
   row: ImportRunRow,
   stage: ImportRunStage,
   batchId: string,
+  source: ImportRunCheckpointSource,
 ): { newlyCompleted: boolean; cancelApplied: boolean } {
-  const completed = parseJson<Partial<Record<ImportRunStage, string[]>>>(row.completed_batches_json, {})
+  assertCheckpointCanApply(row, stage, batchId, source)
+  const completed = completedBatches(row)
   const stageBatches = completed[stage] ?? []
   const newlyCompleted = !stageBatches.includes(batchId)
   if (newlyCompleted) completed[stage] = [...stageBatches, batchId]
@@ -616,7 +786,7 @@ export class ImportRunRepository {
     const payload = canonicalPayload(request.payload)
     return db().transaction(() => {
       const run = assertExecution(request.runId, execution, now)
-      if (run.stage !== request.stage) throw new Error('导入 effect receipt 阶段 checkpoint 已过期')
+      assertCheckpointCanApply(run, request.stage, batchId, 'receipt')
       const existing = db().prepare(`
         SELECT * FROM import_run_receipts
         WHERE run_id = ? AND stage = ? AND batch_id = ?
@@ -663,6 +833,7 @@ export class ImportRunRepository {
         WHERE run_id = ? AND stage = ? AND batch_id = ?
       `).get(runId, stage, batchId) as ImportRunEffectReceiptRow | undefined
       if (!row) throw new Error('导入 effect receipt 不存在')
+      assertCheckpointCanApply(run, stage, batchId, 'receipt')
       const validatedReceipt = rowToEffectReceipt(row, run)
       if (row.state === 'committed') {
         return {
@@ -695,7 +866,7 @@ export class ImportRunRepository {
         default:
           throw new Error('导入 effect receipt 类型不受支持')
       }
-      const checkpoint = applyBatchCheckpoint(run, stage, batchId)
+      const checkpoint = applyBatchCheckpoint(run, stage, batchId, 'receipt')
       db().prepare(`
         UPDATE import_run_receipts
         SET state = 'committed', effect_receipt_json = ?, updated_at = datetime('now')
@@ -838,33 +1009,42 @@ export class ImportRunRepository {
     if (!batchId.trim() || batchId.length > 160) throw new Error('导入批次 ID 无效')
     return db().transaction(() => {
       const row = assertExecution(runId, execution)
-      const { newlyCompleted, cancelApplied } = applyBatchCheckpoint(row, stage, batchId)
+      const { newlyCompleted, cancelApplied } = applyBatchCheckpoint(row, stage, batchId, 'direct')
       return { newlyCompleted, cancelApplied, run: this.get(runId)! }
     })()
   }
 
   static advanceStage(runId: string, completedStage: ImportRunStage, nextStage: ImportRunStage, execution: ImportRunExecutionLease): ImportRunSnapshot {
-    const row = assertExecution(runId, execution)
-    if (!row || row.stage !== completedStage) throw new Error('导入阶段 checkpoint 已过期')
-    const completedChapters = completedStage === 'blueprints' ? row.total_chapters : row.completed_chapters
-    db().prepare(`
-      UPDATE import_runs
-      SET stage = ?, completed_chapters = ?, status = 'running', last_error = '',
-          resumable = 1, updated_at = datetime('now')
-      WHERE id = ? AND stage = ?
-    `).run(nextStage, completedChapters, runId, completedStage)
-    return this.get(runId)!
+    return db().transaction(() => {
+      const row = assertExecution(runId, execution)
+      if (row.status !== 'running' || row.stage !== completedStage) {
+        throw new Error('导入阶段与当前阶段不匹配')
+      }
+      if (NEXT_IMPORT_RUN_STAGE[completedStage] !== nextStage) throw new Error('导入下一阶段转换无效')
+      assertStageCheckpointComplete(row, completedStage)
+      const completedChapters = completedStage === 'blueprints' ? row.total_chapters : row.completed_chapters
+      const result = db().prepare(`
+        UPDATE import_runs
+        SET stage = ?, completed_chapters = ?, status = 'running', last_error = '',
+            resumable = 1, updated_at = datetime('now')
+        WHERE id = ? AND stage = ? AND status = 'running'
+      `).run(nextStage, completedChapters, runId, completedStage)
+      if (result.changes !== 1) throw new Error('导入阶段转换已过期')
+      return this.get(runId)!
+    })()
   }
 
   static fail(runId: string, stage: ImportRunStage, error: string, execution: ImportRunExecutionLease): ImportRunSnapshot {
     return db().transaction(() => {
-      assertExecution(runId, execution)
+      const row = assertExecution(runId, execution)
+      if (row.status !== 'running' || row.stage !== stage) throw new Error('导入失败阶段与当前阶段不匹配')
+      if (typeof error !== 'string') throw new Error('导入失败原因无效')
       const result = db().prepare(`
         UPDATE import_runs
-        SET stage = ?, status = 'failed', last_error = ?, resumable = 1,
+        SET status = 'failed', last_error = ?, resumable = 1,
             execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
-            updated_at = datetime('now') WHERE id = ? AND status <> 'completed'
-      `).run(stage, error.slice(0, 2_000), runId)
+            updated_at = datetime('now') WHERE id = ? AND stage = ? AND status = 'running'
+      `).run(error.slice(0, 2_000), runId, stage)
       if (result.changes === 0) throw new Error('导入运行当前不可标记失败')
       return this.get(runId)!
     })()
@@ -872,14 +1052,18 @@ export class ImportRunRepository {
 
   static complete(runId: string, execution: ImportRunExecutionLease): ImportRunSnapshot {
     return db().transaction(() => {
-      assertExecution(runId, execution)
+      const row = assertExecution(runId, execution)
+      if (row.status !== 'running' || row.stage !== 'refresh') {
+        throw new Error('导入运行只能从 refresh 刷新阶段完成')
+      }
+      assertStageCheckpointComplete(row, 'refresh')
       const result = db().prepare(`
         UPDATE import_runs
         SET stage = 'completed', status = 'completed', completed_chapters = total_chapters,
             resumable = 0, cancel_requested = 0, last_error = '',
             execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
             completed_at = datetime('now'), updated_at = datetime('now')
-        WHERE id = ? AND status <> 'completed'
+        WHERE id = ? AND stage = 'refresh' AND status = 'running'
       `).run(runId)
       if (result.changes === 0) throw new Error('导入运行当前不可完成')
       return this.get(runId)!

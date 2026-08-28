@@ -5,7 +5,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ProjectCoreRepository } from '../project-core-repository'
 import { ImportRunRepository } from '../import-run-repository'
 
@@ -42,8 +42,7 @@ afterEach(() => {
 
 function prepareStyleReceipt() {
   const started = ImportRunRepository.startOrResume('receipt-run', 'renderer-a')
-  ImportRunRepository.advanceStage('receipt-run', 'knowledge', 'global', started.execution)
-  ImportRunRepository.advanceStage('receipt-run', 'global', 'style', started.execution)
+  moveRunToStyle()
   ImportRunRepository.prepareEffectReceipt({
     runId: 'receipt-run',
     stage: 'style',
@@ -53,6 +52,14 @@ function prepareStyleReceipt() {
     payload: { writingStyle: 'Frozen generated style' },
   }, started.execution)
   return started.execution
+}
+
+function moveRunToStyle(): void {
+  getProjectDb()!.prepare(`
+    UPDATE import_runs
+    SET stage = 'style', completed_batches_json = '{"knowledge":["1-1"],"global":["done"]}'
+    WHERE id = 'receipt-run'
+  `).run()
 }
 
 function tamperOffline(sql: string): void {
@@ -66,8 +73,7 @@ function tamperOffline(sql: string): void {
 describe('import-run durable effect receipt', () => {
   it('freezes generated output before effect commit and atomically commits effect with checkpoint after reopen', () => {
     let started = ImportRunRepository.startOrResume('receipt-run', 'renderer-a')
-    ImportRunRepository.advanceStage('receipt-run', 'knowledge', 'global', started.execution)
-    ImportRunRepository.advanceStage('receipt-run', 'global', 'style', started.execution)
+    moveRunToStyle()
     const prepared = ImportRunRepository.prepareEffectReceipt({
       runId: 'receipt-run',
       stage: 'style',
@@ -100,8 +106,7 @@ describe('import-run durable effect receipt', () => {
   it('binds a receipt key to one payload and rejects a stale execution lease', () => {
     const base = Date.now()
     const first = ImportRunRepository.startOrResume('receipt-run', 'renderer-a', base, 100)
-    ImportRunRepository.advanceStage('receipt-run', 'knowledge', 'global', first.execution)
-    ImportRunRepository.advanceStage('receipt-run', 'global', 'style', first.execution)
+    moveRunToStyle()
     const request = {
       runId: 'receipt-run',
       stage: 'style' as const,

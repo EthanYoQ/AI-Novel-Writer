@@ -36,6 +36,16 @@ function request(chapters = [chapter(1)], overrides: Partial<ImportRunPrepareReq
   }
 }
 
+function markRunCompleted(runId: string): void {
+  getProjectDb()!.prepare(`
+    UPDATE import_runs
+    SET stage = 'completed', status = 'completed', resumable = 0,
+        execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+        completed_chapters = total_chapters, completed_at = datetime('now')
+    WHERE id = ?
+  `).run(runId)
+}
+
 function installLegacyRun(snapshots: string[], totalChapters: number): void {
   closeProjectDatabase()
   const legacy = new Database(path.join(root, '.vela', 'vela.db'))
@@ -203,6 +213,7 @@ describe('ImportRunRepository', () => {
     ImportRunRepository.prepare(request([chapter(1), chapter(2)]))
     const execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
     ImportRunRepository.completeBatch('import-run-1', 'knowledge', '1-2', execution)
+    ImportRunRepository.advanceStage('import-run-1', 'knowledge', 'global', execution)
     ImportRunRepository.fail('import-run-1', 'global', 'restart fixture', execution)
 
     closeProjectDatabase()
@@ -218,13 +229,12 @@ describe('ImportRunRepository', () => {
 
   it('classifies only completed observable effects as duplicate, new, or conflict', () => {
     ImportRunRepository.prepare(request([chapter(1)]))
-    let execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
-    ImportRunRepository.fail('import-run-1', 'global', 'interrupted', execution)
+    const execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
+    ImportRunRepository.fail('import-run-1', 'knowledge', 'interrupted', execution)
     expect(ImportRunRepository.prepare(request([chapter(1)], { runId: 'failed-reselection' })).classification)
       .toBe('resumable')
 
-    execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution
-    ImportRunRepository.complete('import-run-1', execution)
+    markRunCompleted('import-run-1')
     expect(ImportRunRepository.prepare(request([chapter(1)], { runId: 'duplicate' }))).toMatchObject({
       classification: 'exact-duplicate',
       run: undefined,
@@ -238,8 +248,7 @@ describe('ImportRunRepository', () => {
     })
     expect(ImportRunRepository.listChapterBatch('incremental', { afterChapterNumber: 0, limit: 10 }))
       .toEqual([expect.objectContaining({ number: 2 })])
-    execution = ImportRunRepository.startOrResume('incremental', 'test-runner').execution
-    ImportRunRepository.complete('incremental', execution)
+    markRunCompleted('incremental')
     expect(ImportRunRepository.prepare(request([chapter(1), chapter(2), chapter(3)], { runId: 'second-incremental' })))
       .toMatchObject({ classification: 'new', newChapterNumbers: [3] })
 
@@ -256,7 +265,7 @@ describe('ImportRunRepository', () => {
     ImportRunRepository.requestCancel('import-run-1', execution)
 
     expect(ImportRunRepository.get('import-run-1')).toMatchObject({ status: 'running', cancelRequested: true })
-    expect(ImportRunRepository.completeBatch('import-run-1', 'knowledge', '1', execution)).toMatchObject({
+    expect(ImportRunRepository.completeBatch('import-run-1', 'knowledge', '1-1', execution)).toMatchObject({
       cancelApplied: true,
       run: { status: 'cancelled', resumable: true },
     })
