@@ -217,6 +217,61 @@ describe('chapter lifecycle deletion IPC', () => {
     await expect(searchKnowledgeFTS('参考小说应保留关键字', projectRoot)).resolves.not.toEqual([])
   })
 
+  it('persists a failed manuscript cleanup and removes the file on retry', async () => {
+    registerChapterLifecycleController(new ChapterDeletionService({
+      createOperationId: () => 'manuscript-retry-1',
+      cleaner: {
+        async removeManuscript() {
+          throw new Error('simulated manuscript cleanup outage')
+        },
+        async removeKnowledgeDocument(root, documentId) {
+          if (!await removeDocument(documentId, root)) throw new Error('knowledge cleanup failed')
+        },
+      },
+    }))
+
+    const first = await handlers.get('chapter:delete-finalized')!(
+      {},
+      { draftId, chapterNumber: 1 },
+      projectRoot,
+      projectSession,
+    ) as {
+      success: boolean
+      committed: boolean
+      operation: { operationId: string; status: string; manuscriptStatus: string; manuscriptError: string }
+    }
+
+    expect(first).toMatchObject({
+      success: false,
+      committed: true,
+      operation: {
+        operationId: 'manuscript-retry-1',
+        status: 'failed',
+        manuscriptStatus: 'failed',
+        manuscriptError: 'simulated manuscript cleanup outage',
+      },
+    })
+    expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(true)
+    await expect(searchKnowledgeFTS('目标章节独有关键字', projectRoot)).resolves.toEqual([])
+    await expect(searchKnowledgeFTS('参考小说应保留关键字', projectRoot)).resolves.not.toEqual([])
+
+    registerChapterLifecycleController(new ChapterDeletionService())
+    const retried = await handlers.get('chapter:retry-deletion')!(
+      {},
+      'manuscript-retry-1',
+      projectRoot,
+      projectSession,
+    ) as { success: boolean; committed: boolean; operation: { status: string; attemptCount: number } }
+
+    expect(retried).toMatchObject({
+      success: true,
+      committed: true,
+      operation: { status: 'completed', attemptCount: 2 },
+    })
+    expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(false)
+    await expect(searchKnowledgeFTS('参考小说应保留关键字', projectRoot)).resolves.not.toEqual([])
+  })
+
   it('rejects stale leases and mismatched chapter identities without deleting anything', async () => {
     const handler = handlers.get('chapter:delete-finalized')!
     const staleSession = projectSession
@@ -279,23 +334,62 @@ describe('chapter lifecycle deletion IPC', () => {
     expect(duplicate).toEqual(first)
   })
 
-  it('freezes the uniquely matching legacy knowledge document before deleting old finalized data', async () => {
+  it('rejects a duplicate request when its chapter identity differs from the receipt', async () => {
+    registerChapterLifecycleController(new ChapterDeletionService({
+      createOperationId: () => 'identity-bound-deletion',
+    }))
+    const handler = handlers.get('chapter:delete-finalized')!
+    const first = await handler(
+      {},
+      { draftId, chapterNumber: 1 },
+      projectRoot,
+      projectSession,
+    ) as { success: boolean; operation: { attemptCount: number } }
+
+    expect(first).toMatchObject({ success: true, operation: { attemptCount: 1 } })
+    await expect(handler(
+      {},
+      { draftId, chapterNumber: 2 },
+      projectRoot,
+      projectSession,
+    )).resolves.toMatchObject({
+      success: false,
+      committed: false,
+      error: expect.stringContaining('身份不匹配'),
+    })
+  })
+
+  it('keeps an identical reference document when a legacy finalization lacks reliable provenance', async () => {
     getProjectDb()!.prepare(`
       UPDATE finalization_outbox SET knowledge_document_id = '' WHERE draft_id = ?
     `).run(draftId)
+    await removeDocument('finalized-document', projectRoot)
+    await removeDocument('reference-document', projectRoot)
+    await addChunks(
+      projectRoot,
+      'identical-reference-document',
+      targetFileName,
+      ['目标章节独有关键字'],
+    )
+
     const result = await handlers.get('chapter:delete-finalized')!(
       {},
       { draftId, chapterNumber: 1 },
       projectRoot,
       projectSession,
-    ) as { success: boolean; operation: { knowledgeDocumentId: string } }
+    ) as { success: boolean; committed: boolean; error?: string }
 
     expect(result).toMatchObject({
-      success: true,
-      operation: { knowledgeDocumentId: 'finalized-document' },
+      success: false,
+      committed: false,
+      error: expect.stringContaining('缺少可靠'),
     })
-    await expect(searchKnowledgeFTS('目标章节独有关键字', projectRoot)).resolves.toEqual([])
-    await expect(searchKnowledgeFTS('参考小说应保留关键字', projectRoot)).resolves.not.toEqual([])
+    expect(DraftRepository.getFull(draftId)).not.toBeNull()
+    expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(true)
+    await expect(listDocuments(projectRoot)).resolves.toEqual([
+      expect.objectContaining({ id: 'identical-reference-document', fileName: targetFileName }),
+    ])
+    await expect(searchKnowledgeFTS('目标章节独有关键字', projectRoot)).resolves.not.toEqual([])
   })
 
   it('keeps the chapter fact when legacy knowledge identity is ambiguous', async () => {
@@ -317,7 +411,7 @@ describe('chapter lifecycle deletion IPC', () => {
     )).resolves.toMatchObject({
       success: false,
       committed: false,
-      error: expect.stringContaining('拒绝猜测'),
+      error: expect.stringContaining('缺少可靠'),
     })
     expect(DraftRepository.getFull(draftId)).not.toBeNull()
     expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(true)

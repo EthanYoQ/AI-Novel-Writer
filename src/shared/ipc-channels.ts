@@ -763,10 +763,6 @@ export interface ChapterLifecycleChannels {
     args: [operationId: string, expectedProjectPath: string]
     return: ChapterDeletionResult
   }
-  'chapter:get-deletion': {
-    args: [operationId: string, expectedProjectPath: string]
-    return: { success: boolean; operation?: ChapterDeletionOperation | null; error?: string }
-  }
   'chapter:list-incomplete-deletions': {
     args: [expectedProjectPath: string]
     return: { success: boolean; operations?: ChapterDeletionOperation[]; error?: string }

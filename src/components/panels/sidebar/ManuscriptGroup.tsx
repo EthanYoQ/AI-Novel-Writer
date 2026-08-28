@@ -8,9 +8,6 @@ import type { FileNode, ProjectSessionContext } from '../../../shared/ipc-channe
 import type { ChapterDeletionOperation } from '../../../shared/chapter-deletion'
 import { ipc } from '../../../services/ipc-client'
 import { useProjectStore } from '../../../stores/project-store'
-import { useDraftStore } from '../../../stores/draft-store'
-import { useEditorStore } from '../../../stores/editor-store'
-import { confirm } from '../../ui/Confirm'
 import { toast } from '../../ui/Toast'
 import { globalEventBus } from '../../../shared/event-bus'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -23,6 +20,7 @@ import {
 import { openChapterFile } from './sidebar-file-openers'
 import { showSidebarMenu } from './sidebar-menu'
 import { chapterTitleCache, clearChapterTitleCache } from './manuscript-title-cache'
+import { deleteFinalizedChapter } from './finalized-chapter-deletion'
 
 /**
  * 优先从蓝图 JSON 读取章节标题，fallback 到文件首行
@@ -178,55 +176,25 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
     displayName: string,
     chapterNumber: number | undefined,
   ) => {
-    const projectSession = captureProjectSession(currentProject)
-    if (!projectSession || !isProjectSessionPath(projectSession, projectPath)) return
     const match = filePath.match(/^vela:\/\/manuscript\/(\d+)$/)
     if (!match || chapterNumber === undefined) {
       toast.error(text('当前章节路径不支持直接删除', 'This chapter path cannot be deleted directly.'))
       return
     }
-
-    const ok = await confirm(text(`确认删除正文「${displayName}」？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；蓝图会保留。清理失败时可在正文章节下重试。`, `Delete manuscript “${displayName}”?\nThis removes the finalized fact and cleans its manuscript file, knowledge document, and post-processing projections. The blueprint is preserved, and failed cleanup can be retried below Manuscript chapters.`), {
-      title: text('删除正文', 'Delete manuscript'),
-      confirmText: text('删除', 'Delete'),
-      danger: true,
-    })
-    if (!ok || !isProjectSessionCurrent(projectSession)) return
-
-    const result = await ipc.invokeWithProjectSession(
-      projectSession,
-      'chapter:delete-finalized',
-      { draftId: Number(match[1]), chapterNumber },
+    await deleteFinalizedChapter({
+      project: currentProject,
       projectPath,
-    )
-    if (!isProjectSessionCurrent(projectSession)) return
-    if (!result.committed) {
-      toast.error(text(`删除失败\n\n${result.error ?? '未知错误'}`, `Delete failed\n\n${result.error ?? 'Unknown error'}`))
-      return
-    }
-
-    const editor = useEditorStore.getState()
-    const tab = editor.tabs.find(t =>
-      t.projectKey === projectPath && (t.id === filePath || t.filePath === filePath)
-    )
-    if (tab) editor.closeTab(tab.id)
-    clearChapterTitleCache(filePath)
-    await useDraftStore.getState().loadAllDrafts(projectPath, projectSession)
-    if (!isProjectSessionCurrent(projectSession)) return
-    globalEventBus.emit('REFRESH_RESOURCE', {
-      resources: ['drafts', 'fileTree'],
-      projectPath,
-      projectSession,
+      draftId: Number(match[1]),
+      chapterNumber,
+      displayName,
+      tabFilePath: filePath,
+      surface: 'manuscript',
+      reloadDrafts: 'all',
+      afterCommit: async (frozenProjectSession) => {
+        clearChapterTitleCache(filePath)
+        await loadIncompleteDeletions(frozenProjectSession)
+      },
     })
-    await loadIncompleteDeletions(projectSession)
-    if (result.success) {
-      toast.success(text(`已删除正文「${displayName}」及其派生投影`, `Deleted manuscript “${displayName}” and its derived projections.`))
-    } else {
-      toast.warning(text(
-        `正文已删除，但派生投影仍待清理：${result.error ?? '未知错误'}。请使用“重试清理”。`,
-        `The manuscript fact was deleted, but derived projections still need cleanup: ${result.error ?? 'Unknown error'}. Use “Retry cleanup”.`,
-      ), 8000)
-    }
   }
 
   const retryDeletion = async (operation: ChapterDeletionOperation) => {

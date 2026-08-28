@@ -46,11 +46,6 @@ export interface SearchResult {
   fileName: string
 }
 
-export type ExactContentDocumentResolution =
-  | { status: 'found'; documentId: string }
-  | { status: 'missing' }
-  | { status: 'ambiguous'; documentIds: string[] }
-
 /** 知识库统计 */
 export interface KBStats {
   documentCount: number
@@ -1214,76 +1209,6 @@ export async function listDocuments(projectPath: string): Promise<DocumentInfo[]
   } catch {
     return []
   }
-}
-
-function normalizedIdentityText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim()
-}
-
-function coverageRatio(target: string, chunks: readonly string[]): number {
-  if (!target) return chunks.length === 0 ? 1 : 0
-  const covered = new Uint8Array(target.length)
-  let totalChunkCharacters = 0
-  for (const rawChunk of chunks) {
-    const chunk = normalizedIdentityText(rawChunk)
-    if (!chunk) continue
-    totalChunkCharacters += chunk.length
-    let offset = 0
-    let found = false
-    while (offset <= target.length - chunk.length) {
-      const index = target.indexOf(chunk, offset)
-      if (index < 0) break
-      found = true
-      covered.fill(1, index, index + chunk.length)
-      offset = index + 1
-    }
-    if (!found) return 0
-  }
-  if (totalChunkCharacters < target.length * 0.9) return 0
-  let coveredCharacters = 0
-  for (const value of covered) coveredCharacters += value
-  return coveredCharacters / target.length
-}
-
-/**
- * 旧定稿尚未保存 docId 时，只按精确文件名和正文块覆盖率寻找唯一文档。
- * 找到多个候选时拒绝猜测，调用方必须保留章节事实并报告歧义。
- */
-export async function resolveDocumentIdByExactContent(
-  projectPath: string,
-  fileName: string,
-  content: string,
-): Promise<ExactContentDocumentResolution> {
-  const db = await getConnection(projectPath)
-  if (!(await db.tableNames()).includes(TABLE_NAME)) return { status: 'missing' }
-  const rows = await (await db.openTable(TABLE_NAME)).query().toArray() as Array<{
-    docId: string
-    fileName: string
-    text: string
-    chunkIndex: number
-    totalChunks: number
-  }>
-  const grouped = new Map<string, Array<{ text: string; chunkIndex: number; totalChunks: number }>>()
-  for (const row of rows) {
-    if (row.fileName !== fileName || typeof row.docId !== 'string') continue
-    const chunks = grouped.get(row.docId) ?? []
-    chunks.push({ text: row.text, chunkIndex: row.chunkIndex, totalChunks: row.totalChunks })
-    grouped.set(row.docId, chunks)
-  }
-
-  const target = normalizedIdentityText(content)
-  const matches: string[] = []
-  for (const [documentId, chunks] of grouped) {
-    chunks.sort((left, right) => left.chunkIndex - right.chunkIndex)
-    const expectedCount = chunks[0]?.totalChunks ?? 0
-    if (expectedCount !== chunks.length) continue
-    if (chunks.some((chunk, index) => chunk.chunkIndex !== index || chunk.totalChunks !== expectedCount)) continue
-    if (coverageRatio(target, chunks.map(chunk => chunk.text)) >= 0.9) matches.push(documentId)
-  }
-  matches.sort()
-  if (matches.length === 0) return { status: 'missing' }
-  if (matches.length === 1) return { status: 'found', documentId: matches[0] }
-  return { status: 'ambiguous', documentIds: matches }
 }
 
 export async function getStats(projectPath: string): Promise<KBStats> {

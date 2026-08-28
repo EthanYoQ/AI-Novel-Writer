@@ -57,16 +57,6 @@ export function registerChapterLifecycleController(
     return service.retry(projectRoot, operationId)
   })
 
-  register('chapter:get-deletion', async (
-    _event,
-    operationId: string,
-    expectedProjectPath: string,
-    projectRoot: string,
-  ) => {
-    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
-    return { success: true, operation: service.get(operationId) }
-  })
-
   register('chapter:list-incomplete-deletions', async (
     _event,
     expectedProjectPath: string,

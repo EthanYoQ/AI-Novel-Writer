@@ -60,8 +60,13 @@ export class ChapterDeletionService {
     request: DeleteFinalizedChapterRequest,
   ): Promise<ChapterDeletionResult> {
     const existing = ChapterDeletionRepository.getByDraftId(request.draftId)
-    if (existing) return this.resume(projectRoot, existing.operationId)
-    await this.freezeLegacyKnowledgeDocument(projectRoot, request)
+    if (existing) {
+      if (existing.draftId !== request.draftId || existing.chapterNumber !== request.chapterNumber) {
+        return { success: false, committed: false, error: '章节删除请求与已冻结操作身份不匹配' }
+      }
+      return this.resume(projectRoot, existing.operationId)
+    }
+    this.assertKnowledgeDocumentProvenance(request)
     const frozen = ChapterDeletionRepository.begin({
       operationId: this.createOperationId(),
       draftId: request.draftId,
@@ -70,34 +75,17 @@ export class ChapterDeletionService {
     return this.resume(projectRoot, frozen.operationId)
   }
 
-  private async freezeLegacyKnowledgeDocument(
-    projectRoot: string,
-    request: DeleteFinalizedChapterRequest,
-  ): Promise<void> {
+  private assertKnowledgeDocumentProvenance(request: DeleteFinalizedChapterRequest): void {
     const finalization = FinalizationRepository.getByDraftId(request.draftId)
-    if (!finalization || finalization.knowledgeDocumentId || !finalization.targetFileName) return
-    const resolution = await knowledgeBaseLoader.run((kb) => kb.resolveFinalizedDocumentId(
-      projectRoot,
-      finalization.targetFileName,
-      finalization.contentSnapshot,
-    ))
-    if (resolution && typeof resolution === 'object' && 'errorCode' in resolution) {
-      throw new Error('无法加载知识库以冻结旧定稿文档身份')
-    }
-    if (resolution.status === 'found') {
-      FinalizationRepository.linkKnowledgeDocument(request.draftId, resolution.documentId)
-      return
-    }
-    if (resolution.status === 'ambiguous') {
-      throw new Error(`旧定稿对应多个知识文档，已拒绝猜测：${resolution.documentIds.join('、')}`)
-    }
-
+    if (!finalization || finalization.knowledgeDocumentId) return
     const run = PostProcessRepository.getLatestRun('chapter_finalize', String(request.chapterNumber))
-    const knowledgeWasImported = !!run && PostProcessRepository.getSteps(run.id)
-      .some(step => step.stepKey === 'kb_import' && step.ok)
-    if (knowledgeWasImported) {
-      throw new Error('旧定稿记录显示知识库导入成功，但无法按正文唯一定位文档；章节事实保持不变')
-    }
+    const hasKnowledgeProjection = !run || PostProcessRepository.getSteps(run.id)
+      .some(step => step.stepKey === 'kb_import')
+    if (!hasKnowledgeProjection) return
+    throw new Error(
+      '旧定稿缺少可靠知识文档身份，已保留章节事实和知识库内容；'
+      + '请先人工核对关联知识文档或修复定稿后处理，再重试删除',
+    )
   }
 
   async retry(projectRoot: string, operationId: string): Promise<ChapterDeletionResult> {
@@ -106,10 +94,6 @@ export class ChapterDeletionService {
       return { success: false, committed: false, error: '未找到可重试的章节删除操作' }
     }
     return this.resume(projectRoot, operationId)
-  }
-
-  get(operationId: string): ChapterDeletionOperation | null {
-    return ChapterDeletionRepository.get(operationId)
   }
 
   listIncomplete(): ChapterDeletionOperation[] {
