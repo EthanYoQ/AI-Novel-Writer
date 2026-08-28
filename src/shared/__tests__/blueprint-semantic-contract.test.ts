@@ -156,7 +156,7 @@ describe('blueprint semantic contract', () => {
   })
 
   it('tells generators to copy exact character endpoints and omit unsupported relations', () => {
-    const contract = blueprintSemanticGenerationContract()
+    const contract = blueprintSemanticGenerationContract('zh-CN')
     expect(contract).toContain('from/to 必须逐字复制同一项 characters 中的完整字符串')
     expect(contract).toContain('任一端点不在 characters 时，删除该关系或使用 []')
     expect(contract).toContain('不得发明别名')

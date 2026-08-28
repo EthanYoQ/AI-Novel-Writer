@@ -13,7 +13,11 @@ import type { Locale } from '../../i18n/types'
 export function requireWorkflowProjectSession(context: WorkflowContext): ProjectSessionContext {
   const session = context.projectSession
   if (!session || !sameProjectPathKey(session.projectPath, context.projectPath)) {
-    throw new Error('工作流缺少匹配的冻结项目会话，已拒绝项目数据访问')
+    throw new Error(workflowUiText(
+      context,
+      '工作流缺少匹配的冻结项目会话，已拒绝项目数据访问',
+      'The workflow is missing a matching frozen project session, so project data access was denied.',
+    ))
   }
   return session
 }

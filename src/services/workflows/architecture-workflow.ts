@@ -4,7 +4,6 @@ import { useProjectStore } from '../../stores/project-store'
 import type { NovelConfig } from '../../shared/ipc-channels'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { WritingLanguage } from '../../shared/writing-language'
-import { resolveWritingLanguage } from '../../shared/writing-language'
 import { promptLanguageText } from '../prompt-language'
 import {
   projectSessionContextFromProject,
@@ -180,9 +179,9 @@ export function createConfigGenerationWorkflow(params: ConfigGenerationWorkflowP
 export function getPlotStructureGuide(
   structure: string,
   totalChapters: number,
-  writingLanguage?: WritingLanguage,
+  writingLanguage: WritingLanguage,
 ): string {
-  const language = resolveWritingLanguage(writingLanguage)
+  const language = writingLanguage
   const ch20 = Math.round(totalChapters * 0.2)
   const ch25 = Math.round(totalChapters * 0.25)
   const ch50 = Math.round(totalChapters * 0.5)
@@ -237,8 +236,8 @@ Act III — climax and resolution: chapters ${ch75 + 1}–${totalChapters}.`)
   }
 }
 
-export function getNarrativePOVLabel(pov: string, writingLanguage?: WritingLanguage): string {
-  const language = resolveWritingLanguage(writingLanguage)
+export function getNarrativePOVLabel(pov: string, writingLanguage: WritingLanguage): string {
+  const language = writingLanguage
   const labels: Record<WritingLanguage, Record<string, string>> = {
     'zh-CN': {
     first_person: '第一人称',

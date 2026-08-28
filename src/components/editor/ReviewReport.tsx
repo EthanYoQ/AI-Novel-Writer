@@ -30,6 +30,7 @@ import { useLLMStore } from '../../stores/llm-store'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
 import type { ModelProfile } from '../../shared/ipc-channels'
+import { resolveWritingLanguage, type WritingLanguage } from '../../shared/writing-language'
 import {
   createHumanConfirmedReviewSnapshot,
   hasIncludedReviewItems,
@@ -327,6 +328,11 @@ function ReviewReportSession({
   initialSnapshot,
 }: ReviewReportSessionProps) {
   const text = useLocaleStore(s => s.text)
+  const writingLanguage = useProjectStore(s => resolveWritingLanguage(
+    s.currentProject?.path === projectKey
+      ? s.currentProject.novelConfig.writingLanguage
+      : undefined,
+  ))
   const parsedReport = parseReport(reportText, text('综合检查', 'General review'))
   const [items, setItems] = useState<EditableReviewItem[]>(() => (
     editableItemsFromReview(parsedReport.issues, initialSnapshot)
@@ -956,6 +962,7 @@ function ReviewReportSession({
       {showRevisionDialog && confirmed && (
         <ConfirmedRevisionDialog
           snapshot={confirmed.snapshot}
+          writingLanguage={writingLanguage}
           onClose={() => setShowRevisionDialog(false)}
           onStart={startConfirmedRevision}
         />
@@ -966,6 +973,7 @@ function ReviewReportSession({
 
 interface ConfirmedRevisionDialogProps {
   snapshot: HumanConfirmedReviewSnapshot
+  writingLanguage: WritingLanguage
   onClose: () => void
   onStart: (generationModelId: string) => Promise<string | null>
 }
@@ -974,7 +982,7 @@ interface ConfirmedRevisionDialogProps {
  * Mounted only while open so every revision gets a fresh local snapshot of the
  * global default model. The chooser never writes to the global default.
  */
-function ConfirmedRevisionDialog({ snapshot, onClose, onStart }: ConfirmedRevisionDialogProps) {
+function ConfirmedRevisionDialog({ snapshot, writingLanguage, onClose, onStart }: ConfirmedRevisionDialogProps) {
   const text = useLocaleStore(s => s.text)
   const models = useLLMStore(s => s.models)
   const defaultModelId = useLLMStore(s => s.defaultModelId)
@@ -998,7 +1006,7 @@ function ConfirmedRevisionDialog({ snapshot, onClose, onStart }: ConfirmedRevisi
         'The selected revision model is no longer available. Select a compatible generation model and try again.',
       )
       : null
-  const confirmedBrief = renderHumanConfirmedReviewBrief(snapshot)
+  const confirmedBrief = renderHumanConfirmedReviewBrief(snapshot, writingLanguage)
 
   const start = async () => {
     if (modelSelectionError || !selectedGenerationModelId) {

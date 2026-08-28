@@ -156,7 +156,7 @@ export function hasIncludedReviewWork(snapshot: HumanConfirmedReviewSnapshot): b
  */
 export function renderHumanConfirmedReviewBrief(
   snapshot: HumanConfirmedReviewSnapshot,
-  writingLanguage: WritingLanguage = 'zh-CN',
+  writingLanguage: WritingLanguage,
 ): string {
   const appliedItems = snapshot.items.filter(item => item.decision === 'apply')
   const sections: string[] = []

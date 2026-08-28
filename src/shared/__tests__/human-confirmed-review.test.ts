@@ -95,7 +95,7 @@ describe('human-confirmed review snapshot contract', () => {
     expect(noWork).not.toBeNull()
     expect(hasIncludedReviewItems(noWork!)).toBe(false)
     expect(hasIncludedReviewWork(noWork!)).toBe(false)
-    expect(renderHumanConfirmedReviewBrief(noWork!)).toBe('')
+    expect(renderHumanConfirmedReviewBrief(noWork!, 'zh-CN')).toBe('')
 
     const guidanceOnly = createHumanConfirmedReviewSnapshot({
       ...noWork!,
@@ -126,7 +126,7 @@ describe('human-confirmed review snapshot contract', () => {
         },
       ],
     })
-    const brief = renderHumanConfirmedReviewBrief(selectedWork!)
+    const brief = renderHumanConfirmedReviewBrief(selectedWork!, 'zh-CN')
 
     expect(brief).toContain('角色位置前后矛盾。')
     expect(brief).toContain('他仍在港口。')

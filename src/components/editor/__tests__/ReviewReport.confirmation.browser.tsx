@@ -53,7 +53,7 @@ let invoke: ReturnType<typeof vi.fn>
 let startWorkflow: ReturnType<typeof vi.fn>
 let setDefaultModel: ReturnType<typeof vi.fn>
 
-function project(): ProjectData {
+function project(writingLanguage: 'zh-CN' | 'en-US' = 'zh-CN'): ProjectData {
   return {
     id: PROJECT_SESSION.projectId,
     sessionLease: PROJECT_SESSION.leaseId,
@@ -72,6 +72,7 @@ function project(): ProjectData {
       goldenFinger: '',
       protagonistProfile: '',
       globalGuidance: '',
+      writingLanguage,
     },
     characterStates: '',
     createdAt: '',
@@ -283,6 +284,26 @@ describe('ReviewReport human-confirmed revision flow', () => {
     expect(useLLMStore.getState().defaultModelId).toBe('glm')
     expect(setDefaultModel).not.toHaveBeenCalled()
     expect(container?.textContent).toContain(RAW_AI_REPORT)
+  })
+
+  it('previews the confirmed checklist in the project writing language before starting revision', async () => {
+    installIpc(94)
+    useLocaleStore.setState({ locale: 'en-US' })
+    useProjectStore.setState({ currentProject: project('en-US') })
+    await renderReport()
+    await fillTextarea('#review-author-guidance', 'Preserve the opening suspense.')
+
+    await act(async () => {
+      await page.getByRole('button', { name: 'Confirm review checklist' }).click()
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+    })
+    await act(async () => page.getByRole('button', { name: 'Revise from confirmed checklist' }).click())
+
+    await expect.element(page.getByText('Confirmed guidance sent to revision')).toBeVisible()
+    expect(document.body.textContent).toContain('[Confirmed review items included in this revision]')
+    expect(document.body.textContent).toContain('[Confirmed author guidance]')
+    expect(document.body.textContent).not.toContain('【已确认纳入本次修稿的审稿项】')
+    expect(document.body.textContent).not.toContain('【作者补充修稿指导】')
   })
 
   it('does not open a revision workflow when every item is ignored, even if author guidance is non-empty', async () => {

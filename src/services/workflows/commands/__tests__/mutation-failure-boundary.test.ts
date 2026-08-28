@@ -261,7 +261,12 @@ describe('workflow mutation failure boundaries', () => {
     })
     stubVelaIpc(invoke)
 
-    await expect(savePartialData(PROJECT_PATH, { premise_result: 'premise' }, context().projectSession!))
+    await expect(savePartialData(
+      PROJECT_PATH,
+      { premise_result: 'premise' },
+      context().projectSession!,
+      '保存架构生成检查点',
+    ))
       .rejects.toThrow('checkpoint rejected')
   })
 

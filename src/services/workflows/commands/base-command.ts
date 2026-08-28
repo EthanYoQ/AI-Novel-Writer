@@ -18,7 +18,7 @@ import {
   redactVisibleCompletionText,
   type BoundedCompletionMode,
 } from '../bounded-completion'
-import { workflowWritingLanguage } from '../workflow-project-session'
+import { workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
 
 export interface CommandExecuteParams {
   step: unknown
@@ -188,8 +188,12 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     options: WorkflowLLMOptions | undefined,
     context: WorkflowContext,
   ): Promise<string> {
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
-    callbacks.log(`  有界生成初始响应：finishReason=${completion.finishReason}`)
+    callbacks.log(text(
+      `  有界生成初始响应：finishReason=${completion.finishReason}`,
+      `  Initial bounded response: finishReason=${completion.finishReason}`,
+    ))
     let continuationCount = 0
     return completeBoundedCompletion({
       initial: completion,
@@ -206,7 +210,10 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       redactVisibleText: text => this.stripThinkingTags(text),
       requestContinuation: async continuationPrompt => {
         continuationCount += 1
-        callbacks.log(`  自动续写第 ${continuationCount} 轮请求已发起`)
+        callbacks.log(text(
+          `  自动续写第 ${continuationCount} 轮请求已发起`,
+          `  Automatic continuation request ${continuationCount} started`,
+        ))
         const next = await this.callLLMResult(
           continuationPrompt,
           systemPrompt,
@@ -214,7 +221,10 @@ export abstract class BaseWorkflowCommand<TResult = string> {
           options,
           context,
         )
-        callbacks.log(`  自动续写第 ${continuationCount} 轮响应：finishReason=${next.finishReason}`)
+        callbacks.log(text(
+          `  自动续写第 ${continuationCount} 轮响应：finishReason=${next.finishReason}`,
+          `  Automatic continuation response ${continuationCount}: finishReason=${next.finishReason}`,
+        ))
         return next
       },
     })
@@ -299,7 +309,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   /** 在所有异步边界与落盘前复查取消，避免已取消请求继续污染项目。 */
   protected assertNotCancelled(context?: WorkflowContext): void {
     if (context?.cancelled) {
-      throw new Error('工作流已取消')
+      throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
     }
   }
 

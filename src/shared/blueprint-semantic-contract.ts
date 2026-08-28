@@ -1,6 +1,5 @@
 import { StructuredContractDiagnostic } from './structured-contract-diagnostic'
 import type { WritingLanguage } from './writing-language'
-import { resolveWritingLanguage } from './writing-language'
 
 export interface BlueprintRelationshipFact {
   from: string
@@ -42,8 +41,8 @@ export const BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST = Object.freeze({
   exactChapterCoverage: true,
 } as const)
 
-export function blueprintSemanticGenerationContract(writingLanguage?: WritingLanguage): string {
-  if (resolveWritingLanguage(writingLanguage) === 'en-US') {
+export function blueprintSemanticGenerationContract(writingLanguage: WritingLanguage): string {
+  if (writingLanguage === 'en-US') {
     return `[Immutable blueprint JSON contract]
 Output {"blueprints":[...]} only. Every item must contain all of these fields: ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.requiredFields.join(', ')}.
 chapterNumber must cover every target chapter exactly once, without duplicates or out-of-range values. title, role, purpose, keyEvents, and suspenseHook must be non-empty strings.

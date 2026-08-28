@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createHumanConfirmedReviewSnapshot,
+  parseHumanConfirmedReviewSnapshot,
+  renderHumanConfirmedReviewBrief,
   serializeHumanConfirmedReviewSnapshot,
   type HumanConfirmedReviewSnapshotInput,
 } from '../../../../shared/human-confirmed-review'
@@ -564,6 +566,45 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     await expect(target.execute({ step: {}, context, callbacks: callbacks() }))
       .rejects.toThrow('Review-based revision requires a saved human-confirmed review snapshot')
     expect(createRuntime).not.toHaveBeenCalled()
+  })
+
+  it('sends the same English confirmed-review brief shown by the project-language preview', async () => {
+    const persistedConfirmation = confirmedReviewContent({
+      authorGuidance: 'Preserve the opening suspense.',
+      items: [{
+        category: 'continuity',
+        severity: 'error',
+        description: 'Keep the character at the harbor until departure.',
+        quote: 'She waited beside the harbor light.',
+        decision: 'apply',
+        origin: 'author',
+      }],
+    })
+    const confirmedSnapshot = parseHumanConfirmedReviewSnapshot(persistedConfirmation)
+    if (!confirmedSnapshot) throw new Error('Expected a valid confirmed-review fixture')
+    const previewBrief = renderHumanConfirmedReviewBrief(confirmedSnapshot, 'en-US')
+    const source = 'Original reviewed chapter. '.repeat(100)
+    const revision = 'Corrected reviewed chapter. '.repeat(100)
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: revision, finishReason: 'stop' })
+    stubIpc(successfulRevisionIpc({ reviewContent: persistedConfirmation }))
+
+    await reviewCommand(completeWithLease, source, {
+      confirmedReviewContent: persistedConfirmation,
+    }).execute({
+      step: {},
+      context: { ...workflowContext(), writingLanguage: 'en-US' },
+      callbacks: callbacks(),
+    })
+
+    const prompt = completeWithLease.mock.calls[0]?.[0].messages
+      .map(message => message.content)
+      .join('\n') ?? ''
+    expect(previewBrief).toContain('[Confirmed review items included in this revision]')
+    expect(previewBrief).toContain('[Confirmed author guidance]')
+    expect(prompt).toContain(previewBrief)
+    expect(prompt).not.toContain('【已确认纳入本次修稿的审稿项】')
+    expect(prompt).not.toContain('【作者补充修稿指导】')
   })
 
   it('uses the persisted confirmation row as the only refinement input, records that row on the pending revision, and preserves the draft before merge', async () => {

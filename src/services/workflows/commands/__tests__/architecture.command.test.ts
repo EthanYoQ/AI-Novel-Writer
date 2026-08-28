@@ -364,7 +364,13 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         novelConfig,
       } as never,
     })
-    const runContext = { ...context, writingLanguage: 'en-US' as const, data: {} }
+    const runContext = {
+      ...context,
+      writingLanguage: 'en-US' as const,
+      uiLocale: 'en-US' as const,
+      data: {},
+    }
+    const englishCallbacks = callbacks
     useLLMStore.setState({
       defaultModelId: 'model-1',
       generateStream: createResponseStream([modelOutput, modelOutput, modelOutput]),
@@ -396,11 +402,11 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
 
     await new GenerateCoreSeedCommand(snapshot, workflowRuntimeDependencies)
-      .execute({ step: {}, context: runContext, callbacks })
+      .execute({ step: {}, context: runContext, callbacks: englishCallbacks })
     await new GenerateWorldBuildingCommand(snapshot, workflowRuntimeDependencies)
-      .execute({ step: {}, context: runContext, callbacks })
+      .execute({ step: {}, context: runContext, callbacks: englishCallbacks })
     await new GeneratePlotArchitectureCommand(['synopsis'], snapshot, workflowRuntimeDependencies)
-      .execute({ step: {}, context: runContext, callbacks })
+      .execute({ step: {}, context: runContext, callbacks: englishCallbacks })
 
     const persistedUpdates = (invoke.mock.calls as unknown as Array<[string, unknown]>)
       .filter(([channel]) => channel === 'db:project-core-update')
@@ -416,6 +422,47 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       expect(JSON.stringify(update)).not.toContain('# 情节大纲')
       expect(JSON.stringify(update)).toContain(modelOutput)
     }
+    expect(englishCallbacks.log).toHaveBeenCalledWith('Generating story premise...')
+    expect(englishCallbacks.log).toHaveBeenCalledWith('Story premise generated and saved to the database.')
+    expect(englishCallbacks.log).toHaveBeenCalledWith('Generating worldbuilding...')
+    expect(englishCallbacks.log).toHaveBeenCalledWith('Worldbuilding generated and saved to the database.')
+    expect(englishCallbacks.log).toHaveBeenCalledWith('Generating plot outline...')
+    expect(englishCallbacks.log).toHaveBeenCalledWith('Plot outline generated and saved to the database.')
+  })
+
+  it('uses the frozen English UI locale for premise logs and an empty-result error', async () => {
+    const novelConfig = {
+      writingLanguage: 'zh-CN',
+      genre: '悬疑',
+      targetAudience: '全龄',
+      totalChapters: 20,
+      wordsPerChapter: 2500,
+    } as const
+    useProjectStore.setState({
+      currentProject: { ...project(projectAPath), novelConfig } as never,
+    })
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        streamCallbacks.onDone?.('', undefined, 'stop')
+        return 'empty-premise-request'
+      }),
+    })
+    const runContext = {
+      ...context,
+      writingLanguage: 'zh-CN' as const,
+      uiLocale: 'en-US' as const,
+      data: {},
+    }
+    const stepCallbacks = callbacks
+    const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
+
+    await expect(new GenerateCoreSeedCommand(snapshot, workflowRuntimeDependencies).execute({
+      step: {},
+      context: runContext,
+      callbacks: stepCallbacks,
+    })).rejects.toThrow('Story premise generation failed because the AI returned empty content.')
+    expect(stepCallbacks.log).toHaveBeenCalledWith('Generating story premise...')
   })
 
   it('sends English built-in instructions for premise, character, world, and synopsis requests', async () => {
@@ -440,7 +487,11 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         novelConfig,
       } as never,
     })
-    const runContext = { ...context, writingLanguage: 'en-US' as const }
+    const runContext = {
+      ...context,
+      writingLanguage: 'en-US' as const,
+      uiLocale: 'en-US' as const,
+    }
     const observed = new Map<string, string>()
     useLLMStore.setState({
       defaultModelId: 'model-1',
@@ -473,13 +524,15 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
     const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
     const commands = [
-      new GenerateCoreSeedCommand(snapshot, workflowRuntimeDependencies),
-      new GenerateCharactersCommand(snapshot),
-      new GenerateWorldBuildingCommand(snapshot, workflowRuntimeDependencies),
-      new GeneratePlotArchitectureCommand(['synopsis'], snapshot, workflowRuntimeDependencies),
-    ]
-    for (const command of commands) {
-      await expect(command.execute({ step: {}, context: runContext, callbacks })).rejects.toThrow()
+      [new GenerateCoreSeedCommand(snapshot, workflowRuntimeDependencies), 'Generating story premise...'],
+      [new GenerateCharactersCommand(snapshot), 'Generating character graph...'],
+      [new GenerateWorldBuildingCommand(snapshot, workflowRuntimeDependencies), 'Generating worldbuilding...'],
+      [new GeneratePlotArchitectureCommand(['synopsis'], snapshot, workflowRuntimeDependencies), 'Generating plot outline...'],
+    ] as const
+    for (const [command, expectedStartLog] of commands) {
+      const stepCallbacks = callbacks
+      await expect(command.execute({ step: {}, context: runContext, callbacks: stepCallbacks })).rejects.toThrow()
+      expect(stepCallbacks.log).toHaveBeenCalledWith(expectedStartLog)
     }
 
     expect(observed.get('generate-core-seed')).toContain('Build a compact story premise')
@@ -581,15 +634,17 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
     const eightContext = {
       ...context,
+      uiLocale: 'en-US' as const,
       data: { stepGuidance: { characters: '必须塑造八名群像角色，覆盖不同立场且关系闭合。' } },
       cancelled: false,
     }
+    const stepCallbacks = callbacks
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
       novelConfig: { genre: '科幻悬疑', totalChapters: 4, wordsPerChapter: 6200 } as never,
     })
 
-    await expect(command.execute({ step: {}, context: eightContext, callbacks })).resolves.toBe('# 八人角色图谱')
+    await expect(command.execute({ step: {}, context: eightContext, callbacks: stepCallbacks })).resolves.toBe('# 八人角色图谱')
 
     expect(generateStream).toHaveBeenCalledTimes(9)
     const manifestPrompt = manifestMessages?.map(message => message.content).join('\n') ?? ''
@@ -610,6 +665,11 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       intent: 'architecture_generation',
       entries: fullEntries,
     })
+    const visibleLogs = vi.mocked(stepCallbacks.log).mock.calls.map(([message]) => message).join('\n')
+    expect(visibleLogs).toContain('Generating character graph...')
+    expect(visibleLogs).toContain('Initial bounded response: finishReason=stop')
+    expect(visibleLogs).toContain('The character graph and 8 character cards were generated.')
+    expect(visibleLogs).not.toMatch(/[\u3400-\u9fff]/u)
   })
 
   it('fails closed when the manifest stage returns the legacy entries envelope', async () => {

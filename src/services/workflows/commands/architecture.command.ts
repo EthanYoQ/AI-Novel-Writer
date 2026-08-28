@@ -9,10 +9,15 @@ import { ArchitecturePromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
-import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
+import {
+  requireWorkflowProjectSession,
+  workflowUiText,
+  workflowWritingLanguage,
+} from '../workflow-project-session'
 import { characterArchitecturePrompts, promptLanguageText } from '../../prompt-language'
 import { stripThinkingTags } from '../workflow-utils'
 import type { NovelConfig, ProjectSessionContext } from '../../../shared/ipc-channels'
+import type { WritingLanguage } from '../../../shared/writing-language'
 import {
   CHARACTER_ROSTER_SCHEMA_VERSION,
   CHARACTER_ROSTER_ROLES,
@@ -57,12 +62,14 @@ const REQUIRED_CONFIG_TEXT_FIELDS = [
   'writingStyle',
 ] as const
 
+type UiText = (zhCNText: string, enUSText: string) => string
+
 function buildNovelConfigJSONContract(
   totalChapters: number,
   wordsPerChapter: number,
-  writingLanguage: NovelConfig['writingLanguage'],
+  writingLanguage: WritingLanguage,
 ): string {
-  return promptLanguageText(writingLanguage ?? 'zh-CN', `【不可变小说配置 JSON 合同】
+  return promptLanguageText(writingLanguage, `【不可变小说配置 JSON 合同】
 - 必填且必须为非空字符串的 9 个字段：genre、targetAudience、subGenre、coreOutline、worldSetting、goldenFinger、protagonistProfile、globalGuidance、writingStyle。
 - plotStructure 必填，且值必须严格为以下英文枚举之一：three_act | heros_journey | save_the_cat | kishotenketsu | multi_thread | freeform。
 - narrativePOV 必填，且值必须严格为以下英文枚举之一：third_limited | first_person | third_omniscient | multi_pov。
@@ -316,12 +323,19 @@ export interface ArchitectureProjectSnapshot {
   novelConfig: Readonly<NovelConfig>
 }
 
-function assertArchitectureProjectSessionCurrent(projectSession: ProjectSessionContext): void {
+function assertArchitectureProjectSessionCurrent(
+  projectSession: ProjectSessionContext,
+  context: CommandExecuteParams['context'],
+): void {
   if (!sameProjectSessionContext(
     projectSession,
     projectSessionContextFromProject(useProjectStore.getState().currentProject),
   )) {
-    throw new Error('当前项目已切换，架构生成已停止以避免写入错误项目')
+    throw new Error(workflowUiText(
+      context,
+      '当前项目已切换，架构生成已停止以避免写入错误项目',
+      'The current project changed, so architecture generation stopped to avoid writing to the wrong project.',
+    ))
   }
 }
 
@@ -343,6 +357,7 @@ export async function savePartialData(
   projectPath: string,
   data: PartialArchData,
   projectSession: ProjectSessionContext,
+  operationLabel: string,
 ): Promise<void> {
   const result = await ipc.invokeWithProjectSession(
     projectSession,
@@ -351,7 +366,7 @@ export async function savePartialData(
     data,
     projectPath,
   )
-  requireIpcSuccess(result, '保存架构生成检查点')
+  requireIpcSuccess(result, operationLabel)
 }
 
 async function writeArchToDb(
@@ -360,6 +375,7 @@ async function writeArchToDb(
   expectedProjectPath: string,
   runId: string,
   projectSession: ProjectSessionContext,
+  fallbackError: string,
 ): Promise<void> {
   const cleanContent = stripThinkingTags(content)
   const result = await ipc.invokeWithProjectSession(
@@ -369,7 +385,7 @@ async function writeArchToDb(
     expectedProjectPath,
   )
   if (!result.success) {
-    throw new Error(result.error || '故事架构写入数据库失败')
+    throw new Error(result.error || fallbackError)
   }
 
   // 通知 UI 层实时刷新架构完成状态
@@ -396,18 +412,25 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
-    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
     return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const projectSession = requireWorkflowProjectSession(context)
     const writingLanguage = workflowWritingLanguage(context)
-    assertArchitectureProjectSessionCurrent(projectSession)
-    callbacks.log('正在调度配置专家 AI，准备解析您的脑洞...')
+    assertArchitectureProjectSessionCurrent(projectSession, context)
+    callbacks.log(text(
+      '正在调度配置专家 AI，准备解析您的脑洞...',
+      'Preparing the configuration model to structure your story idea...',
+    ))
 
     const template = await resolvePromptTemplate('generate_global_config', projectSession, writingLanguage)
-    if (!template) throw new Error('未找到 generate_global_config 模板')
+    if (!template) throw new Error(text(
+      '未找到 generate_global_config 模板',
+      'The generate_global_config template was not found.',
+    ))
 
     const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
       .withUserIdea(this.idea)
@@ -435,7 +458,10 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
     if (initial.finishReason === 'stop') {
       resultRaw = initial.content
     } else if (initial.finishReason === 'length') {
-      callbacks.log('首轮配置 JSON 达到输出上限，已丢弃不可信截断内容，正在请求一次完整替代 JSON...')
+      callbacks.log(text(
+        '首轮配置 JSON 达到输出上限，已丢弃不可信截断内容，正在请求一次完整替代 JSON...',
+        'The first configuration JSON reached the output limit. The untrusted truncated response was discarded; requesting one complete replacement JSON...',
+      ))
       const replacement = await this.callLLMResult(
         promptLanguageText(
           writingLanguage,
@@ -464,12 +490,18 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
     }
     this.assertNotCancelled(context)
 
-    callbacks.log('解析完成，正在应用到项目配置...')
+    callbacks.log(text(
+      '解析完成，正在应用到项目配置...',
+      'Parsing is complete; applying the result to the project configuration...',
+    ))
     let parsed: NovelConfig
     try {
       parsed = decodeCompleteNovelConfig(resultRaw, this.totalChapters, this.wordsPerChapter)
     } catch (e) {
-      throw new Error('AI 返回的小说配置不完整或无效，结果未应用。详细信息: ' + String(e))
+      throw new Error(text(
+        'AI 返回的小说配置不完整或无效，结果未应用。详细信息: ' + String(e),
+        'The AI novel configuration was incomplete or invalid, so the result was not applied.',
+      ))
     }
 
     this.assertNotCancelled(context)
@@ -477,7 +509,10 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
     )) {
-      throw new Error('当前项目已切换，智能配置结果未应用')
+      throw new Error(text(
+        '当前项目已切换，智能配置结果未应用',
+        'The current project changed, so the generated configuration was not applied.',
+      ))
     }
     this.onGenerated(parsed)
     this.assertNotCancelled(context)
@@ -485,18 +520,27 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
     )) {
-      throw new Error('当前项目已切换，智能配置结果未保存')
+      throw new Error(text(
+        '当前项目已切换，智能配置结果未保存',
+        'The current project changed, so the generated configuration was not saved.',
+      ))
     }
     const saved = await useProjectStore.getState().saveProject(projectSession)
     this.assertNotCancelled(context)
 
     if (saved) {
-      callbacks.log('AI 配置生成并保存成功，请检查各字段后点击「生成架构」')
+      callbacks.log(text(
+        'AI 配置生成并保存成功，请检查各字段后点击「生成架构」',
+        'The AI configuration was generated and saved. Review the fields, then select Generate architecture.',
+      ))
     } else {
-      callbacks.log('AI 配置生成成功，请检查各字段后点击「立即保存」')
+      callbacks.log(text(
+        'AI 配置生成成功，请检查各字段后点击「立即保存」',
+        'The AI configuration was generated. Review the fields, then select Save now.',
+      ))
     }
     callbacks.setProgress(100)
-    return '生成的配置已成功应用！'
+    return text('生成的配置已成功应用！', 'The generated configuration was applied successfully.')
   }
 }
 
@@ -509,20 +553,24 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
-    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
     return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const projectSession = requireWorkflowProjectSession(context)
-    assertArchitectureProjectSessionCurrent(projectSession)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
     const writingLanguage = workflowWritingLanguage(context)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
-    callbacks.log('生成故事前提...')
+    callbacks.log(text('生成故事前提...', 'Generating story premise...'))
 
     const template = await resolvePromptTemplate('premise', projectSession, writingLanguage)
-    if (!template) throw new Error('未找到 premise 模板')
+    if (!template) throw new Error(text(
+      '未找到 premise 模板',
+      'The story-premise template was not found.',
+    ))
 
     const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
     const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
@@ -545,22 +593,40 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
       { purpose: 'generate-core-seed', reasoningStage: 'planning' },
       context,
     )
-    if (!result.trim()) throw new Error('故事前提生成失败，AI 返回空内容')
-    if (context.cancelled) throw new Error('工作流已取消')
+    if (!result.trim()) throw new Error(text(
+      '故事前提生成失败，AI 返回空内容',
+      'Story premise generation failed because the AI returned empty content.',
+    ))
+    if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
 
     const heading = promptLanguageText(writingLanguage, '故事前提', 'Story Premise')
     const content = `# ${heading}\n\n${result}\n`
     this.assertNotCancelled(context)
-    await writeArchToDb('premise', content, expectedProjectPath, context.runId, projectSession)
+    await writeArchToDb(
+      'premise',
+      content,
+      expectedProjectPath,
+      context.runId,
+      projectSession,
+      text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
+    )
     this.assertNotCancelled(context)
 
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
     partial.premise_result = result
     this.assertNotCancelled(context)
-    await savePartialData(expectedProjectPath, partial, projectSession)
+    await savePartialData(
+      expectedProjectPath,
+      partial,
+      projectSession,
+      text('保存架构生成检查点', 'Save architecture-generation checkpoint'),
+    )
     context.data.partial = partial
 
-    callbacks.log('故事前提已生成并写入数据库')
+    callbacks.log(text(
+      '故事前提已生成并写入数据库',
+      'Story premise generated and saved to the database.',
+    ))
     return result
   }
 }
@@ -576,10 +642,14 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
   private assertCommittedRosterReadable(
     receipt: { snapshot?: { entries?: Array<{ name?: unknown }>; renderedMarkdown?: unknown } } | undefined,
     candidateEntries: unknown,
+    text: UiText,
   ): asserts receipt is { snapshot: { entries: Array<{ name: string }>; renderedMarkdown: string } } {
     const snapshot = receipt?.snapshot
     if (!snapshot || !Array.isArray(snapshot.entries) || snapshot.entries.length === 0 || typeof snapshot.renderedMarkdown !== 'string' || !snapshot.renderedMarkdown.trim()) {
-      throw new Error('角色名单提交后未能回读角色卡和角色图谱，未将本步骤标记为成功')
+      throw new Error(text(
+        '角色名单提交后未能回读角色卡和角色图谱，未将本步骤标记为成功',
+        'Character cards and the character graph could not be read back after commit, so this step was not marked complete.',
+      ))
     }
 
     if (!Array.isArray(candidateEntries)) return
@@ -594,18 +664,22 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       .map(entry => typeof entry.name === 'string' ? entry.name.trim() : '')
       .filter(Boolean))
     if (candidateNames.length === 0 || candidateNames.some(name => !committedNames.has(name))) {
-      throw new Error('角色名单提交回读不完整，未将本步骤标记为成功')
+      throw new Error(text(
+        '角色名单提交回读不完整，未将本步骤标记为成功',
+        'The committed character roster readback was incomplete, so this step was not marked complete.',
+      ))
     }
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
-    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
     return this.executeWithGenerationRuntime('character-architecture', params, () => this.executeWithinGeneration(params))
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const projectSession = requireWorkflowProjectSession(context)
-    assertArchitectureProjectSessionCurrent(projectSession)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
     const writingLanguage = workflowWritingLanguage(context)
     const promptCopy = characterArchitecturePrompts(writingLanguage)
     const { expectedProjectPath } = this.snapshot
@@ -615,10 +689,13 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     const premise_result = core?.premise || ''
 
     if (!premise_result || premise_result.includes('待生成') || premise_result.length < 50) {
-      throw new Error('故事前提尚未生成或内容不完整，请返回勾选生成')
+      throw new Error(text(
+        '故事前提尚未生成或内容不完整，请返回勾选生成',
+        'The story premise is missing or incomplete. Go back and include it for generation.',
+      ))
     }
 
-    callbacks.log('生成角色图谱...')
+    callbacks.log(text('生成角色图谱...', 'Generating character graph...'))
 
     const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
     const manifestContext = {
@@ -638,7 +715,10 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       `${promptCopy.manifestSystem}\n${manifestPrompt}`,
     ).byteLength
     if (manifestPromptBytes > MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES) {
-      throw new Error('角色身份清单提示超过安全字节上限，请缩短角色指导或参考作品')
+      throw new Error(text(
+        '角色身份清单提示超过安全字节上限，请缩短角色指导或参考作品',
+        'The character identity prompt exceeds the safe byte limit. Shorten the character guidance or reference works.',
+      ))
     }
     const manifestRaw = await this.callLLMWithBoundedCompletion(
       manifestPrompt,
@@ -652,14 +732,23 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       },
       context,
     )
-    const manifest = decodeCharacterIdentityManifest(manifestRaw)
+    let manifest: CharacterIdentitySlot[]
+    try {
+      manifest = decodeCharacterIdentityManifest(manifestRaw)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new Error(text(
+        detail,
+        'The character identity manifest was invalid, so no character data was saved.',
+      ))
+    }
     this.assertNotCancelled(context)
-    assertArchitectureProjectSessionCurrent(projectSession)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
     const manifestById = new Map(manifest.map(slot => [slot.slotId, slot]))
     const detailContract: StructuredBatchContract<CharacterIdentitySlot, CharacterDetailOutput> = {
       buildTask: ({ items, validatedPrefix }) => {
         this.assertNotCancelled(context)
-        assertArchitectureProjectSessionCurrent(projectSession)
+        assertArchitectureProjectSessionCurrent(projectSession, context)
         const prefix = JSON.stringify(validatedPrefix.map(entry => ({
           slotId: entry.slotId,
           name: entry.name,
@@ -667,7 +756,10 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
           relationships: entry.relationships,
         })))
         if (new TextEncoder().encode(prefix).byteLength > MAX_CHARACTER_PREFIX_UTF8_BYTES) {
-          throw new Error('已验证角色详情前缀超过安全字节上限，未继续生成或写入')
+          throw new Error(text(
+            '已验证角色详情前缀超过安全字节上限，未继续生成或写入',
+            'The validated character-detail prefix exceeds the safe byte limit; generation and persistence stopped.',
+          ))
         }
         return {
           purpose: 'character-architecture-details',
@@ -690,7 +782,10 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       outputKey: entry => entry.slotId,
       decode: (content) => {
         const parsed = JSON.parse(extractSingleCompleteJsonObject(content)) as { entries?: unknown }
-        if (!Array.isArray(parsed.entries)) throw new Error('角色详情响应缺少 entries')
+        if (!Array.isArray(parsed.entries)) throw new Error(text(
+          '角色详情响应缺少 entries',
+          'The character-detail response is missing entries.',
+        ))
         return parsed.entries.map((candidate) => {
           if (!isRecord(candidate)) return candidate as unknown as CharacterDetailOutput
           const age = candidate.age
@@ -725,9 +820,15 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       limits: { maxBatchItems: CHARACTER_DETAIL_BATCH_SIZE },
       signal: this.requireGenerationExecution().signal,
     })
-    if (!detailExecution.ok) throw new Error(detailExecution.failure.message)
+    if (!detailExecution.ok) throw new Error(text(
+      detailExecution.failure.message,
+      'Character details failed structural validation and were not saved.',
+    ))
     if (detailExecution.items.length !== manifest.length) {
-      throw new Error('角色详情未完整覆盖冻结身份清单')
+      throw new Error(text(
+        '角色详情未完整覆盖冻结身份清单',
+        'Character details did not fully cover the frozen identity manifest.',
+      ))
     }
     const entries = detailExecution.items.map((detail) => {
       const entry: Record<string, unknown> = { ...detail }
@@ -740,14 +841,14 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     })
     const candidate = { schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION, entries }
     this.assertNotCancelled(context)
-    assertArchitectureProjectSessionCurrent(projectSession)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
     const currentRoster = await ipc.invokeWithProjectSession(
       projectSession,
       'db:character-roster-read',
       expectedProjectPath,
     )
     this.assertNotCancelled(context)
-    assertArchitectureProjectSessionCurrent(projectSession)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
 
     const commitResult = await ipc.invokeWithProjectSession(
       projectSession,
@@ -762,16 +863,22 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       expectedProjectPath,
     )
     if (!commitResult.success) {
-      throw new Error(commitResult.error || '角色名单提交失败，未保存角色图谱或角色卡')
+      throw new Error(commitResult.error || text(
+        '角色名单提交失败，未保存角色图谱或角色卡',
+        'The character-roster commit failed, so the character graph and cards were not saved.',
+      ))
     }
-    this.assertCommittedRosterReadable(commitResult.receipt, candidate.entries)
+    this.assertCommittedRosterReadable(commitResult.receipt, candidate.entries, text)
     const renderedMarkdown = commitResult.receipt.snapshot.renderedMarkdown
     const characterCount = commitResult.receipt.snapshot.entries.length
 
     // 事务 receipt 是取消边界：提交成功后不再把已保存的角色事实误报为零写入取消。
     if (context.cancelled) {
       this.notifyRefresh(['characterCards'], expectedProjectPath, projectSession)
-      callbacks.log(`角色图谱与 ${characterCount} 张角色卡已生成；后续工作流已取消`)
+      callbacks.log(text(
+        `角色图谱与 ${characterCount} 张角色卡已生成；后续工作流已取消`,
+        `The character graph and ${characterCount} character cards were generated; the remaining workflow was cancelled.`,
+      ))
       return renderedMarkdown
     }
 
@@ -779,21 +886,35 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
 
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
     if (context.cancelled) {
-      callbacks.log(`角色图谱与 ${characterCount} 张角色卡已生成；后续工作流已取消`)
+      callbacks.log(text(
+        `角色图谱与 ${characterCount} 张角色卡已生成；后续工作流已取消`,
+        `The character graph and ${characterCount} character cards were generated; the remaining workflow was cancelled.`,
+      ))
       return renderedMarkdown
     }
     partial.character_dynamics_result = renderedMarkdown
     context.data.partial = partial
     try {
-      await savePartialData(expectedProjectPath, partial, projectSession)
+      await savePartialData(
+        expectedProjectPath,
+        partial,
+        projectSession,
+        text('保存架构生成检查点', 'Save architecture-generation checkpoint'),
+      )
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       callbacks.log(
-        `[警告] 角色图谱与 ${characterCount} 张角色卡已保存，但检查点保存失败：${detail}。当前流程可继续；若中断，将无法从此步骤恢复。`,
+        text(
+          `[警告] 角色图谱与 ${characterCount} 张角色卡已保存，但检查点保存失败：${detail}。当前流程可继续；若中断，将无法从此步骤恢复。`,
+          `[Warning] The character graph and ${characterCount} character cards were saved, but the checkpoint failed: ${detail}. The workflow can continue, but it cannot resume from this step after an interruption.`,
+        ),
       )
     }
 
-    callbacks.log(`角色图谱与 ${characterCount} 张角色卡已生成`)
+    callbacks.log(text(
+      `角色图谱与 ${characterCount} 张角色卡已生成`,
+      `The character graph and ${characterCount} character cards were generated.`,
+    ))
     return renderedMarkdown
   }
 }
@@ -807,13 +928,14 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
-    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
     return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const projectSession = requireWorkflowProjectSession(context)
-    assertArchitectureProjectSessionCurrent(projectSession)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
     const writingLanguage = workflowWritingLanguage(context)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
@@ -822,12 +944,18 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     const premise_result = core?.premise || ''
 
     if (!premise_result || premise_result.includes('待生成') || premise_result.length < 50) {
-      throw new Error('故事前提尚未生成或内容不完整，请返回勾选生成')
+      throw new Error(text(
+        '故事前提尚未生成或内容不完整，请返回勾选生成',
+        'The story premise is missing or incomplete. Go back and include it for generation.',
+      ))
     }
 
-    callbacks.log('生成世界观...')
+    callbacks.log(text('生成世界观...', 'Generating worldbuilding...'))
     const template = await resolvePromptTemplate('world_building', projectSession, writingLanguage)
-    if (!template) throw new Error('模板丢失')
+    if (!template) throw new Error(text(
+      '模板丢失',
+      'The worldbuilding template is missing.',
+    ))
 
     const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
     const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
@@ -845,20 +973,35 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       { purpose: 'generate-world-building', reasoningStage: 'planning' },
       context,
     )
-    if (context.cancelled) throw new Error('工作流已取消')
+    if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
 
     this.assertNotCancelled(context)
     const heading = promptLanguageText(writingLanguage, '世界观', 'Worldbuilding')
-    await writeArchToDb('worldbuilding', `# ${heading}\n\n${result}\n`, expectedProjectPath, context.runId, projectSession)
+    await writeArchToDb(
+      'worldbuilding',
+      `# ${heading}\n\n${result}\n`,
+      expectedProjectPath,
+      context.runId,
+      projectSession,
+      text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
+    )
     this.assertNotCancelled(context)
 
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
     partial.world_building_result = result
     this.assertNotCancelled(context)
-    await savePartialData(expectedProjectPath, partial, projectSession)
+    await savePartialData(
+      expectedProjectPath,
+      partial,
+      projectSession,
+      text('保存架构生成检查点', 'Save architecture-generation checkpoint'),
+    )
     context.data.partial = partial
 
-    callbacks.log('世界观已生成并写入数据库')
+    callbacks.log(text(
+      '世界观已生成并写入数据库',
+      'Worldbuilding generated and saved to the database.',
+    ))
     return result
   }
 }
@@ -873,13 +1016,14 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
-    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context))
+    assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
     return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const projectSession = requireWorkflowProjectSession(context)
-    assertArchitectureProjectSessionCurrent(projectSession)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
     const writingLanguage = workflowWritingLanguage(context)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
@@ -889,13 +1033,25 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     const char_dyn = core?.charactersArch || ''
     const world_b = core?.worldbuilding || ''
 
-    if (!premise || premise.includes('待生成')) throw new Error('故事前提未生成')
-    if (!char_dyn || char_dyn.includes('待生成')) throw new Error('角色图谱未生成')
-    if (!world_b || world_b.includes('待生成')) throw new Error('世界观未生成')
+    if (!premise || premise.includes('待生成')) throw new Error(text(
+      '故事前提未生成',
+      'The story premise has not been generated.',
+    ))
+    if (!char_dyn || char_dyn.includes('待生成')) throw new Error(text(
+      '角色图谱未生成',
+      'The character graph has not been generated.',
+    ))
+    if (!world_b || world_b.includes('待生成')) throw new Error(text(
+      '世界观未生成',
+      'Worldbuilding has not been generated.',
+    ))
 
-    callbacks.log('生成情节大纲...')
+    callbacks.log(text('生成情节大纲...', 'Generating plot outline...'))
     const template = await resolvePromptTemplate('synopsis', projectSession, writingLanguage)
-    if (!template) throw new Error('模板丢失')
+    if (!template) throw new Error(text(
+      '模板丢失',
+      'The plot-outline template is missing.',
+    ))
 
     const { getPlotStructureGuide, getNarrativePOVLabel } = await import('../architecture-workflow')
     const guide = getPlotStructureGuide(
@@ -923,11 +1079,18 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       { purpose: 'generate-plot-architecture', reasoningStage: 'planning' },
       context,
     )
-    if (context.cancelled) throw new Error('工作流已取消')
+    if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
 
     this.assertNotCancelled(context)
     const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
-    await writeArchToDb('synopsis', `# ${heading}\n\n${result}\n`, expectedProjectPath, context.runId, projectSession)
+    await writeArchToDb(
+      'synopsis',
+      `# ${heading}\n\n${result}\n`,
+      expectedProjectPath,
+      context.runId,
+      projectSession,
+      text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
+    )
     this.assertNotCancelled(context)
 
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
@@ -945,11 +1108,14 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
           '{}',
           expectedProjectPath,
         ),
-        '清理架构生成检查点',
+        text('清理架构生成检查点', 'Clear architecture-generation checkpoint'),
       )
     }
 
-    callbacks.log('情节大纲已生成并写入数据库')
+    callbacks.log(text(
+      '情节大纲已生成并写入数据库',
+      'Plot outline generated and saved to the database.',
+    ))
     return result
   }
 }
