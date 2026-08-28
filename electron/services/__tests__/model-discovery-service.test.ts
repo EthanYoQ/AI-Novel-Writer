@@ -134,6 +134,107 @@ describe('ModelDiscoveryService', () => {
   it.each([
     { protocol: 'openai' as const, provider: 'custom' as const },
     { protocol: 'gemini' as const, provider: 'gemini' as const },
+  ])('refuses a cross-origin $protocol redirect without sending a second request', async ({ protocol, provider }) => {
+    const credential = crypto.randomUUID()
+    let redirectedRequests = 0
+    let redirectedRequest = ''
+    const targetBaseUrl = await listen(createServer((request, response) => {
+      redirectedRequests += 1
+      redirectedRequest = JSON.stringify({ url: request.url, headers: request.headers })
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(protocol === 'gemini' ? { models: [] } : { data: [] }))
+    }))
+    const sourceBaseUrl = await listen(createServer((_request, response) => {
+      response.writeHead(302, { location: `${targetBaseUrl}/redirect-target` })
+      response.end()
+    }))
+    const saved = profile({
+      id: `redirect-${protocol}`,
+      provider,
+      protocol,
+      apiKey: credential,
+      baseUrl: sourceBaseUrl,
+    })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const result = await new ModelDiscoveryService({ loadModel: () => saved })
+      .discoverModels(saved.id)
+
+    expect(result).toEqual({ success: false, errorCode: 'network' })
+    expect(redirectedRequests).toBe(0)
+    const observableOutput = JSON.stringify({
+      result,
+      redirectedRequest,
+      logs: [log.mock.calls, warn.mock.calls, error.mock.calls],
+    })
+    expect(observableOutput).not.toContain(credential)
+    expect(observableOutput).not.toContain(sourceBaseUrl)
+    expect(observableOutput).not.toContain(targetBaseUrl)
+  })
+
+  it.each([
+    { phase: 'fetch', protocol: 'openai' as const, provider: 'custom' as const },
+    { phase: 'body', protocol: 'openai' as const, provider: 'custom' as const },
+    { phase: 'fetch', protocol: 'gemini' as const, provider: 'gemini' as const },
+    { phase: 'body', protocol: 'gemini' as const, provider: 'gemini' as const },
+  ])('times out a stalled $protocol $phase without exposing provider details', async ({ phase, protocol, provider }) => {
+    const credential = crypto.randomUUID()
+    const providerDetail = `provider-detail-${credential}`
+    const baseUrl = 'https://provider.invalid/private-models'
+    const saved = profile({
+      id: `timeout-${protocol}-${phase}`,
+      provider,
+      protocol,
+      apiKey: credential,
+      baseUrl,
+    })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const waitForAbortOrFallback = (signal: AbortSignal | null) => new Promise<void>((resolve, reject) => {
+      const fallback = setTimeout(resolve, 100)
+      signal?.addEventListener('abort', () => {
+        clearTimeout(fallback)
+        reject(new Error(providerDetail))
+      }, { once: true })
+    })
+    const payload = protocol === 'gemini'
+      ? { models: [{ name: 'models/safe-model' }] }
+      : { data: [{ id: 'safe-model' }] }
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const signal = init?.signal ?? null
+      if (phase === 'fetch') await waitForAbortOrFallback(signal)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => {
+          if (phase === 'body') await waitForAbortOrFallback(signal)
+          return payload
+        },
+      } as Response
+    }
+
+    const result = await new ModelDiscoveryService({
+      loadModel: () => saved,
+      fetchImpl,
+      timeoutMs: 25,
+    }).discoverModels(saved.id)
+
+    expect(result).toEqual({ success: false, errorCode: 'network' })
+    const observableOutput = JSON.stringify({
+      result,
+      logs: [log.mock.calls, warn.mock.calls, error.mock.calls],
+    })
+    expect(observableOutput).not.toContain(credential)
+    expect(observableOutput).not.toContain(providerDetail)
+    expect(observableOutput).not.toContain(baseUrl)
+  })
+
+  it.each([
+    { protocol: 'openai' as const, provider: 'custom' as const },
+    { protocol: 'gemini' as const, provider: 'gemini' as const },
   ])('returns auth without echoing $protocol provider details', async ({ protocol, provider }) => {
     const credential = crypto.randomUUID()
     const providerDetail = `denied-${credential}`
@@ -220,6 +321,113 @@ describe('ModelDiscoveryService', () => {
 
     await expect(new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id))
       .resolves.toEqual({ success: false, errorCode: 'empty' })
+  })
+
+  it.each([
+    {
+      protocol: 'openai' as const,
+      provider: 'custom' as const,
+      payload: { data: Array.from({ length: 501 }, (_, index) => ({ id: `model-${index}` })) },
+    },
+    {
+      protocol: 'gemini' as const,
+      provider: 'gemini' as const,
+      payload: { models: Array.from({ length: 501 }, (_, index) => ({ name: `models/model-${index}` })) },
+    },
+  ])('rejects a $protocol list beyond the 500-entry IPC bound', async ({ protocol, provider, payload }) => {
+    const baseUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(payload))
+    }))
+    const saved = profile({ id: `oversized-list-${protocol}`, provider, protocol, baseUrl })
+
+    await expect(new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id))
+      .resolves.toEqual({ success: false, errorCode: 'invalid_response' })
+  })
+
+  it.each([
+    {
+      label: 'OpenAI-compatible ID over 512 UTF-8 bytes',
+      protocol: 'openai' as const,
+      provider: 'custom' as const,
+      invalidText: '模'.repeat(171),
+      payload: (invalidText: string) => ({ data: [{ id: 'safe-model' }, { id: invalidText }] }),
+    },
+    {
+      label: 'OpenAI-compatible display name with a control character',
+      protocol: 'openai' as const,
+      provider: 'custom' as const,
+      invalidText: 'unsafe\u0000name',
+      payload: (invalidText: string) => ({ data: [{ id: 'safe-model' }, { id: 'other-model', name: invalidText }] }),
+    },
+    {
+      label: 'Gemini ID with a control character',
+      protocol: 'gemini' as const,
+      provider: 'gemini' as const,
+      invalidText: 'models/unsafe\u0000model',
+      payload: (invalidText: string) => ({ models: [{ name: 'models/safe-model' }, { name: invalidText }] }),
+    },
+    {
+      label: 'Gemini display name over 512 UTF-8 bytes',
+      protocol: 'gemini' as const,
+      provider: 'gemini' as const,
+      invalidText: '名'.repeat(171),
+      payload: (invalidText: string) => ({ models: [{ name: 'models/safe-model' }, { name: 'models/other-model', displayName: invalidText }] }),
+    },
+  ])('rejects a single unsafe $label without returning any list entry', async ({ protocol, provider, invalidText, payload }) => {
+    const baseUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(payload(invalidText)))
+    }))
+    const saved = profile({ id: `unsafe-entry-${protocol}`, provider, protocol, baseUrl })
+
+    const result = await new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id)
+
+    expect(result).toEqual({ success: false, errorCode: 'invalid_response' })
+    expect(JSON.stringify(result)).not.toContain(invalidText)
+    expect(JSON.stringify(result)).not.toContain('safe-model')
+  })
+
+  it.each([
+    {
+      protocol: 'openai' as const,
+      provider: 'custom' as const,
+      payload: {
+        data: [
+          { id: 'duplicate-model', name: 'First display name' },
+          { id: 'duplicate-model', name: 'Second display name' },
+          { id: 'other-model' },
+        ],
+      },
+      expected: [
+        { id: 'duplicate-model', name: 'First display name', value: 'duplicate-model' },
+        { id: 'other-model', name: 'other-model', value: 'other-model' },
+      ],
+    },
+    {
+      protocol: 'gemini' as const,
+      provider: 'gemini' as const,
+      payload: {
+        models: [
+          { name: 'models/duplicate-model', displayName: 'First display name' },
+          { name: 'duplicate-model', displayName: 'Second display name' },
+          { name: 'models/other-model' },
+        ],
+      },
+      expected: [
+        { id: 'models/duplicate-model', name: 'First display name', value: 'duplicate-model' },
+        { id: 'models/other-model', name: 'models/other-model', value: 'other-model' },
+      ],
+    },
+  ])('keeps the first $protocol entry for each saved selection value', async ({ protocol, provider, payload, expected }) => {
+    const baseUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(payload))
+    }))
+    const saved = profile({ id: `deduplicate-${protocol}`, provider, protocol, baseUrl })
+
+    await expect(new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id))
+      .resolves.toEqual({ success: true, models: expected })
   })
 
   it('reduces a fetch failure to network without returning the URL, credential, or provider error', async () => {

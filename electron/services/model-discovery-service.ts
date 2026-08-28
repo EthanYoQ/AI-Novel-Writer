@@ -7,6 +7,21 @@ import type {
 interface ModelDiscoveryServiceDependencies {
   loadModel: (profileId: string) => ModelProfile | null
   fetchImpl?: typeof fetch
+  timeoutMs?: number
+}
+
+const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 15_000
+const MAX_DISCOVERED_MODEL_ENTRIES = 500
+const MAX_DISCOVERED_MODEL_TEXT_BYTES = 512
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)
+    if (codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))) {
+      return true
+    }
+  }
+  return false
 }
 
 function resolveOpenAIModelsUrl(baseUrl: string): string {
@@ -48,8 +63,10 @@ function resolveGeminiModelsUrl(baseUrl: string): string {
 
 function safeProviderText(value: unknown, credential: string): string | null {
   if (typeof value !== 'string') return null
+  if (Buffer.byteLength(value, 'utf8') > MAX_DISCOVERED_MODEL_TEXT_BYTES) return null
+  if (containsControlCharacter(value)) return null
   const normalized = value.trim()
-  if (!normalized || (credential && normalized.includes(credential))) return null
+  if (!normalized || urlContainsCredential(normalized, credential)) return null
   return normalized
 }
 
@@ -78,14 +95,19 @@ function parseOpenAIModels(payload: unknown, credential: string): DiscoveredMode
     return null
   }
 
+  const entries = (payload as { data: unknown[] }).data
+  if (entries.length > MAX_DISCOVERED_MODEL_ENTRIES) return null
   const models: DiscoveredModel[] = []
-  for (const item of (payload as { data: unknown[] }).data) {
+  const seenValues = new Set<string>()
+  for (const item of entries) {
     if (!item || typeof item !== 'object') return null
     const id = safeProviderText((item as { id?: unknown }).id, credential)
     if (!id) return null
     const providerName = (item as { name?: unknown }).name
     const name = providerName === undefined ? id : safeProviderText(providerName, credential)
     if (!name) return null
+    if (seenValues.has(id)) continue
+    seenValues.add(id)
     models.push({ id, name, value: id })
   }
   return models
@@ -96,8 +118,11 @@ function parseGeminiModels(payload: unknown, credential: string): DiscoveredMode
     return null
   }
 
+  const entries = (payload as { models: unknown[] }).models
+  if (entries.length > MAX_DISCOVERED_MODEL_ENTRIES) return null
   const models: DiscoveredModel[] = []
-  for (const item of (payload as { models: unknown[] }).models) {
+  const seenValues = new Set<string>()
+  for (const item of entries) {
     if (!item || typeof item !== 'object') return null
     const id = safeProviderText((item as { name?: unknown }).name, credential)
     if (!id) return null
@@ -106,6 +131,8 @@ function parseGeminiModels(payload: unknown, credential: string): DiscoveredMode
     if (!name) return null
     const value = id.startsWith('models/') ? id.slice('models/'.length) : id
     if (!value) return null
+    if (seenValues.has(value)) continue
+    seenValues.add(value)
     models.push({ id, name, value })
   }
   return models
@@ -130,6 +157,13 @@ export class ModelDiscoveryService {
       return { success: false, errorCode: 'unsupported' }
     }
 
+    const configuredTimeoutMs = this.dependencies.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS
+    const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+      ? configuredTimeoutMs
+      : DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS
+    const abortController = new AbortController()
+    const timeout = setTimeout(() => abortController.abort(), timeoutMs)
+
     try {
       if (model.protocol === 'gemini') {
         const requestUrl = resolveGeminiModelsUrl(model.baseUrl)
@@ -140,6 +174,8 @@ export class ModelDiscoveryService {
           requestUrl,
           {
             method: 'GET',
+            redirect: 'error',
+            signal: abortController.signal,
             headers: {
               Accept: 'application/json',
               'x-goog-api-key': model.apiKey,
@@ -152,7 +188,9 @@ export class ModelDiscoveryService {
         try {
           payload = await response.json()
         } catch {
-          return { success: false, errorCode: 'invalid_response' }
+          return abortController.signal.aborted
+            ? { success: false, errorCode: 'network' }
+            : { success: false, errorCode: 'invalid_response' }
         }
         const models = parseGeminiModels(payload, model.apiKey)
         if (!models) return { success: false, errorCode: 'invalid_response' }
@@ -168,6 +206,8 @@ export class ModelDiscoveryService {
         requestUrl,
         {
           method: 'GET',
+          redirect: 'error',
+          signal: abortController.signal,
           headers: {
             Accept: 'application/json',
             Authorization: `Bearer ${model.apiKey}`,
@@ -180,7 +220,9 @@ export class ModelDiscoveryService {
       try {
         payload = await response.json()
       } catch {
-        return { success: false, errorCode: 'invalid_response' }
+        return abortController.signal.aborted
+          ? { success: false, errorCode: 'network' }
+          : { success: false, errorCode: 'invalid_response' }
       }
       const models = parseOpenAIModels(payload, model.apiKey)
       if (!models) return { success: false, errorCode: 'invalid_response' }
@@ -188,6 +230,8 @@ export class ModelDiscoveryService {
       return { success: true, models }
     } catch {
       return { success: false, errorCode: 'network' }
+    } finally {
+      clearTimeout(timeout)
     }
   }
 }

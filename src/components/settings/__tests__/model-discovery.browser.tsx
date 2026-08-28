@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 
-import type { ModelProfile } from '../../../shared/ipc-channels'
+import type { ModelDiscoveryResult, ModelProfile } from '../../../shared/ipc-channels'
 import type { Locale } from '../../../i18n/types'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -49,13 +49,14 @@ async function renderSettings(
   model: ModelProfile,
   discoverModels: ReturnType<typeof useLLMStore.getState>['discoverModels'],
   locale: Locale = 'zh-CN',
+  additionalModels: ModelProfile[] = [],
 ) {
   const saveModel = vi.fn(async () => true)
   const setDefaultModel = vi.fn(async () => true)
   useLayoutStore.setState({ settingsSection: 'llm' })
   useLocaleStore.setState({ locale })
   useLLMStore.setState({
-    models: [model],
+    models: [model, ...additionalModels],
     loaded: true,
     defaultModelId: model.id,
     saveModel,
@@ -231,6 +232,121 @@ describe('model discovery settings flow', () => {
     expect(discoverModels).not.toHaveBeenCalled()
     await expect.element(page.getByText('请先保存端点、协议和 API Key，再获取模型列表。', { exact: true })).toBeVisible()
     expect(document.querySelector('select[aria-label="端点模型列表"]')).toBeNull()
+  })
+
+  it('ignores a pending discovery after its endpoint configuration is edited', async () => {
+    const model = savedProfile()
+    let settleDiscovery!: (result: ModelDiscoveryResult) => void
+    const pendingDiscovery = new Promise<ModelDiscoveryResult>((resolve) => {
+      settleDiscovery = resolve
+    })
+    const discoverModels = vi.fn(() => pendingDiscovery)
+    await renderSettings(model, discoverModels)
+    await act(async () => {
+      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
+    })
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(1))
+
+    const endpointInput = Array.from(document.querySelectorAll('input'))
+      .find(candidate => candidate.value === model.baseUrl)
+    if (!(endpointInput instanceof HTMLInputElement)) throw new Error('Missing endpoint input')
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(endpointInput, 'https://edited-provider.invalid/v1')
+      endpointInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    await expect.element(page.getByRole('button', { name: '获取模型列表', exact: true })).toBeEnabled()
+    await act(async () => {
+      await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
+    })
+    await expect.element(page.getByText('请先保存端点、协议和 API Key，再获取模型列表。', { exact: true })).toBeVisible()
+    expect(discoverModels).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      settleDiscovery({
+        success: true,
+        models: [{ id: 'stale-model', name: 'Stale model', value: 'stale-model' }],
+      })
+      await pendingDiscovery
+    })
+
+    expect(document.querySelector('select[aria-label="端点模型列表"]')).toBeNull()
+    await expect.element(page.getByText('请先保存端点、协议和 API Key，再获取模型列表。', { exact: true })).toBeVisible()
+  })
+
+  it('ignores a pending discovery after switching to another saved profile', async () => {
+    const first = savedProfile({ id: 'first-profile', name: 'First profile' })
+    const second = savedProfile({ id: 'second-profile', name: 'Second profile', modelName: 'second-manual-model' })
+    let settleDiscovery!: (result: ModelDiscoveryResult) => void
+    const pendingDiscovery = new Promise<ModelDiscoveryResult>((resolve) => {
+      settleDiscovery = resolve
+    })
+    const discoverModels = vi.fn(() => pendingDiscovery)
+    await renderSettings(first, discoverModels, 'zh-CN', [second])
+
+    const clickEditButton = async (index: number) => {
+      const buttons = Array.from(document.querySelectorAll('button[title="编辑"]'))
+      const button = buttons[index]
+      if (!(button instanceof HTMLButtonElement)) throw new Error(`Missing edit button ${index}`)
+      await act(async () => button.click())
+    }
+
+    await clickEditButton(0)
+    await act(async () => {
+      await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
+    })
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith(first.id))
+    await act(async () => {
+      await page.getByRole('button', { name: '取消', exact: true }).click()
+    })
+    await clickEditButton(1)
+
+    await act(async () => {
+      settleDiscovery({
+        success: true,
+        models: [{ id: 'stale-first-model', name: 'Stale first model', value: 'stale-first-model' }],
+      })
+      await pendingDiscovery
+    })
+
+    expect(document.querySelector('select[aria-label="端点模型列表"]')).toBeNull()
+    expect(Array.from(document.querySelectorAll('input')).some(input => input.value === second.modelName)).toBe(true)
+    await expect.element(page.getByRole('button', { name: '获取模型列表', exact: true })).toBeEnabled()
+  })
+
+  it('ignores a pending discovery after settings is closed and reopened', async () => {
+    const model = savedProfile()
+    let settleDiscovery!: (result: ModelDiscoveryResult) => void
+    const pendingDiscovery = new Promise<ModelDiscoveryResult>((resolve) => {
+      settleDiscovery = resolve
+    })
+    const discoverModels = vi.fn(() => pendingDiscovery)
+    await renderSettings(model, discoverModels)
+    await act(async () => {
+      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
+    })
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      root?.render(<SettingsModal open={false} onClose={() => {}} />)
+    })
+    await act(async () => {
+      root?.render(<SettingsModal open onClose={() => {}} />)
+    })
+    await act(async () => {
+      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      settleDiscovery({
+        success: true,
+        models: [{ id: 'stale-closed-model', name: 'Stale closed model', value: 'stale-closed-model' }],
+      })
+      await pendingDiscovery
+    })
+
+    expect(document.querySelector('select[aria-label="端点模型列表"]')).toBeNull()
+    await expect.element(page.getByRole('button', { name: '获取模型列表', exact: true })).toBeEnabled()
   })
 
   it.each([

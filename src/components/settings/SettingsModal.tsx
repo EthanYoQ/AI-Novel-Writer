@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   X, Plus, Trash2, Check, Save, Globe, Cpu, Database,
   Type, Settings2, Zap, Eye, EyeOff, ChevronDown, MessageSquare,
@@ -255,6 +255,7 @@ function LLMSection({
       {/* 模型编辑表单 */}
       {editingModel && (
         <ModelForm
+          key={editingModel.id}
           model={editingModel}
           onChange={setEditingModel}
           onSave={handleSave}
@@ -441,6 +442,35 @@ function ModelForm({
   const [discovering, setDiscovering] = useState(false)
   const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([])
   const [discoveryNotice, setDiscoveryNotice] = useState<ModelDiscoveryErrorCode | 'needs_save' | null>(null)
+  const discoveryRevision = useRef(0)
+  const currentDiscoveryConfig = useRef({
+    id: model.id,
+    provider: model.provider,
+    protocol: model.protocol,
+    baseUrl: model.baseUrl,
+    apiKey: model.apiKey,
+  })
+
+  useLayoutEffect(() => {
+    currentDiscoveryConfig.current = {
+      id: model.id,
+      provider: model.provider,
+      protocol: model.protocol,
+      baseUrl: model.baseUrl,
+      apiKey: model.apiKey,
+    }
+  }, [model.apiKey, model.baseUrl, model.id, model.protocol, model.provider])
+
+  useEffect(() => () => {
+    discoveryRevision.current += 1
+  }, [])
+
+  const invalidateDiscovery = () => {
+    discoveryRevision.current += 1
+    setDiscovering(false)
+    setDiscoveredModels([])
+    setDiscoveryNotice(null)
+  }
 
   const isEmbedding = model.purposes?.includes('embedding')
   const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
@@ -462,8 +492,7 @@ function ModelForm({
   /** 更新单个字段 */
   const up = <K extends keyof ModelProfile>(key: K, val: ModelProfile[K]) => {
     if (key === 'provider' || key === 'protocol' || key === 'baseUrl' || key === 'apiKey') {
-      setDiscoveredModels([])
-      setDiscoveryNotice(null)
+      invalidateDiscovery()
     }
     onChange({ ...model, [key]: val })
   }
@@ -495,8 +524,7 @@ function ModelForm({
       ? p?.embeddingModelCapabilities?.[defaultModelName]
       : firstModel?.capabilities
     setCustomModelName(false)
-    setDiscoveredModels([])
-    setDiscoveryNotice(null)
+    invalidateDiscovery()
     onChange({
       ...model,
       provider,
@@ -551,25 +579,38 @@ function ModelForm({
       || savedModel.baseUrl !== model.baseUrl
       || savedModel.apiKey !== model.apiKey
     if (discoveryConfigChanged) {
-      setDiscoveredModels([])
+      invalidateDiscovery()
       setDiscoveryNotice('needs_save')
       return
     }
 
+    const requestRevision = discoveryRevision.current + 1
+    discoveryRevision.current = requestRevision
+    const requestConfig = { ...currentDiscoveryConfig.current }
+    const isCurrentRequest = () => {
+      const current = currentDiscoveryConfig.current
+      return discoveryRevision.current === requestRevision
+        && current.id === requestConfig.id
+        && current.provider === requestConfig.provider
+        && current.protocol === requestConfig.protocol
+        && current.baseUrl === requestConfig.baseUrl
+        && current.apiKey === requestConfig.apiKey
+    }
     setDiscovering(true)
     setDiscoveredModels([])
     setDiscoveryNotice(null)
     try {
       const result = await discoverModels(model.id)
+      if (!isCurrentRequest()) return
       if (result.success) {
         setDiscoveredModels(result.models)
       } else {
         setDiscoveryNotice(result.errorCode)
       }
     } catch {
-      setDiscoveryNotice('network')
+      if (isCurrentRequest()) setDiscoveryNotice('network')
     } finally {
-      setDiscovering(false)
+      if (isCurrentRequest()) setDiscovering(false)
     }
   }
 
