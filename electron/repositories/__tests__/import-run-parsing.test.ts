@@ -94,6 +94,58 @@ describe('persisted per-source parsing', () => {
     })
   })
 
+  it('reopens after every source commit and finalizes only from persisted project snapshots', () => {
+    begin('committed-before-crash')
+    ImportRunRepository.commitParsedSource('committed-before-crash', SOURCE_A, [chapter(1, 'saved A')])
+    ImportRunRepository.commitParsedSource('committed-before-crash', SOURCE_B, [chapter(1, 'saved B')])
+    expect(ImportRunRepository.get('committed-before-crash')).toMatchObject({
+      stage: 'parsing', completedSources: 2, totalSources: 2, progressCompleted: 2, progressTotal: 2,
+    })
+
+    closeProjectDatabase()
+    initProjectDatabase(root)
+
+    expect(ImportRunRepository.finalizeParsing('committed-before-crash')).toMatchObject({
+      classification: 'new',
+      run: { id: 'committed-before-crash', stage: 'prepared', totalChapters: 2 },
+    })
+    expect(ImportRunRepository.listChapterBatch(
+      'committed-before-crash',
+      { afterChapterNumber: 0, limit: 2 },
+    ).map(item => item.content)).toEqual(['saved A', 'saved B'])
+  })
+
+  it('keeps every completed source recoverable when finalization is temporarily blocked', () => {
+    begin('blocking-run')
+    ImportRunRepository.commitParsedSource('blocking-run', SOURCE_A, [chapter(1, 'blocking A')])
+    ImportRunRepository.commitParsedSource('blocking-run', SOURCE_B, [chapter(1, 'blocking B')])
+    ImportRunRepository.finalizeParsing('blocking-run')
+
+    begin('retry-finalize')
+    ImportRunRepository.commitParsedSource('retry-finalize', SOURCE_A, [chapter(1, 'recovered A')])
+    ImportRunRepository.commitParsedSource('retry-finalize', SOURCE_B, [chapter(1, 'recovered B')])
+    const beforeFailedFinalize = getProjectDb()!.serialize()
+    expect(() => ImportRunRepository.finalizeParsing('retry-finalize'))
+      .toThrow(/另一个可恢复导入已包含相同来源/)
+    expect(getProjectDb()!.serialize().equals(beforeFailedFinalize)).toBe(true)
+    expect(ImportRunRepository.get('retry-finalize')).toMatchObject({
+      stage: 'parsing', status: 'ready', resumable: true,
+      completedSources: 2, totalSources: 2, progressCompleted: 2, progressTotal: 2,
+    })
+
+    getProjectDb()!.prepare(`
+      UPDATE import_runs SET status = 'failed', resumable = 0 WHERE id = 'blocking-run'
+    `).run()
+    expect(ImportRunRepository.finalizeParsing('retry-finalize')).toMatchObject({
+      classification: 'new',
+      run: { id: 'retry-finalize', stage: 'prepared', totalChapters: 2 },
+    })
+    expect(ImportRunRepository.listChapterBatch(
+      'retry-finalize',
+      { afterChapterNumber: 0, limit: 2 },
+    ).map(item => item.content)).toEqual(['recovered A', 'recovered B'])
+  })
+
   it('resumes the stable source set after names and file sizes change and refreshes display metadata', () => {
     begin()
     ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, [chapter(1)])

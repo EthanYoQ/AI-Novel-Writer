@@ -355,6 +355,78 @@ describe('current-project reference import', () => {
     expect(invoke.mock.calls.some(([channel]) => channel === 'dialog:select-novel-files')).toBe(false)
   })
 
+  it('finalizes a fully parsed run after reopen without rereading sources and can retry a conflict', async () => {
+    const parsing = importRun({
+      id: 'parsed-before-crash',
+      stage: 'parsing',
+      status: 'ready',
+      sourceDisplay: [
+        { displayName: 'already-read-a.txt', mediaType: 'text/plain', size: 20 },
+        { displayName: 'already-read-b.txt', mediaType: 'text/plain', size: 20 },
+      ],
+      totalChapters: 2,
+      completedChapters: 2,
+      completedSources: 2,
+      totalSources: 2,
+      progressCompleted: 2,
+      progressTotal: 2,
+    })
+    const prepared = importRun({
+      id: parsing.id,
+      stage: 'prepared',
+      status: 'ready',
+      sourceDisplay: parsing.sourceDisplay,
+      totalChapters: 2,
+      manifestChapterCount: 2,
+      progressCompleted: 0,
+      progressTotal: 2,
+    })
+    let finalizeAttempts = 0
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-list-resumable') return [parsing]
+      if (channel === 'db:import-run-finalize-parsing') {
+        finalizeAttempts += 1
+        expect(args[0]).toBe(parsing.id)
+        if (finalizeAttempts === 1) {
+          return {
+            success: false,
+            error: '另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试',
+          }
+        }
+        return {
+          success: true,
+          preparation: {
+            classification: 'new',
+            run: prepared,
+            newChapterNumbers: [1, 2],
+            conflictChapterNumbers: [],
+            duplicateChapterNumbers: [],
+          },
+        }
+      }
+      if (channel === 'dialog:select-novel-files' || channel === 'import:inspect-files') {
+        throw new Error('already parsed sources must not be read again')
+      }
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await act(async () => page.getByRole('button', { name: '继续导入' }).click())
+    await expect.element(page.getByText('另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试')).toBeVisible()
+    expect(startWorkflow).not.toHaveBeenCalled()
+
+    await act(async () => page.getByRole('button', { name: '继续导入' }).click())
+
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: parsing.id })
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:import-run-finalize-parsing')).toHaveLength(2)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'dialog:select-novel-files')).toBe(false)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'import:inspect-files')).toBe(false)
+  })
+
   it('reauthorizes a restarted parsing run in English before starting its prepared workflow', async () => {
     const failedParsing = importRun({
       id: 'failed-parsing', locale: 'en-US', stage: 'parsing', status: 'failed',

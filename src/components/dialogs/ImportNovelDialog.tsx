@@ -3,6 +3,7 @@ import { FileUp, FolderOpen, BookOpen, Zap, Clock, AlertTriangle, RotateCcw } fr
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
+import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { ImportInspectionSummary, ImportRunPreparationResult, ImportRunSnapshot } from '../../shared/import-run'
 import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
 import {
@@ -186,6 +187,52 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     if (isProjectSessionCurrent(projectSession)) onClose()
   }, [onClose, startWorkflow, text])
 
+  const applyPreparation = useCallback((
+    preparation: ImportRunPreparationResult,
+    projectSession: ProjectSessionContext,
+    consumedRunId?: string,
+  ) => {
+    if (consumedRunId) {
+      setResumableState(previous => {
+        if (previous?.projectLeaseId !== projectSession.leaseId) return previous
+        const runs = previous.runs.filter(run => run.id !== consumedRunId)
+        return runs.length > 0 ? { ...previous, runs } : null
+      })
+    }
+    if (preparation.classification === 'exact-duplicate') {
+      setImportNotice(text(
+        '该来源与已完成导入完全一致；未创建任务，也未调用模型。',
+        'This source exactly matches a completed import. No task or model call was created.',
+      ))
+      return
+    }
+    if (preparation.classification === 'conflict') {
+      const chaptersText = preparation.conflictChapterNumbers.join(', ')
+      setSplitError(text(
+        `以下章节号已有不同参照内容，请先调整编号或拆分文件：${chaptersText}`,
+        `These chapter numbers already contain different reference content. Renumber or split them before importing: ${chaptersText}`,
+      ))
+      return
+    }
+    if (preparation.classification === 'resumable' && preparation.run) {
+      setResumableState(previous => {
+        const previousRuns = previous?.projectLeaseId === projectSession.leaseId ? previous.runs : []
+        return {
+          projectLeaseId: projectSession.leaseId,
+          runs: [preparation.run!, ...previousRuns.filter(run => run.id !== preparation.run!.id)],
+        }
+      })
+      setSelectedResumableRunId(preparation.run.id)
+      setImportNotice(text(
+        '发现同一来源的未完成导入，请选择继续或重新开始。',
+        'An unfinished import for this source is available. Continue it or start over.',
+      ))
+      return
+    }
+    if (!preparation.run) throw new Error(text('导入运行缺少持久化记录', 'The import run has no persisted record.'))
+    launchRun(preparation.run)
+  }, [launchRun, text])
+
   /** 执行导入 */
   const handleImport = useCallback(async () => {
     if (
@@ -210,38 +257,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       const preparation = selectionPreparation
       setSelectionPreparation(null)
       setSelectionProjectLeaseId('')
-      if (preparation.classification === 'exact-duplicate') {
-        setImportNotice(text(
-          '该来源与已完成导入完全一致；未创建任务，也未调用模型。',
-          'This source exactly matches a completed import. No task or model call was created.',
-        ))
-        return
-      }
-      if (preparation.classification === 'conflict') {
-        const chaptersText = preparation.conflictChapterNumbers.join(', ')
-        setSplitError(text(
-          `以下章节号已有不同参照内容，请先调整编号或拆分文件：${chaptersText}`,
-          `These chapter numbers already contain different reference content. Renumber or split them before importing: ${chaptersText}`,
-        ))
-        return
-      }
-      if (preparation.classification === 'resumable' && preparation.run) {
-        setResumableState(previous => {
-          const previousRuns = previous?.projectLeaseId === projectSession.leaseId ? previous.runs : []
-          return {
-            projectLeaseId: projectSession.leaseId,
-            runs: [preparation.run!, ...previousRuns.filter(run => run.id !== preparation.run!.id)],
-          }
-        })
-        setSelectedResumableRunId(preparation.run.id)
-        setImportNotice(text(
-          '发现同一来源的未完成导入，请选择继续或重新开始。',
-          'An unfinished import for this source is available. Continue it or start over.',
-        ))
-        return
-      }
-      if (!preparation.run) throw new Error(text('导入运行缺少持久化记录', 'The import run has no persisted record.'))
-      launchRun(preparation.run)
+      applyPreparation(preparation, projectSession)
     } catch (e) {
       console.error('[ImportNovel] 导入失败:', e)
       setSplitError(e instanceof Error ? e.message : String(e))
@@ -249,17 +265,47 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       setImporting(false)
     }
   }, [
-    inspection, selectionPreparation, selectionProjectLeaseId, currentProject, text, launchRun,
+    inspection, selectionPreparation, selectionProjectLeaseId, currentProject, text, applyPreparation,
   ])
 
-  const handleResume = useCallback(() => {
+  const handleResume = useCallback(async () => {
     if (!resumableRun) return
     if (resumableRun.stage === 'parsing') {
-      void handleSelectFiles(resumableRun.id)
+      const completed = resumableRun.progressCompleted ?? resumableRun.completedSources ?? 0
+      const total = resumableRun.progressTotal ?? resumableRun.totalSources ?? 0
+      if (total < 1 || completed !== total) {
+        void handleSelectFiles(resumableRun.id)
+        return
+      }
+      const project = useProjectStore.getState().currentProject
+      const projectSession = captureProjectSession(project)
+      if (!project || !projectSession) return
+      setImporting(true)
+      setSplitError('')
+      setImportNotice('')
+      try {
+        const result = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:import-run-finalize-parsing',
+          resumableRun.id,
+          project.path,
+        )
+        if (!isProjectSessionCurrent(projectSession)) return
+        if (!result.success || !result.preparation) throw new Error(result.error || text(
+          '无法完成已解析的导入，请重试。',
+          'Could not finalize the parsed import. Please try again.',
+        ))
+        applyPreparation(result.preparation, projectSession, resumableRun.id)
+      } catch (error) {
+        if (!isProjectSessionCurrent(projectSession)) return
+        setSplitError(error instanceof Error ? error.message : String(error))
+      } finally {
+        setImporting(false)
+      }
       return
     }
     launchRun(resumableRun)
-  }, [handleSelectFiles, launchRun, resumableRun])
+  }, [applyPreparation, handleSelectFiles, launchRun, resumableRun, text])
 
   const handleRestart = useCallback(async () => {
     if (!resumableRun) return

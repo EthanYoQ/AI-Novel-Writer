@@ -48,6 +48,7 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:import-global-facts-commit',
   'db:project-clear-generated-data',
   'db:import-run-prepare-inspection',
+  'db:import-run-finalize-parsing',
   'db:import-run-start-resume',
   'db:import-run-effect-receipt-prepare',
   'db:import-run-effect-receipt-commit',
@@ -218,6 +219,15 @@ export function registerDatabaseController() {
       }
     }
     return { success: true, preparation: ImportRunRepository.finalizeParsing(parsingRun.id) }
+  })
+
+  ipcMain.handle('db:import-run-finalize-parsing', async (
+    _event,
+    runId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, preparation: ImportRunRepository.finalizeParsing(runId) }
   })
 
   ipcMain.handle('db:import-run-get', async (_event, runId: string, expectedProjectPath: string) => {

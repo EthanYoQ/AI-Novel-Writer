@@ -632,6 +632,10 @@ export interface DatabaseChannels {
     args: [request: ImportRunPrepareFromInspectionRequest, expectedProjectPath: string]
     return: { success: boolean; preparation?: ImportRunPreparationResult; error?: string }
   }
+  'db:import-run-finalize-parsing': {
+    args: [runId: string, expectedProjectPath: string]
+    return: { success: boolean; preparation?: ImportRunPreparationResult; error?: string }
+  }
   'db:import-run-get': { args: [runId: string, expectedProjectPath: string]; return: ImportRunSnapshot | null }
   'db:import-run-list-resumable': { args: [expectedProjectPath: string]; return: ImportRunSnapshot[] }
   'db:import-run-list-chapters': {
