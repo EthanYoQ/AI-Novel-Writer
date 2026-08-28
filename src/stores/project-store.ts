@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { ipc } from '../services/ipc-client'
 import type {
+  CreateProjectConfig,
   ProjectChannels,
   ProjectData,
   ProjectSessionContext,
@@ -277,13 +278,7 @@ interface ProjectState {
 
   // ===== 操作 =====
   /** 新建项目 */
-  createProject: (config: {
-    name: string
-    path: string
-    genre: string
-    targetAudience: string
-    writingLanguage?: NovelConfig['writingLanguage']
-  }) => Promise<boolean>
+  createProject: (config: CreateProjectConfig) => Promise<boolean>
   /** 打开项目 */
   openProject: (projectPath: string) => Promise<boolean>
   /** 保存项目 */

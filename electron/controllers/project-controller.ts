@@ -3,12 +3,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { readJsonFile, writeJsonFile, RECENT_PROJECTS_PATH } from '../utils/config-utils'
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
-import { ProjectData, type ProjectSessionContext } from '../../src/shared/ipc-channels'
+import {
+  ProjectData,
+  type CreateProjectConfig,
+  type ProjectSessionContext,
+} from '../../src/shared/ipc-channels'
 import { DIR_PROMPTS } from '../../src/shared/project-paths'
 import { sameProjectPathKey } from '../../src/shared/project-session-context'
 import {
   resolveWritingLanguage,
-  type WritingLanguage,
 } from '../../src/shared/writing-language'
 import {
   closeProjectDatabase,
@@ -309,9 +312,7 @@ export function registerProjectController() {
   // 创建新项目
   ipcMain.handle('project:create', async (
     _event,
-    config: {
-      name: string; path: string; genre: string; targetAudience: string; writingLanguage?: WritingLanguage
-    },
+    config: CreateProjectConfig,
     requestToken: string,
   ) => {
     latestProjectOpenRequestToken = requestToken

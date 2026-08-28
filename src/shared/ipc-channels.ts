@@ -162,6 +162,14 @@ export interface ProjectSessionContext {
 }
 
 // ===== 项目管理 =====
+export interface CreateProjectConfig {
+  name: string
+  path: string
+  genre: string
+  targetAudience: string
+  writingLanguage?: WritingLanguage
+}
+
 export interface ProjectChannels {
   'project:get-runtime-context': {
     args: []
@@ -172,13 +180,7 @@ export interface ProjectChannels {
   }
   'project:create': {
     args: [
-      config: {
-        name: string
-        path: string
-        genre: string
-        targetAudience: string
-        writingLanguage?: WritingLanguage
-      },
+      config: CreateProjectConfig,
       requestToken: string,
       rendererProjectPath: string | null,
     ]

@@ -3,7 +3,7 @@ import { page } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
-import type { ProjectData } from '../../shared/ipc-channels'
+import type { CreateProjectConfig, ProjectData } from '../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../shared/project-session-context'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
@@ -81,14 +81,39 @@ describe('project writing language', () => {
       await page.getByRole('button', { name: 'Create project' }).click()
     })
 
-    await vi.waitFor(() => expect(createProject).toHaveBeenCalledWith({
+    const expectedConfig: CreateProjectConfig = {
       name: 'English novel',
       path: 'C:\\novels',
       genre: '',
       targetAudience: '',
       writingLanguage: 'en-US',
-    }))
+    }
+    await vi.waitFor(() => expect(createProject).toHaveBeenCalledWith(expectedConfig))
   })
+
+  it.each([
+    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', label: '写作语言' },
+    { uiLocale: 'zh-CN', writingLanguage: 'en-US', label: '写作语言' },
+    { uiLocale: 'en-US', writingLanguage: 'zh-CN', label: 'Writing language' },
+    { uiLocale: 'en-US', writingLanguage: 'en-US', label: 'Writing language' },
+  ] as const)(
+    'renders $writingLanguage writing in a $uiLocale interface',
+    async ({ uiLocale, writingLanguage, label }) => {
+      const currentProject = project(`${uiLocale}-${writingLanguage}`, writingLanguage)
+      useLocaleStore.setState({ locale: uiLocale })
+      useProjectStore.setState({ currentProject })
+      setActiveProjectSessionContext({
+        projectId: currentProject.id,
+        leaseId: currentProject.sessionLease!,
+        projectPath: currentProject.path,
+      })
+
+      await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+
+      await expect.element(page.getByRole('combobox', { name: label })).toBeVisible()
+      expect(writingLanguageSelect().value).toBe(writingLanguage)
+    },
+  )
 
   it('keeps the UI locale independent and follows the active project when projects switch', async () => {
     const projectA = project('A', 'en-US')
