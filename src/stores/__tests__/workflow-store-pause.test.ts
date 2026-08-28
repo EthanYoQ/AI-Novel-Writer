@@ -5,6 +5,7 @@ import { globalEventBus } from '../../shared/event-bus'
 import { useProjectStore } from '../project-store'
 import { useLocaleStore } from '../locale-store'
 import { createBoundedCompletionError } from '../../services/workflows/bounded-completion'
+import { PromptBudgetExceededError } from '../../services/generation/generation-harness'
 
 const projectPath = 'C:\\test-project'
 
@@ -262,6 +263,44 @@ describe('workflow pause at a safe step boundary', () => {
         failureCode: 'content_filter',
       })],
     })
+  })
+
+  it('preserves a typed prompt-budget failure and attributes deleted-KB overflow to remaining config', async () => {
+    const failure = new PromptBudgetExceededError({
+      totalUtf8Bytes: 13_000,
+      limitUtf8Bytes: 12_000,
+      reservedOutputTokens: 8_192,
+      sections: [
+        { sectionName: 'global-guidance', utf8Bytes: 12_020 },
+        { sectionName: 'reference-works', utf8Bytes: 400 },
+        { sectionName: 'prompt-overhead', utf8Bytes: 580 },
+      ],
+      modelId: 'model-a',
+      errorCode: 'PROMPT_BUDGET_EXHAUSTED',
+    })
+
+    await useWorkflowStore.getState().startWorkflow({
+      type: 'architecture_generation',
+      title: '角色图谱生成',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{
+        name: '角色图谱',
+        description: '生成角色身份清单',
+        executor: async () => { throw failure },
+      }],
+    })
+
+    const run = useWorkflowStore.getState().history[0]
+    expect(run).toMatchObject({
+      status: 'failed',
+      failureCode: 'prompt_budget_exhausted',
+      steps: [expect.objectContaining({ failureCode: 'prompt_budget_exhausted' })],
+    })
+    expect(run?.error).toContain('提示词共 13,000 UTF-8 字节')
+    expect(run?.error).toContain('全局指导 12,020')
+    expect(run?.error).toContain('模型：model-a；结果码：PROMPT_BUDGET_EXHAUSTED')
+    expect(run?.error).not.toContain('知识库')
   })
 
   it('atomically replaces provisional output and reconciles it to the terminal step result', async () => {

@@ -289,6 +289,110 @@ describe('GenerationHarness', () => {
     expect(session.budget.maxRequestedOutputTokensPerAttempt).toBe(4096)
   })
 
+  it('counts a known mixed-language sample as UTF-8 bytes and rejects it before a fake provider attempt', async () => {
+    const complete = vi.fn<CompletionPort['complete']>().mockResolvedValue({
+      content: 'unused',
+      finishReason: 'stop',
+    })
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const harness = createGenerationHarness({
+      modelSource: {
+        snapshotDefaultModel: () => ({ revision: 'revision-a', model: model() }),
+      },
+      completionPort: { complete },
+      policy: {
+        maxAttempts: 2,
+        maxRequestedOutputTokens: 8192,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+    const session = harness.openSession()
+    const mixedText = 'A中🙂'
+
+    await expect(session.complete({
+      purpose: 'known-utf8-preflight',
+      output: 'structured-data',
+      messages: [{ role: 'user', content: mixedText }],
+      promptBudget: {
+        limitUtf8Bytes: 7,
+        sections: [{ sectionName: 'step-guidance', messageIndex: 0, finalText: mixedText }],
+      },
+    })).rejects.toMatchObject({
+      name: 'PromptBudgetExceededError',
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: {
+        totalUtf8Bytes: 8,
+        limitUtf8Bytes: 7,
+        reservedOutputTokens: 4096,
+        sections: [{ sectionName: 'step-guidance', utf8Bytes: 8 }],
+        modelId: 'model-a',
+        errorCode: 'PROMPT_BUDGET_EXHAUSTED',
+      },
+    })
+    expect(complete).not.toHaveBeenCalled()
+    expect(diagnostic).toHaveBeenCalledWith('[GenerationPromptBudget]', {
+      totalUtf8Bytes: 8,
+      limitUtf8Bytes: 7,
+      reservedOutputTokens: 4096,
+      sections: [{ sectionName: 'step-guidance', utf8Bytes: 8 }],
+      modelId: 'model-a',
+      errorCode: 'PROMPT_BUDGET_EXHAUSTED',
+    })
+
+    const recovered = await session.complete(task())
+    expect(recovered.receipt.budget).toMatchObject({
+      attempt: 1,
+      cumulativeRequestedOutputTokens: 4096,
+    })
+    expect(complete).toHaveBeenCalledOnce()
+    diagnostic.mockRestore()
+  })
+
+  it('sends an in-budget protected author section unchanged and records only its size in the receipt', async () => {
+    const complete = vi.fn<CompletionPort['complete']>().mockResolvedValue({
+      content: '{"ok":true}',
+      finishReason: 'stop',
+    })
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const harness = createGenerationHarness({
+      modelSource: {
+        snapshotDefaultModel: () => ({ revision: 'revision-a', model: model() }),
+      },
+      completionPort: { complete },
+      policy: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+    const authorGuidance = 'Keep this 完整 guidance unchanged.'
+
+    const outcome = await harness.openSession().complete({
+      purpose: 'protected-guidance',
+      output: 'structured-data',
+      messages: [{ role: 'user', content: authorGuidance }],
+      promptBudget: {
+        limitUtf8Bytes: 128,
+        sections: [{ sectionName: 'global-guidance', messageIndex: 0, finalText: authorGuidance }],
+      },
+    })
+
+    expect(complete.mock.calls[0]?.[0].messages[0]?.content).toBe(authorGuidance)
+    expect(outcome.receipt.promptBudget).toEqual({
+      totalUtf8Bytes: 36,
+      limitUtf8Bytes: 128,
+      reservedOutputTokens: 4096,
+      sections: [{ sectionName: 'global-guidance', utf8Bytes: 36 }],
+      modelId: 'model-a',
+      errorCode: 'OK',
+    })
+    expect(JSON.stringify(outcome.receipt)).not.toContain(authorGuidance)
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(authorGuidance)
+    diagnostic.mockRestore()
+  })
+
   it('rejects an invalid per-attempt requested-token cap before opening a session', () => {
     expect(() => createGenerationHarness({
       modelSource: {

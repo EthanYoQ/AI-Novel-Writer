@@ -117,7 +117,6 @@ function directoryGenerationFailureSummary(
 
 const COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES = 16_384
 const COMPACT_ARCHITECTURE_MAX_UTF8_BYTES = 4_800
-const COMPACT_GUIDANCE_MAX_UTF8_BYTES = 1_200
 const COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES = 600
 const COMPACT_RECENT_BLUEPRINTS = 3
 
@@ -168,8 +167,8 @@ function buildCompactBlueprintTask(input: {
       keyEvents: boundedFactText(chapter.keyEvents, 1_200),
       suspenseHook: boundedFactText(chapter.suspenseHook, 480),
     })),
-    globalGuidance: boundedFactText(input.globalGuidance, COMPACT_GUIDANCE_MAX_UTF8_BYTES),
-    pacingGuidance: boundedFactText(input.pacingGuidance, COMPACT_GUIDANCE_MAX_UTF8_BYTES),
+    globalGuidance: input.globalGuidance,
+    pacingGuidance: input.pacingGuidance,
   }
   const prompt = [
     promptLanguageText(input.writingLanguage, '上一次单章蓝图达到输出上限，其内容已丢弃。仅根据下列有界事实重建该章完整蓝图。', 'The previous single-chapter blueprint reached the output limit and was discarded. Rebuild the complete chapter blueprint from only the bounded facts below.'),
@@ -182,9 +181,11 @@ function buildCompactBlueprintTask(input: {
   ].join('\n')
   const systemRole = boundedFactText(input.systemRole, COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES)
     || promptLanguageText(input.writingLanguage, '你是一位经验丰富的网文架构师。', 'You are an experienced web-fiction architect.')
-  if (utf8Bytes(prompt) + utf8Bytes(systemRole) > COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES) {
-    throw new Error('紧凑单章蓝图任务超过安全字节上限')
-  }
+  const factSection = (sectionName: string, key: keyof typeof facts) => ({
+    sectionName,
+    messageIndex: 1,
+    finalText: JSON.stringify({ [key]: facts[key] }).slice(1, -1),
+  })
   return {
     purpose: `chapter-blueprint-directory:compact-single:chapter-${input.chapterNumber}`,
     output: 'structured-data',
@@ -192,6 +193,19 @@ function buildCompactBlueprintTask(input: {
       { role: 'system', content: systemRole },
       { role: 'user', content: prompt },
     ],
+    promptBudget: {
+      limitUtf8Bytes: COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES,
+      sections: [
+        { sectionName: 'system-instructions', messageIndex: 0, finalText: systemRole },
+        factSection('target-chapter', 'targetChapterNumber'),
+        factSection('project-chapter-count', 'totalChapters'),
+        factSection('genre', 'genre'),
+        factSection('architecture', 'architectureExcerpt'),
+        factSection('previous-blueprints', 'recentBlueprints'),
+        factSection('global-guidance', 'globalGuidance'),
+        factSection('step-guidance', 'pacingGuidance'),
+      ],
+    },
   }
 }
 

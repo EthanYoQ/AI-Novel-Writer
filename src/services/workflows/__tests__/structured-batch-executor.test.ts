@@ -7,6 +7,7 @@ import {
 import {
   createGenerationHarness,
   GenerationAttemptError,
+  PromptBudgetExceededError,
   type GenerationOutcome,
   GenerationAttemptReceipt,
   type GenerationSession,
@@ -181,6 +182,29 @@ function blueprintJson(chapters: readonly number[]): string {
 }
 
 describe('StructuredBatchExecutor seam', () => {
+  it('propagates a typed prompt-budget preflight without manufacturing a batch receipt', async () => {
+    const promptBudgetError = new PromptBudgetExceededError({
+      totalUtf8Bytes: 17_000,
+      limitUtf8Bytes: 16_384,
+      reservedOutputTokens: 4096,
+      sections: [{ sectionName: 'global-guidance', utf8Bytes: 16_500 }],
+      modelId: 'test-model',
+      errorCode: 'PROMPT_BUDGET_EXHAUSTED',
+    })
+    const complete = vi.fn().mockRejectedValue(promptBudgetError)
+    const executor = createStructuredBatchExecutor({
+      contract: blueprintContract,
+      session: { complete },
+    })
+
+    await expect(executor.execute({
+      items: [1],
+      limits: { maxBatchItems: 1 },
+    })).rejects.toBe(promptBudgetError)
+    expect(complete).toHaveBeenCalledOnce()
+    expect(promptBudgetError).not.toHaveProperty('receipt')
+  })
+
   it('uses the eleven-chapter planner budget for recursive splits plus bounded compact singles', async () => {
     let compactFallbackUsed = false
     const physicalComplete = vi.fn(async (request: Parameters<NonNullable<Parameters<typeof createGenerationHarness>[0]['completionPort']['complete']>>[0]) => {
@@ -658,6 +682,12 @@ describe('StructuredBatchExecutor seam', () => {
       expect(task).toMatchObject({
         purpose: 'chapter-blueprints:structured-syntax-repair',
         output: 'structured-data',
+        promptBudget: {
+          sections: expect.arrayContaining([
+            expect.objectContaining({ sectionName: 'repair-contract', messageIndex: 1 }),
+            expect.objectContaining({ sectionName: 'repair-candidate', messageIndex: 1 }),
+          ]),
+        },
       })
       const repairPrompt = task.messages.map(message => message.content).join('\n')
       expect(repairPrompt).toContain('"items":[1]')

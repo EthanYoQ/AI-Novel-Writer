@@ -172,6 +172,11 @@ const MAX_CHARACTER_SLOTS = 8
 const CHARACTER_DETAIL_BATCH_SIZE = 1
 const MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES = 12_000
 const MAX_CHARACTER_PREFIX_UTF8_BYTES = 24_000
+
+function promptUtf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength
+}
+
 function findCompleteJsonObjectEnd(source: string, start: number): number | undefined {
   let depth = 0
   let inString = false
@@ -708,20 +713,17 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       stepGuidance: ((context.data.stepGuidance as Record<string, string>) || {}).characters || missingValue,
       referenceWorks: config.referenceWorks || missingValue,
     }
+    const manifestContextJson = JSON.stringify(manifestContext)
     const manifestPrompt = promptCopy.manifestTask(
-      JSON.stringify(manifestContext),
+      manifestContextJson,
       MIN_CHARACTER_SLOTS,
       MAX_CHARACTER_SLOTS,
     )
-    const manifestPromptBytes = new TextEncoder().encode(
-      `${promptCopy.manifestSystem}\n${manifestPrompt}`,
-    ).byteLength
-    if (manifestPromptBytes > MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES) {
-      throw new Error(text(
-        '角色身份清单提示超过安全字节上限，请缩短角色指导或参考作品',
-        'The character identity prompt exceeds the safe byte limit. Shorten the character guidance or reference works.',
-      ))
-    }
+    const manifestSection = (sectionName: string, key: keyof typeof manifestContext) => ({
+      sectionName,
+      messageIndex: 1,
+      finalText: JSON.stringify({ [key]: manifestContext[key] }).slice(1, -1),
+    })
     const manifestRaw = await this.callLLMWithBoundedCompletion(
       manifestPrompt,
       promptCopy.manifestSystem,
@@ -731,6 +733,22 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         responseFormat: { type: 'json_object' },
         purpose: 'character-architecture-manifest',
         reasoningStage: 'planning',
+        promptBudget: {
+          limitUtf8Bytes: MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES,
+          sections: [
+            {
+              sectionName: 'system-instructions',
+              messageIndex: 0,
+              finalText: promptCopy.manifestSystem,
+            },
+            manifestSection('story-premise', 'premise'),
+            manifestSection('genre', 'genre'),
+            manifestSection('protagonist-profile', 'protagonistProfile'),
+            manifestSection('global-guidance', 'globalGuidance'),
+            manifestSection('step-guidance', 'stepGuidance'),
+            manifestSection('reference-works', 'referenceWorks'),
+          ],
+        },
       },
       context,
     )
@@ -757,12 +775,16 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
           role: entry.role,
           relationships: entry.relationships,
         })))
-        if (new TextEncoder().encode(prefix).byteLength > MAX_CHARACTER_PREFIX_UTF8_BYTES) {
-          throw new Error(text(
-            '已验证角色详情前缀超过安全字节上限，未继续生成或写入',
-            'The validated character-detail prefix exceeds the safe byte limit; generation and persistence stopped.',
-          ))
-        }
+        const frozenManifest = JSON.stringify({ slots: manifest })
+        const slotIds = items.map(slot => slot.slotId).join(', ')
+        const detailPrompt = promptCopy.detailTask({
+          context: manifestContextJson,
+          manifest: frozenManifest,
+          slotIds,
+          validatedPrefix: prefix,
+        })
+        const detailRequestBytes = promptUtf8Bytes(promptCopy.detailSystem) + promptUtf8Bytes(detailPrompt)
+        const fixedDetailRequestBytes = detailRequestBytes - promptUtf8Bytes(prefix)
         return {
           purpose: 'character-architecture-details',
           output: 'structured-data',
@@ -770,14 +792,40 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
             { role: 'system', content: promptCopy.detailSystem },
             {
               role: 'user',
-              content: promptCopy.detailTask({
-                context: JSON.stringify(manifestContext),
-                manifest: JSON.stringify({ slots: manifest }),
-                slotIds: items.map(slot => slot.slotId).join(', '),
-                validatedPrefix: prefix,
-              }),
+              content: detailPrompt,
             },
           ],
+          promptBudget: {
+            limitUtf8Bytes: fixedDetailRequestBytes + MAX_CHARACTER_PREFIX_UTF8_BYTES,
+            sections: [
+              {
+                sectionName: 'system-instructions',
+                messageIndex: 0,
+                finalText: promptCopy.detailSystem,
+              },
+              manifestSection('story-premise', 'premise'),
+              manifestSection('genre', 'genre'),
+              manifestSection('protagonist-profile', 'protagonistProfile'),
+              manifestSection('global-guidance', 'globalGuidance'),
+              manifestSection('step-guidance', 'stepGuidance'),
+              manifestSection('reference-works', 'referenceWorks'),
+              {
+                sectionName: 'identity-manifest',
+                messageIndex: 1,
+                finalText: frozenManifest,
+              },
+              {
+                sectionName: 'batch-slot-ids',
+                messageIndex: 1,
+                finalText: slotIds,
+              },
+              {
+                sectionName: 'validated-prefix',
+                messageIndex: 1,
+                finalText: prefix,
+              },
+            ],
+          },
         }
       },
       inputKey: slot => slot.slotId,

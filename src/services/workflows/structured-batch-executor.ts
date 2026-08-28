@@ -1,6 +1,7 @@
 import {
   GenerationAttemptError,
   GenerationHarnessError,
+  PromptBudgetExceededError,
   type GenerationAttemptReceipt,
   type GenerationSession,
   type GenerationTask,
@@ -421,6 +422,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         }
         return { ok: true, items: validated, receipt }
       } catch (error) {
+        if (error instanceof PromptBudgetExceededError) throw error
         let failure: StructuredBatchFailure
         if (error instanceof ExecutionFailure) {
           failure = error.failure

@@ -10,6 +10,7 @@ import {
 import type {
   GenerationAttemptReceipt,
   GenerationSession,
+  PromptBudgetPolicy,
 } from '../../generation/generation-harness'
 import type { GenerationReasoningStage } from '../../../shared/reasoning-types'
 import {
@@ -36,6 +37,7 @@ type WorkflowLLMOptions = {
   responseFormat?: { type: string }
   purpose?: string
   reasoningStage?: GenerationReasoningStage
+  promptBudget?: PromptBudgetPolicy
 }
 
 export type WorkflowGenerationIntent = 'structured' | 'text' | 'character-architecture'
@@ -218,7 +220,26 @@ export abstract class BaseWorkflowCommand<TResult = string> {
           continuationPrompt,
           systemPrompt,
           callbacks,
-          options,
+          options?.promptBudget
+            ? {
+                ...options,
+                promptBudget: {
+                  limitUtf8Bytes: options.promptBudget.limitUtf8Bytes,
+                  sections: [
+                    {
+                      sectionName: 'system-instructions',
+                      messageIndex: 0,
+                      finalText: systemPrompt,
+                    },
+                    {
+                      sectionName: 'continuation-request',
+                      messageIndex: 1,
+                      finalText: continuationPrompt,
+                    },
+                  ],
+                },
+              }
+            : options,
           context,
         )
         callbacks.log(text(
@@ -257,6 +278,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt },
         ],
+        ...(options?.promptBudget ? { promptBudget: options.promptBudget } : {}),
       }, { signal: execution.signal })
       this.assertNotCancelled(context)
       const content = this.stripThinkingTags(outcome.content)

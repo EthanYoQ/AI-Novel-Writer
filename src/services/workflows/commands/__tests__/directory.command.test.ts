@@ -691,11 +691,22 @@ describe('GenerateDirectoryCommand', () => {
   it('replaces one length-truncated single blueprint in full on the same runtime and commits once', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const observed: Array<{ range: [number, number]; purpose: string }> = []
+    const authorGuidance = `KEEP-FULL-${'g'.repeat(1_300)}-END`
     let attempt = 0
     const session = generationSession(async (task) => {
       attempt += 1
       const range = taskRange(task)
       observed.push({ range, purpose: task.purpose })
+      if (task.purpose.includes(':compact-single:')) {
+        const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
+        expect(prompt).toContain(authorGuidance)
+        expect(task.promptBudget).toMatchObject({
+          limitUtf8Bytes: 16_384,
+          sections: expect.arrayContaining([
+            expect.objectContaining({ sectionName: 'global-guidance', messageIndex: 1 }),
+          ]),
+        })
+      }
       if (attempt <= 2) {
         return {
           status: 'incomplete',
@@ -718,7 +729,10 @@ describe('GenerateDirectoryCommand', () => {
     const createRuntime = vi.fn(async () => testRuntime(session))
     const command = new GenerateDirectoryCommand(
       { mode: 'full', count: 2 },
-      projectSnapshot,
+      {
+        ...projectSnapshot,
+        novelConfig: { ...projectSnapshot.novelConfig, globalGuidance: authorGuidance },
+      },
       { createRuntime },
     )
 

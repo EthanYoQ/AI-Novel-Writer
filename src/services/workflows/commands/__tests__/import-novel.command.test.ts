@@ -693,16 +693,22 @@ describe('InferGlobalSettingsCommand', () => {
     const malformed = `${valid.slice(0, -1)},}`
     const generateStream = vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(
       async (_messages, streamCallbacks, _modelId, options) => {
-        expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
-          'kb:search', 'kb:search', 'kb:search', 'kb:search',
-        ])
+        expect(invoke.mock.calls.filter(([channel]) => channel === 'kb:search')).toHaveLength(4)
         streamCallbacks.onDone?.(generateStream.mock.calls.length === 1 ? malformed : valid, undefined, 'stop')
         return String(options?.modelExecutionLeaseId)
       },
     )
     useLLMStore.setState({ defaultModelId: 'model-a', generateStream })
+    const promptBudgetLog = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    let repairReport: Record<string, unknown> | undefined
 
-    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+    try {
+      await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+      repairReport = promptBudgetLog.mock.calls
+        .find(([label]) => label === '[GenerationPromptBudget]')?.[1] as Record<string, unknown> | undefined
+    } finally {
+      promptBudgetLog.mockRestore()
+    }
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(generateStream.mock.calls[0][3]?.modelExecutionLeaseId)
@@ -711,6 +717,20 @@ describe('InferGlobalSettingsCommand', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('project:save')
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:project-core-update')
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-roster-commit')
+    expect(repairReport).toBeDefined()
+    expect(Object.keys(repairReport!)).toEqual([
+      'totalUtf8Bytes',
+      'limitUtf8Bytes',
+      'reservedOutputTokens',
+      'sections',
+      'modelId',
+      'errorCode',
+    ])
+    expect(repairReport!.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sectionName: 'repair-contract' }),
+      expect.objectContaining({ sectionName: 'repair-candidate' }),
+    ]))
+    expect(JSON.stringify(repairReport)).not.toContain(malformed)
   })
 
   it('does not repair parseable semantic omissions and performs zero writes', async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle, AlertTriangle } from 'lucide-react'
+import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle, AlertTriangle, SlidersHorizontal } from 'lucide-react'
 import {
   useWorkflowStore,
   type WorkflowFailureCode,
@@ -8,6 +8,8 @@ import {
 } from '../../stores/workflow-store'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useEditorStore } from '../../stores/editor-store'
+import { useProjectStore } from '../../stores/project-store'
 import MarkdownContent from '../ui/MarkdownContent'
 import { presentWorkflowFailure } from './ai-output-failure-presentation'
 
@@ -431,6 +433,16 @@ function WorkflowFailureNotice({
   locale: 'zh-CN' | 'en-US'
 }) {
   const presentation = presentWorkflowFailure(failureCode, error, locale, isUnpersistedChapterDraft)
+  const openNovelConfiguration = () => {
+    const project = useProjectStore.getState().currentProject
+    if (!project) return
+    useEditorStore.getState().openFile({
+      id: 'config',
+      name: locale === 'zh-CN' ? '小说配置' : 'Novel configuration',
+      type: 'config',
+      projectKey: project.path,
+    })
+  }
 
   return (
     <div
@@ -449,6 +461,21 @@ function WorkflowFailureNotice({
         </p>
         <p className="m-0 mt-0.5 break-words">{presentation.reason}</p>
         {presentation.persistence && <p className="m-0 mt-1">{presentation.persistence}</p>}
+        {presentation.action === 'open-novel-config' && presentation.actionLabel && (
+          <button
+            type="button"
+            onClick={openNovelConfiguration}
+            className="mt-2 inline-flex items-center gap-1.5 rounded px-2 py-1 font-medium transition-colors"
+            style={{
+              color: 'var(--color-text)',
+              backgroundColor: 'var(--color-hover)',
+              border: '1px solid var(--color-border)',
+            }}
+          >
+            <SlidersHorizontal size={12} aria-hidden="true" />
+            {presentation.actionLabel}
+          </button>
+        )}
       </div>
     </div>
   )

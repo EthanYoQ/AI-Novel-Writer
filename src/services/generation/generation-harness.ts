@@ -20,12 +20,45 @@ export interface GenerationTask {
   reasoningStage?: GenerationReasoningStage
   output: GenerationOutput
   messages: readonly GenerationMessage[]
+  /** Optional byte-exact safety policy for protected structured prompts. */
+  promptBudget?: PromptBudgetPolicy
   /** Physical request controls belong exclusively to this module's plan. */
   maxTokens?: never
   maxOutputTokens?: never
   responseFormat?: never
   thinking?: never
   plan?: never
+}
+
+export interface PromptBudgetSection {
+  /** Stable, non-sensitive section name used by receipts and localized diagnostics. */
+  sectionName: string
+  /** Index in the final message array where this exact assembled fragment occurs. */
+  messageIndex: number
+  /** Exact fragment from the final assembled request; never copied into reports or logs. */
+  finalText: string
+}
+
+export interface PromptBudgetPolicy {
+  limitUtf8Bytes: number
+  sections: readonly PromptBudgetSection[]
+}
+
+export interface PromptBudgetSectionReport {
+  sectionName: string
+  utf8Bytes: number
+}
+
+export type PromptBudgetResultCode = 'OK' | 'PROMPT_BUDGET_EXHAUSTED'
+
+/** Safe prompt diagnostics. Prompt text and provider endpoint details are deliberately absent. */
+export interface PromptBudgetReport {
+  totalUtf8Bytes: number
+  limitUtf8Bytes: number
+  reservedOutputTokens: number
+  sections: readonly PromptBudgetSectionReport[]
+  modelId: string
+  errorCode: PromptBudgetResultCode
 }
 
 export interface DefaultModelSnapshot {
@@ -136,6 +169,7 @@ export interface GenerationAttemptReceipt {
   }
   finishReason: LLMFinishReason
   usage?: TokenUsage
+  promptBudget?: PromptBudgetReport
 }
 
 export type GenerationOutcome =
@@ -184,6 +218,7 @@ export class GenerationHarnessError extends Error {
       | 'ATTEMPT_BUDGET_EXHAUSTED'
       | 'REQUESTED_TOKEN_BUDGET_EXHAUSTED'
       | 'CONTEXT_BUDGET_EXHAUSTED'
+      | 'PROMPT_BUDGET_EXHAUSTED'
       | 'DEADLINE_EXHAUSTED'
       | 'CANCELLED'
       | 'PROVIDER_REQUEST_FAILED',
@@ -191,6 +226,17 @@ export class GenerationHarnessError extends Error {
   ) {
     super(message)
     this.name = 'GenerationHarnessError'
+  }
+}
+
+/** Pre-request failure with a safe report and no physical-attempt receipt. */
+export class PromptBudgetExceededError extends GenerationHarnessError {
+  constructor(
+    readonly report: PromptBudgetReport,
+    message = '提示词预算不足，请缩短主要占用区段后重试。',
+  ) {
+    super('PROMPT_BUDGET_EXHAUSTED', message)
+    this.name = 'PromptBudgetExceededError'
   }
 }
 
@@ -211,6 +257,78 @@ function safeReceiptPurpose(purpose: string): string {
 }
 
 const CONTEXT_SAFETY_RESERVE_TOKENS = 512
+
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength
+}
+
+function createPromptBudgetReport(input: {
+  messages: readonly GenerationMessage[]
+  policy: PromptBudgetPolicy
+  reservedOutputTokens: number
+  modelId: string
+}): PromptBudgetReport {
+  if (!Number.isSafeInteger(input.policy.limitUtf8Bytes) || input.policy.limitUtf8Bytes <= 0) {
+    throw new GenerationHarnessError('INVALID_POLICY', '提示词字节上限必须是正整数。')
+  }
+
+  const cursors = new Map<number, number>()
+  const sections = input.policy.sections.map((section): PromptBudgetSectionReport => {
+    if (
+      !/^[a-z0-9][a-z0-9-]{0,63}$/u.test(section.sectionName)
+      || !Number.isSafeInteger(section.messageIndex)
+      || section.messageIndex < 0
+      || !section.finalText
+    ) {
+      throw new GenerationHarnessError('INVALID_POLICY', '提示词预算区段定义无效。')
+    }
+    const message = input.messages[section.messageIndex]
+    if (!message) {
+      throw new GenerationHarnessError('INVALID_POLICY', '提示词预算区段未绑定最终请求消息。')
+    }
+    const cursor = cursors.get(section.messageIndex) ?? 0
+    const start = message.content.indexOf(section.finalText, cursor)
+    if (start < 0) {
+      throw new GenerationHarnessError('INVALID_POLICY', '提示词预算区段与最终请求不一致。')
+    }
+    cursors.set(section.messageIndex, start + section.finalText.length)
+    return Object.freeze({
+      sectionName: section.sectionName,
+      utf8Bytes: utf8Bytes(section.finalText),
+    })
+  })
+
+  const totalUtf8Bytes = input.messages.reduce(
+    (total, message) => total + utf8Bytes(message.content),
+    0,
+  )
+  const attributedUtf8Bytes = sections.reduce((total, section) => total + section.utf8Bytes, 0)
+  const overheadUtf8Bytes = totalUtf8Bytes - attributedUtf8Bytes
+  if (overheadUtf8Bytes < 0) {
+    throw new GenerationHarnessError('INVALID_POLICY', '提示词预算区段发生重叠。')
+  }
+  if (overheadUtf8Bytes > 0) {
+    sections.push(Object.freeze({
+      sectionName: 'prompt-overhead',
+      utf8Bytes: overheadUtf8Bytes,
+    }))
+  }
+  const errorCode: PromptBudgetResultCode = totalUtf8Bytes > input.policy.limitUtf8Bytes
+    ? 'PROMPT_BUDGET_EXHAUSTED'
+    : 'OK'
+  return Object.freeze({
+    totalUtf8Bytes,
+    limitUtf8Bytes: input.policy.limitUtf8Bytes,
+    reservedOutputTokens: input.reservedOutputTokens,
+    sections: Object.freeze(sections),
+    modelId: input.modelId,
+    errorCode,
+  })
+}
+
+function logPromptBudgetReport(report: PromptBudgetReport): void {
+  console.info('[GenerationPromptBudget]', report)
+}
 
 function positiveInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
@@ -360,6 +478,7 @@ export function createGenerationHarness(dependencies: {
         requestedOutputTokens: number,
         finishReason: LLMFinishReason,
         usage?: TokenUsage,
+        promptBudget?: PromptBudgetReport,
       ): GenerationAttemptReceipt => ({
         purpose: safeReceiptPurpose(purpose),
         model: { ...frozenIdentity },
@@ -375,6 +494,7 @@ export function createGenerationHarness(dependencies: {
         },
         finishReason,
         ...(usage ? { usage: { ...usage } } : {}),
+        ...(promptBudget ? { promptBudget } : {}),
       })
 
       return {
@@ -419,6 +539,20 @@ export function createGenerationHarness(dependencies: {
             sessionBudget.maxRequestedOutputTokensPerAttempt,
             contextAvailableOutputTokens ?? Number.POSITIVE_INFINITY,
           )
+          const promptBudget = task.promptBudget
+            ? createPromptBudgetReport({
+                messages: task.messages,
+                policy: task.promptBudget,
+                reservedOutputTokens: maxOutputTokens,
+                modelId: frozenIdentity.id,
+              })
+            : undefined
+          if (promptBudget) {
+            logPromptBudgetReport(promptBudget)
+            if (promptBudget.errorCode === 'PROMPT_BUDGET_EXHAUSTED') {
+              throw new PromptBudgetExceededError(promptBudget)
+            }
+          }
           const attempt = attempts + 1
           const plan = Object.freeze({
             attempt,
@@ -488,6 +622,8 @@ export function createGenerationHarness(dependencies: {
                 attempt,
                 maxOutputTokens,
                 cancellationCode === 'CANCELLED' ? 'cancelled' : 'error',
+                undefined,
+                promptBudget,
               ),
             )
           } finally {
@@ -505,6 +641,7 @@ export function createGenerationHarness(dependencies: {
             maxOutputTokens,
             finishReason,
             completion.usage,
+            promptBudget,
           )
 
           if (finishReason === 'stop') {

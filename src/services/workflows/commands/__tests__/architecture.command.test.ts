@@ -582,7 +582,66 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     }
   })
 
+  it('preflights the character identity manifest with field attribution before any provider request', async () => {
+    const generateStream = vi.fn()
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:project-core-get') {
+        return { premise: 'A sufficiently detailed premise for prompt-budget attribution before character generation.' }
+      }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+    })
+    const runContext = {
+      ...context,
+      uiLocale: 'en-US' as const,
+      data: { stepGuidance: { characters: '' } },
+      cancelled: false,
+    }
+    const command = new GenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: {
+        genre: 'fantasy',
+        totalChapters: 20,
+        wordsPerChapter: 2500,
+        globalGuidance: 'G'.repeat(12_001),
+        referenceWorks: '',
+      } as never,
+    })
+
+    let failure: unknown
+    try {
+      await command.execute({ step: {}, context: runContext, callbacks })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toMatchObject({
+      name: 'PromptBudgetExceededError',
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: {
+        limitUtf8Bytes: 12_000,
+        reservedOutputTokens: 8192,
+        modelId: 'model-1',
+        errorCode: 'PROMPT_BUDGET_EXHAUSTED',
+        sections: expect.arrayContaining([
+          {
+            sectionName: 'global-guidance',
+            utf8Bytes: 12_020,
+          },
+        ]),
+      },
+    })
+    expect(JSON.stringify(failure)).not.toContain('G'.repeat(128))
+    expect(generateStream).not.toHaveBeenCalled()
+  })
+
   it('generates an eight-slot manifest then bounded individual details before one atomic roster commit', async () => {
+    const promptBudgetDiagnostic = vi.spyOn(console, 'info').mockImplementation(() => {})
     const names = ['江砚', '沈微澜', '顾沉舟', '白榆', '闻策', '唐霁', '陆衡', '乔岚']
     const manifest = {
       slots: names.map((name, index) => ({
@@ -708,6 +767,17 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(visibleLogs).toContain('Initial bounded response: finishReason=stop')
     expect(visibleLogs).toContain('The character graph and 8 character cards were generated.')
     expect(visibleLogs).not.toMatch(/[\u3400-\u9fff]/u)
+    expect(promptBudgetDiagnostic.mock.calls).toEqual(expect.arrayContaining([
+      [
+        '[GenerationPromptBudget]',
+        expect.objectContaining({
+          errorCode: 'OK',
+          sections: expect.arrayContaining([
+            expect.objectContaining({ sectionName: 'validated-prefix' }),
+          ]),
+        }),
+      ],
+    ]))
   })
 
   it('fails closed when the manifest stage returns the legacy entries envelope', async () => {

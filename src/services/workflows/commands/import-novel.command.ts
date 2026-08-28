@@ -585,6 +585,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
           responseFormat: { type: 'json_object' },
           purpose: repairTask.purpose,
           reasoningStage: 'planning',
+          ...(repairTask.promptBudget ? { promptBudget: repairTask.promptBudget } : {}),
         },
         context,
       )

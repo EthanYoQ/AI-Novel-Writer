@@ -5,6 +5,8 @@ export interface WorkflowFailurePresentation {
   heading: string
   reason: string
   persistence?: string
+  action?: 'open-novel-config'
+  actionLabel?: string
 }
 
 export function presentWorkflowFailure(
@@ -13,6 +15,24 @@ export function presentWorkflowFailure(
   locale: Locale,
   isUnpersistedChapterDraft: boolean,
 ): WorkflowFailurePresentation {
+  if (failureCode === 'prompt_budget_exhausted') {
+    return locale === 'zh-CN'
+      ? {
+          heading: '提示词预算不足',
+          reason: error?.trim() || '受保护的结构化请求超过了安全字节上限。',
+          persistence: '模型调用未发起，也未消费本次生成尝试。请缩短列出的主要占用字段后重试。',
+          action: 'open-novel-config',
+          actionLabel: '打开小说配置',
+        }
+      : {
+          heading: 'Prompt budget is insufficient',
+          reason: error?.trim() || 'The protected structured request exceeded its safe byte limit.',
+          persistence: 'No model call was made and no generation attempt was consumed. Shorten the listed top-contributing fields, then try again.',
+          action: 'open-novel-config',
+          actionLabel: 'Open novel configuration',
+        }
+  }
+
   if (failureCode === 'content_filter') {
     return locale === 'zh-CN'
       ? {

@@ -6,6 +6,7 @@ import {
   GenerationRuntimeError,
   type GenerationRuntimeEnvironment,
 } from '../generation-runtime'
+import { PromptBudgetExceededError } from '../generation-harness'
 
 function leaseReceipt(overrides: Partial<ModelExecutionLeaseReceipt> = {}): ModelExecutionLeaseReceipt {
   return {
@@ -76,6 +77,45 @@ describe('GenerationRuntime', () => {
     expect(beginModelExecution).toHaveBeenCalledWith('model-b')
     expect(completeWithLease).toHaveBeenCalledOnce()
     expect(completeWithLease.mock.calls[0]?.[0].leaseId).toBe('model-execution-lease-a')
+  })
+
+  it('rejects an oversized protected request before the production provider protocol is called', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+    const closeModelExecution = vi.fn<GenerationRuntimeEnvironment['closeModelExecution']>()
+      .mockResolvedValue(undefined)
+    const environment: GenerationRuntimeEnvironment = {
+      snapshotDefaultModelId: () => 'model-a',
+      beginModelExecution: vi.fn().mockResolvedValue(leaseReceipt()),
+      completeWithLease,
+      closeModelExecution,
+    }
+    const runtime = await createGenerationRuntime({
+      budget: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    }, environment)
+    const log = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+
+    try {
+      await expect(runtime.execute(({ session }) => session.complete({
+        purpose: 'protected-structured-request',
+        output: 'structured-data',
+        messages: [{ role: 'user', content: 'A中🙂' }],
+        promptBudget: {
+          limitUtf8Bytes: 7,
+          sections: [{ sectionName: 'global-guidance', messageIndex: 0, finalText: 'A中🙂' }],
+        },
+      }))).rejects.toBeInstanceOf(PromptBudgetExceededError)
+    } finally {
+      log.mockRestore()
+    }
+
+    expect(completeWithLease).not.toHaveBeenCalled()
+    expect(closeModelExecution).toHaveBeenCalledOnce()
+    expect(closeModelExecution).toHaveBeenCalledWith('model-execution-lease-a')
   })
 
   it('reports an unknown explicit model before any provider request', async () => {

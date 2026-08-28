@@ -10,6 +10,10 @@ import {
   type BoundedCompletionFailureCode,
 } from '../services/workflows/bounded-completion'
 import {
+  promptBudgetFailureFromError,
+  type PromptBudgetFailureCode,
+} from '../services/generation/prompt-budget-failure'
+import {
   isProjectSessionContext,
   projectSessionContextFromProject,
   sameProjectPathKey,
@@ -34,7 +38,7 @@ export type WorkflowStatus =
   | 'waiting'
 
 /** Stable non-success terminal state supplied by a bounded model completion. */
-export type WorkflowFailureCode = BoundedCompletionFailureCode
+export type WorkflowFailureCode = BoundedCompletionFailureCode | PromptBudgetFailureCode
 
 /** 工作流步骤 */
 export interface WorkflowStep {
@@ -567,8 +571,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           updateRunById(set, run.id, { status: 'running' })
         }
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error)
+        const promptBudgetFailure = promptBudgetFailureFromError(error, context.uiLocale)
+        const errorMsg = promptBudgetFailure?.message
+          ?? (error instanceof Error ? error.message : String(error))
         const failureCode = getBoundedCompletionFailureCode(error)
+          ?? promptBudgetFailure?.failureCode
         updateStepById(set, run.id, i, {
           status: 'failed',
           error: errorMsg,
