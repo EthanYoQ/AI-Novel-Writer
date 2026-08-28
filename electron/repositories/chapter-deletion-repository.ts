@@ -18,8 +18,7 @@ interface ChapterDeletionRow {
   knowledge_status: ChapterDeletionProjectionStatus
   knowledge_error: string
   legacy_knowledge_authorization: ChapterDeletionOperation['legacyKnowledgeAuthorization']
-  legacy_knowledge_confirmed_at: string
-  legacy_knowledge_consumed_at: string
+  legacy_knowledge_authorized_at: string
   status: ChapterDeletionOperation['status']
   attempt_count: number
   created_at: string
@@ -136,8 +135,7 @@ function rowToOperation(row: ChapterDeletionRow): ChapterDeletionOperation {
     knowledgeStatus: row.knowledge_status,
     knowledgeError: row.knowledge_error,
     legacyKnowledgeAuthorization: row.legacy_knowledge_authorization,
-    legacyKnowledgeConfirmedAt: row.legacy_knowledge_confirmed_at,
-    legacyKnowledgeConsumedAt: row.legacy_knowledge_consumed_at,
+    legacyKnowledgeAuthorizedAt: row.legacy_knowledge_authorized_at,
     status: row.status,
     attemptCount: row.attempt_count,
     createdAt: row.created_at,
@@ -262,8 +260,7 @@ export class ChapterDeletionRepository {
       const updated = db.prepare(`
         UPDATE chapter_deletion_operations
         SET legacy_knowledge_authorization = 'consumed',
-            legacy_knowledge_confirmed_at = datetime('now'),
-            legacy_knowledge_consumed_at = datetime('now'),
+            legacy_knowledge_authorized_at = datetime('now'),
             knowledge_status = 'not_required', knowledge_error = '',
             status = 'pending', updated_at = datetime('now')
         WHERE operation_id = ?

@@ -49,8 +49,8 @@ function deletionSurfaceConfig(
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
       confirmation: text(
-        `确认删除 "${displayName}"？\\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；失败的投影清理可在正文章节下重试。`,
-        `Delete “${displayName}”?\\nThis removes the finalized fact and cleans its manuscript, knowledge, and post-processing projections. Failed cleanup can be retried below Manuscript chapters.`,
+        `确认删除 "${displayName}"？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；失败的投影清理可在正文章节下重试。`,
+        `Delete “${displayName}”?\nThis removes the finalized fact and cleans its manuscript, knowledge, and post-processing projections. Failed cleanup can be retried below Manuscript chapters.`,
       ),
       confirmationTitle: text('删除这一稿', 'Delete draft'),
       success: text(`已删除 ${displayName}`, `Deleted ${displayName}`),
@@ -65,8 +65,8 @@ function deletionSurfaceConfig(
     },
     manuscript: {
       confirmation: text(
-        `确认删除正文「${displayName}」？\\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；蓝图会保留。清理失败时可在正文章节下重试。`,
-        `Delete manuscript “${displayName}”?\\nThis removes the finalized fact and cleans its manuscript file, knowledge document, and post-processing projections. The blueprint is preserved, and failed cleanup can be retried below Manuscript chapters.`,
+        `确认删除正文「${displayName}」？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；蓝图会保留。清理失败时可在正文章节下重试。`,
+        `Delete manuscript “${displayName}”?\nThis removes the finalized fact and cleans its manuscript file, knowledge document, and post-processing projections. The blueprint is preserved, and failed cleanup can be retried below Manuscript chapters.`,
       ),
       confirmationTitle: text('删除正文', 'Delete manuscript'),
       success: text(
@@ -95,8 +95,8 @@ function emitDeletionStatusUpdated(
 
 function showUncommittedError(result: ChapterDeletionResult, text: Localize): void {
   toast.error(text(
-    `删除失败\\n\\n${result.error ?? '未知错误'}`,
-    `Delete failed\\n\\n${result.error ?? 'Unknown error'}`,
+    `删除失败\n\n${result.error ?? '未知错误'}`,
+    `Delete failed\n\n${result.error ?? 'Unknown error'}`,
   ))
 }
 

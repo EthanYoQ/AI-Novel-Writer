@@ -457,8 +457,7 @@ describe('chapter lifecycle deletion IPC', () => {
       operation: {
         status: string
         legacyKnowledgeAuthorization: string
-        legacyKnowledgeConfirmedAt: string
-        legacyKnowledgeConsumedAt: string
+        legacyKnowledgeAuthorizedAt: string
       }
     }
     expect(confirmed).toMatchObject({
@@ -467,12 +466,12 @@ describe('chapter lifecycle deletion IPC', () => {
       operation: {
         status: 'completed',
         legacyKnowledgeAuthorization: 'consumed',
-        legacyKnowledgeConfirmedAt: expect.any(String),
-        legacyKnowledgeConsumedAt: expect.any(String),
+        legacyKnowledgeAuthorizedAt: expect.any(String),
       },
     })
-    expect(confirmed.operation.legacyKnowledgeConfirmedAt).not.toBe('')
-    expect(confirmed.operation.legacyKnowledgeConsumedAt).not.toBe('')
+    expect(confirmed.operation.legacyKnowledgeAuthorizedAt).not.toBe('')
+    expect(confirmed.operation).not.toHaveProperty('legacyKnowledgeConfirmedAt')
+    expect(confirmed.operation).not.toHaveProperty('legacyKnowledgeConsumedAt')
     expect(DraftRepository.getFull(draftId)).toBeNull()
     expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(false)
     await expect(listDocuments(projectRoot)).resolves.toEqual([

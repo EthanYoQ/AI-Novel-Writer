@@ -205,8 +205,7 @@ function createTables(db: BetterSqlite3.Database) {
       knowledge_status TEXT NOT NULL DEFAULT 'pending',
       knowledge_error TEXT NOT NULL DEFAULT '',
       legacy_knowledge_authorization TEXT NOT NULL DEFAULT 'not_required',
-      legacy_knowledge_confirmed_at TEXT NOT NULL DEFAULT '',
-      legacy_knowledge_consumed_at TEXT NOT NULL DEFAULT '',
+      legacy_knowledge_authorized_at TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending',
       attempt_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
@@ -378,8 +377,7 @@ function createTables(db: BetterSqlite3.Database) {
     deletionColumns.add(column)
   }
   addDeletionTextColumn('legacy_knowledge_authorization', 'not_required')
-  addDeletionTextColumn('legacy_knowledge_confirmed_at', '')
-  addDeletionTextColumn('legacy_knowledge_consumed_at', '')
+  addDeletionTextColumn('legacy_knowledge_authorized_at', '')
 
   // 旧项目把作者配置字段映射到架构字段，导致重开漂移。新列保持独立事实：
   // 大纲和世界设定可从旧显示来源无损继承；主角档案绝不复制 characters_arch，

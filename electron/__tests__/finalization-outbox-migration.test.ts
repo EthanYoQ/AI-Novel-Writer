@@ -125,17 +125,16 @@ describe('finalization outbox migration', () => {
     const deletionColumns = db!.prepare('PRAGMA table_info(chapter_deletion_operations)').all() as Array<{ name: string }>
     expect(deletionColumns.map(column => column.name)).toEqual(expect.arrayContaining([
       'legacy_knowledge_authorization',
-      'legacy_knowledge_confirmed_at',
-      'legacy_knowledge_consumed_at',
+      'legacy_knowledge_authorized_at',
     ]))
+    expect(deletionColumns.map(column => column.name)).not.toContain('legacy_knowledge_confirmed_at')
+    expect(deletionColumns.map(column => column.name)).not.toContain('legacy_knowledge_consumed_at')
     expect(db!.prepare(`
-      SELECT legacy_knowledge_authorization, legacy_knowledge_confirmed_at,
-             legacy_knowledge_consumed_at
+      SELECT legacy_knowledge_authorization, legacy_knowledge_authorized_at
       FROM chapter_deletion_operations WHERE operation_id = ?
     `).get('legacy-deletion-1')).toEqual({
       legacy_knowledge_authorization: 'not_required',
-      legacy_knowledge_confirmed_at: '',
-      legacy_knowledge_consumed_at: '',
+      legacy_knowledge_authorized_at: '',
     })
     expect(db!.prepare(`
       SELECT content_snapshot FROM finalization_outbox WHERE finalization_id = ?

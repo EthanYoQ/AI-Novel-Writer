@@ -58,6 +58,8 @@ describe('generated content deletion affordances', () => {
     expect(finalizedDeletion).toContain('chapter:confirm-legacy-knowledge-absent')
     expect(finalizedDeletion).toContain('我已人工核对/清理')
     expect(finalizedDeletion).toContain('I have manually checked or cleaned')
+    expect(finalizedDeletion).toContain(String.raw`\n`)
+    expect(finalizedDeletion).not.toContain(String.raw`\\n`)
     expect(finalizedDeletion).toContain("globalEventBus.emit('CHAPTER_DELETION_UPDATED'")
     expect(eventBus).toContain("| 'CHAPTER_DELETION_UPDATED'")
     expect(manuscript).toContain("globalEventBus.on('CHAPTER_DELETION_UPDATED'")

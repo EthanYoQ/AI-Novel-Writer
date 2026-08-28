@@ -21,8 +21,7 @@ export interface ChapterDeletionOperation {
   knowledgeStatus: ChapterDeletionProjectionStatus
   knowledgeError: string
   legacyKnowledgeAuthorization: LegacyKnowledgeAuthorization
-  legacyKnowledgeConfirmedAt: string
-  legacyKnowledgeConsumedAt: string
+  legacyKnowledgeAuthorizedAt: string
   status: ChapterDeletionStatus
   attemptCount: number
   createdAt: string
