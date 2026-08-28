@@ -223,4 +223,95 @@ describe('current-project import parsing persistence', () => {
     })
     expect(reads).toEqual([sourceB])
   })
+
+  it('keeps an empty source retryable and prepares it after the user selects the corrected file again', async () => {
+    const source = path.join(parent, 'empty-then-fixed.txt')
+    fs.writeFileSync(source, '   ', 'utf8')
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [source] })
+    let content = '   \r\n'
+    const fileSystem = {
+      readText: vi.fn(async () => content),
+    } as unknown as WindowsSafeFileSystem
+    registerImportController(
+      fileSystem,
+      filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
+      {},
+      new ExternalFileGrantService(),
+      new ImportInspectionStore(),
+      secret,
+    )
+    const handler = mocks.handlers.get('dialog:select-novel-files')!
+    const event = { sender: { id: 59, once: vi.fn() } }
+    const request = {
+      runId: 'empty-retry', purpose: 'reference', locale: 'en-US', expectedProjectPath: projectRoot,
+    }
+
+    await expect(handler(event, request, session)).resolves.toEqual({
+      success: false,
+      error: 'One or more selected files are empty. Add novel text and choose the unfinished files again.',
+    })
+    expect(importRows()).toEqual({
+      runs: [{ id: 'empty-retry', stage: 'parsing', status: 'failed' }],
+      sources: [{ run_id: 'empty-retry', status: 'failed' }],
+    })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_run_source_chapters').get())
+      .toEqual({ count: 0 })
+
+    content = 'Chapter 1 Corrected\nThe recovered chapter text.'
+    await expect(handler(event, request, session)).resolves.toMatchObject({
+      success: true,
+      preparation: { classification: 'new', run: { id: 'empty-retry', stage: 'prepared' } },
+    })
+  })
+
+  it('persists valid files beside a blank file and rereads only the unfinished source', async () => {
+    const validSource = path.join(parent, 'a-valid.txt')
+    const blankSource = path.join(parent, 'b-blank.txt')
+    fs.writeFileSync(validSource, 'valid', 'utf8')
+    fs.writeFileSync(blankSource, 'blank', 'utf8')
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [validSource, blankSource] })
+    let blankContent = ' \n\t'
+    const reads: string[] = []
+    const fileSystem = {
+      readText: vi.fn(async (capability: { relativePath: string }) => {
+        reads.push(capability.relativePath)
+        return capability.relativePath === 'a-valid.txt'
+          ? '第1章 有效来源\n已保存的正文'
+          : blankContent
+      }),
+    } as unknown as WindowsSafeFileSystem
+    registerImportController(
+      fileSystem,
+      filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
+      {},
+      new ExternalFileGrantService(),
+      new ImportInspectionStore(),
+      secret,
+    )
+    const handler = mocks.handlers.get('dialog:select-novel-files')!
+    const event = { sender: { id: 60, once: vi.fn() } }
+    const request = {
+      runId: 'partial-empty-retry', purpose: 'reference', locale: 'zh-CN', expectedProjectPath: projectRoot,
+    }
+
+    await expect(handler(event, request, session)).resolves.toEqual({
+      success: false,
+      error: '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。',
+    })
+    expect(importRows()).toEqual({
+      runs: [{ id: 'partial-empty-retry', stage: 'parsing', status: 'failed' }],
+      sources: [
+        { run_id: 'partial-empty-retry', status: 'completed' },
+        { run_id: 'partial-empty-retry', status: 'failed' },
+      ],
+    })
+
+    blankContent = '第1章 补全来源\n补全后的正文'
+    reads.length = 0
+    await expect(handler(event, request, session)).resolves.toMatchObject({
+      success: true,
+      preparation: { classification: 'new', run: { id: 'partial-empty-retry', stage: 'prepared', totalChapters: 2 } },
+    })
+    expect(reads).toEqual(['b-blank.txt'])
+  })
 })

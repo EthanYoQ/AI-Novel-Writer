@@ -360,6 +360,7 @@ export function registerImportController(
       }
 
       const inspectedChapters: Array<ParsedChapter & { sourceIndex: number; sourceChapterNumber: number }> = []
+      let emptySourceFound = false
       for (let sourceIndex = 0; sourceIndex < selected.length; sourceIndex++) {
         const source = selected[sourceIndex]
         const encoded = encodedIdentities[sourceIndex]
@@ -396,9 +397,14 @@ export function registerImportController(
           })
           content = content.trim()
           if (!content) {
+            emptySourceFound = true
             if (parsingRun && opaqueSourceId) {
               assertFrozenProject()
-              ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, [])
+              ImportRunRepository.failParsedSource(
+                parsingRun.id,
+                opaqueSourceId,
+                request?.locale === 'en-US' ? 'Selected source file is empty' : '所选来源文件为空',
+              )
             }
             continue
           }
@@ -462,6 +468,18 @@ export function registerImportController(
         } finally {
           if (grantId) grantService.revoke(grantId)
         }
+      }
+
+      if (emptySourceFound) {
+        const error = request?.locale === 'en-US'
+          ? 'One or more selected files are empty. Add novel text and choose the unfinished files again.'
+          : request?.locale === 'zh-CN'
+            ? '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。'
+            : text(
+                '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。',
+                'One or more selected files are empty. Add novel text and choose the unfinished files again.',
+              )
+        return { success: false, error }
       }
 
       if (parsingRun) {

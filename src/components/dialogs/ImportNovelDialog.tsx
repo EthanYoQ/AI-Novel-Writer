@@ -60,6 +60,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const resumableRunIsActive = resumableRun
     ? activeWorkflows.some(workflow => workflow.id === resumableRun.id)
     : false
+  const resumableRunCanRestart = resumableRun
+    ? ['failed', 'cancelled', 'running'].includes(resumableRun.status)
+    : false
   const runProgress = (run: ImportRunSnapshot) => ({
     completed: run.progressCompleted ?? run.completedChapters,
     total: run.progressTotal ?? run.totalChapters,
@@ -88,6 +91,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   /** 选择文件 */
   const handleSelectFiles = useCallback(async (resumeRunId?: string) => {
     setSplitting(true)
+    setSplitError('')
+    let operationSession: ReturnType<typeof captureProjectSession> = null
     try {
       let project = useProjectStore.getState().currentProject
       let projectSession = captureProjectSession(project)
@@ -112,6 +117,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         '目标项目缺少有效会话，已拒绝读取小说文件。',
         'The target project has no valid session, so the novel files were not read.',
       ))
+      operationSession = projectSession
       const runId = resumeRunId || selectionRunId.current
       const result = await ipc.invoke('dialog:select-novel-files', {
         runId,
@@ -119,6 +125,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         locale,
         expectedProjectPath: project.path,
       }, projectSession)
+      if (!isProjectSessionCurrent(projectSession)) return
       if (!result) return
       setSplitDone(false)
       setSplitError('')
@@ -149,6 +156,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         setSplitError(result.error || text('拆章失败', 'Could not split chapters'))
       }
     } catch (e) {
+      if (operationSession && !isProjectSessionCurrent(operationSession)) return
       setSplitError(String(e))
     } finally {
       setSplitting(false)
@@ -262,6 +270,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     const session = captureProjectSession(project)
     if (!project || !session) return
     setImporting(true)
+    setSplitError('')
     try {
       const result = await ipc.invokeWithProjectSession(
         session,
@@ -270,16 +279,35 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         randomUUID(),
         project.path,
       )
+      if (!isProjectSessionCurrent(session)) return
       if (!result.success || !result.run) throw new Error(result.error || text(
         '无法重新开始导入', 'Could not restart the import.',
       ))
+      if (result.run.stage === 'parsing') {
+        const restartedRun = result.run
+        setResumableState(previous => {
+          const previousRuns = previous?.projectLeaseId === session.leaseId ? previous.runs : []
+          return {
+            projectLeaseId: session.leaseId,
+            runs: [restartedRun, ...previousRuns.filter(run => (
+              run.id !== resumableRun.id && run.id !== restartedRun.id
+            ))],
+          }
+        })
+        setSelectedResumableRunId(restartedRun.id)
+        selectionRunId.current = restartedRun.id
+        await handleSelectFiles(restartedRun.id)
+        if (!isProjectSessionCurrent(session)) return
+        return
+      }
       launchRun(result.run)
     } catch (error) {
+      if (!isProjectSessionCurrent(session)) return
       setSplitError(error instanceof Error ? error.message : String(error))
     } finally {
       setImporting(false)
     }
-  }, [launchRun, resumableRun, text])
+  }, [handleSelectFiles, launchRun, resumableRun, text])
 
   // 成本预估
   const costEstimate = splitDone && inspection
@@ -378,10 +406,12 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 <Button type="button" size="sm" onClick={handleResume} disabled={importing || resumableRunIsActive}>
                   {text('继续导入', 'Continue import')}
                 </Button>
-                <Button type="button" size="sm" variant="outline" onClick={handleRestart} disabled={importing || resumableRunIsActive}>
-                  <RotateCcw size={13} />
-                  {text('重新开始', 'Start over')}
-                </Button>
+                {resumableRunCanRestart && (
+                  <Button type="button" size="sm" variant="outline" onClick={handleRestart} disabled={importing || resumableRunIsActive}>
+                    <RotateCcw size={13} />
+                    {text('重新开始', 'Start over')}
+                  </Button>
+                )}
               </div>
             </div>
           )}

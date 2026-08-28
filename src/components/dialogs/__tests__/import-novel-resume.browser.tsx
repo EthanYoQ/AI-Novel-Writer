@@ -21,6 +21,12 @@ let invoke: ReturnType<typeof vi.fn>
 let startWorkflow: ReturnType<typeof vi.fn>
 let preparation: ImportRunPreparationResult
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(resolvePromise => { resolve = resolvePromise })
+  return { promise, resolve }
+}
+
 const project = {
   id: 'current-project', sessionLease: 'lease-current', name: 'Current Project', path: 'C:\\novels\\current',
   novelConfig: {
@@ -232,11 +238,95 @@ describe('current-project reference import', () => {
     await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
     await act(async () => page.getByTestId('import-target-current').click())
 
+    expect(page.getByRole('button', { name: '重新开始' }).query()).toBeNull()
     await act(async () => page.getByRole('button', { name: '继续导入' }).click())
 
     expect(startWorkflow).toHaveBeenCalledOnce()
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'prepared-after-move' })
     expect(invoke.mock.calls.some(([channel]) => channel === 'dialog:select-novel-files')).toBe(false)
+  })
+
+  it('reauthorizes a restarted parsing run in English before starting its prepared workflow', async () => {
+    const failedParsing = importRun({
+      id: 'failed-parsing', locale: 'en-US', stage: 'parsing', status: 'failed',
+      sourceDisplay: [{ displayName: 'retry.txt', mediaType: 'text/plain', size: 20 }],
+      completedChapters: 0, totalChapters: 0, progressCompleted: 0, progressTotal: 1,
+    })
+    const restartedParsing = importRun({
+      id: 'restarted-parsing', locale: 'en-US', stage: 'parsing', status: 'ready',
+      sourceDisplay: failedParsing.sourceDisplay, completedChapters: 0, totalChapters: 0,
+      progressCompleted: 0, progressTotal: 1,
+    })
+    const preparedRestart = importRun({
+      id: 'restarted-parsing', locale: 'en-US', stage: 'prepared', status: 'ready',
+      sourceDisplay: failedParsing.sourceDisplay, totalChapters: 2, manifestChapterCount: 2,
+      completedChapters: 0, progressCompleted: 1, progressTotal: 1,
+    })
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-list-resumable') return [failedParsing]
+      if (channel === 'db:import-run-restart') {
+        expect(args[0]).toBe('failed-parsing')
+        return { success: true, run: restartedParsing }
+      }
+      if (channel === 'dialog:select-novel-files') return {
+        success: true,
+        preparation: {
+          classification: 'new', run: preparedRestart, newChapterNumbers: [1, 2],
+          conflictChapterNumbers: [], duplicateChapterNumbers: [],
+        },
+      }
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => {
+      useLocaleStore.setState({ locale: 'en-US' })
+      useProjectStore.setState({ currentProject: { ...project } as never })
+    })
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await act(async () => page.getByRole('button', { name: 'Start over' }).click())
+
+    await expect.element(page.getByText('2 chapters', { exact: true })).toBeVisible()
+    const selectionCall = invoke.mock.calls.find(([channel]) => channel === 'dialog:select-novel-files')
+    expect(selectionCall?.[1]).toMatchObject({ runId: 'restarted-parsing', purpose: 'reference' })
+    expect(startWorkflow).not.toHaveBeenCalled()
+
+    await act(async () => page.getByRole('button', { name: /Import into current project \(2 chapters\)/ }).click())
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'restarted-parsing', uiLocale: 'en-US' })
+  })
+
+  it('ignores a parsing restart response after the current project session changes', async () => {
+    const failedParsing = importRun({ id: 'stale-parsing', stage: 'parsing', status: 'failed' })
+    const restart = deferred<{ success: boolean; run: ImportRunSnapshot }>()
+    let listCalls = 0
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return listCalls++ === 0 ? [failedParsing] : []
+      if (channel === 'db:import-run-restart') return restart.promise
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await act(async () => page.getByRole('button', { name: '重新开始' }).click())
+    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:import-run-restart')).toBe(true))
+    await act(async () => useProjectStore.setState({
+      currentProject: {
+        ...project,
+        id: 'replacement-project', sessionLease: 'lease-replacement', path: 'C:\\novels\\replacement',
+      } as never,
+    }))
+    restart.resolve({
+      success: true,
+      run: importRun({ id: 'stale-restarted', stage: 'parsing', status: 'ready' }),
+    })
+    await act(async () => { await Promise.resolve() })
+
+    expect(invoke.mock.calls.some(([channel]) => channel === 'dialog:select-novel-files')).toBe(false)
+    expect(startWorkflow).not.toHaveBeenCalled()
   })
 
   it('shows parsing, global, and style recovery progress from each persisted stage unit', async () => {
