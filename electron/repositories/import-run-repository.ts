@@ -213,7 +213,16 @@ function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown):
   ) throw new Error()
 }
 
-function assertEffectPayloadBinding(kind: ImportRunEffectKind, batchId: string, payload: unknown): void {
+function assertEffectPayloadBinding(
+  kind: ImportRunEffectKind,
+  runId: string,
+  batchId: string,
+  payload: unknown,
+): void {
+  if (kind === 'project-global-facts') {
+    if (!isRecord(payload) || payload.operationId !== `novel-import-global-${runId}`) throw new Error()
+    return
+  }
   if (kind !== 'chapter-blueprint-range') return
   const checkpoint = parseImportRunChapterBatchCheckpointId(batchId)
   if (
@@ -221,6 +230,7 @@ function assertEffectPayloadBinding(kind: ImportRunEffectKind, batchId: string, 
     || !isRecord(payload)
     || payload.startChapter !== checkpoint.startChapter
     || payload.endChapter !== checkpoint.endChapter
+    || payload.operationId !== `import-blueprints-${runId}-${checkpoint.startChapter}-${checkpoint.endChapter}`
   ) throw new Error()
 }
 
@@ -232,21 +242,47 @@ function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown
   }
   if (kind === 'project-global-facts') {
     if (
-      effectReceipt.operationId !== payload.operationId
+      !exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'roster'])
+      || effectReceipt.operationId !== payload.operationId
       || typeof effectReceipt.payloadHash !== 'string'
+      || typeof effectReceipt.idempotent !== 'boolean'
       || !isRecord(effectReceipt.core)
       || !isRecord(effectReceipt.roster)
     ) throw new Error()
     return
   }
   if (
-    effectReceipt.operationId !== payload.operationId
+    !exactKeys(effectReceipt, [
+      'mode', 'operationId', 'payloadHash', 'idempotent', 'startChapter', 'endChapter',
+      'chapterNumbers', 'snapshot', 'characterSyncInput', 'characterSyncOperation',
+    ])
+    || effectReceipt.operationId !== payload.operationId
     || effectReceipt.mode !== payload.mode
     || effectReceipt.startChapter !== payload.startChapter
     || effectReceipt.endChapter !== payload.endChapter
     || typeof effectReceipt.payloadHash !== 'string'
+    || typeof effectReceipt.idempotent !== 'boolean'
+    || !Array.isArray(effectReceipt.chapterNumbers)
+    || !Array.isArray(effectReceipt.snapshot)
+    || !Array.isArray(effectReceipt.characterSyncInput)
     || !isRecord(effectReceipt.characterSyncOperation)
   ) throw new Error()
+}
+
+function assertCommittedEffectAuthority(
+  kind: ImportRunEffectKind,
+  payload: unknown,
+  effectReceipt: unknown,
+): void {
+  if (kind === 'project-writing-style') return
+  if (!isRecord(effectReceipt)) throw new Error()
+  const authoritative = kind === 'project-global-facts'
+    ? ImportGlobalFactsRepository.getCommittedOperation((payload as ImportGlobalFactsRequest).operationId)
+    : BlueprintRepository.getCommittedRangeOperation((payload as BlueprintRangeCommitRequest).operationId)
+  if (!authoritative) throw new Error()
+  const stored = canonicalize({ ...effectReceipt, idempotent: false })
+  const readBack = canonicalize({ ...authoritative, idempotent: false })
+  if (JSON.stringify(stored) !== JSON.stringify(readBack)) throw new Error()
 }
 
 function corruptedReceipt(): never {
@@ -260,12 +296,15 @@ function rowToEffectReceipt(row: ImportRunEffectReceiptRow, run: ImportRunRow): 
     const canonical = canonicalPayload(payload)
     if (canonical.json !== row.payload_json || canonical.hash !== row.payload_hash) corruptedReceipt()
     assertEffectPayloadSchema(row.kind, payload)
-    assertEffectPayloadBinding(row.kind, row.batch_id, payload)
+    assertEffectPayloadBinding(row.kind, row.run_id, row.batch_id, payload)
     const effectReceipt = row.effect_receipt_json ? JSON.parse(row.effect_receipt_json) as unknown : undefined
     if ((row.state === 'prepared' && effectReceipt !== undefined) || (row.state === 'committed' && effectReceipt === undefined)) {
       corruptedReceipt()
     }
-    if (row.state === 'committed') assertCommittedEffectSchema(row.kind, payload, effectReceipt)
+    if (row.state === 'committed') {
+      assertCommittedEffectSchema(row.kind, payload, effectReceipt)
+      assertCommittedEffectAuthority(row.kind, payload, effectReceipt)
+    }
     const receipt: ImportRunEffectReceipt = {
       schemaVersion: row.schema_version as typeof IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
       runId: row.run_id,
