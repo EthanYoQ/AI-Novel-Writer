@@ -3,8 +3,12 @@ import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const ipcMocks = vi.hoisted(() => ({ invoke: vi.fn() }))
+const characterSyncMocks = vi.hoisted(() => ({ retry: vi.fn() }))
 vi.mock('../../ipc-client', () => ({
   ipc: { invokeWithProjectSession: ipcMocks.invoke },
+}))
+vi.mock('../directory-character-sync-recovery', () => ({
+  retryDirectoryCharacterSync: characterSyncMocks.retry,
 }))
 
 import { createImportWorkflow } from '../import-workflow'
@@ -43,6 +47,7 @@ function context(): WorkflowContext {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  characterSyncMocks.retry.mockResolvedValue({ operationId: 'sync-1' })
   useProjectStore.setState({
     currentProject: {
       id: 'test-project', sessionLease: 'lease-test-project', name: '测试项目', path: session.projectPath,
@@ -117,7 +122,6 @@ describe('createImportWorkflow', () => {
       session,
       'kb:import-reference-text',
       1,
-      '第1章 Start.txt',
       'import-run-1',
       { owner: executionOwner, epoch: 1 },
     )
@@ -189,6 +193,79 @@ describe('createImportWorkflow', () => {
     await expect(workflow.steps[1].executor({} as never, context(), callbacks))
       .rejects.toThrow(/does not match durable storage/)
     expect(receiptReads).toBe(2)
+  })
+
+  it('resumes a checkpointed blueprint batch by completing its pending character sync without generation', async () => {
+    const checkpoint = '1-1-cccccccc'
+    let snapshot = run({
+      stage: 'blueprints',
+      completedBatches: { blueprints: [checkpoint] },
+    })
+    const receipt: ImportRunEffectReceipt = {
+      schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+      runId: snapshot.id,
+      effectNamespace: snapshot.effectNamespace,
+      effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints',
+      batchId: checkpoint,
+      kind: 'chapter-blueprint-range',
+      payloadHash: 'c'.repeat(64),
+      state: 'committed',
+      payload: { blueprints: [{ chapterNumber: 1 }] },
+      effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    }
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-start-resume') return {
+        success: true,
+        start: {
+          run: snapshot,
+          execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+        },
+      }
+      if (channel === 'db:import-run-renew-execution') return {
+        success: true,
+        execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+      }
+      if (channel === 'db:import-run-list-chapters') {
+        const after = args[1] as number
+        return after === 0 ? [{
+          number: 1,
+          title: 'Start',
+          content: 'frozen reference',
+          contentFingerprint: 'c'.repeat(64),
+          contentSize: 16,
+        }] : []
+      }
+      if (channel === 'db:import-run-effect-receipt-get') return receipt
+      if (channel === 'db:import-run-effect-receipt-commit') return {
+        success: true,
+        result: { receipt, run: snapshot, cancelApplied: false },
+      }
+      if (channel === 'db:import-run-advance-stage') {
+        snapshot = { ...snapshot, stage: 'refresh' }
+        return { success: true, run: snapshot }
+      }
+      if (channel === 'db:import-run-fail') return {
+        success: true,
+        run: { ...snapshot, status: 'failed' },
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({
+      projectPath: session.projectPath,
+      projectSession: session,
+      run: snapshot,
+      executionOwner,
+    })
+
+    await workflow.steps[3].executor({} as never, context(), callbacks)
+
+    expect(characterSyncMocks.retry).toHaveBeenCalledWith('sync-1', session.projectPath, session)
+    expect(snapshot.stage).toBe('refresh')
+    expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('llm:generate')
   })
 
   it('fails closed before creating an author-manuscript stage plan', () => {

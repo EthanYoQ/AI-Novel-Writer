@@ -785,7 +785,6 @@ export interface KnowledgeBaseChannels {
   'kb:import-reference-text': {
     args: [
       chapterNumber: number,
-      fileName: string,
       runId: string,
       executionAuthority: ImportRunExecutionAuthority,
     ]

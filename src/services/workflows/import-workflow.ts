@@ -173,16 +173,10 @@ function productionDependencies(
       session, 'db:import-run-list-chapters', runId, after, limit, projectPath,
     ),
     importReference: async (chapter, run, executionAuthority) => {
-      const fileName = textForLocale(
-        run.locale,
-        `第${chapter.number}章 ${chapter.title || '无标题'}.txt`,
-        `Chapter ${chapter.number} ${chapter.title || 'Untitled'}.txt`,
-      )
       const result = await ipc.invokeWithProjectSession(
         session,
         'kb:import-reference-text',
         chapter.number,
-        fileName,
         run.id,
         executionAuthority,
       )

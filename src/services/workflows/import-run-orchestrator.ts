@@ -375,6 +375,28 @@ export class ImportRunOrchestrator {
     return { run, execution: execution.current }
   }
 
+  private async replayCheckpointedEffect(
+    run: ImportRunSnapshot,
+    execution: ImportRunExecutionState,
+    stage: ImportRunStage,
+    batchId: string,
+  ): Promise<{ run: ImportRunSnapshot; execution: ImportRunExecutionLease }> {
+    const existing = await this.dependencies.getEffectReceipt(run.id, stage, batchId)
+    if (!existing) {
+      throw new Error('A completed import checkpoint is missing its durable effect receipt.')
+    }
+    execution.current = await this.dependencies.renewExecution(run.id, execution.current)
+    const committed = await this.dependencies.commitEffectReceipt(
+      run.id, stage, batchId, execution.current,
+    )
+    await this.withLeaseHeartbeat(
+      run.id,
+      execution,
+      () => this.dependencies.replayCommittedEffect(committed.receipt, committed.run),
+    )
+    return { run: committed.run, execution: execution.current }
+  }
+
   private async executeGlobal(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
     if (!run.completedBatches.global?.includes('done')) {
       if (context.cancelled) throw new Error('Import cancelled at a safe boundary.')
@@ -419,7 +441,16 @@ export class ImportRunOrchestrator {
     while (page.length > 0) {
       for (const batch of splitContiguousBatches(page, IMPORT_BLUEPRINT_BATCH_SIZE)) {
         const checkpoint = createImportRunChapterBatchCheckpointId(batch)
-        if (!run.completedBatches.blueprints?.includes(checkpoint)) {
+        if (run.completedBatches.blueprints?.includes(checkpoint)) {
+          const replayed = await this.replayCheckpointedEffect(
+            run,
+            execution,
+            'blueprints',
+            checkpoint,
+          )
+          run = replayed.run
+          execution.current = replayed.execution
+        } else {
           if (context.cancelled) throw new Error('Import cancelled at a safe boundary.')
           const committed = await this.executeDurableEffect(
             run,

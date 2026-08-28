@@ -475,6 +475,74 @@ describe('ImportRunOrchestrator', () => {
     expect(getRun().stage).toBe('refresh')
   })
 
+  it('replays a checkpointed blueprint effect so pending character sync finishes without another model call', async () => {
+    const firstBatch = Array.from({ length: 5 }, (_, index) => chapter(index + 1))
+    const checkpoint = createImportRunChapterBatchCheckpointId(firstBatch)
+    const { deps, receipts, getRun } = harness(5, {
+      stage: 'blueprints',
+      completedBatches: { blueprints: [checkpoint] },
+    })
+    receipts.set(`blueprints:${checkpoint}`, {
+      schemaVersion: 1,
+      runId: 'run-1',
+      effectNamespace: 'import:reference:run-1',
+      effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints',
+      batchId: checkpoint,
+      kind: 'chapter-blueprint-range',
+      payloadHash: 'f'.repeat(64),
+      state: 'committed',
+      payload: { blueprints: true },
+      effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    })
+    deps.replayCommittedEffect = vi.fn()
+
+    await new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks,
+    )
+
+    expect(deps.inferBlueprints).not.toHaveBeenCalled()
+    expect(deps.replayCommittedEffect).toHaveBeenCalledTimes(1)
+    expect(getRun().stage).toBe('refresh')
+  })
+
+  it('fails closed when a checkpointed blueprint receipt cannot be verified during replay', async () => {
+    const firstBatch = Array.from({ length: 5 }, (_, index) => chapter(index + 1))
+    const checkpoint = createImportRunChapterBatchCheckpointId(firstBatch)
+    const { deps, receipts, getRun } = harness(5, {
+      stage: 'blueprints',
+      completedBatches: { blueprints: [checkpoint] },
+    })
+    receipts.set(`blueprints:${checkpoint}`, {
+      schemaVersion: 1,
+      runId: 'run-1',
+      effectNamespace: 'import:reference:run-1',
+      effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints',
+      batchId: checkpoint,
+      kind: 'chapter-blueprint-range',
+      payloadHash: 'f'.repeat(64),
+      state: 'committed',
+      payload: { blueprints: true },
+      effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    })
+    deps.replayCommittedEffect = vi.fn(async () => {
+      throw new Error('Committed import effect receipt does not match durable storage.')
+    })
+
+    await expect(new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks,
+    )).rejects.toThrow(/does not match durable storage/)
+
+    expect(deps.inferBlueprints).not.toHaveBeenCalled()
+    expect(deps.advanceStage).not.toHaveBeenCalled()
+    expect(getRun()).toMatchObject({ stage: 'blueprints', status: 'failed' })
+  })
+
   it.each([
     ['style', 'analyzeStyle', 'blueprints'],
     ['refresh', 'refresh', 'completed'],

@@ -125,7 +125,7 @@ describe('knowledge-base controller project context guard', () => {
     const authority = { owner: 'renderer-a', epoch: 3 }
 
     await expect(rawHandler('kb:import-reference-text')(
-      {}, 1, 'Chapter 1.txt', 'run-1', authority, {
+      {}, 1, 'run-1', authority, {
         projectId: 'project-A',
         leaseId: 'lease-A',
         projectPath: mocks.currentProjectPath,
@@ -136,12 +136,36 @@ describe('knowledge-base controller project context guard', () => {
       'run-1', authority, 1,
     )
     expect(importReferenceText).toHaveBeenCalledWith(
-      'frozen text', 'Chapter 1.txt', 'reference:key:1:fingerprint',
+      'frozen text', '第1章 Chapter 1.txt', 'reference:key:1:fingerprint',
       1, 'run-1', authority, 'C:/projects/A', 'openai', expect.any(Object),
     )
     expect(mocks.commitReferenceImportReceipt).toHaveBeenCalledWith(
       'run-1', authority, 1, 'reference-doc',
     )
+  })
+
+  it.each([
+    ['control characters', 'Chapter\u0000One'],
+    ['an oversized title', 'x'.repeat(161)],
+  ])('rejects %s in the main-owned reference display name before loading the knowledge base', async (_case, title) => {
+    mocks.resolveReferenceImportAuthority.mockReturnValue({
+      chapterNumber: 1,
+      title,
+      content: 'frozen text',
+      contentFingerprint: 'a'.repeat(64),
+      stableKey: 'reference:key:1:fingerprint',
+    })
+
+    await expect(rawHandler('kb:import-reference-text')(
+      {}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+        projectId: 'project-A',
+        leaseId: 'lease-A',
+        projectPath: mocks.currentProjectPath,
+      },
+    )).rejects.toThrow(/title|display name|标题|展示名/i)
+
+    expect(mocks.run).not.toHaveBeenCalled()
+    expect(mocks.commitReferenceImportReceipt).not.toHaveBeenCalled()
   })
 
   it('rejects a matching project path that omits its session context', async () => {
