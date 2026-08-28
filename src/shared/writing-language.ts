@@ -9,3 +9,12 @@ export function resolveWritingLanguage(value: unknown): WritingLanguage {
     ? value as WritingLanguage
     : DEFAULT_WRITING_LANGUAGE
 }
+
+/** Select built-in copy by project writing language without inspecting user content. */
+export function writingLanguageText(
+  language: WritingLanguage,
+  zhCNText: string,
+  enUSText: string,
+): string {
+  return language === 'en-US' ? enUSText : zhCNText
+}

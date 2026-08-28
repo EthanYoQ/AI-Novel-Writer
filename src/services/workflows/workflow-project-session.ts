@@ -3,6 +3,7 @@ import { sameProjectPathKey } from '../../shared/project-session-context'
 import type { WorkflowContext } from '../../stores/workflow-store'
 import type { WritingLanguage } from '../../shared/writing-language'
 import { resolveWritingLanguage } from '../../shared/writing-language'
+import type { Locale } from '../../i18n/types'
 
 /**
  * 取出工作流启动时冻结的项目会话。
@@ -21,4 +22,17 @@ export function requireWorkflowProjectSession(context: WorkflowContext): Project
 /** Legacy workflows without an explicit snapshot retain the historical Chinese behavior. */
 export function workflowWritingLanguage(context: WorkflowContext): WritingLanguage {
   return resolveWritingLanguage(context.writingLanguage)
+}
+
+/** Legacy command contexts retain the historical Chinese interface copy. */
+export function workflowUiLocale(context: WorkflowContext): Locale {
+  return context.uiLocale === 'en-US' ? 'en-US' : 'zh-CN'
+}
+
+export function workflowUiText(
+  context: WorkflowContext,
+  zhCNText: string,
+  enUSText: string,
+): string {
+  return workflowUiLocale(context) === 'en-US' ? enUSText : zhCNText
 }

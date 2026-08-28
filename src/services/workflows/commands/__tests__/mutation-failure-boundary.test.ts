@@ -362,6 +362,38 @@ describe('workflow mutation failure boundaries', () => {
     )
   })
 
+  it('uses an English knowledge-document prefix without rewriting mixed UTF-8 chapter facts', async () => {
+    const chapterTitle = 'Night Café 夜航'
+    const draftContent = 'The sign reads “夜航 Café” — déjà vu.'
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'kb:import-text') {
+        return { success: true, docId: 'knowledge-document-utf8', chunkCount: 1 }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      chapterTitle,
+      draftContent,
+      testPostProcessGeneration(),
+    ).find(candidate => candidate.key === 'kb_import')
+
+    await expect(step!.executor(callbacks(), {
+      ...context(),
+      writingLanguage: 'en-US',
+    })).resolves.toBeUndefined()
+
+    expect(invoke).toHaveBeenCalledWith(
+      'kb:import-text',
+      draftContent,
+      `Chapter 1 ${chapterTitle}.txt`,
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+    )
+  })
+
   it('records a length-limited chapter-notes step as failed with zero writes, then retries it successfully', async () => {
     let runCreated = false
     let stepState: 'new' | 'failed' | 'ok' = 'new'

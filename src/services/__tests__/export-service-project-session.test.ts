@@ -95,6 +95,31 @@ describe('exportNovel project session ownership', () => {
     )
   })
 
+  it('passes mixed UTF-8 finalized prose to the export capability without transcoding', async () => {
+    const finalizedContent = 'The sign reads “夜航 Café” — déjà vu.'
+    vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (_session: ProjectSessionContext, channel: string) => {
+      if (channel === 'db:blueprint-get-all') return [{ chapterNumber: 1 }] as never
+      if (channel === 'db:draft-get-finalized') return { id: 1 } as never
+      if (channel === 'db:draft-get-full') return { content: finalizedContent } as never
+      throw new Error(`Unexpected channel: ${channel}`)
+    }) as never)
+
+    await expect(exportNovel(
+      { format: 'merged-md', grantId: 'export-grant' },
+      projectSnapshot,
+      projectSession,
+    )).resolves.toEqual({ success: true, path: 'Project A.md' })
+
+    const writeCall = vi.mocked(ipc.invoke).mock.calls.find(([channel]) => channel === 'fs:grant-write-file')
+    const exportedContent = writeCall?.[3]
+    expect(exportedContent).toEqual(expect.stringContaining(finalizedContent))
+    const exportedFact = (exportedContent as string).slice(
+      (exportedContent as string).indexOf(finalizedContent),
+      (exportedContent as string).indexOf(finalizedContent) + finalizedContent.length,
+    )
+    expect(new TextEncoder().encode(exportedFact)).toEqual(new TextEncoder().encode(finalizedContent))
+  })
+
   it('stops after the directory-selection export becomes stale on a same-path reopen', async () => {
     let resolveBlueprints: ((value: Array<{ chapterNumber: number }>) => void) | undefined
     vi.mocked(ipc.invokeWithProjectSession).mockImplementationOnce(() =>

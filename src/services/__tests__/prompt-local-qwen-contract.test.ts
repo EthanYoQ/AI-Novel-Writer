@@ -317,7 +317,7 @@ describe('built-in prompt contract for local Qwen generation', () => {
       word_number: '3000',
       writing_style: '文风',
       user_guidance: '',
-    })
+    }, 'zh-CN')
 
     for (const label of optionalGuidanceLabels) {
       expect(rendered).not.toContain(label)
@@ -329,7 +329,7 @@ describe('built-in prompt contract for local Qwen generation', () => {
     const firstChapter = getPromptTemplate('first_chapter_draft')
     expect(firstChapter).toBeTruthy()
 
-    const rendered = new ChapterPromptBuilder(firstChapter!)
+    const rendered = new ChapterPromptBuilder(firstChapter!, 'zh-CN')
       .withArchitecture('架构')
       .withChapterInfo('本章蓝图')
       .withFutureBlueprints('后续蓝图')

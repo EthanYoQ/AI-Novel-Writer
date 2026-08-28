@@ -223,6 +223,28 @@ afterEach(() => {
 })
 
 describe('RefineDraftCommand bounded visible completion', () => {
+  it('uses the frozen English UI locale for visible refinement logs and the diff tab independently of Chinese writing', async () => {
+    const source = 'Original chapter. '.repeat(120)
+    const revision = 'Revised chapter. '.repeat(120)
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: revision, finishReason: 'stop' })
+    stubIpc(successfulRevisionIpc())
+    const stepCallbacks = callbacks()
+    const context = {
+      ...workflowContext(),
+      writingLanguage: 'zh-CN' as const,
+      uiLocale: 'en-US' as const,
+    } as WorkflowContext & { uiLocale: 'en-US' }
+
+    await command(completeWithLease, source).execute({ step: {}, context, callbacks: stepCallbacks })
+
+    expect(stepCallbacks.log).toHaveBeenCalledWith('Refining the chapter...')
+    expect(stepCallbacks.log).toHaveBeenCalledWith(expect.stringContaining('Revision complete'))
+    expect(useEditorStore.getState().tabs).toEqual([
+      expect.objectContaining({ name: 'Revision merge: Chapter 1', type: 'diff' }),
+    ])
+  })
+
   it('sends English built-in instructions for direct refinement, review, and confirmed-review refinement', async () => {
     useProjectStore.setState((state) => ({
       currentProject: state.currentProject
@@ -500,6 +522,46 @@ describe('RefineDraftCommand bounded visible completion', () => {
 })
 
 describe('RefineFromReviewCommand bounded visible completion', () => {
+  it('uses the frozen English UI locale for visible confirmed-review logs and the diff tab', async () => {
+    const source = 'Original reviewed chapter. '.repeat(100)
+    const revision = 'Corrected reviewed chapter. '.repeat(100)
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: revision, finishReason: 'stop' })
+    stubIpc(successfulRevisionIpc())
+    const stepCallbacks = callbacks()
+    const context = {
+      ...workflowContext(),
+      writingLanguage: 'zh-CN' as const,
+      uiLocale: 'en-US' as const,
+    } as WorkflowContext & { uiLocale: 'en-US' }
+
+    await reviewCommand(completeWithLease, source).execute({ step: {}, context, callbacks: stepCallbacks })
+
+    expect(stepCallbacks.log).toHaveBeenCalledWith('Revising from the confirmed review checklist...')
+    expect(stepCallbacks.log).toHaveBeenCalledWith(expect.stringContaining('Review-based revision complete'))
+    expect(useEditorStore.getState().tabs).toEqual([
+      expect.objectContaining({ name: 'Review fix: Chapter 1', type: 'diff' }),
+    ])
+  })
+
+  it('uses the frozen English UI locale for a pre-generation confirmation error', async () => {
+    const createRuntime = vi.fn<WorkflowGenerationRuntimeDependencies['createRuntime']>()
+    const target = new RefineFromReviewCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: 'Original chapter.',
+      chapterNumber: 1,
+    }, { createRuntime })
+    const context = {
+      ...workflowContext(),
+      writingLanguage: 'zh-CN' as const,
+      uiLocale: 'en-US' as const,
+    } as WorkflowContext & { uiLocale: 'en-US' }
+
+    await expect(target.execute({ step: {}, context, callbacks: callbacks() }))
+      .rejects.toThrow('Review-based revision requires a saved human-confirmed review snapshot')
+    expect(createRuntime).not.toHaveBeenCalled()
+  })
+
   it('uses the persisted confirmation row as the only refinement input, records that row on the pending revision, and preserves the draft before merge', async () => {
     const persistedConfirmation = confirmedReviewContent({
       sourceReviewId: 41,
@@ -716,6 +778,35 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
 })
 
 describe('ReviewChapterCommand reasoning stage', () => {
+  it('uses the frozen English UI locale for visible review logs and the report tab independently of Chinese writing', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '{"summary":"ok","items":[]}', finishReason: 'stop' })
+    stubIpc(vi.fn(async (channel: string) => {
+      if (channel === 'kb:search' || channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:draft-get-meta') {
+        return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: true, id: 77 }
+      throw new Error(`unexpected IPC: ${channel}`)
+    }))
+    const stepCallbacks = callbacks()
+    const context = {
+      ...workflowContext(),
+      writingLanguage: 'zh-CN' as const,
+      uiLocale: 'en-US' as const,
+    } as WorkflowContext & { uiLocale: 'en-US' }
+
+    await chapterReviewCommand(completeWithLease).execute({ step: {}, context, callbacks: stepCallbacks })
+
+    expect(stepCallbacks.log).toHaveBeenCalledWith('Preparing the continuity review...')
+    expect(stepCallbacks.log).toHaveBeenCalledWith(expect.stringContaining('Review complete'))
+    expect(useEditorStore.getState().tabs).toEqual([
+      expect.objectContaining({ name: 'Review report: Chapter 1', type: 'review-report' }),
+    ])
+  })
+
   it('routes the public review workflow through the review stage', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
       .mockResolvedValue({ content: '{"summary":"ok","items":[]}', finishReason: 'stop' })

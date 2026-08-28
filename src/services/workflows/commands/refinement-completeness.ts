@@ -1,3 +1,5 @@
+import type { Locale } from '../../../i18n/types'
+
 const MIN_REFINEMENT_COMPLETION_RATIO = 0.6
 const MIN_REFINEMENT_UNITS = 200
 const CHINESE_CHARACTER_PATTERN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu
@@ -20,6 +22,7 @@ export function assertMateriallyCompleteRevision(
   source: string,
   revision: string,
   targetUnits: number,
+  uiLocale: Locale,
 ): void {
   const sourceUnits = countVisibleProseUnits(source)
   const revisionUnits = countVisibleProseUnits(revision)
@@ -31,6 +34,8 @@ export function assertMateriallyCompleteRevision(
     Math.max(MIN_REFINEMENT_UNITS, Math.floor(boundedTarget * MIN_REFINEMENT_COMPLETION_RATIO)),
   )
   if (revisionUnits < minimumUnits) {
-    throw new Error('修稿结果明显短于原稿，可能仍不完整，结果未被保存。请重试或缩短本次修稿范围。')
+    throw new Error(uiLocale === 'en-US'
+      ? 'The revision is materially shorter than the source and may be incomplete. Nothing was saved; retry or narrow the revision scope.'
+      : '修稿结果明显短于原稿，可能仍不完整，结果未被保存。请重试或缩短本次修稿范围。')
   }
 }

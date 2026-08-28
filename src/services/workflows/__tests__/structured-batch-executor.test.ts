@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  createStructuredBatchExecutor,
+  createStructuredBatchExecutor as createRuntimeStructuredBatchExecutor,
   type StructuredBatchContract,
 } from '../structured-batch-executor'
 import {
@@ -17,6 +17,17 @@ import { planBlueprintGenerationCost } from '../blueprint-batch-policy'
 type Blueprint = {
   chapterNumber: number
   title: string
+}
+
+function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
+  contract: StructuredBatchContract<TInput, TOutput>
+  session: Pick<GenerationSession, 'complete'>
+  writingLanguage?: 'zh-CN' | 'en-US'
+}) {
+  return createRuntimeStructuredBatchExecutor({
+    ...dependencies,
+    writingLanguage: dependencies.writingLanguage ?? 'zh-CN',
+  })
 }
 
 const blueprintContract: StructuredBatchContract<number, Blueprint> = {
@@ -602,6 +613,29 @@ describe('StructuredBatchExecutor seam', () => {
       receipt: { calls: 1, requestedTokens: 100 },
     })
     expect(result).not.toHaveProperty('items')
+  })
+
+  it('fails closed before a repair request when the caller omits writingLanguage', async () => {
+    const complete = vi.fn<GenerationSession['complete']>(async () => ({
+      status: 'completed',
+      content: '{"blueprints":[{"chapterNumber":1,"title":"第1章"}],}',
+      finishReason: 'stop',
+      receipt: attemptReceipt(1, 100, 100, 'stop'),
+    }))
+    const executor = createRuntimeStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+
+    const result = await executor.execute({ items: [1], limits: { maxBatchItems: 1 } })
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: {
+        code: 'invalid_output',
+        reason: 'malformed_output',
+        message: expect.stringContaining('写作语言'),
+      },
+      receipt: { calls: 1 },
+    })
+    expect(complete).toHaveBeenCalledOnce()
   })
 
   it('classifies malformed structured content as invalid output', async () => {

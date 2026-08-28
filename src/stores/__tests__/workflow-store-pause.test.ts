@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useWorkflowStore, type WorkflowDefinition } from '../workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
 import { useProjectStore } from '../project-store'
+import { useLocaleStore } from '../locale-store'
 import { createBoundedCompletionError } from '../../services/workflows/bounded-completion'
 
 const projectPath = 'C:\\test-project'
@@ -34,6 +35,7 @@ beforeEach(() => {
       novelConfig: {},
     } as never,
   })
+  useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
 })
 
 describe('workflow pause at a safe step boundary', () => {
@@ -75,6 +77,68 @@ describe('workflow pause at a safe step boundary', () => {
       status: 'completed',
     })
   })
+
+  it.each([
+    ['zh-CN', 'zh-CN'],
+    ['zh-CN', 'en-US'],
+    ['en-US', 'zh-CN'],
+    ['en-US', 'en-US'],
+  ] as const)(
+    'freezes writing language %s and UI locale %s independently for the whole run',
+    async (writingLanguage, uiLocale) => {
+      const project = useProjectStore.getState().currentProject!
+      useProjectStore.setState({
+        currentProject: {
+          ...project,
+          novelConfig: { ...project.novelConfig, writingLanguage },
+        },
+      })
+      useLocaleStore.setState({ locale: uiLocale })
+      const observed: Array<{ writingLanguage: unknown; uiLocale: unknown }> = []
+
+      await useWorkflowStore.getState().startWorkflow({
+        type: 'chapter_creation',
+        title: 'Frozen language seams',
+        projectPath,
+        projectSession: frozenSession(),
+        steps: [{
+          name: 'capture',
+          description: 'capture frozen language seams',
+          executor: async (_step, context) => {
+            observed.push({
+              writingLanguage: context.writingLanguage,
+              uiLocale: context.uiLocale,
+            })
+            const current = useProjectStore.getState().currentProject!
+            useProjectStore.setState({
+              currentProject: {
+                ...current,
+                novelConfig: {
+                  ...current.novelConfig,
+                  writingLanguage: writingLanguage === 'en-US' ? 'zh-CN' : 'en-US',
+                },
+              },
+            })
+            useLocaleStore.setState({ locale: uiLocale === 'en-US' ? 'zh-CN' : 'en-US' })
+            observed.push({
+              writingLanguage: context.writingLanguage,
+              uiLocale: context.uiLocale,
+            })
+          },
+        }],
+      })
+
+      expect(observed).toEqual([
+        { writingLanguage, uiLocale },
+        { writingLanguage, uiLocale },
+      ])
+      expect(useWorkflowStore.getState().history[0]).toMatchObject({
+        writingLanguage,
+        uiLocale,
+        status: 'completed',
+      })
+    },
+  )
 
   it('copies a bounded terminal failure code to the failed step and run without changing its message', async () => {
     const failure = createBoundedCompletionError('content_filter')

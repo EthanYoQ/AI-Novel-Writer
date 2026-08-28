@@ -8,7 +8,11 @@ import { unwrapKnowledgeValue } from '../../knowledge-service'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
-import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
+import {
+  requireWorkflowProjectSession,
+  workflowUiText,
+  workflowWritingLanguage,
+} from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
 
 
@@ -35,17 +39,18 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     const writingLanguage = workflowWritingLanguage(context)
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(project),
-    )) throw new Error('当前项目已切换，审稿已停止')
+    )) throw new Error(text('当前项目已切换，审稿已停止', 'The project changed, so the review stopped.'))
 
     const draft = this.params.draftContent
-    if (!draft) throw new Error('无草稿内容')
+    if (!draft) throw new Error(text('无草稿内容', 'There is no draft content to review.'))
 
-    callbacks.log('准备启动一致性审查引擎...')
-    callbacks.log('  检索全书设定档案...')
+    callbacks.log(text('准备启动一致性审查引擎...', 'Preparing the continuity review...'))
+    callbacks.log(text('  检索全书设定档案...', '  Retrieving established story facts...'))
 
     // 使用向量检索获取与待审章节相关的历史上下文（替代全局摘要）
     let contextSummary = promptLanguageText(writingLanguage, '（无上下文参考）', '(no relevant prior context)')
@@ -77,7 +82,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     const worldBuilding = await this.readWorldBuilding(context.projectPath, projectSession, writingLanguage)
 
     const template = await resolvePromptTemplate('consistency_check', projectSession, writingLanguage)
-    if (!template) throw new Error('未找到审稿模板')
+    if (!template) throw new Error(text('未找到审稿模板', 'The review prompt template was not found.'))
 
     const promptBuilder = new ReviewPromptBuilder(template, writingLanguage)
       .withChapterContent(draft)
@@ -86,7 +91,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       .withWorldBuilding(worldBuilding)
       .withReviewFocus(this.params.reviewFocus || '')
 
-    callbacks.log('调用 AI 审查员对本章进行多维度扫描...')
+    callbacks.log(text('调用 AI 审查员对本章进行多维度扫描...', 'Running the AI continuity review...'))
 
     // 期望 JSON 格式返回
     const reviewResultRaw = await this.callLLMWithBuilder(
@@ -104,7 +109,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     const reviewResultClean = this.stripThinkingTags(reviewResultRaw)
 
     const baseDraft = await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
-    if (!baseDraft) throw new Error('找不到基准草稿版本')
+    if (!baseDraft) throw new Error(text('找不到基准草稿版本', 'The source draft version could not be found.'))
     const baseVersion = baseDraft.version
 
     const revIndex = await ipc.invokeWithProjectSession(projectSession, 'db:review-next-index', baseDraft.id, context.projectPath)
@@ -113,8 +118,8 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     try {
       parsedResult = this.parseJSON(reviewResultClean)
     } catch {
-      callbacks.log('⚠️ 审稿结果解析失败，返回原始文本')
-      parsedResult = { summary: '解析失败', items: [] }
+      callbacks.log(text('审稿结果解析失败，返回原始文本', 'The review result could not be parsed; preserving the raw response.'))
+      parsedResult = { summary: text('解析失败', 'Parsing failed'), items: [] }
     }
 
     this.assertNotCancelled(context)
@@ -123,7 +128,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       reviewIndex: revIndex,
       content: JSON.stringify(parsedResult, null, 2),
     }, context.projectPath)
-    requireIpcSuccess(createResult, '保存审稿报告')
+    requireIpcSuccess(createResult, text('保存审稿报告', 'Save the review report'))
 
     // 将审稿报告 JSON 序列化为字符串，作为 content 传给 Tab
     // EditorArea 渲染 ReviewReport 的条件：activeTab.content 存在
@@ -133,12 +138,15 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     if (!sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) throw new Error('当前项目已切换，已拒绝打开旧审稿报告')
+    )) throw new Error(text('当前项目已切换，已拒绝打开旧审稿报告', 'The project changed, so the stale review report was not opened.'))
     const { useEditorStore } = await import('../../../stores/editor-store')
     const pseudoReviewPath = `vela://draft/ch${this.params.chapterNumber}/v${baseVersion}/review${revIndex}`
     useEditorStore.getState().openFile({
       id: `review-${this.params.draftPath}-${revIndex}`,
-      name: `审稿报告：第${this.params.chapterNumber}章`,
+      name: text(
+        `审稿报告：第${this.params.chapterNumber}章`,
+        `Review report: Chapter ${this.params.chapterNumber}`,
+      ),
       type: 'review-report',
       content: reportContent,
       filePath: this.params.draftPath,
@@ -150,7 +158,10 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       projectKey: context.projectPath,
     })
 
-    callbacks.log(`✅ 审查完成，已生成审稿报告 r${revIndex}`)
+    callbacks.log(text(
+      `审查完成，已生成审稿报告 r${revIndex}`,
+      `Review complete; created review report r${revIndex}`,
+    ))
     return reviewResultClean
   }
 

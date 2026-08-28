@@ -22,6 +22,7 @@ import type { ChapterInfo } from '../chapter-workflow'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
 import type { CharacterRosterEntry, CharacterRosterRole } from '../../../shared/character-roster'
+import { writingLanguageText } from '../../../shared/writing-language'
 
 export interface FinalizeChapterParams {
   draftPath: string
@@ -89,8 +90,13 @@ export function buildFinalizePostProcessSteps(
       if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
       if (context.cancelled) throw new Error('工作流已取消')
       const projectSession = requireWorkflowProjectSession(context)
+      const writingLanguage = workflowWritingLanguage(context)
       const contentFileName = chapterTitle
-        ? `第${chapterNumber}章 ${chapterTitle}.txt`
+        ? writingLanguageText(
+            writingLanguage,
+            `第${chapterNumber}章 ${chapterTitle}.txt`,
+            `Chapter ${chapterNumber} ${chapterTitle}.txt`,
+          )
         : `chapter_${chapterNumber}.txt`
       const result = await ipc.invokeWithProjectSession(
         projectSession,

@@ -1,4 +1,4 @@
-import type { WritingLanguage } from '../shared/writing-language'
+import { writingLanguageText, type WritingLanguage } from '../shared/writing-language'
 
 export interface PromptLanguageTemplate {
   systemRole: string
@@ -39,6 +39,10 @@ export const CORE_LOCALIZED_BUILTIN_PROMPT_KEYS = Object.freeze([
   'refine_from_review',
   'generate_chapter_notes',
   'update_character_cards',
+  'analyze_writing_style',
+  'infer_novel_config',
+  'infer_novel_config_with_vectors',
+  'infer_single_chapter_blueprint',
 ] as const)
 
 export type CoreLocalizedBuiltinPromptKey = typeof CORE_LOCALIZED_BUILTIN_PROMPT_KEYS[number]
@@ -480,6 +484,111 @@ Return exactly one JSON object:
 
 If nothing changed and no important character was introduced, return {"updates":[],"newCharacters":[]}. Output JSON only, with no Markdown or explanation.`,
   },
+  analyze_writing_style: {
+    systemRole: 'You are a rigorous fiction-style analyst. Convert a reference novel into executable craft constraints without retelling its plot. Use concise, actionable language.',
+    content: `Analyze the following fiction sample and produce a style profile and imitation guide for later drafting.
+
+[Fiction sample]
+{{sample_text}}
+
+[Boundaries]
+- Analyze craft only: narrative rhythm, structure, sentence patterns, descriptive balance, scene movement, and dialogue organization.
+- Do not repeat plot events, character names, place names, proprietary settings, signature scenes, or source sentences.
+- Use concise, executable observations instead of general literary commentary.
+
+[Dimensions]
+1. Narrative rhythm and information release.
+2. Sentence and paragraph patterns.
+3. Scene progression through action, dialogue, interiority, and setting.
+4. Descriptive density and sensory granularity.
+5. Dialogue length, subtext, pressure, colloquial register, and voice distinction.
+6. Emotional tone and modulation.
+7. Opening hooks, escalation, reversals, and chapter-end hooks.
+8. Likely imitation failures and concrete corrections.
+
+Output plain text with exactly these headings and two to four concise items per field:
+
+Style Profile:
+- Narrative rhythm:
+- Sentences and paragraphs:
+- Scene progression:
+- Descriptive density:
+- Dialogue style:
+- Emotional curve:
+- Structural patterns:
+
+Imitation Guide:
+- Prioritize:
+- Avoid:
+- Hard constraints for drafting prompts:
+- How to recover from vague output:
+
+Add no preface, courtesy language, or unrelated explanation.`,
+  },
+  infer_novel_config: {
+    systemRole: 'You are a senior fiction editor and reading analyst who reconstructs a coherent story system from an existing manuscript. Use concise text, explicit JSON, and direct textual evidence.',
+    content: `Infer the complete established story system from the following manuscript sample so the project can continue the same novel.
+
+[Existing manuscript sample]
+{{sample_content}}
+
+[Task]
+Return one JSON object containing novelConfig, architectureFiles, and characterCards. Infer only from the supplied manuscript, preserve names and facts exactly, and mark genuine uncertainty with concise text rather than inventing unsupported canon.
+
+The runtime appends the authoritative immutable JSON contract. Follow that contract over any remembered or alternative schema. Output JSON only, with no Markdown, explanation, or reasoning.`,
+  },
+  infer_novel_config_with_vectors: {
+    systemRole: 'You are a senior fiction editor and reading analyst who reconstructs a coherent story system from an existing manuscript. Use concise text, explicit JSON, and direct textual evidence.',
+    content: `Infer the complete established story system from the following manuscript evidence.
+
+[Opening chapter sample]
+{{first_chapter}}
+
+[Latest chapter sample]
+{{latest_chapter}}
+
+[Existing chapter count]
+{{total_chapters}}
+
+[Retrieved evidence — world and power system]
+{{sampled_worldview}}
+
+[Retrieved evidence — protagonist and central advantage]
+{{sampled_protagonist}}
+
+[Retrieved evidence — central conflict and opposition]
+{{sampled_conflict}}
+
+[Retrieved evidence — prose style and point of view]
+{{sampled_style}}
+
+[Task]
+Return one JSON object containing novelConfig, architectureFiles, and characterCards. Use the opening and latest chapters to distinguish initial from current state. Preserve every source name and fact exactly; do not translate or normalize manuscript content.
+
+The runtime appends the authoritative immutable JSON contract. Follow that contract over any remembered or alternative schema. Output JSON only, with no Markdown, explanation, or reasoning.`,
+  },
+  infer_single_chapter_blueprint: {
+    systemRole: 'You are a professional fiction-structure analyst who extracts a precise chapter blueprint from existing manuscript text. Use explicit fields, concrete evidence, and JSON only.',
+    content: `Extract structured blueprint facts from the existing chapter below.
+
+[Established novel configuration]
+{{novel_config_summary}}
+
+[Chapter]
+- Number: {{chapter_number}}
+- Imported title: {{chapter_title}}
+
+[Existing chapter manuscript]
+{{chapter_content}}
+
+[Requirements]
+1. Base every event, character, relationship, and hook on the supplied manuscript; do not invent facts.
+2. Preserve every character name exactly as written.
+3. Describe this chapter's narrative function, immediate goal, causal events, and final hook concisely.
+4. The runtime appends the final immutable JSON contract; follow it over any alternative schema.
+
+Output JSON only, with no Markdown, explanation, or reasoning.`,
+  },
   first_chapter_draft: {
     systemRole: 'You are an accomplished web-fiction novelist who writes compelling commercial fiction. Use stable narration, concrete scenes, and specific actions. Never reveal reasoning, <think> tags, or interface prompts such as “click to continue.”',
     content: `Write the opening chapter of this novel.
@@ -561,5 +670,5 @@ export function promptLanguageText(
   zhCNText: string,
   enUSText: string,
 ): string {
-  return language === 'en-US' ? enUSText : zhCNText
+  return writingLanguageText(language, zhCNText, enUSText)
 }

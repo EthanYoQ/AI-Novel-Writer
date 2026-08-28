@@ -1,4 +1,4 @@
-import type { WritingLanguage } from './writing-language'
+import { writingLanguageText, type WritingLanguage } from './writing-language'
 
 /**
  * Immutable, user-confirmed review snapshot persisted in the existing
@@ -163,14 +163,18 @@ export function renderHumanConfirmedReviewBrief(
 
   if (appliedItems.length > 0) {
     sections.push([
-      writingLanguage === 'en-US'
-        ? '[Confirmed review items included in this revision]'
-        : '【已确认纳入本次修稿的审稿项】',
+      writingLanguageText(
+        writingLanguage,
+        '【已确认纳入本次修稿的审稿项】',
+        '[Confirmed review items included in this revision]',
+      ),
       ...appliedItems.map((item, index) => {
         const quote = item.quote?.trim()
-          ? writingLanguage === 'en-US'
-            ? `\n  Source excerpt: ${item.quote.trim()}`
-            : `\n  相关原文：${item.quote.trim()}`
+          ? writingLanguageText(
+              writingLanguage,
+              `\n  相关原文：${item.quote.trim()}`,
+              `\n  Source excerpt: ${item.quote.trim()}`,
+            )
           : ''
         return `${index + 1}. [${item.category} / ${item.severity}] ${item.description}${quote}`
       }),
@@ -179,9 +183,11 @@ export function renderHumanConfirmedReviewBrief(
 
   const authorGuidance = snapshot.authorGuidance.trim()
   if (authorGuidance) {
-    sections.push(writingLanguage === 'en-US'
-      ? `[Confirmed author guidance]\n${authorGuidance}`
-      : `【作者补充修稿指导】\n${authorGuidance}`)
+    sections.push(writingLanguageText(
+      writingLanguage,
+      `【作者补充修稿指导】\n${authorGuidance}`,
+      `[Confirmed author guidance]\n${authorGuidance}`,
+    ))
   }
 
   return sections.join('\n\n')

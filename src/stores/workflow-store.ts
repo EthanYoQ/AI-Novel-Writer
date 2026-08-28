@@ -4,6 +4,7 @@ import { globalEventBus } from '../shared/event-bus'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { WritingLanguage } from '../shared/writing-language'
 import { resolveWritingLanguage } from '../shared/writing-language'
+import type { Locale } from '../i18n/types'
 import {
   getBoundedCompletionFailureCode,
   type BoundedCompletionFailureCode,
@@ -15,6 +16,7 @@ import {
   sameProjectSessionContext,
 } from '../shared/project-session-context'
 import { useProjectStore } from './project-store'
+import { useLocaleStore } from './locale-store'
 
 // ===== 工作流数据模型 =====
 
@@ -61,6 +63,8 @@ export interface WorkflowRun {
   generationModelId?: string
   /** Project writing language frozen when the workflow starts. */
   writingLanguage?: WritingLanguage
+  /** Visible interface locale frozen when the workflow starts. */
+  uiLocale?: Locale
   type: WorkflowType
   title: string
   status: WorkflowStatus
@@ -105,6 +109,8 @@ export interface WorkflowContext {
   generationModelId?: string
   /** Project writing language frozen when the workflow starts. */
   writingLanguage?: WritingLanguage
+  /** Visible interface locale frozen when the workflow starts. */
+  uiLocale?: Locale
   /** 步骤间传递的数据 */
   data: Record<string, unknown>
   /** 是否已取消 */
@@ -325,6 +331,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     const runId = definition.runId ?? randomUUID()
     const generationModelId = normalizeGenerationModelId(definition.generationModelId)
     const writingLanguage = resolveWritingLanguage(currentProject?.novelConfig.writingLanguage)
+    const uiLocale = useLocaleStore.getState().locale
 
     // Runtime callers can still deserialize a legacy definition that predates
     // the required TypeScript field. Reject it before adding an active run or
@@ -337,6 +344,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         projectSession: isProjectSessionContext(suppliedProjectSession)
           ? Object.freeze({ ...suppliedProjectSession })
           : null,
+        uiLocale,
         type: definition.type,
         title: definition.title,
         status: 'failed',
@@ -363,6 +371,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       projectPath: definition.projectPath,
       projectSession,
       writingLanguage,
+      uiLocale,
       ...(generationModelId ? { generationModelId } : {}),
       type: definition.type,
       title: definition.title,
@@ -394,6 +403,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       projectPath: definition.projectPath,
       projectSession,
       writingLanguage,
+      uiLocale,
       ...(generationModelId ? { generationModelId } : {}),
       data: {},
       cancelled: false,

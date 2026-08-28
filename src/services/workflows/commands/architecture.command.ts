@@ -548,7 +548,8 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
     if (!result.trim()) throw new Error('故事前提生成失败，AI 返回空内容')
     if (context.cancelled) throw new Error('工作流已取消')
 
-    const content = `# 故事前提\n\n${result}\n`
+    const heading = promptLanguageText(writingLanguage, '故事前提', 'Story Premise')
+    const content = `# ${heading}\n\n${result}\n`
     this.assertNotCancelled(context)
     await writeArchToDb('premise', content, expectedProjectPath, context.runId, projectSession)
     this.assertNotCancelled(context)
@@ -847,7 +848,8 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     if (context.cancelled) throw new Error('工作流已取消')
 
     this.assertNotCancelled(context)
-    await writeArchToDb('worldbuilding', `# 世界观\n\n${result}\n`, expectedProjectPath, context.runId, projectSession)
+    const heading = promptLanguageText(writingLanguage, '世界观', 'Worldbuilding')
+    await writeArchToDb('worldbuilding', `# ${heading}\n\n${result}\n`, expectedProjectPath, context.runId, projectSession)
     this.assertNotCancelled(context)
 
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
@@ -924,7 +926,8 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     if (context.cancelled) throw new Error('工作流已取消')
 
     this.assertNotCancelled(context)
-    await writeArchToDb('synopsis', `# 情节大纲\n\n${result}\n`, expectedProjectPath, context.runId, projectSession)
+    const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
+    await writeArchToDb('synopsis', `# ${heading}\n\n${result}\n`, expectedProjectPath, context.runId, projectSession)
     this.assertNotCancelled(context)
 
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)

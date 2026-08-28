@@ -17,6 +17,25 @@ afterEach(() => {
 })
 
 describe('project writing language persistence', () => {
+  it('round-trips mixed UTF-8 project facts byte-for-byte across close and reopen', () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-writing-language-utf8-'))
+    roots.push(projectRoot)
+    const projectName = 'Night Café 夜航'
+    const coreOutline = 'The sign reads “夜航 Café” — déjà vu.'
+    const premise = '夜航 Café stays open; Mara asks, “Why now?”'
+
+    initProjectDatabase(projectRoot)
+    ProjectCoreRepository.init(projectName, 'en-US')
+    ProjectCoreRepository.update({ coreOutline, premise })
+    closeProjectDatabase()
+    initProjectDatabase(projectRoot)
+
+    const reopened = ProjectCoreRepository.get()
+    expect(reopened).toMatchObject({ projectName, writingLanguage: 'en-US', coreOutline, premise })
+    expect(new TextEncoder().encode(reopened!.coreOutline)).toEqual(new TextEncoder().encode(coreOutline))
+    expect(new TextEncoder().encode(reopened!.premise)).toEqual(new TextEncoder().encode(premise))
+  })
+
   it('initializes and reopens a new project with its selected writing language', () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-writing-language-new-'))
     roots.push(projectRoot)

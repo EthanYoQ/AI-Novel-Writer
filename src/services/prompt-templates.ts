@@ -1254,7 +1254,7 @@ severity 取值：error=严重矛盾强烈建议修复, warning=轻微不一致�
 /** Resolve only model-facing built-ins through the project's writing language. */
 export function getBuiltinPromptTemplate(
   key: string,
-  writingLanguage?: WritingLanguage,
+  writingLanguage: WritingLanguage,
 ): PromptTemplate | undefined {
   const builtin = BUILTIN_PROMPTS.find(template => template.key === key)
   if (!builtin) return undefined
@@ -1301,8 +1301,8 @@ export function getPromptTemplate(
 /** 工作流读取入口：首次调用会自动等待全局与当前项目覆盖水合。 */
 export async function resolvePromptTemplate(
   key: string,
-  projectSession?: ProjectSessionContext,
-  writingLanguage?: WritingLanguage,
+  projectSession: ProjectSessionContext | undefined,
+  writingLanguage: WritingLanguage,
 ): Promise<PromptTemplate | undefined> {
   const resolved = await promptCatalog.resolve(key, projectSession)
   if (!resolved) return undefined
@@ -1356,7 +1356,7 @@ export async function deleteProjectCustomPrompt(
 export function renderPrompt(
   template: PromptTemplate,
   variables: Record<string, string>,
-  writingLanguage?: WritingLanguage,
+  writingLanguage: WritingLanguage,
 ): string {
   let content = template.content
   for (const [key, value] of Object.entries(variables)) {

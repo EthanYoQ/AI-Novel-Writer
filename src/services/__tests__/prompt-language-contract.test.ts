@@ -22,6 +22,10 @@ const REQUIRED_CORE_KEYS = [
   'refine_from_review',
   'generate_chapter_notes',
   'update_character_cards',
+  'analyze_writing_style',
+  'infer_novel_config',
+  'infer_novel_config_with_vectors',
+  'infer_single_chapter_blueprint',
 ] as const
 
 function placeholders(value: string): string[] {

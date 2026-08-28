@@ -10,7 +10,7 @@ export class BasePromptBuilder {
   protected template: PromptTemplate;
   protected variables: Record<string, string> = {};
 
-  constructor(template: PromptTemplate, private readonly writingLanguage?: WritingLanguage) {
+  constructor(template: PromptTemplate, private readonly writingLanguage: WritingLanguage) {
     this.template = template;
   }
 

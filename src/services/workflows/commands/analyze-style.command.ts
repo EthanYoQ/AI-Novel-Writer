@@ -4,8 +4,10 @@ import { resolvePromptTemplate } from '../../prompt-templates'
 import { BasePromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
-import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
 import type { ImportedChapter } from './import-novel.command'
+import { promptLanguageText } from '../../prompt-language'
+import type { WritingLanguage } from '../../../shared/writing-language'
 
 export interface AnalyzeWritingStyleOptions {
   sampleText?: string
@@ -32,13 +34,14 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
+    const writingLanguage = workflowWritingLanguage(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(project),
     )) throw new Error('当前项目已切换，文风分析已停止')
 
-    const sampleTexts = this.collectProvidedSamples()
+    const sampleTexts = this.collectProvidedSamples(writingLanguage)
 
     if (sampleTexts.length > 0) {
       callbacks.log(`正在分析导入文本样本文风（${sampleTexts.length} 段）...`)
@@ -75,11 +78,11 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       return ''
     }
 
-    const template = await resolvePromptTemplate('analyze_writing_style', projectSession)
+    const template = await resolvePromptTemplate('analyze_writing_style', projectSession, writingLanguage)
     if (!template) throw new Error('未找到文风分析模板')
 
     const sampleText = sampleTexts.join('\n\n---\n\n')
-    const prompt = new BasePromptBuilder(template)
+    const prompt = new BasePromptBuilder(template, writingLanguage)
       // 使用 protected variables 需要通过子类或反射，这里使用 build 前手动设置
       ; (prompt as unknown as { variables: { sample_text: string } }).variables = { sample_text: sampleText }
     const finalPrompt = prompt.build()
@@ -87,7 +90,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     callbacks.log('调用 AI 分析文风特征...')
     const result = await this.callLLM(
       finalPrompt,
-      template.systemRole || '你是一位资深的文学评论家和网文研究者。',
+      template.systemRole || promptLanguageText(writingLanguage, '你是一位资深的文学评论家和网文研究者。', 'You are a senior fiction critic and narrative researcher.'),
       callbacks,
       { purpose: 'analyze-writing-style', reasoningStage: 'review' },
       context,
@@ -125,7 +128,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     return cleanResult
   }
 
-  private collectProvidedSamples(): string[] {
+  private collectProvidedSamples(writingLanguage: WritingLanguage): string[] {
     const samples: string[] = []
     if (this.options.sampleText?.trim()) {
       samples.push(this.options.sampleText.trim().slice(0, 4000))
@@ -139,7 +142,11 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       const selected = this.pickRepresentativeChapters(this.options.chapters)
       for (const chapter of selected) {
         if (chapter.content.trim()) {
-          samples.push(`第${chapter.number}章 ${chapter.title}\n${chapter.content.trim().slice(0, 2000)}`)
+          samples.push(promptLanguageText(
+            writingLanguage,
+            `第${chapter.number}章 ${chapter.title}\n${chapter.content.trim().slice(0, 2000)}`,
+            `Chapter ${chapter.number}: ${chapter.title}\n${chapter.content.trim().slice(0, 2000)}`,
+          ))
         }
       }
     }

@@ -315,6 +315,67 @@ describe('ImportInitializeCommand', () => {
 })
 
 describe('InferBlueprintsPerChapterCommand', () => {
+  it('keeps imported UTF-8 intact in English blueprint inference and its syntax-repair request', async () => {
+    const importedText = 'At “夜航 Café”, Mara hears déjà vu in the rain.'
+    const valid = JSON.stringify({
+      blueprints: [{
+        chapterNumber: 1,
+        title: 'Night Café 夜航',
+        role: 'setup',
+        purpose: 'Trace the repeated signal.',
+        keyEvents: 'Mara enters “夜航 Café” and hears the same warning twice.',
+        characters: ['Mara'],
+        relationships: [],
+        suspenseHook: 'The clock resets to midnight.',
+      }],
+    })
+    const malformed = `${valid.slice(0, -1)},}`
+    const observed: Array<Array<{ role: string; content: string }>> = []
+    stubIpcInvoke((channel) => {
+      if (channel === 'db:blueprint-commit-range') return { success: false, error: 'captured after repair' }
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+    useProjectStore.setState(state => ({
+      currentProject: state.currentProject
+        ? {
+            ...state.currentProject,
+            novelConfig: { ...state.currentProject.novelConfig, writingLanguage: 'en-US' },
+          }
+        : null,
+    }))
+    useLLMStore.setState({
+      defaultModelId: 'model-a',
+      generateStream: vi.fn(async (messages, streamCallbacks) => {
+        observed.push(messages)
+        streamCallbacks.onDone?.(observed.length === 1 ? malformed : valid, undefined, 'stop')
+        return `import-blueprint-language-${observed.length}`
+      }),
+    })
+    const context = createContext()
+    context.writingLanguage = 'en-US'
+    context.data.novelConfigSummary = 'A time-loop mystery at “夜航 Café”.'
+    context.data.chapters = [{
+      number: 1,
+      title: 'Night Café 夜航',
+      content: importedText,
+      wordCount: importedText.length,
+    }]
+
+    await expect(new InferBlueprintsPerChapterCommand().execute({
+      step: {},
+      context,
+      callbacks,
+    })).rejects.toThrow('captured after repair')
+
+    expect(observed).toHaveLength(2)
+    expect(observed[0]?.[0]?.content).toContain('professional fiction-structure analyst')
+    expect(observed[0]?.[1]?.content).toContain(importedText)
+    expect(observed[0]?.map(message => message.content).join('\n')).not.toContain('【最终不可变输出合同】')
+    expect(observed[1]?.[0]?.content).toContain('You repair JSON syntax only')
+    expect(observed[1]?.[1]?.content).toContain('Malformed candidate')
+    expect(observed[1]?.[1]?.content).toContain('Night Café 夜航')
+  })
+
   it('performs zero per-chapter writes and throws when the one range commit fails', async () => {
     const invoke = stubIpcInvoke((channel) => {
       if (channel === 'db:blueprint-commit-range') return { success: false, error: 'DB 写入失败' }
@@ -491,6 +552,56 @@ describe('InferBlueprintsPerChapterCommand', () => {
 })
 
 describe('InferGlobalSettingsCommand', () => {
+  it('uses the frozen English writing language for inference and syntax repair without rewriting imported UTF-8', async () => {
+    const invoke = successfulInferenceIpc()
+    const importedText = 'The sign reads “夜航 Café” — déjà vu.'
+    const inferred = validInference()
+    inferred.novelConfig.coreOutline = 'Preserve “夜航 Café” exactly.'
+    const valid = JSON.stringify(inferred)
+    const malformed = `${valid.slice(0, -1)},}`
+    const observed: Array<Array<{ role: string; content: string }>> = []
+    const generateStream = vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(
+      async (messages, streamCallbacks) => {
+        observed.push(messages)
+        streamCallbacks.onDone?.(observed.length === 1 ? malformed : valid, undefined, 'stop')
+        return `import-language-${observed.length}`
+      },
+    )
+    useProjectStore.setState(state => ({
+      currentProject: state.currentProject
+        ? {
+            ...state.currentProject,
+            novelConfig: { ...state.currentProject.novelConfig, writingLanguage: 'en-US' },
+          }
+        : null,
+    }))
+    useLLMStore.setState({ defaultModelId: 'model-a', generateStream })
+    const context = createContext()
+    context.writingLanguage = 'en-US'
+    context.data.chapters = [{
+      number: 1,
+      title: 'Night Café 夜航',
+      content: importedText,
+      wordCount: importedText.length,
+    }]
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context, callbacks })
+
+    expect(observed).toHaveLength(2)
+    expect(observed[0]?.[0]?.content).toContain('senior fiction editor')
+    expect(observed[0]?.[1]?.content).toContain(importedText)
+    expect(observed[0]?.map(message => message.content).join('\n')).not.toContain('【小说全文采样】')
+    expect(observed[1]?.[0]?.content).toContain('You repair JSON syntax only')
+    expect(observed[1]?.[1]?.content).toContain('Malformed candidate')
+    expect(observed[1]?.[1]?.content).toContain('Preserve “夜航 Café” exactly.')
+    const commitCalls = invoke.mock.calls.filter(([channel]) => channel === 'db:import-global-facts-commit')
+    expect(commitCalls).toHaveLength(1)
+    const committedCore = (commitCalls[0]?.[1] as { core: { coreOutline: string } }).core
+    expect(committedCore.coreOutline).toBe(inferred.novelConfig.coreOutline)
+    expect(new TextEncoder().encode(committedCore.coreOutline))
+      .toEqual(new TextEncoder().encode(inferred.novelConfig.coreOutline))
+  })
+
   it('repairs one direct malformed JSON response on the same lease before writing', async () => {
     const invoke = successfulInferenceIpc()
     const valid = JSON.stringify(validInference())

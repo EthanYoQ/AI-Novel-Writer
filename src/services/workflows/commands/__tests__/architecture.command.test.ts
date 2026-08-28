@@ -345,6 +345,77 @@ describe('GenerateConfigCommand error boundaries', () => {
 })
 
 describe('GenerateCharactersCommand structured roster seam', () => {
+  it('persists English architecture headings without rewriting mixed UTF-8 model output', async () => {
+    const modelOutput = 'Night Café 夜航 — “déjà vu” remains unchanged.'
+    const novelConfig = {
+      writingLanguage: 'en-US',
+      genre: 'speculative thriller',
+      targetAudience: 'general',
+      totalChapters: 20,
+      wordsPerChapter: 2500,
+      plotStructure: 'three_act',
+      narrativePOV: 'third_limited',
+    } as const
+    useProjectStore.setState({
+      currentProject: {
+        ...project(projectAPath),
+        novelConfig,
+      } as never,
+    })
+    const runContext = { ...context, writingLanguage: 'en-US' as const, data: {} }
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream: createResponseStream([modelOutput, modelOutput, modelOutput]),
+    })
+    const invoke = vi.fn(async (channel: string) => {
+      switch (channel) {
+        case 'prompt:load-global':
+          return { templates: [], diagnostics: [] }
+        case 'fs:check-exists':
+          return false
+        case 'db:project-core-get':
+          return {
+            premise: 'A sufficiently detailed premise for worldbuilding and plot persistence verification.',
+            charactersArch: 'Mara and Jules pursue conflicting goals.',
+            worldbuilding: 'The overlapping cities obey a midnight boundary.',
+          }
+        case 'db:project-core-update':
+        case 'fs:write-json':
+          return { success: true }
+        case 'fs:read-json':
+          return { success: true, data: {} }
+        default:
+          throw new Error(`Unexpected IPC channel: ${channel}`)
+      }
+    })
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+    })
+    const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
+
+    await new GenerateCoreSeedCommand(snapshot, workflowRuntimeDependencies)
+      .execute({ step: {}, context: runContext, callbacks })
+    await new GenerateWorldBuildingCommand(snapshot, workflowRuntimeDependencies)
+      .execute({ step: {}, context: runContext, callbacks })
+    await new GeneratePlotArchitectureCommand(['synopsis'], snapshot, workflowRuntimeDependencies)
+      .execute({ step: {}, context: runContext, callbacks })
+
+    const persistedUpdates = (invoke.mock.calls as unknown as Array<[string, unknown]>)
+      .filter(([channel]) => channel === 'db:project-core-update')
+      .map(([, update]) => update)
+    expect(persistedUpdates).toEqual([
+      { premise: `# Story Premise\n\n${modelOutput}` },
+      { worldbuilding: `# Worldbuilding\n\n${modelOutput}` },
+      { synopsis: `# Plot Outline\n\n${modelOutput}` },
+    ])
+    for (const update of persistedUpdates) {
+      expect(JSON.stringify(update)).not.toContain('# 故事前提')
+      expect(JSON.stringify(update)).not.toContain('# 世界观')
+      expect(JSON.stringify(update)).not.toContain('# 情节大纲')
+      expect(JSON.stringify(update)).toContain(modelOutput)
+    }
+  })
+
   it('sends English built-in instructions for premise, character, world, and synopsis requests', async () => {
     const novelConfig = {
       writingLanguage: 'en-US',

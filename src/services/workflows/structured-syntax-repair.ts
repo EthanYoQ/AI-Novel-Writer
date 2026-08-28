@@ -24,7 +24,7 @@ export function buildStructuredSyntaxRepairTask(
   originalTask: GenerationTask,
   repairContract: string,
   malformedCandidate: string,
-  writingLanguage: WritingLanguage = 'zh-CN',
+  writingLanguage: WritingLanguage,
 ): GenerationTask {
   return {
     purpose: `${originalTask.purpose}:structured-syntax-repair`,
