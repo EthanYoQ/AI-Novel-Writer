@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { FileUp, FolderOpen, BookOpen, Zap, Clock, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
@@ -41,7 +41,6 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [splitError, setSplitError] = useState('')
   const [selectionPreparation, setSelectionPreparation] = useState<ImportRunPreparationResult | null>(null)
   const [selectionProjectLeaseId, setSelectionProjectLeaseId] = useState('')
-  const selectionRunId = useRef(randomUUID())
 
   // 导入流程
   const [importing, setImporting] = useState(false)
@@ -89,14 +88,14 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   }, [open, currentProject])
 
   /** 选择文件 */
-  const handleSelectFiles = useCallback(async (resumeRunId?: string) => {
+  const handleSelectFiles = useCallback(async (explicitRunId?: string) => {
     setSplitting(true)
     setSplitError('')
     let operationSession: ReturnType<typeof captureProjectSession> = null
     try {
       let project = useProjectStore.getState().currentProject
       let projectSession = captureProjectSession(project)
-      if (targetMode === 'new' && !resumeRunId) {
+      if (targetMode === 'new' && !explicitRunId) {
         if (!name.trim() || !savePath.trim()) throw new Error(text(
           '请先填写新项目名称和保存位置，再选择小说文件。',
           'Enter the new project name and save location before choosing novel files.',
@@ -118,7 +117,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         'The target project has no valid session, so the novel files were not read.',
       ))
       operationSession = projectSession
-      const runId = resumeRunId || selectionRunId.current
+      const runId = explicitRunId ?? randomUUID()
       const result = await ipc.invoke('dialog:select-novel-files', {
         runId,
         purpose: 'reference',
@@ -242,7 +241,6 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         return
       }
       if (!preparation.run) throw new Error(text('导入运行缺少持久化记录', 'The import run has no persisted record.'))
-      selectionRunId.current = randomUUID()
       launchRun(preparation.run)
     } catch (e) {
       console.error('[ImportNovel] 导入失败:', e)
@@ -257,7 +255,6 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const handleResume = useCallback(() => {
     if (!resumableRun) return
     if (resumableRun.stage === 'parsing') {
-      selectionRunId.current = resumableRun.id
       void handleSelectFiles(resumableRun.id)
       return
     }
@@ -295,7 +292,6 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
           }
         })
         setSelectedResumableRunId(restartedRun.id)
-        selectionRunId.current = restartedRun.id
         await handleSelectFiles(restartedRun.id)
         if (!isProjectSessionCurrent(session)) return
         return

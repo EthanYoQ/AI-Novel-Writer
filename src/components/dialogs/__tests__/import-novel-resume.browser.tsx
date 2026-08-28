@@ -130,6 +130,115 @@ afterEach(async () => {
 })
 
 describe('current-project reference import', () => {
+  it('starts a fresh source run for each ordinary file selection', async () => {
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await act(async () => page.getByRole('button', { name: '选择' }).click())
+    await expect.element(page.getByText('共 1 章')).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '选择' }).click())
+
+    const selectionCalls = invoke.mock.calls.filter(([channel]) => channel === 'dialog:select-novel-files')
+    expect(selectionCalls).toHaveLength(2)
+    expect(selectionCalls[0][1]).toMatchObject({ runId: expect.any(String) })
+    expect(selectionCalls[1][1]).toMatchObject({ runId: expect.any(String) })
+    expect((selectionCalls[1][1] as { runId: string }).runId)
+      .not.toBe((selectionCalls[0][1] as { runId: string }).runId)
+  })
+
+  it('keeps the persisted run id while retrying authorization for an empty parsing source', async () => {
+    const parsing = importRun({
+      id: 'empty-source-run', stage: 'parsing', status: 'failed',
+      sourceDisplay: [], totalChapters: 0, manifestChapterCount: 0,
+      completedChapters: 0, progressCompleted: 0, progressTotal: 1,
+    })
+    let selectionCount = 0
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [parsing]
+      if (channel === 'dialog:select-novel-files') {
+        selectionCount += 1
+        if (selectionCount === 1) return { success: false, error: '没有可读章节' }
+        return {
+          success: true,
+          preparation: {
+            classification: 'new',
+            run: importRun({ id: parsing.id, rootRunId: parsing.id, stage: 'prepared' }),
+            newChapterNumbers: [1], conflictChapterNumbers: [], duplicateChapterNumbers: [],
+          },
+        }
+      }
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await act(async () => page.getByRole('button', { name: '继续导入' }).click())
+    await expect.element(page.getByText('没有可读章节')).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '继续导入' }).click())
+    await expect.element(page.getByText('共 1 章')).toBeVisible()
+
+    const selectionCalls = invoke.mock.calls.filter(([channel]) => channel === 'dialog:select-novel-files')
+    expect(selectionCalls).toHaveLength(2)
+    expect(selectionCalls[0][1]).toMatchObject({ runId: 'empty-source-run' })
+    expect(selectionCalls[1][1]).toMatchObject({ runId: 'empty-source-run' })
+  })
+
+  it('does not reuse an ordinary selection run after the dialog closes and reopens', async () => {
+    await act(async () => page.getByTestId('import-target-current').click())
+    await act(async () => page.getByRole('button', { name: '选择' }).click())
+    const firstSelection = invoke.mock.calls.find(([channel]) => channel === 'dialog:select-novel-files')
+
+    await act(async () => root.render(
+      <div>
+        <ProjectTree />
+        <div style={{ height: 360 }}><BottomPanel /></div>
+        <ImportNovelDialog open={false} onClose={vi.fn()} />
+      </div>,
+    ))
+    await act(async () => root.render(
+      <div>
+        <ProjectTree />
+        <div style={{ height: 360 }}><BottomPanel /></div>
+        <ImportNovelDialog open onClose={vi.fn()} />
+      </div>,
+    ))
+    await act(async () => page.getByRole('button', { name: '选择' }).click())
+
+    const selectionCalls = invoke.mock.calls.filter(([channel]) => channel === 'dialog:select-novel-files')
+    expect(selectionCalls).toHaveLength(2)
+    expect((selectionCalls[1][1] as { runId: string }).runId)
+      .not.toBe((firstSelection?.[1] as { runId: string }).runId)
+  })
+
+  it('does not commit a file selection response after the project session changes', async () => {
+    const selection = deferred<{ success: boolean; preparation: ImportRunPreparationResult }>()
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return []
+      if (channel === 'dialog:select-novel-files') return selection.promise
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => page.getByTestId('import-target-current').click())
+    await act(async () => page.getByRole('button', { name: '选择' }).click())
+    await vi.waitFor(() => expect(
+      invoke.mock.calls.some(([channel]) => channel === 'dialog:select-novel-files'),
+    ).toBe(true))
+
+    await act(async () => useProjectStore.setState({
+      currentProject: {
+        ...project,
+        id: 'replacement-project', sessionLease: 'lease-replacement', path: 'C:\\novels\\replacement',
+      } as never,
+    }))
+    selection.resolve({ success: true, preparation })
+    await act(async () => { await Promise.resolve() })
+
+    expect(page.getByText('共 1 章').query()).toBeNull()
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
   it('starts the persisted run from real clicks while keeping the current project tree and task logs visible', async () => {
     await chooseCurrentSource()
     await act(async () => page.getByRole('button', { name: /导入当前项目（1 章）/ }).click())
