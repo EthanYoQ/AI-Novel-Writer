@@ -461,6 +461,7 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
 }
 
 function chapterRowToSnapshot(row: ImportRunChapterRow): ImportRunChapterSnapshot {
+  assertFrozenChapterSnapshot(row)
   return {
     number: row.chapter_number,
     title: row.title,
@@ -468,6 +469,22 @@ function chapterRowToSnapshot(row: ImportRunChapterRow): ImportRunChapterSnapsho
     contentSize: row.content_size,
     content: row.content_snapshot,
   }
+}
+
+function assertFrozenChapterSnapshot(row: Pick<
+  ImportRunChapterRow,
+  'content_fingerprint' | 'content_size' | 'content_snapshot'
+>): void {
+  const actualSize = Buffer.byteLength(row.content_snapshot, 'utf8')
+  const actualFingerprint = createHash('sha256').update(row.content_snapshot, 'utf8').digest('hex')
+  if (
+    !Number.isSafeInteger(row.content_size)
+    || row.content_size < 1
+    || row.content_size > MAX_CHAPTER_BYTES
+    || actualSize !== row.content_size
+    || !SHA256.test(row.content_fingerprint)
+    || actualFingerprint !== row.content_fingerprint
+  ) throw new Error('导入冻结章节快照损坏，已拒绝继续')
 }
 
 function normalizeDisplay(items: ImportSourceDisplayMetadata[]): ImportSourceDisplayMetadata[] {
@@ -916,9 +933,18 @@ function matchingResumableRun(purpose: ImportPurpose, sourceFingerprint: string,
   return db().prepare(`
     SELECT * FROM import_runs
     WHERE purpose = ? AND source_fingerprint = ? AND manifest_fingerprint = ?
-      AND resumable = 1 AND status IN ('ready', 'running', 'failed', 'cancelled')
+      AND stage <> 'parsing' AND resumable = 1
+      AND status IN ('ready', 'running', 'failed', 'cancelled')
     ORDER BY created_at DESC, rowid DESC LIMIT 1
   `).get(purpose, sourceFingerprint, manifestFingerprint) as ImportRunRow | undefined
+}
+
+function discardProvisionalParsingRun(runId: string): void {
+  const result = db().prepare(`
+    DELETE FROM import_runs
+    WHERE id = ? AND stage = 'parsing' AND status IN ('ready', 'failed')
+  `).run(runId)
+  if (result.changes !== 1) throw new Error('导入解析临时运行无法安全终止')
 }
 
 function latestCompletedRun(purpose: ImportPurpose, sourceFingerprint: string): ImportRunRow | undefined {
@@ -968,7 +994,7 @@ export class ImportRunRepository {
       throw new Error('参照知识写入未绑定当前导入的冻结章节')
     }
     const chapter = db().prepare(`
-      SELECT source_id, source_chapter_number, title, content_fingerprint, content_snapshot
+      SELECT source_id, source_chapter_number, title, content_fingerprint, content_size, content_snapshot
       FROM import_run_chapters
       WHERE run_id = ? AND chapter_number = ?
     `).get(runId, chapterNumber) as {
@@ -976,9 +1002,11 @@ export class ImportRunRepository {
       source_chapter_number: number
       title: string
       content_fingerprint: string
+      content_size: number
       content_snapshot: string
     } | undefined
     if (!chapter) throw new Error('参照知识写入未绑定当前导入的冻结章节')
+    assertFrozenChapterSnapshot(chapter)
     const affiliationHash = createHash('sha256').update(JSON.stringify({
       purpose: run.purpose,
       sourceId: chapter.source_id,
@@ -1287,6 +1315,17 @@ export class ImportRunRepository {
       const assignment = assignStableChapterNumbers(run.purpose, normalized)
       const chapters = assignment.chapters
       const manifestFingerprint = hashManifest(run.purpose, chapters)
+      const resumable = matchingResumableRun(run.purpose, run.source_fingerprint, manifestFingerprint)
+      if (resumable && resumable.id !== runId) {
+        discardProvisionalParsingRun(runId)
+        return {
+          classification: 'resumable' as const,
+          run: rowToSnapshot(resumable),
+          newChapterNumbers: [],
+          conflictChapterNumbers: [],
+          duplicateChapterNumbers: chapters.map(chapter => chapter.number),
+        }
+      }
       const sourceIds = sources.map(source => source.source_id)
       const completed = latestCompletedRun(run.purpose, run.source_fingerprint)
       const completedManifest = completedChapterManifest(run.purpose, sourceIds)
@@ -1309,6 +1348,7 @@ export class ImportRunRepository {
         !completedManifest.has(sourceChapterKey(chapter.sourceId, chapter.sourceChapterNumber))
       ))
       if (conflictChapterNumbers.length > 0) {
+        discardProvisionalParsingRun(runId)
         return {
           classification: 'conflict' as const, run: undefined,
           newChapterNumbers: newChapters.map(chapter => chapter.number),
@@ -1687,6 +1727,12 @@ export class ImportRunRepository {
       if (row.stage === 'parsing') {
         throw new Error('导入解析尚未完成，请重新选择并授权未完成来源')
       }
+      const activeProjectRun = db().prepare(`
+        SELECT id FROM import_runs
+        WHERE id <> ? AND status = 'running' AND execution_owner <> '' AND lease_expires_at > ?
+        LIMIT 1
+      `).get(runId, now) as { id: string } | undefined
+      if (activeProjectRun) throw new Error('项目中另一导入运行正在执行')
       if (row.execution_owner && row.execution_owner !== normalizedOwner && row.lease_expires_at > now) {
         throw new Error('导入运行正在由另一执行器运行')
       }
@@ -1748,16 +1794,16 @@ export class ImportRunRepository {
         source.root_run_id,
         `import:${source.purpose}:${normalizedNextId}`,
         source.source_fingerprint,
-        source.manifest_fingerprint,
+        source.stage === 'parsing' ? '0'.repeat(64) : source.manifest_fingerprint,
         source.source_display_json,
         source.locale,
         source.stage,
-        source.total_chapters,
-        source.total_content_size,
-        source.base_run_id,
-        source.manifest_chapter_count,
-        source.manifest_content_size,
-        source.manifest_word_count,
+        source.stage === 'parsing' ? 0 : source.total_chapters,
+        source.stage === 'parsing' ? 0 : source.total_content_size,
+        source.stage === 'parsing' ? null : source.base_run_id,
+        source.stage === 'parsing' ? 0 : source.manifest_chapter_count,
+        source.stage === 'parsing' ? 0 : source.manifest_content_size,
+        source.stage === 'parsing' ? 0 : source.manifest_word_count,
       )
       if (source.stage === 'parsing') {
         db().prepare(`
@@ -1766,25 +1812,9 @@ export class ImportRunRepository {
             manifest_fingerprint, chapter_count, content_size, word_count, last_error
           )
           SELECT ?, source_index, source_id, source_fingerprint, legacy_source_fingerprint, display_json,
-                 CASE WHEN status = 'completed' THEN 'completed' ELSE 'pending' END,
-                 CASE WHEN status = 'completed' THEN manifest_fingerprint ELSE '' END,
-                 CASE WHEN status = 'completed' THEN chapter_count ELSE 0 END,
-                 CASE WHEN status = 'completed' THEN content_size ELSE 0 END,
-                 CASE WHEN status = 'completed' THEN word_count ELSE 0 END,
+                 'pending', '', 0, 0, 0,
                  ''
           FROM import_run_sources WHERE run_id = ? ORDER BY source_index
-        `).run(normalizedNextId, runId)
-        db().prepare(`
-          INSERT INTO import_run_source_chapters (
-            run_id, source_id, source_chapter_number, title, content_fingerprint,
-            content_size, word_count, content_snapshot
-          )
-          SELECT ?, chapters.source_id, chapters.source_chapter_number, chapters.title,
-                 chapters.content_fingerprint, chapters.content_size, chapters.word_count, chapters.content_snapshot
-          FROM import_run_source_chapters AS chapters
-          JOIN import_run_sources AS sources
-            ON sources.run_id = chapters.run_id AND sources.source_id = chapters.source_id
-          WHERE chapters.run_id = ? AND sources.status = 'completed'
         `).run(normalizedNextId, runId)
       } else {
         db().prepare(`

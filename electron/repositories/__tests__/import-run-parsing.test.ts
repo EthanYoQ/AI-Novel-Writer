@@ -21,9 +21,9 @@ function chapter(number: number, content = `source chapter ${number}`) {
   }
 }
 
-function begin() {
+function begin(runId = 'parse-run') {
   return ImportRunRepository.beginParsing({
-    runId: 'parse-run',
+    runId,
     purpose: 'reference',
     sourceFingerprint: 'a'.repeat(64),
     sourceIds: [SOURCE_A, SOURCE_B],
@@ -88,15 +88,66 @@ describe('persisted per-source parsing', () => {
     expect(getProjectDb()!.serialize().equals(before)).toBe(true)
   })
 
-  it('restarts a failed parsing run with completed source checkpoints but not failed-source residue', () => {
+  it('fences a failed parsing run and reparses every source without copying stale snapshots', () => {
     begin()
     ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, [chapter(1)])
     ImportRunRepository.failParsedSource('parse-run', SOURCE_B, 'read interrupted')
 
     expect(ImportRunRepository.restart('parse-run', 'parse-restart')).toMatchObject({
-      id: 'parse-restart', stage: 'parsing', status: 'ready', completedSources: 1, totalSources: 2,
+      id: 'parse-restart', stage: 'parsing', status: 'ready', completedSources: 0, totalSources: 2,
     })
-    expect(ImportRunRepository.commitParsedSource('parse-restart', SOURCE_A, [chapter(1)]))
+    expect(begin('ignored-new-id')).toMatchObject({ id: 'parse-restart', completedSources: 0 })
+    expect(ImportRunRepository.commitParsedSource('parse-restart', SOURCE_A, [chapter(1, 'modified source')]))
+      .toMatchObject({ completedSources: 1 })
+  })
+
+  it('discards a provisional parsing run when its manifest matches an existing resumable run', () => {
+    begin('existing-run')
+    ImportRunRepository.commitParsedSource('existing-run', SOURCE_A, [chapter(1)])
+    ImportRunRepository.commitParsedSource('existing-run', SOURCE_B, [chapter(1, 'second source')])
+    ImportRunRepository.finalizeParsing('existing-run')
+    const execution = ImportRunRepository.startOrResume('existing-run', 'first-worker').execution
+    ImportRunRepository.fail('existing-run', 'knowledge', 'provider unavailable', execution)
+
+    begin('provisional-run')
+    ImportRunRepository.commitParsedSource('provisional-run', SOURCE_A, [chapter(1)])
+    ImportRunRepository.commitParsedSource('provisional-run', SOURCE_B, [chapter(1, 'second source')])
+
+    expect(ImportRunRepository.finalizeParsing('provisional-run')).toMatchObject({
+      classification: 'resumable',
+      run: { id: 'existing-run', stage: 'knowledge', status: 'failed' },
+    })
+    expect(ImportRunRepository.get('provisional-run')).toBeNull()
+    expect(ImportRunRepository.listResumable().map(run => run.id)).toEqual(['existing-run'])
+  })
+
+  it('removes a conflicting provisional run so a fresh selection can parse modified sources', () => {
+    begin('completed-run')
+    ImportRunRepository.commitParsedSource('completed-run', SOURCE_A, [chapter(1)])
+    ImportRunRepository.commitParsedSource('completed-run', SOURCE_B, [chapter(1, 'second source')])
+    ImportRunRepository.finalizeParsing('completed-run')
+    getProjectDb()!.prepare(`
+      UPDATE import_runs
+      SET stage = 'completed', status = 'completed', resumable = 0,
+          completed_chapters = total_chapters, completed_at = datetime('now')
+      WHERE id = 'completed-run'
+    `).run()
+
+    begin('conflicting-run')
+    ImportRunRepository.commitParsedSource('conflicting-run', SOURCE_A, [chapter(1, 'changed')])
+    ImportRunRepository.commitParsedSource('conflicting-run', SOURCE_B, [chapter(1, 'second source')])
+    expect(ImportRunRepository.finalizeParsing('conflicting-run')).toMatchObject({
+      classification: 'conflict',
+      run: undefined,
+      conflictChapterNumbers: [1],
+    })
+    expect(ImportRunRepository.get('conflicting-run')).toBeNull()
+    expect(ImportRunRepository.listResumable()).toEqual([])
+
+    expect(begin('fresh-run')).toMatchObject({
+      id: 'fresh-run', stage: 'parsing', completedSources: 0, totalSources: 2,
+    })
+    expect(ImportRunRepository.commitParsedSource('fresh-run', SOURCE_A, [chapter(1, 'changed again')]))
       .toMatchObject({ completedSources: 1 })
   })
 })

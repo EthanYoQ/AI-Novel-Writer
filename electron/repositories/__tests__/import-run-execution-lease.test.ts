@@ -10,12 +10,13 @@ import { createImportRunChapterBatchCheckpointId } from '../../../src/shared/imp
 import { createHash } from 'node:crypto'
 
 let root = ''
+const CONTENT_FINGERPRINT = createHash('sha256').update('x').digest('hex')
 const request: ImportRunPrepareRequest = {
   runId: 'leased-run', purpose: 'reference', sourceFingerprint: 'a'.repeat(64), locale: 'en-US',
   sourceDisplay: [{ displayName: 'reference.txt', mediaType: 'text/plain', size: 1 }],
   chapters: [{
     number: 1, title: 'One', content: 'x', contentSize: 1,
-    contentFingerprint: 'b'.repeat(64),
+    contentFingerprint: CONTENT_FINGERPRINT,
   }],
 }
 
@@ -49,7 +50,7 @@ describe('import execution lease', () => {
     const authority = { owner: started.execution.owner, epoch: started.execution.epoch }
     expect(ImportRunRepository.resolveReferenceImportAuthority(
       'leased-run', authority, 1, 1_050,
-    )).toMatchObject({ chapterNumber: 1, content: 'x', contentFingerprint: 'b'.repeat(64) })
+    )).toMatchObject({ chapterNumber: 1, content: 'x', contentFingerprint: CONTENT_FINGERPRINT })
     expect(() => ImportRunRepository.resolveReferenceImportAuthority(
       'leased-run', authority, 2, 1_050,
     )).toThrow(/冻结章节/)
@@ -118,7 +119,7 @@ describe('import execution lease', () => {
     ImportRunRepository.commitReferenceImportReceipt(
       'leased-run', first.execution, 1, documentId,
     )
-    const checkpoint = createImportRunChapterBatchCheckpointId([{ number: 1, contentFingerprint: 'b'.repeat(64) }])
+    const checkpoint = createImportRunChapterBatchCheckpointId([{ number: 1, contentFingerprint: CONTENT_FINGERPRINT }])
     ImportRunRepository.requestCancel('leased-run', first.execution)
     expect(ImportRunRepository.completeBatch(
       'leased-run', 'knowledge', checkpoint, first.execution,
@@ -169,5 +170,55 @@ describe('import execution lease', () => {
     expect(() => ImportRunRepository.completeBatch(
       'leased-run', 'knowledge', 'late-after-restart', first.execution,
     )).toThrow(/执行租约/)
+  })
+
+  it('serializes execution across different import runs in the same project and allows expiry takeover', () => {
+    ImportRunRepository.prepare({
+      ...request,
+      runId: 'second-run',
+      sourceFingerprint: 'c'.repeat(64),
+    })
+    const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
+
+    expect(() => ImportRunRepository.startOrResume('second-run', 'renderer-b', 1_050, 100))
+      .toThrow(/项目.*导入|另一.*导入|正在运行/)
+
+    expect(ImportRunRepository.startOrResume('second-run', 'renderer-b', 1_101, 100))
+      .toMatchObject({ run: { id: 'second-run', status: 'running' } })
+    expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-c', 1_102, 100))
+      .toThrow(/项目.*导入|另一.*导入|正在运行/)
+    expect(() => ImportRunRepository.renewExecution('leased-run', first.execution, 1_102, 100))
+      .toThrow(/执行租约/)
+  })
+
+  it('rejects a tampered frozen snapshot at both paged-read and knowledge-authority seams after reopen', () => {
+    ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
+    getProjectDb()!.prepare(`
+      UPDATE import_run_chapters SET content_snapshot = 'y' WHERE run_id = 'leased-run'
+    `).run()
+
+    closeProjectDatabase()
+    initProjectDatabase(root)
+    const resumed = ImportRunRepository.startOrResume('leased-run', 'renderer-b', 1_050, 100)
+
+    expect(() => ImportRunRepository.listChapterBatch(
+      'leased-run', { afterChapterNumber: 0, limit: 10 },
+    )).toThrow(/冻结.*快照|快照.*损坏/)
+    expect(() => ImportRunRepository.resolveReferenceImportAuthority(
+      'leased-run', resumed.execution, 1, 1_051,
+    )).toThrow(/冻结.*快照|快照.*损坏/)
+  })
+
+  it('checks UTF-8 byte size independently of a matching snapshot fingerprint', () => {
+    const content = 'é'
+    getProjectDb()!.prepare(`
+      UPDATE import_run_chapters
+      SET content_snapshot = ?, content_fingerprint = ?
+      WHERE run_id = 'leased-run'
+    `).run(content, createHash('sha256').update(content).digest('hex'))
+
+    expect(() => ImportRunRepository.listChapterBatch(
+      'leased-run', { afterChapterNumber: 0, limit: 10 },
+    )).toThrow(/冻结.*快照|快照.*损坏/)
   })
 })
