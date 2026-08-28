@@ -45,6 +45,8 @@ describe('agent context project isolation', () => {
         id: 'run-a',
         projectPath: 'C:\\novels\\A',
         projectSession: { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:\\novels\\A' },
+        writingLanguage: 'zh-CN',
+        uiLocale: 'zh-CN',
         type: 'chapter_creation',
         title: 'A private workflow',
         status: 'running',

@@ -9,13 +9,16 @@
 
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { useLocaleStore } from '../../../stores/locale-store'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ImportPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
-import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
+import {
+  requireWorkflowProjectSession,
+  workflowUiText,
+  workflowWritingLanguage,
+} from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
 import { refreshImportDerivedFileTreeBestEffort } from '../import-derived-refresh'
 import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
@@ -79,6 +82,7 @@ const IMPORT_ENDPOINT_DELTA_CURRENT_STATE_KEYS = [
   'updatedAtChapter',
 ] as const
 const IMPORT_ENDPOINT_DELTA_RELATIONSHIP_KEYS = ['relation', 'target'] as const
+type UiText = (zhCNText: string, enUSText: string) => string
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -100,10 +104,13 @@ function deepJsonEqual(left: unknown, right: unknown): boolean {
   return false
 }
 
-function importInferenceCards(root: Record<string, unknown>): Array<Record<string, unknown>> {
+function importInferenceCards(root: Record<string, unknown>, text: UiText): Array<Record<string, unknown>> {
   const cards = root.characterCards
   if (!Array.isArray(cards) || !cards.every(isRecord)) {
-    throw new Error('导入推演受限补卡校正缺少可比较的原始角色卡')
+    throw new Error(text(
+      '导入推演受限补卡校正缺少可比较的原始角色卡',
+      'The bounded import correction is missing comparable original character cards.',
+    ))
   }
   return cards
 }
@@ -112,16 +119,20 @@ function assertExactImportEndpointDeltaKeys(
   value: Record<string, unknown>,
   expectedKeys: readonly string[],
   path: string,
+  text: UiText,
 ): void {
   const actualKeys = Object.keys(value).sort()
   const sortedExpectedKeys = [...expectedKeys].sort()
   if (!deepJsonEqual(actualKeys, sortedExpectedKeys)) {
-    throw new Error(`导入推演受限补卡校正 delta ${path} 包含缺失或额外字段`)
+    throw new Error(text(
+      `导入推演受限补卡校正 delta ${path} 包含缺失或额外字段`,
+      `The bounded import correction delta at ${path} has missing or extra fields.`,
+    ))
   }
 }
 
-function unresolvedImportRelationshipTargets(root: Record<string, unknown>): string[] {
-  const cards = importInferenceCards(root)
+function unresolvedImportRelationshipTargets(root: Record<string, unknown>, text: UiText): string[] {
+  const cards = importInferenceCards(root, text)
   const names = new Set(cards.map(card => card.name).filter((name): name is string => typeof name === 'string'))
   const unresolved = new Set<string>()
   for (const card of cards) {
@@ -134,7 +145,10 @@ function unresolvedImportRelationshipTargets(root: Record<string, unknown>): str
     }
   }
   if (unresolved.size === 0) {
-    throw new Error('导入推演受限补卡校正缺少未闭合的关系端点')
+    throw new Error(text(
+      '导入推演受限补卡校正缺少未闭合的关系端点',
+      'The bounded import correction has no unresolved relationship endpoint.',
+    ))
   }
   return [...unresolved]
 }
@@ -142,21 +156,26 @@ function unresolvedImportRelationshipTargets(root: Record<string, unknown>): str
 function parseImportEndpointCorrectionDelta(
   content: string,
   unresolvedTargets: readonly string[],
+  text: UiText,
 ): Array<Record<string, unknown>> {
   const deltaRoot = parseImportInferenceJsonObject(content)
-  assertExactImportEndpointDeltaKeys(deltaRoot, ['characterCards'], '$')
-  const deltaCards = importInferenceCards(deltaRoot)
+  assertExactImportEndpointDeltaKeys(deltaRoot, ['characterCards'], '$', text)
+  const deltaCards = importInferenceCards(deltaRoot, text)
   if (deltaCards.length !== unresolvedTargets.length) {
-    throw new Error('导入推演受限补卡校正只能新增缺失关系端点角色')
+    throw new Error(text(
+      '导入推演受限补卡校正只能新增缺失关系端点角色',
+      'The bounded import correction may add only characters required by missing relationship endpoints.',
+    ))
   }
   for (const [index, deltaCard] of deltaCards.entries()) {
     const path = `characterCards[${index}]`
-    assertExactImportEndpointDeltaKeys(deltaCard, IMPORT_ENDPOINT_DELTA_CARD_KEYS, path)
+    assertExactImportEndpointDeltaKeys(deltaCard, IMPORT_ENDPOINT_DELTA_CARD_KEYS, path, text)
     if (isRecord(deltaCard.currentState)) {
       assertExactImportEndpointDeltaKeys(
         deltaCard.currentState,
         IMPORT_ENDPOINT_DELTA_CURRENT_STATE_KEYS,
         `${path}.currentState`,
+        text,
       )
     }
     const relationships = deltaCard.relationships
@@ -167,6 +186,7 @@ function parseImportEndpointCorrectionDelta(
             relationship,
             IMPORT_ENDPOINT_DELTA_RELATIONSHIP_KEYS,
             `${path}.relationships[${relationshipIndex}]`,
+            text,
           )
         }
       })
@@ -175,13 +195,22 @@ function parseImportEndpointCorrectionDelta(
   const expectedAddedNames = new Set(unresolvedTargets)
   const addedNames = deltaCards.map(card => card.name)
   if (addedNames.some(name => typeof name !== 'string' || !expectedAddedNames.has(name))) {
-    throw new Error('导入推演受限补卡校正新增角色必须精确匹配原始未闭合关系端点')
+    throw new Error(text(
+      '导入推演受限补卡校正新增角色必须精确匹配原始未闭合关系端点',
+      'Characters added by the bounded import correction must exactly match the original unresolved endpoints.',
+    ))
   }
   if (new Set(addedNames).size !== addedNames.length) {
-    throw new Error('导入推演受限补卡校正 delta 包含重复缺失关系端点角色')
+    throw new Error(text(
+      '导入推演受限补卡校正 delta 包含重复缺失关系端点角色',
+      'The bounded import correction delta contains duplicate missing-endpoint characters.',
+    ))
   }
   if (addedNames.length !== expectedAddedNames.size) {
-    throw new Error('导入推演受限补卡校正 delta 缺失关系端点角色')
+    throw new Error(text(
+      '导入推演受限补卡校正 delta 缺失关系端点角色',
+      'The bounded import correction delta omits a missing-endpoint character.',
+    ))
   }
   return deltaCards
 }
@@ -190,6 +219,7 @@ function requireImportGlobalFactsReceipt(
   candidate: ImportGlobalFactsReceipt | undefined,
   operationId: string,
   expectedCharacterCount: number,
+  text: UiText,
 ): ImportGlobalFactsReceipt {
   if (
     !candidate
@@ -200,17 +230,24 @@ function requireImportGlobalFactsReceipt(
     || !candidate.roster?.snapshot
     || candidate.roster.snapshot.status !== 'ready'
     || candidate.roster.snapshot.entries.length !== expectedCharacterCount
-  ) throw new Error('导入全局事实提交收据无效或覆盖不完整')
+  ) throw new Error(text(
+    '导入全局事实提交收据无效或覆盖不完整',
+    'The imported global-facts commit receipt is invalid or incomplete.',
+  ))
   return candidate
 }
 
 export class ImportBlueprintPostCommitSyncError extends Error {
   readonly retryOperationId: string
 
-  constructor(readonly commitReceipt: BlueprintRangeCommitReceipt) {
+  constructor(readonly commitReceipt: BlueprintRangeCommitReceipt, text: UiText) {
     super(
-      `导入蓝图已提交（第 ${commitReceipt.startChapter}–${commitReceipt.endChapter} 章），`
-      + '但角色候选同步失败；可使用同步操作回执安全重试，无需重新生成蓝图。',
+      text(
+        `导入蓝图已提交（第 ${commitReceipt.startChapter}–${commitReceipt.endChapter} 章），`
+          + '但角色候选同步失败；可使用同步操作回执安全重试，无需重新生成蓝图。',
+        `Imported blueprints for Chapters ${commitReceipt.startChapter}–${commitReceipt.endChapter} were committed, `
+          + 'but character-candidate synchronization failed. Retry with the synchronization receipt without regenerating the blueprints.',
+      ),
     )
     this.name = 'ImportBlueprintPostCommitSyncError'
     this.retryOperationId = commitReceipt.characterSyncOperation.operationId
@@ -227,7 +264,8 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
-    const text = useLocaleStore.getState().text
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
+    const writingLanguage = workflowWritingLanguage(context)
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
@@ -252,8 +290,16 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
       const ch = this.chapters[i]
       try {
         const fileName = ch.title
-          ? `第${ch.number}章 ${ch.title}.txt`
-          : `chapter_${ch.number}.txt`
+          ? promptLanguageText(
+              writingLanguage,
+              `第${ch.number}章 ${ch.title}.txt`,
+              `Chapter ${ch.number} ${ch.title}.txt`,
+            )
+          : promptLanguageText(
+              writingLanguage,
+              `第${ch.number}章.txt`,
+              `Chapter ${ch.number}.txt`,
+            )
         const result = await ipc.invokeWithProjectSession(
           projectSession,
           'kb:import-text',
@@ -298,6 +344,7 @@ export class ImportInitializeCommand extends BaseWorkflowCommand<void> {
     await refreshImportDerivedFileTreeBestEffort(
       () => useProjectStore.getState().refreshFileTree(context.projectPath, undefined, projectSession),
       callbacks,
+      text,
     )
   }
 }
@@ -321,6 +368,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     context: CommandExecuteParams['context'],
   ): Promise<ImportInferenceResult> {
     const writingLanguage = workflowWritingLanguage(context)
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     try {
       return decodeImportInferenceJson(rawResult)
     } catch (error) {
@@ -331,12 +379,18 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     }
 
     const originalRoot = parseImportInferenceJsonObject(rawResult)
-    const unresolvedTargets = unresolvedImportRelationshipTargets(originalRoot)
-    const originalCardCount = importInferenceCards(originalRoot).length
+    const unresolvedTargets = unresolvedImportRelationshipTargets(originalRoot, text)
+    const originalCardCount = importInferenceCards(originalRoot, text).length
     if (originalCardCount + unresolvedTargets.length > MAX_IMPORT_INFERENCE_CHARACTER_CARDS) {
-      throw new Error('导入推演受限补卡校正会超过 8 张角色卡上限，已拒绝额外模型请求')
+      throw new Error(text(
+        '导入推演受限补卡校正会超过 8 张角色卡上限，已拒绝额外模型请求',
+        'The bounded import correction would exceed the eight-card limit, so the extra model request was rejected.',
+      ))
     }
-    callbacks.log(`导入推演关系端点缺少 ${unresolvedTargets.length} 张角色卡，正在执行一次受限补卡校正`)
+    callbacks.log(text(
+      `导入推演关系端点缺少 ${unresolvedTargets.length} 张角色卡，正在执行一次受限补卡校正`,
+      `${unresolvedTargets.length} relationship ${unresolvedTargets.length === 1 ? 'endpoint is' : 'endpoints are'} missing a character card; running one bounded correction`,
+    ))
     const correction = await this.callLLMResult(
       promptLanguageText(
         writingLanguage,
@@ -385,8 +439,8 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     const correctedRoot = {
       ...originalRoot,
       characterCards: [
-        ...importInferenceCards(originalRoot),
-        ...parseImportEndpointCorrectionDelta(correction.content, unresolvedTargets),
+        ...importInferenceCards(originalRoot, text),
+        ...parseImportEndpointCorrectionDelta(correction.content, unresolvedTargets, text),
       ],
     }
     return decodeImportInferenceJson(JSON.stringify(correctedRoot))
@@ -395,25 +449,29 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {
     const projectSession = requireWorkflowProjectSession(context)
     const writingLanguage = workflowWritingLanguage(context)
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(project),
-    )) throw new Error('当前项目已切换，导入推演已停止')
+    )) throw new Error(text('当前项目已切换，导入推演已停止', 'The project changed, so import inference stopped.'))
     const projectSnapshot = Object.freeze({ ...project, novelConfig: Object.freeze({ ...project.novelConfig }) })
 
     const chapters = context.data.chapters as ImportedChapter[]
-    if (!chapters || chapters.length === 0) throw new Error('无章节数据')
+    if (!chapters || chapters.length === 0) throw new Error(text('无章节数据', 'No chapter data is available.'))
 
-    callbacks.log('通过向量知识库检索关键片段...')
+    callbacks.log(text(
+      '通过向量知识库检索关键片段...',
+      'Retrieving key passages from the vector knowledge base...',
+    ))
     callbacks.setProgress(5)
 
     // ===== 向量检索采样 =====
     const searchTopics = [
-      { key: 'worldview', query: promptLanguageText(writingLanguage, '世界观 力量体系 修炼等级 境界', 'world rules power system ranks institutions'), label: '世界观与力量体系' },
-      { key: 'protagonist', query: promptLanguageText(writingLanguage, '主角 金手指 核心能力 天赋 系统', 'protagonist central advantage core ability talent system'), label: '主角设定与金手指' },
-      { key: 'conflict', query: promptLanguageText(writingLanguage, '敌人 反派 阴谋 危机 矛盾 对手', 'enemy antagonist conspiracy crisis conflict opponent'), label: '核心矛盾与敌对势力' },
-      { key: 'style', query: promptLanguageText(writingLanguage, '视角 叙述 描写 风格 节奏', 'point of view narration description style pacing'), label: '写作风格与叙事视角' },
+      { key: 'worldview', query: promptLanguageText(writingLanguage, '世界观 力量体系 修炼等级 境界', 'world rules power system ranks institutions'), label: text('世界观与力量体系', 'world and power system') },
+      { key: 'protagonist', query: promptLanguageText(writingLanguage, '主角 金手指 核心能力 天赋 系统', 'protagonist central advantage core ability talent system'), label: text('主角设定与金手指', 'protagonist and central advantage') },
+      { key: 'conflict', query: promptLanguageText(writingLanguage, '敌人 反派 阴谋 危机 矛盾 对手', 'enemy antagonist conspiracy crisis conflict opponent'), label: text('核心矛盾与敌对势力', 'central conflict and opposing forces') },
+      { key: 'style', query: promptLanguageText(writingLanguage, '视角 叙述 描写 风格 节奏', 'point of view narration description style pacing'), label: text('写作风格与叙事视角', 'writing style and narrative viewpoint') },
     ]
 
     const sampledContent: Record<string, string> = {}
@@ -440,10 +498,16 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         } else {
           sampledContent[topic.key] = promptLanguageText(writingLanguage, '（未检索到相关内容）', '(no relevant content found)')
         }
-        callbacks.log(`  已检索「${topic.label}」— ${results.length} 条结果`)
+        callbacks.log(text(
+          `  已检索「${topic.label}」— ${results.length} 条结果`,
+          `  Retrieved ${results.length} ${results.length === 1 ? 'result' : 'results'} for "${topic.label}"`,
+        ))
       } catch {
         sampledContent[topic.key] = promptLanguageText(writingLanguage, '（向量检索不可用）', '(vector search unavailable)')
-        callbacks.log(`  「${topic.label}」检索失败，将使用降级策略`)
+        callbacks.log(text(
+          `  「${topic.label}」检索失败，将使用降级策略`,
+          `  Retrieval failed for "${topic.label}"; using the fallback strategy`,
+        ))
       }
     }
     callbacks.setProgress(20)
@@ -452,7 +516,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     // 优先使用向量增强版 Prompt
     const template = await resolvePromptTemplate('infer_novel_config_with_vectors', projectSession, writingLanguage)
       || await resolvePromptTemplate('infer_novel_config', projectSession, writingLanguage)
-    if (!template) throw new Error('未找到推演 Prompt 模板')
+    if (!template) throw new Error(text('未找到推演 Prompt 模板', 'The import-inference prompt template was not found.'))
 
     const firstChapter = chapters[0]?.content?.slice(0, 3000)
       || promptLanguageText(writingLanguage, '（第一章内容不可用）', '(opening chapter unavailable)')
@@ -477,7 +541,10 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       .build()
       + `\n\n${inferenceContract}`
 
-    callbacks.log('正在调用 AI 推演全局小说配置...')
+    callbacks.log(text(
+      '正在调用 AI 推演全局小说配置...',
+      'Running AI inference for the global novel configuration...',
+    ))
     callbacks.setProgress(25)
 
     const initial = await this.callLLMResult(
@@ -497,8 +564,14 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       if (
         structuredRepairUtf8Bytes(inferenceContract) > MAX_STRUCTURED_REPAIR_CONTRACT_UTF8_BYTES
         || structuredRepairUtf8Bytes(rawResult) > MAX_STRUCTURED_REPAIR_CANDIDATE_UTF8_BYTES
-      ) throw new Error('导入推演 JSON 语法修复证据超过安全字节上限')
-      callbacks.log('导入推演 JSON 存在词法错误，正在执行唯一一次完整替代语法修复...')
+      ) throw new Error(text(
+        '导入推演 JSON 语法修复证据超过安全字节上限',
+        'The import-inference JSON repair evidence exceeds the safe byte limit.',
+      ))
+      callbacks.log(text(
+        '导入推演 JSON 存在词法错误，正在执行唯一一次完整替代语法修复...',
+        'The import-inference JSON has a syntax error; running the single full-replacement syntax repair...',
+      ))
       const repairTask = buildStructuredSyntaxRepairTask({
         purpose: 'import-inference',
         output: 'structured-data',
@@ -517,14 +590,20 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       )
       if (repair.finishReason !== 'stop') throw this.createIncompleteCompletionError(repair.finishReason)
       if (!preservesStructuredJsonEvidence(rawResult, repair.content)) {
-        throw new Error('导入推演 JSON 语法修复改变了候选事实，已拒绝写入')
+        throw new Error(text(
+          '导入推演 JSON 语法修复改变了候选事实，已拒绝写入',
+          'The import-inference JSON syntax repair changed candidate facts, so the write was rejected.',
+        ))
       }
       rawResult = repair.content
     }
     this.assertNotCancelled(context)
 
     callbacks.setProgress(70)
-    callbacks.log('正在解析 AI 返回结果并写入项目...')
+    callbacks.log(text(
+      '正在解析 AI 返回结果并写入项目...',
+      'Parsing the AI response and committing it to the project...',
+    ))
 
     // ===== 解析 JSON 结果 =====
     const inferResult = await this.decodeImportInferenceWithEndpointRecovery(rawResult, callbacks, context)
@@ -535,7 +614,10 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       context.projectPath,
     )
     if (roster.status !== 'ready' && roster.status !== 'empty') {
-      throw new Error('角色名单当前不可安全导入；请先完成旧项目修复或处理数据不一致状态')
+      throw new Error(text(
+        '角色名单当前不可安全导入；请先完成旧项目修复或处理数据不一致状态',
+        'The character roster cannot be imported safely. Repair the legacy project or resolve its inconsistent state first.',
+      ))
     }
 
     const novelConfig = {
@@ -547,7 +629,10 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     if (!sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) throw new Error('当前项目已切换，导入配置结果未应用')
+    )) throw new Error(text(
+      '当前项目已切换，导入配置结果未应用',
+      'The project changed, so the imported configuration was not applied.',
+    ))
     this.assertNotCancelled(context)
 
     const operationId = `novel-import-global-${context.runId}`
@@ -578,11 +663,15 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       },
       context.projectPath,
     )
-    if (!commitResult.success) throw new Error(commitResult.error || '导入全局事实原子提交失败')
+    if (!commitResult.success) throw new Error(commitResult.error || text(
+      '导入全局事实原子提交失败',
+      'The imported global facts could not be committed atomically.',
+    ))
     const commitReceipt = requireImportGlobalFactsReceipt(
       commitResult.receipt,
       operationId,
       inferResult.characterCards.length,
+      text,
     )
     context.data.importGlobalFactsReceipt = commitReceipt
 
@@ -590,7 +679,10 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     if (!sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) throw new Error('当前项目已切换，导入配置结果未应用')
+    )) throw new Error(text(
+      '当前项目已切换，导入配置结果未应用',
+      'The project changed, so the imported configuration was not applied.',
+    ))
     const authoritativeNovelConfig = {
       ...projectSnapshot.novelConfig,
       genre: commitReceipt.core.genre,
@@ -607,8 +699,26 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       protagonistProfile: commitReceipt.core.protagonistProfile,
     }
     useProjectStore.setState({ currentProject: { ...projectSnapshot, novelConfig: authoritativeNovelConfig } })
-    context.data.novelConfigSummary = `类型: ${authoritativeNovelConfig.genre || '未知'} | 子类型: ${authoritativeNovelConfig.subGenre || '未知'} | 受众: ${authoritativeNovelConfig.targetAudience || '未知'}\n大纲: ${authoritativeNovelConfig.coreOutline || '（无）'}\n世界观: ${authoritativeNovelConfig.worldSetting || '（无）'}\n金手指: ${authoritativeNovelConfig.goldenFinger || '（无）'}\n主角: ${authoritativeNovelConfig.protagonistProfile || '（无）'}`
-    callbacks.log(`小说配置、非角色架构与 ${commitReceipt.roster.snapshot.entries.length} 张角色卡已原子提交`)
+    const unknown = promptLanguageText(writingLanguage, '未知', 'Unknown')
+    const none = promptLanguageText(writingLanguage, '（无）', '(none)')
+    context.data.novelConfigSummary = promptLanguageText(
+      writingLanguage,
+      `类型: ${authoritativeNovelConfig.genre || unknown} | 子类型: ${authoritativeNovelConfig.subGenre || unknown} | 受众: ${authoritativeNovelConfig.targetAudience || unknown}\n`
+        + `大纲: ${authoritativeNovelConfig.coreOutline || none}\n`
+        + `世界观: ${authoritativeNovelConfig.worldSetting || none}\n`
+        + `金手指: ${authoritativeNovelConfig.goldenFinger || none}\n`
+        + `主角: ${authoritativeNovelConfig.protagonistProfile || none}`,
+      `Genre: ${authoritativeNovelConfig.genre || unknown} | Subgenre: ${authoritativeNovelConfig.subGenre || unknown} | Audience: ${authoritativeNovelConfig.targetAudience || unknown}\n`
+        + `Outline: ${authoritativeNovelConfig.coreOutline || none}\n`
+        + `World: ${authoritativeNovelConfig.worldSetting || none}\n`
+        + `Central advantage: ${authoritativeNovelConfig.goldenFinger || none}\n`
+        + `Protagonist: ${authoritativeNovelConfig.protagonistProfile || none}`,
+    )
+    const committedCharacterCount = commitReceipt.roster.snapshot.entries.length
+    callbacks.log(text(
+      `小说配置、非角色架构与 ${committedCharacterCount} 张角色卡已原子提交`,
+      `The novel configuration, non-character architecture, and ${committedCharacterCount} character ${committedCharacterCount === 1 ? 'card was' : 'cards were'} committed atomically`,
+    ))
 
     callbacks.setProgress(90)
     this.notifyRefresh(['fileTree', 'characterCards'], context.projectPath, requireWorkflowProjectSession(context))
@@ -635,25 +745,31 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {
     const projectSession = requireWorkflowProjectSession(context)
     const writingLanguage = workflowWritingLanguage(context)
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(project),
-    )) throw new Error('当前项目已切换，蓝图推演已停止')
+    )) throw new Error(text('当前项目已切换，蓝图推演已停止', 'The project changed, so blueprint inference stopped.'))
 
     const chapters = context.data.chapters as ImportedChapter[]
     const configSummary = (context.data.novelConfigSummary as string)
       || promptLanguageText(writingLanguage, '（配置概要不可用）', '(configuration summary unavailable)')
-    if (!chapters || chapters.length === 0) throw new Error('无章节数据')
+    if (!chapters || chapters.length === 0) throw new Error(text('无章节数据', 'No chapter data is available.'))
 
     const template = await resolvePromptTemplate('infer_single_chapter_blueprint', projectSession, writingLanguage)
-    if (!template) throw new Error('未找到单章蓝图推演 Prompt 模板')
+    if (!template) throw new Error(text(
+      '未找到单章蓝图推演 Prompt 模板',
+      'The single-chapter blueprint inference prompt template was not found.',
+    ))
 
     if (chapters.length > InferBlueprintsPerChapterCommand.MAX_CHAPTERS_PER_OPERATION) {
-      throw new Error(
+      throw new Error(text(
         `本次导入需推演 ${chapters.length} 章蓝图，超过单次 ${InferBlueprintsPerChapterCommand.MAX_CHAPTERS_PER_OPERATION} 章的安全成本上限；`
-        + `请按连续章节分段，每段不超过 ${InferBlueprintsPerChapterCommand.MAX_CHAPTERS_PER_OPERATION} 章。`,
-      )
+          + `请按连续章节分段，每段不超过 ${InferBlueprintsPerChapterCommand.MAX_CHAPTERS_PER_OPERATION} 章。`,
+        `This import requires ${chapters.length} chapter blueprints, exceeding the safe limit of ${InferBlueprintsPerChapterCommand.MAX_CHAPTERS_PER_OPERATION} per operation. `
+          + `Import contiguous ranges of at most ${InferBlueprintsPerChapterCommand.MAX_CHAPTERS_PER_OPERATION} chapters.`,
+      ))
     }
     const orderedChapters = [...chapters].sort((left, right) => left.number - right.number)
     const startChapter = orderedChapters[0]?.number
@@ -663,12 +779,17 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       || endChapter === undefined
       || orderedChapters.some((chapter, index) => chapter.number !== startChapter + index)
     ) {
-      throw new Error('导入蓝图只能按连续章节范围生成；请先补齐缺失章节或拆分为连续范围。')
+      throw new Error(text(
+        '导入蓝图只能按连续章节范围生成；请先补齐缺失章节或拆分为连续范围。',
+        'Imported blueprints can be inferred only for a contiguous chapter range. Fill missing chapters or split the import into contiguous ranges.',
+      ))
     }
 
-    callbacks.log(
-      `开始分批推演蓝图（共 ${chapters.length} 章，预计至多 ${Math.ceil(chapters.length / InferBlueprintsPerChapterCommand.MAX_ITEMS_PER_BATCH)} 次调用）...`,
-    )
+    const estimatedCalls = Math.ceil(chapters.length / InferBlueprintsPerChapterCommand.MAX_ITEMS_PER_BATCH)
+    callbacks.log(text(
+      `开始分批推演蓝图（共 ${chapters.length} 章，预计至多 ${estimatedCalls} 次调用）...`,
+      `Inferring blueprints in batches (${chapters.length} ${chapters.length === 1 ? 'chapter' : 'chapters'}; at most ${estimatedCalls} model ${estimatedCalls === 1 ? 'call' : 'calls'})...`,
+    ))
     callbacks.setProgress(5)
 
     let activeChapterNumbers: number[] = []
@@ -708,7 +829,10 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
             `本批必须且只能完整返回以下 chapterNumber：${activeChapterNumbers.join('、')}。`,
             `Return complete items for exactly these chapterNumber values: ${activeChapterNumbers.join(', ')}.`,
           )
-        callbacks.log(`  正在推演第 ${activeChapterNumbers[0]}–${activeChapterNumbers.at(-1)} 章...`)
+        callbacks.log(text(
+          `  正在推演第 ${activeChapterNumbers[0]}–${activeChapterNumbers.at(-1)} 章...`,
+          `  Inferring Chapters ${activeChapterNumbers[0]}–${activeChapterNumbers.at(-1)}...`,
+        ))
         callbacks.setProgress(5 + Math.round((validatedPrefix.length / orderedChapters.length) * 80))
         return {
           purpose: 'import-chapter-blueprints',
@@ -741,7 +865,10 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       limits: { maxBatchItems: InferBlueprintsPerChapterCommand.MAX_ITEMS_PER_BATCH },
       signal: execution.signal,
     })
-    if (!batch.ok) throw new Error(batch.failure.message)
+    if (!batch.ok) throw new Error(text(
+      `蓝图推演失败：${batch.failure.message}`,
+      `Blueprint inference failed (${batch.failure.reason}).`,
+    ))
 
     this.assertNotCancelled(context)
     const commit = await ipc.invokeWithProjectSession(
@@ -757,7 +884,10 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       context.projectPath,
     )
     if (!commit.success || !commit.receipt || commit.receipt.snapshot.length !== orderedChapters.length) {
-      throw new Error(commit.error || '导入蓝图未能作为完整范围一次提交并回读。')
+      throw new Error(commit.error || text(
+        '导入蓝图未能作为完整范围一次提交并回读。',
+        'The imported blueprints could not be committed and read back as one complete range.',
+      ))
     }
 
     const commitReceipt = commit.receipt
@@ -770,10 +900,14 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       )
       context.data.blueprintCharacterSyncReceipt = syncReceipt
     } catch {
-      throw new ImportBlueprintPostCommitSyncError(commitReceipt)
+      throw new ImportBlueprintPostCommitSyncError(commitReceipt, text)
     }
 
-    callbacks.log(`蓝图推演完成：${commitReceipt.snapshot.length} 章已一次提交`)
+    const committedChapterCount = commitReceipt.snapshot.length
+    callbacks.log(text(
+      `蓝图推演完成：${committedChapterCount} 章已一次提交`,
+      `Blueprint inference complete: ${committedChapterCount} ${committedChapterCount === 1 ? 'chapter was' : 'chapters were'} committed in one operation`,
+    ))
     callbacks.setProgress(100)
     this.notifyRefresh(['fileTree', 'blueprints'], context.projectPath, projectSession)
   }

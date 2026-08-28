@@ -42,6 +42,27 @@ describe('知识库嵌入空间回填', () => {
     }
   })
 
+  it('通过主进程知识库生产缝逐字节保存并读回混合 UTF-8 参照文本', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-utf8-roundtrip-'))
+    projects.push(projectPath)
+    const content = 'The sign reads “夜航 Café” — déjà vu. 招牌写着“回家”。'
+    const fileName = 'Chapter 1 夜航 Café.txt'
+    generateEmbeddingsMock.mockResolvedValue([[0.1, 0.2, 0.3]])
+
+    await expect(importText(content, fileName, projectPath, 'openai', {
+      baseUrl: 'https://embedding.example/v1',
+      apiKey: 'test-key-not-persisted',
+      modelName: 'fake-embedding',
+    })).resolves.toMatchObject({ success: true, chunkCount: 1 })
+
+    const results = await searchKnowledgeFTS('夜航 Café', projectPath, 5)
+    expect(results).toEqual([
+      expect.objectContaining({ fileName, text: content }),
+    ])
+    const restored = results[0]?.text ?? ''
+    expect(Buffer.from(restored, 'utf8')).toEqual(Buffer.from(content, 'utf8'))
+  })
+
   it('回填按模型实际 1536 维建空间并激活，不重建 chunks 全文表', async () => {
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-backfill-'))
     projects.push(projectPath)

@@ -78,6 +78,8 @@ const context: WorkflowContext = {
   runId: 'completion-probe',
   projectPath: 'C:\\novels\\probe',
   projectSession: { projectId: 'probe', leaseId: 'lease-probe', projectPath: 'C:\\novels\\probe' },
+  writingLanguage: 'zh-CN',
+  uiLocale: 'zh-CN',
   data: {},
   cancelled: false,
 }

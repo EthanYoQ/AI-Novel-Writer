@@ -28,6 +28,14 @@ const originalGenerateStream = useLLMStore.getState().generateStream
 const originalDefaultModelId = useLLMStore.getState().defaultModelId
 const originalRefreshFileTree = useProjectStore.getState().refreshFileTree
 const originalLocale = useLocaleStore.getState().locale
+const CJK_TEXT = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u
+
+function stripExactPayloads(request: string, payloads: readonly string[]): string {
+  return payloads.reduce(
+    (copy, payload) => payload ? copy.replaceAll(payload, '<USER_OR_MODEL_PAYLOAD>') : copy,
+    request,
+  )
+}
 
 function createContext(): WorkflowContext {
   return {
@@ -38,6 +46,8 @@ function createContext(): WorkflowContext {
       leaseId: 'lease-project-1',
       projectPath: 'C:\\tmp\\vela-import-test',
     },
+    writingLanguage: 'zh-CN',
+    uiLocale: 'zh-CN',
     data: {
       novelConfigSummary: '类型: 玄幻',
       chapters: [
@@ -192,10 +202,15 @@ afterEach(() => {
 
 describe('ImportInitializeCommand', () => {
   it('logs the new reference-only import flow in English when the UI locale is English', async () => {
-    useLocaleStore.setState({ locale: 'en-US' })
     const context = createContext()
-    stubIpcInvoke((channel) => {
-      if (channel === 'kb:import-text') return { success: true }
+    context.uiLocale = 'en-US'
+    context.writingLanguage = 'en-US'
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    const invoke = stubIpcInvoke((channel) => {
+      if (channel === 'kb:import-text') {
+        useLocaleStore.setState({ locale: 'zh-CN' })
+        return { success: true }
+      }
       if (channel === 'fs:list-dir') return []
       throw new Error(`unexpected IPC ${channel}`)
     })
@@ -209,6 +224,39 @@ describe('ImportInitializeCommand', () => {
     expect(callbacks.log).toHaveBeenCalledWith('Importing 1 reference chapter into the knowledge base...')
     expect(callbacks.log).toHaveBeenCalledWith('Building the vector knowledge base...')
     expect(callbacks.log).toHaveBeenCalledWith('Knowledge base build complete (1 succeeded, 0 failed)')
+    expect(invoke).toHaveBeenCalledWith(
+      'kb:import-text',
+      '主角在雨夜发现异常，并踏上旅程。',
+      'Chapter 1 启程.txt',
+      context.projectPath,
+      context.projectSession,
+    )
+  })
+
+  it('uses Chinese KB document names from writing language independently of English UI copy', async () => {
+    const context = createContext()
+    context.writingLanguage = 'zh-CN'
+    context.uiLocale = 'en-US'
+    const invoke = stubIpcInvoke((channel) => {
+      if (channel === 'kb:import-text') return { success: true }
+      if (channel === 'fs:list-dir') return []
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+
+    await new ImportInitializeCommand(context.data.chapters as never[]).execute({
+      step: {},
+      context,
+      callbacks,
+    })
+
+    expect(invoke).toHaveBeenCalledWith(
+      'kb:import-text',
+      '主角在雨夜发现异常，并踏上旅程。',
+      '第1章 启程.txt',
+      context.projectPath,
+      context.projectSession,
+    )
+    expect(callbacks.log).toHaveBeenCalledWith('Building the vector knowledge base...')
   })
 
   it('treats imported chapters as reference material: it writes the knowledge base without creating drafts or finalized manuscript chapters', async () => {
@@ -316,7 +364,7 @@ describe('ImportInitializeCommand', () => {
 
 describe('InferBlueprintsPerChapterCommand', () => {
   it('keeps imported UTF-8 intact in English blueprint inference and its syntax-repair request', async () => {
-    const importedText = 'At “夜航 Café”, Mara hears déjà vu in the rain.'
+    const importedText = 'At “夜航 Café”, Mara sees 招牌写着“回家” and hears déjà vu in the rain.'
     const valid = JSON.stringify({
       blueprints: [{
         chapterNumber: 1,
@@ -353,7 +401,9 @@ describe('InferBlueprintsPerChapterCommand', () => {
     })
     const context = createContext()
     context.writingLanguage = 'en-US'
-    context.data.novelConfigSummary = 'A time-loop mystery at “夜航 Café”.'
+    context.uiLocale = 'en-US'
+    const configSummary = 'A time-loop mystery at “夜航 Café”.'
+    context.data.novelConfigSummary = configSummary
     context.data.chapters = [{
       number: 1,
       title: 'Night Café 夜航',
@@ -374,6 +424,18 @@ describe('InferBlueprintsPerChapterCommand', () => {
     expect(observed[1]?.[0]?.content).toContain('You repair JSON syntax only')
     expect(observed[1]?.[1]?.content).toContain('Malformed candidate')
     expect(observed[1]?.[1]?.content).toContain('Night Café 夜航')
+    const initialBuiltIn = stripExactPayloads(
+      observed[0]?.map(message => message.content).join('\n') ?? '',
+      [importedText, 'Night Café 夜航', configSummary],
+    )
+    const repairBuiltIn = stripExactPayloads(
+      observed[1]?.map(message => message.content).join('\n') ?? '',
+      [malformed, importedText, 'Night Café 夜航', configSummary],
+    )
+    expect(initialBuiltIn).not.toMatch(CJK_TEXT)
+    expect(repairBuiltIn).not.toMatch(CJK_TEXT)
+    expect(callbacks.log).toHaveBeenCalledWith('Inferring blueprints in batches (1 chapter; at most 1 model call)...')
+    expect(callbacks.log).toHaveBeenCalledWith('  Inferring Chapters 1–1...')
   })
 
   it('performs zero per-chapter writes and throws when the one range commit fails', async () => {
@@ -578,6 +640,7 @@ describe('InferGlobalSettingsCommand', () => {
     useLLMStore.setState({ defaultModelId: 'model-a', generateStream })
     const context = createContext()
     context.writingLanguage = 'en-US'
+    context.uiLocale = 'en-US'
     context.data.chapters = [{
       number: 1,
       title: 'Night Café 夜航',
@@ -594,6 +657,28 @@ describe('InferGlobalSettingsCommand', () => {
     expect(observed[1]?.[0]?.content).toContain('You repair JSON syntax only')
     expect(observed[1]?.[1]?.content).toContain('Malformed candidate')
     expect(observed[1]?.[1]?.content).toContain('Preserve “夜航 Café” exactly.')
+    expect(context.data.novelConfigSummary).toBe(
+      `Genre: ${inferred.novelConfig.genre} | Subgenre: ${inferred.novelConfig.subGenre} | Audience: ${inferred.novelConfig.targetAudience}\n`
+      + `Outline: ${inferred.novelConfig.coreOutline}\n`
+      + `World: ${inferred.novelConfig.worldSetting}\n`
+      + `Central advantage: ${inferred.novelConfig.goldenFinger}\n`
+      + `Protagonist: ${inferred.novelConfig.protagonistProfile}`,
+    )
+    const initialBuiltIn = stripExactPayloads(
+      observed[0]?.map(message => message.content).join('\n') ?? '',
+      [importedText],
+    )
+    const repairBuiltIn = stripExactPayloads(
+      observed[1]?.map(message => message.content).join('\n') ?? '',
+      [malformed],
+    )
+    expect(initialBuiltIn).not.toMatch(CJK_TEXT)
+    expect(repairBuiltIn).not.toMatch(CJK_TEXT)
+    expect(callbacks.log).toHaveBeenCalledWith('Retrieving key passages from the vector knowledge base...')
+    expect(callbacks.log).toHaveBeenCalledWith('Running AI inference for the global novel configuration...')
+    expect(callbacks.log).toHaveBeenCalledWith(
+      `The novel configuration, non-character architecture, and ${inferred.characterCards.length} character cards were committed atomically`,
+    )
     const commitCalls = invoke.mock.calls.filter(([channel]) => channel === 'db:import-global-facts-commit')
     expect(commitCalls).toHaveLength(1)
     const committedCore = (commitCalls[0]?.[1] as { core: { coreOutline: string } }).core

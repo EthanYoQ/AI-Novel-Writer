@@ -359,6 +359,8 @@ describe('directory workflow project context', () => {
         leaseId: projectA.sessionLease!,
         projectPath: projectA.path,
       },
+      writingLanguage: 'zh-CN',
+      uiLocale: 'zh-CN',
       data: {
         newBlueprints: [blueprint],
         existingBlueprints: [],

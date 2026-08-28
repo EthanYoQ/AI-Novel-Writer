@@ -58,6 +58,7 @@ describe('bounded completion', () => {
       mode: 'replace-structured-output',
       maxContinuations: 2,
       originalPrompt: '返回章节 JSON',
+      writingLanguage: 'zh-CN',
       requestContinuation,
     })).resolves.toBe('{"chapters":[{"number":1}]}')
 
@@ -75,6 +76,7 @@ describe('bounded completion', () => {
       mode: 'replace-structured-output',
       maxContinuations: 2,
       originalPrompt: '返回 JSON',
+      writingLanguage: 'zh-CN',
       requestContinuation: vi.fn(),
     })).resolves.toBe(fencedJson)
   })
@@ -87,6 +89,7 @@ describe('bounded completion', () => {
       mode: 'replace-structured-output',
       maxContinuations: 2,
       originalPrompt: '返回 JSON',
+      writingLanguage: 'zh-CN',
       requestContinuation,
     })).rejects.toThrow('已自动续写 2 次仍未完成')
 
@@ -103,6 +106,7 @@ describe('bounded completion', () => {
         mode: 'append-visible-text',
         maxContinuations: 3,
         originalPrompt: '写一段正文',
+        writingLanguage: 'zh-CN',
         requestContinuation,
       })).rejects.toThrow(/结果未被保存/)
 
@@ -119,6 +123,7 @@ describe('bounded completion', () => {
         mode: 'append-visible-text',
         maxContinuations: 3,
         originalPrompt: '写一段正文',
+        writingLanguage: 'zh-CN',
         requestContinuation,
       })
       throw new Error('expected a bounded completion failure')
@@ -141,6 +146,7 @@ describe('bounded completion', () => {
       mode: 'append-visible-text',
       maxContinuations: 3,
       originalPrompt: '写一段正文',
+      writingLanguage: 'zh-CN',
       requestContinuation,
       isCancelled: () => true,
     })).rejects.toThrow('工作流已取消')
@@ -155,6 +161,7 @@ describe('bounded completion', () => {
       mode: 'append-visible-text',
       maxContinuations: 3,
       originalPrompt: '续写正文',
+      writingLanguage: 'zh-CN',
       requestContinuation: vi.fn().mockResolvedValue({
         content: `${repeatedTail}\n\n周砚把监控画面停在三点十七分。`,
         finishReason: 'stop',
@@ -177,6 +184,7 @@ describe('bounded completion', () => {
       mode: 'append-visible-text',
       maxContinuations: 3,
       originalPrompt: '输出完整修稿',
+      writingLanguage: 'zh-CN',
       requestContinuation: vi.fn().mockResolvedValue({
         content: continuationContent,
         finishReason: 'stop',
@@ -200,6 +208,7 @@ describe('bounded completion', () => {
       mode: 'append-visible-text',
       maxContinuations: 3,
       originalPrompt: '输出完整修稿',
+      writingLanguage: 'zh-CN',
       requestContinuation,
     })).rejects.toThrow(message)
 
@@ -227,6 +236,7 @@ describe('bounded completion', () => {
         mode: 'append-visible-text',
         maxContinuations,
         originalPrompt: '写一段正文',
+        writingLanguage: 'zh-CN',
         requestContinuation,
       })).rejects.toThrow('自动续写次数必须是 0 到 7 的整数')
 
@@ -245,6 +255,7 @@ describe('bounded completion', () => {
       mode,
       maxContinuations,
       originalPrompt: '写一段正文',
+      writingLanguage: 'zh-CN',
       requestContinuation,
     })).rejects.toThrow(`当前输出类型最多自动续写 ${expectedLimit} 次`)
 
@@ -267,6 +278,7 @@ describe('bounded completion', () => {
       mode: 'replace-structured-output',
       maxContinuations: 1,
       originalPrompt,
+      writingLanguage: 'zh-CN',
       promptBudget: {
         contextWindowTokens,
         maxOutputTokens: 4_096,
@@ -292,6 +304,7 @@ describe('bounded completion', () => {
       mode: 'replace-structured-output',
       maxContinuations: 1,
       originalPrompt: '返回完整 JSON',
+      writingLanguage: 'zh-CN',
       promptBudget: {
         contextWindowTokens: 4_096,
         maxOutputTokens: 4_096,
@@ -313,6 +326,7 @@ describe('bounded completion', () => {
       mode: 'replace-structured-output',
       maxContinuations: 1,
       originalPrompt: '返回完整 JSON',
+      writingLanguage: 'zh-CN',
       promptBudget: {
         contextWindowTokens: null,
         maxOutputTokens: 8192,

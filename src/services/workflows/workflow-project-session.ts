@@ -2,7 +2,6 @@ import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
 import type { WorkflowContext } from '../../stores/workflow-store'
 import type { WritingLanguage } from '../../shared/writing-language'
-import { resolveWritingLanguage } from '../../shared/writing-language'
 import type { Locale } from '../../i18n/types'
 
 /**
@@ -19,14 +18,12 @@ export function requireWorkflowProjectSession(context: WorkflowContext): Project
   return session
 }
 
-/** Legacy workflows without an explicit snapshot retain the historical Chinese behavior. */
 export function workflowWritingLanguage(context: WorkflowContext): WritingLanguage {
-  return resolveWritingLanguage(context.writingLanguage)
+  return context.writingLanguage
 }
 
-/** Legacy command contexts retain the historical Chinese interface copy. */
 export function workflowUiLocale(context: WorkflowContext): Locale {
-  return context.uiLocale === 'en-US' ? 'en-US' : 'zh-CN'
+  return context.uiLocale
 }
 
 export function workflowUiText(

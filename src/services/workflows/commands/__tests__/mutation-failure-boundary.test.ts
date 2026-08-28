@@ -98,6 +98,8 @@ function context(): WorkflowContext {
     runId: 'mutation-boundary',
     projectPath: PROJECT_PATH,
     projectSession: { projectId: 'A', leaseId: 'lease-A', projectPath: PROJECT_PATH },
+    writingLanguage: 'zh-CN',
+    uiLocale: 'zh-CN',
     data: {},
     cancelled: false,
   }

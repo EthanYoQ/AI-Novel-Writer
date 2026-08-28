@@ -615,29 +615,6 @@ describe('StructuredBatchExecutor seam', () => {
     expect(result).not.toHaveProperty('items')
   })
 
-  it('fails closed before a repair request when the caller omits writingLanguage', async () => {
-    const complete = vi.fn<GenerationSession['complete']>(async () => ({
-      status: 'completed',
-      content: '{"blueprints":[{"chapterNumber":1,"title":"第1章"}],}',
-      finishReason: 'stop',
-      receipt: attemptReceipt(1, 100, 100, 'stop'),
-    }))
-    const executor = createRuntimeStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
-
-    const result = await executor.execute({ items: [1], limits: { maxBatchItems: 1 } })
-
-    expect(result).toMatchObject({
-      ok: false,
-      failure: {
-        code: 'invalid_output',
-        reason: 'malformed_output',
-        message: expect.stringContaining('写作语言'),
-      },
-      receipt: { calls: 1 },
-    })
-    expect(complete).toHaveBeenCalledOnce()
-  })
-
   it('classifies malformed structured content as invalid output', async () => {
     let attempt = 0
     const executor = createStructuredBatchExecutor({

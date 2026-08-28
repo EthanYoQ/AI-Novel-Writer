@@ -21,6 +21,8 @@ function failedChapterDraft(): WorkflowRun {
       leaseId: 'failed-chapter-draft-lease',
       projectPath: 'C:\\novels\\failed-chapter-draft',
     },
+    writingLanguage: 'zh-CN',
+    uiLocale: 'zh-CN',
     type: 'chapter_creation',
     title: '写稿 - 第 1 章：初入魔窟',
     status: 'failed',

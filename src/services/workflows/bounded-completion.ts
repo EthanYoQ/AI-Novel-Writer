@@ -66,7 +66,7 @@ export interface BoundedCompletionRequest {
   mode: BoundedCompletionMode
   maxContinuations: number
   originalPrompt: string
-  writingLanguage?: WritingLanguage
+  writingLanguage: WritingLanguage
   promptBudget?: BoundedCompletionPromptBudget
   requestContinuation: (prompt: string) => Promise<BoundedCompletion>
   isCancelled?: () => boolean
@@ -413,7 +413,7 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
       request.originalPrompt,
       content,
       continuationPromptCharBudget(request.promptBudget),
-      request.writingLanguage ?? 'zh-CN',
+      request.writingLanguage,
     )
     const next = await request.requestContinuation(continuationPrompt)
     assertNotCancelled(request.isCancelled)

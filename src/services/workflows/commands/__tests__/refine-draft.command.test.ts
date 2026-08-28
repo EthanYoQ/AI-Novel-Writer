@@ -102,6 +102,8 @@ function workflowContext(options: { generationModelId?: string } = {}): Workflow
     projectPath: PROJECT_PATH,
     projectSession: PROJECT_SESSION,
     ...(options.generationModelId ? { generationModelId: options.generationModelId } : {}),
+    writingLanguage: 'zh-CN',
+    uiLocale: 'zh-CN',
     data: {},
     cancelled: false,
   }
@@ -539,6 +541,8 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
 
     expect(stepCallbacks.log).toHaveBeenCalledWith('Revising from the confirmed review checklist...')
     expect(stepCallbacks.log).toHaveBeenCalledWith(expect.stringContaining('Review-based revision complete'))
+    const visibleLogs = vi.mocked(stepCallbacks.log).mock.calls.map(([message]) => message).join('\n')
+    expect(['✅', '⚠️', '❌'].some(icon => visibleLogs.includes(icon))).toBe(false)
     expect(useEditorStore.getState().tabs).toEqual([
       expect.objectContaining({ name: 'Review fix: Chapter 1', type: 'diff' }),
     ])

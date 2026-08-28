@@ -43,6 +43,8 @@ const context: WorkflowContext = {
   runId: 'test-run',
   projectPath: 'C:/NovelA',
   projectSession: { projectId: 'NovelA', leaseId: 'lease-NovelA', projectPath: 'C:/NovelA' },
+  writingLanguage: 'zh-CN',
+  uiLocale: 'zh-CN',
   data: {},
   cancelled: false,
 }

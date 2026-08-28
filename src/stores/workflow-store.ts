@@ -62,9 +62,9 @@ export interface WorkflowRun {
   /** Agent 明确选择并随本次写稿工作流冻结的模型；缺失时使用默认模型。 */
   generationModelId?: string
   /** Project writing language frozen when the workflow starts. */
-  writingLanguage?: WritingLanguage
+  writingLanguage: WritingLanguage
   /** Visible interface locale frozen when the workflow starts. */
-  uiLocale?: Locale
+  uiLocale: Locale
   type: WorkflowType
   title: string
   status: WorkflowStatus
@@ -108,9 +108,9 @@ export interface WorkflowContext {
   /** Agent 明确选择并随本次写稿工作流冻结的模型；缺失时使用默认模型。 */
   generationModelId?: string
   /** Project writing language frozen when the workflow starts. */
-  writingLanguage?: WritingLanguage
+  writingLanguage: WritingLanguage
   /** Visible interface locale frozen when the workflow starts. */
-  uiLocale?: Locale
+  uiLocale: Locale
   /** 步骤间传递的数据 */
   data: Record<string, unknown>
   /** 是否已取消 */
@@ -184,6 +184,10 @@ function normalizeGenerationModelId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
+function uiText(locale: Locale, zhCNText: string, enUSText: string): string {
+  return locale === 'en-US' ? enUSText : zhCNText
+}
+
 // ===== Store =====
 
 interface WorkflowState {
@@ -230,7 +234,7 @@ interface WorkflowState {
   /** 继续已暂停或正在等待安全暂停的工作流 */
   resumeWorkflow: (runId: string) => void
   /** 添加全局日志 */
-  addLog: (level: 'info' | 'warn' | 'error', message: string) => void
+  addLog: (level: 'info' | 'warn' | 'error', message: string, locale?: Locale) => void
   /** 清空日志 */
   clearLogs: () => void
 }
@@ -344,6 +348,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         projectSession: isProjectSessionContext(suppliedProjectSession)
           ? Object.freeze({ ...suppliedProjectSession })
           : null,
+        writingLanguage,
         uiLocale,
         type: definition.type,
         title: definition.title,
@@ -351,7 +356,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         currentStepIndex: 0,
         createdAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
-        error: '工作流缺少有效的冻结项目会话，已拒绝启动',
+        error: uiText(
+          uiLocale,
+          '工作流缺少有效的冻结项目会话，已拒绝启动',
+          'The workflow is missing a valid frozen project session and was not started.',
+        ),
         steps: definition.steps.map((step) => ({
           id: randomUUID(),
           name: step.name,
@@ -363,7 +372,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       set(state => ({
         history: [rejectedRun, ...state.history].slice(0, 50),
       }))
-      get().addLog('error', `[拒绝] 工作流「${definition.title}」缺少有效冻结项目会话`)
+      get().addLog('error', uiText(
+        uiLocale,
+        `[拒绝] 工作流「${definition.title}」缺少有效冻结项目会话`,
+        `[Rejected] Workflow "${definition.title}" is missing a valid frozen project session`,
+      ), uiLocale)
       return runId
     }
     const run: WorkflowRun = {
@@ -392,7 +405,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       const newRuns = [...s.activeRuns, run]
       return { activeRuns: newRuns, ...computeCompat(newRuns, s.waitingRuns) }
     })
-    get().addLog('info', `[开始] 工作流「${definition.title}」已启动`)
+    get().addLog('info', uiText(
+      uiLocale,
+      `[开始] 工作流「${definition.title}」已启动`,
+      `[Started] Workflow "${definition.title}" started`,
+    ), uiLocale)
 
     // 自动联动：打开右侧面板的 AI 输出视图（非阻塞 import 避免循环依赖）
     import('./layout-store').then(m => m.useLayoutStore.getState().openRightPanel('ai-output')).catch(() => {})
@@ -415,11 +432,19 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       if (!context.pauseRequested || context.cancelled) return
 
       updateRunById(set, run.id, { status: 'paused', pauseRequested: false })
-      get().addLog('info', `[暂停] 工作流「${definition.title}」已在当前步骤完成后暂停`)
+      get().addLog('info', uiText(
+        context.uiLocale,
+        `[暂停] 工作流「${definition.title}」已在当前步骤完成后暂停`,
+        `[Paused] Workflow "${definition.title}" paused after the current step`,
+      ), context.uiLocale)
       await new Promise<void>((resolve) => { pauseResolveRefs.set(run.id, resolve) })
       if (!context.cancelled) {
         updateRunById(set, run.id, { status: 'running', pauseRequested: false })
-        get().addLog('info', `[继续] 工作流「${definition.title}」已继续`)
+        get().addLog('info', uiText(
+          context.uiLocale,
+          `[继续] 工作流「${definition.title}」已继续`,
+          `[Resumed] Workflow "${definition.title}" resumed`,
+        ), context.uiLocale)
       }
     }
 
@@ -430,14 +455,28 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
       // 检查取消
       if (context.cancelled) {
-        updateRunById(set, run.id, { status: 'failed', error: '工作流已取消' })
-        get().addLog('warn', `[取消] 工作流「${definition.title}」已取消`)
+        updateRunById(set, run.id, {
+          status: 'failed',
+          error: uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'),
+        })
+        get().addLog('warn', uiText(
+          context.uiLocale,
+          `[取消] 工作流「${definition.title}」已取消`,
+          `[Cancelled] Workflow "${definition.title}" was cancelled`,
+        ), context.uiLocale)
         break
       }
 
       if (!isCurrentWorkflowSession(definition.projectPath, context.projectSession)) {
-        updateRunById(set, run.id, { status: 'failed', error: '项目会话已切换或失效' })
-        get().addLog('error', `[失败] 工作流「${definition.title}」已停止：项目会话已切换或失效`)
+        updateRunById(set, run.id, {
+          status: 'failed',
+          error: uiText(context.uiLocale, '项目会话已切换或失效', 'The project session changed or expired.'),
+        })
+        get().addLog('error', uiText(
+          context.uiLocale,
+          `[失败] 工作流「${definition.title}」已停止：项目会话已切换或失效`,
+          `[Failed] Workflow "${definition.title}" stopped because the project session changed or expired`,
+        ), context.uiLocale)
         break
       }
 
@@ -446,13 +485,17 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       // 标记当前步骤为运行中
       updateStepById(set, run.id, i, { status: 'running', startedAt: new Date().toISOString() })
       updateRunById(set, run.id, { currentStepIndex: i })
-      get().addLog('info', `[执行] [${definition.title}] 步骤: ${stepDef.name}`)
+      get().addLog('info', uiText(
+        context.uiLocale,
+        `[执行] [${definition.title}] 步骤: ${stepDef.name}`,
+        `[Running] [${definition.title}] Step: ${stepDef.name}`,
+      ), context.uiLocale)
 
       // 创建步骤回调
       const callbacks: StepCallbacks = {
         log: (message) => {
           appendStepLogById(set, run.id, i, message)
-          get().addLog('info', `  ${message}`)
+          get().addLog('info', `  ${message}`, context.uiLocale)
         },
         setProgress: (progress) => {
           updateStepById(set, run.id, i, { progress })
@@ -486,10 +529,14 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       try {
         const result = await stepDef.executor(run.steps[i], context, callbacks)
         if (context.cancelled) {
-          throw new Error('工作流已取消')
+          throw new Error(uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'))
         }
         if (!isCurrentWorkflowSession(definition.projectPath, context.projectSession)) {
-          throw new Error('项目会话已切换或失效，工作流已停止以避免跨项目写入')
+          throw new Error(uiText(
+            context.uiLocale,
+            '项目会话已切换或失效，工作流已停止以避免跨项目写入',
+            'The project session changed or expired. The workflow stopped to prevent a cross-project write.',
+          ))
         }
         updateStepById(set, run.id, i, {
           status: 'completed',
@@ -497,7 +544,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           progress: 100,
           result: result || get().activeRuns.find(r => r.id === run.id)?.steps[i].result,
         })
-        get().addLog('info', `[完成] [${definition.title}] 步骤: ${stepDef.name}`)
+        get().addLog('info', uiText(
+          context.uiLocale,
+          `[完成] [${definition.title}] 步骤: ${stepDef.name}`,
+          `[Completed] [${definition.title}] Step: ${stepDef.name}`,
+        ), context.uiLocale)
 
         // 步进模式：非最后一步，且未取消 → 暂停等待用户确认
         if (stepByStep && i < definition.steps.length - 1 && !context.cancelled) {
@@ -506,7 +557,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
             const newWaiting = { ...s.waitingRuns, [run.id]: { waitingForConfirm: true, waitingAfterStepIndex: i } }
             return { waitingRuns: newWaiting, ...computeCompat(s.activeRuns, newWaiting) }
           })
-          get().addLog('info', `[暂停] [${definition.title}] 等待确认继续第 ${i + 2} 步：${definition.steps[i + 1].name}`)
+          get().addLog('info', uiText(
+            context.uiLocale,
+            `[暂停] [${definition.title}] 等待确认继续第 ${i + 2} 步：${definition.steps[i + 1].name}`,
+            `[Paused] [${definition.title}] Waiting for confirmation before step ${i + 2}: ${definition.steps[i + 1].name}`,
+          ), context.uiLocale)
           await new Promise<void>((resolve) => { continueResolveRefs.set(run.id, resolve) })
           if (context.cancelled) break
           updateRunById(set, run.id, { status: 'running' })
@@ -525,7 +580,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           error: errorMsg,
           ...(failureCode ? { failureCode } : {}),
         })
-        get().addLog('error', `[失败] [${definition.title}] 步骤: ${stepDef.name} — ${errorMsg}`)
+        get().addLog('error', uiText(
+          context.uiLocale,
+          `[失败] [${definition.title}] 步骤: ${stepDef.name} — ${errorMsg}`,
+          `[Failed] [${definition.title}] Step: ${stepDef.name} — ${errorMsg}`,
+        ), context.uiLocale)
         break
       }
     }
@@ -535,7 +594,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     if (finalRun?.status === 'cancelling' || context.cancelled) {
       updateRunById(set, run.id, {
         status: 'failed',
-        error: '工作流已取消',
+        error: uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'),
         completedAt: new Date().toISOString(),
       })
       finalRun = get().activeRuns.find(r => r.id === run.id)
@@ -546,7 +605,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     )) {
       updateRunById(set, run.id, {
         status: 'failed',
-        error: '项目会话已切换或失效，未提交工作流完成结果',
+        error: uiText(
+          context.uiLocale,
+          '项目会话已切换或失效，未提交工作流完成结果',
+          'The project session changed or expired, so the workflow completion result was not committed.',
+        ),
         completedAt: new Date().toISOString(),
       })
       finalRun = get().activeRuns.find(r => r.id === run.id)
@@ -554,7 +617,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     if (finalRun && finalRun.status === 'running') {
       const projectSession = context.projectSession
       updateRunById(set, run.id, { status: 'completed', completedAt: new Date().toISOString() })
-      get().addLog('info', `[完成] 工作流「${definition.title}」已完成`)
+      get().addLog('info', uiText(
+        context.uiLocale,
+        `[完成] 工作流「${definition.title}」已完成`,
+        `[Completed] Workflow "${definition.title}" completed`,
+      ), context.uiLocale)
 
       // 同步广播，并且必须发生在 activeRuns 清理之前。
       // 消费者可用 runId/projectPath 精确识别本次完成，且不会因动态 import 延迟丢失事件。
@@ -575,7 +642,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           }
           // silent 模式不做额外操作
         } catch (e) {
-          get().addLog('warn', `[警告] onComplete 执行失败: ${e}`)
+          get().addLog('warn', uiText(
+            context.uiLocale,
+            `[警告] onComplete 执行失败: ${e}`,
+            `[Warning] onComplete failed: ${e}`,
+          ), context.uiLocale)
         }
       }
     }
@@ -627,7 +698,15 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         const newWaiting = { ...s.waitingRuns }
         delete newWaiting[runId]
         const newRuns = s.activeRuns.map(r => r.id === runId
-          ? { ...r, status: 'cancelling' as const, error: '正在取消，等待当前操作安全退出' }
+          ? {
+              ...r,
+              status: 'cancelling' as const,
+              error: uiText(
+                r.uiLocale,
+                '正在取消，等待当前操作安全退出',
+                'Cancellation requested; waiting for the current operation to exit safely.',
+              ),
+            }
           : r)
         return {
           activeRuns: newRuns,
@@ -635,9 +714,16 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           ...computeCompat(newRuns, newWaiting),
         }
       })
-      get().addLog('warn', '[取消] 取消请求已提交，等待当前操作安全退出')
+      get().addLog('warn', uiText(
+        targetRun.uiLocale,
+        '[取消] 取消请求已提交，等待当前操作安全退出',
+        '[Cancel requested] Waiting for the current operation to exit safely',
+      ), targetRun.uiLocale)
     } else {
       // 取消全部
+      const targetRuns = get().activeRuns.filter(run =>
+        run.status !== 'completed' && run.status !== 'failed'
+      )
       for (const [id, ctx] of activeContexts) {
         const run = get().activeRuns.find(item => item.id === id)
         if (!run || run.status === 'completed' || run.status === 'failed') continue
@@ -655,7 +741,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
             ? {}
             : {
                 status: 'cancelling' as const,
-                error: '正在取消，等待当前操作安全退出',
+                error: uiText(
+                  r.uiLocale,
+                  '正在取消，等待当前操作安全退出',
+                  'Cancellation requested; waiting for the current operation to exit safely.',
+                ),
               }),
         }))
         return {
@@ -664,14 +754,20 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           ...computeCompat(cancellingRuns, {}),
         }
       })
-      get().addLog('warn', '[取消] 所有取消请求已提交，等待当前操作安全退出')
+      for (const targetRun of targetRuns) {
+        get().addLog('warn', uiText(
+          targetRun.uiLocale,
+          `[取消] 工作流「${targetRun.title}」的取消请求已提交，等待当前操作安全退出`,
+          `[Cancel requested] Waiting for workflow "${targetRun.title}" to exit safely`,
+        ), targetRun.uiLocale)
+      }
     }
   },
 
   cancelProjectWorkflowsAndWait: async (projectPath, timeoutMs = 30_000) => {
-    const targetIds = get().activeRuns
+    const targetRuns = get().activeRuns
       .filter(run => sameProjectPathKey(run.projectPath, projectPath))
-      .map(run => run.id)
+    const targetIds = targetRuns.map(run => run.id)
     for (const runId of targetIds) {
       get().cancelWorkflow(runId)
     }
@@ -680,7 +776,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     const deadline = Date.now() + timeoutMs
     while (get().activeRuns.some(run => sameProjectPathKey(run.projectPath, projectPath))) {
       if (Date.now() >= deadline) {
-        throw new Error('等待后台任务停止超时，项目保持打开状态')
+        throw new Error(uiText(
+          targetRuns[0].uiLocale,
+          '等待后台任务停止超时，项目保持打开状态',
+          'Timed out waiting for background tasks to stop; the project remains open.',
+        ))
       }
       await new Promise<void>(resolve => setTimeout(resolve, 50))
     }
@@ -693,7 +793,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
     context.pauseRequested = true
     updateRunById(set, runId, { pauseRequested: true })
-    get().addLog('info', `[暂停] 已请求暂停「${run.title}」，将在当前章节完成后生效`)
+    get().addLog('info', uiText(
+      run.uiLocale,
+      `[暂停] 已请求暂停「${run.title}」，将在当前章节完成后生效`,
+      `[Pause requested] "${run.title}" will pause after the current chapter`,
+    ), run.uiLocale)
   },
 
   resumeWorkflow: (runId) => {
@@ -711,8 +815,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     }
   },
 
-  addLog: (level, message) => {
-    const entry = { time: new Date().toLocaleTimeString('zh-CN'), level, message }
+  addLog: (level, message, locale = useLocaleStore.getState().locale) => {
+    const entry = { time: new Date().toLocaleTimeString(locale), level, message }
     set((s) => ({
       globalLogs: [...s.globalLogs, entry].slice(-500), // 保留最近 500 条
     }))
@@ -768,7 +872,7 @@ function appendStepLogById(
       const steps = [...r.steps]
       steps[stepIndex] = {
         ...steps[stepIndex],
-        logs: [...steps[stepIndex].logs, `[${new Date().toLocaleTimeString('zh-CN')}] ${message}`],
+        logs: [...steps[stepIndex].logs, `[${new Date().toLocaleTimeString(r.uiLocale)}] ${message}`],
       }
       return { ...r, steps }
     })

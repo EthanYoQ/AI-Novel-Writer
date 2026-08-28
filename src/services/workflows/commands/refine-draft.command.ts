@@ -62,7 +62,7 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
     const userPromptBlock = this.params.userRefinePrompt?.trim()
       ? promptLanguageText(
           writingLanguage,
-          `★【用户额外修稿指导（绝对优先级）】★：\n${this.params.userRefinePrompt}`,
+          `【用户额外修稿指导（最高优先级）】\n${this.params.userRefinePrompt}`,
           `[Additional author revision guidance — highest priority]\n${this.params.userRefinePrompt}`,
         )
       : ''

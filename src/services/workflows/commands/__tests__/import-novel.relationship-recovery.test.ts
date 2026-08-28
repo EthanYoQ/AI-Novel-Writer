@@ -28,6 +28,8 @@ function createContext(): WorkflowContext {
       leaseId: 'lease-project-1',
       projectPath: 'C:\\tmp\\vela-import-test',
     },
+    writingLanguage: 'zh-CN',
+    uiLocale: 'zh-CN',
     data: {
       novelConfigSummary: '类型: 玄幻',
       chapters: [

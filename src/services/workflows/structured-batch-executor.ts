@@ -102,7 +102,7 @@ export interface StructuredBatchExecutor<TInput, TOutput> {
 export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
   contract: StructuredBatchContract<TInput, TOutput>
   session: Pick<GenerationSession, 'complete'>
-  writingLanguage?: WritingLanguage
+  writingLanguage: WritingLanguage
 }): StructuredBatchExecutor<TInput, TOutput> {
   const { contract, session, writingLanguage } = dependencies
 
@@ -267,13 +267,6 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         let candidateContent = outcome.content
         let syntaxRepairApplied = false
         if (isRepairableDirectJsonSyntaxFailure(candidateContent)) {
-          if (!writingLanguage) {
-            throw new ExecutionFailure({
-              code: 'invalid_output',
-              reason: 'malformed_output',
-              message: '结构化语法修复缺少明确的项目写作语言，已在再次调用模型前停止',
-            })
-          }
           const originalContract = task.messages
             .map(message => `[${message.role}]\n${message.content}`)
             .join('\n\n')

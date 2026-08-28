@@ -51,6 +51,8 @@ function workflowContext(): WorkflowContext {
       leaseId: 'lease-project-1',
       projectPath: projectSnapshot.expectedProjectPath,
     },
+    writingLanguage: 'zh-CN',
+    uiLocale: 'zh-CN',
     data: { architecture: '故事前提'.repeat(30) },
     cancelled: false,
   }

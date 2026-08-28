@@ -185,8 +185,8 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     systemPrompt: string,
     callbacks: StepCallbacks,
     continuation: { mode: BoundedCompletionMode; maxContinuations: number },
-    options?: WorkflowLLMOptions,
-    context?: WorkflowContext,
+    options: WorkflowLLMOptions | undefined,
+    context: WorkflowContext,
   ): Promise<string> {
     const completion = await this.callLLMResult(prompt, systemPrompt, callbacks, options, context)
     callbacks.log(`  有界生成初始响应：finishReason=${completion.finishReason}`)
@@ -196,13 +196,13 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       mode: continuation.mode,
       maxContinuations: continuation.maxContinuations,
       originalPrompt: prompt,
-      writingLanguage: context ? workflowWritingLanguage(context) : 'zh-CN',
+      writingLanguage: workflowWritingLanguage(context),
       promptBudget: {
         contextWindowTokens: completion.receipt.capabilities.contextWindowTokens,
         maxOutputTokens: completion.receipt.budget.requestedOutputTokens,
         systemPromptChars: systemPrompt.length,
       },
-      isCancelled: () => context?.cancelled === true,
+      isCancelled: () => context.cancelled,
       redactVisibleText: text => this.stripThinkingTags(text),
       requestContinuation: async continuationPrompt => {
         continuationCount += 1

@@ -20,7 +20,7 @@ import {
 } from '../../shared/project-session-context'
 import type { ImportedChapter } from './commands/import-novel.command'
 import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh'
-import { requireWorkflowProjectSession } from './workflow-project-session'
+import { requireWorkflowProjectSession, workflowUiText } from './workflow-project-session'
 
 export interface ImportWorkflowParams {
   projectPath: string
@@ -99,16 +99,17 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
           'Extract a style profile and imitation guidance for later drafting.',
         ),
         executor: async (step, context, callbacks) => {
+          const runText = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
           const { AnalyzeWritingStyleCommand } = await import('./commands/analyze-style.command')
           const cmd = new AnalyzeWritingStyleCommand({ chapters: params.chapters })
           const style = await cmd.execute({ step, context, callbacks })
           if (!style?.trim()) {
-            throw new Error(text(
+            throw new Error(runText(
               '未提取到可用文风，无法继续建立仿写约束',
               'No usable writing style was extracted, so imitation guidance cannot be created.',
             ))
           }
-          return text(
+          return runText(
             '已提取并保存风格档案与仿写指南',
             'The style profile and imitation guidance were saved.',
           )
@@ -135,7 +136,8 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
         description: text('刷新项目状态，加载角色卡与蓝图数据', 'Refresh project state and load character cards and blueprints.'),
         executor: async (_step, context, callbacks) => {
           const workflowProjectSession = requireWorkflowProjectSession(context)
-          callbacks.log(text('正在刷新项目数据...', 'Refreshing project data...'))
+          const runText = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
+          callbacks.log(runText('正在刷新项目数据...', 'Refreshing project data...'))
           callbacks.setProgress(30)
 
           // 派生 UI 文件树刷新不能阻塞后处理中的角色与草稿刷新。
@@ -146,6 +148,7 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
               workflowProjectSession,
             ),
             callbacks,
+            runText,
           )
 
           // 加载角色卡
@@ -166,7 +169,7 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
             )
           } catch { /* 忽略 */ }
 
-          callbacks.log(text(
+          callbacks.log(runText(
             '小说拆解与仿写准备完成，结构化数据已就位。',
             'Novel analysis and style study are ready; structured data is in place.',
           ))

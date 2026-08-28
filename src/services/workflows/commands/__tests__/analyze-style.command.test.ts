@@ -21,6 +21,8 @@ const context: WorkflowContext = {
   runId: 'test-run',
   projectPath: 'C:\\tmp\\vela-style-test',
   projectSession: { projectId: 'project-1', leaseId: 'lease-project-1', projectPath: 'C:\\tmp\\vela-style-test' },
+  writingLanguage: 'zh-CN',
+  uiLocale: 'zh-CN',
   data: {},
   cancelled: false,
 }
@@ -101,6 +103,26 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
       context.projectPath,
       context.projectSession,
     )
+  })
+
+  it('keeps visible analysis logs in the frozen English UI locale', async () => {
+    stubIpcInvoke()
+    const englishContext: WorkflowContext = {
+      ...context,
+      writingLanguage: 'zh-CN',
+      uiLocale: 'en-US',
+    }
+    const command = new AnalyzeWritingStyleCommand({ sampleTexts: ['夜航 Café 的雨声很急。'] })
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+      .mockResolvedValue('Tight pacing with rain-soaked imagery.')
+
+    await command.execute({ step: {}, context: englishContext, callbacks })
+
+    const logs = vi.mocked(callbacks.log).mock.calls.map(([message]) => message)
+    expect(logs).toContain('Analyzing 1 imported text sample...')
+    expect(logs).toContain('Running AI writing-style analysis...')
+    expect(logs).toContain('Writing-style profile saved to the novel configuration')
+    expect(logs.join('\n')).not.toMatch(/正在|文风特征已保存/u)
   })
 
   it('uses imported chapters as style samples without reading finalized drafts', async () => {

@@ -255,7 +255,7 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
     })
 
     callbacks.log(text(
-      `✅ 审稿修复完成（${cleanRefined.length} 字），已生成修订稿版本 r${revIndex}`,
+      `审稿修复完成（${cleanRefined.length} 字），已生成修订稿版本 r${revIndex}`,
       `Review-based revision complete (${cleanRefined.length} characters); revision r${revIndex} is ready.`,
     ))
     return cleanRefined

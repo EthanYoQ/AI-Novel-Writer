@@ -166,6 +166,8 @@ const context: WorkflowContext = {
   runId: 'architecture-config-run',
   projectPath: projectAPath,
   projectSession: { projectId: 'main', leaseId: 'lease-main', projectPath: projectAPath },
+  writingLanguage: 'zh-CN',
+  uiLocale: 'zh-CN',
   data: {},
   cancelled: false,
 }

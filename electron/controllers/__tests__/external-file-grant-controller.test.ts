@@ -25,7 +25,7 @@ import { ExternalFileGrantService } from '../../services/external-file-grant-ser
 import type { AtomicWriteConstraints, WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-external-grant-controller-'))
-const JUNCTION_SECURITY_TEST_TIMEOUT_MS = 15_000
+const SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS = 15_000
 
 function handler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel)
@@ -76,6 +76,28 @@ describe('external file grant IPC contract', () => {
     })
     expect(result).not.toHaveProperty('directoryPath')
   })
+
+  it('通过生产 grant 写入把混合 UTF-8 内容逐字节落盘', async () => {
+    const exportDirectory = path.join(temporaryRoot, 'exports-utf8')
+    fs.mkdirSync(exportDirectory)
+    mocks.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: [exportDirectory],
+    })
+    const selection = await handler('dialog:select-export-directory')(event()) as { grantId: string }
+    const content = '# Night Flight\n\nThe sign reads “夜航 Café” — déjà vu.\n'
+
+    await expect(handler('fs:grant-write-file')(
+      event(),
+      selection.grantId,
+      'Night Flight.md',
+      content,
+    )).resolves.toEqual({ success: true })
+
+    const written = fs.readFileSync(path.join(exportDirectory, 'Night Flight.md'), 'utf8')
+    expect(written).toBe(content)
+    expect(Buffer.from(written, 'utf8')).toEqual(Buffer.from(content, 'utf8'))
+  }, SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS)
 
   it('导出写入拒绝 grant 外的 traversal 相对路径', async () => {
     const exportDirectory = path.join(temporaryRoot, 'exports-safe')
@@ -128,7 +150,7 @@ describe('external file grant IPC contract', () => {
     )).resolves.toMatchObject({ success: false, error: expect.stringContaining('路径无效') })
     expect(fs.existsSync(path.join(outsideDirectory, 'result.txt'))).toBe(false)
     expect(fs.existsSync(path.join(outsideDirectory, 'new-folder'))).toBe(false)
-  }, JUNCTION_SECURITY_TEST_TIMEOUT_MS)
+  }, SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS)
 
   it('仅 write 授权在 exists 后目标被删除时不能借原子替换重新创建文件', async () => {
     const exportDirectory = path.join(temporaryRoot, 'exports-write-only')

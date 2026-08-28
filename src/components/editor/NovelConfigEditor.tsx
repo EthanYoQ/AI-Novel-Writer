@@ -130,6 +130,8 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
           runId: 'config-field',
           projectPath: projectSession.projectPath,
           projectSession,
+          writingLanguage: resolveWritingLanguage(currentProject?.novelConfig.writingLanguage),
+          uiLocale: useLocaleStore.getState().locale,
           data: {},
           cancelled: false,
         },

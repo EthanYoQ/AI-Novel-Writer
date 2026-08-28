@@ -5,13 +5,17 @@ import { createRoot, type Root } from 'react-dom/client'
 
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
 import type { ProjectData } from '../../../shared/ipc-channels'
+import { useLayoutStore } from '../../../stores/layout-store'
+import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
-import { useWorkflowStore, type WorkflowContext } from '../../../stores/workflow-store'
-import ArchitectureConfirmDialog from '../ArchitectureConfirmDialog'
+import { useWorkflowStore } from '../../../stores/workflow-store'
+import WorldBuildingEditor from '../../editor/WorldBuildingEditor'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const originalLayoutState = useLayoutStore.getState()
+const originalLLMState = useLLMStore.getState()
 const originalLocaleState = useLocaleStore.getState()
 const originalProjectState = useProjectStore.getState()
 const originalWorkflowState = useWorkflowStore.getState()
@@ -53,6 +57,8 @@ afterEach(async () => {
   container = undefined
   Reflect.deleteProperty(window, 'velaAPI')
   setActiveProjectSessionContext(null)
+  useLayoutStore.setState(originalLayoutState)
+  useLLMStore.setState(originalLLMState)
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
   useWorkflowStore.setState(originalWorkflowState)
@@ -60,23 +66,34 @@ afterEach(async () => {
 
 describe('workflow launch language seams', () => {
   it.each([
-    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', title: 'AI 生成故事架构', button: /确认生成/ },
-    { uiLocale: 'zh-CN', writingLanguage: 'en-US', title: 'AI 生成故事架构', button: /确认生成/ },
-    { uiLocale: 'en-US', writingLanguage: 'zh-CN', title: 'Generate story architecture with AI', button: /Generate \(/ },
-    { uiLocale: 'en-US', writingLanguage: 'en-US', title: 'Generate story architecture with AI', button: /Generate \(/ },
+    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', title: 'AI 生成故事架构', button: /确认生成/, expectedPrompt: '你是一位网络小说策划专家与故事架构师', unexpectedPrompt: 'Build a compact story premise' },
+    { uiLocale: 'zh-CN', writingLanguage: 'en-US', title: 'AI 生成故事架构', button: /确认生成/, expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位网络小说策划专家与故事架构师' },
+    { uiLocale: 'en-US', writingLanguage: 'zh-CN', title: 'Generate story architecture with AI', button: /Generate \(/, expectedPrompt: '你是一位网络小说策划专家与故事架构师', unexpectedPrompt: 'Build a compact story premise' },
+    { uiLocale: 'en-US', writingLanguage: 'en-US', title: 'Generate story architecture with AI', button: /Generate \(/, expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位网络小说策划专家与故事架构师' },
   ] as const)(
-    'launches a real workflow with UI $uiLocale and writing $writingLanguage kept independent',
-    async ({ uiLocale, writingLanguage, title, button }) => {
+    'launches the production architecture workflow with UI $uiLocale and writing $writingLanguage independent',
+    async ({ uiLocale, writingLanguage, title, button, expectedPrompt, unexpectedPrompt }) => {
       const currentProject = project(writingLanguage)
       const projectSession = {
         projectId: currentProject.id,
         leaseId: currentProject.sessionLease!,
         projectPath: currentProject.path,
       }
-      const observed: Array<Pick<WorkflowContext, 'writingLanguage' | 'uiLocale'>> = []
-      const onClose = vi.fn()
+      const modelId = 'browser-language-model'
+      const generatedPremise = 'A production workflow preserves “夜航 Café” exactly.'
+      let persistedPremise = ''
+      let observedRequest = ''
+      const generateStream = vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(
+        async (messages, callbacks) => {
+          observedRequest = messages.map(message => message.content).join('\n')
+          callbacks.onDone?.(generatedPremise, undefined, 'stop')
+          return 'browser-provider-request'
+        },
+      )
+
       useLocaleStore.setState({ locale: uiLocale, initialized: true })
       useProjectStore.setState({ currentProject })
+      useLLMStore.setState({ defaultModelId: modelId, generateStream })
       useWorkflowStore.setState({
         activeRuns: [],
         history: [],
@@ -90,7 +107,70 @@ describe('workflow launch language seams', () => {
       Object.defineProperty(window, 'velaAPI', {
         configurable: true,
         value: {
-          invoke: vi.fn(async () => ({ success: true })),
+          invoke: vi.fn(async (channel: string, ...args: unknown[]) => {
+            switch (channel) {
+              case 'db:project-core-get':
+                return {
+                  premise: persistedPremise,
+                  worldbuilding: 'Existing English worldbuilding. '.repeat(3),
+                  synopsis: 'Existing English plot outline. '.repeat(3),
+                }
+              case 'db:character-roster-read':
+                return {
+                  schemaVersion: 1,
+                  revision: 1,
+                  migrationState: 'ready',
+                  status: 'ready',
+                  entries: [],
+                  renderedMarkdown: '# Characters\n\nExisting roster',
+                  projectionHash: 'projection',
+                  factHash: 'facts',
+                }
+              case 'prompt:load-global':
+                return { templates: [], diagnostics: [] }
+              case 'fs:check-exists':
+                return false
+              case 'db:project-core-update':
+                persistedPremise = String((args[0] as { premise?: string }).premise ?? '')
+                return { success: true }
+              case 'fs:read-json':
+                return { success: false, error: 'not found' }
+              case 'fs:write-json':
+                return { success: true }
+              case 'llm:begin-execution-lease':
+                return {
+                  success: true,
+                  lease: {
+                    leaseId: 'browser-language-lease',
+                    modelId,
+                    provider: 'custom',
+                    protocol: 'openai',
+                    modelName: modelId,
+                    modelRevision: 'a'.repeat(64),
+                    endpointFingerprint: 'b'.repeat(64),
+                    capabilityEvidence: {
+                      source: {
+                        contextWindowTokens: 'unknown',
+                        maxOutputTokens: 'user-operational-cap',
+                        featureFlags: 'unknown',
+                      },
+                      subjectFingerprint: 'c'.repeat(64),
+                      contextWindowTokens: null,
+                      maxOutputTokens: 8192,
+                      reasoning: null,
+                      structuredOutput: true,
+                      usage: null,
+                    },
+                    createdAt: 1000,
+                    expiresAt: 61_000,
+                  },
+                }
+              case 'llm:close-execution-lease':
+                return { success: true }
+              default:
+                throw new Error(`Unexpected IPC channel: ${channel}`)
+            }
+          }),
           on: vi.fn(() => () => {}),
           once: vi.fn(),
           send: vi.fn(),
@@ -102,44 +182,34 @@ describe('workflow launch language seams', () => {
       container = document.createElement('div')
       document.body.append(container)
       root = createRoot(container)
-      await act(async () => root?.render(
-        <ArchitectureConfirmDialog
-          isOpen
-          onClose={onClose}
-          archStatus={{ premise: false, characters: false, worldbuilding: false, synopsis: false }}
-          initialSelectedSteps={['premise']}
-          onConfirm={async () => {
-            await useWorkflowStore.getState().startWorkflow({
-              type: 'architecture_generation',
-              title: 'Browser language seam',
-              projectPath: currentProject.path,
-              projectSession,
-              steps: [{
-                name: 'capture frozen context',
-                description: 'capture frozen workflow languages',
-                executor: async (_step, context) => {
-                  observed.push({
-                    writingLanguage: context.writingLanguage,
-                    uiLocale: context.uiLocale,
-                  })
-                },
-              }],
-            })
-          }}
-        />,
-      ))
+      await act(async () => root?.render(<WorldBuildingEditor projectKey={currentProject.path} />))
 
+      await expect.element(page.getByText('3/4 已生成', { exact: true })).toBeVisible()
+      await act(async () => page.getByRole('button', { name: 'AI 生成架构' }).click())
       await expect.element(page.getByText(title, { exact: true })).toBeVisible()
+      const dialog = document.querySelector('[role="dialog"]')
+      if (!(dialog instanceof HTMLElement)) throw new Error('Architecture dialog did not mount')
+      const stepLabels = Array.from(dialog.querySelectorAll('label'))
+      expect(stepLabels).toHaveLength(4)
+      await act(async () => {
+        for (const label of stepLabels.slice(1)) label.click()
+      })
       await act(async () => page.getByRole('button', { name: button }).click())
-      await vi.waitFor(() => expect(useWorkflowStore.getState().history).toHaveLength(1))
+      await act(async () => {
+        await vi.waitFor(() => expect(useWorkflowStore.getState().history).toHaveLength(1))
+      })
 
-      expect(observed).toEqual([{ writingLanguage, uiLocale }])
       expect(useWorkflowStore.getState().history[0]).toMatchObject({
+        type: 'architecture_generation',
         writingLanguage,
         uiLocale,
         status: 'completed',
       })
-      expect(onClose).toHaveBeenCalledOnce()
+      expect(generateStream).toHaveBeenCalledOnce()
+      expect(observedRequest).toContain(expectedPrompt)
+      expect(observedRequest).not.toContain(unexpectedPrompt)
+      expect(observedRequest).toContain('“夜航 Café”')
+      expect(persistedPremise).toContain(generatedPremise)
     },
   )
 })

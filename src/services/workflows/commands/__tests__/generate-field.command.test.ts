@@ -22,6 +22,8 @@ const context: WorkflowContext = {
   runId: 'field-run',
   projectPath: projectAPath,
   projectSession: { projectId: projectAPath, leaseId: 'lease-A', projectPath: projectAPath },
+  writingLanguage: 'zh-CN',
+  uiLocale: 'zh-CN',
   data: {},
   cancelled: false,
 }

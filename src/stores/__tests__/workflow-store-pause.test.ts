@@ -140,6 +140,103 @@ describe('workflow pause at a safe step boundary', () => {
     },
   )
 
+  it('keeps store-owned success and pause logs in the UI locale frozen at launch', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    let finishFirstStep: (() => void) | undefined
+
+    const completion = useWorkflowStore.getState().startWorkflow({
+      type: 'batch_generate',
+      title: 'Frozen UI copy',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [
+        {
+          name: 'Chapter one',
+          description: 'first step',
+          executor: async () => new Promise<void>(resolve => { finishFirstStep = resolve }),
+        },
+        {
+          name: 'Chapter two',
+          description: 'second step',
+          executor: async () => undefined,
+        },
+      ],
+    })
+    const runId = useWorkflowStore.getState().activeRuns[0].id
+    await vi.waitFor(() => expect(finishFirstStep).toBeTypeOf('function'))
+
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    useWorkflowStore.getState().pauseWorkflow(runId)
+    finishFirstStep!()
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('paused'))
+    useWorkflowStore.getState().resumeWorkflow(runId)
+    await completion
+
+    const messages = useWorkflowStore.getState().globalLogs.map(entry => entry.message).join('\n')
+    expect(messages).toContain('[Started] Workflow "Frozen UI copy" started')
+    expect(messages).toContain('[Running] [Frozen UI copy] Step: Chapter one')
+    expect(messages).toContain('[Pause requested] "Frozen UI copy" will pause after the current chapter')
+    expect(messages).toContain('[Paused] Workflow "Frozen UI copy" paused after the current step')
+    expect(messages).toContain('[Resumed] Workflow "Frozen UI copy" resumed')
+    expect(messages).toContain('[Completed] Workflow "Frozen UI copy" completed')
+    expect(messages).not.toMatch(/\[(?:开始|执行|暂停|继续|完成)\]/u)
+  })
+
+  it('keeps cancellation status and logs in the launch UI locale after the global locale changes', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    let finishStep: (() => void) | undefined
+    const completion = useWorkflowStore.getState().startWorkflow({
+      type: 'chapter_creation',
+      title: 'Frozen cancellation copy',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{
+        name: 'Draft',
+        description: 'draft step',
+        executor: async () => new Promise<void>(resolve => { finishStep = resolve }),
+      }],
+    })
+    const runId = useWorkflowStore.getState().activeRuns[0].id
+    await vi.waitFor(() => expect(finishStep).toBeTypeOf('function'))
+
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    useWorkflowStore.getState().cancelWorkflow(runId)
+    expect(useWorkflowStore.getState().activeRuns[0]?.error)
+      .toBe('Cancellation requested; waiting for the current operation to exit safely.')
+    finishStep!()
+    await completion
+
+    expect(useWorkflowStore.getState().history[0]?.error).toBe('Workflow was cancelled.')
+    const messages = useWorkflowStore.getState().globalLogs.map(entry => entry.message).join('\n')
+    expect(messages).toContain('[Cancel requested] Waiting for the current operation to exit safely')
+    expect(messages).toContain('[Failed] [Frozen cancellation copy] Step: Draft — Workflow was cancelled.')
+    expect(messages).not.toMatch(/\[(?:取消|失败)\]/u)
+  })
+
+  it('keeps the store failure wrapper in the launch UI locale while preserving the original error', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+
+    await useWorkflowStore.getState().startWorkflow({
+      type: 'chapter_creation',
+      title: 'Frozen failure copy',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{
+        name: 'Draft',
+        description: 'draft step',
+        executor: async () => {
+          useLocaleStore.setState({ locale: 'zh-CN' })
+          throw new Error('provider exploded')
+        },
+      }],
+    })
+
+    expect(useWorkflowStore.getState().history[0]?.error).toBe('provider exploded')
+    const messages = useWorkflowStore.getState().globalLogs.map(entry => entry.message).join('\n')
+    expect(messages).toContain('[Failed] [Frozen failure copy] Step: Draft — provider exploded')
+    expect(messages).not.toContain('[失败]')
+  })
+
   it('copies a bounded terminal failure code to the failed step and run without changing its message', async () => {
     const failure = createBoundedCompletionError('content_filter')
 
