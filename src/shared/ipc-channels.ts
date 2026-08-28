@@ -37,6 +37,7 @@ import type {
   ImportRunExecutionAuthority,
   ImportRunExecutionLease,
   ImportInspectionSummary,
+  ImportNovelFileSelectionRequest,
   ImportRunPreparationResult,
   ImportRunPrepareFromInspectionRequest,
   ImportRunPrepareEffectReceiptRequest,
@@ -821,10 +822,11 @@ export interface KnowledgeBaseChannels {
 // ===== 导入小说 =====
 export interface ImportChannels {
   'dialog:select-novel-files': {
-    args: []
+    args: [request?: ImportNovelFileSelectionRequest, projectSession?: ProjectSessionContext]
     return: {
       success: boolean
       inspection?: ImportInspectionSummary
+      preparation?: ImportRunPreparationResult
       error?: string
     } | null
   }

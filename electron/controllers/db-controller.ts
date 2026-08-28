@@ -178,23 +178,46 @@ export function registerDatabaseController() {
       request.purpose,
       loadApplicationImportSourceSecret(),
     )
-    return {
-      success: true,
-      preparation: ImportRunRepository.prepare({
-        runId: request.runId,
-        purpose: request.purpose,
-        sourceFingerprint: sourceIdentity.sourceFingerprint,
-        sourceIds: sourceIdentity.sourceIds,
-        sourceFingerprints: sourceIdentity.sourceFingerprints,
-        sourceDisplay: inspection.sources.map(source => ({
-          displayName: source.displayName,
-          mediaType: source.mediaType,
-          size: source.size,
-        })),
-        locale: request.locale,
-        chapters: inspection.chapters,
-      }),
+    const sourceDisplay = inspection.sources.map(source => ({
+      displayName: source.displayName,
+      mediaType: source.mediaType,
+      size: source.size,
+    }))
+    const parsingRun = ImportRunRepository.beginParsing({
+      runId: request.runId,
+      purpose: request.purpose,
+      sourceFingerprint: sourceIdentity.sourceFingerprint,
+      sourceIds: sourceIdentity.sourceIds,
+      sourceFingerprints: sourceIdentity.sourceFingerprints,
+      legacySourceFingerprints: sourceIdentity.legacySourceFingerprints,
+      legacyCollectionFingerprint: sourceIdentity.legacyCollectionFingerprint,
+      sourceDisplay,
+      locale: request.locale,
+    })
+    for (let sourceIndex = 0; sourceIndex < sourceIdentity.sourceIds.length; sourceIndex++) {
+      const sourceId = sourceIdentity.sourceIds[sourceIndex]!
+      const chapters = inspection.chapters
+        .filter(chapter => chapter.sourceIndex === sourceIndex)
+        .map(chapter => ({
+          number: chapter.sourceChapterNumber,
+          sourceChapterNumber: chapter.sourceChapterNumber,
+          title: chapter.title,
+          content: chapter.content,
+          contentFingerprint: chapter.contentFingerprint,
+          contentSize: chapter.contentSize,
+        }))
+      try {
+        ImportRunRepository.commitParsedSource(parsingRun.id, sourceId, chapters)
+      } catch (error) {
+        ImportRunRepository.failParsedSource(
+          parsingRun.id,
+          sourceId,
+          error instanceof Error ? error.message : String(error),
+        )
+        throw error
+      }
     }
+    return { success: true, preparation: ImportRunRepository.finalizeParsing(parsingRun.id) }
   })
 
   ipcMain.handle('db:import-run-get', async (_event, runId: string, expectedProjectPath: string) => {

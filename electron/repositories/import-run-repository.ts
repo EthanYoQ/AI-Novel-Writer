@@ -10,6 +10,7 @@ import {
 import type {
   ImportRunChapterInput,
   ImportRunChapterSnapshot,
+  ImportRunBeginParsingRequest,
   ImportRunEffectCommitResult,
   ImportRunEffectKind,
   ImportRunEffectReceipt,
@@ -43,6 +44,7 @@ interface ImportRunRow {
   effect_namespace: string
   source_fingerprint: string
   manifest_fingerprint: string
+  legacy_source_fingerprint: string
   source_display_json: string
   locale: 'zh-CN' | 'en-US'
   stage: ImportRunStage
@@ -102,6 +104,21 @@ interface ImportRunEffectReceiptRow {
   updated_at: string
 }
 
+interface ImportRunSourceRow {
+  run_id: string
+  source_index: number
+  source_id: string
+  source_fingerprint: string
+  legacy_source_fingerprint: string
+  display_json: string
+  status: 'pending' | 'completed' | 'failed'
+  manifest_fingerprint: string
+  chapter_count: number
+  content_size: number
+  word_count: number
+  last_error: string
+}
+
 const SHA256 = /^[a-f0-9]{64}$/u
 const OPAQUE_SOURCE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 const MAX_CHAPTER_BYTES = 16 * 1024 * 1024
@@ -112,9 +129,10 @@ const DEFAULT_EXECUTION_LEASE_MS = 15 * 60_000
 const MAX_EFFECT_RECEIPT_PAYLOAD_BYTES = 16 * 1024 * 1024
 const KNOWLEDGE_BATCH_CHECKPOINT = /^([1-9]\d*)-([1-9]\d*)$/u
 const IMPORT_RUN_STAGE_VALUES = new Set<ImportRunStage>([
-  'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed',
+  'parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed',
 ])
 const NEXT_IMPORT_RUN_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>>> = {
+  prepared: 'knowledge',
   knowledge: 'global',
   global: 'style',
   style: 'blueprints',
@@ -337,7 +355,82 @@ function validateEffectStage(kind: ImportRunEffectKind, stage: ImportRunStage): 
   if (expected[kind] !== stage) throw new Error('导入 effect receipt 类型与阶段不匹配')
 }
 
+function sourceProgress(runId: string): { completedSources: number; totalSources: number; completedChapters: number } {
+  const progress = db().prepare(`
+    SELECT COUNT(*) AS total_sources,
+           COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_sources,
+           COALESCE(SUM(CASE WHEN status = 'completed' THEN chapter_count ELSE 0 END), 0) AS completed_chapters
+    FROM import_run_sources WHERE run_id = ?
+  `).get(runId) as { total_sources: number; completed_sources: number; completed_chapters: number }
+  return {
+    totalSources: progress.total_sources,
+    completedSources: progress.completed_sources,
+    completedChapters: progress.completed_chapters,
+  }
+}
+
+function completedCheckpointChapters(row: ImportRunRow, stage: 'knowledge' | 'blueprints'): number {
+  const covered = new Set<number>()
+  for (const batchId of completedBatches(row)[stage] ?? []) {
+    for (const chapterNumber of checkpointChapterNumbers(row, stage, batchId)) covered.add(chapterNumber)
+  }
+  return covered.size
+}
+
+function persistedProgress(row: ImportRunRow): {
+  completedSources: number
+  totalSources: number
+  completedChapters: number
+  progressCompleted: number
+  progressTotal: number
+} {
+  const sources = sourceProgress(row.id)
+  if (row.stage === 'parsing') {
+    return {
+      ...sources,
+      progressCompleted: sources.completedSources,
+      progressTotal: sources.totalSources,
+    }
+  }
+  const completedChapters = row.stage === 'prepared'
+    ? 0
+    : row.stage === 'knowledge'
+      ? completedCheckpointChapters(row, 'knowledge')
+      : row.total_chapters
+  if (row.stage === 'knowledge' || row.stage === 'prepared') {
+    return {
+      ...sources,
+      completedChapters,
+      progressCompleted: completedChapters,
+      progressTotal: row.total_chapters,
+    }
+  }
+  if (row.stage === 'blueprints') {
+    return {
+      ...sources,
+      completedChapters,
+      progressCompleted: completedCheckpointChapters(row, 'blueprints'),
+      progressTotal: row.total_chapters,
+    }
+  }
+  if (row.stage === 'global' || row.stage === 'style' || row.stage === 'refresh') {
+    return {
+      ...sources,
+      completedChapters,
+      progressCompleted: completedBatches(row)[row.stage]?.includes('done') ? 1 : 0,
+      progressTotal: 1,
+    }
+  }
+  return {
+    ...sources,
+    completedChapters,
+    progressCompleted: row.total_chapters,
+    progressTotal: row.total_chapters,
+  }
+}
+
 function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
+  const progress = persistedProgress(row)
   return {
     id: row.id,
     purpose: row.purpose,
@@ -358,7 +451,11 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
     manifestChapterCount: row.manifest_chapter_count,
     manifestContentSize: row.manifest_content_size,
     manifestWordCount: row.manifest_word_count,
-    completedChapters: row.completed_chapters,
+    completedChapters: progress.completedChapters,
+    completedSources: progress.completedSources,
+    totalSources: progress.totalSources,
+    progressCompleted: progress.progressCompleted,
+    progressTotal: progress.progressTotal,
     baseRunId: row.base_run_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -576,7 +673,7 @@ function assertCheckpointCanApply(
   source: ImportRunCheckpointSource,
 ): void {
   if (row.status !== 'running' || row.stage !== stage) throw new Error('导入批次与当前阶段不匹配')
-  if (stage === 'completed') throw new Error('导入批次 ID 无效')
+  if (stage === 'parsing' || stage === 'prepared' || stage === 'completed') throw new Error('导入批次 ID 无效')
   const receiptStage = stage === 'global' || stage === 'style' || stage === 'blueprints'
   if ((receiptStage && source !== 'receipt') || (!receiptStage && source !== 'direct')) {
     throw new Error(receiptStage ? '该导入阶段必须通过 receipt 提交' : '该导入阶段不接受 receipt 提交')
@@ -818,6 +915,13 @@ function latestCompletedRun(purpose: ImportPurpose, sourceFingerprint: string): 
 }
 
 export class ImportRunRepository {
+  static parsedSourceStatus(runId: string, sourceId: string): 'pending' | 'completed' | 'failed' | undefined {
+    const row = db().prepare(`
+      SELECT status FROM import_run_sources WHERE run_id = ? AND source_id = ?
+    `).get(runId, sourceId) as { status: 'pending' | 'completed' | 'failed' } | undefined
+    return row?.status
+  }
+
   static assertExecutionAuthority(
     runId: string,
     authority: ImportRunExecutionAuthority,
@@ -855,6 +959,313 @@ export class ImportRunRepository {
       || chapter.content_fingerprint !== binding[2]
       || chapter.content_snapshot !== content
     ) throw new Error('参照知识写入未绑定当前导入的冻结章节')
+  }
+
+  static beginParsing(candidate: ImportRunBeginParsingRequest): ImportRunSnapshot {
+    const runId = candidate.runId?.trim()
+    if (!runId || runId.length > 160 || !SHA256.test(candidate.sourceFingerprint)) {
+      throw new Error('导入运行身份无效')
+    }
+    if (candidate.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
+    if (candidate.locale !== 'zh-CN' && candidate.locale !== 'en-US') throw new Error('导入运行语言无效')
+    const sourceDisplay = normalizeDisplay(candidate.sourceDisplay)
+    const sourceIds = normalizeSourceIds(candidate.sourceIds, sourceDisplay, candidate.sourceFingerprint)
+    const sourceFingerprints = normalizeSourceFingerprints(candidate.sourceFingerprints, sourceIds)
+    if (sourceFingerprints.length !== sourceIds.length) throw new Error('导入来源单文件指纹无效')
+    const legacySourceFingerprints = candidate.legacySourceFingerprints ?? sourceIds.map(() => '')
+    if (legacySourceFingerprints.length !== sourceIds.length || legacySourceFingerprints.some(value => value !== '' && !SHA256.test(value))) {
+      throw new Error('旧导入来源单文件指纹无效')
+    }
+    if (candidate.legacyCollectionFingerprint && !SHA256.test(candidate.legacyCollectionFingerprint)) {
+      throw new Error('旧导入来源集合指纹无效')
+    }
+
+    return db().transaction(() => {
+      const existing = db().prepare(`
+        SELECT * FROM import_runs
+        WHERE purpose = ? AND source_fingerprint = ? AND stage = 'parsing' AND resumable = 1
+        ORDER BY updated_at DESC, rowid DESC LIMIT 1
+      `).get(candidate.purpose, candidate.sourceFingerprint) as ImportRunRow | undefined
+      if (existing) {
+        const sources = db().prepare(`
+          SELECT source_id, source_fingerprint, legacy_source_fingerprint, display_json
+          FROM import_run_sources WHERE run_id = ? ORDER BY source_index
+        `).all(existing.id) as Array<{ source_id: string; source_fingerprint: string; legacy_source_fingerprint: string; display_json: string }>
+        if (
+          sources.length !== sourceIds.length
+          || sources.some((source, index) => (
+            source.source_id !== sourceIds[index]
+            || source.source_fingerprint !== sourceFingerprints[index]
+            || source.legacy_source_fingerprint !== legacySourceFingerprints[index]
+            || source.display_json !== JSON.stringify(sourceDisplay[index])
+          ))
+        ) throw new Error('未完成导入的来源清单与本次重新授权不一致')
+        return rowToSnapshot(existing)
+      }
+      if (readRunRow(runId)) throw new Error('导入运行 ID 已存在')
+      db().prepare(`
+        INSERT INTO import_runs (
+          id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint, legacy_source_fingerprint,
+          source_display_json, locale, stage, status, total_chapters, total_content_size,
+          manifest_chapter_count, manifest_content_size, manifest_word_count, completed_chapters
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'parsing', 'ready', 0, 0, 0, 0, 0, 0)
+      `).run(
+        runId,
+        candidate.purpose,
+        runId,
+        `import:${candidate.purpose}:${runId}`,
+        candidate.sourceFingerprint,
+        '0'.repeat(64),
+        candidate.legacyCollectionFingerprint ?? '',
+        JSON.stringify(sourceDisplay),
+        candidate.locale,
+      )
+      const insertSource = db().prepare(`
+        INSERT INTO import_run_sources (
+          run_id, source_index, source_id, source_fingerprint, legacy_source_fingerprint, display_json
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      sourceIds.forEach((sourceId, index) => insertSource.run(
+        runId,
+        index,
+        sourceId,
+        sourceFingerprints[index],
+        legacySourceFingerprints[index],
+        JSON.stringify(sourceDisplay[index]),
+      ))
+      return this.get(runId)!
+    })()
+  }
+
+  static commitParsedSource(
+    runId: string,
+    sourceId: string,
+    chapters: ImportRunChapterInput[],
+  ): ImportRunSnapshot {
+    if (!OPAQUE_SOURCE_ID.test(sourceId)) throw new Error('导入解析来源身份无效')
+    if (chapters.some(chapter => (
+      createHash('sha256').update(chapter.content, 'utf8').digest('hex') !== chapter.contentFingerprint
+    ))) throw new Error('导入解析来源内容指纹与冻结快照不一致')
+    const normalized = chapters.length === 0 ? [] : normalizeChapters(chapters, [sourceId])
+    const manifestFingerprint = hashManifest('reference', normalized.map((chapter, index) => ({
+      ...chapter,
+      number: index + 1,
+    })))
+    return db().transaction(() => {
+      const run = readRunRow(runId)
+      if (!run || run.purpose !== 'reference' || run.stage !== 'parsing' || !['ready', 'failed'].includes(run.status)) {
+        throw new Error('导入解析运行当前不可写入来源')
+      }
+      const source = db().prepare(`
+        SELECT * FROM import_run_sources WHERE run_id = ? AND source_id = ?
+      `).get(runId, sourceId) as ImportRunSourceRow | undefined
+      if (!source) throw new Error('导入解析来源不存在')
+      if (source.status === 'completed') {
+        if (source.manifest_fingerprint !== manifestFingerprint) throw new Error('已完成来源与本次重新授权内容不一致')
+        return this.get(runId)!
+      }
+      db().prepare('DELETE FROM import_run_source_chapters WHERE run_id = ? AND source_id = ?')
+        .run(runId, sourceId)
+      const insert = db().prepare(`
+        INSERT INTO import_run_source_chapters (
+          run_id, source_id, source_chapter_number, title, content_fingerprint,
+          content_size, word_count, content_snapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      for (const chapter of normalized) {
+        insert.run(
+          runId,
+          sourceId,
+          chapter.sourceChapterNumber,
+          chapter.title,
+          chapter.contentFingerprint,
+          chapter.contentSize,
+          chapter.content.length,
+          chapter.content,
+        )
+      }
+      db().prepare(`
+        UPDATE import_run_sources
+        SET status = 'completed', manifest_fingerprint = ?, chapter_count = ?,
+            content_size = ?, word_count = ?, last_error = '', updated_at = datetime('now')
+        WHERE run_id = ? AND source_id = ?
+      `).run(
+        manifestFingerprint,
+        normalized.length,
+        normalized.reduce((sum, chapter) => sum + chapter.contentSize, 0),
+        normalized.reduce((sum, chapter) => sum + chapter.content.length, 0),
+        runId,
+        sourceId,
+      )
+      db().prepare(`
+        UPDATE import_runs
+        SET status = 'ready', last_error = '',
+            total_chapters = (SELECT COALESCE(SUM(chapter_count), 0) FROM import_run_sources WHERE run_id = ? AND status = 'completed'),
+            total_content_size = (SELECT COALESCE(SUM(content_size), 0) FROM import_run_sources WHERE run_id = ? AND status = 'completed'),
+            updated_at = datetime('now')
+        WHERE id = ?
+      `).run(runId, runId, runId)
+      return this.get(runId)!
+    })()
+  }
+
+  static failParsedSource(runId: string, sourceId: string, error: string): ImportRunSnapshot {
+    if (typeof error !== 'string' || !error.trim()) throw new Error('导入解析失败原因无效')
+    return db().transaction(() => {
+      const run = readRunRow(runId)
+      if (!run || run.stage !== 'parsing' || !['ready', 'failed'].includes(run.status)) {
+        throw new Error('导入解析运行当前不可标记失败')
+      }
+      const changed = db().prepare(`
+        UPDATE import_run_sources
+        SET status = 'failed', last_error = ?, updated_at = datetime('now')
+        WHERE run_id = ? AND source_id = ? AND status <> 'completed'
+      `).run(error.slice(0, 2_000), runId, sourceId)
+      if (changed.changes !== 1) throw new Error('导入解析来源当前不可标记失败')
+      db().prepare(`
+        UPDATE import_runs SET status = 'failed', last_error = ?, resumable = 1,
+          updated_at = datetime('now') WHERE id = ?
+      `).run(error.slice(0, 2_000), runId)
+      return this.get(runId)!
+    })()
+  }
+
+  static finalizeParsing(runId: string): ImportRunPreparationResult {
+    return db().transaction(() => {
+      const run = readRunRow(runId)
+      if (!run || run.stage !== 'parsing' || !['ready', 'failed'].includes(run.status)) {
+        throw new Error('导入解析运行当前不可完成')
+      }
+      const sources = db().prepare(`
+        SELECT * FROM import_run_sources WHERE run_id = ? ORDER BY source_index
+      `).all(runId) as ImportRunSourceRow[]
+      if (sources.length === 0 || sources.some(source => source.status !== 'completed')) {
+        throw new Error('导入来源解析尚未完成，请重新授权未完成来源')
+      }
+      const metadata = db().prepare(`
+        SELECT sources.source_index, chapters.source_id, chapters.source_chapter_number,
+               chapters.title, chapters.content_fingerprint, chapters.content_size
+        FROM import_run_source_chapters AS chapters
+        JOIN import_run_sources AS sources
+          ON sources.run_id = chapters.run_id AND sources.source_id = chapters.source_id
+        WHERE chapters.run_id = ?
+        ORDER BY sources.source_index, chapters.source_chapter_number
+      `).all(runId) as Array<{
+        source_index: number
+        source_id: string
+        source_chapter_number: number
+        title: string
+        content_fingerprint: string
+        content_size: number
+      }>
+      if (
+        metadata.length === 0
+        || metadata.length > MAX_IMPORT_CHAPTERS
+        || metadata.length !== sources.reduce((sum, source) => sum + source.chapter_count, 0)
+        || sources.reduce((sum, source) => sum + source.content_size, 0) > MAX_IMPORT_TOTAL_BYTES
+      ) throw new Error('导入解析 manifest 无效')
+      const normalized = metadata.map((chapter, index): NormalizedImportRunChapter => ({
+        number: index + 1,
+        sourceIndex: chapter.source_index,
+        sourceId: chapter.source_id,
+        sourceChapterNumber: chapter.source_chapter_number,
+        title: chapter.title,
+        contentFingerprint: chapter.content_fingerprint,
+        contentSize: chapter.content_size,
+        content: '',
+      }))
+      sources.forEach((source, sourceIndex) => {
+        if (source.legacy_source_fingerprint) {
+          adoptLegacyCompletedRun(
+            run.purpose,
+            source.legacy_source_fingerprint,
+            normalized.filter(chapter => chapter.sourceIndex === sourceIndex),
+          )
+        }
+      })
+      if (run.legacy_source_fingerprint) {
+        adoptLegacyCompletedRun(run.purpose, run.legacy_source_fingerprint, normalized)
+      }
+      const assignment = assignStableChapterNumbers(run.purpose, normalized)
+      const chapters = assignment.chapters
+      const manifestFingerprint = hashManifest(run.purpose, chapters)
+      const sourceIds = sources.map(source => source.source_id)
+      const completed = latestCompletedRun(run.purpose, run.source_fingerprint)
+      const completedManifest = completedChapterManifest(run.purpose, sourceIds)
+      const conflictChapterNumbers = chapters.filter(chapter => {
+        const previous = completedManifest.get(sourceChapterKey(chapter.sourceId, chapter.sourceChapterNumber))
+        return previous !== undefined && (
+          previous.title !== chapter.title
+          || previous.contentFingerprint !== chapter.contentFingerprint
+          || previous.contentSize !== chapter.contentSize
+        )
+      }).map(chapter => chapter.number)
+      const duplicateChapterNumbers = chapters.filter(chapter => {
+        const previous = completedManifest.get(sourceChapterKey(chapter.sourceId, chapter.sourceChapterNumber))
+        return previous !== undefined
+          && previous.title === chapter.title
+          && previous.contentFingerprint === chapter.contentFingerprint
+          && previous.contentSize === chapter.contentSize
+      }).map(chapter => chapter.number)
+      const newChapters = chapters.filter(chapter => (
+        !completedManifest.has(sourceChapterKey(chapter.sourceId, chapter.sourceChapterNumber))
+      ))
+      if (conflictChapterNumbers.length > 0) {
+        return {
+          classification: 'conflict' as const, run: undefined,
+          newChapterNumbers: newChapters.map(chapter => chapter.number),
+          conflictChapterNumbers, duplicateChapterNumbers,
+        }
+      }
+      if (newChapters.length === 0) {
+        db().prepare('DELETE FROM import_runs WHERE id = ?').run(runId)
+        return {
+          classification: 'exact-duplicate' as const, run: undefined,
+          newChapterNumbers: [], conflictChapterNumbers: [], duplicateChapterNumbers,
+        }
+      }
+      const insertMapping = db().prepare(`
+        INSERT INTO import_source_chapter_map (purpose, source_id, source_chapter_number, chapter_number)
+        VALUES (?, ?, ?, ?)
+      `)
+      assignment.newMappings.forEach(mapping => insertMapping.run(
+        run.purpose, mapping.sourceId, mapping.sourceChapterNumber, mapping.chapterNumber,
+      ))
+      const insertChapter = db().prepare(`
+        INSERT INTO import_run_chapters (
+          run_id, chapter_number, source_id, source_chapter_number,
+          title, content_fingerprint, content_size, content_snapshot
+        )
+        SELECT ?, ?, source_id, source_chapter_number, title, content_fingerprint, content_size, content_snapshot
+        FROM import_run_source_chapters
+        WHERE run_id = ? AND source_id = ? AND source_chapter_number = ?
+      `)
+      for (const chapter of newChapters) {
+        insertChapter.run(runId, chapter.number, runId, chapter.sourceId, chapter.sourceChapterNumber)
+      }
+      db().prepare(`
+        UPDATE import_runs
+        SET stage = 'prepared', status = 'ready', manifest_fingerprint = ?,
+            total_chapters = ?, total_content_size = ?, manifest_chapter_count = ?,
+            manifest_content_size = ?, manifest_word_count = ?, completed_chapters = 0,
+            base_run_id = ?, last_error = '', updated_at = datetime('now')
+        WHERE id = ? AND stage = 'parsing'
+      `).run(
+        manifestFingerprint,
+        newChapters.length,
+        newChapters.reduce((sum, chapter) => sum + chapter.contentSize, 0),
+        chapters.length,
+        sources.reduce((sum, source) => sum + source.content_size, 0),
+        sources.reduce((sum, source) => sum + source.word_count, 0),
+        completed?.id ?? null,
+        runId,
+      )
+      return {
+        classification: 'new' as const, run: this.get(runId)!,
+        newChapterNumbers: newChapters.map(chapter => chapter.number),
+        conflictChapterNumbers: [], duplicateChapterNumbers,
+      }
+    })()
   }
 
   static prepare(candidate: ImportRunPrepareRequest): ImportRunPreparationResult {
@@ -1175,6 +1586,9 @@ export class ImportRunRepository {
           ? row.last_error
           : '导入运行当前不可启动')
       }
+      if (row.stage === 'parsing') {
+        throw new Error('导入解析尚未完成，请重新选择并授权未完成来源')
+      }
       if (row.execution_owner && row.execution_owner !== normalizedOwner && row.lease_expires_at > now) {
         throw new Error('导入运行正在由另一执行器运行')
       }
@@ -1183,7 +1597,8 @@ export class ImportRunRepository {
       const expiresAt = now + leaseMs
       db().prepare(`
         UPDATE import_runs
-        SET status = 'running', resumable = 1, cancel_requested = 0,
+        SET stage = CASE WHEN stage = 'prepared' THEN 'knowledge' ELSE stage END,
+            status = 'running', resumable = 1, cancel_requested = 0,
             last_error = '', execution_owner = ?, execution_epoch = ?, lease_expires_at = ?,
             updated_at = datetime('now')
         WHERE id = ?
@@ -1228,7 +1643,7 @@ export class ImportRunRepository {
           id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint, source_display_json, locale,
           stage, status, total_chapters, total_content_size, completed_chapters, base_run_id
           , manifest_chapter_count, manifest_content_size, manifest_word_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'knowledge', 'ready', ?, ?, 0, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, 0, ?, ?, ?, ?)
       `).run(
         normalizedNextId,
         source.purpose,
@@ -1238,6 +1653,7 @@ export class ImportRunRepository {
         source.manifest_fingerprint,
         source.source_display_json,
         source.locale,
+        source.stage,
         source.total_chapters,
         source.total_content_size,
         source.base_run_id,
@@ -1245,15 +1661,44 @@ export class ImportRunRepository {
         source.manifest_content_size,
         source.manifest_word_count,
       )
-      db().prepare(`
-        INSERT INTO import_run_chapters (
-          run_id, chapter_number, source_id, source_chapter_number,
-          title, content_fingerprint, content_size, content_snapshot
-        )
-        SELECT ?, chapter_number, source_id, source_chapter_number,
-               title, content_fingerprint, content_size, content_snapshot
-        FROM import_run_chapters WHERE run_id = ? ORDER BY chapter_number
-      `).run(normalizedNextId, runId)
+      if (source.stage === 'parsing') {
+        db().prepare(`
+          INSERT INTO import_run_sources (
+            run_id, source_index, source_id, source_fingerprint, legacy_source_fingerprint, display_json, status,
+            manifest_fingerprint, chapter_count, content_size, word_count, last_error
+          )
+          SELECT ?, source_index, source_id, source_fingerprint, legacy_source_fingerprint, display_json,
+                 CASE WHEN status = 'completed' THEN 'completed' ELSE 'pending' END,
+                 CASE WHEN status = 'completed' THEN manifest_fingerprint ELSE '' END,
+                 CASE WHEN status = 'completed' THEN chapter_count ELSE 0 END,
+                 CASE WHEN status = 'completed' THEN content_size ELSE 0 END,
+                 CASE WHEN status = 'completed' THEN word_count ELSE 0 END,
+                 ''
+          FROM import_run_sources WHERE run_id = ? ORDER BY source_index
+        `).run(normalizedNextId, runId)
+        db().prepare(`
+          INSERT INTO import_run_source_chapters (
+            run_id, source_id, source_chapter_number, title, content_fingerprint,
+            content_size, word_count, content_snapshot
+          )
+          SELECT ?, chapters.source_id, chapters.source_chapter_number, chapters.title,
+                 chapters.content_fingerprint, chapters.content_size, chapters.word_count, chapters.content_snapshot
+          FROM import_run_source_chapters AS chapters
+          JOIN import_run_sources AS sources
+            ON sources.run_id = chapters.run_id AND sources.source_id = chapters.source_id
+          WHERE chapters.run_id = ? AND sources.status = 'completed'
+        `).run(normalizedNextId, runId)
+      } else {
+        db().prepare(`
+          INSERT INTO import_run_chapters (
+            run_id, chapter_number, source_id, source_chapter_number,
+            title, content_fingerprint, content_size, content_snapshot
+          )
+          SELECT ?, chapter_number, source_id, source_chapter_number,
+                 title, content_fingerprint, content_size, content_snapshot
+          FROM import_run_chapters WHERE run_id = ? ORDER BY chapter_number
+        `).run(normalizedNextId, runId)
+      }
       return this.get(normalizedNextId)!
     })()
   }

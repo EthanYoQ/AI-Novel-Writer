@@ -2,6 +2,8 @@ export type ImportRunLocale = 'zh-CN' | 'en-US'
 export type ImportPurpose = 'reference' | 'author-manuscript'
 
 export type ImportRunStage =
+  | 'parsing'
+  | 'prepared'
   | 'knowledge'
   | 'global'
   | 'style'
@@ -195,6 +197,18 @@ export interface ImportRunPrepareRequest {
   chapters: ImportRunChapterInput[]
 }
 
+export interface ImportRunBeginParsingRequest {
+  runId: string
+  purpose: ImportPurpose
+  sourceFingerprint: string
+  sourceIds: string[]
+  sourceFingerprints?: string[]
+  legacySourceFingerprints?: string[]
+  legacyCollectionFingerprint?: string
+  sourceDisplay: ImportSourceDisplayMetadata[]
+  locale: ImportRunLocale
+}
+
 /** Renderer-safe inspection metadata. Chapter content and source identities stay in main memory. */
 export interface ImportInspectionSummary {
   inspectionId: string
@@ -211,6 +225,14 @@ export interface ImportRunPrepareFromInspectionRequest {
   runId: string
   purpose: 'reference'
   locale: ImportRunLocale
+}
+
+/** Current-project selection binds parsing to one frozen project lease before any source is read. */
+export interface ImportNovelFileSelectionRequest {
+  runId: string
+  purpose: 'reference'
+  locale: ImportRunLocale
+  expectedProjectPath: string
 }
 
 export interface ImportRunSnapshot {
@@ -234,6 +256,10 @@ export interface ImportRunSnapshot {
   manifestContentSize: number
   manifestWordCount: number
   completedChapters: number
+  completedSources?: number
+  totalSources?: number
+  progressCompleted?: number
+  progressTotal?: number
   baseRunId?: string
   createdAt: string
   updatedAt: string

@@ -22,6 +22,12 @@ import {
   type ImportResourceLimits,
 } from '../../src/shared/import-limits'
 import type { ImportSourceFileIdentity } from '../../src/shared/import-run'
+import type { ImportNovelFileSelectionRequest, ImportRunChapterInput } from '../../src/shared/import-run'
+import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { getCurrentProjectPath } from '../database'
+import { projectAccess } from '../services/project-access'
+import { assertRequiredExpectedProjectPath } from '../utils/project-context'
+import { ImportRunRepository } from '../repositories/import-run-repository'
 
 /**
  * 导入小说控制器 — 处理文件选择与章节拆分
@@ -236,12 +242,21 @@ export function registerImportController(
   }
   // Selection, bounded reading, and inspection are one main-process operation.
   // The renderer receives only the final inspection token and safe display facts.
-  ipcMain.handle('dialog:select-novel-files', async (event) => {
+  ipcMain.handle('dialog:select-novel-files', async (
+    event,
+    request?: ImportNovelFileSelectionRequest,
+    projectSession?: ProjectSessionContext,
+  ) => {
     event.sender.once('destroyed', () => {
       grantService.revokeWebContents(event.sender.id)
       inspectionStore.revokeForWebContents(event.sender.id)
     })
     try {
+      if (request) {
+        const active = projectAccess.assertCurrentProjectContext(projectSession, getCurrentProjectPath())
+        assertRequiredExpectedProjectPath(active.rootPath, request.expectedProjectPath)
+        if (request.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
+      }
       const result = await dialog.showOpenDialog({
         title: text('选择要导入的小说文件', 'Choose novel files to import'),
         filters: [
@@ -269,13 +284,37 @@ export function registerImportController(
           throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
         }
         selectedBytes += selectedSize
-        return { filePath, identity, displayName: path.basename(filePath) }
+        return { filePath, identity, displayName: path.basename(filePath), selectedSize }
       }).sort((left, right) => left.displayName.localeCompare(right.displayName, 'zh-CN', { numeric: true }))
       const encodedIdentities = ImportSourceIdentityRepository.encodeSources(
         selected.map(source => source.identity),
         'reference',
         applicationSecret ?? loadApplicationImportSourceSecret(),
       )
+      const resolvedIdentity = request
+        ? ImportSourceIdentityRepository.resolveEncodedSources(
+            encodedIdentities,
+            request.purpose,
+            applicationSecret ?? loadApplicationImportSourceSecret(),
+          )
+        : undefined
+      const parsingRun = request && resolvedIdentity
+        ? ImportRunRepository.beginParsing({
+            runId: request.runId,
+            purpose: request.purpose,
+            sourceFingerprint: resolvedIdentity.sourceFingerprint,
+            sourceIds: resolvedIdentity.sourceIds,
+            sourceFingerprints: resolvedIdentity.sourceFingerprints,
+            legacySourceFingerprints: resolvedIdentity.legacySourceFingerprints,
+            legacyCollectionFingerprint: resolvedIdentity.legacyCollectionFingerprint,
+            sourceDisplay: selected.map(source => ({
+              displayName: source.displayName,
+              mediaType: sourceMediaType(source.displayName),
+              size: source.selectedSize,
+            })),
+            locale: request.locale,
+          })
+        : undefined
 
       let chapterCount = 0
       const sources: Array<{
@@ -307,6 +346,11 @@ export function registerImportController(
       for (let sourceIndex = 0; sourceIndex < selected.length; sourceIndex++) {
         const source = selected[sourceIndex]
         const encoded = encodedIdentities[sourceIndex]
+        const opaqueSourceId = resolvedIdentity?.sourceIds[sourceIndex]
+        if (parsingRun && opaqueSourceId
+          && ImportRunRepository.parsedSourceStatus(parsingRun.id, opaqueSourceId) === 'completed') {
+          continue
+        }
         let grantId = ''
         try {
           const grant = grantService.issueFile({
@@ -332,7 +376,12 @@ export function registerImportController(
             size: contentBytes,
           })
           content = content.trim()
-          if (!content) continue
+          if (!content) {
+            if (parsingRun && opaqueSourceId) {
+              ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, [])
+            }
+            continue
+          }
           const parsed = hasChapterHeadings(content)
             ? splitSingleFileContent(content, limits.maxChapters - chapterCount)
             : [{
@@ -344,6 +393,7 @@ export function registerImportController(
           appendChapters(parsed)
           const usedLocalNumbers = new Set<number>()
           let nextLocalNumber = 1
+          const firstInspectedChapter = inspectedChapters.length
           for (const chapter of parsed) {
             let sourceChapterNumber = chapter.number
             if (!Number.isSafeInteger(sourceChapterNumber) || sourceChapterNumber < 1 || usedLocalNumbers.has(sourceChapterNumber)) {
@@ -353,10 +403,39 @@ export function registerImportController(
             usedLocalNumbers.add(sourceChapterNumber)
             inspectedChapters.push({ ...chapter, sourceIndex, sourceChapterNumber })
           }
+          if (parsingRun && opaqueSourceId) {
+            const sourceChapters: ImportRunChapterInput[] = parsed.map((chapter, index) => {
+              const persisted = inspectedChapters[firstInspectedChapter + index]
+              const sourceChapterNumber = persisted?.sourceChapterNumber ?? chapter.number
+              return {
+                number: sourceChapterNumber,
+                sourceChapterNumber,
+                title: chapter.title,
+                content: chapter.content,
+                contentFingerprint: sha256(chapter.content),
+                contentSize: Buffer.byteLength(chapter.content, 'utf8'),
+              }
+            })
+            ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, sourceChapters)
+          }
           content = ''
+        } catch (error) {
+          if (parsingRun && opaqueSourceId
+            && ImportRunRepository.parsedSourceStatus(parsingRun.id, opaqueSourceId) !== 'completed') {
+            ImportRunRepository.failParsedSource(
+              parsingRun.id,
+              opaqueSourceId,
+              error instanceof Error ? error.message : String(error),
+            )
+          }
+          throw error
         } finally {
           if (grantId) grantService.revoke(grantId)
         }
+      }
+
+      if (parsingRun) {
+        return { success: true, preparation: ImportRunRepository.finalizeParsing(parsingRun.id) }
       }
 
       // Preview numbers are renderer-only. Stable global numbers are assigned

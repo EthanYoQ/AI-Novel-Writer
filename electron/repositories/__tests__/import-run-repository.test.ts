@@ -255,6 +255,26 @@ describe('ImportRunRepository', () => {
     ])
   })
 
+  it('derives resumable knowledge progress from validated checkpoints across reopen and later stages', () => {
+    ImportRunRepository.prepare(request([chapter(1), chapter(2), chapter(3)]))
+    let execution = ImportRunRepository.startOrResume('import-run-1', 'progress-runner').execution
+    ImportRunRepository.completeBatch('import-run-1', 'knowledge', '1-2', execution)
+    expect(ImportRunRepository.get('import-run-1')).toMatchObject({
+      completedChapters: 2, progressCompleted: 2, progressTotal: 3,
+    })
+    ImportRunRepository.fail('import-run-1', 'knowledge', 'pause', execution)
+
+    closeProjectDatabase()
+    initProjectDatabase(root)
+    expect(ImportRunRepository.get('import-run-1')).toMatchObject({ completedChapters: 2 })
+
+    execution = ImportRunRepository.startOrResume('import-run-1', 'progress-runner-2').execution
+    ImportRunRepository.completeBatch('import-run-1', 'knowledge', '3-3', execution)
+    expect(ImportRunRepository.advanceStage('import-run-1', 'knowledge', 'global', execution)).toMatchObject({
+      completedChapters: 3, progressCompleted: 0, progressTotal: 1,
+    })
+  })
+
   it('reopens the same project database with the frozen run and checkpoint intact', () => {
     ImportRunRepository.prepare(request([chapter(1), chapter(2)]))
     const execution = ImportRunRepository.startOrResume('import-run-1', 'test-runner').execution

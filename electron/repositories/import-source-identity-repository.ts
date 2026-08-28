@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto'
+import { createDecipheriv, createHmac, randomUUID } from 'node:crypto'
 
 import { getProjectDb } from '../database'
 import type { ImportPurpose, ImportSourceFileIdentity } from '../../src/shared/import-run'
@@ -12,6 +12,13 @@ interface SourceAliasRow {
 export interface EncodedImportSourceIdentity {
   locationAliasDigest: string
   fileAliasDigest?: string
+  legacyStableIdentity?: string
+}
+
+interface LegacyIdentityBridgeRow {
+  ciphertext_hex: string
+  iv_hex: string
+  auth_tag_hex: string
 }
 
 const SHA256 = /^[a-f0-9]{64}$/u
@@ -44,6 +51,33 @@ function aliasDigest(secret: Buffer, kind: 'location' | 'file', value: string): 
   return createHmac('sha256', secret).update(`import-source-alias:v1:${kind}:${value}`, 'utf8').digest('hex')
 }
 
+function legacySalt(secret: Buffer): Buffer | undefined {
+  const row = getProjectDb()?.prepare(`
+    SELECT ciphertext_hex, iv_hex, auth_tag_hex
+    FROM import_legacy_identity_bridge WHERE id = 'main'
+  `).get() as LegacyIdentityBridgeRow | undefined
+  if (!row) return undefined
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', secret, Buffer.from(row.iv_hex, 'hex'))
+    decipher.setAAD(Buffer.from('ai-novel:legacy-import-source-salt:v1', 'utf8'))
+    decipher.setAuthTag(Buffer.from(row.auth_tag_hex, 'hex'))
+    const salt = Buffer.concat([
+      decipher.update(Buffer.from(row.ciphertext_hex, 'hex')),
+      decipher.final(),
+    ])
+    if (salt.byteLength !== 32) throw new Error('invalid length')
+    return salt
+  } catch {
+    throw new Error('旧导入来源身份桥接数据无效')
+  }
+}
+
+function legacyFingerprint(salt: Buffer, purpose: ImportPurpose, identities: string[]): string {
+  return createHmac('sha256', salt)
+    .update(JSON.stringify({ purpose, identities: [...identities].sort((a, b) => a.localeCompare(b, 'en-US')) }), 'utf8')
+    .digest('hex')
+}
+
 export class ImportSourceIdentityRepository {
   static encodeSources(
     sources: ImportSourceFileIdentity[],
@@ -55,12 +89,14 @@ export class ImportSourceIdentityRepository {
       throw new Error('导入来源身份无效')
     }
     const secret = requireSecret(applicationSecret)
+    const bridgeSalt = legacySalt(secret)
     return sources.map(source => {
       const location = normalizedLocation(source.canonicalLocation)
       const file = normalizedFileIdentity(source.fileIdentity)
       return {
         locationAliasDigest: aliasDigest(secret, 'location', location),
         ...(file ? { fileAliasDigest: aliasDigest(secret, 'file', file) } : {}),
+        ...(bridgeSalt ? { legacyStableIdentity: file ?? `canonical:${location}` } : {}),
       }
     })
   }
@@ -69,7 +105,13 @@ export class ImportSourceIdentityRepository {
     sources: EncodedImportSourceIdentity[],
     purpose: ImportPurpose,
     applicationSecret: Buffer,
-  ): { sourceIds: string[]; sourceFingerprint: string; sourceFingerprints: string[] } {
+  ): {
+    sourceIds: string[]
+    sourceFingerprint: string
+    sourceFingerprints: string[]
+    legacySourceFingerprints?: string[]
+    legacyCollectionFingerprint?: string
+  } {
     if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('导入用途无效')
     if (!Array.isArray(sources) || sources.length === 0 || sources.length > MAX_IMPORT_SOURCE_FILES) {
       throw new Error('导入来源身份无效')
@@ -81,6 +123,7 @@ export class ImportSourceIdentityRepository {
     }
     const secret = requireSecret(applicationSecret)
     const db = database()
+    const bridgeSalt = legacySalt(secret)
 
     return db.transaction(() => {
       const findAlias = db.prepare(`
@@ -107,10 +150,16 @@ export class ImportSourceIdentityRepository {
       const fingerprint = (ids: string[]) => createHmac('sha256', secret)
         .update(JSON.stringify({ version: 1, purpose, sourceIds: [...ids].sort((left, right) => left.localeCompare(right, 'en-US')) }), 'utf8')
         .digest('hex')
+      const legacyIdentities = sources.map(source => source.legacyStableIdentity)
+      const hasCompleteLegacyIdentity = bridgeSalt && legacyIdentities.every((identity): identity is string => Boolean(identity))
       return {
         sourceIds,
         sourceFingerprint: fingerprint(sortedSourceIds),
         sourceFingerprints: sourceIds.map(sourceId => fingerprint([sourceId])),
+        ...(hasCompleteLegacyIdentity ? {
+          legacySourceFingerprints: legacyIdentities.map(identity => legacyFingerprint(bridgeSalt, purpose, [identity])),
+          legacyCollectionFingerprint: legacyFingerprint(bridgeSalt, purpose, legacyIdentities),
+        } : {}),
       }
     })()
   }
@@ -119,7 +168,13 @@ export class ImportSourceIdentityRepository {
     sources: ImportSourceFileIdentity[],
     purpose: ImportPurpose,
     applicationSecret: Buffer,
-  ): { sourceIds: string[]; sourceFingerprint: string; sourceFingerprints: string[] } {
+  ): {
+    sourceIds: string[]
+    sourceFingerprint: string
+    sourceFingerprints: string[]
+    legacySourceFingerprints?: string[]
+    legacyCollectionFingerprint?: string
+  } {
     return this.resolveEncodedSources(
       this.encodeSources(sources, purpose, applicationSecret),
       purpose,
