@@ -120,6 +120,8 @@ describe('createImportWorkflow', () => {
       'frozen reference',
       '第1章 Start.txt',
       `reference:${'a'.repeat(64)}:1:${'c'.repeat(64)}`,
+      'import-run-1',
+      { owner: executionOwner, epoch: 1 },
       session.projectPath,
     )
     expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('db:draft-create')

@@ -25,9 +25,12 @@ export function isImportRunDirectCheckpointStage(stage: unknown): stage is Impor
   return stage === 'knowledge' || stage === 'refresh'
 }
 
-export interface ImportRunExecutionLease {
+export interface ImportRunExecutionAuthority {
   owner: string
   epoch: number
+}
+
+export interface ImportRunExecutionLease extends ImportRunExecutionAuthority {
   expiresAt: number
 }
 

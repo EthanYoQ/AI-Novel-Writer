@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type {
   ImportRunChapterSnapshot,
@@ -112,7 +112,195 @@ function harness(total = 25, overrides: Partial<ImportRunSnapshot> = {}) {
 
 const callbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('ImportRunOrchestrator', () => {
+  it('keeps renewing its lease while one knowledge effect runs longer than the original TTL', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    const { deps } = harness(1)
+    const leaseTtlMs = 15 * 60_000
+    const firstExecution = { owner: 'test-runner', epoch: 1, expiresAt: Date.now() + leaseTtlMs }
+    let authoritativeExpiresAt = firstExecution.expiresAt
+    deps.startOrResume = vi.fn(async () => ({ run: await deps.getRun('run-1') as ImportRunSnapshot, execution: firstExecution }))
+    deps.renewExecution = vi.fn(async (_runId, execution) => {
+      authoritativeExpiresAt = Date.now() + leaseTtlMs
+      return { ...execution, expiresAt: authoritativeExpiresAt }
+    })
+    let finishImport!: () => void
+    deps.importReference = vi.fn(() => new Promise<void>((resolve) => {
+      finishImport = resolve
+    }))
+
+    const running = new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'knowledge', 'test-runner', { cancelled: false }, callbacks,
+    )
+    await vi.advanceTimersByTimeAsync(16 * 60_000)
+
+    expect(deps.importReference).toHaveBeenCalledTimes(1)
+    expect(deps.renewExecution).toHaveBeenCalled()
+    expect(authoritativeExpiresAt).toBeGreaterThan(Date.now())
+
+    finishImport()
+    await running
+  })
+
+  it('renews before starting a model provider and skips the call after authority is lost', async () => {
+    const { deps } = harness(1, { stage: 'global' })
+    deps.renewExecution = vi.fn(async () => {
+      throw new Error('lease epoch changed')
+    })
+
+    await expect(new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'global', 'renderer-a', { cancelled: false }, callbacks,
+    )).rejects.toThrow('lease epoch changed')
+
+    expect(deps.inferGlobal).not.toHaveBeenCalled()
+    expect(deps.prepareEffectReceipt).not.toHaveBeenCalled()
+  })
+
+  it('marks a lost model-stage lease before a late result and never freezes that result', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(2_000)
+    const { deps } = harness(1, { stage: 'global' })
+    const firstExecution = { owner: 'renderer-a', epoch: 1, expiresAt: Date.now() + 90 }
+    deps.startOrResume = vi.fn(async () => ({ run: await deps.getRun('run-1') as ImportRunSnapshot, execution: firstExecution }))
+    let leaseLost = false
+    deps.renewExecution = vi.fn()
+      .mockResolvedValueOnce({ ...firstExecution, expiresAt: Date.now() + 90 })
+      .mockImplementation(async () => {
+        leaseLost = true
+        throw new Error('lease epoch changed')
+      })
+    let finishModel!: () => void
+    deps.inferGlobal = vi.fn(async (_chapters, _stats, _run, commit) => {
+      await new Promise<void>((resolve) => {
+        finishModel = resolve
+      })
+      await commit({ global: true })
+    })
+
+    const running = new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'global', 'renderer-a', { cancelled: false }, callbacks,
+    )
+    await vi.advanceTimersByTimeAsync(30)
+
+    expect(leaseLost).toBe(true)
+    finishModel()
+    await expect(running).rejects.toThrow('lease epoch changed')
+    expect(deps.prepareEffectReceipt).not.toHaveBeenCalled()
+    expect(deps.commitEffectReceipt).not.toHaveBeenCalled()
+  })
+
+  it('serializes a model commit behind an in-flight heartbeat renewal', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(3_000)
+    const { deps } = harness(1, { stage: 'global' })
+    const leaseTtlMs = 90
+    const firstExecution = { owner: 'renderer-a', epoch: 1, expiresAt: Date.now() + leaseTtlMs }
+    let authoritativeExecution = firstExecution
+    let releaseHeartbeat!: () => void
+    let renewalCount = 0
+    deps.startOrResume = vi.fn(async () => ({ run: await deps.getRun('run-1') as ImportRunSnapshot, execution: firstExecution }))
+    deps.renewExecution = vi.fn(async (_runId, supplied) => {
+      if (supplied.expiresAt !== authoritativeExecution.expiresAt) throw new Error('stale lease renewal')
+      authoritativeExecution = { ...supplied, expiresAt: Date.now() + leaseTtlMs }
+      renewalCount += 1
+      if (renewalCount === 2) {
+        await new Promise<void>((resolve) => {
+          releaseHeartbeat = resolve
+        })
+      }
+      return authoritativeExecution
+    })
+    let finishModel!: () => void
+    deps.inferGlobal = vi.fn(async (_chapters, _stats, _run, commit) => {
+      await new Promise<void>((resolve) => {
+        finishModel = resolve
+      })
+      await commit({ global: true })
+    })
+
+    const running = new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'global', 'renderer-a', { cancelled: false }, callbacks,
+    )
+    await vi.advanceTimersByTimeAsync(30)
+    finishModel()
+    await Promise.resolve()
+    releaseHeartbeat()
+
+    await expect(running).resolves.toBeUndefined()
+    expect(deps.prepareEffectReceipt).toHaveBeenCalledTimes(1)
+    expect(deps.commitEffectReceipt).toHaveBeenCalledTimes(1)
+  })
+
+  it('records a provider failure with the lease most recently returned by heartbeat', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(4_000)
+    const { deps } = harness(1, { stage: 'global' })
+    const leaseTtlMs = 90
+    const firstExecution = { owner: 'renderer-a', epoch: 1, expiresAt: Date.now() + leaseTtlMs }
+    let authoritativeExecution = firstExecution
+    deps.startOrResume = vi.fn(async () => ({ run: await deps.getRun('run-1') as ImportRunSnapshot, execution: firstExecution }))
+    deps.renewExecution = vi.fn(async (_runId, supplied) => {
+      if (supplied.expiresAt !== authoritativeExecution.expiresAt) throw new Error('stale lease renewal')
+      authoritativeExecution = { ...supplied, expiresAt: Date.now() + leaseTtlMs }
+      return authoritativeExecution
+    })
+    let failModel!: () => void
+    deps.inferGlobal = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        failModel = resolve
+      })
+      throw new Error('provider unavailable')
+    })
+    const originalFail = deps.fail
+    deps.fail = vi.fn(async (runId, stage, error, supplied) => {
+      if (supplied.expiresAt !== authoritativeExecution.expiresAt) throw new Error('stale failure lease')
+      return originalFail(runId, stage, error, supplied)
+    })
+
+    const running = new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'global', 'renderer-a', { cancelled: false }, callbacks,
+    )
+    await vi.advanceTimersByTimeAsync(30)
+    failModel()
+
+    await expect(running).rejects.toThrow('provider unavailable')
+    expect(deps.fail).toHaveBeenCalledWith(
+      'run-1', 'global', 'provider unavailable', authoritativeExecution,
+    )
+  })
+
+  it('keeps the refresh projection leased while its project reads are delayed', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(5_000)
+    const { deps } = harness(1, { stage: 'refresh' })
+    const leaseTtlMs = 90
+    const firstExecution = { owner: 'renderer-a', epoch: 1, expiresAt: Date.now() + leaseTtlMs }
+    let authoritativeExpiresAt = firstExecution.expiresAt
+    deps.startOrResume = vi.fn(async () => ({ run: await deps.getRun('run-1') as ImportRunSnapshot, execution: firstExecution }))
+    deps.renewExecution = vi.fn(async (_runId, supplied) => {
+      authoritativeExpiresAt = Date.now() + leaseTtlMs
+      return { ...supplied, expiresAt: authoritativeExpiresAt }
+    })
+    let finishRefresh!: () => void
+    deps.refresh = vi.fn(() => new Promise<void>((resolve) => {
+      finishRefresh = resolve
+    }))
+
+    const running = new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'refresh', 'renderer-a', { cancelled: false }, callbacks,
+    )
+    await vi.advanceTimersByTimeAsync(leaseTtlMs * 3)
+
+    expect(authoritativeExpiresAt).toBeGreaterThan(Date.now())
+    finishRefresh()
+    await running
+  })
+
   it('checkpoints bounded knowledge batches and does not replay a committed batch after failure', async () => {
     const { deps, calls, limits, getRun } = harness()
     let failOnce = true

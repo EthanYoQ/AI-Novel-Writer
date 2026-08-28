@@ -34,6 +34,7 @@ import type {
   ImportRunChapterSnapshot,
   ImportRunEffectCommitResult,
   ImportRunEffectReceipt,
+  ImportRunExecutionAuthority,
   ImportRunExecutionLease,
   ImportInspectionSummary,
   ImportRunPreparationResult,
@@ -781,7 +782,14 @@ export interface KnowledgeBaseChannels {
   'kb:import-folder': { args: [grantId: string, expectedProjectPath: string]; return: { success: boolean; importedCount: number; failedFiles: string[]; error?: string; errorCode?: AppErrorCode } }
   'kb:import-text': { args: [text: string, fileName: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
   'kb:import-reference-text': {
-    args: [text: string, fileName: string, idempotencyKey: string, expectedProjectPath: string]
+    args: [
+      text: string,
+      fileName: string,
+      idempotencyKey: string,
+      runId: string,
+      executionAuthority: ImportRunExecutionAuthority,
+      expectedProjectPath: string,
+    ]
     return: { success: boolean; docId?: string; chunkCount?: number; idempotent?: boolean; error?: string; errorCode?: AppErrorCode }
   }
   'kb:search': { args: [query: string, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }

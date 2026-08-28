@@ -29,6 +29,35 @@ afterEach(() => {
 })
 
 describe('import execution lease', () => {
+  it('keeps main-process authority stable across heartbeat expiry updates and fences it on takeover', () => {
+    const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
+    const authority = { owner: first.execution.owner, epoch: first.execution.epoch }
+
+    expect(() => ImportRunRepository.assertExecutionAuthority('leased-run', authority, 1_050)).not.toThrow()
+    ImportRunRepository.renewExecution('leased-run', first.execution, 1_050, 100)
+    expect(() => ImportRunRepository.assertExecutionAuthority('leased-run', authority, 1_149)).not.toThrow()
+
+    ImportRunRepository.startOrResume('leased-run', 'renderer-b', 1_151, 100)
+    expect(() => ImportRunRepository.assertExecutionAuthority('leased-run', authority, 1_151))
+      .toThrow(/执行租约/)
+  })
+
+  it('authorizes only the frozen chapter bound to the active reference-import epoch', () => {
+    const started = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
+    const authority = { owner: started.execution.owner, epoch: started.execution.epoch }
+    const expectedKey = `reference:${'a'.repeat(64)}:1:${'b'.repeat(64)}`
+
+    expect(() => ImportRunRepository.assertReferenceImportAuthority(
+      'leased-run', authority, expectedKey, 'x', 1_050,
+    )).not.toThrow()
+    expect(() => ImportRunRepository.assertReferenceImportAuthority(
+      'leased-run', authority, expectedKey, 'changed', 1_050,
+    )).toThrow(/冻结章节/)
+    expect(() => ImportRunRepository.assertReferenceImportAuthority(
+      'leased-run', authority, 'reference:forged:1:key', 'x', 1_050,
+    )).toThrow(/冻结章节/)
+  })
+
   it('rejects a concurrent owner, allows expiry takeover, and rejects every stale mutation', () => {
     const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
     expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-b', 1_050, 100))

@@ -5,6 +5,7 @@ import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_
 import { GlobalConfig, ModelProfile } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import type { EmbeddingOptions } from '../../src/shared/embedding-options'
+import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { mainText } from '../i18n'
 import { getCurrentProjectPath } from '../database'
@@ -25,6 +26,7 @@ import {
   assertKnowledgeBaseStoragePathSupported,
   projectStoragePreflightFailure,
 } from '../services/project-storage-preflight'
+import { ImportRunRepository } from '../repositories/import-run-repository'
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
@@ -241,9 +243,17 @@ export function registerKBController(
     text: string,
     fileName: string,
     idempotencyKey: string,
+    runId: string,
+    executionAuthority: ImportRunExecutionAuthority,
     expectedProjectPath: string,
   ) => {
     const projectPath = requireProjectPath(expectedProjectPath)
+    ImportRunRepository.assertReferenceImportAuthority(
+      runId,
+      executionAuthority,
+      idempotencyKey,
+      text,
+    )
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
@@ -251,6 +261,8 @@ export function registerKBController(
       text,
       fileName,
       idempotencyKey,
+      runId,
+      executionAuthority,
       projectPath,
       protocol,
       model,

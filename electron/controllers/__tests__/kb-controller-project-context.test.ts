@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   assertKnowledgeBaseStoragePathSupported: vi.fn(),
   projectStoragePreflightFailure: vi.fn(),
   readJsonFile: vi.fn(),
+  assertReferenceImportAuthority: vi.fn(),
 }))
 
 vi.mock('electron', () => ({
@@ -48,6 +49,12 @@ vi.mock('../../services/knowledge-base-loader', () => ({
   knowledgeBaseLoader: { run: mocks.run },
 }))
 
+vi.mock('../../repositories/import-run-repository', () => ({
+  ImportRunRepository: {
+    assertReferenceImportAuthority: mocks.assertReferenceImportAuthority,
+  },
+}))
+
 vi.mock('../../i18n', () => ({
   mainText: vi.fn((_locale: string, zh: string) => zh),
 }))
@@ -83,6 +90,7 @@ beforeEach(() => {
   mocks.currentProjectPath = 'C:/projects/A'
   vi.clearAllMocks()
   mocks.readJsonFile.mockImplementation((_path: string, fallback: unknown) => fallback)
+  mocks.assertReferenceImportAuthority.mockImplementation(() => undefined)
   mocks.assertCurrentProjectContext.mockImplementation((context: { projectPath?: string } | undefined, currentProjectPath: string) => {
     if (!context?.projectPath) throw new Error('缺少项目会话上下文，已拒绝操作')
     if (context.projectPath !== currentProjectPath) {
@@ -101,6 +109,27 @@ beforeEach(() => {
 })
 
 describe('knowledge-base controller project context guard', () => {
+  it('requires active import-run authority before reference text reaches the knowledge base', async () => {
+    const importReferenceText = vi.fn(async () => ({ success: true, docId: 'reference-doc' }))
+    mocks.run.mockImplementation(async (operation: (kb: {
+      importReferenceText: typeof importReferenceText
+    }) => unknown) => operation({ importReferenceText }))
+    const authority = { owner: 'renderer-a', epoch: 3 }
+
+    await expect(handler('kb:import-reference-text')(
+      {}, 'frozen text', 'Chapter 1.txt', 'reference:key:1:fingerprint',
+      'run-1', authority, 'C:/projects/A',
+    )).resolves.toEqual({ success: true, docId: 'reference-doc' })
+
+    expect(mocks.assertReferenceImportAuthority).toHaveBeenCalledWith(
+      'run-1', authority, 'reference:key:1:fingerprint', 'frozen text',
+    )
+    expect(importReferenceText).toHaveBeenCalledWith(
+      'frozen text', 'Chapter 1.txt', 'reference:key:1:fingerprint',
+      'run-1', authority, 'C:/projects/A', 'openai', expect.any(Object),
+    )
+  })
+
   it('rejects a matching project path that omits its session context', async () => {
     await expect(rawHandler('kb:clear-all')({}, 'C:/projects/A'))
       .rejects.toThrow(/项目会话/)

@@ -13,6 +13,7 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { chunkText, generateEmbeddings } from './embedding'
 import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
+import type { ImportRunExecutionAuthority } from '../src/shared/import-run'
 import { EmbeddingResponseValidationError } from './services/embedding-response-error'
 import {
   LEGACY_VECTOR_MIGRATION_BLOCKED,
@@ -35,7 +36,9 @@ import {
   rebuildPlannedEmbeddingSpace,
   type EmbeddingSpaceIdentity,
 } from './vector-store'
-import { getProjectDb } from './database'
+import { getCurrentProjectPath, getProjectDb } from './database'
+import { ImportRunRepository } from './repositories/import-run-repository'
+import { assertRequiredExpectedProjectPath } from './utils/project-context'
 
 // ===== 迁移状态跟踪 =====
 
@@ -408,23 +411,110 @@ export async function importText(
   )
 }
 
-/** Reference-import-only seam with a stable identity; ordinary/finalized text keeps legacy behavior. */
-export async function importReferenceText(
+type ReferenceImportResult = {
+  success: boolean
+  docId?: string
+  chunkCount?: number
+  idempotent?: boolean
+  error?: string
+  errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED
+}
+
+interface ReferenceImportAuthorityRequest {
+  runId: string
+  executionAuthority: ImportRunExecutionAuthority
+  idempotencyKey: string
+  content: string
+}
+
+interface ReferenceImportFlight {
+  bindingHash: string
+  authorities: ReferenceImportAuthorityRequest[]
+  promise?: Promise<ReferenceImportResult>
+}
+
+const referenceImportFlights = new Map<string, ReferenceImportFlight>()
+
+function referenceImportProjectIdentity(projectPath: string): string {
+  const canonical = fs.realpathSync.native(projectPath)
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical
+}
+
+function assertReferenceImportAuthority(request: ReferenceImportAuthorityRequest): void {
+  ImportRunRepository.assertReferenceImportAuthority(
+    request.runId,
+    request.executionAuthority,
+    request.idempotencyKey,
+    request.content,
+  )
+}
+
+function currentFlightAuthority(flight: ReferenceImportFlight): void {
+  let lastError: unknown
+  for (let index = flight.authorities.length - 1; index >= 0; index -= 1) {
+    try {
+      assertReferenceImportAuthority(flight.authorities[index])
+      return
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError ?? new Error('导入执行租约已失效，已拒绝参照知识写入')
+}
+
+async function runReferenceImportSingleFlight(
+  flightKey: string,
+  bindingHash: string,
+  authority: ReferenceImportAuthorityRequest,
+  operation: (assertAuthority: () => void) => Promise<ReferenceImportResult>,
+): Promise<ReferenceImportResult> {
+  assertReferenceImportAuthority(authority)
+  for (;;) {
+    const active = referenceImportFlights.get(flightKey)
+    if (active) {
+      if (!active.promise) throw new Error('参照知识 single-flight 状态无效')
+      if (active.bindingHash !== bindingHash) {
+        await active.promise.catch(() => undefined)
+        assertReferenceImportAuthority(authority)
+        continue
+      }
+      if (!active.authorities.some(candidate => (
+        candidate.runId === authority.runId
+        && candidate.executionAuthority.owner === authority.executionAuthority.owner
+        && candidate.executionAuthority.epoch === authority.executionAuthority.epoch
+      ))) active.authorities.push(authority)
+      return active.promise
+    }
+
+    const flight: ReferenceImportFlight = { bindingHash, authorities: [authority] }
+    const promise = Promise.resolve().then(() => operation(() => currentFlightAuthority(flight)))
+    flight.promise = promise
+    referenceImportFlights.set(flightKey, flight)
+    try {
+      return await promise
+    } finally {
+      if (referenceImportFlights.get(flightKey) === flight) {
+        referenceImportFlights.delete(flightKey)
+      }
+    }
+  }
+}
+
+async function performReferenceTextImport(
   text: string,
   fileName: string,
-  idempotencyKey: string,
+  stableKey: string,
+  documentId: string,
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
-): Promise<{ success: boolean; docId?: string; chunkCount?: number; idempotent?: boolean; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
-  const stableKey = idempotencyKey.trim()
-  if (!stableKey || stableKey.length > 512 || !/^[\w:.-]+$/u.test(stableKey)) {
-    return { success: false, error: '参照导入幂等键无效' }
-  }
-  const documentId = createHash('sha256').update(`reference-import:${stableKey}`, 'utf8').digest('hex')
+  assertAuthority: () => void,
+): Promise<ReferenceImportResult> {
   try {
     if (!text.trim()) return { success: false, error: '文本内容为空' }
+    assertAuthority()
     await ensureMigration(projectPath)
+    assertAuthority()
     const projectDb = getProjectDb()
     if (!projectDb) return { success: false, error: '项目数据库未打开' }
     const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
@@ -456,6 +546,7 @@ export async function importReferenceText(
       || receipt.corpus_kind !== 'reference'
     )) return { success: false, error: '参照导入幂等键已绑定不同内容' }
     if (!receipt) {
+      assertAuthority()
       projectDb.prepare(`
         INSERT INTO import_reference_documents (
           document_id, idempotency_key_hash, content_hash, chunk_set_hash,
@@ -465,12 +556,14 @@ export async function importReferenceText(
     }
 
     const existingIntegrity = await getDocumentIntegrity(projectPath, documentId)
+    assertAuthority()
     if (
       existingIntegrity?.complete
       && existingIntegrity.corpusKind === 'reference'
       && existingIntegrity.chunkCount === chunks.length
       && existingIntegrity.chunkSetHash === chunkSetHash
     ) {
+      assertAuthority()
       projectDb.prepare(`
         UPDATE import_reference_documents
         SET state = 'committed', updated_at = datetime('now')
@@ -481,6 +574,7 @@ export async function importReferenceText(
     if (existingIntegrity && !await removeDocFromStore(projectPath, documentId)) {
       return { success: false, error: '残缺参照文档无法安全清理' }
     }
+    assertAuthority()
     projectDb.prepare(`
       UPDATE import_reference_documents
       SET state = 'prepared', updated_at = datetime('now')
@@ -490,11 +584,19 @@ export async function importReferenceText(
     let vectors: number[][] | undefined
     if (model.apiKey) {
       try {
-        vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
+        vectors = await generateEmbeddings(
+          chunks,
+          protocol,
+          model,
+          model.embeddingOptions?.batchSize,
+          assertAuthority,
+        )
       } catch (error) {
+        assertAuthority()
         if (error instanceof EmbeddingResponseValidationError) throw error
         console.warn('[Vela KB] reference import embedding failed; using FTS-only:', error)
       }
+      assertAuthority()
     }
     const result = await addChunks(
       projectPath,
@@ -511,7 +613,19 @@ export async function importReferenceText(
       embeddingSpaceFor(protocol, model),
     )
     if (!result.success) return { success: false, error: result.error }
+    try {
+      assertAuthority()
+    } catch (error) {
+      await removeDocFromStore(projectPath, documentId)
+      throw error
+    }
     const committedIntegrity = await getDocumentIntegrity(projectPath, documentId)
+    try {
+      assertAuthority()
+    } catch (error) {
+      await removeDocFromStore(projectPath, documentId)
+      throw error
+    }
     if (
       !committedIntegrity?.complete
       || committedIntegrity.corpusKind !== 'reference'
@@ -521,12 +635,66 @@ export async function importReferenceText(
       await removeDocFromStore(projectPath, documentId)
       return { success: false, error: '参照文档完整性校验失败' }
     }
+    assertAuthority()
     projectDb.prepare(`
       UPDATE import_reference_documents
       SET state = 'committed', updated_at = datetime('now')
       WHERE document_id = ?
     `).run(documentId)
     return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: false }
+  } catch (error) {
+    return { success: false, ...migrationFailureDetails(error) }
+  }
+}
+
+/** Reference-import-only seam with a stable identity; ordinary/finalized text keeps legacy behavior. */
+export async function importReferenceText(
+  text: string,
+  fileName: string,
+  idempotencyKey: string,
+  runId: string,
+  executionAuthority: ImportRunExecutionAuthority,
+  projectPath: string,
+  protocol: 'openai' | 'gemini',
+  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+): Promise<ReferenceImportResult> {
+  const stableKey = idempotencyKey.trim()
+  if (!stableKey || stableKey.length > 512 || !/^[\w:.-]+$/u.test(stableKey)) {
+    return { success: false, error: '参照导入幂等键无效' }
+  }
+  const documentId = createHash('sha256').update(`reference-import:${stableKey}`, 'utf8').digest('hex')
+  const authority = { runId, executionAuthority, idempotencyKey: stableKey, content: text }
+  try {
+    const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
+    const bindingHash = createHash('sha256').update(JSON.stringify({
+      contentHash: createHash('sha256').update(text, 'utf8').digest('hex'),
+      protocol,
+      baseUrl: model.baseUrl,
+      modelName: model.modelName ?? '',
+      embeddingOptions,
+    })).digest('hex')
+    const flightKey = `${referenceImportProjectIdentity(projectPath)}\0${documentId}`
+    return await runReferenceImportSingleFlight(
+      flightKey,
+      bindingHash,
+      authority,
+      assertAuthority => {
+        const assertCurrentAuthority = () => {
+          assertRequiredExpectedProjectPath(getCurrentProjectPath(), projectPath)
+          assertAuthority()
+        }
+        return performReferenceTextImport(
+          text,
+          fileName,
+          stableKey,
+          documentId,
+          projectPath,
+          protocol,
+          model,
+          assertCurrentAuthority,
+        )
+      },
+    )
   } catch (error) {
     return { success: false, ...migrationFailureDetails(error) }
   }

@@ -163,7 +163,7 @@ function productionDependencies(
     listChapters: (runId, after, limit) => ipc.invokeWithProjectSession(
       session, 'db:import-run-list-chapters', runId, after, limit, projectPath,
     ),
-    importReference: async (chapter, idempotencyKey, run) => {
+    importReference: async (chapter, idempotencyKey, run, executionAuthority) => {
       const fileName = textForLocale(
         run.locale,
         `第${chapter.number}章 ${chapter.title || '无标题'}.txt`,
@@ -175,6 +175,8 @@ function productionDependencies(
         chapter.content,
         fileName,
         idempotencyKey,
+        run.id,
+        executionAuthority,
         projectPath,
       )
       if (!result.success) throw new Error(result.error || textForLocale(

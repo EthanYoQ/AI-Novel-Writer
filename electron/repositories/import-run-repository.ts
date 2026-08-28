@@ -19,6 +19,7 @@ import type {
   ImportRunSnapshot,
   ImportRunStage,
   ImportRunStatus,
+  ImportRunExecutionAuthority,
   ImportRunExecutionLease,
   ImportRunStartResult,
   ImportSourceDisplayMetadata,
@@ -425,13 +426,20 @@ function readRunRow(runId: string): ImportRunRow | undefined {
   return db().prepare('SELECT * FROM import_runs WHERE id = ?').get(runId) as ImportRunRow | undefined
 }
 
-function assertExecution(runId: string, execution: ImportRunExecutionLease, now = Date.now()): ImportRunRow {
+function assertExecutionAuthority(
+  runId: string,
+  authority: ImportRunExecutionAuthority,
+  now = Date.now(),
+): ImportRunRow {
   const row = readRunRow(runId)
   if (
     !row
-    || row.execution_owner !== execution.owner
-    || row.execution_epoch !== execution.epoch
-    || row.lease_expires_at !== execution.expiresAt
+    || row.status !== 'running'
+    || typeof authority?.owner !== 'string'
+    || !authority.owner
+    || !Number.isSafeInteger(authority.epoch)
+    || row.execution_owner !== authority.owner
+    || row.execution_epoch !== authority.epoch
     || row.lease_expires_at <= now
   ) throw new Error('导入执行租约已失效，已拒绝旧执行器写入')
   return row
@@ -571,6 +579,14 @@ function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage)
     covered.size !== allChapters.length
     || allChapters.some(chapter => !covered.has(chapter.chapter_number))
   ) throw new Error('导入阶段 checkpoint 未完成')
+}
+
+function assertExecution(runId: string, execution: ImportRunExecutionLease, now = Date.now()): ImportRunRow {
+  const row = assertExecutionAuthority(runId, execution, now)
+  if (row.lease_expires_at !== execution.expiresAt) {
+    throw new Error('导入执行租约已失效，已拒绝旧执行器写入')
+  }
+  return row
 }
 
 function applyBatchCheckpoint(
@@ -763,6 +779,45 @@ function latestCompletedRun(purpose: ImportPurpose, sourceFingerprint: string): 
 }
 
 export class ImportRunRepository {
+  static assertExecutionAuthority(
+    runId: string,
+    authority: ImportRunExecutionAuthority,
+    now = Date.now(),
+  ): void {
+    assertExecutionAuthority(runId, authority, now)
+  }
+
+  static assertReferenceImportAuthority(
+    runId: string,
+    authority: ImportRunExecutionAuthority,
+    idempotencyKey: string,
+    content: string,
+    now = Date.now(),
+  ): void {
+    const run = assertExecutionAuthority(runId, authority, now)
+    const prefix = `${run.purpose}:${run.source_fingerprint}:`
+    const binding = idempotencyKey.startsWith(prefix)
+      ? /^(\d+):([a-f0-9]{64})$/u.exec(idempotencyKey.slice(prefix.length))
+      : null
+    if (run.purpose !== 'reference' || run.stage !== 'knowledge' || !binding) {
+      throw new Error('参照知识写入未绑定当前导入的冻结章节')
+    }
+    const chapterNumber = Number(binding[1])
+    const chapter = db().prepare(`
+      SELECT content_fingerprint, content_snapshot
+      FROM import_run_chapters
+      WHERE run_id = ? AND chapter_number = ?
+    `).get(runId, chapterNumber) as {
+      content_fingerprint: string
+      content_snapshot: string
+    } | undefined
+    if (
+      !chapter
+      || chapter.content_fingerprint !== binding[2]
+      || chapter.content_snapshot !== content
+    ) throw new Error('参照知识写入未绑定当前导入的冻结章节')
+  }
+
   static prepare(candidate: ImportRunPrepareRequest): ImportRunPreparationResult {
     const runId = candidate.runId?.trim()
     if (!runId || runId.length > 160 || !SHA256.test(candidate.sourceFingerprint)) {
