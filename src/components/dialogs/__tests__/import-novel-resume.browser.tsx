@@ -80,13 +80,8 @@ beforeEach(async () => {
     if (channel === 'db:import-run-list-resumable') return []
     if (channel === 'dialog:select-novel-files') return {
       success: true,
-      inspection: {
-        inspectionId: 'inspection-1', sourceCount: 1, sourceDisplayNames: ['reference.txt'],
-        chapterCount: 1, totalWords: 16, totalBytes: 16,
-        preview: [{ number: 1, title: 'Start', wordCount: 16 }],
-      },
+      preparation,
     }
-    if (channel === 'db:import-run-prepare-inspection') return { success: true, preparation }
     if (channel === 'db:project-core-get') return null
     if (channel === 'db:blueprint-get-all') return []
     if (channel === 'db:draft-list') return []
@@ -137,6 +132,14 @@ describe('current-project reference import', () => {
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'persisted-import', uiLocale: 'zh-CN' })
     expect(invoke.mock.calls.some(([channel]) => channel === 'project:create')).toBe(false)
     expect(invoke.mock.calls.some(([channel]) => channel === 'import:inspect-source')).toBe(false)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:import-run-prepare-inspection')).toBe(false)
+    const selectionCall = invoke.mock.calls.find(([channel]) => channel === 'dialog:select-novel-files')
+    expect(selectionCall?.[1]).toMatchObject({
+      runId: expect.any(String), purpose: 'reference', locale: 'zh-CN', expectedProjectPath: project.path,
+    })
+    expect(selectionCall?.[2]).toMatchObject({
+      projectId: project.id, leaseId: project.sessionLease, projectPath: project.path,
+    })
     await expect.element(page.getByText('Current Project', { exact: true })).toBeVisible()
     await expect.element(page.getByText('导入参照文本与构建知识库', { exact: true })).toBeVisible()
     await expect.element(page.getByText('参照章节 1 正在写入知识库', { exact: true })).toBeVisible()
@@ -144,6 +147,7 @@ describe('current-project reference import', () => {
 
   it('shows the merged new-import inspection in English without a renderer grant step', async () => {
     await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await act(async () => page.getByTestId('import-target-current').click())
     await act(async () => page.getByRole('button', { name: 'Choose' }).first().click())
 
     await expect.element(page.getByText('1 files selected', { exact: true })).toBeVisible()
@@ -209,7 +213,7 @@ describe('current-project reference import', () => {
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'persisted-import' })
   })
 
-  it('lists two unfinished runs in Chinese and continues the run the user selects', async () => {
+  it('lists two unfinished runs and reauthorizes the parsing run the user selects', async () => {
     const first = importRun({
       id: 'first-run',
       sourceDisplay: [{ displayName: '星河.txt', mediaType: 'text/plain', size: 20 }],
@@ -219,13 +223,21 @@ describe('current-project reference import', () => {
     const second = importRun({
       id: 'second-run',
       sourceDisplay: [{ displayName: '雨城.txt', mediaType: 'text/plain', size: 40 }],
-      status: 'cancelled',
-      stage: 'blueprints',
+      status: 'failed',
+      stage: 'parsing',
+      lastError: 'source read interrupted',
       completedChapters: 3,
       totalChapters: 8,
     })
     invoke.mockImplementation(async (channel: string) => {
       if (channel === 'db:import-run-list-resumable') return [first, second]
+      if (channel === 'dialog:select-novel-files') return {
+        success: true,
+        preparation: {
+          classification: 'new', run: { ...second, status: 'ready', stage: 'knowledge' },
+          newChapterNumbers: [1], conflictChapterNumbers: [], duplicateChapterNumbers: [],
+        },
+      }
       if (channel === 'db:project-core-get') return null
       if (channel === 'db:blueprint-get-all') return []
       return { success: true }
@@ -239,8 +251,10 @@ describe('current-project reference import', () => {
     await act(async () => page.getByTestId('import-resumable-choice-second-run').click())
     await act(async () => page.getByRole('button', { name: '继续导入' }).click())
 
-    expect(startWorkflow).toHaveBeenCalledOnce()
-    expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'second-run' })
+    const selectionCall = invoke.mock.calls.find(([channel]) => channel === 'dialog:select-novel-files')
+    expect(selectionCall?.[1]).toMatchObject({ runId: 'second-run', purpose: 'reference' })
+    expect(startWorkflow).not.toHaveBeenCalled()
+    await expect.element(page.getByText('共 8 章')).toBeVisible()
   })
 
   it('lists two unfinished runs in English and restarts the run the user selects', async () => {

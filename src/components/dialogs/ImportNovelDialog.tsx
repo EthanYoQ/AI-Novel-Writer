@@ -1,11 +1,10 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { FileUp, FolderOpen, BookOpen, Zap, Clock, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
-import type { ImportInspectionSummary, ImportRunSnapshot } from '../../shared/import-run'
+import type { ImportInspectionSummary, ImportRunPreparationResult, ImportRunSnapshot } from '../../shared/import-run'
 import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
-import { inferImportedNovelProjectName } from './import-novel-paths'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
@@ -40,6 +39,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [splitting, setSplitting] = useState(false)
   const [splitDone, setSplitDone] = useState(false)
   const [splitError, setSplitError] = useState('')
+  const [selectionPreparation, setSelectionPreparation] = useState<ImportRunPreparationResult | null>(null)
+  const [selectionProjectLeaseId, setSelectionProjectLeaseId] = useState('')
+  const selectionRunId = useRef(randomUUID())
 
   // 导入流程
   const [importing, setImporting] = useState(false)
@@ -80,21 +82,65 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   }, [open, currentProject])
 
   /** 选择文件 */
-  const handleSelectFiles = useCallback(async () => {
+  const handleSelectFiles = useCallback(async (resumeRunId?: string) => {
     setSplitting(true)
     try {
-      const result = await ipc.invoke('dialog:select-novel-files')
+      let project = useProjectStore.getState().currentProject
+      let projectSession = captureProjectSession(project)
+      if (targetMode === 'new' && !resumeRunId) {
+        if (!name.trim() || !savePath.trim()) throw new Error(text(
+          '请先填写新项目名称和保存位置，再选择小说文件。',
+          'Enter the new project name and save location before choosing novel files.',
+        ))
+        const success = await createProject({
+          name: name.trim(),
+          path: savePath.trim(),
+          genre: '',
+          targetAudience: '',
+          writingLanguage: locale,
+        })
+        if (!success) return
+        project = useProjectStore.getState().currentProject
+        projectSession = captureProjectSession(project)
+        setTargetMode('current')
+      }
+      if (!project || !projectSession) throw new Error(text(
+        '目标项目缺少有效会话，已拒绝读取小说文件。',
+        'The target project has no valid session, so the novel files were not read.',
+      ))
+      const runId = resumeRunId || selectionRunId.current
+      const result = await ipc.invoke('dialog:select-novel-files', {
+        runId,
+        purpose: 'reference',
+        locale,
+        expectedProjectPath: project.path,
+      }, projectSession)
       if (!result) return
       setSplitDone(false)
       setSplitError('')
       setImportNotice('')
       setInspection(null)
-      if (result.success && result.inspection) {
-        setInspection(result.inspection)
+      setSelectionPreparation(null)
+      setSelectionProjectLeaseId('')
+      if (result.success && result.preparation) {
+        const prepared = result.preparation
+        setSelectionPreparation(prepared)
+        setSelectionProjectLeaseId(projectSession.leaseId)
+        const preparedRun = prepared.run
+        const chapterCount = preparedRun?.totalChapters
+          ?? prepared.newChapterNumbers.length
+          + prepared.duplicateChapterNumbers.length
+          + prepared.conflictChapterNumbers.length
+        setInspection({
+          inspectionId: runId,
+          sourceCount: preparedRun?.sourceDisplay.length ?? 0,
+          sourceDisplayNames: preparedRun?.sourceDisplay.map(source => source.displayName) ?? [],
+          chapterCount,
+          totalWords: preparedRun?.manifestWordCount ?? 0,
+          totalBytes: preparedRun?.totalContentSize ?? 0,
+          preview: [],
+        })
         setSplitDone(true)
-        if (!name.trim() && result.inspection.sourceDisplayNames[0]) {
-          setName(inferImportedNovelProjectName(result.inspection.sourceDisplayNames[0]))
-        }
       } else {
         setSplitError(result.error || text('拆章失败', 'Could not split chapters'))
       }
@@ -103,7 +149,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     } finally {
       setSplitting(false)
     }
-  }, [name, text])
+  }, [createProject, locale, name, savePath, targetMode, text])
 
   /** 选择保存路径 */
   const handleSelectFolder = useCallback(async () => {
@@ -133,50 +179,26 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const handleImport = useCallback(async () => {
     if (
       !inspection
-      || (targetMode === 'new' && (!name.trim() || !savePath.trim()))
-      || (targetMode === 'current' && !currentProject)
+      || !selectionPreparation
+      || currentProject?.sessionLease !== selectionProjectLeaseId
     ) return
 
     setImporting(true)
     setSplitError('')
     setImportNotice('')
     try {
-      let project = useProjectStore.getState().currentProject
-      let projectSession = captureProjectSession(project)
-      if (targetMode === 'new') {
-        const success = await createProject({
-          name: name.trim(),
-          path: savePath.trim(),
-          genre: '',
-          targetAudience: '',
-          writingLanguage: locale,
-        })
-        if (!success) return
-        project = useProjectStore.getState().currentProject
-        projectSession = captureProjectSession(project)
-      }
+      const project = useProjectStore.getState().currentProject
+      const projectSession = captureProjectSession(project)
       if (!project || !projectSession) throw new Error(text(
         '目标项目缺少有效会话，已拒绝导入',
         'The target project has no valid session, so the import was rejected.',
       ))
 
-      const prepared = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:import-run-prepare-inspection',
-        {
-          runId: randomUUID(),
-          inspectionId: inspection.inspectionId,
-          purpose: 'reference',
-          locale,
-        },
-        project.path,
-      )
-      if (!prepared.success || !prepared.preparation) throw new Error(prepared.error || text(
-        '无法创建导入运行', 'Could not create the import run.',
-      ))
       setInspection(null)
       setSplitDone(false)
-      const preparation = prepared.preparation
+      const preparation = selectionPreparation
+      setSelectionPreparation(null)
+      setSelectionProjectLeaseId('')
       if (preparation.classification === 'exact-duplicate') {
         setImportNotice(text(
           '该来源与已完成导入完全一致；未创建任务，也未调用模型。',
@@ -208,6 +230,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         return
       }
       if (!preparation.run) throw new Error(text('导入运行缺少持久化记录', 'The import run has no persisted record.'))
+      selectionRunId.current = randomUUID()
       launchRun(preparation.run)
     } catch (e) {
       console.error('[ImportNovel] 导入失败:', e)
@@ -216,13 +239,18 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       setImporting(false)
     }
   }, [
-    inspection, targetMode, currentProject,
-    name, savePath, createProject, locale, text, launchRun,
+    inspection, selectionPreparation, selectionProjectLeaseId, currentProject, text, launchRun,
   ])
 
   const handleResume = useCallback(() => {
-    if (resumableRun) launchRun(resumableRun)
-  }, [launchRun, resumableRun])
+    if (!resumableRun) return
+    if (resumableRun.stage === 'parsing' || resumableRun.stage === 'prepared') {
+      selectionRunId.current = resumableRun.id
+      void handleSelectFiles(resumableRun.id)
+      return
+    }
+    launchRun(resumableRun)
+  }, [handleSelectFiles, launchRun, resumableRun])
 
   const handleRestart = useCallback(async () => {
     if (!resumableRun) return
@@ -274,7 +302,13 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 variant={targetMode === 'new' ? 'default' : 'outline'}
                 aria-pressed={targetMode === 'new'}
                 data-testid="import-target-new"
-                onClick={() => setTargetMode('new')}
+                onClick={() => {
+                  setTargetMode('new')
+                  setInspection(null)
+                  setSelectionPreparation(null)
+                  setSelectionProjectLeaseId('')
+                  setSplitDone(false)
+                }}
               >
                 {text('创建新项目', 'Create new project')}
               </Button>
@@ -284,7 +318,13 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 aria-pressed={targetMode === 'current'}
                 data-testid="import-target-current"
                 disabled={!currentProject}
-                onClick={() => setTargetMode('current')}
+                onClick={() => {
+                  setTargetMode('current')
+                  setInspection(null)
+                  setSelectionPreparation(null)
+                  setSelectionProjectLeaseId('')
+                  setSplitDone(false)
+                }}
               >
                 {text('导入当前项目', 'Import into current project')}
               </Button>
@@ -359,7 +399,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                   ? text(`${inspection.sourceCount} 个文件已选择`, `${inspection.sourceCount} files selected`)
                   : text('支持 .txt / .md 文件（单个或多个）', 'Supports one or more .txt / .md files')}
               </div>
-              <Button variant="outline" onClick={handleSelectFiles} disabled={splitting}>
+              <Button variant="outline" onClick={() => { void handleSelectFiles() }} disabled={splitting}>
                 <FolderOpen size={14} />
                 {text('选择', 'Choose')}
               </Button>
@@ -506,8 +546,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             disabled={
               importing
               || !inspection
-              || (targetMode === 'new' && (!name.trim() || !savePath.trim()))
-              || (targetMode === 'current' && !currentProject)
+              || !selectionPreparation
+              || currentProject?.sessionLease !== selectionProjectLeaseId
             }
           >
             <FileUp size={14} />
