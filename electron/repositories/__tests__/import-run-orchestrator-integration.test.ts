@@ -66,11 +66,11 @@ function realDependencies(
     importReference: async () => { throw new Error('unexpected knowledge stage') },
     inferGlobal: async () => { throw new Error('unexpected global stage') },
     analyzeStyle: async () => { throw new Error('unexpected style stage') },
-    inferBlueprints: async (chapters, checkpoint, _run, commit) => {
+    inferBlueprints: async (chapters, _checkpoint, run, commit) => {
       modelCalls.push(chapters.map(item => item.number))
       await commit({
         mode: 'replace-range',
-        operationId: `import-blueprint:${checkpoint}`,
+        operationId: `import-blueprints-${run.id}-${chapters[0]!.number}-${chapters.at(-1)!.number}`,
         startChapter: chapters[0]!.number,
         endChapter: chapters.at(-1)!.number,
         blueprints: chapters.map(item => blueprint(item.number)),

@@ -10,7 +10,8 @@ const mocks = vi.hoisted(() => ({
   assertKnowledgeBaseStoragePathSupported: vi.fn(),
   projectStoragePreflightFailure: vi.fn(),
   readJsonFile: vi.fn(),
-  assertReferenceImportAuthority: vi.fn(),
+  resolveReferenceImportAuthority: vi.fn(),
+  commitReferenceImportReceipt: vi.fn(),
 }))
 
 vi.mock('electron', () => ({
@@ -51,7 +52,8 @@ vi.mock('../../services/knowledge-base-loader', () => ({
 
 vi.mock('../../repositories/import-run-repository', () => ({
   ImportRunRepository: {
-    assertReferenceImportAuthority: mocks.assertReferenceImportAuthority,
+    resolveReferenceImportAuthority: mocks.resolveReferenceImportAuthority,
+    commitReferenceImportReceipt: mocks.commitReferenceImportReceipt,
   },
 }))
 
@@ -90,7 +92,13 @@ beforeEach(() => {
   mocks.currentProjectPath = 'C:/projects/A'
   vi.clearAllMocks()
   mocks.readJsonFile.mockImplementation((_path: string, fallback: unknown) => fallback)
-  mocks.assertReferenceImportAuthority.mockImplementation(() => undefined)
+  mocks.resolveReferenceImportAuthority.mockReturnValue({
+    chapterNumber: 1,
+    title: 'Chapter 1',
+    content: 'frozen text',
+    contentFingerprint: 'a'.repeat(64),
+    stableKey: 'reference:key:1:fingerprint',
+  })
   mocks.assertCurrentProjectContext.mockImplementation((context: { projectPath?: string } | undefined, currentProjectPath: string) => {
     if (!context?.projectPath) throw new Error('缺少项目会话上下文，已拒绝操作')
     if (context.projectPath !== currentProjectPath) {
@@ -116,17 +124,23 @@ describe('knowledge-base controller project context guard', () => {
     }) => unknown) => operation({ importReferenceText }))
     const authority = { owner: 'renderer-a', epoch: 3 }
 
-    await expect(handler('kb:import-reference-text')(
-      {}, 'frozen text', 'Chapter 1.txt', 'reference:key:1:fingerprint',
-      'run-1', authority, 'C:/projects/A',
+    await expect(rawHandler('kb:import-reference-text')(
+      {}, 1, 'Chapter 1.txt', 'run-1', authority, {
+        projectId: 'project-A',
+        leaseId: 'lease-A',
+        projectPath: mocks.currentProjectPath,
+      },
     )).resolves.toEqual({ success: true, docId: 'reference-doc' })
 
-    expect(mocks.assertReferenceImportAuthority).toHaveBeenCalledWith(
-      'run-1', authority, 'reference:key:1:fingerprint', 'frozen text',
+    expect(mocks.resolveReferenceImportAuthority).toHaveBeenCalledWith(
+      'run-1', authority, 1,
     )
     expect(importReferenceText).toHaveBeenCalledWith(
       'frozen text', 'Chapter 1.txt', 'reference:key:1:fingerprint',
-      'run-1', authority, 'C:/projects/A', 'openai', expect.any(Object),
+      1, 'run-1', authority, 'C:/projects/A', 'openai', expect.any(Object),
+    )
+    expect(mocks.commitReferenceImportReceipt).toHaveBeenCalledWith(
+      'run-1', authority, 1, 'reference-doc',
     )
   })
 
