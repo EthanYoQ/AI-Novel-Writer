@@ -5,8 +5,10 @@
  * 具体业务逻辑由 /repositories 提供。
  */
 import { createRequire } from 'node:module'
+import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs'
+import { loadApplicationImportSourceSecret } from './services/import-source-identity-secret'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -17,7 +19,7 @@ let projectDb: BetterSqlite3.Database | null = null
 let currentProjectPath: string | null = null
 
 /** 初始化项目数据库（打开项目时调用） */
-export function initProjectDatabase(projectPath: string): void {
+export function initProjectDatabase(projectPath: string, importSourceSecret?: Buffer): void {
   closeProjectDatabase()
   currentProjectPath = projectPath
 
@@ -29,7 +31,7 @@ export function initProjectDatabase(projectPath: string): void {
   projectDb.pragma('foreign_keys = ON')
 
   // 创建表结构
-  createTables(projectDb)
+  createTables(projectDb, importSourceSecret)
   console.log(`[Vela DB] 项目数据库已打开: ${dbPath}`)
 }
 
@@ -55,7 +57,7 @@ export function getCurrentProjectPath(): string | null {
 }
 
 /** 创建完整表结构（9 张核心表 + 2 张沿用表） */
-function createTables(db: BetterSqlite3.Database) {
+function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   db.exec(`
     -- ============================================================
     -- 1. project_core — 项目主台账（NovelConfig + 架构四大件）
@@ -333,6 +335,443 @@ function createTables(db: BetterSqlite3.Database) {
 
     -- 索引
     CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls(created_at);
+
+    -- Reference imports are recoverable project facts, not generic workflow history.
+    CREATE TABLE IF NOT EXISTS import_runs (
+      id TEXT PRIMARY KEY,
+      purpose TEXT NOT NULL DEFAULT 'reference'
+        CHECK(purpose IN ('reference', 'author-manuscript')),
+      root_run_id TEXT NOT NULL,
+      effect_namespace TEXT NOT NULL,
+      source_fingerprint TEXT NOT NULL,
+      manifest_fingerprint TEXT NOT NULL,
+      legacy_source_fingerprint TEXT NOT NULL DEFAULT '',
+      source_display_json TEXT NOT NULL DEFAULT '[]',
+      locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
+      stage TEXT NOT NULL DEFAULT 'knowledge'
+        CHECK(stage IN ('parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed')),
+      status TEXT NOT NULL DEFAULT 'ready'
+        CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
+      completed_batches_json TEXT NOT NULL DEFAULT '{}',
+      last_error TEXT NOT NULL DEFAULT '',
+      resumable INTEGER NOT NULL DEFAULT 1 CHECK(resumable IN (0, 1)),
+      cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0, 1)),
+      execution_owner TEXT NOT NULL DEFAULT '',
+      execution_epoch INTEGER NOT NULL DEFAULT 0,
+      lease_expires_at INTEGER NOT NULL DEFAULT 0,
+      total_chapters INTEGER NOT NULL,
+      total_content_size INTEGER NOT NULL DEFAULT 0,
+      manifest_chapter_count INTEGER NOT NULL,
+      manifest_content_size INTEGER NOT NULL DEFAULT 0,
+      manifest_word_count INTEGER NOT NULL DEFAULT 0,
+      completed_chapters INTEGER NOT NULL DEFAULT 0,
+      base_run_id TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT DEFAULT NULL,
+      FOREIGN KEY (base_run_id) REFERENCES import_runs(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_runs_source_status
+      ON import_runs(source_fingerprint, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_import_runs_resumable
+      ON import_runs(resumable, status, updated_at);
+
+    CREATE TABLE IF NOT EXISTS import_run_chapters (
+      run_id TEXT NOT NULL,
+      chapter_number INTEGER NOT NULL,
+      source_id TEXT NOT NULL DEFAULT '',
+      source_chapter_number INTEGER NOT NULL DEFAULT 0,
+      title TEXT NOT NULL DEFAULT '',
+      content_fingerprint TEXT NOT NULL,
+      content_size INTEGER NOT NULL,
+      content_snapshot TEXT NOT NULL,
+      PRIMARY KEY (run_id, chapter_number),
+      FOREIGN KEY (run_id) REFERENCES import_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_run_chapters_page
+      ON import_run_chapters(run_id, chapter_number);
+
+    CREATE TABLE IF NOT EXISTS import_run_sources (
+      run_id TEXT NOT NULL,
+      source_index INTEGER NOT NULL,
+      source_id TEXT NOT NULL,
+      source_fingerprint TEXT NOT NULL,
+      legacy_source_fingerprint TEXT NOT NULL DEFAULT '',
+      display_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'failed')),
+      manifest_fingerprint TEXT NOT NULL DEFAULT '',
+      chapter_count INTEGER NOT NULL DEFAULT 0,
+      content_size INTEGER NOT NULL DEFAULT 0,
+      word_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (run_id, source_id),
+      UNIQUE (run_id, source_index),
+      FOREIGN KEY (run_id) REFERENCES import_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS import_run_source_chapters (
+      run_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_chapter_number INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      content_fingerprint TEXT NOT NULL,
+      content_size INTEGER NOT NULL,
+      word_count INTEGER NOT NULL,
+      content_snapshot TEXT NOT NULL,
+      PRIMARY KEY (run_id, source_id, source_chapter_number),
+      FOREIGN KEY (run_id, source_id) REFERENCES import_run_sources(run_id, source_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_run_source_chapters
+      ON import_run_source_chapters(run_id, source_id, source_chapter_number);
+
+    CREATE TABLE IF NOT EXISTS import_legacy_identity_bridge (
+      id TEXT PRIMARY KEY,
+      ciphertext_hex TEXT NOT NULL,
+      iv_hex TEXT NOT NULL,
+      auth_tag_hex TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS import_source_aliases (
+      alias_digest TEXT PRIMARY KEY,
+      alias_kind TEXT NOT NULL CHECK(alias_kind IN ('location', 'file')),
+      source_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_source_aliases_source
+      ON import_source_aliases(source_id);
+
+    CREATE TABLE IF NOT EXISTS import_source_chapter_map (
+      purpose TEXT NOT NULL CHECK(purpose IN ('reference', 'author-manuscript')),
+      source_id TEXT NOT NULL,
+      source_chapter_number INTEGER NOT NULL,
+      chapter_number INTEGER NOT NULL,
+      PRIMARY KEY (purpose, source_id, source_chapter_number),
+      UNIQUE (purpose, chapter_number)
+    );
+
+    CREATE TABLE IF NOT EXISTS import_run_receipts (
+      run_id TEXT NOT NULL,
+      schema_version INTEGER NOT NULL DEFAULT 1,
+      effect_namespace TEXT NOT NULL,
+      effect_key TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      batch_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'prepared' CHECK(state IN ('prepared', 'committed')),
+      effect_receipt_json TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (run_id, stage, batch_id),
+      UNIQUE (effect_namespace, effect_key),
+      FOREIGN KEY (run_id) REFERENCES import_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_run_receipts_state
+      ON import_run_receipts(run_id, state, stage);
+
+    CREATE TABLE IF NOT EXISTS import_run_knowledge_receipts (
+      run_id TEXT NOT NULL,
+      chapter_number INTEGER NOT NULL,
+      purpose TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_chapter_number INTEGER NOT NULL,
+      content_fingerprint TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state = 'committed'),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (run_id, chapter_number),
+      FOREIGN KEY (run_id, chapter_number)
+        REFERENCES import_run_chapters(run_id, chapter_number) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_run_knowledge_receipts_affiliation
+      ON import_run_knowledge_receipts(
+        purpose, source_id, source_chapter_number, content_fingerprint, state
+      );
+
+    CREATE TABLE IF NOT EXISTS import_reference_documents (
+      document_id TEXT PRIMARY KEY,
+      idempotency_key_hash TEXT NOT NULL UNIQUE,
+      content_hash TEXT NOT NULL,
+      chunk_set_hash TEXT NOT NULL,
+      expected_chunk_count INTEGER NOT NULL,
+      corpus_kind TEXT NOT NULL CHECK(corpus_kind = 'reference'),
+      state TEXT NOT NULL DEFAULT 'prepared' CHECK(state IN ('prepared', 'committed')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `)
+
+  // Import-run columns were introduced incrementally during pre-release development.
+  // Existing project databases must receive the same lease and manifest invariants.
+  const importRunColumns = new Set(
+    (db.prepare('PRAGMA table_info(import_runs)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  const addImportRunColumn = (name: string, definition: string) => {
+    if (importRunColumns.has(name)) return
+    db.exec(`ALTER TABLE import_runs ADD COLUMN ${name} ${definition}`)
+    importRunColumns.add(name)
+  }
+  addImportRunColumn('execution_owner', "TEXT NOT NULL DEFAULT ''")
+  addImportRunColumn('execution_epoch', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('lease_expires_at', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('manifest_chapter_count', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('manifest_content_size', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('manifest_word_count', 'INTEGER NOT NULL DEFAULT 0')
+  addImportRunColumn('purpose', "TEXT NOT NULL DEFAULT 'reference'")
+  addImportRunColumn('root_run_id', "TEXT NOT NULL DEFAULT ''")
+  addImportRunColumn('effect_namespace', "TEXT NOT NULL DEFAULT ''")
+  addImportRunColumn('legacy_source_fingerprint', "TEXT NOT NULL DEFAULT ''")
+  db.exec(`
+    UPDATE import_runs
+    SET manifest_chapter_count = CASE WHEN manifest_chapter_count = 0 THEN total_chapters ELSE manifest_chapter_count END,
+        manifest_content_size = CASE WHEN manifest_content_size = 0 THEN total_content_size ELSE manifest_content_size END,
+        root_run_id = CASE WHEN root_run_id = '' THEN id ELSE root_run_id END,
+        effect_namespace = CASE WHEN effect_namespace = '' THEN 'import:reference:' || id ELSE effect_namespace END
+  `)
+  const importRunSchema = db.prepare(`
+    SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'import_runs'
+  `).get() as { sql: string } | undefined
+  if (importRunSchema && !importRunSchema.sql.includes("'parsing'")) {
+    db.pragma('foreign_keys = OFF')
+    try {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE import_runs_stage_v2 (
+            id TEXT PRIMARY KEY,
+            purpose TEXT NOT NULL DEFAULT 'reference' CHECK(purpose IN ('reference', 'author-manuscript')),
+            root_run_id TEXT NOT NULL,
+            effect_namespace TEXT NOT NULL,
+            source_fingerprint TEXT NOT NULL,
+            manifest_fingerprint TEXT NOT NULL,
+            legacy_source_fingerprint TEXT NOT NULL DEFAULT '',
+            source_display_json TEXT NOT NULL DEFAULT '[]',
+            locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
+            stage TEXT NOT NULL DEFAULT 'parsing'
+              CHECK(stage IN ('parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed')),
+            status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
+            completed_batches_json TEXT NOT NULL DEFAULT '{}',
+            last_error TEXT NOT NULL DEFAULT '',
+            resumable INTEGER NOT NULL DEFAULT 1 CHECK(resumable IN (0, 1)),
+            cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0, 1)),
+            execution_owner TEXT NOT NULL DEFAULT '',
+            execution_epoch INTEGER NOT NULL DEFAULT 0,
+            lease_expires_at INTEGER NOT NULL DEFAULT 0,
+            total_chapters INTEGER NOT NULL,
+            total_content_size INTEGER NOT NULL DEFAULT 0,
+            manifest_chapter_count INTEGER NOT NULL,
+            manifest_content_size INTEGER NOT NULL DEFAULT 0,
+            manifest_word_count INTEGER NOT NULL DEFAULT 0,
+            completed_chapters INTEGER NOT NULL DEFAULT 0,
+            base_run_id TEXT DEFAULT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            completed_at TEXT DEFAULT NULL,
+            FOREIGN KEY (base_run_id) REFERENCES import_runs(id) ON DELETE SET NULL
+          );
+          INSERT INTO import_runs_stage_v2 (
+            id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint, legacy_source_fingerprint,
+            source_display_json, locale, stage, status, completed_batches_json, last_error,
+            resumable, cancel_requested, execution_owner, execution_epoch, lease_expires_at,
+            total_chapters, total_content_size, manifest_chapter_count, manifest_content_size,
+            manifest_word_count, completed_chapters, base_run_id, created_at, updated_at, completed_at
+          )
+          SELECT
+            id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint, legacy_source_fingerprint,
+            source_display_json, locale, stage, status, completed_batches_json, last_error,
+            resumable, cancel_requested, execution_owner, execution_epoch, lease_expires_at,
+            total_chapters, total_content_size, manifest_chapter_count, manifest_content_size,
+            manifest_word_count, completed_chapters, base_run_id, created_at, updated_at, completed_at
+          FROM import_runs;
+          DROP TABLE import_runs;
+          ALTER TABLE import_runs_stage_v2 RENAME TO import_runs;
+          CREATE INDEX idx_import_runs_source_status ON import_runs(source_fingerprint, status, updated_at);
+          CREATE INDEX idx_import_runs_resumable ON import_runs(resumable, status, updated_at);
+        `)
+      })()
+    } finally {
+      db.pragma('foreign_keys = ON')
+    }
+    const violations = db.pragma('foreign_key_check') as unknown[]
+    if (violations.length > 0) throw new Error('导入运行阶段迁移破坏了外键约束')
+  }
+  const importChapterColumns = new Set(
+    (db.prepare('PRAGMA table_info(import_run_chapters)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!importChapterColumns.has('source_id')) {
+    db.exec("ALTER TABLE import_run_chapters ADD COLUMN source_id TEXT NOT NULL DEFAULT ''")
+  }
+  if (!importChapterColumns.has('source_chapter_number')) {
+    db.exec('ALTER TABLE import_run_chapters ADD COLUMN source_chapter_number INTEGER NOT NULL DEFAULT 0')
+  }
+  db.exec(`
+    UPDATE import_run_chapters
+    SET source_id = 'legacy:' || COALESCE((
+          SELECT runs.source_fingerprint FROM import_runs AS runs WHERE runs.id = import_run_chapters.run_id
+        ), run_id),
+        source_chapter_number = chapter_number
+    WHERE source_id = '' OR source_chapter_number = 0;
+
+    CREATE TABLE IF NOT EXISTS import_source_chapter_map (
+      purpose TEXT NOT NULL CHECK(purpose IN ('reference', 'author-manuscript')),
+      source_id TEXT NOT NULL,
+      source_chapter_number INTEGER NOT NULL,
+      chapter_number INTEGER NOT NULL,
+      PRIMARY KEY (purpose, source_id, source_chapter_number),
+      UNIQUE (purpose, chapter_number)
+    );
+
+    INSERT OR IGNORE INTO import_source_chapter_map (
+      purpose, source_id, source_chapter_number, chapter_number
+    )
+    SELECT runs.purpose, chapters.source_id, chapters.source_chapter_number, chapters.chapter_number
+    FROM import_run_chapters AS chapters
+    JOIN import_runs AS runs ON runs.id = chapters.run_id
+    ORDER BY runs.created_at, runs.rowid, chapters.chapter_number;
+  `)
+  const unmappedLegacyChapters = db.prepare(`
+    SELECT DISTINCT runs.purpose, chapters.source_id, chapters.source_chapter_number
+    FROM import_run_chapters AS chapters
+    JOIN import_runs AS runs ON runs.id = chapters.run_id
+    LEFT JOIN import_source_chapter_map AS source_map
+      ON source_map.purpose = runs.purpose
+      AND source_map.source_id = chapters.source_id
+      AND source_map.source_chapter_number = chapters.source_chapter_number
+    WHERE source_map.chapter_number IS NULL
+    ORDER BY runs.created_at, runs.rowid, chapters.chapter_number
+  `).all() as Array<{
+    purpose: 'reference' | 'author-manuscript'
+    source_id: string
+    source_chapter_number: number
+  }>
+  const nextLegacyChapterByPurpose = new Map<string, number>()
+  const insertLegacySourceMapping = db.prepare(`
+    INSERT INTO import_source_chapter_map (
+      purpose, source_id, source_chapter_number, chapter_number
+    ) VALUES (?, ?, ?, ?)
+  `)
+  db.transaction(() => {
+    for (const chapter of unmappedLegacyChapters) {
+      let next = nextLegacyChapterByPurpose.get(chapter.purpose)
+      if (next === undefined) {
+        next = (db.prepare(`
+          SELECT COALESCE(MAX(chapter_number), 0) AS value
+          FROM import_source_chapter_map WHERE purpose = ?
+        `).get(chapter.purpose) as { value: number }).value
+      }
+      next += 1
+      nextLegacyChapterByPurpose.set(chapter.purpose, next)
+      insertLegacySourceMapping.run(
+        chapter.purpose,
+        chapter.source_id,
+        chapter.source_chapter_number,
+        next,
+      )
+    }
+  })()
+  const legacyManifestRuns = db.prepare(`
+    SELECT id, locale, manifest_chapter_count
+    FROM import_runs
+    WHERE manifest_word_count = 0 AND status <> 'completed' AND resumable = 1
+      AND stage NOT IN ('parsing', 'prepared')
+  `).all() as Array<{
+    id: string
+    locale: 'zh-CN' | 'en-US'
+    manifest_chapter_count: number
+  }>
+  const readLegacySnapshots = db.prepare(`
+    SELECT content_fingerprint, content_size, content_snapshot
+    FROM import_run_chapters
+    WHERE run_id = ?
+    ORDER BY chapter_number
+  `)
+  const saveLegacyWordCount = db.prepare(`
+    UPDATE import_runs
+    SET manifest_word_count = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `)
+  const rejectLegacyResume = db.prepare(`
+    UPDATE import_runs
+    SET status = 'failed', resumable = 0, cancel_requested = 0, last_error = ?,
+        execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+        updated_at = datetime('now')
+    WHERE id = ?
+  `)
+  db.transaction(() => {
+    for (const run of legacyManifestRuns) {
+      const snapshots = readLegacySnapshots.all(run.id) as Array<{
+        content_fingerprint: string
+        content_size: number
+        content_snapshot: string
+      }>
+      const snapshotsAreComplete = run.manifest_chapter_count > 0
+        && snapshots.length === run.manifest_chapter_count
+        && snapshots.every(snapshot =>
+          snapshot.content_snapshot.length > 0
+          && Buffer.byteLength(snapshot.content_snapshot, 'utf8') === snapshot.content_size
+          && createHash('sha256').update(snapshot.content_snapshot).digest('hex') === snapshot.content_fingerprint,
+        )
+      if (snapshotsAreComplete) {
+        saveLegacyWordCount.run(
+          snapshots.reduce((total, snapshot) => total + snapshot.content_snapshot.length, 0),
+          run.id,
+        )
+        continue
+      }
+      rejectLegacyResume.run(
+        run.locale === 'en-US'
+          ? 'This legacy import is missing complete frozen chapter snapshots and cannot be resumed. Select the source again to restart.'
+          : '该旧导入缺少完整的冻结章节快照，不可恢复；请重新选择来源后开始。',
+        run.id,
+      )
+    }
+  })()
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_import_runs_purpose_source_status
+      ON import_runs(purpose, source_fingerprint, status, updated_at)
+  `)
+  const importReceiptColumns = new Set(
+    (db.prepare('PRAGMA table_info(import_run_receipts)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!importReceiptColumns.has('schema_version')) {
+    db.exec('ALTER TABLE import_run_receipts ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1')
+  }
+  const legacyIdentityTable = db.prepare(`
+    SELECT 1 AS value FROM sqlite_master WHERE type = 'table' AND name = 'import_source_identity'
+  `).get() as { value: number } | undefined
+  if (legacyIdentityTable) {
+    const migrationSecret = importSourceSecret ?? loadApplicationImportSourceSecret()
+    if (!Buffer.isBuffer(migrationSecret) || migrationSecret.byteLength !== 32) {
+      throw new Error('旧导入来源身份迁移需要有效的应用密钥')
+    }
+    const legacy = db.prepare('SELECT salt_hex FROM import_source_identity WHERE id = ?')
+      .get('main') as { salt_hex: string } | undefined
+    if (legacy) {
+      const salt = Buffer.from(legacy.salt_hex, 'hex')
+      if (salt.byteLength !== 32) throw new Error('旧导入来源身份盐损坏')
+      const iv = randomBytes(12)
+      const cipher = createCipheriv('aes-256-gcm', migrationSecret, iv)
+      cipher.setAAD(Buffer.from('ai-novel:legacy-import-source-salt:v1', 'utf8'))
+      const ciphertext = Buffer.concat([cipher.update(salt), cipher.final()])
+      db.prepare(`
+        INSERT OR REPLACE INTO import_legacy_identity_bridge (
+          id, ciphertext_hex, iv_hex, auth_tag_hex
+        ) VALUES ('main', ?, ?, ?)
+      `).run(ciphertext.toString('hex'), iv.toString('hex'), cipher.getAuthTag().toString('hex'))
+    }
+    db.exec('DROP TABLE import_source_identity')
+  }
+  // Opening a project database is a process/session boundary. Any persisted
+  // running owner belonged to the previous handle and must be fenced before a
+  // new renderer can resume the run.
+  db.exec(`
+    UPDATE import_runs
+    SET execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+        updated_at = datetime('now')
+    WHERE status = 'running' AND (execution_owner <> '' OR lease_expires_at <> 0)
   `)
 
   // 角色事实继续存放于 characters；这里仅建立 revision、迁移与幂等元数据。

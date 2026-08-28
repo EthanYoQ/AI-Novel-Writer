@@ -5,7 +5,6 @@ import { useLLMStore } from '../../../../stores/llm-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import {
-  ImportInitializeCommand,
   InferBlueprintsPerChapterCommand as RuntimeInferBlueprintsPerChapterCommand,
   InferGlobalSettingsCommand as RuntimeInferGlobalSettingsCommand,
 } from '../import-novel.command'
@@ -200,168 +199,6 @@ afterEach(() => {
   useLocaleStore.setState({ locale: originalLocale })
 })
 
-describe('ImportInitializeCommand', () => {
-  it('logs the new reference-only import flow in English when the UI locale is English', async () => {
-    const context = createContext()
-    context.uiLocale = 'en-US'
-    context.writingLanguage = 'en-US'
-    useLocaleStore.setState({ locale: 'zh-CN' })
-    const invoke = stubIpcInvoke((channel) => {
-      if (channel === 'kb:import-text') {
-        useLocaleStore.setState({ locale: 'zh-CN' })
-        return { success: true }
-      }
-      if (channel === 'fs:list-dir') return []
-      throw new Error(`unexpected IPC ${channel}`)
-    })
-
-    await new ImportInitializeCommand(context.data.chapters as never[]).execute({
-      step: {},
-      context,
-      callbacks,
-    })
-
-    expect(callbacks.log).toHaveBeenCalledWith('Importing 1 reference chapter into the knowledge base...')
-    expect(callbacks.log).toHaveBeenCalledWith('Building the vector knowledge base...')
-    expect(callbacks.log).toHaveBeenCalledWith('Knowledge base build complete (1 succeeded, 0 failed)')
-    expect(invoke).toHaveBeenCalledWith(
-      'kb:import-text',
-      '主角在雨夜发现异常，并踏上旅程。',
-      'Chapter 1 启程.txt',
-      context.projectPath,
-      context.projectSession,
-    )
-  })
-
-  it('uses Chinese KB document names from writing language independently of English UI copy', async () => {
-    const context = createContext()
-    context.writingLanguage = 'zh-CN'
-    context.uiLocale = 'en-US'
-    const invoke = stubIpcInvoke((channel) => {
-      if (channel === 'kb:import-text') return { success: true }
-      if (channel === 'fs:list-dir') return []
-      throw new Error(`unexpected IPC ${channel}`)
-    })
-
-    await new ImportInitializeCommand(context.data.chapters as never[]).execute({
-      step: {},
-      context,
-      callbacks,
-    })
-
-    expect(invoke).toHaveBeenCalledWith(
-      'kb:import-text',
-      '主角在雨夜发现异常，并踏上旅程。',
-      '第1章 启程.txt',
-      context.projectPath,
-      context.projectSession,
-    )
-    expect(callbacks.log).toHaveBeenCalledWith('Building the vector knowledge base...')
-  })
-
-  it('treats imported chapters as reference material: it writes the knowledge base without creating drafts or finalized manuscript chapters', async () => {
-    const context = createContext()
-    const chapters = context.data.chapters as never[]
-    Reflect.deleteProperty(context.data, 'chapters')
-    const invoke = stubIpcInvoke((channel) => {
-      if (channel === 'kb:import-text') return { success: true }
-      if (channel === 'fs:list-dir') return []
-      throw new Error(`unexpected IPC ${channel}`)
-    })
-
-    await new ImportInitializeCommand(chapters).execute({
-      step: {},
-      context,
-      callbacks,
-    })
-
-    const channels = invoke.mock.calls.map(([channel]) => channel)
-    expect(channels).toContain('kb:import-text')
-    expect(channels.filter(channel => channel === 'kb:import-text')).toHaveLength(chapters.length)
-    expect(channels.some(channel => String(channel).startsWith('db:draft-'))).toBe(false)
-    expect(channels).not.toContain('db:draft-create')
-    expect(channels).not.toContain('db:draft-update-status')
-    expect(channels).not.toContain('db:draft-import-finalized-batch')
-    expect(channels.some(channel => String(channel).startsWith('manuscript:'))).toBe(false)
-    expect(context.data.chapters).toEqual(chapters)
-    expect(context.data.finalizedDraftImportReceipt).toBeUndefined()
-  })
-
-  it('continues after a pending derived file-tree refresh while preserving imported reference chapters', async () => {
-    vi.useFakeTimers()
-    const context = createContext()
-    stubIpcInvoke((channel) => {
-      if (channel === 'kb:import-text') return { success: true }
-      throw new Error(`unexpected IPC ${channel}`)
-    })
-    const refreshFileTree = vi.fn(() => new Promise<void>(() => {}))
-    useProjectStore.setState({ refreshFileTree })
-    let settled = false
-    let failure: unknown
-
-    void new ImportInitializeCommand(context.data.chapters as never[]).execute({
-      step: {},
-      context,
-      callbacks,
-    }).then(
-      () => { settled = true },
-      error => {
-        settled = true
-        failure = error
-      },
-    )
-
-    await vi.advanceTimersByTimeAsync(5_000)
-
-    expect(settled).toBe(true)
-    expect(failure).toBeUndefined()
-    expect(refreshFileTree).toHaveBeenCalledOnce()
-    expect(context.data.chapters).toEqual(createContext().data.chapters)
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('文件树刷新'))
-  })
-
-  it('continues after a rejected derived file-tree refresh while preserving imported reference chapters', async () => {
-    const context = createContext()
-    stubIpcInvoke((channel) => {
-      if (channel === 'kb:import-text') return { success: true }
-      throw new Error(`unexpected IPC ${channel}`)
-    })
-    const refreshFileTree = vi.fn(() => Promise.reject(new Error('refresh failed')))
-    useProjectStore.setState({ refreshFileTree })
-
-    await expect(new ImportInitializeCommand(context.data.chapters as never[]).execute({
-      step: {},
-      context,
-      callbacks,
-    })).resolves.toBeUndefined()
-
-    expect(refreshFileTree).toHaveBeenCalledOnce()
-    expect(context.data.chapters).toEqual(createContext().data.chapters)
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('文件树刷新'))
-  })
-
-  it('keeps the imported reference context when a knowledge-base chapter fails without creating a draft', async () => {
-    const context = createContext()
-    const invoke = stubIpcInvoke((channel) => {
-      if (channel === 'kb:import-text') return { success: false, error: '向量服务不可用' }
-      if (channel === 'fs:list-dir') return []
-      throw new Error(`unexpected IPC ${channel}`)
-    })
-
-    await expect(new ImportInitializeCommand(context.data.chapters as never[]).execute({
-      step: {},
-      context,
-      callbacks,
-    })).resolves.toBeUndefined()
-
-    expect(invoke.mock.calls.map(([channel]) => channel)).toContain('kb:import-text')
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:draft-import-finalized-batch')
-    expect(context.data.finalizedDraftImportReceipt).toBeUndefined()
-    expect(context.data.chapters).toEqual(createContext().data.chapters)
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('部分参照文本未能进入知识库'))
-  })
-})
-
 describe('InferBlueprintsPerChapterCommand', () => {
   it('keeps imported UTF-8 intact in English blueprint inference and its syntax-repair request', async () => {
     const importedText = 'At “夜航 Café”, Mara sees 招牌写着“回家” and hears déjà vu in the rain.'
@@ -393,7 +230,7 @@ describe('InferBlueprintsPerChapterCommand', () => {
     }))
     useLLMStore.setState({
       defaultModelId: 'model-a',
-      generateStream: vi.fn(async (messages, streamCallbacks) => {
+      generateStream: vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(async (messages, streamCallbacks) => {
         observed.push(messages)
         streamCallbacks.onDone?.(observed.length === 1 ? malformed : valid, undefined, 'stop')
         return `import-blueprint-language-${observed.length}`
@@ -401,7 +238,7 @@ describe('InferBlueprintsPerChapterCommand', () => {
     })
     const context = createContext()
     context.writingLanguage = 'en-US'
-    context.uiLocale = 'en-US'
+    context.uiLocale = 'zh-CN'
     const configSummary = 'A time-loop mystery at “夜航 Café”.'
     context.data.novelConfigSummary = configSummary
     context.data.chapters = [{
@@ -434,8 +271,8 @@ describe('InferBlueprintsPerChapterCommand', () => {
     )
     expect(initialBuiltIn).not.toMatch(CJK_TEXT)
     expect(repairBuiltIn).not.toMatch(CJK_TEXT)
-    expect(callbacks.log).toHaveBeenCalledWith('Inferring blueprints in batches (1 chapter; at most 1 model call)...')
-    expect(callbacks.log).toHaveBeenCalledWith('  Inferring Chapters 1–1...')
+    expect(callbacks.log).toHaveBeenCalledWith('开始分批推演蓝图（共 1 章，预计至多 1 次调用）...')
+    expect(callbacks.log).toHaveBeenCalledWith('  正在推演第 1–1 章...')
   })
 
   it('performs zero per-chapter writes and throws when the one range commit fails', async () => {
@@ -614,6 +451,34 @@ describe('InferBlueprintsPerChapterCommand', () => {
 })
 
 describe('InferGlobalSettingsCommand', () => {
+  it('uses the frozen full manifest chapter count instead of the bounded sample size', async () => {
+    successfulInferenceIpc()
+    const workflowContext = createContext()
+    workflowContext.data.chapters = Array.from({ length: 5 }, (_, index) => ({
+      number: index + 1,
+      title: `样本 ${index + 1}`,
+      content: `有界样本 ${index + 1}`,
+      wordCount: 6,
+    }))
+    workflowContext.data.importRunTotalChapters = 23
+    let prompt = ''
+    useLLMStore.setState({
+      defaultModelId: 'model-a',
+      generateStream: vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(async (messages, streamCallbacks) => {
+        prompt = messages.map(message => message.content).join('\n')
+        streamCallbacks.onDone?.(JSON.stringify(validInference()), undefined, 'stop')
+        return 'full-manifest-count'
+      }),
+    })
+
+    await new InferGlobalSettingsCommand().execute({
+      step: {}, context: workflowContext, callbacks,
+    })
+
+    expect(prompt).toContain('【总章数】23 章')
+    expect(prompt).not.toContain('【总章数】5 章')
+  })
+
   it('uses the frozen English writing language for inference and syntax repair without rewriting imported UTF-8', async () => {
     const invoke = successfulInferenceIpc()
     const importedText = 'The sign reads “夜航 Café” — déjà vu.'

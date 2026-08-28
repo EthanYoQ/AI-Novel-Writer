@@ -40,6 +40,76 @@ beforeEach(() => {
 })
 
 describe('workflow pause at a safe step boundary', () => {
+  it('reuses an active caller-supplied run id without mutating the first workflow', async () => {
+    let releaseFirst!: () => void
+    const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const firstExecutor = vi.fn(async () => { await firstBlocked })
+    const secondExecutor = vi.fn()
+    const first = useWorkflowStore.getState().startWorkflow({
+      runId: 'same-import-run',
+      type: 'novel_import',
+      title: 'First import',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: 'first', description: 'first', executor: firstExecutor }],
+    })
+
+    await vi.waitFor(() => expect(firstExecutor).toHaveBeenCalledOnce())
+    const duplicateId = await useWorkflowStore.getState().startWorkflow({
+      runId: 'same-import-run',
+      type: 'novel_import',
+      title: 'Duplicate import',
+      projectPath,
+      projectSession: frozenSession('wrong-lease'),
+      steps: [{ name: 'duplicate', description: 'duplicate', executor: secondExecutor }],
+    })
+
+    expect(duplicateId).toBe('same-import-run')
+    expect(useWorkflowStore.getState().activeRuns).toHaveLength(1)
+    expect(useWorkflowStore.getState().activeRuns[0]).toMatchObject({
+      id: 'same-import-run',
+      title: 'First import',
+      status: 'running',
+    })
+    expect(secondExecutor).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().history).toHaveLength(0)
+
+    releaseFirst()
+    await first
+  })
+
+  it('durably requests cancellation immediately and finalizes it at a paused boundary', async () => {
+    let finishStep!: () => void
+    const blocked = new Promise<void>((resolve) => { finishStep = resolve })
+    const requested = vi.fn(async () => undefined)
+    const finalized = vi.fn(async () => undefined)
+    const completion = useWorkflowStore.getState().startWorkflow({
+      runId: 'durable-cancel-run',
+      type: 'novel_import',
+      title: 'Durable cancel',
+      projectPath,
+      projectSession: frozenSession(),
+      onCancelRequested: requested,
+      onCancelledAtBoundary: finalized,
+      steps: [
+        { name: 'one', description: 'one', executor: async () => { await blocked } },
+        { name: 'two', description: 'two', executor: vi.fn() },
+      ],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.steps[0]?.status).toBe('running'))
+    useWorkflowStore.getState().pauseWorkflow('durable-cancel-run')
+    finishStep()
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('paused'))
+
+    useWorkflowStore.getState().cancelWorkflow('durable-cancel-run')
+    expect(requested).toHaveBeenCalledOnce()
+    await completion
+
+    expect(finalized).toHaveBeenCalledOnce()
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({
+      id: 'durable-cancel-run', status: 'failed',
+    })
+  })
   it('freezes the project writing language into both the run and command context', async () => {
     const project = useProjectStore.getState().currentProject!
     useProjectStore.setState({

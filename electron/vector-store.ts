@@ -27,7 +27,10 @@ export interface ChunkRecord {
   chunkIndex: number
   totalChunks: number
   importedAt: string
+  corpusKind: KnowledgeCorpusKind
 }
+
+export type KnowledgeCorpusKind = 'reference' | 'project-knowledge' | 'unknown'
 
 /** 文档元信息（聚合查询结果） */
 export interface DocumentInfo {
@@ -37,6 +40,7 @@ export interface DocumentInfo {
   importedAt: string
   chunkCount: number
   filePath: string
+  corpusKind: KnowledgeCorpusKind
 }
 
 /** 检索结果 */
@@ -158,6 +162,7 @@ function canonicalChunkSchema(): ArrowSchema {
     new Field('chunkIndex', new Int32()),
     new Field('totalChunks', new Int32()),
     new Field('importedAt', new Utf8()),
+    new Field('corpusKind', new Utf8()),
   ])
 }
 
@@ -173,6 +178,7 @@ function embeddingChunkSchema(dimension: number): ArrowSchema {
     new Field('chunkIndex', new Int32()),
     new Field('totalChunks', new Int32()),
     new Field('importedAt', new Utf8()),
+    new Field('corpusKind', new Utf8()),
   ])
 }
 
@@ -476,8 +482,15 @@ function recordsForSchema(records: ReadonlyArray<Record<string, unknown>>, schem
 
 async function appendCompatibleRecords(table: lancedb.Table, records: ReadonlyArray<Record<string, unknown>>): Promise<void> {
   if (records.length === 0) return
+  await ensureCorpusKindColumn(table)
   const schema = await table.schema()
   await table.add(recordsForSchema(records, schema))
+}
+
+async function ensureCorpusKindColumn(table: lancedb.Table): Promise<void> {
+  const schema = await table.schema()
+  if (schema.fields.some(field => field.name === 'corpusKind')) return
+  await table.addColumns([{ name: 'corpusKind', valueSql: "'unknown'" }])
 }
 
 async function appendCanonicalRecords(
@@ -888,6 +901,7 @@ async function writeDocumentInfo(
     return
   }
   const docsTable = await db.openTable(DOCS_TABLE_NAME)
+  await ensureCorpusKindColumn(docsTable)
   // 先追加。若后续 canonical/vector/catalog 任一步失败，旧同名文档仍然存在，
   // 回滚也只会删除本次 docId。
   await docsTable.add([docInfo])
@@ -901,7 +915,8 @@ async function pruneSupersededDocumentInfo(
     const docsTable = await db.openTable(DOCS_TABLE_NAME)
     const fileName = docInfo.fileName.replace(/'/g, "''")
     const docId = docInfo.id.replace(/'/g, "''")
-    await docsTable.delete(`\`fileName\` = '${fileName}' AND id != '${docId}'`)
+    const corpusKind = docInfo.corpusKind.replace(/'/g, "''")
+    await docsTable.delete(`\`fileName\` = '${fileName}' AND \`corpusKind\` = '${corpusKind}' AND id != '${docId}'`)
   } catch (error) {
     // 这一步是旧元数据整理，不应将已完成的安全写入变成失败或删除新数据。
     console.warn('[Vela VectorStore] 清理同名旧文档元数据失败:', error)
@@ -949,7 +964,12 @@ export async function addChunks(
   chunks: string[],
   vectors?: number[][],
   filePath?: string,
-  metadata?: { chapterNumber?: number; chapterTitle?: string },
+  metadata?: {
+    chapterNumber?: number
+    chapterTitle?: string
+    corpusKind?: KnowledgeCorpusKind
+    replacementMode?: 'by-file-name' | 'stable-id'
+  },
   embeddingSpace?: EmbeddingSpaceIdentity,
 ): Promise<{ success: boolean; chunkCount: number; error?: string }> {
   if (!validateChunks(chunks)) {
@@ -967,6 +987,7 @@ export async function addChunks(
   try {
     db = await getConnection(projectPath)
     const now = new Date().toISOString()
+    const corpusKind = metadata?.corpusKind ?? 'unknown'
     const canonicalRecords: ChunkRecord[] = chunks.map((text, index) => ({
       id: randomUUID(),
       docId,
@@ -977,6 +998,7 @@ export async function addChunks(
       importedAt: now,
       chapterNumber: metadata?.chapterNumber,
       chapterTitle: metadata?.chapterTitle,
+      corpusKind,
     }))
     chunkIds = canonicalRecords.map(record => record.id)
     const tableNames = await db.tableNames()
@@ -1020,6 +1042,7 @@ export async function addChunks(
       importedAt: now,
       chunkCount: chunks.length,
       filePath: filePath || '',
+      corpusKind,
     }
     if (!validation.vectors && registry.activeGeneration !== null) {
       // This must precede document/canonical writes. Do not restore the old
@@ -1038,7 +1061,9 @@ export async function addChunks(
       await finaliseEmbeddingWrite(projectPath, db, registry, embeddingWrite)
     }
 
-    await pruneSupersededDocumentInfo(db, docInfo)
+    if (metadata?.replacementMode !== 'stable-id') {
+      await pruneSupersededDocumentInfo(db, docInfo)
+    }
 
     rollbackRequired = false
     return { success: true, chunkCount: chunks.length }
@@ -1061,12 +1086,41 @@ export async function removeDocument(projectPath: string, docId: string): Promis
     const tableNames = await db.tableNames()
     const registry = await loadOrRegisterLegacyRegistry(projectPath, db, tableNames)
     const escapedId = docId.replace(/'/g, "''")
-    const targets = new Set<string>([TABLE_NAME, ...registry.spaces.map(space => space.tableName)])
+    const targets = new Set<string>([
+      TABLE_NAME,
+      ...tableNames.filter(tableName => tableName.startsWith(EMBEDDING_TABLE_PREFIX)),
+      ...registry.spaces.map(space => space.tableName),
+    ])
     for (const tableName of targets) {
       if (tableNames.includes(tableName)) await (await db.openTable(tableName)).delete(`\`docId\` = '${escapedId}'`)
     }
     if (tableNames.includes(DOCS_TABLE_NAME)) {
       await (await db.openTable(DOCS_TABLE_NAME)).delete(`id = '${escapedId}'`)
+    }
+
+    // LanceDB cannot atomically delete across physical generations.  A retry is
+    // safe only after proving that every registered and orphan generation has
+    // reached the same zero-row postcondition.
+    const remainingTableNames = await db.tableNames()
+    const remainingTargets = new Set<string>([
+      TABLE_NAME,
+      ...remainingTableNames.filter(tableName => tableName.startsWith(EMBEDDING_TABLE_PREFIX)),
+      ...registry.spaces.map(space => space.tableName),
+    ])
+    for (const tableName of remainingTargets) {
+      if (!remainingTableNames.includes(tableName)) continue
+      const rows = await (await db.openTable(tableName)).query()
+        .filter(`\`docId\` = '${escapedId}'`)
+        .limit(1)
+        .toArray()
+      if (rows.length > 0) return false
+    }
+    if (remainingTableNames.includes(DOCS_TABLE_NAME)) {
+      const rows = await (await db.openTable(DOCS_TABLE_NAME)).query()
+        .filter(`id = '${escapedId}'`)
+        .limit(1)
+        .toArray()
+      if (rows.length > 0) return false
     }
     return true
   } catch (error) {
@@ -1198,16 +1252,153 @@ export async function listDocuments(projectPath: string): Promise<DocumentInfo[]
   try {
     const db = await getConnection(projectPath)
     if (!(await db.tableNames()).includes(DOCS_TABLE_NAME)) return []
-    const rows = await (await db.openTable(DOCS_TABLE_NAME)).query().toArray()
-    return rows.map((row: { id: string; fileName: string; importedAt: string; chunkCount: number; filePath?: string }) => ({
+    const table = await db.openTable(DOCS_TABLE_NAME)
+    await ensureCorpusKindColumn(table)
+    const rows = await table.query().toArray()
+    return rows.map((row: { id: string; fileName: string; importedAt: string; chunkCount: number; filePath?: string; corpusKind?: KnowledgeCorpusKind }) => ({
       id: row.id,
       fileName: row.fileName,
       importedAt: row.importedAt,
       chunkCount: row.chunkCount,
       filePath: row.filePath || '',
+      corpusKind: row.corpusKind ?? 'unknown',
     }))
   } catch {
     return []
+  }
+}
+
+export interface DocumentIntegrity {
+  docId: string
+  corpusKind: KnowledgeCorpusKind
+  chunkCount: number
+  chunkSetHash: string
+  complete: boolean
+  embeddingGenerations: Array<{
+    generation: number | null
+    tableName: string
+    status: EmbeddingSpaceStatus | 'unregistered'
+    chunkCount: number
+    complete: boolean
+  }>
+}
+
+export function hashCanonicalChunkSet(chunks: readonly string[]): string {
+  return createHash('sha256').update(JSON.stringify(chunks), 'utf8').digest('hex')
+}
+
+/** Validate both the document commit row and every canonical chunk for a stable import. */
+export async function getDocumentIntegrity(
+  projectPath: string,
+  docId: string,
+): Promise<DocumentIntegrity | null> {
+  const db = await getConnection(projectPath)
+  const tableNames = await db.tableNames()
+  const escapedId = docId.replace(/'/g, "''")
+  let chunkRows: Array<{ id: string; chunkIndex: number; totalChunks: number; text: string; corpusKind?: KnowledgeCorpusKind }> = []
+  if (tableNames.includes(TABLE_NAME)) {
+    const chunksTable = await db.openTable(TABLE_NAME)
+    await ensureCorpusKindColumn(chunksTable)
+    chunkRows = await chunksTable.query()
+      .filter(`\`docId\` = '${escapedId}'`)
+      .select(['id', 'chunkIndex', 'totalChunks', 'text', 'corpusKind'])
+      .toArray() as typeof chunkRows
+  }
+  let documentRows: Array<{ id: string; chunkCount: number; corpusKind?: KnowledgeCorpusKind }> = []
+  if (tableNames.includes(DOCS_TABLE_NAME)) {
+    const docsTable = await db.openTable(DOCS_TABLE_NAME)
+    await ensureCorpusKindColumn(docsTable)
+    documentRows = await docsTable.query()
+      .filter(`id = '${escapedId}'`)
+      .select(['id', 'chunkCount', 'corpusKind'])
+      .toArray() as typeof documentRows
+  }
+  const ordered = [...chunkRows].sort((left, right) => left.chunkIndex - right.chunkIndex)
+  const document = documentRows[0]
+  const corpusKind = document?.corpusKind ?? ordered[0]?.corpusKind ?? 'unknown'
+  const canonicalComplete = documentRows.length === 1
+    && ordered.length > 0
+    && document?.chunkCount === ordered.length
+    && new Set(ordered.map(row => row.id)).size === ordered.length
+    && ordered.every((row, index) => (
+      row.chunkIndex === index
+      && row.totalChunks === ordered.length
+      && (row.corpusKind ?? 'unknown') === corpusKind
+      && typeof row.text === 'string'
+    ))
+
+  const registry = readRegistry(projectPath) ?? await inferLegacyRegistry(db, tableNames)
+  const registeredByTable = new Map(registry.spaces.map(space => [space.tableName, space] as const))
+  const physicalEmbeddingTables = new Set(
+    tableNames.filter(tableName => tableName.startsWith(EMBEDDING_TABLE_PREFIX)),
+  )
+  for (const space of registry.spaces) {
+    physicalEmbeddingTables.add(space.tableName)
+  }
+  const canonicalByIndex = new Map(ordered.map(row => [row.chunkIndex, row] as const))
+  const embeddingGenerations: DocumentIntegrity['embeddingGenerations'] = []
+  for (const tableName of [...physicalEmbeddingTables].sort()) {
+    let rows: Array<{
+      id?: unknown
+      chunkIndex?: unknown
+      totalChunks?: unknown
+      text?: unknown
+      vector?: unknown
+      corpusKind?: KnowledgeCorpusKind
+    }> = []
+    if (tableNames.includes(tableName)) {
+      const table = await db.openTable(tableName)
+      await ensureCorpusKindColumn(table)
+      rows = await table.query()
+        .filter(`\`docId\` = '${escapedId}'`)
+        .toArray() as typeof rows
+    }
+    const registered = registeredByTable.get(tableName)
+    const required = rows.length > 0 || registered?.generation === registry.activeGeneration
+    const orderedEmbeddingRows = [...rows].sort((left, right) => (
+      typeof left.chunkIndex === 'number' && typeof right.chunkIndex === 'number'
+        ? left.chunkIndex - right.chunkIndex
+        : 0
+    ))
+    const indexes = orderedEmbeddingRows.map(row => row.chunkIndex)
+    const exactSequence = canonicalComplete
+      && !!registered
+      && orderedEmbeddingRows.length === ordered.length
+      && new Set(indexes).size === orderedEmbeddingRows.length
+      && orderedEmbeddingRows.every((row, index) => {
+        const canonical = canonicalByIndex.get(index)
+        return row.chunkIndex === index
+          && row.totalChunks === ordered.length
+          && row.id === canonical?.id
+          && row.text === canonical?.text
+          && (row.corpusKind ?? 'unknown') === corpusKind
+          && vectorIsUsable(row.vector, registered.vectorDimension)
+      })
+    embeddingGenerations.push({
+      generation: registered?.generation ?? null,
+      tableName,
+      status: registered?.status ?? 'unregistered',
+      chunkCount: rows.length,
+      complete: !required || (!!registered && exactSequence),
+    })
+  }
+  if (
+    documentRows.length === 0
+    && chunkRows.length === 0
+    && embeddingGenerations.every(generation => generation.chunkCount === 0)
+  ) return null
+  return {
+    docId,
+    corpusKind,
+    chunkCount: ordered.length,
+    chunkSetHash: hashCanonicalChunkSet(ordered.map(row => row.text)),
+    // A building generation is intentionally allowed to contain a bounded
+    // prefix while backfill is running.  Active/inactive registry entries are
+    // durable completion markers; unregistered rows are crash residue.
+    complete: canonicalComplete && embeddingGenerations.every(generation => (
+      generation.status === 'building' || generation.complete
+    )),
+    embeddingGenerations,
   }
 }
 

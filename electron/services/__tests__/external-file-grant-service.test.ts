@@ -279,6 +279,7 @@ describe('ExternalFileGrantService', () => {
       relativePath: 'chapter.txt',
       scope: 'directory',
     })
+    expect(grants.activeCount()).toBe(1)
     expect(() => grants.resolve(request)).toThrow('外部文件授权已用尽')
 
     fs.rmSync(root, { recursive: true, force: true })
@@ -310,7 +311,7 @@ describe('ExternalFileGrantService', () => {
     fs.rmSync(root, { recursive: true, force: true })
   })
 
-  it('主进程的边界复核不额外消耗同一次业务操作的有限授权', () => {
+  it('主进程可在消费前复核边界，最后一次消费会删除授权记录', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-external-grant-revalidate-'))
     const grants = new ExternalFileGrantService({
       now: () => 1_000,
@@ -330,7 +331,6 @@ describe('ExternalFileGrantService', () => {
       relativePath: 'chapter.txt',
     }
 
-    grants.resolve(request)
     expect(grants.revalidate(request)).toEqual({
       rootPath: fs.realpathSync.native(root),
       rootIdentity: expect.objectContaining({
@@ -349,7 +349,9 @@ describe('ExternalFileGrantService', () => {
       relativePath: 'chapter.txt',
       scope: 'directory',
     })
-    expect(() => grants.resolve(request)).toThrow('外部文件授权已用尽')
+    grants.resolve(request)
+    expect(grants.activeCount()).toBe(0)
+    expect(() => grants.revalidate(request)).toThrow('外部文件授权不存在或已失效')
 
     fs.rmSync(root, { recursive: true, force: true })
   })

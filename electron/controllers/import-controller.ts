@@ -1,11 +1,33 @@
 import { app, ipcMain, dialog } from 'electron'
 import path from 'node:path'
-import { externalFileGrants } from '../services/external-file-grant-service'
+import { createHash } from 'node:crypto'
+import { realpathSync, statSync } from 'node:fs'
+import {
+  ExternalFileGrantService,
+  externalFileGrants,
+} from '../services/external-file-grant-service'
+import {
+  ImportInspectionStore,
+  importInspectionStore,
+} from '../services/import-inspection-store'
+import { ImportSourceIdentityRepository } from '../repositories/import-source-identity-repository'
+import { loadApplicationImportSourceSecret } from '../services/import-source-identity-secret'
 import { mainText } from '../i18n'
 import {
   windowsSafeFileSystem,
   type WindowsSafeFileSystem,
 } from '../security/windows-safe-file-system'
+import {
+  DEFAULT_IMPORT_RESOURCE_LIMITS,
+  type ImportResourceLimits,
+} from '../../src/shared/import-limits'
+import type { ImportRunLocale, ImportSourceFileIdentity } from '../../src/shared/import-run'
+import type { ImportNovelFileSelectionRequest, ImportRunChapterInput } from '../../src/shared/import-run'
+import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { getCurrentProjectPath, getProjectDb } from '../database'
+import { projectAccess } from '../services/project-access'
+import { assertRequiredExpectedProjectPath } from '../utils/project-context'
+import { ImportRunRepository } from '../repositories/import-run-repository'
 
 /**
  * 导入小说控制器 — 处理文件选择与章节拆分
@@ -33,8 +55,60 @@ const CHAPTER_PATTERNS = [RE_CN_CHAPTER, RE_EN_CHAPTER, RE_MD_HEADING]
 
 const IMPORT_GRANT_TTL_MS = 5 * 60 * 1000
 
+export type ImportFileIdentityProvider = (filePath: string) => ImportSourceFileIdentity
+
+/** Raw identities never leave main-process memory; project storage only receives a salted HMAC. */
+function defaultFileIdentity(filePath: string): ImportSourceFileIdentity {
+  const canonicalLocation = realpathSync.native(filePath)
+  const stats = statSync(canonicalLocation, { bigint: true })
+  return {
+    canonicalLocation,
+    ...(stats.ino === 0n
+      ? {}
+      : { fileIdentity: `dev:${stats.dev.toString()}:ino:${stats.ino.toString()}` }),
+  }
+}
+
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
+}
+
+function importText(locale: ImportRunLocale | undefined, zhCNText: string, enUSText: string): string {
+  return locale === 'en-US' ? enUSText : locale === 'zh-CN' ? zhCNText : text(zhCNText, enUSText)
+}
+
+function importSelectionErrorMessage(
+  error: unknown,
+  locale: ImportRunLocale | undefined,
+  limits: ImportResourceLimits,
+): string {
+  const code = error instanceof Error ? error.message : ''
+  if (code === 'IMPORT_SOURCE_COUNT_EXCEEDED') {
+    return importText(
+      locale,
+      `所选文件数量超过导入上限（最多 ${limits.maxSourceFiles} 个）。`,
+      `The import source-file limit was exceeded (limit: ${limits.maxSourceFiles}).`,
+    )
+  }
+  if (code === 'IMPORT_SOURCE_BYTES_EXCEEDED' || code === 'SECURE_FS_FILE_TOO_LARGE') {
+    return importText(
+      locale,
+      `所选文件总大小超过导入上限（最多 ${limits.maxTotalBytes} 字节）。`,
+      `The import source-size limit was exceeded (limit: ${limits.maxTotalBytes} bytes).`,
+    )
+  }
+  if (code === 'IMPORT_CHAPTER_COUNT_EXCEEDED') {
+    return importText(
+      locale,
+      `拆分后的章节数超过导入上限（最多 ${limits.maxChapters} 章）。`,
+      `The import chapter limit was exceeded (limit: ${limits.maxChapters}).`,
+    )
+  }
+  return importText(
+    locale,
+    '无法读取所选文件；请重新选择后再试。',
+    'Could not read the selected files. Please choose them again.',
+  )
 }
 
 /** 中文数字到阿拉伯数字的映射 */
@@ -107,14 +181,31 @@ interface ParsedChapter {
   title: string
   content: string
   wordCount: number
+  contentFingerprint?: string
+  contentSize?: number
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function sourceMediaType(displayName: string): string {
+  return path.extname(displayName).toLowerCase() === '.md' ? 'text/markdown' : 'text/plain'
 }
 
 /** 将单个文件内容拆分为章节数组 */
-function splitSingleFileContent(content: string): ParsedChapter[] {
+function splitSingleFileContent(content: string, maxChapters: number): ParsedChapter[] {
   const lines = content.split('\n')
   const chapters: ParsedChapter[] = []
   let currentChapter: { headerLine: string; lines: string[] } | null = null
   let autoNumber = 0
+
+  const appendChapter = (chapter: ParsedChapter) => {
+    if (chapters.length >= maxChapters) {
+      throw new Error('IMPORT_CHAPTER_COUNT_EXCEEDED')
+    }
+    chapters.push(chapter)
+  }
 
   for (const line of lines) {
     if (isChapterHeading(line)) {
@@ -124,7 +215,7 @@ function splitSingleFileContent(content: string): ParsedChapter[] {
         const num = extractChapterNumber(currentChapter.headerLine) || autoNumber
         const text = currentChapter.lines.join('\n').trim()
         if (text.length > 0) {
-          chapters.push({
+          appendChapter({
             number: num,
             title: extractTitle(currentChapter.headerLine),
             content: text,
@@ -150,7 +241,7 @@ function splitSingleFileContent(content: string): ParsedChapter[] {
     const num = extractChapterNumber(currentChapter.headerLine) || autoNumber
     const text = currentChapter.lines.join('\n').trim()
     if (text.length > 0) {
-      chapters.push({
+      appendChapter({
         number: num,
         title: extractTitle(currentChapter.headerLine),
         content: text,
@@ -170,116 +261,330 @@ function hasChapterHeadings(content: string): boolean {
 
 export function registerImportController(
   fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
+  fileIdentity: ImportFileIdentityProvider = defaultFileIdentity,
+  limitOverrides: Partial<ImportResourceLimits> = {},
+  grantService: ExternalFileGrantService = externalFileGrants,
+  inspectionStore: ImportInspectionStore = importInspectionStore,
+  applicationSecret?: Buffer,
 ) {
-  // ===== 文件选择对话框 =====
-  ipcMain.handle('dialog:select-novel-files', async (event) => {
-    const result = await dialog.showOpenDialog({
-      title: text('选择要导入的小说文件', 'Choose novel files to import'),
-      filters: [
-        { name: text('小说文本', 'Novel text'), extensions: ['txt', 'md', 'text'] },
-        { name: text('所有文件', 'All files'), extensions: ['*'] },
-      ],
-      properties: ['openFile', 'multiSelections'],
+  const limits: ImportResourceLimits = {
+    ...DEFAULT_IMPORT_RESOURCE_LIMITS,
+    ...limitOverrides,
+  }
+  for (const [key, value] of Object.entries(limits) as Array<[keyof ImportResourceLimits, number]>) {
+    if (
+      !Number.isSafeInteger(value)
+      || value < 1
+      || value > DEFAULT_IMPORT_RESOURCE_LIMITS[key]
+    ) throw new Error(`导入资源限制 ${key} 无效`)
+  }
+  // Selection, bounded reading, and inspection are one main-process operation.
+  // The renderer receives only the final inspection token and safe display facts.
+  ipcMain.handle('dialog:select-novel-files', async (
+    event,
+    request?: ImportNovelFileSelectionRequest,
+    projectSession?: ProjectSessionContext,
+  ) => {
+    event.sender.once('destroyed', () => {
+      grantService.revokeWebContents(event.sender.id)
+      inspectionStore.revokeForWebContents(event.sender.id)
     })
-    if (result.canceled || result.filePaths.length === 0) return null
-    return result.filePaths.map((filePath) => {
-      const grant = externalFileGrants.issueFile({
-        webContentsId: event.sender.id,
-        filePath,
-        operations: ['read'],
-        ttlMs: IMPORT_GRANT_TTL_MS,
-        maxUses: 1,
-      })
-      event.sender.once('destroyed', () => externalFileGrants.revoke(grant.grantId))
-      return { grantId: grant.grantId, displayName: path.basename(filePath) }
-    })
-  })
-
-  // ===== 读取并拆分章节 =====
-  ipcMain.handle('import:split-chapters', async (event, grantIds: string[]) => {
+    let frozenProject: { rootPath: string; session: ProjectSessionContext } | undefined
+    let responseLocale = request?.locale
+    const assertFrozenProject = () => {
+      if (!frozenProject) return
+      const active = projectAccess.assertCurrentProjectContext(
+        frozenProject.session,
+        getCurrentProjectPath(),
+      )
+      assertRequiredExpectedProjectPath(active.rootPath, frozenProject.rootPath)
+    }
     try {
-      const allChapters: ParsedChapter[] = []
-      if (!Array.isArray(grantIds) || grantIds.length === 0) {
-        throw new Error(text('未选择可导入的小说文件', 'No novel files were selected for import'))
+      if (request) {
+        const active = projectAccess.assertCurrentProjectContext(projectSession, getCurrentProjectPath())
+        assertRequiredExpectedProjectPath(active.rootPath, request.expectedProjectPath)
+        frozenProject = {
+          rootPath: active.rootPath,
+          session: Object.freeze({ ...projectSession }) as ProjectSessionContext,
+        }
+        if (request.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
       }
-      const fileCapabilities = grantIds.map((grantId) => externalFileGrants.resolve({
-        grantId,
-        webContentsId: event.sender.id,
-        operation: 'read',
-      }))
+      const result = await dialog.showOpenDialog({
+        title: text('选择要导入的小说文件', 'Choose novel files to import'),
+        filters: [
+          { name: text('小说文本', 'Novel text'), extensions: ['txt', 'md', 'text'] },
+          { name: text('所有文件', 'All files'), extensions: ['*'] },
+        ],
+        properties: ['openFile', 'multiSelections'],
+      })
+      assertFrozenProject()
+      if (result.canceled || result.filePaths.length === 0) return null
+      inspectionStore.revokeForWebContents(event.sender.id)
+      if (result.filePaths.length > limits.maxSourceFiles) {
+        throw new Error('IMPORT_SOURCE_COUNT_EXCEEDED')
+      }
 
-      if (fileCapabilities.length === 1) {
-        // ===== 单文件模式 =====
-        const fileCapability = fileCapabilities[0]
-        const content = await fileSystem.readText(fileCapability)
-        const fileName = path.basename(fileCapability.relativePath)
+      // Count, identity, stat, and aggregate-size preflight all complete before
+      // the first capability is allocated.
+      let selectedBytes = 0
+      const selected = result.filePaths.map(filePath => {
+        const identity = fileIdentity(filePath)
+        const selectedSize = statSync(identity.canonicalLocation).size
+        if (!Number.isSafeInteger(selectedSize) || selectedSize < 0) {
+          throw new Error('IMPORT_SOURCE_SIZE_INVALID')
+        }
+        if (selectedSize > limits.maxTotalBytes - selectedBytes) {
+          throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
+        }
+        selectedBytes += selectedSize
+        return { filePath, identity, displayName: path.basename(filePath), selectedSize }
+      }).sort((left, right) => left.displayName.localeCompare(right.displayName, 'zh-CN', { numeric: true }))
+      const encodedIdentities = ImportSourceIdentityRepository.encodeSources(
+        selected.map(source => source.identity),
+        'reference',
+        applicationSecret ?? loadApplicationImportSourceSecret(),
+      )
+      const parsingContext = request
+        ? (() => {
+            assertFrozenProject()
+            const projectDb = getProjectDb()
+            if (!projectDb) throw new Error('项目数据库未打开')
+            return projectDb.transaction(() => {
+              const resolvedIdentity = ImportSourceIdentityRepository.resolveEncodedSources(
+                encodedIdentities,
+                request.purpose,
+                applicationSecret ?? loadApplicationImportSourceSecret(),
+              )
+              const parsingRun = ImportRunRepository.beginParsing({
+                runId: request.runId,
+                purpose: request.purpose,
+                sourceFingerprint: resolvedIdentity.sourceFingerprint,
+                sourceIds: resolvedIdentity.sourceIds,
+                sourceFingerprints: resolvedIdentity.sourceFingerprints,
+                legacySourceFingerprints: resolvedIdentity.legacySourceFingerprints,
+                legacyCollectionFingerprint: resolvedIdentity.legacyCollectionFingerprint,
+                sourceDisplay: selected.map(source => ({
+                  displayName: source.displayName,
+                  mediaType: sourceMediaType(source.displayName),
+                  size: source.selectedSize,
+                })),
+                locale: request.locale,
+              })
+              if (parsingRun.totalContentSize > limits.maxTotalBytes - selectedBytes) {
+                throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
+              }
+              return { resolvedIdentity, parsingRun }
+            })()
+          })()
+        : undefined
+      const resolvedIdentity = parsingContext?.resolvedIdentity
+      const parsingRun = parsingContext?.parsingRun
+      // An ordinary selection may discover an unfinished run by source
+      // identity even when the renderer supplied a fresh run id and a changed
+      // UI locale. From this point onward, the durable run owns user-facing
+      // parsing copy as well as persisted failures.
+      responseLocale = parsingRun?.locale ?? responseLocale
 
-        if (hasChapterHeadings(content)) {
-          // 文件内含章节标题 → 正则拆章
-          const chapters = splitSingleFileContent(content)
-          allChapters.push(...chapters)
-        } else {
-          // 无章节标题 → 整文件视为一章
-          allChapters.push({
-            number: 1,
-            title: path.basename(fileName, path.extname(fileName)),
-            content: content.trim(),
-            wordCount: content.trim().length,
+      let chapterCount = parsingRun?.completedChapters ?? 0
+      const sources: Array<{
+        locationAliasDigest: string
+        fileAliasDigest?: string
+        displayName: string
+        mediaType: string
+        size: number
+      }> = []
+      let consumedBytes = parsingRun?.totalContentSize ?? 0
+
+      const reserveSourceBytes = (content: string): number => {
+        const contentBytes = Buffer.byteLength(content, 'utf8')
+        if (contentBytes > limits.maxTotalBytes - consumedBytes) {
+          throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
+        }
+        consumedBytes += contentBytes
+        return contentBytes
+      }
+
+      const appendChapters = (chapters: ParsedChapter[]) => {
+        if (chapters.length > limits.maxChapters - chapterCount) {
+          throw new Error('IMPORT_CHAPTER_COUNT_EXCEEDED')
+        }
+        chapterCount += chapters.length
+      }
+
+      const inspectedChapters: Array<ParsedChapter & { sourceIndex: number; sourceChapterNumber: number }> = []
+      let emptySourceFound = false
+      let titleOnlySourceFound = false
+      for (let sourceIndex = 0; sourceIndex < selected.length; sourceIndex++) {
+        const source = selected[sourceIndex]
+        const encoded = encodedIdentities[sourceIndex]
+        const opaqueSourceId = resolvedIdentity?.sourceIds[sourceIndex]
+        assertFrozenProject()
+        if (parsingRun && opaqueSourceId
+          && ImportRunRepository.parsedSourceStatus(parsingRun.id, opaqueSourceId) === 'completed') {
+          continue
+        }
+        let grantId = ''
+        try {
+          const grant = grantService.issueFile({
+            webContentsId: event.sender.id,
+            filePath: source.filePath,
+            operations: ['read'],
+            ttlMs: IMPORT_GRANT_TTL_MS,
+            maxUses: 1,
           })
-        }
-      } else {
-        // ===== 多文件模式 =====
-        // 按文件名自然排序
-        const sorted = [...fileCapabilities].sort((a, b) => {
-          const nameA = path.basename(a.relativePath)
-          const nameB = path.basename(b.relativePath)
-          return nameA.localeCompare(nameB, 'zh-CN', { numeric: true })
-        })
-
-        for (let i = 0; i < sorted.length; i++) {
-          const fileCapability = sorted[i]
-          const content = (await fileSystem.readText(fileCapability)).trim()
-          if (!content) continue
-
-          // 尝试从文件内容中检测章节标题
-          if (hasChapterHeadings(content)) {
-            // 文件内含多章 → 拆分
-            const chapters = splitSingleFileContent(content)
-            allChapters.push(...chapters)
-          } else {
-            // 文件内无章节标题 → 整文件视为一章
-            const sourceFileName = path.basename(fileCapability.relativePath)
-            const fileName = path.basename(sourceFileName, path.extname(sourceFileName))
-            const num = extractChapterNumber(fileName) || (allChapters.length + 1)
-            allChapters.push({
-              number: num,
-              title: fileName,
-              content,
-              wordCount: content.length,
-            })
+          grantId = grant.grantId
+          const capability = grantService.resolve({
+            grantId,
+            webContentsId: event.sender.id,
+            operation: 'read',
+          })
+          let content = await fileSystem.readText(capability, limits.maxTotalBytes - consumedBytes)
+          assertFrozenProject()
+          const contentBytes = reserveSourceBytes(content)
+          const sourceFileName = source.displayName
+          sources.push({
+            ...encoded,
+            displayName: sourceFileName,
+            mediaType: sourceMediaType(sourceFileName),
+            size: contentBytes,
+          })
+          content = content.trim()
+          if (!content) {
+            emptySourceFound = true
+            if (parsingRun && opaqueSourceId) {
+              assertFrozenProject()
+              ImportRunRepository.failParsedSource(
+                parsingRun.id,
+                opaqueSourceId,
+                importText(responseLocale, '所选来源文件为空', 'Selected source file is empty'),
+              )
+            }
+            continue
           }
+          const parsed = hasChapterHeadings(content)
+            ? splitSingleFileContent(content, limits.maxChapters - chapterCount)
+            : [{
+                number: extractChapterNumber(path.basename(sourceFileName, path.extname(sourceFileName))) || 1,
+                title: path.basename(sourceFileName, path.extname(sourceFileName)),
+                content,
+                wordCount: content.length,
+              }]
+          if (parsed.length === 0) {
+            titleOnlySourceFound = true
+            if (parsingRun && opaqueSourceId) {
+              assertFrozenProject()
+              ImportRunRepository.failParsedSource(
+                parsingRun.id,
+                opaqueSourceId,
+                importText(
+                  responseLocale,
+                  '所选来源文件只有章节标题，没有可导入的正文',
+                  'The selected source file contains chapter headings but no body text',
+                ),
+              )
+            }
+            continue
+          }
+          appendChapters(parsed)
+          const usedLocalNumbers = new Set<number>()
+          let nextLocalNumber = 1
+          const firstInspectedChapter = inspectedChapters.length
+          for (const chapter of parsed) {
+            let sourceChapterNumber = chapter.number
+            if (!Number.isSafeInteger(sourceChapterNumber) || sourceChapterNumber < 1 || usedLocalNumbers.has(sourceChapterNumber)) {
+              while (usedLocalNumbers.has(nextLocalNumber)) nextLocalNumber++
+              sourceChapterNumber = nextLocalNumber
+            }
+            usedLocalNumbers.add(sourceChapterNumber)
+            inspectedChapters.push({ ...chapter, sourceIndex, sourceChapterNumber })
+          }
+          if (parsingRun && opaqueSourceId) {
+            const sourceChapters: ImportRunChapterInput[] = parsed.map((chapter, index) => {
+              const persisted = inspectedChapters[firstInspectedChapter + index]
+              const sourceChapterNumber = persisted?.sourceChapterNumber ?? chapter.number
+              return {
+                number: sourceChapterNumber,
+                sourceChapterNumber,
+                title: chapter.title,
+                content: chapter.content,
+                contentFingerprint: sha256(chapter.content),
+                contentSize: Buffer.byteLength(chapter.content, 'utf8'),
+              }
+            })
+            assertFrozenProject()
+            ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, sourceChapters)
+          }
+          content = ''
+        } catch (error) {
+          let projectStillCurrent = false
+          try {
+            assertFrozenProject()
+            projectStillCurrent = true
+          } catch {
+            // A stale project session must not turn a read failure into a write
+            // against the newly active project's database.
+          }
+          if (projectStillCurrent && parsingRun && opaqueSourceId
+            && ImportRunRepository.parsedSourceStatus(parsingRun.id, opaqueSourceId) !== 'completed') {
+            assertFrozenProject()
+            ImportRunRepository.failParsedSource(
+              parsingRun.id,
+              opaqueSourceId,
+              importSelectionErrorMessage(error, responseLocale, limits),
+            )
+          }
+          throw error
+        } finally {
+          if (grantId) grantService.revoke(grantId)
         }
       }
 
-      // 保留原始顺序，直接连续重新编号，避免同号（含 fallback 章号）误删章节
-      const renumbered = allChapters.map((ch, idx) => ({
+      if (emptySourceFound) {
+        const error = responseLocale === 'en-US'
+          ? 'One or more selected files are empty. Add novel text and choose the unfinished files again.'
+          : responseLocale === 'zh-CN'
+            ? '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。'
+            : text(
+                '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。',
+                'One or more selected files are empty. Add novel text and choose the unfinished files again.',
+              )
+        return { success: false, error }
+      }
+
+      if (titleOnlySourceFound) {
+        return {
+          success: false,
+          error: importText(
+            responseLocale,
+            '一个或多个所选文件只有章节标题，没有可导入的正文。请补充小说正文后，重新选择未完成的文件。',
+            'One or more selected files contain chapter headings but no body text. Add novel text and choose the unfinished files again.',
+          ),
+        }
+      }
+
+      if (parsingRun) {
+        assertFrozenProject()
+        return { success: true, preparation: ImportRunRepository.finalizeParsing(parsingRun.id) }
+      }
+
+      // Preview numbers are renderer-only. Stable global numbers are assigned
+      // later from (opaque source id, source-local chapter number) in SQLite.
+      const renumbered = inspectedChapters.map((ch, idx) => ({
         ...ch,
         number: idx + 1,
+        contentFingerprint: sha256(ch.content),
+        contentSize: Buffer.byteLength(ch.content, 'utf8'),
       }))
-
-      const totalWords = renumbered.reduce((sum, ch) => sum + ch.wordCount, 0)
 
       return {
         success: true,
-        chapters: renumbered,
-        totalWords,
+        inspection: inspectionStore.create({ webContentsId: event.sender.id, sources, chapters: renumbered }),
       }
-    } catch {
+    } catch (error) {
+      inspectionStore.revokeForWebContents(event.sender.id)
       return {
         success: false,
-        chapters: [],
-        totalWords: 0,
-        error: text('无法读取所选文件；请重新选择后再试。', 'Could not read the selected files. Please choose them again.'),
+        error: importSelectionErrorMessage(error, responseLocale, limits),
       }
     }
   })

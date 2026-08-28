@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   characterRosterCommit: vi.fn(),
   finalizedDraftImportCommit: vi.fn(),
   importGlobalFactsCommit: vi.fn(),
+  importRunFinalizeParsing: vi.fn(),
   draftGetFull: vi.fn(() => ({
     id: 1,
     content: mocks.currentProjectPath.endsWith('/A') ? 'A content' : 'B content',
@@ -148,6 +149,12 @@ vi.mock('../../repositories/import-global-facts-repository', () => ({
   },
 }))
 
+vi.mock('../../repositories/import-run-repository', () => ({
+  ImportRunRepository: {
+    finalizeParsing: mocks.importRunFinalizeParsing,
+  },
+}))
+
 import { registerDatabaseController } from '../db-controller'
 
 function currentSession() {
@@ -203,6 +210,69 @@ beforeEach(() => {
 })
 
 describe('database controller project context guard', () => {
+  it('finalizes an already parsed run from its main-process snapshots', async () => {
+    const preparation = {
+      classification: 'new',
+      run: { id: 'parse-run', stage: 'prepared' },
+      newChapterNumbers: [1],
+      conflictChapterNumbers: [],
+      duplicateChapterNumbers: [],
+    }
+    mocks.importRunFinalizeParsing.mockReturnValueOnce(preparation)
+
+    await expect(handler('db:import-run-finalize-parsing')(
+      {},
+      'parse-run',
+      'C:/projects/A',
+    )).resolves.toEqual({ success: true, preparation })
+    expect(mocks.importRunFinalizeParsing).toHaveBeenCalledOnce()
+    expect(mocks.importRunFinalizeParsing).toHaveBeenCalledWith('parse-run')
+  })
+
+  it('rejects parsing finalization after the project session switches', async () => {
+    mocks.currentProjectPath = 'C:/projects/B'
+
+    await expect(handler('db:import-run-finalize-parsing')(
+      {},
+      'parse-run',
+      'C:/projects/A',
+    )).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('项目上下文已切换'),
+    })
+    expect(mocks.importRunFinalizeParsing).not.toHaveBeenCalled()
+  })
+
+  it('returns the repository finalization conflict without flattening its reason', async () => {
+    mocks.importRunFinalizeParsing.mockImplementationOnce(() => {
+      throw new Error('另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试')
+    })
+
+    await expect(handler('db:import-run-finalize-parsing')(
+      {},
+      'parse-run',
+      'C:/projects/A',
+    )).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('另一个可恢复导入已包含相同来源'),
+    })
+    expect(mocks.importRunFinalizeParsing).toHaveBeenCalledWith('parse-run')
+  })
+
+  it('returns durable English finalization guidance without replacing it with the UI locale', async () => {
+    const guidance = 'Another resumable import already contains the same source. Complete or cancel that import, then try again.'
+    mocks.importRunFinalizeParsing.mockImplementationOnce(() => {
+      throw new Error(guidance)
+    })
+
+    await expect(handler('db:import-run-finalize-parsing')(
+      {},
+      'english-parse-run',
+      'C:/projects/A',
+    )).resolves.toEqual({ success: false, error: `Error: ${guidance}` })
+    expect(mocks.importRunFinalizeParsing).toHaveBeenCalledWith('english-parse-run')
+  })
+
   it('rejects a stale roster commit before the main-process roster module is reached', async () => {
     mocks.currentProjectPath = 'C:/projects/B'
 

@@ -455,7 +455,10 @@ namespace AiNovelSecureFs {
       }
     }
 
-    public static string ReadTextBase64(string rootPath, RootIdentity rootIdentity, string relativePath) {
+    public static string ReadTextBase64(string rootPath, RootIdentity rootIdentity, string relativePath, int maxBytes) {
+      if (maxBytes < 0 || maxBytes > MaxTextBytes) {
+        throw new SecureFsException("SECURE_FS_INVALID_OPERATION");
+      }
       string[] segments = RelativeSegments(relativePath);
       if (segments.Length == 0) throw new SecureFsException("SECURE_FS_INVALID_PATH");
       List<IntPtr> directories = OpenDirectoryChain(rootPath, rootIdentity, Prefix(segments), false, false);
@@ -470,11 +473,20 @@ namespace AiNovelSecureFs {
         file = IntPtr.Zero;
         using (safeHandle) {
           using (FileStream stream = new FileStream(safeHandle, FileAccess.Read, 4096, false)) {
-            if (stream.Length > MaxTextBytes) throw new SecureFsException("SECURE_FS_FILE_TOO_LARGE");
-            using (MemoryStream content = new MemoryStream((int)stream.Length)) {
-              stream.CopyTo(content);
-              if (content.Length > MaxTextBytes) throw new SecureFsException("SECURE_FS_FILE_TOO_LARGE");
-              return Convert.ToBase64String(content.ToArray());
+            long initialLength = stream.Length;
+            if (initialLength > maxBytes) throw new SecureFsException("SECURE_FS_FILE_TOO_LARGE");
+            using (MemoryStream content = new MemoryStream((int)initialLength)) {
+              byte[] buffer = new byte[8192];
+              while (true) {
+                int remaining = maxBytes - (int)content.Length;
+                int count = stream.Read(buffer, 0, Math.Min(buffer.Length, remaining + 1));
+                if (count == 0) break;
+                if (count > remaining) throw new SecureFsException("SECURE_FS_FILE_TOO_LARGE");
+                int requiredCapacity = (int)content.Length + count;
+                if (requiredCapacity > content.Capacity) content.Capacity = requiredCapacity;
+                content.Write(buffer, 0, count);
+              }
+              return Convert.ToBase64String(content.GetBuffer(), 0, (int)content.Length);
             }
           }
         }
@@ -819,7 +831,10 @@ try {
 
   switch ([string]$request.operation) {
     'read' {
-      $contentBase64 = [AiNovelSecureFs.SecureHandleFileSystem]::ReadTextBase64($request.rootPath, $rootIdentity, $request.relativePath)
+      if (($request.PSObject.Properties.Name -notcontains 'maxBytes') -or $request.maxBytes -isnot [int] -or $request.maxBytes -lt 0 -or $request.maxBytes -gt 67108864) {
+        throw [AiNovelSecureFs.SecureFsException]::new('SECURE_FS_INVALID_OPERATION')
+      }
+      $contentBase64 = [AiNovelSecureFs.SecureHandleFileSystem]::ReadTextBase64($request.rootPath, $rootIdentity, $request.relativePath, [int]$request.maxBytes)
       Write-HelperResponse ([pscustomobject]@{ ok = $true; contentBase64 = $contentBase64 })
       break
     }

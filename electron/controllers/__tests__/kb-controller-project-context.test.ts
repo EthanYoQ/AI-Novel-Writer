@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   assertKnowledgeBaseStoragePathSupported: vi.fn(),
   projectStoragePreflightFailure: vi.fn(),
   readJsonFile: vi.fn(),
+  resolveReferenceImportAuthority: vi.fn(),
+  commitReferenceImportReceipt: vi.fn(),
 }))
 
 vi.mock('electron', () => ({
@@ -48,6 +50,13 @@ vi.mock('../../services/knowledge-base-loader', () => ({
   knowledgeBaseLoader: { run: mocks.run },
 }))
 
+vi.mock('../../repositories/import-run-repository', () => ({
+  ImportRunRepository: {
+    resolveReferenceImportAuthority: mocks.resolveReferenceImportAuthority,
+    commitReferenceImportReceipt: mocks.commitReferenceImportReceipt,
+  },
+}))
+
 vi.mock('../../i18n', () => ({
   mainText: vi.fn((_locale: string, zh: string) => zh),
 }))
@@ -83,6 +92,13 @@ beforeEach(() => {
   mocks.currentProjectPath = 'C:/projects/A'
   vi.clearAllMocks()
   mocks.readJsonFile.mockImplementation((_path: string, fallback: unknown) => fallback)
+  mocks.resolveReferenceImportAuthority.mockReturnValue({
+    chapterNumber: 1,
+    title: 'Chapter 1',
+    content: 'frozen text',
+    contentFingerprint: 'a'.repeat(64),
+    stableKey: 'reference:key:1:fingerprint',
+  })
   mocks.assertCurrentProjectContext.mockImplementation((context: { projectPath?: string } | undefined, currentProjectPath: string) => {
     if (!context?.projectPath) throw new Error('缺少项目会话上下文，已拒绝操作')
     if (context.projectPath !== currentProjectPath) {
@@ -101,6 +117,73 @@ beforeEach(() => {
 })
 
 describe('knowledge-base controller project context guard', () => {
+  it('requires active import-run authority before reference text reaches the knowledge base', async () => {
+    const importReferenceText = vi.fn<(
+      text: string, fileName: string, ...args: unknown[]
+    ) => Promise<{ success: boolean; docId: string }>>()
+      .mockResolvedValue({ success: true, docId: 'reference-doc' })
+    mocks.run.mockImplementation(async (operation: (kb: {
+      importReferenceText: typeof importReferenceText
+    }) => unknown) => operation({ importReferenceText }))
+    const authority = { owner: 'renderer-a', epoch: 3 }
+
+    await expect(rawHandler('kb:import-reference-text')(
+      {}, 1, 'run-1', authority, {
+        projectId: 'project-A',
+        leaseId: 'lease-A',
+        projectPath: mocks.currentProjectPath,
+      },
+    )).resolves.toEqual({ success: true, docId: 'reference-doc' })
+
+    expect(mocks.resolveReferenceImportAuthority).toHaveBeenCalledWith(
+      'run-1', authority, 1,
+    )
+    expect(importReferenceText).toHaveBeenCalledWith(
+      'frozen text', '第1章 Chapter 1.txt', 'reference:key:1:fingerprint',
+      1, 'run-1', authority, 'C:/projects/A', 'openai', expect.any(Object),
+    )
+    expect(mocks.commitReferenceImportReceipt).toHaveBeenCalledWith(
+      'run-1', authority, 1, 'reference-doc',
+    )
+  })
+
+  it('derives a stable, control-free bounded KB label from a long main-owned title', async () => {
+    const title = `Persisted\u0000title\n${'x'.repeat(500)}`
+    mocks.resolveReferenceImportAuthority.mockReturnValue({
+      chapterNumber: 1,
+      title,
+      content: 'frozen text',
+      contentFingerprint: 'a'.repeat(64),
+      stableKey: 'reference:key:1:fingerprint',
+    })
+    const importReferenceText = vi.fn<(
+      text: string, fileName: string, ...args: unknown[]
+    ) => Promise<{ success: boolean; docId: string }>>()
+      .mockResolvedValue({ success: true, docId: 'reference-doc' })
+    mocks.run.mockImplementation(async (operation: (kb: {
+      importReferenceText: typeof importReferenceText
+    }) => unknown) => operation({ importReferenceText }))
+    const invoke = () => rawHandler('kb:import-reference-text')(
+      {}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+        projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+      },
+    )
+
+    await expect(invoke()).resolves.toEqual({ success: true, docId: 'reference-doc' })
+    await expect(invoke()).resolves.toEqual({ success: true, docId: 'reference-doc' })
+
+    const labels = importReferenceText.mock.calls.map(call => call[1])
+    expect(labels).toHaveLength(2)
+    expect(labels[0]).toBe(labels[1])
+    expect(Array.from(labels[0])).toHaveLength(160)
+    expect(Array.from(labels[0]).every(character => {
+      const codePoint = character.codePointAt(0) ?? 0
+      return codePoint > 0x1f && (codePoint < 0x7f || codePoint > 0x9f)
+    })).toBe(true)
+    expect(labels[0]).toMatch(/^第1章 Persistedtitlex/u)
+    expect(labels[0]).toMatch(/\.txt$/u)
+  })
+
   it('rejects a matching project path that omits its session context', async () => {
     await expect(rawHandler('kb:clear-all')({}, 'C:/projects/A'))
       .rejects.toThrow(/项目会话/)

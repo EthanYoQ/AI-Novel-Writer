@@ -21,8 +21,32 @@ vi.mock('electron', () => ({
 }))
 
 import { registerImportController } from '../import-controller'
+import {
+  windowsSafeFileSystem,
+  type WindowsSafeFileSystem,
+} from '../../security/windows-safe-file-system'
+import { ExternalFileGrantService } from '../../services/external-file-grant-service'
+import { ImportInspectionStore } from '../../services/import-inspection-store'
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-import-secure-'))
+let grants: ExternalFileGrantService
+let inspections: ImportInspectionStore
+let nextGrantId = 0
+
+function register(
+  fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
+  fileIdentity = (filePath: string) => ({ canonicalLocation: filePath }),
+  limits: { maxSourceFiles?: number; maxChapters?: number; maxTotalBytes?: number } = {},
+) {
+  registerImportController(
+    fileSystem,
+    fileIdentity,
+    limits,
+    grants,
+    inspections,
+    Buffer.alloc(32, 42),
+  )
+}
 
 function handler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel)
@@ -34,11 +58,37 @@ function event() {
   return { sender: { id: 29, once: vi.fn() } }
 }
 
+function boundedReader(contents: Record<string, string>) {
+  const decodedFiles: string[] = []
+  const readText = vi.fn(async (
+    capability: { relativePath: string },
+    maxBytes = Number.POSITIVE_INFINITY,
+  ) => {
+    const content = contents[capability.relativePath] ?? ''
+    if (Buffer.byteLength(content, 'utf8') > maxBytes) {
+      throw new Error('SECURE_FS_FILE_TOO_LARGE')
+    }
+    decodedFiles.push(capability.relativePath)
+    return content
+  })
+  const fileSystem = {
+    readText,
+    writeTextAtomically: vi.fn(),
+    mkdir: vi.fn(),
+    exists: vi.fn(),
+    listDirectory: vi.fn(),
+  } as unknown as WindowsSafeFileSystem
+  return { fileSystem, readText, decodedFiles }
+}
+
 describe('novel import external-file capability', () => {
   beforeEach(() => {
     mocks.handlers.clear()
     mocks.showOpenDialog.mockReset()
-    registerImportController()
+    nextGrantId = 0
+    grants = new ExternalFileGrantService({ newGrantId: () => `import-grant-${++nextGrantId}` })
+    inspections = new ImportInspectionStore()
+    register()
   })
 
   afterAll(() => {
@@ -50,12 +100,23 @@ describe('novel import external-file capability', () => {
     fs.writeFileSync(selected, '第1章 开始\n正常内容', 'utf8')
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [selected] })
 
-    const selection = await handler('dialog:select-novel-files')(event()) as Array<{ grantId: string }>
-    await expect(handler('import:split-chapters')(event(), [selection[0].grantId])).resolves.toMatchObject({
+    const result = await handler('dialog:select-novel-files')(event())
+    expect(result).toMatchObject({
       success: true,
-      totalWords: '正常内容'.length,
-      chapters: [{ number: 1, content: '正常内容' }],
+      inspection: {
+        chapterCount: 1,
+        totalWords: '正常内容'.length,
+        preview: [{ number: 1 }],
+      },
     })
+    expect(JSON.stringify(result)).not.toContain('正常内容')
+    expect(JSON.stringify(result)).not.toContain(temporaryRoot)
+    expect(JSON.stringify(result)).not.toContain('dev:')
+    expect(JSON.stringify(result)).not.toContain('grantId')
+    expect(JSON.stringify(result)).not.toContain('canonicalLocation')
+    expect(JSON.stringify(result)).not.toContain('fileIdentity')
+    expect(grants.activeCount()).toBe(0)
+    expect(inspections.activeCount()).toBe(1)
   })
 
   it('does not import outside content when the selected file parent becomes a junction after grant issuance', async () => {
@@ -69,14 +130,133 @@ describe('novel import external-file capability', () => {
     fs.writeFileSync(path.join(outsideDirectory, 'novel.txt'), '第1章 外部\n外部内容', 'utf8')
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [selected] })
 
-    const selection = await handler('dialog:select-novel-files')(event()) as Array<{ grantId: string }>
-    fs.rmSync(guardedDirectory, { recursive: true, force: true })
-    fs.symlinkSync(outsideDirectory, guardedDirectory, 'junction')
+    mocks.handlers.clear()
+    const swappingFileSystem = {
+      ...windowsSafeFileSystem,
+      readText: vi.fn(async (capability, maxBytes) => {
+        fs.rmSync(guardedDirectory, { recursive: true, force: true })
+        fs.symlinkSync(outsideDirectory, guardedDirectory, 'junction')
+        return windowsSafeFileSystem.readText(capability, maxBytes)
+      }),
+    } as WindowsSafeFileSystem
+    register(swappingFileSystem, filePath => ({ canonicalLocation: fs.realpathSync.native(filePath) }))
 
-    await expect(handler('import:split-chapters')(event(), [selection[0].grantId])).resolves.toMatchObject({
+    await expect(handler('dialog:select-novel-files')(event())).resolves.toMatchObject({
       success: false,
-      chapters: [],
-      totalWords: 0,
     })
+    expect(grants.activeCount()).toBe(0)
+  })
+
+  it('rejects aggregate source bytes before reading any selected file', async () => {
+    const selected = ['budget-a.txt', 'budget-b.txt', 'budget-c.txt'].map((name) => {
+      const filePath = path.join(temporaryRoot, name)
+      fs.writeFileSync(filePath, '1234', 'utf8')
+      return filePath
+    })
+    const { fileSystem, readText } = boundedReader({})
+    mocks.handlers.clear()
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }), {
+      maxSourceFiles: 5_000,
+      maxChapters: 5_000,
+      maxTotalBytes: 10,
+    })
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: selected })
+
+    const result = await handler('dialog:select-novel-files')(event())
+
+    expect(result).toEqual({
+      success: false,
+      error: '所选文件总大小超过导入上限（最多 10 字节）。',
+    })
+    expect(readText).not.toHaveBeenCalled()
+    expect(grants.activeCount()).toBe(0)
+  })
+
+  it('rejects the third grown file before decoding it when only a smaller byte budget remains', async () => {
+    const selected = ['growth-a.txt', 'growth-b.txt', 'growth-c.txt'].map((name) => {
+      const filePath = path.join(temporaryRoot, name)
+      fs.writeFileSync(filePath, 'x', 'utf8')
+      return filePath
+    })
+    const { fileSystem, readText, decodedFiles } = boundedReader({
+      'growth-a.txt': '1234',
+      'growth-b.txt': '1234',
+      'growth-c.txt': '1234',
+    })
+    mocks.handlers.clear()
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }), {
+      maxSourceFiles: 5_000,
+      maxChapters: 5_000,
+      maxTotalBytes: 10,
+    })
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: selected })
+
+    const result = await handler('dialog:select-novel-files')(event())
+
+    expect(result).toEqual({
+      success: false,
+      error: '所选文件总大小超过导入上限（最多 10 字节）。',
+    })
+    expect(readText.mock.calls.map(([capability, maxBytes]) => ({
+      relativePath: capability.relativePath,
+      maxBytes,
+    }))).toEqual([
+      { relativePath: 'growth-a.txt', maxBytes: 10 },
+      { relativePath: 'growth-b.txt', maxBytes: 6 },
+      { relativePath: 'growth-c.txt', maxBytes: 2 },
+    ])
+    expect(decodedFiles).toEqual(['growth-a.txt', 'growth-b.txt'])
+    expect(grants.activeCount()).toBe(0)
+    expect(inspections.activeCount()).toBe(0)
+  })
+
+  it('rejects 5001 source grants before reading any file', async () => {
+    const selected = path.join(temporaryRoot, 'too-many-files.txt')
+    fs.writeFileSync(selected, 'x', 'utf8')
+    const { fileSystem, readText } = boundedReader({ 'too-many-files.txt': 'x' })
+    mocks.handlers.clear()
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }))
+    mocks.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: Array.from({ length: 5_001 }, () => selected),
+    })
+
+    const result = await handler('dialog:select-novel-files')(event())
+
+    expect(result).toEqual({
+      success: false,
+      error: '所选文件数量超过导入上限（最多 5000 个）。',
+    })
+    expect(readText).not.toHaveBeenCalled()
+    expect(grants.activeCount()).toBe(0)
+  })
+
+  it('stops after detecting chapter 5001 without reading a later file', async () => {
+    const selected = ['chapters-a.txt', 'chapters-b.txt'].map((name) => {
+      const filePath = path.join(temporaryRoot, name)
+      fs.writeFileSync(filePath, 'x', 'utf8')
+      return filePath
+    })
+    const oversizedChapterFile = Array.from(
+      { length: 5_001 },
+      (_, index) => `第${index + 1}章 标题\n正文`,
+    ).join('\n')
+    const { fileSystem, readText } = boundedReader({
+      'chapters-a.txt': oversizedChapterFile,
+      'chapters-b.txt': '第1章 后续\n不应读取',
+    })
+    mocks.handlers.clear()
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }))
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: selected })
+
+    const result = await handler('dialog:select-novel-files')(event())
+
+    expect(result).toEqual({
+      success: false,
+      error: '拆分后的章节数超过导入上限（最多 5000 章）。',
+    })
+    expect(readText).toHaveBeenCalledTimes(1)
+    expect(readText.mock.calls[0][0].relativePath).toBe('chapters-a.txt')
+    expect(grants.activeCount()).toBe(0)
   })
 })

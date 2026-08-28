@@ -5,6 +5,7 @@ import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_
 import { GlobalConfig, ModelProfile } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import type { EmbeddingOptions } from '../../src/shared/embedding-options'
+import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { mainText } from '../i18n'
 import { getCurrentProjectPath } from '../database'
@@ -25,6 +26,7 @@ import {
   assertKnowledgeBaseStoragePathSupported,
   projectStoragePreflightFailure,
 } from '../services/project-storage-preflight'
+import { ImportRunRepository } from '../repositories/import-run-repository'
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
@@ -36,6 +38,29 @@ function invalidExternalGrantText(): string {
 
 const MAX_SECURE_KNOWLEDGE_IMPORT_FILES = 16_384
 const MAX_SECURE_KNOWLEDGE_IMPORT_DEPTH = 64
+const MAX_REFERENCE_IMPORT_DISPLAY_CHARACTERS = 160
+
+function isControlCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0)
+  return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+}
+
+function referenceImportDisplayName(binding: { chapterNumber: number; title: string }): string {
+  if (!Number.isSafeInteger(binding.chapterNumber) || binding.chapterNumber < 1) {
+    throw new Error(text('参照章节展示名的章号无效', 'The reference chapter display name has an invalid chapter number.'))
+  }
+  const prefix = `第${binding.chapterNumber}章 `
+  const suffix = '.txt'
+  const titleBudget = MAX_REFERENCE_IMPORT_DISPLAY_CHARACTERS
+    - Array.from(prefix).length
+    - Array.from(suffix).length
+  const safeTitle = Array.from(binding.title)
+    .filter(character => !isControlCharacter(character))
+    .join('')
+    .trim() || '无标题'
+  const boundedTitle = Array.from(safeTitle).slice(0, Math.max(0, titleBudget)).join('')
+  return `${prefix}${boundedTitle}${suffix}`
+}
 
 async function readGrantedKnowledgeFolder(
   fileSystem: WindowsSafeFileSystem,
@@ -187,18 +212,18 @@ export function registerKBController(
     const projectPath = requireProjectPath(expectedProjectPath)
     let importedFiles: Array<{ fileName: string; content: string }>
     try {
-      externalFileGrants.resolve({
-        grantId,
-        webContentsId: event.sender.id,
-        operation: 'list',
-      })
       // Directory enumeration alone is not authority to read every discovered
-      // file. Revalidate the separate read operation without consuming another
-      // renderer use before handing root-relative children to the helper.
+      // file. Validate the separate read operation before the one-use list
+      // capability is consumed and deleted.
       const readableFolder = externalFileGrants.revalidate({
         grantId,
         webContentsId: event.sender.id,
         operation: 'read',
+      })
+      externalFileGrants.resolve({
+        grantId,
+        webContentsId: event.sender.id,
+        operation: 'list',
       })
       importedFiles = await readGrantedKnowledgeFolder(fileSystem, readableFolder)
     } catch {
@@ -234,6 +259,44 @@ export function registerKBController(
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
     return knowledgeBaseLoader.run((kb) => kb.importText(text, fileName, projectPath, protocol, model))
+  })
+
+  ipcMain.handle('kb:import-reference-text', async (
+    _event,
+    chapterNumber: number,
+    runId: string,
+    executionAuthority: ImportRunExecutionAuthority,
+  ) => {
+    const projectPath = getCurrentProjectPath()
+    if (!projectPath) throw new Error(text('项目数据库未打开', 'The project database is not open.'))
+    const binding = ImportRunRepository.resolveReferenceImportAuthority(
+      runId,
+      executionAuthority,
+      chapterNumber,
+    )
+    const fileName = referenceImportDisplayName(binding)
+    const embConfig = getEmbeddingConfig()
+    const protocol = embConfig?.protocol ?? 'openai'
+    const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
+    return knowledgeBaseLoader.run(async (kb) => {
+      const result = await kb.importReferenceText(
+        binding.content,
+        fileName,
+        binding.stableKey,
+        chapterNumber,
+        runId,
+        executionAuthority,
+        projectPath,
+        protocol,
+        model,
+      )
+      if (result.success && result.docId) {
+        ImportRunRepository.commitReferenceImportReceipt(
+          runId, executionAuthority, chapterNumber, result.docId,
+        )
+      }
+      return result
+    })
   })
 
   ipcMain.handle('kb:search', async (_event, query: string, topK: number | undefined, expectedProjectPath: string) => {

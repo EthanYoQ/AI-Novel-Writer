@@ -53,7 +53,6 @@ function isCapabilityOrAppDataChannel(channel: string): boolean {
     || channel.startsWith('dialog:select-')
     || channel.startsWith('prompt:')
     || channel === 'skills:list-user'
-    || channel === 'import:split-chapters'
 }
 
 function isProjectScopedChannel(channel: string): boolean {

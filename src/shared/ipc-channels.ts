@@ -30,6 +30,21 @@ import type {
   ChapterDeletionResult,
   DeleteFinalizedChapterRequest,
 } from './chapter-deletion'
+import type {
+  ImportRunChapterSnapshot,
+  ImportRunEffectCommitResult,
+  ImportRunEffectReceipt,
+  ImportRunExecutionAuthority,
+  ImportRunExecutionLease,
+  ImportInspectionSummary,
+  ImportNovelFileSelectionRequest,
+  ImportRunPreparationResult,
+  ImportRunPrepareFromInspectionRequest,
+  ImportRunPrepareEffectReceiptRequest,
+  ImportRunSnapshot,
+  ImportRunStartResult,
+  ImportRunStage,
+} from './import-run'
 
 // ===== 全局配置 =====
 export interface ConfigChannels {
@@ -638,6 +653,50 @@ export interface DatabaseChannels {
     return: { success: boolean; receipt?: ImportGlobalFactsReceipt; error?: string }
   }
   'db:project-clear-generated-data': { args: [options: ProjectClearOptions, expectedProjectPath: string]; return: { success: boolean; cleared?: ProjectClearScope[]; physicalFilesDeleted?: number; error?: string } }
+  'db:import-run-prepare-inspection': {
+    args: [request: ImportRunPrepareFromInspectionRequest, expectedProjectPath: string]
+    return: { success: boolean; preparation?: ImportRunPreparationResult; error?: string }
+  }
+  'db:import-run-finalize-parsing': {
+    args: [runId: string, expectedProjectPath: string]
+    return: { success: boolean; preparation?: ImportRunPreparationResult; error?: string }
+  }
+  'db:import-run-get': { args: [runId: string, expectedProjectPath: string]; return: ImportRunSnapshot | null }
+  'db:import-run-list-resumable': { args: [expectedProjectPath: string]; return: ImportRunSnapshot[] }
+  'db:import-run-list-chapters': {
+    args: [runId: string, afterChapterNumber: number, limit: number, expectedProjectPath: string]
+    return: ImportRunChapterSnapshot[]
+  }
+  'db:import-run-effect-receipt-get': {
+    args: [runId: string, stage: ImportRunStage, batchId: string, expectedProjectPath: string]
+    return: ImportRunEffectReceipt | null
+  }
+  'db:import-run-effect-receipt-prepare': {
+    args: [request: ImportRunPrepareEffectReceiptRequest, execution: ImportRunExecutionLease, expectedProjectPath: string]
+    return: { success: boolean; receipt?: ImportRunEffectReceipt; error?: string }
+  }
+  'db:import-run-effect-receipt-commit': {
+    args: [runId: string, stage: ImportRunStage, batchId: string, execution: ImportRunExecutionLease, expectedProjectPath: string]
+    return: { success: boolean; result?: ImportRunEffectCommitResult; error?: string }
+  }
+  'db:import-run-start-resume': { args: [runId: string, owner: string, expectedProjectPath: string]; return: { success: boolean; start?: ImportRunStartResult; error?: string } }
+  'db:import-run-renew-execution': { args: [runId: string, execution: ImportRunExecutionLease, expectedProjectPath: string]; return: { success: boolean; execution?: ImportRunExecutionLease; error?: string } }
+  'db:import-run-restart': { args: [runId: string, nextRunId: string, expectedProjectPath: string]; return: { success: boolean; run?: ImportRunSnapshot; error?: string } }
+  'db:import-run-request-cancel': { args: [runId: string, execution: ImportRunExecutionLease, expectedProjectPath: string]; return: { success: boolean; run?: ImportRunSnapshot; error?: string } }
+  'db:import-run-cancel-at-boundary': { args: [runId: string, execution: ImportRunExecutionLease, expectedProjectPath: string]; return: { success: boolean; run?: ImportRunSnapshot; error?: string } }
+  'db:import-run-complete-batch': {
+    args: [runId: string, stage: ImportRunStage, batchId: string, execution: ImportRunExecutionLease, expectedProjectPath: string]
+    return: { success: boolean; newlyCompleted?: boolean; cancelApplied?: boolean; run?: ImportRunSnapshot; error?: string }
+  }
+  'db:import-run-advance-stage': {
+    args: [runId: string, completedStage: ImportRunStage, nextStage: ImportRunStage, execution: ImportRunExecutionLease, expectedProjectPath: string]
+    return: { success: boolean; run?: ImportRunSnapshot; error?: string }
+  }
+  'db:import-run-fail': {
+    args: [runId: string, stage: ImportRunStage, errorMessage: string, execution: ImportRunExecutionLease, expectedProjectPath: string]
+    return: { success: boolean; run?: ImportRunSnapshot; error?: string }
+  }
+  'db:import-run-complete': { args: [runId: string, execution: ImportRunExecutionLease, expectedProjectPath: string]; return: { success: boolean; run?: ImportRunSnapshot; error?: string } }
 
   // 2. blueprints
   'db:blueprint-get-all': { args: [expectedProjectPath: string]; return: BlueprintData[] }
@@ -752,6 +811,14 @@ export interface KnowledgeBaseChannels {
   'kb:import-document': { args: [grantId: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
   'kb:import-folder': { args: [grantId: string, expectedProjectPath: string]; return: { success: boolean; importedCount: number; failedFiles: string[]; error?: string; errorCode?: AppErrorCode } }
   'kb:import-text': { args: [text: string, fileName: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
+  'kb:import-reference-text': {
+    args: [
+      chapterNumber: number,
+      runId: string,
+      executionAuthority: ImportRunExecutionAuthority,
+    ]
+    return: { success: boolean; docId?: string; chunkCount?: number; idempotent?: boolean; error?: string; errorCode?: AppErrorCode }
+  }
   'kb:search': { args: [query: string, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:search-with-scope': { args: [query: string, fromChapter: number, toChapter: number, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:list-documents': { args: [expectedProjectPath: string]; return: AppResult<Array<{ id: string; fileName: string; importedAt: string; chunkCount: number; filePath: string }>> }
@@ -780,15 +847,14 @@ export interface KnowledgeBaseChannels {
 
 // ===== 导入小说 =====
 export interface ImportChannels {
-  'dialog:select-novel-files': { args: []; return: ExternalFileGrant[] | null }
-  'import:split-chapters': {
-    args: [grantIds: string[], options?: { separator?: string }]
+  'dialog:select-novel-files': {
+    args: [request?: ImportNovelFileSelectionRequest, projectSession?: ProjectSessionContext]
     return: {
       success: boolean
-      chapters: Array<{ number: number; title: string; content: string; wordCount: number }>
-      totalWords: number
+      inspection?: ImportInspectionSummary
+      preparation?: ImportRunPreparationResult
       error?: string
-    }
+    } | null
   }
 }
 

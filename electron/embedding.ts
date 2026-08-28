@@ -314,6 +314,7 @@ export async function generateEmbeddings(
   protocol: 'openai' | 'gemini',
   model: { baseUrl: string; apiKey: string; modelName?: string },
   configuredBatchSize?: number,
+  assertActive?: () => void,
 ): Promise<number[][]> {
   // 空文本处理
   if (texts.length === 0) return []
@@ -328,10 +329,12 @@ export async function generateEmbeddings(
   const results: number[][] = []
 
   for (let i = 0; i < texts.length; i += batchSize) {
+    assertActive?.()
     const batch = texts.slice(i, i + batchSize)
     const embeddings = protocol === 'gemini'
       ? await embedGemini(batch, model)
       : await embedOpenAI(batch, model)
+    assertActive?.()
     results.push(...embeddings)
   }
 

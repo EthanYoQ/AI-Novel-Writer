@@ -7,8 +7,10 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -25,6 +27,7 @@ static NSString *const kNotFound = @"SECURE_FS_NOT_FOUND";
 static NSString *const kReparsePoint = @"SECURE_FS_REPARSE_POINT";
 static NSString *const kOpenFailed = @"SECURE_FS_OPEN_FAILED";
 static NSString *const kWriteFailed = @"SECURE_FS_WRITE_FAILED";
+static NSString *const kRootChanged = @"SECURE_FS_ROOT_CHANGED";
 
 static void WriteResponse(NSDictionary *response) {
   NSError *error = nil;
@@ -98,6 +101,57 @@ static BOOL GetString(NSDictionary *request, NSString *key, NSString **output, N
   return YES;
 }
 
+static BOOL ParseUnsignedDecimal(NSString *value, uint64_t maximum, uint64_t *output) {
+  if (![value isKindOfClass:[NSString class]] || value.length == 0 || value.length > 20) return NO;
+  if (value.length > 1 && [value characterAtIndex:0] == '0') return NO;
+  uint64_t parsed = 0;
+  for (NSUInteger index = 0; index < value.length; index++) {
+    unichar character = [value characterAtIndex:index];
+    if (character < '0' || character > '9') return NO;
+    uint64_t digit = (uint64_t)(character - '0');
+    if (parsed > (maximum - digit) / 10) return NO;
+    parsed = parsed * 10 + digit;
+  }
+  *output = parsed;
+  return YES;
+}
+
+static BOOL GetRootIdentity(
+  NSDictionary *request,
+  uint64_t *expectedDevice,
+  uint64_t *expectedFileIndex,
+  NSString **errorCode
+) {
+  id value = request[@"rootIdentity"];
+  if (![value isKindOfClass:[NSDictionary class]]) {
+    *errorCode = kInvalidPath;
+    return NO;
+  }
+  NSDictionary *identity = (NSDictionary *)value;
+  if (identity.count != 2
+      || !ParseUnsignedDecimal(identity[@"volumeSerialNumber"], UINT32_MAX, expectedDevice)
+      || !ParseUnsignedDecimal(identity[@"fileIndex"], UINT64_MAX, expectedFileIndex)) {
+    *errorCode = kInvalidPath;
+    return NO;
+  }
+  return YES;
+}
+
+static BOOL GetReadByteLimit(NSDictionary *request, NSUInteger *output, NSString **errorCode) {
+  id value = request[@"maxBytes"];
+  if (![value isKindOfClass:[NSNumber class]] || IsJsonBoolean(value)) {
+    *errorCode = @"SECURE_FS_INVALID_OPERATION";
+    return NO;
+  }
+  double numeric = [(NSNumber *)value doubleValue];
+  if (!isfinite(numeric) || numeric < 0 || floor(numeric) != numeric || numeric > kMaxTextBytes) {
+    *errorCode = @"SECURE_FS_INVALID_OPERATION";
+    return NO;
+  }
+  *output = (NSUInteger)numeric;
+  return YES;
+}
+
 static BOOL IsWindowsReservedName(NSString *segment) {
   NSString *bare = [[segment componentsSeparatedByString:@"."] firstObject].lowercaseString;
   if ([bare isEqualToString:@"con"] || [bare isEqualToString:@"prn"]
@@ -145,7 +199,12 @@ static NSArray<NSString *> *SegmentsForRelativePath(NSString *relativePath, NSSt
   return segments;
 }
 
-static int OpenRoot(NSString *rootPath, NSString **errorCode) {
+static int OpenRoot(
+  NSString *rootPath,
+  uint64_t expectedDevice,
+  uint64_t expectedFileIndex,
+  NSString **errorCode
+) {
   if (rootPath.length == 0 || rootPath.length > kMaxPathCharacters
       || [rootPath rangeOfString:@"\0"].location != NSNotFound || ![rootPath hasPrefix:@"/"]) {
     *errorCode = kInvalidPath;
@@ -157,7 +216,21 @@ static int OpenRoot(NSString *rootPath, NSString **errorCode) {
     return -1;
   }
   int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-  if (fd < 0) *errorCode = CodeForErrno(errno);
+  if (fd < 0) {
+    *errorCode = CodeForErrno(errno);
+    return -1;
+  }
+  struct stat information;
+  if (fstat(fd, &information) < 0) {
+    close(fd);
+    *errorCode = CodeForErrno(errno);
+    return -1;
+  }
+  if ((uint64_t)information.st_dev != expectedDevice || (uint64_t)information.st_ino != expectedFileIndex) {
+    close(fd);
+    *errorCode = kRootChanged;
+    return -1;
+  }
   return fd;
 }
 
@@ -191,8 +264,15 @@ static int OpenDirectoryAt(int parent, NSString *segment, BOOL createIfMissing, 
   return fd;
 }
 
-static int OpenDirectoryChain(NSString *rootPath, NSArray<NSString *> *segments, BOOL createIfMissing, NSString **errorCode) {
-  int current = OpenRoot(rootPath, errorCode);
+static int OpenDirectoryChain(
+  NSString *rootPath,
+  uint64_t expectedDevice,
+  uint64_t expectedFileIndex,
+  NSArray<NSString *> *segments,
+  BOOL createIfMissing,
+  NSString **errorCode
+) {
+  int current = OpenRoot(rootPath, expectedDevice, expectedFileIndex, errorCode);
   if (current < 0) return -1;
   for (NSString *segment in segments) {
     int child = OpenDirectoryAt(current, segment, createIfMissing, errorCode);
@@ -205,6 +285,8 @@ static int OpenDirectoryChain(NSString *rootPath, NSArray<NSString *> *segments,
 
 static int OpenParentDirectory(
   NSString *rootPath,
+  uint64_t expectedDevice,
+  uint64_t expectedFileIndex,
   NSArray<NSString *> *segments,
   NSString **leaf,
   NSString **errorCode
@@ -215,7 +297,7 @@ static int OpenParentDirectory(
   }
   *leaf = segments.lastObject;
   NSArray<NSString *> *prefix = [segments subarrayWithRange:NSMakeRange(0, segments.count - 1)];
-  return OpenDirectoryChain(rootPath, prefix, NO, errorCode);
+  return OpenDirectoryChain(rootPath, expectedDevice, expectedFileIndex, prefix, NO, errorCode);
 }
 
 static BOOL RequireRegularFile(int fd, NSString **errorCode) {
@@ -231,7 +313,7 @@ static BOOL RequireRegularFile(int fd, NSString **errorCode) {
   return YES;
 }
 
-static BOOL ReadAll(int fd, NSMutableData **output, NSString **errorCode) {
+static BOOL ReadAll(int fd, NSUInteger maxBytes, NSMutableData **output, NSString **errorCode) {
   NSMutableData *data = [NSMutableData data];
   unsigned char buffer[8192];
   for (;;) {
@@ -242,7 +324,7 @@ static BOOL ReadAll(int fd, NSMutableData **output, NSString **errorCode) {
       *errorCode = kOpenFailed;
       return NO;
     }
-    if (data.length + (NSUInteger)count > kMaxTextBytes) {
+    if ((NSUInteger)count > maxBytes - data.length) {
       *errorCode = @"SECURE_FS_FILE_TOO_LARGE";
       return NO;
     }
@@ -271,10 +353,16 @@ static BOOL WriteAll(int fd, NSData *content, NSString **errorCode) {
   return YES;
 }
 
-static NSDictionary *ReadText(NSString *rootPath, NSArray<NSString *> *segments) {
+static NSDictionary *ReadText(
+  NSString *rootPath,
+  uint64_t expectedDevice,
+  uint64_t expectedFileIndex,
+  NSArray<NSString *> *segments,
+  NSUInteger maxBytes
+) {
   NSString *errorCode = nil;
   NSString *leaf = nil;
-  int parent = OpenParentDirectory(rootPath, segments, &leaf, &errorCode);
+  int parent = OpenParentDirectory(rootPath, expectedDevice, expectedFileIndex, segments, &leaf, &errorCode);
   if (parent < 0) return Failure(errorCode);
   const char *name = leaf.fileSystemRepresentation;
   int file = name ? openat(parent, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC) : -1;
@@ -288,24 +376,40 @@ static NSDictionary *ReadText(NSString *rootPath, NSArray<NSString *> *segments)
     close(parent);
     return Failure(errorCode);
   }
+  struct stat information;
+  if (fstat(file, &information) < 0) {
+    close(file);
+    close(parent);
+    return Failure(CodeForErrno(errno));
+  }
+  if (information.st_size < 0 || (uint64_t)information.st_size > maxBytes) {
+    close(file);
+    close(parent);
+    return Failure(@"SECURE_FS_FILE_TOO_LARGE");
+  }
   NSMutableData *content = nil;
-  BOOL ok = ReadAll(file, &content, &errorCode);
+  BOOL ok = ReadAll(file, maxBytes, &content, &errorCode);
   close(file);
   close(parent);
   if (!ok) return Failure(errorCode);
   return @{ @"ok": @YES, @"contentBase64": [content base64EncodedStringWithOptions:0] };
 }
 
-static NSDictionary *Exists(NSString *rootPath, NSArray<NSString *> *segments) {
+static NSDictionary *Exists(
+  NSString *rootPath,
+  uint64_t expectedDevice,
+  uint64_t expectedFileIndex,
+  NSArray<NSString *> *segments
+) {
   NSString *errorCode = nil;
   if (segments.count == 0) {
-    int root = OpenRoot(rootPath, &errorCode);
+    int root = OpenRoot(rootPath, expectedDevice, expectedFileIndex, &errorCode);
     if (root < 0) return Failure(errorCode);
     close(root);
     return @{ @"ok": @YES, @"exists": @YES };
   }
   NSString *leaf = nil;
-  int parent = OpenParentDirectory(rootPath, segments, &leaf, &errorCode);
+  int parent = OpenParentDirectory(rootPath, expectedDevice, expectedFileIndex, segments, &leaf, &errorCode);
   if (parent < 0) {
     if ([errorCode isEqualToString:kNotFound]) return @{ @"ok": @YES, @"exists": @NO };
     return Failure(errorCode);
@@ -322,17 +426,27 @@ static NSDictionary *Exists(NSString *rootPath, NSArray<NSString *> *segments) {
   return @{ @"ok": @YES, @"exists": @YES };
 }
 
-static NSDictionary *MakeDirectory(NSString *rootPath, NSArray<NSString *> *segments) {
+static NSDictionary *MakeDirectory(
+  NSString *rootPath,
+  uint64_t expectedDevice,
+  uint64_t expectedFileIndex,
+  NSArray<NSString *> *segments
+) {
   NSString *errorCode = nil;
-  int directory = OpenDirectoryChain(rootPath, segments, YES, &errorCode);
+  int directory = OpenDirectoryChain(rootPath, expectedDevice, expectedFileIndex, segments, YES, &errorCode);
   if (directory < 0) return Failure(errorCode);
   close(directory);
   return Success();
 }
 
-static NSDictionary *ListDirectory(NSString *rootPath, NSArray<NSString *> *segments) {
+static NSDictionary *ListDirectory(
+  NSString *rootPath,
+  uint64_t expectedDevice,
+  uint64_t expectedFileIndex,
+  NSArray<NSString *> *segments
+) {
   NSString *errorCode = nil;
-  int directory = OpenDirectoryChain(rootPath, segments, NO, &errorCode);
+  int directory = OpenDirectoryChain(rootPath, expectedDevice, expectedFileIndex, segments, NO, &errorCode);
   if (directory < 0) return Failure(errorCode);
   int duplicate = dup(directory);
   if (duplicate < 0) {
@@ -421,7 +535,13 @@ static BOOL DecodeContent(NSString *encoded, NSData **content, NSString **errorC
   return YES;
 }
 
-static void WriteAtomically(NSDictionary *request, NSString *rootPath, NSArray<NSString *> *segments) {
+static void WriteAtomically(
+  NSDictionary *request,
+  NSString *rootPath,
+  uint64_t expectedDevice,
+  uint64_t expectedFileIndex,
+  NSArray<NSString *> *segments
+) {
   NSString *errorCode = nil;
   NSString *encoded = nil;
   if (!GetString(request, @"contentBase64", &encoded, &errorCode)) {
@@ -440,7 +560,7 @@ static void WriteAtomically(NSDictionary *request, NSString *rootPath, NSArray<N
     return;
   }
   NSString *leaf = nil;
-  int parent = OpenParentDirectory(rootPath, segments, &leaf, &errorCode);
+  int parent = OpenParentDirectory(rootPath, expectedDevice, expectedFileIndex, segments, &leaf, &errorCode);
   if (parent < 0) {
     WriteResponse(Failure(errorCode));
     return;
@@ -524,9 +644,12 @@ int main(void) {
     NSString *operation = nil;
     NSString *rootPath = nil;
     NSString *relativePath = nil;
+    uint64_t expectedRootDevice = 0;
+    uint64_t expectedRootFileIndex = 0;
     if (!GetString(request, @"operation", &operation, &errorCode)
         || !GetString(request, @"rootPath", &rootPath, &errorCode)
-        || !GetString(request, @"relativePath", &relativePath, &errorCode)) {
+        || !GetString(request, @"relativePath", &relativePath, &errorCode)
+        || !GetRootIdentity(request, &expectedRootDevice, &expectedRootFileIndex, &errorCode)) {
       WriteResponse(Failure(errorCode));
       return 0;
     }
@@ -536,15 +659,20 @@ int main(void) {
       return 0;
     }
     if ([operation isEqualToString:@"read"]) {
-      WriteResponse(ReadText(rootPath, segments));
+      NSUInteger maxBytes = 0;
+      if (!GetReadByteLimit(request, &maxBytes, &errorCode)) {
+        WriteResponse(Failure(errorCode));
+        return 0;
+      }
+      WriteResponse(ReadText(rootPath, expectedRootDevice, expectedRootFileIndex, segments, maxBytes));
     } else if ([operation isEqualToString:@"write"]) {
-      WriteAtomically(request, rootPath, segments);
+      WriteAtomically(request, rootPath, expectedRootDevice, expectedRootFileIndex, segments);
     } else if ([operation isEqualToString:@"mkdir"]) {
-      WriteResponse(MakeDirectory(rootPath, segments));
+      WriteResponse(MakeDirectory(rootPath, expectedRootDevice, expectedRootFileIndex, segments));
     } else if ([operation isEqualToString:@"exists"]) {
-      WriteResponse(Exists(rootPath, segments));
+      WriteResponse(Exists(rootPath, expectedRootDevice, expectedRootFileIndex, segments));
     } else if ([operation isEqualToString:@"list"]) {
-      WriteResponse(ListDirectory(rootPath, segments));
+      WriteResponse(ListDirectory(rootPath, expectedRootDevice, expectedRootFileIndex, segments));
     } else {
       WriteResponse(Failure(@"SECURE_FS_INVALID_OPERATION"));
     }
