@@ -7,6 +7,10 @@ import { ProjectData, type ProjectSessionContext } from '../../src/shared/ipc-ch
 import { DIR_PROMPTS } from '../../src/shared/project-paths'
 import { sameProjectPathKey } from '../../src/shared/project-session-context'
 import {
+  resolveWritingLanguage,
+  type WritingLanguage,
+} from '../../src/shared/writing-language'
+import {
   closeProjectDatabase,
   getCurrentProjectPath,
   getProjectDb,
@@ -306,7 +310,7 @@ export function registerProjectController() {
   ipcMain.handle('project:create', async (
     _event,
     config: {
-      name: string; path: string; genre: string; targetAudience: string
+      name: string; path: string; genre: string; targetAudience: string; writingLanguage?: WritingLanguage
     },
     requestToken: string,
   ) => {
@@ -334,7 +338,7 @@ export function registerProjectController() {
 
         fs.mkdirSync(path.join(projectDir, DIR_PROMPTS), { recursive: true })
         initProjectDatabase(projectDir)
-        ProjectCoreRepository.init(projectName)
+        ProjectCoreRepository.init(projectName, resolveWritingLanguage(config.writingLanguage))
         ProjectCoreRepository.update({
           genre: config.genre,
           targetAudience: config.targetAudience,
@@ -458,6 +462,7 @@ export function registerProjectController() {
           name: updatedCoreData.projectName,
           path: resolvedProjectPath,
           novelConfig: {
+            writingLanguage: updatedCoreData.writingLanguage,
             genre: updatedCoreData.genre,
             subGenre: updatedCoreData.subGenre,
             targetAudience: updatedCoreData.targetAudience,
@@ -570,6 +575,9 @@ export function registerProjectController() {
 
       const coreUpdate: Parameters<typeof ProjectCoreRepository.update>[0] = {}
       if (data.novelConfig) {
+        if (data.novelConfig.writingLanguage !== undefined) {
+          coreUpdate.writingLanguage = resolveWritingLanguage(data.novelConfig.writingLanguage)
+        }
         Object.assign(coreUpdate, {
           genre: data.novelConfig.genre,
           subGenre: data.novelConfig.subGenre,

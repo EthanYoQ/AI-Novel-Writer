@@ -21,7 +21,7 @@ export default function NewProjectDialog({ open, onClose }: NewProjectDialogProp
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [creating, setCreating] = useState(false)
-  const text = useLocaleStore(s => s.text)
+  const { locale, text } = useLocaleStore()
 
   /** 对话框每次打开时重置名称 */
   useEffect(() => {
@@ -46,6 +46,7 @@ export default function NewProjectDialog({ open, onClose }: NewProjectDialogProp
       path: path.trim(),
       genre: '',
       targetAudience: '',
+      writingLanguage: locale,
     })
     setCreating(false)
     if (success) {

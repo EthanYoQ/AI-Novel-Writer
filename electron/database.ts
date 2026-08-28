@@ -69,6 +69,7 @@ function createTables(db: BetterSqlite3.Database) {
       target_audience TEXT DEFAULT '',            -- 目标受众
       total_chapters INTEGER DEFAULT 100,         -- 预计总章数
       words_per_chapter INTEGER DEFAULT 3000,     -- 单章基准字数
+      writing_language TEXT NOT NULL DEFAULT 'zh-CN', -- 项目级写作语言
       creative_strategy TEXT NOT NULL DEFAULT 'auto', -- 项目级创作策略
       -- [写作技法]
       plot_structure TEXT DEFAULT 'three_act',    -- 故事模型
@@ -394,6 +395,10 @@ function createTables(db: BetterSqlite3.Database) {
   addProjectCoreTextColumn('core_outline', 'synopsis')
   addProjectCoreTextColumn('world_setting', 'worldbuilding')
   addProjectCoreTextColumn('protagonist_profile')
+  if (!projectCoreColumns.has('writing_language')) {
+    db.exec("ALTER TABLE project_core ADD COLUMN writing_language TEXT NOT NULL DEFAULT 'zh-CN'")
+    projectCoreColumns.add('writing_language')
+  }
   if (!projectCoreColumns.has('creative_strategy')) {
     db.exec("ALTER TABLE project_core ADD COLUMN creative_strategy TEXT NOT NULL DEFAULT 'auto'")
     projectCoreColumns.add('creative_strategy')

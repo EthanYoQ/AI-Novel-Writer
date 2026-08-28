@@ -95,6 +95,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         path: savePath.trim(),
         genre: '',
         targetAudience: '',
+        writingLanguage: locale,
       })
 
       if (!success) {
@@ -116,7 +117,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     } finally {
       setImporting(false)
     }
-  }, [name, savePath, chapters, createProject, startWorkflow, onClose])
+  }, [name, savePath, chapters, createProject, startWorkflow, onClose, locale])
 
   // 成本预估
   const costEstimate = splitDone && chapters.length > 0

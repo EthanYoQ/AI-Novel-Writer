@@ -282,6 +282,7 @@ interface ProjectState {
     path: string
     genre: string
     targetAudience: string
+    writingLanguage?: NovelConfig['writingLanguage']
   }) => Promise<boolean>
   /** 打开项目 */
   openProject: (projectPath: string) => Promise<boolean>

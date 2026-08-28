@@ -6,6 +6,11 @@
  */
 import { getProjectDb } from '../database'
 import { CREATIVE_STRATEGIES, type CreativeStrategy } from '../../src/shared/reasoning-types'
+import {
+    DEFAULT_WRITING_LANGUAGE,
+    resolveWritingLanguage,
+    type WritingLanguage,
+} from '../../src/shared/writing-language'
 
 /** project_core 表行类型 */
 export interface ProjectCoreRow {
@@ -16,6 +21,7 @@ export interface ProjectCoreRow {
     target_audience: string
     total_chapters: number
     words_per_chapter: number
+    writing_language: string
     creative_strategy: string
     plot_structure: string
     narrative_pov: string
@@ -43,6 +49,7 @@ export interface ProjectCoreData {
     targetAudience: string
     totalChapters: number
     wordsPerChapter: number
+    writingLanguage: WritingLanguage
     creativeStrategy: CreativeStrategy
     plotStructure: string
     narrativePov: string
@@ -69,6 +76,7 @@ function rowToData(row: ProjectCoreRow): ProjectCoreData {
         targetAudience: row.target_audience,
         totalChapters: row.total_chapters,
         wordsPerChapter: row.words_per_chapter,
+        writingLanguage: resolveWritingLanguage(row.writing_language),
         creativeStrategy: (
             CREATIVE_STRATEGIES.includes(row.creative_strategy as CreativeStrategy)
                 ? row.creative_strategy
@@ -105,14 +113,17 @@ export class ProjectCoreRepository {
     }
 
     /** 初始化项目配置（创建项目时调用） */
-    static init(projectName: string): void {
+    static init(
+        projectName: string,
+        writingLanguage: WritingLanguage = DEFAULT_WRITING_LANGUAGE,
+    ): void {
         const db = getProjectDb()
         if (!db) return
 
         db.prepare(`
-      INSERT OR IGNORE INTO project_core (id, project_name)
-      VALUES ('main', ?)
-    `).run(projectName)
+      INSERT OR IGNORE INTO project_core (id, project_name, writing_language)
+      VALUES ('main', ?, ?)
+    `).run(projectName, writingLanguage)
     }
 
     /** 更新项目配置（传入部分字段即可） */
@@ -131,6 +142,7 @@ export class ProjectCoreRepository {
             targetAudience: 'target_audience',
             totalChapters: 'total_chapters',
             wordsPerChapter: 'words_per_chapter',
+            writingLanguage: 'writing_language',
             creativeStrategy: 'creative_strategy',
             plotStructure: 'plot_structure',
             narrativePov: 'narrative_pov',

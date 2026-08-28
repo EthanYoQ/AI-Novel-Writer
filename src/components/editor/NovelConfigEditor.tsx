@@ -4,6 +4,10 @@ import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import type { NovelConfig } from '../../shared/ipc-channels'
+import {
+  resolveWritingLanguage,
+  type WritingLanguage,
+} from '../../shared/writing-language'
 import type { GeneratableField } from '../../services/workflows/commands/generate-field.command'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -172,6 +176,24 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
         <div className="space-y-5">
           {/* 基本信息 */}
           <Section title={text('基本信息', 'Basic information')}>
+            <div className="grid grid-cols-3 gap-4 mb-4 items-end">
+              <Field label={text('写作语言', 'Writing language')} htmlFor="project-writing-language">
+                <NativeSelect
+                  id="project-writing-language"
+                  value={resolveWritingLanguage(config.writingLanguage)}
+                  onChange={(e) => update('writingLanguage', e.target.value as WritingLanguage)}
+                >
+                  <option value="zh-CN">{text('简体中文', 'Simplified Chinese')}</option>
+                  <option value="en-US">English</option>
+                </NativeSelect>
+              </Field>
+              <p className="col-span-2 text-xs leading-5 text-[var(--color-text-muted)]">
+                {text(
+                  '控制后续 AI 创作使用的内置指令语言；不会改变界面语言，也不会翻译已有内容。',
+                  'Controls the built-in instruction language for future AI writing. It does not change the interface language or translate existing content.',
+                )}
+              </p>
+            </div>
             <div className="grid grid-cols-3 gap-4">
               <Field label={text('类型', 'Genre')}>
                 <NativeSelect value={config.genre} onChange={(e) => update('genre', e.target.value)}>
@@ -417,13 +439,23 @@ function Section({
 }
 
 /** 表单字段 */
-function Field({ label, tipItems, children }: { label: string; tipItems?: string[]; children: React.ReactNode }) {
+function Field({
+  label,
+  htmlFor,
+  tipItems,
+  children,
+}: {
+  label: string
+  htmlFor?: string
+  tipItems?: string[]
+  children: React.ReactNode
+}) {
   const [showTip, setShowTip] = useState(false)
   const tipRef = useRef<HTMLDivElement>(null)
 
   return (
     <div>
-      <label className="text-xs mb-1 flex items-center gap-1 font-medium text-[var(--color-text-muted)]">
+      <label htmlFor={htmlFor} className="text-xs mb-1 flex items-center gap-1 font-medium text-[var(--color-text-muted)]">
         {label}
         {tipItems && tipItems.length > 0 && (
           <span

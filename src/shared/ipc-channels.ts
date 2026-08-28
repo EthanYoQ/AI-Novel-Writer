@@ -11,6 +11,7 @@ import type {
 import type { EmbeddingOptions } from './embedding-options'
 import type { ModelCapabilities } from './provider-presets'
 import type { ModelProviderResourceId } from './model-provider-resources'
+import type { WritingLanguage } from './writing-language'
 import type {
   UpdateActionResponse,
   UpdateCheckResponse,
@@ -171,7 +172,13 @@ export interface ProjectChannels {
   }
   'project:create': {
     args: [
-      config: { name: string; path: string; genre: string; targetAudience: string },
+      config: {
+        name: string
+        path: string
+        genre: string
+        targetAudience: string
+        writingLanguage?: WritingLanguage
+      },
       requestToken: string,
       rendererProjectPath: string | null,
     ]
@@ -379,6 +386,11 @@ export interface ProjectData {
 }
 
 export interface NovelConfig {
+  /**
+   * Project content language; independent from the application UI locale.
+   * Missing only while reading pre-language renderer drafts; project open normalizes it.
+   */
+  writingLanguage?: WritingLanguage
   /** Project-scoped writing intent; independent from the selected model. */
   creativeStrategy?: CreativeStrategy
   genre: string
