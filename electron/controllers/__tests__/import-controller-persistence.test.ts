@@ -19,6 +19,7 @@ import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../d
 import { projectAccess } from '../../services/project-access'
 import { ExternalFileGrantService } from '../../services/external-file-grant-service'
 import { ImportInspectionStore } from '../../services/import-inspection-store'
+import { ImportRunRepository } from '../../repositories/import-run-repository'
 import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
 import { registerImportController } from '../import-controller'
 
@@ -74,6 +75,61 @@ afterEach(() => {
 })
 
 describe('current-project import parsing persistence', () => {
+  it.each([
+    {
+      kind: 'source count', locale: 'zh-CN', limits: { maxSourceFiles: 1 },
+      expected: '所选文件数量超过导入上限（最多 1 个）。',
+    },
+    {
+      kind: 'source count', locale: 'en-US', limits: { maxSourceFiles: 1 },
+      expected: 'The import source-file limit was exceeded (limit: 1).',
+    },
+    {
+      kind: 'total bytes', locale: 'zh-CN', limits: { maxTotalBytes: 10 },
+      expected: '所选文件总大小超过导入上限（最多 10 字节）。',
+    },
+    {
+      kind: 'total bytes', locale: 'en-US', limits: { maxTotalBytes: 10 },
+      expected: 'The import source-size limit was exceeded (limit: 10 bytes).',
+    },
+    {
+      kind: 'chapter count', locale: 'zh-CN', limits: { maxChapters: 1 },
+      expected: '拆分后的章节数超过导入上限（最多 1 章）。',
+    },
+    {
+      kind: 'chapter count', locale: 'en-US', limits: { maxChapters: 1 },
+      expected: 'The import chapter limit was exceeded (limit: 1).',
+    },
+  ] as const)('returns the frozen $locale copy for the $kind limit', async ({ kind, locale, limits, expected }) => {
+    const sourceA = path.join(parent, `limit-${kind}-a.txt`)
+    const sourceB = path.join(parent, `limit-${kind}-b.txt`)
+    const content = kind === 'total bytes'
+      ? '12345678901'
+      : kind === 'chapter count'
+        ? 'Chapter 1 One\nbody one\nChapter 2 Two\nbody two'
+        : 'body'
+    fs.writeFileSync(sourceA, content, 'utf8')
+    fs.writeFileSync(sourceB, 'body', 'utf8')
+    mocks.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: kind === 'source count' ? [sourceA, sourceB] : [sourceA],
+    })
+    registerImportController(
+      undefined,
+      filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
+      limits,
+      new ExternalFileGrantService(),
+      new ImportInspectionStore(),
+      secret,
+    )
+
+    await expect(mocks.handlers.get('dialog:select-novel-files')!(
+      { sender: { id: 54, once: vi.fn() } },
+      { runId: `limit-${kind}-${locale}`, purpose: 'reference', locale, expectedProjectPath: projectRoot },
+      session,
+    )).resolves.toEqual({ success: false, error: expected })
+  })
+
   it('does not create an import run when the project changes while the file picker is open', async () => {
     const source = path.join(parent, 'picker.txt')
     fs.writeFileSync(source, 'Chapter 1 Picker\nalpha', 'utf8')
@@ -317,6 +373,93 @@ describe('current-project import parsing persistence', () => {
       preparation: { classification: 'new', run: { id: 'partial-empty-retry', stage: 'prepared', totalChapters: 2 } },
     })
     expect(reads).toEqual(['b-blank.txt'])
+  })
+
+  it('keeps a title-only source retryable without discarding a valid sibling source', async () => {
+    const validSource = path.join(parent, 'a-body.txt')
+    const titleOnlySource = path.join(parent, 'b-title-only.txt')
+    fs.writeFileSync(validSource, 'Chapter 1 Kept\nSaved body text.', 'utf8')
+    fs.writeFileSync(titleOnlySource, 'Chapter 2 Missing body', 'utf8')
+    mocks.showOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: [validSource, titleOnlySource],
+    })
+    const reads: string[] = []
+    const fileSystem = {
+      readText: vi.fn(async (capability: { rootPath: string; relativePath: string }) => {
+        reads.push(capability.relativePath)
+        return fs.readFileSync(path.join(capability.rootPath, capability.relativePath), 'utf8')
+      }),
+    } as unknown as WindowsSafeFileSystem
+    registerImportController(
+      fileSystem,
+      filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
+      {},
+      new ExternalFileGrantService(),
+      new ImportInspectionStore(),
+      secret,
+    )
+    const handler = mocks.handlers.get('dialog:select-novel-files')!
+    const event = { sender: { id: 63, once: vi.fn() } }
+    const request = {
+      runId: 'partial-title-only', purpose: 'reference', locale: 'en-US', expectedProjectPath: projectRoot,
+    }
+
+    await expect(handler(event, request, session)).resolves.toEqual({
+      success: false,
+      error: 'One or more selected files contain chapter headings but no body text. Add novel text and choose the unfinished files again.',
+    })
+    expect(importRows()).toEqual({
+      runs: [{ id: 'partial-title-only', stage: 'parsing', status: 'failed' }],
+      sources: [
+        { run_id: 'partial-title-only', status: 'completed' },
+        { run_id: 'partial-title-only', status: 'failed' },
+      ],
+    })
+
+    fs.writeFileSync(titleOnlySource, 'Chapter 2 Restored\nRecovered body text.', 'utf8')
+    mocks.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [titleOnlySource] })
+    reads.length = 0
+    await expect(handler(event, request, session)).resolves.toMatchObject({
+      success: true,
+      preparation: { classification: 'new', run: { id: 'partial-title-only', stage: 'prepared', totalChapters: 2 } },
+    })
+    expect(reads).toEqual(['b-title-only.txt'])
+  })
+
+  it('leaves an all-title-only import failed and resumable instead of ready with zero chapters', async () => {
+    const titleOnlySource = path.join(parent, 'title-only.txt')
+    fs.writeFileSync(titleOnlySource, '第1章 只有标题\n第2章 仍然只有标题', 'utf8')
+    mocks.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [titleOnlySource] })
+    registerImportController(
+      undefined,
+      filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
+      {},
+      new ExternalFileGrantService(),
+      new ImportInspectionStore(),
+      secret,
+    )
+    const handler = mocks.handlers.get('dialog:select-novel-files')!
+
+    await expect(handler(
+      { sender: { id: 64, once: vi.fn() } },
+      { runId: 'all-title-only', purpose: 'reference', locale: 'zh-CN', expectedProjectPath: projectRoot },
+      session,
+    )).resolves.toEqual({
+      success: false,
+      error: '一个或多个所选文件只有章节标题，没有可导入的正文。请补充小说正文后，重新选择未完成的文件。',
+    })
+    expect(importRows()).toEqual({
+      runs: [{ id: 'all-title-only', stage: 'parsing', status: 'failed' }],
+      sources: [{ run_id: 'all-title-only', status: 'failed' }],
+    })
+    expect(ImportRunRepository.get('all-title-only')).toMatchObject({
+      resumable: true,
+      totalChapters: 0,
+      unfinishedSourceDisplay: [
+        { displayName: 'title-only.txt', mediaType: 'text/plain' },
+      ],
+    })
   })
 
   it('rejects an injected source when resuming a run and rolls back identity and run writes', async () => {

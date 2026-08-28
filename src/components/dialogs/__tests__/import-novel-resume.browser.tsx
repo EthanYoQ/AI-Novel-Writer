@@ -145,10 +145,12 @@ describe('current-project reference import', () => {
       .not.toBe((selectionCalls[0][1] as { runId: string }).runId)
   })
 
-  it('keeps the persisted run id while retrying authorization for an empty parsing source', async () => {
+  it('shows the title-only error and keeps the persisted run id while retrying the corrected source', async () => {
     const parsing = importRun({
-      id: 'empty-source-run', stage: 'parsing', status: 'failed',
-      sourceDisplay: [], totalChapters: 0, manifestChapterCount: 0,
+      id: 'title-only-source-run', stage: 'parsing', status: 'failed',
+      sourceDisplay: [{ displayName: 'title-only.txt', mediaType: 'text/plain', size: 20 }],
+      unfinishedSourceDisplay: [{ displayName: 'title-only.txt', mediaType: 'text/plain', size: 20 }],
+      totalChapters: 0, manifestChapterCount: 0,
       completedChapters: 0, progressCompleted: 0, progressTotal: 1,
     })
     let selectionCount = 0
@@ -156,7 +158,10 @@ describe('current-project reference import', () => {
       if (channel === 'db:import-run-list-resumable') return [parsing]
       if (channel === 'dialog:select-novel-files') {
         selectionCount += 1
-        if (selectionCount === 1) return { success: false, error: '没有可读章节' }
+        if (selectionCount === 1) return {
+          success: false,
+          error: '一个或多个所选文件只有章节标题，没有可导入的正文。请补充小说正文后，重新选择未完成的文件。',
+        }
         return {
           success: true,
           preparation: {
@@ -173,15 +178,63 @@ describe('current-project reference import', () => {
     await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
     await act(async () => page.getByTestId('import-target-current').click())
 
+    await expect.element(page.getByTestId('import-unfinished-sources'))
+      .toHaveTextContent('需要重新选择：title-only.txt')
     await act(async () => page.getByRole('button', { name: '继续导入' }).click())
-    await expect.element(page.getByText('没有可读章节')).toBeVisible()
+    await expect.element(page.getByText(
+      '一个或多个所选文件只有章节标题，没有可导入的正文。请补充小说正文后，重新选择未完成的文件。',
+    )).toBeVisible()
     await act(async () => page.getByRole('button', { name: '继续导入' }).click())
     await expect.element(page.getByText('共 1 章')).toBeVisible()
 
     const selectionCalls = invoke.mock.calls.filter(([channel]) => channel === 'dialog:select-novel-files')
     expect(selectionCalls).toHaveLength(2)
-    expect(selectionCalls[0][1]).toMatchObject({ runId: 'empty-source-run' })
-    expect(selectionCalls[1][1]).toMatchObject({ runId: 'empty-source-run' })
+    expect(selectionCalls[0][1]).toMatchObject({ runId: 'title-only-source-run' })
+    expect(selectionCalls[1][1]).toMatchObject({ runId: 'title-only-source-run' })
+  })
+
+  it('lists only unfinished source names and resumes with the run-frozen locale after a UI locale switch', async () => {
+    const parsing = importRun({
+      id: 'partial-locale-run',
+      locale: 'en-US',
+      stage: 'parsing',
+      status: 'failed',
+      sourceDisplay: [
+        { displayName: 'a-completed.txt', mediaType: 'text/plain', size: 20 },
+        { displayName: 'b-needs-retry.txt', mediaType: 'text/plain', size: 30 },
+      ],
+      unfinishedSourceDisplay: [
+        { displayName: 'b-needs-retry.txt', mediaType: 'text/plain', size: 30 },
+      ],
+      completedSources: 1,
+      totalSources: 2,
+      progressCompleted: 1,
+      progressTotal: 2,
+    })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [parsing]
+      if (channel === 'dialog:select-novel-files') return { success: false, error: 'retry interrupted' }
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => {
+      useLocaleStore.setState({ locale: 'zh-CN' })
+      useProjectStore.setState({ currentProject: { ...project } as never })
+    })
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await expect.element(page.getByTestId('import-unfinished-sources'))
+      .toHaveTextContent('需要重新选择：b-needs-retry.txt')
+    await act(async () => page.getByRole('button', { name: '继续导入' }).click())
+
+    const selectionCall = invoke.mock.calls.find(([channel]) => channel === 'dialog:select-novel-files')
+    expect(selectionCall?.[1]).toMatchObject({
+      runId: parsing.id,
+      purpose: 'reference',
+      locale: 'en-US',
+      expectedProjectPath: project.path,
+    })
   })
 
   it('does not reuse an ordinary selection run after the dialog closes and reopens', async () => {
@@ -404,7 +457,7 @@ describe('current-project reference import', () => {
           },
         }
       }
-      if (channel === 'dialog:select-novel-files' || channel === 'import:inspect-files') {
+      if (channel === 'dialog:select-novel-files') {
         throw new Error('already parsed sources must not be read again')
       }
       if (channel === 'db:project-core-get') return null
@@ -413,6 +466,7 @@ describe('current-project reference import', () => {
     })
     await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
     await act(async () => page.getByTestId('import-target-current').click())
+    const recoveryCallOffset = invoke.mock.calls.length
 
     await act(async () => page.getByRole('button', { name: '继续导入' }).click())
     await expect.element(page.getByText('另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试')).toBeVisible()
@@ -422,12 +476,16 @@ describe('current-project reference import', () => {
 
     expect(startWorkflow).toHaveBeenCalledOnce()
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: parsing.id })
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:import-run-finalize-parsing')).toHaveLength(2)
     expect(invoke.mock.calls.some(([channel]) => channel === 'dialog:select-novel-files')).toBe(false)
-    expect(invoke.mock.calls.some(([channel]) => channel === 'import:inspect-files')).toBe(false)
+    expect(invoke.mock.calls.slice(recoveryCallOffset)
+      .filter(([channel]) => channel === 'dialog:select-novel-files' || String(channel).startsWith('db:import-run-'))
+      .map(([channel]) => channel)).toEqual([
+        'db:import-run-finalize-parsing',
+        'db:import-run-finalize-parsing',
+      ])
   })
 
-  it('reauthorizes a restarted parsing run in English before starting its prepared workflow', async () => {
+  it('reauthorizes a restarted parsing run with its frozen English locale after the UI switches to Chinese', async () => {
     const failedParsing = importRun({
       id: 'failed-parsing', locale: 'en-US', stage: 'parsing', status: 'failed',
       sourceDisplay: [{ displayName: 'retry.txt', mediaType: 'text/plain', size: 20 }],
@@ -461,19 +519,21 @@ describe('current-project reference import', () => {
       return { success: true }
     })
     await act(async () => {
-      useLocaleStore.setState({ locale: 'en-US' })
+      useLocaleStore.setState({ locale: 'zh-CN' })
       useProjectStore.setState({ currentProject: { ...project } as never })
     })
     await act(async () => page.getByTestId('import-target-current').click())
 
-    await act(async () => page.getByRole('button', { name: 'Start over' }).click())
+    await act(async () => page.getByRole('button', { name: '重新开始' }).click())
 
-    await expect.element(page.getByText('2 chapters', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('共 2 章', { exact: true })).toBeVisible()
     const selectionCall = invoke.mock.calls.find(([channel]) => channel === 'dialog:select-novel-files')
-    expect(selectionCall?.[1]).toMatchObject({ runId: 'restarted-parsing', purpose: 'reference' })
+    expect(selectionCall?.[1]).toMatchObject({
+      runId: 'restarted-parsing', purpose: 'reference', locale: 'en-US',
+    })
     expect(startWorkflow).not.toHaveBeenCalled()
 
-    await act(async () => page.getByRole('button', { name: /Import into current project \(2 chapters\)/ }).click())
+    await act(async () => page.getByRole('button', { name: /导入当前项目（2 章）/ }).click())
     expect(startWorkflow).toHaveBeenCalledOnce()
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'restarted-parsing', uiLocale: 'en-US' })
   })

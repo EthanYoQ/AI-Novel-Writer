@@ -368,6 +368,19 @@ function sourceProgress(runId: string): { completedSources: number; totalSources
   }
 }
 
+function unfinishedSourceDisplay(runId: string): ImportSourceDisplayMetadata[] {
+  const rows = db().prepare(`
+    SELECT display_json
+    FROM import_run_sources
+    WHERE run_id = ? AND status <> 'completed'
+    ORDER BY source_index
+  `).all(runId) as Array<{ display_json: string }>
+  return rows.map(row => parseJson<ImportSourceDisplayMetadata>(
+    row.display_json,
+    { displayName: '', mediaType: '', size: 0 },
+  ))
+}
+
 function completedCheckpointChapters(row: ImportRunRow, stage: 'knowledge' | 'blueprints'): number {
   const covered = new Set<number>()
   for (const batchId of completedBatches(row)[stage] ?? []) {
@@ -436,6 +449,7 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
     rootRunId: row.root_run_id,
     effectNamespace: row.effect_namespace,
     sourceDisplay: parseJson<ImportSourceDisplayMetadata[]>(row.source_display_json, []),
+    unfinishedSourceDisplay: unfinishedSourceDisplay(row.id),
     locale: row.locale,
     stage: row.stage,
     status: row.status,
@@ -1266,10 +1280,11 @@ export class ImportRunRepository {
     chapters: ImportRunChapterInput[],
   ): ImportRunSnapshot {
     if (!OPAQUE_SOURCE_ID.test(sourceId)) throw new Error('导入解析来源身份无效')
+    if (!Array.isArray(chapters) || chapters.length === 0) throw new Error('导入解析来源没有可导入的正文')
     if (chapters.some(chapter => (
       createHash('sha256').update(chapter.content, 'utf8').digest('hex') !== chapter.contentFingerprint
     ))) throw new Error('导入解析来源内容指纹与冻结快照不一致')
-    const normalized = chapters.length === 0 ? [] : normalizeChapters(chapters, [sourceId])
+    const normalized = normalizeChapters(chapters, [sourceId])
     const manifestFingerprint = hashManifest('reference', normalized.map((chapter, index) => ({
       ...chapter,
       number: index + 1,

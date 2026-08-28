@@ -89,14 +89,16 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   }, [open, currentProject])
 
   /** 选择文件 */
-  const handleSelectFiles = useCallback(async (explicitRunId?: string) => {
+  const handleSelectFiles = useCallback(async (
+    explicitRun?: Pick<ImportRunSnapshot, 'id' | 'locale'>,
+  ) => {
     setSplitting(true)
     setSplitError('')
     let operationSession: ReturnType<typeof captureProjectSession> = null
     try {
       let project = useProjectStore.getState().currentProject
       let projectSession = captureProjectSession(project)
-      if (targetMode === 'new' && !explicitRunId) {
+      if (targetMode === 'new' && !explicitRun) {
         if (!name.trim() || !savePath.trim()) throw new Error(text(
           '请先填写新项目名称和保存位置，再选择小说文件。',
           'Enter the new project name and save location before choosing novel files.',
@@ -118,11 +120,12 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         'The target project has no valid session, so the novel files were not read.',
       ))
       operationSession = projectSession
-      const runId = explicitRunId ?? randomUUID()
+      const runId = explicitRun?.id ?? randomUUID()
+      const runLocale = explicitRun?.locale ?? locale
       const result = await ipc.invoke('dialog:select-novel-files', {
         runId,
         purpose: 'reference',
-        locale,
+        locale: runLocale,
         expectedProjectPath: project.path,
       }, projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
@@ -274,7 +277,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       const completed = resumableRun.progressCompleted ?? resumableRun.completedSources ?? 0
       const total = resumableRun.progressTotal ?? resumableRun.totalSources ?? 0
       if (total < 1 || completed !== total) {
-        void handleSelectFiles(resumableRun.id)
+        void handleSelectFiles(resumableRun)
         return
       }
       const project = useProjectStore.getState().currentProject
@@ -338,7 +341,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
           }
         })
         setSelectedResumableRunId(restartedRun.id)
-        await handleSelectFiles(restartedRun.id)
+        await handleSelectFiles(restartedRun)
         if (!isProjectSessionCurrent(session)) return
         return
       }
@@ -432,7 +435,11 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                     data-testid={`import-resumable-choice-${run.id}`}
                     onClick={() => setSelectedResumableRunId(run.id)}
                   >
-                    <span className="truncate">{run.sourceDisplay[0]?.displayName ?? run.id}</span>
+                    <span className="truncate">{
+                      (run.stage === 'parsing' ? run.unfinishedSourceDisplay?.[0]?.displayName : undefined)
+                      ?? run.sourceDisplay[0]?.displayName
+                      ?? run.id
+                    }</span>
                     <span>{runProgress(run).completed}/{runProgress(run).total}</span>
                   </Button>
                 ))}
@@ -444,6 +451,18 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 )}
                 {resumableRun.lastError ? ` — ${resumableRun.lastError}` : ''}
               </div>
+              {resumableRun.stage === 'parsing' && (resumableRun.unfinishedSourceDisplay?.length ?? 0) > 0 && (
+                <div
+                  className="text-xs"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                  data-testid="import-unfinished-sources"
+                >
+                  {text(
+                    `需要重新选择：${resumableRun.unfinishedSourceDisplay!.map(source => source.displayName).join('、')}`,
+                    `Re-select required: ${resumableRun.unfinishedSourceDisplay!.map(source => source.displayName).join(', ')}`,
+                  )}
+                </div>
+              )}
               <div className="flex gap-2">
                 <Button type="button" size="sm" onClick={handleResume} disabled={importing || resumableRunIsActive}>
                   {text('继续导入', 'Continue import')}

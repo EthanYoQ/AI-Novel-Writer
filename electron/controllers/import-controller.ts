@@ -21,7 +21,7 @@ import {
   DEFAULT_IMPORT_RESOURCE_LIMITS,
   type ImportResourceLimits,
 } from '../../src/shared/import-limits'
-import type { ImportSourceFileIdentity } from '../../src/shared/import-run'
+import type { ImportRunLocale, ImportSourceFileIdentity } from '../../src/shared/import-run'
 import type { ImportNovelFileSelectionRequest, ImportRunChapterInput } from '../../src/shared/import-run'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { getCurrentProjectPath, getProjectDb } from '../database'
@@ -71,6 +71,44 @@ function defaultFileIdentity(filePath: string): ImportSourceFileIdentity {
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
+}
+
+function importText(locale: ImportRunLocale | undefined, zhCNText: string, enUSText: string): string {
+  return locale === 'en-US' ? enUSText : locale === 'zh-CN' ? zhCNText : text(zhCNText, enUSText)
+}
+
+function importSelectionErrorMessage(
+  error: unknown,
+  locale: ImportRunLocale | undefined,
+  limits: ImportResourceLimits,
+): string {
+  const code = error instanceof Error ? error.message : ''
+  if (code === 'IMPORT_SOURCE_COUNT_EXCEEDED') {
+    return importText(
+      locale,
+      `所选文件数量超过导入上限（最多 ${limits.maxSourceFiles} 个）。`,
+      `The import source-file limit was exceeded (limit: ${limits.maxSourceFiles}).`,
+    )
+  }
+  if (code === 'IMPORT_SOURCE_BYTES_EXCEEDED' || code === 'SECURE_FS_FILE_TOO_LARGE') {
+    return importText(
+      locale,
+      `所选文件总大小超过导入上限（最多 ${limits.maxTotalBytes} 字节）。`,
+      `The import source-size limit was exceeded (limit: ${limits.maxTotalBytes} bytes).`,
+    )
+  }
+  if (code === 'IMPORT_CHAPTER_COUNT_EXCEEDED') {
+    return importText(
+      locale,
+      `拆分后的章节数超过导入上限（最多 ${limits.maxChapters} 章）。`,
+      `The import chapter limit was exceeded (limit: ${limits.maxChapters}).`,
+    )
+  }
+  return importText(
+    locale,
+    '无法读取所选文件；请重新选择后再试。',
+    'Could not read the selected files. Please choose them again.',
+  )
 }
 
 /** 中文数字到阿拉伯数字的映射 */
@@ -164,7 +202,7 @@ function splitSingleFileContent(content: string, maxChapters: number): ParsedCha
 
   const appendChapter = (chapter: ParsedChapter) => {
     if (chapters.length >= maxChapters) {
-      throw new Error(`导入章节数不能超过 ${maxChapters}`)
+      throw new Error('IMPORT_CHAPTER_COUNT_EXCEEDED')
     }
     chapters.push(chapter)
   }
@@ -362,13 +400,14 @@ export function registerImportController(
 
       const appendChapters = (chapters: ParsedChapter[]) => {
         if (chapters.length > limits.maxChapters - chapterCount) {
-          throw new Error(`导入章节数不能超过 ${limits.maxChapters}`)
+          throw new Error('IMPORT_CHAPTER_COUNT_EXCEEDED')
         }
         chapterCount += chapters.length
       }
 
       const inspectedChapters: Array<ParsedChapter & { sourceIndex: number; sourceChapterNumber: number }> = []
       let emptySourceFound = false
+      let titleOnlySourceFound = false
       for (let sourceIndex = 0; sourceIndex < selected.length; sourceIndex++) {
         const source = selected[sourceIndex]
         const encoded = encodedIdentities[sourceIndex]
@@ -424,6 +463,22 @@ export function registerImportController(
                 content,
                 wordCount: content.length,
               }]
+          if (parsed.length === 0) {
+            titleOnlySourceFound = true
+            if (parsingRun && opaqueSourceId) {
+              assertFrozenProject()
+              ImportRunRepository.failParsedSource(
+                parsingRun.id,
+                opaqueSourceId,
+                importText(
+                  request?.locale,
+                  '所选来源文件只有章节标题，没有可导入的正文',
+                  'The selected source file contains chapter headings but no body text',
+                ),
+              )
+            }
+            continue
+          }
           appendChapters(parsed)
           const usedLocalNumbers = new Set<number>()
           let nextLocalNumber = 1
@@ -490,6 +545,17 @@ export function registerImportController(
         return { success: false, error }
       }
 
+      if (titleOnlySourceFound) {
+        return {
+          success: false,
+          error: importText(
+            request?.locale,
+            '一个或多个所选文件只有章节标题，没有可导入的正文。请补充小说正文后，重新选择未完成的文件。',
+            'One or more selected files contain chapter headings but no body text. Add novel text and choose the unfinished files again.',
+          ),
+        }
+      }
+
       if (parsingRun) {
         assertFrozenProject()
         return { success: true, preparation: ImportRunRepository.finalizeParsing(parsingRun.id) }
@@ -508,11 +574,11 @@ export function registerImportController(
         success: true,
         inspection: inspectionStore.create({ webContentsId: event.sender.id, sources, chapters: renumbered }),
       }
-    } catch {
+    } catch (error) {
       inspectionStore.revokeForWebContents(event.sender.id)
       return {
         success: false,
-        error: text('无法读取所选文件；请重新选择后再试。', 'Could not read the selected files. Please choose them again.'),
+        error: importSelectionErrorMessage(error, request?.locale, limits),
       }
     }
   })

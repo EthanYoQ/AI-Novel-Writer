@@ -165,6 +165,17 @@ describe('persisted per-source parsing', () => {
     ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, [chapter(1, 'saved first source')])
     ImportRunRepository.failParsedSource('parse-run', SOURCE_B, 'empty source')
 
+    const failedSnapshot = ImportRunRepository.get('parse-run')
+    expect(failedSnapshot).toMatchObject({
+      unfinishedSourceDisplay: [
+        { displayName: 'b.txt', mediaType: 'text/plain', size: 20 },
+      ],
+    })
+    expect(JSON.stringify(failedSnapshot)).not.toContain(SOURCE_A)
+    expect(JSON.stringify(failedSnapshot)).not.toContain(SOURCE_B)
+    expect(JSON.stringify(failedSnapshot)).not.toContain('bbbbbbbb')
+    expect(JSON.stringify(failedSnapshot)).not.toContain('cccccccc')
+
     expect(reauthorize({
       runId: 'parse-run',
       sourceFingerprint: 'd'.repeat(64),
@@ -178,6 +189,9 @@ describe('persisted per-source parsing', () => {
       totalSources: 2,
       sourceDisplay: [
         { displayName: 'a.txt', mediaType: 'text/plain', size: 20 },
+        { displayName: 'fixed-b.txt', mediaType: 'text/plain', size: 51 },
+      ],
+      unfinishedSourceDisplay: [
         { displayName: 'fixed-b.txt', mediaType: 'text/plain', size: 51 },
       ],
     })
@@ -241,6 +255,16 @@ describe('persisted per-source parsing', () => {
     ])).toThrow(/快照|指纹/)
     expect(getProjectDb()!.serialize().equals(before)).toBe(true)
     expect(ImportRunRepository.get('parse-run')).toMatchObject({ completedSources: 0, completedChapters: 0 })
+  })
+
+  it('rejects an empty parsed-source snapshot without marking the source completed', () => {
+    begin()
+
+    expect(() => ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, []))
+      .toThrow(/没有可导入的正文|不能为空/)
+    expect(ImportRunRepository.get('parse-run')).toMatchObject({
+      stage: 'parsing', status: 'ready', completedSources: 0, completedChapters: 0,
+    })
   })
 
   it('rejects starting or finalizing incomplete parsing without changing persisted state', () => {

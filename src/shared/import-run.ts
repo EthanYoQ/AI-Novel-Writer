@@ -241,6 +241,8 @@ export interface ImportRunSnapshot {
   rootRunId: string
   effectNamespace: string
   sourceDisplay: ImportSourceDisplayMetadata[]
+  /** Safe display facts for sources that still need user reauthorization. */
+  unfinishedSourceDisplay?: ImportSourceDisplayMetadata[]
   locale: ImportRunLocale
   stage: ImportRunStage
   status: ImportRunStatus
