@@ -547,6 +547,39 @@ describe('current-project reference import', () => {
       ])
   })
 
+  it('shows durable English finalization guidance for an English run while the UI is Chinese', async () => {
+    const guidance = 'Another resumable import already contains the same source. Complete or cancel that import, then try again.'
+    const parsing = importRun({
+      id: 'english-parsed-before-crash',
+      locale: 'en-US',
+      stage: 'parsing',
+      status: 'ready',
+      completedSources: 1,
+      totalSources: 1,
+      progressCompleted: 1,
+      progressTotal: 1,
+    })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [parsing]
+      if (channel === 'db:import-run-finalize-parsing') return { success: false, error: guidance }
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => {
+      useLocaleStore.setState({ locale: 'zh-CN' })
+      useProjectStore.setState({ currentProject: { ...project } as never })
+    })
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await act(async () => page.getByRole('button', { name: '继续导入' }).click())
+
+    await expect.element(page.getByText(guidance)).toBeVisible()
+    expect(startWorkflow).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:import-run-finalize-parsing'))
+      .toHaveLength(1)
+  })
+
   it('reauthorizes a restarted parsing run with its frozen English locale after the UI switches to Chinese', async () => {
     const failedParsing = importRun({
       id: 'failed-parsing', locale: 'en-US', stage: 'parsing', status: 'failed',

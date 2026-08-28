@@ -22,7 +22,7 @@ function chapter(number: number, content = `source chapter ${number}`) {
   }
 }
 
-function begin(runId = 'parse-run') {
+function begin(runId = 'parse-run', locale: 'zh-CN' | 'en-US' = 'en-US') {
   return ImportRunRepository.beginParsing({
     runId,
     purpose: 'reference',
@@ -33,7 +33,7 @@ function begin(runId = 'parse-run') {
       { displayName: 'a.txt', mediaType: 'text/plain', size: 20 },
       { displayName: 'b.txt', mediaType: 'text/plain', size: 20 },
     ],
-    locale: 'en-US',
+    locale,
   })
 }
 
@@ -160,7 +160,7 @@ describe('persisted per-source parsing', () => {
     ImportRunRepository.commitParsedSource('retry-finalize', SOURCE_B, [chapter(1, 'recovered B')])
     const beforeFailedFinalize = getProjectDb()!.serialize()
     expect(() => ImportRunRepository.finalizeParsing('retry-finalize'))
-      .toThrow(/另一个可恢复导入已包含相同来源/)
+      .toThrow('Another resumable import already contains the same source. Complete or cancel that import, then try again.')
     expect(getProjectDb()!.serialize().equals(beforeFailedFinalize)).toBe(true)
     expect(ImportRunRepository.get('retry-finalize')).toMatchObject({
       stage: 'parsing', status: 'ready', resumable: true,
@@ -178,6 +178,20 @@ describe('persisted per-source parsing', () => {
       'retry-finalize',
       { afterChapterNumber: 0, limit: 2 },
     ).map(item => item.content)).toEqual(['recovered A', 'recovered B'])
+  })
+
+  it('keeps the overlap guidance Chinese for a durable Chinese parsing run', () => {
+    begin('blocking-run', 'zh-CN')
+    ImportRunRepository.commitParsedSource('blocking-run', SOURCE_A, [chapter(1, 'blocking A')])
+    ImportRunRepository.commitParsedSource('blocking-run', SOURCE_B, [chapter(1, 'blocking B')])
+    ImportRunRepository.finalizeParsing('blocking-run')
+
+    begin('retry-finalize', 'zh-CN')
+    ImportRunRepository.commitParsedSource('retry-finalize', SOURCE_A, [chapter(1, 'recovered A')])
+    ImportRunRepository.commitParsedSource('retry-finalize', SOURCE_B, [chapter(1, 'recovered B')])
+
+    expect(() => ImportRunRepository.finalizeParsing('retry-finalize'))
+      .toThrow('另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试')
   })
 
   it('resumes the stable source set after names and file sizes change and refreshes display metadata', () => {

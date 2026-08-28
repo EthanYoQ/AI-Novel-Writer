@@ -259,6 +259,20 @@ describe('database controller project context guard', () => {
     expect(mocks.importRunFinalizeParsing).toHaveBeenCalledWith('parse-run')
   })
 
+  it('returns durable English finalization guidance without replacing it with the UI locale', async () => {
+    const guidance = 'Another resumable import already contains the same source. Complete or cancel that import, then try again.'
+    mocks.importRunFinalizeParsing.mockImplementationOnce(() => {
+      throw new Error(guidance)
+    })
+
+    await expect(handler('db:import-run-finalize-parsing')(
+      {},
+      'english-parse-run',
+      'C:/projects/A',
+    )).resolves.toEqual({ success: false, error: `Error: ${guidance}` })
+    expect(mocks.importRunFinalizeParsing).toHaveBeenCalledWith('english-parse-run')
+  })
+
   it('rejects a stale roster commit before the main-process roster module is reached', async () => {
     mocks.currentProjectPath = 'C:/projects/B'
 

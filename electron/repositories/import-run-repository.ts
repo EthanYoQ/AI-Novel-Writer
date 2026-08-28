@@ -1502,7 +1502,9 @@ export class ImportRunRepository {
         }
       }
       if (overlappingResumableSourceRun(runId, run.purpose)) {
-        throw new Error('另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试')
+        throw new Error(run.locale === 'en-US'
+          ? 'Another resumable import already contains the same source. Complete or cancel that import, then try again.'
+          : '另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试')
       }
       const sourceIds = sources.map(source => source.source_id)
       const completed = latestCompletedRun(run.purpose, run.source_fingerprint)
