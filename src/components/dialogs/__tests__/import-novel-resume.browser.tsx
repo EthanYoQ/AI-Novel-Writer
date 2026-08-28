@@ -213,6 +213,65 @@ describe('current-project reference import', () => {
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'persisted-import' })
   })
 
+  it('continues a prepared snapshot without asking for the moved source file again', async () => {
+    const prepared = importRun({
+      id: 'prepared-after-move',
+      status: 'ready',
+      stage: 'prepared',
+      sourceDisplay: [{ displayName: 'moved-away.txt', mediaType: 'text/plain', size: 20 }],
+      progressCompleted: 1,
+      progressTotal: 1,
+    })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [prepared]
+      if (channel === 'dialog:select-novel-files') throw new Error('source file no longer exists')
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await act(async () => page.getByRole('button', { name: '继续导入' }).click())
+
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'prepared-after-move' })
+    expect(invoke.mock.calls.some(([channel]) => channel === 'dialog:select-novel-files')).toBe(false)
+  })
+
+  it('shows parsing, global, and style recovery progress from each persisted stage unit', async () => {
+    const parsing = importRun({
+      id: 'parsing-progress', stage: 'parsing', status: 'failed',
+      sourceDisplay: [{ displayName: 'parsing.txt', mediaType: 'text/plain', size: 20 }],
+      completedChapters: 0, totalChapters: 8, progressCompleted: 2, progressTotal: 4,
+    })
+    const global = importRun({
+      id: 'global-progress', stage: 'global', status: 'failed',
+      sourceDisplay: [{ displayName: 'global.txt', mediaType: 'text/plain', size: 20 }],
+      completedChapters: 8, totalChapters: 8, progressCompleted: 0, progressTotal: 1,
+    })
+    const style = importRun({
+      id: 'style-progress', stage: 'style', status: 'failed',
+      sourceDisplay: [{ displayName: 'style.txt', mediaType: 'text/plain', size: 20 }],
+      completedChapters: 3, totalChapters: 8, progressCompleted: 1, progressTotal: 1,
+    })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [parsing, global, style]
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await expect.element(page.getByTestId('import-resumable-choice-parsing-progress')).toHaveTextContent('2/4')
+    await expect.element(page.getByTestId('import-resumable-run')).toHaveTextContent('进度：2/4')
+    await act(async () => page.getByTestId('import-resumable-choice-global-progress').click())
+    await expect.element(page.getByTestId('import-resumable-run')).toHaveTextContent('进度：0/1')
+    await act(async () => page.getByTestId('import-resumable-choice-style-progress').click())
+    await expect.element(page.getByTestId('import-resumable-run')).toHaveTextContent('进度：1/1')
+  })
+
   it('lists two unfinished runs and reauthorizes the parsing run the user selects', async () => {
     const first = importRun({
       id: 'first-run',

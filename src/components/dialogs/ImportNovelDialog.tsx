@@ -60,6 +60,10 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const resumableRunIsActive = resumableRun
     ? activeWorkflows.some(workflow => workflow.id === resumableRun.id)
     : false
+  const runProgress = (run: ImportRunSnapshot) => ({
+    completed: run.progressCompleted ?? run.completedChapters,
+    total: run.progressTotal ?? run.totalChapters,
+  })
 
   useEffect(() => {
     if (!open || !currentProject) return
@@ -244,7 +248,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
   const handleResume = useCallback(() => {
     if (!resumableRun) return
-    if (resumableRun.stage === 'parsing' || resumableRun.stage === 'prepared') {
+    if (resumableRun.stage === 'parsing') {
       selectionRunId.current = resumableRun.id
       void handleSelectFiles(resumableRun.id)
       return
@@ -359,14 +363,14 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                     onClick={() => setSelectedResumableRunId(run.id)}
                   >
                     <span className="truncate">{run.sourceDisplay[0]?.displayName ?? run.id}</span>
-                    <span>{run.completedChapters}/{run.totalChapters}</span>
+                    <span>{runProgress(run).completed}/{runProgress(run).total}</span>
                   </Button>
                 ))}
               </div>
               <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
                 {text(
-                  `阶段：${resumableRun.stage}；进度：${resumableRun.completedChapters}/${resumableRun.totalChapters}`,
-                  `Stage: ${resumableRun.stage}; progress: ${resumableRun.completedChapters}/${resumableRun.totalChapters}`,
+                  `阶段：${resumableRun.stage}；进度：${runProgress(resumableRun).completed}/${runProgress(resumableRun).total}`,
+                  `Stage: ${resumableRun.stage}; progress: ${runProgress(resumableRun).completed}/${runProgress(resumableRun).total}`,
                 )}
                 {resumableRun.lastError ? ` — ${resumableRun.lastError}` : ''}
               </div>

@@ -251,10 +251,23 @@ export function registerImportController(
       grantService.revokeWebContents(event.sender.id)
       inspectionStore.revokeForWebContents(event.sender.id)
     })
+    let frozenProject: { rootPath: string; session: ProjectSessionContext } | undefined
+    const assertFrozenProject = () => {
+      if (!frozenProject) return
+      const active = projectAccess.assertCurrentProjectContext(
+        frozenProject.session,
+        getCurrentProjectPath(),
+      )
+      assertRequiredExpectedProjectPath(active.rootPath, frozenProject.rootPath)
+    }
     try {
       if (request) {
         const active = projectAccess.assertCurrentProjectContext(projectSession, getCurrentProjectPath())
         assertRequiredExpectedProjectPath(active.rootPath, request.expectedProjectPath)
+        frozenProject = {
+          rootPath: active.rootPath,
+          session: Object.freeze({ ...projectSession }) as ProjectSessionContext,
+        }
         if (request.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
       }
       const result = await dialog.showOpenDialog({
@@ -265,6 +278,7 @@ export function registerImportController(
         ],
         properties: ['openFile', 'multiSelections'],
       })
+      assertFrozenProject()
       if (result.canceled || result.filePaths.length === 0) return null
       inspectionStore.revokeForWebContents(event.sender.id)
       if (result.filePaths.length > limits.maxSourceFiles) {
@@ -299,21 +313,24 @@ export function registerImportController(
           )
         : undefined
       const parsingRun = request && resolvedIdentity
-        ? ImportRunRepository.beginParsing({
-            runId: request.runId,
-            purpose: request.purpose,
-            sourceFingerprint: resolvedIdentity.sourceFingerprint,
-            sourceIds: resolvedIdentity.sourceIds,
-            sourceFingerprints: resolvedIdentity.sourceFingerprints,
-            legacySourceFingerprints: resolvedIdentity.legacySourceFingerprints,
-            legacyCollectionFingerprint: resolvedIdentity.legacyCollectionFingerprint,
-            sourceDisplay: selected.map(source => ({
-              displayName: source.displayName,
-              mediaType: sourceMediaType(source.displayName),
-              size: source.selectedSize,
-            })),
-            locale: request.locale,
-          })
+        ? (() => {
+            assertFrozenProject()
+            return ImportRunRepository.beginParsing({
+              runId: request.runId,
+              purpose: request.purpose,
+              sourceFingerprint: resolvedIdentity.sourceFingerprint,
+              sourceIds: resolvedIdentity.sourceIds,
+              sourceFingerprints: resolvedIdentity.sourceFingerprints,
+              legacySourceFingerprints: resolvedIdentity.legacySourceFingerprints,
+              legacyCollectionFingerprint: resolvedIdentity.legacyCollectionFingerprint,
+              sourceDisplay: selected.map(source => ({
+                displayName: source.displayName,
+                mediaType: sourceMediaType(source.displayName),
+                size: source.selectedSize,
+              })),
+              locale: request.locale,
+            })
+          })()
         : undefined
 
       let chapterCount = 0
@@ -347,6 +364,7 @@ export function registerImportController(
         const source = selected[sourceIndex]
         const encoded = encodedIdentities[sourceIndex]
         const opaqueSourceId = resolvedIdentity?.sourceIds[sourceIndex]
+        assertFrozenProject()
         if (parsingRun && opaqueSourceId
           && ImportRunRepository.parsedSourceStatus(parsingRun.id, opaqueSourceId) === 'completed') {
           continue
@@ -367,6 +385,7 @@ export function registerImportController(
             operation: 'read',
           })
           let content = await fileSystem.readText(capability, limits.maxTotalBytes - consumedBytes)
+          assertFrozenProject()
           const contentBytes = reserveSourceBytes(content)
           const sourceFileName = source.displayName
           sources.push({
@@ -378,6 +397,7 @@ export function registerImportController(
           content = content.trim()
           if (!content) {
             if (parsingRun && opaqueSourceId) {
+              assertFrozenProject()
               ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, [])
             }
             continue
@@ -416,12 +436,22 @@ export function registerImportController(
                 contentSize: Buffer.byteLength(chapter.content, 'utf8'),
               }
             })
+            assertFrozenProject()
             ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, sourceChapters)
           }
           content = ''
         } catch (error) {
-          if (parsingRun && opaqueSourceId
+          let projectStillCurrent = false
+          try {
+            assertFrozenProject()
+            projectStillCurrent = true
+          } catch {
+            // A stale project session must not turn a read failure into a write
+            // against the newly active project's database.
+          }
+          if (projectStillCurrent && parsingRun && opaqueSourceId
             && ImportRunRepository.parsedSourceStatus(parsingRun.id, opaqueSourceId) !== 'completed') {
+            assertFrozenProject()
             ImportRunRepository.failParsedSource(
               parsingRun.id,
               opaqueSourceId,
@@ -435,6 +465,7 @@ export function registerImportController(
       }
 
       if (parsingRun) {
+        assertFrozenProject()
         return { success: true, preparation: ImportRunRepository.finalizeParsing(parsingRun.id) }
       }
 
