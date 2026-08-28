@@ -15,6 +15,7 @@ import type {
   ImportRunEffectKind,
   ImportRunEffectReceipt,
   ImportRunPreparationResult,
+  ImportRunPreparationInspection,
   ImportRunPrepareEffectReceiptRequest,
   ImportRunPrepareRequest,
   ImportRunSnapshot,
@@ -86,6 +87,44 @@ interface ImportRunCheckpointChapterRow {
 interface NormalizedImportRunChapter extends ImportRunChapterInput {
   sourceId: string
   sourceChapterNumber: number
+}
+
+const IMPORT_PREPARATION_PREVIEW_LIMIT = 8
+
+function createPreparationInspection(
+  inspectionId: string,
+  sourceDisplay: readonly ImportSourceDisplayMetadata[],
+  chapters: readonly { number: number; title: string; wordCount: number; contentSize: number }[],
+  classification: Pick<
+    ImportRunPreparationResult,
+    'newChapterNumbers' | 'conflictChapterNumbers' | 'duplicateChapterNumbers'
+  >,
+): ImportRunPreparationInspection {
+  const conflicts = new Set(classification.conflictChapterNumbers)
+  const duplicates = new Set(classification.duplicateChapterNumbers)
+  const fresh = new Set(classification.newChapterNumbers)
+  const preview = chapters.slice(0, IMPORT_PREPARATION_PREVIEW_LIMIT).map(chapter => ({
+    number: chapter.number,
+    title: chapter.title,
+    wordCount: chapter.wordCount,
+    targetStatus: conflicts.has(chapter.number)
+      ? 'conflict' as const
+      : duplicates.has(chapter.number)
+        ? 'duplicate' as const
+        : fresh.has(chapter.number)
+          ? 'new' as const
+          : 'duplicate' as const,
+  }))
+  return {
+    inspectionId,
+    sourceCount: sourceDisplay.length,
+    sourceDisplayNames: sourceDisplay.map(source => source.displayName),
+    chapterCount: chapters.length,
+    totalWords: chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0),
+    totalBytes: chapters.reduce((sum, chapter) => sum + chapter.contentSize, 0),
+    preview,
+    previewRemaining: Math.max(0, chapters.length - preview.length),
+  }
 }
 
 interface ImportRunEffectReceiptRow {
@@ -1382,7 +1421,7 @@ export class ImportRunRepository {
       }
       const metadata = db().prepare(`
         SELECT sources.source_index, chapters.source_id, chapters.source_chapter_number,
-               chapters.title, chapters.content_fingerprint, chapters.content_size
+               chapters.title, chapters.content_fingerprint, chapters.content_size, chapters.word_count
         FROM import_run_source_chapters AS chapters
         JOIN import_run_sources AS sources
           ON sources.run_id = chapters.run_id AND sources.source_id = chapters.source_id
@@ -1395,6 +1434,7 @@ export class ImportRunRepository {
         title: string
         content_fingerprint: string
         content_size: number
+        word_count: number
       }>
       if (
         metadata.length === 0
@@ -1426,16 +1466,39 @@ export class ImportRunRepository {
       }
       const assignment = assignStableChapterNumbers(run.purpose, normalized)
       const chapters = assignment.chapters
+      const sourceDisplay = sources.map(source => parseJson<ImportSourceDisplayMetadata>(
+        source.display_json,
+        { displayName: '', mediaType: '', size: 0 },
+      ))
+      const wordCounts = new Map(metadata.map(chapter => [
+        sourceChapterKey(chapter.source_id, chapter.source_chapter_number),
+        chapter.word_count,
+      ]))
+      const previewChapters = chapters.map(chapter => ({
+        number: chapter.number,
+        title: chapter.title,
+        wordCount: wordCounts.get(sourceChapterKey(chapter.sourceId, chapter.sourceChapterNumber)) ?? 0,
+        contentSize: chapter.contentSize,
+      }))
+      const inspectionFor = (
+        newChapterNumbers: number[],
+        conflictChapterNumbers: number[],
+        duplicateChapterNumbers: number[],
+      ) => createPreparationInspection(runId, sourceDisplay, previewChapters, {
+        newChapterNumbers, conflictChapterNumbers, duplicateChapterNumbers,
+      })
       const manifestFingerprint = hashManifest(run.purpose, chapters)
       const resumable = matchingResumableRun(run.purpose, run.source_fingerprint, manifestFingerprint)
       if (resumable && resumable.id !== runId) {
+        const duplicateChapterNumbers = chapters.map(chapter => chapter.number)
         discardProvisionalParsingRun(runId)
         return {
           classification: 'resumable' as const,
           run: rowToSnapshot(resumable),
           newChapterNumbers: [],
           conflictChapterNumbers: [],
-          duplicateChapterNumbers: chapters.map(chapter => chapter.number),
+          duplicateChapterNumbers,
+          inspection: inspectionFor([], [], duplicateChapterNumbers),
         }
       }
       if (overlappingResumableSourceRun(runId, run.purpose)) {
@@ -1468,6 +1531,9 @@ export class ImportRunRepository {
           classification: 'conflict' as const, run: undefined,
           newChapterNumbers: newChapters.map(chapter => chapter.number),
           conflictChapterNumbers, duplicateChapterNumbers,
+          inspection: inspectionFor(
+            newChapters.map(chapter => chapter.number), conflictChapterNumbers, duplicateChapterNumbers,
+          ),
         }
       }
       if (newChapters.length === 0) {
@@ -1475,6 +1541,7 @@ export class ImportRunRepository {
         return {
           classification: 'exact-duplicate' as const, run: undefined,
           newChapterNumbers: [], conflictChapterNumbers: [], duplicateChapterNumbers,
+          inspection: inspectionFor([], [], duplicateChapterNumbers),
         }
       }
       const insertMapping = db().prepare(`
@@ -1517,6 +1584,9 @@ export class ImportRunRepository {
         classification: 'new' as const, run: this.get(runId)!,
         newChapterNumbers: newChapters.map(chapter => chapter.number),
         conflictChapterNumbers: [], duplicateChapterNumbers,
+        inspection: inspectionFor(
+          newChapters.map(chapter => chapter.number), [], duplicateChapterNumbers,
+        ),
       }
     })()
   }
@@ -1547,14 +1617,29 @@ export class ImportRunRepository {
       const manifestFingerprint = hashManifest(candidate.purpose, chapters)
       const manifestContentSize = chapters.reduce((sum, chapter) => sum + chapter.contentSize, 0)
       const manifestWordCount = chapters.reduce((sum, chapter) => sum + chapter.content.length, 0)
+      const previewChapters = chapters.map(chapter => ({
+        number: chapter.number,
+        title: chapter.title,
+        wordCount: chapter.content.length,
+        contentSize: chapter.contentSize,
+      }))
+      const inspectionFor = (
+        newChapterNumbers: number[],
+        conflictChapterNumbers: number[],
+        duplicateChapterNumbers: number[],
+      ) => createPreparationInspection(candidate.runId, sourceDisplay, previewChapters, {
+        newChapterNumbers, conflictChapterNumbers, duplicateChapterNumbers,
+      })
       const resumable = matchingResumableRun(candidate.purpose, candidate.sourceFingerprint, manifestFingerprint)
       if (resumable) {
+        const duplicateChapterNumbers = chapters.map(chapter => chapter.number)
         return {
           classification: 'resumable' as const,
           run: rowToSnapshot(resumable),
           newChapterNumbers: [],
           conflictChapterNumbers: [],
-          duplicateChapterNumbers: chapters.map(chapter => chapter.number),
+          duplicateChapterNumbers,
+          inspection: inspectionFor([], [], duplicateChapterNumbers),
         }
       }
 
@@ -1590,6 +1675,9 @@ export class ImportRunRepository {
           newChapterNumbers: newChapters.map(chapter => chapter.number),
           conflictChapterNumbers,
           duplicateChapterNumbers,
+          inspection: inspectionFor(
+            newChapters.map(chapter => chapter.number), conflictChapterNumbers, duplicateChapterNumbers,
+          ),
         }
       }
       const chaptersToPersist = newChapters
@@ -1600,6 +1688,7 @@ export class ImportRunRepository {
           newChapterNumbers: [],
           conflictChapterNumbers: [],
           duplicateChapterNumbers,
+          inspection: inspectionFor([], [], duplicateChapterNumbers),
         }
       }
       if (readRunRow(runId)) throw new Error('导入运行 ID 已存在')
@@ -1668,6 +1757,9 @@ export class ImportRunRepository {
         newChapterNumbers: chaptersToPersist.map(chapter => chapter.number),
         conflictChapterNumbers: [],
         duplicateChapterNumbers,
+        inspection: inspectionFor(
+          chaptersToPersist.map(chapter => chapter.number), [], duplicateChapterNumbers,
+        ),
       }
     })()
   }

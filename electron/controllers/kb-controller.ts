@@ -38,27 +38,28 @@ function invalidExternalGrantText(): string {
 
 const MAX_SECURE_KNOWLEDGE_IMPORT_FILES = 16_384
 const MAX_SECURE_KNOWLEDGE_IMPORT_DEPTH = 64
-const MAX_REFERENCE_IMPORT_TITLE_CHARACTERS = 160
+const MAX_REFERENCE_IMPORT_DISPLAY_CHARACTERS = 160
 
-function hasControlCharacter(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const codePoint = character.codePointAt(0)
-    return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
-  })
+function isControlCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0)
+  return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
 }
 
 function referenceImportDisplayName(binding: { chapterNumber: number; title: string }): string {
   if (!Number.isSafeInteger(binding.chapterNumber) || binding.chapterNumber < 1) {
     throw new Error(text('参照章节展示名的章号无效', 'The reference chapter display name has an invalid chapter number.'))
   }
-  if (hasControlCharacter(binding.title)) {
-    throw new Error(text('参照章节标题包含控制字符', 'The reference chapter title contains control characters.'))
-  }
-  const title = binding.title.trim()
-  if (Array.from(title).length > MAX_REFERENCE_IMPORT_TITLE_CHARACTERS) {
-    throw new Error(text('参照章节标题超出长度上限', 'The reference chapter title exceeds the display-name limit.'))
-  }
-  return `第${binding.chapterNumber}章 ${title || '无标题'}.txt`
+  const prefix = `第${binding.chapterNumber}章 `
+  const suffix = '.txt'
+  const titleBudget = MAX_REFERENCE_IMPORT_DISPLAY_CHARACTERS
+    - Array.from(prefix).length
+    - Array.from(suffix).length
+  const safeTitle = Array.from(binding.title)
+    .filter(character => !isControlCharacter(character))
+    .join('')
+    .trim() || '无标题'
+  const boundedTitle = Array.from(safeTitle).slice(0, Math.max(0, titleBudget)).join('')
+  return `${prefix}${boundedTitle}${suffix}`
 }
 
 async function readGrantedKnowledgeFolder(

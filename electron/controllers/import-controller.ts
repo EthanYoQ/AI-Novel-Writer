@@ -290,6 +290,7 @@ export function registerImportController(
       inspectionStore.revokeForWebContents(event.sender.id)
     })
     let frozenProject: { rootPath: string; session: ProjectSessionContext } | undefined
+    let responseLocale = request?.locale
     const assertFrozenProject = () => {
       if (!frozenProject) return
       const active = projectAccess.assertCurrentProjectContext(
@@ -378,6 +379,11 @@ export function registerImportController(
         : undefined
       const resolvedIdentity = parsingContext?.resolvedIdentity
       const parsingRun = parsingContext?.parsingRun
+      // An ordinary selection may discover an unfinished run by source
+      // identity even when the renderer supplied a fresh run id and a changed
+      // UI locale. From this point onward, the durable run owns user-facing
+      // parsing copy as well as persisted failures.
+      responseLocale = parsingRun?.locale ?? responseLocale
 
       let chapterCount = parsingRun?.completedChapters ?? 0
       const sources: Array<{
@@ -450,7 +456,7 @@ export function registerImportController(
               ImportRunRepository.failParsedSource(
                 parsingRun.id,
                 opaqueSourceId,
-                request?.locale === 'en-US' ? 'Selected source file is empty' : '所选来源文件为空',
+                importText(responseLocale, '所选来源文件为空', 'Selected source file is empty'),
               )
             }
             continue
@@ -471,7 +477,7 @@ export function registerImportController(
                 parsingRun.id,
                 opaqueSourceId,
                 importText(
-                  request?.locale,
+                  responseLocale,
                   '所选来源文件只有章节标题，没有可导入的正文',
                   'The selected source file contains chapter headings but no body text',
                 ),
@@ -524,7 +530,7 @@ export function registerImportController(
             ImportRunRepository.failParsedSource(
               parsingRun.id,
               opaqueSourceId,
-              error instanceof Error ? error.message : String(error),
+              importSelectionErrorMessage(error, responseLocale, limits),
             )
           }
           throw error
@@ -534,9 +540,9 @@ export function registerImportController(
       }
 
       if (emptySourceFound) {
-        const error = request?.locale === 'en-US'
+        const error = responseLocale === 'en-US'
           ? 'One or more selected files are empty. Add novel text and choose the unfinished files again.'
-          : request?.locale === 'zh-CN'
+          : responseLocale === 'zh-CN'
             ? '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。'
             : text(
                 '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。',
@@ -549,7 +555,7 @@ export function registerImportController(
         return {
           success: false,
           error: importText(
-            request?.locale,
+            responseLocale,
             '一个或多个所选文件只有章节标题，没有可导入的正文。请补充小说正文后，重新选择未完成的文件。',
             'One or more selected files contain chapter headings but no body text. Add novel text and choose the unfinished files again.',
           ),
@@ -578,7 +584,7 @@ export function registerImportController(
       inspectionStore.revokeForWebContents(event.sender.id)
       return {
         success: false,
-        error: importSelectionErrorMessage(error, request?.locale, limits),
+        error: importSelectionErrorMessage(error, responseLocale, limits),
       }
     }
   })

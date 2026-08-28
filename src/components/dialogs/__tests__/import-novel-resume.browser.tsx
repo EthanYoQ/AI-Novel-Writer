@@ -237,6 +237,35 @@ describe('current-project reference import', () => {
     })
   })
 
+  it('shows only the persisted safe parsing failure after reopen', async () => {
+    const privateDiagnostic = "ENOENT: open 'C:\\Users\\Private\\secret-novel.txt'"
+    const safeFailure = 'Could not read the selected files. Please choose them again.'
+    const parsing = importRun({
+      id: 'safe-error-run',
+      locale: 'en-US',
+      stage: 'parsing',
+      status: 'failed',
+      lastError: safeFailure,
+      unfinishedSourceDisplay: [{ displayName: 'secret-novel.txt', mediaType: 'text/plain', size: 20 }],
+      completedSources: 0,
+      totalSources: 1,
+      progressCompleted: 0,
+      progressTotal: 1,
+    })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [parsing]
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    await expect.element(page.getByTestId('import-resumable-run')).toHaveTextContent(safeFailure)
+    expect(container.textContent).not.toContain(privateDiagnostic)
+    expect(container.textContent).not.toContain('C:\\Users\\Private')
+  })
+
   it('does not reuse an ordinary selection run after the dialog closes and reopens', async () => {
     await act(async () => page.getByTestId('import-target-current').click())
     await act(async () => page.getByRole('button', { name: '选择' }).click())
@@ -321,6 +350,39 @@ describe('current-project reference import', () => {
     await expect.element(page.getByText('1 files selected', { exact: true })).toBeVisible()
     await expect.element(page.getByText('1 chapters', { exact: true })).toBeVisible()
     expect(invoke.mock.calls.some(([channel]) => channel === 'import:inspect-source')).toBe(false)
+  })
+
+  it('renders bounded persisted preview metadata with target states and an explicit remainder', async () => {
+    preparation = {
+      classification: 'conflict',
+      newChapterNumbers: [1],
+      duplicateChapterNumbers: [2],
+      conflictChapterNumbers: [3],
+      inspection: {
+        inspectionId: 'bounded-preview',
+        sourceCount: 2,
+        sourceDisplayNames: ['a.txt', 'b.txt'],
+        chapterCount: 5_000,
+        totalWords: 80_000,
+        totalBytes: 90_000,
+        previewRemaining: 4_997,
+        preview: [
+          { number: 1, title: '新章节', wordCount: 10, targetStatus: 'new' },
+          { number: 2, title: '重复章节', wordCount: 20, targetStatus: 'duplicate' },
+          { number: 3, title: '冲突章节', wordCount: 30, targetStatus: 'conflict' },
+        ],
+      },
+    }
+
+    await act(async () => page.getByTestId('import-target-current').click())
+    await act(async () => page.getByRole('button', { name: '选择' }).click())
+
+    await expect.element(page.getByText('第1章 新章节', { exact: true })).toBeVisible()
+    await expect.element(page.getByTestId('import-preview-status-1')).toHaveTextContent('新增')
+    await expect.element(page.getByTestId('import-preview-status-2')).toHaveTextContent('重复')
+    await expect.element(page.getByTestId('import-preview-status-3')).toHaveTextContent('冲突')
+    await expect.element(page.getByTestId('import-preview-summary'))
+      .toHaveTextContent('已显示 3/5000；剩余 4997 章')
   })
 
   it('reports an exact duplicate as a no-op with no task, KB, or model side effects', async () => {

@@ -386,6 +386,11 @@ describe('ImportRunRepository', () => {
     expect(ImportRunRepository.prepare(request([chapter(1)], { runId: 'duplicate' }))).toMatchObject({
       classification: 'exact-duplicate',
       run: undefined,
+      inspection: {
+        chapterCount: 1,
+        previewRemaining: 0,
+        preview: [{ number: 1, title: 'Chapter 1', wordCount: 11, targetStatus: 'duplicate' }],
+      },
     })
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_runs').get()).toEqual({ count: 1 })
 
@@ -393,6 +398,14 @@ describe('ImportRunRepository', () => {
       classification: 'new',
       newChapterNumbers: [2],
       run: { id: 'incremental' },
+      inspection: {
+        chapterCount: 2,
+        previewRemaining: 0,
+        preview: [
+          { number: 1, title: 'Chapter 1', wordCount: 11, targetStatus: 'duplicate' },
+          { number: 2, title: 'Chapter 2', wordCount: 11, targetStatus: 'new' },
+        ],
+      },
     })
     expect(ImportRunRepository.listChapterBatch('incremental', { afterChapterNumber: 0, limit: 10 }))
       .toEqual([expect.objectContaining({ number: 2 })])
@@ -404,7 +417,32 @@ describe('ImportRunRepository', () => {
       classification: 'conflict',
       conflictChapterNumbers: [1],
       run: undefined,
+      inspection: {
+        preview: [{ number: 1, title: 'Chapter 1', wordCount: 7, targetStatus: 'conflict' }],
+      },
     })
+  })
+
+  it('returns a bounded renderer-safe preview for a 5000-chapter manifest', () => {
+    const chapters = Array.from({ length: 5_000 }, (_, index) => (
+      chapter(index + 1, `private-body-${index + 1}`)
+    ))
+
+    const prepared = ImportRunRepository.prepare(request(chapters, { runId: 'bounded-preview' }))
+
+    expect(prepared.inspection).toMatchObject({
+      inspectionId: 'bounded-preview',
+      chapterCount: 5_000,
+      previewRemaining: 4_992,
+    })
+    expect(prepared.inspection?.preview).toHaveLength(8)
+    expect(prepared.inspection?.preview[0]).toEqual({
+      number: 1, title: 'Chapter 1', wordCount: 14, targetStatus: 'new',
+    })
+    const rendererPayload = JSON.stringify(prepared.inspection)
+    expect(rendererPayload).not.toContain('private-body-')
+    expect(rendererPayload).not.toContain('contentFingerprint')
+    expect(rendererPayload).not.toContain('sourceId')
   })
 
   it('imports only chapters from newly added sources and keeps their global chapter numbers stable', async () => {

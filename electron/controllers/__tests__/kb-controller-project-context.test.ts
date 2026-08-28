@@ -118,7 +118,10 @@ beforeEach(() => {
 
 describe('knowledge-base controller project context guard', () => {
   it('requires active import-run authority before reference text reaches the knowledge base', async () => {
-    const importReferenceText = vi.fn(async () => ({ success: true, docId: 'reference-doc' }))
+    const importReferenceText = vi.fn<(
+      text: string, fileName: string, ...args: unknown[]
+    ) => Promise<{ success: boolean; docId: string }>>()
+      .mockResolvedValue({ success: true, docId: 'reference-doc' })
     mocks.run.mockImplementation(async (operation: (kb: {
       importReferenceText: typeof importReferenceText
     }) => unknown) => operation({ importReferenceText }))
@@ -144,10 +147,8 @@ describe('knowledge-base controller project context guard', () => {
     )
   })
 
-  it.each([
-    ['control characters', 'Chapter\u0000One'],
-    ['an oversized title', 'x'.repeat(161)],
-  ])('rejects %s in the main-owned reference display name before loading the knowledge base', async (_case, title) => {
+  it('derives a stable, control-free bounded KB label from a long main-owned title', async () => {
+    const title = `Persisted\u0000title\n${'x'.repeat(500)}`
     mocks.resolveReferenceImportAuthority.mockReturnValue({
       chapterNumber: 1,
       title,
@@ -155,17 +156,32 @@ describe('knowledge-base controller project context guard', () => {
       contentFingerprint: 'a'.repeat(64),
       stableKey: 'reference:key:1:fingerprint',
     })
-
-    await expect(rawHandler('kb:import-reference-text')(
+    const importReferenceText = vi.fn<(
+      text: string, fileName: string, ...args: unknown[]
+    ) => Promise<{ success: boolean; docId: string }>>()
+      .mockResolvedValue({ success: true, docId: 'reference-doc' })
+    mocks.run.mockImplementation(async (operation: (kb: {
+      importReferenceText: typeof importReferenceText
+    }) => unknown) => operation({ importReferenceText }))
+    const invoke = () => rawHandler('kb:import-reference-text')(
       {}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
-        projectId: 'project-A',
-        leaseId: 'lease-A',
-        projectPath: mocks.currentProjectPath,
+        projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
       },
-    )).rejects.toThrow(/title|display name|标题|展示名/i)
+    )
 
-    expect(mocks.run).not.toHaveBeenCalled()
-    expect(mocks.commitReferenceImportReceipt).not.toHaveBeenCalled()
+    await expect(invoke()).resolves.toEqual({ success: true, docId: 'reference-doc' })
+    await expect(invoke()).resolves.toEqual({ success: true, docId: 'reference-doc' })
+
+    const labels = importReferenceText.mock.calls.map(call => call[1])
+    expect(labels).toHaveLength(2)
+    expect(labels[0]).toBe(labels[1])
+    expect(Array.from(labels[0])).toHaveLength(160)
+    expect(Array.from(labels[0]).every(character => {
+      const codePoint = character.codePointAt(0) ?? 0
+      return codePoint > 0x1f && (codePoint < 0x7f || codePoint > 0x9f)
+    })).toBe(true)
+    expect(labels[0]).toMatch(/^第1章 Persistedtitlex/u)
+    expect(labels[0]).toMatch(/\.txt$/u)
   })
 
   it('rejects a matching project path that omits its session context', async () => {

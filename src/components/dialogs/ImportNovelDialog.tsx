@@ -145,7 +145,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
           ?? prepared.newChapterNumbers.length
           + prepared.duplicateChapterNumbers.length
           + prepared.conflictChapterNumbers.length
-        setInspection({
+        setInspection(prepared.inspection ?? {
           inspectionId: runId,
           sourceCount: preparedRun?.sourceDisplay.length ?? 0,
           sourceDisplayNames: preparedRun?.sourceDisplay.map(source => source.displayName) ?? [],
@@ -551,19 +551,36 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
               <div className="px-3 py-2 space-y-1" style={{ maxHeight: '160px', overflowY: 'auto' }}>
                 {inspection.preview.map((ch) => (
                   <div key={ch.number} className="flex items-center justify-between text-xs">
-                    <span style={{ color: 'var(--color-text-secondary)' }}>
+                    <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
                       {text(`第${ch.number}章 ${ch.title}`, `Chapter ${ch.number} ${ch.title}`)}
                     </span>
+                    {ch.targetStatus && (
+                      <span
+                        className="mx-2 shrink-0"
+                        style={{ color: 'var(--color-text-secondary)' }}
+                        data-testid={`import-preview-status-${ch.number}`}
+                      >
+                        {ch.targetStatus === 'new'
+                          ? text('新增', 'New')
+                          : ch.targetStatus === 'duplicate'
+                            ? text('重复', 'Duplicate')
+                            : text('冲突', 'Conflict')}
+                      </span>
+                    )}
                     <span style={{ color: 'var(--color-text-muted)' }}>
                       {text(`${ch.wordCount.toLocaleString()} 字`, `${ch.wordCount.toLocaleString()} words`)}
                     </span>
                   </div>
                 ))}
-                {inspection.chapterCount > inspection.preview.length && (
-                  <div className="text-xs text-center py-1" style={{ color: 'var(--color-text-muted)' }}>
+                {(inspection.previewRemaining ?? inspection.chapterCount - inspection.preview.length) > 0 && (
+                  <div
+                    className="text-xs text-center py-1"
+                    style={{ color: 'var(--color-text-muted)' }}
+                    data-testid="import-preview-summary"
+                  >
                     {text(
-                      `还有 ${inspection.chapterCount - inspection.preview.length} 章`,
-                      `${inspection.chapterCount - inspection.preview.length} more chapters`,
+                      `已显示 ${inspection.preview.length}/${inspection.chapterCount}；剩余 ${inspection.previewRemaining ?? inspection.chapterCount - inspection.preview.length} 章`,
+                      `Showing ${inspection.preview.length} of ${inspection.chapterCount}; ${inspection.previewRemaining ?? inspection.chapterCount - inspection.preview.length} remaining`,
                     )}
                   </div>
                 )}

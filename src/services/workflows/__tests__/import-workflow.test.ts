@@ -4,11 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const ipcMocks = vi.hoisted(() => ({ invoke: vi.fn() }))
 const characterSyncMocks = vi.hoisted(() => ({ retry: vi.fn() }))
+const commandMocks = vi.hoisted(() => ({ blueprintContext: undefined as WorkflowContext | undefined }))
 vi.mock('../../ipc-client', () => ({
   ipc: { invokeWithProjectSession: ipcMocks.invoke },
 }))
 vi.mock('../directory-character-sync-recovery', () => ({
   retryDirectoryCharacterSync: characterSyncMocks.retry,
+}))
+vi.mock('../commands/import-novel.command', () => ({
+  InferBlueprintsPerChapterCommand: class {
+    async execute(params: { context: WorkflowContext }): Promise<void> {
+      commandMocks.blueprintContext = params.context
+      throw new Error('stop-after-blueprint-prompt-context')
+    }
+  },
 }))
 
 import { createImportWorkflow } from '../import-workflow'
@@ -79,6 +88,55 @@ describe('createImportWorkflow', () => {
     })
     expect(workflow.title).toBe('Novel analysis and style study (1 chapter)')
     expect(workflow.steps[0].name).toBe('Import reference text and build the knowledge base')
+  })
+
+  it('builds blueprint prompt context in the frozen project writing language, not the UI locale', async () => {
+    const snapshot = run({ stage: 'blueprints' })
+    useProjectStore.setState({
+      currentProject: {
+        ...useProjectStore.getState().currentProject!,
+        novelConfig: {
+          writingLanguage: 'en-US',
+          genre: 'Mystery',
+          coreOutline: 'Find the missing witness',
+          worldSetting: 'A coastal city',
+          protagonistProfile: 'A patient investigator',
+        } as never,
+      },
+    })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-start-resume') return {
+        success: true,
+        start: {
+          run: snapshot,
+          execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+        },
+      }
+      if (channel === 'db:import-run-renew-execution') return {
+        success: true,
+        execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+      }
+      if (channel === 'db:import-run-list-chapters') {
+        return (args[1] as number) === 0 ? [{
+          number: 1, title: 'Start', content: 'frozen reference',
+          contentFingerprint: 'c'.repeat(64), contentSize: 16,
+        }] : []
+      }
+      if (channel === 'db:import-run-effect-receipt-get') return null
+      if (channel === 'db:import-run-fail') return { success: true, run: { ...snapshot, status: 'failed' } }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({
+      projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner,
+    })
+    const frozenContext = { ...context(), writingLanguage: 'en-US' as const, uiLocale: 'zh-CN' as const }
+
+    await expect(workflow.steps[3].executor({} as never, frozenContext, callbacks))
+      .rejects.toThrow('stop-after-blueprint-prompt-context')
+
+    expect(commandMocks.blueprintContext?.data.novelConfigSummary).toContain('Genre: Mystery')
+    expect(commandMocks.blueprintContext?.data.novelConfigSummary).not.toContain('类型:')
   })
 
   it('imports the frozen snapshot through the reference-only idempotent channel and checkpoints it', async () => {

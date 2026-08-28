@@ -210,6 +210,16 @@ export interface ImportRunBeginParsingRequest {
 }
 
 /** Renderer-safe inspection metadata. Chapter content and source identities stay in main memory. */
+export type ImportChapterTargetStatus = 'new' | 'duplicate' | 'conflict'
+
+export interface ImportChapterPreview {
+  number: number
+  title: string
+  wordCount: number
+  /** Present once the durable project ledger has classified the target chapter. */
+  targetStatus?: ImportChapterTargetStatus
+}
+
 export interface ImportInspectionSummary {
   inspectionId: string
   sourceCount: number
@@ -217,7 +227,14 @@ export interface ImportInspectionSummary {
   chapterCount: number
   totalWords: number
   totalBytes: number
-  preview: Array<{ number: number; title: string; wordCount: number }>
+  preview: ImportChapterPreview[]
+  /** Present for bounded durable previews; legacy in-memory inspections may omit it. */
+  previewRemaining?: number
+}
+
+export interface ImportRunPreparationInspection extends ImportInspectionSummary {
+  preview: Array<ImportChapterPreview & { targetStatus: ImportChapterTargetStatus }>
+  previewRemaining: number
 }
 
 export interface ImportRunPrepareFromInspectionRequest {
@@ -274,4 +291,6 @@ export interface ImportRunPreparationResult {
   newChapterNumbers: number[]
   conflictChapterNumbers: number[]
   duplicateChapterNumbers: number[]
+  /** Bounded renderer-safe view derived from the main-process frozen manifest. */
+  inspection?: ImportRunPreparationInspection
 }

@@ -108,11 +108,45 @@ describe('persisted per-source parsing', () => {
     expect(ImportRunRepository.finalizeParsing('committed-before-crash')).toMatchObject({
       classification: 'new',
       run: { id: 'committed-before-crash', stage: 'prepared', totalChapters: 2 },
+      inspection: {
+        inspectionId: 'committed-before-crash',
+        sourceCount: 2,
+        chapterCount: 2,
+        totalWords: 14,
+        previewRemaining: 0,
+        preview: [
+          { number: 1, title: 'Chapter 1', wordCount: 7, targetStatus: 'new' },
+          { number: 2, title: 'Chapter 1', wordCount: 7, targetStatus: 'new' },
+        ],
+      },
     })
     expect(ImportRunRepository.listChapterBatch(
       'committed-before-crash',
       { afterChapterNumber: 0, limit: 2 },
     ).map(item => item.content)).toEqual(['saved A', 'saved B'])
+  })
+
+  it('preserves a long control-bearing authoritative title and chapter body across replay', () => {
+    const authoritativeTitle = `Persisted\u0000title\n${'x'.repeat(480)}`
+    const authoritativeBody = 'The authoritative reference body stays unchanged.'
+    begin('long-title-replay')
+    ImportRunRepository.commitParsedSource('long-title-replay', SOURCE_A, [{
+      ...chapter(1, authoritativeBody),
+      title: authoritativeTitle,
+    }])
+    ImportRunRepository.commitParsedSource('long-title-replay', SOURCE_B, [chapter(1, 'second body')])
+    ImportRunRepository.finalizeParsing('long-title-replay')
+    const first = ImportRunRepository.startOrResume('long-title-replay', 'first-renderer')
+    expect(ImportRunRepository.resolveReferenceImportAuthority(
+      'long-title-replay', first.execution, 1,
+    )).toMatchObject({ title: authoritativeTitle, content: authoritativeBody })
+
+    closeProjectDatabase()
+    initProjectDatabase(root)
+    const replay = ImportRunRepository.startOrResume('long-title-replay', 'replay-renderer')
+    expect(ImportRunRepository.resolveReferenceImportAuthority(
+      'long-title-replay', replay.execution, 1,
+    )).toMatchObject({ title: authoritativeTitle, content: authoritativeBody })
   })
 
   it('keeps every completed source recoverable when finalization is temporarily blocked', () => {

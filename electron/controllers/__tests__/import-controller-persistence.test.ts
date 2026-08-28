@@ -276,9 +276,60 @@ describe('current-project import parsing persistence', () => {
     mocks.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [sourceB] })
     await expect(handler(event, request, session)).resolves.toMatchObject({
       success: true,
-      preparation: { classification: 'new', run: { stage: 'prepared' } },
+      preparation: {
+        classification: 'new',
+        run: { stage: 'prepared' },
+        inspection: {
+          chapterCount: 2,
+          previewRemaining: 0,
+          preview: [
+            { number: 1, title: 'A', wordCount: 5, targetStatus: 'new' },
+            { number: 2, title: 'B', wordCount: 4, targetStatus: 'new' },
+          ],
+        },
+      },
     })
     expect(reads).toEqual([sourceB])
+  })
+
+  it('keeps implicit recovery errors in the original locale without persisting private diagnostics', async () => {
+    const source = path.join(parent, 'private-source.txt')
+    fs.writeFileSync(source, 'Chapter 1 Private\nbody', 'utf8')
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [source] })
+    const privateDiagnostic = `ENOENT: no such file or directory, open '${source}'`
+    const fileSystem = {
+      readText: vi.fn(async () => { throw new Error(privateDiagnostic) }),
+    } as unknown as WindowsSafeFileSystem
+    registerImportController(
+      fileSystem,
+      filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
+      {},
+      new ExternalFileGrantService(),
+      new ImportInspectionStore(),
+      secret,
+    )
+    const handler = mocks.handlers.get('dialog:select-novel-files')!
+    const event = { sender: { id: 64, once: vi.fn() } }
+    const expectedSafeError = 'Could not read the selected files. Please choose them again.'
+
+    await expect(handler(event, {
+      runId: 'frozen-english-run', purpose: 'reference', locale: 'en-US', expectedProjectPath: projectRoot,
+    }, session)).resolves.toEqual({ success: false, error: expectedSafeError })
+
+    // An ordinary re-selection uses a fresh UI run id and current Chinese UI
+    // locale, but matching source identity must resume the durable English run.
+    await expect(handler(event, {
+      runId: 'fresh-chinese-selection', purpose: 'reference', locale: 'zh-CN', expectedProjectPath: projectRoot,
+    }, session)).resolves.toEqual({ success: false, error: expectedSafeError })
+
+    reopenProject(projectRoot)
+    const snapshots = ImportRunRepository.listResumable()
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]).toMatchObject({
+      id: 'frozen-english-run', locale: 'en-US', lastError: expectedSafeError,
+    })
+    expect(JSON.stringify(snapshots)).not.toContain(source)
+    expect(JSON.stringify(snapshots)).not.toContain(privateDiagnostic)
   })
 
   it('keeps an empty source retryable and prepares it after the user selects the corrected file again', async () => {

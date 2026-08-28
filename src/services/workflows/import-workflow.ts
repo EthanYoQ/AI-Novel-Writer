@@ -17,6 +17,7 @@ import { ImportRunOrchestrator, type ImportRunOrchestratorDependencies } from '.
 import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh'
 import { promptLanguageText } from '../prompt-language'
 import { retryDirectoryCharacterSync } from './directory-character-sync-recovery'
+import type { WritingLanguage } from '../../shared/writing-language'
 
 export interface ImportWorkflowParams {
   projectPath: string
@@ -44,12 +45,14 @@ function importedChapter(chapter: ImportRunChapterSnapshot) {
   }
 }
 
-function currentNovelConfigSummary(locale: ImportRunSnapshot['locale']): string {
+function currentNovelConfigSummary(writingLanguage: WritingLanguage): string {
   const config = useProjectStore.getState().currentProject?.novelConfig
-  if (!config) return textForLocale(locale, '（配置概要不可用）', '(configuration summary unavailable)')
-  const none = textForLocale(locale, '（无）', '(none)')
+  if (!config) return promptLanguageText(
+    writingLanguage, '（配置概要不可用）', '(configuration summary unavailable)',
+  )
+  const none = promptLanguageText(writingLanguage, '（无）', '(none)')
   return promptLanguageText(
-    locale,
+    writingLanguage,
     `类型: ${config.genre || none}\n大纲: ${config.coreOutline || none}\n世界观: ${config.worldSetting || none}\n主角: ${config.protagonistProfile || none}`,
     `Genre: ${config.genre || none}\nOutline: ${config.coreOutline || none}\nWorld: ${config.worldSetting || none}\nProtagonist: ${config.protagonistProfile || none}`,
   )
@@ -167,7 +170,7 @@ function productionDependencies(
           },
         },
       })
-      context.data.novelConfigSummary = currentNovelConfigSummary(context.uiLocale)
+      context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
     },
     listChapters: (runId, after, limit) => ipc.invokeWithProjectSession(
       session, 'db:import-run-list-chapters', runId, after, limit, projectPath,
@@ -216,7 +219,7 @@ function productionDependencies(
     },
     inferBlueprints: async (chapters, _checkpoint, _run, commit) => {
       context.data.chapters = chapters.map(importedChapter)
-      context.data.novelConfigSummary = currentNovelConfigSummary(context.uiLocale)
+      context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
       const { InferBlueprintsPerChapterCommand } = await import('./commands/import-novel.command')
       await new InferBlueprintsPerChapterCommand(undefined, async request => (
         await commit(request)
