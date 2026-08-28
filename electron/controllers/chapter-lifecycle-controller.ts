@@ -57,6 +57,16 @@ export function registerChapterLifecycleController(
     return service.retry(projectRoot, operationId)
   })
 
+  register('chapter:confirm-legacy-knowledge-absent', async (
+    _event,
+    operationId: string,
+    expectedProjectPath: string,
+    projectRoot: string,
+  ) => {
+    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
+    return service.confirmLegacyKnowledgeAbsent(projectRoot, operationId)
+  })
+
   register('chapter:list-incomplete-deletions', async (
     _event,
     expectedProjectPath: string,

@@ -48,6 +48,25 @@ function makeLegacyProject(): string {
       created_at TEXT,
       updated_at TEXT
     );
+    CREATE TABLE chapter_deletion_operations (
+      operation_id TEXT PRIMARY KEY,
+      draft_id INTEGER NOT NULL UNIQUE,
+      chapter_number INTEGER NOT NULL,
+      chapter_title TEXT NOT NULL DEFAULT '',
+      finalization_id TEXT NOT NULL,
+      target_file_name TEXT NOT NULL DEFAULT '',
+      knowledge_document_id TEXT NOT NULL DEFAULT '',
+      post_process_run_ids TEXT NOT NULL DEFAULT '[]',
+      manuscript_status TEXT NOT NULL DEFAULT 'pending',
+      manuscript_error TEXT NOT NULL DEFAULT '',
+      knowledge_status TEXT NOT NULL DEFAULT 'pending',
+      knowledge_error TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT,
+      updated_at TEXT,
+      completed_at TEXT NOT NULL DEFAULT ''
+    );
   `)
   legacyDb.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(1, snapshot)
   legacyDb.prepare(`
@@ -69,6 +88,11 @@ function makeLegacyProject(): string {
     '第1章 第一章.txt',
     'pending',
   )
+  legacyDb.prepare(`
+    INSERT INTO chapter_deletion_operations (
+      operation_id, draft_id, chapter_number, finalization_id, status
+    ) VALUES (?, ?, ?, ?, ?)
+  `).run('legacy-deletion-1', 99, 9, 'legacy-finalization-9', 'failed')
   legacyDb.close()
   return projectRoot
 }
@@ -98,6 +122,21 @@ describe('finalization outbox migration', () => {
       SELECT name FROM sqlite_master
       WHERE type = 'table' AND name = 'chapter_deletion_operations'
     `).get()).toEqual({ name: 'chapter_deletion_operations' })
+    const deletionColumns = db!.prepare('PRAGMA table_info(chapter_deletion_operations)').all() as Array<{ name: string }>
+    expect(deletionColumns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'legacy_knowledge_authorization',
+      'legacy_knowledge_confirmed_at',
+      'legacy_knowledge_consumed_at',
+    ]))
+    expect(db!.prepare(`
+      SELECT legacy_knowledge_authorization, legacy_knowledge_confirmed_at,
+             legacy_knowledge_consumed_at
+      FROM chapter_deletion_operations WHERE operation_id = ?
+    `).get('legacy-deletion-1')).toEqual({
+      legacy_knowledge_authorization: 'not_required',
+      legacy_knowledge_confirmed_at: '',
+      legacy_knowledge_consumed_at: '',
+    })
     expect(db!.prepare(`
       SELECT content_snapshot FROM finalization_outbox WHERE finalization_id = ?
     `).get('legacy-finalization-1')).toEqual({ content_snapshot: '旧版本已提交的正文' })

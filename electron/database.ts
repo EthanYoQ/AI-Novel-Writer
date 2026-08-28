@@ -204,6 +204,9 @@ function createTables(db: BetterSqlite3.Database) {
       manuscript_error TEXT NOT NULL DEFAULT '',
       knowledge_status TEXT NOT NULL DEFAULT 'pending',
       knowledge_error TEXT NOT NULL DEFAULT '',
+      legacy_knowledge_authorization TEXT NOT NULL DEFAULT 'not_required',
+      legacy_knowledge_confirmed_at TEXT NOT NULL DEFAULT '',
+      legacy_knowledge_consumed_at TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending',
       attempt_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
@@ -364,6 +367,19 @@ function createTables(db: BetterSqlite3.Database) {
       ADD COLUMN knowledge_document_id TEXT NOT NULL DEFAULT ''
     `)
   }
+
+  const deletionColumns = new Set(
+    (db.prepare('PRAGMA table_info(chapter_deletion_operations)').all() as Array<{ name: string }>)
+      .map(column => column.name),
+  )
+  const addDeletionTextColumn = (column: string, defaultValue: string) => {
+    if (deletionColumns.has(column)) return
+    db.exec(`ALTER TABLE chapter_deletion_operations ADD COLUMN ${column} TEXT NOT NULL DEFAULT '${defaultValue}'`)
+    deletionColumns.add(column)
+  }
+  addDeletionTextColumn('legacy_knowledge_authorization', 'not_required')
+  addDeletionTextColumn('legacy_knowledge_confirmed_at', '')
+  addDeletionTextColumn('legacy_knowledge_consumed_at', '')
 
   // 旧项目把作者配置字段映射到架构字段，导致重开漂移。新列保持独立事实：
   // 大纲和世界设定可从旧显示来源无损继承；主角档案绝不复制 characters_arch，

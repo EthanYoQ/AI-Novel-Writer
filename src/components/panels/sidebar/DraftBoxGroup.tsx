@@ -251,7 +251,6 @@ function DraftItem({
         displayName: `${chapterTitleText} v${draft.version}`,
         tabFilePath: draft.filePath,
         surface: 'draft',
-        reloadDrafts: 'chapter',
       })
       return
     }

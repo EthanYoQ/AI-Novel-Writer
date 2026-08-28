@@ -1,5 +1,6 @@
 export type ChapterDeletionProjectionStatus = 'pending' | 'completed' | 'failed' | 'not_required'
-export type ChapterDeletionStatus = 'pending' | 'failed' | 'completed'
+export type ChapterDeletionStatus = 'authorization_required' | 'pending' | 'failed' | 'completed'
+export type LegacyKnowledgeAuthorization = 'not_required' | 'required' | 'consumed'
 
 export interface DeleteFinalizedChapterRequest {
   draftId: number
@@ -19,6 +20,9 @@ export interface ChapterDeletionOperation {
   manuscriptError: string
   knowledgeStatus: ChapterDeletionProjectionStatus
   knowledgeError: string
+  legacyKnowledgeAuthorization: LegacyKnowledgeAuthorization
+  legacyKnowledgeConfirmedAt: string
+  legacyKnowledgeConsumedAt: string
   status: ChapterDeletionStatus
   attemptCount: number
   createdAt: string

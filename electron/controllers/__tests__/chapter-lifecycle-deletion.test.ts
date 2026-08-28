@@ -171,6 +171,17 @@ describe('chapter lifecycle deletion IPC', () => {
     expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(false)
     await expect(searchKnowledgeFTS('目标章节独有关键字', projectRoot)).resolves.not.toEqual([])
 
+    await expect(handlers.get('chapter:confirm-legacy-knowledge-absent')!(
+      {},
+      first.operation.operationId,
+      projectRoot,
+      projectSession,
+    )).resolves.toMatchObject({
+      success: false,
+      committed: false,
+      error: expect.stringContaining('一次性'),
+    })
+
     closeProjectDatabase()
     projectAccess.invalidateCurrentSession()
     closeConnection(projectRoot)
@@ -359,7 +370,7 @@ describe('chapter lifecycle deletion IPC', () => {
     })
   })
 
-  it('keeps an identical reference document when a legacy finalization lacks reliable provenance', async () => {
+  it('records an authorization-required receipt without touching an identical reference document', async () => {
     getProjectDb()!.prepare(`
       UPDATE finalization_outbox SET knowledge_document_id = '' WHERE draft_id = ?
     `).run(draftId)
@@ -377,12 +388,32 @@ describe('chapter lifecycle deletion IPC', () => {
       { draftId, chapterNumber: 1 },
       projectRoot,
       projectSession,
-    ) as { success: boolean; committed: boolean; error?: string }
+    ) as {
+      success: boolean
+      committed: boolean
+      operation?: { operationId: string; status: string; legacyKnowledgeAuthorization: string }
+      error?: string
+    }
 
     expect(result).toMatchObject({
       success: false,
       committed: false,
+      operation: {
+        status: 'authorization_required',
+        legacyKnowledgeAuthorization: 'required',
+      },
       error: expect.stringContaining('缺少可靠'),
+    })
+    const listed = await handlers.get('chapter:list-incomplete-deletions')!(
+      {},
+      projectRoot,
+      projectSession,
+    ) as { success: boolean; operations: Array<{ operationId: string; status: string }> }
+    expect(listed).toMatchObject({
+      success: true,
+      operations: [
+        { operationId: result.operation?.operationId, status: 'authorization_required' },
+      ],
     })
     expect(DraftRepository.getFull(draftId)).not.toBeNull()
     expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(true)
@@ -390,6 +421,78 @@ describe('chapter lifecycle deletion IPC', () => {
       expect.objectContaining({ id: 'identical-reference-document', fileName: targetFileName }),
     ])
     await expect(searchKnowledgeFTS('目标章节独有关键字', projectRoot)).resolves.not.toEqual([])
+  })
+
+  it('continues a legacy deletion only after explicit knowledge-absence confirmation', async () => {
+    getProjectDb()!.prepare(`
+      UPDATE finalization_outbox SET knowledge_document_id = '' WHERE draft_id = ?
+    `).run(draftId)
+    await removeDocument('finalized-document', projectRoot)
+    await removeDocument('reference-document', projectRoot)
+    await addChunks(
+      projectRoot,
+      'confirmed-identical-reference',
+      targetFileName,
+      ['目标章节独有关键字'],
+    )
+
+    const blocked = await handlers.get('chapter:delete-finalized')!(
+      {},
+      { draftId, chapterNumber: 1 },
+      projectRoot,
+      projectSession,
+    ) as {
+      operation: { operationId: string; legacyKnowledgeAuthorization: string }
+    }
+    expect(blocked.operation).toMatchObject({ legacyKnowledgeAuthorization: 'required' })
+
+    const confirmed = await handlers.get('chapter:confirm-legacy-knowledge-absent')!(
+      {},
+      blocked.operation.operationId,
+      projectRoot,
+      projectSession,
+    ) as {
+      success: boolean
+      committed: boolean
+      operation: {
+        status: string
+        legacyKnowledgeAuthorization: string
+        legacyKnowledgeConfirmedAt: string
+        legacyKnowledgeConsumedAt: string
+      }
+    }
+    expect(confirmed).toMatchObject({
+      success: true,
+      committed: true,
+      operation: {
+        status: 'completed',
+        legacyKnowledgeAuthorization: 'consumed',
+        legacyKnowledgeConfirmedAt: expect.any(String),
+        legacyKnowledgeConsumedAt: expect.any(String),
+      },
+    })
+    expect(confirmed.operation.legacyKnowledgeConfirmedAt).not.toBe('')
+    expect(confirmed.operation.legacyKnowledgeConsumedAt).not.toBe('')
+    expect(DraftRepository.getFull(draftId)).toBeNull()
+    expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(false)
+    await expect(listDocuments(projectRoot)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'confirmed-identical-reference',
+        fileName: targetFileName,
+      }),
+    ])
+    await expect(searchKnowledgeFTS('目标章节独有关键字', projectRoot)).resolves.not.toEqual([])
+
+    await expect(handlers.get('chapter:confirm-legacy-knowledge-absent')!(
+      {},
+      blocked.operation.operationId,
+      projectRoot,
+      projectSession,
+    )).resolves.toMatchObject({
+      success: false,
+      committed: false,
+      error: expect.stringContaining('一次性'),
+    })
   })
 
   it('keeps the chapter fact when legacy knowledge identity is ambiguous', async () => {

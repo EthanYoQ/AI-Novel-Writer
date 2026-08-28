@@ -46,6 +46,17 @@ function operationError(operation: ChapterDeletionOperation): string | undefined
   return failures.length > 0 ? failures.join('；') : undefined
 }
 
+function legacyKnowledgeAuthorizationRequired(
+  operation: ChapterDeletionOperation,
+): ChapterDeletionResult {
+  return {
+    success: false,
+    committed: false,
+    operation,
+    error: '旧定稿缺少可靠知识文档身份，已保留章节事实和知识库内容；请人工核对后确认没有需要应用自动删除的知识投影',
+  }
+}
+
 export class ChapterDeletionService {
   private readonly createOperationId: () => string
   private readonly cleaner: ChapterDeletionProjectionCleaner
@@ -64,34 +75,48 @@ export class ChapterDeletionService {
       if (existing.draftId !== request.draftId || existing.chapterNumber !== request.chapterNumber) {
         return { success: false, committed: false, error: '章节删除请求与已冻结操作身份不匹配' }
       }
+      if (existing.legacyKnowledgeAuthorization === 'required') {
+        return legacyKnowledgeAuthorizationRequired(existing)
+      }
       return this.resume(projectRoot, existing.operationId)
     }
-    this.assertKnowledgeDocumentProvenance(request)
+    const requiresLegacyKnowledgeAuthorization = this.requiresLegacyKnowledgeAuthorization(request)
     const frozen = ChapterDeletionRepository.begin({
       operationId: this.createOperationId(),
       draftId: request.draftId,
       chapterNumber: request.chapterNumber,
+      legacyKnowledgeAuthorizationRequired: requiresLegacyKnowledgeAuthorization,
     })
+    if (requiresLegacyKnowledgeAuthorization) {
+      return legacyKnowledgeAuthorizationRequired(frozen)
+    }
     return this.resume(projectRoot, frozen.operationId)
   }
 
-  private assertKnowledgeDocumentProvenance(request: DeleteFinalizedChapterRequest): void {
+  private requiresLegacyKnowledgeAuthorization(request: DeleteFinalizedChapterRequest): boolean {
     const finalization = FinalizationRepository.getByDraftId(request.draftId)
-    if (!finalization || finalization.knowledgeDocumentId) return
+    if (!finalization || finalization.knowledgeDocumentId) return false
     const run = PostProcessRepository.getLatestRun('chapter_finalize', String(request.chapterNumber))
     const hasKnowledgeProjection = !run || PostProcessRepository.getSteps(run.id)
       .some(step => step.stepKey === 'kb_import')
-    if (!hasKnowledgeProjection) return
-    throw new Error(
-      '旧定稿缺少可靠知识文档身份，已保留章节事实和知识库内容；'
-      + '请先人工核对关联知识文档或修复定稿后处理，再重试删除',
-    )
+    return hasKnowledgeProjection
+  }
+
+  async confirmLegacyKnowledgeAbsent(
+    projectRoot: string,
+    operationId: string,
+  ): Promise<ChapterDeletionResult> {
+    const operation = ChapterDeletionRepository.confirmLegacyKnowledgeAbsent(operationId)
+    return this.resume(projectRoot, operation.operationId)
   }
 
   async retry(projectRoot: string, operationId: string): Promise<ChapterDeletionResult> {
     const operation = ChapterDeletionRepository.get(operationId)
     if (!operation) {
       return { success: false, committed: false, error: '未找到可重试的章节删除操作' }
+    }
+    if (operation.legacyKnowledgeAuthorization === 'required') {
+      return legacyKnowledgeAuthorizationRequired(operation)
     }
     return this.resume(projectRoot, operationId)
   }

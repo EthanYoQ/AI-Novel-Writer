@@ -22,6 +22,8 @@ export type GlobalEventType =
   | 'ARCH_FILE_UPDATED'
   // --- 定稿完成（替代原 vela:finalize-complete） ---
   | 'FINALIZE_COMPLETE'
+  // --- 章节删除收据变化（包括待人工确认和部分清理失败） ---
+  | 'CHAPTER_DELETION_UPDATED'
   // --- 项目级事件 ---
   | 'PROJECT_CHANGED'
   // --- 系统通知 ---
@@ -85,6 +87,10 @@ export interface EventPayloadMap {
     publicationStatus: 'pending' | 'published'
     /** 定稿来源；批量任务不应弹出单章的“下一章创作”对话框 */
     source?: 'manual' | 'batch'
+  }
+  'CHAPTER_DELETION_UPDATED': {
+    projectPath: string
+    projectSession: ProjectSessionContext
   }
   'PROJECT_CHANGED': {
     projectPath: string

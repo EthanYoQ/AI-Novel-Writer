@@ -763,6 +763,10 @@ export interface ChapterLifecycleChannels {
     args: [operationId: string, expectedProjectPath: string]
     return: ChapterDeletionResult
   }
+  'chapter:confirm-legacy-knowledge-absent': {
+    args: [operationId: string, expectedProjectPath: string]
+    return: ChapterDeletionResult
+  }
   'chapter:list-incomplete-deletions': {
     args: [expectedProjectPath: string]
     return: { success: boolean; operations?: ChapterDeletionOperation[]; error?: string }

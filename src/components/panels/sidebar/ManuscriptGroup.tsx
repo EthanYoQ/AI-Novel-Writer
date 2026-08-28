@@ -2,7 +2,7 @@
  * ManuscriptGroup — 正文章节折叠组（已定稿章节列表）
  */
 
-import { useCallback, useState, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ChevronRight, ChevronDown, FileText, FolderOpen, Copy, PenTool, RotateCcw, Trash2 } from 'lucide-react'
 import type { FileNode, ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { ChapterDeletionOperation } from '../../../shared/chapter-deletion'
@@ -19,8 +19,11 @@ import {
 
 import { openChapterFile } from './sidebar-file-openers'
 import { showSidebarMenu } from './sidebar-menu'
-import { chapterTitleCache, clearChapterTitleCache } from './manuscript-title-cache'
-import { deleteFinalizedChapter } from './finalized-chapter-deletion'
+import { chapterTitleCache } from './manuscript-title-cache'
+import {
+  confirmLegacyKnowledgeAbsentAndContinue,
+  deleteFinalizedChapter,
+} from './finalized-chapter-deletion'
 
 /**
  * 优先从蓝图 JSON 读取章节标题，fallback 到文件首行
@@ -96,6 +99,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
   const incompleteDeletions = deletionState.projectPath === projectPath
     ? deletionState.operations
     : []
+  const deletionLoadSequence = useRef(0)
   // 文件路径 → 显示名称的映射（异步加载）
   const [titleMap, setTitleMap] = useState<Record<string, string>>({})
 
@@ -144,12 +148,16 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
   const chapterFiles = files.filter(f => !f.name.includes('_notes'))
 
   const fetchIncompleteDeletions = useCallback(async (projectSession: ProjectSessionContext) => {
+    const requestId = ++deletionLoadSequence.current
     const result = await ipc.invokeWithProjectSession(
       projectSession,
       'chapter:list-incomplete-deletions',
       projectPath,
     )
-    if (!isProjectSessionCurrent(projectSession)) return null
+    if (
+      requestId !== deletionLoadSequence.current
+      || !isProjectSessionCurrent(projectSession)
+    ) return null
     return result.success ? result.operations ?? [] : []
   }, [projectPath])
 
@@ -171,6 +179,14 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
     })
   }, [currentProject, fetchIncompleteDeletions, projectPath])
 
+  useEffect(() => globalEventBus.on('CHAPTER_DELETION_UPDATED', payload => {
+    if (
+      !isProjectSessionPath(payload.projectSession, projectPath)
+      || !isProjectSessionCurrent(payload.projectSession)
+    ) return
+    void loadIncompleteDeletions(payload.projectSession)
+  }), [loadIncompleteDeletions, projectPath])
+
   const deleteManuscriptChapter = async (
     filePath: string,
     displayName: string,
@@ -189,11 +205,6 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
       displayName,
       tabFilePath: filePath,
       surface: 'manuscript',
-      reloadDrafts: 'all',
-      afterCommit: async (frozenProjectSession) => {
-        clearChapterTitleCache(filePath)
-        await loadIncompleteDeletions(frozenProjectSession)
-      },
     })
   }
 
@@ -223,6 +234,21 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
     }
   }
 
+  const confirmLegacyDeletion = async (operation: ChapterDeletionOperation) => {
+    const displayName = operation.chapterTitle
+      ? text(`第${operation.chapterNumber}章 ${operation.chapterTitle}`, `Chapter ${operation.chapterNumber} ${operation.chapterTitle}`)
+      : text(`第${operation.chapterNumber}章`, `Chapter ${operation.chapterNumber}`)
+    await confirmLegacyKnowledgeAbsentAndContinue({
+      project: currentProject,
+      projectPath,
+      draftId: operation.draftId,
+      chapterNumber: operation.chapterNumber,
+      displayName,
+      tabFilePath: `vela://manuscript/${operation.draftId}`,
+      surface: 'manuscript',
+    }, operation.operationId)
+  }
+
   return (
     <div>
       <div
@@ -245,9 +271,13 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
       {open && (
         <div>
           {incompleteDeletions.map(operation => {
+            const requiresLegacyConfirmation = operation.legacyKnowledgeAuthorization === 'required'
             const details = [
               operation.manuscriptStatus === 'failed' ? operation.manuscriptError : '',
               operation.knowledgeStatus === 'failed' ? operation.knowledgeError : '',
+              requiresLegacyConfirmation
+                ? text('旧定稿缺少可验证的知识文档身份，需要人工核对', 'Legacy finalization needs manual knowledge-projection verification')
+                : '',
             ].filter(Boolean).join('；')
             return (
               <div
@@ -258,16 +288,24 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
               >
                 <AlertTriangle size={11} style={{ flexShrink: 0 }} />
                 <span className="text-xs flex-1 truncate">
-                  {text(`第${operation.chapterNumber}章清理${operation.status === 'failed' ? '失败' : '待完成'}`, `Chapter ${operation.chapterNumber} cleanup ${operation.status === 'failed' ? 'failed' : 'pending'}`)}
+                  {requiresLegacyConfirmation
+                    ? text(`第${operation.chapterNumber}章待人工确认知识投影`, `Chapter ${operation.chapterNumber} awaits knowledge-projection confirmation`)
+                    : text(`第${operation.chapterNumber}章清理${operation.status === 'failed' ? '失败' : '待完成'}`, `Chapter ${operation.chapterNumber} cleanup ${operation.status === 'failed' ? 'failed' : 'pending'}`)}
                 </span>
                 <button
                   type="button"
                   className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[0.7rem] hover:bg-[var(--color-hover)]"
-                  title={text('重试清理', 'Retry cleanup')}
-                  onClick={() => void retryDeletion(operation)}
+                  title={requiresLegacyConfirmation
+                    ? text('确认人工核对并继续', 'Confirm manual review and continue')
+                    : text('重试清理', 'Retry cleanup')}
+                  onClick={() => void (requiresLegacyConfirmation
+                    ? confirmLegacyDeletion(operation)
+                    : retryDeletion(operation))}
                 >
                   <RotateCcw size={10} />
-                  {text('重试清理', 'Retry cleanup')}
+                  {requiresLegacyConfirmation
+                    ? text('确认人工核对并继续', 'Confirm and continue')
+                    : text('重试清理', 'Retry cleanup')}
                 </button>
               </div>
             )

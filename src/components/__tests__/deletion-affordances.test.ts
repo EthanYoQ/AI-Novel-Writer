@@ -49,6 +49,24 @@ describe('generated content deletion affordances', () => {
     expect(ipcChannels).toContain("'chapter:delete-finalized'")
   })
 
+  it('offers explicit legacy recovery and refreshes deletion receipts from both finalized surfaces', () => {
+    const draftBox = source('src/components/panels/sidebar/DraftBoxGroup.tsx')
+    const manuscript = source('src/components/panels/sidebar/ManuscriptGroup.tsx')
+    const finalizedDeletion = source('src/components/panels/sidebar/finalized-chapter-deletion.ts')
+    const eventBus = source('src/shared/event-bus.ts')
+
+    expect(finalizedDeletion).toContain('chapter:confirm-legacy-knowledge-absent')
+    expect(finalizedDeletion).toContain('我已人工核对/清理')
+    expect(finalizedDeletion).toContain('I have manually checked or cleaned')
+    expect(finalizedDeletion).toContain("globalEventBus.emit('CHAPTER_DELETION_UPDATED'")
+    expect(eventBus).toContain("| 'CHAPTER_DELETION_UPDATED'")
+    expect(manuscript).toContain("globalEventBus.on('CHAPTER_DELETION_UPDATED'")
+    expect(manuscript).toContain('确认人工核对并继续')
+    expect(draftBox).not.toContain('reloadDrafts')
+    expect(manuscript).not.toContain('reloadDrafts')
+    expect(finalizedDeletion).not.toContain('reloadDrafts:')
+  })
+
   it('supports clearing the entire knowledge base from the knowledge page', () => {
     const knowledgePage = source('src/components/pages/KnowledgeOverview.tsx')
     const knowledgeService = source('src/services/knowledge-service.ts')
