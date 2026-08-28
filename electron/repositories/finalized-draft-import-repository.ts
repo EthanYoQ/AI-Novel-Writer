@@ -6,6 +6,10 @@ import type {
   FinalizedDraftImportReceipt,
   FinalizedDraftImportRequest,
 } from '../../src/shared/finalized-draft-import'
+import type {
+  AuthorManuscriptImportPreview,
+  AuthoritativeChapterSequence,
+} from '../../src/shared/author-manuscript-import'
 import { getProjectDb } from '../database'
 import { resolveManuscriptTarget } from '../services/manuscript-publisher'
 
@@ -26,6 +30,16 @@ interface ImportedDraftFactRow {
   content_snapshot: string
   target_file_name: string
   publication_status: string
+}
+
+interface AuthorityRow {
+  draft_id: number
+  chapter_number: number
+  version: number
+  title: string | null
+  body: string
+  content_hash: string | null
+  finalization_id: string | null
 }
 
 function sha256(value: string): string {
@@ -72,8 +86,100 @@ function normalizeChapters(chapters: FinalizedDraftImportChapter[]): FinalizedDr
   return normalized.sort((left, right) => left.chapterNumber - right.chapterNumber)
 }
 
-function requestPayloadHash(operationId: string, chapters: FinalizedDraftImportChapter[]): string {
-  return sha256(JSON.stringify({ operationId, chapters }))
+function requestPayloadHash(request: FinalizedDraftImportRequest, chapters: FinalizedDraftImportChapter[]): string {
+  if (
+    request.expectedAuthorityFingerprint === undefined
+    && request.expectedManifestFingerprint === undefined
+  ) return sha256(JSON.stringify({ operationId: request.operationId, chapters }))
+  return sha256(JSON.stringify({
+    operationId: request.operationId,
+    expectedAuthorityFingerprint: request.expectedAuthorityFingerprint ?? null,
+    expectedManifestFingerprint: request.expectedManifestFingerprint ?? null,
+    chapters,
+  }))
+}
+
+function manifestFingerprint(chapters: FinalizedDraftImportChapter[]): string {
+  return sha256(JSON.stringify(chapters.map(chapter => ({
+    chapterNumber: chapter.chapterNumber,
+    title: chapter.title,
+    contentHash: sha256(chapter.content),
+    wordCount: chapter.wordCount,
+  }))))
+}
+
+function authorityRows(): AuthorityRow[] {
+  const current = getProjectDb()
+  if (!current) throw new Error('项目数据库未打开')
+  return current.prepare(`
+    SELECT drafts.id AS draft_id, drafts.chapter_number, drafts.version,
+           contents.body, finalization_outbox.chapter_title AS title,
+           finalization_outbox.content_hash, finalization_outbox.finalization_id
+    FROM drafts
+    JOIN contents ON contents.id = drafts.content_id
+    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    WHERE drafts.status = 'finalized'
+    ORDER BY drafts.chapter_number ASC, drafts.version ASC, drafts.id ASC
+  `).all() as AuthorityRow[]
+}
+
+function authorityFingerprint(rows: AuthorityRow[]): string {
+  return sha256(JSON.stringify(rows.map(row => ({
+    draftId: row.draft_id,
+    chapterNumber: row.chapter_number,
+    version: row.version,
+    finalizationId: row.finalization_id,
+    title: row.title,
+    contentHash: row.content_hash,
+    bodyHash: sha256(row.body),
+  }))))
+}
+
+function sequenceFromRows(rows: AuthorityRow[]): AuthoritativeChapterSequence {
+  const fingerprint = authorityFingerprint(rows)
+  if (rows.length === 0) {
+    return {
+      status: 'empty',
+      lastChapterNumber: 0,
+      nextChapterNumber: 1,
+      duplicateChapterNumbers: [],
+      authorityFingerprint: fingerprint,
+    }
+  }
+  const counts = new Map<number, number>()
+  for (const row of rows) counts.set(row.chapter_number, (counts.get(row.chapter_number) ?? 0) + 1)
+  const duplicateChapterNumbers = [...counts]
+    .filter(([, count]) => count > 1)
+    .map(([chapterNumber]) => chapterNumber)
+  const maxChapter = Math.max(...rows.map(row => row.chapter_number))
+  let firstGapChapterNumber: number | undefined
+  for (let chapterNumber = 1; chapterNumber <= maxChapter; chapterNumber += 1) {
+    if (!counts.has(chapterNumber)) {
+      firstGapChapterNumber = chapterNumber
+      break
+    }
+  }
+  const hasIncompleteFinalization = rows.some(row => (
+    !row.finalization_id
+    || !row.content_hash
+    || row.content_hash !== sha256(row.body)
+  ))
+  if (duplicateChapterNumbers.length > 0 || firstGapChapterNumber !== undefined || hasIncompleteFinalization) {
+    return {
+      status: 'invalid',
+      lastChapterNumber: maxChapter,
+      ...(firstGapChapterNumber === undefined ? {} : { firstGapChapterNumber }),
+      duplicateChapterNumbers,
+      authorityFingerprint: fingerprint,
+    }
+  }
+  return {
+    status: 'continuous',
+    lastChapterNumber: maxChapter,
+    nextChapterNumber: maxChapter + 1,
+    duplicateChapterNumbers: [],
+    authorityFingerprint: fingerprint,
+  }
 }
 
 function finalizationId(operationId: string, chapterNumber: number): string {
@@ -145,7 +251,7 @@ function verifyStoredFacts(
       || fact.content_snapshot !== chapter.content
       || fact.content_hash !== draftReceipt.contentHash
       || fact.target_file_name !== draftReceipt.targetFileName
-      || fact.publication_status !== 'pending'
+      || (fact.publication_status !== 'pending' && fact.publication_status !== 'published')
     ) {
       throw new Error('定稿导入已提交事实缺失或漂移，已拒绝重放')
     }
@@ -157,12 +263,93 @@ function verifyStoredFacts(
  * 成功，要么全部回滚。operationId 只允许重放完全相同的规范化载荷。
  */
 export class FinalizedDraftImportRepository {
+  static authoritySequence(): AuthoritativeChapterSequence {
+    return sequenceFromRows(authorityRows())
+  }
+
+  static preview(input: FinalizedDraftImportChapter[]): AuthorManuscriptImportPreview {
+    const chapters = normalizeChapters(input)
+    const rows = authorityRows()
+    const sequence = sequenceFromRows(rows)
+    const existingByChapter = new Map(rows.map(row => [row.chapter_number, row]))
+    const conflictChapterNumbers: number[] = []
+    const duplicateChapterNumbers: number[] = []
+    const newChapterNumbers: number[] = []
+    const previewChapters = chapters.map(chapter => {
+      const existing = existingByChapter.get(chapter.chapterNumber)
+      if (!existing) {
+        newChapterNumbers.push(chapter.chapterNumber)
+        return {
+          number: chapter.chapterNumber,
+          title: chapter.title,
+          wordCount: chapter.wordCount,
+          disposition: 'new' as const,
+        }
+      }
+      if (existing.content_hash === sha256(chapter.content) && (existing.title ?? '') === chapter.title) {
+        duplicateChapterNumbers.push(chapter.chapterNumber)
+        return {
+          number: chapter.chapterNumber,
+          title: chapter.title,
+          wordCount: chapter.wordCount,
+          disposition: 'duplicate' as const,
+        }
+      }
+      conflictChapterNumbers.push(chapter.chapterNumber)
+      return {
+        number: chapter.chapterNumber,
+        title: chapter.title,
+        wordCount: chapter.wordCount,
+        disposition: 'conflict' as const,
+      }
+    })
+
+    const expectedNext = sequence.nextChapterNumber
+    let candidateGap: number | undefined
+    if (expectedNext !== undefined && newChapterNumbers.length > 0) {
+      const ordered = [...newChapterNumbers].sort((left, right) => left - right)
+      let expected = expectedNext
+      for (const chapterNumber of ordered) {
+        if (chapterNumber !== expected) {
+          candidateGap = expected
+          break
+        }
+        expected += 1
+      }
+    }
+    const authorityInvalid = sequence.status === 'invalid'
+    const classification = authorityInvalid || conflictChapterNumbers.length > 0 || candidateGap !== undefined
+      ? 'conflict'
+      : newChapterNumbers.length === 0
+        ? 'exact-duplicate'
+        : 'ready'
+    const nextChapterNumber = classification === 'conflict'
+      ? undefined
+      : (sequence.lastChapterNumber + newChapterNumbers.length + 1)
+    return {
+      classification,
+      authorityFingerprint: sequence.authorityFingerprint,
+      manifestFingerprint: manifestFingerprint(chapters),
+      chapterCount: chapters.length,
+      targetStatus: 'finalized',
+      ...(nextChapterNumber === undefined ? {} : { nextChapterNumber }),
+      chapters: previewChapters,
+      newChapterNumbers,
+      duplicateChapterNumbers,
+      conflictChapterNumbers,
+      ...((sequence.firstGapChapterNumber ?? candidateGap) === undefined
+        ? {}
+        : { firstGapChapterNumber: sequence.firstGapChapterNumber ?? candidateGap }),
+      authorityInvalid,
+    }
+  }
+
   static commit(projectRoot: string, request: FinalizedDraftImportRequest): FinalizedDraftImportReceipt {
     const db = getProjectDb()
     if (!db) throw new Error('项目数据库未打开')
     const operationId = requireNonEmptyOperationId(request.operationId)
     const chapters = normalizeChapters(request.chapters)
-    const payloadHash = requestPayloadHash(operationId, chapters)
+    const payloadHash = requestPayloadHash({ ...request, operationId }, chapters)
 
     const transaction = db.transaction(() => {
       const existing = db.prepare(`
@@ -177,6 +364,22 @@ export class FinalizedDraftImportRepository {
         const receipt = parseStoredReceipt(existing)
         verifyStoredFacts(receipt, chapters)
         return { ...receipt, idempotent: true }
+      }
+
+      if (request.expectedManifestFingerprint !== undefined) {
+        if (request.expectedManifestFingerprint !== manifestFingerprint(chapters)) {
+          throw new Error('原稿清单与已确认预览不一致，预览已过期')
+        }
+      }
+      if (request.expectedAuthorityFingerprint !== undefined) {
+        const currentAuthority = sequenceFromRows(authorityRows()).authorityFingerprint
+        if (request.expectedAuthorityFingerprint !== currentAuthority) {
+          throw new Error('项目权威章节已变化，原稿预览已过期')
+        }
+        const preview = this.preview(chapters)
+        if (preview.classification !== 'ready') {
+          throw new Error('原稿章节不能形成连续且无冲突的权威正文')
+        }
       }
 
       const drafts: FinalizedDraftImportDraftReceipt[] = []

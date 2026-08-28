@@ -25,7 +25,7 @@ import type {
   ImportSourceDisplayMetadata,
   ImportPurpose,
 } from '../../src/shared/import-run'
-import { getProjectDb } from '../database'
+import { getCurrentProjectPath, getProjectDb } from '../database'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from './blueprint-repository'
 import { ImportGlobalFactsRepository } from './import-global-facts-repository'
 import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
@@ -35,6 +35,7 @@ import {
   MAX_IMPORT_TOTAL_BYTES,
 } from '../../src/shared/import-limits'
 import { ProjectCoreRepository } from './project-core-repository'
+import { FinalizedDraftImportRepository } from './finalized-draft-import-repository'
 
 interface ImportRunRow {
   id: string
@@ -43,6 +44,7 @@ interface ImportRunRow {
   effect_namespace: string
   source_fingerprint: string
   manifest_fingerprint: string
+  authority_fingerprint: string
   source_display_json: string
   locale: 'zh-CN' | 'en-US'
   stage: ImportRunStage
@@ -111,14 +113,30 @@ const MAX_DISPLAY_SOURCES = MAX_IMPORT_SOURCE_FILES
 const DEFAULT_EXECUTION_LEASE_MS = 15 * 60_000
 const MAX_EFFECT_RECEIPT_PAYLOAD_BYTES = 16 * 1024 * 1024
 const KNOWLEDGE_BATCH_CHECKPOINT = /^([1-9]\d*)-([1-9]\d*)$/u
+const AUTHOR_CHAPTER_CHECKPOINT = /^chapter:([1-9]\d*)$/u
 const IMPORT_RUN_STAGE_VALUES = new Set<ImportRunStage>([
-  'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed',
+  'knowledge', 'global', 'style', 'blueprints',
+  'author-commit', 'author-publish', 'author-postprocess',
+  'refresh', 'completed',
 ])
-const NEXT_IMPORT_RUN_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>>> = {
+const REFERENCE_NEXT_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>>> = {
   knowledge: 'global',
   global: 'style',
   style: 'blueprints',
   blueprints: 'refresh',
+}
+const AUTHOR_NEXT_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>>> = {
+  'author-commit': 'author-publish',
+  'author-publish': 'author-postprocess',
+  'author-postprocess': 'refresh',
+}
+
+function initialStage(purpose: ImportPurpose): ImportRunStage {
+  return purpose === 'author-manuscript' ? 'author-commit' : 'knowledge'
+}
+
+function nextStageForRun(row: ImportRunRow, stage: ImportRunStage): ImportRunStage | undefined {
+  return (row.purpose === 'author-manuscript' ? AUTHOR_NEXT_STAGE : REFERENCE_NEXT_STAGE)[stage]
 }
 
 type ImportRunCheckpointSource = 'direct' | 'receipt'
@@ -185,6 +203,16 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 
 function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown): void {
   if (!isRecord(payload)) throw new Error()
+  if (kind === 'author-finalized-batch') {
+    if (
+      !exactKeys(payload, ['operationId', 'runId', 'authorityFingerprint', 'manifestFingerprint'])
+      || typeof payload.operationId !== 'string'
+      || typeof payload.runId !== 'string'
+      || !SHA256.test(String(payload.authorityFingerprint))
+      || !SHA256.test(String(payload.manifestFingerprint))
+    ) throw new Error()
+    return
+  }
   if (kind === 'project-writing-style') {
     if (!exactKeys(payload, ['writingStyle']) || typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()) {
       throw new Error()
@@ -214,6 +242,10 @@ function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown):
 }
 
 function assertEffectPayloadBinding(kind: ImportRunEffectKind, batchId: string, payload: unknown): void {
+  if (kind === 'author-finalized-batch') {
+    if (batchId !== 'done') throw new Error()
+    return
+  }
   if (kind !== 'chapter-blueprint-range') return
   const checkpoint = parseImportRunChapterBatchCheckpointId(batchId)
   if (
@@ -224,8 +256,31 @@ function assertEffectPayloadBinding(kind: ImportRunEffectKind, batchId: string, 
   ) throw new Error()
 }
 
+function assertAuthorEffectRunBinding(run: ImportRunRow, kind: ImportRunEffectKind, payload: unknown): void {
+  if (kind !== 'author-finalized-batch') return
+  if (
+    run.purpose !== 'author-manuscript'
+    || run.stage !== 'author-commit'
+    || !isRecord(payload)
+    || payload.runId !== run.id
+    || payload.operationId !== `author-import:${run.id}`
+    || payload.authorityFingerprint !== run.authority_fingerprint
+    || payload.manifestFingerprint !== run.manifest_fingerprint
+  ) throw new Error('作者原稿提交 receipt 未绑定冻结导入运行')
+}
+
 function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown, effectReceipt: unknown): void {
   if (!isRecord(payload) || !isRecord(effectReceipt)) throw new Error()
+  if (kind === 'author-finalized-batch') {
+    if (
+      effectReceipt.operationId !== payload.operationId
+      || typeof effectReceipt.payloadHash !== 'string'
+      || !Array.isArray(effectReceipt.chapterNumbers)
+      || !Array.isArray(effectReceipt.drafts)
+      || effectReceipt.chapterNumbers.length !== effectReceipt.drafts.length
+    ) throw new Error()
+    return
+  }
   if (kind === 'project-writing-style') {
     if (!exactKeys(effectReceipt, ['writingStyle']) || effectReceipt.writingStyle !== payload.writingStyle) throw new Error()
     return
@@ -294,6 +349,7 @@ function validateEffectStage(kind: ImportRunEffectKind, stage: ImportRunStage): 
     'project-global-facts': 'global',
     'project-writing-style': 'style',
     'chapter-blueprint-range': 'blueprints',
+    'author-finalized-batch': 'author-commit',
   }
   if (expected[kind] !== stage) throw new Error('导入 effect receipt 类型与阶段不匹配')
 }
@@ -306,6 +362,7 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
     effectNamespace: row.effect_namespace,
     sourceFingerprint: row.source_fingerprint,
     manifestFingerprint: row.manifest_fingerprint,
+    ...(row.authority_fingerprint ? { authorityFingerprint: row.authority_fingerprint } : {}),
     sourceDisplay: parseJson<ImportSourceDisplayMetadata[]>(row.source_display_json, []),
     locale: row.locale,
     stage: row.stage,
@@ -530,6 +587,17 @@ function checkpointChapterNumbers(row: ImportRunRow, stage: 'knowledge' | 'bluep
   return chapters.map(chapter => chapter.chapter_number)
 }
 
+function authorCheckpointChapterNumber(row: ImportRunRow, batchId: string): number {
+  const match = AUTHOR_CHAPTER_CHECKPOINT.exec(batchId)
+  const chapterNumber = match ? Number(match[1]) : 0
+  if (!Number.isSafeInteger(chapterNumber) || chapterNumber < 1) throw new Error('原稿导入批次 ID 无效')
+  const chapter = db().prepare(`
+    SELECT chapter_number FROM import_run_chapters WHERE run_id = ? AND chapter_number = ?
+  `).get(row.id, chapterNumber) as { chapter_number: number } | undefined
+  if (!chapter) throw new Error('原稿导入批次 ID 无效')
+  return chapterNumber
+}
+
 function assertCheckpointCanApply(
   row: ImportRunRow,
   stage: ImportRunStage,
@@ -538,15 +606,28 @@ function assertCheckpointCanApply(
 ): void {
   if (row.status !== 'running' || row.stage !== stage) throw new Error('导入批次与当前阶段不匹配')
   if (stage === 'completed') throw new Error('导入批次 ID 无效')
-  const receiptStage = stage === 'global' || stage === 'style' || stage === 'blueprints'
+  const receiptStage = stage === 'global'
+    || stage === 'style'
+    || stage === 'blueprints'
+    || stage === 'author-commit'
   if ((receiptStage && source !== 'receipt') || (!receiptStage && source !== 'direct')) {
     throw new Error(receiptStage ? '该导入阶段必须通过 receipt 提交' : '该导入阶段不接受 receipt 提交')
   }
-  if (stage === 'global' || stage === 'style' || stage === 'refresh') {
+  if (stage === 'global' || stage === 'style' || stage === 'author-commit' || stage === 'refresh') {
     if (batchId !== 'done') throw new Error('导入批次 ID 无效')
     return
   }
 
+  if (stage === 'author-publish' || stage === 'author-postprocess') {
+    const chapterNumber = authorCheckpointChapterNumber(row, batchId)
+    const existing = completedBatches(row)[stage] ?? []
+    if (existing.some(existingBatchId => (
+      existingBatchId !== batchId
+      && authorCheckpointChapterNumber(row, existingBatchId) === chapterNumber
+    ))) throw new Error('原稿导入批次与已完成 checkpoint 重叠')
+    return
+  }
+  if (stage !== 'knowledge' && stage !== 'blueprints') throw new Error('导入批次 ID 无效')
   checkpointChapterNumbers(row, stage, batchId)
   const range = checkpointRange(stage, batchId)
   const existing = completedBatches(row)[stage] ?? []
@@ -561,8 +642,17 @@ function assertCheckpointCanApply(
 
 function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage): void {
   const batches = completedBatches(row)[stage] ?? []
-  if (stage === 'global' || stage === 'style' || stage === 'refresh') {
+  if (stage === 'global' || stage === 'style' || stage === 'author-commit' || stage === 'refresh') {
     if (batches.length !== 1 || batches[0] !== 'done') throw new Error('导入阶段 checkpoint 未完成')
+    return
+  }
+  if (stage === 'author-publish' || stage === 'author-postprocess') {
+    const allChapters = chapterRowsForRange(row.id, 1, Number.MAX_SAFE_INTEGER)
+    const covered = new Set(batches.map(batchId => authorCheckpointChapterNumber(row, batchId)))
+    if (
+      covered.size !== allChapters.length
+      || allChapters.some(chapter => !covered.has(chapter.chapter_number))
+    ) throw new Error('原稿导入阶段 checkpoint 未完成')
     return
   }
   if (stage !== 'knowledge' && stage !== 'blueprints') throw new Error('导入阶段 checkpoint 未完成')
@@ -823,7 +913,9 @@ export class ImportRunRepository {
     if (!runId || runId.length > 160 || !SHA256.test(candidate.sourceFingerprint)) {
       throw new Error('导入运行身份无效')
     }
-    if (candidate.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
+    if (candidate.purpose !== 'reference' && candidate.purpose !== 'author-manuscript') {
+      throw new Error('导入用途无效')
+    }
     if (candidate.locale !== 'zh-CN' && candidate.locale !== 'en-US') throw new Error('导入运行语言无效')
     const sourceDisplay = normalizeDisplay(candidate.sourceDisplay)
     const sourceIds = normalizeSourceIds(candidate.sourceIds, sourceDisplay, candidate.sourceFingerprint)
@@ -831,6 +923,117 @@ export class ImportRunRepository {
     const normalizedChapters = normalizeChapters(candidate.chapters, sourceIds)
 
     return db().transaction(() => {
+      if (candidate.purpose === 'author-manuscript') {
+        if (
+          !candidate.authorityFingerprint
+          || !SHA256.test(candidate.authorityFingerprint)
+          || !candidate.expectedManifestFingerprint
+          || !SHA256.test(candidate.expectedManifestFingerprint)
+        ) throw new Error('作者原稿缺少已确认的权威预览')
+        const authorChapters = normalizedChapters
+          .map(chapter => ({
+            chapterNumber: chapter.number,
+            title: chapter.title,
+            content: chapter.content,
+            wordCount: chapter.content.length,
+          }))
+          .sort((left, right) => left.chapterNumber - right.chapterNumber)
+        const preview = FinalizedDraftImportRepository.preview(authorChapters)
+        if (preview.manifestFingerprint !== candidate.expectedManifestFingerprint) {
+          throw new Error('作者原稿清单与已确认预览不一致')
+        }
+        const resumable = matchingResumableRun(
+          candidate.purpose,
+          candidate.sourceFingerprint,
+          preview.manifestFingerprint,
+        )
+        if (resumable) {
+          return {
+            classification: 'resumable' as const,
+            run: rowToSnapshot(resumable),
+            newChapterNumbers: [],
+            conflictChapterNumbers: [],
+            duplicateChapterNumbers: authorChapters.map(chapter => chapter.chapterNumber),
+          }
+        }
+        if (preview.authorityFingerprint !== candidate.authorityFingerprint) {
+          throw new Error('项目权威章节已变化，作者原稿预览已过期')
+        }
+        if (preview.classification === 'conflict') {
+          throw new Error(preview.authorityInvalid
+            ? `现有权威正文章节不连续；请先修复第 ${preview.firstGapChapterNumber ?? '?'} 章附近的数据`
+            : preview.conflictChapterNumbers.length > 0
+              ? `作者原稿与现有正文冲突：第 ${preview.conflictChapterNumbers.join('、')} 章`
+              : `作者原稿存在缺章；请从第 ${preview.firstGapChapterNumber ?? '?'} 章连续导入`)
+        }
+        if (preview.classification === 'exact-duplicate') {
+          return {
+            classification: 'exact-duplicate' as const,
+            run: undefined,
+            newChapterNumbers: [],
+            conflictChapterNumbers: [],
+            duplicateChapterNumbers: preview.duplicateChapterNumbers,
+          }
+        }
+        if (readRunRow(runId)) throw new Error('导入运行 ID 已存在')
+        const newChapterSet = new Set(preview.newChapterNumbers)
+        const chaptersToPersist = normalizedChapters
+          .filter(chapter => newChapterSet.has(chapter.number))
+          .sort((left, right) => left.number - right.number)
+        const manifestContentSize = normalizedChapters.reduce((sum, chapter) => sum + chapter.contentSize, 0)
+        const manifestWordCount = normalizedChapters.reduce((sum, chapter) => sum + chapter.content.length, 0)
+        db().prepare(`
+          INSERT INTO import_runs (
+            id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint,
+            authority_fingerprint, source_display_json, locale, stage, status,
+            total_chapters, total_content_size, completed_chapters, base_run_id,
+            manifest_chapter_count, manifest_content_size, manifest_word_count
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'author-commit', 'ready', ?, ?, 0, NULL, ?, ?, ?)
+        `).run(
+          runId,
+          candidate.purpose,
+          runId,
+          `import:${candidate.purpose}:${runId}`,
+          candidate.sourceFingerprint,
+          preview.manifestFingerprint,
+          candidate.authorityFingerprint,
+          JSON.stringify(sourceDisplay),
+          candidate.locale,
+          chaptersToPersist.length,
+          chaptersToPersist.reduce((sum, chapter) => sum + chapter.contentSize, 0),
+          normalizedChapters.length,
+          manifestContentSize,
+          manifestWordCount,
+        )
+        const insertChapter = db().prepare(`
+          INSERT INTO import_run_chapters (
+            run_id, chapter_number, source_id, source_chapter_number,
+            title, content_fingerprint, content_size, content_snapshot
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        for (const chapter of chaptersToPersist) {
+          insertChapter.run(
+            runId,
+            chapter.number,
+            chapter.sourceId,
+            chapter.sourceChapterNumber,
+            chapter.title,
+            chapter.contentFingerprint,
+            chapter.contentSize,
+            chapter.content,
+          )
+        }
+        const created = readRunRow(runId)
+        if (!created) throw new Error('作者原稿导入运行创建失败')
+        return {
+          classification: 'new' as const,
+          run: rowToSnapshot(created),
+          newChapterNumbers: preview.newChapterNumbers,
+          conflictChapterNumbers: [],
+          duplicateChapterNumbers: preview.duplicateChapterNumbers,
+        }
+      }
+
       sourceFingerprints.forEach((fingerprint, sourceIndex) => {
         adoptLegacyCompletedRun(
           candidate.purpose,
@@ -1027,6 +1230,7 @@ export class ImportRunRepository {
     const payload = canonicalPayload(request.payload)
     return db().transaction(() => {
       const run = assertExecution(request.runId, execution, now)
+      assertAuthorEffectRunBinding(run, request.kind, request.payload)
       assertCheckpointCanApply(run, request.stage, batchId, 'receipt')
       const existing = db().prepare(`
         SELECT * FROM import_run_receipts
@@ -1104,6 +1308,27 @@ export class ImportRunRepository {
             parseJson<BlueprintRangeCommitRequest>(row.payload_json, {} as BlueprintRangeCommitRequest),
           )
           break
+        case 'author-finalized-batch': {
+          assertAuthorEffectRunBinding(run, row.kind, validatedReceipt.payload)
+          const projectRoot = getCurrentProjectPath()
+          if (!projectRoot) throw new Error('项目数据库未打开')
+          const chapters = (db().prepare(`
+            SELECT chapter_number, source_id, source_chapter_number,
+                   title, content_fingerprint, content_size, content_snapshot
+            FROM import_run_chapters WHERE run_id = ? ORDER BY chapter_number ASC
+          `).all(runId) as ImportRunChapterRow[]).map(chapterRowToSnapshot).map(chapter => ({
+              chapterNumber: chapter.number,
+              title: chapter.title,
+              content: chapter.content,
+              wordCount: chapter.content.length,
+            }))
+          effectReceipt = FinalizedDraftImportRepository.commit(projectRoot, {
+            operationId: `author-import:${runId}`,
+            expectedAuthorityFingerprint: run.authority_fingerprint,
+            chapters,
+          })
+          break
+        }
         default:
           throw new Error('导入 effect receipt 类型不受支持')
       }
@@ -1186,10 +1411,11 @@ export class ImportRunRepository {
       if (fenced.changes !== 1) throw new Error('导入运行重新开始时已被其他执行器接管')
       db().prepare(`
         INSERT INTO import_runs (
-          id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint, source_display_json, locale,
+          id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint,
+          authority_fingerprint, source_display_json, locale,
           stage, status, total_chapters, total_content_size, completed_chapters, base_run_id
           , manifest_chapter_count, manifest_content_size, manifest_word_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'knowledge', 'ready', ?, ?, 0, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, 0, ?, ?, ?, ?)
       `).run(
         normalizedNextId,
         source.purpose,
@@ -1197,8 +1423,10 @@ export class ImportRunRepository {
         `import:${source.purpose}:${normalizedNextId}`,
         source.source_fingerprint,
         source.manifest_fingerprint,
+        source.authority_fingerprint,
         source.source_display_json,
         source.locale,
+        initialStage(source.purpose),
         source.total_chapters,
         source.total_content_size,
         source.base_run_id,
@@ -1263,9 +1491,11 @@ export class ImportRunRepository {
       if (row.status !== 'running' || row.stage !== completedStage) {
         throw new Error('导入阶段与当前阶段不匹配')
       }
-      if (NEXT_IMPORT_RUN_STAGE[completedStage] !== nextStage) throw new Error('导入下一阶段转换无效')
+      if (nextStageForRun(row, completedStage) !== nextStage) throw new Error('导入下一阶段转换无效')
       assertStageCheckpointComplete(row, completedStage)
-      const completedChapters = completedStage === 'blueprints' ? row.total_chapters : row.completed_chapters
+      const completedChapters = completedStage === 'blueprints' || completedStage === 'author-postprocess'
+        ? row.total_chapters
+        : row.completed_chapters
       const result = db().prepare(`
         UPDATE import_runs
         SET stage = ?, completed_chapters = ?, status = 'running', last_error = '',

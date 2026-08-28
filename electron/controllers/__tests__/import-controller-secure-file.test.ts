@@ -119,6 +119,21 @@ describe('novel import external-file capability', () => {
     expect(inspections.activeCount()).toBe(1)
   })
 
+  it('rejects duplicate author chapter numbers with an actionable localized message', async () => {
+    const first = path.join(temporaryRoot, 'author-a.txt')
+    const second = path.join(temporaryRoot, 'author-b.txt')
+    fs.writeFileSync(first, '第1章 开始\n第一份正文', 'utf8')
+    fs.writeFileSync(second, '第1章 重复\n第二份正文', 'utf8')
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [first, second] })
+
+    await expect(handler('dialog:select-novel-files')(event(), 'author-manuscript')).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/重复的第 1 章/),
+    })
+    expect(inspections.activeCount()).toBe(0)
+    expect(grants.activeCount()).toBe(0)
+  })
+
   it('does not import outside content when the selected file parent becomes a junction after grant issuance', async () => {
     const selectedRoot = path.join(temporaryRoot, 'selected')
     const guardedDirectory = path.join(selectedRoot, 'guarded')

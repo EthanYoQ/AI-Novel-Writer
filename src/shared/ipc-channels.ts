@@ -37,6 +37,7 @@ import type {
   ImportRunExecutionAuthority,
   ImportRunExecutionLease,
   ImportInspectionSummary,
+  ImportPurpose,
   ImportRunPreparationResult,
   ImportRunPrepareFromInspectionRequest,
   ImportRunPrepareEffectReceiptRequest,
@@ -605,6 +606,10 @@ import type {
   FinalizedDraftImportRequest,
 } from './finalized-draft-import'
 import type {
+  AuthorManuscriptImportPreview,
+  AuthoritativeChapterSequence,
+} from './author-manuscript-import'
+import type {
   ImportGlobalFactsReceipt,
   ImportGlobalFactsRequest,
 } from './import-global-facts'
@@ -630,6 +635,10 @@ export interface DatabaseChannels {
   'db:import-run-prepare-inspection': {
     args: [request: ImportRunPrepareFromInspectionRequest, expectedProjectPath: string]
     return: { success: boolean; preparation?: ImportRunPreparationResult; error?: string }
+  }
+  'db:import-run-author-preview': {
+    args: [inspectionId: string, expectedProjectPath: string]
+    return: AuthorManuscriptImportPreview
   }
   'db:import-run-get': { args: [runId: string, expectedProjectPath: string]; return: ImportRunSnapshot | null }
   'db:import-run-list-resumable': { args: [expectedProjectPath: string]; return: ImportRunSnapshot[] }
@@ -723,6 +732,7 @@ export interface DatabaseChannels {
   'db:draft-get-latest': { args: [chapterNumber: number, expectedProjectPath: string]; return: DraftMeta | null }
   'db:draft-get-finalized': { args: [chapterNumber: number, expectedProjectPath: string]; return: DraftMeta | null }
   'db:draft-get-max-finalized-chapter': { args: [expectedProjectPath: string]; return: number }
+  'db:draft-authority-sequence': { args: [expectedProjectPath: string]; return: AuthoritativeChapterSequence }
   'db:draft-next-version': { args: [chapterNumber: number, expectedProjectPath: string]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:draft-update-content': { args: [id: number, content: string, wordCount: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
@@ -821,7 +831,7 @@ export interface KnowledgeBaseChannels {
 // ===== 导入小说 =====
 export interface ImportChannels {
   'dialog:select-novel-files': {
-    args: []
+    args: [purpose?: ImportPurpose]
     return: {
       success: boolean
       inspection?: ImportInspectionSummary

@@ -12,6 +12,7 @@ import { useWorkflowStore, type WorkflowDefinition, type WorkflowRun } from '../
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useDraftStore } from '../../../stores/draft-store'
 import type { ImportRunPreparationResult, ImportRunSnapshot } from '../../../shared/import-run'
+import type { AuthorManuscriptImportPreview } from '../../../shared/author-manuscript-import'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -20,6 +21,8 @@ let container: HTMLDivElement
 let invoke: ReturnType<typeof vi.fn>
 let startWorkflow: ReturnType<typeof vi.fn>
 let preparation: ImportRunPreparationResult
+let authorPreview: AuthorManuscriptImportPreview
+let prepareError = ''
 
 const project = {
   id: 'current-project', sessionLease: 'lease-current', name: 'Current Project', path: 'C:\\novels\\current',
@@ -77,6 +80,13 @@ beforeEach(async () => {
     classification: 'new', run: importRun(), newChapterNumbers: [1],
     conflictChapterNumbers: [], duplicateChapterNumbers: [],
   }
+  prepareError = ''
+  authorPreview = {
+    classification: 'ready', authorityFingerprint: 'c'.repeat(64), manifestFingerprint: 'd'.repeat(64),
+    chapterCount: 1, targetStatus: 'finalized', nextChapterNumber: 2,
+    chapters: [{ number: 1, title: 'Start', wordCount: 16, disposition: 'new' }],
+    newChapterNumbers: [1], duplicateChapterNumbers: [], conflictChapterNumbers: [], authorityInvalid: false,
+  }
   invoke = vi.fn(async (channel: string) => {
     if (channel === 'db:import-run-list-resumable') return []
     if (channel === 'dialog:select-novel-files') return {
@@ -87,7 +97,10 @@ beforeEach(async () => {
         preview: [{ number: 1, title: 'Start', wordCount: 16 }],
       },
     }
-    if (channel === 'db:import-run-prepare-inspection') return { success: true, preparation }
+    if (channel === 'db:import-run-prepare-inspection') return prepareError
+      ? { success: false, error: prepareError }
+      : { success: true, preparation }
+    if (channel === 'db:import-run-author-preview') return authorPreview
     if (channel === 'db:project-core-get') return null
     if (channel === 'db:blueprint-get-all') return []
     if (channel === 'db:draft-list') return []
@@ -164,6 +177,83 @@ describe('current-project reference import', () => {
     expect(startWorkflow).not.toHaveBeenCalled()
     expect(invoke.mock.calls.some(([channel]) => String(channel).startsWith('kb:'))).toBe(false)
     expect(invoke.mock.calls.some(([channel]) => String(channel).startsWith('llm:'))).toBe(false)
+  })
+
+  it('confirms a Chinese author manuscript only after showing finalized targets and never launches reference analysis', async () => {
+    preparation = {
+      classification: 'new',
+      run: importRun({
+        purpose: 'author-manuscript',
+        effectNamespace: 'import:author-manuscript:persisted-import',
+        authorityFingerprint: 'c'.repeat(64),
+        manifestFingerprint: 'd'.repeat(64),
+        stage: 'author-commit',
+      }),
+      newChapterNumbers: [1], conflictChapterNumbers: [], duplicateChapterNumbers: [],
+    }
+
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    await expect.element(page.getByTestId('import-purpose-explanation')).toHaveTextContent('不可变权威定稿')
+    await expect.element(page.getByTestId('import-target-new')).toBeDisabled()
+    await act(async () => page.getByTestId('import-source-choose').click())
+    await expect.element(page.getByTestId('author-preview-target-1')).toHaveTextContent('目标：权威正文章节 / 定稿')
+    await expect.element(page.getByTestId('author-import-confirmation-summary')).toHaveTextContent('确认前不会写入项目')
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:import-run-prepare-inspection')).toBe(false)
+
+    await act(async () => page.getByRole('button', { name: /确认导入（1 章）/ }).click())
+
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    const workflow = startWorkflow.mock.calls[0][0] as WorkflowDefinition
+    expect(workflow.steps.map(step => step.name)).toEqual([
+      '提交权威定稿快照', '发布实体正文', '更新连续性事实', '刷新项目状态',
+    ])
+    expect(workflow.steps.map(step => step.name).join('\n')).not.toMatch(/知识库|文风|蓝图/)
+    const prepareCall = invoke.mock.calls.find(([channel]) => channel === 'db:import-run-prepare-inspection')
+    expect(prepareCall?.[1]).toMatchObject({
+      purpose: 'author-manuscript',
+      authorityFingerprint: 'c'.repeat(64),
+      manifestFingerprint: 'd'.repeat(64),
+    })
+    expect(invoke.mock.calls.some(([channel]) => String(channel).startsWith('kb:'))).toBe(false)
+  })
+
+  it('shows the English author purpose, chapter target, and explicit confirmation action', async () => {
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    await expect.element(page.getByTestId('import-purpose-explanation')).toHaveTextContent('authoritative finalized text')
+    await act(async () => page.getByTestId('import-source-choose').click())
+
+    await expect.element(page.getByText('Chapter 1 Start', { exact: true })).toBeVisible()
+    await expect.element(page.getByTestId('author-preview-target-1')).toHaveTextContent('Target: authoritative manuscript / finalized')
+    await expect.element(page.getByRole('button', { name: 'Confirm import (1 chapters)' })).toBeVisible()
+  })
+
+  it('blocks a non-contiguous author manifest with an actionable first missing chapter', async () => {
+    authorPreview = {
+      ...authorPreview,
+      classification: 'conflict',
+      nextChapterNumber: undefined,
+      firstGapChapterNumber: 1,
+      newChapterNumbers: [2],
+      chapters: [{ number: 2, title: 'Later', wordCount: 16, disposition: 'new' }],
+    }
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    await act(async () => page.getByTestId('import-source-choose').click())
+
+    await expect.element(page.getByText(/请从第 1 章开始/)).toBeVisible()
+    await expect.element(page.getByRole('button', { name: /确认导入/ })).toBeDisabled()
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:import-run-prepare-inspection')).toBe(false)
+  })
+
+  it('fails closed when the project authority changes after author preview', async () => {
+    prepareError = '项目权威章节已变化，原稿预览已过期'
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    await act(async () => page.getByTestId('import-source-choose').click())
+    await act(async () => page.getByRole('button', { name: /确认导入（1 章）/ }).click())
+
+    await expect.element(page.getByText('项目权威章节已变化，原稿预览已过期')).toBeVisible()
+    expect(startWorkflow).not.toHaveBeenCalled()
+    await expect.element(page.getByRole('button', { name: /确认导入（0 章）/ })).toBeDisabled()
   })
 
   it('blocks a same-number conflict and lists the actionable chapter number', async () => {

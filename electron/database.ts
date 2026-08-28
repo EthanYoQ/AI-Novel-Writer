@@ -344,10 +344,15 @@ function createTables(db: BetterSqlite3.Database) {
       effect_namespace TEXT NOT NULL,
       source_fingerprint TEXT NOT NULL,
       manifest_fingerprint TEXT NOT NULL,
+      authority_fingerprint TEXT NOT NULL DEFAULT '',
       source_display_json TEXT NOT NULL DEFAULT '[]',
       locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
       stage TEXT NOT NULL DEFAULT 'knowledge'
-        CHECK(stage IN ('knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed')),
+        CHECK(stage IN (
+          'knowledge', 'global', 'style', 'blueprints',
+          'author-commit', 'author-publish', 'author-postprocess',
+          'refresh', 'completed'
+        )),
       status TEXT NOT NULL DEFAULT 'ready'
         CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
       completed_batches_json TEXT NOT NULL DEFAULT '{}',
@@ -460,6 +465,76 @@ function createTables(db: BetterSqlite3.Database) {
   addImportRunColumn('purpose', "TEXT NOT NULL DEFAULT 'reference'")
   addImportRunColumn('root_run_id', "TEXT NOT NULL DEFAULT ''")
   addImportRunColumn('effect_namespace', "TEXT NOT NULL DEFAULT ''")
+  addImportRunColumn('authority_fingerprint', "TEXT NOT NULL DEFAULT ''")
+
+  const importRunsSql = (db.prepare(`
+    SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'import_runs'
+  `).get() as { sql?: string } | undefined)?.sql ?? ''
+  if (importRunsSql.includes('CHECK') && !importRunsSql.includes('author-commit')) {
+    db.pragma('foreign_keys = OFF')
+    try {
+      db.exec(`
+        CREATE TABLE import_runs_expanded_stage (
+          id TEXT PRIMARY KEY,
+          purpose TEXT NOT NULL DEFAULT 'reference'
+            CHECK(purpose IN ('reference', 'author-manuscript')),
+          root_run_id TEXT NOT NULL,
+          effect_namespace TEXT NOT NULL,
+          source_fingerprint TEXT NOT NULL,
+          manifest_fingerprint TEXT NOT NULL,
+          authority_fingerprint TEXT NOT NULL DEFAULT '',
+          source_display_json TEXT NOT NULL DEFAULT '[]',
+          locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
+          stage TEXT NOT NULL DEFAULT 'knowledge'
+            CHECK(stage IN (
+              'knowledge', 'global', 'style', 'blueprints',
+              'author-commit', 'author-publish', 'author-postprocess',
+              'refresh', 'completed'
+            )),
+          status TEXT NOT NULL DEFAULT 'ready'
+            CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
+          completed_batches_json TEXT NOT NULL DEFAULT '{}',
+          last_error TEXT NOT NULL DEFAULT '',
+          resumable INTEGER NOT NULL DEFAULT 1 CHECK(resumable IN (0, 1)),
+          cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0, 1)),
+          execution_owner TEXT NOT NULL DEFAULT '',
+          execution_epoch INTEGER NOT NULL DEFAULT 0,
+          lease_expires_at INTEGER NOT NULL DEFAULT 0,
+          total_chapters INTEGER NOT NULL,
+          total_content_size INTEGER NOT NULL DEFAULT 0,
+          manifest_chapter_count INTEGER NOT NULL,
+          manifest_content_size INTEGER NOT NULL DEFAULT 0,
+          manifest_word_count INTEGER NOT NULL DEFAULT 0,
+          completed_chapters INTEGER NOT NULL DEFAULT 0,
+          base_run_id TEXT DEFAULT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          completed_at TEXT DEFAULT NULL,
+          FOREIGN KEY (base_run_id) REFERENCES import_runs_expanded_stage(id) ON DELETE SET NULL
+        );
+        INSERT INTO import_runs_expanded_stage (
+          id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint,
+          authority_fingerprint, source_display_json, locale, stage, status, completed_batches_json,
+          last_error, resumable, cancel_requested, execution_owner, execution_epoch, lease_expires_at,
+          total_chapters, total_content_size, manifest_chapter_count, manifest_content_size,
+          manifest_word_count, completed_chapters, base_run_id, created_at, updated_at, completed_at
+        )
+        SELECT
+          id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint,
+          authority_fingerprint, source_display_json, locale, stage, status, completed_batches_json,
+          last_error, resumable, cancel_requested, execution_owner, execution_epoch, lease_expires_at,
+          total_chapters, total_content_size, manifest_chapter_count, manifest_content_size,
+          manifest_word_count, completed_chapters, base_run_id, created_at, updated_at, completed_at
+        FROM import_runs;
+        DROP TABLE import_runs;
+        ALTER TABLE import_runs_expanded_stage RENAME TO import_runs;
+      `)
+    } finally {
+      db.pragma('foreign_keys = ON')
+    }
+    const foreignKeyProblems = db.pragma('foreign_key_check') as unknown[]
+    if (foreignKeyProblems.length > 0) throw new Error('导入运行阶段迁移后的外键校验失败')
+  }
   db.exec(`
     UPDATE import_runs
     SET manifest_chapter_count = CASE WHEN manifest_chapter_count = 0 THEN total_chapters ELSE manifest_chapter_count END,
@@ -598,8 +673,12 @@ function createTables(db: BetterSqlite3.Database) {
     }
   })()
   db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_import_runs_source_status
+      ON import_runs(source_fingerprint, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_import_runs_resumable
+      ON import_runs(resumable, status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_import_runs_purpose_source_status
-      ON import_runs(purpose, source_fingerprint, status, updated_at)
+      ON import_runs(purpose, source_fingerprint, status, updated_at);
   `)
   const importReceiptColumns = new Set(
     (db.prepare('PRAGMA table_info(import_run_receipts)').all() as Array<{ name: string }>).map(column => column.name),

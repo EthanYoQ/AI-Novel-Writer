@@ -6,15 +6,23 @@ export type ImportRunStage =
   | 'global'
   | 'style'
   | 'blueprints'
+  | 'author-commit'
+  | 'author-publish'
+  | 'author-postprocess'
   | 'refresh'
   | 'completed'
 
 export type ImportRunStatus = 'ready' | 'running' | 'failed' | 'cancelled' | 'completed'
-export type ImportRunDirectCheckpointStage = 'knowledge' | 'refresh'
+export type ImportRunDirectCheckpointStage =
+  | 'knowledge'
+  | 'author-publish'
+  | 'author-postprocess'
+  | 'refresh'
 export type ImportRunEffectKind =
   | 'project-global-facts'
   | 'project-writing-style'
   | 'chapter-blueprint-range'
+  | 'author-finalized-batch'
 
 export type ImportRunEffectReceiptState = 'prepared' | 'committed'
 export const IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION = 1 as const
@@ -22,7 +30,10 @@ export const IMPORT_RUN_KNOWLEDGE_BATCH_SIZE = 10
 export const IMPORT_RUN_BLUEPRINT_BATCH_SIZE = 5
 
 export function isImportRunDirectCheckpointStage(stage: unknown): stage is ImportRunDirectCheckpointStage {
-  return stage === 'knowledge' || stage === 'refresh'
+  return stage === 'knowledge'
+    || stage === 'author-publish'
+    || stage === 'author-postprocess'
+    || stage === 'refresh'
 }
 
 export interface ImportRunExecutionAuthority {
@@ -112,6 +123,9 @@ export function expectedImportRunEffectKey(
   ) {
     return `blueprints:${batchId}`
   }
+  if (kind === 'author-finalized-batch' && stage === 'author-commit' && batchId === 'done') {
+    return 'author-finalized-batch'
+  }
   return null
 }
 
@@ -192,12 +206,17 @@ export interface ImportRunPrepareRequest {
   sourceFingerprints?: string[]
   sourceDisplay: ImportSourceDisplayMetadata[]
   locale: ImportRunLocale
+  /** Required for author manuscripts; frozen from a read-only project preview. */
+  authorityFingerprint?: string
+  /** Required for author manuscripts; binds confirmation to the inspected chapter manifest. */
+  expectedManifestFingerprint?: string
   chapters: ImportRunChapterInput[]
 }
 
 /** Renderer-safe inspection metadata. Chapter content and source identities stay in main memory. */
 export interface ImportInspectionSummary {
   inspectionId: string
+  purpose: ImportPurpose
   sourceCount: number
   sourceDisplayNames: string[]
   chapterCount: number
@@ -206,11 +225,18 @@ export interface ImportInspectionSummary {
   preview: Array<{ number: number; title: string; wordCount: number }>
 }
 
-export interface ImportRunPrepareFromInspectionRequest {
+export type ImportRunPrepareFromInspectionRequest = {
   inspectionId: string
   runId: string
   purpose: 'reference'
   locale: ImportRunLocale
+} | {
+  inspectionId: string
+  runId: string
+  purpose: 'author-manuscript'
+  locale: ImportRunLocale
+  authorityFingerprint: string
+  manifestFingerprint: string
 }
 
 export interface ImportRunSnapshot {
@@ -220,6 +246,7 @@ export interface ImportRunSnapshot {
   effectNamespace: string
   sourceFingerprint: string
   manifestFingerprint: string
+  authorityFingerprint?: string
   sourceDisplay: ImportSourceDisplayMetadata[]
   locale: ImportRunLocale
   stage: ImportRunStage

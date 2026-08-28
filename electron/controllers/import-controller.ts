@@ -21,7 +21,7 @@ import {
   DEFAULT_IMPORT_RESOURCE_LIMITS,
   type ImportResourceLimits,
 } from '../../src/shared/import-limits'
-import type { ImportSourceFileIdentity } from '../../src/shared/import-run'
+import type { ImportPurpose, ImportSourceFileIdentity } from '../../src/shared/import-run'
 
 /**
  * 导入小说控制器 — 处理文件选择与章节拆分
@@ -236,14 +236,18 @@ export function registerImportController(
   }
   // Selection, bounded reading, and inspection are one main-process operation.
   // The renderer receives only the final inspection token and safe display facts.
-  ipcMain.handle('dialog:select-novel-files', async (event) => {
+  ipcMain.handle('dialog:select-novel-files', async (event, requestedPurpose?: ImportPurpose) => {
     event.sender.once('destroyed', () => {
       grantService.revokeWebContents(event.sender.id)
       inspectionStore.revokeForWebContents(event.sender.id)
     })
     try {
+      const purpose: ImportPurpose = requestedPurpose ?? 'reference'
+      if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('IMPORT_PURPOSE_INVALID')
       const result = await dialog.showOpenDialog({
-        title: text('选择要导入的小说文件', 'Choose novel files to import'),
+        title: purpose === 'author-manuscript'
+          ? text('选择作者原稿文件', 'Choose author manuscript files')
+          : text('选择参考小说文件', 'Choose reference novel files'),
         filters: [
           { name: text('小说文本', 'Novel text'), extensions: ['txt', 'md', 'text'] },
           { name: text('所有文件', 'All files'), extensions: ['*'] },
@@ -273,7 +277,7 @@ export function registerImportController(
       }).sort((left, right) => left.displayName.localeCompare(right.displayName, 'zh-CN', { numeric: true }))
       const encodedIdentities = ImportSourceIdentityRepository.encodeSources(
         selected.map(source => source.identity),
-        'reference',
+        purpose,
         applicationSecret ?? loadApplicationImportSourceSecret(),
       )
 
@@ -361,22 +365,38 @@ export function registerImportController(
 
       // Preview numbers are renderer-only. Stable global numbers are assigned
       // later from (opaque source id, source-local chapter number) in SQLite.
-      const renumbered = inspectedChapters.map((ch, idx) => ({
+      const numbered = inspectedChapters.map((ch, idx) => ({
         ...ch,
-        number: idx + 1,
+        number: purpose === 'author-manuscript' ? ch.number : idx + 1,
         contentFingerprint: sha256(ch.content),
         contentSize: Buffer.byteLength(ch.content, 'utf8'),
       }))
+      if (purpose === 'author-manuscript') {
+        const seen = new Set<number>()
+        for (const chapter of numbered) {
+          if (!Number.isSafeInteger(chapter.number) || chapter.number < 1 || seen.has(chapter.number)) {
+            throw new Error(`AUTHOR_MANUSCRIPT_DUPLICATE_CHAPTER:${chapter.number}`)
+          }
+          seen.add(chapter.number)
+        }
+      }
 
       return {
         success: true,
-        inspection: inspectionStore.create({ webContentsId: event.sender.id, sources, chapters: renumbered }),
+        inspection: inspectionStore.create({ webContentsId: event.sender.id, purpose, sources, chapters: numbered }),
       }
-    } catch {
+    } catch (error) {
       inspectionStore.revokeForWebContents(event.sender.id)
+      const message = error instanceof Error ? error.message : String(error)
+      const duplicateChapter = /^AUTHOR_MANUSCRIPT_DUPLICATE_CHAPTER:(\d+)$/u.exec(message)
       return {
         success: false,
-        error: text('无法读取所选文件；请重新选择后再试。', 'Could not read the selected files. Please choose them again.'),
+        error: duplicateChapter
+          ? text(
+              `作者原稿包含重复的第 ${duplicateChapter[1]} 章；请修正章节号后重新选择。`,
+              `The author manuscript contains duplicate Chapter ${duplicateChapter[1]}. Correct the chapter numbers and choose the files again.`,
+            )
+          : text('无法读取所选文件；请重新选择后再试。', 'Could not read the selected files. Please choose them again.'),
       }
     }
   })

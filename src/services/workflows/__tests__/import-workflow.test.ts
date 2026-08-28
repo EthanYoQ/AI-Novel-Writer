@@ -194,13 +194,24 @@ describe('createImportWorkflow', () => {
     expect(receiptReads).toBe(2)
   })
 
-  it('fails closed before creating an author-manuscript stage plan', () => {
-    expect(() => createImportWorkflow({
+  it('creates an author-only finalization plan without reference analysis stages', () => {
+    const workflow = createImportWorkflow({
       projectPath: session.projectPath,
       projectSession: session,
-      run: run({ purpose: 'author-manuscript' }),
+      run: run({
+        purpose: 'author-manuscript',
+        effectNamespace: 'import:author-manuscript:import-run-1',
+        stage: 'author-commit',
+        authorityFingerprint: 'c'.repeat(64),
+      }),
       executionOwner,
-    })).toThrow(/不支持作者手稿/)
+    })
+
+    expect(workflow.title).toBe('导入作者原稿（1 章）')
+    expect(workflow.steps.map(step => step.name)).toEqual([
+      '提交权威定稿快照', '发布实体正文', '更新连续性事实', '刷新项目状态',
+    ])
+    expect(workflow.steps.map(step => step.name).join('\n')).not.toMatch(/知识库|文风|蓝图/)
   })
 
   it('keeps import workflow sources free of pseudo icon text', () => {

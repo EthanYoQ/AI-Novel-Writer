@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ImportRunRepository } from '../import-run-repository'
+import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
 import type { ImportRunPrepareRequest } from '../../../src/shared/import-run'
 import {
   ImportRunOrchestrator,
@@ -141,6 +142,78 @@ describe('ImportRunRepository', () => {
     ]))
   })
 
+  it('expands the shipped stage constraint without losing indexes or child foreign keys', () => {
+    closeProjectDatabase()
+    const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+    legacy.pragma('foreign_keys = OFF')
+    legacy.exec(`
+      DROP TABLE import_runs;
+      CREATE TABLE import_runs (
+        id TEXT PRIMARY KEY,
+        purpose TEXT NOT NULL DEFAULT 'reference'
+          CHECK(purpose IN ('reference', 'author-manuscript')),
+        root_run_id TEXT NOT NULL,
+        effect_namespace TEXT NOT NULL,
+        source_fingerprint TEXT NOT NULL,
+        manifest_fingerprint TEXT NOT NULL,
+        source_display_json TEXT NOT NULL DEFAULT '[]',
+        locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
+        stage TEXT NOT NULL DEFAULT 'knowledge'
+          CHECK(stage IN ('knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed')),
+        status TEXT NOT NULL DEFAULT 'ready'
+          CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
+        completed_batches_json TEXT NOT NULL DEFAULT '{}',
+        last_error TEXT NOT NULL DEFAULT '',
+        resumable INTEGER NOT NULL DEFAULT 1 CHECK(resumable IN (0, 1)),
+        cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0, 1)),
+        execution_owner TEXT NOT NULL DEFAULT '',
+        execution_epoch INTEGER NOT NULL DEFAULT 0,
+        lease_expires_at INTEGER NOT NULL DEFAULT 0,
+        total_chapters INTEGER NOT NULL,
+        total_content_size INTEGER NOT NULL DEFAULT 0,
+        manifest_chapter_count INTEGER NOT NULL,
+        manifest_content_size INTEGER NOT NULL DEFAULT 0,
+        manifest_word_count INTEGER NOT NULL DEFAULT 0,
+        completed_chapters INTEGER NOT NULL DEFAULT 0,
+        base_run_id TEXT DEFAULT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT DEFAULT NULL,
+        FOREIGN KEY (base_run_id) REFERENCES import_runs(id) ON DELETE SET NULL
+      );
+    `)
+    legacy.close()
+
+    expect(() => initProjectDatabase(root)).not.toThrow()
+    const db = getProjectDb()!
+    const schema = db.prepare(`
+      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'import_runs'
+    `).get() as { sql: string }
+    expect(schema.sql).toContain('author-commit')
+    const indexes = db.prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'import_runs'
+    `).all() as Array<{ name: string }>
+    expect(indexes.map(index => index.name)).toEqual(expect.arrayContaining([
+      'idx_import_runs_source_status',
+      'idx_import_runs_resumable',
+      'idx_import_runs_purpose_source_status',
+    ]))
+    expect(db.pragma('foreign_key_check')).toEqual([])
+
+    const manuscript = [chapter(1, 'author chapter one')]
+    const preview = FinalizedDraftImportRepository.preview(manuscript.map(item => ({
+      chapterNumber: item.number,
+      title: item.title,
+      content: item.content,
+      wordCount: item.content.length,
+    })))
+    expect(ImportRunRepository.prepare(request(manuscript, {
+      purpose: 'author-manuscript',
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    })).run).toMatchObject({ stage: 'author-commit', purpose: 'author-manuscript' })
+  })
+
   it('migrates legacy chapter rows to opaque source affiliations and stable mappings', () => {
     ImportRunRepository.prepare(request())
     markRunCompleted('import-run-1')
@@ -227,11 +300,44 @@ describe('ImportRunRepository', () => {
       .toEqual({ count: 1 })
   })
 
-  it('fails closed for the reserved author-manuscript purpose', () => {
-    expect(() => ImportRunRepository.prepare(request([chapter(1)], {
+  it('prepares an author manuscript at its original chapter numbers only from a frozen authority preview', () => {
+    const authorChapter = chapter(1, 'author chapter one')
+    const preview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: 1,
+      title: authorChapter.title,
+      content: authorChapter.content,
+      wordCount: authorChapter.content.length,
+    }])
+    const prepared = ImportRunRepository.prepare(request([authorChapter], {
       runId: 'unsupported-author',
       purpose: 'author-manuscript',
-    }))).toThrow(/不支持作者手稿/)
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+
+    expect(prepared).toMatchObject({
+      classification: 'new',
+      newChapterNumbers: [1],
+      run: {
+        purpose: 'author-manuscript',
+        stage: 'author-commit',
+        authorityFingerprint: preview.authorityFingerprint,
+      },
+    })
+    expect(ImportRunRepository.listChapterBatch('unsupported-author', { afterChapterNumber: 0, limit: 10 }))
+      .toEqual([expect.objectContaining({ number: 1, content: 'author chapter one' })])
+  })
+
+  it('rejects a stale or gapped author-manuscript preview without writing a run', () => {
+    const first = chapter(1, 'author chapter one')
+    const preview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: 1, title: first.title, content: first.content, wordCount: first.content.length,
+    }])
+    expect(() => ImportRunRepository.prepare(request([chapter(2, 'skips chapter one')], {
+      runId: 'gapped-author', purpose: 'author-manuscript',
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))).toThrow(/清单.*预览|预览.*清单/)
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_runs').get()).toEqual({ count: 0 })
   })
 

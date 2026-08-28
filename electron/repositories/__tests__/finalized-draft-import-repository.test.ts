@@ -33,6 +33,95 @@ afterEach(() => {
 })
 
 describe('FinalizedDraftImportRepository transaction seam', () => {
+  it('previews an empty project as a contiguous authoritative import without writing facts', () => {
+    const preview = FinalizedDraftImportRepository.preview(chapters(2))
+
+    expect(preview).toMatchObject({
+      classification: 'ready',
+      chapterCount: 2,
+      targetStatus: 'finalized',
+      nextChapterNumber: 3,
+      newChapterNumbers: [1, 2],
+      duplicateChapterNumbers: [],
+      conflictChapterNumbers: [],
+      authorityInvalid: false,
+      authorityFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      manifestFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(preview.chapters.map(chapter => chapter.disposition)).toEqual(['new', 'new'])
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts').get()).toEqual({ count: 0 })
+  })
+
+  it('allows only the contiguous next range and classifies safe duplicates separately from conflicts', () => {
+    FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'existing-authority',
+      chapters: chapters(2),
+    })
+
+    const appended = chapters(3).slice(2)
+    expect(FinalizedDraftImportRepository.preview(appended)).toMatchObject({
+      classification: 'ready',
+      newChapterNumbers: [3],
+      nextChapterNumber: 4,
+    })
+    expect(FinalizedDraftImportRepository.preview(chapters(2))).toMatchObject({
+      classification: 'exact-duplicate',
+      duplicateChapterNumbers: [1, 2],
+      newChapterNumbers: [],
+    })
+
+    const changed = [{ ...chapters(1)[0], content: '冲突正文', wordCount: '冲突正文'.length }]
+    expect(FinalizedDraftImportRepository.preview(changed)).toMatchObject({
+      classification: 'conflict',
+      conflictChapterNumbers: [1],
+    })
+    const skipped = [{ ...chapters(1)[0], chapterNumber: 4, title: '第四章' }]
+    expect(FinalizedDraftImportRepository.preview(skipped)).toMatchObject({
+      classification: 'conflict',
+      firstGapChapterNumber: 3,
+    })
+  })
+
+  it('refuses automatic continuation when existing finalized authority has a gap', () => {
+    const imported = chapters(2)
+    imported[1] = { ...imported[1], chapterNumber: 3, title: '第三章' }
+    FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'gapped-authority',
+      chapters: imported,
+    })
+
+    const sequence = FinalizedDraftImportRepository.authoritySequence()
+    expect(sequence).toMatchObject({
+      status: 'invalid',
+      firstGapChapterNumber: 2,
+    })
+    expect(sequence).not.toHaveProperty('nextChapterNumber')
+    expect(FinalizedDraftImportRepository.preview([
+      { ...chapters(1)[0], chapterNumber: 4, title: '第四章' },
+    ])).toMatchObject({
+      classification: 'conflict',
+      authorityInvalid: true,
+      firstGapChapterNumber: 2,
+    })
+  })
+
+  it('rechecks the frozen authority fingerprint inside the atomic commit', () => {
+    const candidate = chapters(1)
+    const preview = FinalizedDraftImportRepository.preview(candidate)
+    FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'concurrent-authority-change',
+      chapters: [{ ...chapters(1)[0], content: '另一份第一章', wordCount: '另一份第一章'.length }],
+    })
+
+    expect(() => FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'stale-preview',
+      expectedAuthorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+      chapters: candidate,
+    })).toThrow('预览已过期')
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts').get()).toEqual({ count: 1 })
+  })
+
   it('commits nine imported chapters as finalized facts with pending publication outbox in one batch', () => {
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'import-nine-chapters',
@@ -95,6 +184,19 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM finalization_outbox').get()).toEqual({ count: 9 })
     expect(db.prepare('SELECT COUNT(*) AS count FROM finalized_draft_import_operations').get())
       .toEqual({ count: 1 })
+  })
+
+  it('replays an operation after its durable publication outbox was already published', () => {
+    const request = { operationId: 'import-published-replay', chapters: chapters(2) }
+    const first = FinalizedDraftImportRepository.commit(projectRoot, request)
+    getProjectDb()!.prepare(`
+      UPDATE finalization_outbox SET publication_status = 'published'
+      WHERE finalization_id = ?
+    `).run(first.drafts[0].finalizationId)
+
+    expect(FinalizedDraftImportRepository.commit(projectRoot, request))
+      .toEqual({ ...first, idempotent: true })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts').get()).toEqual({ count: 2 })
   })
 
   it('rejects payload drift for an existing operation without changing persisted facts', () => {

@@ -165,11 +165,21 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    if (request.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
-    const inspection = importInspectionStore.consume(
-      request.inspectionId,
-      (event as IpcMainInvokeEvent).sender.id,
-    )
+    const webContentsId = (event as IpcMainInvokeEvent).sender.id
+    const inspected = importInspectionStore.peek(request.inspectionId, webContentsId, request.purpose)
+    if (request.purpose === 'author-manuscript') {
+      const preview = FinalizedDraftImportRepository.preview(inspected.chapters.map(chapter => ({
+        chapterNumber: chapter.number,
+        title: chapter.title,
+        content: chapter.content,
+        wordCount: chapter.wordCount,
+      })))
+      if (
+        preview.authorityFingerprint !== request.authorityFingerprint
+        || preview.manifestFingerprint !== request.manifestFingerprint
+      ) throw new Error('项目或作者原稿清单已变化，预览已过期')
+    }
+    const inspection = importInspectionStore.consume(request.inspectionId, webContentsId)
     const sourceIdentity = ImportSourceIdentityRepository.resolveEncodedSources(
       inspection.sources.map(source => ({
         locationAliasDigest: source.locationAliasDigest,
@@ -192,9 +202,32 @@ export function registerDatabaseController() {
           size: source.size,
         })),
         locale: request.locale,
+        ...(request.purpose === 'author-manuscript' ? {
+          authorityFingerprint: request.authorityFingerprint,
+          expectedManifestFingerprint: request.manifestFingerprint,
+        } : {}),
         chapters: inspection.chapters,
       }),
     }
+  })
+
+  ipcMain.handle('db:import-run-author-preview', async (
+    event,
+    inspectionId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    const inspection = importInspectionStore.peek(
+      inspectionId,
+      (event as IpcMainInvokeEvent).sender.id,
+      'author-manuscript',
+    )
+    return FinalizedDraftImportRepository.preview(inspection.chapters.map(chapter => ({
+      chapterNumber: chapter.number,
+      title: chapter.title,
+      content: chapter.content,
+      wordCount: chapter.wordCount,
+    })))
   })
 
   ipcMain.handle('db:import-run-get', async (_event, runId: string, expectedProjectPath: string) => {
@@ -544,6 +577,11 @@ export function registerDatabaseController() {
   ipcMain.handle('db:draft-get-max-finalized-chapter', async (_event, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return DraftRepository.getMaxFinalizedChapter()
+  })
+
+  ipcMain.handle('db:draft-authority-sequence', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return FinalizedDraftImportRepository.authoritySequence()
   })
   ipcMain.handle('db:draft-next-version', async (_event, chapterNumber: number, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)

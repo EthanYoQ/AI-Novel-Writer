@@ -6,6 +6,7 @@ import type {
   ImportRunSnapshot,
   ImportRunStage,
 } from '../../../shared/import-run'
+import type { FinalizedDraftImportReceipt } from '../../../shared/finalized-draft-import'
 import {
   IMPORT_CHAPTER_PAGE_SIZE,
   IMPORT_KNOWLEDGE_BATCH_SIZE,
@@ -117,6 +118,95 @@ afterEach(() => {
 })
 
 describe('ImportRunOrchestrator', () => {
+  it('runs author manuscripts through commit, publication, and postprocess without reference analysis', async () => {
+    const { deps, getRun } = harness(2, {
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:run-1',
+      authorityFingerprint: 'c'.repeat(64),
+      manifestFingerprint: 'd'.repeat(64),
+      stage: 'author-commit',
+    })
+    const receipt: FinalizedDraftImportReceipt = {
+      operationId: 'author-import:run-1',
+      payloadHash: 'e'.repeat(64),
+      chapterNumbers: [1, 2],
+      drafts: [1, 2].map(chapterNumber => ({
+        chapterNumber,
+        draftId: chapterNumber,
+        finalizationId: `final-${chapterNumber}`,
+        contentHash: 'f'.repeat(64),
+        targetFileName: `Chapter ${chapterNumber}.txt`,
+        status: 'finalized' as const,
+        publicationStatus: 'pending' as const,
+      })),
+      idempotent: false,
+    }
+    deps.commitAuthorManuscript = vi.fn(async (_run, commit) => { await commit({
+      operationId: 'author-import:run-1', runId: 'run-1',
+      authorityFingerprint: 'c'.repeat(64), manifestFingerprint: 'd'.repeat(64),
+    }) })
+    deps.getAuthorCommitReceipt = vi.fn(async () => receipt)
+    deps.publishAuthorChapter = vi.fn(async () => undefined)
+    deps.postprocessAuthorChapter = vi.fn(async () => undefined)
+    const orchestrator = new ImportRunOrchestrator(deps)
+
+    await orchestrator.executeStage('run-1', 'author-commit', 'test-runner', { cancelled: false }, callbacks)
+    await orchestrator.executeStage('run-1', 'author-publish', 'test-runner', { cancelled: false }, callbacks)
+    await orchestrator.executeStage('run-1', 'author-postprocess', 'test-runner', { cancelled: false }, callbacks)
+    await orchestrator.executeStage('run-1', 'refresh', 'test-runner', { cancelled: false }, callbacks)
+
+    expect(deps.commitAuthorManuscript).toHaveBeenCalledTimes(1)
+    expect(deps.publishAuthorChapter).toHaveBeenCalledTimes(2)
+    expect(deps.postprocessAuthorChapter).toHaveBeenCalledTimes(2)
+    expect(deps.importReference).not.toHaveBeenCalled()
+    expect(deps.inferGlobal).not.toHaveBeenCalled()
+    expect(deps.analyzeStyle).not.toHaveBeenCalled()
+    expect(deps.inferBlueprints).not.toHaveBeenCalled()
+    expect(getRun()).toMatchObject({ stage: 'completed', status: 'completed' })
+  })
+
+  it('resumes a partially published author manuscript without publishing a completed chapter twice', async () => {
+    const { deps, getRun } = harness(3, {
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:run-1',
+      authorityFingerprint: 'c'.repeat(64),
+      stage: 'author-publish',
+    })
+    const receipt: FinalizedDraftImportReceipt = {
+      operationId: 'author-import:run-1', payloadHash: 'e'.repeat(64), chapterNumbers: [1, 2, 3],
+      drafts: [1, 2, 3].map(chapterNumber => ({
+        chapterNumber, draftId: chapterNumber, finalizationId: `final-${chapterNumber}`,
+        contentHash: 'f'.repeat(64), targetFileName: `Chapter ${chapterNumber}.txt`,
+        status: 'finalized' as const, publicationStatus: 'pending' as const,
+      })),
+      idempotent: false,
+    }
+    deps.getAuthorCommitReceipt = vi.fn(async () => receipt)
+    const published: number[] = []
+    let failOnce = true
+    deps.publishAuthorChapter = vi.fn(async chapter => {
+      published.push(chapter.number)
+      if (chapter.number === 2 && failOnce) {
+        failOnce = false
+        throw new Error('publication unavailable')
+      }
+    })
+    const orchestrator = new ImportRunOrchestrator(deps)
+
+    await expect(orchestrator.executeStage(
+      'run-1', 'author-publish', 'test-runner', { cancelled: false }, callbacks,
+    )).rejects.toThrow('publication unavailable')
+    expect(getRun().completedBatches['author-publish']).toEqual(['chapter:1'])
+
+    await orchestrator.executeStage(
+      'run-1', 'author-publish', 'test-runner', { cancelled: false }, callbacks,
+    )
+    expect(published.filter(number => number === 1)).toHaveLength(1)
+    expect(published.filter(number => number === 2)).toHaveLength(2)
+    expect(published.filter(number => number === 3)).toHaveLength(1)
+    expect(getRun().stage).toBe('author-postprocess')
+  })
+
   it('keeps renewing its lease while one knowledge effect runs longer than the original TTL', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000)

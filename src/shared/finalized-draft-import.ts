@@ -7,6 +7,10 @@ export interface FinalizedDraftImportChapter {
 
 export interface FinalizedDraftImportRequest {
   operationId: string
+  /** Frozen during author-manuscript preview and rechecked in the commit transaction. */
+  expectedAuthorityFingerprint?: string
+  /** Binds confirmation to the exact inspected chapter manifest. */
+  expectedManifestFingerprint?: string
   chapters: FinalizedDraftImportChapter[]
 }
 

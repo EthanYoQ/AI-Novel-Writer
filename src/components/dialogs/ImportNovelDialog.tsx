@@ -1,9 +1,15 @@
 import { useState, useCallback, useEffect } from 'react'
-import { FileUp, FolderOpen, BookOpen, Zap, Clock, AlertTriangle, RotateCcw } from 'lucide-react'
+import { FileUp, FolderOpen, BookOpen, FileText, Zap, Clock, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
-import type { ImportInspectionSummary, ImportRunSnapshot } from '../../shared/import-run'
+import type {
+  ImportInspectionSummary,
+  ImportPurpose,
+  ImportRunPrepareFromInspectionRequest,
+  ImportRunSnapshot,
+} from '../../shared/import-run'
+import type { AuthorManuscriptImportPreview } from '../../shared/author-manuscript-import'
 import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
 import { inferImportedNovelProjectName } from './import-novel-paths'
 import {
@@ -33,12 +39,15 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [name, setName] = useState('')
   const [savePath, setSavePath] = useState('')
   const [targetMode, setTargetMode] = useState<'new' | 'current'>('new')
+  const [purpose, setPurpose] = useState<ImportPurpose>('reference')
 
   // 拆章结果
   const [inspection, setInspection] = useState<ImportInspectionSummary | null>(null)
   const [splitting, setSplitting] = useState(false)
   const [splitDone, setSplitDone] = useState(false)
   const [splitError, setSplitError] = useState('')
+  const [authorPreview, setAuthorPreview] = useState<AuthorManuscriptImportPreview | null>(null)
+  const [authorPreviewLoading, setAuthorPreviewLoading] = useState(false)
 
   // 导入流程
   const [importing, setImporting] = useState(false)
@@ -49,7 +58,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   } | null>(null)
   const [selectedResumableRunId, setSelectedResumableRunId] = useState('')
   const resumableRuns = resumableState && currentProject?.sessionLease === resumableState.projectLeaseId
-    ? resumableState.runs
+    ? resumableState.runs.filter(run => run.purpose === purpose)
     : []
   const resumableRun = resumableRuns.find(run => run.id === selectedResumableRunId)
     ?? resumableRuns[0]
@@ -75,17 +84,74 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     return () => { active = false }
   }, [open, currentProject])
 
+  useEffect(() => {
+    if (purpose !== 'author-manuscript' || !inspection || targetMode !== 'current' || !currentProject) {
+      return
+    }
+    const session = captureProjectSession(currentProject)
+    if (!session) return
+    let active = true
+    void ipc.invokeWithProjectSession(
+      session,
+      'db:import-run-author-preview',
+      inspection.inspectionId,
+      currentProject.path,
+    ).then(preview => {
+      if (!active || !isProjectSessionCurrent(session)) return
+      setAuthorPreview(preview)
+      if (preview.classification === 'conflict') {
+        if (preview.authorityInvalid) {
+          setSplitError(text(
+            `现有权威正文不连续，请先补齐第 ${preview.firstGapChapterNumber ?? '?'} 章或清理重复定稿。`,
+            `The authoritative manuscript is not continuous. Fill Chapter ${preview.firstGapChapterNumber ?? '?'} or resolve duplicate finalized chapters first.`,
+          ))
+        } else if (preview.conflictChapterNumbers.length > 0) {
+          setSplitError(text(
+            `以下章节与现有权威正文内容冲突：${preview.conflictChapterNumbers.join(', ')}。请修改编号或内容后重新选择。`,
+            `These chapters conflict with authoritative manuscript text: ${preview.conflictChapterNumbers.join(', ')}. Change their numbers or content, then choose the files again.`,
+          ))
+        } else {
+          setSplitError(text(
+            `导入不能从当前下一章连续追加；请从第 ${preview.firstGapChapterNumber ?? '?'} 章开始。`,
+            `The import is not a continuous append. Start with Chapter ${preview.firstGapChapterNumber ?? '?'}.`,
+          ))
+        }
+      }
+    }).catch(error => {
+      if (active && isProjectSessionCurrent(session)) {
+        setAuthorPreview(null)
+        setSplitError(error instanceof Error ? error.message : String(error))
+      }
+    }).finally(() => {
+      if (active && isProjectSessionCurrent(session)) setAuthorPreviewLoading(false)
+    })
+    return () => { active = false }
+  }, [currentProject, inspection, purpose, targetMode, text])
+
+  const changePurpose = useCallback((nextPurpose: ImportPurpose) => {
+    setPurpose(nextPurpose)
+    setInspection(null)
+    setAuthorPreview(null)
+    setAuthorPreviewLoading(false)
+    setSplitDone(false)
+    setSplitError('')
+    setImportNotice('')
+    if (nextPurpose === 'author-manuscript') setTargetMode('current')
+  }, [])
+
   /** 选择文件 */
   const handleSelectFiles = useCallback(async () => {
     setSplitting(true)
     try {
-      const result = await ipc.invoke('dialog:select-novel-files')
+      const result = await ipc.invoke('dialog:select-novel-files', purpose)
       if (!result) return
       setSplitDone(false)
       setSplitError('')
       setImportNotice('')
       setInspection(null)
+      setAuthorPreview(null)
       if (result.success && result.inspection) {
+        if (purpose === 'author-manuscript') setAuthorPreviewLoading(true)
         setInspection(result.inspection)
         setSplitDone(true)
         if (!name.trim() && result.inspection.sourceDisplayNames[0]) {
@@ -99,7 +165,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     } finally {
       setSplitting(false)
     }
-  }, [name, text])
+  }, [name, purpose, text])
 
   /** 选择保存路径 */
   const handleSelectFolder = useCallback(async () => {
@@ -129,6 +195,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const handleImport = useCallback(async () => {
     if (
       !inspection
+      || (purpose === 'author-manuscript' && (!authorPreview || authorPreview.classification === 'conflict'))
       || (targetMode === 'new' && (!name.trim() || !savePath.trim()))
       || (targetMode === 'current' && !currentProject)
     ) return
@@ -156,15 +223,25 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         'The target project has no valid session, so the import was rejected.',
       ))
 
+      const prepareRequest: ImportRunPrepareFromInspectionRequest = purpose === 'author-manuscript'
+        ? {
+            runId: randomUUID(),
+            inspectionId: inspection.inspectionId,
+            purpose,
+            locale,
+            authorityFingerprint: authorPreview!.authorityFingerprint,
+            manifestFingerprint: authorPreview!.manifestFingerprint,
+          }
+        : {
+            runId: randomUUID(),
+            inspectionId: inspection.inspectionId,
+            purpose,
+            locale,
+          }
       const prepared = await ipc.invokeWithProjectSession(
         projectSession,
         'db:import-run-prepare-inspection',
-        {
-          runId: randomUUID(),
-          inspectionId: inspection.inspectionId,
-          purpose: 'reference',
-          locale,
-        },
+        prepareRequest,
         project.path,
       )
       if (!prepared.success || !prepared.preparation) throw new Error(prepared.error || text(
@@ -174,7 +251,10 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       setSplitDone(false)
       const preparation = prepared.preparation
       if (preparation.classification === 'exact-duplicate') {
-        setImportNotice(text(
+        setImportNotice(purpose === 'author-manuscript' ? text(
+          '这些章节已是相同的权威定稿；未重复发布，也未创建任务。',
+          'These chapters already exist as identical authoritative finalized text. Nothing was republished and no task was created.',
+        ) : text(
           '该来源与已完成导入完全一致；未创建任务，也未调用模型。',
           'This source exactly matches a completed import. No task or model call was created.',
         ))
@@ -182,7 +262,10 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       }
       if (preparation.classification === 'conflict') {
         const chaptersText = preparation.conflictChapterNumbers.join(', ')
-        setSplitError(text(
+        setSplitError(purpose === 'author-manuscript' ? text(
+          `原稿预览已过期或章节与权威正文冲突：${chaptersText || '请重新预览'}。`,
+          `The manuscript preview is stale or conflicts with authoritative text: ${chaptersText || 'preview again'}.`,
+        ) : text(
           `以下章节号已有不同参照内容，请先调整编号或拆分文件：${chaptersText}`,
           `These chapter numbers already contain different reference content. Renumber or split them before importing: ${chaptersText}`,
         ))
@@ -207,20 +290,25 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       launchRun(preparation.run)
     } catch (e) {
       console.error('[ImportNovel] 导入失败:', e)
+      if (purpose === 'author-manuscript') {
+        setInspection(null)
+        setAuthorPreview(null)
+        setSplitDone(false)
+      }
       setSplitError(e instanceof Error ? e.message : String(e))
     } finally {
       setImporting(false)
     }
   }, [
-    inspection, targetMode, currentProject,
+    inspection, purpose, authorPreview, targetMode, currentProject,
     name, savePath, createProject, locale, text, launchRun,
   ])
 
-  const handleResume = useCallback(() => {
+  const handleResume = () => {
     if (resumableRun) launchRun(resumableRun)
-  }, [launchRun, resumableRun])
+  }
 
-  const handleRestart = useCallback(async () => {
+  const handleRestart = async () => {
     if (!resumableRun) return
     const project = useProjectStore.getState().currentProject
     const session = captureProjectSession(project)
@@ -243,10 +331,10 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     } finally {
       setImporting(false)
     }
-  }, [launchRun, resumableRun, text])
+  }
 
   // 成本预估
-  const costEstimate = splitDone && inspection
+  const costEstimate = purpose === 'reference' && splitDone && inspection
     ? estimateImportCost(inspection.totalWords, inspection.chapterCount)
     : null
 
@@ -256,12 +344,43 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileUp size={18} className="text-[var(--color-accent)]" />
-            {text('小说拆解与仿写', 'Novel analysis and style study')}
+            {text('导入小说文本', 'Import novel text')}
           </DialogTitle>
-          <DialogDescription>{text('选择参考小说文件，AI 将执行结构拆解、文风提取、蓝图反推，并生成后续写作可用的仿写约束', 'Select a reference novel. AI will analyze its structure and style, infer a blueprint, and create writing constraints for future chapters.')}</DialogDescription>
+          <DialogDescription>{text('先选择文本用途。参考小说用于拆解学习；我的原稿会成为当前项目的权威定稿。', 'Choose how the text will be used. A reference novel is analyzed for study; your manuscript becomes authoritative finalized text in the current project.')}</DialogDescription>
         </DialogHeader>
 
         <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+          <div>
+            <Label>{text('文本用途', 'Text purpose')}</Label>
+            <div className="grid grid-cols-2 gap-2" role="group" aria-label={text('文本用途', 'Text purpose')}>
+              <Button
+                type="button"
+                variant={purpose === 'reference' ? 'default' : 'outline'}
+                aria-pressed={purpose === 'reference'}
+                data-testid="import-purpose-reference"
+                onClick={() => changePurpose('reference')}
+              >
+                <BookOpen size={14} />
+                {text('参考小说', 'Reference novel')}
+              </Button>
+              <Button
+                type="button"
+                variant={purpose === 'author-manuscript' ? 'default' : 'outline'}
+                aria-pressed={purpose === 'author-manuscript'}
+                data-testid="import-purpose-author"
+                onClick={() => changePurpose('author-manuscript')}
+              >
+                <FileText size={14} />
+                {text('我的原稿', 'My manuscript')}
+              </Button>
+            </div>
+            <div className="mt-2 text-xs" style={{ color: 'var(--color-text-secondary)' }} data-testid="import-purpose-explanation">
+              {purpose === 'reference'
+                ? text('用于知识库、结构与文风拆解，不会写入草稿箱或正文章节。', 'Used for knowledge, structure, and style analysis. It never becomes a draft or manuscript chapter.')
+                : text('按章节号导入为不可变权威定稿，用于连续性与后续写作；不会进入参考语料或生成仿写拆解。', 'Imported by chapter number as immutable authoritative finalized text for continuity and future writing. It is not added to reference corpus or imitation analysis.')}
+            </div>
+          </div>
+
           <div>
             <Label>{text('导入目标', 'Import destination')}</Label>
             <div className="grid grid-cols-2 gap-2" role="group" aria-label={text('导入目标', 'Import destination')}>
@@ -270,6 +389,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 variant={targetMode === 'new' ? 'default' : 'outline'}
                 aria-pressed={targetMode === 'new'}
                 data-testid="import-target-new"
+                disabled={purpose === 'author-manuscript'}
                 onClick={() => setTargetMode('new')}
               >
                 {text('创建新项目', 'Create new project')}
@@ -288,6 +408,11 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             {targetMode === 'current' && currentProject && (
               <div className="mt-2 text-xs" style={{ color: 'var(--color-text-secondary)' }} data-testid="import-current-project-name">
                 {text(`当前项目：${currentProject.name}`, `Current project: ${currentProject.name}`)}
+              </div>
+            )}
+            {purpose === 'author-manuscript' && !currentProject && (
+              <div className="mt-2 text-xs" style={{ color: 'var(--color-error-text)' }}>
+                {text('请先打开或创建项目，再导入我的原稿。', 'Open or create a project before importing your manuscript.')}
               </div>
             )}
           </div>
@@ -340,7 +465,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
           {/* ===== 文件选择 ===== */}
           <div>
-            <Label>{text('选择小说文件', 'Reference files')}</Label>
+            <Label>{purpose === 'reference'
+              ? text('选择参考小说文件', 'Reference novel files')
+              : text('选择我的原稿文件', 'My manuscript files')}</Label>
             <div className="flex gap-2">
               <div
                 className="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg text-xs truncate"
@@ -355,7 +482,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                   ? text(`${inspection.sourceCount} 个文件已选择`, `${inspection.sourceCount} files selected`)
                   : text('支持 .txt / .md 文件（单个或多个）', 'Supports one or more .txt / .md files')}
               </div>
-              <Button variant="outline" onClick={handleSelectFiles} disabled={splitting}>
+              <Button data-testid="import-source-choose" variant="outline" onClick={handleSelectFiles} disabled={splitting}>
                 <FolderOpen size={14} />
                 {text('选择', 'Choose')}
               </Button>
@@ -367,7 +494,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
               style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-text-secondary)' }}>
               <div className="animate-spin w-3 h-3 border-2 border-current border-t-transparent rounded-full" />
-              {text('正在拆章并准备结构拆解...', 'Splitting chapters and preparing analysis...')}
+              {purpose === 'reference'
+                ? text('正在拆章并准备结构拆解...', 'Splitting chapters and preparing analysis...')
+                : text('正在拆章并核对权威正文连续性...', 'Splitting chapters and checking authoritative continuity...')}
             </div>
           )}
 
@@ -410,17 +539,28 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
               </div>
               {/* 章节列表（最多显示 8 行 + 省略） */}
               <div className="px-3 py-2 space-y-1" style={{ maxHeight: '160px', overflowY: 'auto' }}>
-                {inspection.preview.map((ch) => (
+                {(purpose === 'author-manuscript' && authorPreview
+                  ? authorPreview.chapters
+                  : inspection.preview).map((ch) => (
                   <div key={ch.number} className="flex items-center justify-between text-xs">
                     <span style={{ color: 'var(--color-text-secondary)' }}>
                       {text(`第${ch.number}章 ${ch.title}`, `Chapter ${ch.number} ${ch.title}`)}
                     </span>
-                    <span style={{ color: 'var(--color-text-muted)' }}>
-                      {text(`${ch.wordCount.toLocaleString()} 字`, `${ch.wordCount.toLocaleString()} words`)}
+                    <span className="flex items-center gap-2" style={{ color: 'var(--color-text-muted)' }}>
+                      <span>{text(`${ch.wordCount.toLocaleString()} 字`, `${ch.wordCount.toLocaleString()} words`)}</span>
+                      {purpose === 'author-manuscript' && 'disposition' in ch && (
+                        <span data-testid={`author-preview-target-${ch.number}`}>
+                          {ch.disposition === 'new'
+                            ? text('目标：权威正文章节 / 定稿', 'Target: authoritative manuscript / finalized')
+                            : ch.disposition === 'duplicate'
+                              ? text('相同定稿（跳过）', 'Identical finalized text (skip)')
+                              : text('冲突（阻止）', 'Conflict (blocked)')}
+                        </span>
+                      )}
                     </span>
                   </div>
                 ))}
-                {inspection.chapterCount > inspection.preview.length && (
+                {purpose === 'reference' && inspection.chapterCount > inspection.preview.length && (
                   <div className="text-xs text-center py-1" style={{ color: 'var(--color-text-muted)' }}>
                     {text(
                       `还有 ${inspection.chapterCount - inspection.preview.length} 章`,
@@ -429,6 +569,21 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {purpose === 'author-manuscript' && splitDone && inspection && (
+            <div className="rounded-lg px-3 py-2 text-xs" style={{ backgroundColor: 'var(--color-hover)' }} data-testid="author-import-confirmation-summary">
+              {authorPreviewLoading
+                ? text('正在核对章节连续性与项目权威状态…', 'Checking chapter continuity and project authority…')
+                : authorPreview?.classification === 'ready'
+                  ? text(
+                    `确认后将新增 ${authorPreview.newChapterNumbers.length} 章权威定稿；下一章为第 ${authorPreview.nextChapterNumber} 章。确认前不会写入项目。`,
+                    `Confirmation will add ${authorPreview.newChapterNumbers.length} authoritative finalized chapters; the next chapter will be ${authorPreview.nextChapterNumber}. The project is not changed before confirmation.`,
+                  )
+                  : authorPreview?.classification === 'exact-duplicate'
+                    ? text('全部章节已存在且内容相同；确认后也不会重复发布。', 'All chapters already exist with identical content. Confirmation will not republish them.')
+                    : text('当前清单不能导入，请按上方提示修正。', 'This manifest cannot be imported. Follow the guidance above to correct it.')}
             </div>
           )}
 
@@ -502,13 +657,17 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             disabled={
               importing
               || !inspection
+              || authorPreviewLoading
+              || (purpose === 'author-manuscript' && (!authorPreview || authorPreview.classification === 'conflict'))
               || (targetMode === 'new' && (!name.trim() || !savePath.trim()))
               || (targetMode === 'current' && !currentProject)
             }
           >
             <FileUp size={14} />
             {importing
-              ? text('拆解中...', 'Analyzing...')
+              ? (purpose === 'author-manuscript' ? text('导入中...', 'Importing...') : text('拆解中...', 'Analyzing...'))
+              : purpose === 'author-manuscript'
+                ? text(`确认导入（${inspection?.chapterCount ?? 0} 章）`, `Confirm import (${inspection?.chapterCount ?? 0} chapters)`)
               : targetMode === 'current'
                 ? text(`导入当前项目（${inspection?.chapterCount ?? 0} 章）`, `Import into current project (${inspection?.chapterCount ?? 0} chapters)`)
                 : text(`开始拆解仿写（${inspection?.chapterCount ?? 0} 章）`, `Start analysis (${inspection?.chapterCount ?? 0} chapters)`)}
