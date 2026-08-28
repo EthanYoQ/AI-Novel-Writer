@@ -66,13 +66,13 @@ afterEach(async () => {
 
 describe('workflow launch language seams', () => {
   it.each([
-    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', title: 'AI 生成故事架构', button: /确认生成/, expectedPrompt: '你是一位网络小说策划专家与故事架构师', unexpectedPrompt: 'Build a compact story premise' },
-    { uiLocale: 'zh-CN', writingLanguage: 'en-US', title: 'AI 生成故事架构', button: /确认生成/, expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位网络小说策划专家与故事架构师' },
-    { uiLocale: 'en-US', writingLanguage: 'zh-CN', title: 'Generate story architecture with AI', button: /Generate \(/, expectedPrompt: '你是一位网络小说策划专家与故事架构师', unexpectedPrompt: 'Build a compact story premise' },
-    { uiLocale: 'en-US', writingLanguage: 'en-US', title: 'Generate story architecture with AI', button: /Generate \(/, expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位网络小说策划专家与故事架构师' },
+    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', heading: '故事架构', status: '3/4 已生成', refresh: '刷新状态', generate: 'AI 生成架构', generateTitle: 'AI 生成故事架构（选择要生成的步骤）', title: 'AI 生成故事架构', button: /确认生成/, expectedPrompt: '你是一位网络小说策划专家与故事架构师', unexpectedPrompt: 'Build a compact story premise' },
+    { uiLocale: 'zh-CN', writingLanguage: 'en-US', heading: '故事架构', status: '3/4 已生成', refresh: '刷新状态', generate: 'AI 生成架构', generateTitle: 'AI 生成故事架构（选择要生成的步骤）', title: 'AI 生成故事架构', button: /确认生成/, expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位网络小说策划专家与故事架构师' },
+    { uiLocale: 'en-US', writingLanguage: 'zh-CN', heading: 'Story architecture', status: '3/4 generated', refresh: 'Refresh status', generate: 'Generate story architecture', generateTitle: 'Generate story architecture (choose steps to generate)', title: 'Generate story architecture with AI', button: /Generate \(/, expectedPrompt: '你是一位网络小说策划专家与故事架构师', unexpectedPrompt: 'Build a compact story premise' },
+    { uiLocale: 'en-US', writingLanguage: 'en-US', heading: 'Story architecture', status: '3/4 generated', refresh: 'Refresh status', generate: 'Generate story architecture', generateTitle: 'Generate story architecture (choose steps to generate)', title: 'Generate story architecture with AI', button: /Generate \(/, expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位网络小说策划专家与故事架构师' },
   ] as const)(
     'launches the production architecture workflow with UI $uiLocale and writing $writingLanguage independent',
-    async ({ uiLocale, writingLanguage, title, button, expectedPrompt, unexpectedPrompt }) => {
+    async ({ uiLocale, writingLanguage, heading, status, refresh, generate, generateTitle, title, button, expectedPrompt, unexpectedPrompt }) => {
       const currentProject = project(writingLanguage)
       const projectSession = {
         projectId: currentProject.id,
@@ -184,8 +184,12 @@ describe('workflow launch language seams', () => {
       root = createRoot(container)
       await act(async () => root?.render(<WorldBuildingEditor projectKey={currentProject.path} />))
 
-      await expect.element(page.getByText('3/4 已生成', { exact: true })).toBeVisible()
-      await act(async () => page.getByRole('button', { name: 'AI 生成架构' }).click())
+      await expect.element(page.getByText(heading, { exact: true })).toBeVisible()
+      await expect.element(page.getByText(status, { exact: true })).toBeVisible()
+      await expect.element(page.getByRole('button', { name: refresh })).toHaveAttribute('title', refresh)
+      const generateButton = page.getByRole('button', { name: generate })
+      await expect.element(generateButton).toHaveAttribute('title', generateTitle)
+      await act(async () => generateButton.click())
       await expect.element(page.getByText(title, { exact: true })).toBeVisible()
       const dialog = document.querySelector('[role="dialog"]')
       if (!(dialog instanceof HTMLElement)) throw new Error('Architecture dialog did not mount')

@@ -250,10 +250,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
         <div className="flex items-center gap-1.5">
           <FolderTree size={14} style={{ color: 'var(--color-text-muted)' }} />
           <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-            故事架构
+            {text('故事架构', 'Story architecture')}
           </span>
           <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            {generatedCount}/{ARCH_FILES.length} 已生成
+            {generatedCount}/{ARCH_FILES.length} {text('已生成', 'generated')}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -261,7 +261,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
             variant="ghost"
             size="icon"
             onClick={loadStatus}
-            title="刷新状态"
+            title={text('刷新状态', 'Refresh status')}
           >
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </Button>
@@ -270,10 +270,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
             variant="ai"
             size="sm"
             onClick={() => setShowArchDialog(true)}
-            title="AI 生成故事架构（选择要生成的步骤）"
+            title={text('AI 生成故事架构（选择要生成的步骤）', 'Generate story architecture (choose steps to generate)')}
           >
             <Sparkles size={12} />
-            AI 生成架构
+            {text('AI 生成架构', 'Generate story architecture')}
           </Button>
         </div>
       </div>
