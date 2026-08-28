@@ -274,7 +274,9 @@ export abstract class BaseWorkflowCommand<TResult = string> {
         && 'code' in error
         && error.code === 'CANCELLED'
       )) {
-        throw new Error('工作流已取消')
+        throw new Error(context
+          ? workflowUiText(context, '工作流已取消', 'Workflow was cancelled.')
+          : 'Workflow was cancelled.')
       }
       throw error
     }

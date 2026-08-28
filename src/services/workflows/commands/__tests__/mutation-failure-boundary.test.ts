@@ -270,6 +270,25 @@ describe('workflow mutation failure boundaries', () => {
       .rejects.toThrow('checkpoint rejected')
   })
 
+  it.each([
+    ['保存架构生成检查点', '保存架构生成检查点失败'],
+    ['Save architecture-generation checkpoint', 'Failed to save the architecture-generation checkpoint.'],
+  ])('uses the explicit architecture checkpoint fallback when IPC omits an error: %s', async (operationLabel, fallbackMessage) => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'fs:write-json') return { success: false }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+
+    await expect(savePartialData(
+      PROJECT_PATH,
+      { premise_result: 'premise' },
+      context().projectSession!,
+      operationLabel,
+      fallbackMessage,
+    )).rejects.toThrow(fallbackMessage)
+  })
+
   it('stops finalization when the atomic SQLite commit reports success=false', async () => {
     finalizationClient.commitFinalizationSnapshot.mockResolvedValue({
       success: false,

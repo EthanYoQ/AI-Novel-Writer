@@ -465,6 +465,44 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(stepCallbacks.log).toHaveBeenCalledWith('Generating story premise...')
   })
 
+  it('uses the frozen English UI locale when the provider aborts premise generation', async () => {
+    const novelConfig = {
+      writingLanguage: 'en-US',
+      genre: 'mystery',
+      targetAudience: 'general',
+      totalChapters: 20,
+      wordsPerChapter: 2500,
+    } as const
+    useProjectStore.setState({
+      currentProject: { ...project(projectAPath), novelConfig } as never,
+    })
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream: vi.fn(() => new Promise<string>(() => {})),
+    })
+    const runContext = {
+      ...context,
+      writingLanguage: 'en-US' as const,
+      uiLocale: 'en-US' as const,
+      data: {},
+    }
+    const stepCallbacks = callbacks
+    const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
+
+    const execution = new GenerateCoreSeedCommand(snapshot, workflowRuntimeDependencies).execute({
+      step: {},
+      context: runContext,
+      callbacks: stepCallbacks,
+    })
+    await vi.waitFor(() => expect(useLLMStore.getState().generateStream).toHaveBeenCalledOnce())
+    runContext.cancelled = true
+
+    await expect(execution).rejects.toThrow('Workflow was cancelled.')
+    const visibleLogs = vi.mocked(stepCallbacks.log).mock.calls.map(([message]) => message).join('\n')
+    expect(visibleLogs).toContain('Generating story premise...')
+    expect(visibleLogs).not.toMatch(/[\u3400-\u9fff]/u)
+  })
+
   it('sends English built-in instructions for premise, character, world, and synopsis requests', async () => {
     const novelConfig = {
       writingLanguage: 'en-US',

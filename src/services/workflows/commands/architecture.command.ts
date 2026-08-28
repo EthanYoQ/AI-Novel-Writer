@@ -358,6 +358,7 @@ export async function savePartialData(
   data: PartialArchData,
   projectSession: ProjectSessionContext,
   operationLabel: string,
+  fallbackMessage?: string,
 ): Promise<void> {
   const result = await ipc.invokeWithProjectSession(
     projectSession,
@@ -366,7 +367,7 @@ export async function savePartialData(
     data,
     projectPath,
   )
-  requireIpcSuccess(result, operationLabel)
+  requireIpcSuccess(result, operationLabel, fallbackMessage)
 }
 
 async function writeArchToDb(
@@ -620,6 +621,7 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
       partial,
       projectSession,
       text('保存架构生成检查点', 'Save architecture-generation checkpoint'),
+      text('保存架构生成检查点失败', 'Failed to save the architecture-generation checkpoint.'),
     )
     context.data.partial = partial
 
@@ -900,6 +902,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         partial,
         projectSession,
         text('保存架构生成检查点', 'Save architecture-generation checkpoint'),
+        text('保存架构生成检查点失败', 'Failed to save the architecture-generation checkpoint.'),
       )
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
@@ -995,6 +998,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       partial,
       projectSession,
       text('保存架构生成检查点', 'Save architecture-generation checkpoint'),
+      text('保存架构生成检查点失败', 'Failed to save the architecture-generation checkpoint.'),
     )
     context.data.partial = partial
 
@@ -1109,6 +1113,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
           expectedProjectPath,
         ),
         text('清理架构生成检查点', 'Clear architecture-generation checkpoint'),
+        text('清理架构生成检查点失败', 'Failed to clear the architecture-generation checkpoint.'),
       )
     }
 
