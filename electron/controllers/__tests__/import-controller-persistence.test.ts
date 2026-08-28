@@ -217,6 +217,7 @@ describe('current-project import parsing persistence', () => {
 
     failB = false
     reads.length = 0
+    mocks.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [sourceB] })
     await expect(handler(event, request, session)).resolves.toMatchObject({
       success: true,
       preparation: { classification: 'new', run: { stage: 'prepared' } },
@@ -269,7 +270,7 @@ describe('current-project import parsing persistence', () => {
     const blankSource = path.join(parent, 'b-blank.txt')
     fs.writeFileSync(validSource, 'valid', 'utf8')
     fs.writeFileSync(blankSource, 'blank', 'utf8')
-    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [validSource, blankSource] })
+    mocks.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [validSource, blankSource] })
     let blankContent = ' \n\t'
     const reads: string[] = []
     const fileSystem = {
@@ -306,6 +307,9 @@ describe('current-project import parsing persistence', () => {
       ],
     })
 
+    const movedValidSource = path.join(parent, 'a-valid-moved.txt')
+    fs.renameSync(validSource, movedValidSource)
+    mocks.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [blankSource] })
     blankContent = '第1章 补全来源\n补全后的正文'
     reads.length = 0
     await expect(handler(event, request, session)).resolves.toMatchObject({
@@ -313,5 +317,81 @@ describe('current-project import parsing persistence', () => {
       preparation: { classification: 'new', run: { id: 'partial-empty-retry', stage: 'prepared', totalChapters: 2 } },
     })
     expect(reads).toEqual(['b-blank.txt'])
+  })
+
+  it('rejects an injected source when resuming a run and rolls back identity and run writes', async () => {
+    const validSource = path.join(parent, 'resume-valid.txt')
+    const blankSource = path.join(parent, 'resume-blank.txt')
+    const injectedSource = path.join(parent, 'resume-injected.txt')
+    fs.writeFileSync(validSource, 'valid', 'utf8')
+    fs.writeFileSync(blankSource, 'blank', 'utf8')
+    fs.writeFileSync(injectedSource, 'injected', 'utf8')
+    mocks.showOpenDialog
+      .mockResolvedValueOnce({ canceled: false, filePaths: [validSource, blankSource] })
+      .mockResolvedValueOnce({ canceled: false, filePaths: [injectedSource] })
+    const fileSystem = {
+      readText: vi.fn(async (capability: { relativePath: string }) => (
+        capability.relativePath === 'resume-valid.txt'
+          ? '第1章 已保存\n已保存正文'
+          : ' \n\t'
+      )),
+    } as unknown as WindowsSafeFileSystem
+    registerImportController(
+      fileSystem,
+      filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
+      {},
+      new ExternalFileGrantService(),
+      new ImportInspectionStore(),
+      secret,
+    )
+    const handler = mocks.handlers.get('dialog:select-novel-files')!
+    const event = { sender: { id: 61, once: vi.fn() } }
+    const request = {
+      runId: 'partial-injection', purpose: 'reference', locale: 'zh-CN', expectedProjectPath: projectRoot,
+    }
+
+    await expect(handler(event, request, session)).resolves.toMatchObject({ success: false })
+    const before = getProjectDb()!.serialize()
+    const beforeRows = importRows()
+    await expect(handler(event, request, session)).resolves.toMatchObject({ success: false })
+
+    expect(getProjectDb()!.serialize().equals(before)).toBe(true)
+    expect(importRows()).toEqual(beforeRows)
+  })
+
+  it('counts completed source bytes before reading a partially resumed source', async () => {
+    const sourceA = path.join(parent, 'budget-a.txt')
+    const sourceB = path.join(parent, 'budget-b.txt')
+    fs.writeFileSync(sourceA, 'Chapter 1 A\n1234567890', 'utf8')
+    fs.writeFileSync(sourceB, ' ', 'utf8')
+    mocks.showOpenDialog
+      .mockResolvedValueOnce({ canceled: false, filePaths: [sourceA, sourceB] })
+      .mockResolvedValueOnce({ canceled: false, filePaths: [sourceB] })
+    const readText = vi.fn(async (capability: { rootPath: string; relativePath: string }) => (
+      fs.readFileSync(path.join(capability.rootPath, capability.relativePath), 'utf8')
+    ))
+    const fileSystem = { readText } as unknown as WindowsSafeFileSystem
+    registerImportController(
+      fileSystem,
+      filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
+      { maxTotalBytes: 40 },
+      new ExternalFileGrantService(),
+      new ImportInspectionStore(),
+      secret,
+    )
+    const handler = mocks.handlers.get('dialog:select-novel-files')!
+    const event = { sender: { id: 62, once: vi.fn() } }
+    const request = {
+      runId: 'partial-byte-budget', purpose: 'reference', locale: 'en-US', expectedProjectPath: projectRoot,
+    }
+
+    await expect(handler(event, request, session)).resolves.toMatchObject({ success: false })
+    const before = getProjectDb()!.serialize()
+    const readCount = readText.mock.calls.length
+    fs.writeFileSync(sourceB, '12345678901234567890123456789012345', 'utf8')
+
+    await expect(handler(event, request, session)).resolves.toMatchObject({ success: false })
+    expect(readText).toHaveBeenCalledTimes(readCount)
+    expect(getProjectDb()!.serialize().equals(before)).toBe(true)
   })
 })

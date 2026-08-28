@@ -1125,6 +1125,63 @@ export class ImportRunRepository {
     }
 
     return db().transaction(() => {
+      const explicitRun = readRunRow(runId)
+      if (explicitRun) {
+        const persistedSources = db().prepare(`
+          SELECT source_index, source_id, source_fingerprint, legacy_source_fingerprint,
+                 display_json, status
+          FROM import_run_sources WHERE run_id = ? ORDER BY source_index
+        `).all(explicitRun.id) as Array<{
+          source_index: number
+          source_id: string
+          source_fingerprint: string
+          legacy_source_fingerprint: string
+          display_json: string
+          status: 'pending' | 'completed' | 'failed'
+        }>
+        if (
+          explicitRun.purpose !== candidate.purpose
+          || explicitRun.stage !== 'parsing'
+          || explicitRun.resumable !== 1
+          || explicitRun.locale !== candidate.locale
+        ) throw new Error('指定的导入运行当前不可重新授权未完成来源')
+
+        const persistedById = new Map(persistedSources.map(source => [source.source_id, source]))
+        if (sourceIds.some((sourceId, index) => {
+          const persisted = persistedById.get(sourceId)
+          return !persisted
+            || persisted.status === 'completed'
+            || persisted.source_fingerprint !== sourceFingerprints[index]
+        })) throw new Error('未完成导入的来源清单与本次重新授权不一致')
+
+        const updateSource = db().prepare(`
+          UPDATE import_run_sources
+          SET legacy_source_fingerprint = ?, display_json = ?, updated_at = datetime('now')
+          WHERE run_id = ? AND source_id = ? AND source_fingerprint = ? AND status <> 'completed'
+        `)
+        sourceIds.forEach((sourceId, index) => {
+          const changed = updateSource.run(
+            legacySourceFingerprints[index],
+            JSON.stringify(sourceDisplay[index]),
+            explicitRun.id,
+            sourceId,
+            sourceFingerprints[index],
+          )
+          if (changed.changes !== 1) throw new Error('未完成导入的来源清单与本次重新授权不一致')
+          const persisted = persistedById.get(sourceId)!
+          persisted.legacy_source_fingerprint = legacySourceFingerprints[index]
+          persisted.display_json = JSON.stringify(sourceDisplay[index])
+        })
+        const fullDisplay = persistedSources.map(source => parseJson<ImportSourceDisplayMetadata>(
+          source.display_json,
+          { displayName: '', mediaType: '', size: 0 },
+        ))
+        db().prepare(`
+          UPDATE import_runs SET source_display_json = ?, updated_at = datetime('now') WHERE id = ?
+        `).run(JSON.stringify(fullDisplay), explicitRun.id)
+        return this.get(explicitRun.id)!
+      }
+
       const existing = db().prepare(`
         SELECT * FROM import_runs
         WHERE purpose = ? AND source_fingerprint = ? AND stage = 'parsing' AND resumable = 1

@@ -24,7 +24,7 @@ import {
 import type { ImportSourceFileIdentity } from '../../src/shared/import-run'
 import type { ImportNovelFileSelectionRequest, ImportRunChapterInput } from '../../src/shared/import-run'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
-import { getCurrentProjectPath } from '../database'
+import { getCurrentProjectPath, getProjectDb } from '../database'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { ImportRunRepository } from '../repositories/import-run-repository'
@@ -305,35 +305,43 @@ export function registerImportController(
         'reference',
         applicationSecret ?? loadApplicationImportSourceSecret(),
       )
-      const resolvedIdentity = request
-        ? ImportSourceIdentityRepository.resolveEncodedSources(
-            encodedIdentities,
-            request.purpose,
-            applicationSecret ?? loadApplicationImportSourceSecret(),
-          )
-        : undefined
-      const parsingRun = request && resolvedIdentity
+      const parsingContext = request
         ? (() => {
             assertFrozenProject()
-            return ImportRunRepository.beginParsing({
-              runId: request.runId,
-              purpose: request.purpose,
-              sourceFingerprint: resolvedIdentity.sourceFingerprint,
-              sourceIds: resolvedIdentity.sourceIds,
-              sourceFingerprints: resolvedIdentity.sourceFingerprints,
-              legacySourceFingerprints: resolvedIdentity.legacySourceFingerprints,
-              legacyCollectionFingerprint: resolvedIdentity.legacyCollectionFingerprint,
-              sourceDisplay: selected.map(source => ({
-                displayName: source.displayName,
-                mediaType: sourceMediaType(source.displayName),
-                size: source.selectedSize,
-              })),
-              locale: request.locale,
-            })
+            const projectDb = getProjectDb()
+            if (!projectDb) throw new Error('项目数据库未打开')
+            return projectDb.transaction(() => {
+              const resolvedIdentity = ImportSourceIdentityRepository.resolveEncodedSources(
+                encodedIdentities,
+                request.purpose,
+                applicationSecret ?? loadApplicationImportSourceSecret(),
+              )
+              const parsingRun = ImportRunRepository.beginParsing({
+                runId: request.runId,
+                purpose: request.purpose,
+                sourceFingerprint: resolvedIdentity.sourceFingerprint,
+                sourceIds: resolvedIdentity.sourceIds,
+                sourceFingerprints: resolvedIdentity.sourceFingerprints,
+                legacySourceFingerprints: resolvedIdentity.legacySourceFingerprints,
+                legacyCollectionFingerprint: resolvedIdentity.legacyCollectionFingerprint,
+                sourceDisplay: selected.map(source => ({
+                  displayName: source.displayName,
+                  mediaType: sourceMediaType(source.displayName),
+                  size: source.selectedSize,
+                })),
+                locale: request.locale,
+              })
+              if (parsingRun.totalContentSize > limits.maxTotalBytes - selectedBytes) {
+                throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
+              }
+              return { resolvedIdentity, parsingRun }
+            })()
           })()
         : undefined
+      const resolvedIdentity = parsingContext?.resolvedIdentity
+      const parsingRun = parsingContext?.parsingRun
 
-      let chapterCount = 0
+      let chapterCount = parsingRun?.completedChapters ?? 0
       const sources: Array<{
         locationAliasDigest: string
         fileAliasDigest?: string
@@ -341,7 +349,7 @@ export function registerImportController(
         mediaType: string
         size: number
       }> = []
-      let consumedBytes = 0
+      let consumedBytes = parsingRun?.totalContentSize ?? 0
 
       const reserveSourceBytes = (content: string): number => {
         const contentBytes = Buffer.byteLength(content, 'utf8')

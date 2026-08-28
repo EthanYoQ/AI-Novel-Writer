@@ -10,6 +10,7 @@ import { ImportRunRepository } from '../import-run-repository'
 let root = ''
 const SOURCE_A = '11111111-1111-4111-8111-111111111111'
 const SOURCE_B = '22222222-2222-4222-8222-222222222222'
+const SOURCE_C = '33333333-3333-4333-8333-333333333333'
 
 function chapter(number: number, content = `source chapter ${number}`) {
   return {
@@ -38,6 +39,7 @@ function begin(runId = 'parse-run') {
 
 function reauthorize(overrides: {
   runId?: string
+  sourceFingerprint?: string
   sourceIds?: string[]
   sourceFingerprints?: string[]
   sourceDisplay?: Array<{ displayName: string; mediaType: string; size: number }>
@@ -45,7 +47,7 @@ function reauthorize(overrides: {
   return ImportRunRepository.beginParsing({
     runId: overrides.runId ?? 'reauthorized-run',
     purpose: 'reference',
-    sourceFingerprint: 'a'.repeat(64),
+    sourceFingerprint: overrides.sourceFingerprint ?? 'a'.repeat(64),
     sourceIds: overrides.sourceIds ?? [SOURCE_A, SOURCE_B],
     sourceFingerprints: overrides.sourceFingerprints ?? ['b'.repeat(64), 'c'.repeat(64)],
     sourceDisplay: overrides.sourceDisplay ?? [
@@ -76,9 +78,13 @@ describe('persisted per-source parsing', () => {
 
     closeProjectDatabase()
     initProjectDatabase(root)
-    expect(begin()).toMatchObject({ id: 'parse-run', stage: 'parsing', completedSources: 1 })
-    expect(ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, [chapter(1), chapter(2)]))
-      .toMatchObject({ completedSources: 1 })
+    expect(reauthorize({
+      runId: 'parse-run',
+      sourceFingerprint: 'd'.repeat(64),
+      sourceIds: [SOURCE_B],
+      sourceFingerprints: ['c'.repeat(64)],
+      sourceDisplay: [{ displayName: 'b-restored.txt', mediaType: 'text/plain', size: 30 }],
+    })).toMatchObject({ id: 'parse-run', stage: 'parsing', completedSources: 1 })
     ImportRunRepository.commitParsedSource('parse-run', SOURCE_B, [chapter(1, 'second source')])
 
     const prepared = ImportRunRepository.finalizeParsing('parse-run')
@@ -100,6 +106,62 @@ describe('persisted per-source parsing', () => {
         { displayName: 'renamed-b.txt', mediaType: 'text/plain', size: 41 },
       ],
     })
+  })
+
+  it('resumes an explicit parsing run with only its unfinished source selected', () => {
+    begin()
+    ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, [chapter(1, 'saved first source')])
+    ImportRunRepository.failParsedSource('parse-run', SOURCE_B, 'empty source')
+
+    expect(reauthorize({
+      runId: 'parse-run',
+      sourceFingerprint: 'd'.repeat(64),
+      sourceIds: [SOURCE_B],
+      sourceFingerprints: ['c'.repeat(64)],
+      sourceDisplay: [{ displayName: 'fixed-b.txt', mediaType: 'text/plain', size: 51 }],
+    })).toMatchObject({
+      id: 'parse-run',
+      stage: 'parsing',
+      completedSources: 1,
+      totalSources: 2,
+      sourceDisplay: [
+        { displayName: 'a.txt', mediaType: 'text/plain', size: 20 },
+        { displayName: 'fixed-b.txt', mediaType: 'text/plain', size: 51 },
+      ],
+    })
+
+    ImportRunRepository.commitParsedSource('parse-run', SOURCE_B, [chapter(1, 'recovered second source')])
+    expect(ImportRunRepository.finalizeParsing('parse-run')).toMatchObject({
+      classification: 'new',
+      run: { id: 'parse-run', stage: 'prepared', totalChapters: 2 },
+    })
+    expect(ImportRunRepository.listChapterBatch('parse-run', { afterChapterNumber: 0, limit: 2 }).map(item => item.content))
+      .toEqual(['saved first source', 'recovered second source'])
+  })
+
+  it('rejects injected or already-completed sources from a partial resume without changing the run', () => {
+    begin()
+    ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, [chapter(1)])
+    ImportRunRepository.failParsedSource('parse-run', SOURCE_B, 'empty source')
+    const before = getProjectDb()!.serialize()
+
+    expect(() => reauthorize({
+      runId: 'parse-run',
+      sourceFingerprint: 'd'.repeat(64),
+      sourceIds: [SOURCE_C],
+      sourceFingerprints: ['e'.repeat(64)],
+      sourceDisplay: [{ displayName: 'injected.txt', mediaType: 'text/plain', size: 5 }],
+    })).toThrow(/来源清单|重新授权/)
+    expect(getProjectDb()!.serialize().equals(before)).toBe(true)
+
+    expect(() => reauthorize({
+      runId: 'parse-run',
+      sourceFingerprint: 'f'.repeat(64),
+      sourceIds: [SOURCE_A],
+      sourceFingerprints: ['b'.repeat(64)],
+      sourceDisplay: [{ displayName: 'a-again.txt', mediaType: 'text/plain', size: 99 }],
+    })).toThrow(/来源清单|重新授权/)
+    expect(getProjectDb()!.serialize().equals(before)).toBe(true)
   })
 
   it('rejects a different stable source key even when the caller reuses the collection fingerprint', () => {
