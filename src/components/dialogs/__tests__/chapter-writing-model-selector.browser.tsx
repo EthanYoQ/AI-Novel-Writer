@@ -25,6 +25,7 @@ let root: Root | undefined
 let container: HTMLDivElement | undefined
 let startWorkflow: ReturnType<typeof vi.fn>
 let setDefaultModel: ReturnType<typeof vi.fn>
+let missingBlueprintChapter: number | null
 
 function project(): ProjectData {
   return {
@@ -72,10 +73,11 @@ function installIpc() {
   Object.defineProperty(window, 'velaAPI', {
     configurable: true,
     value: {
-      invoke: vi.fn(async (channel: string) => {
+      invoke: vi.fn(async (channel: string, ...args: unknown[]) => {
         if (channel === 'db:blueprint-get-all') return [{ chapterNumber: 1 }]
         if (channel === 'db:character-get-all') return [{ id: 1 }]
         if (channel === 'db:blueprint-get') {
+          if (Number(args[0]) === missingBlueprintChapter) return null
           return {
             chapterNumber: 1,
             title: '雨夜启程',
@@ -116,6 +118,7 @@ async function chooseModel(id: string, modelId: string) {
 }
 
 beforeEach(() => {
+  missingBlueprintChapter = null
   startWorkflow = vi.fn(async () => 'writing-model-selector-run')
   setDefaultModel = vi.fn(async () => true)
   useLocaleStore.setState({ locale: 'zh-CN' })
@@ -201,6 +204,8 @@ describe('chapter writing model selectors', () => {
     })
 
     await vi.waitFor(() => expect(selectedModel('batch-writing-model').value).toBe('glm'))
+    await expect.element(page.getByRole('radio', { name: '生成草稿待审' })).toBeChecked()
+    await expect.element(page.getByRole('radio', { name: '自动定稿' })).not.toBeChecked()
     expect(Array.from(selectedModel('batch-writing-model').options).map(option => option.value))
       .toEqual(['', 'glm', 'grok'])
 
@@ -208,9 +213,38 @@ describe('chapter writing model selectors', () => {
     await act(async () => page.getByRole('button', { name: '启动批量创作' }).click())
 
     await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
-    expect(startWorkflow.mock.calls[0]?.[0]).toMatchObject({ generationModelId: 'grok' })
+    expect(startWorkflow.mock.calls[0]?.[0]).toMatchObject({
+      generationModelId: 'grok',
+      completionMode: 'draft_review',
+    })
     expect(useLLMStore.getState().defaultModelId).toBe('glm')
     expect(setDefaultModel).not.toHaveBeenCalled()
+  })
+
+  it('requires an explicit consequence confirmation before starting auto-finalize mode', async () => {
+    await act(async () => {
+      root?.render(
+        <BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />,
+      )
+    })
+
+    await chooseModel('batch-writing-model', 'grok')
+    await act(async () => page.getByRole('radio', { name: '自动定稿' }).click())
+
+    await expect.element(page.getByText(/发布实体稿并运行角色与连续性后处理/)).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '继续确认自动定稿' }).click())
+
+    expect(startWorkflow).not.toHaveBeenCalled()
+    await expect.element(page.getByText('即将自动定稿第1–1章（共1章）。完成后章节只读，不能直接编辑。')).toBeVisible()
+
+    await act(async () => page.getByRole('button', { name: '确认自动定稿并启动' }).click())
+
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+    expect(startWorkflow.mock.calls[0]?.[0]).toMatchObject({
+      completionMode: 'auto_finalize',
+      generationModelId: 'grok',
+      steps: [expect.objectContaining({ name: '第1章：自动定稿与后处理' })],
+    })
   })
 
   it('blocks a direct chapter run when the selected model is deleted while the dialog remains open', async () => {
@@ -234,6 +268,60 @@ describe('chapter writing model selectors', () => {
 
     await expect.element(page.getByText('所选创作模型已不可用。请选择一项可用于文本生成的模型后再试。')).toBeVisible()
     await expect.element(page.getByRole('button', { name: '开始创作' })).toBeDisabled()
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('blocks a batch run when its selected generation model becomes unavailable', async () => {
+    await act(async () => {
+      root?.render(
+        <BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />,
+      )
+    })
+
+    await chooseModel('batch-writing-model', 'grok')
+    useLLMStore.setState({ models: [
+      model({ id: 'glm', name: 'GLM', modelName: 'GLM-4-Flash' }),
+      model({ id: 'embedding', name: 'Embedding only', purposes: ['embedding'] }),
+    ] })
+
+    await expect.element(page.getByText('所选创作模型已不可用。请选择一项可用于文本生成的模型后再试。')).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '启动批量创作' })).toBeDisabled()
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('reports a missing batch blueprint in English and refuses to start', async () => {
+    missingBlueprintChapter = 1
+    useLocaleStore.setState({ locale: 'en-US' })
+    await act(async () => {
+      root?.render(
+        <BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />,
+      )
+    })
+
+    await act(async () => page.getByRole('button', { name: 'Start batch writing' }).click())
+
+    await expect.element(page.getByText(
+      'No blueprint was found for chapter 1. Complete the consecutive blueprints first.',
+    )).toBeVisible()
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('reports the lack of a generation model in English and disables launch', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    useLLMStore.setState({
+      models: [model({ id: 'embedding', name: 'Embedding only', purposes: ['embedding'] })],
+      defaultModelId: null,
+    })
+    await act(async () => {
+      root?.render(
+        <BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />,
+      )
+    })
+
+    await expect.element(page.getByText(
+      'No configured model can generate text. Add or enable a generation model in Settings.',
+    )).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'Start batch writing' })).toBeDisabled()
     expect(startWorkflow).not.toHaveBeenCalled()
   })
 })
