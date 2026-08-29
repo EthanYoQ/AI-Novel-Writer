@@ -25,6 +25,7 @@ import type {
   GenerationSession,
 } from '../../generation/generation-harness'
 import type { WritingLanguage } from '../../../shared/writing-language'
+import type { FinalizedContinuityProjection } from '../../../shared/finalized-continuity'
 import { promptLanguageText } from '../../prompt-language'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
@@ -324,7 +325,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         }
         const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
           projectSession,
-          'kb:search',
+          'kb:search-writing-context',
           searchQuery,
           5,
           expectedProjectPath,
@@ -788,7 +789,7 @@ ${visibleTail}`,
   }
 
   /**
-   * 从蓝图 JSON 的 notes 字段读取章节要点时间线。
+   * 从 finalized 定稿连续性投影读取章节要点时间线，旧蓝图 notes 仅作兼容回退。
    * 近 5 章完整收录；更早期仅保留标题行，控制总量 ≤ 3000 字。
    * 按序拼装保证前缀稳定，最大化 LLM 上下文缓存命中。
    */
@@ -801,26 +802,43 @@ ${visibleTail}`,
     const FULL_WINDOW = 5  // 近 N 章完整收录
     const MAX_CHARS = 3000 // 总量上限
     const lines: string[] = []
+    let finalizedContinuity: FinalizedContinuityProjection[] = []
+    try {
+      finalizedContinuity = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:continuity-list-before',
+        currentChapter,
+        projectPath,
+      )
+    } catch { /* 兼容未迁移的旧项目，逐章读取蓝图 notes */ }
+    const continuityByChapter = new Map(
+      finalizedContinuity.map(projection => [projection.chapterNumber, projection]),
+    )
 
     for (let i = 1; i < currentChapter; i++) {
       try {
-        const bp = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', i, projectPath)
-        if (!bp) continue
+        const projection = continuityByChapter.get(i)
+        const bp = projection
+          ? null
+          : await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', i, projectPath)
+        if (!projection && !bp) continue
         const isRecent = i >= currentChapter - FULL_WINDOW
+        const title = projection?.chapterTitle || bp?.title || ''
+        const notes = projection?.chapterNotes || bp?.notes || ''
 
-        if (isRecent && bp.notes?.trim()) {
+        if (isRecent && notes.trim()) {
           // 近 N 章：完整收录要点
           lines.push(promptLanguageText(
             writingLanguage,
-            `【第${i}章 ${bp.title || ''}】\n${bp.notes.trim()}`,
-            `[Chapter ${i}: ${bp.title || ''}]\n${bp.notes.trim()}`,
+            `【第${i}章 ${title}】\n${notes.trim()}`,
+            `[Chapter ${i}: ${title}]\n${notes.trim()}`,
           ))
         } else {
           // 远期章节：仅保留标题行（节省 Token）
           lines.push(promptLanguageText(
             writingLanguage,
-            `【第${i}章 ${bp.title || ''}】`,
-            `[Chapter ${i}: ${bp.title || ''}]`,
+            `【第${i}章 ${title}】`,
+            `[Chapter ${i}: ${title}]`,
           ))
         }
       } catch { /* 忽略单章读取失败 */ }

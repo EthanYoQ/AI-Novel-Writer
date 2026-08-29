@@ -141,7 +141,21 @@ export function buildFinalizePostProcessSteps(
         const cleanNotes = await generation.complete(notesBuilder, callbacks, 'visible-text', context)
         if (context?.cancelled) throw new Error('工作流已取消')
 
-        // 写入蓝图 JSON 的 notes 字段
+        if (finalizedDraftId !== undefined) {
+          const continuityResult = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:continuity-save-finalized',
+            {
+              draftId: finalizedDraftId,
+              chapterNumber,
+              chapterNotes: cleanNotes,
+            },
+            _project.path,
+          )
+          requireIpcSuccess(continuityResult, '保存定稿连续性事实')
+        }
+
+        // 兼容已有蓝图项目；作者原稿无蓝图时，权威事实仍已由定稿投影保存。
         if (context?.cancelled) throw new Error('工作流已取消')
         const result = await ipc.invokeWithProjectSession(
           projectSession,
@@ -151,7 +165,11 @@ export function buildFinalizePostProcessSteps(
           _project.path,
         )
         requireIpcSuccess(result, '写入章节剧情要点')
-        callbacks.log('本章剧情要点提取完成（已写入蓝图）')
+        callbacks.log(
+          result.updated === false
+            ? '本章剧情要点提取完成（已保存定稿连续性事实）'
+            : '本章剧情要点提取完成（已写入蓝图）',
+        )
       },
     })
 

@@ -42,6 +42,8 @@ const projectSnapshot = {
   },
 }
 
+let authoritySequenceResult: Record<string, unknown>
+
 function workflowContext(): WorkflowContext {
   return {
     runId: 'test-run',
@@ -178,6 +180,7 @@ function stubIpcInvoke(handler: (channel: string, ...args: unknown[]) => unknown
   const invoke = vi.fn((channel: string, ...args: unknown[]) => Promise.resolve(
     channel === 'prompt:load-global' ? { templates: [], diagnostics: [] }
       : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts') ? false
+        : channel === 'db:draft-authority-sequence' ? authoritySequenceResult
         : handler(channel, ...args),
   ))
   vi.stubGlobal('window', {
@@ -276,6 +279,13 @@ function successfulCommitHandler(overrides: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  authoritySequenceResult = {
+    status: 'empty',
+    lastChapterNumber: 0,
+    nextChapterNumber: 1,
+    duplicateChapterNumbers: [],
+    authorityFingerprint: 'f'.repeat(64),
+  }
   useProjectStore.setState({
     currentProject: {
       id: 'project-1',
@@ -310,6 +320,54 @@ afterEach(() => {
 })
 
 describe('GenerateDirectoryCommand', () => {
+  it('uses finalized authority as the default append start when no explicit range is supplied', async () => {
+    authoritySequenceResult = {
+      status: 'continuous',
+      lastChapterNumber: 9,
+      nextChapterNumber: 10,
+      duplicateChapterNumbers: [],
+      authorityFingerprint: 'a'.repeat(64),
+    }
+    const invoke = stubIpcInvoke(successfulCommitHandler())
+    const session = generationSession(async () => ({
+      status: 'completed',
+      content: blueprintJson([10]),
+      finishReason: 'stop',
+      receipt: generationReceipt(1, 'stop'),
+    }))
+    const command = new GenerateDirectoryCommand(
+      { mode: 'append', count: 1 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 10 } },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+
+    await command.execute({ step: {}, context: workflowContext(), callbacks: stepCallbacks() })
+
+    expect(invoke.mock.calls.find(([channel]) => channel === 'db:blueprint-commit-range')?.[1])
+      .toMatchObject({ startChapter: 10, endChapter: 10 })
+  })
+
+  it('fails before opening a runtime when finalized authority is discontinuous', async () => {
+    authoritySequenceResult = {
+      status: 'invalid',
+      lastChapterNumber: 9,
+      firstGapChapterNumber: 4,
+      duplicateChapterNumbers: [],
+      authorityFingerprint: 'b'.repeat(64),
+    }
+    stubIpcInvoke(successfulCommitHandler())
+    const createRuntime = vi.fn()
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      projectSnapshot,
+      { createRuntime: createRuntime as never },
+    )
+
+    await expect(command.execute({ step: {}, context: workflowContext(), callbacks: stepCallbacks() }))
+      .rejects.toThrow(/权威定稿缺少第 4 章/u)
+    expect(createRuntime).not.toHaveBeenCalled()
+  })
+
   it('sends English blueprint instructions through the provider request for an English project', async () => {
     stubIpcInvoke(successfulCommitHandler())
     let observedTask: GenerationTask | undefined

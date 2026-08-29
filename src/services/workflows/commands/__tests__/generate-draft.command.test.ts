@@ -213,6 +213,14 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     userGuidance?: string
     writingLanguage?: 'zh-CN' | 'en-US'
     chapterNumber?: number
+    continuity?: Array<{
+      draftId: number
+      chapterNumber: number
+      chapterTitle: string
+      chapterNotes: string
+    }>
+    previousFinalizedContent?: string
+    knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
   }) {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
@@ -226,6 +234,19 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         }
       }
       if (channel === 'db:blueprint-get-all') return options.blueprints ?? []
+      if (channel === 'db:blueprint-get') {
+        return options.blueprints?.find(blueprint => blueprint.chapterNumber === args[0]) ?? null
+      }
+      if (channel === 'db:continuity-list-before') return options.continuity ?? []
+      if (channel === 'db:draft-get-finalized') {
+        return options.previousFinalizedContent ? { id: 77 } : null
+      }
+      if (channel === 'db:draft-get-full') {
+        return options.previousFinalizedContent
+          ? { id: 77, content: options.previousFinalizedContent }
+          : null
+      }
+      if (channel === 'kb:search-writing-context') return options.knowledgeResults ?? []
       if (channel === 'fs:list-dir' || channel === 'db:character-get-all') return []
       if (channel === 'db:draft-next-version') return 1
       if (channel === 'db:draft-create') return { success: true, id: 'draft-1' }
@@ -404,6 +425,42 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       budget: DRAFT_GENERATION_BUDGET,
       modelId: 'grok-selected-model',
     })
+  })
+
+  it('injects finalized author continuity and the previous finalized ending without a blueprint', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(500), 'stop')
+    })
+    const previousFinalizedContent = `${'旧章正文。'.repeat(300)}上一章定稿结尾哨兵。`
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      continuity: [{
+        draftId: 41,
+        chapterNumber: 1,
+        chapterTitle: '作者第一章',
+        chapterNotes: '作者事实哨兵：林岚已经拿到红色钥匙。',
+      }],
+      previousFinalizedContent,
+      knowledgeResults: [{ text: '项目知识哨兵', score: 0.9, fileName: '世界观' }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('作者事实哨兵：林岚已经拿到红色钥匙。')
+    expect(prompt).toContain('上一章定稿结尾哨兵。')
+    expect(prompt).toContain('项目知识哨兵')
+    expect(invoke).toHaveBeenCalledWith(
+      'kb:search-writing-context',
+      expect.any(String),
+      5,
+      projectPath,
+      expect.anything(),
+    )
   })
 
   it('previews only authored text before completion and reconciles to the persisted terminal draft', async () => {
@@ -612,7 +669,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompts[0]).toContain('(no future chapter blueprints)')
     expect(prompts[0]).toContain('(no chapter notes)')
     expect(prompts[0]).toContain('(no previous manuscript)')
-    expect(prompts[0]).toContain('(knowledge-base search unavailable)')
+    expect(prompts[0]).toContain('(no relevant knowledge-base context)')
     expect(prompts[0]).toContain('(no character state records)')
     expect(prompts[1]).toContain('Continue the current chapter seamlessly')
     expect(prompts[2]).toContain('This is the only no-progress recovery attempt')

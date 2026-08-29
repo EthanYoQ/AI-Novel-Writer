@@ -328,9 +328,12 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     -- ============================================================
     CREATE TABLE IF NOT EXISTS summary_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      draft_id INTEGER DEFAULT NULL,
       chapter_number INTEGER NOT NULL,
       character_states TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now'))
+      chapter_notes TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (draft_id) REFERENCES drafts(id) ON DELETE CASCADE
     );
 
     -- 索引
@@ -508,6 +511,23 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+  `)
+
+  // Durable continuity facts were added to the existing summary projection so
+  // older projects keep their legacy snapshots while new rows bind to a
+  // finalized draft identity.
+  const summaryColumns = new Set(
+    (db.prepare('PRAGMA table_info(summary_snapshots)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!summaryColumns.has('draft_id')) {
+    db.exec('ALTER TABLE summary_snapshots ADD COLUMN draft_id INTEGER DEFAULT NULL')
+  }
+  if (!summaryColumns.has('chapter_notes')) {
+    db.exec("ALTER TABLE summary_snapshots ADD COLUMN chapter_notes TEXT NOT NULL DEFAULT ''")
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_summary_snapshots_draft
+      ON summary_snapshots(draft_id) WHERE draft_id IS NOT NULL
   `)
 
   // Import-run columns were introduced incrementally during pre-release development.

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertCircle, AlertTriangle, BookOpen, Loader2, Play } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
@@ -24,6 +24,7 @@ import {
   isProjectSessionCurrent,
 } from '../project-session-gate'
 import type { ModelProfile } from '../../shared/ipc-channels'
+import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
 
 interface Props {
   isOpen: boolean
@@ -77,12 +78,15 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
   const [starting, setStarting] = useState(false)
   const [completionMode, setCompletionMode] = useState<BatchChapterCompletionMode>('draft_review')
   const [confirmingAutoFinalize, setConfirmingAutoFinalize] = useState(false)
+  const [authoritativeStart, setAuthoritativeStart] = useState<number | null>(null)
+  const [authorityError, setAuthorityError] = useState<string | null>(null)
+  const [authorityLoading, setAuthorityLoading] = useState(false)
   const [generationModelId, setGenerationModelId] = useState<string | null>(() => (
     preferredGenerationModelId(models, defaultModelId)
   ))
 
   const normalizedCount = normalizeBatchChapterCount(chapterCount)
-  const start = startChapterNumber ?? 1
+  const start = authoritativeStart ?? startChapterNumber ?? 1
   const end = start + normalizedCount - 1
   const generationModels = models.filter(isGenerationModel)
   const fallbackGenerationModelId = preferredGenerationModelId(models, defaultModelId)
@@ -99,6 +103,30 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
         'The selected writing model is no longer available. Select a compatible generation model and try again.',
       )
       : null
+
+  useEffect(() => {
+    if (!isOpen) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    let disposed = false
+    const loadAuthority = async () => {
+      setAuthorityLoading(true)
+      try {
+        const nextChapter = await readAuthoritativeNextChapter(projectSession, locale)
+        if (disposed || !isProjectSessionCurrent(projectSession)) return
+        setAuthoritativeStart(nextChapter)
+        setAuthorityError(null)
+      } catch (cause) {
+        if (disposed || !isProjectSessionCurrent(projectSession)) return
+        setAuthoritativeStart(null)
+        setAuthorityError(cause instanceof Error ? cause.message : String(cause))
+      } finally {
+        if (!disposed && isProjectSessionCurrent(projectSession)) setAuthorityLoading(false)
+      }
+    }
+    void loadAuthority()
+    return () => { disposed = true }
+  }, [currentProject, isOpen, locale])
 
   const handleStart = async () => {
     const projectSession = captureProjectSession(currentProject)
@@ -123,11 +151,14 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
 
     setStarting(true)
     try {
+      const frozenStart = await readAuthoritativeNextChapter(projectSession, locale)
+      if (!isProjectSessionCurrent(projectSession)) return
+      setAuthoritativeStart(frozenStart)
+      setAuthorityError(null)
       const frozenCompletionMode = completionMode
       const frozenLocale = locale
-      const frozenStart = start
       const frozenChapterCount = normalizedCount
-      const frozenEnd = end
+      const frozenEnd = frozenStart + frozenChapterCount - 1
       const frozenSelectedGenerationModelId = selectedGenerationModelId
       const chapterNumbers = Array.from({ length: frozenChapterCount }, (_, index) => frozenStart + index)
       const blueprints = await Promise.all(
@@ -191,7 +222,11 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
     } catch (cause) {
       if (!isProjectSessionCurrent(projectSession)) return
       const message = cause instanceof Error ? cause.message : String(cause)
-      setError(message)
+      if (cause && typeof cause === 'object' && 'code' in cause && cause.code === 'AUTHORITATIVE_CHAPTER_SEQUENCE_INVALID') {
+        setAuthorityError(message)
+      } else {
+        setError(message)
+      }
     } finally {
       if (isProjectSessionCurrent(projectSession)) setStarting(false)
     }
@@ -340,10 +375,10 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
             </div>
           )}
 
-          {(modelSelectionError ?? error) && (
+          {(modelSelectionError ?? authorityError ?? error) && (
             <div className="flex items-start gap-2 rounded-md px-3 py-2 text-xs" style={{ backgroundColor: 'color-mix(in srgb, var(--color-error) 12%, transparent)', color: 'var(--color-error-text)' }}>
               <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
-              <span>{modelSelectionError ?? error}</span>
+              <span>{modelSelectionError ?? authorityError ?? error}</span>
             </div>
           )}
         </div>
@@ -352,7 +387,7 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
           <Button variant="ghost" onClick={onClose} disabled={starting}>
             {text('取消', 'Cancel')}
           </Button>
-          <Button variant="ai" onClick={handleStart} disabled={starting || isBatchRunning || startChapterNumber === null || !!modelSelectionError}>
+          <Button variant="ai" onClick={handleStart} disabled={starting || authorityLoading || isBatchRunning || !!authorityError || !!modelSelectionError}>
             {starting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
             {completionMode === 'draft_review'
               ? text('启动批量创作', 'Start batch writing')

@@ -34,6 +34,11 @@ afterEach(() => {
 
 describe('FinalizedDraftImportRepository transaction seam', () => {
   it('previews an empty project as a contiguous authoritative import without writing facts', () => {
+    expect(FinalizedDraftImportRepository.authoritySequence()).toMatchObject({
+      status: 'empty',
+      lastChapterNumber: 0,
+      nextChapterNumber: 1,
+    })
     const preview = FinalizedDraftImportRepository.preview(chapters(2))
 
     expect(preview).toMatchObject({
@@ -147,6 +152,11 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM contents').get()).toEqual({ count: 9 })
     expect(db.prepare('SELECT COUNT(*) AS count FROM finalization_outbox WHERE publication_status = ?').get('pending'))
       .toEqual({ count: 9 })
+    expect(FinalizedDraftImportRepository.authoritySequence()).toMatchObject({
+      status: 'continuous',
+      lastChapterNumber: 9,
+      nextChapterNumber: 10,
+    })
   })
 
   it('rolls back every chapter and the operation receipt when a later outbox insert fails', () => {

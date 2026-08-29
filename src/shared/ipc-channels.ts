@@ -13,6 +13,10 @@ import type { ModelCapabilities } from './provider-presets'
 import type { ModelProviderResourceId } from './model-provider-resources'
 import type { WritingLanguage } from './writing-language'
 import type {
+  FinalizedContinuityProjection,
+  SaveFinalizedContinuityRequest,
+} from './finalized-continuity'
+import type {
   UpdateActionResponse,
   UpdateCheckResponse,
   UpdatePreferences,
@@ -706,7 +710,7 @@ export interface DatabaseChannels {
     ]
     return: { success: boolean; operation?: BlueprintCharacterSyncOperation; error?: string }
   }
-  'db:blueprint-update-notes': { args: [chapterNumber: number, notes: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }
+  'db:blueprint-update-notes': { args: [chapterNumber: number, notes: string, expectedProjectPath: string]; return: { success: boolean; updated?: boolean; error?: string } }
   'db:blueprint-delete': { args: [chapterNumber: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:blueprint-clear-all': { args: [expectedProjectPath: string]; return: { success: boolean; error?: string } }
 
@@ -738,6 +742,14 @@ export interface DatabaseChannels {
   'db:draft-get-finalized': { args: [chapterNumber: number, expectedProjectPath: string]; return: DraftMeta | null }
   'db:draft-get-max-finalized-chapter': { args: [expectedProjectPath: string]; return: number }
   'db:draft-authority-sequence': { args: [expectedProjectPath: string]; return: AuthoritativeChapterSequence }
+  'db:continuity-save-finalized': {
+    args: [request: SaveFinalizedContinuityRequest, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
+  'db:continuity-list-before': {
+    args: [chapterNumber: number, expectedProjectPath: string]
+    return: FinalizedContinuityProjection[]
+  }
   'db:draft-next-version': { args: [chapterNumber: number, expectedProjectPath: string]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:draft-update-content': { args: [id: number, content: string, wordCount: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
@@ -805,6 +817,7 @@ export interface KnowledgeBaseChannels {
     return: { success: boolean; docId?: string; chunkCount?: number; idempotent?: boolean; error?: string; errorCode?: AppErrorCode }
   }
   'kb:search': { args: [query: string, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
+  'kb:search-writing-context': { args: [query: string, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:search-with-scope': { args: [query: string, fromChapter: number, toChapter: number, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:list-documents': { args: [expectedProjectPath: string]; return: AppResult<Array<{ id: string; fileName: string; importedAt: string; chunkCount: number; filePath: string }>> }
   'kb:remove-document': { args: [docId: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }

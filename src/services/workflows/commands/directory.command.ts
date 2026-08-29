@@ -35,6 +35,7 @@ import {
   MAX_BLUEPRINT_CHAPTERS_PER_TASK,
   planBlueprintGenerationCost,
 } from '../blueprint-batch-policy'
+import { readAuthoritativeNextChapter } from '../../authoritative-chapter-sequence'
 
 type CreateDirectoryGenerationRuntime = typeof createGenerationRuntime
 
@@ -229,6 +230,10 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     const existingBlueprints = (context.data.existingBlueprints || []) as ChapterBlueprint[]
     const { expectedProjectPath, novelConfig } = this.projectSnapshot
     const totalChapters = novelConfig.totalChapters
+    const authoritativeNextChapter = await readAuthoritativeNextChapter(
+      projectSession,
+      writingLanguage,
+    )
     const pendingCharacterSyncs = await listPendingDirectoryCharacterSyncs(
       expectedProjectPath,
       projectSession,
@@ -242,7 +247,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     let startChapter = 1
     let endChapter = totalChapters
     if (this.params.mode === 'append') {
-      startChapter = this.params.startChapter || (existingBlueprints.length + 1)
+      startChapter = this.params.startChapter || authoritativeNextChapter
       if (this.params.count && this.params.count > 0) {
         endChapter = Math.min(totalChapters, startChapter + this.params.count - 1)
       }
