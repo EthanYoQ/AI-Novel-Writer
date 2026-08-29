@@ -529,6 +529,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       ), context.uiLocale)
 
       // 创建步骤回调
+      let promptBudgetAttemptCount = 0
       const callbacks: StepCallbacks = {
         log: (message) => {
           appendStepLogById(set, run.id, i, message)
@@ -538,8 +539,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           updateStepById(set, run.id, i, { progress })
         },
         setPromptBudgetReport: (report) => {
-          updateStepById(set, run.id, i, { promptBudgetReport: report })
-          updateRunById(set, run.id, { promptBudgetReport: report })
+          promptBudgetAttemptCount += 1
+          const attributableReport = promptBudgetAttemptCount === 1 ? report : undefined
+          updateStepById(set, run.id, i, { promptBudgetReport: attributableReport })
+          updateRunById(set, run.id, { promptBudgetReport: attributableReport })
         },
         appendText: (text) => {
           const activeRun = get().activeRuns.find(r => r.id === run.id)

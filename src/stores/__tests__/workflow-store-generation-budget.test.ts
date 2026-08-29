@@ -60,7 +60,10 @@ function environment(finishReason: LLMFinishReason): GenerationRuntimeEnvironmen
 }
 
 class BudgetedGenerationCommand extends BaseWorkflowCommand {
-  constructor(finishReason: LLMFinishReason) {
+  constructor(
+    finishReason: LLMFinishReason,
+    private readonly attempts = 1,
+  ) {
     const runtimeEnvironment = environment(finishReason)
     super({
       createRuntime: options => createGenerationRuntime(options, runtimeEnvironment),
@@ -68,32 +71,38 @@ class BudgetedGenerationCommand extends BaseWorkflowCommand {
   }
 
   execute(params: CommandExecuteParams): Promise<string> {
-    return this.executeWithGenerationRuntime('structured', params, () => this.callLLM(
-      'Return one JSON object.',
-      'You are a structured fiction planner.',
-      params.callbacks,
-      {
-        purpose: 'workflow-budget-diagnostic',
-        reasoningStage: 'planning',
-        responseFormat: { type: 'json_object' },
-        promptBudget: {
-          limitUtf8Bytes: 2048,
-          sections: [
-            {
-              sectionName: 'system-instructions',
-              messageIndex: 0,
-              finalText: 'You are a structured fiction planner.',
+    return this.executeWithGenerationRuntime('structured', params, async () => {
+      let content = ''
+      for (let attempt = 0; attempt < this.attempts; attempt += 1) {
+        content = await this.callLLM(
+          'Return one JSON object.',
+          'You are a structured fiction planner.',
+          params.callbacks,
+          {
+            purpose: 'workflow-budget-diagnostic',
+            reasoningStage: 'planning',
+            responseFormat: { type: 'json_object' },
+            promptBudget: {
+              limitUtf8Bytes: 2048,
+              sections: [
+                {
+                  sectionName: 'system-instructions',
+                  messageIndex: 0,
+                  finalText: 'You are a structured fiction planner.',
+                },
+                {
+                  sectionName: 'task',
+                  messageIndex: 1,
+                  finalText: 'Return one JSON object.',
+                },
+              ],
             },
-            {
-              sectionName: 'task',
-              messageIndex: 1,
-              finalText: 'Return one JSON object.',
-            },
-          ],
-        },
-      },
-      params.context,
-    ))
+          },
+          params.context,
+        )
+      }
+      return content
+    })
   }
 }
 
@@ -159,5 +168,26 @@ describe('workflow generation prompt budget diagnostics', () => {
       promptBudgetReport: expectedReport,
       steps: [expect.objectContaining({ promptBudgetReport: expectedReport })],
     })
+  })
+
+  it('does not attribute one budget report to multiple attempts in the same step', async () => {
+    const command = new BudgetedGenerationCommand('stop', 2)
+
+    await useWorkflowStore.getState().startWorkflow({
+      type: 'architecture_generation',
+      title: 'Repeated budget diagnostics',
+      projectPath,
+      projectSession,
+      steps: [{
+        name: 'Generate and repair structured plan',
+        description: 'Run two protected generation attempts',
+        executor: (step, context, callbacks) => command.execute({ step, context, callbacks }),
+      }],
+    })
+
+    const run = useWorkflowStore.getState().history[0]
+    expect(run).toMatchObject({ status: 'completed' })
+    expect(run?.promptBudgetReport).toBeUndefined()
+    expect(run?.steps[0]?.promptBudgetReport).toBeUndefined()
   })
 })
