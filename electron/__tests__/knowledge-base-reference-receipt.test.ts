@@ -107,7 +107,12 @@ describe('stable reference knowledge receipt', () => {
       'delayed-authority-run', { owner: started.execution.owner, epoch: started.execution.epoch }, 1, 1_000,
     ).stableKey
     let finishEmbedding!: (response: Response) => void
+    let observeFetch!: () => void
+    const fetchObserved = new Promise<void>((resolve) => {
+      observeFetch = resolve
+    })
     const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
+      observeFetch()
       finishEmbedding = resolve
     }))
     vi.stubGlobal('fetch', fetchMock)
@@ -123,9 +128,8 @@ describe('stable reference knowledge receipt', () => {
       'openai',
       { baseUrl: 'https://embedding.example/v1', apiKey: 'configured', modelName: 'embedding-model' },
     )
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-    })
+    await fetchObserved
+    expect(fetchMock).toHaveBeenCalledTimes(1)
 
     vi.setSystemTime(1_101)
     finishEmbedding(new Response(JSON.stringify({
