@@ -254,7 +254,7 @@ export class GenerationAttemptError extends GenerationHarnessError {
   }
 }
 
-function safeReceiptPurpose(purpose: string): string {
+export function safeReceiptPurpose(purpose: string): string {
   return /^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(purpose) ? purpose : 'unknown'
 }
 

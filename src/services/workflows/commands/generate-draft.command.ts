@@ -305,7 +305,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         writingLanguage,
         this.chapterInfo.characters,
       )
-      callbacks.log(`  📋 已加载章节要点与连续性事实（${chapterTimeline.factCount} 条）`)
+      callbacks.log(`  已加载章节要点与连续性事实（${chapterTimeline.factCount} 条）`)
       const activeThreads = await this.readActiveNarrativeThreads(
         expectedProjectPath,
         projectSession,

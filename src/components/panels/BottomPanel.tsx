@@ -15,8 +15,12 @@ import {
 import { Button } from '../ui/Button'
 import { toast } from '../ui/Toast'
 import { LLMDataRequestGate } from './llm-data-request-gate'
-import type { LLMCallRecord } from '../../services/stats-service'
-import { coarseRuntimePlatform, formatSafeCallDiagnostic } from '../../services/safe-call-diagnostic'
+import { diagnosticWorkflowForCall, type LLMCallRecord } from '../../services/stats-service'
+import {
+  coarseRuntimePlatform,
+  formatSafeCallDiagnostic,
+  type SafeDiagnosticWorkflow,
+} from '../../services/safe-call-diagnostic'
 
 /** 底部面板 Tab 名称映射 */
 const TAB_LABELS: Record<string, string> = {
@@ -598,7 +602,13 @@ function LogsView() {
 
 // ===== 模型调用视图 =====
 
-export function SafeDiagnosticCopyButton({ call }: { call: LLMCallRecord }) {
+export function SafeDiagnosticCopyButton({
+  call,
+  workflow,
+}: {
+  call: LLMCallRecord
+  workflow?: SafeDiagnosticWorkflow
+}) {
   const locale = useLocaleStore(s => s.locale)
   const text = useLocaleStore(s => s.text)
 
@@ -612,6 +622,7 @@ export function SafeDiagnosticCopyButton({ call }: { call: LLMCallRecord }) {
       appVersion: __APP_VERSION__,
       platform: coarseRuntimePlatform(navigator.platform),
       call,
+      workflow,
     })
     try {
       await navigator.clipboard.writeText(diagnostic)
@@ -642,6 +653,12 @@ function ModelsView() {
     [currentProject],
   )
   const [requestGate] = useState(() => new LLMDataRequestGate())
+  const activeWorkflowRuns = useWorkflowStore(s => s.activeRuns)
+  const workflowHistory = useWorkflowStore(s => s.history)
+  const diagnosticWorkflowRuns = useMemo(
+    () => [...activeWorkflowRuns, ...workflowHistory],
+    [activeWorkflowRuns, workflowHistory],
+  )
   const [data, setData] = useState<{
     projectSession: ProjectSessionContext
     stats: {
@@ -748,7 +765,14 @@ function ModelsView() {
                   <td className="px-2 py-1 text-right text-[var(--color-text)]">{row.totalTokens == null ? '未知' : row.totalTokens.toLocaleString()}</td>
                   <td className="px-2 py-1 text-right text-[var(--color-text-muted)]">{(row.durationMs / 1000).toFixed(1)}s</td>
                   <td className="px-2 py-1 text-center">{row.success ? <CheckCircle2 size={12} style={{ color: 'var(--color-success)', display: 'inline' }} /> : <XCircle size={12} style={{ color: 'var(--color-error)', display: 'inline' }} />}</td>
-                  <td className="px-2 py-0.5 text-center"><SafeDiagnosticCopyButton call={row} /></td>
+                  <td className="px-2 py-0.5 text-center">
+                    <SafeDiagnosticCopyButton
+                      call={row}
+                      workflow={projectSession
+                        ? diagnosticWorkflowForCall(row, diagnosticWorkflowRuns, projectSession.projectPath)
+                        : undefined}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>

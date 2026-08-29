@@ -44,6 +44,7 @@ describe('formatSafeCallDiagnostic', () => {
         stepName: 'Generate draft',
         stepStatus: 'failed',
         stepFailureCode: 'content_filter',
+        finishReason: 'content_filter',
         promptBudgetReport: {
           totalUtf8Bytes: 1024,
           limitUtf8Bytes: 2048,
@@ -61,9 +62,32 @@ describe('formatSafeCallDiagnostic', () => {
     expect(diagnostic).toContain('- Model ID: 2f491640-c201-4c6e-922b-3103e8c2c5f7')
     expect(diagnostic).toContain('- Purpose: chapter-draft')
     expect(diagnostic).toContain('- Workflow failure code: content_filter')
-    expect(diagnostic).toContain('- Finish reason: unknown')
+    expect(diagnostic).toContain('- Step: Generate draft')
+    expect(diagnostic).toContain('- Finish reason: content_filter')
     expect(diagnostic).toContain('| continuity | 320 |')
     expect(diagnostic).not.toMatch(/API_KEY_LURE|Authorization|Users\\TestUser|SYSTEM PROMPT|complete prompt|private reference prose/)
+  })
+
+  it.each([
+    'narrative-thread-plan-candidate',
+    'narrative-thread-event-candidate',
+  ])('uses the generation receipt purpose rule for %s without a second purpose inventory', (purpose) => {
+    const diagnostic = formatSafeCallDiagnostic({
+      locale: 'en-US',
+      call: {
+        id: 7,
+        modelName: 'Grok 4',
+        purpose,
+        promptTokens: 10,
+        completionTokens: 20,
+        totalTokens: 30,
+        durationMs: 250,
+        success: true,
+        createdAt: '2026-08-29T10:00:00.000Z',
+      },
+    })
+
+    expect(diagnostic).toContain(`- Purpose: ${purpose}`)
   })
 
   it('does not echo unrecognized codes or unsafe free-form identity fields', () => {
@@ -87,6 +111,7 @@ describe('formatSafeCallDiagnostic', () => {
       workflow: {
         status: 'failed',
         failureCode: 'Authorization: secret',
+        stepName: 'Authorization secret',
       },
     })
 

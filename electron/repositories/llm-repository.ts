@@ -83,7 +83,17 @@ export class LLMHistoryRepository {
       SELECT id, model_id as modelId, model_name as modelName, purpose,
         prompt_tokens as promptTokens, completion_tokens as completionTokens,
         total_tokens as totalTokens, duration_ms as durationMs,
-        success, created_at as createdAt
+        success,
+        CASE
+          WHEN success = 1 THEN 'stop'
+          WHEN error_message = 'finish:length' THEN 'length'
+          WHEN error_message = 'finish:content_filter' THEN 'content_filter'
+          WHEN error_message IN ('finish:cancelled', 'cancelled') THEN 'cancelled'
+          WHEN error_message = 'finish:error' THEN 'error'
+          WHEN error_message = 'finish:unknown' THEN 'unknown'
+          ELSE NULL
+        END as finishReason,
+        created_at as createdAt
       FROM llm_calls ORDER BY id DESC LIMIT ?
     `).all(limit)
   }

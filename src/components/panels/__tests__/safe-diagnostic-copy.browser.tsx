@@ -33,8 +33,22 @@ describe('safe diagnostic copy action', () => {
       completionTokens: 40,
       totalTokens: 60,
       durationMs: 900,
-      success: true,
+      success: false,
+      finishReason: 'content_filter',
       createdAt: '2026-08-29T10:00:00.000Z',
+    }} workflow={{
+      status: 'failed',
+      failureCode: 'content_filter',
+      stepName: 'Generate draft',
+      stepStatus: 'failed',
+      stepFailureCode: 'content_filter',
+      finishReason: 'content_filter',
+      promptBudgetReport: {
+        totalUtf8Bytes: 1024,
+        limitUtf8Bytes: 2048,
+        reservedOutputTokens: 512,
+        sections: [{ sectionName: 'continuity', utf8Bytes: 320 }],
+      },
     }} />))
 
     await page.getByRole('button', { name: 'Copy safe diagnostics' }).click()
@@ -44,6 +58,10 @@ describe('safe diagnostic copy action', () => {
     expect(copied).toContain('- Actual model: Grok 4')
     expect(copied).toContain('- Model ID: 2f491640-c201-4c6e-922b-3103e8c2c5f7')
     expect(copied).toContain('- Purpose: chapter-draft')
+    expect(copied).toContain('- Workflow failure code: content_filter')
+    expect(copied).toContain('- Step: Generate draft')
+    expect(copied).toContain('- Finish reason: content_filter')
+    expect(copied).toContain('| continuity | 320 |')
     expect(copied).not.toMatch(/sk-do-not-copy|Authorization|request body/)
   })
 })

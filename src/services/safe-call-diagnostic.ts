@@ -1,4 +1,5 @@
 import type { Locale } from '../i18n/types'
+import { safeReceiptPurpose } from './generation/generation-harness'
 import type { LLMCallRecord } from './stats-service'
 
 type PromptBudgetSection = { sectionName?: unknown; utf8Bytes?: unknown }
@@ -14,7 +15,7 @@ export interface SafeDiagnosticWorkflow {
     totalUtf8Bytes?: unknown
     limitUtf8Bytes?: unknown
     reservedOutputTokens?: unknown
-    sections?: PromptBudgetSection[]
+    sections?: readonly PromptBudgetSection[]
   }
   [key: string]: unknown
 }
@@ -30,20 +31,14 @@ export interface SafeCallDiagnosticInput {
 const CODE = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
-const PURPOSE = new Set([
-  'agent', 'generation', 'analyze-writing-style', 'generate-global-config', 'generate-global-config-replacement',
-  'generate-core-seed', 'character-architecture-manifest', 'character-architecture-details', 'generate-world-building',
-  'generate-plot-architecture', 'chapter-draft', 'chapter-blueprint-directory', 'post-process',
-  'legacy-character-roster-repair', 'refine-draft', 'import-inference:endpoint-card-recovery', 'import-inference',
-  'import-chapter-blueprints', 'refine-from-review', 'review-chapter',
-])
 const WORKFLOW_STATUS = new Set(['pending', 'running', 'waiting', 'paused', 'cancelling', 'completed', 'failed', 'cancelled'])
 const FAILURE_CODE = new Set(['length', 'content_filter', 'cancelled', 'error', 'unknown', 'prompt_budget_exhausted'])
 const FINISH_REASON = new Set(['stop', 'length', 'content_filter', 'cancelled', 'error', 'unknown'])
 const PLATFORM = new Set(['windows', 'macos', 'linux'])
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._():+/-]{0,79}$/
-const SENSITIVE_MODEL_NAME = /(?:authorization|bearer|api[ _-]?key|secret|\btoken\b|\bsk-)/i
-const PATH_SHAPED_MODEL_NAME = /(?:^[A-Za-z]:\/|^[A-Za-z][A-Za-z0-9+.-]*:\/\/|(?:^|\/)\.{1,2}(?:\/|$)|\/\/)/
+const SAFE_STEP_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._:：()（）/—–-]{0,79}$/u
+const SENSITIVE_TEXT = /(?:authorization|bearer|api[ _-]?key|secret|\btoken\b|\bsk-)/i
+const PATH_SHAPED_TEXT = /(?:^[A-Za-z]:\/|^[A-Za-z][A-Za-z0-9+.-]*:\/\/|(?:^|\/)\.{1,2}(?:\/|$)|\/\/)/
 
 function safeCode(value: unknown, allowed?: Set<string>): string | undefined {
   if (typeof value !== 'string' || !CODE.test(value)) return undefined
@@ -64,8 +59,24 @@ export function safeModelName(value: unknown): string | undefined {
   if (
     typeof value !== 'string'
     || !MODEL_NAME.test(value)
-    || SENSITIVE_MODEL_NAME.test(value)
-    || PATH_SHAPED_MODEL_NAME.test(value)
+    || SENSITIVE_TEXT.test(value)
+    || PATH_SHAPED_TEXT.test(value)
+  ) return undefined
+  return value
+}
+
+function safePurpose(value: unknown): string | undefined {
+  if (typeof value !== 'string' || SENSITIVE_TEXT.test(value)) return undefined
+  const purpose = safeReceiptPurpose(value)
+  return purpose === 'unknown' ? undefined : purpose
+}
+
+function safeStepName(value: unknown): string | undefined {
+  if (
+    typeof value !== 'string'
+    || !SAFE_STEP_NAME.test(value)
+    || SENSITIVE_TEXT.test(value)
+    || PATH_SHAPED_TEXT.test(value)
   ) return undefined
   return value
 }
@@ -106,7 +117,7 @@ export function formatSafeCallDiagnostic(input: SafeCallDiagnosticInput): string
     '', `## ${labels.call}`,
     `- ${labels.actualModel}: ${value(safeModelName(input.call.modelName))}`,
     `- ${labels.model}: ${value(typeof input.call.modelId === 'string' && UUID.test(input.call.modelId) ? input.call.modelId : undefined)}`,
-    `- ${labels.purpose}: ${value(safeCode(input.call.purpose, PURPOSE))}`,
+    `- ${labels.purpose}: ${value(safePurpose(input.call.purpose))}`,
     `- ${labels.requested}: ${value(safeTimestamp(input.call.createdAt))}`,
     `- ${labels.duration}: ${value(safeNumber(input.call.durationMs))}`,
     `- ${labels.prompt}: ${value(safeNumber(input.call.promptTokens))}`,
@@ -116,7 +127,7 @@ export function formatSafeCallDiagnostic(input: SafeCallDiagnosticInput): string
     '', `## ${labels.workflow}`,
     `- ${labels.status}: ${value(safeCode(workflow?.status, WORKFLOW_STATUS))}`,
     `- ${labels.failureCode}: ${value(safeCode(workflow?.failureCode, FAILURE_CODE))}`,
-    `- ${labels.step}: ${unknown}`,
+    `- ${labels.step}: ${value(safeStepName(workflow?.stepName))}`,
     `- ${labels.stepStatus}: ${value(safeCode(workflow?.stepStatus, WORKFLOW_STATUS))}`,
     `- ${labels.stepFailure}: ${value(safeCode(workflow?.stepFailureCode, FAILURE_CODE))}`,
     `- ${labels.finish}: ${value(safeCode(workflow?.finishReason, FINISH_REASON))}`,
