@@ -29,6 +29,12 @@ beforeEach(() => {
       created_at TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT ''
     );
+    CREATE TABLE finalization_outbox (
+      finalization_id TEXT PRIMARY KEY,
+      draft_id INTEGER NOT NULL UNIQUE,
+      chapter_number INTEGER NOT NULL,
+      chapter_title TEXT NOT NULL
+    );
   `)
   db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(1, '定稿快照正文')
   db.prepare(`
@@ -44,6 +50,32 @@ afterEach(() => {
 })
 
 describe('DraftRepository finalized immutability guard', () => {
+  it('lists the finalized outbox chapter title as authoritative draft metadata', () => {
+    db.prepare(`
+      INSERT INTO finalization_outbox (finalization_id, draft_id, chapter_number, chapter_title)
+      VALUES (?, ?, ?, ?)
+    `).run('finalization-1', 1, 1, '蓝镜初亮')
+
+    expect(DraftRepository.listAll()).toMatchObject([{
+      id: 1,
+      chapterNumber: 1,
+      chapterTitle: '蓝镜初亮',
+      status: 'finalized',
+    }])
+  })
+
+  it('keeps the finalized title in chapter-scoped metadata reloads', () => {
+    db.prepare(`
+      INSERT INTO finalization_outbox (finalization_id, draft_id, chapter_number, chapter_title)
+      VALUES (?, ?, ?, ?)
+    `).run('finalization-1', 1, 1, '蓝镜初亮')
+
+    expect(DraftRepository.listByChapter(1)[0]?.chapterTitle).toBe('蓝镜初亮')
+    expect(DraftRepository.getMeta(1)?.chapterTitle).toBe('蓝镜初亮')
+    expect(DraftRepository.getLatestByChapter(1)?.chapterTitle).toBe('蓝镜初亮')
+    expect(DraftRepository.getFinalizedByChapter(1)?.chapterTitle).toBe('蓝镜初亮')
+  })
+
   it('lists draft metadata across chapters without relying on blueprint rows', () => {
     db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(2, '第二章定稿正文')
     db.prepare(`

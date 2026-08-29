@@ -273,11 +273,28 @@ describe('project refresh context', () => {
 
     const refreshA = useDraftStore.getState().loadAllDrafts(project('A').path)
     useProjectStore.setState({ currentProject: project('B') })
-    useDraftStore.setState({ draftsByChapter: { 2: [] } })
-    draftsA.resolve([])
+    const projectBDraft = {
+      id: 2,
+      chapterNumber: 2,
+      chapterTitle: '项目 B 标题',
+      version: 1,
+      status: 'finalized',
+      source: 'write',
+      wordCount: 8,
+      createdAt: '2026-08-29T00:00:00.000Z',
+      fileName: 'draft_v1.md',
+      filePath: 'vela://draft/2',
+    } as const
+    useDraftStore.setState({ draftsByChapter: { 2: [projectBDraft] } })
+    draftsA.resolve([{
+      ...projectBDraft,
+      id: 1,
+      chapterNumber: 1,
+      chapterTitle: '迟到的项目 A 标题',
+    }])
     await refreshA
 
-    expect(useDraftStore.getState().draftsByChapter).toEqual({ 2: [] })
+    expect(useDraftStore.getState().draftsByChapter).toEqual({ 2: [projectBDraft] })
     expect(invoke).toHaveBeenCalledWith('db:draft-list-all', project('A').path)
   })
 
@@ -288,6 +305,7 @@ describe('project refresh context', () => {
           {
             id: 1,
             chapterNumber: 1,
+            chapterTitle: '蓝镜初亮',
             version: 1,
             status: 'finalized',
             source: 'write',
@@ -297,6 +315,7 @@ describe('project refresh context', () => {
           {
             id: 2,
             chapterNumber: 2,
+            chapterTitle: '潮线回声',
             version: 1,
             status: 'finalized',
             source: 'write',
@@ -313,8 +332,8 @@ describe('project refresh context', () => {
     expect(invoke).toHaveBeenCalledWith('db:draft-list-all', project('A').path)
     expect(invoke).not.toHaveBeenCalledWith('db:blueprint-get-all', project('A').path)
     expect(useDraftStore.getState().draftsByChapter).toMatchObject({
-      1: [{ id: 1, chapterNumber: 1, status: 'finalized', filePath: 'vela://draft/1' }],
-      2: [{ id: 2, chapterNumber: 2, status: 'finalized', filePath: 'vela://draft/2' }],
+      1: [{ id: 1, chapterNumber: 1, chapterTitle: '蓝镜初亮', status: 'finalized', filePath: 'vela://draft/1' }],
+      2: [{ id: 2, chapterNumber: 2, chapterTitle: '潮线回声', status: 'finalized', filePath: 'vela://draft/2' }],
     })
   })
 

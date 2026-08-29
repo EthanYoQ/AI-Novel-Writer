@@ -212,7 +212,8 @@ export default function ProjectTree() {
       path: `vela://manuscript/${draft!.id}`, // 诸如 vela://manuscript/42
       name: `chapter_${draft!.chapterNumber}.md`, // 提供格式化的伪文件名供组件适配解析
       isDir: false,
-    })) as Array<{ path: string; name: string; isDir: boolean }>
+      chapterTitle: draft!.chapterTitle,
+    }))
 
   // 小说配置是否已完成（核心大纲非空视为已完成）
   const nc = currentProject.novelConfig

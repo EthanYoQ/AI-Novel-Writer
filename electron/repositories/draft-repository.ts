@@ -7,10 +7,18 @@
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
 
+const DRAFT_META_SELECT = `
+  SELECT drafts.*, finalization_outbox.chapter_title
+  FROM drafts
+  LEFT JOIN finalization_outbox
+    ON drafts.status = 'finalized' AND finalization_outbox.draft_id = drafts.id
+`
+
 /** 草稿元数据（不含正文，适合列表查询） */
 export interface DraftMeta {
     id: number
     chapterNumber: number
+    chapterTitle?: string
     version: number
     status: string
     source: string
@@ -27,9 +35,13 @@ export interface DraftFull extends DraftMeta {
 
 /** DB 行 → DraftMeta */
 function rowToMeta(row: Record<string, unknown>): DraftMeta {
+    const chapterTitle = typeof row.chapter_title === 'string' && row.chapter_title.trim()
+        ? row.chapter_title
+        : undefined
     return {
         id: row.id as number,
         chapterNumber: row.chapter_number as number,
+        ...(chapterTitle ? { chapterTitle } : {}),
         version: row.version as number,
         status: row.status as string,
         source: row.source as string,
@@ -85,7 +97,9 @@ export class DraftRepository {
         if (!db) return []
 
         const rows = db.prepare(`
-      SELECT * FROM drafts WHERE chapter_number = ? ORDER BY version ASC
+      ${DRAFT_META_SELECT}
+      WHERE drafts.chapter_number = ?
+      ORDER BY drafts.version ASC
     `).all(chapterNumber) as Record<string, unknown>[]
 
         return rows.map(rowToMeta)
@@ -97,7 +111,8 @@ export class DraftRepository {
         if (!db) return []
 
         const rows = db.prepare(`
-      SELECT * FROM drafts ORDER BY chapter_number ASC, version ASC
+      ${DRAFT_META_SELECT}
+      ORDER BY drafts.chapter_number ASC, drafts.version ASC
     `).all() as Record<string, unknown>[]
 
         return rows.map(rowToMeta)
@@ -108,9 +123,10 @@ export class DraftRepository {
         const db = getProjectDb()
         if (!db) return null
 
-        const row = db.prepare(
-            'SELECT * FROM drafts WHERE id = ?'
-        ).get(id) as Record<string, unknown> | undefined
+        const row = db.prepare(`
+          ${DRAFT_META_SELECT}
+          WHERE drafts.id = ?
+        `).get(id) as Record<string, unknown> | undefined
 
         return row ? rowToMeta(row) : null
     }
@@ -130,9 +146,9 @@ export class DraftRepository {
         if (!db) return null
 
         const row = db.prepare(`
-      SELECT * FROM drafts
-      WHERE chapter_number = ?
-      ORDER BY version DESC LIMIT 1
+      ${DRAFT_META_SELECT}
+      WHERE drafts.chapter_number = ?
+      ORDER BY drafts.version DESC LIMIT 1
     `).get(chapterNumber) as Record<string, unknown> | undefined
 
         return row ? rowToMeta(row) : null
@@ -144,9 +160,9 @@ export class DraftRepository {
         if (!db) return null
 
         const row = db.prepare(`
-      SELECT * FROM drafts
-      WHERE chapter_number = ? AND status = 'finalized'
-      ORDER BY version DESC LIMIT 1
+      ${DRAFT_META_SELECT}
+      WHERE drafts.chapter_number = ? AND drafts.status = 'finalized'
+      ORDER BY drafts.version DESC LIMIT 1
     `).get(chapterNumber) as Record<string, unknown> | undefined
 
         return row ? rowToMeta(row) : null

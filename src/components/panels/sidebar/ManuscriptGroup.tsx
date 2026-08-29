@@ -25,8 +25,10 @@ import {
   deleteFinalizedChapter,
 } from './finalized-chapter-deletion'
 
+type ManuscriptFileNode = FileNode & { chapterTitle?: string }
+
 /**
- * 优先从蓝图 JSON 读取章节标题，fallback 到文件首行
+ * 已定稿 metadata 优先；旧定稿再 fallback 到蓝图和文件首行。
  *
  * @param filePath    manuscript 文件路径
  * @param fallback    兜底显示名（如 "第1章"）
@@ -37,12 +39,22 @@ async function readChapterTitle(
   fallback: string,
   projectSession: ProjectSessionContext,
   chapterNumber?: number,
+  authoritativeTitle?: string,
 ): Promise<string | null> {
   if (!isProjectSessionCurrent(projectSession)) return null
   const cacheKey = `${projectSession.projectPath}\u0000${filePath}`
+  if (chapterNumber && authoritativeTitle?.trim()) {
+    const prefix = `第${chapterNumber}章`
+    const title = authoritativeTitle.trim().startsWith(prefix)
+      ? authoritativeTitle.trim().slice(prefix.length).trim()
+      : authoritativeTitle.trim()
+    const display = title ? `${fallback} ${title}` : fallback
+    chapterTitleCache.set(cacheKey, display)
+    return display
+  }
   if (chapterTitleCache.has(cacheKey)) return chapterTitleCache.get(cacheKey)!
 
-  // 优先从蓝图 JSON 读取标题
+  // 旧定稿没有 outbox 标题时，沿用蓝图 fallback。
   if (chapterNumber) {
     try {
       const bpResult = await ipc.invokeWithProjectSession(
@@ -88,7 +100,7 @@ async function readChapterTitle(
 
 // ===== 正文章节组件 =====
 
-export default function ManuscriptGroup({ files, projectPath }: { files: FileNode[]; projectPath: string }) {
+export default function ManuscriptGroup({ files, projectPath }: { files: ManuscriptFileNode[]; projectPath: string }) {
   const [open, setOpen] = useState(true)
   const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore(s => s.currentProject)
@@ -122,7 +134,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: FileNod
           const fallback = chMatch ? text(`第${parseInt(chMatch[1], 10)}章`, `Chapter ${parseInt(chMatch[1], 10)}`) : rawName
           const chNum = chMatch ? parseInt(chMatch[1], 10) : undefined
           try {
-            const title = await readChapterTitle(f.path, fallback, projectSession, chNum)
+            const title = await readChapterTitle(f.path, fallback, projectSession, chNum, f.chapterTitle)
             if (title !== null) entries[f.path] = title
           } catch {
             // 读取失败时保留界面上的兜底名称；不把失败当成空正文或缓存结果。
