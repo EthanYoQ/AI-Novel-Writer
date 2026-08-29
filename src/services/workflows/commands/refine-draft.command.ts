@@ -132,7 +132,7 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
       filePath: this.params.draftPath,
       originalContent: this.params.draftContent,
       content: cleanRefined,
-      revisionPath: String(createRes.id),
+      revisionPath: `vela://revision/${createRes.id}`,
       chapterNumber: this.params.chapterNumber,
       chapterDir: `vela://draft/ch${this.params.chapterNumber}`,
       projectKey: context.projectPath,

@@ -245,7 +245,11 @@ describe('RefineDraftCommand bounded visible completion', () => {
     expect(stepCallbacks.log).toHaveBeenCalledWith('Refining the chapter...')
     expect(stepCallbacks.log).toHaveBeenCalledWith(expect.stringContaining('Revision complete'))
     expect(useEditorStore.getState().tabs).toEqual([
-      expect.objectContaining({ name: 'Revision merge: Chapter 1', type: 'diff' }),
+      expect.objectContaining({
+        name: 'Revision merge: Chapter 1',
+        type: 'diff',
+        revisionPath: 'vela://revision/9',
+      }),
     ])
   })
 
@@ -546,7 +550,11 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     const visibleLogs = vi.mocked(stepCallbacks.log).mock.calls.map(([message]) => message).join('\n')
     expect(['✅', '⚠️', '❌'].some(icon => visibleLogs.includes(icon))).toBe(false)
     expect(useEditorStore.getState().tabs).toEqual([
-      expect.objectContaining({ name: 'Review fix: Chapter 1', type: 'diff' }),
+      expect.objectContaining({
+        name: 'Review fix: Chapter 1',
+        type: 'diff',
+        revisionPath: 'vela://revision/9',
+      }),
     ])
   })
 
