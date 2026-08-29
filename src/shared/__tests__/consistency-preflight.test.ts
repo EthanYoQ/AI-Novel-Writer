@@ -40,6 +40,40 @@ describe('findBlueprintContinuityRisks', () => {
     expect(findings[0]?.issue.enUS).toContain('顾舟')
   })
 
+  it('reports the named terminal subject instead of another entity or a witness', () => {
+    const findings = findBlueprintContinuityRisks([{
+      ...projection[0]!,
+      chapterNumber: 4,
+      facts: [{
+        category: 'character-state' as const,
+        entities: ['林舟', '林海'],
+        statement: '[结果] 林海死亡，U盘与证据落入林舟手中',
+        sourceChapter: 4,
+        evidence: '林海留下证据后死亡。',
+      }, {
+        category: 'character-state' as const,
+        entities: ['林舟'],
+        statement: '| 林舟 | 接收U盘与钥匙，目睹父亲死亡后逃脱 |',
+        sourceChapter: 4,
+        evidence: '林舟目睹父亲死亡。',
+      }],
+    }], {
+      chapterNumber: 5,
+      title: '回声中的证人',
+      role: '收束',
+      purpose: '出席听证会',
+      keyEvents: '林海亲自现身。',
+      characters: ['林舟', '苏遥', '林海'],
+      suspenseHook: '',
+      userGuidance: '',
+      notes: '',
+    }, [])
+
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.issue.zhCN).toContain('林海')
+    expect(findings[0]?.issue.zhCN).not.toContain('“林舟”')
+  })
+
   it('does not report an omitted open thread and suppresses only active stable-key exemptions', () => {
     const openThreadProjection = [{ ...projection[0]!, facts: [{
       category: 'open-thread' as const, entities: ['银色怀表'], statement: '坐标尚未解释。',

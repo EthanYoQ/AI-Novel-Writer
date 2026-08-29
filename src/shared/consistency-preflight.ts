@@ -37,6 +37,24 @@ function normalizedKeyPart(value: string): string {
   return value.trim().replace(/\s+/gu, ' ')
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+function isExplicitTerminalSubject(statement: string, entity: string): boolean {
+  const subject = escapeRegExp(entity)
+  const divider = String.raw`[\s|:：,，、—-]*`
+  const chinese = new RegExp(
+    `${subject}${divider}(?:(?:已经|已|被确认(?:为)?|被证实(?:为)?)${divider})?(?:死亡|身亡|牺牲|去世)`,
+    'u',
+  )
+  const english = new RegExp(
+    String.raw`${subject}[\s|:,-]+(?:(?:is|was|has(?: been)?)\s+)?(?:dead|died|deceased)\b`,
+    'iu',
+  )
+  return chinese.test(statement) || english.test(statement)
+}
+
 export function continuityStableFactKey(fact: {
   category: string
   sourceChapter: number
@@ -72,15 +90,15 @@ export function findBlueprintContinuityRisks(
     exemptions.filter(exemption => !exemption.revoked).map(exemption => exemption.stableFactKey),
   )
   const characters = new Set(blueprint.characters.map(normalizedKeyPart))
-  const terminalState = /(?:已经|已|确认)?(?:死亡|身亡|牺牲|去世)|\b(?:is dead|died|deceased)\b/iu
 
   return projections.flatMap(projection => (projection.facts ?? []).flatMap((fact) => {
-    if (fact.category !== 'character-state' || !terminalState.test(fact.statement)) return []
+    if (fact.category !== 'character-state') return []
     const stableFactKey = continuityStableFactKey(fact)
     if (activeExemptions.has(stableFactKey)) return []
-    const scheduledEntity = fact.entities.map(normalizedKeyPart).find(entity => characters.has(entity))
-    if (!scheduledEntity) return []
-    const subject = scheduledEntity
+    const subject = fact.entities
+      .map(normalizedKeyPart)
+      .find(entity => characters.has(entity) && isExplicitTerminalSubject(fact.statement, entity))
+    if (!subject) return []
     return [{
       stableFactKey,
       severity: 'warning' as const,
