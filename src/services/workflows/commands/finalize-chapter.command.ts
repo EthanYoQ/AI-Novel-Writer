@@ -518,6 +518,14 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
     callbacks.log('正在启动后台大模型推演系统更新全书状态...')
 
     const sourceLabel = `第${snapshot.chapterNumber}章定稿`
+    const chapterEntities = this.params.chapterInfo.characters.length > 0
+      ? this.params.chapterInfo.characters
+      : (await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:blueprint-get',
+          snapshot.chapterNumber,
+          project.path,
+        ))?.characters ?? []
     const postProcessStatus = await new RunFinalizePostProcessCommand({
       project,
       chapterNumber: snapshot.chapterNumber,
@@ -526,7 +534,7 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
       draftId: commit.draftId,
       sourceLabel,
       stopOnFailure: this.params.stopOnPostProcessFailure,
-      chapterEntities: this.params.chapterInfo.characters,
+      chapterEntities,
     }).execute({ step: {}, context, callbacks })
     this.assertNotCancelled(context)
 
