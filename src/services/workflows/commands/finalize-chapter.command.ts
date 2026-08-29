@@ -73,9 +73,13 @@ function factCategory(statement: string): FinalizedContinuityFactCategory {
 }
 
 function textBigrams(value: string): Set<string> {
-  const characters = [...value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')]
-  if (characters.length < 2) return new Set(characters)
-  return new Set(characters.slice(0, -1).map((character, index) => character + characters[index + 1]))
+  const groups = value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+  return new Set(groups.flatMap((group) => {
+    const characters = [...group]
+    return characters.length < 2
+      ? characters
+      : characters.slice(0, -1).map((character, index) => character + characters[index + 1])
+  }))
 }
 
 function evidenceExcerpt(content: string, statement: string, entities: readonly string[]): string {
@@ -84,10 +88,10 @@ function evidenceExcerpt(content: string, statement: string, entities: readonly 
     .map(sentence => sentence.trim())
     .filter(Boolean)
   const factEntities = entities.filter(entity => statement.includes(entity))
-  const signals = textBigrams(statement)
-  for (const entity of factEntities) {
-    for (const entityBigram of textBigrams(entity)) signals.delete(entityBigram)
-  }
+  const statementWithoutEntities = [...factEntities]
+    .sort((left, right) => right.length - left.length)
+    .reduce((text, entity) => text.split(entity).join(' '), statement)
+  const signals = textBigrams(statementWithoutEntities)
   const candidates = factEntities.length > 0
     ? sentences.filter(sentence => factEntities.some(entity => sentence.includes(entity)))
     : sentences

@@ -45,4 +45,15 @@ describe('buildFinalizedContinuityFacts', () => {
     })
     expect(facts.some(fact => fact.statement.includes('顾明'))).toBe(false)
   })
+
+  it('does not treat an entity boundary bigram as evidence for a contradictory fact', () => {
+    const facts = buildFinalizedContinuityFacts(
+      5,
+      '林海在北京死亡。',
+      '林海在上海生活。',
+      ['林海'],
+    )
+
+    expect(facts).toEqual([])
+  })
 })
