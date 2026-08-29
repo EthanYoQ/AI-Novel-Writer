@@ -72,13 +72,34 @@ function factCategory(statement: string): FinalizedContinuityFactCategory {
   return 'plot'
 }
 
-function evidenceExcerpt(content: string, entities: readonly string[]): string {
+function textBigrams(value: string): Set<string> {
+  const characters = [...value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')]
+  if (characters.length < 2) return new Set(characters)
+  return new Set(characters.slice(0, -1).map((character, index) => character + characters[index + 1]))
+}
+
+function evidenceExcerpt(content: string, statement: string, entities: readonly string[]): string {
   const sentences = content
     .split(/(?<=[。！？.!?])|\n+/u)
     .map(sentence => sentence.trim())
     .filter(Boolean)
-  const matched = sentences.find(sentence => entities.some(entity => sentence.includes(entity)))
-  return (matched ?? sentences[0] ?? '').slice(0, CONTINUITY_EVIDENCE_LIMIT).trim()
+  const factEntities = entities.filter(entity => statement.includes(entity))
+  const signals = textBigrams(statement)
+  for (const entity of factEntities) {
+    for (const entityBigram of textBigrams(entity)) signals.delete(entityBigram)
+  }
+  const candidates = factEntities.length > 0
+    ? sentences.filter(sentence => factEntities.some(entity => sentence.includes(entity)))
+    : sentences
+  const ranked = candidates
+    .map(sentence => ({
+      sentence,
+      score: [...signals].filter(signal => textBigrams(sentence).has(signal)).length,
+    }))
+    .sort((left, right) => right.score - left.score)
+  const minimumScore = factEntities.length > 0 ? 1 : 2
+  const matched = ranked.find(candidate => candidate.score >= minimumScore)?.sentence
+  return (matched ?? '').slice(0, CONTINUITY_EVIDENCE_LIMIT).trim()
 }
 
 export function buildFinalizedContinuityFacts(
@@ -93,14 +114,19 @@ export function buildFinalizedContinuityFacts(
     .map(statement => statement.replace(/^\s*(?:[-*•]|\d+[.)、])\s*/u, '').trim())
     .filter(Boolean)
     .slice(0, CONTINUITY_FACT_LIMIT)
-  const evidence = evidenceExcerpt(finalizedContent, entities)
-  return statements.map(statement => ({
-    category: factCategory(statement),
-    entities: entities.filter(entity => statement.includes(entity)),
-    statement: statement.slice(0, CONTINUITY_STATEMENT_LIMIT),
-    sourceChapter: chapterNumber,
-    evidence,
-  }))
+  return statements.flatMap(statement => {
+    const factEntities = entities.filter(entity => statement.includes(entity))
+    const evidence = evidenceExcerpt(finalizedContent, statement, factEntities)
+    return evidence
+      ? [{
+          category: factCategory(statement),
+          entities: factEntities,
+          statement: statement.slice(0, CONTINUITY_STATEMENT_LIMIT),
+          sourceChapter: chapterNumber,
+          evidence,
+        }]
+      : []
+  })
 }
 
 // ===== 后处理步骤构建器 =====

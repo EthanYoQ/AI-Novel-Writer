@@ -21,4 +21,28 @@ describe('buildFinalizedContinuityFacts', () => {
       }),
     ])
   })
+
+  it('binds each fact to its own finalized evidence and omits unsupported notes', () => {
+    const facts = buildFinalizedContinuityFacts(
+      4,
+      [
+        '林舟把铜钥匙交给苏遥。',
+        '韩峥在洪水中死亡。',
+        '顾明破解了保险箱密码。',
+      ].join('\n'),
+      '林舟把铜钥匙交给苏遥。韩峥随后被洪水卷走，当场死亡。',
+      ['林舟', '苏遥', '韩峥', '顾明'],
+    )
+
+    expect(facts).toHaveLength(2)
+    expect(facts[0]).toMatchObject({
+      entities: ['林舟', '苏遥'],
+      evidence: '林舟把铜钥匙交给苏遥。',
+    })
+    expect(facts[1]).toMatchObject({
+      entities: ['韩峥'],
+      evidence: '韩峥随后被洪水卷走，当场死亡。',
+    })
+    expect(facts.some(fact => fact.statement.includes('顾明'))).toBe(false)
+  })
 })
