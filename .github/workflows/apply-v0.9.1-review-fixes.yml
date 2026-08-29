@@ -1,0 +1,111 @@
+name: Apply v0.9.1 review fixes
+
+'on':
+  push:
+    branches:
+      - hotfix/v0.9.1-review-fixes
+    paths:
+      - '.github/workflows/apply-v0.9.1-review-fixes.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-v0.9.1-review-fixes
+  cancel-in-progress: false
+
+jobs:
+  apply-verify-and-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out hotfix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: hotfix/v0.9.1-review-fixes
+          fetch-depth: 0
+
+      - name: Verify immutable base ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base='cdc18a3967483f5d97c88b715041cbc9bcdd7391'
+          git merge-base --is-ancestor "$expected_base" HEAD
+          unexpected="$(git diff --name-only "$expected_base"..HEAD \
+            | grep -vE '^\.github/hotfix/payload-[0-9]{3}\.b64$|^\.github/workflows/apply-v0\.9\.1-review-fixes\.yml$' \
+            || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "Unexpected pre-hotfix branch changes:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+          test "$(find .github/hotfix -maxdepth 1 -name 'payload-*.b64' | wc -l)" -eq 8
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 11.11.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Decode exact-base hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/hotfix/payload-*.b64 \
+            | tr -d '\n\r\t ' \
+            | base64 --decode \
+            | gzip --decompress > "$RUNNER_TEMP/apply.mjs"
+          echo 'a2d480a9c5a0b7129c574f611f4fdb83571be7a4b8c3b37322c2963ce8bf56d6  '"$RUNNER_TEMP/apply.mjs" \
+            | sha256sum --check --strict
+          node --check "$RUNNER_TEMP/apply.mjs"
+
+      - name: Apply exact-base hotfix
+        env:
+          AI_NOVEL_HOTFIX_SKIP_HEAD_CHECK: '1'
+        run: node "$RUNNER_TEMP/apply.mjs"
+
+      - name: Type-check
+        run: pnpm run typecheck
+
+      - name: Check i18n coverage
+        run: pnpm run check:i18n
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Run unit tests
+        run: pnpm run test
+
+      - name: Run browser tests
+        run: pnpm run test:browser
+
+      - name: Build desktop application
+        run: pnpm run build
+
+      - name: Commit and push verified hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/hotfix
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'The hotfix produced no changes.' >&2
+            exit 1
+          fi
+          git commit -m 'fix: harden v0.9.0 workflow and import boundaries'
+          git push origin HEAD:hotfix/v0.9.1-review-fixes
