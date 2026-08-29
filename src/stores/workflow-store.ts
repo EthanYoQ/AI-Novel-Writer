@@ -431,7 +431,12 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     // 添加到活跃列表
     set(s => {
       const newRuns = [...s.activeRuns, run]
-      return { activeRuns: newRuns, ...computeCompat(newRuns, s.waitingRuns) }
+      const newHistory = s.history.filter(previous => previous.id !== run.id)
+      return {
+        activeRuns: newRuns,
+        history: newHistory,
+        ...computeCompat(newRuns, s.waitingRuns),
+      }
     })
     get().addLog('info', uiText(
       uiLocale,

@@ -5,13 +5,19 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
-import { BlueprintRepository, type BlueprintData } from '../blueprint-repository'
+import {
+  BlueprintRepository,
+  type BlueprintData,
+  type BlueprintRangeCommitReceipt,
+} from '../blueprint-repository'
+import { CharacterRosterRepository } from '../character-roster-repository'
 import { ImportRunRepository } from '../import-run-repository'
 import {
   ImportRunOrchestrator,
   type ImportRunOrchestratorDependencies,
 } from '../../../src/services/workflows/import-run-orchestrator'
 import type { ImportRunChapterSnapshot } from '../../../src/shared/import-run'
+import type { CharacterRosterEntry } from '../../../src/shared/character-roster'
 
 let root = ''
 
@@ -38,6 +44,153 @@ function blueprint(number: number): BlueprintData {
     userGuidance: '',
     notes: '',
     notesUpdatedAt: '',
+  }
+}
+
+function rosterCharacter(name: string): CharacterRosterEntry {
+  return {
+    name,
+    role: 'supporting',
+    gender: '',
+    age: '',
+    appearance: '',
+    personality: '',
+    background: '',
+    abilities: '',
+    motivation: '',
+    relationships: [],
+    arc: '',
+    notes: 'Imported reference character',
+  }
+}
+
+interface RecoveryTrace {
+  knowledgeCalls: number[]
+  globalCalls: number
+  styleCalls: number
+  blueprintModelCalls: number[][]
+  replayedBlueprintBatches: string[]
+  failSecondBlueprintBatchOnce: boolean
+}
+
+function completeBlueprintCharacterSync(receipt: BlueprintRangeCommitReceipt): void {
+  BlueprintRepository.completeCharacterSyncOperation(
+    receipt.characterSyncOperation.operationId,
+  )
+}
+
+function fullRecoveryDependencies(trace: RecoveryTrace): ImportRunOrchestratorDependencies {
+  return {
+    getRun: async runId => ImportRunRepository.get(runId),
+    startOrResume: async (runId, owner) => ImportRunRepository.startOrResume(runId, owner),
+    renewExecution: async (runId, execution) => ImportRunRepository.renewExecution(runId, execution),
+    getEffectReceipt: async (runId, stage, batchId) => (
+      ImportRunRepository.getEffectReceipt(runId, stage, batchId)
+    ),
+    prepareEffectReceipt: async (request, execution) => (
+      ImportRunRepository.prepareEffectReceipt(request, execution)
+    ),
+    commitEffectReceipt: async (runId, stage, batchId, execution) => (
+      ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution)
+    ),
+    replayCommittedEffect: async receipt => {
+      if (receipt.kind !== 'chapter-blueprint-range') return
+      const committed = receipt.effectReceipt as BlueprintRangeCommitReceipt
+      trace.replayedBlueprintBatches.push(receipt.batchId)
+      completeBlueprintCharacterSync(committed)
+    },
+    listChapters: async (runId, afterChapterNumber, limit) => (
+      ImportRunRepository.listChapterBatch(runId, { afterChapterNumber, limit })
+    ),
+    importReference: async (item, run, authority) => {
+      trace.knowledgeCalls.push(item.number)
+      const binding = ImportRunRepository.resolveReferenceImportAuthority(
+        run.id,
+        authority,
+        item.number,
+      )
+      const documentId = createHash('sha256')
+        .update(`reference-import:${binding.stableKey}`)
+        .digest('hex')
+      getProjectDb()!.prepare(`
+        INSERT INTO import_reference_documents (
+          document_id, idempotency_key_hash, content_hash, chunk_set_hash,
+          expected_chunk_count, corpus_kind, state
+        ) VALUES (?, ?, ?, ?, 1, 'reference', 'committed')
+      `).run(
+        documentId,
+        createHash('sha256').update(binding.stableKey).digest('hex'),
+        binding.contentFingerprint,
+        createHash('sha256').update(`chunks:${item.number}`).digest('hex'),
+      )
+      ImportRunRepository.commitReferenceImportReceipt(
+        run.id,
+        authority,
+        item.number,
+        documentId,
+      )
+    },
+    inferGlobal: async (_chapters, _stats, run, commit) => {
+      trace.globalCalls += 1
+      await commit({
+        operationId: `novel-import-global-${run.id}`,
+        expectedRosterRevision: 0,
+        core: {
+          genre: 'Science fiction',
+          subGenre: 'Mystery',
+          targetAudience: 'Adult',
+          totalChapters: run.totalChapters,
+          wordsPerChapter: 1_000,
+          plotStructure: 'three_act',
+          narrativePov: 'third_limited',
+          goldenFinger: 'None',
+          globalGuidance: 'Keep the mystery coherent.',
+          coreOutline: 'Mara follows a signal across six chapters.',
+          worldSetting: 'A remote orbital station.',
+          protagonistProfile: 'Mara is a careful navigator.',
+          premise: 'A signal predicts failures before they happen.',
+          worldbuilding: 'The station depends on unreliable archival machines.',
+          synopsis: 'Mara traces the signal and discovers its human source.',
+        },
+        characterEntries: [rosterCharacter('Mara')],
+      })
+    },
+    analyzeStyle: async (_chapters, _run, commit) => {
+      trace.styleCalls += 1
+      await commit({ writingStyle: 'Precise, restrained prose.' })
+    },
+    inferBlueprints: async (chapters, _checkpoint, run, commit) => {
+      trace.blueprintModelCalls.push(chapters.map(item => item.number))
+      if (trace.blueprintModelCalls.length === 2 && trace.failSecondBlueprintBatchOnce) {
+        trace.failSecondBlueprintBatchOnce = false
+        throw new Error('injected later blueprint model failure')
+      }
+      const receipt = await commit({
+        mode: 'replace-range',
+        operationId: `import-blueprints-${run.id}-${chapters[0]!.number}-${chapters.at(-1)!.number}`,
+        startChapter: chapters[0]!.number,
+        endChapter: chapters.at(-1)!.number,
+        blueprints: chapters.map(item => ({
+          ...blueprint(item.number),
+          characters: ['Mara'],
+        })),
+      }) as BlueprintRangeCommitReceipt
+      completeBlueprintCharacterSync(receipt)
+    },
+    refresh: async () => undefined,
+    completeBatch: async (runId, stage, batchId, execution) => (
+      ImportRunRepository.completeBatch(runId, stage, batchId, execution)
+    ),
+    advanceStage: async (runId, completedStage, nextStage, execution) => (
+      ImportRunRepository.advanceStage(runId, completedStage, nextStage, execution)
+    ),
+    fail: async (runId, stage, error, execution) => (
+      ImportRunRepository.fail(runId, stage, error, execution)
+    ),
+    cancelAtBoundary: async (runId, execution) => (
+      ImportRunRepository.cancelAtBoundary(runId, execution)
+    ),
+    complete: async (runId, execution) => ImportRunRepository.complete(runId, execution),
   }
 }
 
@@ -219,5 +372,138 @@ describe('ImportRunOrchestrator with the real import repository', () => {
     expect(BlueprintRepository.count()).toBe(2)
     expect(modelCalls).toEqual([[1, 2]])
     expect(commitSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('continues the same failed run after reopen without repeating committed knowledge or blueprint work', async () => {
+    const runId = 'full-recovery-run'
+    const chapters = Array.from({ length: 6 }, (_, index) => chapter(index + 1))
+    ImportRunRepository.prepare({
+      runId,
+      purpose: 'reference',
+      sourceFingerprint: 'c'.repeat(64),
+      sourceDisplay: [{ displayName: 'full-recovery.txt', mediaType: 'text/plain', size: 66 }],
+      locale: 'en-US',
+      chapters,
+    })
+    getProjectDb()!.prepare(
+      "INSERT INTO project_core (id, project_name) VALUES ('main', 'Recovery integration')",
+    ).run()
+    const assignedChapterNumbers = ImportRunRepository.listChapterBatch(
+      runId,
+      { afterChapterNumber: 0, limit: 100 },
+    ).map(item => item.number)
+    const firstBlueprintBatch = assignedChapterNumbers.slice(0, 5)
+    const laterBlueprintBatch = assignedChapterNumbers.slice(5)
+    const trace: RecoveryTrace = {
+      knowledgeCalls: [],
+      globalCalls: 0,
+      styleCalls: 0,
+      blueprintModelCalls: [],
+      replayedBlueprintBatches: [],
+      failSecondBlueprintBatchOnce: true,
+    }
+    const commitSpy = vi.spyOn(BlueprintRepository, 'commitRange')
+    const callbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
+    const beforeReopen = new ImportRunOrchestrator(fullRecoveryDependencies(trace))
+
+    await beforeReopen.executeStage(
+      runId, 'knowledge', 'renderer-before-reopen', { cancelled: false }, callbacks,
+    )
+    await beforeReopen.executeStage(
+      runId, 'global', 'renderer-before-reopen', { cancelled: false }, callbacks,
+    )
+    await beforeReopen.executeStage(
+      runId, 'style', 'renderer-before-reopen', { cancelled: false }, callbacks,
+    )
+    await expect(beforeReopen.executeStage(
+      runId, 'blueprints', 'renderer-before-reopen', { cancelled: false }, callbacks,
+    )).rejects.toThrow('injected later blueprint model failure')
+
+    const failedRun = ImportRunRepository.get(runId)!
+    expect(failedRun).toMatchObject({
+      id: runId,
+      stage: 'blueprints',
+      status: 'failed',
+      lastError: 'injected later blueprint model failure',
+      completedBatches: {
+        knowledge: [expect.any(String)],
+        global: ['done'],
+        style: ['done'],
+        blueprints: [expect.any(String)],
+      },
+    })
+    const firstBlueprintCheckpoint = failedRun.completedBatches.blueprints![0]!
+    const firstBlueprintReceipt = ImportRunRepository.getEffectReceipt(
+      runId,
+      'blueprints',
+      firstBlueprintCheckpoint,
+    )!
+    const firstBlueprintEffect = firstBlueprintReceipt.effectReceipt as BlueprintRangeCommitReceipt
+    expect(firstBlueprintReceipt.state).toBe('committed')
+    expect(BlueprintRepository.getCharacterSyncOperation(
+      firstBlueprintEffect.characterSyncOperation.operationId,
+    )).toMatchObject({ status: 'completed' })
+    expect(BlueprintRepository.count()).toBe(5)
+    expect(trace.knowledgeCalls).toEqual(assignedChapterNumbers)
+    expect(trace.globalCalls).toBe(1)
+    expect(trace.styleCalls).toBe(1)
+    expect(trace.blueprintModelCalls).toEqual([firstBlueprintBatch, laterBlueprintBatch])
+    expect(getProjectDb()!.prepare(
+      "SELECT COUNT(*) AS count FROM import_reference_documents WHERE state = 'committed'",
+    ).get()).toEqual({ count: 6 })
+    expect(getProjectDb()!.prepare(
+      'SELECT COUNT(*) AS count FROM import_run_knowledge_receipts WHERE run_id = ?',
+    ).get(runId)).toEqual({ count: 6 })
+    const firstBlueprintOperationId = `import-blueprints-${runId}-${firstBlueprintBatch[0]}-${firstBlueprintBatch.at(-1)}`
+    expect(commitSpy.mock.calls.filter(([request]) => (
+      request.operationId === firstBlueprintOperationId
+    ))).toHaveLength(1)
+
+    closeProjectDatabase()
+    initProjectDatabase(root)
+    expect(ImportRunRepository.get(runId)).toMatchObject({
+      stage: 'blueprints',
+      status: 'failed',
+    })
+    expect(BlueprintRepository.getCharacterSyncOperation(
+      firstBlueprintEffect.characterSyncOperation.operationId,
+    )).toMatchObject({ status: 'completed' })
+
+    const afterReopen = new ImportRunOrchestrator(fullRecoveryDependencies(trace))
+    await afterReopen.executeStage(
+      runId, 'blueprints', 'renderer-after-reopen', { cancelled: false }, callbacks,
+    )
+    await afterReopen.executeStage(
+      runId, 'refresh', 'renderer-after-reopen', { cancelled: false }, callbacks,
+    )
+
+    expect(ImportRunRepository.get(runId)).toMatchObject({
+      id: runId,
+      stage: 'completed',
+      status: 'completed',
+      resumable: false,
+      completedChapters: 6,
+    })
+    expect(trace.knowledgeCalls).toEqual(assignedChapterNumbers)
+    expect(trace.globalCalls).toBe(1)
+    expect(trace.styleCalls).toBe(1)
+    expect(trace.blueprintModelCalls).toEqual([
+      firstBlueprintBatch,
+      laterBlueprintBatch,
+      laterBlueprintBatch,
+    ])
+    expect(trace.replayedBlueprintBatches).toEqual([firstBlueprintCheckpoint])
+    expect(BlueprintRepository.count()).toBe(6)
+    expect(commitSpy.mock.calls.filter(([request]) => (
+      request.operationId === firstBlueprintOperationId
+    ))).toHaveLength(1)
+    expect(commitSpy).toHaveBeenCalledTimes(2)
+    expect(getProjectDb()!.prepare(
+      "SELECT COUNT(*) AS count FROM import_reference_documents WHERE state = 'committed'",
+    ).get()).toEqual({ count: 6 })
+    expect(CharacterRosterRepository.read()).toMatchObject({
+      status: 'ready',
+      entries: [expect.objectContaining({ name: 'Mara' })],
+    })
   })
 })

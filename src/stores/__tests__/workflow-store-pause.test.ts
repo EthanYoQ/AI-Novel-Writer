@@ -97,7 +97,27 @@ describe('workflow pause at a safe step boundary', () => {
       status: 'failed',
     }])
 
-    await useWorkflowStore.getState().startWorkflow(definition('Continue import', async () => undefined))
+    let releaseContinue!: () => void
+    const continueBlocked = new Promise<void>((resolve) => { releaseContinue = resolve })
+    const continuing = useWorkflowStore.getState().startWorkflow(definition(
+      'Continue import',
+      async () => { await continueBlocked },
+    ))
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns).toMatchObject([{
+      id: 'continued-import-run',
+      title: 'Continue import',
+      status: 'running',
+    }]))
+
+    const visibleRuns = [
+      ...useWorkflowStore.getState().activeRuns,
+      ...useWorkflowStore.getState().history,
+    ].filter(run => run.id === 'continued-import-run')
+    expect(visibleRuns).toHaveLength(1)
+    expect(useWorkflowStore.getState().history).toHaveLength(0)
+
+    releaseContinue()
+    await continuing
 
     expect(useWorkflowStore.getState().history).toHaveLength(1)
     expect(useWorkflowStore.getState().history[0]).toMatchObject({
