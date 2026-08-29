@@ -358,7 +358,7 @@ describe('workflow mutation failure boundaries', () => {
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('剧情要点提取完成'))
   })
 
-  it('persists finalized continuity when the author chapter has no blueprint', async () => {
+  it('persists notes but omits unsupported facts when the author chapter has no blueprint', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'db:continuity-save-finalized') return { success: true }
       if (channel === 'db:blueprint-update-notes') return { success: true, updated: false }
@@ -389,18 +389,12 @@ describe('workflow mutation failure boundaries', () => {
         draftId: 41,
         chapterNumber: 1,
         chapterNotes: '作者原稿的连续性事实',
-        facts: [{
-          category: 'plot',
-          entities: [],
-          statement: '作者原稿的连续性事实',
-          sourceChapter: 1,
-          evidence: '作者正文',
-        }],
+        facts: [],
       },
       PROJECT_PATH,
       expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
     )
-    expect(stepCallbacks.log).toHaveBeenCalledWith('已投影连续性事实：1 条')
+    expect(stepCallbacks.log).toHaveBeenCalledWith('已投影连续性事实：0 条')
   })
 
   it('records the finalized knowledge document identity before marking import complete', async () => {

@@ -6,7 +6,7 @@ import { createRepairFinalizeWorkflow } from '../chapter-workflow'
 
 const postProcess = vi.hoisted(() => ({
   params: [] as Array<Record<string, unknown>>,
-  execute: vi.fn(async () => undefined),
+  execute: vi.fn(async (params: unknown) => { void params }),
 }))
 
 vi.mock('../commands/finalize-chapter.command', () => ({
@@ -76,7 +76,13 @@ describe('createRepairFinalizeWorkflow', () => {
     vi.stubGlobal('window', { velaAPI: { invoke } })
 
     const workflow = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION)
-    await workflow.steps[0]!.executor({}, context(), callbacks())
+    const step = workflow.steps[0]!
+    await step.executor({
+      ...step,
+      id: 'repair-finalize-step',
+      status: 'running',
+      logs: [],
+    }, context(), callbacks())
 
     expect(postProcess.params).toEqual([expect.objectContaining({
       chapterNumber: 3,
