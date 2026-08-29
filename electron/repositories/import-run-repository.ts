@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import {
+  AuthorImportPreviewStaleError,
   assertImportRunEffectReceiptMetadata,
   IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
   IMPORT_RUN_BLUEPRINT_BATCH_SIZE,
@@ -1111,6 +1112,47 @@ function matchingResumableRun(purpose: ImportPurpose, sourceFingerprint: string,
   `).get(purpose, sourceFingerprint, manifestFingerprint) as ImportRunRow | undefined
 }
 
+function hasCommittedAuthorFinalizationReceipt(run: ImportRunRow): boolean {
+  const receipt = db().prepare(`
+    SELECT * FROM import_run_receipts
+    WHERE run_id = ? AND kind = 'author-finalized-batch' AND state = 'committed'
+    ORDER BY updated_at DESC, rowid DESC LIMIT 1
+  `).get(run.id) as ImportRunEffectReceiptRow | undefined
+  if (!receipt) return false
+  rowToEffectReceipt(receipt, run)
+  return true
+}
+
+function fenceUncommittedAuthorRun(run: ImportRunRow, now = Date.now()): void {
+  if (run.status === 'running' && run.execution_owner && run.lease_expires_at > now) {
+    throw new Error(run.locale === 'en-US'
+      ? 'The previous author import is still running. Wait for it to stop, then confirm the latest preview again.'
+      : '之前的作者原稿导入仍在运行，请等待其停止后重新确认最新预览')
+  }
+  const guidance = run.locale === 'en-US'
+    ? 'Author manuscript authority changed. Confirm the latest preview to create a new import run.'
+    : '作者原稿权威状态已变化，请根据最新预览重新确认导入'
+  const fenced = db().prepare(`
+    UPDATE import_runs
+    SET resumable = 0, cancel_requested = 0, last_error = ?,
+        execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+        updated_at = datetime('now')
+    WHERE id = ? AND purpose = 'author-manuscript' AND resumable = 1
+      AND status IN ('ready', 'running', 'failed', 'cancelled')
+      AND (status <> 'running' OR execution_owner = '' OR lease_expires_at <= ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM import_run_receipts
+        WHERE run_id = import_runs.id
+          AND kind = 'author-finalized-batch' AND state = 'committed'
+      )
+  `).run(guidance, run.id, now)
+  if (fenced.changes !== 1) {
+    throw new Error(run.locale === 'en-US'
+      ? 'The author import state changed. Confirm the latest preview again.'
+      : '作者原稿导入状态已变化，请重新确认最新预览')
+  }
+}
+
 function discardProvisionalParsingRun(runId: string): void {
   const result = db().prepare(`
     DELETE FROM import_runs
@@ -1751,17 +1793,23 @@ export class ImportRunRepository {
           candidate.sourceFingerprint,
           preview.manifestFingerprint,
         )
-        if (resumable) {
-          return {
-            classification: 'resumable' as const,
-            run: rowToSnapshot(resumable),
-            newChapterNumbers: [],
-            conflictChapterNumbers: [],
-            duplicateChapterNumbers: authorChapters.map(chapter => chapter.chapterNumber),
-          }
-        }
         if (preview.authorityFingerprint !== candidate.authorityFingerprint) {
-          throw new Error('项目权威章节已变化，作者原稿预览已过期')
+          throw new AuthorImportPreviewStaleError('项目权威章节已变化，作者原稿预览已过期')
+        }
+        if (resumable) {
+          if (
+            hasCommittedAuthorFinalizationReceipt(resumable)
+            || resumable.authority_fingerprint === preview.authorityFingerprint
+          ) {
+            return {
+              classification: 'resumable' as const,
+              run: rowToSnapshot(resumable),
+              newChapterNumbers: [],
+              conflictChapterNumbers: [],
+              duplicateChapterNumbers: authorChapters.map(chapter => chapter.chapterNumber),
+            }
+          }
+          fenceUncommittedAuthorRun(resumable)
         }
         if (preview.classification === 'conflict') {
           throw new Error(preview.authorityInvalid

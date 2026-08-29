@@ -33,7 +33,12 @@ const mocks = vi.hoisted(() => ({
   })),
   characterRosterCommit: vi.fn(),
   finalizedDraftImportCommit: vi.fn(),
+  finalizedDraftImportPreview: vi.fn(),
   importGlobalFactsCommit: vi.fn(),
+  importInspectionPeek: vi.fn(),
+  importInspectionConsume: vi.fn(),
+  importSourceIdentityResolve: vi.fn(),
+  importRunPrepare: vi.fn(),
   importRunFinalizeParsing: vi.fn(),
   draftGetFull: vi.fn(() => ({
     id: 1,
@@ -140,6 +145,7 @@ vi.mock('../../repositories/draft-repository', () => ({
 vi.mock('../../repositories/finalized-draft-import-repository', () => ({
   FinalizedDraftImportRepository: {
     commit: mocks.finalizedDraftImportCommit,
+    preview: mocks.finalizedDraftImportPreview,
   },
 }))
 
@@ -151,8 +157,26 @@ vi.mock('../../repositories/import-global-facts-repository', () => ({
 
 vi.mock('../../repositories/import-run-repository', () => ({
   ImportRunRepository: {
+    prepare: mocks.importRunPrepare,
     finalizeParsing: mocks.importRunFinalizeParsing,
   },
+}))
+
+vi.mock('../../services/import-inspection-store', () => ({
+  importInspectionStore: {
+    peek: mocks.importInspectionPeek,
+    consume: mocks.importInspectionConsume,
+  },
+}))
+
+vi.mock('../../repositories/import-source-identity-repository', () => ({
+  ImportSourceIdentityRepository: {
+    resolveEncodedSources: mocks.importSourceIdentityResolve,
+  },
+}))
+
+vi.mock('../../services/import-source-identity-secret', () => ({
+  loadApplicationImportSourceSecret: vi.fn(() => Buffer.alloc(32, 1)),
 }))
 
 import { registerDatabaseController } from '../db-controller'
@@ -210,6 +234,115 @@ beforeEach(() => {
 })
 
 describe('database controller project context guard', () => {
+  it.each(['zh-CN', 'en-US'] as const)(
+    'returns a locale-independent error code for a stale %s author confirmation',
+    async (locale) => {
+      mocks.importInspectionPeek.mockReturnValueOnce({
+        inspectionId: 'author-inspection',
+        purpose: 'author-manuscript',
+        webContentsId: 7,
+        sources: [],
+        chapters: [{
+          number: 1,
+          sourceIndex: 0,
+          sourceChapterNumber: 1,
+          title: 'Opening',
+          content: 'Confirmed author text',
+          wordCount: 21,
+          contentFingerprint: 'a'.repeat(64),
+          contentSize: 21,
+        }],
+        totalWords: 21,
+        totalBytes: 21,
+        expiresAt: Date.now() + 60_000,
+      })
+      mocks.finalizedDraftImportPreview.mockReturnValueOnce({
+        authorityFingerprint: 'b'.repeat(64),
+        manifestFingerprint: 'c'.repeat(64),
+      })
+
+      const result = await handler('db:import-run-prepare-inspection')(
+        { sender: { id: 7 } },
+        {
+          inspectionId: 'author-inspection',
+          runId: 'author-run',
+          purpose: 'author-manuscript',
+          locale,
+          authorityFingerprint: 'd'.repeat(64),
+          manifestFingerprint: 'c'.repeat(64),
+        },
+        'C:/projects/A',
+      )
+
+      expect(result).toEqual({
+        success: false,
+        errorCode: 'AUTHOR_IMPORT_PREVIEW_STALE',
+      })
+      expect(mocks.importInspectionConsume).not.toHaveBeenCalled()
+      expect(mocks.importRunPrepare).not.toHaveBeenCalled()
+    },
+  )
+
+  it('preserves the stable stale-preview code when authority changes inside repository preparation', async () => {
+    const inspection = {
+      inspectionId: 'author-race-inspection',
+      purpose: 'author-manuscript',
+      webContentsId: 8,
+      sources: [{
+        locationAliasDigest: '1'.repeat(64),
+        fileAliasDigest: '2'.repeat(64),
+        displayName: 'manuscript.txt',
+        mediaType: 'text/plain',
+        size: 21,
+      }],
+      chapters: [{
+        number: 1,
+        sourceIndex: 0,
+        sourceChapterNumber: 1,
+        title: 'Opening',
+        content: 'Confirmed author text',
+        wordCount: 21,
+        contentFingerprint: 'a'.repeat(64),
+        contentSize: 21,
+      }],
+      totalWords: 21,
+      totalBytes: 21,
+      expiresAt: Date.now() + 60_000,
+    }
+    mocks.importInspectionPeek.mockReturnValueOnce(inspection)
+    mocks.importInspectionConsume.mockReturnValueOnce(inspection)
+    mocks.finalizedDraftImportPreview.mockReturnValueOnce({
+      authorityFingerprint: 'b'.repeat(64),
+      manifestFingerprint: 'c'.repeat(64),
+    })
+    mocks.importSourceIdentityResolve.mockReturnValueOnce({
+      sourceFingerprint: 'e'.repeat(64),
+      sourceIds: ['11111111-1111-4111-8111-111111111111'],
+      sourceFingerprints: ['f'.repeat(64)],
+    })
+    mocks.importRunPrepare.mockImplementationOnce(() => {
+      throw Object.assign(new Error('内部中文诊断不应进入英文 UI'), {
+        code: 'AUTHOR_IMPORT_PREVIEW_STALE',
+      })
+    })
+
+    await expect(handler('db:import-run-prepare-inspection')(
+      { sender: { id: 8 } },
+      {
+        inspectionId: inspection.inspectionId,
+        runId: 'author-race-run',
+        purpose: 'author-manuscript',
+        locale: 'en-US',
+        authorityFingerprint: 'b'.repeat(64),
+        manifestFingerprint: 'c'.repeat(64),
+      },
+      'C:/projects/A',
+    )).resolves.toEqual({
+      success: false,
+      errorCode: 'AUTHOR_IMPORT_PREVIEW_STALE',
+    })
+  })
+
   it('finalizes an already parsed run from its main-process snapshots', async () => {
     const preparation = {
       classification: 'new',

@@ -520,7 +520,10 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     (db.prepare('PRAGMA table_info(summary_snapshots)').all() as Array<{ name: string }>).map(column => column.name),
   )
   if (!summaryColumns.has('draft_id')) {
-    db.exec('ALTER TABLE summary_snapshots ADD COLUMN draft_id INTEGER DEFAULT NULL')
+    db.exec(`
+      ALTER TABLE summary_snapshots
+      ADD COLUMN draft_id INTEGER DEFAULT NULL REFERENCES drafts(id) ON DELETE CASCADE
+    `)
   }
   if (!summaryColumns.has('chapter_notes')) {
     db.exec("ALTER TABLE summary_snapshots ADD COLUMN chapter_notes TEXT NOT NULL DEFAULT ''")

@@ -23,6 +23,7 @@ let startWorkflow: ReturnType<typeof vi.fn>
 let preparation: ImportRunPreparationResult
 let authorPreview: AuthorManuscriptImportPreview
 let prepareError = ''
+let prepareErrorCode = ''
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -86,6 +87,7 @@ beforeEach(async () => {
     conflictChapterNumbers: [], duplicateChapterNumbers: [],
   }
   prepareError = ''
+  prepareErrorCode = ''
   authorPreview = {
     classification: 'ready', authorityFingerprint: 'c'.repeat(64), manifestFingerprint: 'd'.repeat(64),
     chapterCount: 1, targetStatus: 'finalized', nextChapterNumber: 2,
@@ -108,8 +110,8 @@ beforeEach(async () => {
       }
       return { success: true, preparation }
     }
-    if (channel === 'db:import-run-prepare-inspection') return prepareError
-      ? { success: false, error: prepareError }
+    if (channel === 'db:import-run-prepare-inspection') return prepareError || prepareErrorCode
+      ? { success: false, error: prepareError || undefined, errorCode: prepareErrorCode || undefined }
       : { success: true, preparation }
     if (channel === 'db:import-run-author-preview') return authorPreview
     if (channel === 'db:project-core-get') return null
@@ -535,6 +537,96 @@ describe('current-project reference import', () => {
     })
   })
 
+  it('starts the fresh author run after a failed pre-commit run and a mixed-manifest re-confirmation', async () => {
+    const oldRun = importRun({
+      id: 'stale-precommit-author-run',
+      purpose: 'author-manuscript',
+      stage: 'author-commit',
+      status: 'failed',
+      lastError: 'pre-commit interruption',
+      authorityFingerprint: 'a'.repeat(64),
+      manifestFingerprint: 'f'.repeat(64),
+      completedBatches: {},
+      totalChapters: 2,
+      manifestChapterCount: 3,
+    })
+    const freshPreview: AuthorManuscriptImportPreview = {
+      classification: 'ready',
+      authorityFingerprint: 'b'.repeat(64),
+      manifestFingerprint: 'f'.repeat(64),
+      chapterCount: 3,
+      targetStatus: 'finalized',
+      nextChapterNumber: 4,
+      chapters: [
+        { number: 1, title: 'One', wordCount: 10, disposition: 'duplicate' },
+        { number: 2, title: 'Two', wordCount: 10, disposition: 'duplicate' },
+        { number: 3, title: 'Three', wordCount: 10, disposition: 'new' },
+      ],
+      newChapterNumbers: [3],
+      duplicateChapterNumbers: [1, 2],
+      conflictChapterNumbers: [],
+      authorityInvalid: false,
+    }
+    const freshRun = importRun({
+      id: 'fresh-author-run',
+      purpose: 'author-manuscript',
+      stage: 'author-commit',
+      status: 'ready',
+      authorityFingerprint: freshPreview.authorityFingerprint,
+      manifestFingerprint: freshPreview.manifestFingerprint,
+      totalChapters: 1,
+      manifestChapterCount: 3,
+    })
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-list-resumable') return [oldRun]
+      if (channel === 'dialog:select-novel-files') return {
+        success: true,
+        inspection: {
+          inspectionId: 'fresh-author-inspection',
+          purpose: 'author-manuscript',
+          sourceCount: 1,
+          sourceDisplayNames: ['manuscript.txt'],
+          chapterCount: 3,
+          totalWords: 30,
+          totalBytes: 30,
+          preview: freshPreview.chapters.map(({ number, title, wordCount }) => ({ number, title, wordCount })),
+        },
+      }
+      if (channel === 'db:import-run-author-preview') return freshPreview
+      if (channel === 'db:import-run-prepare-inspection') {
+        expect(args[0]).toMatchObject({
+          runId: expect.not.stringMatching(/^stale-precommit-author-run$/),
+          authorityFingerprint: freshPreview.authorityFingerprint,
+          manifestFingerprint: freshPreview.manifestFingerprint,
+        })
+        return {
+          success: true,
+          preparation: {
+            classification: 'new',
+            run: freshRun,
+            newChapterNumbers: [3],
+            duplicateChapterNumbers: [1, 2],
+            conflictChapterNumbers: [],
+          },
+        }
+      }
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    await expect.element(page.getByTestId('import-resumable-choice-stale-precommit-author-run')).toBeVisible()
+    await act(async () => page.getByTestId('import-source-choose').click())
+    await expect.element(page.getByTestId('author-import-confirmation-summary'))
+      .toHaveTextContent('新增 1 章权威定稿')
+    await act(async () => page.getByRole('button', { name: /确认导入（3 章）/ }).click())
+
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: freshRun.id })
+    expect(startWorkflow.mock.calls[0][0]).not.toMatchObject({ runId: oldRun.id })
+  })
+
   it('shows the English author purpose, chapter target, and explicit confirmation action', async () => {
     await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
     await act(async () => page.getByTestId('import-purpose-author').click())
@@ -564,14 +656,28 @@ describe('current-project reference import', () => {
   })
 
   it('fails closed when the project authority changes after author preview', async () => {
-    prepareError = '项目权威章节已变化，原稿预览已过期'
+    prepareErrorCode = 'AUTHOR_IMPORT_PREVIEW_STALE'
     await act(async () => page.getByTestId('import-purpose-author').click())
     await act(async () => page.getByTestId('import-source-choose').click())
     await act(async () => page.getByRole('button', { name: /确认导入（1 章）/ }).click())
 
-    await expect.element(page.getByText('项目权威章节已变化，原稿预览已过期')).toBeVisible()
+    await expect.element(page.getByText('项目或作者原稿清单已变化，请重新选择文件并确认预览。')).toBeVisible()
     expect(startWorkflow).not.toHaveBeenCalled()
     await expect.element(page.getByRole('button', { name: /确认导入（0 章）/ })).toBeDisabled()
+  })
+
+  it('localizes a stale author preview error in English without exposing Chinese main-process text', async () => {
+    prepareErrorCode = 'AUTHOR_IMPORT_PREVIEW_STALE'
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    await act(async () => page.getByTestId('import-source-choose').click())
+    await act(async () => page.getByRole('button', { name: 'Confirm import (1 chapters)' }).click())
+
+    await expect.element(page.getByText(
+      'The project or author manuscript changed. Select the files again and confirm the preview.',
+    )).toBeVisible()
+    expect(container.textContent).not.toContain('项目或作者原稿清单已变化')
+    expect(startWorkflow).not.toHaveBeenCalled()
   })
 
   it('blocks a same-number conflict and lists the actionable chapter number', async () => {

@@ -28,7 +28,11 @@ import type {
   ImportRunPrepareFromInspectionRequest,
   ImportRunStage,
 } from '../../src/shared/import-run'
-import { isImportRunDirectCheckpointStage } from '../../src/shared/import-run'
+import {
+  AUTHOR_IMPORT_PREVIEW_STALE,
+  isAuthorImportPreviewStaleError,
+  isImportRunDirectCheckpointStage,
+} from '../../src/shared/import-run'
 import { ImportSourceIdentityRepository } from '../repositories/import-source-identity-repository'
 import { importInspectionStore } from '../services/import-inspection-store'
 import { loadApplicationImportSourceSecret } from '../services/import-source-identity-secret'
@@ -178,7 +182,7 @@ export function registerDatabaseController() {
       if (
         preview.authorityFingerprint !== request.authorityFingerprint
         || preview.manifestFingerprint !== request.manifestFingerprint
-      ) throw new Error('项目或作者原稿清单已变化，预览已过期')
+      ) return { success: false as const, errorCode: AUTHOR_IMPORT_PREVIEW_STALE }
     }
     const inspection = importInspectionStore.consume(request.inspectionId, webContentsId)
     const sourceIdentity = ImportSourceIdentityRepository.resolveEncodedSources(
@@ -195,20 +199,27 @@ export function registerDatabaseController() {
       size: source.size,
     }))
     if (request.purpose === 'author-manuscript') {
-      return {
-        success: true,
-        preparation: ImportRunRepository.prepare({
-          runId: request.runId,
-          purpose: request.purpose,
-          sourceFingerprint: sourceIdentity.sourceFingerprint,
-          sourceIds: sourceIdentity.sourceIds,
-          sourceFingerprints: sourceIdentity.sourceFingerprints,
-          sourceDisplay,
-          locale: request.locale,
-          authorityFingerprint: request.authorityFingerprint,
-          expectedManifestFingerprint: request.manifestFingerprint,
-          chapters: inspection.chapters,
-        }),
+      try {
+        return {
+          success: true as const,
+          preparation: ImportRunRepository.prepare({
+            runId: request.runId,
+            purpose: request.purpose,
+            sourceFingerprint: sourceIdentity.sourceFingerprint,
+            sourceIds: sourceIdentity.sourceIds,
+            sourceFingerprints: sourceIdentity.sourceFingerprints,
+            sourceDisplay,
+            locale: request.locale,
+            authorityFingerprint: request.authorityFingerprint,
+            expectedManifestFingerprint: request.manifestFingerprint,
+            chapters: inspection.chapters,
+          }),
+        }
+      } catch (error) {
+        if (isAuthorImportPreviewStaleError(error)) {
+          return { success: false as const, errorCode: AUTHOR_IMPORT_PREVIEW_STALE }
+        }
+        throw error
       }
     }
     const parsingRun = ImportRunRepository.beginParsing({

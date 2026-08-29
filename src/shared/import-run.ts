@@ -1,5 +1,23 @@
 export type ImportRunLocale = 'zh-CN' | 'en-US'
 export type ImportPurpose = 'reference' | 'author-manuscript'
+export const AUTHOR_IMPORT_PREVIEW_STALE = 'AUTHOR_IMPORT_PREVIEW_STALE' as const
+
+export class AuthorImportPreviewStaleError extends Error {
+  readonly code = AUTHOR_IMPORT_PREVIEW_STALE
+
+  constructor(message = 'Author manuscript authority changed after preview confirmation') {
+    super(message)
+    this.name = 'AuthorImportPreviewStaleError'
+  }
+}
+
+export function isAuthorImportPreviewStaleError(error: unknown): boolean {
+  return error instanceof AuthorImportPreviewStaleError
+    || (!!error
+      && typeof error === 'object'
+      && 'code' in error
+      && (error as { code?: unknown }).code === AUTHOR_IMPORT_PREVIEW_STALE)
+}
 
 export type ImportRunStage =
   | 'parsing'
@@ -322,4 +340,13 @@ export interface ImportRunPreparationResult {
   duplicateChapterNumbers: number[]
   /** Bounded renderer-safe view derived from the main-process frozen manifest. */
   inspection?: ImportRunPreparationInspection
+}
+
+export type ImportRunPrepareFromInspectionResult = {
+  success: true
+  preparation: ImportRunPreparationResult
+} | {
+  success: false
+  errorCode?: typeof AUTHOR_IMPORT_PREVIEW_STALE
+  error?: string
 }

@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../database'
+import { FinalizedDraftImportRepository } from '../repositories/finalized-draft-import-repository'
 import { SummaryRepository } from '../repositories/summary-repository'
 
 const require = createRequire(import.meta.url)
@@ -45,5 +46,48 @@ describe('summary continuity migration', () => {
       chapterNumber: 3,
       characterStates: 'legacy character state',
     })
+  })
+
+  it('cascades a migrated finalized continuity snapshot when its draft is deleted', () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-summary-cascade-migration-'))
+    roots.push(projectRoot)
+    const velaRoot = path.join(projectRoot, '.vela')
+    fs.mkdirSync(velaRoot, { recursive: true })
+    const legacyDb = new Database(path.join(velaRoot, 'vela.db'))
+    legacyDb.exec(`
+      CREATE TABLE summary_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chapter_number INTEGER NOT NULL,
+        character_states TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+    `)
+    legacyDb.close()
+
+    initProjectDatabase(projectRoot)
+    const finalizedContent = 'A finalized author chapter.'
+    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'migration-cascade-finalized',
+      chapters: [{
+        chapterNumber: 1,
+        title: 'Opening',
+        content: finalizedContent,
+        wordCount: finalizedContent.length,
+      }],
+    })
+    const draftId = receipt.drafts[0]!.draftId
+    SummaryRepository.saveFinalizedContinuity({
+      draftId,
+      chapterNumber: 1,
+      chapterNotes: 'The opening establishes the continuity facts.',
+    })
+
+    expect(getProjectDb()!.prepare(
+      'SELECT draft_id FROM summary_snapshots WHERE draft_id = ?',
+    ).get(draftId)).toEqual({ draft_id: draftId })
+    getProjectDb()!.prepare('DELETE FROM drafts WHERE id = ?').run(draftId)
+    expect(getProjectDb()!.prepare(
+      'SELECT draft_id FROM summary_snapshots WHERE draft_id = ?',
+    ).get(draftId)).toBeUndefined()
   })
 })

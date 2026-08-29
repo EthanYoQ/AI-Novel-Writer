@@ -44,6 +44,7 @@ import type {
   ImportPurpose,
   ImportNovelFileSelectionRequest,
   ImportRunPreparationResult,
+  ImportRunPrepareFromInspectionResult,
   ImportRunPrepareFromInspectionRequest,
   ImportRunPrepareEffectReceiptRequest,
   ImportRunSnapshot,
@@ -639,7 +640,7 @@ export interface DatabaseChannels {
   'db:project-clear-generated-data': { args: [options: ProjectClearOptions, expectedProjectPath: string]; return: { success: boolean; cleared?: ProjectClearScope[]; physicalFilesDeleted?: number; error?: string } }
   'db:import-run-prepare-inspection': {
     args: [request: ImportRunPrepareFromInspectionRequest, expectedProjectPath: string]
-    return: { success: boolean; preparation?: ImportRunPreparationResult; error?: string }
+    return: ImportRunPrepareFromInspectionResult
   }
   'db:import-run-author-preview': {
     args: [inspectionId: string, expectedProjectPath: string]

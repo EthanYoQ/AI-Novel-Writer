@@ -11,6 +11,7 @@ import type {
   ImportRunPrepareFromInspectionRequest,
   ImportRunSnapshot,
 } from '../../shared/import-run'
+import { AUTHOR_IMPORT_PREVIEW_STALE } from '../../shared/import-run'
 import type { AuthorManuscriptImportPreview } from '../../shared/author-manuscript-import'
 import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
 import {
@@ -358,9 +359,14 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         prepareRequest,
         project.path,
       )
-      if (!prepared.success || !prepared.preparation) throw new Error(prepared.error || text(
-        '无法创建导入运行', 'Could not create the import run.',
-      ))
+      if (!prepared.success) {
+        throw new Error(prepared.errorCode === AUTHOR_IMPORT_PREVIEW_STALE
+          ? text(
+              '项目或作者原稿清单已变化，请重新选择文件并确认预览。',
+              'The project or author manuscript changed. Select the files again and confirm the preview.',
+            )
+          : prepared.error || text('无法创建导入运行', 'Could not create the import run.'))
+      }
       setInspection(null)
       setSplitDone(false)
       const preparation = prepared.preparation
