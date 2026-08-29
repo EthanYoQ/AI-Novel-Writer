@@ -167,6 +167,8 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(smokeScript).toContain('release-vector-smoke-runner.cjs')
     expect(vectorRunnerBuildScript).toContain('release-vector-smoke-runner.ts')
     expect(vectorRunnerBuildScript).toContain("platform: 'node'")
+    expect(vectorRunnerBuildScript).toContain("external: ['electron', 'better-sqlite3', '@lancedb/lancedb']")
+    expect(vectorRunnerBuildScript).toContain("define: { 'import.meta.url': '__aiNovelImportMetaUrl' }")
     expect(vectorRunnerSource).toContain('runReleaseVectorSmoke')
     expect(vectorRunnerSource).toContain('Packaged vector smoke timed out after 90 seconds')
     expect(manifestScript).toContain('finalizeReleaseEvidence')

@@ -7,7 +7,9 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 await build({
   entryPoints: [path.join(repositoryRoot, 'electron', 'release-vector-smoke-runner.ts')],
   bundle: true,
-  external: ['better-sqlite3', '@lancedb/lancedb'],
+  external: ['electron', 'better-sqlite3', '@lancedb/lancedb'],
+  banner: { js: 'const __aiNovelImportMetaUrl = require("node:url").pathToFileURL(__filename).href;' },
+  define: { 'import.meta.url': '__aiNovelImportMetaUrl' },
   format: 'cjs',
   outfile: path.join(repositoryRoot, 'dist-electron', 'release-vector-smoke-runner.cjs'),
   platform: 'node',
