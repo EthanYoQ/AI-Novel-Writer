@@ -548,6 +548,33 @@ describe('llm project statistics', () => {
     }))
   })
 
+  it('records a non-stream terminal reason as the repository structured finish code', async () => {
+    const handler = mocks.handlers.get('llm:generate')
+    if (!handler) throw new Error('Missing llm:generate handler')
+    mocks.generate.mockResolvedValueOnce({
+      success: false,
+      content: '',
+      finishReason: 'content_filter',
+      error: 'Human-readable provider policy message',
+    })
+
+    await expect(handler({}, {
+      modelId: deepSeekModel.id,
+      messages: [{ role: 'user', content: 'write' }],
+      purpose: 'draft',
+      projectSession,
+    })).resolves.toMatchObject({
+      success: false,
+      finishReason: 'content_filter',
+      error: 'Human-readable provider policy message',
+    })
+
+    expect(mocks.logCall).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      errorMessage: 'finish:content_filter',
+    }))
+  })
+
   it('does not write project statistics without a project lease', async () => {
     const handler = mocks.handlers.get('llm:generate')
     if (!handler) throw new Error('Missing llm:generate handler')

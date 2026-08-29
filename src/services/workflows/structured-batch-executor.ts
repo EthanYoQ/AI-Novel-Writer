@@ -101,6 +101,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
   contract: StructuredBatchContract<TInput, TOutput>
   session: Pick<GenerationSession, 'complete'>
   writingLanguage: WritingLanguage
+  onAttempt?: (receipt: GenerationAttemptReceipt) => void
 }): StructuredBatchExecutor<TInput, TOutput> {
   const { contract, session, writingLanguage } = dependencies
 
@@ -127,6 +128,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         attemptReceipts.push(attempt)
         receipt.calls = attemptReceipts.length
         receipt.requestedTokens += attempt.budget.requestedOutputTokens
+        dependencies.onAttempt?.(attempt)
       }
 
       if (!Number.isInteger(input.limits.maxBatchItems) || input.limits.maxBatchItems < 1) {

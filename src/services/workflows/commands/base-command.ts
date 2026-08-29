@@ -7,10 +7,11 @@ import {
   type CreateGenerationRuntimeOptions,
   type GenerationRuntime,
 } from '../../generation/generation-runtime'
-import type {
-  GenerationAttemptReceipt,
-  GenerationSession,
-  PromptBudgetPolicy,
+import {
+  GenerationAttemptError,
+  type GenerationAttemptReceipt,
+  type GenerationSession,
+  type PromptBudgetPolicy,
 } from '../../generation/generation-harness'
 import type { GenerationReasoningStage } from '../../../shared/reasoning-types'
 import {
@@ -263,6 +264,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
         ],
         ...(options?.promptBudget ? { promptBudget: options.promptBudget } : {}),
       }, { signal: execution.signal })
+      this.reportGenerationPromptBudget(callbacks, outcome.receipt)
       this.assertNotCancelled(context)
       const content = this.stripThinkingTags(outcome.content)
       callbacks.appendText(content)
@@ -273,6 +275,9 @@ export abstract class BaseWorkflowCommand<TResult = string> {
         receipt: outcome.receipt,
       }
     } catch (error) {
+      if (error instanceof GenerationAttemptError) {
+        this.reportGenerationPromptBudget(callbacks, error.receipt)
+      }
       if (context?.cancelled || (
         typeof error === 'object'
         && error !== null
@@ -285,6 +290,13 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       }
       throw error
     }
+  }
+
+  protected reportGenerationPromptBudget(
+    callbacks: StepCallbacks,
+    receipt: GenerationAttemptReceipt,
+  ): void {
+    if (receipt.promptBudget) callbacks.setPromptBudgetReport?.(receipt.promptBudget)
   }
 
   protected createIncompleteCompletionError(finishReason: LLMFinishReason): Error {

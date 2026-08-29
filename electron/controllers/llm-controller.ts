@@ -66,7 +66,12 @@ function recordProviderOutcome(
   request: LLMRequest,
   model: ModelProfile,
   startedAt: number,
-  outcome: { success: boolean; usage?: TokenUsage; error?: string },
+  outcome: {
+    success: boolean
+    usage?: TokenUsage
+    error?: string
+    finishReason?: LLMFinishReason
+  },
 ): void {
   if (!isProjectSessionContext(request.projectSession)) return
   try {
@@ -80,7 +85,9 @@ function recordProviderOutcome(
       totalTokens: outcome.usage?.totalTokens ?? null,
       durationMs: Math.max(0, Date.now() - startedAt),
       success: outcome.success,
-      errorMessage: outcome.error,
+      errorMessage: outcome.finishReason && outcome.finishReason !== 'stop'
+        ? `finish:${outcome.finishReason}`
+        : outcome.error,
     })
   } catch (error) {
     // Statistics are diagnostic only and must never change generation outcome.

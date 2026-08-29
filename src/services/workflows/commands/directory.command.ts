@@ -374,7 +374,12 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         budget: costPlan.runtimeBudget,
       })
       const batchResult = await runtime.execute(async ({ session }) => {
-        const executor = createStructuredBatchExecutor({ contract, session, writingLanguage })
+        const executor = createStructuredBatchExecutor({
+          contract,
+          session,
+          writingLanguage,
+          onAttempt: receipt => this.reportGenerationPromptBudget(callbacks, receipt),
+        })
         return executor.execute({
           items: chapterNumbers,
           limits: {

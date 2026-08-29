@@ -786,6 +786,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       contract,
       session: execution.session,
       writingLanguage,
+      onAttempt: receipt => this.reportGenerationPromptBudget(callbacks, receipt),
     }).execute({
       items: orderedChapters,
       limits: { maxBatchItems: InferBlueprintsPerChapterCommand.MAX_ITEMS_PER_BATCH },

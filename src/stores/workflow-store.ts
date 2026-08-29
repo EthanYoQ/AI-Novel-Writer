@@ -134,6 +134,8 @@ export interface StepCallbacks {
   log: (message: string) => void
   /** 更新进度 (0-100) */
   setProgress: (progress: number) => void
+  /** 保存本步骤最近一次模型调用的安全提示词预算摘要。 */
+  setPromptBudgetReport?: (report: PromptBudgetReport) => void
   /** 流式文本追加 */
   appendText: (text: string) => void
   /** 用一份安全的临时或终态文本替换当前步骤输出。 */
@@ -534,6 +536,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         },
         setProgress: (progress) => {
           updateStepById(set, run.id, i, { progress })
+        },
+        setPromptBudgetReport: (report) => {
+          updateStepById(set, run.id, i, { promptBudgetReport: report })
+          updateRunById(set, run.id, { promptBudgetReport: report })
         },
         appendText: (text) => {
           const activeRun = get().activeRuns.find(r => r.id === run.id)

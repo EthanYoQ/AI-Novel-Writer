@@ -865,6 +865,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       contract: detailContract,
       session: this.requireGenerationExecution().session,
       writingLanguage,
+      onAttempt: receipt => this.reportGenerationPromptBudget(callbacks, receipt),
     }).execute({
       items: manifest,
       limits: { maxBatchItems: CHARACTER_DETAIL_BATCH_SIZE },
