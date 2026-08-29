@@ -56,4 +56,15 @@ describe('buildFinalizedContinuityFacts', () => {
 
     expect(facts).toEqual([])
   })
+
+  it('does not treat a shared location as support for the opposite predicate', () => {
+    const facts = buildFinalizedContinuityFacts(
+      5,
+      '林海在北京死亡。',
+      '林海在北京生活。',
+      ['林海'],
+    )
+
+    expect(facts).toEqual([])
+  })
 })

@@ -92,17 +92,28 @@ function evidenceExcerpt(content: string, statement: string, entities: readonly 
     .sort((left, right) => right.length - left.length)
     .reduce((text, entity) => text.split(entity).join(' '), statement)
   const signals = textBigrams(statementWithoutEntities)
+  const signalList = [...signals]
   const candidates = factEntities.length > 0
     ? sentences.filter(sentence => factEntities.some(entity => sentence.includes(entity)))
     : sentences
   const ranked = candidates
-    .map(sentence => ({
-      sentence,
-      score: [...signals].filter(signal => textBigrams(sentence).has(signal)).length,
-    }))
+    .map((sentence) => {
+      const sentenceSignals = textBigrams(sentence)
+      const matchedIndexes = signalList
+        .map((signal, index) => sentenceSignals.has(signal) ? index : -1)
+        .filter(index => index >= 0)
+      const independentlySupported = matchedIndexes.some((index, matchIndex) => (
+        matchIndex > 0 && index - matchedIndexes[matchIndex - 1] > 1
+      ))
+      return {
+        sentence,
+        score: matchedIndexes.length,
+        supported: matchedIndexes.length === signalList.length || independentlySupported,
+      }
+    })
     .sort((left, right) => right.score - left.score)
   const minimumScore = factEntities.length > 0 ? 1 : 2
-  const matched = ranked.find(candidate => candidate.score >= minimumScore)?.sentence
+  const matched = ranked.find(candidate => candidate.score >= minimumScore && candidate.supported)?.sentence
   return (matched ?? '').slice(0, CONTINUITY_EVIDENCE_LIMIT).trim()
 }
 
