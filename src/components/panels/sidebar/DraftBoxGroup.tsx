@@ -114,7 +114,7 @@ function DraftChapterGroup({
   const activeDrafts = drafts.filter(d => d.status !== 'archived')
   const archivedDrafts = drafts.filter(d => d.status === 'archived')
   const [showArchived, setShowArchived] = useState(false)
-  const [bpTitle, setBpTitle] = useState<string>('')
+  const [bpTitle, setBpTitle] = useState<{ projectKey: string; title: string } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -122,7 +122,7 @@ function DraftChapterGroup({
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', chapterNumber, projectKey).then(bp => {
       if (!cancelled && isProjectSessionCurrent(projectSession) && bp?.title) {
-        setBpTitle(bp.title)
+        setBpTitle({ projectKey, title: bp.title })
       }
     }).catch(() => { })
     return () => { cancelled = true }
@@ -131,7 +131,8 @@ function DraftChapterGroup({
   // 已定稿的草稿存在时，章节显示绿色标记
   const hasFinalized = drafts.some(d => d.status === 'finalized')
   const finalizedTitle = drafts.find(d => d.status === 'finalized' && d.chapterTitle?.trim())?.chapterTitle
-  const baseTitle = finalizedTitle || bpTitle || drafts[0]?.chapterTitle || ''
+  const scopedBlueprintTitle = bpTitle?.projectKey === projectKey ? bpTitle.title : ''
+  const baseTitle = finalizedTitle || scopedBlueprintTitle || drafts[0]?.chapterTitle || ''
   const cleanTitle = baseTitle.startsWith(`第${chapterNumber}章`)
     ? baseTitle.replace(`第${chapterNumber}章`, '').trim()
     : baseTitle

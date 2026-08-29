@@ -19,7 +19,7 @@ import {
 
 import { openChapterFile } from './sidebar-file-openers'
 import { showSidebarMenu } from './sidebar-menu'
-import { chapterTitleCache } from './manuscript-title-cache'
+import { chapterTitleCache, chapterTitleCacheKey } from './manuscript-title-cache'
 import {
   confirmLegacyKnowledgeAbsentAndContinue,
   deleteFinalizedChapter,
@@ -42,7 +42,7 @@ async function readChapterTitle(
   authoritativeTitle?: string,
 ): Promise<string | null> {
   if (!isProjectSessionCurrent(projectSession)) return null
-  const cacheKey = `${projectSession.projectPath}\u0000${filePath}`
+  const cacheKey = chapterTitleCacheKey(projectSession.projectPath, filePath)
   if (chapterNumber && authoritativeTitle?.trim()) {
     const prefix = `第${chapterNumber}章`
     const title = authoritativeTitle.trim().startsWith(prefix)
@@ -116,7 +116,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
   const [titleMap, setTitleMap] = useState<Record<string, string>>({})
 
   // 每次 files 变化时异步读取各文件标题（命中缓存的路径直接跳过 IPC）
-  const filesDep = files.map(f => f.path).join(',')
+  const filesDep = files.map(f => `${f.path}\u0000${f.chapterTitle ?? ''}`).join(',')
   useEffect(() => {
     if (files.length === 0) return
     const projectSession = captureProjectSession(currentProject)
@@ -124,7 +124,10 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
     let cancelled = false
     const load = async () => {
       // 只读取当前 state 中还没有的路径（增量更新，避免重复 IPC 调用）
-      const missing = files.filter(f => !f.name.includes('_notes') && !titleMap[f.path])
+      const missing = files.filter(f => (
+        !f.name.includes('_notes')
+        && !titleMap[chapterTitleCacheKey(projectPath, f.path)]
+      ))
       if (missing.length === 0) return
       const entries: Record<string, string> = {}
       await Promise.all(
@@ -135,7 +138,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
           const chNum = chMatch ? parseInt(chMatch[1], 10) : undefined
           try {
             const title = await readChapterTitle(f.path, fallback, projectSession, chNum, f.chapterTitle)
-            if (title !== null) entries[f.path] = title
+            if (title !== null) entries[chapterTitleCacheKey(projectPath, f.path)] = title
           } catch {
             // 读取失败时保留界面上的兜底名称；不把失败当成空正文或缓存结果。
           }
@@ -149,11 +152,21 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
     return () => { cancelled = true }
   }, [files, filesDep, projectPath, titleMap, text, currentProject])
 
-  const getDisplay = (f: FileNode) => {
-    if (titleMap[f.path]) return titleMap[f.path]
+  const getDisplay = (f: ManuscriptFileNode) => {
     const rawName = f.name.replace(/\.[^.]+$/, '')
     const chMatch = rawName.match(/^chapter_(\d+)$/)
-    return chMatch ? text(`第${parseInt(chMatch[1], 10)}章`, `Chapter ${parseInt(chMatch[1], 10)}`) : rawName
+    const chapterNumber = chMatch ? parseInt(chMatch[1], 10) : undefined
+    const fallback = chapterNumber
+      ? text(`第${chapterNumber}章`, `Chapter ${chapterNumber}`)
+      : rawName
+    if (chapterNumber && f.chapterTitle?.trim()) {
+      const prefix = `第${chapterNumber}章`
+      const title = f.chapterTitle.trim().startsWith(prefix)
+        ? f.chapterTitle.trim().slice(prefix.length).trim()
+        : f.chapterTitle.trim()
+      return title ? `${fallback} ${title}` : fallback
+    }
+    return titleMap[chapterTitleCacheKey(projectPath, f.path)] ?? fallback
   }
 
   // 只显示正文章节（过滤掉旧的 _notes 文件）

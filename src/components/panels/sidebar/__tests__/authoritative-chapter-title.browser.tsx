@@ -10,6 +10,7 @@ import ManuscriptGroup from '../ManuscriptGroup'
 import { clearChapterTitleCache } from '../manuscript-title-cache'
 
 const PROJECT_PATH = 'C:\\novels\\authoritative-titles'
+const OTHER_PROJECT_PATH = 'C:\\novels\\other-authoritative-titles'
 const originalLocaleState = useLocaleStore.getState()
 const originalProjectState = useProjectStore.getState()
 
@@ -50,6 +51,18 @@ function draft(
   }
 }
 
+function switchProject(path: string, id: string): void {
+  useProjectStore.setState({
+    currentProject: {
+      id,
+      sessionLease: `${id}-lease`,
+      name: id,
+      path,
+      novelConfig: {},
+    } as never,
+  })
+}
+
 beforeEach(() => {
   clearChapterTitleCache()
   useLocaleStore.setState({ locale: 'zh-CN' })
@@ -64,7 +77,7 @@ beforeEach(() => {
   })
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'db:blueprint-get') {
-      if (args[0] === 1) return { chapterNumber: 1, title: '旧码头的红钟' }
+      if (args[0] === 1 && args[1] === PROJECT_PATH) return { chapterNumber: 1, title: '旧码头的红钟' }
       if (args[0] === 3) return { chapterNumber: 3, title: '计划中的第三章' }
       if (args[0] === 4) return { chapterNumber: 4, title: '旧项目第四章' }
       return null
@@ -98,6 +111,45 @@ afterEach(async () => {
 })
 
 describe('authoritative finalized chapter titles', () => {
+  it('never leaks cached chapter titles when switching projects with the same draft identity', async () => {
+    const projectADraft = draft(1, 1, '项目甲标题')
+    const projectBDraft = draft(1, 1, '项目乙标题')
+    const manuscriptFile = (chapterTitle: string) => ({
+      path: 'vela://manuscript/1',
+      name: 'chapter_1.md',
+      isDir: false,
+      chapterTitle,
+    })
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <>
+          <DraftBoxGroup draftsByChapter={{ 1: [projectADraft] }} />
+          <ManuscriptGroup files={[manuscriptFile('项目甲标题')]} projectPath={PROJECT_PATH} />
+        </>,
+      )
+    })
+    await vi.waitFor(() => {
+      expect(container?.textContent?.match(/项目甲标题/gu)).toHaveLength(2)
+    })
+
+    await act(async () => {
+      switchProject(OTHER_PROJECT_PATH, 'other-authoritative-titles')
+      root?.render(
+        <>
+          <DraftBoxGroup draftsByChapter={{ 1: [projectBDraft] }} />
+          <ManuscriptGroup files={[manuscriptFile('项目乙标题')]} projectPath={OTHER_PROJECT_PATH} />
+        </>,
+      )
+    })
+
+    expect(container?.textContent).not.toContain('项目甲标题')
+    expect(container?.textContent?.match(/项目乙标题/gu)).toHaveLength(2)
+  })
+
   it('keeps author outbox titles in both finalized surfaces despite missing or conflicting reference blueprints', async () => {
     const chapterOne = draft(1, 1, '蓝镜初亮')
     const chapterTwo = draft(2, 2, '潮线回声')
