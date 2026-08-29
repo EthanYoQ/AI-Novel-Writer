@@ -45,6 +45,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   const renameCharacter = useCharacterStore(s => s.renameCharacter)
   const updateField = useCharacterStore(s => s.updateField)
   const deleteCharacter = useCharacterStore(s => s.deleteCharacter)
+  const clearAllCharacters = useCharacterStore(s => s.clearAllCharacters)
   const saveAll = useCharacterStore(s => s.saveAll)
   const [viewMode, setViewMode] = useState<'edit' | 'state' | 'graph'>('edit')
   const text = useLocaleStore(s => s.text)
@@ -104,6 +105,36 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
     }
   }
 
+  const handleDeleteAllCharacters = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (
+      !dataReady
+      || characters.length === 0
+      || !projectSession
+      || !isProjectSessionPath(projectSession, projectKey)
+    ) return
+    const ok = await confirm(
+      text(
+        `确定删除全部 ${characters.length} 个角色及其关系吗？角色图谱是角色名单的投影，无法单独清空。此操作不可撤销。`,
+        `Delete all ${characters.length} characters and their relationships? The graph is a projection of the roster and cannot be cleared independently. This cannot be undone.`,
+      ),
+      {
+        title: text('删除全部角色与关系', 'Delete all characters and relationships'),
+        confirmText: text('确认删除全部', 'Delete all'),
+        danger: true,
+      },
+    )
+    if (!ok || !isProjectSessionCurrent(projectSession)) return
+    const cleared = await clearAllCharacters(projectKey, projectSession)
+    if (!isProjectSessionCurrent(projectSession)) return
+    addLog(
+      cleared ? 'info' : 'error',
+      cleared
+        ? text('已删除全部角色及关系', 'Deleted all characters and relationships')
+        : text('删除全部角色失败，请刷新后重试', 'Could not delete all characters. Refresh and try again.'),
+    )
+  }
+
   const updateCurrentField = <K extends Exclude<keyof CharacterCard, 'name'>>(
     name: string,
     key: K,
@@ -154,9 +185,20 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
         
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {viewMode === 'graph' ? (
-            <Button variant="outline" size="sm" onClick={() => setViewMode('edit')} title={text('返回编辑', 'Return to editing')}>
-              <Users size={12} /> {text('编辑模式', 'Edit mode')}
-            </Button>
+            <>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleDeleteAllCharacters}
+                disabled={identityBusy || !dataReady || characters.length === 0}
+                title={text('清空图谱会删除作为事实源的全部角色', 'Clearing the graph deletes every character in the source roster')}
+              >
+                <Trash2 size={12} /> {text('删除全部角色与关系', 'Delete all characters and relationships')}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setViewMode('edit')} title={text('返回编辑', 'Return to editing')}>
+                <Users size={12} /> {text('编辑模式', 'Edit mode')}
+              </Button>
+            </>
           ) : selectedCard ? (
             <>
               {viewMode === 'state' ? (

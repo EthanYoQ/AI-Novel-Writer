@@ -7,6 +7,7 @@
 
 import { ipc } from './ipc-client'
 import { requireIpcSuccess } from './ipc-result'
+import { countDraftUnits } from '../shared/draft-units'
 
 /** 章节元数据（从数据库返回） */
 export interface ChapterRecord {
@@ -76,7 +77,7 @@ export async function revertToVersion(chapterNumber: number, content: string, ex
     version: nextVer,
     source: 'rewrite',
     content,
-    wordCount: content.length,
+    wordCount: countDraftUnits(content),
   }, expectedProjectPath)
   requireIpcSuccess(res, '创建回滚草稿')
   return true

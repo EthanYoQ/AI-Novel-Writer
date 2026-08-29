@@ -38,6 +38,7 @@ export interface AtomicWriteConstraints {
 }
 
 export interface SecureFileSystem {
+  readBytes(capability: SecureFileCapability, maxBytes?: number): Promise<Buffer>
   readText(capability: SecureFileCapability, maxBytes?: number): Promise<string>
   writeTextAtomically(
     capability: SecureFileCapability,
@@ -547,19 +548,26 @@ export function createSecureFileSystem(
     return response
   }
 
+  const readBytes = async (capability: SecureFileCapability, maxBytes?: number): Promise<Buffer> => {
+    const readByteLimit = normalizeReadByteLimit(maxBytes)
+    const response = await run('read', capability, undefined, readByteLimit)
+    if (typeof response.contentBase64 !== 'string') {
+      throw secureError('SECURE_FS_HELPER_INVALID_RESPONSE')
+    }
+    const maximumEncodedLength = Math.ceil(readByteLimit / 3) * 4
+    if (response.contentBase64.length > maximumEncodedLength) {
+      throw secureError('SECURE_FS_FILE_TOO_LARGE')
+    }
+    const buffer = Buffer.from(response.contentBase64, 'base64')
+    if (buffer.length > readByteLimit) throw secureError('SECURE_FS_FILE_TOO_LARGE')
+    return buffer
+  }
+
   return {
+    readBytes,
+
     async readText(capability, maxBytes) {
-      const readByteLimit = normalizeReadByteLimit(maxBytes)
-      const response = await run('read', capability, undefined, readByteLimit)
-      if (typeof response.contentBase64 !== 'string') {
-        throw secureError('SECURE_FS_HELPER_INVALID_RESPONSE')
-      }
-      const maximumEncodedLength = Math.ceil(readByteLimit / 3) * 4
-      if (response.contentBase64.length > maximumEncodedLength) {
-        throw secureError('SECURE_FS_FILE_TOO_LARGE')
-      }
-      const buffer = Buffer.from(response.contentBase64, 'base64')
-      if (buffer.length > readByteLimit) throw secureError('SECURE_FS_FILE_TOO_LARGE')
+      const buffer = await readBytes(capability, maxBytes)
       try {
         return new TextDecoder('utf-8', { fatal: true }).decode(buffer)
       } catch {

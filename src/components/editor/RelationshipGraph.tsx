@@ -1,5 +1,7 @@
-import { useRef, useEffect, useMemo } from 'react'
+import { useRef, useEffect, useMemo, useState } from 'react'
+import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react'
 import { parseRelationshipEdges } from '../../shared/relationship-presentation'
+import { useLocaleStore } from '../../stores/locale-store'
 
 interface CharacterNode {
   name: string
@@ -29,6 +31,11 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const nodesRef = useRef<CharacterNode[]>([])
   const animRef = useRef<number>(0)
+  const drawRef = useRef<(() => void) | null>(null)
+  const viewRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 })
+  const dragRef = useRef<{ x: number; y: number } | null>(null)
+  const [zoomPercent, setZoomPercent] = useState(100)
+  const text = useLocaleStore(state => state.text)
 
   const edges = useMemo<RelationshipGraphEdge[]>(() => {
     const knownNames = characters.map((character) => character.name)
@@ -87,6 +94,12 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
       const nodes = nodesRef.current
 
       ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.save()
+      const view = viewRef.current
+      ctx.translate(view.offsetX, view.offsetY)
+      ctx.translate(canvas.width / 2, canvas.height / 2)
+      ctx.scale(view.scale, view.scale)
+      ctx.translate(-canvas.width / 2, -canvas.height / 2)
 
       // 绘制连线
       ctx.lineWidth = 1.5
@@ -142,7 +155,9 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
         ctx.textBaseline = 'middle'
         ctx.fillText(node.name, node.x, node.y + 36)
       }
+      ctx.restore()
     }
+    drawRef.current = drawFrame
 
     const themeObserver = new MutationObserver(drawFrame)
     const skinRoot = canvas.closest<HTMLElement>('.app-skin-root')
@@ -223,8 +238,22 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
     return () => {
       themeObserver.disconnect()
       cancelAnimationFrame(animRef.current)
+      drawRef.current = null
     }
   }, [characters, edges])
+
+  const updateZoom = (nextScale: number) => {
+    const scale = Math.min(2, Math.max(0.5, Math.round(nextScale * 10) / 10))
+    viewRef.current.scale = scale
+    setZoomPercent(Math.round(scale * 100))
+    drawRef.current?.()
+  }
+
+  const fitView = () => {
+    viewRef.current = { scale: 1, offsetX: 0, offsetY: 0 }
+    setZoomPercent(100)
+    drawRef.current?.()
+  }
 
   if (characters.length === 0) {
     return (
@@ -235,10 +264,68 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
   }
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="w-full h-full"
-      style={{ background: 'transparent', color: 'var(--color-text)' }}
-    />
+    <div className="relative h-full overflow-hidden">
+      <div
+        className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-md border px-1 py-1"
+        style={{
+          borderColor: 'var(--color-border)',
+          backgroundColor: 'var(--color-panel)',
+          color: 'var(--color-text)',
+        }}
+      >
+        <button
+          type="button"
+          className="rounded p-1 hover:bg-[var(--color-hover)]"
+          aria-label={text('缩小关系图谱', 'Zoom out of character graph')}
+          onClick={() => updateZoom(viewRef.current.scale - 0.1)}
+        >
+          <ZoomOut size={14} aria-hidden="true" />
+        </button>
+        <span className="min-w-10 text-center text-[11px] tabular-nums">{zoomPercent}%</span>
+        <button
+          type="button"
+          className="rounded p-1 hover:bg-[var(--color-hover)]"
+          aria-label={text('放大关系图谱', 'Zoom in to character graph')}
+          onClick={() => updateZoom(viewRef.current.scale + 0.1)}
+        >
+          <ZoomIn size={14} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="rounded p-1 hover:bg-[var(--color-hover)]"
+          aria-label={text('适合视图', 'Fit character graph to view')}
+          onClick={fitView}
+        >
+          <Maximize2 size={14} aria-hidden="true" />
+        </button>
+      </div>
+      <canvas
+        ref={canvasRef}
+        className="h-full w-full cursor-grab active:cursor-grabbing"
+        style={{ background: 'transparent', color: 'var(--color-text)' }}
+        onWheel={(event) => {
+          event.preventDefault()
+          updateZoom(viewRef.current.scale + (event.deltaY < 0 ? 0.1 : -0.1))
+        }}
+        onPointerDown={(event) => {
+          dragRef.current = { x: event.clientX, y: event.clientY }
+          event.currentTarget.setPointerCapture(event.pointerId)
+        }}
+        onPointerMove={(event) => {
+          const drag = dragRef.current
+          if (!drag) return
+          const pixelRatio = event.currentTarget.width / Math.max(event.currentTarget.clientWidth, 1)
+          viewRef.current.offsetX += (event.clientX - drag.x) * pixelRatio
+          viewRef.current.offsetY += (event.clientY - drag.y) * pixelRatio
+          dragRef.current = { x: event.clientX, y: event.clientY }
+          drawRef.current?.()
+        }}
+        onPointerUp={(event) => {
+          dragRef.current = null
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        }}
+        onPointerCancel={() => { dragRef.current = null }}
+      />
+    </div>
   )
 }

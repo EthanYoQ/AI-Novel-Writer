@@ -28,6 +28,9 @@ import type { WritingLanguage } from '../../../shared/writing-language'
 import type { FinalizedContinuityProjection } from '../../../shared/finalized-continuity'
 import type { NarrativeThreadView } from '../../../shared/narrative-thread'
 import { promptLanguageText } from '../../prompt-language'
+import { countDraftUnits } from '../../../shared/draft-units'
+
+export { countDraftUnits } from '../../../shared/draft-units'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MIN_TARGET_COMPLETION_RATIO = 0.82
@@ -36,21 +39,6 @@ const MAX_TARGET_OVERAGE_RATIO = 0.12
 const PREVIOUS_ENDING_MAX_CHARS = 1000
 const ACTIVE_THREAD_CONTEXT_MAX_CHARS = 1200
 const ACTIVE_THREAD_CONTEXT_MAX_ITEMS = 6
-const CHINESE_CHARACTER_PATTERN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu
-const ENGLISH_WORD_PATTERN = /[A-Za-z]+(?:['’][A-Za-z]+)*/g
-const WHITESPACE_OR_PUNCTUATION_PATTERN = /[\s\p{P}\p{S}]/gu
-
-export function countDraftUnits(text: string): number {
-  const englishWords = text.match(ENGLISH_WORD_PATTERN)?.length ?? 0
-  const withoutEnglishWords = text.replace(ENGLISH_WORD_PATTERN, '')
-  const chineseCharacters = withoutEnglishWords.match(CHINESE_CHARACTER_PATTERN)?.length ?? 0
-  const otherCharacters = withoutEnglishWords
-    .replace(CHINESE_CHARACTER_PATTERN, '')
-    .replace(WHITESPACE_OR_PUNCTUATION_PATTERN, '')
-    .length
-  return chineseCharacters + englishWords + otherCharacters
-}
-
 export function sanitizeDraftText(text: string): string {
   const cleaned = stripThinkingTags(text)
     .replace(/^\s*(?:点我继续生成后续内容|继续生成后续内容|请点击继续|未完待续)\s*$/gmi, '')
@@ -471,7 +459,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         version: nextVersion,
         source: 'write',
         content: boundedDraftText,
-        wordCount: boundedDraftText.length,
+        wordCount: countDraftUnits(boundedDraftText),
       }, expectedProjectPath)
       if (!createResult.success || !createResult.id) {
         throw new Error(createResult.error || '章节草稿保存失败')
@@ -513,7 +501,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         })
       } catch { /* 忽略 */ }
 
-      callbacks.log(`✅ 草稿已自动入库保存为版本 v${nextVersion}（${boundedDraftText.length} 字）`)
+      callbacks.log(`✅ 草稿已自动入库保存为版本 v${nextVersion}（${countDraftUnits(boundedDraftText)} 字）`)
       return boundedDraftText
     } catch (error) {
       if (!draftPersisted) callbacks.replaceText?.('')

@@ -31,16 +31,19 @@
   <img src="docs/assets/readme/ui-zh-v085-project-config.png" alt="AI 小说作家 v0.8.5：在本地桌面工作台中配置长篇小说的故事前提、世界观、角色、蓝图与章节" width="100%" />
 </p>
 
-> ## v0.8.6 作者原稿续写与可靠恢复
+> ## v0.9.0 长篇一致性与完整创作闭环
 >
-> [v0.8.6](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.6) 加固作者原稿导入、续写与人工审校的完整链路，并继续提供 Windows、macOS Apple Silicon 与 macOS Intel 安装包：
+> [v0.9.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.9.0) 让长篇小说的设定继承、章节控制与审稿修稿更完整，并继续提供 Windows、macOS Apple Silicon 与 macOS Intel 安装包：
 >
-> - **作者原稿权威导入与续写**：作者确认后才写入不可变定稿；原稿进入正文与连续性上下文，但不会混入参考语料，后续章节从正确的下一章继续。
-> - **可恢复导入**：失败、取消或重开后可从已提交阶段安全恢复，不重复发布章节、知识或任务；缺章、重复与冲突会阻止导入并给出修正提示。
-> - **模型路由**：单章、批量和修稿均冻结本次明确选择的生成模型，避免切换后静默回退，并保留准确的模型终止原因。
-> - **人工审稿闭环**：AI 审稿意见可编辑、取舍、补充并确认成不可变快照，再按确认意见生成待合并修订稿，由作者最终决定是否合并。
+> - **长篇一致性上下文继承**：作者明确填写的故事前提、角色、世界观、大纲、蓝图与已定稿事实会进入后续创作，减少长篇写作中的设定遗失和前后矛盾。
+> - **伏笔与叙事线索系统**：可集中查看伏笔建议、埋设与回收章节、当前活跃线索及超期提醒，让长线悬念更容易规划和兑现。
+> - **EPUB 导入与角色图谱操作**：支持导入 EPUB2 / EPUB3 正文并沿用现有章节拆分流程；角色关系图可缩放、平移和一键清空。
+> - **章节模型与字数控制**：单章和连续写作都按本次选择的模型与每章目标字数执行；同一生成目标的重复任务会互斥并给出提示。
+> - **人工审稿闭环**：AI 审稿意见可编辑、忽略、补充并确认，再按确认清单修稿，最后通过差异对比决定是否合并。
+> - **模型配置更顺畅**：模型高级设置提供推理强度、温度等可用选项；填写 API Key 与 Base URL 后即可获取模型列表，不再陷入“未保存就不能获取”的循环。
+> - **更准确的失败提示**：内容限制、模型调用和重复任务等失败会尽量显示具体原因，失败结果不会冒充成功内容写入项目。
 >
-> 同一个 Release 使用七项资产合同：`ai-novel-writer-setup-0.8.6.exe`、`ai-novel-writer-setup-0.8.6.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.6-installer.dmg`、`ai-novel-writer-mac-arm64-0.8.6-installer.dmg.sha256`、`ai-novel-writer-mac-x64-0.8.6-installer.dmg` 与 `ai-novel-writer-mac-x64-0.8.6-installer.dmg.sha256`。Windows 安装包未代码签名；两种 macOS 安装包为 ad-hoc 或未签名且未公证，首次打开可能需要按平台安全提示手动确认。
+> 同一个 Release 使用七项资产合同：`ai-novel-writer-setup-0.9.0.exe`、`ai-novel-writer-setup-0.9.0.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.9.0-installer.dmg`、`ai-novel-writer-mac-arm64-0.9.0-installer.dmg.sha256`、`ai-novel-writer-mac-x64-0.9.0-installer.dmg` 与 `ai-novel-writer-mac-x64-0.9.0-installer.dmg.sha256`。Windows 安装包未代码签名；两种 macOS 安装包为 ad-hoc 或未签名且未公证，首次打开可能需要按平台安全提示手动确认。
 
 
 ## DeepSeek Harness 插件（早期 MVP）

@@ -139,6 +139,7 @@ describe('architecture workflow project context', () => {
     })
 
     expect(workflow.title).toBe('Generate story architecture')
+    expect(workflow.resourceKeys).toEqual(['architecture:premise'])
     expect(workflow.steps[0]).toMatchObject({
       name: 'Story premise',
       description: 'Refine the story premise and its core appeal',
@@ -166,6 +167,7 @@ describe('architecture workflow project context', () => {
       projectSession: { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
       selectedSteps: ['premise', 'characters'],
     })
+    expect(workflow.resourceKeys).toEqual(['architecture:premise', 'architecture:characters'])
     useProjectStore.setState({
       currentProject: {
         id: 'project-B',
@@ -266,6 +268,8 @@ describe('config generation full journey completion contract', () => {
       { content: '{"genre":"玄幻","coreOutline":"不可信的截断片段', finishReason: 'length' },
       { content: JSON.stringify(validGeneratedConfig), finishReason: 'stop' },
     ])
+
+    expect(journey.workflow.resourceKeys).toEqual(['novel-config'])
 
     await expect(execute(journey.workflow)).resolves.toBe('生成的配置已成功应用！')
 

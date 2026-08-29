@@ -608,7 +608,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         genre: 'fantasy',
         totalChapters: 20,
         wordsPerChapter: 2500,
-        globalGuidance: 'G'.repeat(12_001),
+        globalGuidance: 'G'.repeat(24_001),
         referenceWorks: '',
       } as never,
     })
@@ -624,20 +624,53 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       name: 'PromptBudgetExceededError',
       code: 'PROMPT_BUDGET_EXHAUSTED',
       report: {
-        limitUtf8Bytes: 12_000,
+        limitUtf8Bytes: 24_000,
         reservedOutputTokens: 8192,
         modelId: 'model-1',
         errorCode: 'PROMPT_BUDGET_EXHAUSTED',
         sections: expect.arrayContaining([
           {
             sectionName: 'global-guidance',
-            utf8Bytes: 12_020,
+            utf8Bytes: 24_020,
           },
         ]),
       },
     })
     expect(JSON.stringify(failure)).not.toContain('G'.repeat(128))
     expect(generateStream).not.toHaveBeenCalled()
+  })
+
+  it('keeps a complete 12 KB author context instead of requiring the author to delete project guidance', async () => {
+    const generateStream = createResponseStream([JSON.stringify({ slots: [] })])
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:project-core-get') return { premise: 'P'.repeat(1_747) }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+    })
+    const command = new GenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: {
+        genre: 'fantasy',
+        totalChapters: 20,
+        wordsPerChapter: 2_500,
+        globalGuidance: 'G'.repeat(9_607),
+      } as never,
+    })
+
+    let failure: unknown
+    try {
+      await command.execute({ step: {}, context, callbacks })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).not.toMatchObject({ code: 'PROMPT_BUDGET_EXHAUSTED' })
+    expect(generateStream).toHaveBeenCalledOnce()
   })
 
   it('generates an eight-slot manifest then bounded individual details before one atomic roster commit', async () => {
@@ -746,7 +779,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(generateStream).toHaveBeenCalledTimes(9)
     const manifestPrompt = manifestMessages?.map(message => message.content).join('\n') ?? ''
     expect(manifestPrompt).not.toMatch(/appearance|currentState|"?entries"?/u)
-    expect(new TextEncoder().encode(manifestPrompt).byteLength).toBeLessThanOrEqual(12_000)
+    expect(new TextEncoder().encode(manifestPrompt).byteLength).toBeLessThanOrEqual(24_000)
     expect(observedPrefixes).toEqual([[], ...names.slice(1).map((_, index) => names.slice(0, index + 1))])
     const detailPrompt = generateStream.mock.calls[1]?.[0].find(message => message.role === 'user')?.content ?? ''
     expect(detailPrompt).toContain('background 不超过 500 字符')
@@ -1424,7 +1457,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         genre: 'fantasy',
         totalChapters: 100,
         wordsPerChapter: 3000,
-        globalGuidance: 'G'.repeat(10_900),
+        globalGuidance: 'G'.repeat(22_500),
       } as never,
     })
 
@@ -1439,10 +1472,10 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       name: 'PromptBudgetExceededError',
       code: 'PROMPT_BUDGET_EXHAUSTED',
       report: {
-        limitUtf8Bytes: 12_000,
+        limitUtf8Bytes: 24_000,
         errorCode: 'PROMPT_BUDGET_EXHAUSTED',
         sections: expect.arrayContaining([
-          { sectionName: 'global-guidance', utf8Bytes: 10_919 },
+          { sectionName: 'global-guidance', utf8Bytes: 22_519 },
           expect.objectContaining({ sectionName: 'prompt-overhead' }),
         ]),
       },

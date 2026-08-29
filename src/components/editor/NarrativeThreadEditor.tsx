@@ -354,13 +354,13 @@ export default function NarrativeThreadEditor({
       <div className="mx-auto max-w-5xl space-y-5">
         <header className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold">{text('叙事线索', 'Narrative threads')}</h2>
+            <h2 className="text-lg font-semibold">{text('伏笔与叙事线索', 'Foreshadowing & narrative threads')}</h2>
             <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              {text('人工计划保持独立；只有人工确认的定稿章节才能成为已发生事件。', 'Plans stay independent; only user-confirmed finalized chapters become events.')}
+              {text('设置埋设与预计回收章节；活跃计划会自动注入后续写作，逾期或沉寂时提醒。只有人工确认的定稿内容才记为已发生事件。', 'Set setup and expected payoff chapters. Active plans are injected into later writing and flagged when overdue or dormant; only user-confirmed finalized text becomes an event.')}
             </p>
           </div>
           <Button variant="ai" size="sm" onClick={() => openAI('plan')} disabled={blueprints.length === 0}>
-            <Sparkles size={13} />{text('AI 识别蓝图线索', 'Find blueprint threads with AI')}
+            <Sparkles size={13} />{text('AI 建议伏笔与线索', 'Suggest foreshadowing with AI')}
           </Button>
         </header>
 
@@ -369,20 +369,20 @@ export default function NarrativeThreadEditor({
           <div className="grid grid-cols-2 gap-3">
             <label><Label>{text('标题', 'Title')}</Label><Input value={plan.title} onChange={event => setPlan({ ...plan, title: event.target.value })} /></label>
             <label><Label>{text('类型', 'Type')}</Label><Input value={plan.type} onChange={event => setPlan({ ...plan, type: event.target.value })} /></label>
-            <label><Label>{text('目标起始章', 'Target start')}</Label><Input type="number" min={1} value={plan.targetStartChapter} onChange={event => setPlan({ ...plan, targetStartChapter: Number(event.target.value) })} /></label>
-            <label><Label>{text('目标结束章', 'Target end')}</Label><Input type="number" min={1} value={plan.targetEndChapter} onChange={event => setPlan({ ...plan, targetEndChapter: Number(event.target.value) })} /></label>
+            <label><Label>{text('计划埋设 / 开始章', 'Setup / start chapter')}</Label><Input type="number" min={1} value={plan.targetStartChapter} onChange={event => setPlan({ ...plan, targetStartChapter: Number(event.target.value) })} /></label>
+            <label><Label>{text('预计回收 / 结束章', 'Expected payoff / end chapter')}</Label><Input type="number" min={1} value={plan.targetEndChapter} onChange={event => setPlan({ ...plan, targetEndChapter: Number(event.target.value) })} /></label>
           </div>
           <label><Label>{text('作者意图 / 理由', 'Author intent / rationale')}</Label><Textarea value={plan.authorIntent} onChange={event => setPlan({ ...plan, authorIntent: event.target.value })} /></label>
           <Button onClick={() => void savePlan()} disabled={busy || !plan.title.trim() || !plan.type.trim() || !plan.authorIntent.trim() || plan.targetEndChapter < plan.targetStartChapter}>{text('保存计划', 'Save plan')}</Button>
         </section>
 
-        {threads.length === 0 && <p className="text-sm text-center py-8" style={{ color: 'var(--color-text-muted)' }}>{text('暂无叙事线索', 'No narrative threads yet')}</p>}
+        {threads.length === 0 && <p className="text-sm text-center py-8" style={{ color: 'var(--color-text-muted)' }}>{text('暂无伏笔或叙事线索', 'No foreshadowing or narrative threads yet')}</p>}
         {threads.map(thread => (
           <section key={thread.id} className="rounded-lg border p-4 space-y-3" style={{ borderColor: 'var(--color-border)', background: 'var(--color-panel)' }}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="font-semibold">{thread.title}</h3>
-                <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{thread.type} · {text('目标', 'Target')} {thread.targetStartChapter}–{thread.targetEndChapter}</p>
+                <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{thread.type} · {text(`埋设/开始 ${thread.targetStartChapter} · 预计回收/结束 ${thread.targetEndChapter}`, `Setup/start ${thread.targetStartChapter} · expected payoff/end ${thread.targetEndChapter}`)}</p>
               </div>
               <span className="text-xs rounded px-2 py-1" style={{ background: 'var(--color-bg)' }}>{text(...STATUS_LABELS[thread.status])}</span>
             </div>

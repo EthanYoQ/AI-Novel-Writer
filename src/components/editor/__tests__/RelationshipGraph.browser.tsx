@@ -16,6 +16,10 @@ let root: Root
 let container: HTMLDivElement
 let fillTextCalls: FillTextCall[]
 let strokeStyleCalls: string[]
+let saveCalls: ReturnType<typeof vi.fn>
+let restoreCalls: ReturnType<typeof vi.fn>
+let translateCalls: ReturnType<typeof vi.fn>
+let scaleCalls: ReturnType<typeof vi.fn>
 
 async function waitForAnimationFrames(count: number) {
   for (let index = 0; index < count; index++) {
@@ -26,6 +30,10 @@ async function waitForAnimationFrames(count: number) {
 beforeEach(() => {
   fillTextCalls = []
   strokeStyleCalls = []
+  saveCalls = vi.fn()
+  restoreCalls = vi.fn()
+  translateCalls = vi.fn()
+  scaleCalls = vi.fn()
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -39,6 +47,10 @@ beforeEach(() => {
       textAlign: 'start',
       textBaseline: 'alphabetic',
       clearRect: vi.fn(),
+      save: saveCalls,
+      restore: restoreCalls,
+      translate: translateCalls,
+      scale: scaleCalls,
       beginPath: vi.fn(),
       moveTo: vi.fn(),
       lineTo: vi.fn(),
@@ -85,6 +97,10 @@ describe('RelationshipGraph readable theme text', () => {
     expect(canvas).not.toBeNull()
     expect(getComputedStyle(canvas!).color).toBe(expectedTextColor)
     expect(fillTextCalls.find((call) => call.text === '林墨')?.fillStyle).toBe(expectedTextColor)
+    expect(saveCalls).toHaveBeenCalled()
+    expect(translateCalls).toHaveBeenCalledWith(0, 0)
+    expect(scaleCalls).toHaveBeenCalledWith(1, 1)
+    expect(restoreCalls).toHaveBeenCalledTimes(saveCalls.mock.calls.length)
   })
 
   it.each([

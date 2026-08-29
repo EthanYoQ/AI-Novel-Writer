@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { countDraftUnits } from '../../../src/shared/draft-units'
 import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
 import { SummaryRepository } from '../summary-repository'
 
@@ -28,7 +29,7 @@ describe('finalized continuity projection', () => {
         chapterNumber: 1,
         title: '午夜怀表',
         content,
-        wordCount: content.length,
+        wordCount: countDraftUnits(content),
       }],
     })
     const draft = receipt.drafts[0]!
@@ -67,7 +68,7 @@ describe('finalized continuity projection', () => {
     const content = '第一章定稿正文。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'continuity-retry-same-row',
-      chapters: [{ chapterNumber: 1, title: '第一章', content, wordCount: content.length }],
+      chapters: [{ chapterNumber: 1, title: '第一章', content, wordCount: countDraftUnits(content) }],
     })
     const request = {
       draftId: receipt.drafts[0]!.draftId,
@@ -95,7 +96,7 @@ describe('finalized continuity projection', () => {
     const content = '定稿正文。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'continuity-invalid-fact',
-      chapters: [{ chapterNumber: 1, title: '第一章', content, wordCount: content.length }],
+      chapters: [{ chapterNumber: 1, title: '第一章', content, wordCount: countDraftUnits(content) }],
     })
     const draftId = receipt.drafts[0]!.draftId
 
@@ -138,7 +139,7 @@ describe('finalized continuity projection', () => {
         chapterNumber: 1,
         title: '第一章',
         content,
-        wordCount: content.length,
+        wordCount: countDraftUnits(content),
       }],
     })
     SummaryRepository.saveFinalizedContinuity({

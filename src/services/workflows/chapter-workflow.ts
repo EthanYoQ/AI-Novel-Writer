@@ -1,4 +1,4 @@
-import type { WorkflowDefinition } from '../../stores/workflow-store'
+import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workflow-store'
 import type { DraftMeta } from '../draft-index'
 import { requireIpcSuccess } from '../ipc-result'
 import { ipc } from '../ipc-client'
@@ -6,6 +6,7 @@ import { ipc } from '../ipc-client'
 import type { DraftStatus } from '../../shared/draft-status'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
+import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 
 // ==========================================
 // 1. 结构与类型导出 (保留对外的向后兼容)
@@ -184,11 +185,15 @@ export function createChapterWorkflow(
   options: ChapterWorkflowOptions = {},
 ): WorkflowDefinition {
   const generationModelId = options.generationModelId?.trim() || undefined
+  const chapterWordsTarget = normalizeChapterWordsTarget(chapterInfo.wordsTarget)
+  const frozenChapterInfo = Object.freeze({ ...chapterInfo, wordsTarget: chapterWordsTarget })
   return {
     type: 'chapter_creation',
     projectPath: chapterInfo.projectPath,
     projectSession: workflowProjectSession(chapterInfo.projectPath, sourceProjectSession),
     ...(generationModelId ? { generationModelId } : {}),
+    chapterWordsTarget,
+    resourceKeys: [workflowResourceKey('chapter', chapterInfo.chapterNumber)],
     title: `写稿 — 第 ${chapterInfo.chapterNumber} 章 · ${chapterInfo.title}`,
     steps: [
       {
@@ -196,12 +201,12 @@ export function createChapterWorkflow(
         description: '基于架构 + 蓝图 + 上下文调用 Command 生成草稿',
         executor: async (step, context, callbacks) => {
           const { GenerateDraftCommand } = await import('./commands/generate-draft.command')
-          const cmd = new GenerateDraftCommand(chapterInfo)
+          const cmd = new GenerateDraftCommand(frozenChapterInfo)
           return cmd.execute({ step, context, callbacks })
         },
       },
     ],
-      onComplete: { mode: 'open', message: `第${chapterInfo.chapterNumber}章草稿已生成` },
+    onComplete: { mode: 'open', message: `第${chapterInfo.chapterNumber}章草稿已生成` },
   }
 }
 
@@ -213,7 +218,8 @@ export function createRefineOnlyWorkflow(
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
-      title: `修稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    title: `修稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
         name: '修稿',
@@ -245,6 +251,7 @@ export function createRefineFromReviewWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     ...(generationModelId ? { generationModelId } : {}),
+    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
     title: `审稿修复 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
@@ -275,7 +282,8 @@ export function createReviewOnlyWorkflow(
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
-      title: `审稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    title: `审稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
         name: '审稿',
@@ -292,7 +300,7 @@ export function createReviewOnlyWorkflow(
         },
       },
     ],
-      onComplete: { mode: 'open', message: `第${params.chapterNumber}章审稿完成` },
+    onComplete: { mode: 'open', message: `第${params.chapterNumber}章审稿完成` },
   }
 }
 
@@ -305,7 +313,8 @@ export function createFinalizeWorkflow(
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
-      title: `定稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    title: `定稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
         name: '定稿',
@@ -325,7 +334,7 @@ export function createFinalizeWorkflow(
     ],
     // 定稿界面结算只由携带 immutable snapshot 的 FINALIZE_COMPLETE 完成；不要在
     // workflow onComplete 中重新读 DB 并打开/覆盖旧 tab。
-      onComplete: { mode: 'silent', message: `第${params.chapterNumber}章已定稿。` },
+    onComplete: { mode: 'silent', message: `第${params.chapterNumber}章已定稿。` },
   }
 }
 
@@ -342,7 +351,8 @@ export function createRepairFinalizeWorkflow(
     type: 'chapter_creation',
     projectPath,
     projectSession: workflowProjectSession(projectPath, sourceProjectSession),
-      title: `修复后处理 — 第${chapterNumber}章`,
+    resourceKeys: [workflowResourceKey('chapter', chapterNumber)],
+    title: `修复后处理 — 第${chapterNumber}章`,
     steps: [
       {
         name: '重建后处理',

@@ -11,6 +11,7 @@ import type {
   AuthoritativeChapterSequence,
 } from '../../src/shared/author-manuscript-import'
 import { getProjectDb } from '../database'
+import { countDraftUnits } from '../../src/shared/draft-units'
 import { resolveManuscriptTarget } from '../services/manuscript-publisher'
 
 interface ImportOperationRow {
@@ -71,7 +72,7 @@ function normalizeChapters(chapters: FinalizedDraftImportChapter[]): FinalizedDr
     if (typeof chapter.content !== 'string' || chapter.content.trim().length === 0) {
       throw new Error(`第 ${chapter.chapterNumber} 章正文不能为空`)
     }
-    if (!Number.isInteger(chapter.wordCount) || chapter.wordCount !== chapter.content.length) {
+    if (!Number.isInteger(chapter.wordCount) || chapter.wordCount !== countDraftUnits(chapter.content)) {
       throw new Error(`第 ${chapter.chapterNumber} 章字数与正文不一致`)
     }
     return {

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { FileText, RotateCcw } from 'lucide-react'
 import type { BlueprintCharacterSyncOperation } from '../../../electron/repositories/blueprint-repository'
 import { useProjectStore } from '../../stores/project-store'
-import { useWorkflowStore } from '../../stores/workflow-store'
 import { toast } from '../ui/Toast'
 import { useLocaleStore } from '../../stores/locale-store'
 import {
@@ -77,8 +76,6 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   const [authoritativeNextChapter, setAuthoritativeNextChapter] = useState<number | null>(null)
   const [authorityError, setAuthorityError] = useState<string | null>(null)
   const [authorityLoading, setAuthorityLoading] = useState(false)
-
-  const isBatchRunning = useWorkflowStore(s => s.isTypeRunning('batch_generate'))
 
   useEffect(() => {
     if (!isOpen || !currentProject) return
@@ -203,12 +200,6 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
       ))
       return
     }
-    // 防重复：同类型工作流正在运行
-    if (isBatchRunning) {
-      toast.warning(text('已有蓝图生成任务正在执行，请等待完成后再试', 'A blueprint generation task is already running. Please wait for it to finish.'))
-      return
-    }
-
     let frozenAuthoritativeNext: number
     try {
       frozenAuthoritativeNext = await readAuthoritativeNextChapter(projectSession, locale)

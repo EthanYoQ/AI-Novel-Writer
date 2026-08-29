@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import { useProjectStore } from '../../../stores/project-store'
-import { createRepairFinalizeWorkflow } from '../chapter-workflow'
+import { createChapterWorkflow, createRepairFinalizeWorkflow } from '../chapter-workflow'
 
 const postProcess = vi.hoisted(() => ({
   params: [] as Array<Record<string, unknown>>,
@@ -52,6 +52,26 @@ afterEach(() => {
 })
 
 describe('createRepairFinalizeWorkflow', () => {
+  it('scopes direct writing and repair to the target chapter', () => {
+    const writing = createChapterWorkflow({
+      projectPath: PROJECT_PATH,
+      chapterNumber: 3,
+      title: '第三章',
+      role: '发展',
+      purpose: '推进冲突',
+      characters: [],
+      keyEvents: '冲突升级',
+      wordsTarget: 4200,
+    }, PROJECT_SESSION)
+    const repair = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION)
+
+    expect(writing).toMatchObject({
+      chapterWordsTarget: 4200,
+      resourceKeys: ['chapter:3'],
+    })
+    expect(repair.resourceKeys).toEqual(['chapter:3'])
+  })
+
   it('rebuilds every derived result instead of skipping previously successful steps', async () => {
     useProjectStore.setState({
       currentProject: {

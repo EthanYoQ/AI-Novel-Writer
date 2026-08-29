@@ -22,7 +22,7 @@
   box-shadow: none !important;
   width: 100%;
   min-height: 100%;
-  caret-color: var(--color-accent);
+  caret-color: var(--color-editor-caret, var(--color-text));
 }
 
 /* ── 选中文本高亮 ────────────────────────────────────────────────────────── */

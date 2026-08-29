@@ -7,6 +7,7 @@ import { cn } from '../../lib/utils'
 import type { VersionRecord } from '../../services/version-service'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
+import { countDraftUnits } from '../../shared/draft-units'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
@@ -172,7 +173,7 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
         version: nextVersion,
         source: 'rewrite',
         content,
-        wordCount: content.length,
+        wordCount: countDraftUnits(content),
       },
       projectSession.projectPath,
     ), '创建回滚草稿')

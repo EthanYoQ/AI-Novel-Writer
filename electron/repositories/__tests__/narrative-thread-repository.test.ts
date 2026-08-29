@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { countDraftUnits } from '../../../src/shared/draft-units'
 import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
 import { DraftRepository } from '../draft-repository'
 import { NarrativeThreadRepository } from '../narrative-thread-repository'
@@ -80,8 +81,8 @@ describe('NarrativeThreadRepository', () => {
     const finalized = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'thread-finalized-source',
       chapters: [
-        { chapterNumber: 1, title: '旧码头', content: '林岚捡到钥匙。', wordCount: '林岚捡到钥匙。'.length },
-        { chapterNumber: 3, title: '仓库门', content: '钥匙打开仓库。', wordCount: '钥匙打开仓库。'.length },
+        { chapterNumber: 1, title: '旧码头', content: '林岚捡到钥匙。', wordCount: countDraftUnits('林岚捡到钥匙。') },
+        { chapterNumber: 3, title: '仓库门', content: '钥匙打开仓库。', wordCount: countDraftUnits('钥匙打开仓库。') },
       ],
     })
     NarrativeThreadRepository.confirmEvent({
@@ -134,7 +135,7 @@ describe('NarrativeThreadRepository', () => {
     const content = '第七章定稿。'
     FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'thread-current-chapter-query',
-      chapters: [{ chapterNumber: 7, title: '第七章', content, wordCount: content.length }],
+      chapters: [{ chapterNumber: 7, title: '第七章', content, wordCount: countDraftUnits(content) }],
     })
 
     expect(NarrativeThreadRepository.list()[0]).toEqual(expect.objectContaining({
@@ -157,7 +158,7 @@ describe('NarrativeThreadRepository', () => {
     const content = '林岚在门框上发现三道平行刻痕。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'thread-evidence-boundary',
-      chapters: [{ chapterNumber: 1, title: '三道刻痕', content, wordCount: content.length }],
+      chapters: [{ chapterNumber: 1, title: '三道刻痕', content, wordCount: countDraftUnits(content) }],
     })
     const draftId = receipt.drafts[0]!.draftId
 
@@ -193,7 +194,7 @@ describe('NarrativeThreadRepository', () => {
     const content = '林岚推开暗门。废弃的支线不再继续。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'thread-relevant-active-source',
-      chapters: [{ chapterNumber: 2, title: '暗门', content, wordCount: content.length }],
+      chapters: [{ chapterNumber: 2, title: '暗门', content, wordCount: countDraftUnits(content) }],
     })
     NarrativeThreadRepository.confirmEvent({
       planId: resolved.id, draftId: receipt.drafts[0]!.draftId, type: 'resolved',

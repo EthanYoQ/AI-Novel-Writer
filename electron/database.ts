@@ -9,6 +9,7 @@ import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs'
 import { loadApplicationImportSourceSecret } from './services/import-source-identity-secret'
+import { countDraftUnits } from '../src/shared/draft-units'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -794,7 +795,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
         )
       if (snapshotsAreComplete) {
         saveLegacyWordCount.run(
-          snapshots.reduce((total, snapshot) => total + snapshot.content_snapshot.length, 0),
+          snapshots.reduce((total, snapshot) => total + countDraftUnits(snapshot.content_snapshot), 0),
           run.id,
         )
         continue

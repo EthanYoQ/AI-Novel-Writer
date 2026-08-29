@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { BUILTIN_PROMPTS, getBuiltinPromptTemplate } from '../prompt-templates'
+import { BUILTIN_PROMPTS, getBuiltinPromptTemplate, renderPrompt } from '../prompt-templates'
 import {
   characterArchitecturePrompts,
   CORE_LOCALIZED_BUILTIN_PROMPT_KEYS,
   EN_US_BUILTIN_PROMPTS,
 } from '../prompt-language'
+import { ArchitecturePromptBuilder, DirectoryPromptBuilder } from '../prompts/prompt-builder'
 
 const REQUIRED_CORE_KEYS = [
   'generate_global_config',
@@ -69,7 +70,62 @@ describe('core model prompt language contract', () => {
 
     expect(zhCN.manifestSystem).toContain('角色身份规划器')
     expect(enUS.manifestSystem).toContain('character identities')
+    expect(zhCN.manifestSystem).toContain('作者明确设定是权威事实')
+    expect(zhCN.detailSystem).toContain('作者明确设定是权威事实')
+    expect(enUS.manifestSystem).toContain('Explicit author facts')
+    expect(enUS.detailSystem).toContain('Explicit author facts')
     expect(enUS.manifestSystem).not.toMatch(/[\u3400-\u9fff]/u)
     expect(enUS.detailContract).toContain('Immutable character-detail JSON contract')
+  })
+
+  it('appends authoritative project facts omitted by a custom architecture template', () => {
+    const builtin = getBuiltinPromptTemplate('world_building', 'zh-CN')!
+    const customTemplate = { ...builtin, content: '自定义世界观模板。' }
+    const prompt = new ArchitecturePromptBuilder(
+      customTemplate,
+      'zh-CN',
+    )
+      .withCoreSeed('林岚明确害怕密闭空间。')
+      .withCoreSetting('航空公司内部等级森严。')
+      .withGoldenFinger('能够感知谎言。')
+      .withProtagonistProfile('林岚谨慎且坚韧。')
+      .withGlobalGuidance('所有关键选择必须有代价。')
+      .withStepGuidance('')
+      .build()
+
+    expect(prompt).toContain('【自定义模板未引用但仍必须遵循的权威项目设定】')
+    expect(prompt).toContain('林岚明确害怕密闭空间。')
+    expect(prompt).toContain('林岚谨慎且坚韧。')
+    expect(prompt).toContain('所有关键选择必须有代价。')
+    expect(renderPrompt(customTemplate, {
+      premise: '林岚明确害怕密闭空间。',
+      core_setting: '航空公司内部等级森严。',
+      golden_finger: '能够感知谎言。',
+      protagonist_profile: '林岚谨慎且坚韧。',
+      global_guidance: '所有关键选择必须有代价。',
+      step_guidance: '',
+    }, 'zh-CN')).toContain('林岚明确害怕密闭空间。')
+  })
+
+  it('keeps the story architecture when an English custom blueprint template omits it', () => {
+    const builtin = getBuiltinPromptTemplate('chapter_blueprint_chunk', 'en-US')!
+    const prompt = new DirectoryPromptBuilder(
+      { ...builtin, content: 'Create the requested blueprint JSON.' },
+      'en-US',
+    )
+      .withNovelArchitecture('Author fact: Rowan cannot lie.')
+      .withChapterList('Chapter 1: Rowan refuses the bargain.')
+      .withNumberOfChapters(12)
+      .withGlobalGuidance('Never reverse established traits.')
+      .withGenre('Mystery')
+      .withN(2)
+      .withM(4)
+      .withPacingGuidance('')
+      .build()
+
+    expect(prompt).toContain('[Authoritative project context omitted by the custom template')
+    expect(prompt).toContain('Author fact: Rowan cannot lie.')
+    expect(prompt).toContain('Chapter 1: Rowan refuses the bargain.')
+    expect(prompt).toContain('Never reverse established traits.')
   })
 })

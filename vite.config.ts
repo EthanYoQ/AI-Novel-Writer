@@ -27,7 +27,7 @@ export default defineConfig({
         build: {
           // 强制输出 CommonJS，保证 better-sqlite3 等 native 模块能正常加载
           rollupOptions: {
-            external: ['better-sqlite3', '@lancedb/lancedb'],
+            external: ['better-sqlite3', '@lancedb/lancedb', 'yauzl'],
             output: {
               format: 'cjs'
             }

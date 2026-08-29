@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AlertCircle, AlertTriangle, BookOpen, Loader2, Play } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
-import { useWorkflowStore } from '../../stores/workflow-store'
+import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
 import { useLayoutStore } from '../../stores/layout-store'
 import {
   createBatchChapterWorkflow,
@@ -28,6 +28,11 @@ import { readAuthoritativeNextChapter } from '../../services/authoritative-chapt
 import { readConsistencyPreflight, type ConsistencyPreflightResult } from '../../services/consistency-preflight'
 import { requireIpcSuccess } from '../../services/ipc-result'
 import ConsistencyPreflightPanel from './ConsistencyPreflightPanel'
+import {
+  CHAPTER_WORDS_TARGET_MAX,
+  CHAPTER_WORDS_TARGET_MIN,
+  normalizeChapterWordsTarget,
+} from '../../services/workflows/chapter-creation-parameters'
 
 interface Props {
   isOpen: boolean
@@ -73,10 +78,12 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
   const currentProject = useProjectStore(s => s.currentProject)
   const models = useLLMStore(s => s.models)
   const defaultModelId = useLLMStore(s => s.defaultModelId)
-  const isBatchRunning = useWorkflowStore(s => s.isTypeRunning('batch_generate'))
   const startWorkflow = useWorkflowStore.getState().startWorkflow
   const addLog = useWorkflowStore.getState().addLog
   const [chapterCount, setChapterCount] = useState(1)
+  const [chapterWordsTarget, setChapterWordsTarget] = useState<number | ''>(() => (
+    normalizeChapterWordsTarget(currentProject?.novelConfig.wordsPerChapter)
+  ))
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [completionMode, setCompletionMode] = useState<BatchChapterCompletionMode>('draft_review')
@@ -160,11 +167,6 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
       ))
       return
     }
-    if (isBatchRunning) {
-      setError(text('已有批量创作任务正在执行。', 'A batch writing task is already running.'))
-      return
-    }
-
     setStarting(true)
     try {
       const frozenStart = await readAuthoritativeNextChapter(projectSession, locale)
@@ -174,6 +176,10 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
       const frozenCompletionMode = completionMode
       const frozenLocale = locale
       const frozenChapterCount = normalizedCount
+      const frozenChapterWordsTarget = normalizeChapterWordsTarget(
+        chapterWordsTarget,
+        currentProject?.novelConfig.wordsPerChapter,
+      )
       const frozenEnd = frozenStart + frozenChapterCount - 1
       const frozenSelectedGenerationModelId = selectedGenerationModelId
       const chapterNumbers = Array.from({ length: frozenChapterCount }, (_, index) => frozenStart + index)
@@ -236,15 +242,22 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
         ))
         return
       }
-      startWorkflow(createBatchChapterWorkflow({
+      const workflow = createBatchChapterWorkflow({
         projectPath,
         projectSession,
         startChapterNumber: frozenStart,
         chapterCount: frozenChapterCount,
         locale: frozenLocale,
         generationModelId: frozenGenerationModelId,
+        chapterWordsTarget: frozenChapterWordsTarget,
         completionMode: frozenCompletionMode,
-      }))
+      })
+      const conflict = useWorkflowStore.getState().getResourceConflict(workflow)
+      if (conflict) {
+        setError(workflowResourceConflictMessage(frozenLocale, conflict.title))
+        return
+      }
+      void startWorkflow(workflow)
       useLayoutStore.getState().openBottomTab('tasks')
       addLog('info', frozenCompletionMode === 'draft_review'
         ? (frozenLocale === 'en-US'
@@ -312,6 +325,31 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
                 onBlur={() => setChapterCount(normalizeBatchChapterCount(chapterCount))}
               />
             </div>
+          </div>
+
+          <div>
+            <Label htmlFor="batch-chapter-words-target">
+              {text('本次每章目标字数', 'Target words per chapter')}
+            </Label>
+            <Input
+              id="batch-chapter-words-target"
+              type="number"
+              min={CHAPTER_WORDS_TARGET_MIN}
+              max={CHAPTER_WORDS_TARGET_MAX}
+              value={chapterWordsTarget}
+              disabled={starting}
+              onChange={(event) => {
+                setChapterWordsTarget(event.target.value === '' ? '' : Number(event.target.value))
+                setConfirmingAutoFinalize(false)
+              }}
+              onBlur={() => setChapterWordsTarget(normalizeChapterWordsTarget(
+                chapterWordsTarget,
+                currentProject?.novelConfig.wordsPerChapter,
+              ))}
+            />
+            <p className="mt-1 text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
+              {text('默认采用项目设置；只作用于本次连续创作。', 'Defaults to the project setting and applies only to this batch run.')}
+            </p>
           </div>
 
           <fieldset>
@@ -446,7 +484,7 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
           <Button variant="ghost" onClick={onClose} disabled={starting}>
             {text('取消', 'Cancel')}
           </Button>
-          <Button variant="ai" onClick={() => void handleStart(false)} disabled={starting || authorityLoading || isBatchRunning || !!authorityError || !!modelSelectionError}>
+          <Button variant="ai" onClick={() => void handleStart(false)} disabled={starting || authorityLoading || !!authorityError || !!modelSelectionError}>
             {starting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
             {completionMode === 'draft_review'
               ? text('启动批量创作', 'Start batch writing')

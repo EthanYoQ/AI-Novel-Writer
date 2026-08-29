@@ -207,6 +207,36 @@ describe('character store project context', () => {
     )
   })
 
+  it('clears characters and relationships through one roster commit receipt', async () => {
+    const linkedCharacter = {
+      ...character('A 角色'),
+      relationships: JSON.stringify([{ target: 'B 角色', relation: '盟友' }]),
+    }
+    invoke
+      .mockResolvedValueOnce([linkedCharacter, character('B 角色')])
+      .mockResolvedValueOnce({ success: true })
+
+    await useCharacterStore.getState().load(PROJECT_A)
+    await expect(useCharacterStore.getState().clearAllCharacters(PROJECT_A))
+      .resolves.toBe(true)
+
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      'db:character-roster-commit',
+      expect.objectContaining({
+        intent: 'manual_edit',
+        expectedRevision: 1,
+        entries: [],
+      }),
+      PROJECT_A,
+    )
+    expect(useCharacterStore.getState()).toMatchObject({
+      characters: [],
+      selectedName: null,
+      rosterRevision: 2,
+    })
+  })
+
   it('keeps A and B ledgers separate and blocks mutations while B data is not loaded', async () => {
     invoke
       .mockResolvedValueOnce([character('A 角色')])

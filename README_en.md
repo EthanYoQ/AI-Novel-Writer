@@ -31,16 +31,19 @@
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
-> ## v0.8.6 authoritative author imports and reliable continuation
+> ## v0.9.0 long-form continuity and a complete revision loop
 >
-> [v0.8.6](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.6) strengthens author-manuscript import, continuation, and human review while continuing to ship Windows, macOS Apple Silicon, and macOS Intel installers:
+> [v0.9.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.9.0) makes continuity, chapter control, and review-driven revision more complete for long-form fiction while continuing to ship Windows, macOS Apple Silicon, and macOS Intel installers:
 >
-> - **Authoritative author import and continuation** — Material is written only after author confirmation as immutable finalized chapters. It feeds manuscript and continuity context without entering reference corpora, and new writing continues at the correct next chapter.
-> - **Recoverable import** — Failed, cancelled, or reopened runs safely resume from committed stages without duplicating chapters, knowledge, or tasks. Missing chapters, duplicates, and conflicts stop the import with corrective guidance.
-> - **Model routing** — Single-chapter, batch, and revision runs freeze the explicitly selected generation model, preventing silent fallback after switching and preserving accurate model terminal reasons.
-> - **Human review loop** — AI review items can be edited, selected, supplemented, and confirmed as immutable snapshots. Revisions are generated only from the confirmed guidance and remain pending until the author merges them.
+> - **Long-form continuity context** — Explicit author settings, the premise, characters, worldbuilding, outline, blueprints, and finalized facts carry into later writing to reduce forgotten setup and contradictions.
+> - **Foreshadowing and narrative threads** — See suggested hooks, planting and payoff chapters, active threads, and overdue reminders in one place, making long-running suspense easier to plan and resolve.
+> - **EPUB import and an interactive character graph** — Import EPUB2 / EPUB3 text through the existing chapter-splitting flow; zoom, pan, or clear the character relationship graph.
+> - **Per-chapter model and length control** — Single-chapter and continuous writing honor the selected model and target length for each run. Duplicate jobs for the same target are blocked with a clear notice.
+> - **Human-confirmed review loop** — Edit, ignore, or add review items, confirm the checklist, revise from that confirmed guidance, then inspect the diff before choosing whether to merge.
+> - **Smoother model setup** — Advanced model settings expose supported reasoning effort and temperature controls. After entering an API key and Base URL, fetch the model list directly without first saving an incomplete configuration.
+> - **More precise failure messages** — Content restrictions, provider failures, and duplicate jobs report a more specific cause, and incomplete output is not saved as successful project content.
 >
-> One Release uses the exact seven-asset contract: `ai-novel-writer-setup-0.8.6.exe`, `ai-novel-writer-setup-0.8.6.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.6-installer.dmg`, `ai-novel-writer-mac-arm64-0.8.6-installer.dmg.sha256`, `ai-novel-writer-mac-x64-0.8.6-installer.dmg`, and `ai-novel-writer-mac-x64-0.8.6-installer.dmg.sha256`. The Windows installer is not code-signed; both macOS installers are ad-hoc or unsigned and not notarized, so their platform security prompts may require manual confirmation on first launch.
+> One Release uses the exact seven-asset contract: `ai-novel-writer-setup-0.9.0.exe`, `ai-novel-writer-setup-0.9.0.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.9.0-installer.dmg`, `ai-novel-writer-mac-arm64-0.9.0-installer.dmg.sha256`, `ai-novel-writer-mac-x64-0.9.0-installer.dmg`, and `ai-novel-writer-mac-x64-0.9.0-installer.dmg.sha256`. The Windows installer is not code-signed; both macOS installers are ad-hoc or unsigned and not notarized, so their platform security prompts may require manual confirmation on first launch.
 
 
 

@@ -61,9 +61,12 @@ function record(value: unknown): Record<string, unknown> | null {
     : null
 }
 
-function candidatesFromJson(content: string): unknown[] {
+const MAX_PLAN_CANDIDATES = 8
+const MAX_EVENT_CANDIDATES = 5
+
+function candidatesFromJson(content: string, limit: number): unknown[] {
   const parsed = record(JSON.parse(content.trim()))
-  return Array.isArray(parsed?.candidates) ? parsed.candidates.slice(0, 5) : []
+  return Array.isArray(parsed?.candidates) ? parsed.candidates.slice(0, limit) : []
 }
 
 function boundedText(value: unknown, maxLength: number): string | null {
@@ -73,7 +76,7 @@ function boundedText(value: unknown, maxLength: number): string | null {
 }
 
 export function parseNarrativeThreadPlanCandidates(content: string): NarrativeThreadPlanCandidate[] {
-  return candidatesFromJson(content).flatMap((candidate) => {
+  return candidatesFromJson(content, MAX_PLAN_CANDIDATES).flatMap((candidate) => {
     const value = record(candidate)
     if (!value) return []
     const title = boundedText(value.title, 120)
@@ -101,7 +104,7 @@ export function parseNarrativeThreadEventCandidates(
   finalizedContent: string,
 ): NarrativeThreadEventCandidate[] {
   const normalizedSource = finalizedContent.replace(/\s+/gu, '')
-  return candidatesFromJson(content).flatMap((candidate) => {
+  return candidatesFromJson(content, MAX_EVENT_CANDIDATES).flatMap((candidate) => {
     const value = record(candidate)
     if (!value || !['planted', 'progressing', 'resolved', 'abandoned'].includes(String(value.type))) return []
     const evidence = boundedText(value.evidence, 240)
@@ -132,8 +135,8 @@ export function createNarrativeThreadCandidateGenerator(
               role: 'system',
               content: promptLanguageText(
                 input.writingLanguage,
-                '你是小说结构编辑。只从章节蓝图提出可供作者确认的叙事线索计划候选，不得声称正文事件已经发生。只输出 JSON 对象：{"candidates":[{"title":"","type":"","targetStartChapter":1,"targetEndChapter":1,"authorIntent":""}]}。最多 5 项。',
-                'You are a fiction structure editor. Propose narrative-thread plan candidates from the chapter blueprint for author confirmation. Never claim that a manuscript event has occurred. Return only one JSON object: {"candidates":[{"title":"","type":"","targetStartChapter":1,"targetEndChapter":1,"authorIntent":""}]}. Maximum 5 items.',
+                '你是小说结构编辑。只从章节蓝图提出可供作者确认的伏笔与叙事线索计划，不得声称正文事件已经发生。优先提出 3–8 条真正有用的候选；不足 3 条时不要凑数。只输出 JSON 对象：{"candidates":[{"title":"","type":"","targetStartChapter":1,"targetEndChapter":1,"authorIntent":""}]}。最多 8 项。',
+                'You are a fiction structure editor. Propose foreshadowing and narrative-thread plans from the chapter blueprint for author confirmation. Never claim that a manuscript event has occurred. Prefer 3–8 genuinely useful candidates; do not pad the list when fewer than three are justified. Return only one JSON object: {"candidates":[{"title":"","type":"","targetStartChapter":1,"targetEndChapter":1,"authorIntent":""}]}. Maximum 8 items.',
               ),
             },
             {

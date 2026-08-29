@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { Sparkles, Hash, FileText } from 'lucide-react'
 import { useLLMStore } from '../../stores/llm-store'
-import { useWorkflowStore } from '../../stores/workflow-store'
+import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
 
 import { useProjectStore } from '../../stores/project-store'
 import { createConfigGenerationWorkflow } from '../../services/workflows/architecture-workflow'
@@ -102,22 +102,27 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
 
       if (!isProjectSessionCurrent(projectSession)) return
 
+      const workflow = createConfigGenerationWorkflow({
+        projectPath: projectSession.projectPath,
+        projectSession,
+        idea,
+        totalChapters: totalChapters || 100,
+        wordsPerChapter: wordsPerChapter || 3000,
+        onGenerated,
+      })
+      const conflict = useWorkflowStore.getState().getResourceConflict(workflow)
+      if (conflict) {
+        toast.warning(workflowResourceConflictMessage(useLocaleStore.getState().locale, conflict.title))
+        return
+      }
+
       // 覆盖确认通过后，立即关闭弹窗
       onClose()
       toast.info(text('正在根据脑洞生成小说配置...', 'Generating novel configuration from your idea...'))
       addLog('info', text(`正在根据创作脑洞生成小说配置（规模：${totalChapters} 章 / ${wordsPerChapter} 字/章）...`, `Generating novel configuration (${totalChapters} chapters / ${wordsPerChapter} words per chapter)...`))
 
       // 后台执行 LLM 调用（由 WorkflowEngine 接管并显示全局状态面板）
-      startWorkflow(
-        createConfigGenerationWorkflow({
-          projectPath: projectSession.projectPath,
-          projectSession,
-          idea,
-          totalChapters: totalChapters || 100,
-          wordsPerChapter: wordsPerChapter || 3000,
-          onGenerated,
-        })
-      )
+      void startWorkflow(workflow)
     } finally {
       isSubmittingRef.current = false
       setIsSubmitting(false)

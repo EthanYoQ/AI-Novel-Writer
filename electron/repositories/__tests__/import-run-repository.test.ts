@@ -13,6 +13,7 @@ import {
   type ImportRunExecutionAuthority,
   type ImportRunPrepareRequest,
 } from '../../../src/shared/import-run'
+import { countDraftUnits } from '../../../src/shared/draft-units'
 import {
   ImportRunOrchestrator,
   type ImportRunOrchestratorDependencies,
@@ -261,7 +262,7 @@ describe('ImportRunRepository', () => {
       chapterNumber: item.number,
       title: item.title,
       content: item.content,
-      wordCount: item.content.length,
+      wordCount: countDraftUnits(item.content),
     })))
     expect(ImportRunRepository.prepare(request(manuscript, {
       purpose: 'author-manuscript',
@@ -409,7 +410,7 @@ describe('ImportRunRepository', () => {
 
     expect(ImportRunRepository.get('legacy-run')).toMatchObject({
       manifestChapterCount: 2,
-      manifestWordCount: '甲😀'.length + 'second'.length,
+      manifestWordCount: countDraftUnits('甲😀') + countDraftUnits('second'),
       resumable: true,
     })
   })
@@ -456,7 +457,7 @@ describe('ImportRunRepository', () => {
       chapterNumber: 1,
       title: authorChapter.title,
       content: authorChapter.content,
-      wordCount: authorChapter.content.length,
+      wordCount: countDraftUnits(authorChapter.content),
     }])
     const prepared = ImportRunRepository.prepare(request([authorChapter], {
       runId: 'unsupported-author',
@@ -484,7 +485,7 @@ describe('ImportRunRepository', () => {
       chapterNumber: 1,
       title: authorChapter.title,
       content: authorChapter.content,
-      wordCount: authorChapter.content.length,
+      wordCount: countDraftUnits(authorChapter.content),
     }])
     const runId = 'author-receipt-run'
     ImportRunRepository.prepare(request([authorChapter], {
@@ -550,14 +551,14 @@ describe('ImportRunRepository', () => {
         chapterNumber: item.number,
         title: item.title,
         content: item.content,
-        wordCount: item.content.length,
+        wordCount: countDraftUnits(item.content),
       })),
     })
     const preview = FinalizedDraftImportRepository.preview(confirmed.map(item => ({
       chapterNumber: item.number,
       title: item.title,
       content: item.content,
-      wordCount: item.content.length,
+      wordCount: countDraftUnits(item.content),
     })))
     expect(preview).toMatchObject({
       classification: 'ready',
@@ -617,7 +618,7 @@ describe('ImportRunRepository', () => {
       chapterNumber: item.number,
       title: item.title,
       content: item.content,
-      wordCount: item.content.length,
+      wordCount: countDraftUnits(item.content),
     }))
     FinalizedDraftImportRepository.commit(root, {
       operationId: 'stale-existing-author-chapters',
@@ -672,7 +673,7 @@ describe('ImportRunRepository', () => {
         chapterNumber: item.number,
         title: item.title,
         content: item.content,
-        wordCount: item.content.length,
+        wordCount: countDraftUnits(item.content),
       }))
       FinalizedDraftImportRepository.commit(root, {
         operationId: `authority-fence-existing-${interruptedStatus}`,
@@ -774,7 +775,7 @@ describe('ImportRunRepository', () => {
       chapterNumber: imported.number,
       title: imported.title,
       content: imported.content,
-      wordCount: imported.content.length,
+      wordCount: countDraftUnits(imported.content),
     }])
     const runId = 'committed-author-recovery'
     ImportRunRepository.prepare(request([imported], {
@@ -806,7 +807,7 @@ describe('ImportRunRepository', () => {
       chapterNumber: imported.number,
       title: imported.title,
       content: imported.content,
-      wordCount: imported.content.length,
+      wordCount: countDraftUnits(imported.content),
     }])
     expect(ImportRunRepository.prepare(request([imported], {
       runId: 'committed-author-reselection',
@@ -843,7 +844,7 @@ describe('ImportRunRepository', () => {
       chapterNumber: imported.number,
       title: imported.title,
       content: imported.content,
-      wordCount: imported.content.length,
+      wordCount: countDraftUnits(imported.content),
     }])
     const runId = 'cancelled-author-recovery'
     ImportRunRepository.prepare(request([imported], {
@@ -892,7 +893,7 @@ describe('ImportRunRepository', () => {
   it('rejects a stale or gapped author-manuscript preview without writing a run', () => {
     const first = chapter(1, 'author chapter one')
     const preview = FinalizedDraftImportRepository.preview([{
-      chapterNumber: 1, title: first.title, content: first.content, wordCount: first.content.length,
+      chapterNumber: 1, title: first.title, content: first.content, wordCount: countDraftUnits(first.content),
     }])
     expect(() => ImportRunRepository.prepare(request([chapter(2, 'skips chapter one')], {
       runId: 'gapped-author', purpose: 'author-manuscript',
@@ -1002,7 +1003,12 @@ describe('ImportRunRepository', () => {
       inspection: {
         chapterCount: 1,
         previewRemaining: 0,
-        preview: [{ number: 1, title: 'Chapter 1', wordCount: 11, targetStatus: 'duplicate' }],
+        preview: [{
+          number: 1,
+          title: 'Chapter 1',
+          wordCount: countDraftUnits('reference-1'),
+          targetStatus: 'duplicate',
+        }],
       },
     })
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_runs').get()).toEqual({ count: 1 })
@@ -1015,8 +1021,18 @@ describe('ImportRunRepository', () => {
         chapterCount: 2,
         previewRemaining: 0,
         preview: [
-          { number: 1, title: 'Chapter 1', wordCount: 11, targetStatus: 'duplicate' },
-          { number: 2, title: 'Chapter 2', wordCount: 11, targetStatus: 'new' },
+          {
+            number: 1,
+            title: 'Chapter 1',
+            wordCount: countDraftUnits('reference-1'),
+            targetStatus: 'duplicate',
+          },
+          {
+            number: 2,
+            title: 'Chapter 2',
+            wordCount: countDraftUnits('reference-2'),
+            targetStatus: 'new',
+          },
         ],
       },
     })
@@ -1031,7 +1047,12 @@ describe('ImportRunRepository', () => {
       conflictChapterNumbers: [1],
       run: undefined,
       inspection: {
-        preview: [{ number: 1, title: 'Chapter 1', wordCount: 7, targetStatus: 'conflict' }],
+        preview: [{
+          number: 1,
+          title: 'Chapter 1',
+          wordCount: countDraftUnits('changed'),
+          targetStatus: 'conflict',
+        }],
       },
     })
   })
@@ -1050,7 +1071,10 @@ describe('ImportRunRepository', () => {
     })
     expect(prepared.inspection?.preview).toHaveLength(8)
     expect(prepared.inspection?.preview[0]).toEqual({
-      number: 1, title: 'Chapter 1', wordCount: 14, targetStatus: 'new',
+      number: 1,
+      title: 'Chapter 1',
+      wordCount: countDraftUnits('private-body-1'),
+      targetStatus: 'new',
     })
     const rendererPayload = JSON.stringify(prepared.inspection)
     expect(rendererPayload).not.toContain('private-body-')

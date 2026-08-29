@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../database'
+import { countDraftUnits } from '../../src/shared/draft-units'
 import { FinalizedDraftImportRepository } from '../repositories/finalized-draft-import-repository'
 import { SummaryRepository } from '../repositories/summary-repository'
 
@@ -73,7 +74,7 @@ describe('summary continuity migration', () => {
         chapterNumber: 1,
         title: 'Opening',
         content: finalizedContent,
-        wordCount: finalizedContent.length,
+        wordCount: countDraftUnits(finalizedContent),
       }],
     })
     const draftId = receipt.drafts[0]!.draftId

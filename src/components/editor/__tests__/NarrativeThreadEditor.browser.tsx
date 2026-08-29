@@ -104,7 +104,7 @@ afterEach(async () => {
 describe('NarrativeThreadEditor', () => {
   it('creates a plan and confirms an event from a finalized chapter', async () => {
     await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} />))
-    await vi.waitFor(() => expect(container?.textContent).toContain('暂无叙事线索'))
+    await vi.waitFor(() => expect(container?.textContent).toContain('暂无伏笔或叙事线索'))
 
     const fields = container!.querySelectorAll<HTMLInputElement>('input')
     await act(async () => {
@@ -132,7 +132,7 @@ describe('NarrativeThreadEditor', () => {
     await vi.waitFor(() => expect(container?.textContent).toContain('门上的三道刻痕'))
 
     await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('删除'))?.click())
-    await vi.waitFor(() => expect(container?.textContent).toContain('暂无叙事线索'))
+    await vi.waitFor(() => expect(container?.textContent).toContain('暂无伏笔或叙事线索'))
   })
 
   it('renders status history and actions in English after rebuilding the view', async () => {
@@ -147,7 +147,7 @@ describe('NarrativeThreadEditor', () => {
     await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} />))
 
     await vi.waitFor(() => {
-      expect(container?.textContent).toContain('Narrative threads')
+      expect(container?.textContent).toContain('Foreshadowing & narrative threads')
       expect(container?.textContent).toContain('Progressing')
       expect(container?.textContent).toContain('Chapter 1')
       expect(container?.textContent).toContain('Confirm finalized event')
@@ -188,10 +188,10 @@ describe('NarrativeThreadEditor', () => {
     await act(async () => root?.render(
       <NarrativeThreadEditor projectKey={PROJECT_PATH} candidateGenerator={candidateGenerator} />,
     ))
-    await vi.waitFor(() => expect(container?.textContent).toContain('AI 识别蓝图线索'))
+    await vi.waitFor(() => expect(container?.textContent).toContain('AI 建议伏笔与线索'))
 
     await act(async () => Array.from(container!.querySelectorAll('button'))
-      .find(button => button.textContent?.includes('AI 识别蓝图线索'))?.click())
+      .find(button => button.textContent?.includes('AI 建议伏笔与线索'))?.click())
     await vi.waitFor(() => expect(document.body.textContent).toContain('本次识别模型'))
     const modelSelect = document.body.querySelector<HTMLSelectElement>('#narrative-thread-ai-model')!
     expect(Array.from(modelSelect.options).map(option => option.textContent)).toEqual(['请选择可用生成模型', 'GLM', 'Grok'])

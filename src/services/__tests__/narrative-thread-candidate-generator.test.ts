@@ -10,6 +10,20 @@ import {
 } from '../narrative-thread-candidate-generator'
 
 describe('narrative thread AI candidate boundary', () => {
+  it('accepts up to eight useful foreshadowing plan candidates', () => {
+    const candidates = parseNarrativeThreadPlanCandidates(JSON.stringify({
+      candidates: Array.from({ length: 9 }, (_, index) => ({
+        title: `线索 ${index + 1}`,
+        type: '伏笔',
+        targetStartChapter: 1,
+        targetEndChapter: index + 2,
+        authorIntent: `在第 ${index + 2} 章回收`,
+      })),
+    }))
+
+    expect(candidates).toHaveLength(8)
+  })
+
   it('keeps blueprint analysis as plan-only candidates even when the model claims an event already happened', () => {
     const candidates = parseNarrativeThreadPlanCandidates(JSON.stringify({
       candidates: [{

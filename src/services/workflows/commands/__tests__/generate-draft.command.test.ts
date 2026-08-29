@@ -757,6 +757,22 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  it('persists the same draft-unit count used by generation thresholds', async () => {
+    const draft = `${'chapter prose '.repeat(450).trim()}.`
+    const { invoke, context, callbacks, command } = setup({
+      runtime: fakeOutcomes(outcome(draft, 'stop')),
+      writingLanguage: 'en-US',
+      wordsTarget: 900,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
+    expect(persisted?.[1]).toMatchObject({
+      wordCount: countDraftUnits((persisted?.[1] as { content: string }).content),
+    })
+  })
+
   it('continues a length result even after it has crossed 82%', async () => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(5000), 'length', 1),

@@ -19,6 +19,7 @@ import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh
 import { promptLanguageText } from '../prompt-language'
 import { retryDirectoryCharacterSync } from './directory-character-sync-recovery'
 import type { WritingLanguage } from '../../shared/writing-language'
+import { countDraftUnits } from '../../shared/draft-units'
 
 export interface ImportWorkflowParams {
   projectPath: string
@@ -42,7 +43,7 @@ function importedChapter(chapter: ImportRunChapterSnapshot) {
     number: chapter.number,
     title: chapter.title,
     content: chapter.content,
-    wordCount: chapter.content.length,
+    wordCount: countDraftUnits(chapter.content),
   }
 }
 

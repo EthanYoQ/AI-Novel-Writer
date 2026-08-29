@@ -85,6 +85,26 @@ describe('bounded secure text reads', () => {
       expect.objectContaining({ operation: 'read', maxBytes: 3 }),
     ])
   })
+
+  it('returns arbitrary bytes through the same bounded capability helper', async () => {
+    const fixture = fixtureRoot()
+    const selectedRoot = path.join(fixture, 'selected')
+    const binary = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0x00])
+    const requests: Array<Record<string, unknown>> = []
+    fs.mkdirSync(selectedRoot)
+    const safeFileSystem = createWindowsSafeFileSystem({
+      invoke: async (request) => {
+        requests.push({ ...request })
+        return { ok: true, contentBase64: binary.toString('base64') }
+      },
+    })
+
+    await expect(safeFileSystem.readBytes(capability(selectedRoot, 'novel.epub'), binary.length))
+      .resolves.toEqual(binary)
+    expect(requests).toEqual([
+      expect.objectContaining({ operation: 'read', maxBytes: binary.length }),
+    ])
+  })
 })
 
 describe('Darwin handle-bound secure file system', () => {

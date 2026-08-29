@@ -403,9 +403,25 @@ describe('chapter writing model selectors', () => {
     expect(startWorkflow.mock.calls[0]?.[0]).toMatchObject({
       generationModelId: 'grok',
       completionMode: 'draft_review',
+      chapterWordsTarget: 3000,
     })
     expect(useLLMStore.getState().defaultModelId).toBe('glm')
     expect(setDefaultModel).not.toHaveBeenCalled()
+  })
+
+  it('lets a batch run override and freeze the global per-chapter target', async () => {
+    await act(async () => {
+      root?.render(<BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />)
+    })
+
+    const targetInput = page.getByLabelText('本次每章目标字数')
+    await expect.element(targetInput).toHaveValue(3000)
+    await act(async () => targetInput.fill('4600'))
+    await act(async () => page.getByRole('button', { name: '启动批量创作' }).click())
+
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+    expect(startWorkflow.mock.calls[0]?.[0]).toMatchObject({ chapterWordsTarget: 4600 })
+    expect(useProjectStore.getState().currentProject?.novelConfig.wordsPerChapter).toBe(3000)
   })
 
   it('requires an explicit consequence confirmation before starting auto-finalize mode', async () => {

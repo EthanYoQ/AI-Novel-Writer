@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { page } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -83,6 +84,12 @@ beforeEach(() => {
     lastError: null,
     saving: false,
     identityBusy: false,
+    rosterRevision: 1,
+    dataProjectSession: {
+      projectId: 'relationship-editor',
+      leaseId: 'relationship-editor-lease',
+      projectPath: PROJECT_PATH,
+    },
   })
   container = document.createElement('div')
   document.body.append(container)
@@ -153,5 +160,59 @@ describe('CharacterEditor relationship field', () => {
     expect(relationshipField?.value).toContain('Relationship data format is unrecognized')
     expect(relationshipField?.value).toContain('Character: relationship')
     expect(relationshipField?.value).not.toContain(unknownJson)
+  })
+
+  it('zooms the relationship graph with controls and the mouse wheel, then fits the view', async () => {
+    await act(async () => {
+      root?.render(<CharacterEditor projectKey={PROJECT_PATH} />)
+    })
+
+    await act(async () => page.getByRole('button', { name: '关系图谱' }).click())
+    await expect.element(page.getByText('100%')).toBeVisible()
+
+    await act(async () => page.getByRole('button', { name: '放大关系图谱' }).click())
+    await expect.element(page.getByText('110%')).toBeVisible()
+
+    const canvas = container?.querySelector('canvas')
+    expect(canvas).toBeTruthy()
+    await act(async () => {
+      canvas?.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }))
+    })
+    await expect.element(page.getByText('120%')).toBeVisible()
+
+    await act(async () => page.getByRole('button', { name: '适合视图' }).click())
+    await expect.element(page.getByText('100%')).toBeVisible()
+  })
+
+  it('requires confirmation before clearing every character through the roster action', async () => {
+    const clearAllCharacters = vi.fn().mockResolvedValue(true)
+    useCharacterStore.setState({ clearAllCharacters })
+    await act(async () => {
+      root?.render(<CharacterEditor projectKey={PROJECT_PATH} />)
+    })
+
+    await act(async () => page.getByRole('button', { name: '关系图谱' }).click())
+    await act(async () => page.getByRole('button', { name: '删除全部角色与关系' }).click())
+    await expect.element(page.getByRole('dialog')).toBeVisible()
+    expect(clearAllCharacters).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await page.getByRole('button', { name: '取消' }).click()
+      await new Promise(resolve => setTimeout(resolve, 220))
+    })
+    expect(clearAllCharacters).not.toHaveBeenCalled()
+
+    await act(async () => page.getByRole('button', { name: '删除全部角色与关系' }).click())
+    await act(async () => {
+      await page.getByRole('button', { name: '确认删除全部' }).click()
+      await new Promise(resolve => setTimeout(resolve, 220))
+    })
+    expect(clearAllCharacters).toHaveBeenCalledWith(
+      PROJECT_PATH,
+      expect.objectContaining({
+        projectId: 'relationship-editor',
+        leaseId: 'relationship-editor-lease',
+      }),
+    )
   })
 })

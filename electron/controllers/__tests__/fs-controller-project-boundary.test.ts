@@ -50,6 +50,9 @@ function capabilityPath(capability: SecureFileCapability): string {
 // timing visible while preserving the same beforeReplace commit boundary that
 // the Windows handle helper exposes.
 const testFileSystem: WindowsSafeFileSystem = {
+  async readBytes(capability) {
+    return fsPromises.readFile(capabilityPath(capability))
+  },
   async readText(capability) {
     return fsPromises.readFile(capabilityPath(capability), 'utf8')
   },

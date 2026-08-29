@@ -9,11 +9,7 @@ import { Sparkles, Bold, Check } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { createGenerationRuntime } from '../../services/generation/generation-runtime'
 import type { GenerationReasoningStage } from '../../shared/reasoning-types'
-
-/** 统计字数（简单字符数统计，包含空格换行等格式符） */
-function countWords(text: string): number {
-  return text.length
-}
+import { countDraftUnits } from '../../shared/draft-units'
 
 export type CodeMirrorEditorProps = {
   content: string
@@ -68,7 +64,7 @@ export default function CodeMirrorEditor({
   useEffect(() => {
     // 首次挂载时主动汇报一次字数
     if (!hasEmittedInitialCount.current) {
-      onCharCountChange?.(countWords(content))
+      onCharCountChange?.(countDraftUnits(content))
       hasEmittedInitialCount.current = true
     }
 
@@ -76,7 +72,7 @@ export default function CodeMirrorEditor({
       lastEmittedContentRef.current = content
       setEditorContent(content)
       // 内容经由外部变动（例如打开新文件）
-      onCharCountChange?.(countWords(content))
+      onCharCountChange?.(countDraftUnits(content))
     }
   }, [content, onCharCountChange])
 
@@ -102,7 +98,7 @@ export default function CodeMirrorEditor({
       lastEmittedContentRef.current = newText
       onChange?.(newText)
 
-      const cnt = countWords(newText)
+      const cnt = countDraftUnits(newText)
       onCharCountChange?.(cnt)
     }
 
@@ -195,6 +191,7 @@ export default function CodeMirrorEditor({
     ".cm-scroller": {
       overflow: "auto",
       paddingBottom: "100px",
+      cursor: "text",
       fontFamily: (mode === 'prose' || mode === 'document') ? "var(--font-writing)" : "inherit"
     },
     ".cm-content": {
@@ -204,9 +201,10 @@ export default function CodeMirrorEditor({
       padding: "40px",
       lineHeight: "1.8",
       color: "var(--color-text)",
+      cursor: "text",
     },
     "&.cm-focused": { outline: "none" },
-    ".cm-cursor": { borderLeftColor: "var(--color-accent)", borderLeftWidth: "2px" },
+    ".cm-cursor": { borderLeftColor: "var(--color-editor-caret, var(--color-text))", borderLeftWidth: "2px" },
     ".cm-activeLine": { backgroundColor: "transparent" },
     ".cm-selectionBackground, .cm-focused .cm-selectionBackground": { backgroundColor: "var(--color-hover) !important" },
     ".cm-line": { padding: "0" },

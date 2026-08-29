@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
+import { useWorkflowStore } from '../../../stores/workflow-store'
 import ArchitectureConfirmDialog from '../ArchitectureConfirmDialog'
 import DirectoryConfigDialog from '../DirectoryConfigDialog'
 
@@ -30,6 +31,10 @@ beforeEach(() => {
   authorityGap = null
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: project as never })
+  useWorkflowStore.setState({
+    activeRuns: [], history: [], globalLogs: [], waitingRuns: {}, currentRun: null,
+    waitingForConfirm: false, waitingAfterStepIndex: -1,
+  })
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -74,6 +79,37 @@ afterEach(async () => {
 })
 
 describe('workflow launch dialogs', () => {
+  it('does not mistake an active batch-writing task for blueprint generation', async () => {
+    useWorkflowStore.setState({
+      activeRuns: [{
+        id: 'active-batch-writing',
+        projectPath: project.path,
+        projectSession: {
+          projectId: project.id,
+          leaseId: project.sessionLease,
+          projectPath: project.path,
+        },
+        type: 'batch_generate',
+        title: '批量创作',
+        status: 'running',
+        currentStepIndex: 0,
+        createdAt: new Date().toISOString(),
+        writingLanguage: 'zh-CN',
+        uiLocale: 'zh-CN',
+        resourceKeys: ['chapter:1'],
+        steps: [],
+      }],
+    })
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    await act(async () => root.render(
+      <DirectoryConfigDialog isOpen onClose={vi.fn()} existingCount={0} onConfirm={onConfirm} />,
+    ))
+
+    await act(async () => page.getByRole('button', { name: '开始生成' }).click())
+
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledOnce())
+  })
+
   it('defaults blueprint append generation to Chapter 10 after imported finalized Chapters 1 through 9', async () => {
     authoritativeNextChapter = 10
     const onConfirm = vi.fn().mockResolvedValue(undefined)

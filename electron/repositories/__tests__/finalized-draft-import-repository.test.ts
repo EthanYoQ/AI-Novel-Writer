@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { DraftRepository } from '../draft-repository'
 import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
+import { countDraftUnits } from '../../../src/shared/draft-units'
 
 let projectRoot = ''
 
@@ -18,7 +19,7 @@ function chapters(count = 9) {
       chapterNumber,
       title: `第${chapterNumber}章`,
       content,
-      wordCount: content.length,
+      wordCount: countDraftUnits(content),
     }
   })
 }
@@ -76,7 +77,11 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
       newChapterNumbers: [],
     })
 
-    const changed = [{ ...chapters(1)[0], content: '冲突正文', wordCount: '冲突正文'.length }]
+    const changed = [{
+      ...chapters(1)[0],
+      content: '冲突正文',
+      wordCount: countDraftUnits('冲突正文'),
+    }]
     expect(FinalizedDraftImportRepository.preview(changed)).toMatchObject({
       classification: 'conflict',
       conflictChapterNumbers: [1],
@@ -147,7 +152,11 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     const preview = FinalizedDraftImportRepository.preview(candidate)
     FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'concurrent-authority-change',
-      chapters: [{ ...chapters(1)[0], content: '另一份第一章', wordCount: '另一份第一章'.length }],
+      chapters: [{
+        ...chapters(1)[0],
+        content: '另一份第一章',
+        wordCount: countDraftUnits('另一份第一章'),
+      }],
     })
 
     expect(() => FinalizedDraftImportRepository.commit(projectRoot, {
@@ -271,7 +280,7 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     changed[4] = {
       ...changed[4],
       content: '第五章被替换的正文',
-      wordCount: '第五章被替换的正文'.length,
+      wordCount: countDraftUnits('第五章被替换的正文'),
     }
 
     expect(() => FinalizedDraftImportRepository.commit(projectRoot, {

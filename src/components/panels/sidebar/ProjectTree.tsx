@@ -334,9 +334,9 @@ export default function ProjectTree() {
 
       <LeafItem
         iconName="git-branch"
-        label={text('叙事线索', 'Narrative threads')}
-        desc={text('人工计划与定稿事件', 'Author plans and finalized events')}
-        onClick={() => openBuiltinEditor('narrative-thread-editor', text('叙事线索', 'Narrative threads'), 'narrative-thread')}
+        label={text('伏笔与叙事线索', 'Foreshadowing & narrative threads')}
+        desc={text('规划埋设/回收章节，自动注入写作并提示逾期', 'Plan setup/payoff chapters, inject active threads, and flag overdue ones')}
+        onClick={() => openBuiltinEditor('narrative-thread-editor', text('伏笔与叙事线索', 'Foreshadowing & narrative threads'), 'narrative-thread')}
       />
 
       {/* 4. 草稿箱 — 独立分区，按章节分组展示草稿 */}

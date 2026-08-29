@@ -13,6 +13,7 @@ import {
   workflowWritingLanguage,
 } from '../workflow-project-session'
 import { assertMateriallyCompleteRevision } from './refinement-completeness'
+import { countDraftUnits } from '../../../shared/draft-units'
 import {
   hasIncludedReviewItems,
   parseHumanConfirmedReviewSnapshot,
@@ -217,7 +218,7 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
       baseDraftId: baseDraft.id,
       revisionType: 'review-fix',
       content: cleanRefined,
-      wordCount: cleanRefined.length,
+      wordCount: countDraftUnits(cleanRefined),
       userPrompt: confirmedReview.authorGuidance || undefined,
       reviewSourceId,
     }, context.projectPath)
@@ -255,8 +256,8 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
     })
 
     callbacks.log(text(
-      `审稿修复完成（${cleanRefined.length} 字），已生成修订稿版本 r${revIndex}`,
-      `Review-based revision complete (${cleanRefined.length} characters); revision r${revIndex} is ready.`,
+      `审稿修复完成（${countDraftUnits(cleanRefined)} 字），已生成修订稿版本 r${revIndex}`,
+      `Review-based revision complete (${countDraftUnits(cleanRefined)} words); revision r${revIndex} is ready.`,
     ))
     return cleanRefined
   }

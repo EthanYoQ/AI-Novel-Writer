@@ -14,6 +14,7 @@ import {
 } from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
 import { assertMateriallyCompleteRevision } from './refinement-completeness'
+import { countDraftUnits } from '../../../shared/draft-units'
 
 import type { ChapterInfo } from '../chapter-workflow'
 
@@ -107,7 +108,7 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
       baseDraftId: baseDraft.id,
       revisionType: 'refine',
       content: cleanRefined,
-      wordCount: cleanRefined.length,
+      wordCount: countDraftUnits(cleanRefined),
     }, context.projectPath)
     requireIpcSuccess(createRes, text('创建修订稿', 'Create the pending revision'))
     if (createRes.id === undefined) {
@@ -141,8 +142,8 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
     context.data.refined = cleanRefined
     context.data.refinedPath = this.params.draftPath
     callbacks.log(text(
-      `修稿完成（${cleanRefined.length} 字），已生成修订稿版本 r${revIndex}`,
-      `Revision complete (${cleanRefined.length} characters); created revision r${revIndex}`,
+      `修稿完成（${countDraftUnits(cleanRefined)} 字），已生成修订稿版本 r${revIndex}`,
+      `Revision complete (${countDraftUnits(cleanRefined)} words); created revision r${revIndex}`,
     ))
     return cleanRefined
   }

@@ -156,6 +156,15 @@ afterEach(async () => {
 })
 
 describe('current-project reference import', () => {
+  it('advertises EPUB reference import in both UI languages', async () => {
+    await expect.element(page.getByText('支持 .txt / .md / .epub 文件（单个或多个）', { exact: true }))
+      .toBeVisible()
+
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await expect.element(page.getByText('Supports one or more .txt / .md / .epub files', { exact: true }))
+      .toBeVisible()
+  })
+
   it('starts a fresh source run for each ordinary file selection', async () => {
     await act(async () => page.getByTestId('import-target-current').click())
 

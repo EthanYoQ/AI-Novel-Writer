@@ -26,6 +26,7 @@ import { retryFinalizationPublication } from '../../services/finalization-client
 import { captureFinalizationSnapshot } from '../../services/finalization-snapshot'
 
 import { DRAFT_STATUS_LABEL, DRAFT_STATUS_COLOR } from '../../shared/draft-status'
+import { countDraftUnits } from '../../shared/draft-units'
 import { PostProcessStatusPanel } from '../ui/PostProcessStatusPanel'
 import { getChapterFinalizeScope } from '../../services/workflows/workflow-utils'
 import { guardRepairPostProcess } from '../../services/workflow-guards'
@@ -204,7 +205,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           'db:draft-update-content',
           draftId,
           saveSnapshot.content,
-          saveSnapshot.content.length,
+          countDraftUnits(saveSnapshot.content),
           projectSession.projectPath,
         )
         if (!result.success) throw new Error(result.error || text('草稿保存失败', 'Could not save the draft'))

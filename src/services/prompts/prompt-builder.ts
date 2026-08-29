@@ -1,5 +1,9 @@
 import type { PromptTemplate } from '../prompt-templates'
-import { getBuiltinPromptTemplate, pruneEmptyOptionalPromptSections } from '../prompt-templates'
+import {
+  appendRequiredPromptContext,
+  getBuiltinPromptTemplate,
+  pruneEmptyOptionalPromptSections,
+} from '../prompt-templates'
 import type { WritingLanguage } from '../../shared/writing-language'
 
 /**
@@ -38,6 +42,8 @@ export class BasePromptBuilder {
       }
       result = result + '\n\n' + renderedSuffix
     }
+
+    result = appendRequiredPromptContext(result, this.template, this.variables, this.writingLanguage)
 
     // 空变量段落裁剪：与 renderPrompt 保持同一套规则。
     result = pruneEmptyOptionalPromptSections(result)

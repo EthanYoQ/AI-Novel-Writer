@@ -56,8 +56,10 @@ export function isCoreLocalizedBuiltinPromptKey(key: string): key is CoreLocaliz
 const CHARACTER_ARCHITECTURE_PROMPTS: Readonly<Record<WritingLanguage, CharacterArchitecturePromptSet>> = {
   'zh-CN': {
     manifestSystem: `你是小说角色身份规划器。只规划角色身份、叙事职责和角色间关系，不生成角色详情。
+故事前提和主角档案中的作者明确设定是权威事实；涉及角色身份、特质、关系或叙事职责的事实必须落实，不得遗漏、弱化、反转或用题材惯例替换。
 只输出一个可由 JSON.parse 读取的 {"slots":[...]} 对象，不得输出 Markdown、解释、代码围栏或思考过程。`,
     detailSystem: `你是小说角色详情生成器。只为指定的冻结角色身份补全紧凑资料，不规划或改写角色身份和关系。
+故事前提和主角档案中的作者明确设定是权威事实；必须写入相关角色详情，不得遗漏、弱化、反转或用题材惯例替换。
 只输出一个可由 JSON.parse 读取的 {"entries":[...]} 对象，不得输出 schemaVersion、relationships、Markdown、解释、代码围栏或思考过程。`,
     detailContract: `【不可变角色详情 JSON 合同】
 只输出 {"entries":[...]}。每项必须包含 slotId、name、role、gender、age、appearance、personality、background、abilities、motivation、arc、notes、currentState。
@@ -89,8 +91,8 @@ appearance/personality/abilities/motivation/arc/notes 各不超过 300 字符；
 只输出 {"entries":[...]}。每项必须额外回显 slotId，name/role 必须与冻结清单完全一致。不得复制、改写或补充关系。`,
   },
   'en-US': {
-    manifestSystem: 'You plan character identities, narrative duties, and relationships for a novel. Do not generate character details. Output exactly one JSON.parse-compatible {"slots":[...]} object with no Markdown, explanation, code fence, or reasoning.',
-    detailSystem: 'You complete compact character records for explicitly frozen identities. Do not plan or alter identities or relationships. Output exactly one JSON.parse-compatible {"entries":[...]} object with no schemaVersion, relationships, Markdown, explanation, code fence, or reasoning.',
+    manifestSystem: 'You plan character identities, narrative duties, and relationships for a novel. Do not generate character details. Explicit author facts in the story premise and protagonist profile are authoritative: apply every fact relevant to identity, traits, relationships, or narrative duty without omission, weakening, reversal, or replacement by genre convention. Output exactly one JSON.parse-compatible {"slots":[...]} object with no Markdown, explanation, code fence, or reasoning.',
+    detailSystem: 'You complete compact character records for explicitly frozen identities. Do not plan or alter identities or relationships. Explicit author facts in the story premise and protagonist profile are authoritative: preserve every relevant fact in the character details without omission, weakening, reversal, or replacement by genre convention. Output exactly one JSON.parse-compatible {"entries":[...]} object with no schemaVersion, relationships, Markdown, explanation, code fence, or reasoning.',
     detailContract: `[Immutable character-detail JSON contract]
 Output {"entries":[...]} only. Every entry must contain slotId, name, role, gender, age, appearance, personality, background, abilities, motivation, arc, notes, and currentState.
 currentState is required and must contain location, powerLevel, physicalState, mentalState, keyItems, recentEvents, and a non-negative integer updatedAtChapter.
@@ -209,11 +211,12 @@ State the immediate visible threat and the deeper hidden truth or long-term myst
 - Project-wide writing guidance: {{global_guidance}}
 
 [Design requirements]
-1. Keep the protagonist consistent with the supplied profile. Define their visible goal, deeper desire, distinctive appearance, characteristic use of the central advantage, vulnerability, and expected arc.
-2. Design a cast appropriate to the planned scale: normally three to four core characters for a short work and four to six for a longer work.
-3. Include at least one ally with an independent motive and at least one rival whose opposition has a defensible cause. Add mentors, schemers, or uncertain allies only when the story needs them.
-4. Connect every character through unavoidable pressure from scarce resources, survival, institutions, or conflicting beliefs.
-5. Avoid flat saints, irrational antagonists, and characters who exist only as tools unless the author explicitly requests them.
+1. Treat every explicit author fact in the story premise and protagonist profile as authoritative. Preserve each one; never weaken, reverse, or replace it with a genre convention.
+2. Keep the protagonist consistent with the supplied profile. Define their visible goal, deeper desire, distinctive appearance, characteristic use of the central advantage, vulnerability, and expected arc.
+3. Design a cast appropriate to the planned scale: normally three to four core characters for a short work and four to six for a longer work.
+4. Include at least one ally with an independent motive and at least one rival whose opposition has a defensible cause. Add mentors, schemers, or uncertain allies only when the story needs them.
+5. Connect every character through unavoidable pressure from scarce resources, survival, institutions, or conflicting beliefs.
+6. Avoid flat saints, irrational antagonists, and characters who exist only as tools unless the author explicitly requests them.
 
 [Output contract]
 Return exactly one JSON object with "schemaVersion":1 and "entries":[...]. Every relationship must target another character in the same entries array. Do not output Markdown, a preface, a code fence, or reasoning; the runtime supplies the complete immutable field contract.
@@ -253,7 +256,7 @@ Build three connected dimensions, each with a concrete source of conflict:
 [Requirements]
 1. Every setting must support the core appeal of {{genre}} and be usable in scenes.
 2. Make the advantage's interaction with the world rules specific and actionable.
-3. Preserve the project-wide writing guidance and established facts.
+3. Preserve explicit author facts from the story premise and protagonist profile together with the project-wide guidance. Facts unrelated to world mechanics need not be repeated, but the world must not contradict them.
 4. Return the world-building text only, with no code, analysis, or explanation.`,
     systemSuffix: `[Author guidance for this step — highest priority when present]
 {{step_guidance}}`,
@@ -285,8 +288,9 @@ Produce a complete outline made of structural turning points rather than chapter
 2. State the concrete event at every structural turn.
 3. Match the escalation and reveal cadence to {{genre}}.
 4. Respect the information limits and suspense opportunities of {{narrative_pov}}.
-5. Preserve all established facts and project-wide writing guidance.
-6. Return only the plot architecture, with no analysis or explanation.`,
+5. Treat explicit author facts in the story premise, character dynamics, and world system as causal constraints. Never omit, weaken, or reverse them.
+6. Preserve the project-wide writing guidance.
+7. Return only the plot architecture, with no analysis or explanation.`,
     systemSuffix: `[Author guidance for this step — highest priority when present]
 {{step_guidance}}`,
   },
@@ -297,6 +301,7 @@ Produce a complete outline made of structural turning points rather than chapter
 [Authoritative project settings]
 - Genre: {{genre}}
 - Project-wide writing guidance: {{global_guidance}}
+- Explicit author facts in the story architecture are authoritative. Every chapter involving the relevant character, relationship, or rule must apply them without omission, weakening, or reversal.
 
 [Story architecture]
 {{novel_architecture}}
@@ -322,6 +327,7 @@ Return JSON only, with no Markdown, preface, analysis, plan, code fence, or reas
 - Genre: {{genre}}
 - Total chapters: {{number_of_chapters}}
 - Project-wide writing guidance: {{global_guidance}}
+- Explicit author facts in the story architecture are authoritative. Every chapter involving the relevant character, relationship, or rule must apply them without omission, weakening, or reversal.
 
 [Story architecture]
 {{novel_architecture}}
@@ -614,7 +620,12 @@ Use these only to understand later turning points. Do not reveal or advance them
 
 [Writing style]
 {{writing_style}}`,
-    systemSuffix: `[Author guidance for this step — highest priority when present]
+    systemSuffix: `[Authoritative facts that must not drift]
+- Story architecture: {{architecture}}
+- Author-confirmed novel configuration: {{novel_config}}
+- Treat both as immutable facts. Never omit, weaken, reverse, or replace an explicit author setting with a genre convention; if a fact is not foregrounded in this chapter, do not contradict it.
+
+[Author guidance for this step — highest priority when present]
 {{user_guidance}}
 
 [Output contract]
@@ -653,7 +664,12 @@ Use these only to understand later turning points. Do not reveal or advance them
 
 [Writing style]
 {{writing_style}}`,
-    systemSuffix: `[Author guidance for this step — highest priority when present]
+    systemSuffix: `[Authoritative facts that must not drift]
+- Story architecture: {{architecture}}
+- Author-confirmed novel configuration: {{novel_config}}
+- Treat both as immutable facts. Never omit, weaken, reverse, or replace an explicit author setting with a genre convention; if a fact is not foregrounded in this chapter, do not contradict it.
+
+[Author guidance for this step — highest priority when present]
 {{user_guidance}}
 
 [Output contract]

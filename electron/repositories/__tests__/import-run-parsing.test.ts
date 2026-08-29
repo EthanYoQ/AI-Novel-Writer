@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { countDraftUnits } from '../../../src/shared/draft-units'
 import { ImportRunRepository } from '../import-run-repository'
 
 let root = ''
@@ -95,9 +96,11 @@ describe('persisted per-source parsing', () => {
   })
 
   it('reopens after every source commit and finalizes only from persisted project snapshots', () => {
+    const savedA = 'saved A'
+    const savedB = 'saved B'
     begin('committed-before-crash')
-    ImportRunRepository.commitParsedSource('committed-before-crash', SOURCE_A, [chapter(1, 'saved A')])
-    ImportRunRepository.commitParsedSource('committed-before-crash', SOURCE_B, [chapter(1, 'saved B')])
+    ImportRunRepository.commitParsedSource('committed-before-crash', SOURCE_A, [chapter(1, savedA)])
+    ImportRunRepository.commitParsedSource('committed-before-crash', SOURCE_B, [chapter(1, savedB)])
     expect(ImportRunRepository.get('committed-before-crash')).toMatchObject({
       stage: 'parsing', completedSources: 2, totalSources: 2, progressCompleted: 2, progressTotal: 2,
     })
@@ -112,18 +115,18 @@ describe('persisted per-source parsing', () => {
         inspectionId: 'committed-before-crash',
         sourceCount: 2,
         chapterCount: 2,
-        totalWords: 14,
+        totalWords: countDraftUnits(savedA) + countDraftUnits(savedB),
         previewRemaining: 0,
         preview: [
-          { number: 1, title: 'Chapter 1', wordCount: 7, targetStatus: 'new' },
-          { number: 2, title: 'Chapter 1', wordCount: 7, targetStatus: 'new' },
+          { number: 1, title: 'Chapter 1', wordCount: countDraftUnits(savedA), targetStatus: 'new' },
+          { number: 2, title: 'Chapter 1', wordCount: countDraftUnits(savedB), targetStatus: 'new' },
         ],
       },
     })
     expect(ImportRunRepository.listChapterBatch(
       'committed-before-crash',
       { afterChapterNumber: 0, limit: 2 },
-    ).map(item => item.content)).toEqual(['saved A', 'saved B'])
+    ).map(item => item.content)).toEqual([savedA, savedB])
   })
 
   it('preserves a long control-bearing authoritative title and chapter body across replay', () => {

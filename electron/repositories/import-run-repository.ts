@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { countDraftUnits } from '../../src/shared/draft-units'
 
 import {
   AuthorImportPreviewStaleError,
@@ -491,7 +492,7 @@ function assertCommittedEffectAuthority(
       chapterNumber: chapter.number,
       title: chapter.title,
       content: chapter.content,
-      wordCount: chapter.content.length,
+      wordCount: countDraftUnits(chapter.content),
     }))
     const authoritative = FinalizedDraftImportRepository.getCommittedOperation(payload.operationId, chapters)
     if (!authoritative || JSON.stringify(canonicalize(authoritative)) !== JSON.stringify(canonicalize(effectReceipt))) {
@@ -1608,7 +1609,7 @@ export class ImportRunRepository {
           chapter.title,
           chapter.contentFingerprint,
           chapter.contentSize,
-          chapter.content.length,
+          countDraftUnits(chapter.content),
           chapter.content,
         )
       }
@@ -1621,7 +1622,7 @@ export class ImportRunRepository {
         manifestFingerprint,
         normalized.length,
         normalized.reduce((sum, chapter) => sum + chapter.contentSize, 0),
-        normalized.reduce((sum, chapter) => sum + chapter.content.length, 0),
+        normalized.reduce((sum, chapter) => sum + countDraftUnits(chapter.content), 0),
         runId,
         sourceId,
       )
@@ -1871,7 +1872,7 @@ export class ImportRunRepository {
             chapterNumber: chapter.number,
             title: chapter.title,
             content: chapter.content,
-            wordCount: chapter.content.length,
+            wordCount: countDraftUnits(chapter.content),
           }))
           .sort((left, right) => left.chapterNumber - right.chapterNumber)
         const preview = FinalizedDraftImportRepository.preview(authorChapters)
@@ -1923,7 +1924,7 @@ export class ImportRunRepository {
           .filter(chapter => newChapterSet.has(chapter.number))
           .sort((left, right) => left.number - right.number)
         const manifestContentSize = normalizedChapters.reduce((sum, chapter) => sum + chapter.contentSize, 0)
-        const manifestWordCount = normalizedChapters.reduce((sum, chapter) => sum + chapter.content.length, 0)
+        const manifestWordCount = normalizedChapters.reduce((sum, chapter) => sum + countDraftUnits(chapter.content), 0)
         db().prepare(`
           INSERT INTO import_runs (
             id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint,
@@ -1988,11 +1989,11 @@ export class ImportRunRepository {
       const chapters = assignment.chapters
       const manifestFingerprint = hashManifest(candidate.purpose, chapters)
       const manifestContentSize = chapters.reduce((sum, chapter) => sum + chapter.contentSize, 0)
-      const manifestWordCount = chapters.reduce((sum, chapter) => sum + chapter.content.length, 0)
+      const manifestWordCount = chapters.reduce((sum, chapter) => sum + countDraftUnits(chapter.content), 0)
       const previewChapters = chapters.map(chapter => ({
         number: chapter.number,
         title: chapter.title,
-        wordCount: chapter.content.length,
+        wordCount: countDraftUnits(chapter.content),
         contentSize: chapter.contentSize,
       }))
       const inspectionFor = (
@@ -2284,7 +2285,7 @@ export class ImportRunRepository {
             chapterNumber: chapter.number,
             title: chapter.title,
             content: chapter.content,
-            wordCount: chapter.content.length,
+            wordCount: countDraftUnits(chapter.content),
           }))
           const commitManifestFingerprint = FinalizedDraftImportRepository.preview(chapters).manifestFingerprint
           effectReceipt = FinalizedDraftImportRepository.commit(projectRoot, {

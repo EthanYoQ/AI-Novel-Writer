@@ -351,6 +351,7 @@ describe('directory workflow project context', () => {
       leaseId: projectA.sessionLease!,
       projectPath: projectA.path,
     })
+    expect(workflow.resourceKeys).toEqual(['blueprints'])
     const context: WorkflowContext = {
       runId: 'test-run',
       projectPath: projectA.path,

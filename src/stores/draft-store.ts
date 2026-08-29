@@ -18,6 +18,7 @@ import {
 } from '../shared/project-session-context'
 import { useProjectStore } from './project-store'
 import { requireIpcSuccess } from '../services/ipc-result'
+import { countDraftUnits } from '../shared/draft-units'
 
 let loadAllDraftsRequestSequence = 0
 
@@ -318,7 +319,7 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
             'db:draft-update-content',
             targetDraftId,
             mergedText,
-            mergedText.length,
+            countDraftUnits(mergedText),
             expectedProjectPath,
           ),
           '保存合并后的草稿',
@@ -340,7 +341,7 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
                 'db:draft-update-content',
                 targetDraftId,
                 mergedText,
-                mergedText.length,
+                countDraftUnits(mergedText),
                 expectedProjectPath,
               ),
               '保存合并后的草稿',
@@ -358,7 +359,7 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
             'db:draft-update-status',
             targetDraftId,
             'revised',
-            mergedText.length,
+            countDraftUnits(mergedText),
             expectedProjectPath,
           ),
           '更新合并后的草稿状态',

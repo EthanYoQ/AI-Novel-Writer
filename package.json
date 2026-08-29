@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writer",
-  "version": "0.8.6",
+  "version": "0.9.0",
   "description": "AI Novel Writer - a local-first production workspace for long-form fiction",
   "author": "AI Novel Writer Maintainers",
   "private": true,
@@ -78,6 +78,7 @@
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.5.0",
     "tailwindcss-animate": "^1.0.7",
+    "yauzl": "^2.10.0",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
@@ -94,6 +95,7 @@
     "@types/diff-match-patch": "^1.0.36",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/yauzl": "^2.10.3",
     "@typescript-eslint/eslint-plugin": "^8.58.1",
     "@typescript-eslint/parser": "^8.58.1",
     "@vitejs/plugin-react": "^6.0.1",

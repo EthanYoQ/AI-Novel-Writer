@@ -22,6 +22,7 @@ import { ImportInspectionStore } from '../../services/import-inspection-store'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
 import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
 import { registerImportController } from '../import-controller'
+import { countDraftUnits } from '../../../src/shared/draft-units'
 
 let parent = ''
 let projectRoot = ''
@@ -283,8 +284,8 @@ describe('current-project import parsing persistence', () => {
           chapterCount: 2,
           previewRemaining: 0,
           preview: [
-            { number: 1, title: 'A', wordCount: 5, targetStatus: 'new' },
-            { number: 2, title: 'B', wordCount: 4, targetStatus: 'new' },
+            { number: 1, title: 'A', wordCount: countDraftUnits('alpha'), targetStatus: 'new' },
+            { number: 2, title: 'B', wordCount: countDraftUnits('beta'), targetStatus: 'new' },
           ],
         },
       },

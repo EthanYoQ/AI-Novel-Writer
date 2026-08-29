@@ -36,6 +36,8 @@ export interface PromptTemplate {
   systemRole?: string
   /** 可用变量列表 */
   variables: Record<string, string>
+  /** 自定义正文即使删掉占位符，也必须由 Builder 追加的权威上下文变量。 */
+  requiredContextVariables?: readonly string[]
 }
 
 /** 允许用户自定义编辑的模板 Key 列表（其余为系统模板，不可编辑） */
@@ -71,6 +73,7 @@ export const PROMPT_VARIABLE_DESCRIPTIONS_EN: Readonly<Record<string, string>> =
   global_guidance: 'Global writing guidance',
   step_guidance: 'Additional guidance for this step (optional)',
   reference_works: 'Reference works (optional)',
+  novel_config: 'Author-confirmed novel configuration',
   premise: 'Story premise',
   world_building: 'World setting',
   character_dynamics: 'Character map',
@@ -198,6 +201,19 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
       step_guidance: '作者对本步骤的补充指导（可选）',
       reference_works: '参考作品（可选）',
     },
+    requiredContextVariables: [
+      'genre',
+      'sub_genre',
+      'topic',
+      'target_audience',
+      'number_of_chapters',
+      'word_number',
+      'core_setting',
+      'golden_finger',
+      'protagonist_profile',
+      'global_guidance',
+      'reference_works',
+    ],
     content: `请提炼本书的故事前提（Story Premise）。这是一本【{{genre}}】（细分类别：{{sub_genre}}）小说。
 
 【核心设定参数】
@@ -253,6 +269,16 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
       step_guidance: '作者对本步骤的补充指导（可选）',
       reference_works: '参考作品（可选）',
     },
+    requiredContextVariables: [
+      'premise',
+      'genre',
+      'protagonist_profile',
+      'golden_finger',
+      'world_building',
+      'number_of_chapters',
+      'global_guidance',
+      'reference_works',
+    ],
     content: `请基于故事前提为本书塑造一个极具戏剧张力的核心角色图谱。
 
 【参考参数】
@@ -285,11 +311,12 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 简述所有角色如何因为世界观下的生存压力、资源争夺或信念冲突产生不可避免的碰撞。
 
 【要求】
-1. 主角必须严格符合主角档案基调，不可偏离。
-2. 所有角色的设计必须贴合「{{genre}}」类型的读者期待。
-3. 默认避免圣母、降智反派或纯工具人（除非作者明确要求）。
-4. 仅返回一个 JSON 对象，顶层必须包含 "schemaVersion": 1 与 "entries": [...]；每个 entries 条目描述一位角色，关系必须指向同一 entries 列表中的另一位角色。
-5. 不要输出 Markdown、客套话、代码围栏或思考过程；运行时会补充不可变的完整字段契约。
+1. 故事前提和主角档案中的作者明确设定属于权威事实，必须逐项保留，不得弱化、反转或用题材惯例替换。
+2. 主角必须严格符合主角档案基调，不可偏离。
+3. 所有角色的设计必须贴合「{{genre}}」类型的读者期待。
+4. 默认避免圣母、降智反派或纯工具人（除非作者明确要求）。
+5. 仅返回一个 JSON 对象，顶层必须包含 "schemaVersion": 1 与 "entries": [...]；每个 entries 条目描述一位角色，关系必须指向同一 entries 列表中的另一位角色。
+6. 不要输出 Markdown、客套话、代码围栏或思考过程；运行时会补充不可变的完整字段契约。
 
 【参考作品风格（如有，调性与节奏可参考以下作品）】
 {{reference_works}}`,
@@ -311,6 +338,14 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
       global_guidance: '全局写作要求',
       step_guidance: '作者对本步骤的补充指导（可选）',
     },
+    requiredContextVariables: [
+      'premise',
+      'genre',
+      'core_setting',
+      'golden_finger',
+      'protagonist_profile',
+      'global_guidance',
+    ],
     content: `请将基础设定转化为能直接引发冲突的"剧情游乐场"。
 
 【参考参数】
@@ -339,7 +374,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 【要求】
 1. 所有设定必须围绕「{{genre}}」题材的核心看点，不要写无法融入正文的废话设定。
 2. 金手指与世界规则的交互必须具体、可操作，避免泛泛而谈。
-3. 严格遵循全局写作要求，保持设定稳定。
+3. 严格遵循故事前提、主角档案中的作者明确设定和全局写作要求；无需机械复述与世界无关的角色事实，但不得制造相反设定。
 4. 仅返回世界观设定文本，不要生成任何无关代码或解释。
 
 `,
@@ -364,6 +399,17 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
       global_guidance: '全局写作要求',
       step_guidance: '作者对本步骤的补充指导（可选）',
     },
+    requiredContextVariables: [
+      'premise',
+      'character_dynamics',
+      'world_building',
+      'genre',
+      'number_of_chapters',
+      'word_number',
+      'plot_structure_guide',
+      'narrative_pov',
+      'global_guidance',
+    ],
     content: `请将前序生成的所有碎片整合为全书的情节大纲。
 
 【核心资产】
@@ -390,8 +436,9 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 2. 每个结构节点都要提到"具体会发生什么事"，不能泛泛而谈。
 3. 节奏策略要匹配「{{genre}}」类型（如爽文侧重打脸与升级节奏，悬疑侧重线索与反转，言情侧重情感与误会）。
 4. 叙事视角为「{{narrative_pov}}」，大纲设计时需考虑视角限制对信息揭露、悬念制造的影响。
-5. 落实全局写作要求，避开其中列出的写作问题。
-6. 仅返回情节大纲纯文本，禁止一切废话或旁白。
+5. 故事前提、角色图谱、世界观中的作者明确设定必须作为后续情节的因果约束，不得遗漏、弱化或反转。
+6. 落实全局写作要求，避开其中列出的写作问题。
+7. 仅返回情节大纲纯文本，禁止一切废话或旁白。
 
 `,
     systemSuffix: `★【作者对本步骤的额外指导（如有，最高优先级）】★：
@@ -416,11 +463,19 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
       genre: '小说类型',
       pacing_guidance: '节奏/风格指导（可选）',
     },
+    requiredContextVariables: [
+      'novel_architecture',
+      'number_of_chapters',
+      'global_guidance',
+      'genre',
+      'pacing_guidance',
+    ],
     content: `请基于我们此前推演出的【全书架构引擎】，为本书生成从第1章到第{{number_of_chapters}}章的具体"保姆级执行目录细纲"。
 
 【核心防偏离守则】
 - 小说题材：{{genre}}
 - 全局写作要求：{{global_guidance}}
+- 全书架构中的作者明确设定是权威事实；涉及对应角色、关系或规则的章节必须落实，不得遗漏、弱化或反转。
 
 【全书架构数据池】
 {{novel_architecture}}
@@ -476,12 +531,23 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
       genre: '小说类型',
       pacing_guidance: '节奏/风格指导（可选）',
     },
+    requiredContextVariables: [
+      'novel_architecture',
+      'chapter_list',
+      'number_of_chapters',
+      'n',
+      'm',
+      'global_guidance',
+      'genre',
+      'pacing_guidance',
+    ],
     content: `请基于【全书架构引擎】与【已生成的目录进度】，为接下来的 第{{n}}章到第{{m}}章 生成极其严密的"保姆级执行目录细纲"。
 
 【核心防偏离守则】
 - 小说题材：{{genre}}
 - 全书规模：共 {{number_of_chapters}} 章
 - 全局写作要求：{{global_guidance}}
+- 全书架构中的作者明确设定是权威事实；涉及对应角色、关系或规则的章节必须落实，不得遗漏、弱化或反转。
 
 【全书架构数据池】
 {{novel_architecture}}
@@ -534,6 +600,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
     systemRole: '你是一位笔力精湛的网络小说家，擅长撰写引人入胜的商业网文正文。请用稳定叙事、明确场景和具体动作适配本地 Qwen3 14B Q4 量化模型。不要输出思考过程、<think> 标签或“点我继续”。',
     variables: {
       architecture: '故事架构（故事前提+角色图谱+世界观+情节大纲）',
+      novel_config: '作者确认的小说配置（权威约束）',
       chapter_info: '本章信息（JSON）',
       future_blueprints: '后续章节蓝图（防止剧情提前）',
       global_guidance: '全局写作要求',
@@ -563,7 +630,12 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 
 【文风要求（如有，请严格遵循）】
 {{writing_style}}`,
-    systemSuffix: `★【作者对本步骤的额外指导（如有，最高优先级）】★：
+    systemSuffix: `【不可偏离的作者事实】
+- 故事架构：{{architecture}}
+- 小说配置：{{novel_config}}
+- 上述内容是不可改写的事实源。不得删除、弱化、反转或用类型惯例替换作者明确设定；本章暂不展开的事实也不得写出相反内容。
+
+★【作者对本步骤的额外指导（如有，最高优先级）】★：
 {{user_guidance}}
 
 【具体生成要求】
@@ -586,6 +658,8 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
     description: '基于上下文和章节蓝图生成后续章节',
     systemRole: '你是一位笔力精湛的网络小说家，擅长撰写引人入胜的商业网文正文。请用稳定叙事、明确场景和具体动作适配本地 Qwen3 14B Q4 量化模型。不要输出思考过程、<think> 标签或“点我继续”。',
     variables: {
+      architecture: '故事架构（故事前提+角色图谱+世界观+情节大纲）',
+      novel_config: '作者确认的小说配置（权威约束）',
       global_summary: '章节要点时间线（从蓝图按序拼装）',
       character_states: '角色状态',
       short_summary: '近期三章简要',
@@ -625,7 +699,12 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 
 【文风要求（如有，请严格遵循）】
 {{writing_style}}`,
-    systemSuffix: `★【作者对本步骤的额外指导（如有，最高优先级）】★：
+    systemSuffix: `【不可偏离的作者事实】
+- 故事架构：{{architecture}}
+- 小说配置：{{novel_config}}
+- 上述内容是不可改写的事实源。不得删除、弱化、反转或用类型惯例替换作者明确设定；本章暂不展开的事实也不得写出相反内容。
+
+★【作者对本步骤的额外指导（如有，最高优先级）】★：
 {{user_guidance}}
 
 【输出格式】
@@ -1352,6 +1431,28 @@ export async function deleteProjectCustomPrompt(
   return promptCatalog.commit({ action: 'delete', scope: 'project', projectSession, key })
 }
 
+/** Appends only authoritative values that a custom prompt body omitted. */
+export function appendRequiredPromptContext(
+  content: string,
+  template: PromptTemplate,
+  variables: Record<string, string>,
+  writingLanguage: WritingLanguage,
+): string {
+  const builtinTemplate = getBuiltinPromptTemplate(template.key, writingLanguage)
+  const requiredContext = (builtinTemplate?.requiredContextVariables ?? [])
+    .filter(key => !template.content.includes(`{{${key}}}`))
+    .flatMap((key) => {
+      const value = variables[key]?.trim()
+      if (!value || !builtinTemplate) return []
+      return [`${getPromptVariableDescription(builtinTemplate, key, writingLanguage)}:\n${value}`]
+    })
+  if (requiredContext.length === 0) return content
+  const heading = writingLanguage === 'en-US'
+    ? '[Authoritative project context omitted by the custom template — must still be followed]'
+    : '【自定义模板未引用但仍必须遵循的权威项目设定】'
+  return `${content}\n\n${heading}\n${requiredContext.join('\n\n')}`
+}
+
 /** 渲染 Prompt 模板（填充变量 + 自动追加内置 systemSuffix + 空段落裁剪） */
 export function renderPrompt(
   template: PromptTemplate,
@@ -1374,5 +1475,7 @@ export function renderPrompt(
     content = content + '\n\n' + renderedSuffix
   }
 
-  return pruneEmptyOptionalPromptSections(content)
+  return pruneEmptyOptionalPromptSections(
+    appendRequiredPromptContext(content, template, variables, writingLanguage),
+  )
 }

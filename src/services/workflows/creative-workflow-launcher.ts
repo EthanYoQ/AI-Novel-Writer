@@ -2,7 +2,13 @@ import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
 import { randomUUID } from '../../utils/id'
 import { useProjectStore } from '../../stores/project-store'
-import { useWorkflowStore, type WorkflowDefinition, type WorkflowStatus } from '../../stores/workflow-store'
+import {
+  useWorkflowStore,
+  workflowResourceConflictMessage,
+  type WorkflowDefinition,
+  type WorkflowStatus,
+} from '../../stores/workflow-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import { ipc } from '../ipc-client'
 import {
   guardArchitectureGeneration,
@@ -13,6 +19,7 @@ import {
 import { createArchitectureWorkflow, type ArchitectureWorkflowParams } from './architecture-workflow'
 import { createChapterWorkflow } from './chapter-workflow'
 import { createDirectoryWorkflow, type DirectoryWorkflowParams } from './directory-workflow'
+import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 
 export type CreativeWorkflowName =
   | 'generate_draft'
@@ -117,7 +124,7 @@ async function definitionFor(
       keyEvents: blueprint.keyEvents,
       suspenseHook: blueprint.suspenseHook,
       userGuidance: blueprint.userGuidance,
-      wordsTarget: project.novelConfig.wordsPerChapter,
+      wordsTarget: normalizeChapterWordsTarget(project.novelConfig.wordsPerChapter),
     }, projectSession, { generationModelId })
   }
 
@@ -140,6 +147,11 @@ export async function launchCreativeWorkflow(
     generationModelId,
   )
   currentProjectFor(projectSession)
+
+  const conflict = useWorkflowStore.getState().getResourceConflict(definition)
+  if (conflict) {
+    throw new Error(workflowResourceConflictMessage(useLocaleStore.getState().locale, conflict.title))
+  }
 
   const runId = randomUUID()
   const completion = useWorkflowStore.getState().startWorkflow({ ...definition, runId })

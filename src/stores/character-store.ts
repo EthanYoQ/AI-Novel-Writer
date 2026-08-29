@@ -199,6 +199,10 @@ interface CharacterState {
     projectPath?: string,
     expectedProjectSession?: ProjectSessionContext,
   ) => Promise<boolean>
+  clearAllCharacters: (
+    projectPath?: string,
+    expectedProjectSession?: ProjectSessionContext,
+  ) => Promise<boolean>
   renameCharacter: (name: string, newName: string) => boolean
   discardDraft: (projectPath: string, expectedProjectSession?: ProjectSessionContext) => void
   updateField: <K extends Exclude<keyof CharacterCard, 'name'>>(
@@ -453,6 +457,35 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
 
     // 删除同样是完整手工名单保存：由 roster seam 在一次事务中清理关系、
     // 蓝图引用、投影、revision 与 receipt。失败时草稿仍在本地可重试。
+    return get().saveAll(projectKey, projectSession, 'delete')
+      .then(() => isCharacterProjectSessionCurrent(projectSession))
+      .catch(() => false)
+  },
+
+  clearAllCharacters: (projectPath, expectedProjectSession) => {
+    const projectSession = currentCharacterProjectSession(projectPath, expectedProjectSession)
+    if (!projectSession) return Promise.resolve(false)
+    if (
+      characterIdentityMutationInFlight
+      && sameProjectSessionContext(characterIdentityMutationInFlight.projectSession, projectSession)
+    ) return Promise.resolve(false)
+    const projectKey = projectSession.projectPath
+    const state = get()
+    if (
+      !sameProjectSessionContext(state.dataProjectSession, projectSession)
+      || state.loadingProjectSession !== null
+      || state.lastError !== null
+    ) return Promise.resolve(false)
+    const characters = state.characters
+    if (characters.length === 0) return Promise.resolve(true)
+
+    const ledger = readCharacterDraftLedger(projectKey)
+    set({ characters: [], selectedName: null })
+    let nextLedger = recordProjectEditorEdit(ledger, projectKey, characters, [])
+    nextLedger = setCharacterDraftRenames(nextLedger, projectKey, [])
+    persistCharacterDraftLedger(nextLedger)
+
+    // 空名单仍通过既有 roster 原子提交；主进程据此同步删除角色、关系和投影。
     return get().saveAll(projectKey, projectSession, 'delete')
       .then(() => isCharacterProjectSessionCurrent(projectSession))
       .catch(() => false)

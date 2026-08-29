@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowContext, StepCallbacks } from '../../stores/workflow-store'
+import { workflowResourceKey, type WorkflowDefinition, type WorkflowContext, type StepCallbacks } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
 import type { NovelConfig } from '../../shared/ipc-channels'
@@ -126,6 +126,7 @@ export function createArchitectureWorkflow(params: ArchitectureWorkflowParams): 
     title: text('生成故事架构', 'Generate story architecture'),
     projectPath: expectedProjectPath,
     projectSession,
+    resourceKeys: sel.map(key => workflowResourceKey('architecture', key)),
     steps: finalSteps,
     onComplete: { mode: 'silent', message: text('故事架构已生成完成！前往侧边栏「故事架构」查看', 'Story architecture is ready. Open Story Architecture from the sidebar.') },
   }
@@ -149,6 +150,7 @@ export function createConfigGenerationWorkflow(params: ConfigGenerationWorkflowP
     title: text('AI 生成小说配置', 'Generate novel configuration with AI'),
     projectPath: params.projectPath,
     projectSession,
+    resourceKeys: [workflowResourceKey('novel-config')],
     steps: [
       {
         name: text('智能分析并填充配置', 'Analyze and fill the configuration'),

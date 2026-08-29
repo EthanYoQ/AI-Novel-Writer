@@ -230,6 +230,7 @@
 
     /* 编辑器 */
     --color-editor-bg: #FCFAF3;
+    --color-editor-caret: #7A1F12;
     --color-editor-line-highlight: rgba(84, 102, 110, 0.05);
     --color-editor-selection: rgba(181, 64, 44, 0.12);
 
@@ -341,6 +342,7 @@
     --color-activity-indicator: #7EC8E3;
 
     --color-editor-bg: #091525;
+    --color-editor-caret: #FFFFFF;
     --color-editor-line-highlight: rgba(126, 200, 227, 0.04);
     --color-editor-selection: rgba(126, 200, 227, 0.18);
 
@@ -484,6 +486,7 @@
     --color-activity-indicator: #FFFFFF;
 
     --color-editor-bg: #1E1E1E;
+    --color-editor-caret: #FFFFFF;
     --color-editor-line-highlight: rgba(255, 255, 255, 0.04);
     --color-editor-selection: rgba(38, 79, 120, 0.6);
 
@@ -1151,6 +1154,7 @@
   --color-category-progress-text: var(--skin-text-primary);
   --color-category-review-text: var(--skin-text-primary);
   --color-border: var(--skin-border);
+  --color-editor-caret: var(--skin-text-primary);
 }
 
 .app-skin-root[data-theme='light'][data-skin-readability='high-contrast'] {

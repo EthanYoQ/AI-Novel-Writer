@@ -1,4 +1,4 @@
-import type { WorkflowDefinition } from '../../stores/workflow-store'
+import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import {
@@ -264,6 +264,7 @@ export function createDirectoryWorkflow(
       title: params.mode === 'append' ? `续写章节蓝图${params.startChapter ? `（从第 ${params.startChapter} 章）` : ''}` : '生成章节蓝图（全量）',
     projectPath: expectedProjectPath,
     projectSession,
+    resourceKeys: [workflowResourceKey('blueprints')],
     steps: [
       {
         name: '读取架构',

@@ -64,6 +64,7 @@ const expectedPromptVariables: Record<string, string[]> = {
   ],
   first_chapter_draft: [
     'architecture',
+    'novel_config',
     'chapter_info',
     'future_blueprints',
     'global_guidance',
@@ -72,6 +73,8 @@ const expectedPromptVariables: Record<string, string[]> = {
     'user_guidance',
   ],
   next_chapter_draft: [
+    'architecture',
+    'novel_config',
     'global_summary',
     'character_states',
     'short_summary',
@@ -278,6 +281,61 @@ describe('built-in prompt contract for local Qwen generation', () => {
     expect(refineChapter).toContain('段落与段落之间必须保留一个空行')
   })
 
+  it('keeps authoritative project facts in both opening and continuation drafts', () => {
+    for (const key of ['first_chapter_draft', 'next_chapter_draft'] as const) {
+      const template = getPromptTemplate(key)
+      expect(template).toBeTruthy()
+
+      const rendered = new ChapterPromptBuilder(template!, 'zh-CN')
+        .withArchitecture('不可丢失的架构事实')
+        .withNovelConfig({ protagonistProfile: '不可丢失的作者设定' })
+        .withGlobalSummary('前文进展')
+        .withCharacterStates('角色状态')
+        .withShortSummary('近期摘要')
+        .withPreviousEnding('上一章结尾')
+        .withChapterInfo('本章蓝图')
+        .withFutureBlueprints('后续蓝图')
+        .withFilteredContext('知识库')
+        .withGlobalGuidance('全局要求')
+        .withWordNumber('3000')
+        .withWritingStyle('文风')
+        .withUserGuidance('')
+        .build()
+
+      expect(rendered).toContain('不可丢失的架构事实')
+      expect(rendered).toContain('不可丢失的作者设定')
+    }
+  })
+
+  it('appends authoritative facts even when a project customizes the draft body', () => {
+    const rendered = new ChapterPromptBuilder({
+      key: 'next_chapter_draft',
+      name: '自定义后续章',
+      description: '测试自定义正文模板',
+      systemRole: '自定义角色',
+      variables: { chapter_info: '本章蓝图' },
+      content: '只使用自定义正文：{{chapter_info}}',
+    }, 'zh-CN')
+      .withArchitecture('自定义模板也不能丢失的架构事实')
+      .withNovelConfig({ coreOutline: '自定义模板也不能丢失的作者配置' })
+      .withChapterInfo('本章蓝图')
+      .withGlobalGuidance('')
+      .withWordNumber('3000')
+      .withWritingStyle('')
+      .withUserGuidance('')
+      .build()
+
+    expect(rendered).toContain('只使用自定义正文：本章蓝图')
+    expect(rendered).toContain('自定义模板也不能丢失的架构事实')
+    expect(rendered).toContain('自定义模板也不能丢失的作者配置')
+  })
+
+  it('carries explicit author facts through architecture and blueprint prompts', () => {
+    for (const key of ['character_dynamics', 'world_building', 'synopsis', 'chapter_blueprint', 'chapter_blueprint_chunk']) {
+      expect(promptText(key), `${key} should preserve author facts`).toContain('作者明确设定')
+    }
+  })
+
   it('keeps import and imitation prompts focused on style extraction and reference imitation', () => {
     const stylePrompt = promptText('analyze_writing_style')
     expect(stylePrompt).toContain('风格档案')
@@ -311,6 +369,7 @@ describe('built-in prompt contract for local Qwen generation', () => {
 
     const rendered = renderPrompt(firstChapter!, {
       architecture: '架构',
+      novel_config: '{"genre":"类型"}',
       chapter_info: '本章蓝图',
       future_blueprints: '后续蓝图',
       global_guidance: '全局要求',
@@ -331,6 +390,7 @@ describe('built-in prompt contract for local Qwen generation', () => {
 
     const rendered = new ChapterPromptBuilder(firstChapter!, 'zh-CN')
       .withArchitecture('架构')
+      .withNovelConfig({ genre: '类型' })
       .withChapterInfo('本章蓝图')
       .withFutureBlueprints('后续蓝图')
       .withGlobalGuidance('全局要求')

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Wand2, AlertCircle, AlertTriangle, Check, ChevronDown, ChevronRight } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
-import { useWorkflowStore } from '../../stores/workflow-store'
 import { guardArchitectureGeneration, guardCharacterRegeneration } from '../../services/workflow-guards'
 import { createDefaultArchitectureSelection } from '../../services/architecture-step-selection'
 import { toast } from '../ui/Toast'
@@ -61,7 +60,6 @@ export default function ArchitectureConfirmDialog({
     setChecked(createDefaultArchitectureSelection(archStatus, initialSelectedSteps))
   }
 
-  const isArchRunning = useWorkflowStore(s => s.isTypeRunning('architecture_generation'))
   const [isConfirming, setIsConfirming] = useState(false)
   const [guardError, setGuardError] = useState<string | null>(null)
 
@@ -76,12 +74,6 @@ export default function ArchitectureConfirmDialog({
 
   const handleConfirm = async () => {
     if (noneSelected) return
-    // 防重复：同类型工作流正在运行
-    if (isArchRunning) {
-      toast.warning(text('已有架构生成任务正在执行，请等待完成后再试', 'An architecture generation task is already running. Please wait for it to finish.'))
-      return
-    }
-
     setIsConfirming(true)
     try {
       // 前置校验 1：小说配置是否填写

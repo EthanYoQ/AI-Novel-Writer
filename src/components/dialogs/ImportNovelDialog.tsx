@@ -706,7 +706,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 <BookOpen size={14} style={{ flexShrink: 0 }} />
                 {inspection
                   ? text(`${inspection.sourceCount} 个文件已选择`, `${inspection.sourceCount} files selected`)
-                  : text('支持 .txt / .md 文件（单个或多个）', 'Supports one or more .txt / .md files')}
+                  : text('支持 .txt / .md / .epub 文件（单个或多个）', 'Supports one or more .txt / .md / .epub files')}
               </div>
               <Button
                 data-testid="import-source-choose"

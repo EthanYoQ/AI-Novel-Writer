@@ -17,6 +17,7 @@ const doubles = vi.hoisted(() => ({
   generateDraftExecute: vi.fn(),
   finalizeChapterExecute: vi.fn(),
   finalizeChapterParams: [] as unknown[],
+  generateDraftChapterInfos: [] as Array<{ chapterNumber: number; wordsTarget?: number }>,
 }))
 
 vi.mock('../../workflow-guards', () => ({
@@ -32,6 +33,10 @@ vi.mock('../../ipc-client', () => ({
 vi.mock('../commands/generate-draft.command', () => ({
   previousChapterEnding: (content: string) => content.slice(-1000),
   GenerateDraftCommand: class {
+    constructor(chapterInfo: { chapterNumber: number; wordsTarget?: number }) {
+      doubles.generateDraftChapterInfos.push(chapterInfo)
+    }
+
     execute = doubles.generateDraftExecute
   },
 }))
@@ -80,6 +85,7 @@ function resetWorkflowState() {
 beforeEach(() => {
   vi.clearAllMocks()
   doubles.finalizeChapterParams.length = 0
+  doubles.generateDraftChapterInfos.length = 0
   resetWorkflowState()
   doubles.guardChapterWriting.mockResolvedValue({ ok: true })
   doubles.invokeWithProjectSession.mockImplementation(async (
@@ -141,6 +147,32 @@ describe('batch chapter workflow limits', () => {
 })
 
 describe('batch chapter workflow generation model selection', () => {
+  it('freezes one per-chapter target into the definition and every draft command', async () => {
+    const input = {
+      projectPath,
+      projectSession: projectSession(),
+      startChapterNumber: 1,
+      chapterCount: 2,
+      generationModelId: 'grok-selected-model',
+      completionMode: 'draft_review' as const,
+      chapterWordsTarget: 4200,
+    }
+    const workflow = createBatchChapterWorkflow(input)
+
+    input.chapterWordsTarget = 9000
+    expect(workflow).toMatchObject({
+      chapterWordsTarget: 4200,
+      resourceKeys: ['chapter:1', 'chapter:2'],
+    })
+
+    await useWorkflowStore.getState().startWorkflow(workflow)
+
+    expect(doubles.generateDraftChapterInfos).toEqual([
+      expect.objectContaining({ chapterNumber: 1, wordsTarget: 4200 }),
+      expect.objectContaining({ chapterNumber: 2, wordsTarget: 4200 }),
+    ])
+  })
+
   it('freezes a selected Grok model into the definition and every draft command context when the default changes mid-run', async () => {
     const params = {
       projectPath,

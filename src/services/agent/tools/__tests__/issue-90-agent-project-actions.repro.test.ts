@@ -266,6 +266,8 @@ describe('Issue #90 AI assistant project actions', () => {
       type: 'chapter_creation',
       projectPath,
       generationModelId: 'grok-selected-model',
+      chapterWordsTarget: 3000,
+      resourceKeys: ['chapter:1'],
     }))
   })
 

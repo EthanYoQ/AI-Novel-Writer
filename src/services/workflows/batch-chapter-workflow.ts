@@ -1,4 +1,4 @@
-import type { WorkflowContext, WorkflowDefinition, WorkflowStep, StepCallbacks } from '../../stores/workflow-store'
+import { workflowResourceKey, type WorkflowContext, type WorkflowDefinition, type WorkflowStep, type StepCallbacks } from '../../stores/workflow-store'
 import { ipc } from '../ipc-client'
 import { guardChapterWriting } from '../workflow-guards'
 import type { ChapterInfo } from './chapter-workflow'
@@ -10,6 +10,7 @@ import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
 import type { FinalizationSnapshot } from '../finalization-snapshot'
 import { requireWorkflowProjectSession } from './workflow-project-session'
+import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 
 /** 单次批量创作的安全上限，避免无边界调用模型。 */
 export const MIN_BATCH_CHAPTERS = 1
@@ -29,6 +30,8 @@ export interface BatchChapterWorkflowParams {
   locale?: Locale
   /** 由批量创作入口选择并冻结；批量任务禁止回退到运行时默认模型。 */
   generationModelId: string
+  /** 点击开始时从全局默认值初始化并由用户确认，本批次每章一致。 */
+  chapterWordsTarget?: number
   /** 点击开始时冻结；草稿待审与自动定稿在同一批次内不得混用。 */
   completionMode: BatchChapterCompletionMode
 }
@@ -36,6 +39,8 @@ export interface BatchChapterWorkflowParams {
 export interface BatchChapterWorkflowDefinition extends WorkflowDefinition {
   /** 批量任务必须携带启动时冻结的非空生成模型。 */
   generationModelId: string
+  /** 随定义冻结的每章目标可见单位。 */
+  chapterWordsTarget: number
   /** 随定义冻结的批量完成模式，供启动收据与 UI 验证。 */
   completionMode: BatchChapterCompletionMode
 }
@@ -59,7 +64,11 @@ function localeText(locale: Locale, zhCNText: string, enUSText: string): string 
   return locale === 'en-US' ? enUSText : zhCNText
 }
 
-function toChapterInfo(blueprint: ChapterBlueprint, projectPath: string): ChapterInfo {
+function toChapterInfo(
+  blueprint: ChapterBlueprint,
+  projectPath: string,
+  chapterWordsTarget: number,
+): ChapterInfo {
   return {
     projectPath,
     chapterNumber: blueprint.chapterNumber,
@@ -70,6 +79,7 @@ function toChapterInfo(blueprint: ChapterBlueprint, projectPath: string): Chapte
     keyEvents: blueprint.keyEvents || '',
     suspenseHook: blueprint.suspenseHook || '',
     userGuidance: blueprint.userGuidance || '',
+    wordsTarget: chapterWordsTarget,
   }
 }
 
@@ -141,6 +151,7 @@ async function runOneBatchChapter(
   projectPath: string,
   batchStartChapterNumber: number,
   chapterNumber: number,
+  chapterWordsTarget: number,
   completionMode: BatchChapterCompletionMode,
   uiLocale: Locale,
   step: WorkflowStep,
@@ -180,7 +191,7 @@ async function runOneBatchChapter(
     ))
   }
 
-  const chapterInfo = toChapterInfo(blueprint as ChapterBlueprint, projectPath)
+  const chapterInfo = toChapterInfo(blueprint as ChapterBlueprint, projectPath, chapterWordsTarget)
   callbacks.log(completionMode === 'draft_review'
     ? localeText(
       uiLocale,
@@ -276,6 +287,7 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
     ))
   }
   const completionMode = normalizeCompletionMode(params.completionMode)
+  const chapterWordsTarget = normalizeChapterWordsTarget(params.chapterWordsTarget)
   const endChapterNumber = startChapterNumber + chapterCount - 1
   const draftReviewContinuity = new Map<number, string>()
 
@@ -284,6 +296,10 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
     projectPath,
     projectSession: Object.freeze({ ...params.projectSession }),
     generationModelId,
+    chapterWordsTarget,
+    resourceKeys: Array.from({ length: chapterCount }, (_, index) => (
+      workflowResourceKey('chapter', startChapterNumber + index)
+    )),
     completionMode,
     title: completionMode === 'draft_review'
       ? localeText(
@@ -325,6 +341,7 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
           projectPath,
           startChapterNumber,
           chapterNumber,
+          chapterWordsTarget,
           completionMode,
           uiLocale,
           step,

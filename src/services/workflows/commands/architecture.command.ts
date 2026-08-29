@@ -170,8 +170,7 @@ interface CharacterDetailOutput extends Omit<CharacterRosterEntry, 'relationship
 const MIN_CHARACTER_SLOTS = 3
 const MAX_CHARACTER_SLOTS = 8
 const CHARACTER_DETAIL_BATCH_SIZE = 1
-const MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES = 12_000
-const MAX_CHARACTER_PREFIX_UTF8_BYTES = 24_000
+const MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES = 24_000
 
 function promptUtf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength
@@ -734,7 +733,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         purpose: 'character-architecture-manifest',
         reasoningStage: 'planning',
         promptBudget: {
-          limitUtf8Bytes: MAX_CHARACTER_MANIFEST_PROMPT_UTF8_BYTES,
+          limitUtf8Bytes: MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES,
           sections: [
             {
               sectionName: 'system-instructions',
@@ -796,7 +795,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
             },
           ],
           promptBudget: {
-            limitUtf8Bytes: fixedDetailRequestBytes + MAX_CHARACTER_PREFIX_UTF8_BYTES,
+            limitUtf8Bytes: fixedDetailRequestBytes + MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES,
             sections: [
               {
                 sectionName: 'system-instructions',

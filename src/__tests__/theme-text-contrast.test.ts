@@ -55,6 +55,27 @@ describe('readable theme text contrast contract', () => {
     ['explicit light', '.light'],
     ['galaxy', '.galaxy'],
     ['dark', '.dark'],
+  ] as const)('keeps the %s insertion caret visible on the editor surface', (_theme, selector) => {
+    const declarations = declarationsFor(selector)
+    const caret = declarations.get('--color-editor-caret')
+    const editorSurface = declarations.get('--color-editor-bg')
+
+    expect(caret, `${selector} --color-editor-caret`).toBeDefined()
+    expect(editorSurface, `${selector} --color-editor-bg`).toBeDefined()
+    expect(contrastRatio(caret!, editorSurface!)).toBeGreaterThanOrEqual(3)
+  })
+
+  it('uses the shared high-contrast caret token in the manuscript editor too', () => {
+    const manuscriptCss = readFileSync(resolve(process.cwd(), 'src/components/editor/novel-editor.css'), 'utf8')
+    expect(manuscriptCss).toContain('caret-color: var(--color-editor-caret, var(--color-text))')
+  })
+
+  it.each([
+    ['default light', ':root'],
+    ['paper', '.paper'],
+    ['explicit light', '.light'],
+    ['galaxy', '.galaxy'],
+    ['dark', '.dark'],
   ] as const)('keeps %s category labels readable on active and raised surfaces', (_theme, selector) => {
     const declarations = declarationsFor(selector)
     const categoryTextTokens = [

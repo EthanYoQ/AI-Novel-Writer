@@ -29,10 +29,17 @@ import type {
   ImportSourceFileIdentity,
 } from '../../src/shared/import-run'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { countDraftUnits } from '../../src/shared/draft-units'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { ImportRunRepository } from '../repositories/import-run-repository'
+import {
+  EPUB_MAX_ARCHIVE_ENTRIES,
+  EPUB_MAX_ENTRY_BYTES,
+  EPUB_MAX_EXTRACTED_BYTES,
+  extractEpubChapters,
+} from '../services/epub-extraction-service'
 
 /**
  * 导入小说控制器 — 处理文件选择与章节拆分
@@ -107,6 +114,27 @@ function importSelectionErrorMessage(
       locale,
       `拆分后的章节数超过导入上限（最多 ${limits.maxChapters} 章）。`,
       `The import chapter limit was exceeded (limit: ${limits.maxChapters}).`,
+    )
+  }
+  if (code === 'EPUB_DRM_UNSUPPORTED') {
+    return importText(
+      locale,
+      '该 EPUB 受 DRM 或加密保护，无法导入。请使用无 DRM 的 EPUB 或文本文件。',
+      'This EPUB is DRM-protected or encrypted and cannot be imported. Use a DRM-free EPUB or text file.',
+    )
+  }
+  if (code === 'EPUB_EXPANSION_LIMIT') {
+    return importText(
+      locale,
+      '该 EPUB 的条目数或解压后内容超过安全上限，无法导入。',
+      'This EPUB exceeds the safe entry-count or expanded-content limit and cannot be imported.',
+    )
+  }
+  if (code === 'EPUB_INVALID_ARCHIVE') {
+    return importText(
+      locale,
+      'EPUB 文件已损坏，或缺少有效的 container.xml、OPF 与正文阅读顺序。',
+      'The EPUB is damaged or lacks a valid container.xml, OPF package, or textual reading order.',
     )
   }
   return importText(
@@ -195,7 +223,9 @@ function sha256(value: string): string {
 }
 
 function sourceMediaType(displayName: string): string {
-  return path.extname(displayName).toLowerCase() === '.md' ? 'text/markdown' : 'text/plain'
+  const extension = path.extname(displayName).toLowerCase()
+  if (extension === '.epub') return 'application/epub+zip'
+  return extension === '.md' ? 'text/markdown' : 'text/plain'
 }
 
 /** 将单个文件内容拆分为章节数组 */
@@ -224,7 +254,7 @@ function splitSingleFileContent(content: string, maxChapters: number): ParsedCha
             number: num,
             title: extractTitle(currentChapter.headerLine),
             content: text,
-            wordCount: text.length,
+            wordCount: countDraftUnits(text),
           })
         }
       }
@@ -250,7 +280,7 @@ function splitSingleFileContent(content: string, maxChapters: number): ParsedCha
         number: num,
         title: extractTitle(currentChapter.headerLine),
         content: text,
-        wordCount: text.length,
+        wordCount: countDraftUnits(text),
       })
     }
   }
@@ -321,7 +351,7 @@ export function registerImportController(
           ? text('选择作者原稿文件', 'Choose author manuscript files')
           : text('选择参考小说文件', 'Choose reference novel files'),
         filters: [
-          { name: text('小说文本', 'Novel text'), extensions: ['txt', 'md', 'text'] },
+          { name: text('小说文件', 'Novel files'), extensions: ['txt', 'md', 'text', 'epub'] },
           { name: text('所有文件', 'All files'), extensions: ['*'] },
         ],
         properties: ['openFile', 'multiSelections'],
@@ -447,37 +477,67 @@ export function registerImportController(
             webContentsId: event.sender.id,
             operation: 'read',
           })
-          let content = await fileSystem.readText(capability, limits.maxTotalBytes - consumedBytes)
-          assertFrozenProject()
-          const contentBytes = reserveSourceBytes(content)
           const sourceFileName = source.displayName
+          const remainingBytes = limits.maxTotalBytes - consumedBytes
+          const isEpub = path.extname(sourceFileName).toLowerCase() === '.epub'
+          let parsed: ParsedChapter[]
+          let contentBytes: number
+          let content = ''
+          if (isEpub) {
+            const archive = await fileSystem.readBytes(capability, remainingBytes)
+            assertFrozenProject()
+            const extracted = await extractEpubChapters(archive, {
+              maxEntries: EPUB_MAX_ARCHIVE_ENTRIES,
+              maxEntryBytes: Math.min(EPUB_MAX_ENTRY_BYTES, remainingBytes),
+              maxExtractedBytes: Math.min(EPUB_MAX_EXTRACTED_BYTES, remainingBytes),
+            })
+            contentBytes = reserveSourceBytes(extracted.map(chapter => chapter.content).join(''))
+            parsed = extracted.flatMap((chapter, index) => {
+              if (hasChapterHeadings(chapter.content)) {
+                return splitSingleFileContent(
+                  chapter.content,
+                  limits.maxChapters - chapterCount,
+                )
+              }
+              return [{
+                number: index + 1,
+                title: chapter.title,
+                content: chapter.content,
+                wordCount: countDraftUnits(chapter.content),
+              }]
+            })
+          } else {
+            content = await fileSystem.readText(capability, remainingBytes)
+            assertFrozenProject()
+            contentBytes = reserveSourceBytes(content)
+            content = content.trim()
+            if (!content) {
+              emptySourceFound = true
+              if (parsingRun && opaqueSourceId) {
+                assertFrozenProject()
+                ImportRunRepository.failParsedSource(
+                  parsingRun.id,
+                  opaqueSourceId,
+                  importText(responseLocale, '所选来源文件为空', 'Selected source file is empty'),
+                )
+              }
+              continue
+            }
+            parsed = hasChapterHeadings(content)
+              ? splitSingleFileContent(content, limits.maxChapters - chapterCount)
+              : [{
+                  number: extractChapterNumber(path.basename(sourceFileName, path.extname(sourceFileName))) || 1,
+                  title: path.basename(sourceFileName, path.extname(sourceFileName)),
+                  content,
+                  wordCount: countDraftUnits(content),
+                }]
+          }
           sources.push({
             ...encoded,
             displayName: sourceFileName,
             mediaType: sourceMediaType(sourceFileName),
             size: contentBytes,
           })
-          content = content.trim()
-          if (!content) {
-            emptySourceFound = true
-            if (parsingRun && opaqueSourceId) {
-              assertFrozenProject()
-              ImportRunRepository.failParsedSource(
-                parsingRun.id,
-                opaqueSourceId,
-                importText(responseLocale, '所选来源文件为空', 'Selected source file is empty'),
-              )
-            }
-            continue
-          }
-          const parsed = hasChapterHeadings(content)
-            ? splitSingleFileContent(content, limits.maxChapters - chapterCount)
-            : [{
-                number: extractChapterNumber(path.basename(sourceFileName, path.extname(sourceFileName))) || 1,
-                title: path.basename(sourceFileName, path.extname(sourceFileName)),
-                content,
-                wordCount: content.length,
-              }]
           if (parsed.length === 0) {
             titleOnlySourceFound = true
             if (parsingRun && opaqueSourceId) {

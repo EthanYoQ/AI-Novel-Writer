@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-import { Sparkles, Play, AlertCircle, Loader2 } from 'lucide-react'
+import { Sparkles, Play, AlertCircle } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
-import { useWorkflowStore } from '../../stores/workflow-store'
+import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
 
 import { createChapterWorkflow } from '../../services/workflows/chapter-workflow'
 import {
@@ -17,7 +17,6 @@ import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
 import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
 import { readConsistencyPreflight, type ConsistencyPreflightResult } from '../../services/consistency-preflight'
-import { toast } from '../ui/Toast'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
@@ -116,7 +115,6 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
   const [generationModelId, setGenerationModelId] = useState<string | null>(() => (
     preferredGenerationModelId(models, defaultModelId)
   ))
-  const isChapterRunning = useWorkflowStore(s => s.isTypeRunning('chapter_creation'))
   const loadGate = useRef(new ChapterCreationLoadGate())
   const generationModels = models.filter(isGenerationModel)
   const fallbackGenerationModelId = preferredGenerationModelId(models, defaultModelId)
@@ -145,20 +143,6 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
         }
       })
   }, [currentProject, isOpen])
-
-
-  // 如果是在这弹窗里发起的任务，一旦跑完，isChapterRunning 会变成 false，此时自动关闭弹窗
-  useEffect(() => {
-    let prevRunning = useWorkflowStore.getState().isTypeRunning('chapter_creation')
-    const unsub = useWorkflowStore.subscribe((state) => {
-      const running = state.isTypeRunning('chapter_creation')
-      if (prevRunning && !running && isOpen) {
-        onClose()
-      }
-      prevRunning = running
-    })
-    return unsub
-  }, [isOpen, onClose])
 
   // 每次打开时：prefill 优先，其次尝试从历史恢复
   useEffect(() => {
@@ -308,12 +292,6 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
     if (!projectSession) return
     const projectPath = projectSession.projectPath
 
-    // 防重复：同类型工作流正在运行
-    if (isChapterRunning) {
-      toast.warning(text('已有章节创作任务正在执行，请等待完成后再试', 'A chapter writing task is already running. Please wait for it to finish.'))
-      return
-    }
-
     const targetChapter = Number(chapterNumber) || 1
     let authoritativeNextChapter: number
     try {
@@ -416,13 +394,17 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
 
     // 启动任务后关闭设定弹窗，由全局 Overlay 接管展示
     if (!isProjectSessionCurrent(projectSession)) return
-    startWorkflow(workflow, false)
+    const resourceConflict = useWorkflowStore.getState().getResourceConflict(workflow)
+    if (resourceConflict) {
+      setGuardError(workflowResourceConflictMessage(locale, resourceConflict.title))
+      return
+    }
+    void startWorkflow(workflow, false)
     onClose()
   }
 
   const handleOpenChange = (open: boolean) => {
-    // 如果正在生成中，禁止通过点击外部或 ESC 关闭
-    if (!open && !isChapterRunning) onClose()
+    if (!open) onClose()
   }
 
   return (
@@ -572,7 +554,6 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
               <ConsistencyPreflightPanel
                 findings={consistencyPreflight.findings}
                 exemptions={consistencyPreflight.exemptions}
-                disabled={isChapterRunning}
                 onFixAndRerun={() => void handleStart(false)}
                 onIgnoreOnce={() => void handleStart(true)}
                 onSave={async (stableFactKey, reason) => {
@@ -598,18 +579,11 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
               </span>
               <div className="flex items-center gap-2">
                 <Button variant="outline" onClick={onClose}>{text('取消', 'Cancel')}</Button>
-                <Button variant="ai" size="lg" onClick={() => void handleStart(false)} disabled={isChapterRunning || authorityLoading || !!authorityError || !!modelSelectionError}>
-                  {isChapterRunning ? (
-                    <span className="flex items-center gap-2">
-                      <Loader2 size={13} className="animate-spin" />
-                      {text('章节创作中...', 'Writing chapter...')}
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-2">
-                      <Play size={13} />
-                      {text('开始创作', 'Start writing')}
-                    </span>
-                  )}
+                <Button variant="ai" size="lg" onClick={() => void handleStart(false)} disabled={authorityLoading || !!authorityError || !!modelSelectionError}>
+                  <span className="flex items-center gap-2">
+                    <Play size={13} />
+                    {text('开始创作', 'Start writing')}
+                  </span>
                 </Button>
               </div>
             </DialogFooter>

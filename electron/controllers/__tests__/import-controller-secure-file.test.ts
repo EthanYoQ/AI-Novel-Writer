@@ -27,6 +27,8 @@ import {
 } from '../../security/windows-safe-file-system'
 import { ExternalFileGrantService } from '../../services/external-file-grant-service'
 import { ImportInspectionStore } from '../../services/import-inspection-store'
+import { storedZip } from '../../services/__tests__/epub-test-fixture'
+import { countDraftUnits } from '../../../src/shared/draft-units'
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-import-secure-'))
 let grants: ExternalFileGrantService
@@ -117,6 +119,96 @@ describe('novel import external-file capability', () => {
     expect(JSON.stringify(result)).not.toContain('fileIdentity')
     expect(grants.activeCount()).toBe(0)
     expect(inspections.activeCount()).toBe(1)
+  })
+
+  it('reads EPUB bytes and splits multiple chapter headings inside one spine document', async () => {
+    const selected = path.join(temporaryRoot, '长篇参考.epub')
+    const archive = storedZip({
+      'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+      'book.opf': `<package><manifest>
+        <item id="novel" href="novel.xhtml" media-type="application/xhtml+xml"/>
+        </manifest><spine><itemref idref="novel"/></spine></package>`,
+      'novel.xhtml': `<html><body>
+        <h1>第一章 雨夜</h1><p>雨落长安，陆云飞归来。</p>
+        <h1>第二章 重逢</h1><p>Café 中，她听见旧日歌声。</p>
+        </body></html>`,
+    })
+    fs.writeFileSync(selected, archive)
+    const readBytes = vi.fn(async () => archive)
+    const readText = vi.fn(async () => { throw new Error('EPUB must not be decoded as plain UTF-8') })
+    const fileSystem = {
+      readBytes,
+      readText,
+      writeTextAtomically: vi.fn(),
+      mkdir: vi.fn(),
+      exists: vi.fn(),
+      listDirectory: vi.fn(),
+    } as WindowsSafeFileSystem
+    mocks.handlers.clear()
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }))
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [selected] })
+
+    const result = await handler('dialog:select-novel-files')(event())
+
+    expect(mocks.showOpenDialog).toHaveBeenCalledWith(expect.objectContaining({
+      filters: expect.arrayContaining([
+        expect.objectContaining({ extensions: expect.arrayContaining(['epub']) }),
+      ]),
+    }))
+    expect(readBytes).toHaveBeenCalledOnce()
+    expect(readText).not.toHaveBeenCalled()
+    expect(result).toMatchObject({
+      success: true,
+      inspection: {
+        sourceCount: 1,
+        chapterCount: 2,
+        totalWords: countDraftUnits('雨落长安，陆云飞归来。')
+          + countDraftUnits('Café 中，她听见旧日歌声。'),
+        preview: [
+          { number: 1, title: '雨夜' },
+          { number: 2, title: '重逢' },
+        ],
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain('雨落长安')
+    expect(grants.activeCount()).toBe(0)
+  })
+
+  it.each([
+    {
+      fileName: 'damaged.epub',
+      archive: Buffer.from('not a zip archive'),
+      error: 'EPUB 文件已损坏，或缺少有效的 container.xml、OPF 与正文阅读顺序。',
+    },
+    {
+      fileName: 'protected.epub',
+      archive: storedZip({
+        'META-INF/encryption.xml': '<encryption/>',
+        'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+        'book.opf': '<package><manifest/><spine/></package>',
+      }),
+      error: '该 EPUB 受 DRM 或加密保护，无法导入。请使用无 DRM 的 EPUB 或文本文件。',
+    },
+  ])('shows a safe actionable error for $fileName', async ({ fileName, archive, error }) => {
+    const selected = path.join(temporaryRoot, fileName)
+    fs.writeFileSync(selected, archive)
+    const fileSystem = {
+      readBytes: vi.fn(async () => archive),
+      readText: vi.fn(),
+      writeTextAtomically: vi.fn(),
+      mkdir: vi.fn(),
+      exists: vi.fn(),
+      listDirectory: vi.fn(),
+    } as WindowsSafeFileSystem
+    mocks.handlers.clear()
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }))
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [selected] })
+
+    await expect(handler('dialog:select-novel-files')(event())).resolves.toEqual({
+      success: false,
+      error,
+    })
+    expect(grants.activeCount()).toBe(0)
   })
 
   it('rejects duplicate author chapter numbers with an actionable localized message', async () => {
