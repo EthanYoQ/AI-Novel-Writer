@@ -92,6 +92,14 @@ function creativeStrategyCoreUpdate(
     : {}
 }
 
+function narrativeThreadSettingsCoreUpdate(
+  novelConfig: ProjectData['novelConfig'],
+): Pick<Partial<ProjectCoreData>, 'narrativeThreadDormantChapterThreshold'> {
+  return novelConfig.narrativeThreadDormantChapterThreshold === undefined
+    ? {}
+    : { narrativeThreadDormantChapterThreshold: novelConfig.narrativeThreadDormantChapterThreshold }
+}
+
 /** 项目配置读写必须显式携带当前会话租约，路径本身不是授权。 */
 function assertRequiredProjectSession(
   projectId: string,
@@ -470,6 +478,7 @@ export function registerProjectController() {
             totalChapters: updatedCoreData.totalChapters,
             wordsPerChapter: updatedCoreData.wordsPerChapter,
             creativeStrategy: updatedCoreData.creativeStrategy,
+            narrativeThreadDormantChapterThreshold: updatedCoreData.narrativeThreadDormantChapterThreshold,
             plotStructure: updatedCoreData.plotStructure as 'three_act' | 'heros_journey' | 'save_the_cat' | 'kishotenketsu' | 'multi_thread' | 'freeform',
             narrativePOV: updatedCoreData.narrativePov as 'third_limited' | 'first_person' | 'third_omniscient' | 'multi_pov',
             coreOutline: updatedCoreData.coreOutline,
@@ -586,6 +595,7 @@ export function registerProjectController() {
           totalChapters: data.novelConfig.totalChapters,
           wordsPerChapter: data.novelConfig.wordsPerChapter,
           ...creativeStrategyCoreUpdate(data.novelConfig),
+          ...narrativeThreadSettingsCoreUpdate(data.novelConfig),
           plotStructure: data.novelConfig.plotStructure,
           narrativePov: data.novelConfig.narrativePOV,
           goldenFinger: data.novelConfig.goldenFinger,
@@ -653,6 +663,7 @@ export function registerProjectController() {
           totalChapters: data.novelConfig.totalChapters,
           wordsPerChapter: data.novelConfig.wordsPerChapter,
           ...creativeStrategyCoreUpdate(data.novelConfig),
+          ...narrativeThreadSettingsCoreUpdate(data.novelConfig),
           plotStructure: data.novelConfig.plotStructure,
           narrativePov: data.novelConfig.narrativePOV,
           goldenFinger: data.novelConfig.goldenFinger,

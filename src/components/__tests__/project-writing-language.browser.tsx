@@ -174,4 +174,38 @@ describe('project writing language', () => {
     await vi.waitFor(() => expect(saveProject).toHaveBeenCalledOnce())
     expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe(originalOutline)
   })
+
+  it('shows the project-scoped quality threshold, its effective value, and a bilingual reset', async () => {
+    const currentProject = project('quality-setting', 'zh-CN')
+    currentProject.novelConfig.narrativeThreadDormantChapterThreshold = 9
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    useProjectStore.setState({ currentProject })
+    setActiveProjectSessionContext({
+      projectId: currentProject.id,
+      leaseId: currentProject.sessionLease!,
+      projectPath: currentProject.path,
+    })
+
+    await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+    await expect.element(page.getByText('质量与连续性', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('作用范围：当前项目', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('产品默认值：3 章', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('当前生效值：9 章', { exact: true })).toBeVisible()
+    const threshold = document.getElementById('narrative-thread-dormant-threshold')
+    if (!(threshold instanceof HTMLInputElement)) throw new Error('Missing narrative thread threshold input')
+    expect({ value: threshold.value, min: threshold.min, max: threshold.max }).toEqual({ value: '9', min: '1', max: '50' })
+
+    await act(async () => page.getByRole('button', { name: '恢复默认值' }).click())
+    expect(useProjectStore.getState().currentProject?.novelConfig.narrativeThreadDormantChapterThreshold).toBe(3)
+    await expect.element(page.getByText('当前生效值：3 章', { exact: true })).toBeVisible()
+
+    await act(async () => {
+      useLocaleStore.setState({ locale: 'en-US' })
+      root?.render(<NovelConfigEditor projectKey={currentProject.path} />)
+    })
+    await expect.element(page.getByText('Quality and continuity', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('Scope: this project', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('Product default: 3 chapters', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('Effective now: 3 chapters', { exact: true })).toBeVisible()
+  })
 })

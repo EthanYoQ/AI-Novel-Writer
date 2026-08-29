@@ -168,4 +168,53 @@ describe('NarrativeThreadRepository', () => {
       planId: plan.id, draftId, type: 'planted', evidence: '三道平行刻痕', reason: '',
     })).toThrow('叙事线索事件参数无效')
   })
+
+  it('returns only active threads relevant to the current chapter plan', () => {
+    const inRange = NarrativeThreadRepository.createPlan({
+      title: '门框上的刻痕', type: '伏笔', targetStartChapter: 2, targetEndChapter: 4,
+      authorIntent: '第四章揭示刻痕来自旧组织。',
+    })
+    const characterRelevant = NarrativeThreadRepository.createPlan({
+      title: '林岚隐瞒的旧伤', type: '人物承诺', targetStartChapter: 8, targetEndChapter: 12,
+      authorIntent: '林岚面对故人时承认旧伤。',
+    })
+    const unrelated = NarrativeThreadRepository.createPlan({
+      title: '北港的失踪货船', type: '世界线', targetStartChapter: 8, targetEndChapter: 12,
+      authorIntent: '海关在第十二章公布调查结论。',
+    })
+    const resolved = NarrativeThreadRepository.createPlan({
+      title: '已经打开的暗门', type: '伏笔', targetStartChapter: 1, targetEndChapter: 4,
+      authorIntent: '第三章打开暗门。',
+    })
+    const abandoned = NarrativeThreadRepository.createPlan({
+      title: '废弃的支线', type: '支线', targetStartChapter: 1, targetEndChapter: 4,
+      authorIntent: '作者决定放弃。',
+    })
+    const content = '林岚推开暗门。废弃的支线不再继续。'
+    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'thread-relevant-active-source',
+      chapters: [{ chapterNumber: 2, title: '暗门', content, wordCount: content.length }],
+    })
+    NarrativeThreadRepository.confirmEvent({
+      planId: resolved.id, draftId: receipt.drafts[0]!.draftId, type: 'resolved',
+      evidence: '林岚推开暗门', reason: '伏笔已兑现。',
+    })
+    NarrativeThreadRepository.confirmEvent({
+      planId: abandoned.id, draftId: receipt.drafts[0]!.draftId, type: 'abandoned',
+      evidence: '废弃的支线不再继续', reason: '作者明确放弃。',
+    })
+
+    expect(NarrativeThreadRepository.listRelevantActive({
+      chapterNumber: 3,
+      title: '刻痕再现',
+      keyEvents: '林岚发现新的刻痕。',
+      characters: ['林岚'],
+    }).map(thread => thread.id)).toEqual([inRange.id, characterRelevant.id])
+    expect(NarrativeThreadRepository.listRelevantActive({
+      chapterNumber: 3,
+      title: '刻痕再现',
+      keyEvents: '林岚发现新的刻痕。',
+      characters: ['林岚'],
+    }).map(thread => thread.id)).not.toContain(unrelated.id)
+  })
 })

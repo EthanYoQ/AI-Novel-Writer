@@ -1,6 +1,20 @@
 export type NarrativeThreadStatus = 'planned' | 'planted' | 'progressing' | 'resolved' | 'abandoned'
 export type NarrativeThreadEventType = Exclude<NarrativeThreadStatus, 'planned'>
 
+export const DEFAULT_NARRATIVE_THREAD_DORMANT_THRESHOLD = 3
+export const MIN_NARRATIVE_THREAD_DORMANT_THRESHOLD = 1
+export const MAX_NARRATIVE_THREAD_DORMANT_THRESHOLD = 50
+
+export function resolveNarrativeThreadDormantThreshold(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_NARRATIVE_THREAD_DORMANT_THRESHOLD
+  }
+  return Math.min(
+    MAX_NARRATIVE_THREAD_DORMANT_THRESHOLD,
+    Math.max(MIN_NARRATIVE_THREAD_DORMANT_THRESHOLD, Math.trunc(value)),
+  )
+}
+
 export interface NarrativeThreadPlanInput {
   title: string
   type: string
@@ -38,4 +52,11 @@ export interface NarrativeThreadPlanRecord extends NarrativeThreadPlanInput {
   id: number
   createdAt: string
   updatedAt: string
+}
+
+export interface NarrativeThreadChapterContext {
+  chapterNumber: number
+  title: string
+  keyEvents: string
+  characters: string[]
 }

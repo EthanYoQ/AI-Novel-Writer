@@ -7,6 +7,7 @@ import type {
   LLMFinishReason,
   ModelExecutionLeaseReceipt,
 } from '../../../../shared/ipc-channels'
+import type { NarrativeThreadView } from '../../../../shared/narrative-thread'
 import {
   createGenerationRuntime,
   type GenerationRuntime,
@@ -227,6 +228,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         evidence: string
       }>
     }>
+    narrativeThreads?: NarrativeThreadView[]
     previousFinalizedContent?: string
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
   }) {
@@ -246,6 +248,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         return options.blueprints?.find(blueprint => blueprint.chapterNumber === args[0]) ?? null
       }
       if (channel === 'db:continuity-list-before') return options.continuity ?? []
+      if (channel === 'db:narrative-thread-list-relevant') return options.narrativeThreads ?? []
       if (channel === 'db:draft-get-finalized') {
         return options.previousFinalizedContent ? { id: 77 } : null
       }
@@ -558,6 +561,59 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(prompt).toContain('预算事实哨兵')
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
+  })
+
+  it('injects a bounded set of relevant active narrative threads into the next chapter prompt', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(500), 'stop')
+    })
+    const narrativeThreads: NarrativeThreadView[] = Array.from({ length: 8 }, (_, index) => ({
+      id: index + 1,
+      title: `活跃线索-${index + 1}`,
+      type: '伏笔',
+      targetStartChapter: 2,
+      targetEndChapter: 8,
+      authorIntent: `在第八章前兑现线索 ${index + 1}。`,
+      status: index === 0 ? 'progressing' : 'planned',
+      dormantChapters: index,
+      overdue: false,
+      events: index === 0 ? [{
+        id: 11, planId: 1, draftId: 41, type: 'progressing', evidence: '门框上有三道刻痕',
+        reason: '线索得到推进。', chapterNumber: 4, chapterTitle: '旧仓库', createdAt: '',
+      }] : [],
+      createdAt: '', updatedAt: '',
+    }))
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 5,
+      characters: ['林岚'],
+      wordsTarget: 500,
+      narrativeThreads,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('【当前相关活跃叙事线索】')
+    expect(prompt).toContain('活跃线索-1')
+    expect(prompt).toContain('目标第2–8章')
+    expect(prompt).toContain('来源第4章：门框上有三道刻痕')
+    expect(prompt).toContain('活跃线索-6')
+    expect(prompt).not.toContain('活跃线索-7')
+    expect(prompt).not.toContain('活跃线索-8')
+    const threadContextStart = prompt.indexOf('【当前相关活跃叙事线索】')
+    const threadContextEnd = prompt.indexOf('\n\n', threadContextStart)
+    expect(threadContextEnd).toBeGreaterThan(threadContextStart)
+    expect(threadContextEnd - threadContextStart).toBeLessThanOrEqual(1200)
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('活跃叙事线索（6 条）'))
+    expect(invoke).toHaveBeenCalledWith(
+      'db:narrative-thread-list-relevant',
+      expect.objectContaining({ chapterNumber: 5, characters: ['林岚'] }),
+      projectPath,
+      expect.anything(),
+    )
   })
 
   it('previews only authored text before completion and reconciles to the persisted terminal draft', async () => {

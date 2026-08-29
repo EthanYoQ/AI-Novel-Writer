@@ -699,6 +699,11 @@ export function registerDatabaseController() {
     return NarrativeThreadRepository.list()
   })
 
+  ipcMain.handle('db:narrative-thread-list-relevant', async (_event, context, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return NarrativeThreadRepository.listRelevantActive(context)
+  })
+
   ipcMain.handle('db:narrative-thread-plan-create', async (_event, input, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return { success: true, plan: NarrativeThreadRepository.createPlan(input) }

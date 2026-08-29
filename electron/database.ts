@@ -73,6 +73,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       words_per_chapter INTEGER DEFAULT 3000,     -- 单章基准字数
       writing_language TEXT NOT NULL DEFAULT 'zh-CN', -- 项目级写作语言
       creative_strategy TEXT NOT NULL DEFAULT 'auto', -- 项目级创作策略
+      narrative_thread_dormant_threshold INTEGER NOT NULL DEFAULT 3,
       -- [写作技法]
       plot_structure TEXT DEFAULT 'three_act',    -- 故事模型
       narrative_pov TEXT DEFAULT 'third_limited', -- 叙事视角
@@ -922,6 +923,10 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   if (!projectCoreColumns.has('creative_strategy')) {
     db.exec("ALTER TABLE project_core ADD COLUMN creative_strategy TEXT NOT NULL DEFAULT 'auto'")
     projectCoreColumns.add('creative_strategy')
+  }
+  if (!projectCoreColumns.has('narrative_thread_dormant_threshold')) {
+    db.exec('ALTER TABLE project_core ADD COLUMN narrative_thread_dormant_threshold INTEGER NOT NULL DEFAULT 3')
+    projectCoreColumns.add('narrative_thread_dormant_threshold')
   }
 
   // 兼容旧库：将「无 currentState」的哨兵 0 迁移为 NULL（chapter 0 合法状态不受影响）

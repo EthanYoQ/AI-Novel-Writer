@@ -2,6 +2,7 @@ import { getProjectDb } from '../database'
 import type {
   NarrativeThreadEvent,
   NarrativeThreadEventInput,
+  NarrativeThreadChapterContext,
   NarrativeThreadPlanInput,
   NarrativeThreadPlanRecord,
   NarrativeThreadStatus,
@@ -149,6 +150,25 @@ export class NarrativeThreadRepository {
         overdue: !terminal && currentFinalizedChapter > plan.targetEndChapter,
         events: eventRows,
       }
+    })
+  }
+
+  static listRelevantActive(context: NarrativeThreadChapterContext): NarrativeThreadView[] {
+    const currentText = `${context.title}\n${context.keyEvents}`
+    const characters = context.characters.map(character => character.trim()).filter(Boolean)
+    return this.list().filter((thread) => {
+      if (thread.status === 'resolved' || thread.status === 'abandoned') return false
+      if (context.chapterNumber >= thread.targetStartChapter && context.chapterNumber <= thread.targetEndChapter) {
+        return true
+      }
+      const threadText = [
+        thread.title,
+        thread.type,
+        thread.authorIntent,
+        ...thread.events.flatMap(event => [event.evidence, event.reason]),
+      ].join('\n')
+      return characters.some(character => threadText.includes(character))
+        || (thread.title.length >= 2 && currentText.includes(thread.title))
     })
   }
 }

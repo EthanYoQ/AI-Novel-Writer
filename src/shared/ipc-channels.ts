@@ -20,6 +20,7 @@ import type { ConsistencyExemption } from './consistency-preflight'
 import type {
   NarrativeThreadEvent,
   NarrativeThreadEventInput,
+  NarrativeThreadChapterContext,
   NarrativeThreadPlanInput,
   NarrativeThreadPlanRecord,
   NarrativeThreadView,
@@ -449,6 +450,8 @@ export interface NovelConfig {
   writingLanguage?: WritingLanguage
   /** Project-scoped writing intent; independent from the selected model. */
   creativeStrategy?: CreativeStrategy
+  /** Project-scoped chapter count before an active narrative thread is marked dormant. */
+  narrativeThreadDormantChapterThreshold?: number
   genre: string
   subGenre: string
   targetAudience: string
@@ -796,6 +799,10 @@ export interface DatabaseChannels {
   }
   'db:narrative-thread-list': {
     args: [expectedProjectPath: string]
+    return: NarrativeThreadView[]
+  }
+  'db:narrative-thread-list-relevant': {
+    args: [context: NarrativeThreadChapterContext, expectedProjectPath: string]
     return: NarrativeThreadView[]
   }
   'db:narrative-thread-plan-create': {

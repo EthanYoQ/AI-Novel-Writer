@@ -26,6 +26,7 @@ import type {
 } from '../../generation/generation-harness'
 import type { WritingLanguage } from '../../../shared/writing-language'
 import type { FinalizedContinuityProjection } from '../../../shared/finalized-continuity'
+import type { NarrativeThreadView } from '../../../shared/narrative-thread'
 import { promptLanguageText } from '../../prompt-language'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
@@ -33,6 +34,8 @@ const MIN_TARGET_COMPLETION_RATIO = 0.82
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const MAX_TARGET_OVERAGE_RATIO = 0.12
 const PREVIOUS_ENDING_MAX_CHARS = 1000
+const ACTIVE_THREAD_CONTEXT_MAX_CHARS = 1200
+const ACTIVE_THREAD_CONTEXT_MAX_ITEMS = 6
 const CHINESE_CHARACTER_PATTERN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu
 const ENGLISH_WORD_PATTERN = /[A-Za-z]+(?:['’][A-Za-z]+)*/g
 const WHITESPACE_OR_PUNCTUATION_PATTERN = /[\s\p{P}\p{S}]/gu
@@ -303,6 +306,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         this.chapterInfo.characters,
       )
       callbacks.log(`  📋 已加载章节要点与连续性事实（${chapterTimeline.factCount} 条）`)
+      const activeThreads = await this.readActiveNarrativeThreads(
+        expectedProjectPath,
+        projectSession,
+        writingLanguage,
+      )
+      callbacks.log(`  已加载相关活跃叙事线索（${activeThreads.count} 条）`)
 
       let previousEnding = this.previousDraftEnding ?? ''
       if (!previousEnding) {
@@ -344,7 +353,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
       promptBuilder
         // ---- 缓存命中区续（要点时间线按序追加，前缀对齐）----
-        .withGlobalSummary(chapterTimeline.text)
+        .withGlobalSummary([chapterTimeline.text, activeThreads.text].filter(Boolean).join('\n\n'))
         .withCharacterStates(characterState)
         // ---- 缓存失效区（逐章变化）----
         .withPreviousEnding(previousEnding || promptLanguageText(
@@ -888,6 +897,54 @@ ${visibleTail}`,
     return {
       text: result || promptLanguageText(writingLanguage, '（无章节要点）', '(no chapter notes)'),
       factCount: selectedFacts.length,
+    }
+  }
+
+  private async readActiveNarrativeThreads(
+    projectPath: string,
+    projectSession: ProjectSessionContext,
+    writingLanguage: WritingLanguage,
+  ): Promise<{ text: string; count: number }> {
+    let threads: NarrativeThreadView[] = []
+    try {
+      threads = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:narrative-thread-list-relevant',
+        {
+          chapterNumber: this.chapterInfo.chapterNumber,
+          title: this.chapterInfo.title,
+          keyEvents: this.chapterInfo.keyEvents,
+          characters: [...this.chapterInfo.characters],
+        },
+        projectPath,
+      )
+    } catch {
+      return { text: '', count: 0 }
+    }
+
+    const header = promptLanguageText(
+      writingLanguage,
+      '【当前相关活跃叙事线索】',
+      '[Relevant active narrative threads]',
+    )
+    const lines: string[] = []
+    let usedChars = header.length + 1
+    for (const thread of threads.slice(0, ACTIVE_THREAD_CONTEXT_MAX_ITEMS)) {
+      const source = thread.events.at(-1)
+      const line = promptLanguageText(
+        writingLanguage,
+        `- ${thread.title} [${thread.status}]（目标第${thread.targetStartChapter}–${thread.targetEndChapter}章；作者意图：${thread.authorIntent}${source ? `；来源第${source.chapterNumber}章：${source.evidence}` : ''}）`,
+        `- ${thread.title} [${thread.status}] (target Chapters ${thread.targetStartChapter}–${thread.targetEndChapter}; author intent: ${thread.authorIntent}${source ? `; source Chapter ${source.chapterNumber}: ${source.evidence}` : ''})`,
+      )
+      const nextLength = line.length + (lines.length > 0 ? 1 : 0)
+      if (usedChars + nextLength > ACTIVE_THREAD_CONTEXT_MAX_CHARS) break
+      lines.push(line)
+      usedChars += nextLength
+    }
+    if (lines.length === 0) return { text: '', count: 0 }
+    return {
+      text: `${header}\n${lines.join('\n')}`,
+      count: lines.length,
     }
   }
 }

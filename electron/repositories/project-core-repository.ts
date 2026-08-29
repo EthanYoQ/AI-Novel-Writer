@@ -11,6 +11,7 @@ import {
     resolveWritingLanguage,
     type WritingLanguage,
 } from '../../src/shared/writing-language'
+import { resolveNarrativeThreadDormantThreshold } from '../../src/shared/narrative-thread'
 
 /** project_core 表行类型 */
 export interface ProjectCoreRow {
@@ -23,6 +24,7 @@ export interface ProjectCoreRow {
     words_per_chapter: number
     writing_language: string
     creative_strategy: string
+    narrative_thread_dormant_threshold: number
     plot_structure: string
     narrative_pov: string
     writing_style: string
@@ -51,6 +53,7 @@ export interface ProjectCoreData {
     wordsPerChapter: number
     writingLanguage: WritingLanguage
     creativeStrategy: CreativeStrategy
+    narrativeThreadDormantChapterThreshold: number
     plotStructure: string
     narrativePov: string
     writingStyle: string
@@ -82,6 +85,9 @@ function rowToData(row: ProjectCoreRow): ProjectCoreData {
                 ? row.creative_strategy
                 : 'auto'
         ) as CreativeStrategy,
+        narrativeThreadDormantChapterThreshold: resolveNarrativeThreadDormantThreshold(
+            row.narrative_thread_dormant_threshold,
+        ),
         plotStructure: row.plot_structure,
         narrativePov: row.narrative_pov,
         writingStyle: row.writing_style,
@@ -144,6 +150,7 @@ export class ProjectCoreRepository {
             wordsPerChapter: 'words_per_chapter',
             writingLanguage: 'writing_language',
             creativeStrategy: 'creative_strategy',
+            narrativeThreadDormantChapterThreshold: 'narrative_thread_dormant_threshold',
             plotStructure: 'plot_structure',
             narrativePov: 'narrative_pov',
             writingStyle: 'writing_style',
@@ -165,7 +172,10 @@ export class ProjectCoreRepository {
         for (const [camel, col] of Object.entries(fieldMap)) {
             if (camel in data) {
                 setClauses.push(`${col} = ?`)
-                values.push((data as Record<string, unknown>)[camel])
+                const value = (data as Record<string, unknown>)[camel]
+                values.push(camel === 'narrativeThreadDormantChapterThreshold'
+                    ? resolveNarrativeThreadDormantThreshold(value)
+                    : value)
             }
         }
 
