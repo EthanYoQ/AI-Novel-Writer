@@ -5,6 +5,7 @@ import { alertError } from '../components/ui/AlertDialog'
 import type {
   LLMFinishReason,
   ModelDiscoveryResult,
+  ModelDiscoveryRequest,
   ModelProfile,
   LLMResponse,
   TokenUsage,
@@ -62,8 +63,8 @@ interface LLMState {
   cancelGeneration: (requestId: string) => Promise<void>
   /** 测试模型连接 */
   testConnection: (model: ModelProfile) => Promise<{ success: boolean; error?: string }>
-  /** 仅以已保存 profile ID 主动发现 provider 模型。 */
-  discoverModels: (profileId: string) => Promise<ModelDiscoveryResult>
+  /** 以当前表单中的端点和凭据主动发现 provider 模型。 */
+  discoverModels: (request: ModelDiscoveryRequest) => Promise<ModelDiscoveryResult>
 }
 
 let initializationFlight: Promise<void> | null = null
@@ -274,5 +275,5 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     )
   },
 
-  discoverModels: async (profileId) => ipc.invoke('llm:discover-models', profileId),
+  discoverModels: async (request) => ipc.invoke('llm:discover-models', request),
 }))

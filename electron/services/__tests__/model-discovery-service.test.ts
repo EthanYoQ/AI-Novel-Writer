@@ -42,7 +42,7 @@ afterEach(async () => {
 })
 
 describe('ModelDiscoveryService', () => {
-  it('discovers OpenAI-compatible models from the saved profile without leaking its credential', async () => {
+  it('discovers OpenAI-compatible models from the current form without leaking its credential', async () => {
     const credential = crypto.randomUUID()
     let requestUrl = ''
     let authorization = ''
@@ -58,14 +58,12 @@ describe('ModelDiscoveryService', () => {
       }))
     }))
     const saved = profile({ apiKey: credential, baseUrl: `${baseUrl}/v1` })
-    const loadModel = vi.fn((profileId: string) => profileId === saved.id ? saved : null)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const result = await new ModelDiscoveryService({ loadModel }).discoverModels(saved.id)
+    const result = await new ModelDiscoveryService().discoverModels(saved)
 
-    expect(loadModel).toHaveBeenCalledWith(saved.id)
     expect(requestUrl).toBe('/v1/models')
     expect(requestUrl).not.toContain(credential)
     expect(authorization).toBe(`Bearer ${credential}`)
@@ -80,7 +78,7 @@ describe('ModelDiscoveryService', () => {
     expect(JSON.stringify([log.mock.calls, warn.mock.calls, error.mock.calls])).not.toContain(credential)
   })
 
-  it('uses the saved Gemini profile and keeps its credential in the request header', async () => {
+  it('uses the current Gemini form and keeps its credential in the request header', async () => {
     const credential = crypto.randomUUID()
     let requestUrl = ''
     let googleApiKey = ''
@@ -105,9 +103,7 @@ describe('ModelDiscoveryService', () => {
       baseUrl,
     })
 
-    const result = await new ModelDiscoveryService({
-      loadModel: profileId => profileId === saved.id ? saved : null,
-    }).discoverModels(saved.id)
+    const result = await new ModelDiscoveryService().discoverModels(saved)
 
     expect(requestUrl).toBe('/v1beta/models')
     expect(requestUrl).not.toContain(credential)
@@ -159,8 +155,7 @@ describe('ModelDiscoveryService', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const result = await new ModelDiscoveryService({ loadModel: () => saved })
-      .discoverModels(saved.id)
+    const result = await new ModelDiscoveryService().discoverModels(saved)
 
     expect(result).toEqual({ success: false, errorCode: 'network' })
     expect(redirectedRequests).toBe(0)
@@ -217,10 +212,9 @@ describe('ModelDiscoveryService', () => {
     }
 
     const result = await new ModelDiscoveryService({
-      loadModel: () => saved,
       fetchImpl,
       timeoutMs: 25,
-    }).discoverModels(saved.id)
+    }).discoverModels(saved)
 
     expect(result).toEqual({ success: false, errorCode: 'network' })
     const observableOutput = JSON.stringify({
@@ -253,8 +247,7 @@ describe('ModelDiscoveryService', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const result = await new ModelDiscoveryService({ loadModel: () => saved })
-      .discoverModels(saved.id)
+    const result = await new ModelDiscoveryService().discoverModels(saved)
 
     expect(result).toEqual({ success: false, errorCode: 'auth' })
     const observableOutput = JSON.stringify({
@@ -281,7 +274,7 @@ describe('ModelDiscoveryService', () => {
       baseUrl,
     })
 
-    await expect(new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id))
+    await expect(new ModelDiscoveryService().discoverModels(saved))
       .resolves.toEqual({ success: false, errorCode: 'invalid_response' })
   })
 
@@ -297,7 +290,7 @@ describe('ModelDiscoveryService', () => {
     }))
     const saved = profile({ id: `unsupported-${protocol}-${status}`, provider, protocol, baseUrl })
 
-    await expect(new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id))
+    await expect(new ModelDiscoveryService().discoverModels(saved))
       .resolves.toEqual({ success: false, errorCode: 'unsupported' })
   })
 
@@ -319,7 +312,7 @@ describe('ModelDiscoveryService', () => {
     }))
     const saved = profile({ id: `empty-${protocol}`, provider, protocol, baseUrl })
 
-    await expect(new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id))
+    await expect(new ModelDiscoveryService().discoverModels(saved))
       .resolves.toEqual({ success: false, errorCode: 'empty' })
   })
 
@@ -341,7 +334,7 @@ describe('ModelDiscoveryService', () => {
     }))
     const saved = profile({ id: `oversized-list-${protocol}`, provider, protocol, baseUrl })
 
-    await expect(new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id))
+    await expect(new ModelDiscoveryService().discoverModels(saved))
       .resolves.toEqual({ success: false, errorCode: 'invalid_response' })
   })
 
@@ -381,7 +374,7 @@ describe('ModelDiscoveryService', () => {
     }))
     const saved = profile({ id: `unsafe-entry-${protocol}`, provider, protocol, baseUrl })
 
-    const result = await new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id)
+    const result = await new ModelDiscoveryService().discoverModels(saved)
 
     expect(result).toEqual({ success: false, errorCode: 'invalid_response' })
     expect(JSON.stringify(result)).not.toContain(invalidText)
@@ -426,7 +419,7 @@ describe('ModelDiscoveryService', () => {
     }))
     const saved = profile({ id: `deduplicate-${protocol}`, provider, protocol, baseUrl })
 
-    await expect(new ModelDiscoveryService({ loadModel: () => saved }).discoverModels(saved.id))
+    await expect(new ModelDiscoveryService().discoverModels(saved))
       .resolves.toEqual({ success: true, models: expected })
   })
 
@@ -442,8 +435,7 @@ describe('ModelDiscoveryService', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const result = await new ModelDiscoveryService({ loadModel: () => saved, fetchImpl })
-      .discoverModels(saved.id)
+    const result = await new ModelDiscoveryService({ fetchImpl }).discoverModels(saved)
 
     expect(result).toEqual({ success: false, errorCode: 'network' })
     const observableOutput = JSON.stringify({
@@ -453,21 +445,6 @@ describe('ModelDiscoveryService', () => {
     expect(observableOutput).not.toContain(baseUrl)
     expect(observableOutput).not.toContain(credential)
     expect(observableOutput).not.toContain(providerError)
-  })
-
-  it('reduces a saved-profile read failure without returning its error details', async () => {
-    const sensitiveDetail = `models.json:${crypto.randomUUID()}`
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    const result = await new ModelDiscoveryService({
-      loadModel: () => { throw new Error(sensitiveDetail) },
-    }).discoverModels('saved-profile-id')
-
-    expect(result).toEqual({ success: false, errorCode: 'invalid_response' })
-    expect(JSON.stringify({ result, logs: [log.mock.calls, warn.mock.calls, error.mock.calls] }))
-      .not.toContain(sensitiveDetail)
   })
 
   it('refuses an endpoint that would place the saved credential in the request URL', async () => {
@@ -483,8 +460,7 @@ describe('ModelDiscoveryService', () => {
       baseUrl: `${baseUrl}/v1/${encodeURIComponent(credential)}`,
     })
 
-    const result = await new ModelDiscoveryService({ loadModel: () => saved })
-      .discoverModels(saved.id)
+    const result = await new ModelDiscoveryService().discoverModels(saved)
 
     expect(result).toEqual({ success: false, errorCode: 'invalid_response' })
     expect(requestCount).toBe(0)

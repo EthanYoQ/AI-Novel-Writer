@@ -29,6 +29,21 @@ import { assertExpectedProjectPath, assertRequiredExpectedProjectPath } from '..
 import { sanitizeProjectName } from './project-path'
 import { projectStoragePreflightFailure } from '../services/project-storage-preflight'
 
+function projectRootSelectionFailure(error: unknown) {
+  if (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === 'PROJECT_ROOT_REQUIRED'
+  ) {
+    return {
+      errorCode: 'PROJECT_ROOT_REQUIRED' as const,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+  return null
+}
+
 interface RecentProject {
   name: string
   path: string
@@ -561,7 +576,7 @@ export function registerProjectController() {
           project: null,
           requestToken,
           ...databaseState,
-          ...(projectStoragePreflightFailure(error) ?? {}),
+          ...(projectStoragePreflightFailure(error) ?? projectRootSelectionFailure(error) ?? {}),
           error: errorMessage,
         }
       }

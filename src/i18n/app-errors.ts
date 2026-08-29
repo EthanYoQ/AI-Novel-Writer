@@ -8,6 +8,7 @@ const ERROR_KEYS = {
   PROJECT_NOT_OPEN: 'error.projectNotOpen',
   EMBEDDING_MODEL_NOT_CONFIGURED: 'error.embeddingModelNotConfigured',
   PROJECT_STORAGE_PATH_UNSUPPORTED: 'error.projectStoragePathUnsupported',
+  PROJECT_ROOT_REQUIRED: 'error.projectRootRequired',
 } as const
 
 function readCode(error: unknown): AppErrorCode | undefined {

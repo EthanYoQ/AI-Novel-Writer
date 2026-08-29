@@ -221,6 +221,43 @@ describe('ProjectAccessService project session seam', () => {
     expect(access.probeExistingProject(created.rootPath)).toEqual(created)
   })
 
+  it('reopens a created manifest project after its previous session is closed', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-project-reopen-'))
+    temporaryRoots.push(parent)
+    const access = new ProjectAccessService({
+      homePath: path.join(os.tmpdir(), 'not-the-project-home'),
+      newLeaseId: (() => {
+        let next = 0
+        return () => `lease-${++next}`
+      })(),
+    })
+
+    const created = access.createProject(parent, '可重开小说')
+    const firstSession = access.beginSession(created)
+    access.invalidateCurrentSession()
+    const reopened = access.beginSession(trustedProject(access, created.rootPath))
+
+    expect(reopened).toMatchObject({
+      projectId: created.projectId,
+      rootPath: created.rootPath,
+      leaseId: 'lease-2',
+    })
+    expect(() => access.assertCurrentSession(firstSession)).toThrow('项目会话已失效')
+  })
+
+  it('identifies an ordinary parent directory as a selection error without trusting it', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-project-parent-only-'))
+    temporaryRoots.push(parent)
+    const access = new ProjectAccessService({
+      homePath: path.join(os.tmpdir(), 'not-the-project-home'),
+    })
+
+    expect(() => access.probeExistingProject(parent)).toThrow(expect.objectContaining({
+      code: 'PROJECT_ROOT_REQUIRED',
+    }))
+    expect(inventory(parent)).toEqual([])
+  })
+
   it('allows a new child project below the user home without ever treating the home itself as a project', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-home-parent-'))
     temporaryRoots.push(home)

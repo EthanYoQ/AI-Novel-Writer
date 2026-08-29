@@ -86,7 +86,6 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
     <div
       className="skin-solid-surface fixed inset-0 z-50 flex items-center justify-center"
       style={{ backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
         className="relative flex w-[880px] h-[600px] rounded-2xl overflow-hidden shadow-2xl"
@@ -145,6 +144,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             </div>
             <button
               onClick={onClose}
+              aria-label={text('关闭设置', 'Close settings')}
               className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-[var(--color-hover)]"
               style={{ color: 'var(--color-text-muted)' }}
             >
@@ -442,10 +442,9 @@ function ModelForm({
   const [testResult, setTestResult] = useState<{ success: boolean, error?: string } | null>(null)
   const testConnection = useLLMStore(s => s.testConnection)
   const discoverModels = useLLMStore(s => s.discoverModels)
-  const savedModels = useLLMStore(s => s.models)
   const [discovering, setDiscovering] = useState(false)
   const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([])
-  const [discoveryNotice, setDiscoveryNotice] = useState<ModelDiscoveryErrorCode | 'needs_save' | null>(null)
+  const [discoveryNotice, setDiscoveryNotice] = useState<ModelDiscoveryErrorCode | null>(null)
   const discoveryRevision = useRef(0)
   const currentDiscoveryConfig = useRef({
     id: model.id,
@@ -593,18 +592,6 @@ function ModelForm({
   }
 
   const handleDiscoverModels = async () => {
-    const savedModel = savedModels.find(candidate => candidate.id === model.id)
-    const discoveryConfigChanged = !savedModel
-      || savedModel.provider !== model.provider
-      || savedModel.protocol !== model.protocol
-      || savedModel.baseUrl !== model.baseUrl
-      || savedModel.apiKey !== model.apiKey
-    if (discoveryConfigChanged) {
-      invalidateDiscovery()
-      setDiscoveryNotice('needs_save')
-      return
-    }
-
     const requestRevision = discoveryRevision.current + 1
     discoveryRevision.current = requestRevision
     const requestConfig = { ...currentDiscoveryConfig.current }
@@ -621,7 +608,12 @@ function ModelForm({
     setDiscoveredModels([])
     setDiscoveryNotice(null)
     try {
-      const result = await discoverModels(model.id)
+      const result = await discoverModels({
+        provider: model.provider,
+        protocol: model.protocol,
+        baseUrl: model.baseUrl,
+        apiKey: model.apiKey,
+      })
       if (!isCurrentRequest()) return
       if (result.success) {
         setDiscoveredModels(result.models)
@@ -635,10 +627,8 @@ function ModelForm({
     }
   }
 
-  const discoveryNoticeText = discoveryNotice === 'needs_save'
-    ? text('请先保存端点、协议和 API Key，再获取模型列表。', 'Save the endpoint, protocol, and API key before refreshing the model list.')
-    : discoveryNotice === 'auth'
-      ? text('鉴权失败：请检查已保存的 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the saved API key. Manual model IDs remain available.')
+  const discoveryNoticeText = discoveryNotice === 'auth'
+      ? text('鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.')
       : discoveryNotice === 'unsupported'
         ? text('该端点不支持标准模型列表接口。请继续手工填写模型 ID。', 'This endpoint does not support the standard model-list API. Continue with a manual model ID.')
         : discoveryNotice === 'network'
@@ -796,7 +786,7 @@ function ModelForm({
           <div>
             <Label className="mb-0">{text('端点模型列表', 'Endpoint model list')}</Label>
             <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
-              {text('仅在点击后使用已保存配置刷新；选择后仍需保存。', 'Refreshes only after a click using the saved profile. Save after choosing.')}
+              {text('填写端点与 API Key 后即可获取；选择模型后再保存配置。', 'Enter the endpoint and API key to refresh, then save after choosing a model.')}
             </p>
           </div>
           <Button type="button" size="sm" variant="outline" onClick={handleDiscoverModels} disabled={discovering}>
@@ -980,7 +970,7 @@ function ModelForm({
         <Button
           className="flex-1"
           onClick={onSave}
-          disabled={saving || !model.name || (!model.apiKey && model.provider !== 'ollama')}
+          disabled={saving || !model.baseUrl.trim() || !model.modelName.trim() || (!model.apiKey.trim() && model.provider !== 'ollama')}
         >
           <Save size={13} />
           {saving ? text('保存中...', 'Saving...') : text('保存配置', 'Save configuration')}

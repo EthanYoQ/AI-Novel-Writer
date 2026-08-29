@@ -172,6 +172,7 @@ export type AppErrorCode =
   | 'PROJECT_NOT_OPEN'
   | 'EMBEDDING_MODEL_NOT_CONFIGURED'
   | 'PROJECT_STORAGE_PATH_UNSUPPORTED'
+  | 'PROJECT_ROOT_REQUIRED'
 
 export interface AppFailure {
   success: false
@@ -347,6 +348,12 @@ export type ModelDiscoveryResult =
   | { success: true; models: DiscoveredModel[] }
   | { success: false; errorCode: ModelDiscoveryErrorCode }
 
+/** Unsaved endpoint fields required to request a provider's model list. */
+export type ModelDiscoveryRequest = Pick<
+  ModelProfile,
+  'provider' | 'protocol' | 'baseUrl' | 'apiKey'
+>
+
 export interface LLMChannels {
   'llm:begin-execution-lease': {
     args: [modelId: string]
@@ -378,8 +385,8 @@ export interface LLMChannels {
     return: ModelProfile[]
   }
   'llm:discover-models': {
-    /** Discovery always uses the currently saved main-process profile snapshot. */
-    args: [profileId: string]
+    /** Discovery uses the current settings form without persisting it first. */
+    args: [request: ModelDiscoveryRequest]
     return: ModelDiscoveryResult
   }
   'llm:save-model': {

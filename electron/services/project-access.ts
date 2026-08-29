@@ -11,6 +11,7 @@ import {
 } from './project-storage-preflight'
 
 export const PROJECT_MANIFEST_RELATIVE_PATH = path.join('.vela', 'project.json')
+export const PROJECT_ROOT_REQUIRED = 'PROJECT_ROOT_REQUIRED' as const
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 const LEGACY_REQUIRED_TABLES = new Set([
@@ -33,6 +34,15 @@ interface ProjectManifest {
   kind: 'ai-novel-project'
   projectId: string
   createdAt: string
+}
+
+export class ProjectRootRequiredError extends Error {
+  readonly code = PROJECT_ROOT_REQUIRED
+
+  constructor() {
+    super('所选目录不是项目根目录：目录缺少有效项目清单或可信旧版指纹')
+    this.name = 'ProjectRootRequiredError'
+  }
 }
 
 export interface TrustedProject {
@@ -181,7 +191,7 @@ export class ProjectAccessService {
       }
     }
 
-    throw new Error('目录缺少有效项目清单或可信旧版指纹，已拒绝打开')
+    throw new ProjectRootRequiredError()
   }
 
   adoptLegacyProject(project: ProjectProbe): TrustedProject {

@@ -42,6 +42,15 @@ function savedProfile(overrides: Partial<ModelProfile> = {}): ModelProfile {
   }
 }
 
+function discoveryRequest(model: ModelProfile) {
+  return {
+    provider: model.provider,
+    protocol: model.protocol,
+    baseUrl: model.baseUrl,
+    apiKey: model.apiKey,
+  }
+}
+
 let root: Root | undefined
 let container: HTMLDivElement | undefined
 
@@ -50,13 +59,15 @@ async function renderSettings(
   discoverModels: ReturnType<typeof useLLMStore.getState>['discoverModels'],
   locale: Locale = 'zh-CN',
   additionalModels: ModelProfile[] = [],
+  onClose = vi.fn(),
+  persisted = true,
 ) {
   const saveModel = vi.fn(async () => true)
   const setDefaultModel = vi.fn(async () => true)
   useLayoutStore.setState({ settingsSection: 'llm' })
   useLocaleStore.setState({ locale })
   useLLMStore.setState({
-    models: [model, ...additionalModels],
+    models: persisted ? [model, ...additionalModels] : additionalModels,
     loaded: true,
     defaultModelId: model.id,
     saveModel,
@@ -77,9 +88,9 @@ async function renderSettings(
   document.body.append(container)
   root = createRoot(container)
   await act(async () => {
-    root?.render(<SettingsModal open onClose={() => {}} />)
+    root?.render(<SettingsModal open onClose={onClose} />)
   })
-  return { saveModel, setDefaultModel }
+  return { saveModel, setDefaultModel, onClose }
 }
 
 afterEach(async () => {
@@ -95,7 +106,7 @@ afterEach(async () => {
 })
 
 describe('model discovery settings flow', () => {
-  it('does not discover when settings opens and refreshes explicitly by saved profile id', async () => {
+  it('does not discover when settings opens and refreshes explicitly with the current form configuration', async () => {
     const model = savedProfile()
     const discoverModels = vi.fn(async () => ({
       success: true as const,
@@ -115,9 +126,82 @@ describe('model discovery settings flow', () => {
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
     })
 
-    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith(model.id))
-    expect(discoverModels.mock.calls[0]).toEqual([model.id])
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith(discoveryRequest(model)))
+    expect(discoverModels.mock.calls[0]).toEqual([discoveryRequest(model)])
     await expect.element(page.getByLabelText('端点模型列表')).toBeVisible()
+  })
+
+  it('refreshes models from a new unsaved endpoint and credentials', async () => {
+    const model = savedProfile()
+    const discoverModels = vi.fn(async () => ({
+      success: true as const,
+      models: [{ id: 'fresh-model', name: 'Fresh model', value: 'fresh-model' }],
+    }))
+    await renderSettings(model, discoverModels, 'zh-CN', [], vi.fn(), false)
+    await act(async () => {
+      await page.getByRole('button', { name: '添加第一个生成模型', exact: true }).click()
+    })
+
+    const editedBaseUrl = 'https://edited-provider.invalid/v1'
+    const editedApiKey = `edited-${crypto.randomUUID()}`
+    const baseUrlInput = Array.from(document.querySelectorAll('input'))
+      .find(candidate => candidate.value === 'https://api.openai.com')
+    const apiKeyInput = document.querySelector('input[placeholder="sk-..."]')
+    if (!(baseUrlInput instanceof HTMLInputElement)) throw new Error('Missing base URL input')
+    if (!(apiKeyInput instanceof HTMLInputElement)) throw new Error('Missing API key input')
+    for (const [input, nextValue] of [
+      [baseUrlInput, editedBaseUrl],
+      [apiKeyInput, editedApiKey],
+    ] as const) {
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+        setter?.call(input, nextValue)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+
+    await act(async () => {
+      await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
+    })
+
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith({
+      provider: 'openai',
+      protocol: 'openai',
+      baseUrl: editedBaseUrl,
+      apiKey: editedApiKey,
+    }))
+    await expect.element(page.getByLabelText('端点模型列表')).toBeVisible()
+  })
+
+  it('keeps configuration open on backdrop clicks and closes only from the explicit close button', async () => {
+    const model = savedProfile()
+    const discoverModels = vi.fn()
+    const { onClose } = await renderSettings(model, discoverModels)
+    const backdrop = container?.firstElementChild
+    if (!(backdrop instanceof HTMLDivElement)) throw new Error('Missing settings backdrop')
+
+    await act(async () => backdrop.click())
+    expect(onClose).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await page.getByRole('button', { name: '关闭设置', exact: true }).click()
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows saving a complete manual configuration without a display name', async () => {
+    const model = savedProfile({ name: '' })
+    const discoverModels = vi.fn()
+    const { saveModel } = await renderSettings(model, discoverModels)
+    await act(async () => {
+      await page.getByRole('button', { name: '编辑', exact: true }).click()
+    })
+
+    await expect.element(page.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled()
+    await act(async () => {
+      await page.getByRole('button', { name: '保存配置', exact: true }).click()
+    })
+    await vi.waitFor(() => expect(saveModel).toHaveBeenCalledWith(model))
   })
 
   it('selects a discovered id without inference and saves only after explicit confirmation', async () => {
@@ -202,38 +286,6 @@ describe('model discovery settings flow', () => {
     }))
   })
 
-  it.each([
-    { field: 'endpoint', editedValue: 'https://edited-provider.invalid/v1' },
-    { field: 'credential', editedValue: `edited-${crypto.randomUUID()}` },
-  ])('blocks refresh until an edited $field is saved', async ({ field, editedValue }) => {
-    const model = savedProfile()
-    const discoverModels = vi.fn(async () => ({
-      success: true as const,
-      models: [{ id: 'should-not-load', name: 'Should not load', value: 'should-not-load' }],
-    }))
-    await renderSettings(model, discoverModels)
-    await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
-    })
-
-    const currentValue = field === 'endpoint' ? model.baseUrl : model.apiKey
-    const input = Array.from(document.querySelectorAll('input'))
-      .find(candidate => candidate.value === currentValue)
-    if (!(input instanceof HTMLInputElement)) throw new Error(`Missing ${field} input`)
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-      setter?.call(input, editedValue)
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    await act(async () => {
-      await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
-    })
-
-    expect(discoverModels).not.toHaveBeenCalled()
-    await expect.element(page.getByText('请先保存端点、协议和 API Key，再获取模型列表。', { exact: true })).toBeVisible()
-    expect(document.querySelector('select[aria-label="端点模型列表"]')).toBeNull()
-  })
-
   it('ignores a pending discovery after its endpoint configuration is edited', async () => {
     const model = savedProfile()
     let settleDiscovery!: (result: ModelDiscoveryResult) => void
@@ -258,10 +310,6 @@ describe('model discovery settings flow', () => {
     })
 
     await expect.element(page.getByRole('button', { name: '获取模型列表', exact: true })).toBeEnabled()
-    await act(async () => {
-      await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
-    })
-    await expect.element(page.getByText('请先保存端点、协议和 API Key，再获取模型列表。', { exact: true })).toBeVisible()
     expect(discoverModels).toHaveBeenCalledTimes(1)
 
     await act(async () => {
@@ -273,7 +321,6 @@ describe('model discovery settings flow', () => {
     })
 
     expect(document.querySelector('select[aria-label="端点模型列表"]')).toBeNull()
-    await expect.element(page.getByText('请先保存端点、协议和 API Key，再获取模型列表。', { exact: true })).toBeVisible()
   })
 
   it('ignores a pending discovery after switching to another saved profile', async () => {
@@ -297,7 +344,7 @@ describe('model discovery settings flow', () => {
     await act(async () => {
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
     })
-    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith(first.id))
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith(discoveryRequest(first)))
     await act(async () => {
       await page.getByRole('button', { name: '取消', exact: true }).click()
     })
@@ -353,12 +400,12 @@ describe('model discovery settings flow', () => {
     {
       errorCode: 'auth' as const,
       locale: 'zh-CN' as const,
-      expected: '鉴权失败：请检查已保存的 API Key。手工模型 ID 仍可使用。',
+      expected: '鉴权失败：请检查 API Key。手工模型 ID 仍可使用。',
     },
     {
       errorCode: 'auth' as const,
       locale: 'en-US' as const,
-      expected: 'Authentication failed. Check the saved API key. Manual model IDs remain available.',
+      expected: 'Authentication failed. Check the API key. Manual model IDs remain available.',
     },
     {
       errorCode: 'unsupported' as const,

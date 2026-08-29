@@ -7,7 +7,7 @@ import {
   GLOBAL_CONFIG_PATH,
   DEFAULT_GLOBAL_CONFIG,
 } from '../utils/config-utils'
-import type { LLMFinishReason, LLMRequest, ModelProfile, GlobalConfig, TokenUsage } from '../../src/shared/ipc-channels'
+import type { GlobalConfig, LLMFinishReason, LLMRequest, ModelDiscoveryRequest, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { LLMFactory } from '../llm/llm-factory'
 import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
@@ -97,7 +97,7 @@ function recordProviderOutcome(
 
 export function registerLLMController() {
   const modelExecutionLeases = new ModelExecutionLeaseRegistry({ loadModel: getModelConfig })
-  const modelDiscovery = new ModelDiscoveryService({ loadModel: getModelConfig })
+  const modelDiscovery = new ModelDiscoveryService()
   const closedExecutionLeaseTombstones = new Map<string, number>()
 
   const pruneClosedExecutionLeaseTombstones = (now: number) => {
@@ -232,10 +232,10 @@ export function registerLLMController() {
 
   ipcMain.handle('llm:list-models', async () => loadModelConfigs())
 
-  ipcMain.handle('llm:discover-models', async (_event, profileId: string) => {
+  ipcMain.handle('llm:discover-models', async (_event, request: ModelDiscoveryRequest) => {
     try {
       applyProxyConfig()
-      return await modelDiscovery.discoverModels(profileId)
+      return await modelDiscovery.discoverModels(request)
     } catch {
       return { success: false, errorCode: 'invalid_response' as const }
     }

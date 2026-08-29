@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type {
   ModelDiscoveryResult,
+  ModelDiscoveryRequest,
   ModelProfile,
 } from '../../../src/shared/ipc-channels'
 
@@ -10,8 +11,7 @@ type IpcHandler = (...args: unknown[]) => Promise<unknown>
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, IpcHandler>(),
   models: [] as ModelProfile[],
-  discoverModels: vi.fn<(profileId: string) => Promise<ModelDiscoveryResult>>(),
-  discoveryLoadModel: undefined as undefined | ((profileId: string) => ModelProfile | null),
+  discoverModels: vi.fn<(request: ModelDiscoveryRequest) => Promise<ModelDiscoveryResult>>(),
 }))
 
 vi.mock('electron', () => ({
@@ -47,12 +47,8 @@ vi.mock('../../services/project-access', () => ({
 }))
 vi.mock('../../services/model-discovery-service', () => ({
   ModelDiscoveryService: class {
-    constructor(dependencies: { loadModel: (profileId: string) => ModelProfile | null }) {
-      mocks.discoveryLoadModel = dependencies.loadModel
-    }
-
-    discoverModels(profileId: string) {
-      return mocks.discoverModels(profileId)
+    discoverModels(request: ModelDiscoveryRequest) {
+      return mocks.discoverModels(request)
     }
   },
 }))
@@ -72,13 +68,20 @@ const savedProfile: ModelProfile = {
   purposes: ['generation'],
 }
 
+const unsavedRequest: ModelDiscoveryRequest = {
+  provider: savedProfile.provider,
+  protocol: savedProfile.protocol,
+  apiKey: savedProfile.apiKey,
+  baseUrl: savedProfile.baseUrl,
+}
+
 beforeAll(() => {
   registerLLMController()
 })
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mocks.models = [savedProfile]
+  mocks.models = []
   mocks.discoverModels.mockResolvedValue({
     success: true,
     models: [{ id: 'provider-model', name: 'Provider Model', value: 'provider-model' }],
@@ -86,16 +89,13 @@ beforeEach(() => {
 })
 
 describe('llm model discovery controller boundary', () => {
-  it('uses only the renderer profile id while the service can load the saved credential', async () => {
+  it('discovers from the current unsaved renderer form without requiring a saved profile', async () => {
     const handler = mocks.handlers.get('llm:discover-models')
     if (!handler) throw new Error('Missing llm:discover-models handler')
 
-    const result = await handler({}, savedProfile.id)
+    const result = await handler({}, unsavedRequest)
 
-    expect(mocks.discoverModels).toHaveBeenCalledWith(savedProfile.id)
-    expect(mocks.discoverModels.mock.calls[0]).toEqual([savedProfile.id])
-    expect(mocks.discoveryLoadModel?.(savedProfile.id)).toEqual(savedProfile)
-    expect(JSON.stringify(mocks.discoverModels.mock.calls)).not.toContain(savedProfile.apiKey)
+    expect(mocks.discoverModels).toHaveBeenCalledWith(unsavedRequest)
     expect(JSON.stringify(result)).not.toContain(savedProfile.apiKey)
   })
 })

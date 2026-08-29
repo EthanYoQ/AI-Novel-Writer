@@ -1,11 +1,10 @@
 import type {
   DiscoveredModel,
+  ModelDiscoveryRequest,
   ModelDiscoveryResult,
-  ModelProfile,
 } from '../../src/shared/ipc-channels'
 
 interface ModelDiscoveryServiceDependencies {
-  loadModel: (profileId: string) => ModelProfile | null
   fetchImpl?: typeof fetch
   timeoutMs?: number
 }
@@ -139,24 +138,13 @@ function parseGeminiModels(payload: unknown, credential: string): DiscoveredMode
 }
 
 /**
- * Main-process model configuration boundary for explicit provider discovery.
- * Callers supply only a saved profile ID; endpoint and credential stay inside
- * the main process and provider details are reduced to a fixed safe result.
+ * Main-process model discovery boundary. The current form reaches this trusted
+ * boundary without being saved, and provider details are reduced to a fixed result.
  */
 export class ModelDiscoveryService {
-  constructor(private readonly dependencies: ModelDiscoveryServiceDependencies) {}
+  constructor(private readonly dependencies: ModelDiscoveryServiceDependencies = {}) {}
 
-  async discoverModels(profileId: string): Promise<ModelDiscoveryResult> {
-    let model: ModelProfile | null
-    try {
-      model = this.dependencies.loadModel(profileId)
-    } catch {
-      return { success: false, errorCode: 'invalid_response' }
-    }
-    if (!model) {
-      return { success: false, errorCode: 'unsupported' }
-    }
-
+  async discoverModels(model: ModelDiscoveryRequest): Promise<ModelDiscoveryResult> {
     const configuredTimeoutMs = this.dependencies.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS
     const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
       ? configuredTimeoutMs

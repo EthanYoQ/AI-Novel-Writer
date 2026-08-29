@@ -34,6 +34,7 @@ export const enUS = {
   'error.projectNotOpen': 'Open a project first.',
   'error.embeddingModelNotConfigured': 'Configure an embedding model first.',
   'error.projectStoragePathUnsupported': 'The project path is too deep for some local storage. Move the entire project folder closer to the drive root (for example, D:\\Novels), then try again.',
+  'error.projectRootRequired': 'Select the project root folder that contains .vela/project.json, not its parent folder.',
   'error.unknown': 'Something went wrong: {message}',
   'project.backupUnavailable': 'Backup will be implemented in a later release',
   'project.current': 'Current project: {name}',

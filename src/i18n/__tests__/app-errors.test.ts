@@ -9,6 +9,10 @@ describe('localized application errors', () => {
       .toBe('请先打开项目。')
     expect(appErrorMessage('en-US', { errorCode: 'PROJECT_NOT_OPEN' }))
       .toBe('Open a project first.')
+    expect(appErrorMessage('zh-CN', { errorCode: 'PROJECT_ROOT_REQUIRED' }))
+      .toContain('请选择项目根目录')
+    expect(appErrorMessage('en-US', { errorCode: 'PROJECT_ROOT_REQUIRED' }))
+      .toContain('Select the project root folder')
   })
 
   it('preserves an unknown error as localized diagnostic text', () => {

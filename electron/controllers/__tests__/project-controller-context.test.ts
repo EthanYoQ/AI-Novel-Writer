@@ -448,6 +448,29 @@ describe('project controller project identity', () => {
     expect(mocks.initCalls).not.toContain(projectC)
   })
 
+  it('returns an actionable typed error when the selected folder is not a project root', async () => {
+    mocks.projectAccess.probeExistingProject.mockImplementationOnce(() => {
+      throw Object.assign(new Error('selected parent is not a project root'), {
+        code: 'PROJECT_ROOT_REQUIRED',
+      })
+    })
+
+    await expect(handler('project:open')(
+      {},
+      ordinaryDirectory,
+      'request-open-parent-directory',
+      projectA,
+    )).resolves.toMatchObject({
+      success: false,
+      errorCode: 'PROJECT_ROOT_REQUIRED',
+      databaseRestored: true,
+      dbReady: true,
+    })
+
+    expect(mocks.initCalls).toEqual([projectA])
+    expect(mocks.initCalls).not.toContain(ordinaryDirectory)
+  })
+
   it('creates from a first-ever neutral runtime, returns to no database or lease, then opens explicitly', async () => {
     mocks.currentProjectPath = ''
     mocks.activeSession = null
