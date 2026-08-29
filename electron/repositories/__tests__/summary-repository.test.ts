@@ -37,6 +37,13 @@ describe('finalized continuity projection', () => {
       draftId: draft.draftId,
       chapterNumber: 1,
       chapterNotes: '情节：怀表停摆；伏笔：表盖内侧刻着陌生坐标。',
+      facts: [{
+        category: 'open-thread',
+        entities: ['银色怀表'],
+        statement: '怀表表盖内侧有陌生坐标。',
+        sourceChapter: 1,
+        evidence: '银色怀表在午夜停摆。',
+      }],
     })
 
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM blueprints').get())
@@ -46,7 +53,64 @@ describe('finalized continuity projection', () => {
       chapterNumber: 1,
       chapterTitle: '午夜怀表',
       chapterNotes: '情节：怀表停摆；伏笔：表盖内侧刻着陌生坐标。',
+      facts: [{
+        category: 'open-thread',
+        entities: ['银色怀表'],
+        statement: '怀表表盖内侧有陌生坐标。',
+        sourceChapter: 1,
+        evidence: '银色怀表在午夜停摆。',
+      }],
     }])
+  })
+
+  it('replaces the same finalized summary row on retry without duplicating facts', () => {
+    const content = '第一章定稿正文。'
+    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'continuity-retry-same-row',
+      chapters: [{ chapterNumber: 1, title: '第一章', content, wordCount: content.length }],
+    })
+    const request = {
+      draftId: receipt.drafts[0]!.draftId,
+      chapterNumber: 1,
+      chapterNotes: '林岚已经拿到红色钥匙。',
+      facts: [{
+        category: 'character-state' as const,
+        entities: ['林岚'],
+        statement: '林岚持有红色钥匙。',
+        sourceChapter: 1,
+        evidence: '林岚把红色钥匙收进口袋。',
+      }],
+    }
+
+    SummaryRepository.saveFinalizedContinuity(request)
+    SummaryRepository.saveFinalizedContinuity(request)
+
+    expect(getProjectDb()!.prepare(
+      'SELECT COUNT(*) AS count FROM summary_snapshots WHERE draft_id = ?',
+    ).get(request.draftId)).toEqual({ count: 1 })
+    expect(SummaryRepository.listFinalizedContinuityBefore(2)[0]?.facts).toEqual(request.facts)
+  })
+
+  it('rejects unbounded or cross-chapter continuity facts', () => {
+    const content = '定稿正文。'
+    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'continuity-invalid-fact',
+      chapters: [{ chapterNumber: 1, title: '第一章', content, wordCount: content.length }],
+    })
+    const draftId = receipt.drafts[0]!.draftId
+
+    expect(() => SummaryRepository.saveFinalizedContinuity({
+      draftId,
+      chapterNumber: 1,
+      chapterNotes: '连续性要点',
+      facts: [{
+        category: 'plot',
+        entities: [],
+        statement: 'x'.repeat(281),
+        sourceChapter: 2,
+        evidence: '短证据',
+      }],
+    })).toThrow('连续性事实参数无效')
   })
 
   it('rejects a continuity projection that is not bound to the matching finalized chapter', () => {

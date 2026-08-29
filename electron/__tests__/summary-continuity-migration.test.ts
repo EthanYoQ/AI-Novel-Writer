@@ -41,6 +41,7 @@ describe('summary continuity migration', () => {
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'draft_id' }),
         expect.objectContaining({ name: 'chapter_notes' }),
+        expect.objectContaining({ name: 'continuity_facts' }),
       ]))
     expect(SummaryRepository.getLatestSnapshot()).toEqual({
       chapterNumber: 3,

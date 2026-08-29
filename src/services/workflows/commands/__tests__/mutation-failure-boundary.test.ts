@@ -381,17 +381,26 @@ describe('workflow mutation failure boundaries', () => {
       41,
     ).find(candidate => candidate.key === 'chapter_notes')
 
-    await expect(step!.executor(callbacks(), context())).resolves.toBeUndefined()
+    const stepCallbacks = callbacks()
+    await expect(step!.executor(stepCallbacks, context())).resolves.toBeUndefined()
     expect(invoke).toHaveBeenCalledWith(
       'db:continuity-save-finalized',
       {
         draftId: 41,
         chapterNumber: 1,
         chapterNotes: '作者原稿的连续性事实',
+        facts: [{
+          category: 'plot',
+          entities: [],
+          statement: '作者原稿的连续性事实',
+          sourceChapter: 1,
+          evidence: '作者正文',
+        }],
       },
       PROJECT_PATH,
       expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
     )
+    expect(stepCallbacks.log).toHaveBeenCalledWith('已投影连续性事实：1 条')
   })
 
   it('records the finalized knowledge document identity before marking import complete', async () => {

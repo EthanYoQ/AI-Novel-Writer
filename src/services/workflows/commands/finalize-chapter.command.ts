@@ -19,6 +19,10 @@ import {
   type PostProcessStatus,
 } from '../workflow-utils'
 import type { ChapterInfo } from '../chapter-workflow'
+import type {
+  FinalizedContinuityFact,
+  FinalizedContinuityFactCategory,
+} from '../../../shared/finalized-continuity'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
 import type { CharacterRosterEntry, CharacterRosterRole } from '../../../shared/character-roster'
@@ -57,6 +61,48 @@ function parseJSON<T>(text: string): T {
   return JSON.parse(cleanText) as T
 }
 
+const CONTINUITY_FACT_LIMIT = 12
+const CONTINUITY_STATEMENT_LIMIT = 280
+const CONTINUITY_EVIDENCE_LIMIT = 240
+
+function factCategory(statement: string): FinalizedContinuityFactCategory {
+  if (/(?:角色|状态|持有|受伤|位于|character|holds?|injur|location)/iu.test(statement)) return 'character-state'
+  if (/(?:时间|当日|翌日|多年|之前|之后|timeline|before|after|years?)/iu.test(statement)) return 'timeline'
+  if (/(?:伏笔|悬念|承诺|未解|线索|promise|unresolved|clue|mystery)/iu.test(statement)) return 'open-thread'
+  return 'plot'
+}
+
+function evidenceExcerpt(content: string, entities: readonly string[]): string {
+  const sentences = content
+    .split(/(?<=[。！？.!?])|\n+/u)
+    .map(sentence => sentence.trim())
+    .filter(Boolean)
+  const matched = sentences.find(sentence => entities.some(entity => sentence.includes(entity)))
+  return (matched ?? sentences[0] ?? '').slice(0, CONTINUITY_EVIDENCE_LIMIT).trim()
+}
+
+export function buildFinalizedContinuityFacts(
+  chapterNumber: number,
+  chapterNotes: string,
+  finalizedContent: string,
+  chapterEntities: readonly string[] = [],
+): FinalizedContinuityFact[] {
+  const entities = [...new Set(chapterEntities.map(entity => entity.trim()).filter(Boolean))].slice(0, 8)
+  const statements = chapterNotes
+    .split(/\n+|(?<=[。！？.!?])\s*/u)
+    .map(statement => statement.replace(/^\s*(?:[-*•]|\d+[.)、])\s*/u, '').trim())
+    .filter(Boolean)
+    .slice(0, CONTINUITY_FACT_LIMIT)
+  const evidence = evidenceExcerpt(finalizedContent, entities)
+  return statements.map(statement => ({
+    category: factCategory(statement),
+    entities: entities.filter(entity => statement.includes(entity)),
+    statement: statement.slice(0, CONTINUITY_STATEMENT_LIMIT),
+    sourceChapter: chapterNumber,
+    evidence,
+  }))
+}
+
 // ===== 后处理步骤构建器 =====
 
 /**
@@ -78,6 +124,7 @@ export function buildFinalizePostProcessSteps(
   draftContent: string,
   generation: FinalizePostProcessGeneration,
   finalizedDraftId?: number,
+  chapterEntities: readonly string[] = [],
 ): PostProcessStep[] {
   const steps: PostProcessStep[] = []
 
@@ -142,6 +189,12 @@ export function buildFinalizePostProcessSteps(
         if (context?.cancelled) throw new Error('工作流已取消')
 
         if (finalizedDraftId !== undefined) {
+          const facts = buildFinalizedContinuityFacts(
+            chapterNumber,
+            cleanNotes,
+            draftContent,
+            chapterEntities,
+          )
           const continuityResult = await ipc.invokeWithProjectSession(
             projectSession,
             'db:continuity-save-finalized',
@@ -149,10 +202,12 @@ export function buildFinalizePostProcessSteps(
               draftId: finalizedDraftId,
               chapterNumber,
               chapterNotes: cleanNotes,
+              facts,
             },
             _project.path,
           )
           requireIpcSuccess(continuityResult, '保存定稿连续性事实')
+          callbacks.log(`已投影连续性事实：${facts.length} 条`)
         }
 
         // 兼容已有蓝图项目；作者原稿无蓝图时，权威事实仍已由定稿投影保存。
@@ -348,6 +403,7 @@ export interface RunFinalizePostProcessParams {
   sourceLabel: string
   stopOnFailure?: boolean
   onlyFailed?: boolean
+  chapterEntities?: readonly string[]
 }
 
 /** One post-process run freezes one model and one budget across notes/cards. */
@@ -382,6 +438,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       this.params.draftContent,
       generation,
       this.params.draftId,
+      this.params.chapterEntities,
     )
     return runPostProcessPipeline(
       this.params.project.path,
@@ -469,6 +526,7 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
       draftId: commit.draftId,
       sourceLabel,
       stopOnFailure: this.params.stopOnPostProcessFailure,
+      chapterEntities: this.params.chapterInfo.characters,
     }).execute({ step: {}, context, callbacks })
     this.assertNotCancelled(context)
 

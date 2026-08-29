@@ -213,11 +213,19 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     userGuidance?: string
     writingLanguage?: 'zh-CN' | 'en-US'
     chapterNumber?: number
+    characters?: string[]
     continuity?: Array<{
       draftId: number
       chapterNumber: number
       chapterTitle: string
       chapterNotes: string
+      facts?: Array<{
+        category: 'character-state' | 'timeline' | 'open-thread' | 'plot'
+        entities: string[]
+        statement: string
+        sourceChapter: number
+        evidence: string
+      }>
     }>
     previousFinalizedContent?: string
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
@@ -301,7 +309,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       role: '开端',
       purpose: '建立冲突',
       keyEvents: '开端',
-      characters: [],
+      characters: options.characters ?? [],
       wordsTarget: options.wordsTarget,
       userGuidance: options.userGuidance,
     }, { dependencies: { createRuntime: options.runtime.createRuntime } })
@@ -437,12 +445,20 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const { invoke, context, callbacks, command } = setup({
       runtime,
       chapterNumber: 2,
+      characters: ['林岚'],
       wordsTarget: 500,
       continuity: [{
         draftId: 41,
         chapterNumber: 1,
         chapterTitle: '作者第一章',
         chapterNotes: '作者事实哨兵：林岚已经拿到红色钥匙。',
+        facts: [{
+          category: 'character-state',
+          entities: ['林岚'],
+          statement: '林岚持有红色钥匙。',
+          sourceChapter: 1,
+          evidence: '林岚把红色钥匙收进口袋。',
+        }],
       }],
       previousFinalizedContent,
       knowledgeResults: [{ text: '项目知识哨兵', score: 0.9, fileName: '世界观' }],
@@ -452,6 +468,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(prompt).toContain('作者事实哨兵：林岚已经拿到红色钥匙。')
+    expect(prompt).toContain('林岚持有红色钥匙。')
+    expect(prompt).toContain('来源第1章')
+    expect(prompt).toContain('林岚把红色钥匙收进口袋。')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
     expect(prompt).toContain('上一章定稿结尾哨兵。')
     expect(prompt).toContain('项目知识哨兵')
     expect(invoke).toHaveBeenCalledWith(
@@ -461,6 +481,83 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       projectPath,
       expect.anything(),
     )
+  })
+
+  it('keeps older facts only when they are relevant to the current chapter entities', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(500), 'stop')
+    })
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 8,
+      characters: ['林岚'],
+      wordsTarget: 500,
+      continuity: [{
+        draftId: 41,
+        chapterNumber: 1,
+        chapterTitle: '第一章',
+        chapterNotes: '第一章摘要',
+        facts: [
+          {
+            category: 'character-state',
+            entities: ['林岚'],
+            statement: '早期事实哨兵：林岚不会游泳。',
+            sourceChapter: 1,
+            evidence: '林岚在河边承认自己不会游泳。',
+          },
+          {
+            category: 'plot',
+            entities: ['周远'],
+            statement: '无关事实哨兵：周远换了一双鞋。',
+            sourceChapter: 1,
+            evidence: '周远穿上新鞋。',
+          },
+        ],
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('早期事实哨兵')
+    expect(prompt).not.toContain('无关事实哨兵')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
+  })
+
+  it('keeps an older relevant fact when newer chapter notes exhaust the context budget', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(500), 'stop')
+    })
+    const continuity = Array.from({ length: 7 }, (_, index) => ({
+      draftId: 41 + index,
+      chapterNumber: index + 1,
+      chapterTitle: `第${index + 1}章`,
+      chapterNotes: index === 0 ? '第一章摘要' : `较新的长摘要${index + 1}：${'占用上下文。'.repeat(120)}`,
+      facts: index === 0 ? [{
+        category: 'character-state' as const,
+        entities: ['林岚'],
+        statement: '预算事实哨兵：林岚惧怕深水。',
+        sourceChapter: 1,
+        evidence: '林岚在旧码头拒绝登船。',
+      }] : [],
+    }))
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 8,
+      characters: ['林岚'],
+      wordsTarget: 500,
+      continuity,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('预算事实哨兵')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
   })
 
   it('previews only authored text before completion and reconciles to the persisted terminal draft', async () => {

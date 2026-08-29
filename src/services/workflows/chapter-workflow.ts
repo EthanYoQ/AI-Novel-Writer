@@ -371,9 +371,11 @@ export function createRepairFinalizeWorkflow(
 
           // 从数据库蓝图读取正式标题
           let chapterTitle = `第${chapterNumber}章`
+          let chapterEntities: string[] = []
           try {
             const bp = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', chapterNumber, projectPath)
             if (bp?.title) chapterTitle = bp.title
+            if (Array.isArray(bp?.characters)) chapterEntities = bp.characters
           } catch { /* 蓝图读取失败时使用默认标题 */ }
 
           // 修复运行也冻结一次模型租约，全部 LLM 后处理共享一个预算。
@@ -386,6 +388,7 @@ export function createRepairFinalizeWorkflow(
             draftId: draftMeta.id,
             sourceLabel: `第${chapterNumber}章定稿`,
             onlyFailed: true,
+            chapterEntities,
           }).execute({ step: {}, context, callbacks })
 
           // 后处理修复不会产生新定稿快照，只请求项目资源刷新。

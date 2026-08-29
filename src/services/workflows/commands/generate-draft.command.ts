@@ -300,8 +300,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         this.chapterInfo.chapterNumber,
         projectSession,
         writingLanguage,
+        this.chapterInfo.characters,
       )
-      callbacks.log(`  📋 已加载章节要点时间线（${chapterTimeline.length} 字）`)
+      callbacks.log(`  📋 已加载章节要点与连续性事实（${chapterTimeline.factCount} 条）`)
 
       let previousEnding = this.previousDraftEnding ?? ''
       if (!previousEnding) {
@@ -343,7 +344,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
       promptBuilder
         // ---- 缓存命中区续（要点时间线按序追加，前缀对齐）----
-        .withGlobalSummary(chapterTimeline)
+        .withGlobalSummary(chapterTimeline.text)
         .withCharacterStates(characterState)
         // ---- 缓存失效区（逐章变化）----
         .withPreviousEnding(previousEnding || promptLanguageText(
@@ -798,10 +799,13 @@ ${visibleTail}`,
     currentChapter: number,
     projectSession: ProjectSessionContext,
     writingLanguage: WritingLanguage,
-  ): Promise<string> {
+    currentEntities: readonly string[],
+  ): Promise<{ text: string; factCount: number }> {
     const FULL_WINDOW = 5  // 近 N 章完整收录
     const MAX_CHARS = 3000 // 总量上限
+    const FACT_BUDGET = 1500
     const lines: string[] = []
+    const factCandidates: Array<{ text: string; entityRelevant: boolean; sourceChapter: number }> = []
     let finalizedContinuity: FinalizedContinuityProjection[] = []
     try {
       finalizedContinuity = await ipc.invokeWithProjectSession(
@@ -825,6 +829,22 @@ ${visibleTail}`,
         const isRecent = i >= currentChapter - FULL_WINDOW
         const title = projection?.chapterTitle || bp?.title || ''
         const notes = projection?.chapterNotes || bp?.notes || ''
+        for (const fact of projection?.facts ?? []) {
+          const entityRelevant = fact.entities.some(entity => currentEntities.includes(entity))
+            || currentEntities.some(entity => (
+              fact.statement.includes(entity) || fact.evidence.includes(entity)
+            ))
+          if (!isRecent && !entityRelevant) continue
+          factCandidates.push({
+            text: promptLanguageText(
+              writingLanguage,
+              `- [${fact.category}] ${fact.statement}（来源第${fact.sourceChapter}章；证据：${fact.evidence}）`,
+              `- [${fact.category}] ${fact.statement} (source: Chapter ${fact.sourceChapter}; evidence: ${fact.evidence})`,
+            ),
+            entityRelevant,
+            sourceChapter: fact.sourceChapter,
+          })
+        }
 
         if (isRecent && notes.trim()) {
           // 近 N 章：完整收录要点
@@ -844,13 +864,30 @@ ${visibleTail}`,
       } catch { /* 忽略单章读取失败 */ }
     }
 
-    // Token 预算控制：超限时从最早的完整要点开始精简
-    let result = lines.join('\n\n')
-    if (result.length > MAX_CHARS) {
-      // 保留近章完整内容，远期章节已经是标题行了
-      result = result.slice(-MAX_CHARS)
+    const selectedFacts: string[] = []
+    let usedFactChars = 0
+    for (const candidate of factCandidates
+      .sort((a, b) => Number(b.entityRelevant) - Number(a.entityRelevant) || b.sourceChapter - a.sourceChapter)
+      .slice(0, 12)) {
+      const nextLength = candidate.text.length + (selectedFacts.length > 0 ? 1 : 0)
+      if (usedFactChars + nextLength > FACT_BUDGET) continue
+      selectedFacts.push(candidate.text)
+      usedFactChars += nextLength
     }
+    const factBlock = selectedFacts.length > 0
+      ? promptLanguageText(
+          writingLanguage,
+          `【已定稿连续性事实】\n${selectedFacts.join('\n')}`,
+          `[Finalized continuity facts]\n${selectedFacts.join('\n')}`,
+        )
+      : ''
+    const notesBudget = Math.max(MAX_CHARS - factBlock.length - (factBlock ? 2 : 0), 0)
+    const notesText = lines.join('\n\n').slice(-notesBudget)
+    const result = [notesText, factBlock].filter(Boolean).join('\n\n')
 
-    return result || promptLanguageText(writingLanguage, '（无章节要点）', '(no chapter notes)')
+    return {
+      text: result || promptLanguageText(writingLanguage, '（无章节要点）', '(no chapter notes)'),
+      factCount: selectedFacts.length,
+    }
   }
 }

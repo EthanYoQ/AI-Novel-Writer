@@ -332,6 +332,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       chapter_number INTEGER NOT NULL,
       character_states TEXT DEFAULT '',
       chapter_notes TEXT NOT NULL DEFAULT '',
+      continuity_facts TEXT NOT NULL DEFAULT '[]',
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (draft_id) REFERENCES drafts(id) ON DELETE CASCADE
     );
@@ -527,6 +528,9 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   }
   if (!summaryColumns.has('chapter_notes')) {
     db.exec("ALTER TABLE summary_snapshots ADD COLUMN chapter_notes TEXT NOT NULL DEFAULT ''")
+  }
+  if (!summaryColumns.has('continuity_facts')) {
+    db.exec("ALTER TABLE summary_snapshots ADD COLUMN continuity_facts TEXT NOT NULL DEFAULT '[]'")
   }
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_summary_snapshots_draft
