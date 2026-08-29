@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ProjectCoreRepository } from '../project-core-repository'
 import { ImportRunRepository } from '../import-run-repository'
-import type { BlueprintData } from '../blueprint-repository'
+import { BlueprintRepository, type BlueprintData } from '../blueprint-repository'
+import { CharacterRosterRepository } from '../character-roster-repository'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -142,6 +143,38 @@ function prepareCommittedGlobalReceipt(): void {
 }
 
 describe('import-run durable effect receipt', () => {
+  it('reopens a committed blueprint receipt after its durable character sync completes', () => {
+    prepareCommittedBlueprintReceipt()
+    const operation = BlueprintRepository.getCommittedRangeOperation('import-blueprints-receipt-run-1-1')
+    expect(operation?.characterSyncOperation.status).toBe('pending')
+
+    CharacterRosterRepository.commit({
+      operationId: operation!.characterSyncOperation.operationId,
+      expectedRevision: 0,
+      schemaVersion: 1,
+      intent: 'blueprint_sync',
+      entries: [{
+        name: 'Protagonist', role: 'supporting', gender: '', age: '', appearance: '',
+        personality: '', background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '',
+      }],
+    })
+    expect(BlueprintRepository.completeCharacterSyncOperation(
+      operation!.characterSyncOperation.operationId,
+    ).status).toBe('completed')
+
+    closeProjectDatabase()
+    initProjectDatabase(root)
+
+    expect(ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
+      .toMatchObject({
+        state: 'committed',
+        effectReceipt: {
+          operationId: 'import-blueprints-receipt-run-1-1',
+          characterSyncOperation: { status: 'pending' },
+        },
+      })
+  })
+
   it('freezes generated output before effect commit and atomically commits effect with checkpoint after reopen', () => {
     let started = ImportRunRepository.startOrResume('receipt-run', 'renderer-a')
     moveRunToStyle()

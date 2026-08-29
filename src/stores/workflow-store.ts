@@ -275,6 +275,10 @@ function computeCompat(activeRuns: WorkflowRun[], waitingRuns: Record<string, { 
   }
 }
 
+function prependRunHistory(history: WorkflowRun[], run: WorkflowRun): WorkflowRun[] {
+  return [run, ...history.filter(previous => previous.id !== run.id)].slice(0, 50)
+}
+
 export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
   activeRuns: [],
   history: [],
@@ -394,7 +398,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         })),
       }
       set(state => ({
-        history: [rejectedRun, ...state.history].slice(0, 50),
+        history: prependRunHistory(state.history, rejectedRun),
       }))
       get().addLog('error', uiText(
         uiLocale,
@@ -701,7 +705,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       const newWaiting = { ...s.waitingRuns }
       delete newWaiting[run.id]
       const newHistory = completedRun
-        ? [completedRun, ...s.history].slice(0, 50)
+        ? prependRunHistory(s.history, completedRun)
         : s.history
       return {
         activeRuns: newRuns,

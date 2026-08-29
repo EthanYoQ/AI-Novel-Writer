@@ -78,6 +78,35 @@ describe('workflow pause at a safe step boundary', () => {
     await first
   })
 
+  it('replaces the failed history entry when the same durable import run continues', async () => {
+    const definition = (title: string, executor: WorkflowDefinition['steps'][number]['executor']): WorkflowDefinition => ({
+      runId: 'continued-import-run',
+      type: 'novel_import',
+      title,
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: 'import', description: 'import', executor }],
+    })
+
+    await useWorkflowStore.getState().startWorkflow(definition('First attempt', async () => {
+      throw new Error('receipt validation failed')
+    }))
+    expect(useWorkflowStore.getState().history).toMatchObject([{
+      id: 'continued-import-run',
+      title: 'First attempt',
+      status: 'failed',
+    }])
+
+    await useWorkflowStore.getState().startWorkflow(definition('Continue import', async () => undefined))
+
+    expect(useWorkflowStore.getState().history).toHaveLength(1)
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({
+      id: 'continued-import-run',
+      title: 'Continue import',
+      status: 'completed',
+    })
+  })
+
   it('durably requests cancellation immediately and finalizes it at a paused boundary', async () => {
     let finishStep!: () => void
     const blocked = new Promise<void>((resolve) => { finishStep = resolve })

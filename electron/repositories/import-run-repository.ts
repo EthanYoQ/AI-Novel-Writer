@@ -388,6 +388,92 @@ function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown
   ) throw new Error()
 }
 
+const BLUEPRINT_SYNC_BASE_KEYS = [
+  'operationId', 'blueprintCommitOperationId', 'blueprintCommitPayloadHash',
+  'status', 'startChapter', 'endChapter', 'characterSyncInput', 'createdAt', 'updatedAt',
+] as const
+
+function canonicalEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right))
+}
+
+function assertCompletedBlueprintSyncOperation(operation: Record<string, unknown>): void {
+  if (
+    operation.status !== 'completed'
+    || typeof operation.completedAt !== 'string'
+    || !operation.completedAt
+    || !isRecord(operation.completionReceipt)
+  ) throw new Error()
+
+  const completion = operation.completionReceipt
+  if (
+    completion.operationId !== operation.operationId
+    || completion.blueprintCommitOperationId !== operation.blueprintCommitOperationId
+  ) throw new Error()
+
+  if (completion.status === 'already-satisfied') {
+    if (!exactKeys(completion, ['blueprintCommitOperationId', 'operationId', 'status'])) throw new Error()
+    return
+  }
+  if (
+    completion.status !== 'committed'
+    || !exactKeys(completion, ['blueprintCommitOperationId', 'operationId', 'status', 'rosterReceipt'])
+    || !isRecord(completion.rosterReceipt)
+  ) throw new Error()
+  const rosterReceipt = completion.rosterReceipt
+  if (
+    !exactKeys(rosterReceipt, ['operationId', 'payloadHash', 'revision', 'idempotent'])
+    || rosterReceipt.operationId !== operation.operationId
+    || typeof rosterReceipt.payloadHash !== 'string'
+    || !SHA256.test(rosterReceipt.payloadHash)
+    || !Number.isInteger(rosterReceipt.revision)
+    || Number(rosterReceipt.revision) < 1
+    || typeof rosterReceipt.idempotent !== 'boolean'
+  ) throw new Error()
+}
+
+function assertBlueprintEffectAuthority(
+  stored: Record<string, unknown>,
+  authoritative: Record<string, unknown>,
+): void {
+  const storedSync = stored.characterSyncOperation
+  const authoritativeSync = authoritative.characterSyncOperation
+  if (!isRecord(storedSync) || !isRecord(authoritativeSync)) throw new Error()
+
+  const storedOuter: Record<string, unknown> = { ...stored, idempotent: false }
+  const authoritativeOuter: Record<string, unknown> = { ...authoritative, idempotent: false }
+  delete storedOuter.characterSyncOperation
+  delete authoritativeOuter.characterSyncOperation
+  if (!canonicalEqual(storedOuter, authoritativeOuter)) throw new Error()
+
+  const syncBinding = (operation: Record<string, unknown>) => ({
+    operationId: operation.operationId,
+    blueprintCommitOperationId: operation.blueprintCommitOperationId,
+    blueprintCommitPayloadHash: operation.blueprintCommitPayloadHash,
+    startChapter: operation.startChapter,
+    endChapter: operation.endChapter,
+    characterSyncInput: operation.characterSyncInput,
+    createdAt: operation.createdAt,
+  })
+  if (!canonicalEqual(syncBinding(storedSync), syncBinding(authoritativeSync))) throw new Error()
+
+  const storedKeys = storedSync.status === 'completed'
+    ? [...BLUEPRINT_SYNC_BASE_KEYS, 'completionReceipt', 'completedAt']
+    : BLUEPRINT_SYNC_BASE_KEYS
+  const authoritativeKeys = authoritativeSync.status === 'completed'
+    ? [...BLUEPRINT_SYNC_BASE_KEYS, 'completionReceipt', 'completedAt']
+    : BLUEPRINT_SYNC_BASE_KEYS
+  if (!exactKeys(storedSync, storedKeys) || !exactKeys(authoritativeSync, authoritativeKeys)) throw new Error()
+
+  if (storedSync.status === authoritativeSync.status) {
+    if (!canonicalEqual(storedSync, authoritativeSync)) throw new Error()
+    return
+  }
+  if (storedSync.status !== 'pending' || authoritativeSync.status !== 'completed') throw new Error()
+  if (storedSync.updatedAt !== authoritativeSync.createdAt) throw new Error()
+  assertCompletedBlueprintSyncOperation(authoritativeSync)
+}
+
 function assertCommittedEffectAuthority(
   kind: ImportRunEffectKind,
   payload: unknown,
@@ -417,6 +503,10 @@ function assertCommittedEffectAuthority(
     ? ImportGlobalFactsRepository.getCommittedOperation((payload as ImportGlobalFactsRequest).operationId)
     : BlueprintRepository.getCommittedRangeOperation((payload as BlueprintRangeCommitRequest).operationId)
   if (!authoritative) throw new Error()
+  if (kind === 'chapter-blueprint-range') {
+    assertBlueprintEffectAuthority(effectReceipt, authoritative as unknown as Record<string, unknown>)
+    return
+  }
   const stored = canonicalize({ ...effectReceipt, idempotent: false })
   const readBack = canonicalize({ ...authoritative, idempotent: false })
   if (JSON.stringify(stored) !== JSON.stringify(readBack)) throw new Error()
