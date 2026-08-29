@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('README language variants', () => {
-  it('keeps Chinese README as the repository default with a Chinese hero', () => {
+  it('keeps Chinese README as the repository default with a localized product screenshot', () => {
     const readme = readFileSync('README.md', 'utf8')
-    expect(readme).toContain('hero-zh-v2.png')
+    expect(readme).toContain('ui-zh-v085-project-config.png')
     expect(readme).toMatch(/\[English\]\(README_en\.md\)\s*\|\s*\*\*中文\*\*/)
   })
 
