@@ -269,9 +269,14 @@ const outside = path.join(smokeRoot, 'outside')
 fs.mkdirSync(root)
 fs.mkdirSync(outside)
 fs.writeFileSync(path.join(outside, 'secret.txt'), 'outside', 'utf8')
+const rootInformation = fs.statSync(root, { bigint: true })
+const rootIdentity = {
+  volumeSerialNumber: rootInformation.dev.toString(),
+  fileIndex: rootInformation.ino.toString(),
+}
 
 function invoke(request, commit = false) {
-  const input = [JSON.stringify(request), ...(commit ? [JSON.stringify({ command: 'commit' })] : [])].join('\n') + '\n'
+  const input = [JSON.stringify({ ...request, rootIdentity }), ...(commit ? [JSON.stringify({ command: 'commit' })] : [])].join('\n') + '\n'
   const result = spawnSync(helper, [], { input, encoding: 'utf8' })
   if (result.status !== 0) throw new Error(`Secure helper exited ${result.status}: ${String(result.stderr).trim()}`)
   const responses = String(result.stdout).trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
@@ -292,11 +297,11 @@ const writeResponses = invoke({
 }, true)
 if (writeResponses[0]?.phase !== 'ready') throw new Error('Secure helper did not preserve the atomic-write ready boundary')
 requireOk(writeResponses, 'write')
-const read = requireOk(invoke({ operation: 'read', rootPath: root, relativePath: 'chapters/one.txt' }), 'read')
+const read = requireOk(invoke({ operation: 'read', rootPath: root, relativePath: 'chapters/one.txt', maxBytes: 1024 }), 'read')
 if (Buffer.from(read.contentBase64 ?? '', 'base64').toString('utf8') !== 'safe package smoke') throw new Error('Secure helper read returned the wrong content')
 
 fs.symlinkSync(outside, path.join(root, 'escape'))
-const escaped = invoke({ operation: 'read', rootPath: root, relativePath: 'escape/secret.txt' }).at(-1)
+const escaped = invoke({ operation: 'read', rootPath: root, relativePath: 'escape/secret.txt', maxBytes: 1024 }).at(-1)
 if (escaped?.ok === true || escaped?.code !== 'SECURE_FS_REPARSE_POINT') {
   throw new Error(`Secure helper failed to reject a symlink escape: ${JSON.stringify(escaped)}`)
 }
