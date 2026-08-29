@@ -111,6 +111,44 @@ afterEach(async () => {
 })
 
 describe('authoritative finalized chapter titles', () => {
+  it('never leaks a blueprint fallback when the next project has no chapter title', async () => {
+    const projectADraft = draft(1, 1)
+    const projectBDraft = draft(1, 1)
+    const manuscriptFile = {
+      path: 'vela://manuscript/1',
+      name: 'chapter_1.md',
+      isDir: false,
+    }
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <>
+          <DraftBoxGroup draftsByChapter={{ 1: [projectADraft] }} />
+          <ManuscriptGroup files={[manuscriptFile]} projectPath={PROJECT_PATH} />
+        </>,
+      )
+    })
+    await vi.waitFor(() => {
+      expect(container?.textContent?.match(/旧码头的红钟/gu)).toHaveLength(2)
+    })
+
+    await act(async () => {
+      switchProject(OTHER_PROJECT_PATH, 'other-blueprint-fallback')
+      root?.render(
+        <>
+          <DraftBoxGroup draftsByChapter={{ 1: [projectBDraft] }} />
+          <ManuscriptGroup files={[manuscriptFile]} projectPath={OTHER_PROJECT_PATH} />
+        </>,
+      )
+    })
+
+    expect(container?.textContent).not.toContain('旧码头的红钟')
+    expect(container?.textContent?.match(/第1章/gu)).toHaveLength(2)
+  })
+
   it('never leaks cached chapter titles when switching projects with the same draft identity', async () => {
     const projectADraft = draft(1, 1, '项目甲标题')
     const projectBDraft = draft(1, 1, '项目乙标题')
