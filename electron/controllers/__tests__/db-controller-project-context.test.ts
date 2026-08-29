@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => ({
     content: mocks.currentProjectPath.endsWith('/A') ? 'A content' : 'B content',
   })),
   draftGetMeta: vi.fn(),
+  draftListAll: vi.fn((): Array<Record<string, unknown>> => []),
   draftUpdateContent: vi.fn(),
   postProcessCreateRun: vi.fn(() => 'run-1'),
   postProcessGetLatestRun: vi.fn(),
@@ -130,6 +131,7 @@ vi.mock('../../repositories/draft-repository', () => ({
   DraftRepository: {
     create: vi.fn(() => 1),
     listByChapter: vi.fn(() => []),
+    listAll: mocks.draftListAll,
     getMeta: mocks.draftGetMeta,
     getFull: mocks.draftGetFull,
     getLatestByChapter: vi.fn(),
@@ -792,6 +794,28 @@ describe('database controller project context guard', () => {
 
     expect(staleWrite).toMatchObject({ success: false })
     expect(mocks.draftUpdateContent).not.toHaveBeenCalled()
+  })
+
+  it('lists all draft metadata only for the current project session', async () => {
+    mocks.draftListAll.mockReturnValueOnce([{
+      id: 1,
+      chapterNumber: 1,
+      version: 1,
+      status: 'finalized',
+    }])
+
+    await expect(handler('db:draft-list-all')({}, 'C:/projects/A'))
+      .resolves.toEqual([{
+        id: 1,
+        chapterNumber: 1,
+        version: 1,
+        status: 'finalized',
+      }])
+
+    mocks.currentProjectPath = 'C:/projects/B'
+    await expect(handler('db:draft-list-all')({}, 'C:/projects/A'))
+      .rejects.toThrow(/项目上下文已切换/)
+    expect(mocks.draftListAll).toHaveBeenCalledOnce()
   })
 
   it('rejects content updates for finalized database drafts', async () => {

@@ -91,6 +91,18 @@ export class DraftRepository {
         return rows.map(rowToMeta)
     }
 
+    /** 列出全部章节的草稿元数据（按章节、版本升序） */
+    static listAll(): DraftMeta[] {
+        const db = getProjectDb()
+        if (!db) return []
+
+        const rows = db.prepare(`
+      SELECT * FROM drafts ORDER BY chapter_number ASC, version ASC
+    `).all() as Record<string, unknown>[]
+
+        return rows.map(rowToMeta)
+    }
+
     /** 获取草稿元数据 */
     static getMeta(id: number): DraftMeta | null {
         const db = getProjectDb()

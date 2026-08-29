@@ -44,6 +44,19 @@ afterEach(() => {
 })
 
 describe('DraftRepository finalized immutability guard', () => {
+  it('lists draft metadata across chapters without relying on blueprint rows', () => {
+    db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(2, '第二章定稿正文')
+    db.prepare(`
+      INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(2, 2, 1, 'finalized', 2, 7)
+
+    expect(DraftRepository.listAll()).toMatchObject([
+      { id: 1, chapterNumber: 1, version: 1, status: 'finalized' },
+      { id: 2, chapterNumber: 2, version: 1, status: 'finalized' },
+    ])
+  })
+
   it('does not allow a generic content update to silently mutate finalized database fact', () => {
     expect(() => DraftRepository.updateContent(1, '后续编辑正文', 6))
       .toThrow('不可变事实')

@@ -611,6 +611,11 @@ export function registerDatabaseController() {
     return DraftRepository.listByChapter(chapterNumber)
   })
 
+  ipcMain.handle('db:draft-list-all', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return DraftRepository.listAll()
+  })
+
   ipcMain.handle('db:draft-get-meta', async (_event, id: number, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return DraftRepository.getMeta(id)

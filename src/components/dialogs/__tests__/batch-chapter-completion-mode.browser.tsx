@@ -50,6 +50,16 @@ let draftRecord: {
   source: 'write'
   content: string
 } | null
+let importedFinalizedDrafts: Array<{
+  id: number
+  chapterNumber: number
+  version: number
+  status: 'finalized'
+  wordCount: number
+  createdAt: string
+  source: 'write'
+  content: string
+}> | null
 let postProcessRunCreated: boolean
 let draftCompletionIndex: number
 let draftCompletions: string[]
@@ -243,8 +253,12 @@ function installIpc() {
     }
     if (channel === 'fs:check-exists') return false
     if (channel === 'fs:list-dir') return args[0] === PROJECT_PATH ? fileTree() : []
-    if (channel === 'db:blueprint-get-all') return [blueprint(), blueprint(2)]
-    if (channel === 'db:blueprint-get') return blueprint(Number(args[0]))
+    if (channel === 'db:blueprint-get-all') {
+      return importedFinalizedDrafts ? [] : [blueprint(), blueprint(2)]
+    }
+    if (channel === 'db:blueprint-get') {
+      return importedFinalizedDrafts ? null : blueprint(Number(args[0]))
+    }
     if (channel === 'db:character-get-all') {
       return [{ id: 1, name: '沈砺', role: 'protagonist', currentState: null }]
     }
@@ -255,7 +269,9 @@ function installIpc() {
       return draftRecord?.chapterNumber === Number(args[0]) ? draftRecord : null
     }
     if (channel === 'db:draft-get-finalized') return null
-    if (channel === 'db:draft-get-full') return draftRecord
+    if (channel === 'db:draft-get-full') {
+      return importedFinalizedDrafts?.find(draft => draft.id === Number(args[0])) ?? draftRecord
+    }
     if (channel === 'db:draft-next-version') return 1
     if (channel === 'db:draft-create') {
       const input = args[0] as { chapterNumber: number; version: number; content: string; wordCount: number }
@@ -272,6 +288,9 @@ function installIpc() {
       return { success: true, id: draftRecord.id }
     }
     if (channel === 'db:draft-list') return draftRecord ? [draftRecord] : []
+    if (channel === 'db:draft-list-all') {
+      return importedFinalizedDrafts ?? (draftRecord ? [draftRecord] : [])
+    }
     if (channel === 'db:draft-get-meta') return draftRecord
     if (channel === 'db:revision-get-pending' || channel === 'db:review-list') return []
     if (channel === 'chapter:list-incomplete-deletions') {
@@ -377,6 +396,7 @@ function installIpc() {
 
 beforeEach(() => {
   draftRecord = null
+  importedFinalizedDrafts = null
   draftCompletionIndex = 0
   draftCompletions = [DRAFT_TEXT]
   deferDraftCompletion = false
@@ -441,6 +461,41 @@ afterEach(async () => {
 })
 
 describe('batch chapter completion mode browser flow', () => {
+  it('shows imported finalized chapters in the project tree when no blueprints exist', async () => {
+    importedFinalizedDrafts = [1, 2].map(chapterNumber => ({
+      id: 200 + chapterNumber,
+      chapterNumber,
+      version: 1,
+      status: 'finalized' as const,
+      wordCount: 18,
+      createdAt: '2026-08-29T00:00:00.000Z',
+      source: 'write' as const,
+      content: `第${chapterNumber}章作者原稿正文`,
+    }))
+
+    await act(async () => root?.render(
+      <div data-testid="project-tree"><ProjectTree /></div>,
+    ))
+
+    await vi.waitFor(() => {
+      expect(useDraftStore.getState().draftsByChapter).toMatchObject({
+        1: [{ id: 201, status: 'finalized' }],
+        2: [{ id: 202, status: 'finalized' }],
+      })
+    })
+    await vi.waitFor(() => {
+      const manuscriptHeader = Array.from(container?.querySelectorAll('.tree-item') ?? [])
+        .find(element => element.textContent?.includes('正文章节'))
+      const manuscriptSectionText = manuscriptHeader?.parentElement?.textContent ?? ''
+      expect(manuscriptSectionText).toContain('2 章')
+      expect(manuscriptSectionText).toContain('第1章')
+      expect(manuscriptSectionText).toContain('第2章')
+      expect(manuscriptSectionText).not.toContain('暂无定稿章节')
+    })
+    expect(invoke).toHaveBeenCalledWith('db:draft-list-all', PROJECT_PATH, PROJECT_SESSION)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:draft-list')).toBe(false)
+  })
+
   it.each([
     {
       locale: 'zh-CN',

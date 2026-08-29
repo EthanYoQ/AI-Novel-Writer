@@ -263,10 +263,10 @@ describe('project refresh context', () => {
   })
 
   it('does not commit delayed project A drafts after switching to project B', async () => {
-    const blueprintsA = deferred<Array<{ chapterNumber: number }>>()
+    const draftsA = deferred<unknown[]>()
     invoke.mockImplementation((channel: string, ...args: unknown[]) => {
-      if (channel === 'db:blueprint-get-all' && args[0] === project('A').path) {
-        return blueprintsA.promise
+      if (channel === 'db:draft-list-all' && args[0] === project('A').path) {
+        return draftsA.promise
       }
       return Promise.resolve([])
     })
@@ -274,18 +274,55 @@ describe('project refresh context', () => {
     const refreshA = useDraftStore.getState().loadAllDrafts(project('A').path)
     useProjectStore.setState({ currentProject: project('B') })
     useDraftStore.setState({ draftsByChapter: { 2: [] } })
-    blueprintsA.resolve([{ chapterNumber: 1 }])
+    draftsA.resolve([])
     await refreshA
 
     expect(useDraftStore.getState().draftsByChapter).toEqual({ 2: [] })
-    expect(invoke).toHaveBeenCalledWith('db:blueprint-get-all', project('A').path)
+    expect(invoke).toHaveBeenCalledWith('db:draft-list-all', project('A').path)
+  })
+
+  it('discovers finalized author manuscript chapters even when the project has no blueprints', async () => {
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'db:draft-list-all') {
+        return Promise.resolve([
+          {
+            id: 1,
+            chapterNumber: 1,
+            version: 1,
+            status: 'finalized',
+            source: 'write',
+            wordCount: 18,
+            createdAt: '2026-08-29T00:00:00.000Z',
+          },
+          {
+            id: 2,
+            chapterNumber: 2,
+            version: 1,
+            status: 'finalized',
+            source: 'write',
+            wordCount: 18,
+            createdAt: '2026-08-29T00:00:00.000Z',
+          },
+        ])
+      }
+      return Promise.resolve([])
+    })
+
+    await useDraftStore.getState().loadAllDrafts(project('A').path)
+
+    expect(invoke).toHaveBeenCalledWith('db:draft-list-all', project('A').path)
+    expect(invoke).not.toHaveBeenCalledWith('db:blueprint-get-all', project('A').path)
+    expect(useDraftStore.getState().draftsByChapter).toMatchObject({
+      1: [{ id: 1, chapterNumber: 1, status: 'finalized', filePath: 'vela://draft/1' }],
+      2: [{ id: 2, chapterNumber: 2, status: 'finalized', filePath: 'vela://draft/2' }],
+    })
   })
 
   it('unbinds project A drafts synchronously and rejects its delayed response', async () => {
-    const blueprintsA = deferred<Array<{ chapterNumber: number }>>()
+    const draftsA = deferred<unknown[]>()
     invoke.mockImplementation((channel: string, ...args: unknown[]) => {
-      if (channel === 'db:blueprint-get-all' && args[0] === project('A').path) {
-        return blueprintsA.promise
+      if (channel === 'db:draft-list-all' && args[0] === project('A').path) {
+        return draftsA.promise
       }
       return Promise.resolve([])
     })
@@ -304,7 +341,7 @@ describe('project refresh context', () => {
       loadingProjectKey: project('B').path,
     })
 
-    blueprintsA.resolve([{ chapterNumber: 1 }])
+    draftsA.resolve([])
     await refreshA
     expect(useDraftStore.getState()).toMatchObject({
       draftsByChapter: {},

@@ -199,24 +199,23 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
       loadingProjectSession: projectSession,
     }))
     try {
-      const blueprints = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get-all', projectPath)
+      const drafts = await ipc.invokeWithProjectSession(projectSession, 'db:draft-list-all', projectPath)
       const newDraftsByChapter: DraftsByChapter = {}
 
-      for (const bp of blueprints) {
-        const chNum = bp.chapterNumber
-        const list = await ipc.invokeWithProjectSession(projectSession, 'db:draft-list', chNum, projectPath)
-        if (!list || list.length === 0) continue
+      for (const draft of drafts) {
+        const chapterDrafts = newDraftsByChapter[draft.chapterNumber] ?? []
+        chapterDrafts.push({
+          ...draft,
+          status: draft.status as DraftStatus,
+          source: draft.source as DraftMeta['source'],
+          fileName: `draft_v${draft.version}.md`,
+          filePath: `vela://draft/${draft.id}`
+        })
+        newDraftsByChapter[draft.chapterNumber] = chapterDrafts
+      }
 
-        const metas: DraftMeta[] = list.map((m) => ({
-          ...m,
-          status: m.status as DraftStatus,
-          source: m.source as DraftMeta['source'],
-          fileName: `draft_v${m.version}.md`,
-          filePath: `vela://draft/${m.id}`
-        }))
-
-        metas.sort((a, b) => b.version - a.version)
-        newDraftsByChapter[chNum] = metas
+      for (const chapterDrafts of Object.values(newDraftsByChapter)) {
+        chapterDrafts.sort((a, b) => b.version - a.version)
       }
 
       if (
