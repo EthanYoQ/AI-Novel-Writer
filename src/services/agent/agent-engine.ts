@@ -46,6 +46,17 @@ export interface ToolCallInfo {
   projectSession?: AgentExecutionContext['projectSession']
 }
 
+/** One optional blueprint diff selected from a transient novel-config impact preview. */
+export interface ConfigImpactBlueprintProposal {
+  readonly name: 'propose_chapter_blueprint'
+  readonly arguments: Record<string, unknown>
+}
+
+export interface ToolConfirmationDecision {
+  readonly confirmed: boolean
+  readonly blueprintProposals?: readonly ConfigImpactBlueprintProposal[]
+}
+
 /** Agent Engine 回调 */
 export interface AgentEngineCallbacks {
   /** 流式文本片段 */
@@ -55,7 +66,7 @@ export interface AgentEngineCallbacks {
   /** Tool 调用完成 */
   onToolCallComplete: (toolCall: ToolCallInfo) => void
   /** Tool 需要用户确认 */
-  onToolCallConfirmRequired: (toolCall: ToolCallInfo) => Promise<boolean>
+  onToolCallConfirmRequired: (toolCall: ToolCallInfo) => Promise<boolean | ToolConfirmationDecision>
   /** 全部完成 */
   onDone: (fullText: string, toolCalls: ToolCallInfo[], artifacts: ToolArtifact[]) => void
   /** 错误 */
@@ -162,10 +173,14 @@ export async function runAgentLoop(
     // 将 LLM 的完整回复加入历史（包含 tool_call 标签）
     messages.push({ role: 'assistant', content: llmResponse })
 
-    // 依次执行每个 tool_call
+    // 依次执行每个 tool_call。配置影响预览中明确选择的蓝图差异会在
+    // 配置写入成功后插入此轮，并继续走同一条确认与工具执行路径。
     const observationParts: string[] = []
+    const roundToolCalls = [...toolCalls]
 
-    for (const tc of toolCalls) {
+    for (let toolIndex = 0; toolIndex < roundToolCalls.length; toolIndex++) {
+      if (abortSignal?.aborted) break
+      const tc = roundToolCalls[toolIndex]
       const toolCallInfo: ToolCallInfo = {
         id: crypto.randomUUID(),
         toolName: tc.name,
@@ -189,12 +204,14 @@ export async function runAgentLoop(
       toolCallInfo.source = tool.source
 
       // 需要用户确认的 Tool
+      let confirmationDecision: ToolConfirmationDecision = { confirmed: true }
       if (tool.requiresConfirmation) {
         toolCallInfo.status = 'waiting_confirm'
         callbacks.onToolCallStart(toolCallInfo)
 
-        const confirmed = await callbacks.onToolCallConfirmRequired(toolCallInfo)
-        if (!confirmed) {
+        const response = await callbacks.onToolCallConfirmRequired(toolCallInfo)
+        confirmationDecision = typeof response === 'boolean' ? { confirmed: response } : response
+        if (!confirmationDecision.confirmed) {
           toolCallInfo.status = 'failed'
           toolCallInfo.error = '用户拒绝执行'
           callbacks.onToolCallComplete(toolCallInfo)
@@ -233,6 +250,9 @@ export async function runAgentLoop(
 
         if (result.success) {
           observationParts.push(`<tool_result name="${tc.name}">\n${truncatedContent}\n</tool_result>`)
+          if (tc.name === 'propose_novel_config' && confirmationDecision.blueprintProposals?.length) {
+            roundToolCalls.splice(toolIndex + 1, 0, ...confirmationDecision.blueprintProposals)
+          }
         } else {
           observationParts.push(`<tool_result name="${tc.name}" error="true">\n${result.error ?? truncatedContent}\n</tool_result>`)
         }

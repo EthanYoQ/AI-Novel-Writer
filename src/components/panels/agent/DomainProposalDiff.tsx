@@ -9,7 +9,7 @@ import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 
-const CONFIG_LABELS: Record<string, readonly [string, string]> = {
+export const CONFIG_LABELS: Record<string, readonly [string, string]> = {
   genre: ['类型', 'Genre'], subGenre: ['子类型', 'Subgenre'], targetAudience: ['目标读者', 'Target audience'],
   totalChapters: ['总章节数', 'Total chapters'], wordsPerChapter: ['每章字数', 'Words per chapter'],
   plotStructure: ['情节结构', 'Plot structure'], narrativePOV: ['叙事视角', 'Narrative POV'],
@@ -18,7 +18,7 @@ const CONFIG_LABELS: Record<string, readonly [string, string]> = {
   globalGuidance: ['全局指导', 'Global guidance'], writingStyle: ['写作风格', 'Writing style'],
   referenceWorks: ['参考作品', 'Reference works'], writingLanguage: ['写作语言', 'Writing language'],
 }
-const BLUEPRINT_LABELS: Record<string, readonly [string, string]> = {
+export const BLUEPRINT_LABELS: Record<string, readonly [string, string]> = {
   title: ['章节标题', 'Chapter title'], role: ['章节定位', 'Chapter role'], purpose: ['章节目的', 'Purpose'],
   keyEvents: ['关键事件', 'Key events'], characters: ['出场角色', 'Characters'], suspenseHook: ['悬念钩子', 'Suspense hook'],
   userGuidance: ['作者指导', 'Author guidance'], notes: ['备注', 'Notes'],

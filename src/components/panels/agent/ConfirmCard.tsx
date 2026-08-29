@@ -4,10 +4,12 @@
  * 当 Agent 调用需要确认的 Tool 时显示此卡片。
  * 用户可以批准或拒绝操作。
  */
+import { useState } from 'react'
 import { ShieldAlert } from 'lucide-react'
 import type { ToolCallInfo } from '../../../services/agent/agent-engine'
 import { useAgentStore } from '../../../stores/agent-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import ConfigImpactPreview, { useConfigImpactPreview } from './ConfigImpactPreview'
 import DomainProposalDiff, { useDomainProposalPreview } from './DomainProposalDiff'
 
 interface Props {
@@ -19,8 +21,11 @@ export default function ConfirmCard({ toolCall }: Props) {
   const text = useLocaleStore(s => s.text)
   const { id, toolName, arguments: args } = toolCall
   const proposalPreview = useDomainProposalPreview(toolCall)
+  const impactPreview = useConfigImpactPreview(toolCall, proposalPreview)
+  const [selectedImpactKeys, setSelectedImpactKeys] = useState<Set<string>>(() => new Set())
   const isDomainProposal = proposalPreview.kind !== 'none'
-  const canApprove = !isDomainProposal || proposalPreview.kind === 'valid'
+  const impactReady = impactPreview.kind === 'none' || impactPreview.kind === 'valid'
+  const canApprove = (!isDomainProposal || proposalPreview.kind === 'valid') && impactReady
 
   // 生成操作描述
   const description = generateDescription(toolName, args, text)
@@ -37,6 +42,16 @@ export default function ConfirmCard({ toolCall }: Props) {
       <div className="confirm-card-body">
         <div>{description}</div>
         <DomainProposalDiff toolCall={toolCall} preview={proposalPreview} />
+        <ConfigImpactPreview
+          preview={impactPreview}
+          selectedKeys={selectedImpactKeys}
+          onSelectionChange={(key, selected) => setSelectedImpactKeys(current => {
+            const next = new Set(current)
+            if (selected) next.add(key)
+            else next.delete(key)
+            return next
+          })}
+        />
         {!isDomainProposal && Object.keys(args).length > 0 && (
           <div
             style={{
@@ -76,7 +91,18 @@ export default function ConfirmCard({ toolCall }: Props) {
         <button
           className="confirm-card-btn approve"
           disabled={!canApprove}
-          onClick={() => resolveToolConfirmation(id, true)}
+          onClick={() => {
+            const blueprintProposals = impactPreview.kind === 'valid'
+              ? impactPreview.blueprintProposals
+                  .filter(proposal => selectedImpactKeys.has(proposal.key))
+                  .map(proposal => ({ name: proposal.name, arguments: proposal.arguments }))
+              : []
+            if (blueprintProposals.length > 0) {
+              resolveToolConfirmation(id, true, { blueprintProposals })
+              return
+            }
+            resolveToolConfirmation(id, true)
+          }}
         >
           {text('批准执行', 'Approve')}
         </button>

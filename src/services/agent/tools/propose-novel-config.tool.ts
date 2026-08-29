@@ -65,12 +65,16 @@ export function buildNovelConfigProposal(
 
 export const proposeNovelConfigTool = buildAgentTool({
   name: 'propose_novel_config',
-  description: '提出小说配置字段变更。参数只包含候选值；应用会展示当前值与建议值，必须由用户批准后才写入。',
+  description: '提出小说配置字段变更。应用会展示当前值、建议值与一次性影响预览，必须由用户批准后才写入。可选 blueprint_changes 只提供未写章节的字段差异候选；用户选择后仍会逐项再次确认。',
   source: 'builtin',
   inputSchema: {
     type: 'object',
     properties: {
       changes: { type: 'object', description: '小说配置允许字段及其建议值' },
+      blueprint_changes: {
+        type: 'array',
+        description: '可选的未写章节蓝图差异候选；每项包含 chapter_number 与 changes，不会随配置自动写入',
+      },
     },
     required: ['changes'],
   },

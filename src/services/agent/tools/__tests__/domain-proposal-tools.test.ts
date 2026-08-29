@@ -64,6 +64,99 @@ describe('explicit Agent domain proposals', () => {
     expect(invoke).not.toHaveBeenCalled()
   })
 
+  it('runs selected config-impact blueprint proposals through separate existing confirmations', async () => {
+    toolRegistry.register(proposeNovelConfigTool)
+    toolRegistry.register(proposeChapterBlueprintTool)
+    invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'project:update-config') return { success: true }
+      if (channel === 'db:blueprint-get') return blueprint
+      if (channel === 'db:blueprint-upsert') return { success: true }
+      throw new Error(`unexpected channel ${channel}`)
+    })
+    const confirmation = vi.fn()
+      .mockResolvedValueOnce({
+        confirmed: true,
+        blueprintProposals: [{
+          name: 'propose_chapter_blueprint',
+          arguments: { chapter_number: 2, changes: { purpose: '埋下蓝钥匙线索' } },
+        }],
+      })
+      .mockResolvedValueOnce(true)
+    const callbacks = {
+      onTextChunk: vi.fn(), onToolCallStart: vi.fn(), onToolCallComplete: vi.fn(),
+      onToolCallConfirmRequired: confirmation, onDone: vi.fn(), onError: vi.fn(),
+    }
+    const generate = vi.fn()
+      .mockResolvedValueOnce('propose_novel_config\n{"changes":{"coreOutline":"蓝钥匙来自旧案"}}')
+      .mockResolvedValueOnce('配置与所选蓝图均已提交。')
+
+    await runAgentLoop(
+      'system', [], '调整旧案线索', 'model', generate, callbacks as never,
+      undefined, createAgentExecutionContext(),
+    )
+
+    expect(confirmation).toHaveBeenCalledTimes(2)
+    expect(confirmation.mock.calls[0][0]).toMatchObject({ toolName: 'propose_novel_config' })
+    expect(confirmation.mock.calls[1][0]).toMatchObject({
+      toolName: 'propose_chapter_blueprint',
+      arguments: { chapter_number: 2, changes: { purpose: '埋下蓝钥匙线索' } },
+    })
+    expect(invoke.mock.calls.map(([, channel]) => channel)).toEqual([
+      'project:update-config', 'db:blueprint-get', 'db:blueprint-upsert',
+    ])
+    expect(callbacks.onDone).toHaveBeenCalledWith(
+      '配置与所选蓝图均已提交。',
+      [
+        expect.objectContaining({ toolName: 'propose_novel_config', status: 'completed' }),
+        expect.objectContaining({ toolName: 'propose_chapter_blueprint', status: 'completed' }),
+      ],
+      [],
+    )
+  })
+
+  it('reports the real selected-blueprint failure instead of marking it successful', async () => {
+    toolRegistry.register(proposeNovelConfigTool)
+    toolRegistry.register(proposeChapterBlueprintTool)
+    invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'project:update-config') return { success: true }
+      if (channel === 'db:blueprint-get') return blueprint
+      if (channel === 'db:blueprint-upsert') return { success: false, error: 'blueprint storage unavailable' }
+      throw new Error(`unexpected channel ${channel}`)
+    })
+    const confirmation = vi.fn()
+      .mockResolvedValueOnce({
+        confirmed: true,
+        blueprintProposals: [{
+          name: 'propose_chapter_blueprint',
+          arguments: { chapter_number: 2, changes: { purpose: '埋下蓝钥匙线索' } },
+        }],
+      })
+      .mockResolvedValueOnce(true)
+    const callbacks = {
+      onTextChunk: vi.fn(), onToolCallStart: vi.fn(), onToolCallComplete: vi.fn(),
+      onToolCallConfirmRequired: confirmation, onDone: vi.fn(), onError: vi.fn(),
+    }
+    const generate = vi.fn()
+      .mockResolvedValueOnce('propose_novel_config\n{"changes":{"coreOutline":"蓝钥匙来自旧案"}}')
+      .mockResolvedValueOnce('蓝图更新失败。')
+
+    await runAgentLoop(
+      'system', [], '调整旧案线索', 'model', generate, callbacks as never,
+      undefined, createAgentExecutionContext(),
+    )
+
+    expect(callbacks.onDone).toHaveBeenCalledWith(
+      '蓝图更新失败。',
+      [
+        expect.objectContaining({ toolName: 'propose_novel_config', status: 'completed' }),
+        expect.objectContaining({
+          toolName: 'propose_chapter_blueprint', status: 'failed', error: 'blueprint storage unavailable',
+        }),
+      ],
+      [],
+    )
+  })
+
   it('commits an approved novel-config proposal through the existing project adapter', async () => {
     invoke.mockResolvedValue({ success: true })
 

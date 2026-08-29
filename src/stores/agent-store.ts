@@ -1,6 +1,12 @@
 import { create } from 'zustand'
 import { buildAgentSystemPrompt } from '../services/agent/context-builder'
-import { runAgentLoop, type ToolCallInfo, type LLMMessage } from '../services/agent/agent-engine'
+import {
+  runAgentLoop,
+  type ConfigImpactBlueprintProposal,
+  type ToolCallInfo,
+  type LLMMessage,
+  type ToolConfirmationDecision,
+} from '../services/agent/agent-engine'
 import { registerBuiltinTools } from '../services/agent/tools'
 import { skillRegistry } from '../services/agent/skill-registry'
 import { parseSlashCommand, parseMentions, mentionsToToolCalls } from '../services/agent/intent-router'
@@ -95,7 +101,11 @@ interface AgentState {
   /** 取消当前生成 */
   cancelGeneration: () => Promise<void>
   /** 响应 Tool 确认（用于 ConfirmCard） */
-  resolveToolConfirmation: (toolCallId: string, confirmed: boolean) => void
+  resolveToolConfirmation: (
+    toolCallId: string,
+    confirmed: boolean,
+    options?: { blueprintProposals?: readonly ConfigImpactBlueprintProposal[] },
+  ) => void
 }
 
 // ===== 工具函数 =====
@@ -140,7 +150,7 @@ const generateHelpText = (): string => {
 // ===== Tool 确认回调管理 =====
 /** 存储待确认的 Tool 回调 */
 const pendingConfirmations = new Map<string, {
-  resolve: (confirmed: boolean) => void
+  resolve: (decision: boolean | ToolConfirmationDecision) => void
 }>()
 
 /** 当前活跃的 AbortController（用于取消 ReAct 循环） */
@@ -478,7 +488,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             }))
 
             // 返回 Promise，等待用户通过 resolveToolConfirmation 响应
-            return new Promise<boolean>((resolve) => {
+            return new Promise<boolean | ToolConfirmationDecision>((resolve) => {
               pendingConfirmations.set(toolCall.id, { resolve })
             })
           },
@@ -554,10 +564,12 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     }))
   },
 
-  resolveToolConfirmation: (toolCallId, confirmed) => {
+  resolveToolConfirmation: (toolCallId, confirmed, options) => {
     const pending = pendingConfirmations.get(toolCallId)
     if (pending) {
-      pending.resolve(confirmed)
+      pending.resolve(confirmed && options?.blueprintProposals?.length
+        ? { confirmed: true, blueprintProposals: options.blueprintProposals }
+        : confirmed)
       pendingConfirmations.delete(toolCallId)
     }
   },
