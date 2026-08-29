@@ -42,6 +42,8 @@ export interface ToolCallInfo {
   error?: string
   /** Tool 来源标记 */
   source?: string
+  /** Frozen project identity used to render and execute a confirmed domain proposal. */
+  projectSession?: AgentExecutionContext['projectSession']
 }
 
 /** Agent Engine 回调 */
@@ -169,6 +171,7 @@ export async function runAgentLoop(
         toolName: tc.name,
         arguments: tc.arguments,
         status: 'pending',
+        projectSession: executionContext.projectSession,
       }
       allToolCalls.push(toolCallInfo)
 

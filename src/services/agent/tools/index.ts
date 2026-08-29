@@ -17,7 +17,8 @@ import { listChaptersTool } from './list-chapters.tool'
 import { writeFileTool } from './write-file.tool'
 import { openEditorTool } from './open-editor.tool'
 import { startWorkflowTool } from './start-workflow.tool'
-import { updateConfigTool } from './update-config.tool'
+import { proposeNovelConfigTool } from './propose-novel-config.tool'
+import { proposeChapterBlueprintTool } from './propose-chapter-blueprint.tool'
 
 /** 所有内置 Tool（供外部引用） */
 export const builtinTools = [
@@ -34,7 +35,8 @@ export const builtinTools = [
   writeFileTool,
   openEditorTool,
   startWorkflowTool,
-  updateConfigTool,
+  proposeNovelConfigTool,
+  proposeChapterBlueprintTool,
 ]
 
 /**
