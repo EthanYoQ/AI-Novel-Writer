@@ -345,8 +345,8 @@ export function createRepairFinalizeWorkflow(
       title: `修复后处理 — 第${chapterNumber}章`,
     steps: [
       {
-        name: '重跑失败步骤',
-        description: '仅重新执行失败的后处理步骤（章节要点/角色卡更新等）',
+        name: '重建后处理',
+        description: '从定稿正文重新生成章节要点、连续性事实和角色状态',
         executor: async (_step, context, callbacks) => {
           const { useProjectStore } = await import('../../stores/project-store')
           const { ipc } = await import('../ipc-client')
@@ -387,7 +387,7 @@ export function createRepairFinalizeWorkflow(
             draftContent: full.content,
             draftId: draftMeta.id,
             sourceLabel: `第${chapterNumber}章定稿`,
-            onlyFailed: true,
+            onlyFailed: false,
             chapterEntities,
           }).execute({ step: {}, context, callbacks })
 
