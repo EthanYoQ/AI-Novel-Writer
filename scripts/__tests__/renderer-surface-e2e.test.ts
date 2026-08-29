@@ -4,6 +4,8 @@ import { spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { quitElectronApp } from '../renderer-surface-e2e.mjs'
+
 const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8')) as {
   scripts?: Record<string, string>
 }
@@ -13,8 +15,6 @@ const VISUAL_EVIDENCE_PREFLIGHT_TEST_TIMEOUT_MS = 45_000
 
 describe('renderer surface E2E runner contract', () => {
   it('rejects an Electron process that exited early without a clean zero-code exit', async () => {
-    const { quitElectronApp } = await import('../renderer-surface-e2e.mjs')
-
     for (const child of [
       Object.assign(new EventEmitter(), { exitCode: 7, signalCode: null }),
       Object.assign(new EventEmitter(), { exitCode: null, signalCode: 'SIGTERM' }),
@@ -32,7 +32,6 @@ describe('renderer surface E2E runner contract', () => {
   })
 
   it('accepts only code zero with no signal when Electron exits after quit', async () => {
-    const { quitElectronApp } = await import('../renderer-surface-e2e.mjs')
     const makeElectronApp = (code: number | null, signal: NodeJS.Signals | null) => {
       const child = Object.assign(new EventEmitter(), { exitCode: null as number | null, signalCode: null as NodeJS.Signals | null })
       return {
@@ -223,7 +222,6 @@ describe('renderer surface E2E runner contract', () => {
       const {
         prepareVisualEvidenceDirectory,
         finalizeVisualEvidenceRun,
-        quitElectronApp,
       } = await import('../renderer-surface-e2e.mjs')
       prepareVisualEvidenceDirectory(outputDirectory)
       const child = Object.assign(new EventEmitter(), { exitCode: 23, signalCode: null })
