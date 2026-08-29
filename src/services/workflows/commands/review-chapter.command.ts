@@ -14,6 +14,8 @@ import {
   workflowWritingLanguage,
 } from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
+import { readConsistencyPreflight } from '../../consistency-preflight'
+import { mergeConsistencyFindingsIntoReview, type ReviewLike } from '../../../shared/consistency-preflight'
 
 
 export interface ReviewChapterParams {
@@ -114,12 +116,26 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
 
     const revIndex = await ipc.invokeWithProjectSession(projectSession, 'db:review-next-index', baseDraft.id, context.projectPath)
 
-    let parsedResult
+    let parsedResult: ReviewLike
     try {
-      parsedResult = this.parseJSON(reviewResultClean)
+      const parsed = this.parseJSON(reviewResultClean)
+      parsedResult = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as ReviewLike
+        : { summary: text('解析失败', 'Parsing failed'), items: [] }
     } catch {
       callbacks.log(text('审稿结果解析失败，返回原始文本', 'The review result could not be parsed; preserving the raw response.'))
       parsedResult = { summary: text('解析失败', 'Parsing failed'), items: [] }
+    }
+
+    const blueprint = await ipc.invokeWithProjectSession(
+      projectSession, 'db:blueprint-get', this.params.chapterNumber, context.projectPath,
+    )
+    if (blueprint) {
+      const preflight = await readConsistencyPreflight(projectSession, [blueprint])
+      if (!sameProjectSessionContext(projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))) {
+        throw new Error(text('当前项目已切换，审稿已停止', 'The project changed, so the review stopped.'))
+      }
+      parsedResult = mergeConsistencyFindingsIntoReview(parsedResult, preflight.findings, context.uiLocale ?? 'zh-CN')
     }
 
     this.assertNotCancelled(context)

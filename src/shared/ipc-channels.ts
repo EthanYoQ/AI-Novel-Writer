@@ -16,6 +16,7 @@ import type {
   FinalizedContinuityProjection,
   SaveFinalizedContinuityRequest,
 } from './finalized-continuity'
+import type { ConsistencyExemption } from './consistency-preflight'
 import type {
   UpdateActionResponse,
   UpdateCheckResponse,
@@ -776,6 +777,15 @@ export interface DatabaseChannels {
   'db:continuity-list-before': {
     args: [chapterNumber: number, expectedProjectPath: string]
     return: FinalizedContinuityProjection[]
+  }
+  'db:consistency-exemption-list': { args: [expectedProjectPath: string]; return: ConsistencyExemption[] }
+  'db:consistency-exemption-save': {
+    args: [stableFactKey: string, reason: string, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
+  'db:consistency-exemption-revoke': {
+    args: [stableFactKey: string, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
   }
   'db:draft-next-version': { args: [chapterNumber: number, expectedProjectPath: string]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }

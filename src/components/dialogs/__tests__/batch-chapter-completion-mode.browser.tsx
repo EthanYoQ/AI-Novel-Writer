@@ -256,6 +256,7 @@ function installIpc() {
     if (channel === 'db:blueprint-get-all') {
       return importedFinalizedDrafts ? [] : [blueprint(), blueprint(2)]
     }
+    if (channel === 'db:continuity-list-before' || channel === 'db:consistency-exemption-list') return []
     if (channel === 'db:blueprint-get') {
       return importedFinalizedDrafts ? null : blueprint(Number(args[0]))
     }

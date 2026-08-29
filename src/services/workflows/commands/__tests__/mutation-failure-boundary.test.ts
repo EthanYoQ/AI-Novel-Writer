@@ -731,6 +731,7 @@ describe('workflow mutation failure boundaries', () => {
       }
       if (channel === 'db:review-next-index') return 1
       if (channel === 'db:review-create') return { success: false, error: 'review rejected' }
+      if (channel === 'db:blueprint-get') return null
       throw new Error(`unexpected IPC: ${channel}`)
     })
     stubVelaIpc(invoke)

@@ -29,6 +29,8 @@ let missingBlueprintChapter: number | null
 let authoritativeNextChapter: number
 let authorityInvalid: { gap?: number; duplicates?: number[] } | null
 let creationHistoryChapter: number | null
+let continuityProjections: unknown[]
+let consistencyExemptions: unknown[]
 
 function project(): ProjectData {
   return {
@@ -96,6 +98,16 @@ function installIpc() {
           }
         }
         if (channel === 'db:blueprint-get-all') return [{ chapterNumber: 1 }]
+        if (channel === 'db:continuity-list-before') return continuityProjections
+        if (channel === 'db:consistency-exemption-list') return consistencyExemptions
+        if (channel === 'db:consistency-exemption-save') {
+          consistencyExemptions = [{ stableFactKey: String(args[0]), reason: String(args[1]), revoked: false }]
+          return { success: true }
+        }
+        if (channel === 'db:consistency-exemption-revoke') {
+          consistencyExemptions = consistencyExemptions.map(item => ({ ...(item as object), revoked: true }))
+          return { success: true }
+        }
         if (channel === 'db:character-get-all') return [{ id: 1 }]
         if (channel === 'db:blueprint-get') {
           if (Number(args[0]) === missingBlueprintChapter) return null
@@ -156,6 +168,8 @@ beforeEach(() => {
   authoritativeNextChapter = 1
   authorityInvalid = null
   creationHistoryChapter = null
+  continuityProjections = []
+  consistencyExemptions = []
   startWorkflow = vi.fn(async () => 'writing-model-selector-run')
   setDefaultModel = vi.fn(async () => true)
   useLocaleStore.setState({ locale: 'zh-CN' })
@@ -277,6 +291,67 @@ describe('chapter writing model selectors', () => {
     expect(startWorkflow.mock.calls[0]?.[0]).toMatchObject({ generationModelId: 'grok' })
     expect(useLLMStore.getState().defaultModelId).toBe('glm')
     expect(setDefaultModel).not.toHaveBeenCalled()
+  })
+
+  it('shows a continuable bilingual finding and ignores it for this run only', async () => {
+    continuityProjections = [{
+      draftId: 1, chapterNumber: 1, chapterTitle: '终局', chapterNotes: '顾舟死亡',
+      facts: [{ category: 'character-state', entities: ['顾舟'], statement: '顾舟已经死亡。', sourceChapter: 1, evidence: '顾舟停止了呼吸。' }],
+    }]
+    await act(async () => {
+      root?.render(<ChapterCreationDialog isOpen onClose={vi.fn()} prefill={{
+        chapterNumber: 1, title: '重逢', role: '发展', purpose: '顾舟归来', characters: '顾舟', keyEvents: '顾舟敲门',
+      }} />)
+    })
+    await act(async () => page.getByRole('button', { name: '开始创作' }).click())
+    await expect.element(page.getByRole('region', { name: '一致性预检' })).toBeVisible()
+    await expect.element(page.getByText(/已定稿事实记录“顾舟”/)).toBeVisible()
+    expect(startWorkflow).not.toHaveBeenCalled()
+
+    await act(async () => page.getByRole('button', { name: '修改后重检' }).click())
+    await expect.element(page.getByRole('region', { name: '一致性预检' })).toBeVisible()
+    expect(startWorkflow).not.toHaveBeenCalled()
+
+    await act(async () => page.getByRole('button', { name: '仅本次忽略并继续' }).click())
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+    expect(consistencyExemptions).toEqual([])
+  })
+
+  it('shows the same continuable preflight in English before a batch run', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    continuityProjections = [{
+      draftId: 1, chapterNumber: 1, chapterTitle: 'The End', chapterNotes: '沈砺 died',
+      facts: [{ category: 'character-state', entities: ['沈砺'], statement: '沈砺 is dead.', sourceChapter: 1, evidence: 'His breathing stopped.' }],
+    }]
+    await act(async () => {
+      root?.render(<BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />)
+    })
+    await act(async () => page.getByRole('button', { name: 'Start batch writing' }).click())
+    await expect.element(page.getByRole('region', { name: 'Consistency preflight' })).toBeVisible()
+    await expect.element(page.getByText(/Finalized facts record “沈砺” as dead/)).toBeVisible()
+    expect(startWorkflow).not.toHaveBeenCalled()
+
+    await act(async () => page.getByRole('button', { name: 'Fix and rerun' }).click())
+    await expect.element(page.getByRole('region', { name: 'Consistency preflight' })).toBeVisible()
+    expect(startWorkflow).not.toHaveBeenCalled()
+
+    await act(async () => page.getByRole('button', { name: 'Ignore once and continue' }).click())
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+  })
+
+  it('reopens saved arrangements and allows revocation without starting writing', async () => {
+    consistencyExemptions = [{ stableFactKey: 'character-state:1:顾舟:顾舟已经死亡。', reason: '回忆场景', revoked: false }]
+    await act(async () => {
+      root?.render(<ChapterCreationDialog isOpen onClose={vi.fn()} />)
+    })
+    await expect.element(page.getByText('已保存安排（1）')).toBeVisible()
+    await act(async () => page.getByText('已保存安排（1）').click())
+    await expect.element(page.getByText('回忆场景')).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '撤销' }).click())
+    await vi.waitFor(() => expect(consistencyExemptions).toEqual([
+      expect.objectContaining({ revoked: true }),
+    ]))
+    expect(startWorkflow).not.toHaveBeenCalled()
   })
 
   it('defaults the batch dialog to the global model, freezes an explicitly selected Grok run, and preserves that default', async () => {

@@ -43,6 +43,7 @@ import { PostProcessRepository } from '../repositories/post-process-repository'
 // 沿用的旧表
 import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { SummaryRepository } from '../repositories/summary-repository'
+import { ConsistencyExemptionRepository } from '../repositories/consistency-exemption-repository'
 
 type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 
@@ -83,6 +84,8 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:revision-mark-merged',
   'db:revision-mark-discarded',
   'db:review-create',
+  'db:consistency-exemption-save',
+  'db:consistency-exemption-revoke',
   'db:post-process-create-run',
   'db:post-process-mark-step-ok',
   'db:post-process-mark-step-failed',
@@ -659,6 +662,31 @@ export function registerDatabaseController() {
   ipcMain.handle('db:continuity-list-before', async (_event, chapterNumber: number, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return SummaryRepository.listFinalizedContinuityBefore(chapterNumber)
+  })
+
+  ipcMain.handle('db:consistency-exemption-list', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return ConsistencyExemptionRepository.list()
+  })
+
+  ipcMain.handle('db:consistency-exemption-save', async (_event, stableFactKey: string, reason: string, expectedProjectPath: string) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      ConsistencyExemptionRepository.save(stableFactKey, reason)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('db:consistency-exemption-revoke', async (_event, stableFactKey: string, expectedProjectPath: string) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      ConsistencyExemptionRepository.revoke(stableFactKey)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
   })
 
   ipcMain.handle('db:draft-next-version', async (_event, chapterNumber: number, expectedProjectPath: string) => {

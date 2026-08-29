@@ -537,6 +537,14 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       ON summary_snapshots(draft_id) WHERE draft_id IS NOT NULL
   `)
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS consistency_exemptions (
+      stable_fact_key TEXT PRIMARY KEY,
+      reason TEXT NOT NULL,
+      revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0, 1))
+    )
+  `)
+
   // Import-run columns were introduced incrementally during pre-release development.
   // Existing project databases must receive the same lease and manifest invariants.
   const importRunColumns = new Set(

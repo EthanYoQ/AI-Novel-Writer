@@ -25,6 +25,9 @@ import {
 } from '../project-session-gate'
 import type { ModelProfile } from '../../shared/ipc-channels'
 import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
+import { readConsistencyPreflight, type ConsistencyPreflightResult } from '../../services/consistency-preflight'
+import { requireIpcSuccess } from '../../services/ipc-result'
+import ConsistencyPreflightPanel from './ConsistencyPreflightPanel'
 
 interface Props {
   isOpen: boolean
@@ -81,6 +84,7 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
   const [authoritativeStart, setAuthoritativeStart] = useState<number | null>(null)
   const [authorityError, setAuthorityError] = useState<string | null>(null)
   const [authorityLoading, setAuthorityLoading] = useState(false)
+  const [consistencyPreflight, setConsistencyPreflight] = useState<ConsistencyPreflightResult | null>(null)
   const [generationModelId, setGenerationModelId] = useState<string | null>(() => (
     preferredGenerationModelId(models, defaultModelId)
   ))
@@ -128,7 +132,19 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
     return () => { disposed = true }
   }, [currentProject, isOpen, locale])
 
-  const handleStart = async () => {
+  useEffect(() => {
+    if (!isOpen) return
+    const session = captureProjectSession(currentProject)
+    if (!session) return
+    void ipc.invokeWithProjectSession(session, 'db:consistency-exemption-list', session.projectPath)
+      .then(exemptions => {
+        if (isProjectSessionCurrent(session) && exemptions.some(item => !item.revoked)) {
+          setConsistencyPreflight({ findings: [], exemptions })
+        }
+      })
+  }, [currentProject, isOpen])
+
+  const handleStart = async (ignoreFindingsOnce = false) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession) return
     const projectPath = projectSession.projectPath
@@ -179,6 +195,17 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
         ))
         return
       }
+
+      if (!ignoreFindingsOnce) {
+        const preflight = await readConsistencyPreflight(
+          projectSession,
+          blueprints.filter((blueprint): blueprint is NonNullable<typeof blueprint> => !!blueprint),
+        )
+        if (!isProjectSessionCurrent(projectSession)) return
+        setConsistencyPreflight(preflight)
+        if (preflight.findings.length > 0) return
+      }
+      setConsistencyPreflight(null)
 
       if (!isProjectSessionCurrent(projectSession)) return
       const guard = await guardChapterWriting(frozenStart, projectPath, projectSession)
@@ -383,11 +410,35 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
           )}
         </div>
 
+        {consistencyPreflight && (consistencyPreflight.findings.length > 0 || consistencyPreflight.exemptions.some(item => !item.revoked)) ? (
+          <ConsistencyPreflightPanel
+            findings={consistencyPreflight.findings}
+            exemptions={consistencyPreflight.exemptions}
+            disabled={starting}
+            onFixAndRerun={() => void handleStart(false)}
+            onIgnoreOnce={() => void handleStart(true)}
+            onSave={async (stableFactKey, reason) => {
+              const session = captureProjectSession(useProjectStore.getState().currentProject)
+              if (!session) return
+              requireIpcSuccess(await ipc.invokeWithProjectSession(session, 'db:consistency-exemption-save', stableFactKey, reason, session.projectPath), text('保存一致性安排', 'Save consistency arrangement'))
+              await handleStart(false)
+            }}
+            onRevoke={async stableFactKey => {
+              const session = captureProjectSession(useProjectStore.getState().currentProject)
+              if (!session) return
+              requireIpcSuccess(await ipc.invokeWithProjectSession(session, 'db:consistency-exemption-revoke', stableFactKey, session.projectPath), text('撤销一致性安排', 'Revoke consistency arrangement'))
+              setConsistencyPreflight(current => current ? {
+                ...current,
+                exemptions: current.exemptions.map(item => item.stableFactKey === stableFactKey ? { ...item, revoked: true } : item),
+              } : null)
+            }}
+          />
+        ) : null}
         <DialogFooter>
           <Button variant="ghost" onClick={onClose} disabled={starting}>
             {text('取消', 'Cancel')}
           </Button>
-          <Button variant="ai" onClick={handleStart} disabled={starting || authorityLoading || isBatchRunning || !!authorityError || !!modelSelectionError}>
+          <Button variant="ai" onClick={() => void handleStart(false)} disabled={starting || authorityLoading || isBatchRunning || !!authorityError || !!modelSelectionError}>
             {starting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
             {completionMode === 'draft_review'
               ? text('启动批量创作', 'Start batch writing')

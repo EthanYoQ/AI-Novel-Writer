@@ -16,6 +16,7 @@ import { guardChapterWriting } from '../../services/workflow-guards'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
 import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
+import { readConsistencyPreflight, type ConsistencyPreflightResult } from '../../services/consistency-preflight'
 import { toast } from '../ui/Toast'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
@@ -34,6 +35,7 @@ import {
   isProjectSessionCurrent,
 } from '../project-session-gate'
 import type { ModelProfile, ProjectSessionContext } from '../../shared/ipc-channels'
+import ConsistencyPreflightPanel from './ConsistencyPreflightPanel'
 
 const CHAPTER_ROLES = [
   { value: '开篇', en: 'Opening' },
@@ -110,6 +112,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
   const [guardError, setGuardError] = useState<string | null>(null)
   const [authorityError, setAuthorityError] = useState<string | null>(null)
   const [authorityLoading, setAuthorityLoading] = useState(false)
+  const [consistencyPreflight, setConsistencyPreflight] = useState<ConsistencyPreflightResult | null>(null)
   const [generationModelId, setGenerationModelId] = useState<string | null>(() => (
     preferredGenerationModelId(models, defaultModelId)
   ))
@@ -130,6 +133,18 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
         'The selected writing model is no longer available. Select a compatible generation model and try again.',
       )
       : null
+
+  useEffect(() => {
+    if (!isOpen) return
+    const session = captureProjectSession(currentProject)
+    if (!session) return
+    void ipc.invokeWithProjectSession(session, 'db:consistency-exemption-list', session.projectPath)
+      .then(exemptions => {
+        if (isProjectSessionCurrent(session) && exemptions.some(item => !item.revoked)) {
+          setConsistencyPreflight({ findings: [], exemptions })
+        }
+      })
+  }, [currentProject, isOpen])
 
 
   // 如果是在这弹窗里发起的任务，一旦跑完，isChapterRunning 会变成 false，此时自动关闭弹窗
@@ -279,7 +294,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
     }
   }
 
-  const handleStart = async () => {
+  const handleStart = async (ignoreFindingsOnce = false) => {
     if (modelSelectionError || !selectedGenerationModel) {
       const message = modelSelectionError ?? text(
         '请选择一项可用于文本生成的模型。',
@@ -337,6 +352,24 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
       return
     }
     setGuardError(null)
+
+    if (!ignoreFindingsOnce) {
+      const preflight = await readConsistencyPreflight(projectSession, [{
+        chapterNumber: targetChapter,
+        title,
+        role,
+        purpose,
+        keyEvents,
+        characters: characters.split(/[、,，]/u).map(value => value.trim()).filter(Boolean),
+        suspenseHook: '',
+        userGuidance,
+        notes: '',
+      }])
+      if (!isProjectSessionCurrent(projectSession)) return
+      setConsistencyPreflight(preflight)
+      if (preflight.findings.length > 0) return
+    }
+    setConsistencyPreflight(null)
 
     const normalizedWordsTarget = normalizeChapterWordsTarget(
       wordsTarget,
@@ -527,13 +560,37 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
               </div>
             </div>
 
+            {consistencyPreflight && (consistencyPreflight.findings.length > 0 || consistencyPreflight.exemptions.some(item => !item.revoked)) ? (
+              <ConsistencyPreflightPanel
+                findings={consistencyPreflight.findings}
+                exemptions={consistencyPreflight.exemptions}
+                disabled={isChapterRunning}
+                onFixAndRerun={() => void handleStart(false)}
+                onIgnoreOnce={() => void handleStart(true)}
+                onSave={async (stableFactKey, reason) => {
+                  const session = captureProjectSession(useProjectStore.getState().currentProject)
+                  if (!session) return
+                  requireIpcSuccess(await ipc.invokeWithProjectSession(session, 'db:consistency-exemption-save', stableFactKey, reason, session.projectPath), text('保存一致性安排', 'Save consistency arrangement'))
+                  await handleStart(false)
+                }}
+                onRevoke={async stableFactKey => {
+                  const session = captureProjectSession(useProjectStore.getState().currentProject)
+                  if (!session) return
+                  requireIpcSuccess(await ipc.invokeWithProjectSession(session, 'db:consistency-exemption-revoke', stableFactKey, session.projectPath), text('撤销一致性安排', 'Revoke consistency arrangement'))
+                  setConsistencyPreflight(current => current ? {
+                    ...current,
+                    exemptions: current.exemptions.map(item => item.stableFactKey === stableFactKey ? { ...item, revoked: true } : item),
+                  } : null)
+                }}
+              />
+            ) : null}
             <DialogFooter className="sm:justify-between items-center">
               <span className="text-xs mt-2 sm:mt-0" style={{ color: 'var(--color-text-muted)' }}>
                 {text('流程：一键写稿（修稿/审稿后续在工具栏处理）', 'Flow: write the draft now; revise and review from the editor toolbar.')}
               </span>
               <div className="flex items-center gap-2">
                 <Button variant="outline" onClick={onClose}>{text('取消', 'Cancel')}</Button>
-                <Button variant="ai" size="lg" onClick={handleStart} disabled={isChapterRunning || authorityLoading || !!authorityError || !!modelSelectionError}>
+                <Button variant="ai" size="lg" onClick={() => void handleStart(false)} disabled={isChapterRunning || authorityLoading || !!authorityError || !!modelSelectionError}>
                   {isChapterRunning ? (
                     <span className="flex items-center gap-2">
                       <Loader2 size={13} className="animate-spin" />

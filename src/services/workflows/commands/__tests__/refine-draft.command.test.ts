@@ -823,6 +823,38 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
 })
 
 describe('ReviewChapterCommand reasoning stage', () => {
+  it('maps current deterministic findings into the persisted review for human confirmation', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '{"summary":"ok","items":[]}', finishReason: 'stop' })
+    const createParams: Array<{ content: string }> = []
+    stubIpc(vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'kb:search' || channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:draft-get-meta') return { id: 1, chapterNumber: 2, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:blueprint-get') return {
+        chapterNumber: 2, title: '重逢', role: '发展', purpose: '顾舟归来', keyEvents: '顾舟敲门',
+        characters: ['顾舟'], suspenseHook: '他为何归来', userGuidance: '', notes: '', notesUpdatedAt: '',
+      }
+      if (channel === 'db:consistency-exemption-list') return []
+      if (channel === 'db:continuity-list-before') return [{
+        draftId: 9, chapterNumber: 1, chapterTitle: '终局', chapterNotes: '顾舟死亡',
+        facts: [{ category: 'character-state', entities: ['顾舟'], statement: '顾舟已经死亡。', sourceChapter: 1, evidence: '顾舟停止了呼吸。' }],
+      }]
+      if (channel === 'db:review-create') {
+        createParams.push(args[0] as { content: string })
+        return { success: true, id: 77 }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    }))
+
+    await chapterReviewCommand(completeWithLease).execute({ step: {}, context: workflowContext(), callbacks: callbacks() })
+
+    expect(JSON.parse(createParams[0]!.content).items).toEqual([
+      expect.objectContaining({ category: '确定性一致性预检', stableFactKey: expect.stringMatching(/^fact:[0-9a-f]{16}$/u) }),
+    ])
+  })
+
   it('uses the frozen English UI locale for visible review logs and the report tab independently of Chinese writing', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
       .mockResolvedValue({ content: '{"summary":"ok","items":[]}', finishReason: 'stop' })
@@ -834,6 +866,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
       }
       if (channel === 'db:review-next-index') return 1
       if (channel === 'db:review-create') return { success: true, id: 77 }
+      if (channel === 'db:blueprint-get') return null
       throw new Error(`unexpected IPC: ${channel}`)
     }))
     const stepCallbacks = callbacks()
@@ -864,6 +897,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
       }
       if (channel === 'db:review-next-index') return 1
       if (channel === 'db:review-create') return { success: true }
+      if (channel === 'db:blueprint-get') return null
       throw new Error(`unexpected IPC: ${channel}`)
     }))
 
