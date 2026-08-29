@@ -289,7 +289,7 @@ describe('current-project import parsing persistence', () => {
         },
       },
     })
-    expect(reads).toEqual([sourceB])
+    expect(reads).toEqual([fs.realpathSync(sourceB)])
   })
 
   it('keeps implicit recovery errors in the original locale without persisting private diagnostics', async () => {
