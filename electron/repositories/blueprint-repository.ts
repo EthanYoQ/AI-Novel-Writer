@@ -396,6 +396,10 @@ function authoritativeCharacterSyncCompletionReceipt(
         || rosterOperation.committed_revision > roster.revision
         || !SHA256_HEX.test(rosterOperation.payload_hash)
         || !SHA256_HEX.test(rosterOperation.projection_hash)
+        || (
+            rosterOperation.committed_revision === roster.revision
+            && rosterOperation.projection_hash !== roster.projectionHash
+        )
     ) {
         throw new Error('角色名单操作证据与当前事实不匹配，已拒绝完成蓝图角色同步')
     }
@@ -409,6 +413,20 @@ function authoritativeCharacterSyncCompletionReceipt(
             revision: rosterOperation.committed_revision,
             idempotent: false,
         },
+    }
+}
+
+function assertAuthoritativeCharacterSyncCompletion(
+    db: NonNullable<ReturnType<typeof getProjectDb>>,
+    operation: BlueprintCharacterSyncOperation,
+): void {
+    if (operation.status !== 'completed' || !operation.completionReceipt) return
+    const authoritative = authoritativeCharacterSyncCompletionReceipt(db, operation)
+    if (
+        JSON.stringify(canonicalize(operation.completionReceipt))
+        !== JSON.stringify(canonicalize(authoritative))
+    ) {
+        throw new Error('蓝图角色同步完成回执与角色名单事实不匹配')
     }
 }
 
@@ -542,6 +560,7 @@ export class BlueprintRepository {
             characterSyncOperationId(operation.operation_id),
         )
         if (!characterSyncOperation) throw new Error('蓝图提交缺少可恢复的角色同步操作')
+        assertAuthoritativeCharacterSyncCompletion(db, characterSyncOperation)
         return {
             mode: operation.mode,
             operationId: operation.operation_id,
@@ -585,6 +604,7 @@ export class BlueprintRepository {
                     characterSyncOperationId(existingOperation.operation_id),
                 )
                 if (!characterSyncOperation) throw new Error('蓝图提交缺少可恢复的角色同步操作')
+                assertAuthoritativeCharacterSyncCompletion(db, characterSyncOperation)
                 return {
                     mode: existingOperation.mode,
                     operationId: existingOperation.operation_id,
@@ -699,7 +719,9 @@ export class BlueprintRepository {
         if (!operationId.trim()) throw new Error('蓝图角色同步操作 ID 不能为空')
         const db = requireProjectDb()
         ensureBlueprintCommitSchema(db)
-        return readCharacterSyncOperation(db, operationId)
+        const operation = readCharacterSyncOperation(db, operationId)
+        if (operation) assertAuthoritativeCharacterSyncCompletion(db, operation)
+        return operation
     }
 
     static completeCharacterSyncOperation(
@@ -711,7 +733,10 @@ export class BlueprintRepository {
         const tx = db.transaction(() => {
             const operation = readCharacterSyncOperation(db, operationId)
             if (!operation) throw new Error('待处理蓝图角色同步操作不存在')
-            if (operation.status === 'completed') return operation
+            if (operation.status === 'completed') {
+                assertAuthoritativeCharacterSyncCompletion(db, operation)
+                return operation
+            }
             const completionReceipt = authoritativeCharacterSyncCompletionReceipt(db, operation)
             const result = db.prepare(`
               UPDATE blueprint_character_sync_operations
@@ -727,6 +752,7 @@ export class BlueprintRepository {
             if (!completed || completed.status !== 'completed' || !completed.completionReceipt) {
                 throw new Error('蓝图角色同步完成回执回读失败')
             }
+            assertAuthoritativeCharacterSyncCompletion(db, completed)
             return completed
         })
         return tx()

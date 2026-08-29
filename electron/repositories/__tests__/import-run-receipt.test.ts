@@ -175,6 +175,58 @@ describe('import-run durable effect receipt', () => {
       })
   })
 
+  it('rejects an offline-forged committed sync receipt without its roster operation proof', () => {
+    prepareCommittedBlueprintReceipt()
+    CharacterRosterRepository.commit({
+      operationId: 'different-roster-operation',
+      expectedRevision: 0,
+      schemaVersion: 1,
+      intent: 'blueprint_sync',
+      entries: [{
+        name: 'Protagonist', role: 'supporting', gender: '', age: '', appearance: '',
+        personality: '', background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '',
+      }],
+    })
+    tamperOffline(`
+      UPDATE blueprint_character_sync_operations
+      SET status = 'completed',
+          completion_receipt = json_object(
+            'blueprintCommitOperationId', 'import-blueprints-receipt-run-1-1',
+            'operationId', 'blueprint-sync-import-blueprints-receipt-run-1-1',
+            'status', 'committed',
+            'rosterReceipt', json_object(
+              'operationId', 'blueprint-sync-import-blueprints-receipt-run-1-1',
+              'payloadHash', '${'f'.repeat(64)}',
+              'revision', 1,
+              'idempotent', json('false')
+            )
+          ),
+          completed_at = created_at
+      WHERE operation_id = 'blueprint-sync-import-blueprints-receipt-run-1-1'
+    `)
+
+    expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
+      .toThrow(/receipt.*损坏|收据.*损坏/i)
+  })
+
+  it('rejects an offline-forged already-satisfied sync receipt when frozen roster facts are missing', () => {
+    prepareCommittedBlueprintReceipt()
+    tamperOffline(`
+      UPDATE blueprint_character_sync_operations
+      SET status = 'completed',
+          completion_receipt = json_object(
+            'blueprintCommitOperationId', 'import-blueprints-receipt-run-1-1',
+            'operationId', 'blueprint-sync-import-blueprints-receipt-run-1-1',
+            'status', 'already-satisfied'
+          ),
+          completed_at = created_at
+      WHERE operation_id = 'blueprint-sync-import-blueprints-receipt-run-1-1'
+    `)
+
+    expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
+      .toThrow(/receipt.*损坏|收据.*损坏/i)
+  })
+
   it('freezes generated output before effect commit and atomically commits effect with checkpoint after reopen', () => {
     let started = ImportRunRepository.startOrResume('receipt-run', 'renderer-a')
     moveRunToStyle()
