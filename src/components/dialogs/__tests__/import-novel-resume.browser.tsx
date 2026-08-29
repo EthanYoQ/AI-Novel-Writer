@@ -462,6 +462,79 @@ describe('current-project reference import', () => {
     expect(invoke.mock.calls.some(([channel]) => String(channel).startsWith('kb:'))).toBe(false)
   })
 
+  it('keeps the full incremental author preview visible while launching a new-only commit run', async () => {
+    const fullPreview: AuthorManuscriptImportPreview = {
+      classification: 'ready',
+      authorityFingerprint: 'c'.repeat(64),
+      manifestFingerprint: 'e'.repeat(64),
+      chapterCount: 3,
+      targetStatus: 'finalized',
+      nextChapterNumber: 4,
+      chapters: [
+        { number: 1, title: 'Existing One', wordCount: 11, disposition: 'duplicate' },
+        { number: 2, title: 'Existing Two', wordCount: 11, disposition: 'duplicate' },
+        { number: 3, title: 'New Three', wordCount: 9, disposition: 'new' },
+      ],
+      newChapterNumbers: [3],
+      duplicateChapterNumbers: [1, 2],
+      conflictChapterNumbers: [],
+      authorityInvalid: false,
+    }
+    const incrementalRun = importRun({
+      id: 'incremental-author-run',
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:incremental-author-run',
+      authorityFingerprint: fullPreview.authorityFingerprint,
+      manifestFingerprint: fullPreview.manifestFingerprint,
+      stage: 'author-commit',
+      totalChapters: 1,
+      manifestChapterCount: 3,
+    })
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-list-resumable') return []
+      if (channel === 'dialog:select-novel-files') return {
+        success: true,
+        inspection: {
+          inspectionId: 'incremental-inspection', purpose: 'author-manuscript',
+          sourceCount: 1, sourceDisplayNames: ['manuscript.txt'], chapterCount: 3,
+          totalWords: 31, totalBytes: 31,
+          preview: fullPreview.chapters.map(({ number, title, wordCount }) => ({ number, title, wordCount })),
+        },
+      }
+      if (channel === 'db:import-run-author-preview') return fullPreview
+      if (channel === 'db:import-run-prepare-inspection') {
+        expect(args[0]).toMatchObject({
+          authorityFingerprint: fullPreview.authorityFingerprint,
+          manifestFingerprint: fullPreview.manifestFingerprint,
+        })
+        return {
+          success: true,
+          preparation: {
+            classification: 'new', run: incrementalRun, newChapterNumbers: [3],
+            duplicateChapterNumbers: [1, 2], conflictChapterNumbers: [],
+          },
+        }
+      }
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    await act(async () => page.getByTestId('import-source-choose').click())
+    await expect.element(page.getByTestId('author-import-confirmation-summary'))
+      .toHaveTextContent('新增 1 章权威定稿')
+    await expect.element(page.getByTestId('author-preview-target-1')).toHaveTextContent('相同定稿（跳过）')
+    await expect.element(page.getByTestId('author-preview-target-3')).toHaveTextContent('权威正文章节 / 定稿')
+
+    await act(async () => page.getByRole('button', { name: /确认导入（3 章）/ }).click())
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    expect(startWorkflow.mock.calls[0][0]).toMatchObject({
+      runId: 'incremental-author-run',
+      title: '导入作者原稿（1 章）',
+    })
+  })
+
   it('shows the English author purpose, chapter target, and explicit confirmation action', async () => {
     await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
     await act(async () => page.getByTestId('import-purpose-author').click())
@@ -543,6 +616,37 @@ describe('current-project reference import', () => {
 
     expect(startWorkflow).toHaveBeenCalledOnce()
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'persisted-import' })
+  })
+
+  it('offers Continue without Start over for a failed author run after finalized commit', async () => {
+    const resumable = importRun({
+      id: 'failed-author-postprocess',
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:failed-author-postprocess',
+      stage: 'author-postprocess',
+      status: 'failed',
+      lastError: 'continuity unavailable',
+      completedBatches: { 'author-commit': ['done'], 'author-publish': ['chapter:1'] },
+    })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [resumable]
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+    await act(async () => page.getByTestId('import-purpose-author').click())
+
+    await expect.element(page.getByTestId('import-resumable-run')).toHaveTextContent('continuity unavailable')
+    await expect.element(page.getByTestId('author-import-continue-guidance'))
+      .toHaveTextContent('继续同一导入')
+    expect(page.getByRole('button', { name: '重新开始' }).query()).toBeNull()
+
+    await act(async () => page.getByRole('button', { name: '继续导入' }).click())
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'failed-author-postprocess' })
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:import-run-restart')).toBe(false)
   })
 
   it('continues a prepared snapshot without asking for the moved source file again', async () => {

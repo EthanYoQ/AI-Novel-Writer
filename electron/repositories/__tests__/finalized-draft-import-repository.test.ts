@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
@@ -80,6 +81,12 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
       classification: 'conflict',
       conflictChapterNumbers: [1],
     })
+    expect(FinalizedDraftImportRepository.preview([{
+      ...chapters(1)[0], title: '同正文的新标题',
+    }])).toMatchObject({
+      classification: 'conflict',
+      conflictChapterNumbers: [1],
+    })
     const skipped = [{ ...chapters(1)[0], chapterNumber: 4, title: '第四章' }]
     expect(FinalizedDraftImportRepository.preview(skipped)).toMatchObject({
       classification: 'conflict',
@@ -110,6 +117,31 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     })
   })
 
+  it('derives a continuous legacy authority sequence from finalized drafts without publication outbox rows', () => {
+    const db = getProjectDb()!
+    for (const chapter of chapters(3)) {
+      const content = db.prepare('INSERT INTO contents (body) VALUES (?)').run(chapter.content)
+      db.prepare(`
+        INSERT INTO drafts (chapter_number, version, status, source, content_id, word_count)
+        VALUES (?, 1, 'finalized', 'write', ?, ?)
+      `).run(chapter.chapterNumber, Number(content.lastInsertRowid), chapter.wordCount)
+    }
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM finalization_outbox').get()).toEqual({ count: 0 })
+    expect(FinalizedDraftImportRepository.authoritySequence()).toMatchObject({
+      status: 'continuous',
+      lastChapterNumber: 3,
+      nextChapterNumber: 4,
+      duplicateChapterNumbers: [],
+    })
+    expect(FinalizedDraftImportRepository.preview(chapters(4))).toMatchObject({
+      classification: 'ready',
+      duplicateChapterNumbers: [1, 2, 3],
+      newChapterNumbers: [4],
+      nextChapterNumber: 5,
+    })
+  })
+
   it('rechecks the frozen authority fingerprint inside the atomic commit', () => {
     const candidate = chapters(1)
     const preview = FinalizedDraftImportRepository.preview(candidate)
@@ -125,6 +157,26 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
       chapters: candidate,
     })).toThrow('预览已过期')
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts').get()).toEqual({ count: 1 })
+  })
+
+  it('preserves the legacy payload hash when no separate commit-manifest fingerprint is supplied', () => {
+    const operationId = 'legacy-confirmed-manifest-hash'
+    const candidate = chapters(1)
+    const preview = FinalizedDraftImportRepository.preview(candidate)
+    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId,
+      expectedAuthorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+      chapters: candidate,
+    })
+    const expectedPayloadHash = createHash('sha256').update(JSON.stringify({
+      operationId,
+      expectedAuthorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+      chapters: candidate,
+    })).digest('hex')
+
+    expect(receipt.payloadHash).toBe(expectedPayloadHash)
   })
 
   it('commits nine imported chapters as finalized facts with pending publication outbox in one batch', () => {

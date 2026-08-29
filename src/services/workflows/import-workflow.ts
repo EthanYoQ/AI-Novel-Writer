@@ -390,53 +390,10 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
   const session = Object.freeze({ ...params.projectSession })
   const count = params.run.totalChapters
   const chapterCountEn = `${count} ${count === 1 ? 'chapter' : 'chapters'}`
-  if (params.run.purpose === 'author-manuscript') {
-    return {
-      runId: params.run.id,
-      type: 'novel_import',
-      title: textForLocale(
-        params.run.locale,
-        `导入作者原稿（${count} 章）`,
-        `Import author manuscript (${chapterCountEn})`,
-      ),
-      projectPath: params.projectPath,
-      projectSession: session,
-      uiLocale: params.run.locale,
-      steps: [
-        importStep(params.run, params.executionOwner, 'author-commit',
-          ['提交权威定稿快照', 'Commit authoritative finalized snapshots'],
-          ['以单个 SQLite 事务提交不可变定稿与发布 outbox', 'Atomically commit immutable finalized snapshots and publication outbox records.']),
-        importStep(params.run, params.executionOwner, 'author-publish',
-          ['发布实体正文', 'Publish manuscript files'],
-          ['按持久检查点发布正文文件；失败后可安全重试', 'Publish manuscript files with durable checkpoints and safe retries.']),
-        importStep(params.run, params.executionOwner, 'author-postprocess',
-          ['更新连续性事实', 'Update continuity facts'],
-          ['从权威定稿更新章节事实与角色状态，不导入参照语料', 'Update chapter facts and character state from authoritative text without importing reference prose.']),
-        importStep(params.run, params.executionOwner, 'refresh',
-          ['刷新项目状态', 'Refresh project state'],
-          ['刷新正文树、角色卡与定稿状态', 'Refresh the manuscript tree, character cards, and finalized status.']),
-      ],
-      onComplete: {
-        mode: 'silent',
-        message: textForLocale(
-          params.run.locale,
-          '作者原稿已作为权威定稿导入，可以从下一章继续创作。',
-          'The manuscript is now authoritative finalized text. You can continue from the next chapter.',
-        ),
-      },
-    }
-  }
-  return {
-    runId: params.run.id,
-    type: 'novel_import',
-    title: textForLocale(
-      params.run.locale,
-      `小说拆解与仿写（${count} 章）`,
-      `Novel analysis and style study (${chapterCountEn})`,
-    ),
-    projectPath: params.projectPath,
-    projectSession: session,
-    uiLocale: params.run.locale,
+  const durableCancelHooks: Pick<
+    WorkflowDefinition,
+    'onCancelRequested' | 'onCancelledAtBoundary'
+  > = {
     onCancelRequested: async context => {
       const execution = context.data.importRunExecution as ImportRunExecutionLease | undefined
       if (!execution) return
@@ -484,6 +441,56 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
         'Could not finalize import cancellation.',
       ))
     },
+  }
+  if (params.run.purpose === 'author-manuscript') {
+    return {
+      runId: params.run.id,
+      type: 'novel_import',
+      title: textForLocale(
+        params.run.locale,
+        `导入作者原稿（${count} 章）`,
+        `Import author manuscript (${chapterCountEn})`,
+      ),
+      projectPath: params.projectPath,
+      projectSession: session,
+      uiLocale: params.run.locale,
+      ...durableCancelHooks,
+      steps: [
+        importStep(params.run, params.executionOwner, 'author-commit',
+          ['提交权威定稿快照', 'Commit authoritative finalized snapshots'],
+          ['以单个 SQLite 事务提交不可变定稿与发布 outbox', 'Atomically commit immutable finalized snapshots and publication outbox records.']),
+        importStep(params.run, params.executionOwner, 'author-publish',
+          ['发布实体正文', 'Publish manuscript files'],
+          ['按持久检查点发布正文文件；失败后可安全重试', 'Publish manuscript files with durable checkpoints and safe retries.']),
+        importStep(params.run, params.executionOwner, 'author-postprocess',
+          ['更新连续性事实', 'Update continuity facts'],
+          ['从权威定稿更新章节事实与角色状态，不导入参照语料', 'Update chapter facts and character state from authoritative text without importing reference prose.']),
+        importStep(params.run, params.executionOwner, 'refresh',
+          ['刷新项目状态', 'Refresh project state'],
+          ['刷新正文树、角色卡与定稿状态', 'Refresh the manuscript tree, character cards, and finalized status.']),
+      ],
+      onComplete: {
+        mode: 'silent',
+        message: textForLocale(
+          params.run.locale,
+          '作者原稿已作为权威定稿导入，可以从下一章继续创作。',
+          'The manuscript is now authoritative finalized text. You can continue from the next chapter.',
+        ),
+      },
+    }
+  }
+  return {
+    runId: params.run.id,
+    type: 'novel_import',
+    title: textForLocale(
+      params.run.locale,
+      `小说拆解与仿写（${count} 章）`,
+      `Novel analysis and style study (${chapterCountEn})`,
+    ),
+    projectPath: params.projectPath,
+    projectSession: session,
+    uiLocale: params.run.locale,
+    ...durableCancelHooks,
     steps: [
       importStep(params.run, params.executionOwner, 'knowledge',
         ['导入参照文本与构建知识库', 'Import reference text and build the knowledge base'],

@@ -207,6 +207,55 @@ describe('ImportRunOrchestrator', () => {
     expect(getRun().stage).toBe('author-postprocess')
   })
 
+  it('resumes failed author postprocess from its durable chapter checkpoint without repeating completed work', async () => {
+    const { deps, getRun } = harness(3, {
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:run-1',
+      authorityFingerprint: 'c'.repeat(64),
+      stage: 'author-postprocess',
+      completedBatches: {
+        'author-commit': ['done'],
+        'author-publish': ['chapter:1', 'chapter:2', 'chapter:3'],
+      },
+    })
+    const receipt: FinalizedDraftImportReceipt = {
+      operationId: 'author-import:run-1', payloadHash: 'e'.repeat(64), chapterNumbers: [1, 2, 3],
+      drafts: [1, 2, 3].map(chapterNumber => ({
+        chapterNumber, draftId: chapterNumber, finalizationId: `final-${chapterNumber}`,
+        contentHash: 'f'.repeat(64), targetFileName: `Chapter ${chapterNumber}.txt`,
+        status: 'finalized' as const, publicationStatus: 'pending' as const,
+      })),
+      idempotent: false,
+    }
+    deps.getAuthorCommitReceipt = vi.fn(async () => receipt)
+    const postprocessed: number[] = []
+    let failOnce = true
+    deps.postprocessAuthorChapter = vi.fn(async chapter => {
+      postprocessed.push(chapter.number)
+      if (chapter.number === 2 && failOnce) {
+        failOnce = false
+        throw new Error('postprocess unavailable')
+      }
+    })
+    const orchestrator = new ImportRunOrchestrator(deps)
+
+    await expect(orchestrator.executeStage(
+      'run-1', 'author-postprocess', 'test-runner', { cancelled: false }, callbacks,
+    )).rejects.toThrow('postprocess unavailable')
+    expect(getRun()).toMatchObject({
+      stage: 'author-postprocess', status: 'failed',
+      completedBatches: { 'author-postprocess': ['chapter:1'] },
+    })
+
+    await orchestrator.executeStage(
+      'run-1', 'author-postprocess', 'test-runner', { cancelled: false }, callbacks,
+    )
+    expect(postprocessed.filter(number => number === 1)).toHaveLength(1)
+    expect(postprocessed.filter(number => number === 2)).toHaveLength(2)
+    expect(postprocessed.filter(number => number === 3)).toHaveLength(1)
+    expect(getRun().stage).toBe('refresh')
+  })
+
   it('keeps renewing its lease while one knowledge effect runs longer than the original TTL', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000)

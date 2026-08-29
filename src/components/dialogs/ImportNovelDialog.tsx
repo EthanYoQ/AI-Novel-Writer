@@ -71,7 +71,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     ? activeWorkflows.some(workflow => workflow.id === resumableRun.id)
     : false
   const resumableRunCanRestart = resumableRun
-    ? ['failed', 'cancelled', 'running'].includes(resumableRun.status)
+    ? resumableRun.purpose !== 'author-manuscript'
+      && ['failed', 'cancelled', 'running'].includes(resumableRun.status)
     : false
   const runProgress = (run: ImportRunSnapshot) => ({
     completed: run.progressCompleted ?? run.completedChapters,
@@ -653,6 +654,18 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                   {text(
                     `需要重新选择：${resumableRun.unfinishedSourceDisplay!.map(source => source.displayName).join('、')}`,
                     `Re-select required: ${resumableRun.unfinishedSourceDisplay!.map(source => source.displayName).join(', ')}`,
+                  )}
+                </div>
+              )}
+              {resumableRun.purpose === 'author-manuscript' && (
+                <div
+                  className="text-xs"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                  data-testid="author-import-continue-guidance"
+                >
+                  {text(
+                    '权威定稿已绑定当前运行，请继续同一导入完成发布与连续性更新。',
+                    'The finalized manuscript is bound to this run. Continue the same import to finish publication and continuity updates.',
                   )}
                 </div>
               )}

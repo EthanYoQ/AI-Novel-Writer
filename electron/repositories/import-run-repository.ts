@@ -189,10 +189,6 @@ const AUTHOR_NEXT_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>
   'author-postprocess': 'refresh',
 }
 
-function initialStage(purpose: ImportPurpose): ImportRunStage {
-  return purpose === 'author-manuscript' ? 'author-commit' : 'knowledge'
-}
-
 function nextStageForRun(row: ImportRunRow, stage: ImportRunStage): ImportRunStage | undefined {
   return (row.purpose === 'author-manuscript' ? AUTHOR_NEXT_STAGE : REFERENCE_NEXT_STAGE)[stage]
 }
@@ -324,11 +320,20 @@ function assertEffectPayloadBinding(
   ) throw new Error()
 }
 
-function assertAuthorEffectRunBinding(run: ImportRunRow, kind: ImportRunEffectKind, payload: unknown): void {
+function assertAuthorEffectRunBinding(
+  run: ImportRunRow,
+  kind: ImportRunEffectKind,
+  payload: unknown,
+  allowCommittedLaterStage = false,
+): void {
   if (kind !== 'author-finalized-batch') return
+  const stageMatches = run.stage === 'author-commit'
+    || (allowCommittedLaterStage && [
+      'author-publish', 'author-postprocess', 'refresh', 'completed',
+    ].includes(run.stage))
   if (
     run.purpose !== 'author-manuscript'
-    || run.stage !== 'author-commit'
+    || !stageMatches
     || !isRecord(payload)
     || payload.runId !== run.id
     || payload.operationId !== `author-import:${run.id}`
@@ -428,7 +433,7 @@ function rowToEffectReceipt(row: ImportRunEffectReceiptRow, run: ImportRunRow): 
     if (canonical.json !== row.payload_json || canonical.hash !== row.payload_hash) corruptedReceipt()
     assertEffectPayloadSchema(row.kind, payload)
     assertEffectPayloadBinding(row.kind, row.run_id, row.batch_id, payload)
-    assertAuthorEffectRunBinding(run, row.kind, payload)
+    assertAuthorEffectRunBinding(run, row.kind, payload, row.state === 'committed')
     const effectReceipt = row.effect_receipt_json ? JSON.parse(row.effect_receipt_json) as unknown : undefined
     if ((row.state === 'prepared' && effectReceipt !== undefined) || (row.state === 'committed' && effectReceipt === undefined)) {
       corruptedReceipt()
@@ -2138,15 +2143,17 @@ export class ImportRunRepository {
                    title, content_fingerprint, content_size, content_snapshot
             FROM import_run_chapters WHERE run_id = ? ORDER BY chapter_number ASC
           `).all(runId) as ImportRunChapterRow[]).map(chapterRowToSnapshot).map(chapter => ({
-              chapterNumber: chapter.number,
-              title: chapter.title,
-              content: chapter.content,
-              wordCount: chapter.content.length,
-            }))
+            chapterNumber: chapter.number,
+            title: chapter.title,
+            content: chapter.content,
+            wordCount: chapter.content.length,
+          }))
+          const commitManifestFingerprint = FinalizedDraftImportRepository.preview(chapters).manifestFingerprint
           effectReceipt = FinalizedDraftImportRepository.commit(projectRoot, {
             operationId: `author-import:${runId}`,
             expectedAuthorityFingerprint: run.authority_fingerprint,
             expectedManifestFingerprint: run.manifest_fingerprint,
+            expectedCommitManifestFingerprint: commitManifestFingerprint,
             chapters,
           })
           break
@@ -2232,6 +2239,9 @@ export class ImportRunRepository {
       if (!source || !restartable || source.resumable !== 1) {
         throw new Error('导入运行当前不可重新开始')
       }
+      if (source.purpose === 'author-manuscript') {
+        throw new Error('作者原稿导入不能重新开始；请继续原运行以完成发布和后处理')
+      }
       if (readRunRow(normalizedNextId)) throw new Error('新导入运行 ID 已存在')
       const fenced = db().prepare(`
         UPDATE import_runs
@@ -2241,9 +2251,7 @@ export class ImportRunRepository {
         WHERE id = ? AND execution_epoch = ?
       `).run(runId, source.execution_epoch)
       if (fenced.changes !== 1) throw new Error('导入运行重新开始时已被其他执行器接管')
-      const restartStage = source.purpose === 'author-manuscript'
-        ? initialStage(source.purpose)
-        : source.stage
+      const restartStage = source.stage
       const restartingParsing = restartStage === 'parsing'
       db().prepare(`
         INSERT INTO import_runs (

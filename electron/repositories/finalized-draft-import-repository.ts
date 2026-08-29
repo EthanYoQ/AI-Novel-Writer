@@ -38,8 +38,6 @@ interface AuthorityRow {
   version: number
   title: string | null
   body: string
-  content_hash: string | null
-  finalization_id: string | null
 }
 
 function sha256(value: string): string {
@@ -90,11 +88,21 @@ function requestPayloadHash(request: FinalizedDraftImportRequest, chapters: Fina
   if (
     request.expectedAuthorityFingerprint === undefined
     && request.expectedManifestFingerprint === undefined
+    && request.expectedCommitManifestFingerprint === undefined
   ) return sha256(JSON.stringify({ operationId: request.operationId, chapters }))
+  if (request.expectedCommitManifestFingerprint === undefined) {
+    return sha256(JSON.stringify({
+      operationId: request.operationId,
+      expectedAuthorityFingerprint: request.expectedAuthorityFingerprint ?? null,
+      expectedManifestFingerprint: request.expectedManifestFingerprint ?? null,
+      chapters,
+    }))
+  }
   return sha256(JSON.stringify({
     operationId: request.operationId,
     expectedAuthorityFingerprint: request.expectedAuthorityFingerprint ?? null,
     expectedManifestFingerprint: request.expectedManifestFingerprint ?? null,
+    expectedCommitManifestFingerprint: request.expectedCommitManifestFingerprint ?? null,
     chapters,
   }))
 }
@@ -113,11 +121,10 @@ function authorityRows(): AuthorityRow[] {
   if (!current) throw new Error('项目数据库未打开')
   return current.prepare(`
     SELECT drafts.id AS draft_id, drafts.chapter_number, drafts.version,
-           contents.body, finalization_outbox.chapter_title AS title,
-           finalization_outbox.content_hash, finalization_outbox.finalization_id
+           contents.body,
+           (SELECT chapter_title FROM finalization_outbox WHERE draft_id = drafts.id) AS title
     FROM drafts
     JOIN contents ON contents.id = drafts.content_id
-    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
     WHERE drafts.status = 'finalized'
     ORDER BY drafts.chapter_number ASC, drafts.version ASC, drafts.id ASC
   `).all() as AuthorityRow[]
@@ -128,9 +135,6 @@ function authorityFingerprint(rows: AuthorityRow[]): string {
     draftId: row.draft_id,
     chapterNumber: row.chapter_number,
     version: row.version,
-    finalizationId: row.finalization_id,
-    title: row.title,
-    contentHash: row.content_hash,
     bodyHash: sha256(row.body),
   }))))
 }
@@ -159,12 +163,7 @@ function sequenceFromRows(rows: AuthorityRow[]): AuthoritativeChapterSequence {
       break
     }
   }
-  const hasIncompleteFinalization = rows.some(row => (
-    !row.finalization_id
-    || !row.content_hash
-    || row.content_hash !== sha256(row.body)
-  ))
-  if (duplicateChapterNumbers.length > 0 || firstGapChapterNumber !== undefined || hasIncompleteFinalization) {
+  if (duplicateChapterNumbers.length > 0 || firstGapChapterNumber !== undefined) {
     return {
       status: 'invalid',
       lastChapterNumber: maxChapter,
@@ -305,7 +304,10 @@ export class FinalizedDraftImportRepository {
           disposition: 'new' as const,
         }
       }
-      if (existing.content_hash === sha256(chapter.content) && (existing.title ?? '') === chapter.title) {
+      if (
+        sha256(existing.body) === sha256(chapter.content)
+        && (existing.title === null || existing.title === chapter.title)
+      ) {
         duplicateChapterNumbers.push(chapter.chapterNumber)
         return {
           number: chapter.chapterNumber,
@@ -385,8 +387,10 @@ export class FinalizedDraftImportRepository {
         return { ...receipt, idempotent: true }
       }
 
-      if (request.expectedManifestFingerprint !== undefined) {
-        if (request.expectedManifestFingerprint !== manifestFingerprint(chapters)) {
+      const expectedCommitManifestFingerprint = request.expectedCommitManifestFingerprint
+        ?? request.expectedManifestFingerprint
+      if (expectedCommitManifestFingerprint !== undefined) {
+        if (expectedCommitManifestFingerprint !== manifestFingerprint(chapters)) {
           throw new Error('原稿清单与已确认预览不一致，预览已过期')
         }
       }

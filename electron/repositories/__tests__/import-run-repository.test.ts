@@ -538,6 +538,232 @@ describe('ImportRunRepository', () => {
       .toThrow(/receipt.*损坏|收据.*损坏/i)
   })
 
+  it('binds an incremental author confirmation to the full manifest while committing only appended chapters', () => {
+    const confirmed = [
+      chapter(1, 'author chapter one'),
+      chapter(2, 'author chapter two'),
+      chapter(3, 'author chapter three'),
+    ]
+    FinalizedDraftImportRepository.commit(root, {
+      operationId: 'existing-author-chapters',
+      chapters: confirmed.slice(0, 2).map(item => ({
+        chapterNumber: item.number,
+        title: item.title,
+        content: item.content,
+        wordCount: item.content.length,
+      })),
+    })
+    const preview = FinalizedDraftImportRepository.preview(confirmed.map(item => ({
+      chapterNumber: item.number,
+      title: item.title,
+      content: item.content,
+      wordCount: item.content.length,
+    })))
+    expect(preview).toMatchObject({
+      classification: 'ready',
+      duplicateChapterNumbers: [1, 2],
+      newChapterNumbers: [3],
+    })
+
+    const runId = 'incremental-author-receipt'
+    const prepared = ImportRunRepository.prepare(request(confirmed, {
+      runId,
+      purpose: 'author-manuscript',
+      sourceFingerprint: 'b'.repeat(64),
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+    expect(prepared).toMatchObject({
+      classification: 'new',
+      duplicateChapterNumbers: [1, 2],
+      newChapterNumbers: [3],
+      run: { manifestFingerprint: preview.manifestFingerprint, totalChapters: 1, manifestChapterCount: 3 },
+    })
+    expect(ImportRunRepository.listChapterBatch(runId, { afterChapterNumber: 0, limit: 10 }))
+      .toEqual([expect.objectContaining({ number: 3, content: 'author chapter three' })])
+
+    const execution = ImportRunRepository.startOrResume(runId, 'incremental-author-runner').execution
+    ImportRunRepository.prepareEffectReceipt({
+      runId,
+      stage: 'author-commit',
+      batchId: 'done',
+      effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${runId}`,
+        runId,
+        authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, execution)
+
+    expect(ImportRunRepository.commitEffectReceipt(runId, 'author-commit', 'done', execution))
+      .toMatchObject({
+        receipt: { effectReceipt: { chapterNumbers: [3] } },
+        run: { completedBatches: { 'author-commit': ['done'] } },
+      })
+    expect(FinalizedDraftImportRepository.authoritySequence()).toMatchObject({
+      status: 'continuous', lastChapterNumber: 3, nextChapterNumber: 4,
+    })
+  })
+
+  it('rejects an incremental author commit when authority changes after the full manifest confirmation', () => {
+    const confirmed = [
+      chapter(1, 'author chapter one'),
+      chapter(2, 'author chapter two'),
+      chapter(3, 'author chapter three'),
+    ]
+    const finalized = (items: typeof confirmed) => items.map(item => ({
+      chapterNumber: item.number,
+      title: item.title,
+      content: item.content,
+      wordCount: item.content.length,
+    }))
+    FinalizedDraftImportRepository.commit(root, {
+      operationId: 'stale-existing-author-chapters',
+      chapters: finalized(confirmed.slice(0, 2)),
+    })
+    const preview = FinalizedDraftImportRepository.preview(finalized(confirmed))
+    const runId = 'stale-incremental-author'
+    ImportRunRepository.prepare(request(confirmed, {
+      runId,
+      purpose: 'author-manuscript',
+      sourceFingerprint: 'd'.repeat(64),
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+
+    FinalizedDraftImportRepository.commit(root, {
+      operationId: 'concurrent-third-chapter',
+      chapters: finalized(confirmed.slice(2)),
+    })
+    const execution = ImportRunRepository.startOrResume(runId, 'stale-author-runner').execution
+    ImportRunRepository.prepareEffectReceipt({
+      runId,
+      stage: 'author-commit',
+      batchId: 'done',
+      effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${runId}`,
+        runId,
+        authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, execution)
+
+    expect(() => ImportRunRepository.commitEffectReceipt(runId, 'author-commit', 'done', execution))
+      .toThrow(/权威章节已变化|预览已过期/)
+    expect(ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done'))
+      .toMatchObject({ state: 'prepared' })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts WHERE status = ?').get('finalized'))
+      .toEqual({ count: 3 })
+  })
+
+  it('keeps a failed committed author run resumable and rejects restarting it from author-commit', () => {
+    const imported = chapter(1, 'author chapter one')
+    const preview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: imported.number,
+      title: imported.title,
+      content: imported.content,
+      wordCount: imported.content.length,
+    }])
+    const runId = 'committed-author-recovery'
+    ImportRunRepository.prepare(request([imported], {
+      runId,
+      purpose: 'author-manuscript',
+      sourceFingerprint: 'c'.repeat(64),
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+    let execution = ImportRunRepository.startOrResume(runId, 'author-before-failure').execution
+    ImportRunRepository.prepareEffectReceipt({
+      runId,
+      stage: 'author-commit',
+      batchId: 'done',
+      effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${runId}`,
+        runId,
+        authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, execution)
+    ImportRunRepository.commitEffectReceipt(runId, 'author-commit', 'done', execution)
+    ImportRunRepository.advanceStage(runId, 'author-commit', 'author-publish', execution)
+    ImportRunRepository.fail(runId, 'author-publish', 'publication unavailable', execution)
+
+    expect(() => ImportRunRepository.restart(runId, 'forbidden-author-restart'))
+      .toThrow(/作者原稿.*继续|author.*continue/i)
+    expect(ImportRunRepository.get('forbidden-author-restart')).toBeNull()
+    expect(ImportRunRepository.get(runId)).toMatchObject({
+      stage: 'author-publish', status: 'failed', resumable: true,
+      completedBatches: { 'author-commit': ['done'] },
+    })
+
+    execution = ImportRunRepository.startOrResume(runId, 'author-after-failure').execution
+    expect(ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done')).toMatchObject({
+      state: 'committed',
+      effectReceipt: { chapterNumbers: [1] },
+    })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts WHERE status = ?').get('finalized'))
+      .toEqual({ count: 1 })
+    expect(execution).toMatchObject({ owner: 'author-after-failure' })
+  })
+
+  it('cancels a committed author run at a durable boundary, releases its lease, and resumes without repeating finalization', () => {
+    const imported = chapter(1, 'author chapter one')
+    const preview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: imported.number,
+      title: imported.title,
+      content: imported.content,
+      wordCount: imported.content.length,
+    }])
+    const runId = 'cancelled-author-recovery'
+    ImportRunRepository.prepare(request([imported], {
+      runId,
+      purpose: 'author-manuscript',
+      sourceFingerprint: 'e'.repeat(64),
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+    const firstExecution = ImportRunRepository.startOrResume(runId, 'author-before-cancel').execution
+    ImportRunRepository.prepareEffectReceipt({
+      runId,
+      stage: 'author-commit',
+      batchId: 'done',
+      effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${runId}`,
+        runId,
+        authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, firstExecution)
+    ImportRunRepository.commitEffectReceipt(runId, 'author-commit', 'done', firstExecution)
+    ImportRunRepository.advanceStage(runId, 'author-commit', 'author-publish', firstExecution)
+    ImportRunRepository.requestCancel(runId, firstExecution)
+
+    expect(ImportRunRepository.cancelAtBoundary(runId, firstExecution)).toMatchObject({
+      stage: 'author-publish', status: 'cancelled', resumable: true, cancelRequested: true,
+    })
+    expect(getProjectDb()!.prepare(`
+      SELECT execution_owner, lease_expires_at FROM import_runs WHERE id = ?
+    `).get(runId)).toEqual({ execution_owner: '', lease_expires_at: 0 })
+
+    const resumed = ImportRunRepository.startOrResume(runId, 'author-after-cancel')
+    expect(resumed).toMatchObject({
+      run: { stage: 'author-publish', status: 'running', cancelRequested: false },
+      execution: { owner: 'author-after-cancel' },
+    })
+    expect(ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done'))
+      .toMatchObject({ state: 'committed', effectReceipt: { chapterNumbers: [1] } })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts WHERE status = ?').get('finalized'))
+      .toEqual({ count: 1 })
+  })
+
   it('rejects a stale or gapped author-manuscript preview without writing a run', () => {
     const first = chapter(1, 'author chapter one')
     const preview = FinalizedDraftImportRepository.preview([{
