@@ -122,14 +122,23 @@ describe('novel import external-file capability', () => {
   it('rejects duplicate author chapter numbers with an actionable localized message', async () => {
     const first = path.join(temporaryRoot, 'author-a.txt')
     const second = path.join(temporaryRoot, 'author-b.txt')
-    fs.writeFileSync(first, '第1章 开始\n第一份正文', 'utf8')
-    fs.writeFileSync(second, '第1章 重复\n第二份正文', 'utf8')
+    const firstContent = '第1章 开始\n第一份正文'
+    const secondContent = '第1章 重复\n第二份正文'
+    fs.writeFileSync(first, firstContent, 'utf8')
+    fs.writeFileSync(second, secondContent, 'utf8')
+    const { fileSystem, readText } = boundedReader({
+      'author-a.txt': firstContent,
+      'author-b.txt': secondContent,
+    })
+    mocks.handlers.clear()
+    register(fileSystem, filePath => ({ canonicalLocation: filePath }))
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [first, second] })
 
     await expect(handler('dialog:select-novel-files')(event(), 'author-manuscript')).resolves.toMatchObject({
       success: false,
       error: expect.stringMatching(/重复的第 1 章/),
     })
+    expect(readText).toHaveBeenCalledTimes(2)
     expect(inspections.activeCount()).toBe(0)
     expect(grants.activeCount()).toBe(0)
   })

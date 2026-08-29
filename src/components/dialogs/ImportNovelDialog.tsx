@@ -505,9 +505,21 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileUp size={18} className="text-[var(--color-accent)]" />
-            {text('导入小说文本', 'Import novel text')}
+            {purpose === 'reference'
+              ? text('小说拆解与仿写', 'Novel analysis and style study')
+              : text('导入作者原稿', 'Import author manuscript')}
           </DialogTitle>
-          <DialogDescription>{text('先选择文本用途。参考小说用于拆解学习；我的原稿会成为当前项目的权威定稿。', 'Choose how the text will be used. A reference novel is analyzed for study; your manuscript becomes authoritative finalized text in the current project.')}</DialogDescription>
+          <DialogDescription>
+            {purpose === 'reference'
+              ? text(
+                  '选择参考小说文件，AI 将执行结构拆解、文风提取、蓝图反推，并生成后续写作可用的仿写约束。',
+                  'Select reference novel files. AI will analyze their structure and style, infer blueprints, and create imitation constraints for future writing.',
+                )
+              : text(
+                  '选择我的原稿文件，按章节号导入为当前项目的不可变权威定稿；不会进入参考语料或触发仿写拆解。',
+                  'Select manuscript files to import by chapter number as immutable authoritative finalized text in the current project. They are not added to the reference corpus or imitation analysis.',
+                )}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
