@@ -27,6 +27,7 @@ import {
   listPendingDirectoryCharacterSyncs,
   retryAllPendingDirectoryCharacterSyncs,
 } from '../../services/workflows/directory-character-sync-recovery'
+import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
 
 interface Props {
   isOpen: boolean
@@ -39,14 +40,14 @@ interface Props {
 function requestedChapterCount(
   params: DirectoryWorkflowParams,
   totalChapters: number,
-  existingCount: number,
+  authoritativeNextChapter: number,
 ): number {
   if (params.mode === 'full') {
     return params.count && params.count > 0
       ? Math.min(totalChapters, params.count)
       : totalChapters
   }
-  const startChapter = params.startChapter || existingCount + 1
+  const startChapter = params.startChapter || authoritativeNextChapter
   const remaining = Math.max(0, totalChapters - startChapter + 1)
   return params.count && params.count > 0 ? Math.min(remaining, params.count) : remaining
 }
@@ -54,6 +55,7 @@ function requestedChapterCount(
 /** 蓝图生成配置弹框 — 选择生成范围和模式 */
 export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, onConfirm }: Props) {
   const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
 
   // 范围选择
@@ -72,6 +74,9 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   const [isRecoveryLoading, setIsRecoveryLoading] = useState(false)
   const [isRecovering, setIsRecovering] = useState(false)
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
+  const [authoritativeNextChapter, setAuthoritativeNextChapter] = useState<number | null>(null)
+  const [authorityError, setAuthorityError] = useState<string | null>(null)
+  const [authorityLoading, setAuthorityLoading] = useState(false)
 
   const isBatchRunning = useWorkflowStore(s => s.isTypeRunning('batch_generate'))
 
@@ -109,17 +114,46 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
     return () => { disposed = true }
   }, [currentProject, isOpen, text])
 
+  useEffect(() => {
+    if (!isOpen || !currentProject) return
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    let disposed = false
+    const loadAuthority = async () => {
+      setAuthorityLoading(true)
+      try {
+        const nextChapter = await readAuthoritativeNextChapter(projectSession, locale)
+        if (disposed || !isProjectSessionCurrent(projectSession)) return
+        setAuthoritativeNextChapter(nextChapter)
+        setRangeStart(nextChapter)
+        setRangeEnd(Math.min(currentProject.novelConfig.totalChapters, nextChapter + 49))
+        setAuthorityError(null)
+      } catch (cause) {
+        if (disposed || !isProjectSessionCurrent(projectSession)) return
+        setAuthoritativeNextChapter(null)
+        setAuthorityError(cause instanceof Error ? cause.message : String(cause))
+      } finally {
+        if (!disposed && isProjectSessionCurrent(projectSession)) setAuthorityLoading(false)
+      }
+    }
+    void loadAuthority()
+    return () => { disposed = true }
+  }, [currentProject, isOpen, locale])
+
   if (!currentProject) return null
   const total = currentProject.novelConfig.totalChapters
+  const appendStart = authoritativeNextChapter ?? existingCount + 1
+  const hasPriorAuthority = appendStart > 1
+  const appendByDefault = overwriteMode === 'append' && (existingCount > 0 || hasPriorAuthority)
   const previewParams: DirectoryWorkflowParams = rangeMode === 'full'
     ? { mode: overwriteMode === 'full' ? 'full' : 'append', count: 0 }
     : rangeMode === 'front'
-      ? existingCount > 0 && overwriteMode === 'append'
+      ? appendByDefault
         ? {
             mode: 'append',
-            startChapter: existingCount + 1,
+            startChapter: appendStart,
             count: Math.min(
-              Math.max(0, total - existingCount),
+              Math.max(0, total - appendStart + 1),
               Math.max(1, Number(frontN) || DEFAULT_BLUEPRINT_GENERATION_COUNT),
             ),
           }
@@ -138,7 +172,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
           ),
         }
   const previewCost = planBlueprintGenerationCost(
-    requestedChapterCount(previewParams, total, existingCount),
+    requestedChapterCount(previewParams, total, appendStart),
   )
 
   const handleCharacterSyncRecovery = async () => {
@@ -175,24 +209,38 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
       return
     }
 
+    let frozenAuthoritativeNext: number
+    try {
+      frozenAuthoritativeNext = await readAuthoritativeNextChapter(projectSession, locale)
+    } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return
+      setAuthorityError(error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (!isProjectSessionCurrent(projectSession)) return
+    setAuthoritativeNextChapter(frozenAuthoritativeNext)
+    setAuthorityError(null)
+    const frozenAppendByDefault = overwriteMode === 'append'
+      && (existingCount > 0 || frozenAuthoritativeNext > 1)
+
     let params: DirectoryWorkflowParams
 
     if (rangeMode === 'full') {
       // 追加全量：若已无剩余章节则拒绝（覆盖模式仍可从第 1 章重生成）
-      if (overwriteMode === 'append' && existingCount >= total) {
+      if (overwriteMode === 'append' && frozenAuthoritativeNext > total) {
         toast.warning(text('没有可追加生成的章节', 'No chapters remain to generate.'))
         return
       }
       params = { mode: overwriteMode === 'full' ? 'full' : 'append', count: 0 }
     } else if (rangeMode === 'front') {
-      if (existingCount > 0 && overwriteMode === 'append') {
-        if (existingCount >= total) {
+      if (frozenAppendByDefault) {
+        if (frozenAuthoritativeNext > total) {
           toast.warning(text('没有可追加生成的章节', 'No chapters remain to generate.'))
           return
         }
-        const remaining = total - existingCount
+        const remaining = total - frozenAuthoritativeNext + 1
         const count = Math.min(remaining, Math.max(1, Number(frontN) || DEFAULT_BLUEPRINT_GENERATION_COUNT))
-        params = { mode: 'append', startChapter: existingCount + 1, count }
+        params = { mode: 'append', startChapter: frozenAuthoritativeNext, count }
       } else {
         params = {
           mode: 'full',
@@ -210,7 +258,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
       params = { mode: 'append', startChapter: start, count: Math.max(1, end - start + 1) }
     }
 
-    const costPlan = planBlueprintGenerationCost(requestedChapterCount(params, total, existingCount))
+    const costPlan = planBlueprintGenerationCost(requestedChapterCount(params, total, frozenAuthoritativeNext))
     if (costPlan.exceedsHardLimit) {
       toast.warning(text(
         `当前范围超过单次任务安全成本上限，请拆成每段不超过 ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} 章的范围。`,
@@ -244,6 +292,8 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
           <DialogDescription>
             {existingCount > 0
               ? text(`当前已存在 ${existingCount} 章蓝图，选择下一步操作：`, `${existingCount} chapter blueprints already exist. Choose what to do next:`)
+              : hasPriorAuthority
+                ? text(`权威正文已定稿至第 ${appendStart - 1} 章，下一章蓝图从第 ${appendStart} 章开始。`, `Finalized manuscript authority ends at Chapter ${appendStart - 1}; the next blueprint starts at Chapter ${appendStart}.`)
               : text(`项目共 ${total} 章，请选择生成范围：`, `The project has ${total} chapters. Choose a generation range:`)}
           </DialogDescription>
         </DialogHeader>
@@ -371,7 +421,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
             </p>
           </div>
 
-          {existingCount > 0 && (
+          {(existingCount > 0 || hasPriorAuthority) && (
             <div
               className="rounded-lg p-3 space-y-2 mt-4"
               style={{ backgroundColor: 'var(--color-panel)', border: '1px solid var(--color-border)' }}
@@ -383,7 +433,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
                 <RadioOption
                   checked={overwriteMode === 'append'}
                   onChange={() => setOverwriteMode('append')}
-                  label={text(`追加模式：保留现有蓝图，从第 ${existingCount + 1} 章起往后生成`, `Append: keep existing blueprints and continue from chapter ${existingCount + 1}`)}
+                  label={text(`追加模式：保留现有蓝图，从第 ${appendStart} 章起往后生成`, `Append: keep existing blueprints and continue from chapter ${appendStart}`)}
                 />
                 <RadioOption
                   checked={overwriteMode === 'full'}
@@ -412,6 +462,11 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
               {launchError}
             </p>
           )}
+          {authorityError && (
+            <p className="whitespace-pre-line rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2.5 text-xs text-[var(--color-warning-text)]">
+              {authorityError}
+            </p>
+          )}
         </div>
 
         <DialogFooter>
@@ -421,6 +476,8 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
             onClick={handleConfirm}
             disabled={
               isConfirming
+              || authorityLoading
+              || Boolean(authorityError)
               || isRecoveryLoading
               || isRecovering
               || pendingCharacterSyncs.length > 0

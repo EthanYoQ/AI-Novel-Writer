@@ -336,8 +336,12 @@ describe('chapter-card draft ledger', () => {
     expect(source).toContain(
       'const canRecoverLegacyImportedText = projectDataReady\n    && legacyImportedTextRecoveryChapter !== null',
     )
-    expect(source).toContain('let hasFinalizedTextAfterGap = false')
-    expect(source).toContain('setNextWriteChapter(recoveryChapter === null ? firstUnfinalizedChapterNumber : null)')
+    expect(source).toContain(
+      'const recoveryChapter = error instanceof AuthoritativeChapterSequenceError',
+    )
+    expect(source).toContain('error.sequence.firstGapChapterNumber')
+    expect(source).toContain('setLegacyImportedTextRecoveryChapter(recoveryChapter)')
+    expect(source).toContain('setNextWriteChapter(null)')
     expect(source).toContain('{canRecoverLegacyImportedText && (')
     expect(source).toContain('onClick={handleClearLegacyImportedText}')
     expect(recoveryHandler).toContain("confirmText: text('清除误导入正文', 'Clear incorrectly imported text')")

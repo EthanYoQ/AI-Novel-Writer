@@ -21,8 +21,13 @@ import {
   DEFAULT_IMPORT_RESOURCE_LIMITS,
   type ImportResourceLimits,
 } from '../../src/shared/import-limits'
-import type { ImportRunLocale, ImportSourceFileIdentity } from '../../src/shared/import-run'
-import type { ImportNovelFileSelectionRequest, ImportRunChapterInput } from '../../src/shared/import-run'
+import type {
+  ImportNovelFileSelectionRequest,
+  ImportPurpose,
+  ImportRunChapterInput,
+  ImportRunLocale,
+  ImportSourceFileIdentity,
+} from '../../src/shared/import-run'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { projectAccess } from '../services/project-access'
@@ -282,15 +287,17 @@ export function registerImportController(
   // The renderer receives only the final inspection token and safe display facts.
   ipcMain.handle('dialog:select-novel-files', async (
     event,
-    request?: ImportNovelFileSelectionRequest,
+    request?: ImportPurpose | ImportNovelFileSelectionRequest,
     projectSession?: ProjectSessionContext,
   ) => {
     event.sender.once('destroyed', () => {
       grantService.revokeWebContents(event.sender.id)
       inspectionStore.revokeForWebContents(event.sender.id)
     })
+    const structuredRequest = typeof request === 'object' && request !== null ? request : undefined
+    const purpose: ImportPurpose = typeof request === 'string' ? request : (structuredRequest?.purpose ?? 'reference')
     let frozenProject: { rootPath: string; session: ProjectSessionContext } | undefined
-    let responseLocale = request?.locale
+    let responseLocale = structuredRequest?.locale
     const assertFrozenProject = () => {
       if (!frozenProject) return
       const active = projectAccess.assertCurrentProjectContext(
@@ -300,17 +307,19 @@ export function registerImportController(
       assertRequiredExpectedProjectPath(active.rootPath, frozenProject.rootPath)
     }
     try {
-      if (request) {
+      if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('IMPORT_PURPOSE_INVALID')
+      if (structuredRequest) {
         const active = projectAccess.assertCurrentProjectContext(projectSession, getCurrentProjectPath())
-        assertRequiredExpectedProjectPath(active.rootPath, request.expectedProjectPath)
+        assertRequiredExpectedProjectPath(active.rootPath, structuredRequest.expectedProjectPath)
         frozenProject = {
           rootPath: active.rootPath,
           session: Object.freeze({ ...projectSession }) as ProjectSessionContext,
         }
-        if (request.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
       }
       const result = await dialog.showOpenDialog({
-        title: text('选择要导入的小说文件', 'Choose novel files to import'),
+        title: purpose === 'author-manuscript'
+          ? text('选择作者原稿文件', 'Choose author manuscript files')
+          : text('选择参考小说文件', 'Choose reference novel files'),
         filters: [
           { name: text('小说文本', 'Novel text'), extensions: ['txt', 'md', 'text'] },
           { name: text('所有文件', 'All files'), extensions: ['*'] },
@@ -341,10 +350,10 @@ export function registerImportController(
       }).sort((left, right) => left.displayName.localeCompare(right.displayName, 'zh-CN', { numeric: true }))
       const encodedIdentities = ImportSourceIdentityRepository.encodeSources(
         selected.map(source => source.identity),
-        'reference',
+        purpose,
         applicationSecret ?? loadApplicationImportSourceSecret(),
       )
-      const parsingContext = request
+      const parsingContext = structuredRequest?.purpose === 'reference'
         ? (() => {
             assertFrozenProject()
             const projectDb = getProjectDb()
@@ -352,12 +361,12 @@ export function registerImportController(
             return projectDb.transaction(() => {
               const resolvedIdentity = ImportSourceIdentityRepository.resolveEncodedSources(
                 encodedIdentities,
-                request.purpose,
+                structuredRequest.purpose,
                 applicationSecret ?? loadApplicationImportSourceSecret(),
               )
               const parsingRun = ImportRunRepository.beginParsing({
-                runId: request.runId,
-                purpose: request.purpose,
+                runId: structuredRequest.runId,
+                purpose: structuredRequest.purpose,
                 sourceFingerprint: resolvedIdentity.sourceFingerprint,
                 sourceIds: resolvedIdentity.sourceIds,
                 sourceFingerprints: resolvedIdentity.sourceFingerprints,
@@ -368,7 +377,7 @@ export function registerImportController(
                   mediaType: sourceMediaType(source.displayName),
                   size: source.selectedSize,
                 })),
-                locale: request.locale,
+                locale: structuredRequest.locale,
               })
               if (parsingRun.totalContentSize > limits.maxTotalBytes - selectedBytes) {
                 throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
@@ -569,22 +578,38 @@ export function registerImportController(
 
       // Preview numbers are renderer-only. Stable global numbers are assigned
       // later from (opaque source id, source-local chapter number) in SQLite.
-      const renumbered = inspectedChapters.map((ch, idx) => ({
+      const numbered = inspectedChapters.map((ch, idx) => ({
         ...ch,
-        number: idx + 1,
+        number: purpose === 'author-manuscript' ? ch.number : idx + 1,
         contentFingerprint: sha256(ch.content),
         contentSize: Buffer.byteLength(ch.content, 'utf8'),
       }))
+      if (purpose === 'author-manuscript') {
+        const seen = new Set<number>()
+        for (const chapter of numbered) {
+          if (!Number.isSafeInteger(chapter.number) || chapter.number < 1 || seen.has(chapter.number)) {
+            throw new Error(`AUTHOR_MANUSCRIPT_DUPLICATE_CHAPTER:${chapter.number}`)
+          }
+          seen.add(chapter.number)
+        }
+      }
 
       return {
         success: true,
-        inspection: inspectionStore.create({ webContentsId: event.sender.id, sources, chapters: renumbered }),
+        inspection: inspectionStore.create({ webContentsId: event.sender.id, purpose, sources, chapters: numbered }),
       }
     } catch (error) {
       inspectionStore.revokeForWebContents(event.sender.id)
+      const message = error instanceof Error ? error.message : String(error)
+      const duplicateChapter = /^AUTHOR_MANUSCRIPT_DUPLICATE_CHAPTER:(\d+)$/u.exec(message)
       return {
         success: false,
-        error: importSelectionErrorMessage(error, responseLocale, limits),
+        error: duplicateChapter
+          ? text(
+              `作者原稿包含重复的第 ${duplicateChapter[1]} 章；请修正章节号后重新选择。`,
+              `The author manuscript contains duplicate Chapter ${duplicateChapter[1]}. Correct the chapter numbers and choose the files again.`,
+            )
+          : importSelectionErrorMessage(error, responseLocale, limits),
       }
     }
   })

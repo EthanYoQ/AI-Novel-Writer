@@ -7,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ImportRunRepository } from '../import-run-repository'
-import { createImportRunChapterBatchCheckpointId, type ImportRunPrepareRequest, type ImportRunExecutionAuthority } from '../../../src/shared/import-run'
+import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
+import {
+  createImportRunChapterBatchCheckpointId,
+  type ImportRunExecutionAuthority,
+  type ImportRunPrepareRequest,
+} from '../../../src/shared/import-run'
 import {
   ImportRunOrchestrator,
   type ImportRunOrchestratorDependencies,
@@ -193,6 +198,170 @@ describe('ImportRunRepository', () => {
     ]))
   })
 
+  it('expands the shipped stage constraint without losing indexes or child foreign keys', () => {
+    closeProjectDatabase()
+    const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+    legacy.pragma('foreign_keys = OFF')
+    legacy.exec(`
+      DROP TABLE import_runs;
+      CREATE TABLE import_runs (
+        id TEXT PRIMARY KEY,
+        purpose TEXT NOT NULL DEFAULT 'reference'
+          CHECK(purpose IN ('reference', 'author-manuscript')),
+        root_run_id TEXT NOT NULL,
+        effect_namespace TEXT NOT NULL,
+        source_fingerprint TEXT NOT NULL,
+        manifest_fingerprint TEXT NOT NULL,
+        source_display_json TEXT NOT NULL DEFAULT '[]',
+        locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
+        stage TEXT NOT NULL DEFAULT 'knowledge'
+          CHECK(stage IN ('knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed')),
+        status TEXT NOT NULL DEFAULT 'ready'
+          CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
+        completed_batches_json TEXT NOT NULL DEFAULT '{}',
+        last_error TEXT NOT NULL DEFAULT '',
+        resumable INTEGER NOT NULL DEFAULT 1 CHECK(resumable IN (0, 1)),
+        cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0, 1)),
+        execution_owner TEXT NOT NULL DEFAULT '',
+        execution_epoch INTEGER NOT NULL DEFAULT 0,
+        lease_expires_at INTEGER NOT NULL DEFAULT 0,
+        total_chapters INTEGER NOT NULL,
+        total_content_size INTEGER NOT NULL DEFAULT 0,
+        manifest_chapter_count INTEGER NOT NULL,
+        manifest_content_size INTEGER NOT NULL DEFAULT 0,
+        manifest_word_count INTEGER NOT NULL DEFAULT 0,
+        completed_chapters INTEGER NOT NULL DEFAULT 0,
+        base_run_id TEXT DEFAULT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT DEFAULT NULL,
+        FOREIGN KEY (base_run_id) REFERENCES import_runs(id) ON DELETE SET NULL
+      );
+    `)
+    legacy.close()
+
+    expect(() => initProjectDatabase(root)).not.toThrow()
+    const db = getProjectDb()!
+    const schema = db.prepare(`
+      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'import_runs'
+    `).get() as { sql: string }
+    expect(schema.sql).toContain('author-commit')
+    const indexes = db.prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'import_runs'
+    `).all() as Array<{ name: string }>
+    expect(indexes.map(index => index.name)).toEqual(expect.arrayContaining([
+      'idx_import_runs_source_status',
+      'idx_import_runs_resumable',
+      'idx_import_runs_purpose_source_status',
+    ]))
+    expect(db.pragma('foreign_key_check')).toEqual([])
+
+    const manuscript = [chapter(1, 'author chapter one')]
+    const preview = FinalizedDraftImportRepository.preview(manuscript.map(item => ({
+      chapterNumber: item.number,
+      title: item.title,
+      content: item.content,
+      wordCount: item.content.length,
+    })))
+    expect(ImportRunRepository.prepare(request(manuscript, {
+      purpose: 'author-manuscript',
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    })).run).toMatchObject({ stage: 'author-commit', purpose: 'author-manuscript' })
+  })
+
+  it.each([
+    {
+      label: '#152-only reference schema',
+      extraColumn: "legacy_source_fingerprint TEXT NOT NULL DEFAULT ''",
+      extraName: 'legacy_source_fingerprint',
+      extraValue: 'c'.repeat(64),
+      purpose: 'reference',
+      stage: 'prepared',
+      stages: "'parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed'",
+    },
+    {
+      label: '#153-only author schema',
+      extraColumn: "authority_fingerprint TEXT NOT NULL DEFAULT ''",
+      extraName: 'authority_fingerprint',
+      extraValue: 'd'.repeat(64),
+      purpose: 'author-manuscript',
+      stage: 'author-publish',
+      stages: "'knowledge', 'global', 'style', 'blueprints', 'author-commit', 'author-publish', 'author-postprocess', 'refresh', 'completed'",
+    },
+  ])('migrates a $label without losing its purpose-specific state', (variant) => {
+    closeProjectDatabase()
+    const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+    legacy.pragma('foreign_keys = OFF')
+    legacy.exec(`
+      DROP TABLE import_runs;
+      CREATE TABLE import_runs (
+        id TEXT PRIMARY KEY,
+        purpose TEXT NOT NULL DEFAULT 'reference'
+          CHECK(purpose IN ('reference', 'author-manuscript')),
+        root_run_id TEXT NOT NULL,
+        effect_namespace TEXT NOT NULL,
+        source_fingerprint TEXT NOT NULL,
+        manifest_fingerprint TEXT NOT NULL,
+        ${variant.extraColumn},
+        source_display_json TEXT NOT NULL DEFAULT '[]',
+        locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
+        stage TEXT NOT NULL DEFAULT 'knowledge' CHECK(stage IN (${variant.stages})),
+        status TEXT NOT NULL DEFAULT 'ready'
+          CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
+        completed_batches_json TEXT NOT NULL DEFAULT '{}',
+        last_error TEXT NOT NULL DEFAULT '',
+        resumable INTEGER NOT NULL DEFAULT 1 CHECK(resumable IN (0, 1)),
+        cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0, 1)),
+        execution_owner TEXT NOT NULL DEFAULT '',
+        execution_epoch INTEGER NOT NULL DEFAULT 0,
+        lease_expires_at INTEGER NOT NULL DEFAULT 0,
+        total_chapters INTEGER NOT NULL,
+        total_content_size INTEGER NOT NULL DEFAULT 0,
+        manifest_chapter_count INTEGER NOT NULL,
+        manifest_content_size INTEGER NOT NULL DEFAULT 0,
+        manifest_word_count INTEGER NOT NULL DEFAULT 0,
+        completed_chapters INTEGER NOT NULL DEFAULT 0,
+        base_run_id TEXT DEFAULT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT DEFAULT NULL,
+        FOREIGN KEY (base_run_id) REFERENCES import_runs(id) ON DELETE SET NULL
+      );
+      INSERT INTO import_runs (
+        id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint,
+        ${variant.extraName}, locale, stage, status, total_chapters, manifest_chapter_count
+      ) VALUES (
+        'split-schema-run', '${variant.purpose}', 'split-schema-run',
+        'import:${variant.purpose}:split-schema-run', '${'a'.repeat(64)}', '${'b'.repeat(64)}',
+        '${variant.extraValue}', 'en-US', '${variant.stage}', 'ready', 1, 1
+      );
+    `)
+    legacy.close()
+
+    expect(() => initProjectDatabase(root)).not.toThrow()
+    const db = getProjectDb()!
+    const columns = db.prepare('PRAGMA table_info(import_runs)').all() as Array<{ name: string }>
+    expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'authority_fingerprint', 'legacy_source_fingerprint',
+    ]))
+    const schema = db.prepare(`
+      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'import_runs'
+    `).get() as { sql: string }
+    expect(schema.sql).toContain("'parsing'")
+    expect(schema.sql).toContain("'author-commit'")
+    expect(db.prepare(`
+      SELECT purpose, stage, authority_fingerprint, legacy_source_fingerprint
+      FROM import_runs WHERE id = 'split-schema-run'
+    `).get()).toEqual({
+      purpose: variant.purpose,
+      stage: variant.stage,
+      authority_fingerprint: variant.extraName === 'authority_fingerprint' ? variant.extraValue : '',
+      legacy_source_fingerprint: variant.extraName === 'legacy_source_fingerprint' ? variant.extraValue : '',
+    })
+    expect(db.pragma('foreign_key_check')).toEqual([])
+  })
+
   it('migrates legacy chapter rows to opaque source affiliations and stable mappings', () => {
     ImportRunRepository.prepare(request())
     markRunCompleted('import-run-1')
@@ -281,11 +450,455 @@ describe('ImportRunRepository', () => {
       .toEqual({ count: 1 })
   })
 
-  it('fails closed for the reserved author-manuscript purpose', () => {
-    expect(() => ImportRunRepository.prepare(request([chapter(1)], {
+  it('prepares an author manuscript at its original chapter numbers only from a frozen authority preview', () => {
+    const authorChapter = chapter(1, 'author chapter one')
+    const preview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: 1,
+      title: authorChapter.title,
+      content: authorChapter.content,
+      wordCount: authorChapter.content.length,
+    }])
+    const prepared = ImportRunRepository.prepare(request([authorChapter], {
       runId: 'unsupported-author',
       purpose: 'author-manuscript',
-    }))).toThrow(/不支持作者手稿/)
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+
+    expect(prepared).toMatchObject({
+      classification: 'new',
+      newChapterNumbers: [1],
+      run: {
+        purpose: 'author-manuscript',
+        stage: 'author-commit',
+        authorityFingerprint: preview.authorityFingerprint,
+      },
+    })
+    expect(ImportRunRepository.listChapterBatch('unsupported-author', { afterChapterNumber: 0, limit: 10 }))
+      .toEqual([expect.objectContaining({ number: 1, content: 'author chapter one' })])
+  })
+
+  it('commits and validates an author manuscript receipt against finalized draft facts', () => {
+    const authorChapter = chapter(1, 'author chapter one')
+    const preview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: 1,
+      title: authorChapter.title,
+      content: authorChapter.content,
+      wordCount: authorChapter.content.length,
+    }])
+    const runId = 'author-receipt-run'
+    ImportRunRepository.prepare(request([authorChapter], {
+      runId,
+      purpose: 'author-manuscript',
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+    const execution = ImportRunRepository.startOrResume(runId, 'author-runner').execution
+    ImportRunRepository.prepareEffectReceipt({
+      runId,
+      stage: 'author-commit',
+      batchId: 'done',
+      effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${runId}`,
+        runId,
+        authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, execution)
+
+    expect(ImportRunRepository.commitEffectReceipt(
+      runId, 'author-commit', 'done', execution,
+    )).toMatchObject({
+      receipt: {
+        state: 'committed',
+        effectReceipt: {
+          operationId: `author-import:${runId}`,
+          chapterNumbers: [1],
+        },
+      },
+      run: { completedBatches: { 'author-commit': ['done'] } },
+    })
+
+    closeProjectDatabase()
+    initProjectDatabase(root)
+    expect(ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done'))
+      .toMatchObject({ state: 'committed' })
+
+    getProjectDb()!.prepare(`
+      UPDATE contents SET body = 'tampered'
+      WHERE id = (
+        SELECT content_id FROM drafts
+        WHERE chapter_number = 1 AND status = 'finalized'
+        ORDER BY id DESC LIMIT 1
+      )
+    `).run()
+    expect(() => ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done'))
+      .toThrow(/receipt.*损坏|收据.*损坏/i)
+  })
+
+  it('binds an incremental author confirmation to the full manifest while committing only appended chapters', () => {
+    const confirmed = [
+      chapter(1, 'author chapter one'),
+      chapter(2, 'author chapter two'),
+      chapter(3, 'author chapter three'),
+    ]
+    FinalizedDraftImportRepository.commit(root, {
+      operationId: 'existing-author-chapters',
+      chapters: confirmed.slice(0, 2).map(item => ({
+        chapterNumber: item.number,
+        title: item.title,
+        content: item.content,
+        wordCount: item.content.length,
+      })),
+    })
+    const preview = FinalizedDraftImportRepository.preview(confirmed.map(item => ({
+      chapterNumber: item.number,
+      title: item.title,
+      content: item.content,
+      wordCount: item.content.length,
+    })))
+    expect(preview).toMatchObject({
+      classification: 'ready',
+      duplicateChapterNumbers: [1, 2],
+      newChapterNumbers: [3],
+    })
+
+    const runId = 'incremental-author-receipt'
+    const prepared = ImportRunRepository.prepare(request(confirmed, {
+      runId,
+      purpose: 'author-manuscript',
+      sourceFingerprint: 'b'.repeat(64),
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+    expect(prepared).toMatchObject({
+      classification: 'new',
+      duplicateChapterNumbers: [1, 2],
+      newChapterNumbers: [3],
+      run: { manifestFingerprint: preview.manifestFingerprint, totalChapters: 1, manifestChapterCount: 3 },
+    })
+    expect(ImportRunRepository.listChapterBatch(runId, { afterChapterNumber: 0, limit: 10 }))
+      .toEqual([expect.objectContaining({ number: 3, content: 'author chapter three' })])
+
+    const execution = ImportRunRepository.startOrResume(runId, 'incremental-author-runner').execution
+    ImportRunRepository.prepareEffectReceipt({
+      runId,
+      stage: 'author-commit',
+      batchId: 'done',
+      effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${runId}`,
+        runId,
+        authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, execution)
+
+    expect(ImportRunRepository.commitEffectReceipt(runId, 'author-commit', 'done', execution))
+      .toMatchObject({
+        receipt: { effectReceipt: { chapterNumbers: [3] } },
+        run: { completedBatches: { 'author-commit': ['done'] } },
+      })
+    expect(FinalizedDraftImportRepository.authoritySequence()).toMatchObject({
+      status: 'continuous', lastChapterNumber: 3, nextChapterNumber: 4,
+    })
+  })
+
+  it('rejects an incremental author commit when authority changes after the full manifest confirmation', () => {
+    const confirmed = [
+      chapter(1, 'author chapter one'),
+      chapter(2, 'author chapter two'),
+      chapter(3, 'author chapter three'),
+    ]
+    const finalized = (items: typeof confirmed) => items.map(item => ({
+      chapterNumber: item.number,
+      title: item.title,
+      content: item.content,
+      wordCount: item.content.length,
+    }))
+    FinalizedDraftImportRepository.commit(root, {
+      operationId: 'stale-existing-author-chapters',
+      chapters: finalized(confirmed.slice(0, 2)),
+    })
+    const preview = FinalizedDraftImportRepository.preview(finalized(confirmed))
+    const runId = 'stale-incremental-author'
+    ImportRunRepository.prepare(request(confirmed, {
+      runId,
+      purpose: 'author-manuscript',
+      sourceFingerprint: 'd'.repeat(64),
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+
+    FinalizedDraftImportRepository.commit(root, {
+      operationId: 'concurrent-third-chapter',
+      chapters: finalized(confirmed.slice(2)),
+    })
+    const execution = ImportRunRepository.startOrResume(runId, 'stale-author-runner').execution
+    ImportRunRepository.prepareEffectReceipt({
+      runId,
+      stage: 'author-commit',
+      batchId: 'done',
+      effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${runId}`,
+        runId,
+        authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, execution)
+
+    expect(() => ImportRunRepository.commitEffectReceipt(runId, 'author-commit', 'done', execution))
+      .toThrow(/权威章节已变化|预览已过期/)
+    expect(ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done'))
+      .toMatchObject({ state: 'prepared' })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts WHERE status = ?').get('finalized'))
+      .toEqual({ count: 3 })
+  })
+
+  it.each(['failed', 'cancelled'] as const)(
+    'fences a %s uncommitted author run after authority changes and prepares from the fresh confirmation',
+    (interruptedStatus) => {
+      const manuscript = [
+        chapter(1, 'author chapter one'),
+        chapter(2, 'author chapter two'),
+        chapter(3, 'author chapter three'),
+      ]
+      const finalized = (items: typeof manuscript) => items.map(item => ({
+        chapterNumber: item.number,
+        title: item.title,
+        content: item.content,
+        wordCount: item.content.length,
+      }))
+      FinalizedDraftImportRepository.commit(root, {
+        operationId: `authority-fence-existing-${interruptedStatus}`,
+        chapters: finalized(manuscript.slice(0, 1)),
+      })
+      const originalPreview = FinalizedDraftImportRepository.preview(finalized(manuscript))
+      const oldRunId = `authority-fence-old-${interruptedStatus}`
+      const sourceFingerprint = interruptedStatus === 'failed' ? '8'.repeat(64) : '9'.repeat(64)
+      ImportRunRepository.prepare(request(manuscript, {
+        runId: oldRunId,
+        purpose: 'author-manuscript',
+        sourceFingerprint,
+        authorityFingerprint: originalPreview.authorityFingerprint,
+        expectedManifestFingerprint: originalPreview.manifestFingerprint,
+      }))
+      const oldExecution = ImportRunRepository.startOrResume(
+        oldRunId,
+        `authority-fence-runner-${interruptedStatus}`,
+      ).execution
+      if (interruptedStatus === 'failed') {
+        ImportRunRepository.fail(oldRunId, 'author-commit', 'pre-commit interruption', oldExecution)
+      } else {
+        ImportRunRepository.requestCancel(oldRunId, oldExecution)
+        ImportRunRepository.cancelAtBoundary(oldRunId, oldExecution)
+      }
+
+      FinalizedDraftImportRepository.commit(root, {
+        operationId: `authority-fence-external-${interruptedStatus}`,
+        chapters: finalized(manuscript.slice(1, 2)),
+      })
+      const freshPreview = FinalizedDraftImportRepository.preview(finalized(manuscript))
+      expect(freshPreview).toMatchObject({
+        classification: 'ready',
+        duplicateChapterNumbers: [1, 2],
+        newChapterNumbers: [3],
+      })
+      expect(freshPreview.authorityFingerprint).not.toBe(originalPreview.authorityFingerprint)
+
+      expect(() => ImportRunRepository.prepare(request(manuscript, {
+        runId: `authority-fence-stale-${interruptedStatus}`,
+        purpose: 'author-manuscript',
+        sourceFingerprint,
+        authorityFingerprint: originalPreview.authorityFingerprint,
+        expectedManifestFingerprint: originalPreview.manifestFingerprint,
+      }))).toThrow(/权威章节已变化|预览已过期/)
+      expect(ImportRunRepository.get(oldRunId)).toMatchObject({
+        status: interruptedStatus,
+        resumable: true,
+      })
+
+      const freshRunId = `authority-fence-fresh-${interruptedStatus}`
+      const prepared = ImportRunRepository.prepare(request(manuscript, {
+        runId: freshRunId,
+        purpose: 'author-manuscript',
+        sourceFingerprint,
+        authorityFingerprint: freshPreview.authorityFingerprint,
+        expectedManifestFingerprint: freshPreview.manifestFingerprint,
+      }))
+      expect(prepared).toMatchObject({
+        classification: 'new',
+        duplicateChapterNumbers: [1, 2],
+        newChapterNumbers: [3],
+        run: { id: freshRunId, totalChapters: 1 },
+      })
+      expect(() => ImportRunRepository.startOrResume(oldRunId, 'stale-old-runner'))
+        .toThrow(/authority changed|权威状态已变化|重新确认/i)
+
+      const freshExecution = ImportRunRepository.startOrResume(freshRunId, 'fresh-author-runner').execution
+      ImportRunRepository.prepareEffectReceipt({
+        runId: freshRunId,
+        stage: 'author-commit',
+        batchId: 'done',
+        effectKey: 'author-finalized-batch',
+        kind: 'author-finalized-batch',
+        payload: {
+          operationId: `author-import:${freshRunId}`,
+          runId: freshRunId,
+          authorityFingerprint: freshPreview.authorityFingerprint,
+          manifestFingerprint: freshPreview.manifestFingerprint,
+        },
+      }, freshExecution)
+      expect(ImportRunRepository.commitEffectReceipt(
+        freshRunId,
+        'author-commit',
+        'done',
+        freshExecution,
+      )).toMatchObject({
+        receipt: { state: 'committed', effectReceipt: { chapterNumbers: [3] } },
+      })
+      expect(getProjectDb()!.prepare(
+        "SELECT COUNT(*) AS count FROM drafts WHERE status = 'finalized'",
+      ).get()).toEqual({ count: 3 })
+    },
+  )
+
+  it('keeps a failed committed author run resumable and rejects restarting it from author-commit', () => {
+    const imported = chapter(1, 'author chapter one')
+    const preview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: imported.number,
+      title: imported.title,
+      content: imported.content,
+      wordCount: imported.content.length,
+    }])
+    const runId = 'committed-author-recovery'
+    ImportRunRepository.prepare(request([imported], {
+      runId,
+      purpose: 'author-manuscript',
+      sourceFingerprint: 'c'.repeat(64),
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+    let execution = ImportRunRepository.startOrResume(runId, 'author-before-failure').execution
+    ImportRunRepository.prepareEffectReceipt({
+      runId,
+      stage: 'author-commit',
+      batchId: 'done',
+      effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${runId}`,
+        runId,
+        authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, execution)
+    ImportRunRepository.commitEffectReceipt(runId, 'author-commit', 'done', execution)
+    ImportRunRepository.advanceStage(runId, 'author-commit', 'author-publish', execution)
+    ImportRunRepository.fail(runId, 'author-publish', 'publication unavailable', execution)
+
+    const currentPreview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: imported.number,
+      title: imported.title,
+      content: imported.content,
+      wordCount: imported.content.length,
+    }])
+    expect(ImportRunRepository.prepare(request([imported], {
+      runId: 'committed-author-reselection',
+      purpose: 'author-manuscript',
+      sourceFingerprint: 'c'.repeat(64),
+      authorityFingerprint: currentPreview.authorityFingerprint,
+      expectedManifestFingerprint: currentPreview.manifestFingerprint,
+    }))).toMatchObject({
+      classification: 'resumable',
+      run: { id: runId, stage: 'author-publish', status: 'failed' },
+    })
+
+    expect(() => ImportRunRepository.restart(runId, 'forbidden-author-restart'))
+      .toThrow(/作者原稿.*继续|author.*continue/i)
+    expect(ImportRunRepository.get('forbidden-author-restart')).toBeNull()
+    expect(ImportRunRepository.get(runId)).toMatchObject({
+      stage: 'author-publish', status: 'failed', resumable: true,
+      completedBatches: { 'author-commit': ['done'] },
+    })
+
+    execution = ImportRunRepository.startOrResume(runId, 'author-after-failure').execution
+    expect(ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done')).toMatchObject({
+      state: 'committed',
+      effectReceipt: { chapterNumbers: [1] },
+    })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts WHERE status = ?').get('finalized'))
+      .toEqual({ count: 1 })
+    expect(execution).toMatchObject({ owner: 'author-after-failure' })
+  })
+
+  it('cancels a committed author run at a durable boundary, releases its lease, and resumes without repeating finalization', () => {
+    const imported = chapter(1, 'author chapter one')
+    const preview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: imported.number,
+      title: imported.title,
+      content: imported.content,
+      wordCount: imported.content.length,
+    }])
+    const runId = 'cancelled-author-recovery'
+    ImportRunRepository.prepare(request([imported], {
+      runId,
+      purpose: 'author-manuscript',
+      sourceFingerprint: 'e'.repeat(64),
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))
+    const firstExecution = ImportRunRepository.startOrResume(runId, 'author-before-cancel').execution
+    ImportRunRepository.prepareEffectReceipt({
+      runId,
+      stage: 'author-commit',
+      batchId: 'done',
+      effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${runId}`,
+        runId,
+        authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, firstExecution)
+    ImportRunRepository.commitEffectReceipt(runId, 'author-commit', 'done', firstExecution)
+    ImportRunRepository.advanceStage(runId, 'author-commit', 'author-publish', firstExecution)
+    ImportRunRepository.requestCancel(runId, firstExecution)
+
+    expect(ImportRunRepository.cancelAtBoundary(runId, firstExecution)).toMatchObject({
+      stage: 'author-publish', status: 'cancelled', resumable: true, cancelRequested: true,
+    })
+    expect(getProjectDb()!.prepare(`
+      SELECT execution_owner, lease_expires_at FROM import_runs WHERE id = ?
+    `).get(runId)).toEqual({ execution_owner: '', lease_expires_at: 0 })
+
+    const resumed = ImportRunRepository.startOrResume(runId, 'author-after-cancel')
+    expect(resumed).toMatchObject({
+      run: { stage: 'author-publish', status: 'running', cancelRequested: false },
+      execution: { owner: 'author-after-cancel' },
+    })
+    expect(ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done'))
+      .toMatchObject({ state: 'committed', effectReceipt: { chapterNumbers: [1] } })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts WHERE status = ?').get('finalized'))
+      .toEqual({ count: 1 })
+  })
+
+  it('rejects a stale or gapped author-manuscript preview without writing a run', () => {
+    const first = chapter(1, 'author chapter one')
+    const preview = FinalizedDraftImportRepository.preview([{
+      chapterNumber: 1, title: first.title, content: first.content, wordCount: first.content.length,
+    }])
+    expect(() => ImportRunRepository.prepare(request([chapter(2, 'skips chapter one')], {
+      runId: 'gapped-author', purpose: 'author-manuscript',
+      authorityFingerprint: preview.authorityFingerprint,
+      expectedManifestFingerprint: preview.manifestFingerprint,
+    }))).toThrow(/清单.*预览|预览.*清单/)
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_runs').get()).toEqual({ count: 0 })
   })
 

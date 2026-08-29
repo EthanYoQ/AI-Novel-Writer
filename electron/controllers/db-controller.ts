@@ -28,7 +28,11 @@ import type {
   ImportRunPrepareFromInspectionRequest,
   ImportRunStage,
 } from '../../src/shared/import-run'
-import { isImportRunDirectCheckpointStage } from '../../src/shared/import-run'
+import {
+  AUTHOR_IMPORT_PREVIEW_STALE,
+  isAuthorImportPreviewStaleError,
+  isImportRunDirectCheckpointStage,
+} from '../../src/shared/import-run'
 import { ImportSourceIdentityRepository } from '../repositories/import-source-identity-repository'
 import { importInspectionStore } from '../services/import-inspection-store'
 import { loadApplicationImportSourceSecret } from '../services/import-source-identity-secret'
@@ -166,11 +170,21 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    if (request.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
-    const inspection = importInspectionStore.consume(
-      request.inspectionId,
-      (event as IpcMainInvokeEvent).sender.id,
-    )
+    const webContentsId = (event as IpcMainInvokeEvent).sender.id
+    const inspected = importInspectionStore.peek(request.inspectionId, webContentsId, request.purpose)
+    if (request.purpose === 'author-manuscript') {
+      const preview = FinalizedDraftImportRepository.preview(inspected.chapters.map(chapter => ({
+        chapterNumber: chapter.number,
+        title: chapter.title,
+        content: chapter.content,
+        wordCount: chapter.wordCount,
+      })))
+      if (
+        preview.authorityFingerprint !== request.authorityFingerprint
+        || preview.manifestFingerprint !== request.manifestFingerprint
+      ) return { success: false as const, errorCode: AUTHOR_IMPORT_PREVIEW_STALE }
+    }
+    const inspection = importInspectionStore.consume(request.inspectionId, webContentsId)
     const sourceIdentity = ImportSourceIdentityRepository.resolveEncodedSources(
       inspection.sources.map(source => ({
         locationAliasDigest: source.locationAliasDigest,
@@ -184,6 +198,30 @@ export function registerDatabaseController() {
       mediaType: source.mediaType,
       size: source.size,
     }))
+    if (request.purpose === 'author-manuscript') {
+      try {
+        return {
+          success: true as const,
+          preparation: ImportRunRepository.prepare({
+            runId: request.runId,
+            purpose: request.purpose,
+            sourceFingerprint: sourceIdentity.sourceFingerprint,
+            sourceIds: sourceIdentity.sourceIds,
+            sourceFingerprints: sourceIdentity.sourceFingerprints,
+            sourceDisplay,
+            locale: request.locale,
+            authorityFingerprint: request.authorityFingerprint,
+            expectedManifestFingerprint: request.manifestFingerprint,
+            chapters: inspection.chapters,
+          }),
+        }
+      } catch (error) {
+        if (isAuthorImportPreviewStaleError(error)) {
+          return { success: false as const, errorCode: AUTHOR_IMPORT_PREVIEW_STALE }
+        }
+        throw error
+      }
+    }
     const parsingRun = ImportRunRepository.beginParsing({
       runId: request.runId,
       purpose: request.purpose,
@@ -228,6 +266,25 @@ export function registerDatabaseController() {
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return { success: true, preparation: ImportRunRepository.finalizeParsing(runId) }
+  })
+
+  ipcMain.handle('db:import-run-author-preview', async (
+    event,
+    inspectionId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    const inspection = importInspectionStore.peek(
+      inspectionId,
+      (event as IpcMainInvokeEvent).sender.id,
+      'author-manuscript',
+    )
+    return FinalizedDraftImportRepository.preview(inspection.chapters.map(chapter => ({
+      chapterNumber: chapter.number,
+      title: chapter.title,
+      content: chapter.content,
+      wordCount: chapter.wordCount,
+    })))
   })
 
   ipcMain.handle('db:import-run-get', async (_event, runId: string, expectedProjectPath: string) => {
@@ -463,8 +520,8 @@ export function registerDatabaseController() {
   ipcMain.handle('db:blueprint-update-notes', async (_event, chapterNumber: number, notes: string, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      BlueprintRepository.updateNotes(chapterNumber, notes)
-      return { success: true }
+      const updated = BlueprintRepository.updateNotes(chapterNumber, notes)
+      return { success: true, updated }
     } catch (err) {
       return { success: false, error: String(err) }
     }
@@ -578,6 +635,27 @@ export function registerDatabaseController() {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return DraftRepository.getMaxFinalizedChapter()
   })
+
+  ipcMain.handle('db:draft-authority-sequence', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return FinalizedDraftImportRepository.authoritySequence()
+  })
+
+  ipcMain.handle('db:continuity-save-finalized', async (_event, request, expectedProjectPath: string) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      SummaryRepository.saveFinalizedContinuity(request)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:continuity-list-before', async (_event, chapterNumber: number, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return SummaryRepository.listFinalizedContinuityBefore(chapterNumber)
+  })
+
   ipcMain.handle('db:draft-next-version', async (_event, chapterNumber: number, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return DraftRepository.getNextVersion(chapterNumber)

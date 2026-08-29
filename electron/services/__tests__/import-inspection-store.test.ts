@@ -17,6 +17,7 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ now: () => now, ttlMs: 100, maxActive: 2, maxAggregateBytes: 100 })
     const summary = store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'a'.repeat(64), fileAliasDigest: 'b'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(1)],
     })
@@ -32,6 +33,7 @@ describe('ImportInspectionStore bounds', () => {
 
     const expiring = store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'c'.repeat(64), fileAliasDigest: 'd'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(2)],
     })
@@ -43,11 +45,13 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ maxAggregateBytes: 10 })
     expect(() => store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 5_001 }],
       chapters: Array.from({ length: 5_001 }, (_, index) => chapter(index + 1)),
     })).toThrow(/5000/)
     expect(() => store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 11 }],
       chapters: [chapter(1, '12345678901')],
     })).toThrow(/字节/)
@@ -58,6 +62,7 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore()
     expect(() => store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'not-an-alias', displayName: 'C:/private/book.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(1)],
     })).toThrow(/来源/)
@@ -68,11 +73,13 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ maxActive: 1, maxAggregateBytes: 10 })
     store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 6 }],
       chapters: [chapter(1, '123456')],
     })
     expect(() => store.create({
       webContentsId: 8,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'b'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(2, 'x')],
     })).toThrow(/待处理导入检查过多/)
@@ -82,12 +89,14 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ maxAggregateBytes: 10 })
     const valid = store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(1)],
     })
 
     expect(() => store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'b'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 11 }],
       chapters: [chapter(2, '12345678901')],
     })).toThrow(/字节/)
@@ -99,11 +108,13 @@ describe('ImportInspectionStore bounds', () => {
     const store = new ImportInspectionStore({ maxActive: 1, maxAggregateBytes: 10 })
     const previous = store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 6 }],
       chapters: [chapter(1, '123456')],
     })
     const replacement = store.create({
       webContentsId: 7,
+      purpose: 'reference',
       sources: [{ locationAliasDigest: 'b'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 10 }],
       chapters: [chapter(2, '1234567890')],
     })

@@ -13,6 +13,8 @@ import DirectoryConfigDialog from '../DirectoryConfigDialog'
 let root: Root
 let container: HTMLDivElement
 let invoke: ReturnType<typeof vi.fn>
+let authoritativeNextChapter: number
+let authorityGap: number | null
 
 const project = {
   id: 'dialogs', sessionLease: 'lease-dialogs', name: 'Dialogs', path: 'C:\\novels\\dialogs',
@@ -24,14 +26,32 @@ const project = {
 }
 
 beforeEach(() => {
+  authoritativeNextChapter = 1
+  authorityGap = null
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: project as never })
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
-  invoke = vi.fn(async (channel: string) => (
-    channel === 'db:blueprint-character-sync-list-pending' ? [] : { success: true }
-  ))
+  invoke = vi.fn(async (channel: string) => {
+    if (channel === 'db:blueprint-character-sync-list-pending') return []
+    if (channel === 'db:draft-authority-sequence') return authorityGap === null
+      ? {
+          status: authoritativeNextChapter === 1 ? 'empty' : 'continuous',
+          lastChapterNumber: authoritativeNextChapter - 1,
+          nextChapterNumber: authoritativeNextChapter,
+          duplicateChapterNumbers: [],
+          authorityFingerprint: 'a'.repeat(64),
+        }
+      : {
+          status: 'invalid',
+          lastChapterNumber: 9,
+          firstGapChapterNumber: authorityGap,
+          duplicateChapterNumbers: [],
+          authorityFingerprint: 'b'.repeat(64),
+        }
+    return { success: true }
+  })
   Object.defineProperty(window, 'velaAPI', {
     configurable: true,
     value: {
@@ -54,6 +74,46 @@ afterEach(async () => {
 })
 
 describe('workflow launch dialogs', () => {
+  it('defaults blueprint append generation to Chapter 10 after imported finalized Chapters 1 through 9', async () => {
+    authoritativeNextChapter = 10
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    await act(async () => root.render(
+      <DirectoryConfigDialog
+        isOpen
+        onClose={vi.fn()}
+        existingCount={0}
+        onConfirm={onConfirm}
+      />,
+    ))
+
+    await expect.element(page.getByText(/从第 10 章起往后生成/)).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '开始生成' }).click())
+
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledOnce())
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'append',
+      startChapter: 10,
+      count: 1,
+    }))
+  })
+
+  it('blocks blueprint generation when finalized authority has a gap', async () => {
+    authorityGap = 4
+    const onConfirm = vi.fn()
+    await act(async () => root.render(
+      <DirectoryConfigDialog
+        isOpen
+        onClose={vi.fn()}
+        existingCount={0}
+        onConfirm={onConfirm}
+      />,
+    ))
+
+    await expect.element(page.getByText(/权威定稿缺少第 4 章/)).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '开始生成' })).toBeDisabled()
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
   it('keeps architecture confirmation open and reports launcher rejection', async () => {
     const onClose = vi.fn()
     await act(async () => root.render(
@@ -107,6 +167,13 @@ describe('workflow launch dialogs', () => {
       updatedAt: '2026-01-01 00:00:00',
     }
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:draft-authority-sequence') return {
+        status: 'empty',
+        lastChapterNumber: 0,
+        nextChapterNumber: 1,
+        duplicateChapterNumbers: [],
+        authorityFingerprint: 'c'.repeat(64),
+      }
       if (channel === 'db:blueprint-character-sync-list-pending') return pending ? [operation] : []
       if (channel === 'db:blueprint-character-sync-get') return operation
       if (channel === 'db:blueprint-character-sync-complete') {

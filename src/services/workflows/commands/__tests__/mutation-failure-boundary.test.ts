@@ -358,6 +358,42 @@ describe('workflow mutation failure boundaries', () => {
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('剧情要点提取完成'))
   })
 
+  it('persists finalized continuity when the author chapter has no blueprint', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:continuity-save-finalized') return { success: true }
+      if (channel === 'db:blueprint-update-notes') return { success: true, updated: false }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    useLLMStore.setState({
+      defaultModelId: 'model',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        streamCallbacks.onDone?.('作者原稿的连续性事实', undefined, 'stop')
+        return 'request-1'
+      }),
+    })
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      '第一章',
+      '作者正文',
+      testPostProcessGeneration(),
+      41,
+    ).find(candidate => candidate.key === 'chapter_notes')
+
+    await expect(step!.executor(callbacks(), context())).resolves.toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith(
+      'db:continuity-save-finalized',
+      {
+        draftId: 41,
+        chapterNumber: 1,
+        chapterNotes: '作者原稿的连续性事实',
+      },
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+    )
+  })
+
   it('records the finalized knowledge document identity before marking import complete', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'kb:import-text') {

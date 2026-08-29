@@ -13,6 +13,10 @@ import type { ModelCapabilities } from './provider-presets'
 import type { ModelProviderResourceId } from './model-provider-resources'
 import type { WritingLanguage } from './writing-language'
 import type {
+  FinalizedContinuityProjection,
+  SaveFinalizedContinuityRequest,
+} from './finalized-continuity'
+import type {
   UpdateActionResponse,
   UpdateCheckResponse,
   UpdatePreferences,
@@ -37,8 +41,10 @@ import type {
   ImportRunExecutionAuthority,
   ImportRunExecutionLease,
   ImportInspectionSummary,
+  ImportPurpose,
   ImportNovelFileSelectionRequest,
   ImportRunPreparationResult,
+  ImportRunPrepareFromInspectionResult,
   ImportRunPrepareFromInspectionRequest,
   ImportRunPrepareEffectReceiptRequest,
   ImportRunSnapshot,
@@ -631,6 +637,10 @@ import type {
   FinalizedDraftImportRequest,
 } from './finalized-draft-import'
 import type {
+  AuthorManuscriptImportPreview,
+  AuthoritativeChapterSequence,
+} from './author-manuscript-import'
+import type {
   ImportGlobalFactsReceipt,
   ImportGlobalFactsRequest,
 } from './import-global-facts'
@@ -655,7 +665,11 @@ export interface DatabaseChannels {
   'db:project-clear-generated-data': { args: [options: ProjectClearOptions, expectedProjectPath: string]; return: { success: boolean; cleared?: ProjectClearScope[]; physicalFilesDeleted?: number; error?: string } }
   'db:import-run-prepare-inspection': {
     args: [request: ImportRunPrepareFromInspectionRequest, expectedProjectPath: string]
-    return: { success: boolean; preparation?: ImportRunPreparationResult; error?: string }
+    return: ImportRunPrepareFromInspectionResult
+  }
+  'db:import-run-author-preview': {
+    args: [inspectionId: string, expectedProjectPath: string]
+    return: AuthorManuscriptImportPreview
   }
   'db:import-run-finalize-parsing': {
     args: [runId: string, expectedProjectPath: string]
@@ -722,7 +736,7 @@ export interface DatabaseChannels {
     ]
     return: { success: boolean; operation?: BlueprintCharacterSyncOperation; error?: string }
   }
-  'db:blueprint-update-notes': { args: [chapterNumber: number, notes: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }
+  'db:blueprint-update-notes': { args: [chapterNumber: number, notes: string, expectedProjectPath: string]; return: { success: boolean; updated?: boolean; error?: string } }
   'db:blueprint-delete': { args: [chapterNumber: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:blueprint-clear-all': { args: [expectedProjectPath: string]; return: { success: boolean; error?: string } }
 
@@ -753,6 +767,15 @@ export interface DatabaseChannels {
   'db:draft-get-latest': { args: [chapterNumber: number, expectedProjectPath: string]; return: DraftMeta | null }
   'db:draft-get-finalized': { args: [chapterNumber: number, expectedProjectPath: string]; return: DraftMeta | null }
   'db:draft-get-max-finalized-chapter': { args: [expectedProjectPath: string]; return: number }
+  'db:draft-authority-sequence': { args: [expectedProjectPath: string]; return: AuthoritativeChapterSequence }
+  'db:continuity-save-finalized': {
+    args: [request: SaveFinalizedContinuityRequest, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
+  'db:continuity-list-before': {
+    args: [chapterNumber: number, expectedProjectPath: string]
+    return: FinalizedContinuityProjection[]
+  }
   'db:draft-next-version': { args: [chapterNumber: number, expectedProjectPath: string]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:draft-update-content': { args: [id: number, content: string, wordCount: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
@@ -820,6 +843,7 @@ export interface KnowledgeBaseChannels {
     return: { success: boolean; docId?: string; chunkCount?: number; idempotent?: boolean; error?: string; errorCode?: AppErrorCode }
   }
   'kb:search': { args: [query: string, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
+  'kb:search-writing-context': { args: [query: string, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:search-with-scope': { args: [query: string, fromChapter: number, toChapter: number, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:list-documents': { args: [expectedProjectPath: string]; return: AppResult<Array<{ id: string; fileName: string; importedAt: string; chunkCount: number; filePath: string }>> }
   'kb:remove-document': { args: [docId: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }
@@ -845,10 +869,10 @@ export interface KnowledgeBaseChannels {
   'kb:backfill-vectors': { args: [expectedProjectPath: string]; return: { success: boolean; processed: number; failed: number; error?: string; errorCode?: AppErrorCode } }
 }
 
-// ===== 导入小说 =====
+  // ===== 导入小说 =====
 export interface ImportChannels {
   'dialog:select-novel-files': {
-    args: [request?: ImportNovelFileSelectionRequest, projectSession?: ProjectSessionContext]
+    args: [request?: ImportPurpose | ImportNovelFileSelectionRequest, projectSession?: ProjectSessionContext]
     return: {
       success: boolean
       inspection?: ImportInspectionSummary

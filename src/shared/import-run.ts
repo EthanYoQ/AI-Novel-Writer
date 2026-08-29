@@ -1,5 +1,23 @@
 export type ImportRunLocale = 'zh-CN' | 'en-US'
 export type ImportPurpose = 'reference' | 'author-manuscript'
+export const AUTHOR_IMPORT_PREVIEW_STALE = 'AUTHOR_IMPORT_PREVIEW_STALE' as const
+
+export class AuthorImportPreviewStaleError extends Error {
+  readonly code = AUTHOR_IMPORT_PREVIEW_STALE
+
+  constructor(message = 'Author manuscript authority changed after preview confirmation') {
+    super(message)
+    this.name = 'AuthorImportPreviewStaleError'
+  }
+}
+
+export function isAuthorImportPreviewStaleError(error: unknown): boolean {
+  return error instanceof AuthorImportPreviewStaleError
+    || (!!error
+      && typeof error === 'object'
+      && 'code' in error
+      && (error as { code?: unknown }).code === AUTHOR_IMPORT_PREVIEW_STALE)
+}
 
 export type ImportRunStage =
   | 'parsing'
@@ -8,15 +26,23 @@ export type ImportRunStage =
   | 'global'
   | 'style'
   | 'blueprints'
+  | 'author-commit'
+  | 'author-publish'
+  | 'author-postprocess'
   | 'refresh'
   | 'completed'
 
 export type ImportRunStatus = 'ready' | 'running' | 'failed' | 'cancelled' | 'completed'
-export type ImportRunDirectCheckpointStage = 'knowledge' | 'refresh'
+export type ImportRunDirectCheckpointStage =
+  | 'knowledge'
+  | 'author-publish'
+  | 'author-postprocess'
+  | 'refresh'
 export type ImportRunEffectKind =
   | 'project-global-facts'
   | 'project-writing-style'
   | 'chapter-blueprint-range'
+  | 'author-finalized-batch'
 
 export type ImportRunEffectReceiptState = 'prepared' | 'committed'
 export const IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION = 1 as const
@@ -24,7 +50,10 @@ export const IMPORT_RUN_KNOWLEDGE_BATCH_SIZE = 10
 export const IMPORT_RUN_BLUEPRINT_BATCH_SIZE = 5
 
 export function isImportRunDirectCheckpointStage(stage: unknown): stage is ImportRunDirectCheckpointStage {
-  return stage === 'knowledge' || stage === 'refresh'
+  return stage === 'knowledge'
+    || stage === 'author-publish'
+    || stage === 'author-postprocess'
+    || stage === 'refresh'
 }
 
 export interface ImportRunExecutionAuthority {
@@ -114,6 +143,9 @@ export function expectedImportRunEffectKey(
   ) {
     return `blueprints:${batchId}`
   }
+  if (kind === 'author-finalized-batch' && stage === 'author-commit' && batchId === 'done') {
+    return 'author-finalized-batch'
+  }
   return null
 }
 
@@ -194,6 +226,10 @@ export interface ImportRunPrepareRequest {
   sourceFingerprints?: string[]
   sourceDisplay: ImportSourceDisplayMetadata[]
   locale: ImportRunLocale
+  /** Required for author manuscripts; frozen from a read-only project preview. */
+  authorityFingerprint?: string
+  /** Required for author manuscripts; binds confirmation to the inspected chapter manifest. */
+  expectedManifestFingerprint?: string
   chapters: ImportRunChapterInput[]
 }
 
@@ -222,6 +258,7 @@ export interface ImportChapterPreview {
 
 export interface ImportInspectionSummary {
   inspectionId: string
+  purpose: ImportPurpose
   sourceCount: number
   sourceDisplayNames: string[]
   chapterCount: number
@@ -237,17 +274,24 @@ export interface ImportRunPreparationInspection extends ImportInspectionSummary 
   previewRemaining: number
 }
 
-export interface ImportRunPrepareFromInspectionRequest {
+export type ImportRunPrepareFromInspectionRequest = {
   inspectionId: string
   runId: string
   purpose: 'reference'
   locale: ImportRunLocale
+} | {
+  inspectionId: string
+  runId: string
+  purpose: 'author-manuscript'
+  locale: ImportRunLocale
+  authorityFingerprint: string
+  manifestFingerprint: string
 }
 
 /** Current-project selection binds parsing to one frozen project lease before any source is read. */
 export interface ImportNovelFileSelectionRequest {
   runId: string
-  purpose: 'reference'
+  purpose: ImportPurpose
   locale: ImportRunLocale
   expectedProjectPath: string
 }
@@ -257,6 +301,9 @@ export interface ImportRunSnapshot {
   purpose: ImportPurpose
   rootRunId: string
   effectNamespace: string
+  /** Author-manuscript snapshots expose only the hashes needed to resume their confirmed commit. */
+  manifestFingerprint?: string
+  authorityFingerprint?: string
   sourceDisplay: ImportSourceDisplayMetadata[]
   /** Safe display facts for sources that still need user reauthorization. */
   unfinishedSourceDisplay?: ImportSourceDisplayMetadata[]
@@ -293,4 +340,13 @@ export interface ImportRunPreparationResult {
   duplicateChapterNumbers: number[]
   /** Bounded renderer-safe view derived from the main-process frozen manifest. */
   inspection?: ImportRunPreparationInspection
+}
+
+export type ImportRunPrepareFromInspectionResult = {
+  success: true
+  preparation: ImportRunPreparationResult
+} | {
+  success: false
+  errorCode?: typeof AUTHOR_IMPORT_PREVIEW_STALE
+  error?: string
 }

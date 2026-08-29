@@ -63,6 +63,78 @@ describe('知识库嵌入空间回填', () => {
     expect(Buffer.from(restored, 'utf8')).toEqual(Buffer.from(content, 'utf8'))
   })
 
+  it('写作检索的 FTS 与语义路径都按 corpus kind 排除参照语料', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-writing-corpus-'))
+    projects.push(projectPath)
+    const vector = [0.1, 0.2, 0.3]
+    const model = {
+      baseUrl: 'https://embedding.example/v1',
+      apiKey: 'test-key-not-persisted',
+      modelName: 'fake-embedding',
+    }
+    const space = {
+      modelFingerprint: 'openai|https://embedding.example/v1|fake-embedding',
+      distanceMetric: 'l2',
+    }
+    await addChunks(
+      projectPath,
+      'legacy-document',
+      'legacy.txt',
+      ['写作检索哨兵 legacy fact'],
+      [vector],
+      undefined,
+      { corpusKind: 'unknown' },
+      space,
+    )
+    await addChunks(
+      projectPath,
+      'project-document',
+      'project.txt',
+      ['写作检索哨兵 project fact'],
+      [vector],
+      undefined,
+      { corpusKind: 'project-knowledge' },
+      space,
+    )
+    await addChunks(
+      projectPath,
+      'reference-document',
+      'reference.txt',
+      ['写作检索哨兵 REFERENCE_SENTINEL'],
+      [vector],
+      undefined,
+      { corpusKind: 'reference' },
+      space,
+    )
+    generateEmbeddingsMock.mockResolvedValue([vector])
+
+    const ftsResults = await searchKnowledgeFTS(
+      '写作检索哨兵',
+      projectPath,
+      10,
+      undefined,
+      ['reference'],
+    )
+    const semanticResults = await searchKnowledge(
+      '写作检索哨兵',
+      projectPath,
+      'openai',
+      model,
+      10,
+      undefined,
+      ['reference'],
+    )
+    expect(semanticResults.every(result => result.score > 0.5)).toBe(true)
+
+    for (const results of [ftsResults, semanticResults]) {
+      expect(results.map(result => result.text)).toEqual(expect.arrayContaining([
+        '写作检索哨兵 legacy fact',
+        '写作检索哨兵 project fact',
+      ]))
+      expect(JSON.stringify(results)).not.toContain('REFERENCE_SENTINEL')
+    }
+  })
+
   it('回填按模型实际 1536 维建空间并激活，不重建 chunks 全文表', async () => {
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-backfill-'))
     projects.push(projectPath)

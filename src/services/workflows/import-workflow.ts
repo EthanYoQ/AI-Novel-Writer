@@ -9,6 +9,7 @@ import {
 } from '../../shared/import-run'
 import type { ImportGlobalFactsReceipt } from '../../shared/import-global-facts'
 import type { BlueprintRangeCommitReceipt } from '../../../electron/repositories/blueprint-repository'
+import type { FinalizedDraftImportReceipt } from '../../shared/finalized-draft-import'
 import { sameProjectSessionContext, projectSessionContextFromProject } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
 import { useProjectStore } from '../../stores/project-store'
@@ -143,6 +144,15 @@ function productionDependencies(
         )
         return
       }
+      if (durableReceipt.kind === 'author-finalized-batch') {
+        const authorReceipt = durableReceipt.effectReceipt as FinalizedDraftImportReceipt | undefined
+        if (
+          !authorReceipt
+          || authorReceipt.operationId !== `author-import:${run.id}`
+          || authorReceipt.drafts.length !== run.totalChapters
+        ) throw new Error('Committed author-manuscript receipt is incomplete.')
+        return
+      }
       const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
       const current = useProjectStore.getState().currentProject
       if (!core || !current || !sameProjectSessionContext(
@@ -225,6 +235,84 @@ function productionDependencies(
         await commit(request)
       ) as BlueprintRangeCommitReceipt).execute({ step: {} as never, context, callbacks })
     },
+    commitAuthorManuscript: async (run, commit) => {
+      if (!run.authorityFingerprint || !run.manifestFingerprint) {
+        throw new Error(textForLocale(
+          run.locale,
+          '作者原稿导入缺少权威状态指纹',
+          'The author-manuscript import is missing its authority fingerprint.',
+        ))
+      }
+      await commit({
+        operationId: `author-import:${run.id}`,
+        runId: run.id,
+        authorityFingerprint: run.authorityFingerprint,
+        manifestFingerprint: run.manifestFingerprint,
+      })
+    },
+    getAuthorCommitReceipt: async runId => {
+      const receipt = await ipc.invokeWithProjectSession(
+        session,
+        'db:import-run-effect-receipt-get',
+        runId,
+        'author-commit',
+        'done',
+        projectPath,
+      )
+      if (!receipt) return null
+      if (receipt.state !== 'committed' || receipt.kind !== 'author-finalized-batch') {
+        throw new Error('Author-manuscript finalization has not been durably committed.')
+      }
+      return receipt.effectReceipt as FinalizedDraftImportReceipt
+    },
+    publishAuthorChapter: async (chapter, draft, run) => {
+      const { retryFinalizationPublication } = await import('../finalization-client')
+      const result = await retryFinalizationPublication(draft.finalizationId, session)
+      if (!result.success || result.publicationStatus !== 'published') {
+        throw new Error(result.error || textForLocale(
+          run.locale,
+          `第 ${chapter.number} 章实体正文发布失败`,
+          `Chapter ${chapter.number} could not be published to the manuscript directory.`,
+        ))
+      }
+      callbacks.log(textForLocale(
+        run.locale,
+        `第 ${chapter.number} 章实体正文已发布`,
+        `Chapter ${chapter.number} was published to the manuscript directory.`,
+      ))
+    },
+    postprocessAuthorChapter: async (chapter, draft, run) => {
+      const current = useProjectStore.getState().currentProject
+      if (!current || !sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
+        throw new Error(textForLocale(
+          run.locale,
+          '当前项目已切换，无法更新原稿连续性事实',
+          'The project changed before manuscript continuity could be updated.',
+        ))
+      }
+      const { RunFinalizePostProcessCommand } = await import('./commands/finalize-chapter.command')
+      const status = await new RunFinalizePostProcessCommand({
+        project: current,
+        chapterNumber: chapter.number,
+        chapterTitle: chapter.title,
+        draftContent: chapter.content,
+        draftId: draft.draftId,
+        sourceLabel: textForLocale(
+          run.locale,
+          `第${chapter.number}章作者原稿定稿`,
+          `Author manuscript Chapter ${chapter.number} finalization`,
+        ),
+        stopOnFailure: true,
+        onlyFailed: true,
+      }).execute({ step: {} as never, context, callbacks })
+      if (!status.allCriticalPassed) {
+        throw new Error(textForLocale(
+          run.locale,
+          `第 ${chapter.number} 章连续性后处理未完成`,
+          `Continuity post-processing did not complete for Chapter ${chapter.number}.`,
+        ))
+      }
+    },
     refresh: async run => {
       callbacks.log(textForLocale(run.locale, '正在刷新项目数据...', 'Refreshing project data...'))
       await refreshImportDerivedFileTreeBestEffort(
@@ -291,13 +379,6 @@ function importStep(
 }
 
 export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefinition {
-  if (params.run.purpose !== 'reference') {
-    throw new Error(textForLocale(
-      params.run.locale,
-      '当前版本不支持作者手稿导入',
-      'Author-manuscript import is not supported by this version.',
-    ))
-  }
   const project = useProjectStore.getState().currentProject
   if (!project || !sameProjectSessionContext(params.projectSession, projectSessionContextFromProject(project))) {
     throw new Error(textForLocale(
@@ -309,17 +390,10 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
   const session = Object.freeze({ ...params.projectSession })
   const count = params.run.totalChapters
   const chapterCountEn = `${count} ${count === 1 ? 'chapter' : 'chapters'}`
-  return {
-    runId: params.run.id,
-    type: 'novel_import',
-    title: textForLocale(
-      params.run.locale,
-      `小说拆解与仿写（${count} 章）`,
-      `Novel analysis and style study (${chapterCountEn})`,
-    ),
-    projectPath: params.projectPath,
-    projectSession: session,
-    uiLocale: params.run.locale,
+  const durableCancelHooks: Pick<
+    WorkflowDefinition,
+    'onCancelRequested' | 'onCancelledAtBoundary'
+  > = {
     onCancelRequested: async context => {
       const execution = context.data.importRunExecution as ImportRunExecutionLease | undefined
       if (!execution) return
@@ -367,6 +441,56 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
         'Could not finalize import cancellation.',
       ))
     },
+  }
+  if (params.run.purpose === 'author-manuscript') {
+    return {
+      runId: params.run.id,
+      type: 'novel_import',
+      title: textForLocale(
+        params.run.locale,
+        `导入作者原稿（${count} 章）`,
+        `Import author manuscript (${chapterCountEn})`,
+      ),
+      projectPath: params.projectPath,
+      projectSession: session,
+      uiLocale: params.run.locale,
+      ...durableCancelHooks,
+      steps: [
+        importStep(params.run, params.executionOwner, 'author-commit',
+          ['提交权威定稿快照', 'Commit authoritative finalized snapshots'],
+          ['以单个 SQLite 事务提交不可变定稿与发布 outbox', 'Atomically commit immutable finalized snapshots and publication outbox records.']),
+        importStep(params.run, params.executionOwner, 'author-publish',
+          ['发布实体正文', 'Publish manuscript files'],
+          ['按持久检查点发布正文文件；失败后可安全重试', 'Publish manuscript files with durable checkpoints and safe retries.']),
+        importStep(params.run, params.executionOwner, 'author-postprocess',
+          ['更新连续性事实', 'Update continuity facts'],
+          ['从权威定稿更新章节事实与角色状态，不导入参照语料', 'Update chapter facts and character state from authoritative text without importing reference prose.']),
+        importStep(params.run, params.executionOwner, 'refresh',
+          ['刷新项目状态', 'Refresh project state'],
+          ['刷新正文树、角色卡与定稿状态', 'Refresh the manuscript tree, character cards, and finalized status.']),
+      ],
+      onComplete: {
+        mode: 'silent',
+        message: textForLocale(
+          params.run.locale,
+          '作者原稿已作为权威定稿导入，可以从下一章继续创作。',
+          'The manuscript is now authoritative finalized text. You can continue from the next chapter.',
+        ),
+      },
+    }
+  }
+  return {
+    runId: params.run.id,
+    type: 'novel_import',
+    title: textForLocale(
+      params.run.locale,
+      `小说拆解与仿写（${count} 章）`,
+      `Novel analysis and style study (${chapterCountEn})`,
+    ),
+    projectPath: params.projectPath,
+    projectSession: session,
+    uiLocale: params.run.locale,
+    ...durableCancelHooks,
     steps: [
       importStep(params.run, params.executionOwner, 'knowledge',
         ['导入参照文本与构建知识库', 'Import reference text and build the knowledge base'],

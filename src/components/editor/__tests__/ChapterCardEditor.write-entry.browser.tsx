@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 import type { ProjectData } from '../../../shared/ipc-channels'
+import type { AuthoritativeChapterSequence } from '../../../shared/author-manuscript-import'
 import type { ChapterBlueprint } from '../../../services/workflows/directory-workflow'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLayoutStore } from '../../../stores/layout-store'
@@ -64,9 +65,19 @@ function installIpc(options: {
   blueprints?: ChapterBlueprint[]
   finalizedChapter?: (chapterNumber: number) => unknown
   onClearGeneratedText?: () => void
+  authoritySequence?: AuthoritativeChapterSequence | (() => AuthoritativeChapterSequence)
 } = {}) {
   const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'db:blueprint-get-all') return options.blueprints ?? [blueprint(1)]
+    if (channel === 'db:draft-authority-sequence') return typeof options.authoritySequence === 'function'
+      ? options.authoritySequence()
+      : options.authoritySequence ?? {
+          status: 'empty',
+          lastChapterNumber: 0,
+          nextChapterNumber: 1,
+          duplicateChapterNumbers: [],
+          authorityFingerprint: 'a'.repeat(64),
+        }
     if (channel === 'db:draft-get-finalized') {
       const chapterNumber = args[0] as number
       return options.finalizedChapter?.(chapterNumber) ?? null
@@ -121,6 +132,68 @@ afterEach(async () => {
 })
 
 describe('ChapterCardEditor writing entry', () => {
+  it('uses finalized authority to expose Chapter 10 even when imported Chapters 1 through 9 have no blueprints', async () => {
+    installIpc({
+      blueprints: [blueprint(10)],
+      authoritySequence: {
+        status: 'continuous',
+        lastChapterNumber: 9,
+        nextChapterNumber: 10,
+        duplicateChapterNumbers: [],
+        authorityFingerprint: 'b'.repeat(64),
+      },
+    })
+
+    await renderEditor()
+
+    await vi.waitFor(() => {
+      expect(container?.textContent).toContain('写作第10章')
+      expect(container?.textContent).toContain('批量创作')
+    })
+  })
+
+  it('creates a manual blueprint at the authoritative next chapter instead of the blueprint maximum', async () => {
+    installIpc({
+      blueprints: [],
+      authoritySequence: {
+        status: 'continuous',
+        lastChapterNumber: 9,
+        nextChapterNumber: 10,
+        duplicateChapterNumbers: [],
+        authorityFingerprint: 'b'.repeat(64),
+      },
+    })
+
+    await renderEditor()
+    await vi.waitFor(() => expect(container?.textContent).toContain('暂无蓝图'))
+    const addButton = Array.from(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+      .find(button => button.title === '新建章节')
+    expect(addButton).toBeDefined()
+    await act(async () => addButton?.click())
+
+    expect(container?.textContent).toContain('第 10 章：')
+  })
+
+  it('blocks card writing and explains duplicate finalized authority', async () => {
+    installIpc({
+      blueprints: [blueprint(3)],
+      authoritySequence: {
+        status: 'invalid',
+        lastChapterNumber: 3,
+        duplicateChapterNumbers: [3],
+        authorityFingerprint: 'c'.repeat(64),
+      },
+    })
+
+    await renderEditor()
+
+    await vi.waitFor(() => {
+      expect(container?.textContent).toMatch(/第 3 章存在重复记录/u)
+    })
+    expect(container?.textContent).not.toContain('写作第3章')
+    expect(container?.textContent).not.toContain('批量创作')
+  })
+
   it('shows Write Chapter 1 after blueprints are available and opens the chapter-creation workbench', async () => {
     await renderEditor()
 
@@ -143,6 +216,21 @@ describe('ChapterCardEditor writing entry', () => {
     let legacyImportedTextExists = true
     const invoke = installIpc({
       blueprints: [1, 2, 3, 4, 5].map(blueprint),
+      authoritySequence: () => legacyImportedTextExists
+        ? {
+            status: 'invalid',
+            lastChapterNumber: 5,
+            firstGapChapterNumber: 1,
+            duplicateChapterNumbers: [],
+            authorityFingerprint: 'd'.repeat(64),
+          }
+        : {
+            status: 'empty',
+            lastChapterNumber: 0,
+            nextChapterNumber: 1,
+            duplicateChapterNumbers: [],
+            authorityFingerprint: 'e'.repeat(64),
+          },
       finalizedChapter: (chapterNumber) => (
         legacyImportedTextExists && chapterNumber >= 2 ? { id: chapterNumber } : null
       ),

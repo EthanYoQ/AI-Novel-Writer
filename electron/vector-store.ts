@@ -1167,8 +1167,15 @@ function requestMatchesActiveSpace(
   return space.modelFingerprint === requested.modelFingerprint && space.distanceMetric === requested.distanceMetric
 }
 
-async function tableSupportsChapterScope(table: lancedb.Table): Promise<boolean> {
-  return (await table.schema()).fields.some(field => field.name === 'chapterNumber')
+async function tableSupportsField(table: lancedb.Table, fieldName: string): Promise<boolean> {
+  return (await table.schema()).fields.some(field => field.name === fieldName)
+}
+
+function excludedCorpusFilter(excludedCorpusKinds: readonly KnowledgeCorpusKind[]): string | undefined {
+  const values = [...new Set(excludedCorpusKinds)]
+  return values.length > 0
+    ? `\`corpusKind\` NOT IN (${values.map(value => `'${value}'`).join(', ')})`
+    : undefined
 }
 
 /** 统一检索入口 — 仅对当前 active 且身份匹配的空间使用向量，其他情况安全降级 FTS。 */
@@ -1178,8 +1185,17 @@ export async function search(
   queryVector?: number[],
   topK: number = 5,
   embeddingSpace?: EmbeddingSpaceIdentity,
+  excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<SearchResult[]> {
-  return searchWithScope(projectPath, queryText, queryVector, topK, undefined, embeddingSpace)
+  return searchWithScope(
+    projectPath,
+    queryText,
+    queryVector,
+    topK,
+    undefined,
+    embeddingSpace,
+    excludedCorpusKinds,
+  )
 }
 
 /** 支持章节范围限定的检索入口。 */
@@ -1190,6 +1206,7 @@ export async function searchWithScope(
   topK: number = 5,
   chapterScope?: [number, number],
   embeddingSpace?: EmbeddingSpaceIdentity,
+  excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<SearchResult[]> {
   try {
     const db = await getConnection(projectPath)
@@ -1209,7 +1226,15 @@ export async function searchWithScope(
         if (active && tableNames.includes(active.tableName) && requestMatchesActiveSpace(active, queryVector, embeddingSpace)) {
           const vectorTable = await db.openTable(active.tableName)
           let query = vectorTable.search(queryVector).limit(topK)
-          if (scopeFilter && await tableSupportsChapterScope(vectorTable)) query = query.where(scopeFilter)
+          const vectorFilters: string[] = []
+          if (scopeFilter && await tableSupportsField(vectorTable, 'chapterNumber')) {
+            vectorFilters.push(scopeFilter)
+          }
+          const corpusFilter = excludedCorpusFilter(excludedCorpusKinds)
+          if (corpusFilter && await tableSupportsField(vectorTable, 'corpusKind')) {
+            vectorFilters.push(corpusFilter)
+          }
+          if (vectorFilters.length > 0) query = query.where(vectorFilters.join(' AND '))
           const results = await query.toArray()
           if (results.length > 0) {
             return results.map((row: { text: string; _distance?: number; fileName: string }) => ({
@@ -1229,9 +1254,15 @@ export async function searchWithScope(
       const escapedQuery = queryText.replace(/'/g, "''")
       const likePattern = `%${escapedQuery.split('').join('%')}%`
       const textFilter = `text LIKE '${likePattern}'`
-      const filter = scopeFilter && await tableSupportsChapterScope(canonicalTable)
-        ? `${textFilter} AND ${scopeFilter}`
-        : textFilter
+      const filters = [textFilter]
+      if (scopeFilter && await tableSupportsField(canonicalTable, 'chapterNumber')) {
+        filters.push(scopeFilter)
+      }
+      const corpusFilter = excludedCorpusFilter(excludedCorpusKinds)
+      if (corpusFilter && await tableSupportsField(canonicalTable, 'corpusKind')) {
+        filters.push(corpusFilter)
+      }
+      const filter = filters.join(' AND ')
       const results = await canonicalTable.query().filter(filter).limit(topK).toArray()
       return results.map((row: { text: string; fileName: string }) => ({
         text: row.text,

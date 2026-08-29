@@ -326,13 +326,68 @@ describe('createImportWorkflow', () => {
     expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('llm:generate')
   })
 
-  it('fails closed before creating an author-manuscript stage plan', () => {
-    expect(() => createImportWorkflow({
+  it('creates an author-only finalization plan without reference analysis stages', () => {
+    const workflow = createImportWorkflow({
       projectPath: session.projectPath,
       projectSession: session,
-      run: run({ purpose: 'author-manuscript' }),
+      run: run({
+        purpose: 'author-manuscript',
+        effectNamespace: 'import:author-manuscript:import-run-1',
+        stage: 'author-commit',
+        authorityFingerprint: 'c'.repeat(64),
+      }),
       executionOwner,
-    })).toThrow(/不支持作者手稿/)
+    })
+
+    expect(workflow.title).toBe('导入作者原稿（1 章）')
+    expect(workflow.steps.map(step => step.name)).toEqual([
+      '提交权威定稿快照', '发布实体正文', '更新连续性事实', '刷新项目状态',
+    ])
+    expect(workflow.steps.map(step => step.name).join('\n')).not.toMatch(/知识库|文风|蓝图/)
+  })
+
+  it('persists author cancellation through the same durable request and boundary hooks as reference import', async () => {
+    const snapshot = run({
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:import-run-1',
+      stage: 'author-publish',
+      authorityFingerprint: 'c'.repeat(64),
+    })
+    const renewed = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-request-cancel') return { success: true, run: { ...snapshot, cancelRequested: true } }
+      if (channel === 'db:import-run-get') return { ...snapshot, cancelRequested: true }
+      if (channel === 'db:import-run-renew-execution') return { success: true, execution: renewed }
+      if (channel === 'db:import-run-cancel-at-boundary') {
+        return { success: true, run: { ...snapshot, status: 'cancelled', cancelRequested: true } }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({
+      projectPath: session.projectPath,
+      projectSession: session,
+      run: snapshot,
+      executionOwner,
+    })
+    const workflowContext = context()
+    workflowContext.data.importRunExecution = {
+      owner: executionOwner,
+      epoch: 1,
+      expiresAt: Number.MAX_SAFE_INTEGER - 1,
+    }
+
+    expect(workflow.onCancelRequested).toBeTypeOf('function')
+    expect(workflow.onCancelledAtBoundary).toBeTypeOf('function')
+    await workflow.onCancelRequested!(workflowContext)
+    await workflow.onCancelledAtBoundary!(workflowContext)
+
+    expect(ipcMocks.invoke.mock.calls.map(call => call[1])).toEqual([
+      'db:import-run-request-cancel',
+      'db:import-run-get',
+      'db:import-run-renew-execution',
+      'db:import-run-cancel-at-boundary',
+    ])
+    expect(workflowContext.data.importRunExecution).toEqual(renewed)
   })
 
   it('keeps import workflow sources free of pseudo icon text', () => {

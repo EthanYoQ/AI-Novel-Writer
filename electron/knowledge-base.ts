@@ -35,6 +35,7 @@ import {
   activatePlannedEmbeddingSpace,
   rebuildPlannedEmbeddingSpace,
   type EmbeddingSpaceIdentity,
+  type KnowledgeCorpusKind,
 } from './vector-store'
 import { getCurrentProjectPath, getProjectDb } from './database'
 import { ImportRunRepository } from './repositories/import-run-repository'
@@ -182,6 +183,7 @@ export async function searchKnowledge(
   model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
   topK: number = 5,
   chapterScope?: [number, number],
+  excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<Array<{ text: string; score: number; fileName: string }>> {
   await ensureMigration(projectPath)
 
@@ -205,6 +207,7 @@ export async function searchKnowledge(
     topK,
     chapterScope,
     embeddingSpaceFor(protocol, model),
+    excludedCorpusKinds,
   )
 }
 
@@ -828,7 +831,16 @@ export async function searchKnowledgeFTS(
   projectPath: string,
   topK: number = 5,
   chapterScope?: [number, number],
+  excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<Array<{ text: string; score: number; fileName: string }>> {
   await ensureMigration(projectPath)
-  return storeSearchWithScope(projectPath, query, undefined, topK, chapterScope)
+  return storeSearchWithScope(
+    projectPath,
+    query,
+    undefined,
+    topK,
+    chapterScope,
+    undefined,
+    excludedCorpusKinds,
+  )
 }

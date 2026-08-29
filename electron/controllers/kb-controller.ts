@@ -311,6 +311,26 @@ export function registerKBController(
     })
   })
 
+  ipcMain.handle('kb:search-writing-context', async (_event, query: string, topK: number | undefined, expectedProjectPath: string) => {
+    const projectPath = requireProjectPath(expectedProjectPath)
+    const embConfig = getEmbeddingConfig()
+
+    return knowledgeBaseLoader.run((kb) => {
+      if (embConfig) {
+        return kb.searchKnowledge(
+          query,
+          projectPath,
+          embConfig.protocol,
+          embConfig.model,
+          topK ?? 5,
+          undefined,
+          ['reference'],
+        )
+      }
+      return kb.searchKnowledgeFTS(query, projectPath, topK ?? 5, undefined, ['reference'])
+    })
+  })
+
   ipcMain.handle('kb:search-with-scope', async (_event, query: string, fromChapter: number, toChapter: number, topK: number | undefined, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()

@@ -53,6 +53,10 @@ import {
   type EditableChapterBlueprintField,
 } from './chapter-card-draft-ledger'
 import { LatestRequestGate } from './latest-request-gate'
+import {
+  AuthoritativeChapterSequenceError,
+  readAuthoritativeNextChapter,
+} from '../../services/authoritative-chapter-sequence'
 
 const ROLES = ['建置', '铺垫', '发展', '冲突', '高潮', '转折', '收尾']
 
@@ -115,6 +119,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
   const dirty = dirtyChapterNumbers.size > 0
   // 下一个可写的章节号
   const [nextWriteChapter, setNextWriteChapter] = useState<number | null>(null)
+  const [authorityError, setAuthorityError] = useState<string | null>(null)
   // 旧版仿写导入可能造成“前章未写、后续正文已定稿”的异常状态；该状态只能由用户确认恢复。
   const [legacyImportedTextRecoveryChapter, setLegacyImportedTextRecoveryChapter] = useState<number | null>(null)
 
@@ -208,6 +213,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       dataProjectSessionRef.current = null
       setDataProjectSession(null)
       setNextWriteChapter(null)
+      setAuthorityError(null)
       setLegacyImportedTextRecoveryChapter(null)
       setSaving(false)
       applyVisibleDraftState([], new Set())
@@ -225,6 +231,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       dataProjectSessionRef.current = null
       setDataProjectSession(null)
       setNextWriteChapter(null)
+      setAuthorityError(null)
       setLegacyImportedTextRecoveryChapter(null)
       setSaving(false)
       applyVisibleDraftState([], new Set())
@@ -254,35 +261,30 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       if (!restored || !isLatestProjectRequest()) return
       const data = restored.blueprints
       if (data.length > 0) setSelectedIdx(0)
-      // 从第 1 章开始确认连续的定稿状态。不能以“最大已定稿章节”判断进度：
-      // 旧版异常导入可能留下后续章节的 finalized 记录，而前章仍未写作。
-      let expectedChapterNumber = 1
-      let firstUnfinalizedChapterNumber: number | null = null
-      let hasFinalizedTextAfterGap = false
-      for (const blueprint of [...data].sort((a, b) => a.chapterNumber - b.chapterNumber)) {
-        // 缺少中间蓝图时，不允许跳过它直接写后续章节。
-        if (blueprint.chapterNumber !== expectedChapterNumber) break
-        const finalized = await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:draft-get-finalized',
-          blueprint.chapterNumber,
-          projectKey,
-        )
+      try {
+        const nextChapter = await readAuthoritativeNextChapter(projectSession, locale)
         if (!isLatestProjectRequest()) return
-        if (!finalized) {
-          firstUnfinalizedChapterNumber ??= blueprint.chapterNumber
-        } else if (firstUnfinalizedChapterNumber !== null) {
-          hasFinalizedTextAfterGap = true
-        }
-        expectedChapterNumber += 1
+        setAuthorityError(null)
+        setLegacyImportedTextRecoveryChapter(null)
+        setNextWriteChapter(nextChapter)
+      } catch (error) {
+        if (!isLatestProjectRequest()) return
+        const message = error instanceof Error ? error.message : String(error)
+        const recoveryChapter = error instanceof AuthoritativeChapterSequenceError
+          && error.sequence.firstGapChapterNumber !== undefined
+          && error.sequence.lastChapterNumber > error.sequence.firstGapChapterNumber
+          ? error.sequence.firstGapChapterNumber
+          : null
+        setAuthorityError(message)
+        setLegacyImportedTextRecoveryChapter(recoveryChapter)
+        setNextWriteChapter(null)
       }
-      const recoveryChapter = hasFinalizedTextAfterGap
-        ? firstUnfinalizedChapterNumber
-        : null
-      setLegacyImportedTextRecoveryChapter(recoveryChapter)
-      setNextWriteChapter(recoveryChapter === null ? firstUnfinalizedChapterNumber : null)
-    } catch {
-      if (isLatestProjectRequest()) addLog('error', text('读取章节蓝图失败', 'Could not load chapter blueprints'))
+    } catch (error) {
+      if (isLatestProjectRequest()) {
+        const message = error instanceof Error ? error.message : String(error)
+        setAuthorityError(message)
+        addLog('error', text('读取章节蓝图失败', 'Could not load chapter blueprints'))
+      }
     } finally {
       if (isLatestProjectRequest()) setLoading(false)
     }
@@ -294,6 +296,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
     renderedProjectPath,
     addLog,
     text,
+    locale,
     applyVisibleDraftState,
     persistProjectDraftState,
   ])
@@ -429,9 +432,20 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       || !projectSession
       || !sameProjectSessionContext(dataProjectSessionRef.current, projectSession)
     ) return
-    const maxNum = blueprints.reduce((m, b) => Math.max(m, b.chapterNumber), 0)
+    if (nextWriteChapter === null) {
+      toast.warning(authorityError || text(
+        '当前无法确定权威下一章，请先修复定稿章节。',
+        'The authoritative next chapter is unavailable. Repair finalized chapters first.',
+      ))
+      return
+    }
+    const existingIndex = blueprints.findIndex(blueprint => blueprint.chapterNumber === nextWriteChapter)
+    if (existingIndex >= 0) {
+      setSelectedIdx(existingIndex)
+      return
+    }
     const newBlueprint: ChapterBlueprint = {
-      chapterNumber: maxNum + 1,
+      chapterNumber: nextWriteChapter,
       title: '',
       role: '发展',
       purpose: '',
@@ -717,7 +731,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
             variant="ai"
             size="sm"
             onClick={() => setShowBlueprintDialog(true)}
-            disabled={!projectDataReady}
+            disabled={!projectDataReady || Boolean(authorityError)}
             title={text('AI 生成章节蓝图（选择范围和模式）', 'Generate chapter blueprints with AI (choose the range and mode)')}
           >
             <Sparkles size={12} />
@@ -726,7 +740,7 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
           <Button variant="ghost" size="icon" onClick={() => loadBlueprints()} title={text('重新加载', 'Reload')} disabled={loading}>
             <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
           </Button>
-          <Button variant="ghost" size="icon" onClick={handleAddChapter} disabled={!projectDataReady} title={text('新建章节', 'New chapter')}>
+          <Button variant="ghost" size="icon" onClick={handleAddChapter} disabled={!projectDataReady || nextWriteChapter === null || Boolean(authorityError)} title={text('新建章节', 'New chapter')}>
             <Plus size={14} />
           </Button>
           <Button
@@ -775,6 +789,20 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
               ? text('清除中...', 'Clearing...')
               : text('清除误导入正文', 'Clear incorrectly imported text')}
           </Button>
+        </div>
+      )}
+
+      {projectDataReady && authorityError && !canRecoverLegacyImportedText && (
+        <div
+          className="flex items-start gap-2 border-b px-3 py-2 text-xs"
+          style={{
+            color: 'var(--color-warning-text)',
+            borderColor: 'color-mix(in srgb, var(--color-warning) 42%, var(--color-border))',
+            backgroundColor: 'color-mix(in srgb, var(--color-warning) 8%, transparent)',
+          }}
+        >
+          <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--color-warning)' }} />
+          <p className="leading-5">{authorityError}</p>
         </div>
       )}
 

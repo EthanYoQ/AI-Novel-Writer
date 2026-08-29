@@ -26,6 +26,9 @@ let container: HTMLDivElement | undefined
 let startWorkflow: ReturnType<typeof vi.fn>
 let setDefaultModel: ReturnType<typeof vi.fn>
 let missingBlueprintChapter: number | null
+let authoritativeNextChapter: number
+let authorityInvalid: { gap?: number; duplicates?: number[] } | null
+let creationHistoryChapter: number | null
 
 function project(): ProjectData {
   return {
@@ -74,6 +77,24 @@ function installIpc() {
     configurable: true,
     value: {
       invoke: vi.fn(async (channel: string, ...args: unknown[]) => {
+        if (channel === 'db:draft-authority-sequence') {
+          if (authorityInvalid) {
+            return {
+              status: 'invalid',
+              lastChapterNumber: 9,
+              firstGapChapterNumber: authorityInvalid.gap,
+              duplicateChapterNumbers: authorityInvalid.duplicates ?? [],
+              authorityFingerprint: 'f'.repeat(64),
+            }
+          }
+          return {
+            status: authoritativeNextChapter === 1 ? 'empty' : 'continuous',
+            lastChapterNumber: authoritativeNextChapter - 1,
+            nextChapterNumber: authoritativeNextChapter,
+            duplicateChapterNumbers: [],
+            authorityFingerprint: 'e'.repeat(64),
+          }
+        }
         if (channel === 'db:blueprint-get-all') return [{ chapterNumber: 1 }]
         if (channel === 'db:character-get-all') return [{ id: 1 }]
         if (channel === 'db:blueprint-get') {
@@ -89,7 +110,20 @@ function installIpc() {
             userGuidance: '',
           }
         }
-        if (channel === 'fs:read-json') return { success: false }
+        if (channel === 'fs:read-json') return creationHistoryChapter === null
+          ? { success: false }
+          : {
+              success: true,
+              data: {
+                lastUsed: {
+                  chapterNumber: creationHistoryChapter,
+                  role: '发展',
+                  purpose: '历史目的',
+                  keyEvents: '历史事件',
+                  characters: '',
+                },
+              },
+            }
         if (channel === 'fs:write-json') return { success: true }
         throw new Error(`Unexpected IPC channel: ${channel}`)
       }),
@@ -119,6 +153,9 @@ async function chooseModel(id: string, modelId: string) {
 
 beforeEach(() => {
   missingBlueprintChapter = null
+  authoritativeNextChapter = 1
+  authorityInvalid = null
+  creationHistoryChapter = null
   startWorkflow = vi.fn(async () => 'writing-model-selector-run')
   setDefaultModel = vi.fn(async () => true)
   useLocaleStore.setState({ locale: 'zh-CN' })
@@ -171,6 +208,52 @@ afterEach(async () => {
 })
 
 describe('chapter writing model selectors', () => {
+  it('uses finalized authority rather than creation history for the direct-writing default', async () => {
+    authoritativeNextChapter = 10
+    creationHistoryChapter = 3
+    await act(async () => {
+      root?.render(<ChapterCreationDialog isOpen onClose={vi.fn()} />)
+    })
+
+    await vi.waitFor(() => {
+      const chapterInput = document.querySelector<HTMLInputElement>('[role="dialog"] input[type="number"]')
+      expect(chapterInput?.value).toBe('10')
+    })
+    expect(document.body.textContent).toContain('已自动填入上次参数')
+  })
+
+  it('uses finalized authority for the batch start even when its caller provides a stale chapter', async () => {
+    authoritativeNextChapter = 10
+    await act(async () => {
+      root?.render(
+        <BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />,
+      )
+    })
+
+    await expect.element(page.getByText('第10章')).toBeVisible()
+  })
+
+  it('blocks direct and batch writing when finalized authority has a gap', async () => {
+    authorityInvalid = { gap: 4 }
+    await act(async () => {
+      root?.render(
+        <div>
+          <ChapterCreationDialog isOpen onClose={vi.fn()} />
+          <BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />
+        </div>,
+      )
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent?.match(/权威定稿缺少第 4 章/g)).toHaveLength(2)
+    })
+    const startButtons = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button'))
+      .filter(button => button.textContent?.includes('开始创作') || button.textContent?.includes('启动批量创作'))
+    expect(startButtons).toHaveLength(2)
+    expect(startButtons.every(button => button.disabled)).toBe(true)
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
   it('defaults the direct chapter dialog to the global model, freezes an explicitly selected Grok run, and preserves that default', async () => {
     await act(async () => {
       root?.render(

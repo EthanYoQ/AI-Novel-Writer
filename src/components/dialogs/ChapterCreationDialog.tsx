@@ -15,6 +15,7 @@ import {
 import { guardChapterWriting } from '../../services/workflow-guards'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
+import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
 import { toast } from '../ui/Toast'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
@@ -88,6 +89,7 @@ export default function ChapterCreationDialog(props: Props) {
 
 function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
   const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
   const models = useLLMStore(s => s.models)
   const defaultModelId = useLLMStore(s => s.defaultModelId)
@@ -106,6 +108,8 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
   const [loadedFromHistory, setLoadedFromHistory] = useState(false)
   const [loadedFromBlueprint, setLoadedFromBlueprint] = useState(false)
   const [guardError, setGuardError] = useState<string | null>(null)
+  const [authorityError, setAuthorityError] = useState<string | null>(null)
+  const [authorityLoading, setAuthorityLoading] = useState(false)
   const [generationModelId, setGenerationModelId] = useState<string | null>(() => (
     preferredGenerationModelId(models, defaultModelId)
   ))
@@ -158,7 +162,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
       useProjectStore.getState().currentProject?.path,
     ) && isProjectSessionCurrent(projectSession)
     /** 从项目本地 .vela/chapter_creation_log.json 读取上次参数。 */
-    const loadLastParams = async () => {
+    const loadLastParams = async (nextChapterNumber: number) => {
       try {
         const result = await ipc.invokeWithProjectSession(
           projectSession,
@@ -177,8 +181,8 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
           }
           if (log.lastUsed) {
             const last = log.lastUsed
-            // 章节号自动 +1
-            setChapterNumber((last.chapterNumber || 0) + 1)
+            // 历史记录仅恢复创作参数；章号始终服从不可变定稿事实源。
+            setChapterNumber(nextChapterNumber)
             setTitle('') // 标题不继承，让用户自填
             setRole(last.role || '发展')
             setPurpose(last.purpose || '')
@@ -194,11 +198,23 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
       if (!isCurrentRequest()) return
       // 默认值：根据已有稿件数量推断下一章节号
       setWordsTarget(normalizeChapterWordsTarget(defaultWordsTarget))
-      setChapterNumber(1)
+      setChapterNumber(nextChapterNumber)
       setLoadedFromHistory(false)
     }
-    Promise.resolve().then(() => {
+    const initialize = async () => {
+      setAuthorityLoading(true)
+      let nextChapterNumber: number
+      try {
+        nextChapterNumber = await readAuthoritativeNextChapter(projectSession, locale)
+      } catch (error) {
+        if (!isCurrentRequest()) return
+        setAuthorityError(error instanceof Error ? error.message : String(error))
+        return
+      } finally {
+        if (isCurrentRequest()) setAuthorityLoading(false)
+      }
       if (!isCurrentRequest()) return
+      setAuthorityError(null)
       if (prefill) {
         // 使用章节蓝图预填数据
         setChapterNumber(Number(prefill.chapterNumber) || 1)
@@ -213,13 +229,14 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
         setLoadedFromHistory(false)
       } else {
         setLoadedFromBlueprint(false)
-        void loadLastParams()
+        await loadLastParams(nextChapterNumber)
       }
-    })
+    }
+    void initialize()
     return () => {
       gate.invalidate(requestToken)
     }
-  }, [isOpen, currentProject, prefill])
+  }, [isOpen, currentProject, prefill, locale])
 
 
 
@@ -282,8 +299,26 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
       return
     }
 
-    // 前置校验：章节蓝图是否已生成，以及（若篇章>1）前一章是否已定稿
     const targetChapter = Number(chapterNumber) || 1
+    let authoritativeNextChapter: number
+    try {
+      authoritativeNextChapter = await readAuthoritativeNextChapter(projectSession, locale)
+    } catch (error) {
+      if (!isProjectSessionCurrent(projectSession)) return
+      setAuthorityError(error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (!isProjectSessionCurrent(projectSession)) return
+    setAuthorityError(null)
+    if (targetChapter !== authoritativeNextChapter) {
+      setGuardError(text(
+        `当前权威定稿之后只能创作第 ${authoritativeNextChapter} 章。请从该章蓝图进入，或修复定稿章节后重试。`,
+        `Only Chapter ${authoritativeNextChapter} can be written after the current finalized authority. Open that blueprint, or repair finalized chapters before retrying.`,
+      ))
+      return
+    }
+
+    // 前置校验：章节蓝图是否已生成，以及（若篇章>1）前一章是否已定稿
     const guard = await guardChapterWriting(targetChapter, projectPath, projectSession)
     if (!isProjectSessionCurrent(projectSession)) return
     const guardedGenerationModelId = availableGenerationModelId(
@@ -498,7 +533,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
               </span>
               <div className="flex items-center gap-2">
                 <Button variant="outline" onClick={onClose}>{text('取消', 'Cancel')}</Button>
-                <Button variant="ai" size="lg" onClick={handleStart} disabled={isChapterRunning || !!modelSelectionError}>
+                <Button variant="ai" size="lg" onClick={handleStart} disabled={isChapterRunning || authorityLoading || !!authorityError || !!modelSelectionError}>
                   {isChapterRunning ? (
                     <span className="flex items-center gap-2">
                       <Loader2 size={13} className="animate-spin" />
@@ -514,10 +549,10 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
               </div>
             </DialogFooter>
             {/* 前置校验失败提示（呈现在 Footer 下方） */}
-            {guardError && (
+            {(authorityError ?? guardError) && (
               <div className="mx-5 mb-4 flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs bg-yellow-500/10 border border-yellow-500/30 text-[var(--color-warning-text)]">
                 <AlertCircle size={13} className="flex-shrink-0 mt-0.5 text-[var(--color-warning)]" />
-                <span className="whitespace-pre-line">{guardError}</span>
+                <span className="whitespace-pre-line">{authorityError ?? guardError}</span>
               </div>
             )}
       </DialogContent>

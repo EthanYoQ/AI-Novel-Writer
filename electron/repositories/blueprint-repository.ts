@@ -749,13 +749,14 @@ export class BlueprintRepository {
     }
 
     /** 仅更新 notes 字段 */
-    static updateNotes(chapterNumber: number, notes: string): void {
+    static updateNotes(chapterNumber: number, notes: string): boolean {
         const db = requireProjectDb()
 
-        db.prepare(`
+        const result = db.prepare(`
       UPDATE blueprints
       SET notes = ?, notes_updated_at = datetime('now'), updated_at = datetime('now')
       WHERE chapter_number = ?
     `).run(notes, chapterNumber)
+        return result.changes > 0
     }
 }

@@ -328,9 +328,12 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     -- ============================================================
     CREATE TABLE IF NOT EXISTS summary_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      draft_id INTEGER DEFAULT NULL,
       chapter_number INTEGER NOT NULL,
       character_states TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now'))
+      chapter_notes TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (draft_id) REFERENCES drafts(id) ON DELETE CASCADE
     );
 
     -- 索引
@@ -345,11 +348,16 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       effect_namespace TEXT NOT NULL,
       source_fingerprint TEXT NOT NULL,
       manifest_fingerprint TEXT NOT NULL,
+      authority_fingerprint TEXT NOT NULL DEFAULT '',
       legacy_source_fingerprint TEXT NOT NULL DEFAULT '',
       source_display_json TEXT NOT NULL DEFAULT '[]',
       locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
       stage TEXT NOT NULL DEFAULT 'knowledge'
-        CHECK(stage IN ('parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed')),
+        CHECK(stage IN (
+          'parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints',
+          'author-commit', 'author-publish', 'author-postprocess',
+          'refresh', 'completed'
+        )),
       status TEXT NOT NULL DEFAULT 'ready'
         CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
       completed_batches_json TEXT NOT NULL DEFAULT '{}',
@@ -505,6 +513,26 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     );
   `)
 
+  // Durable continuity facts were added to the existing summary projection so
+  // older projects keep their legacy snapshots while new rows bind to a
+  // finalized draft identity.
+  const summaryColumns = new Set(
+    (db.prepare('PRAGMA table_info(summary_snapshots)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!summaryColumns.has('draft_id')) {
+    db.exec(`
+      ALTER TABLE summary_snapshots
+      ADD COLUMN draft_id INTEGER DEFAULT NULL REFERENCES drafts(id) ON DELETE CASCADE
+    `)
+  }
+  if (!summaryColumns.has('chapter_notes')) {
+    db.exec("ALTER TABLE summary_snapshots ADD COLUMN chapter_notes TEXT NOT NULL DEFAULT ''")
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_summary_snapshots_draft
+      ON summary_snapshots(draft_id) WHERE draft_id IS NOT NULL
+  `)
+
   // Import-run columns were introduced incrementally during pre-release development.
   // Existing project databases must receive the same lease and manifest invariants.
   const importRunColumns = new Set(
@@ -524,6 +552,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   addImportRunColumn('purpose', "TEXT NOT NULL DEFAULT 'reference'")
   addImportRunColumn('root_run_id', "TEXT NOT NULL DEFAULT ''")
   addImportRunColumn('effect_namespace', "TEXT NOT NULL DEFAULT ''")
+  addImportRunColumn('authority_fingerprint', "TEXT NOT NULL DEFAULT ''")
   addImportRunColumn('legacy_source_fingerprint', "TEXT NOT NULL DEFAULT ''")
   db.exec(`
     UPDATE import_runs
@@ -535,23 +564,31 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   const importRunSchema = db.prepare(`
     SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'import_runs'
   `).get() as { sql: string } | undefined
-  if (importRunSchema && !importRunSchema.sql.includes("'parsing'")) {
+  if (
+    importRunSchema
+    && (!importRunSchema.sql.includes("'parsing'") || !importRunSchema.sql.includes("'author-commit'"))
+  ) {
     db.pragma('foreign_keys = OFF')
     try {
       db.transaction(() => {
         db.exec(`
-          CREATE TABLE import_runs_stage_v2 (
+          CREATE TABLE import_runs_stage_v3 (
             id TEXT PRIMARY KEY,
             purpose TEXT NOT NULL DEFAULT 'reference' CHECK(purpose IN ('reference', 'author-manuscript')),
             root_run_id TEXT NOT NULL,
             effect_namespace TEXT NOT NULL,
             source_fingerprint TEXT NOT NULL,
             manifest_fingerprint TEXT NOT NULL,
+            authority_fingerprint TEXT NOT NULL DEFAULT '',
             legacy_source_fingerprint TEXT NOT NULL DEFAULT '',
             source_display_json TEXT NOT NULL DEFAULT '[]',
             locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
-            stage TEXT NOT NULL DEFAULT 'parsing'
-              CHECK(stage IN ('parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed')),
+            stage TEXT NOT NULL DEFAULT 'knowledge'
+              CHECK(stage IN (
+                'parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints',
+                'author-commit', 'author-publish', 'author-postprocess',
+                'refresh', 'completed'
+              )),
             status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('ready', 'running', 'failed', 'cancelled', 'completed')),
             completed_batches_json TEXT NOT NULL DEFAULT '{}',
             last_error TEXT NOT NULL DEFAULT '',
@@ -570,24 +607,26 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             completed_at TEXT DEFAULT NULL,
-            FOREIGN KEY (base_run_id) REFERENCES import_runs(id) ON DELETE SET NULL
+            FOREIGN KEY (base_run_id) REFERENCES import_runs_stage_v3(id) ON DELETE SET NULL
           );
-          INSERT INTO import_runs_stage_v2 (
-            id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint, legacy_source_fingerprint,
+          INSERT INTO import_runs_stage_v3 (
+            id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint,
+            authority_fingerprint, legacy_source_fingerprint,
             source_display_json, locale, stage, status, completed_batches_json, last_error,
             resumable, cancel_requested, execution_owner, execution_epoch, lease_expires_at,
             total_chapters, total_content_size, manifest_chapter_count, manifest_content_size,
             manifest_word_count, completed_chapters, base_run_id, created_at, updated_at, completed_at
           )
           SELECT
-            id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint, legacy_source_fingerprint,
+            id, purpose, root_run_id, effect_namespace, source_fingerprint, manifest_fingerprint,
+            authority_fingerprint, legacy_source_fingerprint,
             source_display_json, locale, stage, status, completed_batches_json, last_error,
             resumable, cancel_requested, execution_owner, execution_epoch, lease_expires_at,
             total_chapters, total_content_size, manifest_chapter_count, manifest_content_size,
             manifest_word_count, completed_chapters, base_run_id, created_at, updated_at, completed_at
           FROM import_runs;
           DROP TABLE import_runs;
-          ALTER TABLE import_runs_stage_v2 RENAME TO import_runs;
+          ALTER TABLE import_runs_stage_v3 RENAME TO import_runs;
           CREATE INDEX idx_import_runs_source_status ON import_runs(source_fingerprint, status, updated_at);
           CREATE INDEX idx_import_runs_resumable ON import_runs(resumable, status, updated_at);
         `)
@@ -730,8 +769,12 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     }
   })()
   db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_import_runs_source_status
+      ON import_runs(source_fingerprint, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_import_runs_resumable
+      ON import_runs(resumable, status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_import_runs_purpose_source_status
-      ON import_runs(purpose, source_fingerprint, status, updated_at)
+      ON import_runs(purpose, source_fingerprint, status, updated_at);
   `)
   const importReceiptColumns = new Set(
     (db.prepare('PRAGMA table_info(import_run_receipts)').all() as Array<{ name: string }>).map(column => column.name),

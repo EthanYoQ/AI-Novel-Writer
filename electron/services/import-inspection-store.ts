@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { ImportInspectionSummary } from '../../src/shared/import-run'
+import type { ImportInspectionSummary, ImportPurpose } from '../../src/shared/import-run'
 import type { EncodedImportSourceIdentity } from '../repositories/import-source-identity-repository'
 import {
   MAX_IMPORT_CHAPTERS,
@@ -31,6 +31,7 @@ export interface InspectedImportSource extends EncodedImportSourceIdentity {
 
 export interface ImportInspection {
   inspectionId: string
+  purpose: ImportPurpose
   webContentsId: number
   sources: InspectedImportSource[]
   chapters: InspectedImportChapter[]
@@ -62,6 +63,7 @@ export class ImportInspectionStore {
 
   create(input: {
     webContentsId: number
+    purpose: ImportPurpose
     sources: InspectedImportSource[]
     chapters: InspectedImportChapter[]
   }): ImportInspectionSummary {
@@ -124,6 +126,7 @@ export class ImportInspectionStore {
     const inspectionId = randomUUID()
     const inspection: ImportInspection = {
       inspectionId,
+      purpose: input.purpose,
       webContentsId: input.webContentsId,
       sources: input.sources,
       chapters: input.chapters,
@@ -134,6 +137,7 @@ export class ImportInspectionStore {
     this.inspections.set(inspectionId, inspection)
     return {
       inspectionId,
+      purpose: inspection.purpose,
       sourceCount: inspection.sources.length,
       sourceDisplayNames: inspection.sources.map(source => source.displayName),
       chapterCount: inspection.chapters.length,
@@ -152,6 +156,17 @@ export class ImportInspectionStore {
     const inspection = this.inspections.get(inspectionId)
     if (!inspection || inspection.webContentsId !== webContentsId) throw new Error('导入检查已失效，请重新选择文件')
     this.inspections.delete(inspectionId)
+    return inspection
+  }
+
+  peek(inspectionId: string, webContentsId: number, purpose?: ImportPurpose): ImportInspection {
+    this.removeExpired()
+    const inspection = this.inspections.get(inspectionId)
+    if (
+      !inspection
+      || inspection.webContentsId !== webContentsId
+      || (purpose !== undefined && inspection.purpose !== purpose)
+    ) throw new Error('导入检查已失效，请重新选择文件')
     return inspection
   }
 

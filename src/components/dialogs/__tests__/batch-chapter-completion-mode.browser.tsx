@@ -208,6 +208,15 @@ function installIpc() {
   }
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+    if (channel === 'db:draft-authority-sequence') {
+      return {
+        status: 'empty',
+        lastChapterNumber: 0,
+        nextChapterNumber: 1,
+        duplicateChapterNumbers: [],
+        authorityFingerprint: 'a'.repeat(64),
+      }
+    }
     if (channel === 'llm:begin-execution-lease') return { success: true, lease: MODEL_LEASE }
     if (channel === 'llm:close-execution-lease') return { success: true }
     if (channel === 'llm:generate-stream') {
@@ -285,7 +294,8 @@ function installIpc() {
       return { success: true, chunkCount: 1, docId: 'knowledge-browser-1' }
     }
     if (channel === 'db:finalization-link-knowledge-document') return { success: true }
-    if (channel === 'db:blueprint-update-notes') return { success: true }
+    if (channel === 'db:continuity-save-finalized') return { success: true }
+    if (channel === 'db:blueprint-update-notes') return { success: true, updated: true }
     if (channel === 'db:character-roster-read') {
       return { status: 'empty', revision: 0, entries: [] }
     }
