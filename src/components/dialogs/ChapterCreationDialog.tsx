@@ -354,20 +354,28 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
     setGuardError(null)
 
     if (!ignoreFindingsOnce) {
-      const preflight = await readConsistencyPreflight(projectSession, [{
-        chapterNumber: targetChapter,
-        title,
-        role,
-        purpose,
-        keyEvents,
-        characters: characters.split(/[、,，]/u).map(value => value.trim()).filter(Boolean),
-        suspenseHook: '',
-        userGuidance,
-        notes: '',
-      }])
-      if (!isProjectSessionCurrent(projectSession)) return
-      setConsistencyPreflight(preflight)
-      if (preflight.findings.length > 0) return
+      try {
+        const preflight = await readConsistencyPreflight(projectSession, [{
+          chapterNumber: targetChapter,
+          title,
+          role,
+          purpose,
+          keyEvents,
+          characters: characters.split(/[、,，]/u).map(value => value.trim()).filter(Boolean),
+          suspenseHook: '',
+          userGuidance,
+          notes: '',
+        }])
+        if (!isProjectSessionCurrent(projectSession)) return
+        setConsistencyPreflight(preflight)
+        if (preflight.findings.length > 0) return
+      } catch {
+        if (!isProjectSessionCurrent(projectSession)) return
+        addLog('info', text(
+          '一致性证据暂时不可用；本次创作仍会继续。',
+          'Continuity evidence is temporarily unavailable; writing will continue.',
+        ))
+      }
     }
     setConsistencyPreflight(null)
 

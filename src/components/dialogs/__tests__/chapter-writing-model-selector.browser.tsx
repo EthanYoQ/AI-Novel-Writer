@@ -31,6 +31,7 @@ let authorityInvalid: { gap?: number; duplicates?: number[] } | null
 let creationHistoryChapter: number | null
 let continuityProjections: unknown[]
 let consistencyExemptions: unknown[]
+let continuityProjectionReadError: Error | null
 
 function project(): ProjectData {
   return {
@@ -98,7 +99,10 @@ function installIpc() {
           }
         }
         if (channel === 'db:blueprint-get-all') return [{ chapterNumber: 1 }]
-        if (channel === 'db:continuity-list-before') return continuityProjections
+        if (channel === 'db:continuity-list-before') {
+          if (continuityProjectionReadError) throw continuityProjectionReadError
+          return continuityProjections
+        }
         if (channel === 'db:consistency-exemption-list') return consistencyExemptions
         if (channel === 'db:consistency-exemption-save') {
           consistencyExemptions = [{ stableFactKey: String(args[0]), reason: String(args[1]), revoked: false }]
@@ -170,6 +174,7 @@ beforeEach(() => {
   creationHistoryChapter = null
   continuityProjections = []
   consistencyExemptions = []
+  continuityProjectionReadError = null
   startWorkflow = vi.fn(async () => 'writing-model-selector-run')
   setDefaultModel = vi.fn(async () => true)
   useLocaleStore.setState({ locale: 'zh-CN' })
@@ -317,6 +322,19 @@ describe('chapter writing model selectors', () => {
     expect(consistencyExemptions).toEqual([])
   })
 
+  it('still starts direct writing when consistency evidence cannot be read', async () => {
+    continuityProjectionReadError = new Error('projection unavailable')
+    await act(async () => {
+      root?.render(<ChapterCreationDialog isOpen onClose={vi.fn()} prefill={{
+        chapterNumber: 1, title: '雨夜启程', role: '开篇', purpose: '开始旅程', keyEvents: '收到匿名信',
+      }} />)
+    })
+
+    await act(async () => page.getByRole('button', { name: '开始创作' }).click())
+
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+  })
+
   it('shows the same continuable preflight in English before a batch run', async () => {
     useLocaleStore.setState({ locale: 'en-US' })
     continuityProjections = [{
@@ -336,6 +354,17 @@ describe('chapter writing model selectors', () => {
     expect(startWorkflow).not.toHaveBeenCalled()
 
     await act(async () => page.getByRole('button', { name: 'Ignore once and continue' }).click())
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+  })
+
+  it('still starts batch writing when consistency evidence cannot be read', async () => {
+    continuityProjectionReadError = new Error('projection unavailable')
+    await act(async () => {
+      root?.render(<BatchChapterCreationDialog isOpen startChapterNumber={1} onClose={vi.fn()} />)
+    })
+
+    await act(async () => page.getByRole('button', { name: '启动批量创作' }).click())
+
     await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
   })
 

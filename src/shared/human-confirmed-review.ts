@@ -16,6 +16,8 @@ export interface HumanConfirmedReviewItem {
   severity: string
   description: string
   quote?: string
+  stableFactKey?: string
+  sourceChapter?: number
   decision: HumanConfirmedReviewDecision
   origin: HumanConfirmedReviewOrigin
 }
@@ -56,6 +58,8 @@ function parseItem(value: unknown): HumanConfirmedReviewItem | null {
   const severity = nonEmptyString(record.severity)
   const description = nonEmptyString(record.description)
   const quote = record.quote === undefined ? undefined : stringValue(record.quote)
+  const stableFactKey = record.stableFactKey === undefined ? undefined : nonEmptyString(record.stableFactKey)
+  const sourceChapter = record.sourceChapter
   const decision = record.decision
   const origin = record.origin
 
@@ -67,12 +71,16 @@ function parseItem(value: unknown): HumanConfirmedReviewItem | null {
     || (origin !== 'ai' && origin !== 'author')
   ) return null
   if (quote === null) return null
+  if (stableFactKey === null) return null
+  if (sourceChapter !== undefined && !positiveSafeInteger(sourceChapter)) return null
 
   return Object.freeze({
     category,
     severity,
     description,
     ...(quote === undefined ? {} : { quote }),
+    ...(stableFactKey === undefined ? {} : { stableFactKey }),
+    ...(sourceChapter === undefined ? {} : { sourceChapter }),
     decision,
     origin,
   })

@@ -863,6 +863,37 @@ describe('ReviewChapterCommand reasoning stage', () => {
     ])
   })
 
+  it('preserves the AI review when deterministic continuity evidence cannot be read', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '{"summary":"AI review","items":[]}', finishReason: 'stop' })
+    const createParams: Array<{ content: string }> = []
+    stubIpc(vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'kb:search' || channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:draft-get-meta') return { id: 1, chapterNumber: 2, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:blueprint-get') return {
+        chapterNumber: 2, title: '重逢', role: '发展', purpose: '顾舟归来', keyEvents: '顾舟敲门',
+        characters: ['顾舟'], suspenseHook: '他为何归来', userGuidance: '', notes: '', notesUpdatedAt: '',
+      }
+      if (channel === 'db:consistency-exemption-list') return []
+      if (channel === 'db:continuity-list-before') throw new Error('projection unavailable')
+      if (channel === 'db:review-create') {
+        createParams.push(args[0] as { content: string })
+        return { success: true, id: 77 }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    }))
+    const stepCallbacks = callbacks()
+
+    await expect(chapterReviewCommand(completeWithLease).execute({
+      step: {}, context: workflowContext(), callbacks: stepCallbacks,
+    })).resolves.toContain('AI review')
+
+    expect(JSON.parse(createParams[0]!.content)).toEqual({ summary: 'AI review', items: [] })
+    expect(stepCallbacks.log).toHaveBeenCalledWith('一致性证据暂时不可用；AI 审稿仍会继续。')
+  })
+
   it('uses the frozen English UI locale for visible review logs and the report tab independently of Chinese writing', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
       .mockResolvedValue({ content: '{"summary":"ok","items":[]}', finishReason: 'stop' })

@@ -48,6 +48,8 @@ interface ReviewIssue {
   description: string
   /** 引用的原文片段（有问题时提供） */
   quote?: string
+  stableFactKey?: string
+  sourceChapter?: number
 }
 
 /** AI 返回的 JSON 审稿结构 */
@@ -57,6 +59,8 @@ interface ReviewJSON {
     severity: string
     description: string
     quote?: string
+    stableFactKey?: string
+    sourceChapter?: number
   }>
   summary: string
 }
@@ -130,6 +134,10 @@ function parseReport(text: string, fallbackCategory: string): { issues: ReviewIs
           severity: normalizeSeverity(item.severity),
           description: item.description || '',
           quote: item.quote || undefined,
+          stableFactKey: item.stableFactKey || undefined,
+          sourceChapter: Number.isSafeInteger(item.sourceChapter) && Number(item.sourceChapter) > 0
+            ? item.sourceChapter
+            : undefined,
         }))
         return { issues, summary: data.summary || '' }
       }
@@ -290,6 +298,8 @@ function editableItemsFromReview(
     severity: issue.severity,
     description: issue.description,
     ...(issue.quote ? { quote: issue.quote } : {}),
+    ...(issue.stableFactKey ? { stableFactKey: issue.stableFactKey } : {}),
+    ...(issue.sourceChapter ? { sourceChapter: issue.sourceChapter } : {}),
     decision: issue.severity === 'pass' ? 'ignore' : 'apply',
     origin: 'ai',
   }))
@@ -475,11 +485,15 @@ function ReviewReportSession({
       sourceReviewId,
       summary,
       authorGuidance,
-      items: items.map(({ category, severity, description, quote, decision, origin }) => ({
+      items: items.map(({
+        category, severity, description, quote, stableFactKey, sourceChapter, decision, origin,
+      }) => ({
         category,
         severity,
         description,
         ...(quote?.trim() ? { quote: quote.trim() } : {}),
+        ...(stableFactKey ? { stableFactKey } : {}),
+        ...(sourceChapter ? { sourceChapter } : {}),
         decision,
         origin,
       })),
@@ -827,6 +841,14 @@ function ReviewReportSession({
                                   [{copy.actionLabel}]
                                 </span>
                               </div>
+                            )}
+                            {item.sourceChapter && (
+                              <p className="text-[0.7rem] text-[var(--color-text-muted)]">
+                                {text(
+                                  `来源：第${item.sourceChapter}章`,
+                                  `Source: Chapter ${item.sourceChapter}`,
+                                )}
+                              </p>
                             )}
                             {!isPass && editingChecklist && (
                               <div className="flex items-center justify-between gap-2">

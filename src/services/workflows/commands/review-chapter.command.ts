@@ -131,11 +131,18 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       projectSession, 'db:blueprint-get', this.params.chapterNumber, context.projectPath,
     )
     if (blueprint) {
-      const preflight = await readConsistencyPreflight(projectSession, [blueprint])
+      try {
+        const preflight = await readConsistencyPreflight(projectSession, [blueprint])
+        parsedResult = mergeConsistencyFindingsIntoReview(parsedResult, preflight.findings, context.uiLocale ?? 'zh-CN')
+      } catch {
+        callbacks.log(text(
+          '一致性证据暂时不可用；AI 审稿仍会继续。',
+          'Continuity evidence is temporarily unavailable; the AI review will continue.',
+        ))
+      }
       if (!sameProjectSessionContext(projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))) {
         throw new Error(text('当前项目已切换，审稿已停止', 'The project changed, so the review stopped.'))
       }
-      parsedResult = mergeConsistencyFindingsIntoReview(parsedResult, preflight.findings, context.uiLocale ?? 'zh-CN')
     }
 
     this.assertNotCancelled(context)

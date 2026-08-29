@@ -26,6 +26,8 @@ const RAW_AI_REPORT = JSON.stringify({
       severity: 'error',
       description: '角色离开港口后又在同一场景出现。',
       quote: '他仍站在港口的灯塔下。',
+      stableFactKey: 'fact:1234567890abcdef',
+      sourceChapter: 7,
     },
     {
       category: '节奏',
@@ -249,6 +251,7 @@ describe('ReviewReport human-confirmed revision flow', () => {
     await renderReport()
 
     expect(container?.textContent).toContain(RAW_AI_REPORT)
+    expect(container?.textContent).toContain('来源：第7章')
     await act(async () => page.getByRole('button', { name: '忽略' }).nth(1).click())
     await expect.element(page.getByRole('button', { name: '恢复' })).toBeVisible()
     await act(async () => page.getByRole('button', { name: '恢复' }).click())
@@ -273,6 +276,9 @@ describe('ReviewReport human-confirmed revision flow', () => {
     expect(snapshot?.items).toEqual(expect.arrayContaining([
       expect.objectContaining({
         description: '角色离开港口后又在同一场景出现（作者已校正描述）。',
+        quote: '他仍站在港口的灯塔下。',
+        stableFactKey: 'fact:1234567890abcdef',
+        sourceChapter: 7,
         decision: 'apply',
         origin: 'ai',
       }),
