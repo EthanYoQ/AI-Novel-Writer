@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle,
@@ -356,6 +356,49 @@ function ReviewReportSession({
   const sourceReviewId = confirmationSourceReviewId(initialSnapshot, reviewId)
   const summary = initialSnapshot?.summary ?? parsedReport.summary
   const canManageChecklist = Boolean(draftPath && chapterDir)
+
+  useEffect(() => {
+    if (initialSnapshot || !draftPath || !chapterDir || !isReviewId(reviewId)) return
+
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+
+    let cancelled = false
+    void (async () => {
+      const { parseDraftMeta } = await import('../../services/workflows/chapter-workflow')
+      if (cancelled || !isProjectSessionCurrent(projectSession)) return
+      const draftMeta = await parseDraftMeta(
+        draftPath,
+        projectSession.projectPath,
+        projectSession,
+      )
+      if (cancelled || !isProjectSessionCurrent(projectSession) || !draftMeta) return
+
+      const latestReview = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:review-get-latest',
+        draftMeta.id,
+        projectSession.projectPath,
+      )
+      if (cancelled || !isProjectSessionCurrent(projectSession) || !latestReview) return
+
+      const restoredSnapshot = parseHumanConfirmedReviewSnapshot(latestReview.content)
+      if (!restoredSnapshot || restoredSnapshot.sourceReviewId !== reviewId) return
+
+      setItems(editableItemsFromReview([], restoredSnapshot))
+      setAuthorGuidance(restoredSnapshot.authorGuidance)
+      setConfirmed({
+        reviewSourceId: latestReview.id,
+        content: latestReview.content,
+        snapshot: restoredSnapshot,
+      })
+      setEditingChecklist(false)
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [chapterDir, draftPath, initialSnapshot, projectKey, reviewId])
 
   // 按分类分组
   const categories = new Map<string, EditableReviewItem[]>()

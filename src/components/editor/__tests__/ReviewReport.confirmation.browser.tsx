@@ -97,6 +97,14 @@ function model(overrides: Partial<ModelProfile>): ModelProfile {
 }
 
 function installIpc(confirmationId: number) {
+  let latestReview: {
+    id: number
+    baseDraftId: number
+    reviewIndex: number
+    contentId: number
+    createdAt: string
+    content: string
+  } | null = null
   invoke = vi.fn(async (channel: string) => {
     if (channel === 'db:draft-get-meta') {
       return {
@@ -111,6 +119,7 @@ function installIpc(confirmationId: number) {
     if (channel === 'db:draft-get-full') return { id: 1, content: '这是尚未合并的原始草稿正文。' }
     if (channel === 'db:review-next-index') return 2
     if (channel === 'db:review-create') return { success: true, id: confirmationId }
+    if (channel === 'db:review-get-latest') return latestReview
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
   Object.defineProperty(window, 'velaAPI', {
@@ -125,6 +134,18 @@ function installIpc(confirmationId: number) {
       getZoomLevel: vi.fn(() => 0),
     },
   })
+  return {
+    setLatestReview(content: string) {
+      latestReview = {
+        id: confirmationId,
+        baseDraftId: 1,
+        reviewIndex: 2,
+        contentId: 101,
+        createdAt: '2026-08-29T00:00:00.000Z',
+        content,
+      }
+    },
+  }
 }
 
 function confirmationCreateParams() {
@@ -348,5 +369,42 @@ describe('ReviewReport human-confirmed revision flow', () => {
     await act(async () => page.getByRole('button', { name: '确认审稿清单' }).click())
     await expect.element(page.getByRole('alert')).toHaveTextContent('请填写或移除空白的人工问题后再确认')
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(false)
+  })
+
+  it('restores persisted confirmation after leaving and returning', async () => {
+    const ipc = installIpc(95)
+    await renderReport()
+    await fillTextarea('textarea[aria-label="审稿问题"]', '角色位置冲突（作者确认版本）。')
+    await fillTextarea('#review-author-guidance', '只修复已确认的位置冲突。')
+
+    await act(async () => {
+      await page.getByRole('button', { name: '确认审稿清单' }).click()
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+    })
+    const persistedContent = confirmationCreateParams().content
+    expect(parseHumanConfirmedReviewSnapshot(persistedContent)?.sourceReviewId).toBe(41)
+
+    await act(async () => root?.unmount())
+    container?.remove()
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    ipc.setLatestReview(persistedContent)
+    invoke.mockClear()
+
+    await renderReport()
+
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-get-latest')).toBe(true)
+      })
+    })
+    await expect.element(page.getByRole('button', { name: '按确认意见修稿' })).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '编辑清单' }).click())
+    expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="审稿问题"]')?.value)
+      .toBe('角色位置冲突（作者确认版本）。')
+    expect(document.querySelector<HTMLTextAreaElement>('#review-author-guidance')?.value)
+      .toBe('只修复已确认的位置冲突。')
+    expect(container?.textContent).toContain(RAW_AI_REPORT)
   })
 })
