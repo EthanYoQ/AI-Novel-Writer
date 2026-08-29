@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import {
   Trash2, ChevronsDown, Loader2, CheckCircle2, XCircle, Clock,
-  Play, Pause, X, ChevronDown, ChevronRight, Zap,
+  Play, Pause, X, ChevronDown, ChevronRight, Zap, Copy,
 } from 'lucide-react'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useWorkflowStore, type WorkflowStep, type WorkflowRun } from '../../stores/workflow-store'
@@ -13,7 +13,10 @@ import {
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
 import { Button } from '../ui/Button'
+import { toast } from '../ui/Toast'
 import { LLMDataRequestGate } from './llm-data-request-gate'
+import type { LLMCallRecord } from '../../services/stats-service'
+import { coarseRuntimePlatform, formatSafeCallDiagnostic } from '../../services/safe-call-diagnostic'
 
 /** 底部面板 Tab 名称映射 */
 const TAB_LABELS: Record<string, string> = {
@@ -595,7 +598,44 @@ function LogsView() {
 
 // ===== 模型调用视图 =====
 
+export function SafeDiagnosticCopyButton({ call }: { call: LLMCallRecord }) {
+  const locale = useLocaleStore(s => s.locale)
+  const text = useLocaleStore(s => s.text)
+
+  const copyDiagnostic = async () => {
+    if (!navigator.clipboard?.writeText) {
+      toast.error(text('当前环境不支持复制安全诊断', 'Safe diagnostic copying is unavailable in this environment.'))
+      return
+    }
+    const diagnostic = formatSafeCallDiagnostic({
+      locale,
+      appVersion: __APP_VERSION__,
+      platform: coarseRuntimePlatform(navigator.platform),
+      call,
+    })
+    try {
+      await navigator.clipboard.writeText(diagnostic)
+      toast.success(text('已复制安全诊断', 'Safe diagnostics copied.'))
+    } catch {
+      toast.error(text('复制安全诊断失败', 'Could not copy safe diagnostics.'))
+    }
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => void copyDiagnostic()}
+      title={text('复制安全诊断', 'Copy safe diagnostics')}
+      aria-label={text('复制安全诊断', 'Copy safe diagnostics')}
+    >
+      <Copy size={12} />
+    </Button>
+  )
+}
+
 function ModelsView() {
+  const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore(s => s.currentProject)
   const projectSession = useMemo(
     () => projectSessionContextFromProject(currentProject),
@@ -609,11 +649,7 @@ function ModelsView() {
       totalTokens: number | null
       totalPromptTokens: number | null; totalCompletionTokens: number | null
     }
-    history: Array<{
-      id: number; modelName: string; purpose: string
-      promptTokens: number | null; completionTokens: number | null; totalTokens: number | null
-      durationMs: number; success: boolean; createdAt: string
-    }>
+    history: LLMCallRecord[]
   } | null>(null)
 
   // 即使旧请求尚未返回，也绝不向新会话展示其统计；数据与 lease 一起渲染。
@@ -694,6 +730,7 @@ function ModelsView() {
                 <th className="text-right px-2 py-1 font-medium">Tokens</th>
                 <th className="text-right px-2 py-1 font-medium">耗时</th>
                 <th className="text-center px-2 py-1 font-medium">状态</th>
+                <th className="text-center px-2 py-1 font-medium">{text('诊断', 'Diagnostics')}</th>
               </tr>
             </thead>
             <tbody>
@@ -711,6 +748,7 @@ function ModelsView() {
                   <td className="px-2 py-1 text-right text-[var(--color-text)]">{row.totalTokens == null ? '未知' : row.totalTokens.toLocaleString()}</td>
                   <td className="px-2 py-1 text-right text-[var(--color-text-muted)]">{(row.durationMs / 1000).toFixed(1)}s</td>
                   <td className="px-2 py-1 text-center">{row.success ? <CheckCircle2 size={12} style={{ color: 'var(--color-success)', display: 'inline' }} /> : <XCircle size={12} style={{ color: 'var(--color-error)', display: 'inline' }} />}</td>
+                  <td className="px-2 py-0.5 text-center"><SafeDiagnosticCopyButton call={row} /></td>
                 </tr>
               ))}
             </tbody>

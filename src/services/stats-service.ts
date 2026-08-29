@@ -21,6 +21,7 @@ export interface LLMStats {
 /** LLM 调用记录 */
 export interface LLMCallRecord {
   id: number
+  modelId?: string
   modelName: string
   purpose: string
   promptTokens: number | null

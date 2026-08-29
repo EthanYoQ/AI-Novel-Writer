@@ -80,7 +80,7 @@ export class LLMHistoryRepository {
     const db = getProjectDb()
     if (!db) return []
     return db.prepare(`
-      SELECT id, model_name as modelName, purpose,
+      SELECT id, model_id as modelId, model_name as modelName, purpose,
         prompt_tokens as promptTokens, completion_tokens as completionTokens,
         total_tokens as totalTokens, duration_ms as durationMs,
         success, created_at as createdAt
