@@ -66,7 +66,7 @@ const CONTINUITY_STATEMENT_LIMIT = 280
 const CONTINUITY_EVIDENCE_LIMIT = 240
 
 function factCategory(statement: string): FinalizedContinuityFactCategory {
-  if (/(?:角色|状态|持有|受伤|位于|character|holds?|injur|location)/iu.test(statement)) return 'character-state'
+  if (/(?:角色|状态|持有|受伤|位于|死亡|身亡|牺牲|去世|character|holds?|injur|location|dead|died|deceased)/iu.test(statement)) return 'character-state'
   if (/(?:时间|当日|翌日|多年|之前|之后|timeline|before|after|years?)/iu.test(statement)) return 'timeline'
   if (/(?:伏笔|悬念|承诺|未解|线索|promise|unresolved|clue|mystery)/iu.test(statement)) return 'open-thread'
   return 'plot'
