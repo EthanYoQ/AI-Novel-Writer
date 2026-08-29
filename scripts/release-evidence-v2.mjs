@@ -234,6 +234,12 @@ function now() {
   return new Date().toISOString()
 }
 
+function nowAtOrAfter(minimumTimestamp) {
+  const minimum = Date.parse(minimumTimestamp)
+  assert(Number.isFinite(minimum), 'Release evidence prior timestamp is invalid')
+  return new Date(Math.max(Date.now(), minimum)).toISOString()
+}
+
 function pinnedVersion(value, label) {
   assert(typeof value === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value), `${label} must be a pinned version`)
   return value
@@ -442,7 +448,8 @@ export function recordReleaseCommand({ evidenceRoot, step, command, cwd = reposi
   const evidence = readInitializedEvidence(evidenceRoot)
   assert(!evidence.ledger.commands.some(record => record?.step === step), `Release evidence already records step: ${step}`)
 
-  const startedAt = now()
+  const previousTimestamp = evidence.ledger.commands.at(-1)?.endedAt ?? evidence.ledger.run?.startedAt
+  const startedAt = nowAtOrAfter(previousTimestamp)
   const timeoutMs = commandTimeoutMilliseconds()
   const result = spawnSync(command[0], command.slice(1), {
     cwd,
@@ -451,7 +458,7 @@ export function recordReleaseCommand({ evidenceRoot, step, command, cwd = reposi
     timeout: timeoutMs,
     windowsHide: true,
   })
-  const endedAt = now()
+  const endedAt = nowAtOrAfter(startedAt)
   const commandRecord = {
     step,
     command: {

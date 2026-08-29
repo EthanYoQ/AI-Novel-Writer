@@ -220,6 +220,50 @@ describe('release evidence v2 CLI', () => {
     ])
   })
 
+  it('keeps command evidence ordered when the runner wall clock moves backward', () => {
+    const evidenceRoot = fixture()
+    const init = spawnSync(process.execPath, [
+      evidenceScript,
+      'init',
+      '--platform', 'macos-arm64',
+      '--evidence-root', evidenceRoot,
+      '--repository', 'EthanYoQ/AI-Novel-Writer',
+      '--commit', 'c'.repeat(40),
+      '--run-id', '204',
+      '--run-attempt', '1',
+      '--runner-label', 'macos-14',
+      '--image-os', 'macos14',
+      '--image-version', '20260726.1',
+      '--expected-node-version', process.versions.node,
+      '--expected-pnpm-version', '11.11.0',
+      '--workflow-path', '.github/workflows/macos-arm64-cloud-build.yml',
+      '--workflow-name', 'macOS ARM64 cloud package qualification',
+      '--actor', 'release-operator',
+      '--event', 'workflow_dispatch',
+      '--dispatch-inputs-json', '{}',
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(init.status, init.stderr).toBe(0)
+
+    const ledgerPath = path.join(evidenceRoot, 'run-ledger.json')
+    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf8'))
+    const futureStart = new Date(Date.now() + 60_000).toISOString()
+    ledger.run.startedAt = futureStart
+    writeJson(ledgerPath, ledger)
+
+    const recorded = spawnSync(process.execPath, [
+      evidenceScript,
+      'record',
+      '--evidence-root', evidenceRoot,
+      '--step', 'clock-rollback-probe',
+      '--', process.execPath, '-e', '',
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(recorded.status, recorded.stderr).toBe(0)
+
+    const [command] = JSON.parse(readFileSync(ledgerPath, 'utf8')).commands
+    expect(Date.parse(command.startedAt)).toBeGreaterThanOrEqual(Date.parse(futureStart))
+    expect(Date.parse(command.endedAt)).toBeGreaterThanOrEqual(Date.parse(command.startedAt))
+  })
+
   it('freezes Intel macOS evidence with an x64-only artifact and workflow identity', () => {
     const evidenceRoot = fixture()
     const init = spawnSync(process.execPath, [
