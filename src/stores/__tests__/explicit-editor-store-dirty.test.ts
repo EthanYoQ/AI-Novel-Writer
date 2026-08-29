@@ -15,7 +15,12 @@ import {
   rebuildCharacterRenamesAfterSave,
 } from '../character-rename-ledger'
 
-const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
+const { alertError, invoke } = vi.hoisted(() => ({
+  alertError: vi.fn(),
+  invoke: vi.fn(),
+}))
+
+vi.mock('../../components/ui/AlertDialog', () => ({ alertError }))
 
 vi.mock('../../services/ipc-client', () => ({
   ipc: {
@@ -130,6 +135,7 @@ function visibleEditor(type: 'character' | 'config') {
 }
 
 beforeEach(() => {
+  alertError.mockReset()
   invoke.mockReset()
   useEditorStore.setState({
     tabs: [
@@ -211,6 +217,10 @@ describe('explicit editor dirty integration', () => {
 
     fileTree.resolve([])
     await expect(opening).resolves.toBe(true)
+    expect(alertError).toHaveBeenCalledWith(
+      expect.stringContaining('unexpected IPC'),
+      expect.objectContaining({ title: '项目已打开，部分数据加载失败' }),
+    )
     expect(useCharacterStore.getState()).toMatchObject({
       characters: [character('项目 B 角色')],
       dataProjectKey: projectB().path,
