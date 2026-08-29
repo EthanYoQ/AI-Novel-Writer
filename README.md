@@ -31,16 +31,16 @@
   <img src="docs/assets/readme/ui-zh-v085-project-config.png" alt="AI 小说作家 v0.8.5：在本地桌面工作台中配置长篇小说的故事前提、世界观、角色、蓝图与章节" width="100%" />
 </p>
 
-> ## v0.8.5 创作闭环与三架构桌面发布
+> ## v0.8.6 作者原稿续写与可靠恢复
 >
-> [v0.8.5](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.5) 补齐了从创作到定稿的人工可控闭环，并把 macOS Apple Silicon 与 Intel 安装包纳入同一份可追溯的发布合同：
+> [v0.8.6](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.6) 加固作者原稿导入、续写与人工审校的完整链路，并继续提供 Windows、macOS Apple Silicon 与 macOS Intel 安装包：
 >
-> - **可控创作模型**：单章、批量与审稿修稿都可明确选择并冻结本次生成模型，不会静默回退到全局默认模型；模型未完成会显示实际终止原因，内容策略拦截不会再被泛化为“工作流未完成”。
-> - **人工审稿到修稿**：AI 审稿意见可逐条编辑、忽略、恢复或补充；确认后生成不可变快照，只按确认清单生成待合并修订稿，保留人工差异合并的最后决定权。
-> - **写作与项目可靠性**：修复章节创作入口、定稿后处理状态、结构化 JSON 恢复与关系图谱编辑边界；未完成或未确认的内容不会被错误落盘。
-> - **外观与平台**：继续保留独立主题（`light`、`galaxy`、`paper`、`dark`）与界面皮肤（`classic`、`anime`、`custom`）设置；macOS ARM64 与 x64 各自经过独立的资格合同、构建和收据验证。
+> - **作者原稿权威导入与续写**：作者确认后才写入不可变定稿；原稿进入正文与连续性上下文，但不会混入参考语料，后续章节从正确的下一章继续。
+> - **可恢复导入**：失败、取消或重开后可从已提交阶段安全恢复，不重复发布章节、知识或任务；缺章、重复与冲突会阻止导入并给出修正提示。
+> - **模型路由**：单章、批量和修稿均冻结本次明确选择的生成模型，避免切换后静默回退，并保留准确的模型终止原因。
+> - **人工审稿闭环**：AI 审稿意见可编辑、取舍、补充并确认成不可变快照，再按确认意见生成待合并修订稿，由作者最终决定是否合并。
 >
-> 同一个 Release 使用七项资产合同：`ai-novel-writer-setup-0.8.5.exe`、`ai-novel-writer-setup-0.8.5.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.5-installer.dmg`、`ai-novel-writer-mac-arm64-0.8.5-installer.dmg.sha256`、`ai-novel-writer-mac-x64-0.8.5-installer.dmg` 与 `ai-novel-writer-mac-x64-0.8.5-installer.dmg.sha256`。Windows 安装包未代码签名；两种 macOS 安装包为 ad-hoc 或未签名且未公证，首次打开可能需要按平台安全提示手动确认。
+> 同一个 Release 使用七项资产合同：`ai-novel-writer-setup-0.8.6.exe`、`ai-novel-writer-setup-0.8.6.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.8.6-installer.dmg`、`ai-novel-writer-mac-arm64-0.8.6-installer.dmg.sha256`、`ai-novel-writer-mac-x64-0.8.6-installer.dmg` 与 `ai-novel-writer-mac-x64-0.8.6-installer.dmg.sha256`。Windows 安装包未代码签名；两种 macOS 安装包为 ad-hoc 或未签名且未公证，首次打开可能需要按平台安全提示手动确认。
 
 
 ## DeepSeek Harness 插件（早期 MVP）

@@ -31,16 +31,16 @@
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
-> ## v0.8.5 authoring loop and three-architecture desktop release
+> ## v0.8.6 authoritative author imports and reliable continuation
 >
-> [v0.8.5](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.5) completes the human-controlled loop from writing through finalization, and brings macOS Apple Silicon and Intel installers into one traceable release contract:
+> [v0.8.6](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.8.6) strengthens author-manuscript import, continuation, and human review while continuing to ship Windows, macOS Apple Silicon, and macOS Intel installers:
 >
-> - **Controlled authoring models** — Single-chapter, batch, and review-driven revision flows can explicitly select and freeze the model for that run instead of silently falling back to the global default. An incomplete model response reports its actual terminal reason, so a policy block is no longer presented as a generic unfinished workflow.
-> - **Human review to revision** — AI review items can be edited, ignored, restored, or supplemented. Confirmation persists an immutable snapshot; revision creates a pending merge revision from that confirmed list, leaving the final diff merge to the author.
-> - **Writing and project reliability** — Repairs cover the chapter writing entry, post-finalization status, structured JSON recovery, and relationship-graph editing boundaries. Incomplete or unconfirmed material is not persisted as completed work.
-> - **Appearance and platforms** — The independent themes (`light`, `galaxy`, `paper`, `dark`) and interface skins (`classic`, `anime`, `custom`) remain available. macOS ARM64 and x64 each have separate qualification contracts, builds, and receipts.
+> - **Authoritative author import and continuation** — Material is written only after author confirmation as immutable finalized chapters. It feeds manuscript and continuity context without entering reference corpora, and new writing continues at the correct next chapter.
+> - **Recoverable import** — Failed, cancelled, or reopened runs safely resume from committed stages without duplicating chapters, knowledge, or tasks. Missing chapters, duplicates, and conflicts stop the import with corrective guidance.
+> - **Model routing** — Single-chapter, batch, and revision runs freeze the explicitly selected generation model, preventing silent fallback after switching and preserving accurate model terminal reasons.
+> - **Human review loop** — AI review items can be edited, selected, supplemented, and confirmed as immutable snapshots. Revisions are generated only from the confirmed guidance and remain pending until the author merges them.
 >
-> One Release uses the exact seven-asset contract: `ai-novel-writer-setup-0.8.5.exe`, `ai-novel-writer-setup-0.8.5.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.5-installer.dmg`, `ai-novel-writer-mac-arm64-0.8.5-installer.dmg.sha256`, `ai-novel-writer-mac-x64-0.8.5-installer.dmg`, and `ai-novel-writer-mac-x64-0.8.5-installer.dmg.sha256`. The Windows installer is not code-signed; both macOS installers are ad-hoc or unsigned and not notarized, so their platform security prompts may require manual confirmation on first launch.
+> One Release uses the exact seven-asset contract: `ai-novel-writer-setup-0.8.6.exe`, `ai-novel-writer-setup-0.8.6.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.8.6-installer.dmg`, `ai-novel-writer-mac-arm64-0.8.6-installer.dmg.sha256`, `ai-novel-writer-mac-x64-0.8.6-installer.dmg`, and `ai-novel-writer-mac-x64-0.8.6-installer.dmg.sha256`. The Windows installer is not code-signed; both macOS installers are ad-hoc or unsigned and not notarized, so their platform security prompts may require manual confirmation on first launch.
 
 
 
