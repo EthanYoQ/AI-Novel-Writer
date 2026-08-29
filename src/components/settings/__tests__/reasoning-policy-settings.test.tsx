@@ -74,7 +74,7 @@ describe('reasoning policy settings', () => {
     expect(markup).toContain('流畅起草')
     expect(markup).toContain('一致性优先')
     expect(markup).toContain('深度规划')
-    expect(markup).toContain('模型推理覆盖（高级）')
+    expect(markup).toContain('模型推理覆盖')
     expect(markup).toContain('最高 → 高')
     expect(markup).toContain('已限制')
     expect(markup).toContain('关闭')

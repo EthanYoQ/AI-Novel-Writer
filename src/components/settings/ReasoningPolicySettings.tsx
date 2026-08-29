@@ -15,7 +15,50 @@ import { useProjectStore } from '../../stores/project-store'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 
-export default function ReasoningPolicySettings({
+export function ProjectCreativeStrategySettings() {
+  const text = useLocaleStore(state => state.text)
+  const currentProject = useProjectStore(state => state.currentProject)
+  const updateNovelConfig = useProjectStore(state => state.updateNovelConfig)
+  const saveProject = useProjectStore(state => state.saveProject)
+  const [projectSaveState, setProjectSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const creativeStrategy = currentProject?.novelConfig.creativeStrategy ?? 'auto'
+  const updateCreativeStrategy = async (value: CreativeStrategy) => {
+    const session = projectSessionContextFromProject(currentProject)
+    if (!session) return
+    setProjectSaveState('saving')
+    updateNovelConfig({ creativeStrategy: value }, session)
+    const saved = await saveProject(session)
+    setProjectSaveState(saved ? 'saved' : 'error')
+  }
+
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] p-3">
+      <Label>{text('创作策略（当前项目）', 'Creative strategy (current project)')}</Label>
+      <NativeSelect
+        value={creativeStrategy}
+        disabled={!currentProject || projectSaveState === 'saving'}
+        onChange={event => { void updateCreativeStrategy(event.target.value as CreativeStrategy) }}
+        aria-label={text('创作策略（当前项目）', 'Creative strategy (current project)')}
+      >
+        <option value="auto">{text('自动', 'Auto')}</option>
+        <option value="fluent-drafting">{text('流畅起草', 'Fluent drafting')}</option>
+        <option value="consistency-first">{text('一致性优先', 'Consistency first')}</option>
+        <option value="deep-planning">{text('深度规划', 'Deep planning')}</option>
+      </NativeSelect>
+      <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
+        {!currentProject
+          ? text('打开项目后可配置；该设置跟随项目，不随模型切换。', 'Open a project to configure this. It follows the project, not the selected model.')
+          : projectSaveState === 'saving'
+            ? text('正在保存项目策略…', 'Saving project strategy…')
+            : projectSaveState === 'error'
+              ? text('项目策略保存失败。', 'Could not save the project strategy.')
+              : text('该设置跟随项目，不随模型切换。', 'This setting follows the project and does not change with the model.')}
+      </p>
+    </div>
+  )
+}
+
+export function ModelReasoningOverrideSettings({
   model,
   onModelChange,
 }: {
@@ -23,11 +66,7 @@ export default function ReasoningPolicySettings({
   onModelChange: (model: ModelProfile) => void
 }) {
   const text = useLocaleStore(state => state.text)
-  const currentProject = useProjectStore(state => state.currentProject)
-  const updateNovelConfig = useProjectStore(state => state.updateNovelConfig)
-  const saveProject = useProjectStore(state => state.saveProject)
-  const [projectSaveState, setProjectSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const creativeStrategy = currentProject?.novelConfig.creativeStrategy ?? 'auto'
+  const creativeStrategy = useProjectStore(state => state.currentProject?.novelConfig.creativeStrategy ?? 'auto')
   const effortLabel = (value: ReasoningEffort | EffectiveReasoningEffort | null): string => {
     if (value === null) return '—'
     return {
@@ -38,21 +77,7 @@ export default function ReasoningPolicySettings({
       max: text('最高', 'Max'),
     }[value]
   }
-
-  const updateCreativeStrategy = async (value: CreativeStrategy) => {
-    const session = projectSessionContextFromProject(currentProject)
-    if (!session) return
-    setProjectSaveState('saving')
-    updateNovelConfig({ creativeStrategy: value }, session)
-    const saved = await saveProject(session)
-    setProjectSaveState(saved ? 'saved' : 'error')
-  }
-
-  const drafting = resolveReasoningPolicy({
-    model,
-    creativeStrategy,
-    stage: 'drafting',
-  })
+  const drafting = resolveReasoningPolicy({ model, creativeStrategy, stage: 'drafting' })
   const planning = resolveReasoningPolicy({
     model,
     creativeStrategy,
@@ -85,40 +110,16 @@ export default function ReasoningPolicySettings({
   )
 
   return (
-    <div className="space-y-3 rounded-lg border border-[var(--color-border)] p-3" data-reasoning-policy-settings>
+    <div className="space-y-3" data-model-reasoning-override-settings>
       <div>
-        <Label>{text('创作策略（当前项目）', 'Creative strategy (current project)')}</Label>
-        <NativeSelect
-          value={creativeStrategy}
-          disabled={!currentProject || projectSaveState === 'saving'}
-          onChange={event => { void updateCreativeStrategy(event.target.value as CreativeStrategy) }}
-          aria-label={text('创作策略（当前项目）', 'Creative strategy (current project)')}
-        >
-          <option value="auto">{text('自动', 'Auto')}</option>
-          <option value="fluent-drafting">{text('流畅起草', 'Fluent drafting')}</option>
-          <option value="consistency-first">{text('一致性优先', 'Consistency first')}</option>
-          <option value="deep-planning">{text('深度规划', 'Deep planning')}</option>
-        </NativeSelect>
-        <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
-          {!currentProject
-            ? text('打开项目后可配置；该设置跟随项目，不随模型切换。', 'Open a project to configure this. It follows the project, not the selected model.')
-            : projectSaveState === 'saving'
-              ? text('正在保存项目策略…', 'Saving project strategy…')
-              : projectSaveState === 'error'
-                ? text('项目策略保存失败。', 'Could not save the project strategy.')
-                : text('该设置跟随项目，不随模型切换。', 'This setting follows the project and does not change with the model.')}
-        </p>
-      </div>
-
-      <div>
-        <Label>{text('模型推理覆盖（高级）', 'Model reasoning override (advanced)')}</Label>
+        <Label>{text('模型推理覆盖', 'Model reasoning override')}</Label>
         <NativeSelect
           value={model.reasoningOverride ?? 'auto'}
           onChange={event => onModelChange({
             ...model,
             reasoningOverride: event.target.value as ReasoningOverride,
           })}
-          aria-label={text('模型推理覆盖（高级）', 'Model reasoning override (advanced)')}
+          aria-label={text('模型推理覆盖', 'Model reasoning override')}
         >
           <option value="auto">{text('自动（遵循项目与阶段）', 'Auto (project and stage)')}</option>
           <option value="off">{text('关闭', 'Off')}</option>
@@ -146,6 +147,18 @@ export default function ReasoningPolicySettings({
           'Raw reasoning is not treated as chapter prose or persisted into long-term novel memory.',
         )}
       </p>
+    </div>
+  )
+}
+
+export default function ReasoningPolicySettings(props: {
+  model: ModelProfile
+  onModelChange: (model: ModelProfile) => void
+}) {
+  return (
+    <div className="space-y-3 rounded-lg border border-[var(--color-border)] p-3" data-reasoning-policy-settings>
+      <ProjectCreativeStrategySettings />
+      <ModelReasoningOverrideSettings {...props} />
     </div>
   )
 }

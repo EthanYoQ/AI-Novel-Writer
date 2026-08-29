@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   X, Plus, Trash2, Check, Save, Globe, Cpu, Database,
   Type, Settings2, Zap, Eye, EyeOff, ChevronDown, MessageSquare,
-  Info, Palette, ExternalLink, RefreshCw,
+  Info, Palette, ExternalLink, RefreshCw, RotateCcw,
 } from 'lucide-react'
 import PromptSettings from './PromptSettings'
 import AppearanceSettings from './AppearanceSettings'
@@ -31,7 +31,10 @@ import { useLayoutStore, type SettingsSection } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { Locale } from '../../i18n/types'
 import { alertError } from '../ui/AlertDialog'
-import ReasoningPolicySettings from './ReasoningPolicySettings'
+import {
+  ModelReasoningOverrideSettings,
+  ProjectCreativeStrategySettings,
+} from './ReasoningPolicySettings'
 
 // ==================== 分类定义 ====================
 
@@ -431,6 +434,7 @@ function ModelForm({
 }) {
   const text = useLocaleStore(s => s.text)
   const [showKey, setShowKey] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   // 标记"模型标识"是否使用自定义输入模式
   const [customModelName, setCustomModelName] = useState(false)
 
@@ -508,6 +512,23 @@ function ModelForm({
   const updateCapabilities = (next: Partial<ModelCapabilities>) => {
     const capabilities = { ...currentCapabilities, ...next }
     onChange({ ...model, capabilities, maxTokens: capabilities.maxOutputTokens })
+  }
+
+  const resetAdvancedSettings = () => {
+    const presetModel = presetModels.find(candidate => candidate.name === model.modelName)
+    const defaultMaxOutputTokens = presetModel?.capabilities?.maxOutputTokens
+      ?? presetModel?.maxTokens
+      ?? 4096
+    onChange({
+      ...model,
+      temperature: 0.7,
+      maxTokens: defaultMaxOutputTokens,
+      capabilities: {
+        ...currentCapabilities,
+        maxOutputTokens: defaultMaxOutputTokens,
+      },
+      reasoningOverride: 'auto',
+    })
   }
 
   /**
@@ -830,45 +851,87 @@ function ModelForm({
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label>{text('上下文窗口', 'Context Window')}</Label>
-          <Input
-            type="number"
-            min={0}
-            value={model.capabilities?.contextWindowTokens ?? ''}
-            placeholder={text('可选', 'Optional')}
-              onChange={(e) => updateCapabilities({ contextWindowTokens: e.target.value === '' ? null : parseInt(e.target.value) || null })}
-          />
-        </div>
-        <div>
-          <Label>{text('最大输出 Tokens', 'Max Output Tokens')}</Label>
-          <Input
-            type="number"
-            min={0}
-            disabled={isEmbedding}
-            value={currentCapabilities.maxOutputTokens}
-            onChange={(e) => updateCapabilities({ maxOutputTokens: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
-          />
-        </div>
+      <div>
+        <Label>{text('上下文窗口', 'Context Window')}</Label>
+        <Input
+          type="number"
+          min={0}
+          value={model.capabilities?.contextWindowTokens ?? ''}
+          placeholder={text('可选', 'Optional')}
+          onChange={(e) => updateCapabilities({ contextWindowTokens: e.target.value === '' ? null : parseInt(e.target.value) || null })}
+        />
       </div>
 
-      {/* 温度（仅生成模型） */}
       {!isEmbedding && (
-        <div>
-          <Label>{text('温度', 'Temperature')}</Label>
-          <Input
-            type="number" min={0} max={2} step={0.1}
-            value={model.temperature}
-            onChange={(e) => up('temperature', (e.target.value === '' ? '' : parseFloat(e.target.value)) as number)}
-            onBlur={() => {
-              const v = Number(model.temperature);
-              if (isNaN(v)) up('temperature', 0.7)
-            }}
-          />
-          <p className="mt-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            {text('部分服务商的固定温度模型由服务商自行决定；本应用不会发送温度参数。', 'For provider-fixed temperature models, the provider chooses the value; this app does not send a temperature parameter.')}
-          </p>
+        <ProjectCreativeStrategySettings />
+      )}
+
+      {!isEmbedding && (
+        <div className="rounded-lg border border-[var(--color-border)]" data-model-advanced-settings>
+          <button
+            type="button"
+            aria-label={text('高级设置', 'Advanced settings')}
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen(open => !open)}
+            className="flex w-full items-center gap-2 p-3 text-left"
+          >
+            <Settings2 size={14} style={{ color: 'var(--color-accent)' }} />
+            <span className="flex-1">
+              <span className="block text-xs font-medium text-[var(--color-text)]">
+                {text('高级设置', 'Advanced settings')}
+              </span>
+              <span className="mt-0.5 block text-[0.7rem] text-[var(--color-text-muted)]">
+                {text('仅作用于当前模型；未调整时使用产品与服务商默认行为。', 'Applies only to this model. Unchanged values use product and provider defaults.')}
+              </span>
+            </span>
+            <ChevronDown size={14} className={cn('transition-transform', advancedOpen && 'rotate-180')} />
+          </button>
+
+          {advancedOpen && (
+            <div className="space-y-4 border-t border-[var(--color-border)] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[0.7rem] text-[var(--color-text-muted)]">
+                  {text('这些值随当前模型保存，连接测试和生成会读取已保存配置。', 'These values are saved with this model and used by connection tests and generation.')}
+                </p>
+                <Button type="button" size="sm" variant="outline" onClick={resetAdvancedSettings}>
+                  <RotateCcw size={12} />
+                  {text('恢复默认值', 'Restore defaults')}
+                </Button>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>{text('温度', 'Temperature')}</Label>
+                  <Input
+                    aria-label={text('温度', 'Temperature')}
+                    type="number" min={0} max={2} step={0.1}
+                    value={model.temperature}
+                    onChange={(e) => up('temperature', (e.target.value === '' ? '' : parseFloat(e.target.value)) as number)}
+                    onBlur={() => {
+                      const value = Number(model.temperature)
+                      if (Number.isNaN(value)) up('temperature', 0.7)
+                    }}
+                  />
+                  <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
+                    {text('模型级采样偏好；固定温度模型不会收到此参数。', 'Model-level sampling preference. Fixed-temperature models do not receive this parameter.')}
+                  </p>
+                </div>
+                <div>
+                  <Label>{text('最大输出 Token', 'Max output tokens')}</Label>
+                  <Input
+                    aria-label={text('最大输出 Token', 'Max output tokens')}
+                    type="number"
+                    min={0}
+                    value={currentCapabilities.maxOutputTokens}
+                    onChange={(e) => updateCapabilities({ maxOutputTokens: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+                  />
+                  <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
+                    {text('限制当前模型单次响应；恢复默认会使用内置模型上限。', 'Limits one response from this model. Restore uses the built-in model limit.')}
+                  </p>
+                </div>
+              </div>
+              <ModelReasoningOverrideSettings model={model} onModelChange={onChange} />
+            </div>
+          )}
         </div>
       )}
 
@@ -903,10 +966,6 @@ function ModelForm({
             </div>
           </div>
         </div>
-      )}
-
-      {!isEmbedding && (
-        <ReasoningPolicySettings model={model} onModelChange={onChange} />
       )}
 
       <div className="flex items-center gap-2 pt-1">
