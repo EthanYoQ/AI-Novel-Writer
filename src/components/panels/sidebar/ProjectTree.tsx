@@ -332,6 +332,13 @@ export default function ProjectTree() {
         ], e)}
       />
 
+      <LeafItem
+        iconName="git-branch"
+        label={text('叙事线索', 'Narrative threads')}
+        desc={text('人工计划与定稿事件', 'Author plans and finalized events')}
+        onClick={() => openBuiltinEditor('narrative-thread-editor', text('叙事线索', 'Narrative threads'), 'narrative-thread')}
+      />
+
       {/* 4. 草稿箱 — 独立分区，按章节分组展示草稿 */}
       <DraftBoxGroup draftsByChapter={draftsByChapter} />
 

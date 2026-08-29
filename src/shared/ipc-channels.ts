@@ -18,6 +18,13 @@ import type {
 } from './finalized-continuity'
 import type { ConsistencyExemption } from './consistency-preflight'
 import type {
+  NarrativeThreadEvent,
+  NarrativeThreadEventInput,
+  NarrativeThreadPlanInput,
+  NarrativeThreadPlanRecord,
+  NarrativeThreadView,
+} from './narrative-thread'
+import type {
   UpdateActionResponse,
   UpdateCheckResponse,
   UpdatePreferences,
@@ -786,6 +793,26 @@ export interface DatabaseChannels {
   'db:consistency-exemption-revoke': {
     args: [stableFactKey: string, expectedProjectPath: string]
     return: { success: boolean; error?: string }
+  }
+  'db:narrative-thread-list': {
+    args: [expectedProjectPath: string]
+    return: NarrativeThreadView[]
+  }
+  'db:narrative-thread-plan-create': {
+    args: [input: NarrativeThreadPlanInput, expectedProjectPath: string]
+    return: { success: boolean; plan?: NarrativeThreadPlanRecord; error?: string }
+  }
+  'db:narrative-thread-plan-update': {
+    args: [id: number, input: NarrativeThreadPlanInput, expectedProjectPath: string]
+    return: { success: boolean; plan?: NarrativeThreadPlanRecord; error?: string }
+  }
+  'db:narrative-thread-plan-delete': {
+    args: [id: number, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
+  'db:narrative-thread-event-confirm': {
+    args: [input: NarrativeThreadEventInput, expectedProjectPath: string]
+    return: { success: boolean; event?: NarrativeThreadEvent; error?: string }
   }
   'db:draft-next-version': { args: [chapterNumber: number, expectedProjectPath: string]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }

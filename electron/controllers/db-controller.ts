@@ -44,6 +44,7 @@ import { PostProcessRepository } from '../repositories/post-process-repository'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { SummaryRepository } from '../repositories/summary-repository'
 import { ConsistencyExemptionRepository } from '../repositories/consistency-exemption-repository'
+import { NarrativeThreadRepository } from '../repositories/narrative-thread-repository'
 
 type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 
@@ -91,6 +92,10 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:post-process-mark-step-failed',
   'db:log-llm-call',
   'db:save-summary-snapshot',
+  'db:narrative-thread-plan-create',
+  'db:narrative-thread-plan-update',
+  'db:narrative-thread-plan-delete',
+  'db:narrative-thread-event-confirm',
 ])
 
 function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabaseHandler): void {
@@ -687,6 +692,32 @@ export function registerDatabaseController() {
     } catch (error) {
       return { success: false, error: String(error) }
     }
+  })
+
+  ipcMain.handle('db:narrative-thread-list', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return NarrativeThreadRepository.list()
+  })
+
+  ipcMain.handle('db:narrative-thread-plan-create', async (_event, input, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, plan: NarrativeThreadRepository.createPlan(input) }
+  })
+
+  ipcMain.handle('db:narrative-thread-plan-update', async (_event, id: number, input, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, plan: NarrativeThreadRepository.updatePlan(id, input) }
+  })
+
+  ipcMain.handle('db:narrative-thread-plan-delete', async (_event, id: number, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    NarrativeThreadRepository.deletePlan(id)
+    return { success: true }
+  })
+
+  ipcMain.handle('db:narrative-thread-event-confirm', async (_event, input, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, event: NarrativeThreadRepository.confirmEvent(input) }
   })
 
   ipcMain.handle('db:draft-next-version', async (_event, chapterNumber: number, expectedProjectPath: string) => {

@@ -14,6 +14,7 @@ import ArchFileViewer from '../editor/ArchFileViewer'
 import DraftEditor from '../editor/DraftEditor'
 import VersionHistory from '../editor/VersionHistory'
 import ReviewReport from '../editor/ReviewReport'
+import NarrativeThreadEditor from '../editor/NarrativeThreadEditor'
 import ThreeWayMerge from '../editor/ThreeWayMerge'  // 保留引用以防其他入口使用
 import WelcomePage from '../pages/WelcomePage'
 import KnowledgeOverview from '../pages/KnowledgeOverview'
@@ -663,6 +664,9 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         )}
         {activeTab?.type === 'world-building' && activeTab.projectKey && (
           <WorldBuildingEditor key={activeTab.id} projectKey={activeTab.projectKey} />
+        )}
+        {activeTab?.type === 'narrative-thread' && activeTab.projectKey === currentProject.path && (
+          <NarrativeThreadEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
         {activeTab?.type === 'arch-file' && activeTab.filePath && activeTab.projectKey && (
           <ArchFileViewer

@@ -337,6 +337,32 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       FOREIGN KEY (draft_id) REFERENCES drafts(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS narrative_thread_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      type TEXT NOT NULL,
+      target_start_chapter INTEGER NOT NULL CHECK(target_start_chapter > 0),
+      target_end_chapter INTEGER NOT NULL CHECK(target_end_chapter >= target_start_chapter),
+      author_intent TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS narrative_thread_confirmations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_id INTEGER NOT NULL,
+      draft_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL CHECK(event_type IN ('planted', 'progressing', 'resolved', 'abandoned')),
+      evidence TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (plan_id) REFERENCES narrative_thread_plans(id) ON DELETE CASCADE,
+      FOREIGN KEY (draft_id) REFERENCES drafts(id) ON DELETE CASCADE,
+      UNIQUE(plan_id, draft_id, event_type, evidence)
+    );
+    CREATE INDEX IF NOT EXISTS idx_narrative_thread_confirmations_plan
+      ON narrative_thread_confirmations(plan_id, draft_id, id);
+
     -- 索引
     CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls(created_at);
 

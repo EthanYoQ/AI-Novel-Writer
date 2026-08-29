@@ -2,7 +2,7 @@ import { createElement, type ComponentType, type CSSProperties, type ReactNode }
 import {
   Target, Users, Globe, Map, BookOpen, FolderTree, LayoutList,
   FilePen, PenTool, BrainCircuit, Sparkles, FolderOpen, Zap,
-  FileText, MessageCircle, RefreshCw, GitCompare,
+  FileText, MessageCircle, RefreshCw, GitCompare, GitBranch,
 } from 'lucide-react'
 
 type SidebarIcon = ComponentType<{ size?: number; className?: string; style?: CSSProperties }>
@@ -25,6 +25,7 @@ const ICON_MAP: Record<string, SidebarIcon> = {
   'message-circle': MessageCircle,
   'refresh-cw': RefreshCw,
   'git-compare': GitCompare,
+  'git-branch': GitBranch,
 }
 
 /** 根据 iconName 渲染 Lucide 图标；未找到时返回空占位。 */
