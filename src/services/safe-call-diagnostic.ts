@@ -41,7 +41,7 @@ const WORKFLOW_STATUS = new Set(['pending', 'running', 'waiting', 'paused', 'can
 const FAILURE_CODE = new Set(['length', 'content_filter', 'cancelled', 'error', 'unknown', 'prompt_budget_exhausted'])
 const FINISH_REASON = new Set(['stop', 'length', 'content_filter', 'cancelled', 'error', 'unknown'])
 const PLATFORM = new Set(['windows', 'macos', 'linux'])
-const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._():+\/-]{0,79}$/
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._():+/-]{0,79}$/
 const SENSITIVE_MODEL_NAME = /(?:authorization|bearer|api[ _-]?key|secret|\btoken\b|\bsk-)/i
 const PATH_SHAPED_MODEL_NAME = /(?:^[A-Za-z]:\/|^[A-Za-z][A-Za-z0-9+.-]*:\/\/|(?:^|\/)\.{1,2}(?:\/|$)|\/\/)/
 
