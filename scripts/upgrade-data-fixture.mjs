@@ -172,6 +172,8 @@ const CONTENT_ROWS = [
   },
 ]
 
+const V1_DRAFT_WORD_COUNTS = Object.freeze({ 71: 37, 72: 38 })
+
 const DRAFT_ROWS = [
   {
     id: 71,
@@ -180,7 +182,7 @@ const DRAFT_ROWS = [
     status: 'draft',
     source: 'write',
     content_id: 701,
-    word_count: 37,
+    word_count: V1_DRAFT_WORD_COUNTS[71],
     created_at: '2026-01-02 03:04:05',
     updated_at: '2026-01-02 03:04:05',
   },
@@ -191,11 +193,25 @@ const DRAFT_ROWS = [
     status: 'finalized',
     source: 'rewrite',
     content_id: 702,
-    word_count: 38,
+    word_count: V1_DRAFT_WORD_COUNTS[72],
     created_at: '2026-01-02 03:05:05',
     updated_at: '2026-01-02 03:08:05',
   },
 ]
+
+function rowsWithExpectedWordCounts(rows, expectedById) {
+  return rows.map((row) => {
+    const wordCount = expectedById[row.id]
+    assert(Number.isInteger(wordCount), `fixture word-count expectation for row ${row.id} is missing`)
+    return { ...row, word_count: wordCount }
+  })
+}
+
+// Independent fixture oracle for persisted draft-unit algorithm v2. Keep these
+// reviewed values explicit so a production counter regression cannot make its
+// own upgrade acceptance fixture pass by repeating the same implementation.
+const V2_DRAFT_WORD_COUNTS = Object.freeze({ 71: 32, 72: 31 })
+const MIGRATED_DRAFT_ROWS = rowsWithExpectedWordCounts(DRAFT_ROWS, V2_DRAFT_WORD_COUNTS)
 
 const REVIEW_ROWS = [
   {
@@ -206,6 +222,8 @@ const REVIEW_ROWS = [
     created_at: '2026-01-02 03:07:05',
   },
 ]
+
+const V1_REVISION_WORD_COUNTS = Object.freeze({ 91: 30 })
 
 const REVISION_ROWS = [
   {
@@ -218,11 +236,14 @@ const REVISION_ROWS = [
     user_prompt: '保持克制文风，补足证据链的先后关系',
     review_source_id: 81,
     content_id: 703,
-    word_count: 30,
+    word_count: V1_REVISION_WORD_COUNTS[91],
     created_at: '2026-01-02 03:06:05',
     updated_at: '2026-01-02 03:08:05',
   },
 ]
+
+const V2_REVISION_WORD_COUNTS = Object.freeze({ 91: 22 })
+const MIGRATED_REVISION_ROWS = rowsWithExpectedWordCounts(REVISION_ROWS, V2_REVISION_WORD_COUNTS)
 
 const POST_PROCESS_RUN_ROWS = [
   {
@@ -312,8 +333,10 @@ const CHARACTER_COLUMNS = Object.keys(CHARACTER_ROWS[0])
 const BLUEPRINT_COLUMNS = Object.keys(BLUEPRINT_ROWS[0])
 const CONTENT_COLUMNS = Object.keys(CONTENT_ROWS[0])
 const DRAFT_COLUMNS = Object.keys(DRAFT_ROWS[0])
+const DRAFT_PRESERVED_COLUMNS = DRAFT_COLUMNS.filter(column => column !== 'word_count')
 const REVIEW_COLUMNS = Object.keys(REVIEW_ROWS[0])
 const REVISION_COLUMNS = Object.keys(REVISION_ROWS[0])
+const REVISION_PRESERVED_COLUMNS = REVISION_COLUMNS.filter(column => column !== 'word_count')
 const POST_PROCESS_RUN_COLUMNS = Object.keys(POST_PROCESS_RUN_ROWS[0])
 const POST_PROCESS_STEP_COLUMNS = Object.keys(POST_PROCESS_STEP_ROWS[0])
 const LLM_CALL_COLUMNS = Object.keys(LLM_CALL_ROWS[0])
@@ -991,10 +1014,10 @@ async function seed(projectRoot, settingsPath) {
   seedPhysicalProjectAssets(projectRoot)
   await seedEmbeddingAssets(projectRoot)
   writeAssetInventory(projectRoot, createAssetInventory(projectRoot, settingsPath))
-  return validate(projectRoot, settingsPath)
+  return validate(projectRoot, settingsPath, false)
 }
 
-function validateDatabase(projectRoot) {
+function validateDatabase(projectRoot, migratedDraftUnitCounts) {
   const dbPath = databasePath(projectRoot)
   if (!existsSync(dbPath)) {
     throw new Error(`Upgrade fixture database is missing: ${dbPath}`)
@@ -1036,13 +1059,37 @@ function validateDatabase(projectRoot) {
     assert.deepEqual(contents, CONTENT_ROWS, 'content bodies changed during upgrade')
 
     const drafts = readRows(db, 'drafts', DRAFT_COLUMNS, 'id')
-    assert.deepEqual(drafts, DRAFT_ROWS, 'draft or finalized records changed during upgrade')
+    const expectedDrafts = migratedDraftUnitCounts ? MIGRATED_DRAFT_ROWS : DRAFT_ROWS
+    assert.deepEqual(
+      drafts.map(draft => normalizeRow(draft, DRAFT_PRESERVED_COLUMNS)),
+      DRAFT_ROWS.map(draft => normalizeRow(draft, DRAFT_PRESERVED_COLUMNS)),
+      'draft identity or content reference changed during upgrade',
+    )
+    assert.deepEqual(
+      drafts.map(({ id, word_count }) => ({ id, word_count })),
+      expectedDrafts.map(({ id, word_count }) => ({ id, word_count })),
+      migratedDraftUnitCounts
+        ? 'draft word counts were not migrated to the current Unicode algorithm'
+        : 'legacy draft word counts changed before upgrade',
+    )
 
     const reviews = readRows(db, 'reviews', REVIEW_COLUMNS, 'id')
     assert.deepEqual(reviews, REVIEW_ROWS, 'review records changed during upgrade')
 
     const revisions = readRows(db, 'revisions', REVISION_COLUMNS, 'id')
-    assert.deepEqual(revisions, REVISION_ROWS, 'revision records changed during upgrade')
+    const expectedRevisions = migratedDraftUnitCounts ? MIGRATED_REVISION_ROWS : REVISION_ROWS
+    assert.deepEqual(
+      revisions.map(revision => normalizeRow(revision, REVISION_PRESERVED_COLUMNS)),
+      REVISION_ROWS.map(revision => normalizeRow(revision, REVISION_PRESERVED_COLUMNS)),
+      'revision identity or content reference changed during upgrade',
+    )
+    assert.deepEqual(
+      revisions.map(({ id, word_count }) => ({ id, word_count })),
+      expectedRevisions.map(({ id, word_count }) => ({ id, word_count })),
+      migratedDraftUnitCounts
+        ? 'revision word counts were not migrated to the current Unicode algorithm'
+        : 'legacy revision word counts changed before upgrade',
+    )
 
     const postProcessRuns = readRows(
       db,
@@ -1106,8 +1153,8 @@ function validateDatabase(projectRoot) {
   }
 }
 
-async function validate(projectRoot, settingsPath) {
-  const databaseEvidence = validateDatabase(projectRoot)
+async function validate(projectRoot, settingsPath, migratedDraftUnitCounts = true) {
+  const databaseEvidence = validateDatabase(projectRoot, migratedDraftUnitCounts)
   const embeddingSpace = await validateEmbeddingAssets(projectRoot)
   const inventoryEvidence = validateAssetInventory(
     projectRoot,
@@ -1124,13 +1171,13 @@ async function validate(projectRoot, settingsPath) {
 
 async function main() {
   const [mode, projectRoot, settingsPath] = process.argv.slice(2)
-  if (!projectRoot || (mode !== 'seed' && mode !== 'validate')) {
-    throw new Error('Usage: electron upgrade-data-fixture.mjs <seed|validate> <project-root> [settings-path]')
+  if (!projectRoot || !['seed', 'validate-legacy', 'validate'].includes(mode)) {
+    throw new Error('Usage: electron upgrade-data-fixture.mjs <seed|validate-legacy|validate> <project-root> [settings-path]')
   }
 
   const result = mode === 'seed'
     ? await seed(projectRoot, settingsPath)
-    : await validate(projectRoot, settingsPath)
+    : await validate(projectRoot, settingsPath, mode === 'validate')
   process.stdout.write(`${JSON.stringify({ mode, ...result })}\n`)
 }
 

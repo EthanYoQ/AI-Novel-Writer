@@ -114,7 +114,7 @@ function Get-AiNovelUtf8NonEmptyLines {
 
 function Invoke-AiNovelUpgradeDataFixture {
   param(
-    [Parameter(Mandatory = $true)][ValidateSet('seed', 'validate')][string]$Mode,
+    [Parameter(Mandatory = $true)][ValidateSet('seed', 'validate-legacy', 'validate')][string]$Mode,
     [Parameter(Mandatory = $true)][string]$ProjectRoot,
     [string]$SettingsPath
   )
@@ -790,7 +790,7 @@ try {
     # {project}\.vela\vela.db with all 11 v0.2.5 tables and representative
     # core, draft, revision, review, post-process, LLM, and summary records.
     Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
-    Invoke-AiNovelUpgradeDataFixture -Mode validate -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
+    Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
     $upgradeFixtureSeeded = $true
     @(
       @{

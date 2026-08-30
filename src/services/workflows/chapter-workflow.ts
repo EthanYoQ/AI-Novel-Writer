@@ -6,6 +6,7 @@ import { ipc } from '../ipc-client'
 import type { DraftStatus } from '../../shared/draft-status'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
+import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 
 // ==========================================
@@ -98,6 +99,17 @@ const CHAPTER_CONTEXT_READ_RESOURCE_KEYS = Object.freeze([
   workflowResourceKey('architecture'),
   workflowResourceKey('blueprints'),
 ])
+
+const FINALIZE_SHARED_WRITE_RESOURCE_KEYS = Object.freeze([
+  ...FINALIZATION_SHARED_WRITE_RESOURCE_KINDS.map(kind => workflowResourceKey(kind)),
+])
+
+function finalizeWriteResourceKeys(chapterNumber: number): readonly string[] {
+  return Object.freeze([
+    workflowResourceKey('chapter', chapterNumber),
+    ...FINALIZE_SHARED_WRITE_RESOURCE_KEYS,
+  ])
+}
 
 function workflowProjectSession(
   projectPath: string,
@@ -323,7 +335,7 @@ export function createFinalizeWorkflow(
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
-    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    resourceKeys: finalizeWriteResourceKeys(params.chapterNumber),
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `定稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
@@ -362,7 +374,7 @@ export function createRepairFinalizeWorkflow(
     type: 'chapter_creation',
     projectPath,
     projectSession: workflowProjectSession(projectPath, sourceProjectSession),
-    resourceKeys: [workflowResourceKey('chapter', chapterNumber)],
+    resourceKeys: finalizeWriteResourceKeys(chapterNumber),
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `修复后处理 — 第${chapterNumber}章`,
     steps: [

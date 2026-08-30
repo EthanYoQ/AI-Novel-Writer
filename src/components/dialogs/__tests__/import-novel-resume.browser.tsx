@@ -24,6 +24,23 @@ let preparation: ImportRunPreparationResult
 let authorPreview: AuthorManuscriptImportPreview
 let prepareError = ''
 let prepareErrorCode = ''
+let durableAuthorChapters: Record<string, number[]>
+
+function durableAuthorChapterPage(args: unknown[]) {
+  const runId = String(args[0])
+  const afterChapterNumber = Number(args[1])
+  const limit = Number(args[2])
+  return (durableAuthorChapters[runId] ?? [])
+    .filter(number => number > afterChapterNumber)
+    .slice(0, limit)
+    .map(number => ({
+      number,
+      title: `Chapter ${number}`,
+      contentFingerprint: String(number).padStart(64, '0'),
+      contentSize: 1,
+      content: 'x',
+    }))
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -88,6 +105,7 @@ beforeEach(async () => {
   }
   prepareError = ''
   prepareErrorCode = ''
+  durableAuthorChapters = { 'persisted-import': [1] }
   authorPreview = {
     classification: 'ready', authorityFingerprint: 'c'.repeat(64), manifestFingerprint: 'd'.repeat(64),
     chapterCount: 1, targetStatus: 'finalized', nextChapterNumber: 2,
@@ -114,6 +132,7 @@ beforeEach(async () => {
       ? { success: false, error: prepareError || undefined, errorCode: prepareErrorCode || undefined }
       : { success: true, preparation }
     if (channel === 'db:import-run-author-preview') return authorPreview
+    if (channel === 'db:import-run-list-chapters') return durableAuthorChapterPage(args)
     if (channel === 'db:project-core-get') return null
     if (channel === 'db:blueprint-get-all') return []
     if (channel === 'db:draft-list') return []
@@ -501,6 +520,7 @@ describe('current-project reference import', () => {
       totalChapters: 1,
       manifestChapterCount: 3,
     })
+    durableAuthorChapters[incrementalRun.id] = [3]
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
       if (channel === 'db:import-run-list-resumable') return []
       if (channel === 'dialog:select-novel-files') return {
@@ -513,6 +533,7 @@ describe('current-project reference import', () => {
         },
       }
       if (channel === 'db:import-run-author-preview') return fullPreview
+      if (channel === 'db:import-run-list-chapters') return durableAuthorChapterPage(args)
       if (channel === 'db:import-run-prepare-inspection') {
         expect(args[0]).toMatchObject({
           authorityFingerprint: fullPreview.authorityFingerprint,
@@ -586,6 +607,7 @@ describe('current-project reference import', () => {
       totalChapters: 1,
       manifestChapterCount: 3,
     })
+    durableAuthorChapters[freshRun.id] = [3]
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
       if (channel === 'db:import-run-list-resumable') return [oldRun]
       if (channel === 'dialog:select-novel-files') return {
@@ -602,6 +624,7 @@ describe('current-project reference import', () => {
         },
       }
       if (channel === 'db:import-run-author-preview') return freshPreview
+      if (channel === 'db:import-run-list-chapters') return durableAuthorChapterPage(args)
       if (channel === 'db:import-run-prepare-inspection') {
         expect(args[0]).toMatchObject({
           runId: expect.not.stringMatching(/^stale-precommit-author-run$/),
@@ -743,8 +766,10 @@ describe('current-project reference import', () => {
       lastError: 'continuity unavailable',
       completedBatches: { 'author-commit': ['done'], 'author-publish': ['chapter:1'] },
     })
-    invoke.mockImplementation(async (channel: string) => {
+    durableAuthorChapters[resumable.id] = [1]
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
       if (channel === 'db:import-run-list-resumable') return [resumable]
+      if (channel === 'db:import-run-list-chapters') return durableAuthorChapterPage(args)
       if (channel === 'db:project-core-get') return null
       if (channel === 'db:blueprint-get-all') return []
       return { success: true }

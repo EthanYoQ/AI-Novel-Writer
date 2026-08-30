@@ -9,6 +9,7 @@ import type { Locale } from '../../i18n/types'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
 import type { FinalizationSnapshot } from '../finalization-snapshot'
+import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import { requireWorkflowProjectSession } from './workflow-project-session'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 
@@ -290,6 +291,9 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
   const chapterWordsTarget = normalizeChapterWordsTarget(params.chapterWordsTarget)
   const endChapterNumber = startChapterNumber + chapterCount - 1
   const draftReviewContinuity = new Map<number, string>()
+  const chapterResourceKeys = Array.from({ length: chapterCount }, (_, index) => (
+    workflowResourceKey('chapter', startChapterNumber + index)
+  ))
 
   return {
     type: 'batch_generate',
@@ -297,9 +301,12 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
     projectSession: Object.freeze({ ...params.projectSession }),
     generationModelId,
     chapterWordsTarget,
-    resourceKeys: Array.from({ length: chapterCount }, (_, index) => (
-      workflowResourceKey('chapter', startChapterNumber + index)
-    )),
+    resourceKeys: completionMode === 'auto_finalize'
+      ? [
+          ...chapterResourceKeys,
+          ...FINALIZATION_SHARED_WRITE_RESOURCE_KINDS.map(kind => workflowResourceKey(kind)),
+        ]
+      : chapterResourceKeys,
     readResourceKeys: [
       workflowResourceKey('novel-config'),
       workflowResourceKey('architecture'),

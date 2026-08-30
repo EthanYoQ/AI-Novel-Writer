@@ -25,6 +25,7 @@ import { useLocaleStore } from './locale-store'
 import {
   normalizeWorkflowResourceKeys,
   workflowResourceClaimsConflict,
+  type WorkflowResourceKind,
 } from '../shared/workflow-resource-claims'
 
 // ===== 工作流数据模型 =====
@@ -225,7 +226,7 @@ function normalizeChapterWordsTarget(value: unknown): number | undefined {
 }
 
 export function workflowResourceKey(
-  kind: 'novel-config' | 'architecture' | 'blueprints' | 'chapter',
+  kind: WorkflowResourceKind,
   identifier?: string | number,
 ): string {
   return identifier === undefined ? kind : `${kind}:${identifier}`

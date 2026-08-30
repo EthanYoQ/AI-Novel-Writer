@@ -13,7 +13,11 @@ import type {
 } from '../../shared/import-run'
 import { AUTHOR_IMPORT_PREVIEW_STALE } from '../../shared/import-run'
 import type { AuthorManuscriptImportPreview } from '../../shared/author-manuscript-import'
-import { createImportWorkflow, estimateImportCost } from '../../services/workflows/import-workflow'
+import {
+  createImportWorkflow,
+  estimateImportCost,
+  loadAuthorImportChapterNumbers,
+} from '../../services/workflows/import-workflow'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
@@ -248,17 +252,22 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     if (selected) setSavePath(selected)
   }, [])
 
-  const launchRun = useCallback((run: ImportRunSnapshot) => {
+  const launchRun = useCallback(async (run: ImportRunSnapshot) => {
     const project = useProjectStore.getState().currentProject
     const projectSession = captureProjectSession(project)
     if (!project || !projectSession) {
       throw new Error(text('当前项目会话已失效，无法启动导入', 'The project session expired, so the import cannot start.'))
     }
+    const authorChapterNumbers = run.purpose === 'author-manuscript'
+      ? await loadAuthorImportChapterNumbers(run, projectSession, project.path)
+      : undefined
+    if (!isProjectSessionCurrent(projectSession)) return
     const workflow = createImportWorkflow({
       run,
       projectPath: project.path,
       projectSession,
       executionOwner: randomUUID(),
+      authorChapterNumbers,
     })
     void startWorkflow(workflow, false).catch(error => {
       console.error('[ImportNovel] 导入工作流失败:', error)
@@ -266,7 +275,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     if (isProjectSessionCurrent(projectSession)) onClose()
   }, [onClose, startWorkflow, text])
 
-  const applyPreparation = useCallback((
+  const applyPreparation = useCallback(async (
     preparation: ImportRunPreparationResult,
     projectSession: ProjectSessionContext,
     consumedRunId?: string,
@@ -309,7 +318,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       return
     }
     if (!preparation.run) throw new Error(text('导入运行缺少持久化记录', 'The import run has no persisted record.'))
-    launchRun(preparation.run)
+    await launchRun(preparation.run)
   }, [launchRun, text])
 
   /** 执行导入 */
@@ -341,7 +350,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         const preparation = selectionPreparation!
         setSelectionPreparation(null)
         setSelectionProjectLeaseId('')
-        applyPreparation(preparation, projectSession)
+        await applyPreparation(preparation, projectSession)
         return
       }
 
@@ -401,7 +410,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         return
       }
       if (!preparation.run) throw new Error(text('导入运行缺少持久化记录', 'The import run has no persisted record.'))
-      launchRun(preparation.run)
+      await launchRun(preparation.run)
     } catch (e) {
       console.error('[ImportNovel] 导入失败:', e)
       if (purpose === 'author-manuscript') {
@@ -445,7 +454,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
           '无法完成已解析的导入，请重试。',
           'Could not finalize the parsed import. Please try again.',
         ))
-        applyPreparation(result.preparation, projectSession, resumableRun.id)
+        await applyPreparation(result.preparation, projectSession, resumableRun.id)
       } catch (error) {
         if (!isProjectSessionCurrent(projectSession)) return
         setSplitError(error instanceof Error ? error.message : String(error))
@@ -454,7 +463,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       }
       return
     }
-    launchRun(resumableRun)
+    await launchRun(resumableRun)
   }
 
   const handleRestart = async () => {
@@ -492,7 +501,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         if (!isProjectSessionCurrent(session)) return
         return
       }
-      launchRun(result.run)
+      await launchRun(result.run)
     } catch (error) {
       if (!isProjectSessionCurrent(session)) return
       setSplitError(error instanceof Error ? error.message : String(error))
