@@ -76,6 +76,21 @@ jobs:
           AI_NOVEL_HOTFIX_SKIP_HEAD_CHECK: '1'
         run: node "$RUNNER_TEMP/apply.mjs"
 
+      - name: Persist applied sources for verification iteration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'The hotfix produced no source changes.' >&2
+            exit 1
+          fi
+          git commit -m 'wip: apply v0.9.1 review fixes for verification'
+          git push origin HEAD:hotfix/v0.9.1-review-fixes
+
       - name: Type-check
         run: pnpm run typecheck
 
@@ -94,18 +109,16 @@ jobs:
       - name: Build desktop application
         run: pnpm run build
 
-      - name: Commit and push verified hotfix
+      - name: Commit and push verified hotfix cleanup
         shell: bash
         run: |
           set -euo pipefail
           rm -rf .github/hotfix
           git diff --check
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           if git diff --cached --quiet; then
-            echo 'The hotfix produced no changes.' >&2
-            exit 1
+            echo 'No cleanup changes remained after verification.'
+            exit 0
           fi
-          git commit -m 'fix: harden v0.9.0 workflow and import boundaries'
+          git commit -m 'chore: remove temporary hotfix payload'
           git push origin HEAD:hotfix/v0.9.1-review-fixes
