@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => {
       getLocale: () => 'zh-CN',
       getVersion: () => '0.7.0',
       isPackaged: false,
+      requestSingleInstanceLock: vi.fn(() => true),
       on: vi.fn(),
       whenReady: vi.fn(() => Promise.resolve()),
       quit: vi.fn(),

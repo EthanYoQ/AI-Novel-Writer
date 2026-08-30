@@ -68,8 +68,12 @@ describe('createRepairFinalizeWorkflow', () => {
     expect(writing).toMatchObject({
       chapterWordsTarget: 4200,
       resourceKeys: ['chapter:3'],
+      readResourceKeys: ['novel-config', 'architecture', 'blueprints'],
     })
-    expect(repair.resourceKeys).toEqual(['chapter:3'])
+    expect(repair).toMatchObject({
+      resourceKeys: ['chapter:3'],
+      readResourceKeys: ['novel-config', 'architecture', 'blueprints'],
+    })
   })
 
   it('rebuilds every derived result instead of skipping previously successful steps', async () => {

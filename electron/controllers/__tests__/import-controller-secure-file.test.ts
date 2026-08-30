@@ -21,10 +21,8 @@ vi.mock('electron', () => ({
 }))
 
 import { registerImportController } from '../import-controller'
-import {
-  windowsSafeFileSystem,
-  type WindowsSafeFileSystem,
-} from '../../security/windows-safe-file-system'
+import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
+import { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'
 import { ExternalFileGrantService } from '../../services/external-file-grant-service'
 import { ImportInspectionStore } from '../../services/import-inspection-store'
 import { storedZip } from '../../services/__tests__/epub-test-fixture'
@@ -36,7 +34,7 @@ let inspections: ImportInspectionStore
 let nextGrantId = 0
 
 function register(
-  fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
+  fileSystem: WindowsSafeFileSystem = nodeTestSecureFileSystem,
   fileIdentity = (filePath: string) => ({ canonicalLocation: filePath }),
   limits: { maxSourceFiles?: number; maxChapters?: number; maxTotalBytes?: number } = {},
 ) {
@@ -183,9 +181,17 @@ describe('novel import external-file capability', () => {
     {
       fileName: 'protected.epub',
       archive: storedZip({
-        'META-INF/encryption.xml': '<encryption/>',
+        'META-INF/encryption.xml': `<encryption xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+          <enc:EncryptedData>
+            <enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes256-cbc"/>
+            <enc:CipherData><enc:CipherReference URI="chapter.xhtml"/></enc:CipherData>
+          </enc:EncryptedData>
+        </encryption>`,
         'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
-        'book.opf': '<package><manifest/><spine/></package>',
+        'book.opf': `<package><manifest>
+          <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+          </manifest><spine><itemref idref="chapter"/></spine></package>`,
+        'chapter.xhtml': '<html><body><p>Encrypted placeholder</p></body></html>',
       }),
       error: '该 EPUB 受 DRM 或加密保护，无法导入。请使用无 DRM 的 EPUB 或文本文件。',
     },
@@ -248,11 +254,11 @@ describe('novel import external-file capability', () => {
 
     mocks.handlers.clear()
     const swappingFileSystem = {
-      ...windowsSafeFileSystem,
+      ...nodeTestSecureFileSystem,
       readText: vi.fn(async (capability, maxBytes) => {
         fs.rmSync(guardedDirectory, { recursive: true, force: true })
         fs.symlinkSync(outsideDirectory, guardedDirectory, 'junction')
-        return windowsSafeFileSystem.readText(capability, maxBytes)
+        return nodeTestSecureFileSystem.readText(capability, maxBytes)
       }),
     } as WindowsSafeFileSystem
     register(swappingFileSystem, filePath => ({ canonicalLocation: fs.realpathSync.native(filePath) }))

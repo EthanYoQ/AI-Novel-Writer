@@ -22,6 +22,10 @@ import {
 } from '../shared/project-session-context'
 import { useProjectStore } from './project-store'
 import { useLocaleStore } from './locale-store'
+import {
+  normalizeWorkflowResourceKeys,
+  workflowResourceClaimsConflict,
+} from '../shared/workflow-resource-claims'
 
 // ===== 工作流数据模型 =====
 
@@ -70,8 +74,10 @@ export interface WorkflowRun {
   generationModelId?: string
   /** 本次写作冻结的每章目标可见单位；不得在执行中重新读取全局配置。 */
   chapterWordsTarget?: number
-  /** 该运行将生成或改写的逻辑资源，用于同项目单资源 single-flight。 */
+  /** 该运行将生成或改写的逻辑资源；同项目内写入与任何其他声明互斥。 */
   resourceKeys?: readonly string[]
+  /** 该运行只读取的逻辑资源；多个读取者可以并发。 */
+  readResourceKeys?: readonly string[]
   /** Project writing language frozen when the workflow starts. */
   writingLanguage: WritingLanguage
   /** Visible interface locale frozen when the workflow starts. */
@@ -179,8 +185,10 @@ export interface WorkflowDefinition {
   generationModelId?: string
   /** 本次写作冻结的每章目标可见单位。 */
   chapterWordsTarget?: number
-  /** 同一项目内不可与其他活跃运行重叠的逻辑资源。 */
+  /** 同一项目内由本工作流写入的逻辑资源。 */
   resourceKeys?: readonly string[]
+  /** 同一项目内由本工作流读取的逻辑资源。 */
+  readResourceKeys?: readonly string[]
   /** Persisted workflows may freeze the UI locale independently of the current app setting. */
   uiLocale?: Locale
   steps: Array<{
@@ -216,11 +224,6 @@ function normalizeChapterWordsTarget(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
 }
 
-function normalizeResourceKeys(values: readonly string[] | undefined): readonly string[] | undefined {
-  const keys = [...new Set((values ?? []).map(value => value.trim()).filter(Boolean))]
-  return keys.length > 0 ? Object.freeze(keys) : undefined
-}
-
 export function workflowResourceKey(
   kind: 'novel-config' | 'architecture' | 'blueprints' | 'chapter',
   identifier?: string | number,
@@ -238,14 +241,11 @@ export function workflowResourceConflictMessage(locale: Locale, activeTitle: str
 
 function findResourceConflict(
   activeRuns: readonly WorkflowRun[],
-  definition: Pick<WorkflowDefinition, 'projectPath' | 'resourceKeys'>,
+  definition: Pick<WorkflowDefinition, 'projectPath' | 'resourceKeys' | 'readResourceKeys'>,
 ): WorkflowRun | null {
-  const requestedKeys = normalizeResourceKeys(definition.resourceKeys)
-  if (!requestedKeys) return null
-  const requested = new Set(requestedKeys)
   return activeRuns.find(run => (
     sameProjectPathKey(run.projectPath, definition.projectPath)
-    && run.resourceKeys?.some(key => requested.has(key))
+    && workflowResourceClaimsConflict(run, definition)
   )) ?? null
 }
 
@@ -277,7 +277,10 @@ interface WorkflowState {
   /** 检查指定类型的工作流是否有在运行 */
   isTypeRunning: (type: WorkflowType) => boolean
   /** 返回占用同项目同一逻辑资源的活跃运行；不同资源仍可并发。 */
-  getResourceConflict: (definition: Pick<WorkflowDefinition, 'projectPath' | 'resourceKeys'>) => WorkflowRun | null
+  getResourceConflict: (definition: Pick<
+    WorkflowDefinition,
+    'projectPath' | 'resourceKeys' | 'readResourceKeys'
+  >) => WorkflowRun | null
   /** 是否有任何工作流在运行 */
   hasActiveRun: () => boolean
   /** 活跃任务数量 */
@@ -416,7 +419,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     const runId = definition.runId ?? randomUUID()
     const generationModelId = normalizeGenerationModelId(definition.generationModelId)
     const chapterWordsTarget = normalizeChapterWordsTarget(definition.chapterWordsTarget)
-    const resourceKeys = normalizeResourceKeys(definition.resourceKeys)
+    const resourceKeys = normalizeWorkflowResourceKeys(definition.resourceKeys)
+    const readResourceKeys = normalizeWorkflowResourceKeys(definition.readResourceKeys)
     const writingLanguage = resolveWritingLanguage(currentProject?.novelConfig.writingLanguage)
     const uiLocale = definition.uiLocale ?? useLocaleStore.getState().locale
 
@@ -474,6 +478,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         ...(generationModelId ? { generationModelId } : {}),
         ...(chapterWordsTarget ? { chapterWordsTarget } : {}),
         ...(resourceKeys ? { resourceKeys } : {}),
+        ...(readResourceKeys ? { readResourceKeys } : {}),
         type: definition.type,
         title: definition.title,
         status: 'failed',
@@ -502,6 +507,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       ...(generationModelId ? { generationModelId } : {}),
       ...(chapterWordsTarget ? { chapterWordsTarget } : {}),
       ...(resourceKeys ? { resourceKeys } : {}),
+      ...(readResourceKeys ? { readResourceKeys } : {}),
       type: definition.type,
       title: definition.title,
       status: 'running',

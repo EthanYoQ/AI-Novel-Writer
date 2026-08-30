@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { DraftRepository } from '../draft-repository'
 import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
-import { countDraftUnits } from '../../../src/shared/draft-units'
+import {
+  countDraftUnits,
+  countLegacyDraftUnitsV1,
+} from '../../../src/shared/draft-units'
 
 let projectRoot = ''
 
@@ -254,6 +257,39 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM drafts').get()).toEqual({ count: 9 })
     expect(db.prepare('SELECT COUNT(*) AS count FROM finalization_outbox').get()).toEqual({ count: 9 })
     expect(db.prepare('SELECT COUNT(*) AS count FROM finalized_draft_import_operations').get())
+      .toEqual({ count: 1 })
+  })
+
+  it('replays a pre-migration operation after cached word counts move to the Unicode metric', () => {
+    const operationId = 'legacy-word-count-replay'
+    const content = 'Café 𠀀'
+    const request = {
+      operationId,
+      chapters: [{
+        chapterNumber: 1,
+        title: '第一章',
+        content,
+        wordCount: countDraftUnits(content),
+      }],
+    }
+    const first = FinalizedDraftImportRepository.commit(projectRoot, request)
+    const legacyPayloadHash = createHash('sha256').update(JSON.stringify({
+      operationId,
+      chapters: request.chapters.map(chapter => ({
+        ...chapter,
+        wordCount: countLegacyDraftUnitsV1(chapter.content),
+      })),
+    })).digest('hex')
+    const storedReceipt = { ...first, payloadHash: legacyPayloadHash }
+    getProjectDb()!.prepare(`
+      UPDATE finalized_draft_import_operations
+      SET payload_hash = ?, receipt_json = ?
+      WHERE operation_id = ?
+    `).run(legacyPayloadHash, JSON.stringify(storedReceipt), operationId)
+
+    expect(FinalizedDraftImportRepository.commit(projectRoot, request))
+      .toEqual({ ...storedReceipt, idempotent: true })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts').get())
       .toEqual({ count: 1 })
   })
 

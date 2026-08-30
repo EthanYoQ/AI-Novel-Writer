@@ -10,6 +10,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { loadApplicationImportSourceSecret } from './services/import-source-identity-secret'
 import { countDraftUnits } from '../src/shared/draft-units'
+import { migrateDraftUnitCounts } from './services/draft-unit-migration'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -945,4 +946,6 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   } catch {
     // 旧库结构差异时忽略
   }
+
+  migrateDraftUnitCounts(db)
 }

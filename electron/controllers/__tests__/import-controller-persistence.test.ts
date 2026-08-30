@@ -21,6 +21,7 @@ import { ExternalFileGrantService } from '../../services/external-file-grant-ser
 import { ImportInspectionStore } from '../../services/import-inspection-store'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
 import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
+import { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'
 import { registerImportController } from '../import-controller'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 
@@ -116,7 +117,7 @@ describe('current-project import parsing persistence', () => {
       filePaths: kind === 'source count' ? [sourceA, sourceB] : [sourceA],
     })
     registerImportController(
-      undefined,
+      nodeTestSecureFileSystem,
       filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
       limits,
       new ExternalFileGrantService(),
@@ -137,7 +138,7 @@ describe('current-project import parsing persistence', () => {
     const picker = deferred<{ canceled: boolean; filePaths: string[] }>()
     mocks.showOpenDialog.mockReturnValue(picker.promise)
     registerImportController(
-      undefined,
+      nodeTestSecureFileSystem,
       filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
       {},
       new ExternalFileGrantService(),
@@ -487,7 +488,7 @@ describe('current-project import parsing persistence', () => {
     fs.writeFileSync(titleOnlySource, '第1章 只有标题\n第2章 仍然只有标题', 'utf8')
     mocks.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [titleOnlySource] })
     registerImportController(
-      undefined,
+      nodeTestSecureFileSystem,
       filePath => ({ canonicalLocation: filePath, fileIdentity: `file:${path.basename(filePath)}` }),
       {},
       new ExternalFileGrantService(),

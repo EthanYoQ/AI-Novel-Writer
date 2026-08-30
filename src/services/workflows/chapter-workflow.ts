@@ -93,6 +93,12 @@ export function getDraftPath(_projectPath: string, chapterNumber: number, versio
   return `vela://draft/ch${chapterNumber}/v${version}`
 }
 
+const CHAPTER_CONTEXT_READ_RESOURCE_KEYS = Object.freeze([
+  workflowResourceKey('novel-config'),
+  workflowResourceKey('architecture'),
+  workflowResourceKey('blueprints'),
+])
+
 function workflowProjectSession(
   projectPath: string,
   sourceProjectSession: ProjectSessionContext,
@@ -194,6 +200,7 @@ export function createChapterWorkflow(
     ...(generationModelId ? { generationModelId } : {}),
     chapterWordsTarget,
     resourceKeys: [workflowResourceKey('chapter', chapterInfo.chapterNumber)],
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `写稿 — 第 ${chapterInfo.chapterNumber} 章 · ${chapterInfo.title}`,
     steps: [
       {
@@ -219,6 +226,7 @@ export function createRefineOnlyWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `修稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
@@ -252,6 +260,7 @@ export function createRefineFromReviewWorkflow(
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     ...(generationModelId ? { generationModelId } : {}),
     resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `审稿修复 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
@@ -283,6 +292,7 @@ export function createReviewOnlyWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `审稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
@@ -314,6 +324,7 @@ export function createFinalizeWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `定稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
       {
@@ -352,6 +363,7 @@ export function createRepairFinalizeWorkflow(
     projectPath,
     projectSession: workflowProjectSession(projectPath, sourceProjectSession),
     resourceKeys: [workflowResourceKey('chapter', chapterNumber)],
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `修复后处理 — 第${chapterNumber}章`,
     steps: [
       {

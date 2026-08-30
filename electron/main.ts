@@ -31,6 +31,7 @@ import {
   createOfficialHomepageWindowOpenHandler,
   preventRendererNavigation,
 } from './services/official-homepage-navigation'
+import { configureSingleInstanceRuntime } from './services/single-instance-runtime'
 
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -72,6 +73,13 @@ const releaseHomepageSmokeInvocation = releaseHomepageSmokeRequested
 const releaseSkinSmokeInvocation = releaseSkinSmokeRequested
   ? claimReleaseSkinSmokeInvocation(process.argv, process.env)
   : undefined
+const applicationInstanceAccepted = configureSingleInstanceRuntime({
+  releaseSmokeRequested,
+  requestLock: () => app.requestSingleInstanceLock(),
+  quit: () => app.quit(),
+  onSecondInstance: listener => { app.on('second-instance', () => listener()) },
+  getWindow: () => win,
+})
 let releaseSmokeStage = 'not-requested'
 let releaseSmokeTimeout: NodeJS.Timeout | undefined
 
@@ -172,6 +180,7 @@ async function runPackagedOfficialHomepageSmoke(token: string) {
 
 // macOS: 关闭所有窗口不退出
 app.on('window-all-closed', () => {
+  if (!applicationInstanceAccepted) return
   if (process.platform !== 'darwin') {
     app.quit()
     win = null
@@ -180,13 +189,14 @@ app.on('window-all-closed', () => {
 
 // macOS: 点击 dock 图标重新创建窗口
 app.on('activate', () => {
-  if (releaseSmokeRequested) return
+  if (!applicationInstanceAccepted || releaseSmokeRequested) return
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow()
   }
 })
 
 app.whenReady().then(async () => {
+  if (!applicationInstanceAccepted) return
   reportReleaseSmokeStage('electron-ready')
   if (releaseSmokeRequested) {
     const requestedSmokeModeCount = Number(releaseVectorSmokeRequested)

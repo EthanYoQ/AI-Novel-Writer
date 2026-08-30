@@ -7,6 +7,17 @@ function utf16Le(value: string): Buffer {
   return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(value, 'utf16le')])
 }
 
+function simpleBook(extraFiles: Record<string, string | Buffer> = {}): Buffer {
+  return storedZip({
+    'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+    'book.opf': `<package><manifest>
+      <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+      </manifest><spine><itemref idref="chapter"/></spine></package>`,
+    'chapter.xhtml': '<html><head><title>Arrival</title></head><body><p>正文内容。</p></body></html>',
+    ...extraFiles,
+  })
+}
+
 describe('EPUB chapter extraction', () => {
   it('follows an EPUB 2 package spine and preserves Unicode novel text', async () => {
     const archive = storedZip({
@@ -72,6 +83,86 @@ describe('EPUB chapter extraction', () => {
     ])
   })
 
+  it('allows an encryption.xml that declares only standard font obfuscation', async () => {
+    const archive = storedZip({
+      'META-INF/container.xml': '<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>',
+      'META-INF/encryption.xml': `<encryption>
+        <EncryptedData>
+          <EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+          <CipherData><CipherReference URI="OPS/fonts/book.otf"/></CipherData>
+        </EncryptedData>
+      </encryption>`,
+      'OPS/book.opf': `<package><manifest>
+        <item id="chapter" href="text/chapter.xhtml" media-type="application/xhtml+xml"/>
+        <item id="font" href="fonts/book.otf" media-type="application/vnd.ms-opentype"/>
+        </manifest><spine><itemref idref="chapter"/></spine></package>`,
+      'OPS/text/chapter.xhtml': '<html><body><p>合法无 DRM 正文。</p></body></html>',
+      'OPS/fonts/book.otf': Buffer.from([0, 1, 2, 3]),
+    })
+
+    await expect(extractEpubChapters(archive)).resolves.toEqual([
+      { title: 'chapter', content: '合法无 DRM 正文。' },
+    ])
+  })
+
+  it('allows the legacy Adobe algorithm only when it targets a manifest font', async () => {
+    const archive = storedZip({
+      'META-INF/container.xml': '<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>',
+      'META-INF/encryption.xml': `<encryption><EncryptedData>
+        <EncryptionMethod Algorithm="http://ns.adobe.com/pdf/enc#RC"/>
+        <CipherData><CipherReference URI="OPS/fonts/book.ttf"/></CipherData>
+      </EncryptedData></encryption>`,
+      'OPS/book.opf': `<package><manifest>
+        <item id="chapter" href="text/chapter.xhtml" media-type="application/xhtml+xml"/>
+        <item id="font" href="fonts/book.ttf" media-type="font/ttf"/>
+        </manifest><spine><itemref idref="chapter"/></spine></package>`,
+      'OPS/text/chapter.xhtml': '<html><body><p>Legacy font book.</p></body></html>',
+      'OPS/fonts/book.ttf': Buffer.from([0, 1, 2, 3]),
+    })
+
+    await expect(extractEpubChapters(archive)).resolves.toEqual([
+      { title: 'chapter', content: 'Legacy font book.' },
+    ])
+  })
+
+  it('rejects malformed empty encryption metadata as an invalid archive, not DRM', async () => {
+    await expect(extractEpubChapters(simpleBook({
+      'META-INF/encryption.xml': '<encryption/>',
+    }))).rejects.toMatchObject({ code: 'EPUB_INVALID_ARCHIVE' })
+  })
+
+  it.each([
+    {
+      name: 'encrypted spine XHTML',
+      encryption: `<encryption><EncryptedData>
+        <EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes256-cbc"/>
+        <CipherData><CipherReference URI="chapter.xhtml"/></CipherData>
+      </EncryptedData></encryption>`,
+    },
+    {
+      name: 'unknown font encryption algorithm',
+      encryption: `<encryption><EncryptedData>
+        <EncryptionMethod Algorithm="urn:example:unknown"/>
+        <CipherData><CipherReference URI="font.otf"/></CipherData>
+      </EncryptedData></encryption>`,
+    },
+  ])('rejects $name with an explicit DRM error', async ({ encryption }) => {
+    const archive = storedZip({
+      'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
+      'META-INF/encryption.xml': encryption,
+      'book.opf': `<package><manifest>
+        <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+        <item id="font" href="font.otf" media-type="font/otf"/>
+        </manifest><spine><itemref idref="chapter"/></spine></package>`,
+      'chapter.xhtml': '<html><body><p>正文</p></body></html>',
+      'font.otf': Buffer.from([1, 2, 3]),
+    })
+
+    await expect(extractEpubChapters(archive)).rejects.toMatchObject({
+      code: 'EPUB_DRM_UNSUPPORTED',
+    })
+  })
+
   it.each([
     { name: 'corrupt ZIP data', archive: Buffer.from('not a zip archive') },
     { name: 'a missing container.xml', archive: storedZip({ 'book/content.opf': '<package/>' }) },
@@ -79,18 +170,6 @@ describe('EPUB chapter extraction', () => {
   ])('rejects $name as an invalid EPUB', async ({ archive }) => {
     await expect(extractEpubChapters(archive)).rejects.toMatchObject({
       code: 'EPUB_INVALID_ARCHIVE',
-    })
-  })
-
-  it('rejects encrypted EPUB content with an explicit DRM error', async () => {
-    const archive = storedZip({
-      'META-INF/encryption.xml': '<encryption/>',
-      'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
-      'book.opf': '<package><manifest/><spine/></package>',
-    })
-
-    await expect(extractEpubChapters(archive)).rejects.toMatchObject({
-      code: 'EPUB_DRM_UNSUPPORTED',
     })
   })
 

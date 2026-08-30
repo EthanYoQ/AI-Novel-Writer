@@ -139,7 +139,8 @@ describe('architecture workflow project context', () => {
     })
 
     expect(workflow.title).toBe('Generate story architecture')
-    expect(workflow.resourceKeys).toEqual(['architecture:premise'])
+    expect(workflow.resourceKeys).toEqual(['architecture'])
+    expect(workflow.readResourceKeys).toEqual(['novel-config'])
     expect(workflow.steps[0]).toMatchObject({
       name: 'Story premise',
       description: 'Refine the story premise and its core appeal',
@@ -167,7 +168,8 @@ describe('architecture workflow project context', () => {
       projectSession: { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
       selectedSteps: ['premise', 'characters'],
     })
-    expect(workflow.resourceKeys).toEqual(['architecture:premise', 'architecture:characters'])
+    expect(workflow.resourceKeys).toEqual(['architecture'])
+    expect(workflow.readResourceKeys).toEqual(['novel-config'])
     useProjectStore.setState({
       currentProject: {
         id: 'project-B',

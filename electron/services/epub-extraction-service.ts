@@ -35,10 +35,32 @@ const DEFAULT_LIMITS: Readonly<EpubExtractionLimits> = Object.freeze({
   maxExtractedBytes: EPUB_MAX_EXTRACTED_BYTES,
 })
 
+const SUPPORTED_FONT_OBFUSCATION_ALGORITHMS = new Set([
+  'http://www.idpf.org/2008/embedding',
+  'http://ns.adobe.com/pdf/enc#RC',
+])
+const FONT_MEDIA_TYPES = new Set([
+  'application/font-sfnt',
+  'application/font-woff',
+  'application/vnd.ms-fontobject',
+  'application/vnd.ms-opentype',
+  'application/x-font-opentype',
+  'application/x-font-ttf',
+  'font/otf',
+  'font/ttf',
+  'font/woff',
+  'font/woff2',
+])
+
 interface ManifestItem {
   href: string
   mediaType: string
   properties: string
+}
+
+interface EncryptedResource {
+  algorithm: string
+  archivePath: string
 }
 
 function invalidArchive(): never {
@@ -52,6 +74,20 @@ function normalizeArchivePath(value: string): string {
     invalidArchive()
   }
   return normalized
+}
+
+function decodeReferenceValue(value: string): string {
+  const relative = value.split(/[?#]/u, 1)[0]
+  if (!relative) invalidArchive()
+  try {
+    return decodeURIComponent(relative)
+  } catch {
+    invalidArchive()
+  }
+}
+
+function resolveManifestArchivePath(packageDirectory: string, href: string): string {
+  return normalizeArchivePath(path.posix.join(packageDirectory, decodeReferenceValue(href)))
 }
 
 function decodeEntities(value: string): string {
@@ -88,6 +124,44 @@ function firstTagAttributes(xml: string, localName: string): Record<string, stri
 function allTagAttributes(xml: string, localName: string): Array<Record<string, string>> {
   const expression = new RegExp(`<(?:[\\w-]+:)?${localName}\\b([^>]*)>`, 'giu')
   return [...xml.matchAll(expression)].map(match => attributes(match[1]))
+}
+
+function encryptedResources(xml: string): EncryptedResource[] {
+  const declarations = xml.match(/<(?:[\w-]+:)?EncryptedData\b/giu)?.length ?? 0
+  const blocks = [...xml.matchAll(
+    /<(?:[\w-]+:)?EncryptedData\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?EncryptedData\s*>/giu,
+  )]
+  if (declarations === 0 || blocks.length !== declarations) invalidArchive()
+
+  return blocks.map((match) => {
+    const algorithm = firstTagAttributes(match[1], 'EncryptionMethod')?.algorithm?.trim()
+    const uri = firstTagAttributes(match[1], 'CipherReference')?.uri?.trim()
+    if (!algorithm || !uri) invalidArchive()
+    return { algorithm, archivePath: normalizeArchivePath(decodeReferenceValue(uri)) }
+  })
+}
+
+function isFontMediaType(mediaType: string): boolean {
+  const normalized = mediaType.trim().toLowerCase()
+  return normalized.startsWith('font/') || FONT_MEDIA_TYPES.has(normalized)
+}
+
+function assertSupportedEncryption(
+  encryptionXml: string,
+  manifestByArchivePath: ReadonlyMap<string, ManifestItem>,
+  entries: ReadonlyMap<string, yauzl.Entry>,
+): void {
+  for (const resource of encryptedResources(encryptionXml)) {
+    const manifestItem = manifestByArchivePath.get(resource.archivePath)
+    if (
+      !SUPPORTED_FONT_OBFUSCATION_ALGORITHMS.has(resource.algorithm)
+      || !manifestItem
+      || !isFontMediaType(manifestItem.mediaType)
+      || !entries.has(resource.archivePath)
+    ) {
+      throw new EpubExtractionError('EPUB_DRM_UNSUPPORTED')
+    }
+  }
 }
 
 function htmlToText(html: string): string {
@@ -171,7 +245,7 @@ async function readEntry(
   }
   const stream = await new Promise<Readable>((resolve, reject) => {
     zip.openReadStream(entry, (error, opened) => {
-      if (error) reject(new EpubExtractionError('EPUB_INVALID_ARCHIVE'))
+      if (error || !opened) reject(new EpubExtractionError('EPUB_INVALID_ARCHIVE'))
       else resolve(opened)
     })
   })
@@ -219,9 +293,6 @@ export async function extractEpubChapters(
   const zip = await openArchive(archive)
   try {
     const entries = await indexEntries(zip, limits)
-    if (entries.has('META-INF/encryption.xml')) {
-      throw new EpubExtractionError('EPUB_DRM_UNSUPPORTED')
-    }
     const containerEntry = entries.get('META-INF/container.xml')
     if (!containerEntry) invalidArchive()
     const consumed = { bytes: 0 }
@@ -234,13 +305,24 @@ export async function extractEpubChapters(
     const opf = await readEntry(zip, packageEntry, limits, consumed)
     const packageDirectory = path.posix.dirname(normalizedPackagePath)
     const manifest = new Map<string, ManifestItem>()
+    const manifestByArchivePath = new Map<string, ManifestItem>()
     for (const item of allTagAttributes(opf, 'item')) {
       if (!item.id || !item.href || manifest.has(item.id)) invalidArchive()
-      manifest.set(item.id, {
+      const manifestItem = {
         href: item.href,
         mediaType: item['media-type'] ?? '',
         properties: item.properties ?? '',
-      })
+      }
+      const archivePath = resolveManifestArchivePath(packageDirectory, manifestItem.href)
+      if (manifestByArchivePath.has(archivePath)) invalidArchive()
+      manifest.set(item.id, manifestItem)
+      manifestByArchivePath.set(archivePath, manifestItem)
+    }
+
+    const encryptionEntry = entries.get('META-INF/encryption.xml')
+    if (encryptionEntry) {
+      const encryptionXml = await readEntry(zip, encryptionEntry, limits, consumed)
+      assertSupportedEncryption(encryptionXml, manifestByArchivePath, entries)
     }
 
     const chapters: EpubChapter[] = []
@@ -250,14 +332,7 @@ export async function extractEpubChapters(
       if (!item) invalidArchive()
       if (!['application/xhtml+xml', 'text/html'].includes(item.mediaType.toLowerCase())) continue
       if (item.properties.split(/\s+/u).includes('nav')) continue
-      const relativeHref = item.href.split(/[?#]/u, 1)[0]
-      let decodedHref: string
-      try {
-        decodedHref = decodeURIComponent(relativeHref)
-      } catch {
-        invalidArchive()
-      }
-      const documentPath = normalizeArchivePath(path.posix.join(packageDirectory, decodedHref))
+      const documentPath = resolveManifestArchivePath(packageDirectory, item.href)
       const documentEntry = entries.get(documentPath)
       if (!documentEntry) invalidArchive()
       const document = await readEntry(zip, documentEntry, limits, consumed)
