@@ -9,6 +9,7 @@ import type { Locale } from '../../i18n/types'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
 import type { FinalizationSnapshot } from '../finalization-snapshot'
+import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import { requireWorkflowProjectSession } from './workflow-project-session'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 
@@ -303,9 +304,7 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
     resourceKeys: completionMode === 'auto_finalize'
       ? [
           ...chapterResourceKeys,
-          workflowResourceKey('character-roster'),
-          workflowResourceKey('continuity'),
-          workflowResourceKey('chapter-summary'),
+          ...FINALIZATION_SHARED_WRITE_RESOURCE_KINDS.map(kind => workflowResourceKey(kind)),
         ]
       : chapterResourceKeys,
     readResourceKeys: [

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { workflowResourceClaimsConflict } from '../../../shared/workflow-resource-claims'
+import type { ImportPurpose, ImportRunSnapshot } from '../../../shared/import-run'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import {
@@ -13,6 +14,7 @@ import {
 } from '../chapter-workflow'
 import { createBatchChapterWorkflow } from '../batch-chapter-workflow'
 import { createDirectoryWorkflow } from '../directory-workflow'
+import { createImportWorkflow } from '../import-workflow'
 
 vi.mock('../commands/legacy-character-roster-repair.command', () => ({
   RepairLegacyCharacterRosterCommand: class {
@@ -63,6 +65,43 @@ function createDraft(chapterNumber: number) {
     characters: [],
     keyEvents: 'an event',
   }, PROJECT_SESSION)
+}
+
+function createImportRun(purpose: ImportPurpose, totalChapters = 1): ImportRunSnapshot {
+  return {
+    id: `import-${purpose}`,
+    purpose,
+    rootRunId: `import-${purpose}`,
+    effectNamespace: `import:${purpose}:import-${purpose}`,
+    sourceDisplay: [{ displayName: 'novel.txt', mediaType: 'text/plain', size: 20 }],
+    locale: 'en-US',
+    stage: purpose === 'author-manuscript' ? 'author-commit' : 'knowledge',
+    status: 'running',
+    completedBatches: {},
+    lastError: '',
+    resumable: true,
+    cancelRequested: false,
+    totalChapters,
+    totalContentSize: 20,
+    manifestChapterCount: totalChapters,
+    manifestContentSize: 20,
+    manifestWordCount: 20,
+    completedChapters: 0,
+    createdAt: '2026-01-01',
+    updatedAt: '2026-01-01',
+    ...(purpose === 'author-manuscript'
+      ? { authorityFingerprint: 'a'.repeat(64), manifestFingerprint: 'b'.repeat(64) }
+      : {}),
+  }
+}
+
+function createImport(purpose: ImportPurpose, totalChapters = 1) {
+  return createImportWorkflow({
+    projectPath: PROJECT_PATH,
+    projectSession: PROJECT_SESSION,
+    run: createImportRun(purpose, totalChapters),
+    executionOwner: 'resource-claim-test',
+  })
 }
 
 afterEach(() => {
@@ -181,5 +220,57 @@ describe('workflow factory resource claims', () => {
     expect(workflowResourceClaimsConflict(repair ?? {}, architecture)).toBe(true)
     expect(workflowResourceClaimsConflict(repair ?? {}, createFinalize(1))).toBe(true)
     expect(workflowResourceClaimsConflict(repair ?? {}, directory)).toBe(true)
+  })
+
+  it('serializes reference imports against every project-fact writer they overlap', () => {
+    setCurrentProject()
+    const referenceImport = createImport('reference')
+    const architecture = createArchitectureWorkflow({
+      projectPath: PROJECT_PATH,
+      projectSession: PROJECT_SESSION,
+      selectedSteps: ['characters'],
+    })
+    const directory = createDirectoryWorkflow(
+      { mode: 'full' },
+      PROJECT_PATH,
+      PROJECT_SESSION,
+    )
+
+    expect(referenceImport.resourceKeys).toEqual([
+      'novel-config',
+      'architecture',
+      'character-roster',
+      'blueprints',
+    ])
+    expect(workflowResourceClaimsConflict(referenceImport, createFinalize(1))).toBe(true)
+    expect(workflowResourceClaimsConflict(referenceImport, directory)).toBe(true)
+    expect(workflowResourceClaimsConflict(referenceImport, architecture)).toBe(true)
+  })
+
+  it('serializes author imports on finalized facts while preserving an unrelated draft', () => {
+    setCurrentProject()
+    const authorImport = createImport('author-manuscript', 2)
+    const architecture = createArchitectureWorkflow({
+      projectPath: PROJECT_PATH,
+      projectSession: PROJECT_SESSION,
+      selectedSteps: ['characters'],
+    })
+    const directory = createDirectoryWorkflow(
+      { mode: 'full' },
+      PROJECT_PATH,
+      PROJECT_SESSION,
+    )
+
+    expect(authorImport.resourceKeys).toEqual([
+      'chapter:1',
+      'chapter:2',
+      'character-roster',
+      'continuity',
+      'chapter-summary',
+    ])
+    expect(workflowResourceClaimsConflict(authorImport, createFinalize(3))).toBe(true)
+    expect(workflowResourceClaimsConflict(authorImport, directory)).toBe(true)
+    expect(workflowResourceClaimsConflict(authorImport, architecture)).toBe(true)
+    expect(workflowResourceClaimsConflict(authorImport, createDraft(3))).toBe(false)
   })
 })

@@ -13,13 +13,14 @@ import type { FinalizedDraftImportReceipt } from '../../shared/finalized-draft-i
 import { sameProjectSessionContext, projectSessionContextFromProject } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
 import { useProjectStore } from '../../stores/project-store'
-import type { StepCallbacks, WorkflowContext, WorkflowDefinition, WorkflowStep } from '../../stores/workflow-store'
+import { workflowResourceKey, type StepCallbacks, type WorkflowContext, type WorkflowDefinition, type WorkflowStep } from '../../stores/workflow-store'
 import { ImportRunOrchestrator, type ImportRunOrchestratorDependencies } from './import-run-orchestrator'
 import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh'
 import { promptLanguageText } from '../prompt-language'
 import { retryDirectoryCharacterSync } from './directory-character-sync-recovery'
 import type { WritingLanguage } from '../../shared/writing-language'
 import { countDraftUnits } from '../../shared/draft-units'
+import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 
 export interface ImportWorkflowParams {
   projectPath: string
@@ -391,6 +392,11 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
   const session = Object.freeze({ ...params.projectSession })
   const count = params.run.totalChapters
   const chapterCountEn = `${count} ${count === 1 ? 'chapter' : 'chapters'}`
+  const contextReadResourceKeys = [
+    workflowResourceKey('novel-config'),
+    workflowResourceKey('architecture'),
+    workflowResourceKey('blueprints'),
+  ]
   const durableCancelHooks: Pick<
     WorkflowDefinition,
     'onCancelRequested' | 'onCancelledAtBoundary'
@@ -455,6 +461,11 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
       projectPath: params.projectPath,
       projectSession: session,
       uiLocale: params.run.locale,
+      resourceKeys: [
+        ...Array.from({ length: count }, (_, index) => workflowResourceKey('chapter', index + 1)),
+        ...FINALIZATION_SHARED_WRITE_RESOURCE_KINDS.map(kind => workflowResourceKey(kind)),
+      ],
+      readResourceKeys: contextReadResourceKeys,
       ...durableCancelHooks,
       steps: [
         importStep(params.run, params.executionOwner, 'author-commit',
@@ -491,6 +502,12 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
     projectPath: params.projectPath,
     projectSession: session,
     uiLocale: params.run.locale,
+    resourceKeys: [
+      workflowResourceKey('novel-config'),
+      workflowResourceKey('architecture'),
+      workflowResourceKey('character-roster'),
+      workflowResourceKey('blueprints'),
+    ],
     ...durableCancelHooks,
     steps: [
       importStep(params.run, params.executionOwner, 'knowledge',

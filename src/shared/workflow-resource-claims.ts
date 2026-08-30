@@ -7,6 +7,12 @@ export type WorkflowResourceKind =
   | 'continuity'
   | 'chapter-summary'
 
+export const FINALIZATION_SHARED_WRITE_RESOURCE_KINDS = Object.freeze([
+  'character-roster',
+  'continuity',
+  'chapter-summary',
+] as const satisfies readonly WorkflowResourceKind[])
+
 export interface WorkflowResourceClaims {
   /** Resources this workflow may mutate. */
   readonly resourceKeys?: readonly string[]

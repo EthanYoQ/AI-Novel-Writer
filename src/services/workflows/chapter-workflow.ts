@@ -6,6 +6,7 @@ import { ipc } from '../ipc-client'
 import type { DraftStatus } from '../../shared/draft-status'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
+import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 
 // ==========================================
@@ -100,9 +101,7 @@ const CHAPTER_CONTEXT_READ_RESOURCE_KEYS = Object.freeze([
 ])
 
 const FINALIZE_SHARED_WRITE_RESOURCE_KEYS = Object.freeze([
-  workflowResourceKey('character-roster'),
-  workflowResourceKey('continuity'),
-  workflowResourceKey('chapter-summary'),
+  ...FINALIZATION_SHARED_WRITE_RESOURCE_KINDS.map(kind => workflowResourceKey(kind)),
 ])
 
 function finalizeWriteResourceKeys(chapterNumber: number): readonly string[] {

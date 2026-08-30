@@ -312,7 +312,9 @@ try {
   return parseLastJsonLine(output)
 }
 
-function runUpgradeFixture(mode: 'seed' | 'validate', projectRoot: string): Record<string, unknown> {
+type UpgradeFixtureMode = 'seed' | 'validate-legacy' | 'validate'
+
+function runUpgradeFixture(mode: UpgradeFixtureMode, projectRoot: string): Record<string, unknown> {
   const output = execFileSync(
     electronNodeRunner,
     [upgradeFixtureScript, mode, projectRoot],
@@ -325,7 +327,7 @@ function runUpgradeFixture(mode: 'seed' | 'validate', projectRoot: string): Reco
 }
 
 function runUpgradeFixtureWithNode(
-  mode: 'seed' | 'validate',
+  mode: UpgradeFixtureMode,
   projectRoot: string,
   settingsPath?: string,
 ): Record<string, unknown> {
@@ -389,6 +391,7 @@ describe('Windows installer smoke contract', () => {
     expect(script).toContain('Take one final desktop snapshot')
     expect(script).toContain('Invoke-AiNovelUpgradeDataFixture')
     expect(script).toContain('upgrade-data-fixture.mjs')
+    expect(script).toContain("[ValidateSet('seed', 'validate-legacy', 'validate')]")
     expect(script).toContain('ELECTRON_RUN_AS_NODE')
     expect(script).toContain('[string]$SettingsPath')
     expect(script).toContain('-SettingsPath $globalConfig')
@@ -419,6 +422,15 @@ describe('Windows installer smoke contract', () => {
     expect(script).toContain('smoke-win-app.ps1')
     expect(script).toContain('VelaHome = $velaHome')
     expect(script).toContain('$appSmokeParameters.ProjectPathToOpen = $upgradeFixtureRoot')
+    const legacyValidation = 'Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot'
+    const migratedValidation = '$upgradeValidationEvidence = Invoke-AiNovelUpgradeDataFixture -Mode validate -ProjectRoot $upgradeFixtureRoot'
+    expect(script).toContain(legacyValidation)
+    expect(script).toContain(migratedValidation)
+    expect(script).not.toContain('UPDATE drafts SET word_count')
+    expect(script.indexOf(legacyValidation)).toBeLessThan(script.indexOf('Install-Silently $resolvedInstaller'))
+    expect(script.indexOf(migratedValidation)).toBeGreaterThan(
+      script.indexOf("& (Join-Path $PSScriptRoot 'smoke-win-app.ps1') @appSmokeParameters"),
+    )
     expect(script).toContain('PostExitQuietSeconds = $PostExitQuietSeconds')
     expect(script).toContain('Installer smoke changed existing global configuration')
 
@@ -486,6 +498,11 @@ describe('Windows installer smoke contract', () => {
     expect(fixture).toContain("const ASSET_INVENTORY_RELATIVE_PATH = '.vela/upgrade-data-inventory.json'")
     expect(fixture).toContain("const EMBEDDING_DIMENSION = 768")
     expect(fixture).toContain("const PROMPT_TEMPLATE_RELATIVE_PATH = '.vela/prompts/chapter-style.md'")
+    expect(fixture).toContain('const V1_DRAFT_WORD_COUNTS = Object.freeze({ 71: 37, 72: 38 })')
+    expect(fixture).toContain('const V2_DRAFT_WORD_COUNTS = Object.freeze({ 71: 32, 72: 31 })')
+    expect(fixture).toContain('const V1_REVISION_WORD_COUNTS = Object.freeze({ 91: 30 })')
+    expect(fixture).toContain('const V2_REVISION_WORD_COUNTS = Object.freeze({ 91: 22 })')
+    expect(fixture).not.toContain('Script=Han')
     expect(fixture).toContain('CREATE TABLE project_core')
     expect(fixture).toContain('CREATE TABLE characters')
     expect(fixture).toContain('CREATE TABLE blueprints')
@@ -3252,6 +3269,10 @@ try {
     const fixtureRoot = mkdtempSync(join(tmpdir(), 'ai-novel-v025-draft-count-fixture-'))
     try {
       runUpgradeFixtureWithNode('seed', fixtureRoot)
+      expect(runUpgradeFixtureWithNode('validate-legacy', fixtureRoot)).toMatchObject({
+        draftCount: 2,
+        revisionCount: 1,
+      })
       const beforeMigration = validateUpgradeFixtureWithNode(fixtureRoot)
       expect(beforeMigration.status).not.toBe(0)
       expect(beforeMigration.stderr).toContain('draft word counts were not migrated to the current Unicode algorithm')
@@ -3375,8 +3396,10 @@ $fixtureRoot = '${fixtureRootPowerShell}'
 $settingsPath = '${settingsPathPowerShell}'
 $before = $env:ELECTRON_RUN_AS_NODE
 $seeded = Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $fixtureRoot -SettingsPath $settingsPath
+$legacyValidated = Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $fixtureRoot -SettingsPath $settingsPath
 [pscustomobject]@{
   SeededCharacters = $seeded.characterCount
+  LegacyValidatedCharacters = $legacyValidated.characterCount
   EnvironmentRestored = $env:ELECTRON_RUN_AS_NODE -eq $before
 } | ConvertTo-Json -Compress
 `)
@@ -3411,6 +3434,7 @@ $validated = Invoke-AiNovelUpgradeDataFixture -Mode validate -ProjectRoot $fixtu
 
       expect(result).toEqual({
         SeededCharacters: 2,
+        LegacyValidatedCharacters: 2,
         ValidatedCharacters: 2,
         CurrentStates: 2,
         LegacyTables: 11,
