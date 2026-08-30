@@ -1,0 +1,313 @@
+name: Repair and verify v0.9.1 test portability
+
+'on':
+  push:
+    branches:
+      - hotfix/v0.9.1-review-fixes
+    paths:
+      - '.github/workflows/repair-v0.9.1-test-portability.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-v0.9.1-test-portability
+  cancel-in-progress: false
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out hotfix branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: hotfix/v0.9.1-review-fixes
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 11.11.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply portable test-only secure filesystem repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test/helpers
+          cat > test/helpers/node-test-secure-file-system.ts <<'EOF'
+          import fs from 'node:fs'
+          import path from 'node:path'
+
+          import type {
+            SecureDirectoryEntry,
+            SecureFileCapability,
+            SecureFileSystem,
+          } from '../../electron/security/windows-safe-file-system'
+
+          function secureError(code: string): Error {
+            return new Error(code)
+          }
+
+          function assertContained(rootPath: string, candidatePath: string): void {
+            const relative = path.relative(rootPath, candidatePath)
+            if (
+              relative === '..'
+              || relative.startsWith(`..${path.sep}`)
+              || path.isAbsolute(relative)
+            ) {
+              throw secureError('SECURE_FS_INVALID_PATH')
+            }
+          }
+
+          function capabilitySegments(relativePath: string): string[] {
+            const segments = relativePath.split(/[\\/]+/).filter(Boolean)
+            if (segments.some(segment => segment === '.' || segment === '..' || segment.includes('\0'))) {
+              throw secureError('SECURE_FS_INVALID_PATH')
+            }
+            return segments
+          }
+
+          function resolveCapability(capability: SecureFileCapability): string {
+            const rootPath = fs.realpathSync.native(capability.rootPath)
+            const rootStats = fs.statSync(rootPath, { bigint: true })
+            if (
+              !rootStats.isDirectory()
+              || rootStats.dev.toString() !== capability.rootIdentity.volumeSerialNumber
+              || rootStats.ino.toString() !== capability.rootIdentity.fileIndex
+            ) {
+              throw secureError('SECURE_FS_REPARSE_POINT')
+            }
+
+            const segments = capabilitySegments(capability.relativePath)
+            let currentPath = rootPath
+            for (let index = 0; index < segments.length; index += 1) {
+              const nextPath = path.join(currentPath, segments[index])
+              if (!fs.existsSync(nextPath)) {
+                const unresolvedPath = path.join(nextPath, ...segments.slice(index + 1))
+                assertContained(rootPath, unresolvedPath)
+                return unresolvedPath
+              }
+              const information = fs.lstatSync(nextPath)
+              if (information.isSymbolicLink()) {
+                throw secureError('SECURE_FS_REPARSE_POINT')
+              }
+              const canonicalPath = fs.realpathSync.native(nextPath)
+              assertContained(rootPath, canonicalPath)
+              currentPath = canonicalPath
+            }
+            return currentPath
+          }
+
+          async function readBytes(
+            capability: SecureFileCapability,
+            maxBytes?: number,
+          ): Promise<Buffer> {
+            const targetPath = resolveCapability(capability)
+            const content = fs.readFileSync(targetPath)
+            if (maxBytes !== undefined && content.length > maxBytes) {
+              throw secureError('SECURE_FS_FILE_TOO_LARGE')
+            }
+            return content
+          }
+
+          export const nodeTestSecureFileSystem: SecureFileSystem = {
+            readBytes,
+
+            async readText(capability, maxBytes) {
+              const content = await readBytes(capability, maxBytes)
+              try {
+                return new TextDecoder('utf-8', { fatal: true }).decode(content)
+              } catch {
+                throw secureError('SECURE_FS_INVALID_TEXT')
+              }
+            },
+
+            async writeTextAtomically(capability, content, beforeReplace, constraints) {
+              const initialTarget = resolveCapability(capability)
+              if (constraints?.mustAlreadyExist && !fs.existsSync(initialTarget)) {
+                throw secureError('SECURE_FS_NOT_FOUND')
+              }
+              await beforeReplace?.()
+              const targetPath = resolveCapability(capability)
+              if (constraints?.mustAlreadyExist && !fs.existsSync(targetPath)) {
+                throw secureError('SECURE_FS_NOT_FOUND')
+              }
+              fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+              const temporaryPath = path.join(
+                path.dirname(targetPath),
+                `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.tmp`,
+              )
+              try {
+                fs.writeFileSync(temporaryPath, content, 'utf8')
+                fs.renameSync(temporaryPath, targetPath)
+              } finally {
+                fs.rmSync(temporaryPath, { force: true })
+              }
+            },
+
+            async mkdir(capability) {
+              const targetPath = resolveCapability(capability)
+              fs.mkdirSync(targetPath, { recursive: true })
+            },
+
+            async exists(capability) {
+              return fs.existsSync(resolveCapability(capability))
+            },
+
+            async listDirectory(capability): Promise<SecureDirectoryEntry[]> {
+              const targetPath = resolveCapability(capability)
+              return fs.readdirSync(targetPath, { withFileTypes: true }).map(entry => ({
+                name: entry.name,
+                isDirectory: entry.isDirectory(),
+              }))
+            },
+          }
+          EOF
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, expected: int = 1) -> None:
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f'{path}: expected {expected} occurrence(s), found {count}: {old!r}')
+              file.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace(
+              'electron/__tests__/main-skin-startup.test.ts',
+              "      isPackaged: false,\n      on: vi.fn(),",
+              "      isPackaged: false,\n      requestSingleInstanceLock: vi.fn(() => true),\n      on: vi.fn(),",
+          )
+
+          replace(
+              'electron/controllers/__tests__/external-file-grant-controller.test.ts',
+              "import type { AtomicWriteConstraints, WindowsSafeFileSystem } from '../../security/windows-safe-file-system'\n",
+              "import type { AtomicWriteConstraints, WindowsSafeFileSystem } from '../../security/windows-safe-file-system'\nimport { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'\n",
+          )
+          replace(
+              'electron/controllers/__tests__/external-file-grant-controller.test.ts',
+              "    registerExternalFileGrantController(new ExternalFileGrantService({\n      now: () => 1_000,\n      newGrantId: () => 'export-directory-grant',\n    }))",
+              "    registerExternalFileGrantController(new ExternalFileGrantService({\n      now: () => 1_000,\n      newGrantId: () => 'export-directory-grant',\n    }), nodeTestSecureFileSystem)",
+          )
+
+          replace(
+              'electron/controllers/__tests__/import-controller-secure-file.test.ts',
+              "import {\n  windowsSafeFileSystem,\n  type WindowsSafeFileSystem,\n} from '../../security/windows-safe-file-system'\n",
+              "import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'\nimport { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'\n",
+          )
+          replace(
+              'electron/controllers/__tests__/import-controller-secure-file.test.ts',
+              '  fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,',
+              '  fileSystem: WindowsSafeFileSystem = nodeTestSecureFileSystem,',
+          )
+          replace(
+              'electron/controllers/__tests__/import-controller-secure-file.test.ts',
+              '      ...windowsSafeFileSystem,',
+              '      ...nodeTestSecureFileSystem,',
+          )
+          replace(
+              'electron/controllers/__tests__/import-controller-secure-file.test.ts',
+              '        return windowsSafeFileSystem.readText(capability, maxBytes)',
+              '        return nodeTestSecureFileSystem.readText(capability, maxBytes)',
+          )
+
+          replace(
+              'electron/controllers/__tests__/import-controller-persistence.test.ts',
+              "import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'\n",
+              "import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'\nimport { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'\n",
+          )
+          replace(
+              'electron/controllers/__tests__/import-controller-persistence.test.ts',
+              '    registerImportController(\n      undefined,',
+              '    registerImportController(\n      nodeTestSecureFileSystem,',
+              expected=2,
+          )
+
+          replace(
+              'electron/services/__tests__/project-access.test.ts',
+              '      maxNativePathCharacters: 70,',
+              "      maxNativePathCharacters: root.length + path.win32.join('.vela', 'vela.db-wal').length,",
+          )
+          replace(
+              'electron/services/__tests__/project-access.test.ts',
+              "      trustedProject(access, root.toLocaleUpperCase('en-US')),",
+              "      trustedProject(access, process.platform === 'win32' ? root.toLocaleUpperCase('en-US') : root),",
+          )
+          replace(
+              'electron/services/__tests__/project-access.test.ts',
+              "      projectPath: root.toLocaleUpperCase('en-US'),",
+              "      projectPath: process.platform === 'win32' ? root.toLocaleUpperCase('en-US') : root,",
+          )
+          PY
+
+          git diff --check
+
+      - name: Type-check repaired sources
+        run: pnpm run typecheck
+
+      - name: Lint repaired sources
+        run: pnpm run lint
+
+      - name: Run formerly failing tests
+        run: >-
+          pnpm exec vitest run
+          electron/__tests__/main-skin-startup.test.ts
+          electron/controllers/__tests__/external-file-grant-controller.test.ts
+          electron/controllers/__tests__/import-controller-persistence.test.ts
+          electron/controllers/__tests__/import-controller-secure-file.test.ts
+          electron/services/__tests__/project-access.test.ts
+
+      - name: Commit portable test repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No portability repair changes were produced.' >&2
+            exit 1
+          fi
+          git commit -m 'test: make security-boundary tests platform-independent'
+          git push origin HEAD:hotfix/v0.9.1-review-fixes
+
+      - name: Run full unit suite
+        run: pnpm run test
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: pnpm run test:browser
+
+      - name: Build desktop application
+        run: pnpm run build
+
+      - name: Remove temporary hotfix machinery after full verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/hotfix
+          rm -f .github/workflows/apply-v0.9.1-review-fixes.yml
+          rm -f .github/workflows/repair-v0.9.1-test-portability.yml
+          git diff --check
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No temporary files remained.'
+            exit 0
+          fi
+          git commit -m 'chore: remove temporary hotfix verification machinery'
+          git push origin HEAD:hotfix/v0.9.1-review-fixes
