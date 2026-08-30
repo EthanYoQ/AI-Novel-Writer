@@ -11,7 +11,10 @@ import type {
   AuthoritativeChapterSequence,
 } from '../../src/shared/author-manuscript-import'
 import { getProjectDb } from '../database'
-import { countDraftUnits } from '../../src/shared/draft-units'
+import {
+  countDraftUnits,
+  countLegacyDraftUnitsV1,
+} from '../../src/shared/draft-units'
 import { resolveManuscriptTarget } from '../services/manuscript-publisher'
 
 interface ImportOperationRow {
@@ -106,6 +109,24 @@ function requestPayloadHash(request: FinalizedDraftImportRequest, chapters: Fina
     expectedCommitManifestFingerprint: request.expectedCommitManifestFingerprint ?? null,
     chapters,
   }))
+}
+
+function requestPayloadHashCandidates(
+  request: FinalizedDraftImportRequest,
+  chapters: FinalizedDraftImportChapter[],
+): ReadonlySet<string> {
+  const candidates = new Set<string>([requestPayloadHash(request, chapters)])
+  const legacyCounters = [
+    countLegacyDraftUnitsV1,
+    (content: string) => content.length,
+  ] as const
+  for (const count of legacyCounters) {
+    candidates.add(requestPayloadHash(request, chapters.map(chapter => ({
+      ...chapter,
+      wordCount: count(chapter.content),
+    }))))
+  }
+  return candidates
 }
 
 function manifestFingerprint(chapters: FinalizedDraftImportChapter[]): string {
@@ -371,7 +392,9 @@ export class FinalizedDraftImportRepository {
     if (!db) throw new Error('项目数据库未打开')
     const operationId = requireNonEmptyOperationId(request.operationId)
     const chapters = normalizeChapters(request.chapters)
-    const payloadHash = requestPayloadHash({ ...request, operationId }, chapters)
+    const normalizedRequest = { ...request, operationId }
+    const payloadHash = requestPayloadHash(normalizedRequest, chapters)
+    const acceptedPayloadHashes = requestPayloadHashCandidates(normalizedRequest, chapters)
 
     const transaction = db.transaction(() => {
       const existing = db.prepare(`
@@ -380,7 +403,7 @@ export class FinalizedDraftImportRepository {
         WHERE operation_id = ?
       `).get(operationId) as ImportOperationRow | undefined
       if (existing) {
-        if (existing.payload_hash !== payloadHash) {
+        if (!acceptedPayloadHashes.has(existing.payload_hash)) {
           throw new Error('定稿导入 operationId 已绑定不同载荷')
         }
         const receipt = parseStoredReceipt(existing)

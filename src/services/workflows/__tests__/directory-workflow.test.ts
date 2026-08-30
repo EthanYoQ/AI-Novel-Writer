@@ -352,6 +352,7 @@ describe('directory workflow project context', () => {
       projectPath: projectA.path,
     })
     expect(workflow.resourceKeys).toEqual(['blueprints'])
+    expect(workflow.readResourceKeys).toEqual(['novel-config', 'architecture'])
     const context: WorkflowContext = {
       runId: 'test-run',
       projectPath: projectA.path,

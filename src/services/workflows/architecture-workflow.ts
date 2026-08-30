@@ -126,7 +126,8 @@ export function createArchitectureWorkflow(params: ArchitectureWorkflowParams): 
     title: text('生成故事架构', 'Generate story architecture'),
     projectPath: expectedProjectPath,
     projectSession,
-    resourceKeys: sel.map(key => workflowResourceKey('architecture', key)),
+    resourceKeys: [workflowResourceKey('architecture')],
+    readResourceKeys: [workflowResourceKey('novel-config')],
     steps: finalSteps,
     onComplete: { mode: 'silent', message: text('故事架构已生成完成！前往侧边栏「故事架构」查看', 'Story architecture is ready. Open Story Architecture from the sidebar.') },
   }

@@ -265,6 +265,10 @@ export function createDirectoryWorkflow(
     projectPath: expectedProjectPath,
     projectSession,
     resourceKeys: [workflowResourceKey('blueprints')],
+    readResourceKeys: [
+      workflowResourceKey('novel-config'),
+      workflowResourceKey('architecture'),
+    ],
     steps: [
       {
         name: '读取架构',

@@ -183,9 +183,17 @@ describe('novel import external-file capability', () => {
     {
       fileName: 'protected.epub',
       archive: storedZip({
-        'META-INF/encryption.xml': '<encryption/>',
+        'META-INF/encryption.xml': `<encryption xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+          <enc:EncryptedData>
+            <enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes256-cbc"/>
+            <enc:CipherData><enc:CipherReference URI="chapter.xhtml"/></enc:CipherData>
+          </enc:EncryptedData>
+        </encryption>`,
         'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>',
-        'book.opf': '<package><manifest/><spine/></package>',
+        'book.opf': `<package><manifest>
+          <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+          </manifest><spine><itemref idref="chapter"/></spine></package>`,
+        'chapter.xhtml': '<html><body><p>Encrypted placeholder</p></body></html>',
       }),
       error: '该 EPUB 受 DRM 或加密保护，无法导入。请使用无 DRM 的 EPUB 或文本文件。',
     },

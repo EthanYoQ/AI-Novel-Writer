@@ -19,6 +19,7 @@ function definition(
   title: string,
   resourceKeys: string[],
   execute: WorkflowDefinition['steps'][number]['executor'],
+  readResourceKeys: string[] = [],
 ): WorkflowDefinition {
   return {
     type: 'chapter_creation',
@@ -26,6 +27,7 @@ function definition(
     projectPath,
     projectSession,
     resourceKeys,
+    ...(readResourceKeys.length > 0 ? { readResourceKeys } : {}),
     steps: [{ name: title, description: title, executor: execute }],
   }
 }
@@ -89,6 +91,27 @@ describe('workflow logical resource single-flight', () => {
     await firstCompletion
   })
 
+  it('rejects a blueprint writer while a chapter is reading the blueprint authority', async () => {
+    let releaseChapter!: () => void
+    const chapterExecutor = vi.fn(() => new Promise<void>((resolve) => { releaseChapter = resolve }))
+    const blueprintExecutor = vi.fn().mockResolvedValue(undefined)
+
+    const chapterCompletion = useWorkflowStore.getState().startWorkflow(
+      definition('Chapter 1', ['chapter:1'], chapterExecutor, ['blueprints']),
+    )
+    await vi.waitFor(() => expect(chapterExecutor).toHaveBeenCalledOnce())
+
+    const blueprintRewrite = definition('Rewrite blueprints', ['blueprints'], blueprintExecutor)
+    expect(useWorkflowStore.getState().getResourceConflict(blueprintRewrite)).toMatchObject({
+      title: 'Chapter 1',
+    })
+    await useWorkflowStore.getState().startWorkflow(blueprintRewrite)
+    expect(blueprintExecutor).not.toHaveBeenCalled()
+
+    releaseChapter()
+    await chapterCompletion
+  })
+
   it('allows different chapter resources in the same project to run concurrently', async () => {
     let releaseFirst!: () => void
     let releaseSecond!: () => void
@@ -96,9 +119,14 @@ describe('workflow logical resource single-flight', () => {
     const secondExecutor = vi.fn(() => new Promise<void>((resolve) => { releaseSecond = resolve }))
 
     const firstCompletion = useWorkflowStore.getState().startWorkflow(
-      definition('Chapter 1', ['chapter:1'], firstExecutor),
+      definition('Chapter 1', ['chapter:1'], firstExecutor, ['blueprints']),
     )
-    const secondDefinition = definition('Chapter 2', ['chapter:2'], secondExecutor)
+    const secondDefinition = definition(
+      'Chapter 2',
+      ['chapter:2'],
+      secondExecutor,
+      ['blueprints'],
+    )
     await vi.waitFor(() => expect(firstExecutor).toHaveBeenCalledOnce())
 
     expect(useWorkflowStore.getState().getResourceConflict(secondDefinition)).toBeNull()

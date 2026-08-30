@@ -163,6 +163,7 @@ describe('batch chapter workflow generation model selection', () => {
     expect(workflow).toMatchObject({
       chapterWordsTarget: 4200,
       resourceKeys: ['chapter:1', 'chapter:2'],
+      readResourceKeys: ['novel-config', 'architecture', 'blueprints'],
     })
 
     await useWorkflowStore.getState().startWorkflow(workflow)

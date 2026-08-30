@@ -300,6 +300,11 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
     resourceKeys: Array.from({ length: chapterCount }, (_, index) => (
       workflowResourceKey('chapter', startChapterNumber + index)
     )),
+    readResourceKeys: [
+      workflowResourceKey('novel-config'),
+      workflowResourceKey('architecture'),
+      workflowResourceKey('blueprints'),
+    ],
     completionMode,
     title: completionMode === 'draft_review'
       ? localeText(
