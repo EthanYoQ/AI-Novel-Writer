@@ -233,7 +233,7 @@ jobs:
               'electron/controllers/__tests__/import-controller-persistence.test.ts',
               '    registerImportController(\n      undefined,',
               '    registerImportController(\n      nodeTestSecureFileSystem,',
-              expected=2,
+              expected=3,
           )
 
           replace(
