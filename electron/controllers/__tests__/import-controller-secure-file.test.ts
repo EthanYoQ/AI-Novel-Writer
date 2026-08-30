@@ -21,10 +21,8 @@ vi.mock('electron', () => ({
 }))
 
 import { registerImportController } from '../import-controller'
-import {
-  windowsSafeFileSystem,
-  type WindowsSafeFileSystem,
-} from '../../security/windows-safe-file-system'
+import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
+import { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'
 import { ExternalFileGrantService } from '../../services/external-file-grant-service'
 import { ImportInspectionStore } from '../../services/import-inspection-store'
 import { storedZip } from '../../services/__tests__/epub-test-fixture'
@@ -36,7 +34,7 @@ let inspections: ImportInspectionStore
 let nextGrantId = 0
 
 function register(
-  fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
+  fileSystem: WindowsSafeFileSystem = nodeTestSecureFileSystem,
   fileIdentity = (filePath: string) => ({ canonicalLocation: filePath }),
   limits: { maxSourceFiles?: number; maxChapters?: number; maxTotalBytes?: number } = {},
 ) {
@@ -256,11 +254,11 @@ describe('novel import external-file capability', () => {
 
     mocks.handlers.clear()
     const swappingFileSystem = {
-      ...windowsSafeFileSystem,
+      ...nodeTestSecureFileSystem,
       readText: vi.fn(async (capability, maxBytes) => {
         fs.rmSync(guardedDirectory, { recursive: true, force: true })
         fs.symlinkSync(outsideDirectory, guardedDirectory, 'junction')
-        return windowsSafeFileSystem.readText(capability, maxBytes)
+        return nodeTestSecureFileSystem.readText(capability, maxBytes)
       }),
     } as WindowsSafeFileSystem
     register(swappingFileSystem, filePath => ({ canonicalLocation: fs.realpathSync.native(filePath) }))

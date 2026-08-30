@@ -103,7 +103,7 @@ describe('ProjectAccessService project session seam', () => {
     const options = {
       homePath: path.join(os.tmpdir(), 'not-the-project-home'),
       platform: 'win32' as NodeJS.Platform,
-      maxNativePathCharacters: 70,
+      maxNativePathCharacters: root.length + path.win32.join('.vela', 'vela.db-wal').length,
     }
     const access = new ProjectAccessService(options)
 
@@ -140,7 +140,7 @@ describe('ProjectAccessService project session seam', () => {
 
     const first = access.beginSession(trustedProject(access, root))
     const reopened = access.beginSession(
-      trustedProject(access, root.toLocaleUpperCase('en-US')),
+      trustedProject(access, process.platform === 'win32' ? root.toLocaleUpperCase('en-US') : root),
     )
 
     expect(reopened.projectId).toBe(first.projectId)
@@ -193,7 +193,7 @@ describe('ProjectAccessService project session seam', () => {
     expect(access.assertCurrentProjectContext({
       projectId: activeLease.projectId,
       leaseId: activeLease.leaseId,
-      projectPath: root.toLocaleUpperCase('en-US'),
+      projectPath: process.platform === 'win32' ? root.toLocaleUpperCase('en-US') : root,
     }, root)).toEqual(activeLease)
     expect(() => access.assertCurrentProjectContext({
       projectId: activeLease.projectId,

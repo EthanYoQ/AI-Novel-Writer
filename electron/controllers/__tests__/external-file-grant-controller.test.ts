@@ -23,6 +23,7 @@ vi.mock('electron', () => ({
 import { registerExternalFileGrantController } from '../external-file-grant-controller'
 import { ExternalFileGrantService } from '../../services/external-file-grant-service'
 import type { AtomicWriteConstraints, WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
+import { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-external-grant-controller-'))
 const SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS = 15_000
@@ -49,7 +50,7 @@ describe('external file grant IPC contract', () => {
     registerExternalFileGrantController(new ExternalFileGrantService({
       now: () => 1_000,
       newGrantId: () => 'export-directory-grant',
-    }))
+    }), nodeTestSecureFileSystem)
   })
 
   afterAll(() => {
