@@ -77,10 +77,14 @@ describe('createImportWorkflow', () => {
       manifestChapterCount: 2,
       authorityFingerprint: 'c'.repeat(64),
     })
-    ipcMocks.invoke.mockResolvedValue([
-      { number: 2, title: 'Second', contentFingerprint: 'a'.repeat(64), contentSize: 1, content: 'a' },
-      { number: 7, title: 'Seventh', contentFingerprint: 'b'.repeat(64), contentSize: 1, content: 'b' },
-    ])
+    ipcMocks.invoke.mockImplementation(async (_session, _channel, _runId, after) => (
+      after === 0
+        ? [
+            { number: 2, title: 'Second', contentFingerprint: 'a'.repeat(64), contentSize: 1, content: 'a' },
+            { number: 7, title: 'Seventh', contentFingerprint: 'b'.repeat(64), contentSize: 1, content: 'b' },
+          ]
+        : []
+    ))
 
     await expect(loadAuthorImportChapterNumbers(snapshot, session, session.projectPath))
       .resolves.toEqual([2, 7])
@@ -92,6 +96,38 @@ describe('createImportWorkflow', () => {
       100,
       session.projectPath,
     )
+    expect(ipcMocks.invoke).toHaveBeenCalledWith(
+      session,
+      'db:import-run-list-chapters',
+      snapshot.id,
+      7,
+      100,
+      session.projectPath,
+    )
+  })
+
+  it('rejects an author manifest with durable rows beyond the declared chapter count', async () => {
+    const snapshot = run({
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:import-run-1',
+      stage: 'author-publish',
+      totalChapters: 2,
+      manifestChapterCount: 2,
+      authorityFingerprint: 'c'.repeat(64),
+    })
+    ipcMocks.invoke.mockImplementation(async (_session, _channel, _runId, after) => {
+      if (after === 0) return [
+        { number: 2, title: 'Second', contentFingerprint: 'a'.repeat(64), contentSize: 1, content: 'a' },
+        { number: 7, title: 'Seventh', contentFingerprint: 'b'.repeat(64), contentSize: 1, content: 'b' },
+      ]
+      if (after === 7) return [
+        { number: 9, title: 'Ninth', contentFingerprint: 'd'.repeat(64), contentSize: 1, content: 'd' },
+      ]
+      return []
+    })
+
+    await expect(loadAuthorImportChapterNumbers(snapshot, session, session.projectPath))
+      .rejects.toThrow('持久化章节清单不完整')
   })
 
   it('freezes the persisted run id, locale, session, and reference-only staged copy', () => {

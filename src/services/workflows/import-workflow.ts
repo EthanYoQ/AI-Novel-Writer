@@ -45,6 +45,14 @@ function required<T>(result: { success: boolean; error?: string } & T, fallback:
   return result
 }
 
+function incompleteAuthorManifestError(run: ImportRunSnapshot): Error {
+  return new Error(textForLocale(
+    run.locale,
+    '作者原稿的持久化章节清单不完整，无法安全启动导入。',
+    'The persisted author-manuscript chapter manifest is incomplete, so the import cannot start safely.',
+  ))
+}
+
 function normalizeAuthorChapterNumbers(
   run: ImportRunSnapshot,
   values: readonly number[] | undefined,
@@ -54,11 +62,7 @@ function normalizeAuthorChapterNumbers(
     chapterNumbers.length !== run.totalChapters
     || chapterNumbers.some(number => !Number.isSafeInteger(number) || number < 1)
   ) {
-    throw new Error(textForLocale(
-      run.locale,
-      '作者原稿的持久化章节清单不完整，无法安全启动导入。',
-      'The persisted author-manuscript chapter manifest is incomplete, so the import cannot start safely.',
-    ))
+    throw incompleteAuthorManifestError(run)
   }
   return Object.freeze(chapterNumbers)
 }
@@ -70,7 +74,8 @@ export async function loadAuthorImportChapterNumbers(
 ): Promise<readonly number[]> {
   const chapterNumbers: number[] = []
   let afterChapterNumber = 0
-  while (chapterNumbers.length < run.totalChapters) {
+  let hasMore = true
+  while (hasMore) {
     const page = await ipc.invokeWithProjectSession(
       projectSession,
       'db:import-run-list-chapters',
@@ -79,10 +84,13 @@ export async function loadAuthorImportChapterNumbers(
       IMPORT_CHAPTER_PAGE_SIZE,
       projectPath,
     )
-    if (page.length === 0) break
+    if (page.length === 0) {
+      hasMore = false
+      continue
+    }
     chapterNumbers.push(...page.map(chapter => chapter.number))
     const nextAfterChapterNumber = page[page.length - 1]!.number
-    if (nextAfterChapterNumber <= afterChapterNumber) break
+    if (nextAfterChapterNumber <= afterChapterNumber) throw incompleteAuthorManifestError(run)
     afterChapterNumber = nextAfterChapterNumber
   }
   return normalizeAuthorChapterNumbers(run, chapterNumbers)
