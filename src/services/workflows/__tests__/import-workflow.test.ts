@@ -20,7 +20,7 @@ vi.mock('../commands/import-novel.command', () => ({
   },
 }))
 
-import { createImportWorkflow } from '../import-workflow'
+import { createImportWorkflow, loadAuthorImportChapterNumbers } from '../import-workflow'
 import {
   IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
   type ImportRunEffectReceipt,
@@ -68,6 +68,32 @@ beforeEach(() => {
 afterEach(() => useProjectStore.setState({ currentProject: null }))
 
 describe('createImportWorkflow', () => {
+  it('loads sparse frozen chapter numbers from a resumed author run manifest', async () => {
+    const snapshot = run({
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:import-run-1',
+      stage: 'author-publish',
+      totalChapters: 2,
+      manifestChapterCount: 2,
+      authorityFingerprint: 'c'.repeat(64),
+    })
+    ipcMocks.invoke.mockResolvedValue([
+      { number: 2, title: 'Second', contentFingerprint: 'a'.repeat(64), contentSize: 1, content: 'a' },
+      { number: 7, title: 'Seventh', contentFingerprint: 'b'.repeat(64), contentSize: 1, content: 'b' },
+    ])
+
+    await expect(loadAuthorImportChapterNumbers(snapshot, session, session.projectPath))
+      .resolves.toEqual([2, 7])
+    expect(ipcMocks.invoke).toHaveBeenCalledWith(
+      session,
+      'db:import-run-list-chapters',
+      snapshot.id,
+      0,
+      100,
+      session.projectPath,
+    )
+  })
+
   it('freezes the persisted run id, locale, session, and reference-only staged copy', () => {
     const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: run(), executionOwner })
 
@@ -337,6 +363,7 @@ describe('createImportWorkflow', () => {
         authorityFingerprint: 'c'.repeat(64),
       }),
       executionOwner,
+      authorChapterNumbers: [1],
     })
 
     expect(workflow.title).toBe('导入作者原稿（1 章）')
@@ -368,6 +395,7 @@ describe('createImportWorkflow', () => {
       projectSession: session,
       run: snapshot,
       executionOwner,
+      authorChapterNumbers: [1],
     })
     const workflowContext = context()
     workflowContext.data.importRunExecution = {

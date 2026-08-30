@@ -14,7 +14,11 @@ import { sameProjectSessionContext, projectSessionContextFromProject } from '../
 import { ipc } from '../ipc-client'
 import { useProjectStore } from '../../stores/project-store'
 import { workflowResourceKey, type StepCallbacks, type WorkflowContext, type WorkflowDefinition, type WorkflowStep } from '../../stores/workflow-store'
-import { ImportRunOrchestrator, type ImportRunOrchestratorDependencies } from './import-run-orchestrator'
+import {
+  IMPORT_CHAPTER_PAGE_SIZE,
+  ImportRunOrchestrator,
+  type ImportRunOrchestratorDependencies,
+} from './import-run-orchestrator'
 import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh'
 import { promptLanguageText } from '../prompt-language'
 import { retryDirectoryCharacterSync } from './directory-character-sync-recovery'
@@ -28,6 +32,8 @@ export interface ImportWorkflowParams {
   run: ImportRunSnapshot
   /** One frozen renderer execution identity for every step in this workflow. */
   executionOwner: string
+  /** Durable manifest chapter numbers; required for author-manuscript writes. */
+  authorChapterNumbers?: readonly number[]
 }
 
 function textForLocale(locale: ImportRunSnapshot['locale'], zhCNText: string, enUSText: string): string {
@@ -37,6 +43,49 @@ function textForLocale(locale: ImportRunSnapshot['locale'], zhCNText: string, en
 function required<T>(result: { success: boolean; error?: string } & T, fallback: string): T {
   if (!result.success) throw new Error(result.error || fallback)
   return result
+}
+
+function normalizeAuthorChapterNumbers(
+  run: ImportRunSnapshot,
+  values: readonly number[] | undefined,
+): readonly number[] {
+  const chapterNumbers = [...new Set(values ?? [])].sort((left, right) => left - right)
+  if (
+    chapterNumbers.length !== run.totalChapters
+    || chapterNumbers.some(number => !Number.isSafeInteger(number) || number < 1)
+  ) {
+    throw new Error(textForLocale(
+      run.locale,
+      '作者原稿的持久化章节清单不完整，无法安全启动导入。',
+      'The persisted author-manuscript chapter manifest is incomplete, so the import cannot start safely.',
+    ))
+  }
+  return Object.freeze(chapterNumbers)
+}
+
+export async function loadAuthorImportChapterNumbers(
+  run: ImportRunSnapshot,
+  projectSession: ProjectSessionContext,
+  projectPath: string,
+): Promise<readonly number[]> {
+  const chapterNumbers: number[] = []
+  let afterChapterNumber = 0
+  while (chapterNumbers.length < run.totalChapters) {
+    const page = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:import-run-list-chapters',
+      run.id,
+      afterChapterNumber,
+      IMPORT_CHAPTER_PAGE_SIZE,
+      projectPath,
+    )
+    if (page.length === 0) break
+    chapterNumbers.push(...page.map(chapter => chapter.number))
+    const nextAfterChapterNumber = page[page.length - 1]!.number
+    if (nextAfterChapterNumber <= afterChapterNumber) break
+    afterChapterNumber = nextAfterChapterNumber
+  }
+  return normalizeAuthorChapterNumbers(run, chapterNumbers)
 }
 
 function importedChapter(chapter: ImportRunChapterSnapshot) {
@@ -450,6 +499,10 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
     },
   }
   if (params.run.purpose === 'author-manuscript') {
+    const authorChapterNumbers = normalizeAuthorChapterNumbers(
+      params.run,
+      params.authorChapterNumbers,
+    )
     return {
       runId: params.run.id,
       type: 'novel_import',
@@ -462,7 +515,7 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
       projectSession: session,
       uiLocale: params.run.locale,
       resourceKeys: [
-        ...Array.from({ length: count }, (_, index) => workflowResourceKey('chapter', index + 1)),
+        ...authorChapterNumbers.map(chapterNumber => workflowResourceKey('chapter', chapterNumber)),
         ...FINALIZATION_SHARED_WRITE_RESOURCE_KINDS.map(kind => workflowResourceKey(kind)),
       ],
       readResourceKeys: contextReadResourceKeys,

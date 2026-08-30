@@ -95,13 +95,19 @@ function createImportRun(purpose: ImportPurpose, totalChapters = 1): ImportRunSn
   }
 }
 
-function createImport(purpose: ImportPurpose, totalChapters = 1) {
-  return createImportWorkflow({
+function createImport(
+  purpose: ImportPurpose,
+  totalChapters = 1,
+  authorChapterNumbers?: readonly number[],
+) {
+  const params = {
     projectPath: PROJECT_PATH,
     projectSession: PROJECT_SESSION,
     run: createImportRun(purpose, totalChapters),
     executionOwner: 'resource-claim-test',
-  })
+    authorChapterNumbers,
+  }
+  return createImportWorkflow(params)
 }
 
 afterEach(() => {
@@ -249,7 +255,7 @@ describe('workflow factory resource claims', () => {
 
   it('serializes author imports on finalized facts while preserving an unrelated draft', () => {
     setCurrentProject()
-    const authorImport = createImport('author-manuscript', 2)
+    const authorImport = createImport('author-manuscript', 2, [2, 7])
     const architecture = createArchitectureWorkflow({
       projectPath: PROJECT_PATH,
       projectSession: PROJECT_SESSION,
@@ -262,8 +268,8 @@ describe('workflow factory resource claims', () => {
     )
 
     expect(authorImport.resourceKeys).toEqual([
-      'chapter:1',
       'chapter:2',
+      'chapter:7',
       'character-roster',
       'continuity',
       'chapter-summary',
@@ -271,6 +277,9 @@ describe('workflow factory resource claims', () => {
     expect(workflowResourceClaimsConflict(authorImport, createFinalize(3))).toBe(true)
     expect(workflowResourceClaimsConflict(authorImport, directory)).toBe(true)
     expect(workflowResourceClaimsConflict(authorImport, architecture)).toBe(true)
+    expect(workflowResourceClaimsConflict(authorImport, createDraft(7))).toBe(true)
+    expect(workflowResourceClaimsConflict(authorImport, createDraft(2))).toBe(true)
+    expect(workflowResourceClaimsConflict(authorImport, createDraft(1))).toBe(false)
     expect(workflowResourceClaimsConflict(authorImport, createDraft(3))).toBe(false)
   })
 })
