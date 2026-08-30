@@ -1,3 +1,12 @@
+export type WorkflowResourceKind =
+  | 'novel-config'
+  | 'architecture'
+  | 'blueprints'
+  | 'chapter'
+  | 'character-roster'
+  | 'continuity'
+  | 'chapter-summary'
+
 export interface WorkflowResourceClaims {
   /** Resources this workflow may mutate. */
   readonly resourceKeys?: readonly string[]

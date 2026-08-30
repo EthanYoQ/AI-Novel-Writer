@@ -71,7 +71,12 @@ describe('createRepairFinalizeWorkflow', () => {
       readResourceKeys: ['novel-config', 'architecture', 'blueprints'],
     })
     expect(repair).toMatchObject({
-      resourceKeys: ['chapter:3'],
+      resourceKeys: [
+        'chapter:3',
+        'character-roster',
+        'continuity',
+        'chapter-summary',
+      ],
       readResourceKeys: ['novel-config', 'architecture', 'blueprints'],
     })
   })

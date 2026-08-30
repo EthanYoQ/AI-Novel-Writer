@@ -264,7 +264,10 @@ export function createDirectoryWorkflow(
       title: params.mode === 'append' ? `续写章节蓝图${params.startChapter ? `（从第 ${params.startChapter} 章）` : ''}` : '生成章节蓝图（全量）',
     projectPath: expectedProjectPath,
     projectSession,
-    resourceKeys: [workflowResourceKey('blueprints')],
+    resourceKeys: [
+      workflowResourceKey('blueprints'),
+      workflowResourceKey('character-roster'),
+    ],
     readResourceKeys: [
       workflowResourceKey('novel-config'),
       workflowResourceKey('architecture'),

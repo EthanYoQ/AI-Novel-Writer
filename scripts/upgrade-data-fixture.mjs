@@ -197,6 +197,28 @@ const DRAFT_ROWS = [
   },
 ]
 
+function countUnicodeDraftUnits(text) {
+  const normalized = text.normalize('NFC')
+  const hanCharacters = normalized.match(/\p{Script=Han}/gu)?.length ?? 0
+  const withoutHan = normalized.replace(/\p{Script=Han}/gu, ' ')
+  const words = withoutHan.match(/\p{L}[\p{L}\p{M}]*(?:['’]\p{L}[\p{L}\p{M}]*)*/gu)?.length ?? 0
+  const otherVisibleCodePoints = [...withoutHan
+    .replace(/\p{L}[\p{L}\p{M}]*(?:['’]\p{L}[\p{L}\p{M}]*)*/gu, '')
+    .replace(/[\s\p{P}\p{S}]/gu, '')]
+    .length
+  return hanCharacters + words + otherVisibleCodePoints
+}
+
+function migratedContentBackedRows(rows) {
+  return rows.map((row) => {
+    const content = CONTENT_ROWS.find(candidate => candidate.id === row.content_id)
+    assert(content, `fixture content ${row.content_id} is missing`)
+    return { ...row, word_count: countUnicodeDraftUnits(content.body) }
+  })
+}
+
+const MIGRATED_DRAFT_ROWS = migratedContentBackedRows(DRAFT_ROWS)
+
 const REVIEW_ROWS = [
   {
     id: 81,
@@ -223,6 +245,8 @@ const REVISION_ROWS = [
     updated_at: '2026-01-02 03:08:05',
   },
 ]
+
+const MIGRATED_REVISION_ROWS = migratedContentBackedRows(REVISION_ROWS)
 
 const POST_PROCESS_RUN_ROWS = [
   {
@@ -312,8 +336,10 @@ const CHARACTER_COLUMNS = Object.keys(CHARACTER_ROWS[0])
 const BLUEPRINT_COLUMNS = Object.keys(BLUEPRINT_ROWS[0])
 const CONTENT_COLUMNS = Object.keys(CONTENT_ROWS[0])
 const DRAFT_COLUMNS = Object.keys(DRAFT_ROWS[0])
+const DRAFT_PRESERVED_COLUMNS = DRAFT_COLUMNS.filter(column => column !== 'word_count')
 const REVIEW_COLUMNS = Object.keys(REVIEW_ROWS[0])
 const REVISION_COLUMNS = Object.keys(REVISION_ROWS[0])
+const REVISION_PRESERVED_COLUMNS = REVISION_COLUMNS.filter(column => column !== 'word_count')
 const POST_PROCESS_RUN_COLUMNS = Object.keys(POST_PROCESS_RUN_ROWS[0])
 const POST_PROCESS_STEP_COLUMNS = Object.keys(POST_PROCESS_STEP_ROWS[0])
 const LLM_CALL_COLUMNS = Object.keys(LLM_CALL_ROWS[0])
@@ -991,10 +1017,10 @@ async function seed(projectRoot, settingsPath) {
   seedPhysicalProjectAssets(projectRoot)
   await seedEmbeddingAssets(projectRoot)
   writeAssetInventory(projectRoot, createAssetInventory(projectRoot, settingsPath))
-  return validate(projectRoot, settingsPath)
+  return validate(projectRoot, settingsPath, false)
 }
 
-function validateDatabase(projectRoot) {
+function validateDatabase(projectRoot, migratedDraftUnitCounts) {
   const dbPath = databasePath(projectRoot)
   if (!existsSync(dbPath)) {
     throw new Error(`Upgrade fixture database is missing: ${dbPath}`)
@@ -1036,13 +1062,37 @@ function validateDatabase(projectRoot) {
     assert.deepEqual(contents, CONTENT_ROWS, 'content bodies changed during upgrade')
 
     const drafts = readRows(db, 'drafts', DRAFT_COLUMNS, 'id')
-    assert.deepEqual(drafts, DRAFT_ROWS, 'draft or finalized records changed during upgrade')
+    const expectedDrafts = migratedDraftUnitCounts ? MIGRATED_DRAFT_ROWS : DRAFT_ROWS
+    assert.deepEqual(
+      drafts.map(draft => normalizeRow(draft, DRAFT_PRESERVED_COLUMNS)),
+      DRAFT_ROWS.map(draft => normalizeRow(draft, DRAFT_PRESERVED_COLUMNS)),
+      'draft identity or content reference changed during upgrade',
+    )
+    assert.deepEqual(
+      drafts.map(({ id, word_count }) => ({ id, word_count })),
+      expectedDrafts.map(({ id, word_count }) => ({ id, word_count })),
+      migratedDraftUnitCounts
+        ? 'draft word counts were not migrated to the current Unicode algorithm'
+        : 'legacy draft word counts changed before upgrade',
+    )
 
     const reviews = readRows(db, 'reviews', REVIEW_COLUMNS, 'id')
     assert.deepEqual(reviews, REVIEW_ROWS, 'review records changed during upgrade')
 
     const revisions = readRows(db, 'revisions', REVISION_COLUMNS, 'id')
-    assert.deepEqual(revisions, REVISION_ROWS, 'revision records changed during upgrade')
+    const expectedRevisions = migratedDraftUnitCounts ? MIGRATED_REVISION_ROWS : REVISION_ROWS
+    assert.deepEqual(
+      revisions.map(revision => normalizeRow(revision, REVISION_PRESERVED_COLUMNS)),
+      REVISION_ROWS.map(revision => normalizeRow(revision, REVISION_PRESERVED_COLUMNS)),
+      'revision identity or content reference changed during upgrade',
+    )
+    assert.deepEqual(
+      revisions.map(({ id, word_count }) => ({ id, word_count })),
+      expectedRevisions.map(({ id, word_count }) => ({ id, word_count })),
+      migratedDraftUnitCounts
+        ? 'revision word counts were not migrated to the current Unicode algorithm'
+        : 'legacy revision word counts changed before upgrade',
+    )
 
     const postProcessRuns = readRows(
       db,
@@ -1106,8 +1156,8 @@ function validateDatabase(projectRoot) {
   }
 }
 
-async function validate(projectRoot, settingsPath) {
-  const databaseEvidence = validateDatabase(projectRoot)
+async function validate(projectRoot, settingsPath, migratedDraftUnitCounts = true) {
+  const databaseEvidence = validateDatabase(projectRoot, migratedDraftUnitCounts)
   const embeddingSpace = await validateEmbeddingAssets(projectRoot)
   const inventoryEvidence = validateAssetInventory(
     projectRoot,

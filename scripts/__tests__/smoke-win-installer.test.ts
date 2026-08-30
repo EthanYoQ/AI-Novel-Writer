@@ -345,6 +345,22 @@ function validateUpgradeFixtureWithNode(projectRoot: string, settingsPath?: stri
   )
 }
 
+function applyExpectedDraftUnitMigration(projectRoot: string) {
+  execFileSync(
+    process.execPath,
+    [
+      '-e',
+      "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.env.AI_NOVEL_FIXTURE_DB);db.exec('UPDATE drafts SET word_count = CASE id WHEN 71 THEN 32 WHEN 72 THEN 31 ELSE word_count END; UPDATE revisions SET word_count = CASE id WHEN 91 THEN 22 ELSE word_count END');db.close()",
+    ],
+    {
+      env: {
+        ...process.env,
+        AI_NOVEL_FIXTURE_DB: join(projectRoot, '.vela', 'vela.db'),
+      },
+    },
+  )
+}
+
 function writeUpgradeFixtureSettings(settingsPath: string) {
   writeFileSync(settingsPath, JSON.stringify({
     theme: 'light',
@@ -553,6 +569,8 @@ describe('Windows installer smoke contract', () => {
       ])
       closeConnection(projectRoot)
 
+      applyExpectedDraftUnitMigration(projectRoot)
+
       const after = runUpgradeFixtureWithNode('validate', projectRoot, settingsPath)
       expect(after).toMatchObject({
         assetInventoryPath: '.vela/upgrade-data-inventory.json',
@@ -626,6 +644,7 @@ describe('Windows installer smoke contract', () => {
       try {
         writeUpgradeFixtureSettings(settingsPath)
         runUpgradeFixtureWithNode('seed', projectRoot, settingsPath)
+        applyExpectedDraftUnitMigration(projectRoot)
         testCase.mutate(projectRoot, settingsPath)
 
         const rejected = validateUpgradeFixtureWithNode(projectRoot, settingsPath)
@@ -645,6 +664,7 @@ describe('Windows installer smoke contract', () => {
     try {
       writeUpgradeFixtureSettings(settingsPath)
       runUpgradeFixtureWithNode('seed', projectRoot, settingsPath)
+      applyExpectedDraftUnitMigration(projectRoot)
       execFileSync(
         process.execPath,
         [
@@ -3140,6 +3160,7 @@ try {
     const fixtureRoot = mkdtempSync(join(tmpdir(), 'ai-novel-v025-sqlite-fixture-'))
     try {
       const seeded = runUpgradeFixtureWithNode('seed', fixtureRoot)
+      applyExpectedDraftUnitMigration(fixtureRoot)
       const validated = runUpgradeFixture('validate', fixtureRoot)
 
       expect(seeded.databasePath).toBe(join(fixtureRoot, '.vela', 'vela.db'))
@@ -3227,11 +3248,66 @@ try {
     }
   }, 15_000)
 
+  windowsIt('accepts migrated Unicode draft counts without relaxing preserved draft fields', () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'ai-novel-v025-draft-count-fixture-'))
+    try {
+      runUpgradeFixtureWithNode('seed', fixtureRoot)
+      const beforeMigration = validateUpgradeFixtureWithNode(fixtureRoot)
+      expect(beforeMigration.status).not.toBe(0)
+      expect(beforeMigration.stderr).toContain('draft word counts were not migrated to the current Unicode algorithm')
+
+      applyExpectedDraftUnitMigration(fixtureRoot)
+
+      expect(runUpgradeFixtureWithNode('validate', fixtureRoot)).toMatchObject({
+        draftCount: 2,
+        finalizedDraftCount: 1,
+      })
+
+      execFileSync(
+        process.execPath,
+        [
+          '-e',
+          "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.env.AI_NOVEL_FIXTURE_DB);db.prepare('UPDATE drafts SET word_count=33 WHERE id=71').run();db.close()",
+        ],
+        {
+          env: {
+            ...process.env,
+            AI_NOVEL_FIXTURE_DB: join(fixtureRoot, '.vela', 'vela.db'),
+          },
+        },
+      )
+      const countRejected = validateUpgradeFixtureWithNode(fixtureRoot)
+      expect(countRejected.status).not.toBe(0)
+      expect(countRejected.stderr).toContain('draft word counts were not migrated to the current Unicode algorithm')
+
+      applyExpectedDraftUnitMigration(fixtureRoot)
+
+      execFileSync(
+        process.execPath,
+        [
+          '-e',
+          "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.env.AI_NOVEL_FIXTURE_DB);db.prepare(\"UPDATE drafts SET source='rewrite' WHERE id=71\").run();db.close()",
+        ],
+        {
+          env: {
+            ...process.env,
+            AI_NOVEL_FIXTURE_DB: join(fixtureRoot, '.vela', 'vela.db'),
+          },
+        },
+      )
+      const rejected = validateUpgradeFixtureWithNode(fixtureRoot)
+      expect(rejected.status).not.toBe(0)
+      expect(rejected.stderr).toContain('draft identity or content reference changed during upgrade')
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true })
+    }
+  }, 15_000)
+
   windowsIt('rejects corruption in every extended v0.2.5 upgrade table', () => {
     const cases = [
       {
         sql: "UPDATE revisions SET user_prompt='changed' WHERE id=91",
-        message: 'revision records changed during upgrade',
+        message: 'revision identity or content reference changed during upgrade',
       },
       {
         sql: 'UPDATE reviews SET review_index=2 WHERE id=81',
@@ -3259,6 +3335,7 @@ try {
       const fixtureRoot = mkdtempSync(join(tmpdir(), 'ai-novel-v025-table-check-'))
       try {
         runUpgradeFixtureWithNode('seed', fixtureRoot)
+        applyExpectedDraftUnitMigration(fixtureRoot)
         execFileSync(
           process.execPath,
           [
@@ -3287,60 +3364,74 @@ try {
   }, 30_000)
 
   windowsPowerShellIt('runs the SQLite seeder and validator through the project Electron runtime', () => {
-    const output = runInstallerLibrary(`
-$fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-v025-wrapper-test-' + [guid]::NewGuid().ToString('N'))
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'ai-novel-v025-wrapper-test-'))
+    const settingsPath = join(fixtureRoot, 'isolated-settings.json')
+    const fixtureRootPowerShell = fixtureRoot.replace(/'/g, "''")
+    const settingsPathPowerShell = settingsPath.replace(/'/g, "''")
+    writeUpgradeFixtureSettings(settingsPath)
+    try {
+      const seededOutput = runInstallerLibrary(`
+$fixtureRoot = '${fixtureRootPowerShell}'
+$settingsPath = '${settingsPathPowerShell}'
 $before = $env:ELECTRON_RUN_AS_NODE
-try {
-  New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
-  $settingsPath = Join-Path $fixtureRoot 'isolated-settings.json'
-  @{ theme = 'light'; locale = 'zh-CN'; proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 } } |
-    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $settingsPath -Encoding utf8
-  $seeded = Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $fixtureRoot -SettingsPath $settingsPath
-  $validated = Invoke-AiNovelUpgradeDataFixture -Mode validate -ProjectRoot $fixtureRoot -SettingsPath $settingsPath
-  [pscustomobject]@{
-    SeededCharacters = $seeded.characterCount
-      ValidatedCharacters = $validated.characterCount
-      CurrentStates = $validated.currentStateCount
-      LegacyTables = $validated.legacyTableCount
-      Revisions = $validated.revisionCount
-      Reviews = $validated.reviewCount
-      PostProcessSteps = $validated.postProcessStepCount
-       LlmCalls = $validated.llmCallCount
-       SummarySnapshots = $validated.summarySnapshotCount
-       AssetCount = $validated.assetCount
-       PreservedAssets = $validated.preservedAssetCount
-       EmbeddingDimension = $validated.embeddingSpace.vectorDimension
-       EmbeddingQueryCount = $validated.embeddingSpace.queryResultCount
-       SettingsAssetCount = @($validated.assetInventory | Where-Object { $_.location -eq 'settings' }).Count
-       EnvironmentRestored = $env:ELECTRON_RUN_AS_NODE -eq $before
-    DatabaseExists = Test-Path -LiteralPath (Join-Path $fixtureRoot '.vela\\vela.db') -PathType Leaf
-  } | ConvertTo-Json -Compress
-} finally {
-  Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
-}
+$seeded = Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $fixtureRoot -SettingsPath $settingsPath
+[pscustomobject]@{
+  SeededCharacters = $seeded.characterCount
+  EnvironmentRestored = $env:ELECTRON_RUN_AS_NODE -eq $before
+} | ConvertTo-Json -Compress
 `)
-    const result = parseLastJsonLine(output)
+      applyExpectedDraftUnitMigration(fixtureRoot)
+      const validatedOutput = runInstallerLibrary(`
+$fixtureRoot = '${fixtureRootPowerShell}'
+$settingsPath = '${settingsPathPowerShell}'
+$before = $env:ELECTRON_RUN_AS_NODE
+$validated = Invoke-AiNovelUpgradeDataFixture -Mode validate -ProjectRoot $fixtureRoot -SettingsPath $settingsPath
+[pscustomobject]@{
+  ValidatedCharacters = $validated.characterCount
+  CurrentStates = $validated.currentStateCount
+  LegacyTables = $validated.legacyTableCount
+  Revisions = $validated.revisionCount
+  Reviews = $validated.reviewCount
+  PostProcessSteps = $validated.postProcessStepCount
+  LlmCalls = $validated.llmCallCount
+  SummarySnapshots = $validated.summarySnapshotCount
+  AssetCount = $validated.assetCount
+  PreservedAssets = $validated.preservedAssetCount
+  EmbeddingDimension = $validated.embeddingSpace.vectorDimension
+  EmbeddingQueryCount = $validated.embeddingSpace.queryResultCount
+  SettingsAssetCount = @($validated.assetInventory | Where-Object { $_.location -eq 'settings' }).Count
+  EnvironmentRestored = $env:ELECTRON_RUN_AS_NODE -eq $before
+  DatabaseExists = Test-Path -LiteralPath (Join-Path $fixtureRoot '.vela\\vela.db') -PathType Leaf
+} | ConvertTo-Json -Compress
+`)
+      const result = {
+        ...parseLastJsonLine(seededOutput),
+        ...parseLastJsonLine(validatedOutput),
+      }
 
-    expect(result).toEqual({
-      SeededCharacters: 2,
-      ValidatedCharacters: 2,
-      CurrentStates: 2,
-      LegacyTables: 11,
-      Revisions: 1,
-      Reviews: 1,
-      PostProcessSteps: 2,
-      LlmCalls: 2,
-      SummarySnapshots: 2,
-      AssetCount: expect.any(Number),
-      PreservedAssets: expect.any(Number),
-      EmbeddingDimension: 768,
-      EmbeddingQueryCount: 1,
-      SettingsAssetCount: 1,
-      EnvironmentRestored: true,
-      DatabaseExists: true,
-    })
-    expect(result.AssetCount).toBe(result.PreservedAssets)
-    expect(Number(result.AssetCount)).toBeGreaterThanOrEqual(7)
+      expect(result).toEqual({
+        SeededCharacters: 2,
+        ValidatedCharacters: 2,
+        CurrentStates: 2,
+        LegacyTables: 11,
+        Revisions: 1,
+        Reviews: 1,
+        PostProcessSteps: 2,
+        LlmCalls: 2,
+        SummarySnapshots: 2,
+        AssetCount: expect.any(Number),
+        PreservedAssets: expect.any(Number),
+        EmbeddingDimension: 768,
+        EmbeddingQueryCount: 1,
+        SettingsAssetCount: 1,
+        EnvironmentRestored: true,
+        DatabaseExists: true,
+      })
+      expect(result.AssetCount).toBe(result.PreservedAssets)
+      expect(Number(result.AssetCount)).toBeGreaterThanOrEqual(7)
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true })
+    }
   }, 15_000)
 
   windowsPowerShellIt('persists structured failure evidence and removes diagnostics only after success', () => {

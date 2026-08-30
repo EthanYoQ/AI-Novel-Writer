@@ -126,7 +126,10 @@ export function createArchitectureWorkflow(params: ArchitectureWorkflowParams): 
     title: text('生成故事架构', 'Generate story architecture'),
     projectPath: expectedProjectPath,
     projectSession,
-    resourceKeys: [workflowResourceKey('architecture')],
+    resourceKeys: [
+      workflowResourceKey('architecture'),
+      ...(sel.includes('characters') ? [workflowResourceKey('character-roster')] : []),
+    ],
     readResourceKeys: [workflowResourceKey('novel-config')],
     steps: finalSteps,
     onComplete: { mode: 'silent', message: text('故事架构已生成完成！前往侧边栏「故事架构」查看', 'Story architecture is ready. Open Story Architecture from the sidebar.') },
@@ -284,6 +287,7 @@ export async function migrateLegacyCharacterRoster(projectPath: string): Promise
     title: text('修复：旧角色名单', 'Repair: legacy character roster'),
     projectPath,
     projectSession,
+    resourceKeys: [workflowResourceKey('character-roster')],
     steps: [{
       name: text('安全修复旧角色图谱', 'Safely repair the legacy character graph'),
       description: text(

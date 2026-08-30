@@ -168,7 +168,7 @@ describe('architecture workflow project context', () => {
       projectSession: { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
       selectedSteps: ['premise', 'characters'],
     })
-    expect(workflow.resourceKeys).toEqual(['architecture'])
+    expect(workflow.resourceKeys).toEqual(['architecture', 'character-roster'])
     expect(workflow.readResourceKeys).toEqual(['novel-config'])
     useProjectStore.setState({
       currentProject: {

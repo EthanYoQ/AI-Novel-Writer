@@ -139,6 +139,11 @@ describe('batch chapter workflow limits', () => {
     })
 
     expect(workflow.type).toBe('batch_generate')
+    expect(workflow.resourceKeys).toEqual(expect.arrayContaining([
+      'character-roster',
+      'continuity',
+      'chapter-summary',
+    ]))
     expect(workflow.steps).toHaveLength(MAX_BATCH_CHAPTERS)
     expect(workflow.steps[0]).toMatchObject({ name: '第4章：自动定稿与后处理' })
     expect(workflow.steps[MAX_BATCH_CHAPTERS - 1]).toMatchObject({ name: '第13章：自动定稿与后处理' })

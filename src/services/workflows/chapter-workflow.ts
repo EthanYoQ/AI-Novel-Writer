@@ -99,6 +99,19 @@ const CHAPTER_CONTEXT_READ_RESOURCE_KEYS = Object.freeze([
   workflowResourceKey('blueprints'),
 ])
 
+const FINALIZE_SHARED_WRITE_RESOURCE_KEYS = Object.freeze([
+  workflowResourceKey('character-roster'),
+  workflowResourceKey('continuity'),
+  workflowResourceKey('chapter-summary'),
+])
+
+function finalizeWriteResourceKeys(chapterNumber: number): readonly string[] {
+  return Object.freeze([
+    workflowResourceKey('chapter', chapterNumber),
+    ...FINALIZE_SHARED_WRITE_RESOURCE_KEYS,
+  ])
+}
+
 function workflowProjectSession(
   projectPath: string,
   sourceProjectSession: ProjectSessionContext,
@@ -323,7 +336,7 @@ export function createFinalizeWorkflow(
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
-    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
+    resourceKeys: finalizeWriteResourceKeys(params.chapterNumber),
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `定稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
     steps: [
@@ -362,7 +375,7 @@ export function createRepairFinalizeWorkflow(
     type: 'chapter_creation',
     projectPath,
     projectSession: workflowProjectSession(projectPath, sourceProjectSession),
-    resourceKeys: [workflowResourceKey('chapter', chapterNumber)],
+    resourceKeys: finalizeWriteResourceKeys(chapterNumber),
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
     title: `修复后处理 — 第${chapterNumber}章`,
     steps: [

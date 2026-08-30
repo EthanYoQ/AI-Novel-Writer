@@ -290,6 +290,9 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
   const chapterWordsTarget = normalizeChapterWordsTarget(params.chapterWordsTarget)
   const endChapterNumber = startChapterNumber + chapterCount - 1
   const draftReviewContinuity = new Map<number, string>()
+  const chapterResourceKeys = Array.from({ length: chapterCount }, (_, index) => (
+    workflowResourceKey('chapter', startChapterNumber + index)
+  ))
 
   return {
     type: 'batch_generate',
@@ -297,9 +300,14 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
     projectSession: Object.freeze({ ...params.projectSession }),
     generationModelId,
     chapterWordsTarget,
-    resourceKeys: Array.from({ length: chapterCount }, (_, index) => (
-      workflowResourceKey('chapter', startChapterNumber + index)
-    )),
+    resourceKeys: completionMode === 'auto_finalize'
+      ? [
+          ...chapterResourceKeys,
+          workflowResourceKey('character-roster'),
+          workflowResourceKey('continuity'),
+          workflowResourceKey('chapter-summary'),
+        ]
+      : chapterResourceKeys,
     readResourceKeys: [
       workflowResourceKey('novel-config'),
       workflowResourceKey('architecture'),
