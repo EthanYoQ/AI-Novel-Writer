@@ -1,0 +1,310 @@
+name: Release v0.9.1 from GitHub cloud
+
+'on':
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/release-v0.9.1-cloud.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-v0.9.1-cloud
+  cancel-in-progress: false
+
+env:
+  RELEASE_VERSION: 0.9.1
+  RELEASE_TAG: v0.9.1
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      release_sha: ${{ steps.release_commit.outputs.release_sha }}
+      mac_arch: ${{ steps.release_commit.outputs.mac_arch }}
+    steps:
+      - name: Check out current master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 11.11.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+
+      - name: Refuse an existing tag or release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Tag $RELEASE_TAG already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+
+      - name: Bump application version and refresh lock metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pkg set version="$RELEASE_VERSION"
+          pnpm install --lockfile-only
+          pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Verify release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run typecheck
+          pnpm run check:i18n
+          pnpm run lint
+          pnpm run test
+          pnpm run test:browser
+          pnpm run build
+
+      - name: Commit release version, tag it, and create draft release
+        id: release_commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json pnpm-lock.yaml
+          if git diff --cached --quiet; then
+            echo 'Version preparation produced no tracked change.' >&2
+            exit 1
+          fi
+          git commit -m "chore: release $RELEASE_TAG"
+          git push origin HEAD:master
+          release_sha="$(git rev-parse HEAD)"
+          git tag -a "$RELEASE_TAG" "$release_sha" -m "AI Novel Writer $RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+
+          previous_assets="$(gh release view v0.9.0 --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          mac_arch='arm64'
+          if grep -Eqi 'universal' <<<"$previous_assets"; then
+            mac_arch='universal'
+          elif grep -Eqi '(^|[-_. ])x64([-_. ]|$)|x86_64' <<<"$previous_assets" \
+            && ! grep -Eqi 'arm64|aarch64|apple[ -]?silicon' <<<"$previous_assets"; then
+            mac_arch='x64'
+          fi
+
+          cat > "$RUNNER_TEMP/release-notes.md" <<'EOF'
+          ## v0.9.1：让 v0.9.0 的长篇写作工作流更稳定
+
+          v0.9.0 完成了从故事架构、章节目录到长篇生成与导入的完整工作流。v0.9.1 不增加新的学习成本，集中修复影响稳定性、兼容性和数据一致性的边界问题。
+
+          ### 本次更新
+
+          - **长篇任务不再互相污染**：故事架构、目录和章节任务会按真实读写依赖互斥；不同章节仍可安全并行。
+          - **EPUB 导入更准确**：不再把正常的嵌入字体混淆误判成 DRM；正文或关键资源被加密时仍会安全拒绝。
+          - **字数统计更可靠**：正确处理中文扩展字符以及 Café、naïve 等 Unicode 文本，并自动迁移旧项目中的缓存计数。
+          - **重复启动更安全**：普通桌面使用只保留一个应用实例，避免同一项目被两个进程同时生成；发行自检模式不受影响。
+          - **旧项目继续兼容**：历史定稿导入回执和旧字数算法仍可幂等重放，不会因为升级被误判为不同载荷。
+
+          ### 升级建议
+
+          建议所有 v0.9.0 用户升级。首次打开旧项目时，应用会在本地自动校准历史字数缓存；正文内容不会被改写。升级前仍建议保留重要项目的常规备份。
+
+          ### 下载与校验
+
+          本页提供 Windows 安装程序和 macOS 安装包，并附带 SHA-256 校验文件。安装包由 GitHub 云端从该版本标签直接构建。
+          EOF
+          sed -i 's/^          //' "$RUNNER_TEMP/release-notes.md"
+          gh release create "$RELEASE_TAG" \
+            --draft \
+            --target "$release_sha" \
+            --title "AI 小说作家 $RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "mac_arch=$mac_arch" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    needs: prepare
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 11.11.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pnpm run build
+          pnpm exec electron-builder --win nsis --x64 --publish never
+
+      - name: Collect, checksum, and upload Windows assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          $roots = @('release', 'dist', 'out') | Where-Object { Test-Path $_ }
+          if ($roots.Count -eq 0) { throw 'No packaging output directory was produced.' }
+          $candidates = Get-ChildItem -Path $roots -File -Recurse | Where-Object {
+            $_.Name -match '\.exe$' -or
+            $_.Name -match '\.exe\.blockmap$' -or
+            $_.Name -eq 'latest.yml'
+          }
+          if (-not ($candidates | Where-Object { $_.Name -match '\.exe$' })) {
+            throw 'No Windows installer was produced.'
+          }
+          foreach ($file in $candidates) {
+            Copy-Item -LiteralPath $file.FullName -Destination (Join-Path 'release-assets' $file.Name) -Force
+          }
+          Get-ChildItem release-assets -File |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLowerInvariant(), (Split-Path $_.Path -Leaf) } |
+            Set-Content -Encoding ascii release-assets/SHA256SUMS-windows.txt
+          $assetPaths = Get-ChildItem release-assets -File | ForEach-Object { $_.FullName }
+          & gh release upload $env:RELEASE_TAG @assetPaths --clobber
+
+  build-macos:
+    needs: prepare
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      GH_TOKEN: ${{ github.token }}
+      MAC_ARCH: ${{ needs.prepare.outputs.mac_arch }}
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 11.11.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build macOS installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run build
+          pnpm exec electron-builder --mac dmg zip "--$MAC_ARCH" --publish never
+
+      - name: Collect, checksum, and upload macOS assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          roots=()
+          for root in release dist out; do
+            [[ -d "$root" ]] && roots+=("$root")
+          done
+          if [[ ${#roots[@]} -eq 0 ]]; then
+            echo 'No packaging output directory was produced.' >&2
+            exit 1
+          fi
+          found_dmg=0
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            case "$name" in
+              *.dmg) found_dmg=1; cp -f "$file" "release-assets/$name" ;;
+              *.dmg.blockmap|*.zip|*.zip.blockmap|latest-mac.yml) cp -f "$file" "release-assets/$name" ;;
+            esac
+          done < <(find "${roots[@]}" -type f -print0)
+          if [[ "$found_dmg" -ne 1 ]]; then
+            echo 'No macOS DMG was produced.' >&2
+            exit 1
+          fi
+          (
+            cd release-assets
+            shasum -a 256 * > SHA256SUMS-macos.txt
+          )
+          mapfile -d '' assets < <(find release-assets -maxdepth 1 -type f -print0)
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+
+  publish-and-clean:
+    needs:
+      - prepare
+      - build-windows
+      - build-macos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify both platform installers and publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          grep -Eqi '\.exe$' <<<"$assets"
+          grep -Eqi '\.dmg$' <<<"$assets"
+          grep -Fxq 'SHA256SUMS-windows.txt' <<<"$assets"
+          grep -Fxq 'SHA256SUMS-macos.txt' <<<"$assets"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+      - name: Remove one-time release workflow from master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin master
+          git rm .github/workflows/release-v0.9.1-cloud.yml
+          git commit -m 'chore: remove one-time v0.9.1 release workflow'
+          git push origin HEAD:master
