@@ -26,6 +26,7 @@ import {
   renderPrompt,
   resolvePromptTemplate,
 } from '../prompt-templates'
+import { localizeNovelConfigFacts } from '../../shared/novel-config-localization'
 
 // ===== 上下文构建 =====
 
@@ -106,17 +107,18 @@ function buildL0ProjectContext(
   ) return null
 
   const cfg = project.novelConfig
+  const modelFacts = localizeNovelConfigFacts(cfg, writingLanguage)
   const label = (zhCN: string, enUS: string) => promptLanguageText(writingLanguage, zhCN, enUS)
   const parts: string[] = [
     `## ${label('当前项目上下文', 'Current project context')}`,
     `${label('项目名称', 'Project name')}: ${project.name}`,
   ]
 
-  if (cfg.genre) {
-    parts.push(`${label('类型', 'Genre')}: ${cfg.genre}${cfg.subGenre ? ' · ' + cfg.subGenre : ''}`)
+  if (modelFacts.genre) {
+    parts.push(`${label('类型', 'Genre')}: ${modelFacts.genre}${cfg.subGenre ? ' · ' + cfg.subGenre : ''}`)
   }
-  if (cfg.targetAudience) {
-    parts.push(`${label('目标读者', 'Target readers')}: ${cfg.targetAudience}`)
+  if (modelFacts.targetAudience) {
+    parts.push(`${label('目标读者', 'Target readers')}: ${modelFacts.targetAudience}`)
   }
   if (cfg.totalChapters) {
     parts.push(`${label('计划章节数', 'Planned chapters')}: ${cfg.totalChapters}`)
@@ -124,15 +126,8 @@ function buildL0ProjectContext(
   if (cfg.wordsPerChapter) {
     parts.push(`${label('每章目标字数', 'Target words per chapter')}: ${cfg.wordsPerChapter}`)
   }
-  if (cfg.narrativePOV) {
-    const povMap: Record<string, readonly [string, string]> = {
-      'third_limited': ['第三人称有限', 'Third-person limited'],
-      'first_person': ['第一人称', 'First person'],
-      'third_omniscient': ['第三人称全知', 'Third-person omniscient'],
-      'multi_pov': ['多视角', 'Multiple viewpoints'],
-    }
-    const pov = povMap[cfg.narrativePOV]
-    parts.push(`${label('叙事视角', 'Point of view')}: ${pov ? label(...pov) : cfg.narrativePOV}`)
+  if (modelFacts.narrativePOV) {
+    parts.push(`${label('叙事视角', 'Point of view')}: ${modelFacts.narrativePOV}`)
   }
   if (cfg.coreOutline) {
     // 截取前 300 字符，避免 Token 爆炸

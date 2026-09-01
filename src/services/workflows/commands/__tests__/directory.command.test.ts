@@ -385,6 +385,7 @@ describe('GenerateDirectoryCommand', () => {
         ...projectSnapshot,
         novelConfig: {
           ...projectSnapshot.novelConfig,
+          genre: '科幻',
           totalChapters: 1,
         },
       },
@@ -403,6 +404,8 @@ describe('GenerateDirectoryCommand', () => {
     expect(system).toContain('You are an experienced chapter architect')
     expect(system).toContain('[Immutable system contract]')
     expect(user).toContain('Generate chapter blueprints from chapter 1 through chapter 1')
+    expect(user).toContain('Science fiction')
+    expect(user).not.toContain('科幻')
     expect(user).toContain('The sign “夜航 Café” must remain byte-for-byte unchanged.')
     expect(user).not.toContain('【不可变蓝图 JSON 合同】')
   })

@@ -26,12 +26,7 @@ import {
   isProjectSessionCurrent,
   isProjectSessionPath,
 } from '../project-session-gate'
-
-const GENRE_EN: Record<string, string> = {
-  玄幻: 'Eastern fantasy', 仙侠: 'Xianxia', 都市: 'Urban', 科幻: 'Science fiction', 历史: 'Historical', 军事: 'Military',
-  游戏: 'Game', 末世: 'Post-apocalyptic', 悬疑: 'Mystery', 灵异: 'Supernatural', 言情: 'Romance', 古言: 'Historical romance',
-  现言: 'Contemporary romance', 奇幻: 'Fantasy', 武侠: 'Wuxia', 轻小说: 'Light novel', 同人: 'Fan fiction', 职场: 'Workplace',
-}
+import { AUDIENCE_EN, GENRE_EN } from './novel-config-labels'
 
 /** 小说配置编辑器 — Tab 内的可视化配置面板 */
 export default function NovelConfigEditor({ projectKey }: { projectKey: string }) {
@@ -216,10 +211,9 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
               </Field>
               <Field label={text('目标受众', 'Audience')}>
                 <NativeSelect value={config.targetAudience} onChange={(e) => update('targetAudience', e.target.value)}>
-                  <option value="男频">{text('男频', 'Male-oriented')}</option>
-                  <option value="女频">{text('女频', 'Female-oriented')}</option>
-                  <option value="双性向">{text('双性向', 'All audiences')}</option>
-                  <option value="全龄">{text('全龄', 'All ages')}</option>
+                  {Object.entries(AUDIENCE_EN).map(([value, labelEn]) => (
+                    <option key={value} value={value}>{text(value, labelEn)}</option>
+                  ))}
                 </NativeSelect>
               </Field>
             </div>

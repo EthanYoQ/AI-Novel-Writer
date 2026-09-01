@@ -27,6 +27,7 @@ import {
   retryAllPendingDirectoryCharacterSyncs,
 } from '../../services/workflows/directory-character-sync-recovery'
 import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
+import { ipc } from '../../services/ipc-client'
 
 interface Props {
   isOpen: boolean
@@ -49,6 +50,21 @@ function requestedChapterCount(
   const startChapter = params.startChapter || authoritativeNextChapter
   const remaining = Math.max(0, totalChapters - startChapter + 1)
   return params.count && params.count > 0 ? Math.min(remaining, params.count) : remaining
+}
+
+async function readHighestBlueprintChapter(
+  projectPath: string,
+  projectSession: NonNullable<ReturnType<typeof captureProjectSession>>,
+): Promise<number> {
+  const blueprints = await ipc.invokeWithProjectSession(
+    projectSession,
+    'db:blueprint-get-all',
+    projectPath,
+  )
+  return blueprints.reduce(
+    (highest, blueprint) => Math.max(highest, blueprint.chapterNumber),
+    0,
+  )
 }
 
 /** 蓝图生成配置弹框 — 选择生成范围和模式 */
@@ -74,6 +90,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   const [isRecovering, setIsRecovering] = useState(false)
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
   const [authoritativeNextChapter, setAuthoritativeNextChapter] = useState<number | null>(null)
+  const [highestBlueprintChapter, setHighestBlueprintChapter] = useState<number | null>(null)
   const [authorityError, setAuthorityError] = useState<string | null>(null)
   const [authorityLoading, setAuthorityLoading] = useState(false)
 
@@ -119,15 +136,21 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
     const loadAuthority = async () => {
       setAuthorityLoading(true)
       try {
-        const nextChapter = await readAuthoritativeNextChapter(projectSession, locale)
+        const [nextChapter, highestBlueprint] = await Promise.all([
+          readAuthoritativeNextChapter(projectSession, locale),
+          readHighestBlueprintChapter(currentProject.path, projectSession),
+        ])
         if (disposed || !isProjectSessionCurrent(projectSession)) return
         setAuthoritativeNextChapter(nextChapter)
-        setRangeStart(nextChapter)
-        setRangeEnd(Math.min(currentProject.novelConfig.totalChapters, nextChapter + 49))
+        setHighestBlueprintChapter(highestBlueprint)
+        const appendStart = Math.max(highestBlueprint + 1, nextChapter)
+        setRangeStart(appendStart)
+        setRangeEnd(Math.min(currentProject.novelConfig.totalChapters, appendStart + 49))
         setAuthorityError(null)
       } catch (cause) {
         if (disposed || !isProjectSessionCurrent(projectSession)) return
         setAuthoritativeNextChapter(null)
+        setHighestBlueprintChapter(null)
         setAuthorityError(cause instanceof Error ? cause.message : String(cause))
       } finally {
         if (!disposed && isProjectSessionCurrent(projectSession)) setAuthorityLoading(false)
@@ -139,9 +162,11 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
 
   if (!currentProject) return null
   const total = currentProject.novelConfig.totalChapters
-  const appendStart = authoritativeNextChapter ?? existingCount + 1
+  const appendStart = Math.max((highestBlueprintChapter ?? 0) + 1, authoritativeNextChapter ?? 1)
   const hasPriorAuthority = appendStart > 1
   const appendByDefault = overwriteMode === 'append' && (existingCount > 0 || hasPriorAuthority)
+  const selectedRangeStart = Math.min(total, Math.max(appendStart, Number(rangeStart) || appendStart))
+  const selectedRangeEnd = Math.min(total, Math.max(selectedRangeStart, Number(rangeEnd) || selectedRangeStart))
   const previewParams: DirectoryWorkflowParams = rangeMode === 'full'
     ? { mode: overwriteMode === 'full' ? 'full' : 'append', count: 0 }
     : rangeMode === 'front'
@@ -160,13 +185,8 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
           }
       : {
           mode: 'append',
-          startChapter: Math.min(total, Math.max(1, Number(rangeStart) || 1)),
-          count: Math.max(
-            1,
-            Math.min(total, Math.max(Number(rangeStart) || 1, Number(rangeEnd) || 1))
-              - Math.min(total, Math.max(1, Number(rangeStart) || 1))
-              + 1,
-          ),
+          startChapter: selectedRangeStart,
+          count: Math.max(1, selectedRangeEnd - selectedRangeStart + 1),
         }
   const previewCost = planBlueprintGenerationCost(
     requestedChapterCount(previewParams, total, appendStart),
@@ -201,8 +221,14 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
       return
     }
     let frozenAuthoritativeNext: number
+    let frozenHighestBlueprint: number
     try {
-      frozenAuthoritativeNext = await readAuthoritativeNextChapter(projectSession, locale)
+      const authority = await Promise.all([
+        readAuthoritativeNextChapter(projectSession, locale),
+        readHighestBlueprintChapter(currentProject.path, projectSession),
+      ])
+      frozenAuthoritativeNext = authority[0]
+      frozenHighestBlueprint = authority[1]
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
       setAuthorityError(error instanceof Error ? error.message : String(error))
@@ -210,28 +236,32 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
     }
     if (!isProjectSessionCurrent(projectSession)) return
     setAuthoritativeNextChapter(frozenAuthoritativeNext)
+    setHighestBlueprintChapter(frozenHighestBlueprint)
     setAuthorityError(null)
+    const frozenAppendStart = Math.max(frozenHighestBlueprint + 1, frozenAuthoritativeNext)
     const frozenAppendByDefault = overwriteMode === 'append'
-      && (existingCount > 0 || frozenAuthoritativeNext > 1)
+      && (existingCount > 0 || frozenAppendStart > 1)
 
     let params: DirectoryWorkflowParams
 
     if (rangeMode === 'full') {
       // 追加全量：若已无剩余章节则拒绝（覆盖模式仍可从第 1 章重生成）
-      if (overwriteMode === 'append' && frozenAuthoritativeNext > total) {
+      if (overwriteMode === 'append' && frozenAppendStart > total) {
         toast.warning(text('没有可追加生成的章节', 'No chapters remain to generate.'))
         return
       }
-      params = { mode: overwriteMode === 'full' ? 'full' : 'append', count: 0 }
+      params = overwriteMode === 'full'
+        ? { mode: 'full', count: 0 }
+        : { mode: 'append', startChapter: frozenAppendStart, count: 0 }
     } else if (rangeMode === 'front') {
       if (frozenAppendByDefault) {
-        if (frozenAuthoritativeNext > total) {
+        if (frozenAppendStart > total) {
           toast.warning(text('没有可追加生成的章节', 'No chapters remain to generate.'))
           return
         }
-        const remaining = total - frozenAuthoritativeNext + 1
+        const remaining = total - frozenAppendStart + 1
         const count = Math.min(remaining, Math.max(1, Number(frontN) || DEFAULT_BLUEPRINT_GENERATION_COUNT))
-        params = { mode: 'append', startChapter: frozenAuthoritativeNext, count }
+        params = { mode: 'append', startChapter: frozenAppendStart, count }
       } else {
         params = {
           mode: 'full',
@@ -240,16 +270,16 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
       }
     } else {
       // 指定范围：提交时归一化，不依赖 blur；全书已有蓝图时拒绝追加
-      if (existingCount >= total) {
+      if (frozenHighestBlueprint >= total) {
         toast.warning(text('没有可追加生成的章节', 'No chapters remain to generate.'))
         return
       }
-      const start = Math.min(total, Math.max(1, Number(rangeStart) || 1))
+      const start = Math.min(total, Math.max(frozenAppendStart, Number(rangeStart) || frozenAppendStart))
       const end = Math.min(total, Math.max(start, Number(rangeEnd) || start))
       params = { mode: 'append', startChapter: start, count: Math.max(1, end - start + 1) }
     }
 
-    const costPlan = planBlueprintGenerationCost(requestedChapterCount(params, total, frozenAuthoritativeNext))
+    const costPlan = planBlueprintGenerationCost(requestedChapterCount(params, total, frozenAppendStart))
     if (costPlan.exceedsHardLimit) {
       toast.warning(text(
         `当前范围超过单次任务安全成本上限，请拆成每段不超过 ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} 章的范围。`,

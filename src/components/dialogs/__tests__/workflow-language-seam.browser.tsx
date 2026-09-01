@@ -31,9 +31,9 @@ function project(writingLanguage: 'zh-CN' | 'en-US'): ProjectData {
     path: `C:\\novels\\workflow-language-${writingLanguage}`,
     novelConfig: {
       writingLanguage,
-      genre: 'speculative thriller',
+      genre: '科幻',
       subGenre: 'time-loop mystery',
-      targetAudience: 'general',
+      targetAudience: '全龄',
       totalChapters: 12,
       wordsPerChapter: 2500,
       plotStructure: 'three_act',
@@ -196,6 +196,8 @@ describe('workflow launch language seams', () => {
       await expect.element(page.getByText(title, { exact: true })).toBeVisible()
       const dialog = document.querySelector('[role="dialog"]')
       if (!(dialog instanceof HTMLElement)) throw new Error('Architecture dialog did not mount')
+      await expect.element(page.getByText(textForLocale(uiLocale, '科幻 · time-loop mystery', 'Science fiction · time-loop mystery'), { exact: true })).toBeVisible()
+      await expect.element(page.getByText(textForLocale(uiLocale, '全龄', 'All ages'), { exact: true })).toBeVisible()
       const stepLabels = Array.from(dialog.querySelectorAll('label'))
       expect(stepLabels).toHaveLength(4)
       await act(async () => {
@@ -230,3 +232,7 @@ describe('workflow launch language seams', () => {
     },
   )
 })
+
+function textForLocale(locale: 'zh-CN' | 'en-US', zh: string, en: string): string {
+  return locale === 'zh-CN' ? zh : en
+}

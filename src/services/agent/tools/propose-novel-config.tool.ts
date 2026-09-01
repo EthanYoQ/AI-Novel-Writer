@@ -39,18 +39,23 @@ export function buildNovelConfigProposal(
   if (!candidate || Object.keys(candidate).length === 0) return { valid: false, error: '缺少小说配置变更字段' }
   const changes: Record<string, unknown> = {}
   for (const [field, proposed] of Object.entries(candidate)) {
-    if (STRING_FIELDS.has(field as keyof NovelConfig)) {
-      if (typeof proposed !== 'string') return { valid: false, error: `字段 ${field} 必须是文本` }
-    } else if (NUMBER_FIELDS.has(field as keyof NovelConfig)) {
-      if (!Number.isInteger(proposed) || (proposed as number) <= 0) return { valid: false, error: `字段 ${field} 必须是正整数` }
-    } else if (field in ENUM_FIELDS) {
-      if (!ENUM_FIELDS[field as keyof NovelConfig]?.includes(String(proposed))) {
-        return { valid: false, error: `字段 ${field} 的值不受支持` }
+    const canonicalField = field === 'narrativePov' ? 'narrativePOV' : field
+    const normalizedValue = canonicalField === 'writingLanguage'
+      ? proposed === '简体中文' ? 'zh-CN' : proposed === 'English' ? 'en-US' : proposed
+      : proposed
+    if (STRING_FIELDS.has(canonicalField as keyof NovelConfig)) {
+      if (typeof normalizedValue !== 'string') return { valid: false, error: `字段 ${field} 必须是文本` }
+    } else if (NUMBER_FIELDS.has(canonicalField as keyof NovelConfig)) {
+      if (!Number.isInteger(normalizedValue) || (normalizedValue as number) <= 0) return { valid: false, error: `字段 ${field} 必须是正整数` }
+    } else if (canonicalField in ENUM_FIELDS) {
+      const allowedValues = ENUM_FIELDS[canonicalField as keyof NovelConfig] ?? []
+      if (!allowedValues.includes(String(normalizedValue))) {
+        return { valid: false, error: `字段 ${field} 的值 ${JSON.stringify(normalizedValue)} 不受支持；允许值：${allowedValues.join('、')}` }
       }
     } else {
       return { valid: false, error: `未知小说配置字段：${field}` }
     }
-    changes[field] = proposed
+    changes[canonicalField] = normalizedValue
   }
   return {
     valid: true,
@@ -66,11 +71,16 @@ export function buildNovelConfigProposal(
 export const proposeNovelConfigTool = buildAgentTool({
   name: 'propose_novel_config',
   description: '提出小说配置字段变更。应用会展示当前值、建议值与一次性影响预览，必须由用户批准后才写入。可选 blueprint_changes 只提供未写章节的字段差异候选；用户选择后仍会逐项再次确认。',
+  descriptionEn: 'Propose changes to the novel configuration. The app shows a diff and impact preview, then writes only after user approval. Optional blueprint_changes remain separately confirmed.',
   source: 'builtin',
   inputSchema: {
     type: 'object',
     properties: {
-      changes: { type: 'object', description: '小说配置允许字段及其建议值' },
+      changes: {
+        type: 'object',
+        description: '允许字段：genre、subGenre、targetAudience、totalChapters、wordsPerChapter、plotStructure、narrativePOV、writingLanguage、coreOutline、worldSetting、goldenFinger、protagonistProfile、globalGuidance、writingStyle、referenceWorks。枚举值：writingLanguage=zh-CN|en-US；plotStructure=three_act|heros_journey|save_the_cat|kishotenketsu|multi_thread|freeform；narrativePOV=third_limited|first_person|third_omniscient|multi_pov。',
+        descriptionEn: 'Allowed fields: genre, subGenre, targetAudience, totalChapters, wordsPerChapter, plotStructure, narrativePOV, writingLanguage, coreOutline, worldSetting, goldenFinger, protagonistProfile, globalGuidance, writingStyle, referenceWorks. Canonical enum values: writingLanguage=zh-CN|en-US; plotStructure=three_act|heros_journey|save_the_cat|kishotenketsu|multi_thread|freeform; narrativePOV=third_limited|first_person|third_omniscient|multi_pov.',
+      },
       blueprint_changes: {
         type: 'array',
         description: '可选的未写章节蓝图差异候选；每项包含 chapter_number 与 changes，不会随配置自动写入',

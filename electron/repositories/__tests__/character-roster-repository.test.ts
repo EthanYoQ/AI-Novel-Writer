@@ -64,6 +64,7 @@ beforeEach(() => {
   db.exec(`
     CREATE TABLE project_core (
       id TEXT PRIMARY KEY,
+      writing_language TEXT NOT NULL DEFAULT 'zh-CN',
       characters_arch TEXT DEFAULT ''
     );
     INSERT INTO project_core (id, characters_arch) VALUES ('main', '');
@@ -155,6 +156,98 @@ describe('CharacterRosterRepository public read/commit seam', () => {
 
     expect(receipt.snapshot.renderedMarkdown).toContain('## 龙套：苏绾')
     expect(receipt.snapshot.renderedMarkdown).not.toContain('## 次要角色：苏绾')
+  })
+
+  it('renders an English project roster without Chinese projection labels', () => {
+    db.prepare("UPDATE project_core SET writing_language = 'en-US' WHERE id = 'main'").run()
+
+    const receipt = CharacterRosterRepository.commit(commitRequest({
+      entries: commitRequest().entries.map(entry => ({
+        ...entry,
+        name: entry.name === '林舟' ? 'Lin Zhou' : 'Su Wan',
+        gender: entry.gender === '男' ? 'male' : 'female',
+        age: entry.age === '十八岁' ? '18' : '26',
+        appearance: 'plain travel clothes',
+        personality: 'calm',
+        background: 'harbor investigator',
+        abilities: 'investigation',
+        motivation: 'find the truth',
+        relationships: [{
+          target: entry.name === '林舟' ? 'Su Wan' : 'Lin Zhou',
+          relation: 'trusted colleague',
+        }],
+        arc: 'learns to trust others',
+        notes: '',
+      })),
+    }))
+
+    expect(receipt.snapshot.renderedMarkdown).toBe([
+      '# Character graph',
+      '',
+      '## Protagonist: Lin Zhou',
+      '- Gender: male',
+      '- Age: 18',
+      '- Appearance: plain travel clothes',
+      '- Personality: calm',
+      '- Background: harbor investigator',
+      '- Abilities: investigation',
+      '- Motivation: find the truth',
+      '- Arc: learns to trust others',
+      '- Relationship: Su Wan (trusted colleague)',
+      '',
+      '## Supporting character: Su Wan',
+      '- Gender: female',
+      '- Age: 26',
+      '- Appearance: plain travel clothes',
+      '- Personality: calm',
+      '- Background: harbor investigator',
+      '- Abilities: investigation',
+      '- Motivation: find the truth',
+      '- Arc: learns to trust others',
+      '- Relationship: Lin Zhou (trusted colleague)',
+    ].join('\n'))
+    expect(receipt.snapshot.renderedMarkdown).not.toMatch(/[\u3400-\u9fff]/u)
+
+    const extraRoles = CharacterRosterRepository.commit({
+      operationId: 'english-role-labels',
+      expectedRevision: receipt.revision,
+      schemaVersion: 1,
+      intent: 'manual_edit',
+      entries: [
+        ...receipt.snapshot.entries,
+        { ...receipt.snapshot.entries[1], name: 'Rowan Vale', role: 'antagonist' as const, relationships: [] },
+        { ...receipt.snapshot.entries[1], name: 'Harbor Clerk', role: 'minor' as const, relationships: [] },
+      ],
+    })
+    expect(extraRoles.snapshot.renderedMarkdown).toContain('## Antagonist: Rowan Vale')
+    expect(extraRoles.snapshot.renderedMarkdown).toContain('## Minor character: Harbor Clerk')
+  })
+
+  it('keeps a historical Chinese projection readable after a project switches to English, then localizes the next commit', () => {
+    const historical = CharacterRosterRepository.commit(commitRequest())
+    db.prepare("UPDATE project_core SET writing_language = 'en-US' WHERE id = 'main'").run()
+
+    expect(CharacterRosterRepository.read()).toMatchObject({
+      status: 'ready',
+      renderedMarkdown: historical.snapshot.renderedMarkdown,
+      projectionHash: historical.snapshot.projectionHash,
+    })
+    expect(CharacterRosterRepository.commit(commitRequest())).toMatchObject({
+      idempotent: true,
+      snapshot: { status: 'ready', renderedMarkdown: historical.snapshot.renderedMarkdown },
+    })
+
+    const localized = CharacterRosterRepository.commit({
+      operationId: 'manual-edit-localizes-projection',
+      expectedRevision: historical.revision,
+      schemaVersion: 1,
+      intent: 'manual_edit',
+      entries: historical.snapshot.entries,
+    })
+    expect(localized.snapshot).toMatchObject({ status: 'ready', revision: 2 })
+    expect(localized.snapshot.renderedMarkdown).toContain('# Character graph')
+    expect(localized.snapshot.renderedMarkdown).toContain('## Protagonist: 林舟')
+    expect(localized.snapshot.renderedMarkdown).toContain('- Relationship: 苏绾 (师徒)')
   })
 
   it('uses one manual-edit receipt to rename, delete, preserve free-text relations, update blueprint references, and allow an empty roster', () => {

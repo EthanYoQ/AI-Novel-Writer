@@ -418,7 +418,7 @@ function ArchFileViewerSession({
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="flex-shrink-0" style={{ color: 'var(--color-text-muted)', opacity: 0.6 }}>{meta ? renderIcon(meta.iconName, 14) : <FileText size={14} />}</span>
           <span className="text-xs font-medium flex-shrink-0" style={{ color: 'var(--color-text-secondary)' }}>
-            {meta?.label ?? '架构文档'}
+            {meta?.label ?? text('架构文档', 'Architecture document')}
           </span>
           {meta && (
             <span className="text-xs truncate hidden sm:inline" style={{ color: 'var(--color-text-muted)' }}>
@@ -450,7 +450,7 @@ function ArchFileViewerSession({
             variant="ghost"
             size="icon"
             onClick={handleReload}
-            title="从磁盘重新加载（AI 生成完成后可点击刷新）"
+            title={text('从磁盘重新加载（AI 生成完成后可点击刷新）', 'Reload from disk (refresh after AI generation completes)')}
             disabled={loading || !projectMatches}
           >
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { buildAgentSystemPrompt } from '../services/agent/context-builder'
 import {
+  cleanAgentVisibleText,
   runAgentLoop,
   type ConfigImpactBlueprintProposal,
   type ToolCallInfo,
@@ -452,12 +453,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         },
         {
           onTextChunk: (chunk) => {
-            // 清理所有形式的 tool_call/tool_result 标签（完整对 + 孤立片段）
-            const cleaned = chunk
-              .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
-              .replace(/<\/?tool_call>/g, '')
-              .replace(/<\/?tool_result[^>]*>/g, '')
-              .trim()
+            const cleaned = cleanAgentVisibleText(chunk)
             if (!cleaned) return
             updateAssistantMsg(m => ({
               ...m,
@@ -493,14 +489,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             })
           },
           onDone: (fullText, toolCalls, artifacts) => {
-            // 最终文本全量清洗，去除所有形式的 tool_call / tool_result 标签
-            const cleanedText = fullText
-              .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
-              .replace(/<tool_result[\s\S]*?<\/tool_result>/g, '')
-              .replace(/<\/?tool_call>/g, '')
-              .replace(/<\/?tool_result[^>]*>/g, '')
-              .replace(/\n{3,}/g, '\n\n')
-              .trim()
+            const cleanedText = cleanAgentVisibleText(fullText)
             updateAssistantMsg(m => ({
               ...m,
               content: cleanedText,

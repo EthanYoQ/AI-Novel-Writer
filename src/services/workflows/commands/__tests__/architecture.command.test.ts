@@ -517,9 +517,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
   it('sends English built-in instructions for premise, character, world, and synopsis requests', async () => {
     const novelConfig = {
       writingLanguage: 'en-US',
-      genre: 'speculative thriller',
+      genre: '科幻',
       subGenre: 'time-loop mystery',
-      targetAudience: 'general',
+      targetAudience: '全龄',
       totalChapters: 20,
       wordsPerChapter: 2500,
       plotStructure: 'three_act',
@@ -589,6 +589,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(observed.get('generate-world-building')).toContain('Design the world as a conflict system')
     expect(observed.get('generate-plot-architecture')).toContain('Build the complete plot architecture')
     for (const request of observed.values()) {
+      expect(request).toContain('Science fiction')
+      expect(request).not.toContain('科幻')
+      expect(request).not.toContain('全龄')
       expect(request).not.toContain('你是一位网络小说策划专家与故事架构师')
     }
   })
@@ -905,14 +908,34 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
-  it('reports success only after the manifest and every detail batch commit one readable graph and card set', async () => {
-    const generateStream = createResponseStream(twoStageResponses(rosterEntries))
+  it('normalizes integer identity and relation IDs before details and one atomic roster commit', async () => {
+    const numericManifest = {
+      slots: rosterEntries.map((entry, index) => ({
+        slotId: index + 1,
+        name: entry.name,
+        role: entry.role,
+        narrativeDuty: entry.notes,
+        relations: entry.relationships.map(relationship => ({
+          targetSlotId: rosterEntries.findIndex(candidate => candidate.name === relationship.target) + 1,
+          relation: relationship.relation,
+        })),
+      })),
+    }
+    const numericDetailResponses = rosterEntries.map((entry, index) => {
+      const details: Partial<CharacterRosterEntry> = { ...entry }
+      delete details.relationships
+      return JSON.stringify({ entries: [{ slotId: String(index + 1), ...details }] })
+    })
+    const generateStream = createResponseStream([
+      JSON.stringify(numericManifest),
+      ...numericDetailResponses,
+    ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
 
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
         case 'prompt:load-global':
-          return []
+          return { templates: [], diagnostics: [] }
         case 'fs:check-exists':
           return false
         case 'db:project-core-get':
@@ -962,6 +985,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
 
     expect(result).toBe(readyRoster.renderedMarkdown)
     expect(generateStream).toHaveBeenCalledTimes(4)
+    const manifestPrompt = generateStream.mock.calls[0]?.[0].map(message => message.content).join('\n') ?? ''
+    expect(manifestPrompt).toContain('slotId 与 targetSlotId 必须是 JSON 字符串')
     expect(invoke).toHaveBeenCalledWith(
       'db:character-roster-commit',
       expect.objectContaining({

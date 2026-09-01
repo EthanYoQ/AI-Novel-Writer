@@ -44,6 +44,7 @@ const MAX_TARGET_OVERAGE_RATIO = 0.12
 const PREVIOUS_ENDING_MAX_CHARS = 1000
 const ACTIVE_THREAD_CONTEXT_MAX_CHARS = 1200
 const ACTIVE_THREAD_CONTEXT_MAX_ITEMS = 6
+const STREAM_PREVIEW_INTERVAL_MS = 250
 export function sanitizeDraftText(text: string): string {
   const cleaned = stripThinkingTags(text)
     .replace(/^\s*(?:点我继续生成后续内容|继续生成后续内容|请点击继续|未完待续)\s*$/gmi, '')
@@ -73,13 +74,54 @@ export function visibleDraftStreamText(rawText: string): string {
   const lower = rawText.toLowerCase()
   let safeEnd = rawText.length
   const longestTag = Math.max(...THINKING_TAGS.map(tag => tag.length))
-  for (let length = 1; length < longestTag; length += 1) {
+  for (let length = 1; length < longestTag && length <= rawText.length; length += 1) {
     const suffix = lower.slice(-length)
     if (THINKING_TAGS.some(tag => tag.startsWith(suffix))) {
       safeEnd = rawText.length - length
     }
   }
   return sanitizeDraftText(rawText.slice(0, safeEnd))
+}
+
+function createDraftStreamPreview(
+  replaceText: ((text: string) => void) | undefined,
+  composeVisibleText: (rawText: string) => string,
+  initialRenderedText = '',
+): { push(chunk: string): void; stop(): void } {
+  let active = true
+  let rawText = ''
+  let renderedText = initialRenderedText
+  let lastRenderedAt = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  const render = () => {
+    timer = undefined
+    if (!active || !replaceText) return
+    const nextText = composeVisibleText(rawText)
+    if (nextText === renderedText) return
+    renderedText = nextText
+    lastRenderedAt = Date.now()
+    replaceText(nextText)
+  }
+
+  return {
+    push(chunk) {
+      if (!active) return
+      rawText += chunk
+      if (!replaceText || timer) return
+      if (lastRenderedAt === 0) {
+        render()
+        return
+      }
+      const delay = Math.max(0, STREAM_PREVIEW_INTERVAL_MS - (Date.now() - lastRenderedAt))
+      timer = setTimeout(render, delay)
+    },
+    stop() {
+      active = false
+      if (timer) clearTimeout(timer)
+      timer = undefined
+    },
+  }
 }
 
 function maxDraftCharsForTarget(targetChars: number): number {
@@ -386,8 +428,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           }
           this.assertNotCancelled(context)
           callbacks.setProgress(10)
-          let rawPreview = ''
-          let previewActive = true
+          const preview = createDraftStreamPreview(
+            callbacks.replaceText,
+            visibleDraftStreamText,
+          )
           let initialOutcome: GenerationOutcome
           try {
             initialOutcome = await draftingSession.complete({
@@ -401,13 +445,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             }, {
               signal: cancellation.signal,
               onChunk: chunk => {
-                if (!previewActive || context.cancelled) return
-                rawPreview += chunk
-                callbacks.replaceText?.(visibleDraftStreamText(rawPreview))
+                if (context.cancelled) return
+                preview.push(chunk)
               },
             })
           } finally {
-            previewActive = false
+            preview.stop()
           }
           const initialCompletion = completionFromOutcome(initialOutcome)
           logDraftAttempt(callbacks, '初始生成', initialOutcome.receipt)
@@ -639,8 +682,11 @@ ${params.writingStyle || '(none)'}
 ${visibleTail}`,
       )
 
-      let rawPreview = ''
-      let previewActive = true
+      const preview = createDraftStreamPreview(
+        params.callbacks.replaceText,
+        rawText => appendVisibleDraftContinuation(draft, visibleDraftStreamText(rawText)),
+        draft,
+      )
       let outcome: GenerationOutcome
       try {
         outcome = await params.session.complete({
@@ -656,16 +702,12 @@ ${visibleTail}`,
         }, {
           signal: params.signal,
           onChunk: chunk => {
-            if (!previewActive || params.context.cancelled) return
-            rawPreview += chunk
-            params.callbacks.replaceText?.(appendVisibleDraftContinuation(
-              draft,
-              visibleDraftStreamText(rawPreview),
-            ))
+            if (params.context.cancelled) return
+            preview.push(chunk)
           },
         })
       } finally {
-        previewActive = false
+        preview.stop()
       }
       const addition = completionFromOutcome(outcome)
       logDraftAttempt(params.callbacks, `自动续写第 ${rounds} 段`, outcome.receipt)

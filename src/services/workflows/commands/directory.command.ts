@@ -37,6 +37,7 @@ import {
   planBlueprintGenerationCost,
 } from '../blueprint-batch-policy'
 import { readAuthoritativeNextChapter } from '../../authoritative-chapter-sequence'
+import { localizeNovelConfigFacts } from '../../../shared/novel-config-localization'
 
 type CreateDirectoryGenerationRuntime = typeof createGenerationRuntime
 
@@ -234,6 +235,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     const architecture = context.data.architecture as string
     const existingBlueprints = (context.data.existingBlueprints || []) as ChapterBlueprint[]
     const { expectedProjectPath, novelConfig } = this.projectSnapshot
+    const modelFacts = localizeNovelConfigFacts(novelConfig, writingLanguage)
     const totalChapters = novelConfig.totalChapters
     const authoritativeNextChapter = await readAuthoritativeNextChapter(
       projectSession,
@@ -302,7 +304,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           .withN(batchStart)
           .withM(batchEnd)
           .withGlobalGuidance(novelConfig.globalGuidance || '')
-          .withGenre(novelConfig.genre || '')
+          .withGenre(modelFacts.genre)
           .withPacingGuidance((context.data.pacingGuidance as string) || '')
           .build()
           + `\n\n${blueprintSemanticGenerationContract(writingLanguage)}`
@@ -326,7 +328,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         architecture,
         previous: [...existingBlueprints, ...validatedPrefix],
         totalChapters,
-        genre: novelConfig.genre || '',
+        genre: modelFacts.genre,
         globalGuidance: novelConfig.globalGuidance || '',
         pacingGuidance: (context.data.pacingGuidance as string) || '',
         systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位经验丰富的小说架构师。', 'You are an experienced fiction architect.'),

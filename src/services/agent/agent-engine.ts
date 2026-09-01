@@ -85,6 +85,20 @@ export type LLMGenerateFn = (
   modelId: string,
 ) => Promise<string>
 
+const TOOL_CALL_BLOCK = /<(tool_call|｜DSML｜tool_call)>[\s\S]*?<\/\1>/g
+const TOOL_CALL_TAG = /<\/?(?:tool_call|｜DSML｜tool_call)>/g
+
+/** Remove provider tool-protocol markup before any model text reaches the UI. */
+export function cleanAgentVisibleText(text: string): string {
+  return text
+    .replace(TOOL_CALL_BLOCK, '')
+    .replace(/<tool_result[\s\S]*?<\/tool_result>/g, '')
+    .replace(TOOL_CALL_TAG, '')
+    .replace(/<\/?tool_result[^>]*>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 // ===== 核心引擎 =====
 
 /**
@@ -151,14 +165,7 @@ export async function runAgentLoop(
     const { textParts, toolCalls } = parseToolCalls(llmResponse)
 
     // 输出文本部分（清理可能残留的 tool_call/tool_result 标记）
-    let textContent = textParts.join('')
-    textContent = textContent
-      .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
-      .replace(/<tool_result[\s\S]*?<\/tool_result>/g, '')
-      .replace(/<\/?tool_call>/g, '')      // 清理孤立的开/闭标签
-      .replace(/<\/?tool_result>/g, '')     // 清理孤立的 result 标签
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
+    const textContent = cleanAgentVisibleText(textParts.join(''))
     if (textContent) {
       callbacks.onTextChunk(textContent)
       fullAssistantText += textContent
@@ -331,12 +338,14 @@ export function parseToolCalls(text: string): {
   const toolCalls: ParsedToolCall[] = []
   const textParts: string[] = []
 
-  // 匹配 <tool_call>...</tool_call> 标签
-  const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
+  // 匹配标准 XML 或 SiliconFlow DSML 的 tool_call 包装。
+  const regex = /<(tool_call|｜DSML｜tool_call)>\s*([\s\S]*?)\s*<\/\1>/g
   let lastIndex = 0
   let match: RegExpExecArray | null = null
+  let matchedProtocolBlock = false
 
   while ((match = regex.exec(text)) !== null) {
+    matchedProtocolBlock = true
     // 收集标签前的文本
     if (match.index > lastIndex) {
       const before = text.slice(lastIndex, match.index).trim()
@@ -345,7 +354,7 @@ export function parseToolCalls(text: string): {
     lastIndex = regex.lastIndex
 
     // 解析 JSON（增强容错）
-    const rawContent = match[1].trim()
+    const rawContent = match[2].trim()
     let parsed = false
 
     // 策略 1：直接解析整个内容
@@ -386,7 +395,7 @@ export function parseToolCalls(text: string): {
   }
 
   // 如果没有匹配到任何标签，整个文本都是 textParts
-  if (toolCalls.length === 0 && textParts.length === 0) {
+  if (!matchedProtocolBlock && toolCalls.length === 0 && textParts.length === 0) {
     textParts.push(text)
   }
 

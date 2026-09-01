@@ -16,6 +16,7 @@ let container: HTMLDivElement
 let invoke: ReturnType<typeof vi.fn>
 let authoritativeNextChapter: number
 let authorityGap: number | null
+let blueprintChapterNumbers: number[]
 
 const project = {
   id: 'dialogs', sessionLease: 'lease-dialogs', name: 'Dialogs', path: 'C:\\novels\\dialogs',
@@ -29,6 +30,7 @@ const project = {
 beforeEach(() => {
   authoritativeNextChapter = 1
   authorityGap = null
+  blueprintChapterNumbers = []
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: project as never })
   useWorkflowStore.setState({
@@ -40,6 +42,9 @@ beforeEach(() => {
   root = createRoot(container)
   invoke = vi.fn(async (channel: string) => {
     if (channel === 'db:blueprint-character-sync-list-pending') return []
+    if (channel === 'db:blueprint-get-all') {
+      return blueprintChapterNumbers.map(chapterNumber => ({ chapterNumber }))
+    }
     if (channel === 'db:draft-authority-sequence') return authorityGap === null
       ? {
           status: authoritativeNextChapter === 1 ? 'empty' : 'continuous',
@@ -133,6 +138,54 @@ describe('workflow launch dialogs', () => {
     }))
   })
 
+  it('appends after existing blueprints when finalized manuscript authority is behind', async () => {
+    authoritativeNextChapter = 1
+    blueprintChapterNumbers = [1, 2, 3, 4]
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    await act(async () => root.render(
+      <DirectoryConfigDialog
+        isOpen
+        onClose={vi.fn()}
+        existingCount={4}
+        onConfirm={onConfirm}
+      />,
+    ))
+
+    await expect.element(page.getByText(/从第 5 章起往后生成/)).toBeVisible()
+    await act(async () => page.getByRole('spinbutton').nth(0).fill('4'))
+    await act(async () => page.getByRole('button', { name: '开始生成' }).click())
+
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledOnce())
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'append',
+      startChapter: 5,
+      count: 4,
+    }))
+  })
+
+  it('appends after the highest existing blueprint when chapter numbers are non-consecutive', async () => {
+    authoritativeNextChapter = 1
+    blueprintChapterNumbers = [1, 3, 4]
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    await act(async () => root.render(
+      <DirectoryConfigDialog
+        isOpen
+        onClose={vi.fn()}
+        existingCount={3}
+        onConfirm={onConfirm}
+      />,
+    ))
+
+    await expect.element(page.getByText(/从第 5 章起往后生成/)).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '开始生成' }).click())
+
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledOnce())
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'append',
+      startChapter: 5,
+    }))
+  })
+
   it('blocks blueprint generation when finalized authority has a gap', async () => {
     authorityGap = 4
     const onConfirm = vi.fn()
@@ -203,6 +256,7 @@ describe('workflow launch dialogs', () => {
       updatedAt: '2026-01-01 00:00:00',
     }
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:blueprint-get-all') return []
       if (channel === 'db:draft-authority-sequence') return {
         status: 'empty',
         lastChapterNumber: 0,

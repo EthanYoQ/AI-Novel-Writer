@@ -10,6 +10,7 @@ import {
 import { Button } from '../ui/Button'
 import { Textarea } from '../ui/Textarea'
 import { useLocaleStore } from '../../stores/locale-store'
+import { AUDIENCE_EN, GENRE_EN } from '../editor/novel-config-labels'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -65,6 +66,10 @@ export default function ArchitectureConfirmDialog({
 
   if (!currentProject) return null
   const config = currentProject.novelConfig
+  const genre = [text(config.genre, GENRE_EN[config.genre] ?? config.genre), config.subGenre]
+    .filter(Boolean)
+    .join(' · ')
+  const audience = text(config.targetAudience, AUDIENCE_EN[config.targetAudience] ?? config.targetAudience)
 
   const toggleStep = (key: ArchStepKey) =>
     setChecked(prev => ({ ...prev, [key]: !prev[key] }))
@@ -138,8 +143,8 @@ export default function ArchitectureConfirmDialog({
               {text('当前配置预览', 'Current configuration')}
             </p>
             <div className="grid grid-cols-2 gap-1">
-              <ConfigRow label={text('类型', 'Genre')} value={[config.genre, config.subGenre].filter(Boolean).join(' · ')} />
-              <ConfigRow label={text('受众', 'Audience')} value={config.targetAudience} />
+              <ConfigRow label={text('类型', 'Genre')} value={genre} />
+              <ConfigRow label={text('受众', 'Audience')} value={audience} />
               <ConfigRow label={text('总章数', 'Chapters')} value={text(`${config.totalChapters} 章`, `${config.totalChapters}`)} />
               <ConfigRow label={text('每章字数', 'Words/chapter')} value={text(`${config.wordsPerChapter} 字`, `${config.wordsPerChapter} words`)} />
             </div>

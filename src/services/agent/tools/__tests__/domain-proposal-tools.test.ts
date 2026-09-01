@@ -171,6 +171,53 @@ describe('explicit Agent domain proposals', () => {
     )
   })
 
+  it('accepts the narrativePov field emitted by read_project_state and stores the canonical config field', async () => {
+    invoke.mockResolvedValue({ success: true })
+
+    const result = await proposeNovelConfigTool.execute({
+      changes: { narrativePov: 'first_person' },
+    }, createAgentExecutionContext())
+
+    expect(result).toMatchObject({ success: true })
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'project-A', leaseId: 'lease-A' }),
+      'project:update-config', 'project-A',
+      expect.objectContaining({ novelConfig: expect.objectContaining({ narrativePOV: 'first_person' }) }),
+      project.path,
+    )
+  })
+
+  it.each([
+    ['简体中文', 'zh-CN'],
+    ['English', 'en-US'],
+  ])('normalizes the common language label %s before storing config', async (label, canonical) => {
+    invoke.mockResolvedValue({ success: true })
+
+    const result = await proposeNovelConfigTool.execute({
+      changes: { writingLanguage: label },
+    }, createAgentExecutionContext())
+
+    expect(result).toMatchObject({ success: true })
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'project-A', leaseId: 'lease-A' }),
+      'project:update-config', 'project-A',
+      expect.objectContaining({ novelConfig: expect.objectContaining({ writingLanguage: canonical }) }),
+      project.path,
+    )
+  })
+
+  it('reports the received and allowed values for an unsupported config enum', async () => {
+    const result = await proposeNovelConfigTool.execute({
+      changes: { writingLanguage: 'Esperanto' },
+    }, createAgentExecutionContext())
+
+    expect(result).toMatchObject({ success: false })
+    expect(result.error).toContain('Esperanto')
+    expect(result.error).toContain('zh-CN')
+    expect(result.error).toContain('en-US')
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it('rejects unknown config fields without writing', async () => {
     const result = await proposeNovelConfigTool.execute({ changes: { apiKey: 'lure' } }, createAgentExecutionContext())
     expect(result).toMatchObject({ success: false })

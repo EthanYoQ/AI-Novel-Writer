@@ -30,6 +30,7 @@ import {
   type CharacterRosterEntry,
 } from '../../../shared/character-roster'
 import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
+import { localizeNovelConfigFacts } from '../../../shared/novel-config-localization'
 
 // --- 基础工具库 ---
 
@@ -246,24 +247,28 @@ function decodeCharacterIdentityManifest(content: string): CharacterIdentitySlot
     if (!isRecord(candidate)) throw new Error(`角色身份清单第 ${index + 1} 项无效`)
     const relations = candidate.relations
     if (!Array.isArray(relations)) throw new Error(`角色身份清单第 ${index + 1} 项缺少关系列表`)
+    const slotId = normalizeCharacterSlotId(candidate.slotId)
     if (
-      typeof candidate.slotId !== 'string' || !candidate.slotId.trim()
+      slotId === undefined
       || typeof candidate.name !== 'string' || !candidate.name.trim()
       || typeof candidate.role !== 'string' || !CHARACTER_ROSTER_ROLES.includes(candidate.role as CharacterRosterEntry['role'])
       || typeof candidate.narrativeDuty !== 'string' || !candidate.narrativeDuty.trim()
     ) throw new Error(`角色身份清单第 ${index + 1} 项字段不完整`)
     return {
-      slotId: candidate.slotId.trim(),
+      slotId,
       name: candidate.name.trim(),
       role: candidate.role as CharacterRosterEntry['role'],
       narrativeDuty: candidate.narrativeDuty.trim(),
       relations: relations.map((relation, relationIndex) => {
+        const targetSlotId = isRecord(relation)
+          ? normalizeCharacterSlotId(relation.targetSlotId)
+          : undefined
         if (!isRecord(relation)
-          || typeof relation.targetSlotId !== 'string' || !relation.targetSlotId.trim()
+          || targetSlotId === undefined
           || typeof relation.relation !== 'string' || !relation.relation.trim()) {
           throw new Error(`角色身份清单第 ${index + 1} 项关系 ${relationIndex + 1} 无效`)
         }
-        return { targetSlotId: relation.targetSlotId.trim(), relation: relation.relation.trim() }
+        return { targetSlotId, relation: relation.relation.trim() }
       }),
     }
   })
@@ -279,6 +284,13 @@ function decodeCharacterIdentityManifest(content: string): CharacterIdentitySlot
     }
   }
   return slots
+}
+
+function normalizeCharacterSlotId(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.trim() || undefined
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? String(value)
+    : undefined
 }
 
 function validateCharacterDetail(output: CharacterDetailOutput): string | undefined {
@@ -567,6 +579,7 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
     const writingLanguage = workflowWritingLanguage(context)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
+    const modelFacts = localizeNovelConfigFacts(config, writingLanguage)
     callbacks.log(text('生成故事前提...', 'Generating story premise...'))
 
     const template = await resolvePromptTemplate('premise', projectSession, writingLanguage)
@@ -577,10 +590,10 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
 
     const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
     const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
-      .withGenre(config.genre)
-      .withSubGenre(config.subGenre || config.genre)
+      .withGenre(modelFacts.genre)
+      .withSubGenre(config.subGenre || modelFacts.genre)
       .withTopic(config.coreOutline || missingValue)
-      .withTargetAudience(config.targetAudience)
+      .withTargetAudience(modelFacts.targetAudience)
       .withNumberOfChapters(config.totalChapters)
       .withWordNumber(config.wordsPerChapter)
       .withCoreSetting(config.worldSetting || missingValue)
@@ -693,6 +706,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     ))
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
+    const modelFacts = localizeNovelConfigFacts(config, writingLanguage)
 
     const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', expectedProjectPath)
     const premise_result = core?.premise || ''
@@ -709,7 +723,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
     const manifestContext = {
       premise: premise_result,
-      genre: config.genre,
+      genre: modelFacts.genre,
       protagonistProfile: config.protagonistProfile || missingValue,
       globalGuidance: config.globalGuidance || missingValue,
       stepGuidance: ((context.data.stepGuidance as Record<string, string>) || {}).characters || missingValue,
@@ -1016,6 +1030,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     const writingLanguage = workflowWritingLanguage(context)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
+    const modelFacts = localizeNovelConfigFacts(config, writingLanguage)
 
     const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', expectedProjectPath)
     const premise_result = core?.premise || ''
@@ -1037,7 +1052,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
     const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
       .withCoreSeed(premise_result)
-      .withGenre(config.genre)
+      .withGenre(modelFacts.genre)
       .withCoreSetting(config.worldSetting || missingValue)
       .withGoldenFinger(config.goldenFinger || missingValue)
       .withProtagonistProfile(config.protagonistProfile || missingValue)
@@ -1105,6 +1120,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     const writingLanguage = workflowWritingLanguage(context)
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
+    const modelFacts = localizeNovelConfigFacts(config, writingLanguage)
 
     const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', expectedProjectPath)
     const premise = core?.premise || ''
@@ -1143,7 +1159,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       .withCoreSeed(premise)
       .withCharacterDynamics(char_dyn)
       .withWorldBuilding(world_b)
-      .withGenre(config.genre)
+      .withGenre(modelFacts.genre)
       .withNumberOfChapters(config.totalChapters)
       .withWordNumber(config.wordsPerChapter)
       .withPlotStructureGuide(guide)

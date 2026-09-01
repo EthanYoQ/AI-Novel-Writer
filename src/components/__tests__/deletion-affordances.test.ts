@@ -14,6 +14,15 @@ describe('generated content deletion affordances', () => {
 
     expect(projectTree).toContain('清除全部')
     expect(projectTree).toContain('清除项目生成内容')
+    expect(projectTree).toContain("text('工作流运行中，暂不能清除', 'A workflow is running. Project data cannot be cleared yet.')")
+    expect(projectTree).toContain("text('清除项目生成内容', 'Clear generated project data')")
+  })
+
+  it('localizes architecture document fallback and refresh affordance', () => {
+    const archFileViewer = source('src/components/editor/ArchFileViewer.tsx')
+
+    expect(archFileViewer).toContain("text('架构文档', 'Architecture document')")
+    expect(archFileViewer).toContain("text('从磁盘重新加载（AI 生成完成后可点击刷新）', 'Reload from disk (refresh after AI generation completes)')")
   })
 
   it('supports deleting one blueprint and clearing all blueprints through persisted IPC', () => {

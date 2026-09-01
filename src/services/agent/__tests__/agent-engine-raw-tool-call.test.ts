@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { parseToolCalls, runAgentLoop } from '../agent-engine'
+import { cleanAgentVisibleText, parseToolCalls, runAgentLoop } from '../agent-engine'
 import { toolRegistry } from '../tool-registry'
 
 const RAW_START_WORKFLOW = 'start_workflow\n{"workflow":"generate_draft","chapter_number":1}'
@@ -124,6 +124,34 @@ describe('Agent raw tool-call compatibility', () => {
     expect(execute).toHaveBeenCalledOnce()
   })
 
+  it('executes a SiliconFlow DSML tool call without exposing the protocol as prose', async () => {
+    const execute = vi.fn(async () => ({ success: true, content: '蓝图已读取' }))
+    toolRegistry.register({
+      name: 'status_probe',
+      description: 'test read-only status probe',
+      source: 'builtin',
+      inputSchema: { type: 'object', properties: {} },
+      requiresConfirmation: false,
+      isReadOnly: true,
+      execute,
+    })
+    const sink = callbacks(true)
+    const generate = vi.fn()
+      .mockResolvedValueOnce('<｜DSML｜tool_call>\n{"name":"status_probe","arguments":{}}\n</｜DSML｜tool_call>')
+      .mockResolvedValueOnce('蓝图已读取。')
+
+    await runAgentLoop('system', [], '读取蓝图', 'model', generate, sink)
+
+    expect(execute).toHaveBeenCalledOnce()
+    expect(sink.onTextChunk).toHaveBeenCalledTimes(1)
+    expect(sink.onTextChunk).toHaveBeenCalledWith('蓝图已读取。')
+    expect(sink.onDone).toHaveBeenCalledWith(
+      '蓝图已读取。',
+      [expect.objectContaining({ toolName: 'status_probe', status: 'completed' })],
+      [],
+    )
+  })
+
   it('does not treat a raw name-plus-JSON block as a command unless the whole response is the registered call', () => {
     registerStartWorkflow()
 
@@ -135,5 +163,12 @@ describe('Agent raw tool-call compatibility', () => {
       textParts: ['unregistered_tool\n{}'],
       toolCalls: [],
     })
+  })
+
+  it('drops DSML protocol blocks even when their payload is invalid', () => {
+    const response = '<｜DSML｜tool_call>not-json</｜DSML｜tool_call>'
+
+    expect(parseToolCalls(response)).toEqual({ textParts: [], toolCalls: [] })
+    expect(cleanAgentVisibleText(`before\n${response}\nafter`)).toBe('before\n\nafter')
   })
 })

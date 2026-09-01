@@ -119,7 +119,10 @@ describe('agent context project isolation', () => {
         path: 'C:\\novels\\english',
         novelConfig: {
           writingLanguage: 'en-US',
-          genre: 'Mystery',
+          genre: '科幻',
+          targetAudience: '全龄',
+          plotStructure: 'three_act',
+          narrativePOV: 'third_limited',
           coreOutline: 'A pilot investigates a forged maintenance log.',
         },
       } as never,
@@ -144,6 +147,9 @@ describe('agent context project isolation', () => {
     expect(prompt).toContain('You are an experienced long-form fiction-writing assistant')
     expect(prompt).toContain('## Tool system')
     expect(prompt).toContain('test_chinese_description')
+    expect(prompt).toContain('Genre: Science fiction')
+    expect(prompt).toContain('Target readers: All ages')
+    expect(prompt).toContain('Point of view: Third-person limited')
     expect(prompt).not.toMatch(/[\u3400-\u9fff]/u)
   })
 

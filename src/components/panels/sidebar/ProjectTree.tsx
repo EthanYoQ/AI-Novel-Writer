@@ -236,7 +236,9 @@ export default function ProjectTree() {
             size="sm"
             onClick={() => setClearDialogOpen(true)}
             disabled={clearDisabled}
-            title={clearDisabled ? '工作流运行中，暂不能清除' : '清除项目生成内容'}
+            title={clearDisabled
+              ? text('工作流运行中，暂不能清除', 'A workflow is running. Project data cannot be cleared yet.')
+              : text('清除项目生成内容', 'Clear generated project data')}
           >
             <Trash2 size={12} />
             {text('清除全部', 'Clear all')}

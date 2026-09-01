@@ -650,6 +650,72 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(replaceText).toHaveBeenLastCalledWith(persistedText)
   })
 
+  it('bounds provisional renders for a burst of small chunks and still reconciles the terminal draft', async () => {
+    let resolveAttempt: ((value: GenerationOutcome) => void) | undefined
+    let streamChunk: ((chunk: string) => void) | undefined
+    const runtime = fakeRuntime((_attempt, _task, options) => {
+      streamChunk = (options as { onChunk?: (chunk: string) => void } | undefined)?.onChunk
+      return new Promise<GenerationOutcome>(resolve => { resolveAttempt = resolve })
+    })
+    const setupResult = setup({ runtime })
+    const replaceText = vi.fn()
+    const callbacks = Object.assign(setupResult.callbacks, { replaceText })
+
+    const execution = setupResult.command.execute({
+      step: {},
+      context: setupResult.context,
+      callbacks,
+    })
+    await vi.waitFor(() => expect(streamChunk).toBeTypeOf('function'))
+
+    for (let index = 0; index < 12_000; index += 1) streamChunk!('文')
+
+    expect(replaceText.mock.calls.length).toBeLessThanOrEqual(2)
+
+    const terminalDraft = `${'终稿正文'.repeat(1250)}。`
+    resolveAttempt!(outcome(terminalDraft, 'stop'))
+    await execution
+
+    const persisted = setupResult.invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
+    const persistedText = (persisted?.[1] as { content: string }).content
+    expect(replaceText).toHaveBeenLastCalledWith(persistedText)
+  })
+
+  it('bounds continuation renders for a burst of small chunks and keeps the accepted continuation', async () => {
+    let resolveContinuation: ((value: GenerationOutcome) => void) | undefined
+    let streamContinuation: ((chunk: string) => void) | undefined
+    const initialDraft = '初'.repeat(4000)
+    const runtime = fakeRuntime((attempt, _task, options) => {
+      if (attempt === 1) return outcome(initialDraft, 'length', 1)
+      streamContinuation = (options as { onChunk?: (chunk: string) => void } | undefined)?.onChunk
+      return new Promise<GenerationOutcome>(resolve => { resolveContinuation = resolve })
+    })
+    const setupResult = setup({ runtime })
+    const replaceText = vi.fn()
+    const callbacks = Object.assign(setupResult.callbacks, { replaceText })
+
+    const execution = setupResult.command.execute({
+      step: {},
+      context: setupResult.context,
+      callbacks,
+    })
+    await vi.waitFor(() => expect(streamContinuation).toBeTypeOf('function'))
+    const callsBeforeContinuation = replaceText.mock.calls.length
+
+    for (let index = 0; index < 12_000; index += 1) streamContinuation!('续')
+
+    expect(replaceText.mock.calls.length - callsBeforeContinuation).toBeLessThanOrEqual(2)
+
+    const terminalContinuation = `${'续'.repeat(1000)}。`
+    resolveContinuation!(outcome(terminalContinuation, 'stop', 2))
+    await execution
+
+    const persisted = setupResult.invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
+    expect((persisted?.[1] as { content: string }).content).toBe(
+      `${initialDraft}\n\n${terminalContinuation}`,
+    )
+  })
+
   it('clears provisional text after a failed attempt and ignores its late chunks', async () => {
     let lateChunk: ((chunk: string) => void) | undefined
     const runtime = fakeRuntime((_attempt, _task, options) => {
