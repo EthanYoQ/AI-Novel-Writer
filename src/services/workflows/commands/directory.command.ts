@@ -1,6 +1,10 @@
-import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
+import {
+  BaseWorkflowCommand,
+  injectWritingSkillIntoSession,
+  type CommandExecuteParams,
+} from './base-command'
 import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
-import { resolvePromptTemplate } from '../../prompt-templates'
+import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
 import { DirectoryPromptBuilder } from '../../prompts/prompt-builder'
 import { createGenerationRuntime, type GenerationRuntime } from '../../generation/generation-runtime'
 import type { GenerationTask } from '../../generation/generation-harness'
@@ -22,10 +26,7 @@ import {
 } from '../../../shared/blueprint-semantic-contract'
 import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
-import {
-  listPendingDirectoryCharacterSyncs,
-  retryDirectoryCharacterSync,
-} from '../directory-character-sync-recovery'
+import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
 export {
   retryDirectoryCharacterSync,
   type DirectoryCharacterSyncReceipt,
@@ -78,18 +79,6 @@ export class DirectoryCostLimitError extends Error {
       + `请拆成每段不超过 ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} 章的范围分别生成。`,
     )
     this.name = 'DirectoryCostLimitError'
-  }
-}
-
-export class DirectoryCharacterSyncPendingError extends Error {
-  readonly code = 'DIRECTORY_CHARACTER_SYNC_PENDING' as const
-
-  constructor(readonly operationIds: readonly string[]) {
-    super(
-      `仍有 ${operationIds.length} 次已提交蓝图的角色同步待修复；`
-      + '请先在蓝图生成窗口点击“重试角色同步”，无需重新生成蓝图。',
-    )
-    this.name = 'DirectoryCharacterSyncPendingError'
   }
 }
 
@@ -180,8 +169,10 @@ function buildCompactBlueprintTask(input: {
     promptLanguageText(input.writingLanguage, `必须且只能返回 chapterNumber=${input.chapterNumber} 的一项。`, `Return exactly one item whose chapterNumber is ${input.chapterNumber}.`),
     promptLanguageText(input.writingLanguage, `严格执行字段和列表上限：${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}。`, `Enforce these field and list limits exactly: ${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}.`),
   ].join('\n')
-  const systemRole = boundedFactText(input.systemRole, COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES)
-    || promptLanguageText(input.writingLanguage, '你是一位经验丰富的网文架构师。', 'You are an experienced web-fiction architect.')
+  const systemRole = composePromptSystemRole({
+    systemRole: boundedFactText(input.systemRole, COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES)
+      || promptLanguageText(input.writingLanguage, '你是一位经验丰富的章节架构师。', 'You are an experienced chapter architect.'),
+  }, input.writingLanguage)
   const factSection = (sectionName: string, key: keyof typeof facts) => ({
     sectionName,
     messageIndex: 1,
@@ -248,16 +239,6 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       projectSession,
       writingLanguage,
     )
-    const pendingCharacterSyncs = await listPendingDirectoryCharacterSyncs(
-      expectedProjectPath,
-      projectSession,
-    )
-    if (pendingCharacterSyncs.length > 0) {
-      throw new DirectoryCharacterSyncPendingError(
-        pendingCharacterSyncs.map(operation => operation.operationId),
-      )
-    }
-
     let startChapter = 1
     let endChapter = totalChapters
     if (this.params.mode === 'append') {
@@ -332,7 +313,9 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           messages: [
             {
               role: 'system',
-              content: template.systemRole || promptLanguageText(writingLanguage, '你是一位经验丰富的网文架构师。', 'You are an experienced web-fiction architect.'),
+              content: composePromptSystemRole({
+                systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位经验丰富的小说架构师。', 'You are an experienced fiction architect.'),
+              }, writingLanguage),
             },
             { role: 'user', content: prompt },
           ],
@@ -346,7 +329,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         genre: novelConfig.genre || '',
         globalGuidance: novelConfig.globalGuidance || '',
         pacingGuidance: (context.data.pacingGuidance as string) || '',
-        systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位经验丰富的网文架构师。', 'You are an experienced web-fiction architect.'),
+        systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位经验丰富的小说架构师。', 'You are an experienced fiction architect.'),
         writingLanguage,
       }),
       inputKey: chapterNumber => chapterNumber,
@@ -374,9 +357,17 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         budget: costPlan.runtimeBudget,
       })
       const batchResult = await runtime.execute(async ({ session }) => {
+        const planningSession = injectWritingSkillIntoSession(session, context, 'planning')
+        if (context.writingSkills?.planning) {
+          callbacks.log(promptLanguageText(
+            writingLanguage,
+            `本次 planning 阶段使用已冻结写作 Skill：${context.writingSkills.planning.name}`,
+            `Using the workflow-start-frozen writing skill for planning: ${context.writingSkills.planning.name}`,
+          ))
+        }
         const executor = createStructuredBatchExecutor({
           contract,
-          session,
+          session: planningSession,
           writingLanguage,
           onAttempt: receipt => this.reportGenerationPromptBudget(callbacks, receipt),
         })

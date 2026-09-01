@@ -1,6 +1,7 @@
 import type { PromptTemplate } from '../prompt-templates'
 import {
   appendRequiredPromptContext,
+  composePromptSystemRole,
   getBuiltinPromptTemplate,
   pruneEmptyOptionalPromptSections,
 } from '../prompt-templates'
@@ -20,7 +21,7 @@ export class BasePromptBuilder {
 
   /** 获取模板定义的 system role（LLM system message 角色定位） */
   public getSystemRole(): string {
-    return this.template.systemRole || ''
+    return composePromptSystemRole(this.template, this.writingLanguage)
   }
 
   /** 打包输出最终经过所有合法性替换的字符串 */
@@ -30,6 +31,17 @@ export class BasePromptBuilder {
       // 使用 replaceAll 避免正则注入风险，安全替换所有匹配项
       const safeValue = value || ''
       result = result.replaceAll(`{{${key}}}`, safeValue)
+    }
+
+    if (this.template.taskGuidance?.trim()) {
+      let taskGuidance = this.template.taskGuidance
+      for (const [key, value] of Object.entries(this.variables)) {
+        taskGuidance = taskGuidance.replaceAll(`{{${key}}}`, value || '')
+      }
+      const heading = this.writingLanguage === 'en-US'
+        ? '[User-defined creative guidance]'
+        : '【用户自定义创作指导】'
+      result += `\n\n${heading}\n${taskGuidance.trim()}`
     }
 
     // 自动追加 systemSuffix（始终从内置模板获取，与 renderPrompt 行为对齐）

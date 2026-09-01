@@ -619,7 +619,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
               size="sm"
               onClick={() => { setUserRefinePrompt(''); setConfirmAction('refine') }}
               disabled={isChapterBusy}
-                title={text('AI 修稿 — 大神级润色，生成修稿并打开合并视图', 'AI revision — polish the chapter, create a revision, and open the merge view')}
+                title={text('AI 修稿 — 专业精修章节，生成修订并打开合并视图', 'AI revision — professionally refine the chapter, create a revision, and open the merge view')}
             >
               <Sparkles size={12} />
                 {text('AI 修稿', 'AI revise')}

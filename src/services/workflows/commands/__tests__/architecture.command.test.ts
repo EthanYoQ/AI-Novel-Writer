@@ -13,6 +13,12 @@ import {
   GeneratePlotArchitectureCommand,
 } from '../architecture.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+import {
+  clearProjectCustomPrompts,
+  getBuiltinPromptTemplate,
+  loadProjectCustomPrompts,
+  saveProjectCustomPrompt,
+} from '../../../prompt-templates'
 
 class GenerateConfigCommand extends RuntimeGenerateConfigCommand {
   constructor(...args: ConstructorParameters<typeof RuntimeGenerateConfigCommand>) {
@@ -35,6 +41,10 @@ const callbacks: StepCallbacks = {
   setProgress: vi.fn(),
   appendText: vi.fn(),
 }
+
+const domainIpcChannels = (invoke: ReturnType<typeof vi.fn>) => invoke.mock.calls
+  .map(([channel]) => channel as string)
+  .filter(channel => !channel.startsWith('prompt:') && !channel.startsWith('fs:'))
 const validConfigJson = JSON.stringify({
   genre: '玄幻',
   targetAudience: '男频',
@@ -212,14 +222,15 @@ afterEach(() => {
     generateStream: originalGenerateStream,
   })
   useProjectStore.setState({ currentProject: null })
+  clearProjectCustomPrompts()
 })
 
 describe('GenerateConfigCommand error boundaries', () => {
   it.each([
-    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的网络小说主编', unexpected: 'You are an experienced web-fiction editor' },
-    { uiLocale: 'en-US', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的网络小说主编', unexpected: 'You are an experienced web-fiction editor' },
-    { uiLocale: 'zh-CN', writingLanguage: 'en-US', expected: 'You are an experienced web-fiction editor', unexpected: '你是一位经验丰富的网络小说主编' },
-    { uiLocale: 'en-US', writingLanguage: 'en-US', expected: 'You are an experienced web-fiction editor', unexpected: '你是一位经验丰富的网络小说主编' },
+    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的小说编辑', unexpected: 'You are an experienced fiction editor' },
+    { uiLocale: 'en-US', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的小说编辑', unexpected: 'You are an experienced fiction editor' },
+    { uiLocale: 'zh-CN', writingLanguage: 'en-US', expected: 'You are an experienced fiction editor', unexpected: '你是一位经验丰富的小说编辑' },
+    { uiLocale: 'en-US', writingLanguage: 'en-US', expected: 'You are an experienced fiction editor', unexpected: '你是一位经验丰富的小说编辑' },
   ] as const)(
     'sends $writingLanguage configuration instructions through the provider request in a $uiLocale interface',
     async ({ uiLocale, writingLanguage, expected, unexpected }) => {
@@ -749,6 +760,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
+      if (channel === 'fs:mkdir' || channel === 'fs:write-file') return { success: true }
       if (channel === 'db:project-core-get') return { premise: '足够长的八人群像故事前提，用于验证身份清单和分批详情始终在同一个生成会话中完成，并且只有全局关系闭包通过后才原子提交。' }
       if (channel === 'db:character-roster-read') return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
       if (channel === 'db:character-roster-commit') {
@@ -762,10 +774,25 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     vi.stubGlobal('window', {
       velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
+    await loadProjectCustomPrompts(context.projectSession!)
+    const characterTemplate = getBuiltinPromptTemplate('character_dynamics', 'zh-CN')!
+    await expect(saveProjectCustomPrompt(context.projectSession!, {
+      ...characterTemplate,
+      writingLanguage: 'zh-CN',
+      systemRole: '自定义角色规划定位：重视人物选择与代价。',
+      taskGuidance: '自定义角色指导：每个角色必须有独立欲望。',
+    })).resolves.toBe(true)
     const eightContext = {
       ...context,
       uiLocale: 'en-US' as const,
       data: { stepGuidance: { characters: '必须塑造八名群像角色，覆盖不同立场且关系闭合。' } },
+      writingSkills: Object.freeze({
+        planning: Object.freeze({
+          skillId: 'user:character-planning', name: 'Character causality', stage: 'planning' as const,
+          source: 'user' as const, writingLanguage: 'zh-CN' as const,
+          content: '每个角色的选择必须产生可追踪的代价。', utf8Bytes: 57,
+        }),
+      }),
       cancelled: false,
     }
     const stepCallbacks = callbacks
@@ -779,10 +806,23 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(generateStream).toHaveBeenCalledTimes(9)
     const manifestPrompt = manifestMessages?.map(message => message.content).join('\n') ?? ''
     expect(manifestPrompt).not.toMatch(/appearance|currentState|"?entries"?/u)
+    expect(manifestPrompt).toContain('自定义角色规划定位：重视人物选择与代价。')
+    expect(manifestPrompt).toContain('【补充写作 Skill：Character causality】')
+    expect(manifestPrompt).toContain('自定义角色指导：每个角色必须有独立欲望。')
+    expect(manifestPrompt).toContain('{"slots":[...]}')
     expect(new TextEncoder().encode(manifestPrompt).byteLength).toBeLessThanOrEqual(24_000)
     expect(observedPrefixes).toEqual([[], ...names.slice(1).map((_, index) => names.slice(0, index + 1))])
     const detailPrompt = generateStream.mock.calls[1]?.[0].find(message => message.role === 'user')?.content ?? ''
-    expect(detailPrompt).toContain('background 不超过 500 字符')
+    const detailSystem = generateStream.mock.calls[1]?.[0].find(message => message.role === 'system')?.content ?? ''
+    expect(detailSystem).toContain('自定义角色规划定位：重视人物选择与代价。')
+    expect(detailPrompt).toContain('自定义角色指导：每个角色必须有独立欲望。')
+    expect(detailPrompt).toContain('【补充写作 Skill：Character causality】')
+    expect(detailPrompt.indexOf('每个角色的选择必须产生可追踪的代价。'))
+      .toBeLessThan(detailPrompt.indexOf('【不可变角色详情 JSON 合同】'))
+    expect(detailPrompt).toContain('【不可变角色详情 JSON 合同】')
+    expect(detailPrompt).not.toContain('## 核心角色档案')
+    expect(detailPrompt).toContain('保持每个字段具体、紧凑且与叙事有关')
+    expect(detailPrompt).not.toContain('background 不超过 500 字符')
     expect(detailPrompt).toContain('禁止输出 relationships')
     expect(detailPrompt).not.toContain('关系必须指向角色列表中另一位已存在角色')
     expect(detailPrompt).toContain('currentState 必填')
@@ -836,7 +876,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('角色身份清单缺少 slots')
     expect(generateStream).toHaveBeenCalledOnce()
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
   it('rejects forged detail relationships so only the manifest can define committed edges', async () => {
@@ -862,7 +902,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('角色详情 slotId=slot-1 字段 relationships 不得出现')
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
   it('reports success only after the manifest and every detail batch commit one readable graph and card set', async () => {
@@ -934,9 +974,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       projectAPath,
       context.projectSession,
     )
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:project-core-update')
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-save-all')
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:post-process-create-run')
+    expect(domainIpcChannels(invoke)).not.toContain('db:project-core-update')
+    expect(domainIpcChannels(invoke)).not.toContain('db:character-save-all')
+    expect(domainIpcChannels(invoke)).not.toContain('db:post-process-create-run')
     expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith('角色图谱与 3 张角色卡已生成')
   })
 
@@ -1063,7 +1103,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     await expect(command.execute({ step: {}, context, callbacks }))
       .rejects.toThrow(/完整 JSON|截断/u)
 
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-roster-commit')
+    expect(domainIpcChannels(invoke)).not.toContain('db:character-roster-commit')
   })
 
   it('accepts fenced detail batches with leading prose after a raw manifest before one atomic roster commit', async () => {
@@ -1187,7 +1227,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     await expect(command.execute({ step: {}, context: committedThenCancelledContext, callbacks }))
       .resolves.toBe(readyRoster.renderedMarkdown)
 
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+    expect(domainIpcChannels(invoke)).toEqual([
       'db:project-core-get',
       'db:character-roster-read',
       'db:character-roster-commit',
@@ -1327,7 +1367,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const continuationMessages = generateStream.mock.calls[1]?.[0] ?? []
     const continuationPrompt = continuationMessages.find(message => message.role === 'user')?.content ?? ''
     expect(continuationPrompt).toContain('返回完整 JSON，从头重建，不要只补后缀')
-    expect(invoke.mock.calls.map(([channel]) => channel)).toContain('db:character-roster-commit')
+    expect(domainIpcChannels(invoke)).toContain('db:character-roster-commit')
   })
 
   it('keeps the complete protected author guidance on a length replacement request', async () => {
@@ -1418,7 +1458,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         expect.objectContaining({ sectionName: 'continuation-request' }),
       ]),
     })
-    expect(invoke.mock.calls.map(([channel]) => channel)).toContain('db:character-roster-commit')
+    expect(domainIpcChannels(invoke)).toContain('db:character-roster-commit')
   })
 
   it('fails the protected length replacement before an additional provider call when its complete prompt exceeds the product budget', async () => {
@@ -1457,7 +1497,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         genre: 'fantasy',
         totalChapters: 100,
         wordsPerChapter: 3000,
-        globalGuidance: 'G'.repeat(22_500),
+        globalGuidance: 'G'.repeat(22_000),
       } as never,
     })
 
@@ -1475,14 +1515,14 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         limitUtf8Bytes: 24_000,
         errorCode: 'PROMPT_BUDGET_EXHAUSTED',
         sections: expect.arrayContaining([
-          { sectionName: 'global-guidance', utf8Bytes: 22_519 },
+          { sectionName: 'global-guidance', utf8Bytes: 22_019 },
           expect.objectContaining({ sectionName: 'prompt-overhead' }),
         ]),
       },
     })
     expect(failure).not.toHaveProperty('receipt')
     expect(generateStream).toHaveBeenCalledOnce()
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
   it('repairs one syntactically invalid detail batch before committing the complete roster', async () => {
@@ -1549,7 +1589,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       .resolves.toBe(readyRoster.renderedMarkdown)
 
     expect(generateStream).toHaveBeenCalledTimes(5)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toContain('db:character-roster-commit')
+    expect(domainIpcChannels(invoke)).toContain('db:character-roster-commit')
   })
 
   it('rejects semantically incomplete detail coverage before any roster write', async () => {
@@ -1590,22 +1630,42 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       .rejects.toThrow(/覆盖|缺少|结构化/u)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
-  it('rejects an overlong individual character detail before any roster write', async () => {
-    const firstDetail = JSON.parse(detailResponses(rosterEntries)[0]) as { entries: Array<CharacterRosterEntry & { slotId: string }> }
-    firstDetail.entries[0].appearance = '外'.repeat(301)
-    const generateStream = createResponseStream([
-      JSON.stringify(manifestFor(rosterEntries)),
-      JSON.stringify(firstDetail),
-    ])
+  it('accepts valid long character details and leaves size control to the request budget', async () => {
+    const longEntries: CharacterRosterEntry[] = rosterEntries.map((entry, index) => (
+      index === 0
+        ? {
+            ...entry,
+            appearance: '外'.repeat(301),
+            background: '往'.repeat(501),
+            currentState: { ...entry.currentState!, recentEvents: '事'.repeat(301) },
+          }
+        : entry
+    ))
+    const longRoster = { ...readyRoster, entries: longEntries }
+    const generateStream = createResponseStream(twoStageResponses(longEntries))
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
-      if (channel === 'fs:check-exists') return false
-      if (channel === 'db:project-core-get') {
-        return { premise: '足够长的故事前提，用于验证单角色详情即使 JSON 完整，也必须在字段超出精炼长度合同时失败关闭并保持角色事实零写入。' }
+      switch (channel) {
+        case 'prompt:load-global': return { templates: [], diagnostics: [] }
+        case 'fs:check-exists': return false
+        case 'db:project-core-get': return { premise: '这是一段足够长且包含明确冲突的故事前提，用于验证合法长文本角色详情会由整体请求预算管理，不会再被人为字符上限拒绝并且能够正常原子提交角色事实。' }
+        case 'db:character-roster-read': return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
+        case 'db:character-roster-commit': return {
+          success: true,
+          receipt: {
+            operationId: context.runId,
+            payloadHash: 'payload-hash',
+            revision: 1,
+            idempotent: false,
+            snapshot: longRoster,
+          },
+        }
+        case 'fs:read-json': return { success: true, data: {} }
+        case 'fs:write-json': return { success: true }
+        default: break
       }
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
@@ -1617,9 +1677,14 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
 
-    await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('appearance 超过 300 字符上限')
-    expect(generateStream).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(readyRoster.renderedMarkdown)
+    expect(generateStream).toHaveBeenCalledTimes(4)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({ entries: longEntries }),
+      projectAPath,
+      context.projectSession,
+    )
   })
 
   it('rejects non-finite, boolean, and null age values without echoing their content', async () => {
@@ -1644,7 +1709,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
 
       await expect(command.execute({ step: {}, context, callbacks }))
         .rejects.toThrow('角色详情 slotId=slot-1 字段 age 必须是非空文本')
-      expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+      expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
     }
   })
 
@@ -1671,8 +1736,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         })
 
         await expect(command.execute({ step: {}, context, callbacks }))
-          .rejects.toThrow(`角色详情 slotId=slot-1 字段 currentState.${field} 必须是 1–300 字符文本`)
-        expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+          .rejects.toThrow(`角色详情 slotId=slot-1 字段 currentState.${field} 必须是非空文本`)
+        expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
       }
     }
   })
@@ -1697,7 +1762,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('角色详情 slotId=slot-1 字段 currentState 必填')
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
   it('fails closed after the single allowed detail JSON repair is still invalid', async () => {
@@ -1736,7 +1801,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       .rejects.toThrow(/语法修复|结构化/u)
 
     expect(generateStream).toHaveBeenCalledTimes(3)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
   it('does not commit a completed model response after the frozen project session has switched', async () => {
@@ -1780,7 +1845,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     finishGeneration?.()
 
     await expect(execution).rejects.toThrow('当前项目已切换，架构生成已停止以避免写入错误项目')
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
   it('does not commit when cancellation wins before the roster commit boundary', async () => {
@@ -1825,6 +1890,6 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     finishGeneration?.()
 
     await expect(execution).rejects.toThrow('工作流已取消')
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:project-core-get'])
+    expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 })

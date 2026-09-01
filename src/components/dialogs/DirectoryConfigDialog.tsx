@@ -469,10 +469,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
               isConfirming
               || authorityLoading
               || Boolean(authorityError)
-              || isRecoveryLoading
               || isRecovering
-              || pendingCharacterSyncs.length > 0
-              || Boolean(recoveryError)
             }
           >
             <FileText size={13} />

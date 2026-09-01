@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Globe, FolderOpen, RotateCcw, AlertTriangle,
 import {
   BUILTIN_PROMPTS,
   EDITABLE_PROMPT_KEYS,
+  getBuiltinPromptTemplate,
   getPromptTemplate,
   getPromptSource,
   getPromptVariableDescription,
@@ -15,6 +16,7 @@ import {
   loadProjectCustomPrompts,
   type PromptTemplate,
 } from '../../services/prompt-templates'
+import { resolveWritingLanguage, type WritingLanguage } from '../../shared/writing-language'
 import { useProjectStore } from '../../stores/project-store'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
@@ -31,17 +33,28 @@ const SOURCE_CONFIG = {
 } as const
 
 const PROMPT_META_EN: Record<string, { name: string; description: string }> = {
+  assistant_writing_identity: { name: 'AI writing assistant identity', description: 'Define the creative role and working guidance for the writing assistant' },
+  edit_selected_text: { name: 'Selected-text editing', description: 'Refine, expand, or rewrite selected story prose' },
+  generate_novel_config_field: { name: 'Single configuration field', description: 'Complete one novel setting from existing author facts' },
   generate_global_config: { name: 'Full configuration', description: 'Generate a complete novel configuration from a short idea' },
   premise: { name: 'Story premise', description: 'Distill the central hook and chain of conflicts' },
   character_dynamics: { name: 'Character map', description: 'Build character arcs, relationships, and conflicts' },
   world_building: { name: 'World building', description: 'Build a world matrix that naturally creates conflict' },
   synopsis: { name: 'Plot synopsis', description: 'Combine the architecture into a structured plot outline' },
+  chapter_blueprint: { name: 'Chapter blueprint', description: 'Plan the complete sequence of chapter-level events' },
+  chapter_blueprint_chunk: { name: 'Blueprint segment', description: 'Plan a selected range of chapter-level events' },
   first_chapter_draft: { name: 'First chapter draft', description: 'Generate the complete first chapter' },
   next_chapter_draft: { name: 'Next chapter draft', description: 'Generate the next chapter from context and its blueprint' },
   refine_chapter: { name: 'Chapter revision', description: 'Improve a draft for clarity, craft, and impact' },
   consistency_check: { name: 'Consistency review', description: 'Check a chapter for continuity and consistency issues' },
   analyze_writing_style: { name: 'Style analysis', description: 'Extract an actionable style profile from sample text' },
   refine_from_review: { name: 'Review-driven revision', description: 'Revise a draft using findings from a review report' },
+  generate_chapter_notes: { name: 'Chapter notes', description: 'Extract continuity notes from a completed chapter' },
+  update_character_cards: { name: 'Character state update', description: 'Update character records from chapter facts' },
+  infer_novel_config: { name: 'Infer novel configuration', description: 'Infer a configuration from imported prose' },
+  extract_initial_characters: { name: 'Extract initial characters', description: 'Extract initial character records from imported material' },
+  infer_single_chapter_blueprint: { name: 'Infer chapter blueprint', description: 'Infer a chapter blueprint from existing prose' },
+  infer_novel_config_with_vectors: { name: 'Infer configuration from samples', description: 'Infer a configuration from retrieved source excerpts' },
 }
 
 // ==================== 主组件 ====================
@@ -56,6 +69,14 @@ export default function PromptSettings() {
   const projectSession = projectId && projectPath && projectLease
     ? captureProjectSession({ id: projectId, path: projectPath, sessionLease: projectLease })
     : null
+  const projectWritingLanguage = resolveWritingLanguage(project?.novelConfig.writingLanguage)
+  const [languageSelection, setLanguageSelection] = useState<{
+    projectId: string | null
+    writingLanguage: WritingLanguage
+  }>({ projectId: projectId ?? null, writingLanguage: projectWritingLanguage })
+  const editingLanguage = languageSelection.projectId === (projectId ?? null)
+    ? languageSelection.writingLanguage
+    : projectWritingLanguage
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   // 强制刷新用（保存/恢复后 getPromptSource 的结果会变）
   const [refreshKey, setRefreshKey] = useState(0)
@@ -68,7 +89,7 @@ export default function PromptSettings() {
 
   useEffect(() => {
     let disposed = false
-    void loadCustomPrompts().then(() => {
+    void loadCustomPrompts(editingLanguage).then(() => {
       if (!disposed) {
         setGlobalLoadError(null)
         setRefreshKey((key) => key + 1)
@@ -77,7 +98,7 @@ export default function PromptSettings() {
       if (!disposed) setGlobalLoadError(text('全局提示词加载失败，创作流程已停止使用未确认的配置', 'Global prompts could not be loaded; generation will not use an unverified configuration'))
     })
     return () => { disposed = true }
-  }, [text])
+  }, [editingLanguage, text])
 
   // 项目变更时重新加载项目级覆盖
   useEffect(() => {
@@ -91,7 +112,7 @@ export default function PromptSettings() {
       return () => { disposed = true }
     }
 
-    void loadProjectCustomPrompts(session).then((loaded) => {
+    void loadProjectCustomPrompts(session, editingLanguage).then((loaded) => {
       if (!disposed && loaded && isProjectSessionCurrent(session)) {
         setProjectLoadError(null)
         setRefreshKey((k) => k + 1)
@@ -106,10 +127,12 @@ export default function PromptSettings() {
       }
     })
     return () => { disposed = true }
-  }, [projectId, projectLease, projectPath, text])
+  }, [editingLanguage, projectId, projectLease, projectPath, text])
 
   // 获取可编辑的模板列表
-  const editableTemplates = BUILTIN_PROMPTS.filter((t) => EDITABLE_PROMPT_KEYS.includes(t.key))
+  const editableTemplates = BUILTIN_PROMPTS
+    .filter((template) => EDITABLE_PROMPT_KEYS.includes(template.key))
+    .map((template) => getBuiltinPromptTemplate(template.key, editingLanguage) ?? template)
 
   const handleToggle = (key: string) => {
     setExpandedKey((prev) => (prev === key ? null : key))
@@ -144,20 +167,44 @@ export default function PromptSettings() {
         </span>
       </div>
 
+      <label className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border border-[var(--color-border)]">
+        <span>
+          <span className="block text-xs font-medium text-[var(--color-text)]">
+            {text('编辑的写作语言', 'Writing language to edit')}
+          </span>
+          <span className="block text-[0.68rem] text-[var(--color-text-muted)]">
+            {text('中英文覆盖独立保存，不会互相串用。', 'Chinese and English overrides are stored independently.')}
+          </span>
+        </span>
+        <select
+          value={editingLanguage}
+          onChange={(event) => setLanguageSelection({
+            projectId: projectId ?? null,
+            writingLanguage: event.target.value as WritingLanguage,
+          })}
+          className="rounded-md px-2.5 py-1.5 text-xs bg-[var(--color-panel)] text-[var(--color-text)] border border-[var(--color-border)]"
+          aria-label={text('编辑的写作语言', 'Writing language to edit')}
+        >
+          <option value="zh-CN">{text('简体中文', 'Chinese (Simplified)')}</option>
+          <option value="en-US">English</option>
+        </select>
+      </label>
+
       {editableTemplates.map((builtinTemplate) => {
-        const source = getPromptSource(builtinTemplate.key, projectSession ?? undefined)
-        const currentTemplate = getPromptTemplate(builtinTemplate.key, projectSession ?? undefined) ?? builtinTemplate
+        const source = getPromptSource(builtinTemplate.key, projectSession ?? undefined, editingLanguage)
+        const currentTemplate = getPromptTemplate(builtinTemplate.key, projectSession ?? undefined, editingLanguage) ?? builtinTemplate
         const isExpanded = expandedKey === builtinTemplate.key
 
         return (
           <TemplateItem
-            key={`${projectSession?.projectId ?? 'no-project'}:${projectSession?.leaseId ?? 'no-lease'}:${builtinTemplate.key}`}
+            key={`${projectSession?.projectId ?? 'no-project'}:${projectSession?.leaseId ?? 'no-lease'}:${editingLanguage}:${builtinTemplate.key}`}
             builtinTemplate={builtinTemplate}
             currentTemplate={currentTemplate}
             source={source}
             isExpanded={isExpanded}
             onToggle={() => handleToggle(builtinTemplate.key)}
             projectSession={projectSession}
+            writingLanguage={editingLanguage}
             onSaved={triggerRefresh}
           />
         )
@@ -175,6 +222,7 @@ function TemplateItem({
   isExpanded,
   onToggle,
   projectSession,
+  writingLanguage,
   onSaved,
 }: {
   builtinTemplate: PromptTemplate
@@ -183,10 +231,14 @@ function TemplateItem({
   isExpanded: boolean
   onToggle: () => void
   projectSession: ProjectSessionContext | null
+  writingLanguage: WritingLanguage
   onSaved: () => void
 }) {
   const text = useLocaleStore(s => s.text)
-  const [editContent, setEditContent] = useState(currentTemplate.content)
+  const [editRole, setEditRole] = useState(currentTemplate.systemRole ?? '')
+  const [editGuidance, setEditGuidance] = useState(
+    currentTemplate.taskGuidance ?? (source === 'builtin' ? '' : currentTemplate.content),
+  )
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -197,17 +249,13 @@ function TemplateItem({
   // 展开时重置编辑内容
   if (isExpanded !== prevExpanded || currentTemplate.content !== prevContent) {
     if (isExpanded) {
-      setEditContent(currentTemplate.content)
+      setEditRole(currentTemplate.systemRole ?? '')
+      setEditGuidance(currentTemplate.taskGuidance ?? (source === 'builtin' ? '' : currentTemplate.content))
       setSaveResult(null)
     }
     setPrevExpanded(isExpanded)
     setPrevContent(currentTemplate.content)
   }
-
-  // 检查是否有被删除的变量
-  const missingVars = Object.keys(builtinTemplate.variables).filter(
-    (v) => builtinTemplate.content.includes(`{{${v}}}`) && !editContent.includes(`{{${v}}}`)
-  )
 
   const sourceConf = SOURCE_CONFIG[source]
 
@@ -218,8 +266,8 @@ function TemplateItem({
     const start = textarea.selectionStart
     const end = textarea.selectionEnd
     const text = `{{${varName}}}`
-    const newContent = editContent.slice(0, start) + text + editContent.slice(end)
-    setEditContent(newContent)
+    const newContent = editGuidance.slice(0, start) + text + editGuidance.slice(end)
+    setEditGuidance(newContent)
     // 恢复光标
     requestAnimationFrame(() => {
       textarea.focus()
@@ -233,8 +281,9 @@ function TemplateItem({
     setSaveResult(null)
     const template: PromptTemplate = {
       ...builtinTemplate,
-      content: editContent,
-      // 不保存 systemSuffix，渲染时自动从内置取
+      writingLanguage,
+      systemRole: editRole,
+      taskGuidance: editGuidance,
     }
     delete (template as Partial<PromptTemplate>).systemSuffix
     const ok = await saveCustomPrompt(template)
@@ -252,12 +301,14 @@ function TemplateItem({
     setSaveResult(null)
     const template: PromptTemplate = {
       ...builtinTemplate,
-      content: editContent,
+      writingLanguage,
+      systemRole: editRole,
+      taskGuidance: editGuidance,
     }
     delete (template as Partial<PromptTemplate>).systemSuffix
     const ok = await saveProjectCustomPrompt(operationSession, template)
     if (!isProjectSessionCurrent(operationSession)) return
-    if (ok) await loadProjectCustomPrompts(operationSession)
+    if (ok) await loadProjectCustomPrompts(operationSession, writingLanguage)
     if (!isProjectSessionCurrent(operationSession)) return
     setSaving(false)
     setSaveResult(ok ? { type: 'success', msg: text('已保存到当前项目', 'Saved to this project') } : { type: 'error', msg: text('保存失败', 'Save failed') })
@@ -273,7 +324,7 @@ function TemplateItem({
     // 依次删除项目级和全局级覆盖
     if (operationSession) {
       if (!isProjectSessionCurrent(operationSession)) return
-      const projectDeleted = await deleteProjectCustomPrompt(operationSession, builtinTemplate.key)
+      const projectDeleted = await deleteProjectCustomPrompt(operationSession, builtinTemplate.key, writingLanguage)
       if (!isProjectSessionCurrent(operationSession)) return
       if (!projectDeleted) {
         setSaving(false)
@@ -281,7 +332,7 @@ function TemplateItem({
         return
       }
     }
-    const globalDeleted = await deleteCustomPrompt(builtinTemplate.key)
+    const globalDeleted = await deleteCustomPrompt(builtinTemplate.key, writingLanguage)
     if (operationSession && !isProjectSessionCurrent(operationSession)) return
     if (!globalDeleted) {
       setSaving(false)
@@ -289,10 +340,11 @@ function TemplateItem({
       return
     }
     if (operationSession) {
-      await loadProjectCustomPrompts(operationSession)
+      await loadProjectCustomPrompts(operationSession, writingLanguage)
       if (!isProjectSessionCurrent(operationSession)) return
     }
-    setEditContent(builtinTemplate.content)
+    setEditRole(builtinTemplate.systemRole ?? '')
+    setEditGuidance('')
     setSaving(false)
     setSaveResult({ type: 'success', msg: text('已恢复为内置默认', 'Restored built-in default') })
     onSaved()
@@ -366,18 +418,42 @@ function TemplateItem({
             </div>
           </div>
 
-          {/* 编辑 textarea */}
+          <label className="block">
+            <span className="block text-[0.68rem] font-medium mb-1.5 text-[var(--color-text-muted)]">
+              {text('创作角色定位', 'Creative role')}
+            </span>
+            <textarea
+              value={editRole}
+              onChange={(event) => setEditRole(event.target.value)}
+              className="w-full rounded-lg px-3 py-2.5 text-xs resize-y outline-none focus:border-[var(--color-accent)]"
+              style={{
+                backgroundColor: 'var(--color-editor-bg)',
+                color: 'var(--color-text)',
+                border: '1px solid var(--color-border)',
+                minHeight: '84px',
+                lineHeight: 1.6,
+              }}
+              spellCheck={false}
+            />
+          </label>
+
+          {/* 用户层只追加创作指导；内置任务与输出合同保持隐藏且不可改。 */}
           <div>
+            <p className="text-[0.68rem] font-medium mb-1.5 text-[var(--color-text-muted)]">
+              {text('补充创作指导', 'Additional creative guidance')}
+            </p>
             <textarea
               ref={textareaRef}
-              value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
+              aria-label={text('补充创作指导', 'Additional creative guidance')}
+              value={editGuidance}
+              onChange={(e) => setEditGuidance(e.target.value)}
+              placeholder={text('例如：优先通过角色行动体现冲突，避免概括式说明。', 'For example: reveal conflict through character action instead of summary.')}
               className="w-full rounded-lg px-3 py-2.5 text-xs font-mono resize-y outline-none focus:outline-none"
               style={{
                 backgroundColor: 'var(--color-editor-bg)',
                 color: 'var(--color-text)',
                 border: '1px solid var(--color-border)',
-                minHeight: '200px',
+                minHeight: '140px',
                 maxHeight: '500px',
                 lineHeight: 1.6,
                 transition: 'border-color 0.15s ease',
@@ -387,23 +463,6 @@ function TemplateItem({
               spellCheck={false}
             />
           </div>
-
-          {/* 变量缺失警告 */}
-          {missingVars.length > 0 && (
-            <div
-              className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-              style={{ backgroundColor: 'color-mix(in srgb, var(--color-warning) 8%, transparent)', color: 'var(--color-warning-text)' }}
-            >
-              <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" style={{ color: 'var(--color-warning)' }} />
-              <span>
-                {text('以下变量在原模板中使用但在当前内容中未找到：', 'Variables used by the built-in template are missing:')}
-                {missingVars.map((v) => (
-                  <code key={v} className="mx-1 font-mono">{`{{${v}}}`}</code>
-                ))}
-                {text('，可能导致渲染时出现未替换的占位符。', '. This may leave placeholders unresolved.')}
-              </span>
-            </div>
-          )}
 
 
           {/* 操作按钮 */}

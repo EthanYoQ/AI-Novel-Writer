@@ -18,6 +18,14 @@ import {
   projectSessionContextFromProject,
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
+import { resolveWritingLanguage, type WritingLanguage } from '../../shared/writing-language'
+import { promptLanguageText } from '../prompt-language'
+import {
+  composePromptSystemRole,
+  getBuiltinPromptTemplate,
+  renderPrompt,
+  resolvePromptTemplate,
+} from '../prompt-templates'
 
 // ===== 上下文构建 =====
 
@@ -27,25 +35,28 @@ import {
  * 这是 Agent 每次对话时的系统提示词入口。
  * 将项目上下文、编辑器状态、可用 Tool 列表整合为一份完整的系统提示。
  */
-export function buildAgentSystemPrompt(
+export async function buildAgentSystemPrompt(
   mode: AgentMode,
   executionContext?: AgentExecutionContext,
-): string {
+): Promise<string> {
   const sections: string[] = []
+  const writingLanguage = resolveWritingLanguage(
+    useProjectStore.getState().currentProject?.novelConfig.writingLanguage,
+  )
 
   // 1. Agent 身份与行为指导
-  sections.push(buildIdentityPrompt(mode))
+  sections.push(await buildIdentityPrompt(mode, writingLanguage, executionContext))
 
   // 2. L0 — 始终注入的项目上下文
-  const l0 = buildL0ProjectContext(executionContext)
+  const l0 = buildL0ProjectContext(writingLanguage, executionContext)
   if (l0) sections.push(l0)
 
   // 3. L1 — 编辑器感知上下文
-  const l1 = buildL1EditorContext(executionContext)
+  const l1 = buildL1EditorContext(writingLanguage, executionContext)
   if (l1) sections.push(l1)
 
   // 4. Tool 系统提示词
-  const toolPrompt = toolRegistry.generateToolPrompt()
+  const toolPrompt = toolRegistry.generateToolPrompt(writingLanguage)
   if (toolPrompt) sections.push(toolPrompt)
 
   return sections.join('\n\n---\n\n')
@@ -54,36 +65,37 @@ export function buildAgentSystemPrompt(
 // ===== 内部构建方法 =====
 
 /** Agent 身份提示词 */
-function buildIdentityPrompt(mode: AgentMode): string {
-  const modeDesc = mode === 'planning'
-    ? '当前处于 Planning 模式：你可以先规划再执行，适合复杂的多步骤任务。请先分析需求，制定方案，再逐步执行。'
-    : '当前处于 Fast 模式：你直接高效地完成任务，适合简单快速的操作。'
-
-  return `# AI小说作家 AI 创作助手
-
-你是 AI小说作家智能创作助手，专注于帮助作家进行长篇小说创作。
-
-${modeDesc}
-
-## 核心能力
-- 📖 深入理解小说项目的架构、人物、情节，提供专业的创作建议
-- 🔍 通过工具调用主动获取项目数据（架构文件、角色卡、蓝图、草稿等）
-- ✏️ 通过工具触发创作工作流（写稿、修稿、审计、定稿）
-- 🧠 结合知识库做检索增强生成（RAG）
-
-## 行为规范
-- 使用中文回复
-- 回答应当专业、具体、富有创意
-- 主动使用工具获取所需信息，而非要求用户提供
-- 对于写入型操作（修改文件、触发工作流），先说明你要做什么，再调用工具
-- 如果需要多步操作，可以逐步调用多个工具`
+async function buildIdentityPrompt(
+  mode: AgentMode,
+  writingLanguage: WritingLanguage,
+  executionContext?: AgentExecutionContext,
+): Promise<string> {
+  const projectSession = executionContext?.projectSession ?? undefined
+  const template = await resolvePromptTemplate('assistant_writing_identity', projectSession, writingLanguage)
+    ?? getBuiltinPromptTemplate('assistant_writing_identity', writingLanguage)
+  if (!template) throw new Error('Missing assistant writing identity prompt')
+  const modeInstruction = writingLanguage === 'en-US'
+    ? (mode === 'planning'
+        ? 'Planning mode: analyze the request, form a short plan, and carry it out through the available application tools.'
+        : 'Fast mode: complete straightforward requests directly and efficiently.')
+    : (mode === 'planning'
+        ? '当前处于规划模式：先分析需求、形成简短方案，再通过可用的应用工具执行。'
+        : '当前处于快速模式：直接、高效地完成清晰直接的请求。')
+  return `${composePromptSystemRole(template, writingLanguage)}\n\n${renderPrompt(
+    template,
+    { mode_instruction: modeInstruction },
+    writingLanguage,
+  )}`
 }
 
 /**
  * L0 — 始终注入的项目上下文
  * 约 300-500 token，每次对话都注入
  */
-function buildL0ProjectContext(executionContext?: AgentExecutionContext): string | null {
+function buildL0ProjectContext(
+  writingLanguage: WritingLanguage,
+  executionContext?: AgentExecutionContext,
+): string | null {
   const project = useProjectStore.getState().currentProject
   if (
     !project
@@ -94,44 +106,46 @@ function buildL0ProjectContext(executionContext?: AgentExecutionContext): string
   ) return null
 
   const cfg = project.novelConfig
+  const label = (zhCN: string, enUS: string) => promptLanguageText(writingLanguage, zhCN, enUS)
   const parts: string[] = [
-    `## 当前项目上下文`,
-    `项目名称：《${project.name}》`,
+    `## ${label('当前项目上下文', 'Current project context')}`,
+    `${label('项目名称', 'Project name')}: ${project.name}`,
   ]
 
   if (cfg.genre) {
-    parts.push(`类型：${cfg.genre}${cfg.subGenre ? ' · ' + cfg.subGenre : ''}`)
+    parts.push(`${label('类型', 'Genre')}: ${cfg.genre}${cfg.subGenre ? ' · ' + cfg.subGenre : ''}`)
   }
   if (cfg.targetAudience) {
-    parts.push(`目标读者：${cfg.targetAudience}`)
+    parts.push(`${label('目标读者', 'Target readers')}: ${cfg.targetAudience}`)
   }
   if (cfg.totalChapters) {
-    parts.push(`计划章节数：${cfg.totalChapters} 章`)
+    parts.push(`${label('计划章节数', 'Planned chapters')}: ${cfg.totalChapters}`)
   }
   if (cfg.wordsPerChapter) {
-    parts.push(`每章字数：约 ${cfg.wordsPerChapter} 字`)
+    parts.push(`${label('每章目标字数', 'Target words per chapter')}: ${cfg.wordsPerChapter}`)
   }
   if (cfg.narrativePOV) {
-    const povMap: Record<string, string> = {
-      'third_limited': '第三人称有限',
-      'first_person': '第一人称',
-      'third_omniscient': '第三人称全知',
-      'multi_pov': '多视角',
+    const povMap: Record<string, readonly [string, string]> = {
+      'third_limited': ['第三人称有限', 'Third-person limited'],
+      'first_person': ['第一人称', 'First person'],
+      'third_omniscient': ['第三人称全知', 'Third-person omniscient'],
+      'multi_pov': ['多视角', 'Multiple viewpoints'],
     }
-    parts.push(`叙事视角：${povMap[cfg.narrativePOV] ?? cfg.narrativePOV}`)
+    const pov = povMap[cfg.narrativePOV]
+    parts.push(`${label('叙事视角', 'Point of view')}: ${pov ? label(...pov) : cfg.narrativePOV}`)
   }
   if (cfg.coreOutline) {
     // 截取前 300 字符，避免 Token 爆炸
     const outline = cfg.coreOutline.length > 300
-      ? cfg.coreOutline.slice(0, 300) + '…'
+      ? cfg.coreOutline.slice(0, 300) + label('…', '...')
       : cfg.coreOutline
-    parts.push(`核心大纲：${outline}`)
+    parts.push(`${label('核心大纲', 'Core outline')}: ${outline}`)
   }
   if (cfg.writingStyle) {
     const style = cfg.writingStyle.length > 150
-      ? cfg.writingStyle.slice(0, 150) + '…'
+      ? cfg.writingStyle.slice(0, 150) + label('…', '...')
       : cfg.writingStyle
-    parts.push(`写作风格：${style}`)
+    parts.push(`${label('写作风格', 'Writing style')}: ${style}`)
   }
 
   return parts.join('\n')
@@ -141,8 +155,12 @@ function buildL0ProjectContext(executionContext?: AgentExecutionContext): string
  * L1 — 编辑器感知上下文
  * 约 200-500 token，注入当前打开的 Tab 信息和工作流状态
  */
-function buildL1EditorContext(executionContext?: AgentExecutionContext): string | null {
+function buildL1EditorContext(
+  writingLanguage: WritingLanguage,
+  executionContext?: AgentExecutionContext,
+): string | null {
   const parts: string[] = []
+  const label = (zhCN: string, enUS: string) => promptLanguageText(writingLanguage, zhCN, enUS)
 
   // 当前打开的编辑器 Tab
   const editorState = useEditorStore.getState()
@@ -161,19 +179,19 @@ function buildL1EditorContext(executionContext?: AgentExecutionContext): string 
   if (projectTabs.length > 0) {
     const activeTab = projectTabs.find(t => t.id === editorState.activeTabId)
     const tabSummaries = projectTabs.map(t => {
-      const active = t.id === editorState.activeTabId ? ' [当前活跃]' : ''
-      const dirty = t.dirty ? ' [未保存]' : ''
+      const active = t.id === editorState.activeTabId ? ` [${label('当前活跃', 'active')}]` : ''
+      const dirty = t.dirty ? ` [${label('未保存', 'unsaved')}]` : ''
       return `  - ${t.name} (${t.type})${active}${dirty}`
     }).join('\n')
 
-    parts.push(`## 编辑器状态\n打开的文件：\n${tabSummaries}`)
+    parts.push(`## ${label('编辑器状态', 'Editor state')}\n${label('打开的文件', 'Open files')}:\n${tabSummaries}`)
 
     // 如果当前活跃 Tab 有内容且不太长，注入内容摘要
     if (activeTab?.content && activeTab.content.length > 0) {
       const preview = activeTab.content.length > 500
-        ? activeTab.content.slice(0, 500) + '\n…（内容过长已截断，可通过 read_file 工具获取完整内容）'
+        ? activeTab.content.slice(0, 500) + `\n${label('…（内容过长已截断，可通过 read_file 工具获取完整内容）', '... (preview truncated; use read_file to retrieve the complete content)')}`
         : activeTab.content
-      parts.push(`### 当前活跃文件内容\n文件名：${activeTab.name}\n\`\`\`\n${preview}\n\`\`\``)
+      parts.push(`### ${label('当前活跃文件内容', 'Active file content')}\n${label('文件名', 'File')}: ${activeTab.name}\n\`\`\`\n${preview}\n\`\`\``)
     }
   }
 
@@ -182,7 +200,8 @@ function buildL1EditorContext(executionContext?: AgentExecutionContext): string 
   if (workflowState.hasActiveRun()) {
     const run = workflowState.activeRuns.find(item => item.projectPath === currentProjectPath)
     if (run) {
-      parts.push(`## 工作流状态\n当前有工作流正在运行：${run.title}（进度：${run.currentStepIndex + 1}/${run.steps.length}）`)
+      const runName = writingLanguage === 'en-US' ? run.type : run.title
+      parts.push(`## ${label('工作流状态', 'Workflow status')}\n${label('正在运行', 'Running')}: ${runName} (${label('进度', 'progress')}: ${run.currentStepIndex + 1}/${run.steps.length})`)
     }
   }
 

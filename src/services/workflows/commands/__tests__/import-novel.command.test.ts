@@ -506,6 +506,13 @@ describe('InferGlobalSettingsCommand', () => {
     const context = createContext()
     context.writingLanguage = 'en-US'
     context.uiLocale = 'en-US'
+    context.writingSkills = Object.freeze({
+      planning: Object.freeze({
+        skillId: 'user:import-planning', name: 'Import planning', stage: 'planning' as const,
+        source: 'user' as const, writingLanguage: 'en-US' as const,
+        content: 'Preserve imported causal facts.', utf8Bytes: 31,
+      }),
+    })
     context.data.chapters = [{
       number: 1,
       title: 'Night Café 夜航',
@@ -517,6 +524,8 @@ describe('InferGlobalSettingsCommand', () => {
 
     expect(observed).toHaveLength(2)
     expect(observed[0]?.[0]?.content).toContain('senior fiction editor')
+    expect(observed[0]?.[1]?.content).toContain('[Supplemental writing skill: Import planning]')
+    expect(observed[1]?.[1]?.content).toContain('[Supplemental writing skill: Import planning]')
     expect(observed[0]?.[1]?.content).toContain(importedText)
     expect(observed[0]?.map(message => message.content).join('\n')).not.toContain('【小说全文采样】')
     expect(observed[1]?.[0]?.content).toContain('You repair JSON syntax only')
@@ -586,6 +595,8 @@ describe('InferGlobalSettingsCommand', () => {
     expect(Object.keys(repairReport!)).toEqual([
       'totalUtf8Bytes',
       'limitUtf8Bytes',
+      'contextWindowTokens',
+      'estimatedInputTokens',
       'reservedOutputTokens',
       'sections',
       'modelId',
@@ -692,6 +703,44 @@ describe('InferGlobalSettingsCommand', () => {
     useLLMStore.setState({ defaultModelId: 'model-a', generateStream })
     await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
     expect(generateStream).toHaveBeenCalledOnce()
+  })
+
+  it('accepts a merged roster receipt when every inferred character is present with existing characters', async () => {
+    const inferred = validInference()
+    stubIpcInvoke((channel, request) => {
+      if (channel === 'kb:search') return []
+      if (channel === 'db:character-roster-read') return { status: 'ready', revision: 7, entries: [{ name: '旧角色' }] }
+      if (channel === 'db:import-global-facts-commit') {
+        const candidate = request as { operationId: string; core: object; characterEntries: unknown[] }
+        return {
+          success: true,
+          receipt: {
+            operationId: candidate.operationId,
+            payloadHash: 'f'.repeat(64),
+            idempotent: false,
+            core: candidate.core,
+            roster: {
+              snapshot: {
+                status: 'ready',
+                entries: [{ name: '旧角色' }, ...candidate.characterEntries],
+              },
+            },
+          },
+        }
+      }
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+    useLLMStore.setState({
+      defaultModelId: 'model-a',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        streamCallbacks.onDone?.(JSON.stringify(inferred), undefined, 'stop')
+        return 'merged-roster-receipt'
+      }),
+    })
+
+    await expect(new InferGlobalSettingsCommand().execute({
+      step: {}, context: createContext(), callbacks,
+    })).resolves.toBeUndefined()
   })
 
   it('rejects inferred free-text relationships before any roster commit', async () => {

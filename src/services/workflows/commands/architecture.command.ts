@@ -1,10 +1,15 @@
 import {
   BaseWorkflowCommand,
-  CommandExecuteParams,
+  injectWritingSkillIntoSession,
+  type CommandExecuteParams,
   type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { resolvePromptTemplate } from '../../prompt-templates'
+import {
+  composePromptSystemRole,
+  renderPromptTaskGuidance,
+  resolvePromptTemplate,
+} from '../../prompt-templates'
 import { ArchitecturePromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
@@ -288,21 +293,12 @@ function validateCharacterDetail(output: CharacterDetailOutput): string | undefi
   }
   if (!CHARACTER_ROSTER_ROLES.includes(output.role)) return invalid('role', '不是允许的定位')
   if (output.relationships !== undefined) return invalid('relationships', '不得出现')
-  const textLimits: Array<[string, unknown, number]> = [
-    ['gender', output.gender, 100], ['age', output.age, 100], ['appearance', output.appearance, 300],
-    ['personality', output.personality, 300], ['background', output.background, 500],
-    ['abilities', output.abilities, 300], ['motivation', output.motivation, 300],
-    ['arc', output.arc, 300], ['notes', output.notes, 300],
-  ]
-  for (const [field, value, limit] of textLimits) {
-    if (typeof value !== 'string' || value.length > limit) return invalid(field, `超过 ${limit} 字符上限`)
-  }
   if (output.currentState === undefined) return invalid('currentState', '必填')
   {
     if (!isRecord(output.currentState)) return invalid('currentState', '必须是对象')
     for (const field of ['location', 'powerLevel', 'physicalState', 'mentalState', 'keyItems', 'recentEvents'] as const) {
       const value = output.currentState[field]
-      if (typeof value !== 'string' || !value.trim() || value.length > 300) return invalid(`currentState.${field}`, '必须是 1–300 字符文本')
+      if (typeof value !== 'string' || !value.trim()) return invalid(`currentState.${field}`, '必须是非空文本')
     }
     if (!Number.isSafeInteger(output.currentState.updatedAtChapter) || output.currentState.updatedAtChapter < 0) {
       return invalid('currentState.updatedAtChapter', '必须是非负整数')
@@ -456,6 +452,7 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
         responseFormat: { type: 'json_object' },
         purpose: 'generate-global-config',
         reasoningStage: 'planning',
+        writingSkillStage: 'planning',
       },
       context,
     )
@@ -483,6 +480,7 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
           responseFormat: { type: 'json_object' },
           purpose: 'generate-global-config-replacement',
           reasoningStage: 'planning',
+          writingSkillStage: 'planning',
         },
         context,
       )
@@ -595,7 +593,7 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
     const result = await this.callLLMWithBuilder(
       promptBuilder,
       callbacks,
-      { purpose: 'generate-core-seed', reasoningStage: 'planning' },
+      { purpose: 'generate-core-seed', reasoningStage: 'planning', writingSkillStage: 'planning' },
       context,
     )
     if (!result.trim()) throw new Error(text(
@@ -688,6 +686,11 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     assertArchitectureProjectSessionCurrent(projectSession, context)
     const writingLanguage = workflowWritingLanguage(context)
     const promptCopy = characterArchitecturePrompts(writingLanguage)
+    const creativeTemplate = await resolvePromptTemplate('character_dynamics', projectSession, writingLanguage)
+    if (!creativeTemplate) throw new Error(text(
+      '角色规划模板丢失',
+      'The character-planning template is missing.',
+    ))
     const { expectedProjectPath } = this.snapshot
     const { novelConfig: config } = this.snapshot
 
@@ -713,11 +716,28 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       referenceWorks: config.referenceWorks || missingValue,
     }
     const manifestContextJson = JSON.stringify(manifestContext)
-    const manifestPrompt = promptCopy.manifestTask(
+    const templateVariables = {
+      premise: manifestContext.premise,
+      genre: manifestContext.genre,
+      protagonist_profile: manifestContext.protagonistProfile,
+      global_guidance: manifestContext.globalGuidance,
+      step_guidance: manifestContext.stepGuidance,
+      reference_works: manifestContext.referenceWorks,
+      number_of_chapters: String(config.totalChapters),
+      golden_finger: config.goldenFinger || missingValue,
+      world_building: config.worldSetting || missingValue,
+    }
+    const creativeSystem = composePromptSystemRole(creativeTemplate, writingLanguage)
+    const creativeGuidance = renderPromptTaskGuidance(creativeTemplate, templateVariables, writingLanguage)
+    const manifestSystem = `${creativeSystem}\n\n${promptCopy.manifestSystem}`
+    const manifestTask = promptCopy.manifestTask(
       manifestContextJson,
       MIN_CHARACTER_SLOTS,
       MAX_CHARACTER_SLOTS,
     )
+    const manifestPrompt = creativeGuidance
+      ? `${creativeGuidance}\n\n${manifestTask}`
+      : manifestTask
     const manifestSection = (sectionName: string, key: keyof typeof manifestContext) => ({
       sectionName,
       messageIndex: 1,
@@ -725,20 +745,21 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     })
     const manifestRaw = await this.callLLMWithBoundedCompletion(
       manifestPrompt,
-      promptCopy.manifestSystem,
+      manifestSystem,
       callbacks,
       { mode: 'replace-structured-output', maxContinuations: 2 },
       {
         responseFormat: { type: 'json_object' },
         purpose: 'character-architecture-manifest',
         reasoningStage: 'planning',
+        writingSkillStage: 'planning',
         promptBudget: {
           limitUtf8Bytes: MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES,
           sections: [
             {
               sectionName: 'system-instructions',
               messageIndex: 0,
-              finalText: promptCopy.manifestSystem,
+              finalText: manifestSystem,
             },
             manifestSection('story-premise', 'premise'),
             manifestSection('genre', 'genre'),
@@ -776,19 +797,23 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         })))
         const frozenManifest = JSON.stringify({ slots: manifest })
         const slotIds = items.map(slot => slot.slotId).join(', ')
-        const detailPrompt = promptCopy.detailTask({
+        const detailTask = promptCopy.detailTask({
           context: manifestContextJson,
           manifest: frozenManifest,
           slotIds,
           validatedPrefix: prefix,
         })
-        const detailRequestBytes = promptUtf8Bytes(promptCopy.detailSystem) + promptUtf8Bytes(detailPrompt)
+        const detailPrompt = creativeGuidance
+          ? `${creativeGuidance}\n\n${detailTask}`
+          : detailTask
+        const detailSystem = `${creativeSystem}\n\n${promptCopy.detailSystem}`
+        const detailRequestBytes = promptUtf8Bytes(detailSystem) + promptUtf8Bytes(detailPrompt)
         const fixedDetailRequestBytes = detailRequestBytes - promptUtf8Bytes(prefix)
         return {
           purpose: 'character-architecture-details',
           output: 'structured-data',
           messages: [
-            { role: 'system', content: promptCopy.detailSystem },
+            { role: 'system', content: detailSystem },
             {
               role: 'user',
               content: detailPrompt,
@@ -800,7 +825,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
               {
                 sectionName: 'system-instructions',
                 messageIndex: 0,
-                finalText: promptCopy.detailSystem,
+                finalText: detailSystem,
               },
               manifestSection('story-premise', 'premise'),
               manifestSection('genre', 'genre'),
@@ -860,15 +885,16 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         return undefined
       },
     }
+    const generationExecution = this.requireGenerationExecution()
     const detailExecution = await createStructuredBatchExecutor({
       contract: detailContract,
-      session: this.requireGenerationExecution().session,
+      session: injectWritingSkillIntoSession(generationExecution.session, context, 'planning'),
       writingLanguage,
       onAttempt: receipt => this.reportGenerationPromptBudget(callbacks, receipt),
     }).execute({
       items: manifest,
       limits: { maxBatchItems: CHARACTER_DETAIL_BATCH_SIZE },
-      signal: this.requireGenerationExecution().signal,
+      signal: generationExecution.signal,
     })
     if (!detailExecution.ok) throw new Error(text(
       detailExecution.failure.message,
@@ -1021,7 +1047,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     const result = await this.callLLMWithBuilder(
       promptBuilder,
       callbacks,
-      { purpose: 'generate-world-building', reasoningStage: 'planning' },
+      { purpose: 'generate-world-building', reasoningStage: 'planning', writingSkillStage: 'planning' },
       context,
     )
     if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
@@ -1128,7 +1154,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     const result = await this.callLLMWithBuilder(
       promptBuilder,
       callbacks,
-      { purpose: 'generate-plot-architecture', reasoningStage: 'planning' },
+      { purpose: 'generate-plot-architecture', reasoningStage: 'planning', writingSkillStage: 'planning' },
       context,
     )
     if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))

@@ -12,7 +12,6 @@ import type { GenerationRuntime } from '../../../generation/generation-runtime'
 import {
   DirectoryPostCommitCancellationError,
   DirectoryPostCommitSyncError,
-  DirectoryCharacterSyncPendingError,
   DirectoryCostLimitError,
   GenerateDirectoryCommand,
   retryDirectoryCharacterSync,
@@ -401,7 +400,8 @@ describe('GenerateDirectoryCommand', () => {
 
     const system = observedTask?.messages.find(message => message.role === 'system')?.content ?? ''
     const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(system).toContain('You are an experienced web-fiction architect')
+    expect(system).toContain('You are an experienced chapter architect')
+    expect(system).toContain('[Immutable system contract]')
     expect(user).toContain('Generate chapter blueprints from chapter 1 through chapter 1')
     expect(user).toContain('The sign “夜航 Café” must remain byte-for-byte unchanged.')
     expect(user).not.toContain('【不可变蓝图 JSON 合同】')
@@ -427,6 +427,8 @@ describe('GenerateDirectoryCommand', () => {
 
       const system = task.messages.find(message => message.role === 'system')?.content ?? ''
       const user = task.messages.find(message => message.role === 'user')?.content ?? ''
+      expect(user).toContain('[Supplemental writing skill: Blueprint craft]')
+      expect(user).toContain('Preserve causal structure across chapters.')
       expect(task.purpose).toBe('chapter-blueprint-directory:structured-syntax-repair')
       expect(system).toContain('You repair JSON syntax')
       expect(system).not.toContain('你是结构化 JSON 语法修复器')
@@ -444,7 +446,17 @@ describe('GenerateDirectoryCommand', () => {
       { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 1 } },
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
-    const context = { ...workflowContext(), writingLanguage: 'en-US' as const }
+    const context = {
+      ...workflowContext(),
+      writingLanguage: 'en-US' as const,
+      writingSkills: Object.freeze({
+        planning: Object.freeze({
+          skillId: 'user:blueprint-craft', name: 'Blueprint craft', stage: 'planning' as const,
+          source: 'user' as const, writingLanguage: 'en-US' as const,
+          content: 'Preserve causal structure across chapters.', utf8Bytes: 42,
+        }),
+      }),
+    }
 
     const result = await command.execute({ step: {}, context, callbacks: stepCallbacks() })
 
@@ -452,7 +464,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(attempt).toBe(2)
   })
 
-  it('blocks a new billable directory run while a durable character sync is pending', async () => {
+  it('allows a new directory run while an older character sync remains independently retryable', async () => {
     const operation = {
       operationId: 'blueprint-sync-previous-run',
       blueprintCommitOperationId: 'previous-run',
@@ -464,25 +476,33 @@ describe('GenerateDirectoryCommand', () => {
       createdAt: '2026-01-01 00:00:00',
       updatedAt: '2026-01-01 00:00:00',
     }
-    stubIpcInvoke(channel => (
-      channel === 'db:blueprint-character-sync-list-pending' ? [operation] : { success: true }
+    const commitHandler = successfulCommitHandler()
+    stubIpcInvoke((channel, ...args) => (
+      channel === 'db:blueprint-character-sync-list-pending'
+        ? [operation]
+        : commitHandler(channel, ...args)
     ))
-    const createRuntime = vi.fn()
+    const session = generationSession(async () => ({
+      status: 'completed',
+      content: blueprintJson([1]),
+      finishReason: 'stop',
+      receipt: generationReceipt(1, 'stop'),
+    }))
+    const createRuntime = vi.fn(async () => testRuntime(session))
     const command = new GenerateDirectoryCommand(
       { mode: 'full', count: 1 },
       { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 1 } },
-      { createRuntime: createRuntime as never },
+      { createRuntime },
     )
 
-    const failure = await command.execute({
+    const result = await command.execute({
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    }).catch(error => error as unknown)
+    })
 
-    expect(failure).toBeInstanceOf(DirectoryCharacterSyncPendingError)
-    expect(failure).toMatchObject({ operationIds: ['blueprint-sync-previous-run'] })
-    expect(createRuntime).not.toHaveBeenCalled()
+    expect(result).toHaveLength(1)
+    expect(createRuntime).toHaveBeenCalledOnce()
   })
 
   it('keeps a larger logical range in one transaction while the executor makes ordered five-item batches', async () => {

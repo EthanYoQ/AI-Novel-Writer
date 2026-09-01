@@ -6,9 +6,14 @@
  * 2. InferBlueprintsPerChapterCommand — 按章逐一推演精准蓝图 + 蓝图入向量库 + 拼装轻量全局摘要
  */
 
-import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
+import {
+  BaseWorkflowCommand,
+  injectWritingSkillIntoSession,
+  type CommandExecuteParams,
+  type WorkflowGenerationRuntimeDependencies,
+} from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { resolvePromptTemplate } from '../../prompt-templates'
+import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
 import { ImportPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
@@ -219,9 +224,12 @@ function parseImportEndpointCorrectionDelta(
 function requireImportGlobalFactsReceipt(
   candidate: ImportGlobalFactsReceipt | undefined,
   operationId: string,
-  expectedCharacterCount: number,
+  expectedCharacterNames: readonly string[],
   text: UiText,
 ): ImportGlobalFactsReceipt {
+  const committedNames = new Set(candidate?.roster?.snapshot?.entries
+    ?.map(entry => typeof entry.name === 'string' ? entry.name.trim() : '')
+    .filter(Boolean))
   if (
     !candidate
     || candidate.operationId !== operationId
@@ -230,7 +238,7 @@ function requireImportGlobalFactsReceipt(
     || !candidate.core
     || !candidate.roster?.snapshot
     || candidate.roster.snapshot.status !== 'ready'
-    || candidate.roster.snapshot.entries.length !== expectedCharacterCount
+    || expectedCharacterNames.some(name => !committedNames.has(name.trim()))
   ) throw new Error(text(
     '导入全局事实提交收据无效或覆盖不完整',
     'The imported global-facts commit receipt is invalid or incomplete.',
@@ -341,6 +349,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         responseFormat: { type: 'json_object' },
         purpose: 'import-inference:endpoint-card-recovery',
         reasoningStage: 'planning',
+        writingSkillStage: 'planning',
       },
       context,
     )
@@ -464,12 +473,15 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
     const initial = await this.callLLMResult(
       prompt,
-      template.systemRole || promptLanguageText(writingLanguage, '你是一位顶级网文主编和资深阅读分析师。', 'You are a senior fiction editor and reading analyst.'),
+      composePromptSystemRole({
+        systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位资深小说编辑和阅读分析师。', 'You are a senior fiction editor and reading analyst.'),
+      }, writingLanguage),
       callbacks,
       {
         responseFormat: { type: 'json_object' },
         purpose: 'import-inference',
         reasoningStage: 'planning',
+        writingSkillStage: 'planning',
       },
       context,
     )
@@ -493,6 +505,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
           responseFormat: { type: 'json_object' },
           purpose: repairTask.purpose,
           reasoningStage: 'planning',
+          writingSkillStage: 'planning',
           ...(repairTask.promptBudget ? { promptBudget: repairTask.promptBudget } : {}),
         },
         context,
@@ -591,7 +604,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     const commitReceipt = requireImportGlobalFactsReceipt(
       rawCommitReceipt,
       operationId,
-      inferResult.characterCards.length,
+      inferResult.characterCards.map(card => card.name),
       text,
     )
     context.data.importGlobalFactsReceipt = commitReceipt
@@ -764,7 +777,12 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
           purpose: 'import-chapter-blueprints',
           output: 'structured-data',
           messages: [
-            { role: 'system', content: template.systemRole || promptLanguageText(writingLanguage, '你是一位专业的网文结构分析师。', 'You are a professional fiction-structure analyst.') },
+            {
+              role: 'system',
+              content: composePromptSystemRole({
+                systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位专业的小说结构分析师。', 'You are a professional fiction-structure analyst.'),
+              }, writingLanguage),
+            },
             { role: 'user', content: prompt },
           ],
         }
@@ -782,9 +800,10 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     }
 
     const execution = this.requireGenerationExecution()
+    const planningSession = injectWritingSkillIntoSession(execution.session, context, 'planning')
     const batch = await createStructuredBatchExecutor({
       contract,
-      session: execution.session,
+      session: planningSession,
       writingLanguage,
       onAttempt: receipt => this.reportGenerationPromptBudget(callbacks, receipt),
     }).execute({

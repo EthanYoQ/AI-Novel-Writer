@@ -10,6 +10,12 @@ import { cn } from '../../lib/utils'
 import { createGenerationRuntime } from '../../services/generation/generation-runtime'
 import type { GenerationReasoningStage } from '../../shared/reasoning-types'
 import { countDraftUnits } from '../../shared/draft-units'
+import { useLocaleStore } from '../../stores/locale-store'
+import { useProjectStore } from '../../stores/project-store'
+import { getActiveProjectSessionContext } from '../../shared/project-session-context'
+import { resolveWritingLanguage } from '../../shared/writing-language'
+import { promptLanguageText } from '../../services/prompt-language'
+import { composePromptSystemRole, renderPrompt, resolvePromptTemplate } from '../../services/prompt-templates'
 
 export type CodeMirrorEditorProps = {
   content: string
@@ -25,17 +31,17 @@ export type CodeMirrorEditorProps = {
 
 type EditorAIAction = {
   key: 'refine' | 'expand' | 'continue' | 'dialogue'
-  label: string
+  label: readonly [string, string]
   color: string
-  prompt: string
+  prompt: readonly [string, string]
   reasoningStage: GenerationReasoningStage
 }
 
 const AI_ACTIONS = [
-  { key: 'refine', label: '润色', color: 'text-[var(--color-category-progress-text)]', prompt: '润色这部分，使其更具文学感和感染力。', reasoningStage: 'review' },
-  { key: 'expand', label: '扩写', color: 'text-[var(--color-warning-text)]', prompt: '扩写这部分，增加更多细节描写和环境烘托。', reasoningStage: 'drafting' },
-  { key: 'continue', label: '续写', color: 'text-[var(--color-category-review-text)]', prompt: '根据上下文，合理续写接下来的情节。', reasoningStage: 'drafting' },
-  { key: 'dialogue', label: '对话', color: 'text-[var(--color-success-text)]', prompt: '将这部分改写为更生动传神的对话形式。', reasoningStage: 'drafting' },
+  { key: 'refine', label: ['润色', 'Refine'], color: 'text-[var(--color-category-progress-text)]', prompt: ['润色这部分，使语言自然、具体并增强场景表现力。', 'Refine this passage for natural, specific language and stronger scene craft.'], reasoningStage: 'review' },
+  { key: 'expand', label: ['扩写', 'Expand'], color: 'text-[var(--color-warning-text)]', prompt: ['扩写这部分，补充与情节有关的动作、感官和环境细节。', 'Expand this passage with plot-relevant action, sensory detail, and setting.'], reasoningStage: 'drafting' },
+  { key: 'continue', label: ['续写', 'Continue'], color: 'text-[var(--color-category-review-text)]', prompt: ['根据现有因果和人物动机，自然续写接下来的情节。', 'Continue naturally from the established causality and character motivation.'], reasoningStage: 'drafting' },
+  { key: 'dialogue', label: ['对话', 'Dialogue'], color: 'text-[var(--color-success-text)]', prompt: ['将这部分改写为有区分度、能推动冲突的自然对话。', 'Rewrite this passage as distinct, natural dialogue that advances the conflict.'], reasoningStage: 'drafting' },
 ] satisfies readonly EditorAIAction[]
 
 const EDITOR_AI_GENERATION_BUDGET = Object.freeze({
@@ -53,6 +59,8 @@ export default function CodeMirrorEditor({
   onCharCountChange,
   mode = 'document',
 }: CodeMirrorEditorProps) {
+  const uiText = useLocaleStore(s => s.text)
+  const uiLocale = useLocaleStore(s => s.locale)
   const editorRef = useRef<ReactCodeMirrorRef>(null)
 
   // 避免状态回路
@@ -231,7 +239,7 @@ export default function CodeMirrorEditor({
         }
       ]),
       // 汉化 Search / UI 文本（涵盖官方大小写所有变种）
-      EditorState.phrases.of({
+      EditorState.phrases.of(uiLocale === 'zh-CN' ? {
         "Find": "查找",
         "find": "查找",
         "Replace": "替换",
@@ -252,13 +260,13 @@ export default function CodeMirrorEditor({
         "By word": "全词匹配",
         "Close": "关闭",
         "close": "关闭"
-      })
+      } : {})
     ]
     if (mode === 'document') {
       exts.push(markdown({ base: markdownLanguage, codeLanguages: languages }))
     }
     return exts
-  }, [mode])
+  }, [mode, uiLocale])
 
   // AI 菜单处理（流式调用，实时显示生成内容）
   const handleAIAction = async (action: EditorAIAction) => {
@@ -267,8 +275,17 @@ export default function CodeMirrorEditor({
       if (!selectionRange || !editorRef.current?.view) return
       const view = editorRef.current.view
       const selectedText = view.state.sliceDoc(selectionRange.from, selectionRange.to)
+      const writingLanguage = resolveWritingLanguage(
+        useProjectStore.getState().currentProject?.novelConfig.writingLanguage,
+      )
+      const template = await resolvePromptTemplate(
+        'edit_selected_text',
+        getActiveProjectSessionContext() ?? undefined,
+        writingLanguage,
+      )
+      if (!template) throw new Error(uiText('未找到编辑器提示词', 'Editor prompt is unavailable'))
 
-      setActiveAIAction(action.label)
+      setActiveAIAction(uiText(...action.label))
       setAiResult('')
       setAiError(null)
 
@@ -278,20 +295,23 @@ export default function CodeMirrorEditor({
         reasoningStage: action.reasoningStage,
         output: 'visible-text',
         messages: [
-          { role: 'system', content: '你是一个专业的小说编辑，请根据要求对文本进行处理，只返回处理后的文本，不要有任何解释。' },
-          { role: 'user', content: `要求：${action.prompt}\n\n文本：\n${selectedText}` },
+          { role: 'system', content: composePromptSystemRole(template, writingLanguage) },
+          { role: 'user', content: renderPrompt(template, {
+            edit_instruction: promptLanguageText(writingLanguage, ...action.prompt),
+            selected_text: selectedText,
+          }, writingLanguage) },
         ],
       }))
       if (outcome.status !== 'completed' || outcome.finishReason !== 'stop') {
         setAiResult('')
-        setAiError('生成未完整完成，结果不可应用')
+        setAiError(uiText('生成未完整完成，结果不可应用', 'Generation did not complete; the result cannot be applied.'))
         return
       }
       setAiResult(outcome.content)
     } catch (e) {
       console.error(e)
       setAiResult('')
-      setAiError('生成失败，结果不可应用')
+      setAiError(uiText('生成失败，结果不可应用', 'Generation failed; the result cannot be applied.'))
     } finally {
       await runtime?.close().catch(() => {})
     }
@@ -391,7 +411,9 @@ export default function CodeMirrorEditor({
                 className="text-[10px] mb-1.5 font-medium flex items-center gap-1"
                 style={{ color: 'var(--color-text-muted)' }}
               >
-                <Sparkles size={11} style={{ color: 'var(--color-accent)' }} /> {activeAIAction ? `${activeAIAction}预览` : 'AI 预览'}
+                <Sparkles size={11} style={{ color: 'var(--color-accent)' }} /> {activeAIAction
+                  ? uiText(`${activeAIAction}预览`, `${activeAIAction} preview`)
+                  : uiText('AI 预览', 'AI preview')}
               </div>
               {/* 流式输入中显示动态内容 */}
               {aiError ? (
@@ -406,7 +428,7 @@ export default function CodeMirrorEditor({
                   className="text-xs leading-relaxed mb-3"
                   style={{ color: 'var(--color-text-muted)' }}
                 >
-                  正在生成 {loadingDots}
+                  {uiText('正在生成', 'Generating')} {loadingDots}
                 </div>
               ) : (
                 <div
@@ -423,7 +445,7 @@ export default function CodeMirrorEditor({
                   onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-hover)')}
                   onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
                   onClick={handleRejectAI}
-                >取消</button>
+                >{uiText('取消', 'Cancel')}</button>
                 <button
                   className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md font-medium transition-colors"
                   style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
@@ -431,7 +453,7 @@ export default function CodeMirrorEditor({
                   onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
                   disabled={aiResult === '' || aiError !== null}
                   onClick={handleAcceptAI}
-                ><Check size={12} aria-hidden="true" />替换</button>
+                ><Check size={12} aria-hidden="true" />{uiText('替换', 'Replace')}</button>
               </div>
             </div>
           ) : (
@@ -471,7 +493,7 @@ export default function CodeMirrorEditor({
                   onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
                   onClick={() => handleAIAction(action)}
                 >
-                  <span className="text-[10px] tracking-widest">{action.label}</span>
+                  <span className="text-[10px] tracking-widest">{uiText(...action.label)}</span>
                 </button>
               ))}
             </>

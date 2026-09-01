@@ -3,6 +3,7 @@ import { sameProjectSessionContext } from '../shared/project-session-context'
 import { ipc } from './ipc-client'
 import { requireIpcSuccess } from './ipc-result'
 import type { PromptTemplate } from './prompt-templates'
+import { resolveWritingLanguage, type WritingLanguage } from '../shared/writing-language'
 
 export type PromptSource = 'builtin' | 'global' | 'project'
 
@@ -13,9 +14,9 @@ export interface ResolvedPrompt {
 
 export type PromptCommit =
   | { action: 'save'; scope: 'global'; template: PromptTemplate }
-  | { action: 'delete'; scope: 'global'; key: string }
+  | { action: 'delete'; scope: 'global'; key: string; writingLanguage?: WritingLanguage }
   | { action: 'save'; scope: 'project'; projectSession: ProjectSessionContext; template: PromptTemplate }
-  | { action: 'delete'; scope: 'project'; projectSession: ProjectSessionContext; key: string }
+  | { action: 'delete'; scope: 'project'; projectSession: ProjectSessionContext; key: string; writingLanguage?: WritingLanguage }
 
 /** Persistence is the real seam: Electron IPC in production, an in-memory fake in tests. */
 export interface PromptPersistence {
@@ -23,8 +24,8 @@ export interface PromptPersistence {
   loadProject(projectSession: ProjectSessionContext): Promise<PromptLoadReceipt>
   saveGlobal(template: PromptTemplate): Promise<void>
   saveProject(projectSession: ProjectSessionContext, template: PromptTemplate): Promise<void>
-  deleteGlobal(key: string): Promise<void>
-  deleteProject(projectSession: ProjectSessionContext, key: string): Promise<void>
+  deleteGlobal(key: string, writingLanguage?: WritingLanguage): Promise<void>
+  deleteProject(projectSession: ProjectSessionContext, key: string, writingLanguage?: WritingLanguage): Promise<void>
 }
 
 export interface PromptLoadReceipt {
@@ -49,6 +50,49 @@ function sessionKey(projectSession: ProjectSessionContext): string {
 
 function validTemplate(value: PromptTemplate): boolean {
   return !!value && typeof value.key === 'string' && value.key.length > 0 && typeof value.content === 'string'
+}
+
+function templateLanguage(template: Pick<PromptTemplate, 'writingLanguage'>): WritingLanguage {
+  // Files written before bilingual overrides had no language marker. They were
+  // authored by the Chinese-only settings surface and therefore migrate to zh-CN.
+  return resolveWritingLanguage(template.writingLanguage)
+}
+
+function localizedKey(key: string, writingLanguage: WritingLanguage): string {
+  return `${key}\u0000${resolveWritingLanguage(writingLanguage)}`
+}
+
+function diagnosticMatchesLanguage(
+  diagnostic: PromptLoadDiagnostic,
+  writingLanguage: WritingLanguage,
+): boolean {
+  return diagnostic.key === undefined
+    || resolveWritingLanguage(diagnostic.writingLanguage) === resolveWritingLanguage(writingLanguage)
+}
+
+function keepDiagnosticAfterChange(
+  diagnostic: PromptLoadDiagnostic,
+  key: string,
+  writingLanguage: WritingLanguage,
+): boolean {
+  return diagnostic.key !== key
+    || resolveWritingLanguage(diagnostic.writingLanguage) !== resolveWritingLanguage(writingLanguage)
+}
+
+function setLocalizedTemplate(target: Map<string, PromptTemplate>, template: PromptTemplate): void {
+  const key = localizedKey(template.key, templateLanguage(template))
+  const current = target.get(key)
+  // Prefer an explicitly tagged file over its legacy untagged Chinese version.
+  if (!current || template.writingLanguage || !current.writingLanguage) target.set(key, template)
+}
+
+function promptKeyFromFilename(filename: string): string {
+  return filename.replace(/\.json$/u, '').replace(/\.(?:zh-CN|en-US)$/u, '')
+}
+
+function promptLanguageFromFilename(filename: string): WritingLanguage | undefined {
+  const match = filename.match(/\.(zh-CN|en-US)\.json$/u)
+  return match?.[1] as WritingLanguage | undefined
 }
 
 /**
@@ -77,25 +121,33 @@ export class PromptCatalog {
     this.builtins = new Map(builtins.map((template) => [template.key, template]))
   }
 
-  async resolve(key: string, projectSession?: ProjectSessionContext): Promise<ResolvedPrompt | undefined> {
+  async resolve(
+    key: string,
+    projectSession?: ProjectSessionContext,
+    writingLanguage: WritingLanguage = 'zh-CN',
+  ): Promise<ResolvedPrompt | undefined> {
     await this.ensureGlobalLoaded()
     if (projectSession && !await this.ensureProjectLoaded(projectSession)) {
       throw new Error('项目会话已变化，已拒绝读取项目提示词')
     }
     const projectPrompts = this.projectPromptsFor(projectSession)
-    const project = projectPrompts?.get(key)
+    const localized = localizedKey(key, writingLanguage)
+    const project = projectPrompts?.get(localized)
     if (project) return { template: project, source: 'project' }
-    this.throwIfTargetDamaged(key, this.projectCache?.diagnostics ?? [])
+    this.throwIfTargetDamaged(key, writingLanguage, this.projectCache?.diagnostics ?? [])
 
-    const global = this.globalPrompts.get(key)
+    const global = this.globalPrompts.get(localized)
     if (global) return { template: global, source: 'global' }
-    this.throwIfTargetDamaged(key, this.globalDiagnostics)
+    this.throwIfTargetDamaged(key, writingLanguage, this.globalDiagnostics)
 
     const builtin = this.builtins.get(key)
     return builtin ? { template: builtin, source: 'builtin' } : undefined
   }
 
-  async list(projectSession?: ProjectSessionContext): Promise<ResolvedPrompt[]> {
+  async list(
+    projectSession?: ProjectSessionContext,
+    writingLanguage: WritingLanguage = 'zh-CN',
+  ): Promise<ResolvedPrompt[]> {
     await this.ensureGlobalLoaded()
     if (projectSession && !await this.ensureProjectLoaded(projectSession)) {
       throw new Error('项目会话已变化，已拒绝读取项目提示词')
@@ -106,14 +158,16 @@ export class PromptCatalog {
       && sameProjectSessionContext(projectSession, this.projectCache.owner)
       ? this.projectCache.diagnostics
       : []
+    const language = resolveWritingLanguage(writingLanguage)
     const diagnostics = [...this.globalDiagnostics, ...projectDiagnostics]
+      .filter(item => diagnosticMatchesLanguage(item, language))
     if (diagnostics.length > 0) throw new PromptLoadDiagnosticsError(diagnostics)
 
     const keys = new Set(this.builtins.keys())
-    for (const key of this.globalPrompts.keys()) keys.add(key)
-    for (const key of this.projectPromptsFor(projectSession)?.keys() ?? []) keys.add(key)
+    for (const template of this.globalPrompts.values()) keys.add(template.key)
+    for (const template of this.projectPromptsFor(projectSession)?.values() ?? []) keys.add(template.key)
     return [...keys].flatMap((key) => {
-      const resolved = this.peek(key, projectSession)
+      const resolved = this.peek(key, projectSession, writingLanguage)
       return resolved ? [resolved] : []
     })
   }
@@ -124,12 +178,21 @@ export class PromptCatalog {
       if (change.scope === 'global') {
         if (change.action === 'save') {
           await this.persistence.saveGlobal(change.template)
-          this.globalPrompts.set(change.template.key, change.template)
-          this.globalDiagnostics = this.globalDiagnostics.filter((item) => item.key !== change.template.key)
+          setLocalizedTemplate(this.globalPrompts, change.template)
+          this.globalDiagnostics = this.globalDiagnostics.filter(item => keepDiagnosticAfterChange(
+            item,
+            change.template.key,
+            templateLanguage(change.template),
+          ))
         } else {
-          await this.persistence.deleteGlobal(change.key)
-          this.globalPrompts.delete(change.key)
-          this.globalDiagnostics = this.globalDiagnostics.filter((item) => item.key !== change.key)
+          const writingLanguage = resolveWritingLanguage(change.writingLanguage)
+          await this.persistence.deleteGlobal(change.key, writingLanguage)
+          this.globalPrompts.delete(localizedKey(change.key, writingLanguage))
+          this.globalDiagnostics = this.globalDiagnostics.filter(item => keepDiagnosticAfterChange(
+            item,
+            change.key,
+            writingLanguage,
+          ))
         }
         return true
       }
@@ -141,7 +204,7 @@ export class PromptCatalog {
       if (change.action === 'save') {
         await this.persistence.saveProject(owner, change.template)
       } else {
-        await this.persistence.deleteProject(owner, change.key)
+        await this.persistence.deleteProject(owner, change.key, resolveWritingLanguage(change.writingLanguage))
       }
       if (!this.isCurrent(owner)) return false
 
@@ -149,14 +212,21 @@ export class PromptCatalog {
       const currentCache = this.projectCache
       if (!current || !currentCache) return false
       const next = new Map(current)
-      if (change.action === 'save') next.set(change.template.key, change.template)
-      else next.delete(change.key)
+      if (change.action === 'save') setLocalizedTemplate(next, change.template)
+      else next.delete(localizedKey(change.key, resolveWritingLanguage(change.writingLanguage)))
       const changedKey = change.action === 'save' ? change.template.key : change.key
+      const changedLanguage = change.action === 'save'
+        ? templateLanguage(change.template)
+        : resolveWritingLanguage(change.writingLanguage)
       this.projectCache = {
         key: sessionKey(owner),
         owner,
         prompts: next,
-        diagnostics: currentCache.diagnostics.filter((item) => item.key !== changedKey),
+        diagnostics: currentCache.diagnostics.filter(item => keepDiagnosticAfterChange(
+          item,
+          changedKey,
+          changedLanguage,
+        )),
       }
       return true
     } catch {
@@ -165,10 +235,15 @@ export class PromptCatalog {
   }
 
   /** Synchronous compatibility read; lifecycle remains owned by this module. */
-  peek(key: string, projectSession?: ProjectSessionContext): ResolvedPrompt | undefined {
-    const project = this.projectPromptsFor(projectSession)?.get(key)
+  peek(
+    key: string,
+    projectSession?: ProjectSessionContext,
+    writingLanguage: WritingLanguage = 'zh-CN',
+  ): ResolvedPrompt | undefined {
+    const localized = localizedKey(key, writingLanguage)
+    const project = this.projectPromptsFor(projectSession)?.get(localized)
     if (project) return { template: project, source: 'project' }
-    const global = this.globalPrompts.get(key)
+    const global = this.globalPrompts.get(localized)
     if (global) return { template: global, source: 'global' }
     const builtin = this.builtins.get(key)
     return builtin ? { template: builtin, source: 'builtin' } : undefined
@@ -181,10 +256,15 @@ export class PromptCatalog {
   }
 
   /** Compatibility preload; normal callers should use resolve/list. */
-  async loadProject(projectSession: ProjectSessionContext): Promise<boolean> {
+  async loadProject(
+    projectSession: ProjectSessionContext,
+    writingLanguage: WritingLanguage = 'zh-CN',
+  ): Promise<boolean> {
     const loaded = await this.ensureProjectLoaded(projectSession)
-    if (loaded && this.projectCache && this.projectCache.diagnostics.length > 0) {
-      throw new PromptLoadDiagnosticsError(this.projectCache.diagnostics)
+    const diagnostics = this.projectCache?.diagnostics
+      .filter(item => diagnosticMatchesLanguage(item, writingLanguage)) ?? []
+    if (loaded && diagnostics.length > 0) {
+      throw new PromptLoadDiagnosticsError(diagnostics)
     }
     return loaded
   }
@@ -196,7 +276,7 @@ export class PromptCatalog {
         .then((receipt) => {
           const loaded = new Map<string, PromptTemplate>()
           for (const template of receipt.templates) {
-            if (validTemplate(template)) loaded.set(template.key, template)
+            if (validTemplate(template)) setLocalizedTemplate(loaded, template)
           }
           this.globalPrompts = loaded
           this.globalDiagnostics = receipt.diagnostics
@@ -220,7 +300,7 @@ export class PromptCatalog {
           if (!this.isCurrent(owner)) return false
           const prompts = new Map<string, PromptTemplate>()
           for (const template of receipt.templates) {
-            if (validTemplate(template)) prompts.set(template.key, template)
+            if (validTemplate(template)) setLocalizedTemplate(prompts, template)
           }
           this.projectCache = { key, owner, prompts, diagnostics: receipt.diagnostics }
           return true
@@ -247,8 +327,15 @@ export class PromptCatalog {
     return this.projectCache.prompts
   }
 
-  private throwIfTargetDamaged(key: string, diagnostics: readonly PromptLoadDiagnostic[]): void {
-    const relevant = diagnostics.filter((item) => item.key === undefined || item.key === key)
+  private throwIfTargetDamaged(
+    key: string,
+    writingLanguage: WritingLanguage,
+    diagnostics: readonly PromptLoadDiagnostic[],
+  ): void {
+    const relevant = diagnostics.filter((item) => (
+      (item.key === undefined || item.key === key)
+      && diagnosticMatchesLanguage(item, writingLanguage)
+    ))
     if (relevant.length > 0) throw new PromptLoadDiagnosticsError(relevant)
   }
 }
@@ -291,11 +378,17 @@ export const ipcPromptPersistence: PromptPersistence = {
         const parsed = JSON.parse(result.content) as PromptTemplate
         if (!validTemplate(parsed)) throw new Error('提示词内容结构无效')
         const filenameKey = file.name.slice(0, -'.json'.length)
-        if (parsed.key !== filenameKey) throw new Error('提示词标识与文件名不一致')
+        const expectedFilename = parsed.writingLanguage
+          ? `${parsed.key}.${resolveWritingLanguage(parsed.writingLanguage)}`
+          : parsed.key
+        if (expectedFilename !== filenameKey) throw new Error('提示词标识或语言与文件名不一致')
         prompts.push(parsed)
       } catch (error) {
         diagnostics.push({
-          key: file.name.slice(0, -'.json'.length),
+          key: promptKeyFromFilename(file.name),
+          ...(promptLanguageFromFilename(file.name)
+            ? { writingLanguage: promptLanguageFromFilename(file.name) }
+            : {}),
           path: file.path,
           error: error instanceof Error ? error.message : String(error),
         })
@@ -333,34 +426,60 @@ export const ipcPromptPersistence: PromptPersistence = {
         projectSession.projectPath,
       ), '创建项目提示词目录')
     }
+    const writingLanguage = templateLanguage(template)
     requireIpcSuccess(await ipc.invokeWithProjectSession(
       projectSession,
       'fs:write-file',
-      `${dirPath}/${template.key}.json`,
-      JSON.stringify(template, null, 2),
+      `${dirPath}/${template.key}.${writingLanguage}.json`,
+      JSON.stringify({ ...template, writingLanguage }, null, 2),
       projectSession.projectPath,
     ), '保存项目提示词')
+    if (writingLanguage === 'zh-CN') {
+      const legacyPath = `${dirPath}/${template.key}.json`
+      const legacyExists = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:check-exists',
+        legacyPath,
+        projectSession.projectPath,
+      )
+      if (legacyExists) {
+        requireIpcSuccess(await ipc.invokeWithProjectSession(
+          projectSession,
+          'fs:write-file',
+          legacyPath,
+          '',
+          projectSession.projectPath,
+        ), '迁移旧版项目提示词')
+      }
+    }
   },
 
-  async deleteGlobal(key) {
-    requireIpcSuccess(await ipc.invoke('prompt:delete-global', key), '删除自定义提示词')
-  },
-
-  async deleteProject(projectSession, key) {
-    const filePath = `${projectSession.projectPath}/.vela/prompts/${key}.json`
-    const exists = await ipc.invokeWithProjectSession(
-      projectSession,
-      'fs:check-exists',
-      filePath,
-      projectSession.projectPath,
+  async deleteGlobal(key, writingLanguage = 'zh-CN') {
+    requireIpcSuccess(
+      await ipc.invoke('prompt:delete-global', key, resolveWritingLanguage(writingLanguage)),
+      '删除自定义提示词',
     )
-    if (!exists) return
-    requireIpcSuccess(await ipc.invokeWithProjectSession(
-      projectSession,
-      'fs:write-file',
-      filePath,
-      '',
-      projectSession.projectPath,
-    ), '删除项目提示词')
+  },
+
+  async deleteProject(projectSession, key, writingLanguage = 'zh-CN') {
+    const language = resolveWritingLanguage(writingLanguage)
+    const filePaths = [`${projectSession.projectPath}/.vela/prompts/${key}.${language}.json`]
+    if (language === 'zh-CN') filePaths.push(`${projectSession.projectPath}/.vela/prompts/${key}.json`)
+    for (const filePath of filePaths) {
+      const exists = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:check-exists',
+        filePath,
+        projectSession.projectPath,
+      )
+      if (!exists) continue
+      requireIpcSuccess(await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:write-file',
+        filePath,
+        '',
+        projectSession.projectPath,
+      ), '删除项目提示词')
+    }
   },
 }

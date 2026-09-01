@@ -1,4 +1,9 @@
-import { BaseWorkflowCommand, CommandExecuteParams, type LLMCompletion } from './base-command'
+import {
+  BaseWorkflowCommand,
+  injectWritingSkillIntoSession,
+  type CommandExecuteParams,
+  type LLMCompletion,
+} from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
@@ -371,13 +376,21 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           ...(generationModelId ? { modelId: generationModelId } : {}),
         })
         cleanDraftText = await runtime.execute(async ({ session }) => {
+          const draftingSession = injectWritingSkillIntoSession(session, context, 'drafting')
+          if (context.writingSkills?.drafting) {
+            callbacks.log(promptLanguageText(
+              writingLanguage,
+              `本次 drafting 阶段使用已冻结写作 Skill：${context.writingSkills.drafting.name}`,
+              `Using the workflow-start-frozen writing skill for drafting: ${context.writingSkills.drafting.name}`,
+            ))
+          }
           this.assertNotCancelled(context)
           callbacks.setProgress(10)
           let rawPreview = ''
           let previewActive = true
           let initialOutcome: GenerationOutcome
           try {
-            initialOutcome = await session.complete({
+            initialOutcome = await draftingSession.complete({
               purpose: 'chapter-draft',
               reasoningStage: 'drafting',
               output: 'visible-text',
@@ -405,7 +418,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           callbacks.setProgress(90)
           this.assertNotCancelled(context)
           return this.extendDraftIfNeeded({
-            session,
+            session: draftingSession,
             signal: cancellation.signal,
             initialDraft: initialVisibleDraft,
             initialFinishReason: initialCompletion.finishReason,

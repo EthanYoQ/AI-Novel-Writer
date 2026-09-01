@@ -6,6 +6,10 @@ import {
   sameProjectSessionContext,
 } from '../../../shared/project-session-context'
 import { requireWorkflowProjectSession } from '../workflow-project-session'
+import { workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
+import { composePromptSystemRole, resolvePromptTemplate, renderPrompt } from '../../prompt-templates'
+import { promptLanguageText } from '../../prompt-language'
+import type { WritingLanguage } from '../../../shared/writing-language'
 
 /**
  * 支持的单字段生成 Key
@@ -19,14 +23,13 @@ export type GeneratableField =
   | 'globalGuidance'
   | 'writingStyle'
 
-/** 字段中文标签映射 */
-const FIELD_LABELS: Record<GeneratableField, string> = {
-  coreOutline: '核心大纲',
-  worldSetting: '世界观设定',
-  goldenFinger: '金手指/核心卖点',
-  protagonistProfile: '主角人设',
-  globalGuidance: '全局写作要求',
-  writingStyle: '文风配置',
+const FIELD_LABELS: Record<GeneratableField, readonly [string, string]> = {
+  coreOutline: ['核心大纲', 'Core outline'],
+  worldSetting: ['世界观设定', 'World setting'],
+  goldenFinger: ['金手指/核心卖点', 'Special advantage / core story engine'],
+  protagonistProfile: ['主角人设', 'Protagonist profile'],
+  globalGuidance: ['全局写作要求', 'Global writing guidance'],
+  writingStyle: ['文风配置', 'Writing-style guide'],
 }
 
 /**
@@ -59,28 +62,44 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
     }
 
     const config = project.novelConfig
-    const label = FIELD_LABELS[this.fieldKey]
+    const writingLanguage = workflowWritingLanguage(context)
+    const labelPair = FIELD_LABELS[this.fieldKey]
+    const label = workflowUiText(context, labelPair[0], labelPair[1])
 
-    callbacks.log(`🧠 正在为「${label}」生成内容...`)
+    callbacks.log(workflowUiText(context, `正在为「${label}」生成内容...`, `Generating “${label}”...`))
 
     // 构建上下文摘要（已填写的字段作为参考）
-    const contextSummary = this.buildContext(config)
+    const contextSummary = this.buildContext(config, writingLanguage)
     // 构建针对性 prompt
-    const prompt = this.buildPrompt(config, contextSummary)
-    const systemPrompt = '你是一位入行十年的顶尖网文主编与白金大神作家，擅长精准设计小说的各项核心配置。'
+    const template = await resolvePromptTemplate(
+      'generate_novel_config_field',
+      projectSession,
+      writingLanguage,
+    )
+    if (!template) throw new Error(workflowUiText(context, '未找到字段生成提示词', 'Field-generation prompt is unavailable'))
+    const prompt = renderPrompt(template, {
+      existing_config: contextSummary,
+      field_label: promptLanguageText(writingLanguage, labelPair[0], labelPair[1]),
+      field_requirements: this.fieldRequirements(config, writingLanguage),
+    }, writingLanguage)
+    const systemPrompt = composePromptSystemRole(template, writingLanguage)
 
     const result = await this.callLLM(
       prompt,
       systemPrompt,
       callbacks,
-      { purpose: `generate-field-${this.fieldKey}`, reasoningStage: 'planning' },
+      {
+        purpose: `generate-field-${this.fieldKey}`,
+        reasoningStage: 'planning',
+        writingSkillStage: 'planning',
+      },
       context,
     )
     this.assertNotCancelled(context)
     const cleanResult = this.stripThinkingTags(result).trim()
 
     if (!cleanResult) {
-      callbacks.log(`⚠️ 「${label}」生成返回空结果`)
+      callbacks.log(workflowUiText(context, `「${label}」生成返回空结果`, `Generation returned no content for “${label}”.`))
       return ''
     }
 
@@ -116,83 +135,50 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
     )) {
       throw new Error('当前项目已切换，字段生成已停止')
     }
-    callbacks.log(`✅ 「${label}」已生成并保存`)
+    callbacks.log(workflowUiText(context, `「${label}」已生成并保存`, `“${label}” was generated and saved.`))
 
     return cleanResult
   }
 
   /** 构建已有配置的上下文摘要 */
-  private buildContext(config: NovelConfig): string {
+  private buildContext(config: NovelConfig, writingLanguage: WritingLanguage): string {
     const parts: string[] = []
-    if (config.genre) parts.push(`- 类型：${config.genre}`)
-    if (config.subGenre) parts.push(`- 细分类型：${config.subGenre}`)
-    if (config.targetAudience) parts.push(`- 目标受众：${config.targetAudience}`)
-    if (config.totalChapters) parts.push(`- 总章数：${config.totalChapters} 章`)
-    if (config.wordsPerChapter) parts.push(`- 每章字数：${config.wordsPerChapter} 字`)
+    const line = (zhLabel: string, enLabel: string, value: string | number) => (
+      `- ${promptLanguageText(writingLanguage, zhLabel, enLabel)}: ${value}`
+    )
+    if (config.genre) parts.push(line('类型', 'Genre', config.genre))
+    if (config.subGenre) parts.push(line('细分类型', 'Subgenre', config.subGenre))
+    if (config.targetAudience) parts.push(line('目标受众', 'Target audience', config.targetAudience))
+    if (config.totalChapters) parts.push(line('总章数', 'Total chapters', config.totalChapters))
+    if (config.wordsPerChapter) parts.push(line('每章目标字数', 'Target words per chapter', config.wordsPerChapter))
     if (config.coreOutline?.trim() && this.fieldKey !== 'coreOutline')
-      parts.push(`- 核心大纲：${config.coreOutline.slice(0, 500)}`)
+      parts.push(line('核心大纲', 'Core outline', config.coreOutline))
     if (config.worldSetting?.trim() && this.fieldKey !== 'worldSetting')
-      parts.push(`- 世界观设定：${config.worldSetting.slice(0, 500)}`)
+      parts.push(line('世界观设定', 'World setting', config.worldSetting))
     if (config.goldenFinger?.trim() && this.fieldKey !== 'goldenFinger')
-      parts.push(`- 金手指体系：${config.goldenFinger.slice(0, 500)}`)
+      parts.push(line('金手指体系', 'Special advantage', config.goldenFinger))
     if (config.protagonistProfile?.trim() && this.fieldKey !== 'protagonistProfile')
-      parts.push(`- 主角人设：${config.protagonistProfile.slice(0, 500)}`)
+      parts.push(line('主角人设', 'Protagonist profile', config.protagonistProfile))
     if (config.globalGuidance?.trim() && this.fieldKey !== 'globalGuidance')
-      parts.push(`- 全局写作要求：${config.globalGuidance.slice(0, 500)}`)
+      parts.push(line('全局写作要求', 'Global writing guidance', config.globalGuidance))
     if (config.referenceWorks?.trim())
-      parts.push(`- 参考作品：${config.referenceWorks}`)
+      parts.push(line('参考作品', 'Reference works', config.referenceWorks))
     if (config.writingStyle?.trim() && this.fieldKey !== 'writingStyle')
-      parts.push(`- 文风描述：${config.writingStyle.slice(0, 300)}`)
-    return parts.length > 0 ? parts.join('\n') : '（尚未填写任何配置）'
+      parts.push(line('文风描述', 'Writing style', config.writingStyle))
+    return parts.length > 0
+      ? parts.join('\n')
+      : promptLanguageText(writingLanguage, '（尚未填写任何配置）', '(No configuration has been provided yet.)')
   }
 
-  /** 根据 fieldKey 构建针对性 prompt */
-  private buildPrompt(config: NovelConfig, context: string): string {
-    const fieldPrompts: Record<GeneratableField, string> = {
-      coreOutline: `请为这部小说生成一份【核心大纲】。
-要求：不少于150字，包含主角的致命危机/开局困境、必须完成的核心目标、终极大危机、主要爽点起伏。
-大纲应具有强烈的戏剧张力和商业吸引力，让编辑一看就知道这本书的核心卖点。`,
-
-      worldSetting: `请为这部小说生成一份【世界观/初始设定】。
-要求：描述故事发生的背景、时代、力量体系、社会结构。
-包含：物理维度特征、权力结构与断层、核心资源争夺机制。
-所有设定必须自带冲突点，能直接驱动情节发展。`,
-
-      goldenFinger: `请为这部小说生成一份【金手指/核心卖点体系】。
-要求：详细描述主角的差异化优势。
-包含：获取方式、具体功能与核心机制、进阶成长路径、副作用/限制/代价。
-金手指必须与世界观规则产生有趣的交互，而非万能型。`,
-
-      protagonistProfile: `请为这部小说生成一份【主角人设档案】。
-要求：包含表面伪装标签与真实性格、极具反差的性格弱点。
-核心驱动力需要区分物质目标（显性）和深层灵魂渴望（隐性）。
-主角必须有清晰的成长弧光起点和终点。`,
-
-      globalGuidance: `请为这部小说生成一份【全局写作要求】。
-要求：严格基于${config.totalChapters || 100}章的实际规模推算。
-包含：前/中/后期各占多少章、小/中/大高潮的具体章节频率。
-明确写作风格要求、核心禁忌/毒点、节奏控制策略。`,
-
-      writingStyle: `请为这部小说设计一份【文风配置指南】。
-要求：不少于100字，这份指南将指导 AI 写稿和修稿时的文风遵循。
-请从以下维度给出具体、可操作的风格要求：
-1. 叙述节奏：整体快慢偏好、场景切换频率、段落长短
-2. 描写密度：环境/动作/心理描写的比重偏好
-3. 对话风格：对话比例、口语化程度、是否使用方言
-4. 用词偏好：古风/现代/专业术语的倾向
-5. 情感基调：热血/冷峻/诙谐/沉重/轻松
-6. 标志性手法：推荐的修辞手法、过渡技巧
-请根据本书的类型（${config.genre || '未指定'}）和受众（${config.targetAudience || '未指定'}）推荐最匹配的写作风格。`,
+  private fieldRequirements(config: NovelConfig, writingLanguage: WritingLanguage): string {
+    const fieldPrompts: Record<GeneratableField, readonly [string, string]> = {
+      coreOutline: ['不少于150字，包含主角开局困境、核心目标、主要冲突升级与最终危机，明确故事的差异化吸引力。', 'Write at least 150 words covering the protagonist’s opening predicament, core objective, escalating conflict, final crisis, and distinctive story appeal.'],
+      worldSetting: ['描述时代、地点、力量或制度规则、权力结构和稀缺资源；每项设定都应能制造具体冲突。', 'Describe the era, setting, governing rules or power system, power structure, and scarce resources. Every element should create concrete conflict.'],
+      goldenFinger: ['说明差异化优势的来源、机制、成长路径、限制与代价，使其与世界规则发生冲突而非成为万能能力。', 'Define the origin, mechanism, growth path, limits, and cost of the protagonist’s special advantage. It must interact with world rules rather than solve everything.'],
+      protagonistProfile: ['包含外在形象、真实个性、反差弱点、显性目标、深层渴望，以及清晰的成长弧起点和方向。', 'Include public persona, true personality, a contrasting weakness, visible goal, deeper desire, and a clear starting point and direction for the character arc.'],
+      globalGuidance: [`严格按 ${config.totalChapters || 100} 章规模规划前中后期、高潮频率、节奏策略与需要持续避免的问题。`, `Plan the opening, middle, ending, escalation frequency, pacing strategy, and recurring pitfalls for exactly ${config.totalChapters || 100} chapters.`],
+      writingStyle: [`提供不少于100字的可执行文风指南，涵盖节奏、场景切换、描写密度、对话、用词、情感基调和标志性手法，并适配${config.genre || '当前题材'}与${config.targetAudience || '目标受众'}。`, `Provide an actionable style guide of at least 100 words covering pacing, scene transitions, descriptive density, dialogue, diction, emotional tone, and signature techniques, suited to ${config.genre || 'the genre'} and ${config.targetAudience || 'the target audience'}.`],
     }
-
-    return `以下是这部小说的已有配置信息：
-${context}
-
-${fieldPrompts[this.fieldKey]}
-
-【输出要求】
-- 直接输出纯文本内容，不要使用 JSON 格式
-- 不要添加任何前导语、解释或客套话
-- 不要使用 Markdown 标题（#），可以使用换行分段`
+    return promptLanguageText(writingLanguage, ...fieldPrompts[this.fieldKey])
   }
 }

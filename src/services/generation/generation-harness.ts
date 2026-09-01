@@ -39,6 +39,8 @@ export interface PromptBudgetSection {
   finalText: string
   /** Optional independent ceiling for one protected evidence section. */
   limitUtf8Bytes?: number
+  /** Safe human-readable identity for diagnostics; prompt text is never copied here. */
+  displayName?: string
 }
 
 export interface PromptBudgetPolicy {
@@ -49,6 +51,7 @@ export interface PromptBudgetPolicy {
 export interface PromptBudgetSectionReport {
   sectionName: string
   utf8Bytes: number
+  displayName?: string
 }
 
 export type PromptBudgetResultCode = 'OK' | 'PROMPT_BUDGET_EXHAUSTED'
@@ -57,6 +60,10 @@ export type PromptBudgetResultCode = 'OK' | 'PROMPT_BUDGET_EXHAUSTED'
 export interface PromptBudgetReport {
   totalUtf8Bytes: number
   limitUtf8Bytes: number
+  /** Present on current reports; optional so persisted reports from older releases remain readable. */
+  contextWindowTokens?: number | null
+  /** Present on current reports; optional so persisted reports from older releases remain readable. */
+  estimatedInputTokens?: number
   reservedOutputTokens: number
   sections: readonly PromptBudgetSectionReport[]
   modelId: string
@@ -264,9 +271,20 @@ function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength
 }
 
+function safeDiagnosticDisplayName(value: string | undefined): string | undefined {
+  const printable = value && Array.from(value, character => {
+    const code = character.charCodeAt(0)
+    return code < 32 || code === 127 ? ' ' : character
+  }).join('')
+  const normalized = printable?.replace(/\s+/gu, ' ').trim()
+  return normalized ? normalized.slice(0, 128) : undefined
+}
+
 function createPromptBudgetReport(input: {
   messages: readonly GenerationMessage[]
   policy: PromptBudgetPolicy
+  contextWindowTokens: number | null
+  estimatedInputTokens: number
   reservedOutputTokens: number
   modelId: string
 }): PromptBudgetReport {
@@ -296,10 +314,14 @@ function createPromptBudgetReport(input: {
       throw new GenerationHarnessError('INVALID_POLICY', '提示词预算区段与最终请求不一致。')
     }
     cursors.set(section.messageIndex, start + section.finalText.length)
+    const displayName = section.sectionName === 'writing-skill'
+      ? safeDiagnosticDisplayName(section.displayName)
+      : undefined
     return {
       report: Object.freeze({
         sectionName: section.sectionName,
         utf8Bytes: utf8Bytes(section.finalText),
+        ...(displayName ? { displayName } : {}),
       }),
       limitUtf8Bytes: section.limitUtf8Bytes,
     }
@@ -339,6 +361,8 @@ function createPromptBudgetReport(input: {
   return Object.freeze({
     totalUtf8Bytes,
     limitUtf8Bytes: effectiveLimitUtf8Bytes,
+    contextWindowTokens: input.contextWindowTokens,
+    estimatedInputTokens: input.estimatedInputTokens,
     reservedOutputTokens: input.reservedOutputTokens,
     sections: Object.freeze(sections),
     modelId: input.modelId,
@@ -348,6 +372,26 @@ function createPromptBudgetReport(input: {
 
 function logPromptBudgetReport(report: PromptBudgetReport): void {
   console.info('[GenerationPromptBudget]', report)
+}
+
+function contextBudgetExhaustedMessage(input: {
+  modelId: string
+  contextWindowTokens: number
+  estimatedInputTokens: number
+  sections?: readonly PromptBudgetSectionReport[]
+}): string {
+  const contributors = input.sections
+    ? [...input.sections]
+        .sort((left, right) => right.utf8Bytes - left.utf8Bytes)
+        .slice(0, 3)
+        .map(section => `${section.sectionName}=${section.utf8Bytes} UTF-8 bytes`)
+        .join(', ')
+    : 'prompt sections unavailable'
+  return '当前生成输入没有安全的输出空间。'
+    + `模型=${input.modelId}；上下文=${input.contextWindowTokens} tokens；`
+    + `估算输入=${input.estimatedInputTokens} tokens；`
+    + `安全保留=${CONTEXT_SAFETY_RESERVE_TOKENS} tokens；输出保留=0 tokens；`
+    + `主要区段=${contributors}。`
 }
 
 function positiveInteger(value: unknown): number | null {
@@ -548,11 +592,20 @@ export function createGenerationHarness(dependencies: {
             remainingRequestedTokens,
             sessionBudget.maxRequestedOutputTokensPerAttempt,
           )
+          const contextAvailableOutputTokens = capabilities.contextWindowTokens === null
+            ? null
+            : capabilities.contextWindowTokens - estimatedInputTokens - CONTEXT_SAFETY_RESERVE_TOKENS
+          const safeReservedOutputTokens = Math.min(
+            intentOutputTokens,
+            Math.max(0, contextAvailableOutputTokens ?? intentOutputTokens),
+          )
           const promptBudgetCandidate = task.promptBudget
             ? createPromptBudgetReport({
                 messages: task.messages,
                 policy: task.promptBudget,
-                reservedOutputTokens: intentOutputTokens,
+                contextWindowTokens: capabilities.contextWindowTokens,
+                estimatedInputTokens,
+                reservedOutputTokens: safeReservedOutputTokens,
                 modelId: frozenIdentity.id,
               })
             : undefined
@@ -560,13 +613,15 @@ export function createGenerationHarness(dependencies: {
             logPromptBudgetReport(promptBudgetCandidate)
             throw new PromptBudgetExceededError(promptBudgetCandidate)
           }
-          const contextAvailableOutputTokens = capabilities.contextWindowTokens === null
-            ? null
-            : capabilities.contextWindowTokens - estimatedInputTokens - CONTEXT_SAFETY_RESERVE_TOKENS
           if (contextAvailableOutputTokens !== null && contextAvailableOutputTokens <= 0) {
             throw new GenerationHarnessError(
               'CONTEXT_BUDGET_EXHAUSTED',
-              '当前生成输入没有安全的输出空间。',
+              contextBudgetExhaustedMessage({
+                modelId: frozenIdentity.id,
+                contextWindowTokens: capabilities.contextWindowTokens!,
+                estimatedInputTokens,
+                sections: promptBudgetCandidate?.sections,
+              }),
             )
           }
 

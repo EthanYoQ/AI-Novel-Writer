@@ -54,7 +54,7 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
     const draft = this.params.draftContent
     if (!draft) throw new Error(text('无草稿内容', 'There is no draft content to revise.'))
 
-    callbacks.log(text('正在进行大神级修稿...', 'Refining the chapter...'))
+    callbacks.log(text('正在精修章节...', 'Refining the chapter...'))
 
     const template = await resolvePromptTemplate('refine_chapter', projectSession, writingLanguage)
     if (!template) throw new Error(text('未找到修稿模板', 'The revision prompt template was not found.'))
@@ -83,7 +83,7 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
       promptBuilder.getSystemRole(),
       callbacks,
       { mode: 'append-visible-text', maxContinuations: 3 },
-      { purpose: 'refine-draft', reasoningStage: 'review' },
+      { purpose: 'refine-draft', reasoningStage: 'review', writingSkillStage: 'refinement' },
       context,
     )
     this.assertNotCancelled(context)

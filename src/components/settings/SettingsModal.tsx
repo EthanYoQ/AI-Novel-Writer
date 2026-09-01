@@ -2,9 +2,10 @@ import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   X, Plus, Trash2, Check, Save, Globe, Cpu, Database,
   Type, Settings2, Zap, Eye, EyeOff, ChevronDown, MessageSquare,
-  Info, Palette, ExternalLink, RefreshCw, RotateCcw,
+  Info, Palette, ExternalLink, RefreshCw, RotateCcw, BookOpen,
 } from 'lucide-react'
 import PromptSettings from './PromptSettings'
+import SkillSettings from './SkillSettings'
 import AppearanceSettings from './AppearanceSettings'
 import { useLLMStore } from '../../stores/llm-store'
 import { useThemeStore, FONT_OPTIONS, type FontId } from '../../stores/theme-store'
@@ -57,6 +58,7 @@ export const SETTINGS_SECTIONS: SectionItem[] = [
   { id: 'proxy', label: '网络代理', labelEn: 'Network proxy', icon: <Globe size={16} />, description: '配置 HTTP / SOCKS5 代理，用于访问受限 API', descriptionEn: 'HTTP / SOCKS5 proxy for restricted APIs' },
   { id: 'editor', label: '编辑器', labelEn: 'Editor', icon: <Type size={16} />, description: '字体大小、自动保存等编辑器偏好设置', descriptionEn: 'Fonts and other editor preferences' },
   { id: 'prompts', label: '提示词模板', labelEn: 'Prompt templates', icon: <MessageSquare size={16} />, description: '自定义 AI 创作各环节使用的提示词模板', descriptionEn: 'Customize guidance for each AI writing stage' },
+  { id: 'skills', label: '写作 Skills', labelEn: 'Writing skills', icon: <BookOpen size={16} />, description: '检查、安装并绑定提示词型写作 Skill', descriptionEn: 'Inspect, install, and bind prompt-only writing skills' },
   { id: 'about', label: '关于', labelEn: 'About', icon: <Info size={16} />, description: '版本、定位与本地部署说明', descriptionEn: 'Version, positioning, and local deployment' },
 ]
 
@@ -160,6 +162,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             {section === 'proxy' && <ProxySection />}
             {section === 'editor' && <EditorSection />}
             {section === 'prompts' && <PromptSettings />}
+            {section === 'skills' && <SkillSettings />}
             {section === 'about' && <AboutSection />}
           </div>
         </main>
@@ -507,6 +510,10 @@ function ModelForm({
     structuredOutput: model.capabilities?.structuredOutput ?? false,
     usage: model.capabilities?.usage ?? false,
   }
+  const contextOutputConflict = !isEmbedding
+    && currentCapabilities.contextWindowTokens !== null
+    && currentCapabilities.contextWindowTokens > 0
+    && currentCapabilities.maxOutputTokens >= currentCapabilities.contextWindowTokens
 
   const updateCapabilities = (next: Partial<ModelCapabilities>) => {
     const capabilities = { ...currentCapabilities, ...next }
@@ -844,6 +851,7 @@ function ModelForm({
       <div>
         <Label>{text('上下文窗口', 'Context Window')}</Label>
         <Input
+          aria-label={text('上下文窗口', 'Context Window')}
           type="number"
           min={0}
           value={model.capabilities?.contextWindowTokens ?? ''}
@@ -919,6 +927,22 @@ function ModelForm({
                   </p>
                 </div>
               </div>
+              {contextOutputConflict && (
+                <p
+                  role="status"
+                  className="rounded-lg border px-3 py-2 text-xs leading-5"
+                  style={{
+                    borderColor: 'var(--color-warning)',
+                    backgroundColor: 'color-mix(in srgb, var(--color-warning) 8%, transparent)',
+                    color: 'var(--color-warning-text)',
+                  }}
+                >
+                  {text(
+                    '最大输出 Token 没有给提示词留下安全空间。生成前预算检查会阻止请求；请降低最大输出或增大上下文窗口。此提示不会阻止保存。',
+                    'Max output tokens leave no safe room for the prompt. The preflight budget check will block generation; lower the output limit or increase the context window. This warning does not block saving.',
+                  )}
+                </p>
+              )}
               <ModelReasoningOverrideSettings model={model} onModelChange={onChange} />
             </div>
           )}

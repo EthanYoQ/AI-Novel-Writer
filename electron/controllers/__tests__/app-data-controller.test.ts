@@ -47,8 +47,8 @@ describe('fixed app-data IPC boundary', () => {
     )).resolves.toEqual({ success: true })
 
     expect(mocks.writeJsonFile).toHaveBeenCalledWith(
-      expect.stringMatching(/vela-app-data[\\/]prompts[\\/]style-guide\.json$/),
-      { key: 'style-guide', content: 'keep this prompt' },
+      expect.stringMatching(/vela-app-data[\\/]prompts[\\/]style-guide\.zh-CN\.json$/),
+      { key: 'style-guide', content: 'keep this prompt', writingLanguage: 'zh-CN' },
     )
   })
 })

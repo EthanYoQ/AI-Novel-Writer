@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import { ChapterPromptBuilder } from '../prompts/prompt-builder'
-import { BUILTIN_PROMPTS, getPromptTemplate, renderPrompt } from '../prompt-templates'
+import { BUILTIN_PROMPTS, EDITABLE_PROMPT_KEYS, getBuiltinPromptTemplate, getPromptTemplate, renderPrompt } from '../prompt-templates'
 
 const expectedPromptVariables: Record<string, string[]> = {
+  assistant_writing_identity: ['mode_instruction'],
+  edit_selected_text: ['edit_instruction', 'selected_text'],
+  generate_novel_config_field: ['existing_config', 'field_label', 'field_requirements'],
   generate_global_config: ['user_idea', 'number_of_chapters', 'word_number'],
   premise: [
     'genre',
@@ -223,7 +226,11 @@ const optionalGuidanceLabels = [
   '【作者要求重点检查的维度】',
 ]
 
-describe('built-in prompt contract for local Qwen generation', () => {
+describe('built-in model-neutral prompt contract', () => {
+  it('does not advertise prompt editors that have no production consumer', () => {
+    expect(EDITABLE_PROMPT_KEYS).not.toContain('chapter_blueprint')
+    expect(EDITABLE_PROMPT_KEYS).not.toContain('extract_initial_characters')
+  })
   it('keeps character-card extraction compatible with JSON-object response mode', () => {
     const text = promptText('extract_initial_characters')
 
@@ -238,12 +245,14 @@ describe('built-in prompt contract for local Qwen generation', () => {
     }
   })
 
-  it('adapts every built-in system role for local Qwen3 14B Q4 without rewriting template bodies', () => {
+  it('keeps every built-in system role model-neutral and focused on fiction work', () => {
     for (const template of BUILTIN_PROMPTS) {
       const role = template.systemRole ?? ''
-      expect(role, `${template.key} should mention Qwen3 14B Q4`).toContain('Qwen3 14B Q4')
-      expect(role, `${template.key} should mention local quantization`).toContain('量化模型')
+      expect(role, `${template.key} must not bind to one provider or prestige identity`).not.toMatch(/Qwen|量化模型|GPT|Claude|DeepSeek|Grok|顶尖|白金|大神|accomplished|top[- ]|web-fiction/i)
       expect(role, `${template.key} should stay focused on writing or structure`).toMatch(/小说|网文|章节|角色|正文|设定|审稿|风格|结构|JSON/)
+
+      const englishRole = getBuiltinPromptTemplate(template.key, 'en-US')?.systemRole ?? ''
+      expect(englishRole, `${template.key} English role`).not.toMatch(/Qwen|quantiz|GPT|Claude|DeepSeek|Grok|accomplished|top[- ]|web-fiction/i)
     }
   })
 
@@ -340,7 +349,7 @@ describe('built-in prompt contract for local Qwen generation', () => {
     const stylePrompt = promptText('analyze_writing_style')
     expect(stylePrompt).toContain('风格档案')
     expect(stylePrompt).toContain('仿写指南')
-    expect(stylePrompt).toContain('Qwen3 14B Q4')
+    expect(stylePrompt).not.toMatch(/Qwen|量化模型/i)
     expect(stylePrompt).toContain('禁止复述')
     expect(stylePrompt).toContain('不要复制')
 

@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 
 import type { ModelExecutionLeaseReceipt } from '../../../shared/ipc-channels'
 import { useLLMStore } from '../../../stores/llm-store'
+import { useLocaleStore } from '../../../stores/locale-store'
 import CodeMirrorEditor from '../CodeMirrorEditor'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -52,6 +53,7 @@ beforeEach(() => {
     activeRequests: new Map(),
   })
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
     if (channel === 'llm:begin-execution-lease') return { success: true, lease: LEASE }
     if (channel === 'llm:close-execution-lease') return { success: true }
     if (channel === 'llm:generate-stream') {
@@ -89,10 +91,32 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   useLLMStore.setState({ defaultModelId: null, activeRequests: new Map() })
+  useLocaleStore.setState({ locale: 'zh-CN' })
   Reflect.deleteProperty(window, 'velaAPI')
 })
 
 describe('CodeMirror editor AI generation boundary', () => {
+  it('localizes search and AI-result actions for an English interface', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    await act(async () => root.render(
+      <CodeMirrorEditor content="Original passage" mode="prose" />,
+    ))
+
+    const editor = container.querySelector<HTMLElement>('.cm-content')!
+    await act(async () => {
+      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true }))
+    })
+    await expect.element(page.getByRole('textbox', { name: 'Find' })).toBeVisible()
+    await expect.element(page.getByRole('textbox', { name: 'Replace' })).toBeVisible()
+
+    await act(async () => page.getByText('Original passage').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: 'Refine' }).click())
+
+    await expect.element(page.getByText('Refine preview')).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'Cancel' })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'Replace', exact: true })).toBeDisabled()
+  })
+
   it('keeps a length-limited result non-applicable while closing its model lease', async () => {
     await act(async () => root.render(
       <CodeMirrorEditor content="原文段落" mode="prose" />,

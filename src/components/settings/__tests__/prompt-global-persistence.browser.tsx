@@ -71,7 +71,7 @@ describe('global prompt persistence at the settings boundary', () => {
     await vi.waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('prompt:load-global')
     })
-    await expect.element(page.getByRole('textbox')).toHaveValue(persistedContent)
+    await expect.element(page.getByRole('textbox', { name: '补充创作指导' })).toHaveValue(persistedContent)
   })
 
 })

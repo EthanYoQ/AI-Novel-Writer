@@ -324,6 +324,8 @@ describe('GenerationHarness', () => {
       report: {
         totalUtf8Bytes: 8,
         limitUtf8Bytes: 7,
+        contextWindowTokens: null,
+        estimatedInputTokens: 4,
         reservedOutputTokens: 4096,
         sections: [{ sectionName: 'step-guidance', utf8Bytes: 8 }],
         modelId: 'model-a',
@@ -334,6 +336,8 @@ describe('GenerationHarness', () => {
     expect(diagnostic).toHaveBeenCalledWith('[GenerationPromptBudget]', {
       totalUtf8Bytes: 8,
       limitUtf8Bytes: 7,
+      contextWindowTokens: null,
+      estimatedInputTokens: 4,
       reservedOutputTokens: 4096,
       sections: [{ sectionName: 'step-guidance', utf8Bytes: 8 }],
       modelId: 'model-a',
@@ -472,9 +476,25 @@ describe('GenerationHarness', () => {
       report: {
         totalUtf8Bytes: 100,
         limitUtf8Bytes: 99,
-        reservedOutputTokens: 100,
+        contextWindowTokens: 600,
+        estimatedInputTokens: 100,
+        reservedOutputTokens: 0,
         sections: [{ sectionName: 'global-guidance', utf8Bytes: 100 }],
       },
+    })
+    expect(complete).not.toHaveBeenCalled()
+
+    await expect(session.complete({
+      purpose: 'context-only-overflow',
+      output: 'structured-data',
+      messages: [{ role: 'user', content: oversized }],
+      promptBudget: {
+        limitUtf8Bytes: 200,
+        sections: [{ sectionName: 'global-guidance', messageIndex: 0, finalText: oversized }],
+      },
+    })).rejects.toMatchObject({
+      code: 'CONTEXT_BUDGET_EXHAUSTED',
+      message: expect.stringMatching(/model-a.*600 tokens.*100 tokens.*512 tokens.*0 tokens.*global-guidance=100/u),
     })
     expect(complete).not.toHaveBeenCalled()
 
@@ -521,6 +541,8 @@ describe('GenerationHarness', () => {
     expect(outcome.receipt.promptBudget).toEqual({
       totalUtf8Bytes: 36,
       limitUtf8Bytes: 128,
+      contextWindowTokens: null,
+      estimatedInputTokens: 32,
       reservedOutputTokens: 4096,
       sections: [{ sectionName: 'global-guidance', utf8Bytes: 36 }],
       modelId: 'model-a',

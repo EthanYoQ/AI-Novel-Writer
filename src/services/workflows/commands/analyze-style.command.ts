@@ -1,6 +1,6 @@
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { resolvePromptTemplate } from '../../prompt-templates'
+import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
 import { BasePromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
@@ -102,7 +102,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     callbacks.log(text('调用 AI 分析文风特征...', 'Running AI writing-style analysis...'))
     const result = await this.callLLM(
       finalPrompt,
-      template.systemRole || promptLanguageText(writingLanguage, '你是一位资深的文学评论家和网文研究者。', 'You are a senior fiction critic and narrative researcher.'),
+      composePromptSystemRole(template, writingLanguage),
       callbacks,
       { purpose: 'analyze-writing-style', reasoningStage: 'review' },
       context,

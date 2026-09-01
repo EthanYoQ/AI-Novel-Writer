@@ -493,12 +493,15 @@ export type ExternalDirectoryGrant = ExternalFileGrant
 /** 固定 app-data 服务使用的提示词数据；文件位置不由渲染进程决定。 */
 export interface AppPromptTemplate {
   key: string
+  writingLanguage?: WritingLanguage
   [key: string]: unknown
 }
 
 export interface PromptLoadDiagnostic {
   /** Derived from the owned filename when possible; absent means the whole scope is unreadable. */
   key?: string
+  /** Absent on legacy receipts, which retain their original scope-wide behavior. */
+  writingLanguage?: WritingLanguage
   path: string
   error: string
 }
@@ -511,10 +514,22 @@ export interface AppPromptLoadReceipt {
 export interface AppDataChannels {
   'prompt:load-global': { args: []; return: AppPromptLoadReceipt }
   'prompt:save-global': { args: [template: AppPromptTemplate]; return: { success: boolean; error?: string } }
-  'prompt:delete-global': { args: [key: string]; return: { success: boolean; error?: string } }
+  'prompt:delete-global': { args: [key: string, writingLanguage: WritingLanguage]; return: { success: boolean; error?: string } }
   'skills:list-user': {
     args: []
     return: Array<{ name: string; content: string; baseDir: string; filePath: string }>
+  }
+  'skills:inspect-github': {
+    args: [sourceUrl: string]
+    return: { success: boolean; inspection?: import('./writing-skills').RemoteWritingSkillInspection; error?: string }
+  }
+  'skills:install-github': {
+    args: [sourceUrl: string]
+    return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
+  }
+  'skills:uninstall-user': {
+    args: [name: string]
+    return: { success: boolean; error?: string }
   }
 }
 

@@ -30,8 +30,18 @@ const SECTION_LABELS: Readonly<Record<string, readonly [string, string]>> = Obje
   'prompt-overhead': ['模板与结构开销', 'Template and structure overhead'],
 })
 
-function sectionLabel(sectionName: string, locale: Locale): string {
-  const labels = SECTION_LABELS[sectionName]
+function sectionLabel(
+  section: PromptBudgetReport['sections'][number],
+  locale: Locale,
+): string {
+  if (section.sectionName === 'writing-skill') {
+    const generic = locale === 'zh-CN' ? '写作 Skill' : 'Writing Skill'
+    if (!section.displayName) return generic
+    return locale === 'zh-CN'
+      ? `${generic}：${section.displayName}`
+      : `${generic}: ${section.displayName}`
+  }
+  const labels = SECTION_LABELS[section.sectionName]
   if (!labels) return locale === 'zh-CN' ? '其他结构化上下文' : 'Other structured context'
   return locale === 'zh-CN' ? labels[0] : labels[1]
 }
@@ -45,19 +55,33 @@ export function formatPromptBudgetFailure(report: PromptBudgetReport, locale: Lo
   const contributors = [...report.sections]
     .sort((left, right) => right.utf8Bytes - left.utf8Bytes)
     .slice(0, 3)
-    .map(section => `${sectionLabel(section.sectionName, locale)} ${formatInteger(section.utf8Bytes, locale)}`)
+    .map(section => `${sectionLabel(section, locale)} ${formatInteger(section.utf8Bytes, locale)}`)
     .join(locale === 'zh-CN' ? '、' : ', ')
 
   if (locale === 'zh-CN') {
+    const contextWindow = report.contextWindowTokens == null
+      ? '未知'
+      : `${formatInteger(report.contextWindowTokens, locale)} tokens`
+    const estimatedInput = report.estimatedInputTokens === undefined
+      ? '未知'
+      : `${formatInteger(report.estimatedInputTokens, locale)} tokens`
     return [
       `提示词共 ${formatInteger(report.totalUtf8Bytes, locale)} UTF-8 字节，超过上限 ${formatInteger(report.limitUtf8Bytes, locale)} 字节；输出保留空间为 ${formatInteger(report.reservedOutputTokens, locale)} tokens。`,
+      `模型上下文：${contextWindow}；估算输入：${estimatedInput}。`,
       `主要占用：${contributors}。`,
       `模型：${report.modelId}；结果码：${report.errorCode}。`,
     ].join('')
   }
 
+  const contextWindow = report.contextWindowTokens == null
+    ? 'unknown'
+    : `${formatInteger(report.contextWindowTokens, locale)} tokens`
+  const estimatedInput = report.estimatedInputTokens === undefined
+    ? 'unknown'
+    : `${formatInteger(report.estimatedInputTokens, locale)} tokens`
   return [
     `The prompt uses ${formatInteger(report.totalUtf8Bytes, locale)} UTF-8 bytes, exceeding the ${formatInteger(report.limitUtf8Bytes, locale)}-byte limit; ${formatInteger(report.reservedOutputTokens, locale)} tokens are reserved for output. `,
+    `Model context: ${contextWindow}; estimated input: ${estimatedInput}. `,
     `Top contributors: ${contributors}. `,
     `Model: ${report.modelId}; result code: ${report.errorCode}.`,
   ].join('')

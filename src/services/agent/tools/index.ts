@@ -19,6 +19,9 @@ import { openEditorTool } from './open-editor.tool'
 import { startWorkflowTool } from './start-workflow.tool'
 import { proposeNovelConfigTool } from './propose-novel-config.tool'
 import { proposeChapterBlueprintTool } from './propose-chapter-blueprint.tool'
+import { inspectWritingSkillTool } from './inspect-writing-skill.tool'
+import { installWritingSkillTool } from './install-writing-skill.tool'
+import { bindWritingSkillTool } from './bind-writing-skill.tool'
 
 /** 所有内置 Tool（供外部引用） */
 export const builtinTools = [
@@ -31,12 +34,15 @@ export const builtinTools = [
   readProjectStateTool,
   readDraftsTool,
   listChaptersTool,
+  inspectWritingSkillTool,
   // 行动 Tool（需确认）
   writeFileTool,
   openEditorTool,
   startWorkflowTool,
   proposeNovelConfigTool,
   proposeChapterBlueprintTool,
+  installWritingSkillTool,
+  bindWritingSkillTool,
 ]
 
 /**

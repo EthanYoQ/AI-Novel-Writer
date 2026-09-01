@@ -43,6 +43,15 @@ function project(path: string, writingStyle = '') {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubGlobal('window', {
+    velaAPI: {
+      invoke: vi.fn(async (channel: string) => {
+        if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+        if (channel === 'fs:check-exists') return false
+        return { success: true }
+      }),
+    },
+  })
   useProjectStore.setState({
     currentProject: project(projectAPath) as never,
   })
@@ -50,10 +59,44 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   useProjectStore.setState({ currentProject: null })
 })
 
 describe('GenerateFieldCommand project identity', () => {
+  it('sends a complete English configuration without Chinese model instructions', async () => {
+    const longOutline = `A detective follows a forged flight manifest. ${'The clue remains authoritative. '.repeat(24)}`
+    useProjectStore.setState({
+      currentProject: {
+        ...project(projectAPath),
+        novelConfig: {
+          genre: 'Mystery',
+          targetAudience: 'Adult readers',
+          coreOutline: longOutline,
+          writingLanguage: 'en-US',
+        },
+      } as never,
+      saveProject: vi.fn(async () => true),
+    })
+    const command = new GenerateFieldCommand('writingStyle')
+    const callLlm = vi.spyOn(
+      command as unknown as { callLLM: (...args: unknown[]) => Promise<string> },
+      'callLLM',
+    ).mockResolvedValue('Tense, scene-driven prose.')
+
+    await command.execute({
+      step: {},
+      context: { ...context, writingLanguage: 'en-US', uiLocale: 'en-US' },
+      callbacks,
+    })
+
+    const [prompt, systemPrompt] = callLlm.mock.calls[0]!
+    expect(callLlm.mock.calls[0]?.[3]).toMatchObject({ writingSkillStage: 'planning' })
+    expect(`${systemPrompt}\n${prompt}`).not.toMatch(/[\u3400-\u9fff]/u)
+    expect(prompt).toContain(longOutline)
+    expect(String(prompt)).toContain(longOutline.slice(500))
+  })
+
   it('does not mutate the newly selected project when the LLM returns after a switch', async () => {
     let resolveLlm: ((value: string) => void) | undefined
     const command = new GenerateFieldCommand('writingStyle')

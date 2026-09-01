@@ -16,6 +16,47 @@ afterEach(async () => {
   await act(async () => root?.unmount())
   container?.remove()
   useProjectStore.setState({ currentProject: null })
+  useLocaleStore.setState({ locale: 'zh-CN' })
+})
+
+it('checks project prompt diagnostics for the language selected in settings', async () => {
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'prompt:load-global') throw new Error('global unavailable in project diagnostic fixture')
+    if (channel === 'fs:check-exists') return true
+    if (channel === 'fs:list-dir') return [{
+      name: 'premise.zh-CN.json',
+      path: 'C:/novels/english/.vela/prompts/premise.zh-CN.json',
+      isDir: false,
+    }]
+    if (channel === 'fs:read-file') return { success: true, content: '{invalid json' }
+    throw new Error(`Unexpected IPC channel: ${channel}`)
+  })
+  ;(window as unknown as { velaAPI: { invoke: typeof invoke } }).velaAPI = { invoke }
+  useLocaleStore.setState({ locale: 'en-US' })
+  useProjectStore.setState({
+    currentProject: {
+      id: 'english-project',
+      name: 'English Project',
+      path: 'C:/novels/english',
+      sessionLease: 'lease-english',
+      novelConfig: { writingLanguage: 'en-US' },
+    } as never,
+  })
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  await act(async () => { root?.render(<PromptSettings />) })
+
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith(
+    'fs:read-file',
+    expect.anything(),
+    expect.anything(),
+    expect.anything(),
+  ))
+  await expect.element(page.getByText(/Project prompts could not be loaded/)).not.toBeInTheDocument()
+
+  await act(async () => page.getByRole('combobox', { name: 'Writing language to edit' }).selectOptions('zh-CN'))
+  await expect.element(page.getByText(/Project prompts could not be loaded/)).toBeVisible()
 })
 
 it('keeps the project error visible when a later global retry succeeds', async () => {

@@ -23,7 +23,7 @@ vi.mock('../../services/ipc-client', () => ({
   ipc: {
     invoke: mocks.invoke,
     invokeWithProjectSession: (_context: unknown, channel: string, ...args: unknown[]) => (
-      mocks.invoke(channel, ...args)
+      channel === 'fs:check-exists' ? Promise.resolve(false) : mocks.invoke(channel, ...args)
     ),
   },
 }))

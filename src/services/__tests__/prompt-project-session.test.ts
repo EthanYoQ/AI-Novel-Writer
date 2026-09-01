@@ -13,6 +13,7 @@ import {
   getPromptVariableDescription,
   loadProjectCustomPrompts,
   PROMPT_VARIABLE_DESCRIPTIONS_EN,
+  saveProjectCustomPrompt,
   type PromptTemplate,
 } from '../prompt-templates'
 
@@ -76,6 +77,51 @@ afterEach(() => {
 })
 
 describe('project custom prompt session ownership', () => {
+  it.each([
+    ['zh-CN', true],
+    ['en-US', false],
+  ] as const)('%s project save migrates the untagged file only for Chinese', async (writingLanguage, migratesLegacy) => {
+    const legacyPath = `${sessionA.projectPath}/.vela/prompts/first_chapter_draft.json`
+    const localizedPath = `${sessionA.projectPath}/.vela/prompts/first_chapter_draft.${writingLanguage}.json`
+    const files = new Map<string, string>([[legacyPath, '{invalid json']])
+    vi.mocked(ipc.invoke).mockResolvedValue({ templates: [], diagnostics: [] } as never)
+    vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (
+      _session: ProjectSessionContext,
+      channel: string,
+      ...args: unknown[]
+    ) => {
+      if (channel === 'fs:check-exists') {
+        const target = String(args[0])
+        return target.endsWith('/.vela/prompts') || files.has(target)
+      }
+      if (channel === 'fs:list-dir') return [...files.keys()].map(filePath => ({
+        name: filePath.slice(filePath.lastIndexOf('/') + 1),
+        path: filePath,
+        isDir: false,
+      }))
+      if (channel === 'fs:read-file') return { success: true, content: files.get(String(args[0])) ?? '' }
+      if (channel === 'fs:write-file') {
+        files.set(String(args[0]), String(args[1]))
+        return { success: true }
+      }
+      throw new Error(`unexpected channel: ${channel}`)
+    }) as never)
+
+    await expect(saveProjectCustomPrompt(sessionA, {
+      ...customTemplate('saved prompt'),
+      writingLanguage,
+    })).resolves.toBe(true)
+
+    expect(files.get(localizedPath)).toContain('saved prompt')
+    expect(files.get(legacyPath)).toBe(migratesLegacy ? '' : '{invalid json')
+    clearProjectCustomPrompts()
+    if (migratesLegacy) {
+      await expect(loadProjectCustomPrompts(sessionA, 'zh-CN')).resolves.toBe(true)
+    } else {
+      await expect(loadProjectCustomPrompts(sessionA, 'zh-CN')).rejects.toThrow(legacyPath)
+    }
+  })
+
   it('does not let a delayed project A load overwrite the completed project B cache', async () => {
     const delayedARead = deferred<{ success: boolean; content: string }>()
     const aReadStarted = deferred<void>()
@@ -256,11 +302,11 @@ describe('project custom prompt session ownership', () => {
     )
 
     expect(source).toContain('captureProjectSession({ id: projectId, path: projectPath, sessionLease: projectLease })')
-    expect(source).toContain('loadProjectCustomPrompts(session)')
+    expect(source).toContain('loadProjectCustomPrompts(session, editingLanguage)')
     expect(source).toContain('isProjectSessionCurrent(session)')
-    expect(source).toContain('[projectId, projectLease, projectPath, text]')
-    expect(source).toContain('getPromptTemplate(builtinTemplate.key, projectSession ?? undefined)')
-    expect(source).toContain('getPromptSource(builtinTemplate.key, projectSession ?? undefined)')
+    expect(source).toContain('[editingLanguage, projectId, projectLease, projectPath, text]')
+    expect(source).toContain('getPromptTemplate(builtinTemplate.key, projectSession ?? undefined, editingLanguage)')
+    expect(source).toContain('getPromptSource(builtinTemplate.key, projectSession ?? undefined, editingLanguage)')
   })
 
   it('provides audited English descriptions for every variable shown by editable prompts', () => {

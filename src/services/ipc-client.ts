@@ -52,7 +52,7 @@ function isCapabilityOrAppDataChannel(channel: string): boolean {
   return channel.startsWith('fs:grant-')
     || channel.startsWith('dialog:select-')
     || channel.startsWith('prompt:')
-    || channel === 'skills:list-user'
+    || channel.startsWith('skills:')
 }
 
 function isProjectScopedChannel(channel: string): boolean {

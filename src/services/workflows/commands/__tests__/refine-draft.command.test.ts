@@ -940,13 +940,25 @@ describe('ReviewChapterCommand reasoning stage', () => {
       throw new Error(`unexpected IPC: ${channel}`)
     }))
 
+    const context = {
+      ...workflowContext(),
+      writingSkills: Object.freeze({
+        review: Object.freeze({
+          skillId: 'user:review-craft', name: 'Review craft', stage: 'review' as const,
+          source: 'user' as const, writingLanguage: 'zh-CN' as const,
+          content: '检查角色动机与因果连续性。', utf8Bytes: 39,
+        }),
+      }),
+    }
     await chapterReviewCommand(completeWithLease).execute({
       step: {},
-      context: workflowContext(),
+      context,
       callbacks: callbacks(),
     })
 
     expect(completeWithLease).toHaveBeenCalledOnce()
     expect(completeWithLease.mock.calls[0]?.[0].reasoningStage).toBe('review')
+    expect(completeWithLease.mock.calls[0]?.[0].messages[1]?.content)
+      .toContain('【补充写作 Skill：Review craft】')
   })
 })

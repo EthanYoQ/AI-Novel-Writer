@@ -53,7 +53,7 @@ describe('global prompt app-data persistence', () => {
 
     await expect(handler('prompt:save-global')({}, template)).resolves.toEqual({ success: true })
     await expect(handler('prompt:load-global')({})).resolves.toEqual({
-      templates: [template],
+      templates: [{ ...template, writingLanguage: 'zh-CN' }],
       diagnostics: [],
     })
   })
@@ -74,6 +74,81 @@ describe('global prompt app-data persistence', () => {
         path: 'broken.json',
         error: expect.any(String),
       }],
+    })
+  })
+
+  it('reports the language encoded by a corrupt localized prompt filename', async () => {
+    const promptsDirectory = path.join(velaHome, 'prompts')
+    fs.mkdirSync(promptsDirectory, { recursive: true })
+    fs.writeFileSync(path.join(promptsDirectory, 'premise.en-US.json'), '{not json', 'utf8')
+
+    await expect(handler('prompt:load-global')({})).resolves.toMatchObject({
+      diagnostics: [{
+        key: 'premise',
+        writingLanguage: 'en-US',
+        path: 'premise.en-US.json',
+      }],
+    })
+  })
+
+  it('stores Chinese and English overrides for the same prompt independently', async () => {
+    await handler('prompt:save-global')({}, {
+      key: 'premise',
+      writingLanguage: 'zh-CN',
+      content: '中文创作指导',
+    })
+    await handler('prompt:save-global')({}, {
+      key: 'premise',
+      writingLanguage: 'en-US',
+      content: 'English creative guidance',
+    })
+
+    expect(fs.existsSync(path.join(velaHome, 'prompts', 'premise.zh-CN.json'))).toBe(true)
+    expect(fs.existsSync(path.join(velaHome, 'prompts', 'premise.en-US.json'))).toBe(true)
+    await expect(handler('prompt:load-global')({})).resolves.toMatchObject({
+      templates: expect.arrayContaining([
+        expect.objectContaining({ key: 'premise', writingLanguage: 'zh-CN', content: '中文创作指导' }),
+        expect.objectContaining({ key: 'premise', writingLanguage: 'en-US', content: 'English creative guidance' }),
+      ]),
+      diagnostics: [],
+    })
+  })
+
+  it('migrates a damaged untagged prompt after a successful Chinese save', async () => {
+    const promptsDirectory = path.join(velaHome, 'prompts')
+    fs.mkdirSync(promptsDirectory, { recursive: true })
+    const legacyPath = path.join(promptsDirectory, 'premise.json')
+    fs.writeFileSync(legacyPath, '{not json', 'utf8')
+
+    await expect(handler('prompt:save-global')({}, {
+      key: 'premise',
+      writingLanguage: 'zh-CN',
+      content: '迁移后的中文提示词',
+    })).resolves.toEqual({ success: true })
+
+    expect(fs.existsSync(legacyPath)).toBe(false)
+    await expect(handler('prompt:load-global')({})).resolves.toMatchObject({
+      templates: [expect.objectContaining({ writingLanguage: 'zh-CN', content: '迁移后的中文提示词' })],
+      diagnostics: [],
+    })
+  })
+
+  it('does not touch a damaged untagged Chinese prompt when saving English', async () => {
+    const promptsDirectory = path.join(velaHome, 'prompts')
+    fs.mkdirSync(promptsDirectory, { recursive: true })
+    const legacyPath = path.join(promptsDirectory, 'premise.json')
+    fs.writeFileSync(legacyPath, '{not json', 'utf8')
+
+    await expect(handler('prompt:save-global')({}, {
+      key: 'premise',
+      writingLanguage: 'en-US',
+      content: 'English prompt',
+    })).resolves.toEqual({ success: true })
+
+    expect(fs.existsSync(legacyPath)).toBe(true)
+    await expect(handler('prompt:load-global')({})).resolves.toMatchObject({
+      templates: [expect.objectContaining({ writingLanguage: 'en-US', content: 'English prompt' })],
+      diagnostics: [expect.objectContaining({ key: 'premise', path: 'premise.json' })],
     })
   })
 })

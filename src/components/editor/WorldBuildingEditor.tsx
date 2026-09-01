@@ -36,14 +36,16 @@ type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 const ARCH_FILES: Array<{
   key: ArchStepKey
   fileName: string
-  label: string
+  labelZh: string
+  labelEn: string
   iconName: string
-  desc: string
+  descZh: string
+  descEn: string
 }> = [
-    { key: 'premise', fileName: 'premise.md', label: '故事前提', iconName: 'target', desc: 'Logline · 核心冲突链 · 金手指定位 · 悬念骨架' },
-    { key: 'characters', fileName: 'characters.md', label: '角色图谱', iconName: 'users', desc: '角色弧光 · 关系网络 · 矛盾交织' },
-    { key: 'worldbuilding', fileName: 'worldbuilding.md', label: '世界观', iconName: 'globe', desc: '核心规则 · 阶层断层 · 深层危机' },
-    { key: 'synopsis', fileName: 'synopsis.md', label: '情节大纲', iconName: 'map', desc: '三幕结构 · 拐点节奏 · 伏笔闭环' },
+    { key: 'premise', fileName: 'premise.md', labelZh: '故事前提', labelEn: 'Story premise', iconName: 'target', descZh: '故事钩子 · 核心冲突链 · 主角优势 · 悬念骨架', descEn: 'Story hook · core conflict · protagonist edge · suspense structure' },
+    { key: 'characters', fileName: 'characters.md', labelZh: '角色图谱', labelEn: 'Character map', iconName: 'users', descZh: '角色弧光 · 关系网络 · 矛盾交织', descEn: 'Character arcs · relationships · interlocking tensions' },
+    { key: 'worldbuilding', fileName: 'worldbuilding.md', labelZh: '世界观', labelEn: 'Worldbuilding', iconName: 'globe', descZh: '核心规则 · 社会结构 · 深层危机', descEn: 'Core rules · social structure · underlying crisis' },
+    { key: 'synopsis', fileName: 'synopsis.md', labelZh: '情节大纲', labelEn: 'Plot outline', iconName: 'map', descZh: '结构推进 · 转折节奏 · 伏笔闭环', descEn: 'Story progression · turning points · setup and payoff' },
   ]
 
 /** 故事架构编辑器 — 显示四个架构文件状态，并提供 AI 生成入口 */
@@ -187,7 +189,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     } else {
       store.openFile({
         id: tabId,
-        name: `${f.label}`,
+        name: text(f.labelZh, f.labelEn),
         type: 'arch-file',
         filePath,
         content,
@@ -200,8 +202,8 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   /** 确认后启动架构工作流 */
   const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
     const projectSession = captureProjectSession(currentProject)
-    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) throw new Error('项目会话已切换，未启动架构生成')
-    if (!isProjectSessionCurrent(projectSession)) throw new Error('项目会话已切换，未启动架构生成')
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation was not started.'))
+    if (!isProjectSessionCurrent(projectSession)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation was not started.'))
     await launchCreativeWorkflow({
       workflow: 'generate_architecture',
       selectedSteps,
@@ -221,12 +223,12 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
         >
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="text-xs font-medium truncate text-[var(--color-text-secondary)]">
-              故事架构
+              {text('故事架构', 'Story architecture')}
             </span>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto relative">
-          <EmptyState icon={<BookOpen size={36} />} message="请先打开项目" opacity={0.4} />
+          <EmptyState icon={<BookOpen size={36} />} message={text('请先打开项目', 'Open a project to continue')} opacity={0.4} />
         </div>
       </div>
     )
@@ -311,7 +313,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                 onClick={() => openArchFile(f)}
                 onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--color-accent)'}
                 onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = cardBorderColor}
-                title={`点击查看 — ${f.desc}`}
+                title={`${text('点击查看', 'Open')} — ${text(f.descZh, f.descEn)}`}
               >
                 {/* 状态图标 */}
                 {generated
@@ -325,10 +327,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                 {/* 标题 + 描述 */}
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-                    {f.label}
+                    {text(f.labelZh, f.labelEn)}
                   </div>
                   <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                    {f.desc}
+                    {text(f.descZh, f.descEn)}
                   </div>
                   {isCharacters && rosterPresentation && (
                     <div
@@ -364,17 +366,17 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                       </span>
                       {generated && (
                         <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                          {words.toLocaleString()} 字符
+                          {words.toLocaleString()} {text('字符', 'characters')}
                         </span>
                       )}
                     </>
                   ) : generated ? (
                     <>
                       <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-[var(--color-success-text)]">
-                        已生成
+                        {text('已生成', 'Generated')}
                       </span>
                       <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                        {words.toLocaleString()} 字符
+                        {words.toLocaleString()} {text('字符', 'characters')}
                       </span>
                     </>
                   ) : (
@@ -382,7 +384,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                       className="text-[0.7rem] px-1.5 py-0.5 rounded"
                       style={{ backgroundColor: 'rgba(var(--color-accent-rgb,99 102 241),0.1)', color: 'var(--color-accent)' }}
                     >
-                      待生成
+                      {text('待生成', 'Not generated')}
                     </span>
                   )}
                   {/* 显式安全修复，或采用受保护的既有角色卡。 */}
@@ -407,7 +409,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                   {/* 查看箭头提示 */}
                   {generated && !(isCharacters && !loading && canRepairRoster) && (
                     <span className="text-[0.7rem] flex items-center gap-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                      <FileText size={10} /> 点击查看
+                      <FileText size={10} /> {text('点击查看', 'Open')}
                     </span>
                   )}
                 </div>

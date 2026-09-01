@@ -12,6 +12,7 @@
 
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { WorkflowStatus } from '../../stores/workflow-store'
+import type { WritingLanguage } from '../../shared/writing-language'
 
 // ===== JSON Schema 简化类型 =====
 
@@ -21,6 +22,7 @@ export interface ToolInputSchema {
   properties: Record<string, {
     type: string
     description: string
+    descriptionEn?: string
     enum?: string[]
     default?: unknown
   }>
@@ -99,6 +101,7 @@ export interface AgentTool {
   name: string
   /** Tool 用途描述（Agent 凭此决定何时调用） */
   description: string
+  descriptionEn?: string
   /** 来源分类 — 影响 UI 渲染风格 */
   source: ToolSource
   /** 参数 JSON Schema */
@@ -199,11 +202,35 @@ class ToolRegistryImpl {
    * - file_path (string, 必填): 相对于项目根目录的文件路径
    * ```
    */
-  generateToolPrompt(): string {
+  generateToolPrompt(writingLanguage: WritingLanguage = 'zh-CN'): string {
     const tools = this.listAll()
     if (tools.length === 0) return ''
 
-    let prompt = `## 工具系统
+    const english = writingLanguage === 'en-US'
+    let prompt = english ? `## Tool system
+
+Use registered application tools to read project data or request an operation.
+
+### Call format
+
+Use exactly this XML format:
+
+<tool_call>
+{"name": "tool_name", "arguments": {"argument_name": "value"}}
+</tool_call>
+
+### Immutable rules
+
+1. Put at most one <tool_call> block in each response.
+2. After a tool runs, the application returns <tool_result>.
+3. Continue after <tool_result> and answer the user from the returned data.
+4. Call another tool in the next turn only when more data is required.
+5. Never quote or reveal tool-call markup in story prose.
+6. Read-only tools run directly. Write tools require user confirmation.
+
+### Available tools
+
+` : `## 工具系统
 
 你可以通过调用工具来获取项目数据或执行操作。
 
@@ -222,7 +249,7 @@ class ToolRegistryImpl {
 3. **收到 <tool_result> 后你必须继续推理**，根据工具返回的数据回答用户问题。不要就此停止。
 4. 如果一个工具的结果不够，你可以在下一轮继续调用另一个工具。
 5. 不要在正文中引用或复述 <tool_call> 标签的内容。
-6. 只读工具自动执行。写入型工具（标记 ⚠️）需要用户确认。
+6. 只读工具自动执行。写入型工具需要用户确认。
 
 ### 示例交互
 
@@ -238,26 +265,34 @@ class ToolRegistryImpl {
 
 `
     for (const tool of tools) {
-      const displayName = tool.userFacingName ?? tool.name
+      const displayName = english ? tool.name : (tool.userFacingName ?? tool.name)
       const sourceTag = tool.source === 'mcp' ? ' [MCP]' : tool.source === 'skill' ? ' [Skill]' : ''
-      const confirmTag = tool.requiresConfirmation ? ' ⚠️需确认' : ''
+      const confirmTag = tool.requiresConfirmation
+        ? (english ? ' [confirmation required]' : ' [需确认]')
+        : ''
 
       prompt += `#### ${displayName}${sourceTag}${confirmTag}\n`
-      prompt += `${tool.description}\n`
+      prompt += `${english ? (tool.descriptionEn ?? tool.description) : tool.description}\n`
 
       // 生成参数说明
       const { properties, required = [] } = tool.inputSchema
       if (Object.keys(properties).length > 0) {
-        prompt += '参数：\n'
+        prompt += english ? 'Arguments:\n' : '参数：\n'
         for (const [key, schema] of Object.entries(properties)) {
           const isRequired = required.includes(key)
-          const reqTag = isRequired ? '必填' : '可选'
-          let paramDesc = `- ${key} (${schema.type}, ${reqTag}): ${schema.description}`
+          const reqTag = isRequired ? (english ? 'required' : '必填') : (english ? 'optional' : '可选')
+          let paramDesc = `- ${key} (${schema.type}, ${reqTag})`
+          const description = english ? (schema.descriptionEn ?? schema.description) : schema.description
+          if (description) paramDesc += `: ${description}`
           if (schema.enum) {
-            paramDesc += ` [可选值: ${schema.enum.join(', ')}]`
+            paramDesc += english
+              ? ` [values: ${schema.enum.join(', ')}]`
+              : ` [可选值: ${schema.enum.join(', ')}]`
           }
           if (schema.default !== undefined) {
-            paramDesc += ` (默认: ${JSON.stringify(schema.default)})`
+            paramDesc += english
+              ? ` (default: ${JSON.stringify(schema.default)})`
+              : ` (默认: ${JSON.stringify(schema.default)})`
           }
           prompt += paramDesc + '\n'
         }

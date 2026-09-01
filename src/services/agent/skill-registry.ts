@@ -18,11 +18,17 @@ import {
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
 import { toolRegistry, type AgentExecutionContext, type AgentTool } from './tool-registry'
+import type { WritingLanguage } from '../../shared/writing-language'
+import {
+  inspectWritingSkillMarkdown,
+  type WritingSkillInspection,
+  type WritingSkillSource,
+} from '../../shared/writing-skills'
 
 // ===== 类型定义 =====
 
 /** Skill 来源 */
-export type SkillSource = 'builtin' | 'user' | 'project'
+export type SkillSource = WritingSkillSource
 
 /** Skill 元数据（从 SKILL.md frontmatter 解析） */
 export interface SkillMetadata {
@@ -58,22 +64,32 @@ export interface LoadedSkill {
   filePath: string
   /** 项目级 Skill 必须绑定其加载时的完整项目 lease。 */
   projectSession?: ProjectSessionContext
+  /** Stable project-binding key. */
+  skillId: string
+  /** Prompt-only workflow compatibility; incompatible packages remain visible but are never injected. */
+  writingSkill: WritingSkillInspection
+  /** Built-in bilingual copy selected by project writing language. */
+  localizedContent?: Partial<Record<WritingLanguage, string>>
 }
 
 // ===== Skill Registry =====
 
 class SkillRegistryImpl {
   private skills: Map<string, LoadedSkill> = new Map()
-  private loadSequence = 0
+  private loadTail: Promise<void> = Promise.resolve()
 
   /** 注册一个 Skill */
   register(skill: LoadedSkill): void {
-    this.skills.set(skill.metadata.name, skill)
+    this.skills.set(skill.skillId, skill)
   }
 
-  /** 查找 Skill */
+  /** Legacy lookup by metadata name. Stable project bindings use getById. */
   get(name: string): LoadedSkill | undefined {
-    return this.skills.get(name)
+    return this.listAll().find(skill => skill.metadata.name === name)
+  }
+
+  getById(skillId: string): LoadedSkill | undefined {
+    return this.skills.get(skillId)
   }
 
   /** 列出所有 Skill */
@@ -97,15 +113,14 @@ class SkillRegistryImpl {
   }
 
   /** 从主进程管理的用户 Skill 目录加载，渲染进程不接触 VELA_HOME 路径。 */
-  private async loadUserSkills(loadSequence: number): Promise<number> {
+  private async loadUserSkills(target: Map<string, LoadedSkill>): Promise<number> {
     let count = 0
     try {
       const entries = await ipc.invoke('skills:list-user')
       for (const entry of entries) {
-        if (loadSequence !== this.loadSequence) return count
         const skill = parseSkillMd(entry.content, entry.name, 'user', entry.baseDir, entry.filePath)
         if (!skill) continue
-        this.register(skill)
+        target.set(skill.skillId, skill)
         count++
       }
     } catch {
@@ -123,7 +138,7 @@ class SkillRegistryImpl {
     dir: string,
     projectPath: string,
     projectSession: ProjectSessionContext,
-    loadSequence: number,
+    target: Map<string, LoadedSkill>,
   ): Promise<number> {
     let count = 0
     try {
@@ -134,16 +149,14 @@ class SkillRegistryImpl {
         projectPath,
       )
       if (
-        loadSequence !== this.loadSequence
-        || !sameProjectSessionContext(
+        !sameProjectSessionContext(
           projectSession,
           projectSessionContextFromProject(useProjectStore.getState().currentProject),
         )
       ) return count
       for (const entry of entries) {
         if (
-          loadSequence !== this.loadSequence
-          || !sameProjectSessionContext(
+          !sameProjectSessionContext(
             projectSession,
             projectSessionContextFromProject(useProjectStore.getState().currentProject),
           )
@@ -159,8 +172,7 @@ class SkillRegistryImpl {
             projectPath,
           )
           if (
-            loadSequence !== this.loadSequence
-            || !sameProjectSessionContext(
+            !sameProjectSessionContext(
               projectSession,
               projectSessionContextFromProject(useProjectStore.getState().currentProject),
             )
@@ -176,7 +188,7 @@ class SkillRegistryImpl {
             projectSession,
           )
           if (skill) {
-            this.register(skill)
+            target.set(skill.skillId, skill)
             count++
           }
         } catch {
@@ -192,19 +204,23 @@ class SkillRegistryImpl {
   /**
    * 加载所有 Skill（内置 + 用户 + 项目）
    */
-  async loadAll(): Promise<void> {
-    const loadSequence = ++this.loadSequence
+  loadAll(): Promise<void> {
+    const load = this.loadTail.then(() => this.loadAllAtomic())
+    this.loadTail = load.catch(() => undefined)
+    return load
+  }
+
+  private async loadAllAtomic(): Promise<void> {
     const projectSession = projectSessionContextFromProject(
       useProjectStore.getState().currentProject,
     )
-    this.clear()
+    const staged = new Map<string, LoadedSkill>()
 
     // 注册内置 Skill
-    registerBuiltinSkills(this)
+    registerBuiltinSkills({ register: skill => staged.set(skill.skillId, skill) })
 
     // 用户 Skill 路径只能由主进程的固定应用数据服务访问。
-    const userCount = await this.loadUserSkills(loadSequence)
-    if (loadSequence !== this.loadSequence) return
+    const userCount = await this.loadUserSkills(staged)
     if (userCount > 0) {
       console.log(`[Skills] 加载了 ${userCount} 个用户 Skill`)
     }
@@ -222,14 +238,14 @@ class SkillRegistryImpl {
         projectSkillsDir,
         projectSession.projectPath,
         projectSession,
-        loadSequence,
+        staged,
       )
-      if (loadSequence !== this.loadSequence) return
       if (projectCount > 0) {
         console.log(`[Skills] 加载了 ${projectCount} 个项目 Skill`)
       }
     }
 
+    this.skills = staged
     // 将所有 Skill 注册为 Agent Tool
     this.registerToToolRegistry()
 
@@ -244,6 +260,7 @@ class SkillRegistryImpl {
     toolRegistry.unregisterBySource('skill')
 
     for (const skill of this.listAll()) {
+      if (skill.source !== 'builtin') continue
       const agentTool: AgentTool = {
         name: `skill__${skill.metadata.name}`,
         description: skill.metadata.description + (skill.metadata.whenToUse ? ` — ${skill.metadata.whenToUse}` : ''),
@@ -312,7 +329,7 @@ export const skillRegistry = new SkillRegistryImpl()
  * ...
  * ```
  */
-function parseSkillMd(
+export function parseSkillMd(
   raw: string,
   fallbackName: string,
   source: SkillSource,
@@ -320,59 +337,68 @@ function parseSkillMd(
   filePath: string,
   projectSession?: ProjectSessionContext,
 ): LoadedSkill | null {
-  // 解析 frontmatter
-  const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n/)
-  const frontmatter: Record<string, unknown> = {}
-  let content = raw
-
-  if (fmMatch) {
-    const fmText = fmMatch[1]
-    content = raw.slice(fmMatch[0].length)
-
-    // 简单的 YAML 解析（支持 key: value 和 key: [items]）
-    for (const line of fmText.split('\n')) {
-      const kvMatch = line.match(/^\s*([^:]+):\s*(.*)$/)
-      if (!kvMatch) continue
-      const key = kvMatch[1].trim()
-      let val: unknown = kvMatch[2].trim()
-
-      // 解析数组 [a, b, c]
-      if (typeof val === 'string' && val.startsWith('[') && val.endsWith(']')) {
-        val = val.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean)
-      }
-      // 解析布尔值
-      if (val === 'true') val = true
-      if (val === 'false') val = false
-
-      frontmatter[key] = val
-    }
-  }
-
+  const writingSkill = inspectWritingSkillMarkdown(raw)
+  const inspectedName = writingSkill.metadata.name === 'unnamed-writing-skill'
+    ? fallbackName
+    : writingSkill.metadata.name
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(inspectedName)) return null
   const metadata: SkillMetadata = {
-    name: (frontmatter['name'] as string) || fallbackName,
-    displayName: frontmatter['display_name'] as string,
-    description: (frontmatter['description'] as string) || `Skill: ${fallbackName}`,
-    whenToUse: frontmatter['when_to_use'] as string,
-    version: frontmatter['version'] as string,
-    allowedTools: frontmatter['allowed-tools'] as string[],
-    argumentHint: frontmatter['argument-hint'] as string,
-    userInvocable: frontmatter['user-invocable'] !== false,
+    name: inspectedName,
+    displayName: writingSkill.metadata.displayName,
+    description: writingSkill.metadata.description || `Skill: ${fallbackName}`,
+    version: writingSkill.metadata.version,
+    userInvocable: true,
   }
 
   return {
     metadata,
-    content: content.trim(),
+    content: writingSkill.content,
     source,
     baseDir,
     filePath,
     projectSession,
+    skillId: `${source}:${metadata.name}`,
+    writingSkill,
   }
 }
 
 // ===== 内置 Skills =====
 
-function registerBuiltinSkills(registry: SkillRegistryImpl): void {
-  const builtins: Array<{ metadata: SkillMetadata; content: string }> = [
+function registerBuiltinSkills(registry: Pick<SkillRegistryImpl, 'register'>): void {
+  const builtins: Array<{
+    metadata: SkillMetadata
+    content: string
+    writingSkill?: WritingSkillInspection
+    localizedContent?: Partial<Record<WritingLanguage, string>>
+  }> = [
+    {
+      metadata: {
+        name: 'long-form-continuity',
+        displayName: '长篇连续性与场景推进',
+        description: '在规划和正文阶段守住作者事实、因果链、角色状态与伏笔进度。',
+        version: '1.0.0',
+      },
+      content: 'Treat established author facts as authoritative. Track causality, character state, and unresolved narrative threads. Build each scene around a character choice, its cost, and a concrete change in the story state.',
+      localizedContent: {
+        'zh-CN': '以作者已经确认的事实为最高依据。持续核对因果链、角色状态和未回收的叙事线索。每个场景围绕角色的主动选择、选择的代价，以及故事状态发生的具体变化展开。',
+        'en-US': 'Treat established author facts as authoritative. Track causality, character state, and unresolved narrative threads. Build each scene around a character choice, its cost, and a concrete change in the story state.',
+      },
+      writingSkill: inspectWritingSkillMarkdown(`---\nname: long-form-continuity\ndescription: Long-form continuity and scene progression\nversion: 1.0.0\nlanguage: bilingual\nstage: planning\n---\nTreat established author facts as authoritative. Track causality, character state, and unresolved narrative threads.`),
+    },
+    {
+      metadata: {
+        name: 'natural-prose-refinement',
+        displayName: '自然语言润色',
+        description: '在修稿阶段减少模板化表达，让动作、感官和句式服务于人物与场景。',
+        version: '1.0.0',
+      },
+      content: 'Revise the prose without changing author facts or plot outcomes. Replace generic summaries with selective concrete action, vary sentence rhythm, preserve the viewpoint voice, and remove meta commentary and repetitive transitions.',
+      localizedContent: {
+        'zh-CN': '在不改变作者事实和情节结果的前提下润色正文。用有选择的具体动作替代空泛概述，调整句式节奏，保持视角人物的语言质感，并删除元话术和重复的过渡表达。',
+        'en-US': 'Revise the prose without changing author facts or plot outcomes. Replace generic summaries with selective concrete action, vary sentence rhythm, preserve the viewpoint voice, and remove meta commentary and repetitive transitions.',
+      },
+      writingSkill: inspectWritingSkillMarkdown(`---\nname: natural-prose-refinement\ndescription: Natural prose refinement\nversion: 1.0.0\nlanguage: bilingual\nstage: refinement\n---\nRevise the prose without changing author facts or plot outcomes.`),
+    },
     {
       metadata: {
         name: 'review-chapter',
@@ -493,13 +519,17 @@ function registerBuiltinSkills(registry: SkillRegistryImpl): void {
     },
   ]
 
-  for (const { metadata, content } of builtins) {
+  for (const { metadata, content, writingSkill, localizedContent } of builtins) {
+    const inspected = writingSkill ?? inspectWritingSkillMarkdown(`---\nname: ${metadata.name}\ndescription: ${metadata.description}\n---\n${content}`)
     registry.register({
       metadata,
       content,
       source: 'builtin',
       baseDir: '',
       filePath: `builtin://${metadata.name}`,
+      skillId: `builtin:${metadata.name}`,
+      writingSkill: inspected,
+      localizedContent,
     })
   }
 }

@@ -325,10 +325,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   }
 
   it.each([
-    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', expected: '你是一位笔力精湛的网络小说家', unexpected: 'You are an accomplished web-fiction novelist' },
-    { uiLocale: 'en-US', writingLanguage: 'zh-CN', expected: '你是一位笔力精湛的网络小说家', unexpected: 'You are an accomplished web-fiction novelist' },
-    { uiLocale: 'zh-CN', writingLanguage: 'en-US', expected: 'You are an accomplished web-fiction novelist', unexpected: '你是一位笔力精湛的网络小说家' },
-    { uiLocale: 'en-US', writingLanguage: 'en-US', expected: 'You are an accomplished web-fiction novelist', unexpected: '你是一位笔力精湛的网络小说家' },
+    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的小说作者', unexpected: 'You are an experienced fiction writer' },
+    { uiLocale: 'en-US', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的小说作者', unexpected: 'You are an experienced fiction writer' },
+    { uiLocale: 'zh-CN', writingLanguage: 'en-US', expected: 'You are an experienced fiction writer', unexpected: '你是一位经验丰富的小说作者' },
+    { uiLocale: 'en-US', writingLanguage: 'en-US', expected: 'You are an experienced fiction writer', unexpected: '你是一位经验丰富的小说作者' },
   ] as const)(
     'sends $writingLanguage built-in instructions through the provider request in a $uiLocale interface',
     async ({ uiLocale, writingLanguage, expected, unexpected }) => {
@@ -873,11 +873,23 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       userGuidance: '第一章必须以潮湿灯塔开场',
     })
 
-    await command.execute({ step: {}, context, callbacks })
+    const contextWithSkill = {
+      ...context,
+      writingSkills: Object.freeze({
+        drafting: Object.freeze({
+          skillId: 'user:scene-craft', name: 'Scene craft', stage: 'drafting' as const,
+          source: 'user' as const, writingLanguage: 'zh-CN' as const,
+          content: '用具体动作推进因果变化。', utf8Bytes: 36,
+        }),
+      }),
+    }
+    await command.execute({ step: {}, context: contextWithSkill, callbacks })
 
     const task = runtime.complete.mock.calls[0]?.[0] as GenerationTask
     const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
     expect(task).toMatchObject({ purpose: 'chapter-draft', output: 'visible-text' })
+    expect(prompt).toContain('【补充写作 Skill：Scene craft】')
+    expect(prompt).toContain('用具体动作推进因果变化。')
     expect(prompt).not.toMatch(/\{\{(?:chapter_info|future_blueprints|user_guidance)\}\}/u)
     expect(prompt).toContain('第2章 蓝门回声：追查蓝色漆屑与撞击声')
     expect(prompt).toContain('第一章必须以潮湿灯塔开场')

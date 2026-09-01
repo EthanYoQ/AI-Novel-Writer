@@ -236,6 +236,7 @@ describe('workflow launch dialogs', () => {
     ))
 
     await expect.element(page.getByText(/1 次角色同步待修复/)).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
     await act(async () => page.getByRole('button', { name: '重试角色同步' }).click())
 
     expect(invoke.mock.calls.some(([channel]) => (

@@ -37,6 +37,43 @@ function persistence(overrides: Partial<PromptPersistence> = {}): PromptPersiste
 }
 
 describe('PromptCatalog lifecycle', () => {
+  it('isolates overrides by writing language and migrates legacy overrides to zh-CN only', async () => {
+    const adapter = persistence({
+      loadGlobal: vi.fn(async () => ({
+        templates: [
+          { ...builtin, content: '旧中文覆盖' },
+          { ...builtin, writingLanguage: 'en-US' as const, content: 'English override' },
+        ],
+        diagnostics: [],
+      })),
+    })
+    const catalog = new PromptCatalog([builtin], adapter, () => null)
+
+    await expect(catalog.resolve(builtin.key, undefined, 'zh-CN')).resolves.toMatchObject({
+      template: { content: '旧中文覆盖' },
+      source: 'global',
+    })
+    await expect(catalog.resolve(builtin.key, undefined, 'en-US')).resolves.toMatchObject({
+      template: { content: 'English override' },
+      source: 'global',
+    })
+  })
+
+  it('does not apply a legacy Chinese override to an English project', async () => {
+    const adapter = persistence({
+      loadGlobal: vi.fn(async () => ({
+        templates: [{ ...builtin, content: '旧中文覆盖' }],
+        diagnostics: [],
+      })),
+    })
+    const catalog = new PromptCatalog([builtin], adapter, () => null)
+
+    await expect(catalog.resolve(builtin.key, undefined, 'en-US')).resolves.toMatchObject({
+      template: { content: 'builtin prompt' },
+      source: 'builtin',
+    })
+  })
+
   it('hydrates a global override on the first resolve and shares one concurrent load', async () => {
     const globalLoad = deferred<{ templates: PromptTemplate[]; diagnostics: [] }>()
     const adapter = persistence({ loadGlobal: vi.fn(() => globalLoad.promise) })
@@ -140,6 +177,65 @@ describe('PromptCatalog lifecycle', () => {
       source: 'builtin',
     })
     await expect(catalog.list()).rejects.toThrow('first_chapter_draft.json')
+  })
+
+  it('isolates a damaged localized override from the same prompt in another language', async () => {
+    const adapter = persistence({
+      loadGlobal: vi.fn(async () => ({
+        templates: [],
+        diagnostics: [{
+          key: builtin.key,
+          writingLanguage: 'en-US' as const,
+          path: 'first_chapter_draft.en-US.json',
+          error: 'invalid JSON',
+        }],
+      })),
+    })
+    const catalog = new PromptCatalog([builtin], adapter, () => null)
+
+    await expect(catalog.resolve(builtin.key, undefined, 'zh-CN')).resolves.toMatchObject({ source: 'builtin' })
+    await expect(catalog.resolve(builtin.key, undefined, 'en-US')).rejects.toThrow('invalid JSON')
+    await expect(catalog.list(undefined, 'zh-CN')).resolves.toHaveLength(1)
+    await expect(catalog.list(undefined, 'en-US')).rejects.toThrow('invalid JSON')
+  })
+
+  it.each(['save', 'delete'] as const)('keeps an English diagnostic after a Chinese %s', async (action) => {
+    const adapter = persistence({
+      loadGlobal: vi.fn(async () => ({
+        templates: [],
+        diagnostics: [{
+          key: builtin.key,
+          writingLanguage: 'en-US' as const,
+          path: 'first_chapter_draft.en-US.json',
+          error: 'English override is damaged',
+        }],
+      })),
+    })
+    const catalog = new PromptCatalog([builtin], adapter, () => null)
+    const change = action === 'save'
+      ? { action, scope: 'global' as const, template: { ...builtin, writingLanguage: 'zh-CN' as const } }
+      : { action, scope: 'global' as const, key: builtin.key, writingLanguage: 'zh-CN' as const }
+
+    await expect(catalog.commit(change)).resolves.toBe(true)
+    await expect(catalog.resolve(builtin.key, undefined, 'en-US')).rejects.toThrow('English override is damaged')
+  })
+
+  it('preloads project diagnostics only for the requested writing language', async () => {
+    const adapter = persistence({
+      loadProject: vi.fn(async () => ({
+        templates: [],
+        diagnostics: [{
+          key: builtin.key,
+          writingLanguage: 'en-US' as const,
+          path: 'project/first_chapter_draft.en-US.json',
+          error: 'English project override is damaged',
+        }],
+      })),
+    })
+    const catalog = new PromptCatalog([builtin], adapter, () => session)
+
+    await expect(catalog.loadProject(session, 'zh-CN')).resolves.toBe(true)
+    await expect(catalog.loadProject(session, 'en-US')).rejects.toThrow('English project override is damaged')
   })
 
   it('does not leak project diagnostics into a global-only list', async () => {

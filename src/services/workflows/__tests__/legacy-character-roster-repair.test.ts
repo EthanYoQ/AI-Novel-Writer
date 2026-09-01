@@ -114,6 +114,7 @@ function installVela(invoke: (channel: string, ...args: unknown[]) => unknown) {
       invoke: vi.fn((channel: string, ...args: unknown[]) => {
         if (channel === 'llm:begin-execution-lease') return Promise.resolve({ success: true, lease })
         if (channel === 'llm:close-execution-lease') return Promise.resolve({ success: true })
+        if (channel === 'fs:check-exists') return Promise.resolve(false)
         return invoke(channel, ...args)
       }),
       on: vi.fn(),
@@ -233,7 +234,7 @@ describe('legacy character roster repair public workflow seam', () => {
       purpose: 'legacy-character-roster-json-repair',
     })
     expect(repairOptions).not.toHaveProperty('temperature')
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+    expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => channel.startsWith('db:character-roster'))).toEqual([
       'db:character-roster-read',
       'db:character-roster-read',
       'db:character-roster-commit',
@@ -257,7 +258,7 @@ describe('legacy character roster repair public workflow seam', () => {
 
     await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('已自动续写 2 次仍未完成')
     expect(generateStream).toHaveBeenCalledTimes(3)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
+    expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => channel.startsWith('db:character-roster'))).toEqual(['db:character-roster-read'])
   })
 
   it('adopts protected existing cards without a model call, then rebuilds only the read-only projection', async () => {
@@ -325,7 +326,7 @@ describe('legacy character roster repair public workflow seam', () => {
     finishGeneration?.()
 
     await expect(execution).rejects.toThrow('当前项目已切换，旧角色图谱修复已停止以避免写入错误项目')
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
+    expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => channel.startsWith('db:character-roster'))).toEqual(['db:character-roster-read'])
   })
 
   it('does not commit when cancellation reaches the repair before its atomic boundary', async () => {
@@ -352,7 +353,7 @@ describe('legacy character roster repair public workflow seam', () => {
     finishGeneration?.()
 
     await expect(execution).rejects.toThrow('工作流已取消')
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
+    expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => channel.startsWith('db:character-roster'))).toEqual(['db:character-roster-read'])
   })
 
   it('leaves semantic validation to the atomic seam and never falls back to Markdown parsing', async () => {
@@ -373,7 +374,7 @@ describe('legacy character roster repair public workflow seam', () => {
 
     await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('角色名单不能为空')
     expect(generateStream).toHaveBeenCalledOnce()
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+    expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => channel.startsWith('db:character-roster'))).toEqual([
       'db:character-roster-read',
       'db:character-roster-read',
       'db:character-roster-commit',

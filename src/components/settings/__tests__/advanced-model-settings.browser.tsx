@@ -145,4 +145,21 @@ describe('advanced model settings', () => {
     await expect.element(page.getByLabelText('Model reasoning override')).toBeVisible()
     await expect.element(page.getByLabelText('Effective reasoning effort')).toBeVisible()
   })
+
+  it('warns when the configured output consumes the context window without blocking save', async () => {
+    const { saveModel } = await renderSettings('en-US')
+    await clickEdit('Edit')
+    await act(async () => {
+      await page.getByLabelText('Context Window').fill('8192')
+      await page.getByRole('button', { name: 'Advanced settings', exact: true }).click()
+      await page.getByLabelText('Max output tokens').fill('8192')
+    })
+
+    await expect.element(page.getByRole('status')).toHaveTextContent(
+      'Max output tokens leave no safe room for the prompt',
+    )
+
+    await act(async () => page.getByRole('button', { name: 'Save configuration', exact: true }).click())
+    await vi.waitFor(() => expect(saveModel).toHaveBeenCalledTimes(1))
+  })
 })

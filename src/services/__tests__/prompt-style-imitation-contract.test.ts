@@ -10,7 +10,7 @@ describe('reference style imitation prompt contract', () => {
     expect(template?.content).toContain('仿写指南')
     expect(template?.content).toContain('句式')
     expect(template?.content).toContain('场景推进')
-    expect(template?.content).toContain('Qwen3 14B Q4')
+    expect(template?.content).not.toMatch(/Qwen|量化模型/i)
     expect(template?.content).toContain('禁止复述')
     expect(template?.content).toContain('不要复制')
   })

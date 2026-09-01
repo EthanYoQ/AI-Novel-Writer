@@ -381,7 +381,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       // @ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
       const executionContext = createAgentExecutionContext(modelId)
       // 系统提示词、@ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
-      const systemPrompt = buildAgentSystemPrompt(currentConv.mode, executionContext)
+      const systemPrompt = await buildAgentSystemPrompt(currentConv.mode, executionContext)
 
       // ===== P1-5: @ 提及预取 =====
       let enrichedUserMessage = content.trim()

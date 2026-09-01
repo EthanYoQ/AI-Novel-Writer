@@ -103,6 +103,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
         responseFormat: { type: 'json_object' },
         purpose: 'review-chapter',
         reasoningStage: 'review',
+        writingSkillStage: 'review',
       },
       context,
     )

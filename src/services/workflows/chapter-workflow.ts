@@ -243,7 +243,7 @@ export function createRefineOnlyWorkflow(
     steps: [
       {
         name: '修稿',
-        description: '将草稿提升到大神级质量，保存修稿并打开合并视图',
+        description: '在保留作者事实与叙事意图的前提下精修草稿，保存修订并打开合并视图',
         executor: async (step, context, callbacks) => {
           const { RefineDraftCommand } = await import('./commands/refine-draft.command')
           const cmd = new RefineDraftCommand({

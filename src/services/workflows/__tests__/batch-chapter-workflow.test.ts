@@ -26,7 +26,11 @@ vi.mock('../../workflow-guards', () => ({
 
 vi.mock('../../ipc-client', () => ({
   ipc: {
-    invokeWithProjectSession: doubles.invokeWithProjectSession,
+    invokeWithProjectSession: (context: unknown, channel: string, ...args: unknown[]) => (
+      channel === 'fs:check-exists'
+        ? Promise.resolve(false)
+        : doubles.invokeWithProjectSession(context, channel, ...args)
+    ),
   },
 }))
 
