@@ -403,7 +403,7 @@ describe('BlueprintRepository range commit', () => {
     }
   })
 
-  it('refuses to close pending sync work until the authoritative roster proves its frozen facts', () => {
+  it('closes relationship sync without creating blueprint-only character cards', () => {
     const db = createBlueprintDb()
     vi.mocked(getProjectDb).mockReturnValue(db)
     try {
@@ -419,10 +419,14 @@ describe('BlueprintRepository range commit', () => {
         }],
       })
 
-      expect(() => BlueprintRepository.completeCharacterSyncOperation(
+      expect(BlueprintRepository.completeCharacterSyncOperation(
         committed.characterSyncOperation.operationId,
-      )).toThrow(/缺少蓝图角色/u)
-      expect(BlueprintRepository.listPendingCharacterSyncOperations()).toHaveLength(1)
+      )).toMatchObject({
+        status: 'completed',
+        completionReceipt: { status: 'already-satisfied' },
+      })
+      expect(CharacterRosterRepository.read().entries).toEqual([])
+      expect(BlueprintRepository.listPendingCharacterSyncOperations()).toHaveLength(0)
     } finally {
       db.close()
     }

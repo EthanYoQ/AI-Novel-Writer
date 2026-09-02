@@ -15,6 +15,7 @@ import {
   sameProjectPathKey,
   sameProjectSessionContext,
 } from '../shared/project-session-context'
+import type { WritingLanguage } from '../shared/writing-language'
 
 
 export type ExportFormat = 'merged-md' | 'split-md' | 'txt'
@@ -36,6 +37,7 @@ export interface ExportProjectSnapshot {
   novelConfig: Readonly<{
     genre: string
     targetAudience: string
+    writingLanguage: WritingLanguage
   }>
 }
 
@@ -73,7 +75,7 @@ export async function exportNovel(
 
   try {
     // 遍历所有章节蓝图，取定稿内容
-    const chapterContents: Array<{ name: string; content: string }> = []
+    const chapterContents: Array<{ chapterNumber: number; title: string; name: string; content: string }> = []
     const blueprints = await ipc.invokeWithProjectSession(
       projectSession,
       'db:blueprint-get-all',
@@ -100,6 +102,8 @@ export async function exportNovel(
         if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
         if (full && (full as { content?: string }).content) {
           chapterContents.push({
+            chapterNumber: bp.chapterNumber as number,
+            title: typeof bp.title === 'string' ? bp.title.trim() : '',
             name: `chapter_${bp.chapterNumber}.md`,
             content: (full as { content: string }).content,
           })
@@ -170,6 +174,9 @@ export async function exportNovel(
         let content = `${project.name}\n${'='.repeat(project.name.length * 2)}\n\n`
 
         for (const ch of chapterContents) {
+          const chapterHeading = project.novelConfig.writingLanguage === 'en-US'
+            ? `Chapter ${ch.chapterNumber}${ch.title ? ` ${ch.title}` : ''}`
+            : `第${ch.chapterNumber}章${ch.title ? ` ${ch.title}` : ''}`
           // 简单去除 Markdown 标记
           const plainText = ch.content
             .replace(/^#{1,6}\s+/gm, '')  // 去掉标题标记
@@ -179,7 +186,7 @@ export async function exportNovel(
             .replace(/---+/g, '\n')  // 分隔线
             .trim()
 
-          content += plainText + '\n\n'
+          content += `${chapterHeading}\n\n${plainText}\n\n`
         }
 
         outputPath = `${projectFileStem}.txt`

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CharacterRosterEntry } from '../../../shared/character-roster'
+import { blueprintCharacterSyncFactError } from '../../../shared/blueprint-character-sync-evidence'
 import { syncBlueprintCharacterCandidates } from '../blueprint-character-sync'
 
 const projectPath = 'C:\\novels\\candidate-sync'
@@ -64,7 +65,7 @@ afterEach(() => {
 })
 
 describe('blueprint character candidate sync', () => {
-  it('creates missing candidates through one roster receipt without requiring an embedding model', async () => {
+  it('does not turn blueprint-only names into character cards', async () => {
     const { invoke, commits } = stubIpc([])
 
     await syncBlueprintCharacterCandidates([
@@ -75,31 +76,17 @@ describe('blueprint character candidate sync', () => {
       },
     ], projectPath, projectSession, 'blueprint-sync-001')
 
-    expect(commits).toEqual([expect.objectContaining({
-      intent: 'blueprint_sync',
-      entries: expect.arrayContaining([
-        expect.objectContaining({
-          name: '林岚',
-          role: 'supporting',
-          notes: '自动候选来源：章节蓝图（第1章）',
-          relationships: [{ target: '周砚', relation: '共同追查真相' }],
-        }),
-        expect.objectContaining({
-          name: '周砚',
-          relationships: [{ target: '林岚', relation: '共同追查真相' }],
-        }),
-      ]),
-    })])
+    expect(commits).toEqual([])
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
       'db:character-roster-read',
-      'db:character-roster-commit',
     ])
     expect(invoke.mock.calls.some(([channel]) => String(channel).startsWith('kb:'))).toBe(false)
   })
 
-  it('sends only changed structured cards plus new candidates, preserving existing manual profile fields in the deep module', async () => {
+  it('only enriches relationships between characters that already exist in the roster', async () => {
     const existing = character()
-    const { commits } = stubIpc([existing])
+    const second = character({ name: '周砚', role: 'supporting', relationships: [] })
+    const { commits } = stubIpc([existing, second])
 
     await syncBlueprintCharacterCandidates([
       {
@@ -118,27 +105,29 @@ describe('blueprint character candidate sync', () => {
           { target: '周砚', relation: '共同追查真相' },
         ],
       }),
-      expect.objectContaining({ name: '周砚' }),
+      expect.objectContaining({
+        name: '周砚',
+        relationships: [{ target: '林岚', relation: '共同追查真相' }],
+      }),
     ]))
     expect(commits[0].entries).toHaveLength(2)
   })
 
   it('does not echo legacy free-text relationship evidence through a blueprint IPC request', async () => {
     const existing = character({ legacyRelationshipNotes: '林岚与周砚的手工关系说明', relationships: [] })
-    const { commits } = stubIpc([existing])
-
-    await syncBlueprintCharacterCandidates([
+    const second = character({ name: '周砚', relationships: [] })
+    const frozenBlueprints = [
       {
         chapterNumber: 2,
         characters: ['林岚', '周砚'],
         relationshipHints: [{ from: '林岚', to: '周砚', relation: '共同追查真相' }],
       },
-    ], projectPath, projectSession, 'blueprint-sync-003')
+    ]
+    const { commits } = stubIpc([existing, second])
 
-    expect(commits).toHaveLength(1)
-    expect(commits[0].entries).toEqual([
-      expect.objectContaining({ name: '周砚' }),
-    ])
-    expect(JSON.stringify(commits[0].entries)).not.toContain('legacyRelationshipNotes')
+    await syncBlueprintCharacterCandidates(frozenBlueprints, projectPath, projectSession, 'blueprint-sync-003')
+
+    expect(commits).toHaveLength(0)
+    expect(blueprintCharacterSyncFactError(frozenBlueprints, [existing, second])).toBeUndefined()
   })
 })

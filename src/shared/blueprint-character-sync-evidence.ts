@@ -56,31 +56,24 @@ function relationshipSatisfied(
 }
 
 /**
- * Verifies the authoritative roster after a durable blueprint sync. Returning
- * no error is the only fact evidence that may close the pending operation.
+ * Verifies relationship enrichment for characters that already exist in the
+ * authoritative roster. Blueprint-only names are planning references and are
+ * deliberately not required to become character cards.
  */
 export function blueprintCharacterSyncFactError(
   blueprints: readonly BlueprintCharacterSyncFactSource[],
   roster: readonly BlueprintCharacterSyncRosterFact[],
 ): string | undefined {
   const rosterByName = new Map(roster.map(entry => [nameKey(entry.name), entry] as const))
-  const expectedNames = new Map<string, string>()
-  for (const blueprint of blueprints) {
-    for (const rawName of blueprint.characters) {
-      if (typeof rawName === 'string' && rawName.trim()) {
-        expectedNames.set(nameKey(rawName), rawName.trim())
-      }
-    }
-  }
-  for (const [key, name] of expectedNames) {
-    if (!rosterByName.has(key)) return `角色名单缺少蓝图角色「${name}」`
-  }
-
   for (const blueprint of blueprints) {
     for (const fact of relationshipFacts(blueprint.relationshipHints)) {
       const from = rosterByName.get(nameKey(fact.from))
       const to = rosterByName.get(nameKey(fact.to))
       if (!from || !to) continue
+      // Legacy relationship prose remains authoritative read-only evidence.
+      // Blueprint sync must not force a lossy conversion merely to close its
+      // post-commit bookkeeping operation.
+      if (from.legacyRelationshipNotes || to.legacyRelationshipNotes) continue
       if (
         !relationshipSatisfied(from, to.name, fact.relation)
         || !relationshipSatisfied(to, from.name, fact.relation)

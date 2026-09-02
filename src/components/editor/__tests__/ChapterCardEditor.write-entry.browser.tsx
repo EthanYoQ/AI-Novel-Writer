@@ -8,6 +8,7 @@ import type { ChapterBlueprint } from '../../../services/workflows/directory-wor
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useProjectStore } from '../../../stores/project-store'
+import { toast } from '../../ui/Toast'
 import ChapterCardEditor from '../ChapterCardEditor'
 
 const PROJECT_PATH = 'C:\\novels\\chapter-write-entry'
@@ -172,6 +173,31 @@ describe('ChapterCardEditor writing entry', () => {
     await act(async () => addButton?.click())
 
     expect(container?.textContent).toContain('第 10 章：')
+  })
+
+  it('appends after the blueprint maximum when the authoritative next blueprint already exists', async () => {
+    const info = vi.spyOn(toast, 'info').mockImplementation(() => undefined)
+    installIpc({
+      blueprints: [blueprint(10), blueprint(11)],
+      authoritySequence: {
+        status: 'continuous',
+        lastChapterNumber: 9,
+        nextChapterNumber: 10,
+        duplicateChapterNumbers: [],
+        authorityFingerprint: 'b'.repeat(64),
+      },
+    })
+
+    await renderEditor()
+    await vi.waitFor(() => expect(container?.textContent).toContain('写作第10章'))
+    const addButton = Array.from(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+      .find(button => button.title === '新建章节')
+    expect(addButton).toBeDefined()
+    await act(async () => addButton?.click())
+
+    expect(container?.textContent).toContain('第 12 章：')
+    expect(container?.textContent).toContain('写作第10章')
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('写作入口仍为第 10 章'))
   })
 
   it('blocks card writing and explains duplicate finalized authority', async () => {

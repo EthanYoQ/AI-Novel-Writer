@@ -439,13 +439,15 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       ))
       return
     }
-    const existingIndex = blueprints.findIndex(blueprint => blueprint.chapterNumber === nextWriteChapter)
-    if (existingIndex >= 0) {
-      setSelectedIdx(existingIndex)
-      return
-    }
+    const currentBlueprints = blueprintsRef.current
+    const authoritativeBlueprintExists = currentBlueprints.some(
+      blueprint => blueprint.chapterNumber === nextWriteChapter,
+    )
+    const chapterNumber = authoritativeBlueprintExists
+      ? Math.max(nextWriteChapter, ...currentBlueprints.map(blueprint => blueprint.chapterNumber)) + 1
+      : nextWriteChapter
     const newBlueprint: ChapterBlueprint = {
-      chapterNumber: nextWriteChapter,
+      chapterNumber,
       title: '',
       role: '发展',
       purpose: '',
@@ -456,8 +458,14 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       notes: '',
       notesUpdatedAt: '',
     }
-    markChapterDirty([...blueprintsRef.current, newBlueprint], newBlueprint.chapterNumber)
-    setSelectedIdx(blueprints.length)
+    markChapterDirty([...currentBlueprints, newBlueprint], newBlueprint.chapterNumber)
+    setSelectedIdx(currentBlueprints.length)
+    if (authoritativeBlueprintExists) {
+      toast.info(text(
+        `第 ${nextWriteChapter} 章蓝图已存在，已新增第 ${chapterNumber} 章；写作入口仍为第 ${nextWriteChapter} 章。`,
+        `The Chapter ${nextWriteChapter} blueprint already exists. Added Chapter ${chapterNumber}; the writing entry remains Chapter ${nextWriteChapter}.`,
+      ))
+    }
   }
 
   /** 删除选中章节 */
@@ -829,7 +837,10 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
           {visibleBlueprints.length === 0 ? (
             <div className="flex flex-col items-center justify-center flex-1 gap-3 opacity-40 p-4">
               <BookOpen size={28} />
-              <span className="text-xs text-center">{text('暂无蓝图，点击「AI 生成」开始', 'No blueprints yet. Select “AI generate” to begin.')}</span>
+              <span className="text-xs text-center">{text(
+                '暂无蓝图，可点击右上角「+」手动新建，或用「AI 生成蓝图」批量创建。',
+                'No blueprints yet. Use “+” to add one manually, or “AI generate blueprints” to create a batch.',
+              )}</span>
             </div>
           ) : (
           <div className="flex-1 overflow-y-auto p-1">

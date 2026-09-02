@@ -1192,7 +1192,10 @@ describe('GenerateDirectoryCommand', () => {
   })
 
   it('reports an explicit committed receipt when post-commit character synchronization fails', async () => {
-    const committed = blueprint(1, { characters: ['林岚'] })
+    const committed = blueprint(1, {
+      characters: ['林岚', '周砚'],
+      relationshipHints: [{ from: '林岚', to: '周砚', relation: '追查' }],
+    })
     stubIpcInvoke(successfulCommitHandler({
       snapshot: [committed],
       other: channel => {

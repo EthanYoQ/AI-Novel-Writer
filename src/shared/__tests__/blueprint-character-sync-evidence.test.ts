@@ -22,9 +22,9 @@ describe('blueprint character-sync fact evidence', () => {
     expect(blueprintCharacterSyncFactError(blueprints, roster())).toBeUndefined()
   })
 
-  it('rejects a roster that omits a frozen character', () => {
+  it('does not require a blueprint-only name to become a roster character', () => {
     expect(blueprintCharacterSyncFactError(blueprints, roster().slice(0, 1)))
-      .toMatch(/周砚/u)
+      .toBeUndefined()
   })
 
   it('rejects a roster that omits either direction of a frozen relationship', () => {
@@ -34,10 +34,10 @@ describe('blueprint character-sync fact evidence', () => {
     ])).toMatch(/临时盟友/u)
   })
 
-  it('does not mistake legacy free text for the required structured relationship fact', () => {
+  it('does not force legacy relationship prose into a lossy structured conversion', () => {
     expect(blueprintCharacterSyncFactError(blueprints, [
       { name: '林岚', relationships: [], legacyRelationshipNotes: '作者手工关系原文' },
       { name: '周砚', relationships: [], legacyRelationshipNotes: '作者手工关系原文' },
-    ])).toMatch(/临时盟友/u)
+    ])).toBeUndefined()
   })
 })

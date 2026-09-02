@@ -18,6 +18,7 @@ import {
   isProjectSessionCurrent,
 } from '../project-session-gate'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import { resolveWritingLanguage } from '../../shared/writing-language'
 
 interface Props {
   isOpen: boolean
@@ -52,6 +53,7 @@ export default function ExportDialog({ isOpen, onClose }: Props) {
       novelConfig: Object.freeze({
         genre: currentProject.novelConfig.genre,
         targetAudience: currentProject.novelConfig.targetAudience,
+        writingLanguage: resolveWritingLanguage(currentProject.novelConfig.writingLanguage),
       }),
     })
     const destination = await ipc.invoke('dialog:select-export-directory')

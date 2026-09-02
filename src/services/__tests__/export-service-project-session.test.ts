@@ -27,6 +27,7 @@ const projectSnapshot = {
   novelConfig: {
     genre: 'fantasy',
     targetAudience: 'general',
+    writingLanguage: 'zh-CN' as const,
   },
 }
 
@@ -118,6 +119,46 @@ describe('exportNovel project session ownership', () => {
       (exportedContent as string).indexOf(finalizedContent) + finalizedContent.length,
     )
     expect(new TextEncoder().encode(exportedFact)).toEqual(new TextEncoder().encode(finalizedContent))
+  })
+
+  it.each([
+    {
+      writingLanguage: 'zh-CN' as const,
+      title: '夜航',
+      expectedHeading: '第1章 夜航',
+    },
+    {
+      writingLanguage: 'en-US' as const,
+      title: 'Night Flight',
+      expectedHeading: 'Chapter 1 Night Flight',
+    },
+  ])('includes localized chapter titles in TXT exports for $writingLanguage projects', async ({
+    writingLanguage,
+    title,
+    expectedHeading,
+  }) => {
+    vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (_session: ProjectSessionContext, channel: string) => {
+      if (channel === 'db:blueprint-get-all') return [{ chapterNumber: 1, title }] as never
+      if (channel === 'db:draft-get-finalized') return { id: 1 } as never
+      if (channel === 'db:draft-get-full') return { content: 'Final chapter' } as never
+      throw new Error(`Unexpected channel: ${channel}`)
+    }) as never)
+
+    await expect(exportNovel(
+      { format: 'txt', grantId: 'export-grant' },
+      {
+        ...projectSnapshot,
+        novelConfig: { ...projectSnapshot.novelConfig, writingLanguage },
+      },
+      projectSession,
+    )).resolves.toEqual({ success: true, path: 'Project A.txt' })
+
+    expect(ipc.invoke).toHaveBeenCalledWith(
+      'fs:grant-write-file',
+      'export-grant',
+      'Project A.txt',
+      expect.stringContaining(`${expectedHeading}\n\nFinal chapter`),
+    )
   })
 
   it('stops after the directory-selection export becomes stale on a same-path reopen', async () => {

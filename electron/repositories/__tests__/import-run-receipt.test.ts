@@ -209,7 +209,7 @@ describe('import-run durable effect receipt', () => {
       .toThrow(/receipt.*损坏|收据.*损坏/i)
   })
 
-  it('rejects an offline-forged already-satisfied sync receipt when frozen roster facts are missing', () => {
+  it('accepts an already-satisfied receipt when blueprints need no existing-roster relationship update', () => {
     prepareCommittedBlueprintReceipt()
     tamperOffline(`
       UPDATE blueprint_character_sync_operations
@@ -223,8 +223,8 @@ describe('import-run durable effect receipt', () => {
       WHERE operation_id = 'blueprint-sync-import-blueprints-receipt-run-1-1'
     `)
 
-    expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+    expect(ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
+      .toMatchObject({ state: 'committed' })
   })
 
   it('freezes generated output before effect commit and atomically commits effect with checkpoint after reopen', () => {
