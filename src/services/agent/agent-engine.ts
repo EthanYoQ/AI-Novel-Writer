@@ -259,7 +259,6 @@ export async function runAgentLoop(
           tc.arguments,
           Object.freeze({
             ...executionContext,
-            operationId: toolCallInfo.id,
             markSideEffectStarted: () => { sideEffectStarted = true },
           }),
           TOOL_TIMEOUT_MS,

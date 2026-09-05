@@ -76,7 +76,10 @@ export const startWorkflowTool = buildAgentTool({
       const receipt = await launchCreativeWorkflow({
         workflow,
         ...(chapterNumber === undefined ? {} : { chapterNumber }),
-      } as CreativeIntent, projectSession, { generationModelId })
+      } as CreativeIntent, projectSession, {
+        generationModelId,
+        onRegistered: context?.markSideEffectStarted,
+      })
 
       return {
         success: true,

@@ -178,6 +178,19 @@ describe('Issue #90 AI assistant project actions', () => {
     }))
   })
 
+  it('marks the write boundary when the Agent registers a real workflow run', async () => {
+    stubWorkflowIpc()
+    const markSideEffectStarted = vi.fn()
+
+    const result = await startWorkflowTool.execute(
+      { workflow: 'generate_draft', chapter_number: 1 },
+      { ...createAgentExecutionContext(), markSideEffectStarted },
+    )
+
+    expect(result.success).toBe(true)
+    expect(markSideEffectStarted).toHaveBeenCalledTimes(1)
+  })
+
   it('freezes the English locale before asynchronous draft guards complete', async () => {
     stubWorkflowIpc()
     useLocaleStore.setState({ locale: 'en-US' })

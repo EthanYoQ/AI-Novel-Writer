@@ -78,7 +78,6 @@ describe('tool artifact project ownership', () => {
       content: 'must not be written',
     }, {
       ...createAgentExecutionContext(),
-      operationId: 'write-before-commit',
       abortSignal: controller.signal,
     })).rejects.toThrow(/取消|cancel/u)
 

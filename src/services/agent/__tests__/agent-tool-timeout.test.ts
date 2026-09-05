@@ -71,7 +71,7 @@ describe('Agent tool timeout boundary', () => {
     let finishWrite: ((result: ToolResult) => void) | undefined
     const execute = vi.fn(async (_args: Record<string, unknown>, execution?: AgentExecutionContext) => (
       new Promise<ToolResult>((resolve) => {
-        expect(execution?.operationId).toMatch(/\S/u)
+        expect(execution?.abortSignal).toBeInstanceOf(AbortSignal)
         finishWrite = resolve
       })
     ))

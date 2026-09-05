@@ -52,6 +52,8 @@ export interface CreativeWorkflowLaunchReceipt {
  */
 export interface CreativeWorkflowLaunchOptions {
   readonly generationModelId?: string
+  /** Called only after the workflow run is visible in the authoritative store. */
+  readonly onRegistered?: () => void
 }
 
 function requireGuardAccepted(result: GuardResult, uiLocale: Locale): void {
@@ -189,6 +191,7 @@ export async function launchCreativeWorkflow(
   if (!registered || registered.status === 'failed') {
     throw new Error(registered?.error ?? '工作流未能注册到任务中心，已拒绝报告启动成功')
   }
+  options.onRegistered?.()
 
   return Object.freeze({
     accepted: true,
