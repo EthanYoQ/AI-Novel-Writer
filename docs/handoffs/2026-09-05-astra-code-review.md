@@ -4,7 +4,9 @@
 仓库：`EthanYoQ/AI-Novel-Writer`
 审查分支：`codex/plot-tree-update-reminder`
 比较基线：`48c3b8a473da7d6d901ea087d13a32cd0e307f8a`
-实现提交：`5c6e73e522a4499d1c90d389b548e2906fe820ef`
+实现主提交：`5c6e73e522a4499d1c90d389b548e2906fe820ef`
+角色同步补充提交：`7ea4d961e9683396f7ac6095ceba78cc94d20ccd`
+当前审查代码头：`7ea4d961e9683396f7ac6095ceba78cc94d20ccd`
 合并状态：禁止合并；本轮只要求独立代码审查。
 
 ## 1. 先读本节：证据规则
@@ -33,11 +35,11 @@
 git fetch origin
 git checkout codex/plot-tree-update-reminder
 git status --short
-git diff --stat 48c3b8a473da7d6d901ea087d13a32cd0e307f8a..5c6e73e522a4499d1c90d389b548e2906fe820ef
-git diff 48c3b8a473da7d6d901ea087d13a32cd0e307f8a..5c6e73e522a4499d1c90d389b548e2906fe820ef
+git diff --stat 48c3b8a473da7d6d901ea087d13a32cd0e307f8a..7ea4d961e9683396f7ac6095ceba78cc94d20ccd
+git diff 48c3b8a473da7d6d901ea087d13a32cd0e307f8a..7ea4d961e9683396f7ac6095ceba78cc94d20ccd
 ```
 
-实现提交相对基线包含 222 个文件，约 `+14247/-1488`。不要只按提交大小判断质量；重点核对下文列出的事实边界、失败原子性和真实用户路径。
+当前审查代码头相对基线包含 229 个文件，约 `+15043/-1565`。不要只按提交大小判断质量；重点核对下文列出的事实边界、失败原子性和真实用户路径。
 
 ## 2. 软件是什么
 
@@ -130,9 +132,9 @@ AI Novel Writer 是本地优先的 Electron 长篇小说创作工作台。它负
 
 ### 4.3 第二批开发记录
 
-第二批是生成 `5c6e73e` 的当前任务。它接手第一批工作区，处理 GitHub #185/#187/#191 和人工测试发现的语言、角色、剧情树、连续性、篇幅、Agent 工具协议、终端弹窗等问题，并完成真实中英文四章流程、视觉审计、日志审计、Windows ZIP 和独立 code review。
+第二批是生成 `5c6e73e` 的当前任务。它接手第一批工作区，处理 GitHub #185/#187/#191 和人工测试发现的语言、角色、剧情树、连续性、篇幅、Agent 工具协议、终端弹窗等问题，并完成真实中英文四章流程、视觉审计、日志审计、Windows ZIP 和独立 code review。首次推送后的 Worktree 交叉盘点又发现 11 个未进入主提交的角色同步文件；`7ea4d96` 将这组可明确归属的 WIP 合入当前审查头，没有混入旧路线图、本机上下文或生成截图。
 
-由于两批连续修改了同一批核心文件，不能安全地按文件或补丁重新拆成两个实现提交。审查应使用时间线理解意图，但用一个固定 diff 判断最终状态。
+由于两批连续修改了同一批核心文件，主体不能安全地按文件重新拆成两个实现提交。角色同步遗漏具有独立且可验证的边界，因此保留为补充提交；审查仍应以固定 base 到 `7ea4d96` 的完整 diff 判断最终状态。
 
 ## 5. 第一批 Bug 与修复台账
 
@@ -242,7 +244,7 @@ AI Novel Writer 是本地优先的 Electron 长篇小说创作工作台。它负
 
 ### 6.2 角色生成与图谱
 
-71. **架构和蓝图生成后角色图谱为空。** 原因组合包括 manifest 合同过严、只允许恰好一个主角、角色详情单项调用过多、可恢复 provider 形态被拒绝、对话框复用旧缺失状态以及项目树不刷新。当前允许至少一个主角和双主角，详情 batch 为 3，安全归一化数值/字符串/数组形态，原子名册提交后 readback 才成功；对话框重开恢复缺失项默认选择，项目树订阅提交事件。
+71. **架构和蓝图生成后角色图谱为空。** 原因组合包括 manifest 合同过严、只允许恰好一个主角、角色详情单项调用过多、可恢复 provider 形态被拒绝、对话框复用旧缺失状态以及项目树不刷新。当前允许至少一个主角和双主角，详情 batch 为 3，安全归一化数值/字符串/数组形态，原子名册提交后 readback 才成功；蓝图只有通过结构化合同明确声明的长期 `newCharacterCandidates` 才能进入角色名单，正文定稿后处理不得自由创建角色；对话框重开恢复缺失项默认选择，项目树订阅提交事件。
 72. **角色详情过长造成调用和上下文膨胀。** 描述字段和状态字段使用 Unicode-safe 的明确上限；身份、角色类型、关系端点和必填结构仍严格，不能把截短扩大到事实字段。
 73. **角色图谱所有角色只能整块拖动。** 指针先转换到 world coordinate 并 hit-test；点中节点只更新该节点，空白处平移画布，缩放和适合视图继续工作。
 74. **角色图谱文字重叠。** 节点名最多 8 个 Unicode 字符，关系标签最多 6，其余显示 `+N`；完整内容保留在详情/可访问描述。互为双向关系合并成一条概览边，边距增加。
@@ -317,7 +319,7 @@ AI Novel Writer 是本地优先的 Electron 长篇小说创作工作台。它负
 
 ### 8.1 自动化和静态门禁
 
-实现提交对应的工作树已经通过：
+实现主提交对应的工作树已经通过：
 
 - 单元测试：588/588 suites；2343 tests 中 2334 passed、0 failed、9 skipped；
 - 浏览器测试：80/80 suites，239/239 tests；
@@ -329,9 +331,17 @@ AI Novel Writer 是本地优先的 Electron 长篇小说创作工作台。它负
 - 独立固定基线 review：无 P1/P2，唯一 P3 重复注释已删除；
 - 最终 ZIP 独立复核：无 P1/P2/P3。
 
+角色同步补充提交另通过：
+
+- 5 个直接测试文件，113/113 tests；
+- 2 个邻接提示词/定稿测试文件，15/15 tests；
+- `pnpm run typecheck`；
+- 11 个改动文件的 ESLint；
+- `git diff --check`。
+
 两次完整单测曾分别触发 60ms release-monitor 时序波动和首次 Vite optimizer 冷启动超时；对应单文件复跑通过。最终使用四 workers 的完整 run 全绿。审查者应区分环境时序波动与功能失败，不要通过放宽业务断言来消除波动。
 
-这些是实现提交形成前、源代码内容相同的工作树证据，不是 GitHub CI 对远端 SHA 的证明。推送后应查看远端 checks；pending 必须仍标 pending。
+完整套件、真实四章、视觉和 ZIP 是实现主提交形成前、源代码内容相同的工作树证据；角色同步补充提交只有上列聚焦回归，没有重新执行四章在线验收或重新打包。它们都不是 GitHub CI 对远端 SHA 的证明；远端没有触发 checks 时必须明确写“无远端 CI”，不能写成 CI 通过。
 
 ### 8.2 中文真实四章流程
 
@@ -375,7 +385,7 @@ AI Novel Writer 是本地优先的 Electron 长篇小说创作工作台。它负
 
 ## 9. 隐私、仓库卫生和禁止提交内容
 
-实现提交形成前，对准备上传的 222 个文件扫描四个真实 credential 值和本机路径标记，命中为 0。最终 ZIP 另以五项真实敏感值扫描，命中为 0。
+实现主提交形成前，对准备上传的 222 个文件扫描四个真实 credential 值和本机路径标记，命中为 0。角色同步补充提交的 11 个文件另做敏感键格式和绝对本机路径扫描，命中为 0。最终 ZIP 另以五项真实敏感值扫描，命中为 0。
 
 以下内容不得进入 Git：
 
@@ -393,7 +403,7 @@ AI Novel Writer 是本地优先的 Electron 长篇小说创作工作台。它负
 
 ### 10.1 冻结对象
 
-- 确认 base=`48c3b8a...`、implementation=`5c6e73e...`。
+- 确认 base=`48c3b8a...`、main implementation=`5c6e73e...`、review head=`7ea4d96...`。
 - 确认 fresh checkout 干净。
 - 检查完整 diff 和所有新文件，尤其不能漏掉 untracked-origin production files。
 
@@ -508,7 +518,7 @@ pnpm run check:i18n
 pnpm run lint
 pnpm test -- --maxWorkers=4
 pnpm run test:browser
-git diff --check 48c3b8a473da7d6d901ea087d13a32cd0e307f8a..5c6e73e522a4499d1c90d389b548e2906fe820ef
+git diff --check 48c3b8a473da7d6d901ea087d13a32cd0e307f8a..7ea4d961e9683396f7ac6095ceba78cc94d20ccd
 ```
 
 Windows package review另执行：
