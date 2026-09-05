@@ -123,7 +123,7 @@ describe('reasoning policy settings', () => {
       <ReasoningPolicySettings model={legacyDeepSeekV4} onModelChange={() => {}} />,
     )
 
-    expect(markup).toContain('低 → 高')
+    expect(markup).toContain('低 → 低')
     expect(markup).toContain('已映射')
     expect(markup).not.toContain('不支持 / 不发送参数')
   })
