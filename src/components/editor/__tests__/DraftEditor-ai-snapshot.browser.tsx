@@ -50,6 +50,7 @@ beforeEach(async () => {
         version: 1,
         status: 'draft',
         source: 'write',
+        contentId: 70,
         wordCount: SAVED_BODY.length,
         createdAt: '2026-09-06T00:00:00.000Z',
         updatedAt: '2026-09-06T00:00:00.000Z',
@@ -58,7 +59,21 @@ beforeEach(async () => {
     if (channel === 'db:blueprint-get-all') return []
     if (channel === 'db:draft-list') return [{ id: 7, version: 1 }]
     if (channel === 'db:revision-get-pending' || channel === 'db:review-list') return []
-    if (channel === 'db:draft-get-full') return { content: SAVED_BODY }
+    if (channel === 'db:draft-update-content') return { success: true }
+    if (channel === 'db:draft-get-full') {
+      return {
+        id: 7,
+        chapterNumber: 1,
+        version: 1,
+        status: 'draft',
+        source: 'write',
+        contentId: 70,
+        wordCount: SCREEN_BODY.length,
+        createdAt: '2026-09-06T00:00:00.000Z',
+        updatedAt: '2026-09-06T00:01:00.000Z',
+        content: SCREEN_BODY,
+      }
+    }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
   Object.defineProperty(window, 'velaAPI', {
@@ -169,9 +184,32 @@ describe('DraftEditor AI source snapshot', () => {
     const definition = startWorkflow.mock.calls[0]?.[0] as WorkflowDefinition
     await definition.steps[0].executor({} as never, {} as never, {} as never)
     const instance = (command === 'refine' ? refineExecute : reviewExecute).mock.instances[0] as unknown as {
-      params: { draftContent: string }
+      params: {
+        draftContent: string
+        sourceDraft: { id: number; chapterNumber: number; version: number; status: string; contentRevision: number }
+      }
     }
     expect(instance.params.draftContent).toBe(SCREEN_BODY)
-    expect(invoke.mock.calls.some(([channel]) => channel === 'db:draft-get-full')).toBe(false)
+    expect(instance.params.sourceDraft).toEqual({
+      id: 7,
+      chapterNumber: 1,
+      version: 1,
+      status: 'draft',
+      contentRevision: 1,
+    })
+    expect(invoke.mock.calls).toContainEqual([
+      'db:draft-update-content',
+      7,
+      SCREEN_BODY,
+      SCREEN_BODY.length,
+      PROJECT_PATH,
+      PROJECT_SESSION,
+    ])
+    expect(invoke.mock.calls).toContainEqual([
+      'db:draft-get-full',
+      7,
+      PROJECT_PATH,
+      PROJECT_SESSION,
+    ])
   })
 })

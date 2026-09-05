@@ -17,6 +17,13 @@ const projectSession: ProjectSessionContext = {
   projectPath,
 }
 const originalLocale = useLocaleStore.getState().locale
+const sourceDraft = {
+  id: 2,
+  chapterNumber: 2,
+  version: 1,
+  status: 'draft' as const,
+  contentRevision: 0,
+}
 
 afterEach(() => useLocaleStore.setState({ locale: originalLocale }))
 
@@ -40,6 +47,7 @@ describe('chapter workflow locale', () => {
         chapterTitle: 'A New Term',
         draftPath: 'vela://draft/2',
         draftContent: 'Draft',
+        sourceDraft,
       }, projectSession),
       createRefineOnlyWorkflow({
         projectPath,
@@ -47,6 +55,7 @@ describe('chapter workflow locale', () => {
         chapterTitle: 'A New Term',
         draftPath: 'vela://draft/2',
         draftContent: 'Draft',
+        sourceDraft,
       }, projectSession),
       createRefineFromReviewWorkflow({
         projectPath,

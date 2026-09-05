@@ -140,10 +140,12 @@ function stubIpc(invoke: (channel: string, ...args: unknown[]) => Promise<unknow
 function command(
   completeWithLease: GenerationRuntimeEnvironment['completeWithLease'],
   draftContent: string,
+  sourceDraft?: NonNullable<ConstructorParameters<typeof RefineDraftCommand>[0]['sourceDraft']>,
 ): RefineDraftCommand {
   return new RefineDraftCommand({
     draftPath: 'vela://draft/1',
     draftContent,
+    sourceDraft,
     chapterNumber: 1,
     chapterInfo: {
       projectPath: PROJECT_PATH,
@@ -176,10 +178,12 @@ function chapterReviewCommand(
   completeWithLease: GenerationRuntimeEnvironment['completeWithLease'],
   draftContent = '待审章节正文。',
   chapterNumber = 1,
+  sourceDraft?: NonNullable<ConstructorParameters<typeof ReviewChapterCommand>[0]['sourceDraft']>,
 ): ReviewChapterCommand {
   return new ReviewChapterCommand({
     draftPath: 'vela://draft/1',
     draftContent,
+    sourceDraft,
     chapterNumber,
   }, runtimeDependencies(completeWithLease))
 }
@@ -499,6 +503,44 @@ describe('RefineDraftCommand bounded visible completion', () => {
 
     expect(invoke).not.toHaveBeenCalled()
     expect(useEditorStore.getState().tabs).toEqual([])
+  })
+
+  it('refuses to persist a revision when the frozen source changes during generation', async () => {
+    const source = '原稿正文。'.repeat(120)
+    const revision = '修订正文。'.repeat(120)
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: revision, finishReason: 'stop' })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:draft-get-full') {
+        return {
+          id: 1,
+          chapterNumber: 1,
+          version: 1,
+          status: 'draft',
+          source: 'write',
+          content: '修稿期间被改写的正文。',
+        }
+      }
+      if (channel === 'db:revision-replace-pending') return { success: true, id: 9, revisionIndex: 2 }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubIpc(invoke)
+
+    await expect(command(completeWithLease, source, {
+      id: 1,
+      chapterNumber: 1,
+      version: 1,
+      status: 'draft',
+      contentRevision: 4,
+    }).execute({
+      step: {},
+      context: workflowContext(),
+      callbacks: callbacks(),
+    })).rejects.toThrow('源草稿在修稿期间已变化')
+
+    expect(invoke).toHaveBeenCalledWith('db:draft-get-full', 1, PROJECT_PATH, PROJECT_SESSION)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:draft-get-meta')).toBe(false)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:revision-replace-pending')).toBe(false)
   })
 
   it('rejects a final stop that is materially shorter than the source before any revision IPC', async () => {
@@ -837,6 +879,47 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
 })
 
 describe('ReviewChapterCommand reasoning stage', () => {
+  it('refuses to persist a review when the frozen source changes during generation', async () => {
+    const source = '待审章节正文。'.repeat(120)
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:continuity-list-before' || channel === 'db:character-get-all' || channel === 'db:blueprint-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:draft-get-full') {
+        return {
+          id: 1,
+          chapterNumber: 1,
+          version: 1,
+          status: 'draft',
+          source: 'write',
+          content: '审稿期间被改写的正文。',
+        }
+      }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:blueprint-get') return null
+      if (channel === 'db:review-create') return { success: true, id: 77 }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubIpc(invoke)
+
+    await expect(chapterReviewCommand(completeWithLease, source, 1, {
+      id: 1,
+      chapterNumber: 1,
+      version: 1,
+      status: 'draft',
+      contentRevision: 8,
+    }).execute({
+      step: {},
+      context: workflowContext(),
+      callbacks: callbacks(),
+    })).rejects.toThrow('源草稿在审稿期间已变化')
+
+    expect(invoke).toHaveBeenCalledWith('db:draft-get-full', 1, PROJECT_PATH, PROJECT_SESSION)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:draft-get-meta')).toBe(false)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(false)
+  })
+
   it('keeps the complete source chapter in a length replacement request', async () => {
     const sourceDraft = [
       'SOURCE_DRAFT_HEAD',
@@ -878,6 +961,12 @@ describe('ReviewChapterCommand reasoning stage', () => {
             novelConfig: {
               ...state.currentProject.novelConfig,
               globalGuidance: 'AUTHOR_GLOBAL_GUIDANCE：不得将计划冒充已经发生。',
+              writingStyle: 'AUTHOR_WRITING_STYLE：短句，克制，不使用全知视角。',
+              narrativePOV: 'first_person',
+              coreOutline: 'AUTHOR_CORE_OUTLINE：潮门真相只在终章揭晓。',
+              worldSetting: 'AUTHOR_WORLD_SETTING：月桂港每天只有一次退潮。',
+              goldenFinger: 'AUTHOR_GOLDEN_FINGER：主角只能听见潮汐钟。',
+              protagonistProfile: 'AUTHOR_PROTAGONIST：顾舟不会游泳。',
             },
           }
         : null,
@@ -935,6 +1024,13 @@ describe('ReviewChapterCommand reasoning stage', () => {
     expect(reviewRequest).toContain('唯一已发生事实源')
     expect(reviewRequest).toContain('【作者全局创作指导｜约束而非已发生事实】')
     expect(reviewRequest).toContain('AUTHOR_GLOBAL_GUIDANCE')
+    expect(reviewRequest).toContain('【作者确认项目配置｜约束而非已发生事实】')
+    expect(reviewRequest).toContain('AUTHOR_WRITING_STYLE')
+    expect(reviewRequest).toContain('first_person')
+    expect(reviewRequest).toContain('AUTHOR_CORE_OUTLINE')
+    expect(reviewRequest).toContain('AUTHOR_WORLD_SETTING')
+    expect(reviewRequest).toContain('AUTHOR_GOLDEN_FINGER')
+    expect(reviewRequest).toContain('AUTHOR_PROTAGONIST')
     expect(reviewRequest).toContain('【当前及未来蓝图/计划｜非既定历史】')
     expect(reviewRequest).toContain('FUTURE_BLUEPRINT_PLAN')
     expect(reviewRequest).not.toContain('REFERENCE_WORK_POLLUTANT')

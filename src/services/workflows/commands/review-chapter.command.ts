@@ -17,11 +17,13 @@ import { promptLanguageText } from '../../prompt-language'
 import { readConsistencyPreflight } from '../../consistency-preflight'
 import { mergeConsistencyFindingsIntoReview, type ReviewLike } from '../../../shared/consistency-preflight'
 import type { ChapterBlueprint } from '../directory-workflow'
+import type { FrozenDraftSourceIdentity } from '../chapter-workflow'
 
 
 export interface ReviewChapterParams {
   draftPath: string
   draftContent: string
+  sourceDraft?: FrozenDraftSourceIdentity
   chapterNumber: number
   /** 审稿维度侧重点（可选） */
   reviewFocus?: string
@@ -230,6 +232,11 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       `【作者全局创作指导｜约束而非已发生事实】\n${globalGuidance}`,
       `[Author global creative guidance | constraint, not established history]\n${globalGuidance}`,
     )
+    const authorConfigSection = promptLanguageText(
+      writingLanguage,
+      `【作者确认项目配置｜约束而非已发生事实】\n${JSON.stringify(novelConfig, null, 2)}`,
+      `[Author-confirmed project configuration | constraint, not established history]\n${JSON.stringify(novelConfig, null, 2)}`,
+    )
     let planningMaterial = formatReviewPlanningMaterial([], writingLanguage)
     try {
       const { loadDirectoryBlueprints } = await import('../directory-workflow')
@@ -259,6 +266,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     const reviewPrompt = [
       promptBuilder.build(),
       authorGuidanceSection,
+      authorConfigSection,
       planningMaterial,
     ].join('\n\n')
 
@@ -292,12 +300,6 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       ))
     }
 
-    const baseDraft = await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
-    if (!baseDraft) throw new Error(text('找不到基准草稿版本', 'The source draft version could not be found.'))
-    const baseVersion = baseDraft.version
-
-    const revIndex = await ipc.invokeWithProjectSession(projectSession, 'db:review-next-index', baseDraft.id, context.projectPath)
-
     const blueprint = await ipc.invokeWithProjectSession(
       projectSession, 'db:blueprint-get', this.params.chapterNumber, context.projectPath,
     )
@@ -315,6 +317,32 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
         throw new Error(text('当前项目已切换，审稿已停止', 'The project changed, so the review stopped.'))
       }
     }
+
+    const frozenSource = this.params.sourceDraft
+    const baseDraft = frozenSource
+      ? await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:draft-get-full',
+          frozenSource.id,
+          context.projectPath,
+        )
+      : await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
+    if (!baseDraft) throw new Error(text('找不到基准草稿版本', 'The source draft version could not be found.'))
+    if (frozenSource && (
+      baseDraft.id !== frozenSource.id
+      || baseDraft.chapterNumber !== frozenSource.chapterNumber
+      || baseDraft.version !== frozenSource.version
+      || baseDraft.status !== frozenSource.status
+      || !('content' in baseDraft)
+      || baseDraft.content !== draft
+    )) {
+      throw new Error(text(
+        '源草稿在审稿期间已变化，审稿报告未保存',
+        'The source draft changed during review, so the review report was not saved.',
+      ))
+    }
+    const baseVersion = baseDraft.version
+    const revIndex = await ipc.invokeWithProjectSession(projectSession, 'db:review-next-index', baseDraft.id, context.projectPath)
 
     this.assertNotCancelled(context)
     const createResult = await ipc.invokeWithProjectSession(projectSession, 'db:review-create', {

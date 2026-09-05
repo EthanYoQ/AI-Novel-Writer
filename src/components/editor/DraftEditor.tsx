@@ -234,14 +234,59 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     }
   }
 
+  const freezeDraftSourceForAI = async (projectSession: NonNullable<ReturnType<typeof captureProjectSession>>) => {
+    if (!meta) return null
+    const targetTab = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )
+    if (!targetTab || (targetTab.draftId !== undefined && targetTab.draftId !== meta.id)) {
+      toast.warning(text(
+        '当前草稿身份已变化，请重新打开后再执行 AI 操作',
+        'The current draft identity changed. Reopen it before running the AI action.',
+      ))
+      return null
+    }
+    const body = targetTab.content ?? currentBodyRef.current
+    const sourceDraft = Object.freeze({
+      id: meta.id,
+      chapterNumber: meta.chapterNumber,
+      version: meta.version,
+      status: targetTab.draftStatus ?? meta.status,
+      contentRevision: targetTab.contentRevision ?? 0,
+    })
+
+    if (targetTab.dirty) await doSave(body)
+    if (!isProjectSessionCurrent(projectSession)) return null
+    const stored = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-get-full',
+      sourceDraft.id,
+      projectSession.projectPath,
+    )
+    if (
+      !stored
+      || stored.id !== sourceDraft.id
+      || stored.chapterNumber !== sourceDraft.chapterNumber
+      || stored.version !== sourceDraft.version
+      || stored.status !== sourceDraft.status
+      || stored.content !== body
+    ) {
+      toast.warning(text(
+        '保存期间草稿基准已变化，AI 操作未启动',
+        'The draft source changed while it was being saved, so the AI action was not started.',
+      ))
+      return null
+    }
+    return Object.freeze({ body, sourceDraft })
+  }
+
   /** 执行 AI 修稿（含用户自定义提示词） */
   const doRefine = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    const body = useEditorStore.getState().tabs.find(
-      tab => tab.id === tabId && tab.projectKey === projectKey,
-    )?.content ?? currentBodyRef.current
     try {
+      const source = await freezeDraftSourceForAI(projectSession)
+      if (!source || !isProjectSessionCurrent(projectSession)) return
       const { useWorkflowStore } = await import('../../stores/workflow-store')
       const { createRefineOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
@@ -251,7 +296,8 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         chapterNumber: meta.chapterNumber,
         chapterTitle: meta.chapterTitle ?? '未知标题',
         draftPath: filePath,
-        draftContent: body,
+        draftContent: source.body,
+        sourceDraft: source.sourceDraft,
         userRefinePrompt: userRefinePrompt.trim() || undefined,
       }, projectSession), false)
     } catch (e) {
@@ -264,10 +310,9 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const doReview = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    const body = useEditorStore.getState().tabs.find(
-      tab => tab.id === tabId && tab.projectKey === projectKey,
-    )?.content ?? currentBodyRef.current
     try {
+      const source = await freezeDraftSourceForAI(projectSession)
+      if (!source || !isProjectSessionCurrent(projectSession)) return
       const { useWorkflowStore } = await import('../../stores/workflow-store')
       const { createReviewOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
@@ -277,7 +322,8 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         chapterNumber: meta.chapterNumber,
         chapterTitle: meta.chapterTitle ?? '未知标题',
         draftPath: filePath,
-        draftContent: body,
+        draftContent: source.body,
+        sourceDraft: source.sourceDraft,
         reviewFocus: REVIEW_DIMS.filter(d => reviewDims[d.key]).map(d => d.promptLabel).join('、') || undefined,
       }, projectSession), false)
     } catch (e) {

@@ -40,12 +40,22 @@ export interface ChapterWorkflowOptions {
   uiLocale?: Locale
 }
 
+export interface FrozenDraftSourceIdentity {
+  readonly id: number
+  readonly chapterNumber: number
+  readonly version: number
+  readonly status: DraftStatus
+  /** Renderer edit generation captured with the body shown to the author. */
+  readonly contentRevision: number
+}
+
 export interface RefineOnlyParams {
   projectPath: string
   chapterNumber: number
   chapterTitle: string
   draftPath: string
   draftContent: string
+  sourceDraft: FrozenDraftSourceIdentity
   userRefinePrompt?: string
 }
 
@@ -74,6 +84,7 @@ export interface ReviewOnlyParams {
   chapterTitle: string
   draftPath: string
   draftContent: string
+  sourceDraft: FrozenDraftSourceIdentity
   /** 审稿维度侧重点（可选） */
   reviewFocus?: string
 }
@@ -264,6 +275,10 @@ export function createRefineOnlyWorkflow(
   sourceProjectSession: ProjectSessionContext,
 ): WorkflowDefinition {
   const uiLocale = chapterWorkflowLocale()
+  const frozenParams = Object.freeze({
+    ...params,
+    sourceDraft: Object.freeze({ ...params.sourceDraft }),
+  })
   return {
     type: 'chapter_creation',
     projectPath: params.projectPath,
@@ -286,11 +301,12 @@ export function createRefineOnlyWorkflow(
         executor: async (step, context, callbacks) => {
           const { RefineDraftCommand } = await import('./commands/refine-draft.command')
           const cmd = new RefineDraftCommand({
-            draftPath: params.draftPath,
-            draftContent: params.draftContent,
-            chapterNumber: params.chapterNumber,
-            chapterInfo: { projectPath: params.projectPath, chapterNumber: params.chapterNumber, title: params.chapterTitle, role: '', purpose: '', characters: [], keyEvents: '' },
-            userRefinePrompt: params.userRefinePrompt,
+            draftPath: frozenParams.draftPath,
+            draftContent: frozenParams.draftContent,
+            sourceDraft: frozenParams.sourceDraft,
+            chapterNumber: frozenParams.chapterNumber,
+            chapterInfo: { projectPath: frozenParams.projectPath, chapterNumber: frozenParams.chapterNumber, title: frozenParams.chapterTitle, role: '', purpose: '', characters: [], keyEvents: '' },
+            userRefinePrompt: frozenParams.userRefinePrompt,
           })
           return cmd.execute({ step, context, callbacks })
         },
@@ -348,6 +364,10 @@ export function createReviewOnlyWorkflow(
   sourceProjectSession: ProjectSessionContext,
 ): WorkflowDefinition {
   const uiLocale = chapterWorkflowLocale()
+  const frozenParams = Object.freeze({
+    ...params,
+    sourceDraft: Object.freeze({ ...params.sourceDraft }),
+  })
   return {
     type: 'chapter_creation',
     projectPath: params.projectPath,
@@ -370,10 +390,11 @@ export function createReviewOnlyWorkflow(
         executor: async (step, context, callbacks) => {
           const { ReviewChapterCommand } = await import('./commands/review-chapter.command')
           const cmd = new ReviewChapterCommand({
-            draftPath: params.draftPath,
-            draftContent: params.draftContent,
-            chapterNumber: params.chapterNumber,
-            reviewFocus: params.reviewFocus,
+            draftPath: frozenParams.draftPath,
+            draftContent: frozenParams.draftContent,
+            sourceDraft: frozenParams.sourceDraft,
+            chapterNumber: frozenParams.chapterNumber,
+            reviewFocus: frozenParams.reviewFocus,
           })
           return cmd.execute({ step, context, callbacks })
         },
