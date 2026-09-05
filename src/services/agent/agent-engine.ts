@@ -264,6 +264,7 @@ export async function runAgentLoop(
           TOOL_TIMEOUT_MS,
           executionContext.writingLanguage,
           tool.isReadOnly,
+          () => sideEffectStarted,
           abortSignal,
         )
 
@@ -531,6 +532,7 @@ async function executeToolWithTimeout(
   timeoutMs: number,
   writingLanguage: WritingLanguage,
   isReadOnly: boolean,
+  hasSideEffectStarted: () => boolean,
   outerSignal?: AbortSignal,
 ): Promise<ToolResult> {
   const controller = new AbortController()
@@ -540,22 +542,15 @@ async function executeToolWithTimeout(
   const toolContext = Object.freeze({ ...context, abortSignal: controller.signal })
   const execution = executeFn(args, toolContext)
 
-  // A write may already have crossed an IPC/main-process commit point. Waiting
-  // for its real receipt is safer than returning "failed" and inviting a retry.
-  if (!isReadOnly) {
-    try {
-      return await execution
-    } finally {
-      outerSignal?.removeEventListener('abort', forwardAbort)
-    }
-  }
-
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
       execution,
       new Promise<ToolResult>((_, reject) => {
         timer = setTimeout(() => {
+          // Once a write crosses its explicit commit point, keep waiting for
+          // the real receipt instead of turning latency into a retryable error.
+          if (!isReadOnly && hasSideEffectStarted()) return
           controller.abort()
           reject(new ToolExecutionTimeoutError(writingLanguageText(
             writingLanguage,

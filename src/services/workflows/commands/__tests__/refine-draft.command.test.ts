@@ -871,6 +871,17 @@ describe('ReviewChapterCommand reasoning stage', () => {
   })
 
   it('uses finalized continuity as the only established-history source in the review request', async () => {
+    useProjectStore.setState(state => ({
+      currentProject: state.currentProject
+        ? {
+            ...state.currentProject,
+            novelConfig: {
+              ...state.currentProject.novelConfig,
+              globalGuidance: 'AUTHOR_GLOBAL_GUIDANCE：不得将计划冒充已经发生。',
+            },
+          }
+        : null,
+    }))
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
       .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
     const invoke = vi.fn(async (channel: string) => {
@@ -892,6 +903,18 @@ describe('ReviewChapterCommand reasoning stage', () => {
         { text: 'FUTURE_PLAN_POLLUTANT：顾舟将在第十章离港。', score: 1, fileName: '未来计划.md' },
         { text: 'UNKNOWN_SOURCE_POLLUTANT', score: 1, fileName: 'legacy.md' },
       ]
+      if (channel === 'db:blueprint-get-all') return [{
+        chapterNumber: 3,
+        title: '潮门之后',
+        role: '发展',
+        purpose: '揭示新目标',
+        keyEvents: 'FUTURE_BLUEPRINT_PLAN：顾舟将在下一章调查潮门。',
+        characters: ['顾舟'],
+        suspenseHook: '潮门通向哪里',
+        userGuidance: '',
+        notes: '',
+        notesUpdatedAt: '',
+      }]
       if (channel === 'db:character-get-all') return []
       if (channel === 'db:project-core-get') return {}
       if (channel === 'db:draft-get-meta') return { id: 2, chapterNumber: 2, version: 1, status: 'draft', source: 'write' }
@@ -910,6 +933,10 @@ describe('ReviewChapterCommand reasoning stage', () => {
       .map(message => message.content).join('\n') ?? ''
     expect(reviewRequest).toContain('FINALIZED_HISTORY_FACT')
     expect(reviewRequest).toContain('唯一已发生事实源')
+    expect(reviewRequest).toContain('【作者全局创作指导｜约束而非已发生事实】')
+    expect(reviewRequest).toContain('AUTHOR_GLOBAL_GUIDANCE')
+    expect(reviewRequest).toContain('【当前及未来蓝图/计划｜非既定历史】')
+    expect(reviewRequest).toContain('FUTURE_BLUEPRINT_PLAN')
     expect(reviewRequest).not.toContain('REFERENCE_WORK_POLLUTANT')
     expect(reviewRequest).not.toContain('FUTURE_PLAN_POLLUTANT')
     expect(reviewRequest).not.toContain('UNKNOWN_SOURCE_POLLUTANT')

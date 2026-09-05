@@ -198,4 +198,33 @@ describe('CodeMirror editor AI generation boundary', () => {
     await expect.element(page.getByText('正文或原目标已变化，结果未应用；你仍可复制预览内容')).toBeVisible()
     await expect.element(page.getByText('替换甲')).toBeVisible()
   })
+
+  it('keeps a completed result copyable but refuses replacement after the editor becomes read-only', async () => {
+    deferStream = true
+    await act(async () => root.render(
+      <CodeMirrorEditor content="甲乙" mode="prose" editable />,
+    ))
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+
+    await act(async () => page.getByText('甲乙').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await act(async () => {
+      const requestId = pendingRequestId!
+      listeners.get('llm:stream-done')?.({
+        requestId,
+        fullText: '替换甲',
+        finishReason: 'stop',
+      } as never)
+    })
+    await expect.element(page.getByText('替换甲')).toBeVisible()
+
+    await act(async () => root.render(
+      <CodeMirrorEditor content="甲乙" mode="prose" editable={false} />,
+    ))
+    await act(async () => page.getByRole('button', { name: '替换' }).click())
+
+    expect(view.state.doc.toString()).toBe('甲乙')
+    await expect.element(page.getByText('正文已变为只读，结果未应用；你仍可复制预览内容')).toBeVisible()
+    await expect.element(page.getByText('替换甲')).toBeVisible()
+  })
 })

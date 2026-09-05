@@ -238,12 +238,12 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const doRefine = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    const body = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )?.content ?? currentBodyRef.current
     try {
       const { useWorkflowStore } = await import('../../stores/workflow-store')
       const { createRefineOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
-      if (!isProjectSessionCurrent(projectSession)) return
-
-      const body = await readDraftBody(filePath, projectKey, projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
 
       useWorkflowStore.getState().startWorkflow(createRefineOnlyWorkflow({
@@ -264,12 +264,12 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const doReview = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    const body = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )?.content ?? currentBodyRef.current
     try {
       const { useWorkflowStore } = await import('../../stores/workflow-store')
       const { createReviewOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
-      if (!isProjectSessionCurrent(projectSession)) return
-
-      const body = await readDraftBody(filePath, projectKey, projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
 
       useWorkflowStore.getState().startWorkflow(createReviewOnlyWorkflow({

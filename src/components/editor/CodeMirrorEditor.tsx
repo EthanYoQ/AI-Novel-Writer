@@ -340,6 +340,13 @@ export default function CodeMirrorEditor({
     const target = aiTargetRef.current
     if (target && aiResult && editorRef.current?.view) {
       const view = editorRef.current.view
+      if (!editable) {
+        setAiError(uiText(
+          '正文已变为只读，结果未应用；你仍可复制预览内容',
+          'The document is now read-only. The result was not applied; you can still copy the preview.',
+        ))
+        return
+      }
       const targetStillCurrent = (
         target.requestSequence === aiRequestSequenceRef.current
         && view.state.doc.toString() === target.documentText

@@ -26,6 +26,7 @@ function context(): AgentExecutionContext {
 afterEach(() => {
   vi.useRealTimers()
   toolRegistry.unregister('timeout_read_probe')
+  toolRegistry.unregister('timeout_write_probe')
   toolRegistry.unregister('delayed_write_probe')
   toolRegistry.unregister('cancelled_write_probe')
   toolRegistry.unregister('unknown_write_probe')
@@ -66,12 +67,50 @@ describe('Agent tool timeout boundary', () => {
     }))
   })
 
-  it('waits for a delayed write receipt instead of reporting an unknown failure and retrying', async () => {
+  it('aborts a timed-out write before it crosses the commit point', async () => {
+    vi.useFakeTimers()
+    let observedAbort = false
+    let finishWrite: ((result: ToolResult) => void) | undefined
+    toolRegistry.register({
+      name: 'timeout_write_probe', description: 'probe', source: 'builtin',
+      inputSchema: { type: 'object', properties: {} }, requiresConfirmation: false, isReadOnly: false,
+      execute: async (_args, execution) => new Promise<ToolResult>((resolve) => {
+        finishWrite = resolve
+        execution?.abortSignal?.addEventListener('abort', () => {
+          observedAbort = true
+        }, { once: true })
+      }),
+    })
+    const ui = callbacks()
+    const run = runAgentLoop(
+      'system', [], 'write', 'model',
+      vi.fn()
+        .mockResolvedValueOnce('<tool_call>{"name":"timeout_write_probe","arguments":{}}</tool_call>')
+        .mockResolvedValueOnce('done'),
+      ui,
+      undefined,
+      context(),
+    )
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    const abortedAtDeadline = observedAbort
+    finishWrite?.({ success: true, content: 'late receipt' })
+    await run
+
+    expect(abortedAtDeadline).toBe(true)
+    expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      error: expect.stringContaining('timed out'),
+    }))
+  })
+
+  it('waits for a delayed post-commit write receipt instead of timing out and retrying', async () => {
     vi.useFakeTimers()
     let finishWrite: ((result: ToolResult) => void) | undefined
     const execute = vi.fn(async (_args: Record<string, unknown>, execution?: AgentExecutionContext) => (
       new Promise<ToolResult>((resolve) => {
         expect(execution?.abortSignal).toBeInstanceOf(AbortSignal)
+        execution?.markSideEffectStarted?.()
         finishWrite = resolve
       })
     ))

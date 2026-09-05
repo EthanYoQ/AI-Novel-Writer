@@ -1392,6 +1392,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   })
 
   it('uses the bounded final rewrite when the first English length repair underfills', async () => {
+    const initialSource = `ORIGINAL_SOURCE_HEAD ${'alpha '.repeat(900)} ORIGINAL_SOURCE_MIDDLE ${'alpha '.repeat(929)}`
+    const continuationSource = `${'beta '.repeat(1031)} ORIGINAL_SOURCE_TAIL`
     const acceptedDraft = 'delta '.repeat(2250)
     const repairDraft = [
       'REPAIR_SOURCE_HEAD',
@@ -1401,8 +1403,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       'REPAIR_SOURCE_TAIL',
     ].join(' ')
     const runtime = fakeOutcomes(
-      outcome('alpha '.repeat(1831), 'stop', 1),
-      outcome('beta '.repeat(1032), 'stop', 2),
+      outcome(initialSource, 'stop', 1),
+      outcome(continuationSource, 'stop', 2),
       outcome(repairDraft, 'stop', 3),
       outcome(acceptedDraft, 'stop', 4),
     )
@@ -1425,12 +1427,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     ])
     const repairPrompt = runtime.complete.mock.calls[2]?.[0].messages
       .find(message => message.role === 'user')?.content ?? ''
-    expect(repairPrompt).toContain('2863 locally counted prose units')
+    expect(repairPrompt).toContain('locally counted prose units')
     const finalRewriteRequest = runtime.complete.mock.calls[3]?.[0].messages
       .map(message => message.content).join('\n') ?? ''
-    expect(finalRewriteRequest).toContain('REPAIR_SOURCE_HEAD')
-    expect(finalRewriteRequest).toContain('REPAIR_SOURCE_MIDDLE')
-    expect(finalRewriteRequest).toContain('REPAIR_SOURCE_TAIL')
+    expect(finalRewriteRequest).toContain('ORIGINAL_SOURCE_HEAD')
+    expect(finalRewriteRequest).toContain('ORIGINAL_SOURCE_MIDDLE')
+    expect(finalRewriteRequest).toContain('ORIGINAL_SOURCE_TAIL')
+    expect(finalRewriteRequest).not.toContain('REPAIR_SOURCE_MIDDLE')
     expect(finalRewriteRequest).toContain('FROZEN_GLOBAL_RULE')
     expect(finalRewriteRequest).toContain('FROZEN_CORE_FACT')
     expect(invoke).toHaveBeenCalledWith(
@@ -1491,12 +1494,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const endingFact = 'ENDING_SENTINEL。林岚发现密钥，切断警报，带着证据离开机房。'
     const fixedText = `FRONT_SENTINEL。MIDDLE_SENTINEL。尾段结束。${endingFact}`
     const firstRepairUnits = Math.max(1200, Math.floor(wordsTarget * 1.12) + 100)
-    const filler = '乙'.repeat(firstRepairUnits - countDraftUnits(fixedText))
-    const firstRepair = `FRONT_SENTINEL。MIDDLE_SENTINEL。${filler}尾段结束。\n\n${endingFact}`
+    const sourceFiller = '甲'.repeat(firstRepairUnits + 100 - countDraftUnits(fixedText))
+    const originalSource = `FRONT_SENTINEL。MIDDLE_SENTINEL。${sourceFiller}尾段结束。\n\n${endingFact}`
+    const firstRepair = '乙'.repeat(firstRepairUnits)
     expect(countDraftUnits(firstRepair)).toBe(firstRepairUnits)
     const finalDraft = '丙'.repeat(finalTarget)
     const runtime = fakeOutcomes(
-      outcome('甲'.repeat(firstRepairUnits + 100), 'stop'),
+      outcome(originalSource, 'stop'),
       outcome(firstRepair, 'stop', 2),
       outcome(finalDraft, 'stop', 3),
     )
@@ -1542,7 +1546,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(finalPrompt).toContain('ENDING_SENTINEL')
     expect(finalPrompt).toContain('FRONT_SENTINEL')
     expect(finalPrompt).toContain('MIDDLE_SENTINEL')
-    expect(finalPrompt).toContain('乙'.repeat(80))
+    expect(finalPrompt).toContain('甲'.repeat(80))
     const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
     expect((persisted?.[1] as { content: string }).content).toBe(finalDraft)
   })
@@ -1572,9 +1576,16 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   ])(
     'allows one last-chance rewrite after a stopped final rewrite $boundary in $writingLanguage',
     async ({ writingLanguage, finalUnits }) => {
+      const originalSourceDraft = [
+        'ORIGINAL_SOURCE_HEAD',
+        '甲'.repeat(2_400),
+        'ORIGINAL_SOURCE_MIDDLE',
+        '乙'.repeat(2_400),
+        'ORIGINAL_SOURCE_TAIL',
+      ].join('\n')
       const acceptedDraft = '丁'.repeat(2200)
       const runtime = fakeOutcomes(
-        outcome(`${'甲'.repeat(4773)}。`, 'stop'),
+        outcome(originalSourceDraft, 'stop'),
         outcome(`${'乙'.repeat(4276)}。`, 'stop', 2),
         outcome(`${'丙'.repeat(finalUnits)}。`, 'stop', 3),
         outcome(acceptedDraft, 'stop', 4),
@@ -1602,6 +1613,12 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       expect(retryPrompt).toContain(writingLanguage === 'zh-CN'
         ? '全章绝对不得超过 23 个自然段，每段不得超过约 98 个正文单位'
         : 'Use no more than 23 natural paragraphs, with each paragraph no longer than about 98 prose units')
+      for (const [task] of runtime.complete.mock.calls.slice(1)) {
+        const recoveryPrompt = task.messages.find(message => message.role === 'user')?.content ?? ''
+        expect(recoveryPrompt).toContain('ORIGINAL_SOURCE_HEAD')
+        expect(recoveryPrompt).toContain('ORIGINAL_SOURCE_MIDDLE')
+        expect(recoveryPrompt).toContain('ORIGINAL_SOURCE_TAIL')
+      }
       const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
       expect((persisted?.[1] as { content: string }).content).toBe(acceptedDraft)
     },

@@ -16,6 +16,7 @@ import {
 import { promptLanguageText } from '../../prompt-language'
 import { readConsistencyPreflight } from '../../consistency-preflight'
 import { mergeConsistencyFindingsIntoReview, type ReviewLike } from '../../../shared/consistency-preflight'
+import type { ChapterBlueprint } from '../directory-workflow'
 
 
 export interface ReviewChapterParams {
@@ -144,6 +145,33 @@ function formatFinalizedHistory(
   ].join('\n\n')
 }
 
+function formatReviewPlanningMaterial(
+  blueprints: readonly ChapterBlueprint[],
+  writingLanguage: NonNullable<CommandExecuteParams['context']['writingLanguage']>,
+): string {
+  const header = promptLanguageText(
+    writingLanguage,
+    '【当前及未来蓝图/计划｜非既定历史】',
+    '[Current and future blueprints/plans | not established history]',
+  )
+  if (blueprints.length === 0) return `${header}\n${promptLanguageText(
+    writingLanguage,
+    '（无当前或后续蓝图）',
+    '(no current or future blueprints)',
+  )}`
+  const plans = blueprints.map(blueprint => ({
+    chapterNumber: blueprint.chapterNumber,
+    title: blueprint.title,
+    role: blueprint.role,
+    purpose: blueprint.purpose,
+    keyEvents: blueprint.keyEvents,
+    characters: blueprint.characters,
+    suspenseHook: blueprint.suspenseHook,
+    userGuidance: blueprint.userGuidance,
+  }))
+  return `${header}\n${JSON.stringify(plans, null, 2)}`
+}
+
 export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
   constructor(
     private params: ReviewChapterParams,
@@ -165,6 +193,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       projectSession,
       projectSessionContextFromProject(project),
     )) throw new Error(text('当前项目已切换，审稿已停止', 'The project changed, so the review stopped.'))
+    const novelConfig = Object.freeze({ ...project.novelConfig })
 
     const draft = this.params.draftContent
     if (!draft) throw new Error(text('无草稿内容', 'There is no draft content to review.'))
@@ -191,6 +220,32 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
 
     const characterState = await this.readCharacterStates(context.projectPath, projectSession, writingLanguage)
     const worldBuilding = await this.readWorldBuilding(context.projectPath, projectSession, writingLanguage)
+    const globalGuidance = novelConfig.globalGuidance?.trim() || promptLanguageText(
+      writingLanguage,
+      '（无作者全局创作指导）',
+      '(no author global creative guidance)',
+    )
+    const authorGuidanceSection = promptLanguageText(
+      writingLanguage,
+      `【作者全局创作指导｜约束而非已发生事实】\n${globalGuidance}`,
+      `[Author global creative guidance | constraint, not established history]\n${globalGuidance}`,
+    )
+    let planningMaterial = formatReviewPlanningMaterial([], writingLanguage)
+    try {
+      const { loadDirectoryBlueprints } = await import('../directory-workflow')
+      const blueprints = (await loadDirectoryBlueprints(context.projectPath, projectSession))
+        .filter(blueprint => (
+          blueprint.chapterNumber >= this.params.chapterNumber
+          && blueprint.chapterNumber <= this.params.chapterNumber + 5
+        ))
+      planningMaterial = formatReviewPlanningMaterial(blueprints, writingLanguage)
+    } catch {
+      planningMaterial = promptLanguageText(
+        writingLanguage,
+        '【当前及未来蓝图/计划｜非既定历史】\n（蓝图读取暂时不可用）',
+        '[Current and future blueprints/plans | not established history]\n(blueprint retrieval unavailable)',
+      )
+    }
 
     const template = await resolvePromptTemplate('consistency_check', projectSession, writingLanguage)
     if (!template) throw new Error(text('未找到审稿模板', 'The review prompt template was not found.'))
@@ -201,12 +256,17 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       .withGlobalSummary(contextSummary)
       .withWorldBuilding(worldBuilding)
       .withReviewFocus(this.params.reviewFocus || '')
+    const reviewPrompt = [
+      promptBuilder.build(),
+      authorGuidanceSection,
+      planningMaterial,
+    ].join('\n\n')
 
     callbacks.log(text('调用 AI 审查员对本章进行多维度扫描...', 'Running the AI continuity review...'))
 
     // 期望 JSON 格式返回
     const reviewResultRaw = await this.callLLMWithBoundedCompletion(
-      promptBuilder.build(),
+      reviewPrompt,
       promptBuilder.getSystemRole(),
       callbacks,
       { mode: 'replace-structured-output', maxContinuations: 1 },

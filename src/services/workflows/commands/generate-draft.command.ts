@@ -559,14 +559,14 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             `  Draft exceeded the target tolerance; compressing it in the current model session to at most ${maxDraftChars} prose units`,
           ))
           const minimumDraftChars = Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
-          const lengthRewritePrompt = (draft: string, currentUnits: number, final: boolean) => {
+          const originalSourceDraft = completedDraft
+          const lengthRewritePrompt = (currentUnits: number, final: boolean) => {
             const rewriteMaxDraftChars = final ? Math.floor(targetChars * 0.9) : maxDraftChars
             const paragraphCount = Math.max(4, Math.min(80, Math.round(rewriteMaxDraftChars / 100)))
             const paragraphUnits = Math.round(rewriteMaxDraftChars / paragraphCount)
             const rewriteChapterInfo = final
               ? { ...this.chapterInfo, wordsTarget: rewriteMaxDraftChars }
               : this.chapterInfo
-            const sourceDraft = draft
             return promptLanguageText(
               writingLanguage,
               `${final
@@ -600,7 +600,7 @@ ${writingStyle}
 ${novelConfigFactsJson}
 
 【待重写的完整章节草稿】
-${sourceDraft}`,
+${originalSourceDraft}`,
               `${final
                 ? 'The previous full rewrite fell outside the local length range. This is a bounded full rewrite in the final compression stage. Do not keep line-editing the prior draft; rewrite it from a blank page.'
                 : `The complete chapter currently contains ${currentUnits} locally counted prose units and must be compressed and rewritten in full.`}
@@ -632,11 +632,10 @@ Author novel-configuration facts:
 ${novelConfigFactsJson}
 
 [Complete chapter draft to rewrite]
-${sourceDraft}`,
+${originalSourceDraft}`,
             )
           }
           const repairPrompt = lengthRewritePrompt(
-            completedDraft,
             completedUnits,
             false,
           )
@@ -678,7 +677,7 @@ ${sourceDraft}`,
                 { role: 'system', content: promptBuilder.getSystemRole() },
                 {
                   role: 'user',
-                  content: lengthRewritePrompt(repairedDraft, repairedUnits, true),
+                  content: lengthRewritePrompt(repairedUnits, true),
                 },
               ],
             }, { signal: cancellation.signal })
@@ -711,7 +710,7 @@ ${sourceDraft}`,
                   { role: 'system', content: promptBuilder.getSystemRole() },
                   {
                     role: 'user',
-                    content: lengthRewritePrompt(finalDraft, finalUnits, true),
+                    content: lengthRewritePrompt(finalUnits, true),
                   },
                 ],
               }, { signal: cancellation.signal })
