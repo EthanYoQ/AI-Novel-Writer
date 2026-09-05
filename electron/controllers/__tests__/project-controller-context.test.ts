@@ -900,6 +900,22 @@ describe('project controller project identity', () => {
     }))
   })
 
+  it('removes a missing project from recent navigation without deleting project data', async () => {
+    const movedProject = path.resolve('C:/projects/moved-away')
+    mocks.recentProjects = [
+      { name: 'Moved', path: movedProject, updatedAt: '2026-09-01T00:00:00.000Z' },
+      { name: 'Project A', path: projectA, updatedAt: '2026-09-02T00:00:00.000Z' },
+    ]
+
+    await expect(handler('project:recent-remove')({}, movedProject)).resolves.toEqual({ success: true })
+
+    expect(mocks.recentProjects).toEqual([
+      { name: 'Project A', path: projectA, updatedAt: '2026-09-02T00:00:00.000Z' },
+    ])
+    expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.assertCurrentProjectContext).not.toHaveBeenCalled()
+  })
+
   it('reopens the active database and reports failure when the project directory remains', async () => {
     mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(() => {
       throw new Error('directory locked')

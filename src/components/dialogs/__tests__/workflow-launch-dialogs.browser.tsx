@@ -222,6 +222,33 @@ describe('workflow launch dialogs', () => {
     await expect.element(page.getByRole('dialog')).toBeVisible()
   })
 
+  it('restores missing architecture steps after the controlled dialog closes and reopens', async () => {
+    const onClose = vi.fn()
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    const renderDialog = async (isOpen: boolean) => act(async () => root.render(
+      <ArchitectureConfirmDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        archStatus={{ premise: false, characters: false, worldbuilding: false, synopsis: false }}
+        onConfirm={onConfirm}
+      />,
+    ))
+
+    await renderDialog(true)
+    const charactersRow = Array.from(document.querySelectorAll('label'))
+      .find(label => label.textContent?.includes('角色图谱'))
+    expect(charactersRow).toBeDefined()
+    await act(async () => charactersRow?.click())
+    await expect.element(page.getByRole('button', { name: '确认生成（3/4）' })).toBeVisible()
+
+    await act(async () => page.getByRole('button', { name: '取消' }).click())
+    await renderDialog(false)
+    await renderDialog(true)
+
+    await expect.element(page.getByRole('button', { name: '确认生成（4/4）' })).toBeVisible()
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
   it('keeps directory configuration open and reports launcher rejection', async () => {
     const onClose = vi.fn()
     await act(async () => root.render(

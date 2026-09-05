@@ -8,6 +8,11 @@ import {
   type NarrativeThreadPlanInput,
   type NarrativeThreadView,
 } from '../../shared/narrative-thread'
+import type {
+  PlotTreeSnapshot,
+  PlotTreeSourceBundle,
+  PlotTreeSourceReference,
+} from '../../shared/plot-tree'
 import { resolveWritingLanguage } from '../../shared/writing-language'
 import { ipc } from '../../services/ipc-client'
 import {
@@ -16,9 +21,19 @@ import {
   type NarrativeThreadEventCandidate,
   type NarrativeThreadPlanCandidate,
 } from '../../services/narrative-thread-candidate-generator'
+import {
+  generatePlotTree,
+  PlotTreeGenerationError,
+  PlotTreeIncompleteError,
+  PlotTreeResponseError,
+  type GeneratePlotTreeInput,
+  type PlotTreeGenerationErrorCode,
+  type PlotTreeResponseErrorCode,
+} from '../../services/plot-tree-generator'
 import { useLLMStore } from '../../stores/llm-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
+import { useWorkflowStore } from '../../stores/workflow-store'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../project-session-gate'
 import { Button } from '../ui/Button'
 import {
@@ -29,6 +44,8 @@ import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 import { Textarea } from '../ui/Textarea'
 import { toast } from '../ui/Toast'
+import { openBuiltinEditor, openChapterFile } from '../panels/sidebar/sidebar-file-openers'
+import PlotTreeView from './PlotTreeView'
 
 const EMPTY_PLAN: NarrativeThreadPlanInput = {
   title: '', type: '', targetStartChapter: 1, targetEndChapter: 1, authorIntent: '',
@@ -45,9 +62,94 @@ const STATUS_LABELS: Record<NarrativeThreadView['status'], [string, string]> = {
 interface NarrativeThreadEditorProps {
   projectKey: string
   candidateGenerator?: NarrativeThreadCandidateGenerator
+  initialView?: 'plot-tree' | 'plans'
+  viewRequest?: number
+  plotTreeGenerator?: (request: GeneratePlotTreeInput) => Promise<PlotTreeSnapshot>
 }
 
 type AICandidateMode = 'plan' | 'event'
+
+type LocaleText = (zh: string, en: string) => string
+
+const SNAPSHOT_VALIDATION_ERROR_ENDINGS = [
+  '无效', '不存在', '不匹配', '超出轨道章节范围', '重复', '不能有父轨道', '必须归属一条主线', '必须是现有主线', '缺少来源引用',
+] as const
+
+function plotTreeErrorMessage(
+  error: unknown,
+  text: LocaleText,
+  fallback: [zh: string, en: string],
+): string {
+  if (error instanceof PlotTreeGenerationError) {
+    return error.code === 'DEADLINE_EXHAUSTED'
+      ? text(
+          '剧情树生成超过会话截止时间，旧快照保持不变，请稍后重试。',
+          'Plot-tree generation exceeded the session deadline; the previous snapshot remains unchanged. Try again later.',
+        )
+      : text(
+          '剧情树模型请求失败，旧快照保持不变，请检查模型连接后重试。',
+          'The plot-tree model request failed; the previous snapshot remains unchanged. Check the model connection and try again.',
+        )
+  }
+  if (error instanceof PlotTreeResponseError) {
+    return error.code === 'invalid_json'
+      ? text(
+          '模型未返回可解析的剧情树 JSON，旧快照保持不变。',
+          'The model did not return parseable plot-tree JSON; the previous snapshot remains unchanged.',
+        )
+      : text(
+          '模型返回的剧情树结构或来源引用无效，旧快照保持不变。',
+          'The model returned an invalid plot-tree structure or source reference; the previous snapshot remains unchanged.',
+        )
+  }
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  const message = raw.replace(/^Error:\s*/, '')
+  if (message.startsWith('剧情树')
+    && SNAPSHOT_VALIDATION_ERROR_ENDINGS.some(ending => message.endsWith(ending))) {
+    return text('剧情树快照无效。', 'The plot-tree snapshot is invalid.')
+  }
+  if (message === '剧情树快照保存失败') {
+    return text('无法保存剧情树。', 'Could not save the plot tree.')
+  }
+  if (message === '剧情树快照清除失败') {
+    return text('无法清除剧情树。', 'Could not clear the plot tree.')
+  }
+  if (message === '剧情资料在生成期间已更新，本次结果未保存，请重新生成。'
+    || message === 'Plot sources changed during generation. This result was not saved; generate it again.') {
+    return text(
+      '剧情资料在生成期间已更新，本次结果未保存，请重新生成。',
+      'Plot sources changed during generation. This result was not saved; generate it again.',
+    )
+  }
+  if (message === '项目数据库未打开' || message === '项目配置不存在') {
+    return text(...fallback)
+  }
+  if (error instanceof PlotTreeIncompleteError) {
+    if (error.finishReason === 'length') {
+      return text(
+        '剧情树输出达到模型最大长度，结果未保存，请提高最大输出 Tokens 或缩短项目资料。',
+        'Plot-tree output reached the model maximum output length and was not saved. Increase maximum output tokens or shorten the project sources.',
+      )
+    }
+    if (error.finishReason === 'content_filter') {
+      return text(
+        '剧情树输出因内容限制未完成，结果未保存。',
+        'Plot-tree output was stopped by the content policy and was not saved.',
+      )
+    }
+    if (error.finishReason === 'cancelled') {
+      return text(
+        '剧情树生成已取消，结果未保存。',
+        'Plot-tree generation was cancelled and the result was not saved.',
+      )
+    }
+    return text(
+      '剧情树生成未正常完成，结果未保存。',
+      'Plot-tree generation did not complete normally and the result was not saved.',
+    )
+  }
+  return text(...fallback)
+}
 
 interface BoundEventCandidate extends NarrativeThreadEventCandidate {
   planId: number
@@ -62,6 +164,9 @@ function isGenerationModel(model: ModelProfile): boolean {
 export default function NarrativeThreadEditor({
   projectKey,
   candidateGenerator = narrativeThreadCandidateGenerator,
+  initialView = 'plans',
+  viewRequest,
+  plotTreeGenerator = generatePlotTree,
 }: NarrativeThreadEditorProps) {
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
@@ -89,7 +194,15 @@ export default function NarrativeThreadEditor({
   const [eventCandidates, setEventCandidates] = useState<BoundEventCandidate[]>([])
   const [aiBusy, setAiBusy] = useState(false)
   const [aiError, setAiError] = useState('')
+  const [view, setView] = useState<'plot-tree' | 'plans'>(initialView)
+  const [plotSources, setPlotSources] = useState<PlotTreeSourceBundle | null>(null)
+  const [plotModelId, setPlotModelId] = useState<string | null>(null)
+  const [plotBusy, setPlotBusy] = useState(false)
+  const [plotError, setPlotError] = useState('')
+  const [sourcePlanId, setSourcePlanId] = useState<number | null>(null)
   const candidateAbortRef = useRef<AbortController | null>(null)
+  const plotAbortRef = useRef<AbortController | null>(null)
+  const previousViewRequestRef = useRef(viewRequest)
   const dormantThreshold = resolveNarrativeThreadDormantThreshold(
     currentProject?.novelConfig.narrativeThreadDormantChapterThreshold,
   )
@@ -99,6 +212,8 @@ export default function NarrativeThreadEditor({
     : generationModels[0]?.id ?? null
   const selectedModelId = aiModelId ?? fallbackModelId
   const selectedModel = generationModels.find(model => model.id === selectedModelId)
+  const selectedPlotModelId = plotModelId ?? fallbackModelId
+  const selectedPlotModel = generationModels.find(model => model.id === selectedPlotModelId)
   const modelSelectionError = generationModels.length === 0
     ? text(
         '没有已配置且可用于文本生成的模型。请先在设置中添加生成模型。',
@@ -108,6 +223,14 @@ export default function NarrativeThreadEditor({
       ? text(
           '所选识别模型已不可用，请重新选择。',
           'The selected analysis model is unavailable. Select another model.',
+        )
+      : ''
+  const plotModelSelectionError = generationModels.length === 0
+    ? modelSelectionError
+    : !selectedPlotModel
+      ? text(
+          '所选剧情树模型已不可用，请重新选择。',
+          'The selected plot-tree model is unavailable. Select another model.',
         )
       : ''
 
@@ -132,9 +255,51 @@ export default function NarrativeThreadEditor({
     }
   }, [projectKey, text])
 
+  const loadPlotTree = useCallback(async () => {
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!session || !isProjectSessionPath(session, projectKey)) return
+    try {
+      const sources = await ipc.invokeWithProjectSession(
+        session,
+        'db:plot-tree-read',
+        projectKey,
+      )
+      if (!isProjectSessionCurrent(session)) return
+      setPlotSources(sources)
+      setPlotError('')
+    } catch (error) {
+      if (isProjectSessionCurrent(session)) {
+        setPlotError(plotTreeErrorMessage(
+          error,
+          text,
+          ['无法读取剧情树资料。', 'Could not read plot tree sources.'],
+        ))
+      }
+    }
+  }, [projectKey, text])
+
   useEffect(() => {
-    queueMicrotask(() => { void reload() })
-  }, [reload, currentProject?.sessionLease])
+    if (view === 'plans') queueMicrotask(() => { void reload() })
+  }, [reload, currentProject?.sessionLease, view])
+
+  useEffect(() => {
+    if (view === 'plot-tree') queueMicrotask(() => { void loadPlotTree() })
+  }, [loadPlotTree, currentProject?.sessionLease, view])
+
+  useEffect(() => {
+    if (previousViewRequestRef.current === viewRequest) return
+    previousViewRequestRef.current = viewRequest
+    setView(initialView)
+  }, [initialView, viewRequest])
+
+  useEffect(() => {
+    if (view !== 'plans' || sourcePlanId === null) return
+    document.getElementById(`narrative-plan-${sourcePlanId}`)?.scrollIntoView({ block: 'center' })
+  }, [sourcePlanId, threads, view])
+
+  useEffect(() => () => {
+    plotAbortRef.current?.abort()
+  }, [currentProject?.sessionLease, projectKey])
 
   useEffect(() => {
     if (!loadedModels) void loadModels()
@@ -150,6 +315,137 @@ export default function NarrativeThreadEditor({
     setEventCandidates([])
   }, [])
 
+  const refreshPlotTree = async () => {
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    const uiLocale = useLocaleStore.getState().locale
+    const uiText: LocaleText = (zhCNText, enUSText) => uiLocale === 'en-US' ? enUSText : zhCNText
+    const frozenModelId = selectedPlotModel?.id
+    if (!session || !isProjectSessionPath(session, projectKey) || !plotSources
+      || !frozenModelId || plotBusy) return
+    const controller = new AbortController()
+    plotAbortRef.current?.abort()
+    plotAbortRef.current = controller
+    setPlotBusy(true)
+    setPlotError('')
+    let failureCode: PlotTreeGenerationErrorCode | PlotTreeResponseErrorCode
+      | 'sources_changed' | 'length' | 'save_failed' | null = null
+    try {
+      const snapshot = await plotTreeGenerator({
+        modelId: frozenModelId,
+        projectSession: session,
+        sources: plotSources,
+        signal: controller.signal,
+      })
+      if (!isProjectSessionCurrent(session) || controller.signal.aborted) return
+      let saved
+      try {
+        saved = await ipc.invokeWithProjectSession(
+          session,
+          'db:plot-tree-save',
+          snapshot,
+          plotSources.sourceRevision,
+          projectKey,
+        )
+      } catch {
+        failureCode = 'save_failed'
+        throw new Error('剧情树快照保存失败')
+      }
+      if (!isProjectSessionCurrent(session) || controller.signal.aborted) return
+      const savedSnapshot = saved.snapshot
+      if (!saved.success || !savedSnapshot) {
+        if (saved.errorCode === 'sources-changed') {
+          failureCode = 'sources_changed'
+          await loadPlotTree()
+        } else {
+          failureCode = 'save_failed'
+        }
+        throw new Error(saved.errorCode === 'sources-changed'
+          ? uiText(
+              '剧情资料在生成期间已更新，本次结果未保存，请重新生成。',
+              'Plot sources changed during generation. This result was not saved; generate it again.',
+            )
+          : '剧情树快照保存失败')
+      }
+      setPlotSources(previous => previous ? { ...previous, snapshot: savedSnapshot } : previous)
+    } catch (error) {
+      if (isProjectSessionCurrent(session) && !controller.signal.aborted) {
+        failureCode ??= error instanceof PlotTreeGenerationError
+          ? error.code
+          : error instanceof PlotTreeResponseError
+            ? error.code
+            : error instanceof PlotTreeIncompleteError && error.finishReason === 'length'
+              ? 'length'
+              : null
+        if (failureCode) {
+          useWorkflowStore.getState().addLog(
+            'error',
+            uiText(
+              `剧情树生成失败（错误码：${failureCode}）。`,
+              `Plot-tree generation failed (error code: ${failureCode}).`,
+            ),
+          )
+        }
+        setPlotError(plotTreeErrorMessage(
+          error,
+          uiText,
+          ['剧情树生成失败。', 'Could not generate the plot tree.'],
+        ))
+      }
+    } finally {
+      if (plotAbortRef.current === controller) plotAbortRef.current = null
+      if (isProjectSessionCurrent(session) && !controller.signal.aborted) setPlotBusy(false)
+    }
+  }
+
+  const clearPlotTree = async () => {
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!session || !isProjectSessionPath(session, projectKey) || !plotSources?.snapshot) return
+    setPlotError('')
+    try {
+      const result = await ipc.invokeWithProjectSession(
+        session,
+        'db:plot-tree-clear',
+        projectKey,
+      )
+      if (!isProjectSessionCurrent(session)) return
+      if (!result.success) throw new Error(result.error ?? text(
+        '无法清除剧情树。',
+        'Could not clear the plot tree.',
+      ))
+      setPlotSources(previous => previous ? { ...previous, snapshot: null } : previous)
+    } catch (error) {
+      if (isProjectSessionCurrent(session)) {
+        setPlotError(plotTreeErrorMessage(
+          error,
+          text,
+          ['无法清除剧情树。', 'Could not clear the plot tree.'],
+        ))
+      }
+    }
+  }
+
+  const openPlotSource = (source: PlotTreeSourceReference) => {
+    if (source.type === 'blueprint') {
+      openBuiltinEditor(
+        'chapter-card-editor',
+        text('章节蓝图', 'Chapter blueprint'),
+        'chapter-card',
+        undefined,
+        source.chapterNumber,
+      )
+      return
+    }
+    if (source.type === 'finalized-chapter') {
+      void openChapterFile(
+        `vela://manuscript/${source.draftId}`,
+        text(`第 ${source.chapterNumber} 章定稿`, `Chapter ${source.chapterNumber} finalized draft`),
+      )
+      return
+    }
+    setSourcePlanId(source.planId)
+    setView('plans')
+  }
+
   const openAI = (mode: AICandidateMode) => {
     if (mode === 'event' && (eventPlanId === null || eventDraftId === 0)) return
     setAiMode(mode)
@@ -164,10 +460,12 @@ export default function NarrativeThreadEditor({
   }
 
   const generatePlanCandidates = async () => {
-    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    const projectSnapshot = useProjectStore.getState().currentProject
+    const session = captureProjectSession(projectSnapshot)
     const blueprint = blueprints.find(item => item.chapterNumber === aiBlueprintChapter)
     const frozenModelId = selectedModel?.id
-    if (!session || !isProjectSessionPath(session, projectKey) || !blueprint || !frozenModelId || aiBusy) return
+    const totalChapters = projectSnapshot?.novelConfig.totalChapters
+    if (!session || !isProjectSessionPath(session, projectKey) || !blueprint || !frozenModelId || !totalChapters || aiBusy) return
     const controller = new AbortController()
     candidateAbortRef.current?.abort()
     candidateAbortRef.current = controller
@@ -177,7 +475,8 @@ export default function NarrativeThreadEditor({
     try {
       const candidates = await candidateGenerator.generatePlanCandidates({
         modelId: frozenModelId,
-        writingLanguage: resolveWritingLanguage(useProjectStore.getState().currentProject?.novelConfig.writingLanguage),
+        writingLanguage: resolveWritingLanguage(projectSnapshot.novelConfig.writingLanguage),
+        totalChapters,
         blueprint,
         signal: controller.signal,
       })
@@ -352,17 +651,54 @@ export default function NarrativeThreadEditor({
   return (
     <div className="h-full overflow-y-auto p-5" style={{ color: 'var(--color-text)' }}>
       <div className="mx-auto max-w-5xl space-y-5">
-        <header className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold">{text('伏笔与叙事线索', 'Foreshadowing & narrative threads')}</h2>
-            <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              {text('设置埋设与预计回收章节；活跃计划会自动注入后续写作，逾期或沉寂时提醒。只有人工确认的定稿内容才记为已发生事件。', 'Set setup and expected payoff chapters. Active plans are injected into later writing and flagged when overdue or dormant; only user-confirmed finalized text becomes an event.')}
-            </p>
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">{text('剧情树与叙事线索', 'Plot tree & narrative threads')}</h2>
+          <div className="flex gap-2" role="tablist" aria-label={text('剧情编辑器视图', 'Plot editor views')}>
+            <Button
+              size="sm"
+              variant={view === 'plot-tree' ? 'default' : 'outline'}
+              role="tab"
+              aria-selected={view === 'plot-tree'}
+              onClick={() => setView('plot-tree')}
+            >
+              {text('剧情树', 'Plot tree')}
+            </Button>
+            <Button
+              size="sm"
+              variant={view === 'plans' ? 'default' : 'outline'}
+              role="tab"
+              aria-selected={view === 'plans'}
+              onClick={() => setView('plans')}
+            >
+              {text('计划清单', 'Plan list')}
+            </Button>
           </div>
-          <Button variant="ai" size="sm" onClick={() => openAI('plan')} disabled={blueprints.length === 0}>
+        </header>
+
+        {view === 'plot-tree' ? (
+          <PlotTreeView
+            key={plotSources?.snapshot?.generatedAt ?? 'empty'}
+            snapshot={plotSources?.snapshot ?? null}
+            sourceRevision={plotSources?.sourceRevision ?? ''}
+            currentChapter={Math.max(1, ...(plotSources?.finalizedChapters.map(chapter => chapter.chapterNumber) ?? []))}
+            models={generationModels}
+            selectedModelId={selectedPlotModel?.id ?? null}
+            busy={plotBusy}
+            error={plotError || plotModelSelectionError}
+            onModelChange={setPlotModelId}
+            onGenerate={() => void refreshPlotTree()}
+            onClear={() => void clearPlotTree()}
+            onOpenSource={openPlotSource}
+          />
+        ) : <>
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            {text('设置埋设与预计回收章节；活跃计划会自动注入后续写作，逾期或沉寂时提醒。只有人工确认的定稿内容才记为已发生事件。', 'Set setup and expected payoff chapters. Active plans are injected into later writing and flagged when overdue or dormant; only user-confirmed finalized text becomes an event.')}
+          </p>
+          <Button className="shrink-0" variant="ai" size="sm" onClick={() => openAI('plan')} disabled={blueprints.length === 0}>
             <Sparkles size={13} />{text('AI 建议伏笔与线索', 'Suggest foreshadowing with AI')}
           </Button>
-        </header>
+        </div>
 
         <section className="rounded-lg border p-4 space-y-3" style={{ borderColor: 'var(--color-border)', background: 'var(--color-panel)' }}>
           <div className="flex items-center gap-2 font-medium"><Plus size={16} />{editingId === null ? text('新建计划', 'New plan') : text('编辑计划', 'Edit plan')}</div>
@@ -378,7 +714,15 @@ export default function NarrativeThreadEditor({
 
         {threads.length === 0 && <p className="text-sm text-center py-8" style={{ color: 'var(--color-text-muted)' }}>{text('暂无伏笔或叙事线索', 'No foreshadowing or narrative threads yet')}</p>}
         {threads.map(thread => (
-          <section key={thread.id} className="rounded-lg border p-4 space-y-3" style={{ borderColor: 'var(--color-border)', background: 'var(--color-panel)' }}>
+          <section
+            id={`narrative-plan-${thread.id}`}
+            key={thread.id}
+            className="rounded-lg border p-4 space-y-3"
+            style={{
+              borderColor: sourcePlanId === thread.id ? 'var(--color-accent)' : 'var(--color-border)',
+              background: 'var(--color-panel)',
+            }}
+          >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="font-semibold">{thread.title}</h3>
@@ -422,6 +766,7 @@ export default function NarrativeThreadEditor({
             </div>}
           </section>
         ))}
+        </>}
       </div>
       <Dialog open={aiOpen} onOpenChange={open => { if (!open) closeAI() }}>
         <DialogContent className="max-w-[620px]">

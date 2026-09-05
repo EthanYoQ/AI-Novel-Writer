@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CharacterRosterEntry } from '../../../shared/character-roster'
 import { blueprintCharacterSyncFactError } from '../../../shared/blueprint-character-sync-evidence'
-import { syncBlueprintCharacterCandidates } from '../blueprint-character-sync'
+import {
+  syncBlueprintCharacterCandidates,
+  type BlueprintCharacterCandidateSource,
+} from '../blueprint-character-sync'
 
 const projectPath = 'C:\\novels\\candidate-sync'
 const projectSession = {
@@ -65,7 +68,35 @@ afterEach(() => {
 })
 
 describe('blueprint character candidate sync', () => {
-  it('does not turn blueprint-only names into character cards', async () => {
+  it('registers an explicitly declared recurring blueprint character', async () => {
+    const { commits } = stubIpc([character()])
+    const blueprint: BlueprintCharacterCandidateSource = {
+      chapterNumber: 1,
+      characters: ['林岚', '周砚'],
+      relationshipHints: [],
+      newCharacterCandidates: [{
+        name: '周砚',
+        role: 'supporting',
+      }],
+    }
+
+    await syncBlueprintCharacterCandidates(
+      [blueprint],
+      projectPath,
+      projectSession,
+      'blueprint-sync-declared-001',
+    )
+
+    expect(commits).toEqual([expect.objectContaining({
+      intent: 'blueprint_sync',
+      entries: [expect.objectContaining({
+        name: '周砚',
+        role: 'supporting',
+      })],
+    })])
+  })
+
+  it('does not turn an undeclared blueprint-only name into a character card', async () => {
     const { invoke, commits } = stubIpc([])
 
     await syncBlueprintCharacterCandidates([

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Database, BookOpen, FileText,
-  Search, RefreshCw, Layers, Zap, Server, Activity, Trash2, AlertTriangle,
+  Search, RefreshCw, Layers, Zap, Server, Activity, Trash2, AlertTriangle, Upload,
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -12,10 +12,18 @@ import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
 import { globalEventBus } from '../../shared/event-bus'
 import {
+  selectPlanningMaterials,
   unwrapKnowledgeValue,
   type KBDocument, type SearchResult, type KBStatsData, type VectorRebuildStatus,
 } from '../../services/knowledge-service'
+import { useLLMStore } from '../../stores/llm-store'
+import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
+import {
+  createPlanningMaterialCharacterExtractionWorkflow,
+  createPlanningMaterialWorkflow,
+} from '../../services/workflows/planning-material-workflow'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useLayoutStore } from '../../stores/layout-store'
 import { appErrorMessage } from '../../i18n/app-errors'
 import { ipc } from '../../services/ipc-client'
 import {
@@ -39,6 +47,7 @@ export default function KnowledgeOverview() {
   const [vectorRebuildStatus, setVectorRebuildStatus] = useState<VectorRebuildStatus | null>(null)
   const [backfilling, setBackfilling] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [loadError, setLoadError] = useState('')
 
   const currentProject = useProjectStore(s => s.currentProject)
@@ -268,6 +277,59 @@ export default function KnowledgeOverview() {
     }
   }
 
+  const handleImportPlanningMaterials = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession || importing) return
+    setImporting(true)
+    try {
+      const materials = await selectPlanningMaterials()
+      if (materials.length === 0 || !isProjectSessionCurrent(projectSession)) return
+      const workflowStore = useWorkflowStore.getState()
+      const localWorkflow = createPlanningMaterialWorkflow({ projectSession, materials })
+      const localRunId = await workflowStore.startWorkflow(localWorkflow)
+      const localRun = useWorkflowStore.getState().history.find(run => run.id === localRunId)
+      if (localRun?.status !== 'completed' || !isProjectSessionCurrent(projectSession)) return
+
+      const llmState = useLLMStore.getState()
+      const model = llmState.models.find(candidate => candidate.id === llmState.defaultModelId)
+      if (!model) {
+        toast.success(text(
+          '创作资料已仅导入本地知识库；配置生成模型后可提取角色卡',
+          'Planning material was imported only into the local knowledge base. Configure a generation model to extract character cards.',
+        ))
+        return
+      }
+      const shouldExtract = await confirm(
+        text(
+          `创作资料已仅保存在当前项目的本地知识库。\n\n若继续，本次选中的全部文本将发送到当前配置的模型端点，用于提取可编辑角色卡：\n模型：${model.name} (${model.modelName})\n端点：${model.baseUrl}\n\n是否发送并提取？`,
+          `The planning material is now stored only in this project's local knowledge base.\n\nIf you continue, all selected text will be sent to the currently configured model endpoint to extract editable character cards:\nModel: ${model.name} (${model.modelName})\nEndpoint: ${model.baseUrl}\n\nSend the text and extract character cards?`,
+        ),
+        {
+          title: text('AI 提取角色卡', 'AI character-card extraction'),
+          confirmText: text('发送并提取', 'Send and extract'),
+        },
+      )
+      if (!shouldExtract || !isProjectSessionCurrent(projectSession)) return
+
+      const extractionWorkflow = createPlanningMaterialCharacterExtractionWorkflow({
+        projectSession,
+        materials,
+        generationModelId: model.id,
+      })
+      const conflict = useWorkflowStore.getState().getResourceConflict(extractionWorkflow)
+      if (conflict) {
+        toast.warning(workflowResourceConflictMessage(locale, conflict.title))
+        return
+      }
+      useLayoutStore.getState().openBottomTab('tasks')
+      await useWorkflowStore.getState().startWorkflow(extractionWorkflow, true)
+    } catch (error) {
+      if (isProjectSessionCurrent(projectSession)) toast.error(appErrorMessage(locale, error))
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <div className="skin-workspace-page h-full overflow-y-auto" style={{ backgroundColor: 'var(--color-editor-bg)' }}>
       <div className="max-w-4xl mx-auto px-8 py-6">
@@ -286,15 +348,26 @@ export default function KnowledgeOverview() {
               {text('基于 LanceDB 的本地向量数据库，定稿后自动入库，为 AI 写作提供语义检索上下文', 'A local LanceDB vector database. Finalized chapters are indexed automatically to provide retrieval context for AI writing.')}
             </p>
           </div>
-          <Button
-            variant="outline"
-            className="ml-auto text-xs"
-            onClick={handleClearKnowledgeBase}
-            disabled={clearing || (stats.documentCount === 0 && stats.totalChunks === 0)}
-          >
-            {clearing ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
-            {text('清空知识库', 'Clear knowledge base')}
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="text-xs"
+              onClick={handleImportPlanningMaterials}
+              disabled={importing}
+            >
+              {importing ? <RefreshCw size={13} className="animate-spin" /> : <Upload size={13} />}
+              {text('导入创作资料', 'Import planning material')}
+            </Button>
+            <Button
+              variant="outline"
+              className="text-xs"
+              onClick={handleClearKnowledgeBase}
+              disabled={clearing || (stats.documentCount === 0 && stats.totalChunks === 0)}
+            >
+              {clearing ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+              {text('清空知识库', 'Clear knowledge base')}
+            </Button>
+          </div>
         </div>
 
         {loadError && (

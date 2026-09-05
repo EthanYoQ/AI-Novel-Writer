@@ -201,7 +201,7 @@ function createIsolatedFixture() {
   // 通过原生选择器写入的同一持久清单边界，预置仓库内的 PNG。
   // 这样无需自动操作系统对话框，仍能覆盖真实主进程服务、IPC、
   // Blob URL、渲染器解码及自定义图片皮肤的重启恢复路径。
-  const customSource = join(repositoryRoot, 'public', 'logos', 'logo.png')
+  const customSource = join(repositoryRoot, 'build', 'icon.png')
   const customBytes = readFileSync(customSource)
   const customDimensions = pngDimensions(customBytes)
   const revision = createHash('sha256').update(customBytes).digest('hex')
@@ -548,7 +548,7 @@ async function openAppearanceSettings(page) {
 
 async function closeSettings(page) {
   const modal = page.locator('.skin-solid-surface').first()
-  await modal.click({ position: { x: 4, y: 4 } })
+  await modal.getByRole('button', { name: /关闭设置|Close settings/ }).click()
   await modal.waitFor({ state: 'detached', timeout: RUNNER_TIMEOUT_MS })
 }
 

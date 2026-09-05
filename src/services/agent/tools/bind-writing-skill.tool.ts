@@ -2,7 +2,7 @@ import { WRITING_SKILL_STAGES, type WritingSkillStage } from '../../../shared/wr
 import { saveWritingSkillBinding } from '../writing-skill-bindings'
 import { skillRegistry } from '../skill-registry'
 import { buildAgentTool } from '../tool-registry'
-import { requireAgentProject } from './project-context'
+import { agentToolText, requireAgentProject } from './project-context'
 
 export const bindWritingSkillTool = buildAgentTool({
   name: 'bind_writing_skill',
@@ -30,20 +30,24 @@ export const bindWritingSkillTool = buildAgentTool({
   requiresConfirmation: true,
   isReadOnly: false,
   execute: async (args, context) => {
+    const text = (zhCN: string, enUS: string) => agentToolText(context, zhCN, enUS)
     const skillId = args.skill_id
     const stage = args.stage
     if (typeof skillId !== 'string' || !WRITING_SKILL_STAGES.includes(stage as WritingSkillStage)) {
-      return { success: false, content: '', error: 'skill_id 或 stage 无效' }
+      return { success: false, content: '', error: text('skill_id 或 stage 无效', 'The skill_id or stage is invalid') }
     }
     const skill = skillRegistry.getById(skillId)
     if (!skill || !skill.writingSkill.compatible) {
-      return { success: false, content: '', error: '该 Skill 不存在或不兼容提示词型写作流程' }
+      return { success: false, content: '', error: text('该 Skill 不存在或不兼容提示词型写作流程', 'The Skill does not exist or is incompatible with the prompt-only writing workflow') }
     }
     const { projectSession } = requireAgentProject(context)
     await saveWritingSkillBinding(projectSession, stage as WritingSkillStage, skillId)
     return {
       success: true,
-      content: `已将“${skill.metadata.displayName ?? skill.metadata.name}”绑定到 ${stage} 阶段。`,
+      content: text(
+        `已将“${skill.metadata.displayName ?? skill.metadata.name}”绑定到 ${stage} 阶段。`,
+        `Bound "${skill.metadata.displayName ?? skill.metadata.name}" to the ${stage} stage.`,
+      ),
     }
   },
 })

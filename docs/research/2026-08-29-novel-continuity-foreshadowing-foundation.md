@@ -7,7 +7,7 @@
 - 备选：[Yaemikoreal/OpenNovel](https://github.com/Yaemikoreal/OpenNovel)（MIT，2 Stars，最后代码提交 2026-08-01，覆盖状态投影、伏笔追踪、人工差异确认）、[Nigh/show-me-the-story](https://github.com/Nigh/show-me-the-story)（MIT，520 Stars，最后代码提交 2026-08-08，覆盖伏笔生命周期、叙事记忆和写作后处理）
 - 结论：三个项目均与现有 Electron、TypeScript、SQLite 产品的架构和事实源不匹配，不适合作为新的主底座；现有产品已经具备蓝图、草稿、审稿、修稿、定稿、结构化角色与连续性检索等深层 seam，应在这些 seam 上增量实现。
 
-产品范围与交付切片由 Issue #158 及其实施 tickets 维护；本文件只保存底座选择证据。
+Issue #158 记录了当时的产品范围与交付切片；该 Issue 已关闭，本文件只保存带日期的底座选择证据，不代表当前实施状态。
 
 ### 可借鉴的设计
 

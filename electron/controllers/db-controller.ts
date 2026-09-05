@@ -45,6 +45,8 @@ import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { SummaryRepository } from '../repositories/summary-repository'
 import { ConsistencyExemptionRepository } from '../repositories/consistency-exemption-repository'
 import { NarrativeThreadRepository } from '../repositories/narrative-thread-repository'
+import { PlotTreeRepository } from '../repositories/plot-tree-repository'
+import { isPlotTreeSourceRevision } from '../../src/shared/plot-tree'
 
 type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 
@@ -96,6 +98,8 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:narrative-thread-plan-update',
   'db:narrative-thread-plan-delete',
   'db:narrative-thread-event-confirm',
+  'db:plot-tree-save',
+  'db:plot-tree-clear',
 ])
 
 function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabaseHandler): void {
@@ -723,6 +727,44 @@ export function registerDatabaseController() {
   ipcMain.handle('db:narrative-thread-event-confirm', async (_event, input, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return { success: true, event: NarrativeThreadRepository.confirmEvent(input) }
+  })
+
+  ipcMain.handle('db:plot-tree-read', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return PlotTreeRepository.read()
+  })
+
+  ipcMain.handle('db:plot-tree-save', async (
+    _event,
+    snapshot,
+    expectedSourceRevision: string,
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      if (!isPlotTreeSourceRevision(expectedSourceRevision)) {
+        throw new Error('剧情树来源版本无效')
+      }
+      return {
+        success: true,
+        snapshot: PlotTreeRepository.save(snapshot, expectedSourceRevision),
+      }
+    } catch (error) {
+      const message = String(error)
+      return {
+        success: false,
+        ...(message.includes('剧情资料在生成期间已更新')
+          ? { errorCode: 'sources-changed' as const }
+          : {}),
+        error: message,
+      }
+    }
+  })
+
+  ipcMain.handle('db:plot-tree-clear', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    PlotTreeRepository.clear()
+    return { success: true }
   })
 
   ipcMain.handle('db:draft-next-version', async (_event, chapterNumber: number, expectedProjectPath: string) => {

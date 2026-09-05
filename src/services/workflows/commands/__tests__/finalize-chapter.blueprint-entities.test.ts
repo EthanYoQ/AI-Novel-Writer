@@ -18,13 +18,13 @@ const PROJECT_SESSION = Object.freeze({
   projectPath: PROJECT_PATH,
 })
 
-function workflowContext(): WorkflowContext {
+function workflowContext(uiLocale: 'zh-CN' | 'en-US' = 'zh-CN'): WorkflowContext {
   return {
     runId: 'finalize-blueprint-entities',
     projectPath: PROJECT_PATH,
     projectSession: PROJECT_SESSION,
     writingLanguage: 'zh-CN',
-    uiLocale: 'zh-CN',
+    uiLocale,
     data: {},
     cancelled: false,
   }
@@ -189,7 +189,12 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
       }),
     })
 
-    await command.execute({ step: {}, context: workflowContext(), callbacks: callbacks() })
+    const stepCallbacks = callbacks()
+    await command.execute({
+      step: {},
+      context: workflowContext('en-US'),
+      callbacks: stepCallbacks,
+    })
 
     expect(invoke).toHaveBeenCalledWith(
       'db:blueprint-get',
@@ -205,5 +210,10 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
         statement: '韩峥被洪水卷入排水井，当场死亡。',
       })],
     }))
+    const visibleLogs = vi.mocked(stepCallbacks.log).mock.calls.flat().join('\n')
+    expect(visibleLogs).toContain('Starting finalization and post-processing analysis')
+    expect(visibleLogs).toContain('Finalized content committed to SQLite and published as a manuscript')
+    expect(visibleLogs).toContain('Chapter 3 creation workflow fully completed')
+    expect(visibleLogs).not.toMatch(/开始定稿与后处理分析|定稿内容已提交到|创作全流程彻底完成/u)
   })
 })

@@ -2,7 +2,7 @@
  * Version the persisted prose-count contract so existing cached counts can be
  * migrated instead of mixing algorithms inside one project.
  */
-export const DRAFT_UNIT_ALGORITHM_VERSION = 2
+export const DRAFT_UNIT_ALGORITHM_VERSION = 3
 
 const LEGACY_CHINESE_CHARACTER_PATTERN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu
 const LEGACY_ENGLISH_WORD_PATTERN = /[A-Za-z]+(?:['’][A-Za-z]+)*/g

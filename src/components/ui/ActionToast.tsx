@@ -55,6 +55,15 @@ interface ActionToastItem extends ActionToastOptions {
 
 let _counter = 0
 let _addItem: ((item: ActionToastItem) => void) | null = null
+let _removeItem: ((id: number) => void) | null = null
+let _pendingItems: ActionToastItem[] = []
+const _dismissedItems = new Set<number>()
+
+function dismissItem(id: number) {
+  _dismissedItems.add(id)
+  _pendingItems = _pendingItems.filter(item => item.id !== id)
+  _removeItem?.(id)
+}
 
 /** 挂载 ActionToast 容器到 DOM */
 function ensureContainer() {
@@ -68,13 +77,33 @@ function ensureContainer() {
 // ===== 容器组件 =====
 
 function ActionToastContainer() {
-  const [items, setItems] = useState<ActionToastItem[]>([])
+  const [items, setItems] = useState<ActionToastItem[]>(() => {
+    const pending = _pendingItems
+    _pendingItems = []
+    return pending
+  })
 
   useEffect(() => {
     _addItem = (item) => {
       setItems(prev => [...prev, item])
     }
-    return () => { _addItem = null }
+    _removeItem = (id) => {
+      _dismissedItems.delete(id)
+      setItems(prev => prev.filter(item => item.id !== id))
+    }
+    if (_pendingItems.length > 0) {
+      const pending = _pendingItems
+      _pendingItems = []
+      queueMicrotask(() => pending.forEach(item => _addItem?.(item)))
+    }
+    if (_dismissedItems.size > 0) {
+      const dismissed = [..._dismissedItems]
+      queueMicrotask(() => dismissed.forEach(id => _removeItem?.(id)))
+    }
+    return () => {
+      _addItem = null
+      _removeItem = null
+    }
   }, [])
 
   const remove = useCallback((id: number) => {
@@ -268,7 +297,9 @@ export const actionToast = {
   show: (options: ActionToastOptions) => {
     ensureContainer()
     const item: ActionToastItem = { id: ++_counter, ...options }
-    requestAnimationFrame(() => _addItem?.(item))
+    if (_addItem) _addItem(item)
+    else _pendingItems.push(item)
+    return () => dismissItem(item.id)
   },
 
   /** 工作流完成快捷方法 */
@@ -287,6 +318,7 @@ export const actionToast = {
       actions,
       duration: openAction ? 10000 : 6000,
     }
-    requestAnimationFrame(() => _addItem?.(item))
+    if (_addItem) _addItem(item)
+    else _pendingItems.push(item)
   },
 }

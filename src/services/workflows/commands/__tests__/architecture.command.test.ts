@@ -136,8 +136,18 @@ function detailResponses(entries: readonly CharacterRosterEntry[]): string[] {
   })
 }
 
+function detailBatchResponses(entries: readonly CharacterRosterEntry[]): string[] {
+  const details = detailResponses(entries)
+    .map(response => (JSON.parse(response) as { entries: unknown[] }).entries[0])
+  const responses: string[] = []
+  for (let offset = 0; offset < details.length; offset += 4) {
+    responses.push(JSON.stringify({ entries: details.slice(offset, offset + 4) }))
+  }
+  return responses
+}
+
 function twoStageResponses(entries: readonly CharacterRosterEntry[]): string[] {
-  return [JSON.stringify(manifestFor(entries)), ...detailResponses(entries)]
+  return [JSON.stringify(manifestFor(entries)), ...detailBatchResponses(entries)]
 }
 
 function fencedJsonWithProse(json: string): string {
@@ -226,6 +236,57 @@ afterEach(() => {
 })
 
 describe('GenerateConfigCommand error boundaries', () => {
+  it('expands authored configuration text and preserves explicit author choices', async () => {
+    const authorOutline = '作者设定：主角必须先救出妹妹，这一事实不可改写。'
+    const authorGuidance = `作者规则：${'不可删除。'.repeat(130)}`
+    let observedMessages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0] = []
+    const onGenerated = vi.fn()
+    useProjectStore.setState({
+      currentProject: {
+        ...project(projectAPath),
+        novelConfig: {
+          genre: '现实主义',
+          subGenre: '校园成长',
+          targetAudience: '女频',
+          totalChapters: 10,
+          wordsPerChapter: 2500,
+          plotStructure: 'multi_thread',
+          narrativePOV: 'first_person',
+          coreOutline: authorOutline,
+          worldSetting: '',
+          goldenFinger: '',
+          protagonistProfile: '',
+          globalGuidance: authorGuidance,
+        },
+      } as never,
+      saveProject: vi.fn().mockResolvedValue(true),
+    })
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream: vi.fn(async (messages, streamCallbacks) => {
+        observedMessages = messages
+        streamCallbacks.onDone?.(validConfigJson, undefined, 'stop')
+        return 'config-expansion-request'
+      }),
+    })
+
+    const command = new GenerateConfigCommand('扩写现有设定', 10, 2500, onGenerated)
+    await command.execute({ step: {}, context, callbacks })
+
+    const userPrompt = observedMessages.find(message => message.role === 'user')?.content ?? ''
+    expect(userPrompt).toContain(authorOutline)
+    expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining({
+      genre: '现实主义',
+      subGenre: '校园成长',
+      targetAudience: '女频',
+      plotStructure: 'multi_thread',
+      narrativePOV: 'first_person',
+      coreOutline: `${authorOutline}\n\n${JSON.parse(validConfigJson).coreOutline}`,
+      worldSetting: JSON.parse(validConfigJson).worldSetting,
+      globalGuidance: `${authorGuidance}\n\n${JSON.parse(validConfigJson).globalGuidance}`,
+    }))
+  })
+
   it.each([
     { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的小说编辑', unexpected: 'You are an experienced fiction editor' },
     { uiLocale: 'en-US', writingLanguage: 'zh-CN', expected: '你是一位经验丰富的小说编辑', unexpected: 'You are an experienced fiction editor' },
@@ -291,9 +352,96 @@ describe('GenerateConfigCommand error boundaries', () => {
       expect(prompt).toContain('third_limited | first_person | third_omniscient | multi_pov')
       expect(prompt).toContain('totalChapters 若输出必须严格等于 100')
       expect(prompt).toContain('wordsPerChapter 若输出必须严格等于 3000')
+      expect(prompt).toContain('globalGuidance 必须是 4–8 条')
+      expect(prompt).toContain('不得超过 600 字符')
       expect(prompt).toContain('不得输出中文枚举、近义词')
     }
     expect(onGenerated).toHaveBeenCalledOnce()
+  })
+
+  it('accepts one JSON fence covering the complete model response without retrying', async () => {
+    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.(`\`\`\`json\r\n${validConfigJson}\r\n\`\`\``, undefined, 'stop')
+      return 'config-request'
+    })
+    const onGenerated = vi.fn()
+    const saveProject = vi.fn().mockResolvedValue(true)
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    useProjectStore.setState({ saveProject })
+    const command = new GenerateConfigCommand('idea', 100, 3000, onGenerated)
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .resolves.toBe('生成的配置已成功应用！')
+
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining(JSON.parse(validConfigJson)))
+    expect(saveProject).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['explanatory prose', `Here is the result:\n\`\`\`json\n${validConfigJson}\n\`\`\`\nDone.`],
+    ['multiple fences', `\`\`\`json\n${validConfigJson}\n\`\`\`\n\`\`\`json\n${validConfigJson}\n\`\`\``],
+  ])('rejects a config response containing %s', async (_case, response) => {
+    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.(response, undefined, 'stop')
+      return 'config-request'
+    })
+    const onGenerated = vi.fn()
+    const saveProject = vi.fn()
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    useProjectStore.setState({ saveProject })
+    const command = new GenerateConfigCommand('idea', 100, 3000, onGenerated)
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('结果未应用')
+
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(onGenerated).not.toHaveBeenCalled()
+    expect(saveProject).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      case: 'at a natural boundary',
+      generatedGuidance: `${'规'.repeat(580)}。\n${'不'.repeat(84)}`,
+      expectedGuidance: `${'规'.repeat(580)}。`,
+    },
+    {
+      case: 'without splitting a Unicode code point',
+      generatedGuidance: `${'A'.repeat(599)}😀${'B'.repeat(10)}`,
+      expectedGuidance: `${'A'.repeat(599)}😀`,
+    },
+  ])('bounds generated global guidance $case before applying config', async ({
+    generatedGuidance,
+    expectedGuidance,
+  }) => {
+    const overlongConfig = JSON.stringify({
+      ...JSON.parse(validConfigJson),
+      globalGuidance: generatedGuidance,
+    })
+    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.(overlongConfig, undefined, 'stop')
+      return 'config-request'
+    })
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream,
+    })
+    const onGenerated = vi.fn()
+    const saveProject = vi.fn().mockResolvedValue(true)
+    useProjectStore.setState({ saveProject })
+    const command = new GenerateConfigCommand('idea', 100, 3000, onGenerated)
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .resolves.toBe('生成的配置已成功应用！')
+
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(onGenerated).toHaveBeenCalledOnce()
+    const appliedGuidance = (onGenerated.mock.calls[0]?.[0] as { globalGuidance: string }).globalGuidance
+    expect(appliedGuidance).toBe(expectedGuidance)
+    expect(Array.from(appliedGuidance).length).toBeLessThanOrEqual(600)
+    expect(appliedGuidance).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/u)
+    expect(saveProject).toHaveBeenCalledOnce()
   })
 
   it('rejects an inexact plot structure without applying or saving config', async () => {
@@ -586,6 +734,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
 
     expect(observed.get('generate-core-seed')).toContain('Build a compact story premise')
     expect(observed.get('character-architecture-manifest')).toContain('You plan character identities')
+    expect(observed.get('character-architecture-manifest')).toContain('at least one protagonist')
+    expect(observed.get('character-architecture-manifest')).not.toContain('exactly one protagonist')
     expect(observed.get('generate-world-building')).toContain('Design the world as a conflict system')
     expect(observed.get('generate-plot-architecture')).toContain('Build the complete plot architecture')
     for (const request of observed.values()) {
@@ -687,14 +837,14 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(generateStream).toHaveBeenCalledOnce()
   })
 
-  it('generates an eight-slot manifest then bounded individual details before one atomic roster commit', async () => {
+  it('generates a dual-protagonist eight-slot manifest before one atomic roster commit', async () => {
     const promptBudgetDiagnostic = vi.spyOn(console, 'info').mockImplementation(() => {})
     const names = ['江砚', '沈微澜', '顾沉舟', '白榆', '闻策', '唐霁', '陆衡', '乔岚']
     const manifest = {
       slots: names.map((name, index) => ({
         slotId: `slot-${index + 1}`,
         name,
-        role: index === 0 ? 'protagonist' : index === 2 ? 'antagonist' : 'supporting',
+        role: index < 2 ? 'protagonist' : index === 2 ? 'antagonist' : 'supporting',
         narrativeDuty: `第${index + 1}位角色的独立叙事职责`,
         relations: [{ targetSlotId: `slot-${((index + 1) % names.length) + 1}`, relation: '推动彼此选择' }],
       })),
@@ -723,22 +873,25 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       keyItems: '钥匙、旧照片',
       recentEvents: '收到密信；躲过追捕',
     }
+    const generatedDetails = fullEntries.map((entry, index) => {
+      const details: Partial<CharacterRosterEntry> = { ...entry }
+      delete details.relationships
+      if (index === 0) (details as { age: unknown }).age = 18
+      if (index === 0) details.currentState = {
+        ...entry.currentState!,
+        keyItems: ['钥匙', '旧照片'],
+        recentEvents: ['收到密信', '躲过追捕'],
+      } as unknown as CharacterRosterEntry['currentState']
+      return {
+        slotId: manifest.slots[index].slotId,
+        ...details,
+      }
+    })
     const generatedResponses = [
       JSON.stringify(manifest),
-      ...fullEntries.map((entry, index) => {
-        const details: Partial<CharacterRosterEntry> = { ...entry }
-        delete details.relationships
-        if (index === 0) (details as { age: unknown }).age = 18
-        if (index === 0) details.currentState = {
-          ...entry.currentState!,
-          keyItems: ['钥匙', '旧照片'],
-          recentEvents: ['收到密信', '躲过追捕'],
-        } as unknown as CharacterRosterEntry['currentState']
-        return JSON.stringify({ entries: [{
-          slotId: manifest.slots[index].slotId,
-          ...details,
-        }] })
-      }),
+      JSON.stringify({ entries: generatedDetails.slice(0, 3) }),
+      JSON.stringify({ entries: generatedDetails.slice(3, 6) }),
+      JSON.stringify({ entries: generatedDetails.slice(6) }),
     ]
     const observedPrefixes: string[][] = []
     let manifestMessages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0] | undefined
@@ -806,15 +959,17 @@ describe('GenerateCharactersCommand structured roster seam', () => {
 
     await expect(command.execute({ step: {}, context: eightContext, callbacks: stepCallbacks })).resolves.toBe('# 八人角色图谱')
 
-    expect(generateStream).toHaveBeenCalledTimes(9)
+    expect(generateStream).toHaveBeenCalledTimes(4)
     const manifestPrompt = manifestMessages?.map(message => message.content).join('\n') ?? ''
     expect(manifestPrompt).not.toMatch(/appearance|currentState|"?entries"?/u)
     expect(manifestPrompt).toContain('自定义角色规划定位：重视人物选择与代价。')
     expect(manifestPrompt).toContain('【补充写作 Skill：Character causality】')
     expect(manifestPrompt).toContain('自定义角色指导：每个角色必须有独立欲望。')
     expect(manifestPrompt).toContain('{"slots":[...]}')
+    expect(manifestPrompt).toContain('至少一个 protagonist')
+    expect(manifestPrompt).not.toContain('恰好一个 protagonist')
     expect(new TextEncoder().encode(manifestPrompt).byteLength).toBeLessThanOrEqual(24_000)
-    expect(observedPrefixes).toEqual([[], ...names.slice(1).map((_, index) => names.slice(0, index + 1))])
+    expect(observedPrefixes).toEqual([[], names.slice(0, 3), names.slice(0, 6)])
     const detailPrompt = generateStream.mock.calls[1]?.[0].find(message => message.role === 'user')?.content ?? ''
     const detailSystem = generateStream.mock.calls[1]?.[0].find(message => message.role === 'system')?.content ?? ''
     expect(detailSystem).toContain('自定义角色规划定位：重视人物选择与代价。')
@@ -854,6 +1009,37 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         }),
       ],
     ]))
+  })
+
+  it('rejects a manifest without a protagonist before generating details or committing', async () => {
+    const manifest = manifestFor(rosterEntries)
+    manifest.slots = manifest.slots.map(slot => ({
+      ...slot,
+      role: slot.role === 'protagonist' ? 'supporting' : slot.role,
+    }))
+    const generateStream = createResponseStream([JSON.stringify(manifest)])
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:project-core-get') {
+        return { premise: '足够长的双主角故事前提，用于验证身份清单没有任何 protagonist 时必须在生成详情或提交角色图谱前失败关闭。' }
+      }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+    })
+    const command = new GenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: { genre: '校园爱情', totalChapters: 4, wordsPerChapter: 2500 } as never,
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('角色身份清单必须至少包含一个主角')
+
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
   it('fails closed when the manifest stage returns the legacy entries envelope', async () => {
@@ -908,6 +1094,129 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
+  it('normalizes a decimal-string initial chapter and commits the complete roster without replacing author text', async () => {
+    const fourthEntry: CharacterRosterEntry = {
+      name: '叶澄',
+      role: 'supporting',
+      gender: '女',
+      age: '十九岁',
+      appearance: '短发学生',
+      personality: '敏锐',
+      background: '新闻社成员',
+      abilities: '调查',
+      motivation: '查清校园传闻',
+      relationships: [{ target: '林舟', relation: '同盟' }],
+      arc: '从旁观者成为行动者',
+      notes: '线索推进职责',
+      currentState: { location: '校园', powerLevel: '普通学生', physicalState: '健康', mentalState: '警觉', keyItems: '采访本', recentEvents: '发现异常记录', updatedAtChapter: 0 },
+    }
+    const fourEntries = [...rosterEntries, fourthEntry]
+    const details = detailResponses(fourEntries).map(response => (
+      JSON.parse(response) as { entries: Array<Record<string, unknown>> }
+    ).entries[0]!)
+    const fourthState = details[3]!.currentState as Record<string, unknown>
+    fourthState.updatedAtChapter = '0'
+    const generateStream = createResponseStream([
+      JSON.stringify(manifestFor(fourEntries)),
+      JSON.stringify({ entries: details.slice(0, 3) }),
+      JSON.stringify({ entries: details.slice(3) }),
+    ])
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+
+    const authorAppearance = '作者手写的灰色旧斗篷'
+    const existingEntries = [
+      { ...rosterEntries[0]!, appearance: authorAppearance },
+      ...rosterEntries.slice(1),
+    ]
+    const committedEntries = [existingEntries[0]!, ...fourEntries.slice(1)]
+    let committedRequest: unknown
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      switch (channel) {
+        case 'prompt:load-global': return { templates: [], diagnostics: [] }
+        case 'fs:check-exists': return false
+        case 'db:project-core-get': return { premise: '双主角校园故事围绕一份异常记录展开，四名角色分别承担调查、阻碍、见证与选择职责，并在同一条因果链中推进冲突。' }
+        case 'db:character-roster-read':
+          return { ...readyRoster, revision: 4, entries: existingEntries }
+        case 'db:character-roster-commit':
+          committedRequest = args[0]
+          return {
+            success: true,
+            receipt: {
+              operationId: context.runId,
+              payloadHash: 'payload-hash',
+              revision: 5,
+              idempotent: false,
+              snapshot: {
+                ...readyRoster,
+                revision: 5,
+                entries: committedEntries,
+                renderedMarkdown: '# 四人角色图谱',
+              },
+            },
+          }
+        case 'fs:read-json': return { success: true, data: {} }
+        case 'fs:write-json': return { success: true }
+        default: throw new Error(`Unexpected IPC channel: ${channel}`)
+      }
+    })
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+    })
+    const command = new GenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: { genre: '校园悬疑', totalChapters: 4, wordsPerChapter: 2500 } as never,
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe('# 四人角色图谱')
+
+    expect(generateStream).toHaveBeenCalledTimes(3)
+    expect(committedRequest).toMatchObject({
+      expectedRevision: 4,
+      intent: 'architecture_generation',
+      entries: expect.arrayContaining([
+        expect.objectContaining({
+          name: '叶澄',
+          currentState: expect.objectContaining({ updatedAtChapter: 0 }),
+        }),
+      ]),
+    })
+    expect((committedRequest as { entries: unknown[] }).entries).toHaveLength(4)
+    expect(committedEntries[0]!.appearance).toBe(authorAppearance)
+  })
+
+  it.each(['-1', '1.5', '', 'abc'])(
+    'rejects invalid decimal-string initial chapter %j before roster commit',
+    async (updatedAtChapter) => {
+      const invalid = JSON.parse(detailBatchResponses(rosterEntries)[0]!) as { entries: Array<Record<string, unknown>> }
+      const state = invalid.entries[0]!.currentState as Record<string, unknown>
+      state.updatedAtChapter = updatedAtChapter
+      const generateStream = createResponseStream([
+        JSON.stringify(manifestFor(rosterEntries)),
+        JSON.stringify(invalid),
+      ])
+      useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+      const invoke = vi.fn(async (channel: string) => {
+        if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+        if (channel === 'fs:check-exists') return false
+        if (channel === 'db:project-core-get') {
+          return { premise: '这是一段足够长且包含明确冲突与人物目标的故事前提，用于验证非法角色状态章节必须在角色事实提交之前安全失败。' }
+        }
+        throw new Error(`Unexpected IPC channel: ${channel}`)
+      })
+      vi.stubGlobal('window', {
+        velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      })
+      const command = new GenerateCharactersCommand({
+        expectedProjectPath: projectAPath,
+        novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
+      })
+
+      await expect(command.execute({ step: {}, context, callbacks }))
+        .rejects.toThrow('角色详情 slotId=slot-1 字段 currentState.updatedAtChapter 必须是非负整数')
+      expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
+    },
+  )
+
   it('normalizes integer identity and relation IDs before details and one atomic roster commit', async () => {
     const numericManifest = {
       slots: rosterEntries.map((entry, index) => ({
@@ -928,7 +1237,11 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
     const generateStream = createResponseStream([
       JSON.stringify(numericManifest),
-      ...numericDetailResponses,
+      JSON.stringify({
+        entries: numericDetailResponses.map(response => (
+          JSON.parse(response) as { entries: unknown[] }
+        ).entries[0]),
+      }),
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
 
@@ -984,7 +1297,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const result = await command.execute({ step: {}, context, callbacks })
 
     expect(result).toBe(readyRoster.renderedMarkdown)
-    expect(generateStream).toHaveBeenCalledTimes(4)
+    expect(generateStream).toHaveBeenCalledTimes(2)
     const manifestPrompt = generateStream.mock.calls[0]?.[0].map(message => message.content).join('\n') ?? ''
     expect(manifestPrompt).toContain('slotId 与 targetSlotId 必须是 JSON 字符串')
     expect(invoke).toHaveBeenCalledWith(
@@ -1008,7 +1321,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
   it('accepts a fenced manifest with leading prose before strict validation and one atomic roster commit', async () => {
     const generateStream = createResponseStream([
       fencedJsonWithProse(JSON.stringify(manifestFor(rosterEntries))),
-      ...detailResponses(rosterEntries),
+      ...detailBatchResponses(rosterEntries),
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
 
@@ -1060,7 +1373,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     await expect(command.execute({ step: {}, context, callbacks }))
       .resolves.toBe(readyRoster.renderedMarkdown)
 
-    expect(generateStream).toHaveBeenCalledTimes(4)
+    expect(generateStream).toHaveBeenCalledTimes(2)
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
     expect(invoke).toHaveBeenCalledWith(
       'db:character-roster-commit',
@@ -1134,7 +1447,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
   it('accepts fenced detail batches with leading prose after a raw manifest before one atomic roster commit', async () => {
     const generateStream = createResponseStream([
       JSON.stringify(manifestFor(rosterEntries)),
-      ...detailResponses(rosterEntries).map(fencedJsonWithProse),
+      ...detailBatchResponses(rosterEntries).map(fencedJsonWithProse),
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
 
@@ -1186,7 +1499,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     await expect(command.execute({ step: {}, context, callbacks }))
       .resolves.toBe(readyRoster.renderedMarkdown)
 
-    expect(generateStream).toHaveBeenCalledTimes(4)
+    expect(generateStream).toHaveBeenCalledTimes(2)
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
     expect(invoke).toHaveBeenCalledWith(
       'db:character-roster-commit',
@@ -1321,7 +1634,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
 
   it('replaces a truncated roster JSON before committing the readable roster receipt', async () => {
     const truncated = '{"slots":['
-    const responses = [truncated, JSON.stringify(manifestFor(rosterEntries)), ...detailResponses(rosterEntries)]
+    const responses = [truncated, JSON.stringify(manifestFor(rosterEntries)), ...detailBatchResponses(rosterEntries)]
     const generateStream = vi.fn((
       _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
       streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
@@ -1387,8 +1700,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     await expect(command.execute({ step: {}, context, callbacks }))
       .resolves.toBe(readyRoster.renderedMarkdown)
 
-    expect(generateStream).toHaveBeenCalledTimes(5)
-    expect(generateStream.mock.calls.map(call => call[2])).toEqual(['model-1', 'model-1', 'model-1', 'model-1', 'model-1'])
+    expect(generateStream).toHaveBeenCalledTimes(3)
+    expect(generateStream.mock.calls.map(call => call[2])).toEqual(['model-1', 'model-1', 'model-1'])
     const continuationMessages = generateStream.mock.calls[1]?.[0] ?? []
     const continuationPrompt = continuationMessages.find(message => message.role === 'user')?.content ?? ''
     expect(continuationPrompt).toContain('返回完整 JSON，从头重建，不要只补后缀')
@@ -1402,7 +1715,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       'Preserve every relationship, motive, and causal turn. '.repeat(85),
       'AUTHOR_GUIDANCE_END',
     ].join('\n')
-    const responses = ['{"slots":[', JSON.stringify(manifestFor(rosterEntries)), ...detailResponses(rosterEntries)]
+    const responses = ['{"slots":[', JSON.stringify(manifestFor(rosterEntries)), ...detailBatchResponses(rosterEntries)]
     const generateStream = createResponseStream(
       responses,
       responses.map((_, index) => index === 0 ? 'length' : 'stop'),
@@ -1468,7 +1781,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     await expect(command.execute({ step: {}, context: runContext, callbacks }))
       .resolves.toBe(readyRoster.renderedMarkdown)
 
-    expect(generateStream).toHaveBeenCalledTimes(5)
+    expect(generateStream).toHaveBeenCalledTimes(3)
     const continuationPrompt = generateStream.mock.calls[1]?.[0]
       .find(message => message.role === 'user')?.content ?? ''
     expect(continuationPrompt).toContain(JSON.stringify({ globalGuidance: authorGuidance }).slice(1, -1))
@@ -1551,9 +1864,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
   })
 
   it('repairs one syntactically invalid detail batch before committing the complete roster', async () => {
-    const details = detailResponses(rosterEntries)
-    const malformed = details[0]!.slice(0, -2)
-    const responses = [JSON.stringify(manifestFor(rosterEntries)), malformed, details[0]!, details[1]!, details[2]!]
+    const details = detailBatchResponses(rosterEntries)[0]!
+    const malformed = details.slice(0, -2)
+    const responses = [JSON.stringify(manifestFor(rosterEntries)), malformed, details]
     const generateStream = vi.fn((
       _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
       streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
@@ -1613,7 +1926,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     await expect(command.execute({ step: {}, context, callbacks }))
       .resolves.toBe(readyRoster.renderedMarkdown)
 
-    expect(generateStream).toHaveBeenCalledTimes(5)
+    expect(generateStream).toHaveBeenCalledTimes(3)
     expect(domainIpcChannels(invoke)).toContain('db:character-roster-commit')
   })
 
@@ -1626,7 +1939,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
         case 'prompt:load-global':
-          return []
+          return { templates: [], diagnostics: [] }
         case 'fs:check-exists':
           return false
         case 'db:project-core-get':
@@ -1651,42 +1964,62 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       expectedProjectPath: projectAPath,
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
-    await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow(/覆盖|缺少|结构化/u)
+    const failure = await command.execute({
+      step: {},
+      context: { ...context, uiLocale: 'en-US' },
+      callbacks,
+    }).then(() => null, error => error as Error)
 
+    expect(failure?.message).not.toMatch(/[\u3400-\u9fff]/u)
+    expect(failure?.message).toContain('code=invalid_output reason=missing_item')
+    expect(failure?.message).toContain('purpose=character-architecture-details finishReason=stop')
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
-  it('accepts valid long character details and leaves size control to the request budget', async () => {
-    const longEntries: CharacterRosterEntry[] = rosterEntries.map((entry, index) => (
-      index === 0
-        ? {
-            ...entry,
-            appearance: '外'.repeat(301),
-            background: '往'.repeat(501),
-            currentState: { ...entry.currentState!, recentEvents: '事'.repeat(301) },
-          }
-        : entry
-    ))
-    const longRoster = { ...readyRoster, entries: longEntries }
-    const generateStream = createResponseStream(twoStageResponses(longEntries))
+  it('trims and Unicode-bounds valid AI character descriptions before roster commit', async () => {
+    const descriptionFields = [
+      'appearance', 'personality', 'background', 'abilities', 'motivation', 'arc', 'notes',
+    ] as const
+    const stateFields = [
+      'location', 'powerLevel', 'physicalState', 'mentalState', 'keyItems',
+    ] as const
+    const boundedDescription = `${'文'.repeat(119)}😀`
+    const boundedState = `${'态'.repeat(79)}😀`
+    const mayaRecentEvents = 'Maya traced the forged campus record, warned Li, and secured the evidence before dawn'
+    expect(Array.from(boundedDescription)).toHaveLength(120)
+    expect(Array.from(boundedState)).toHaveLength(80)
+    expect(Array.from(mayaRecentEvents)).toHaveLength(85)
+    const modelEntry: CharacterRosterEntry = {
+      ...rosterEntries[0]!,
+      currentState: { ...rosterEntries[0]!.currentState! },
+    }
+    for (const field of descriptionFields) modelEntry[field] = `  ${boundedDescription}尾  `
+    for (const field of stateFields) modelEntry.currentState![field] = `  ${boundedState}尾  `
+    modelEntry.currentState!.recentEvents = `  ${mayaRecentEvents}  `
+    const modelEntries = [modelEntry, ...rosterEntries.slice(1)]
+    const generateStream = createResponseStream(twoStageResponses(modelEntries))
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    let committedEntries: CharacterRosterEntry[] | undefined
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
         case 'prompt:load-global': return { templates: [], diagnostics: [] }
         case 'fs:check-exists': return false
-        case 'db:project-core-get': return { premise: '这是一段足够长且包含明确冲突的故事前提，用于验证合法长文本角色详情会由整体请求预算管理，不会再被人为字符上限拒绝并且能够正常原子提交角色事实。' }
-        case 'db:character-roster-read': return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
-        case 'db:character-roster-commit': return {
-          success: true,
-          receipt: {
-            operationId: context.runId,
-            payloadHash: 'payload-hash',
-            revision: 1,
-            idempotent: false,
-            snapshot: longRoster,
-          },
+        case 'db:project-core-get': return { premise: '这是一段足够长且包含明确冲突的故事前提，用于验证模型生成的少量超长自由描述会在严格结构验证前确定性收束。' }
+        case 'db:character-roster-read':
+          return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
+        case 'db:character-roster-commit': {
+          committedEntries = (args[0] as { entries: CharacterRosterEntry[] }).entries
+          return {
+            success: true,
+            receipt: {
+              operationId: context.runId,
+              payloadHash: 'payload-hash',
+              revision: 1,
+              idempotent: false,
+              snapshot: { ...readyRoster, entries: committedEntries },
+            },
+          }
         }
         case 'fs:read-json': return { success: true, data: {} }
         case 'fs:write-json': return { success: true }
@@ -1702,14 +2035,19 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
 
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(readyRoster.renderedMarkdown)
-    expect(generateStream).toHaveBeenCalledTimes(4)
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({ entries: longEntries }),
-      projectAPath,
-      context.projectSession,
-    )
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .resolves.toBe(readyRoster.renderedMarkdown)
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    const committed = committedEntries?.[0]
+    expect(committed).toMatchObject({
+      name: rosterEntries[0]!.name,
+      role: rosterEntries[0]!.role,
+      relationships: rosterEntries[0]!.relationships,
+    })
+    for (const field of descriptionFields) expect(committed?.[field]).toBe(boundedDescription)
+    for (const field of stateFields) expect(committed?.currentState?.[field]).toBe(boundedState)
+    expect(committed?.currentState?.recentEvents).toBe(Array.from(mayaRecentEvents).slice(0, 80).join(''))
+    expect(domainIpcChannels(invoke)).toContain('db:character-roster-commit')
   })
 
   it('rejects non-finite, boolean, and null age values without echoing their content', async () => {

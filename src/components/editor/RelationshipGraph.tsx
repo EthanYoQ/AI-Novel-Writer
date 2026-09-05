@@ -15,8 +15,16 @@ interface CharacterNode {
 interface RelationshipGraphEdge {
   from: string
   to: string
-  label: string
+  relations: Array<{
+    from: string
+    to: string
+    label: string
+  }>
 }
+
+type DragState =
+  | { kind: 'view'; x: number; y: number }
+  | { kind: 'node'; name: string; offsetX: number; offsetY: number }
 
 interface RelationshipGraphProps {
   characters: Array<{
@@ -26,6 +34,31 @@ interface RelationshipGraphProps {
   }>
 }
 
+const NODE_LABEL_MAX_CHARACTERS = 8
+const RELATIONSHIP_LABEL_MAX_CHARACTERS = 6
+
+function compactOverviewLabel(value: string, maxCharacters: number): string {
+  const characters = Array.from(value.trim())
+  return characters.length > maxCharacters
+    ? `${characters.slice(0, maxCharacters).join('')}…`
+    : characters.join('')
+}
+
+function pointerWorldPosition(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+  view: { scale: number; offsetX: number; offsetY: number },
+) {
+  const bounds = canvas.getBoundingClientRect()
+  const pixelX = (clientX - bounds.left) * canvas.width / (bounds.width || canvas.clientWidth || 1)
+  const pixelY = (clientY - bounds.top) * canvas.height / (bounds.height || canvas.clientHeight || 1)
+  return {
+    x: canvas.width / 2 + (pixelX - view.offsetX - canvas.width / 2) / view.scale,
+    y: canvas.height / 2 + (pixelY - view.offsetY - canvas.height / 2) / view.scale,
+  }
+}
+
 /** 角色关系网 Canvas 可视化 */
 export default function RelationshipGraph({ characters }: RelationshipGraphProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -33,22 +66,42 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
   const animRef = useRef<number>(0)
   const drawRef = useRef<(() => void) | null>(null)
   const viewRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 })
-  const dragRef = useRef<{ x: number; y: number } | null>(null)
+  const dragRef = useRef<DragState | null>(null)
   const [zoomPercent, setZoomPercent] = useState(100)
   const text = useLocaleStore(state => state.text)
 
   const edges = useMemo<RelationshipGraphEdge[]>(() => {
     const knownNames = characters.map((character) => character.name)
-    return characters.flatMap((character) => (
-      parseRelationshipEdges(character.relationships, {
+    const overviewEdges = new Map<string, RelationshipGraphEdge>()
+    for (const character of characters) {
+      for (const edge of parseRelationshipEdges(character.relationships, {
         knownNames,
         selfName: character.name,
-      }).map((edge) => ({
-        from: character.name,
-        to: edge.target,
-        label: edge.relation,
-      }))
-    ))
+      })) {
+        const key = [character.name, edge.target].sort().join('\u0000')
+        const relation = {
+          from: character.name,
+          to: edge.target,
+          label: edge.relation,
+        }
+        const overviewEdge = overviewEdges.get(key)
+        if (overviewEdge) {
+          const isDuplicate = overviewEdge.relations.some(candidate => (
+            candidate.from === relation.from
+            && candidate.to === relation.to
+            && candidate.label === relation.label
+          ))
+          if (!isDuplicate) overviewEdge.relations.push(relation)
+          continue
+        }
+        overviewEdges.set(key, {
+          from: character.name,
+          to: edge.target,
+          relations: [relation],
+        })
+      }
+    }
+    return Array.from(overviewEdges.values())
   }, [characters])
 
   // 初始化节点布局
@@ -115,13 +168,23 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
         ctx.stroke()
 
         // 关系标签
-        if (edge.label) {
+        const firstRelation = edge.relations[0]?.label
+        if (firstRelation) {
           const mx = (a.x + b.x) / 2
           const my = (a.y + b.y) / 2
+          const compactLabel = compactOverviewLabel(
+            firstRelation,
+            RELATIONSHIP_LABEL_MAX_CHARACTERS,
+          )
+          const additionalCount = edge.relations.length - 1
           ctx.font = '18px system-ui'
           ctx.fillStyle = relationshipLabelColor
           ctx.textAlign = 'center'
-          ctx.fillText(edge.label, mx, my - 4)
+          ctx.fillText(
+            additionalCount > 0 ? `${compactLabel} +${additionalCount}` : compactLabel,
+            mx,
+            my - 4,
+          )
         }
       }
 
@@ -153,7 +216,7 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
         ctx.fillStyle = readableTextColor
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
-        ctx.fillText(node.name, node.x, node.y + 36)
+        ctx.fillText(compactOverviewLabel(node.name, NODE_LABEL_MAX_CHARACTERS), node.x, node.y + 36)
       }
       ctx.restore()
     }
@@ -201,7 +264,7 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
         const dx = b.x - a.x
         const dy = b.y - a.y
         const dist = Math.sqrt(dx * dx + dy * dy)
-        const force = (dist - 150) * 0.01
+        const force = (dist - 300) * 0.01
         const fx = (dx / dist) * force
         const fy = (dy / dist) * force
         a.vx += fx
@@ -258,10 +321,24 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
   if (characters.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-xs text-[var(--color-text-muted)]">
-        暂无角色数据
+        {text('暂无角色数据', 'No character data')}
       </div>
     )
   }
+
+  const relationshipDetails = edges
+    .flatMap(edge => edge.relations)
+    .map(relation => text(
+      `${relation.from} 对 ${relation.to}：${relation.label}`,
+      `${relation.from} to ${relation.to}: ${relation.label}`,
+    ))
+    .join(text('；', '; '))
+  const graphLabel = relationshipDetails
+    ? text(
+        `角色关系图谱。完整关系：${relationshipDetails}`,
+        `Character relationship graph. Full relationships: ${relationshipDetails}`,
+      )
+    : text('角色关系图谱', 'Character relationship graph')
 
   return (
     <div className="relative h-full overflow-hidden">
@@ -301,6 +378,8 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
       </div>
       <canvas
         ref={canvasRef}
+        role="img"
+        aria-label={graphLabel}
         className="h-full w-full cursor-grab active:cursor-grabbing"
         style={{ background: 'transparent', color: 'var(--color-text)' }}
         onWheel={(event) => {
@@ -308,16 +387,53 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
           updateZoom(viewRef.current.scale + (event.deltaY < 0 ? 0.1 : -0.1))
         }}
         onPointerDown={(event) => {
-          dragRef.current = { x: event.clientX, y: event.clientY }
+          const point = pointerWorldPosition(
+            event.currentTarget,
+            event.clientX,
+            event.clientY,
+            viewRef.current,
+          )
+          const node = nodesRef.current.find(candidate => (
+            (candidate.x - point.x) ** 2 + (candidate.y - point.y) ** 2 <= 28 ** 2
+          ))
+          if (node) {
+            cancelAnimationFrame(animRef.current)
+            node.vx = 0
+            node.vy = 0
+            dragRef.current = {
+              kind: 'node',
+              name: node.name,
+              offsetX: node.x - point.x,
+              offsetY: node.y - point.y,
+            }
+          } else {
+            dragRef.current = { kind: 'view', x: event.clientX, y: event.clientY }
+          }
           event.currentTarget.setPointerCapture(event.pointerId)
         }}
         onPointerMove={(event) => {
           const drag = dragRef.current
           if (!drag) return
+          if (drag.kind === 'node') {
+            const node = nodesRef.current.find(candidate => candidate.name === drag.name)
+            if (!node) return
+            const point = pointerWorldPosition(
+              event.currentTarget,
+              event.clientX,
+              event.clientY,
+              viewRef.current,
+            )
+            node.x = Math.max(40, Math.min(event.currentTarget.width - 40, point.x + drag.offsetX))
+            node.y = Math.max(40, Math.min(event.currentTarget.height - 40, point.y + drag.offsetY))
+            node.vx = 0
+            node.vy = 0
+            drawRef.current?.()
+            return
+          }
           const pixelRatio = event.currentTarget.width / Math.max(event.currentTarget.clientWidth, 1)
           viewRef.current.offsetX += (event.clientX - drag.x) * pixelRatio
           viewRef.current.offsetY += (event.clientY - drag.y) * pixelRatio
-          dragRef.current = { x: event.clientX, y: event.clientY }
+          dragRef.current = { kind: 'view', x: event.clientX, y: event.clientY }
           drawRef.current?.()
         }}
         onPointerUp={(event) => {

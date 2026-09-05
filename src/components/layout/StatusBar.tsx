@@ -31,7 +31,7 @@ export default function StatusBar() {
       <div className="flex items-center h-full">
         <StatusBarSegment title={text(APP_BRAND.zhName, APP_BRAND.enName)}>
           <BookOpen size={11} />
-          <span className="font-medium brand-gradient">{APP_BRAND.shortName}</span>
+          <span className="font-medium brand-gradient">{text(APP_BRAND.shortName, APP_BRAND.enName)}</span>
           <span className="opacity-80 brand-gradient">v{__APP_VERSION__}</span>
         </StatusBarSegment>
 

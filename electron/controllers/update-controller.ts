@@ -13,6 +13,8 @@ export interface UpdateIpcRegistrar {
 export interface UpdateServiceFacade {
   getState(): UpdateState
   checkManually(): Promise<UpdateCheckResponse>
+  downloadUpdate(): Promise<UpdateActionResponse>
+  openRelease(): Promise<UpdateActionResponse>
   deferReminder(days: UpdateReminderDelay): Promise<UpdateActionResponse>
   requestInstall(): Promise<UpdateActionResponse>
   subscribe(listener: (state: UpdateState) => void): () => void
@@ -42,6 +44,8 @@ export function registerUpdateController(
 ): () => void {
   ipc.handle('update:get-state', async () => service.getState())
   ipc.handle('update:check', async () => service.checkManually())
+  ipc.handle('update:download', async () => service.downloadUpdate())
+  ipc.handle('update:open-release', async () => service.openRelease())
   ipc.handle('update:defer-reminder', async (_event, days: unknown) => {
     const delay = typeof days === 'number' ? days : Number.NaN
     return service.deferReminder(delay as UpdateReminderDelay)

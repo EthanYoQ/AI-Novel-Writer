@@ -14,6 +14,7 @@ import {
   type GenerationTask,
 } from '../../generation/generation-harness'
 import { planBlueprintGenerationCost } from '../blueprint-batch-policy'
+import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
 
 type Blueprint = {
   chapterNumber: number
@@ -1397,6 +1398,60 @@ describe('StructuredBatchExecutor seam', () => {
     expect(observedPurposes.filter(purpose => purpose.endsWith(':compact-single')))
       .toEqual(['chapter-blueprints:compact-single'])
     expect(complete).toHaveBeenCalledTimes(4)
+  })
+
+  it('splits a completed multi-item diagnostic and rebuilds each failing single item once', async () => {
+    let attempt = 0
+    const observedPurposes: string[] = []
+    const complete = vi.fn<GenerationSession['complete']>(async task => {
+      attempt += 1
+      observedPurposes.push(task.purpose)
+      const request = taskPayload(task)
+      return {
+        status: 'completed',
+        content: task.purpose === 'chapter-blueprints'
+          ? JSON.stringify({
+              blueprints: request.items.map(chapterNumber => ({
+                chapterNumber,
+                title: '',
+              })),
+            })
+          : blueprintJson(request.items),
+        finishReason: 'stop',
+        receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+      }
+    })
+    const executor = createStructuredBatchExecutor({
+      contract: {
+        ...blueprintContract,
+        decode: content => {
+          const blueprints = blueprintContract.decode(content)
+          if (blueprints.some(blueprint => !blueprint.title.trim())) {
+            throw new StructuredContractDiagnostic('invalid_value', 'blueprints[0].title')
+          }
+          return blueprints
+        },
+      },
+      session: { complete },
+    })
+
+    const result = await executor.execute({
+      items: [1, 2],
+      limits: { maxBatchItems: 2, maxCompactSingleFallbacks: 2 },
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: [{ chapterNumber: 1 }, { chapterNumber: 2 }],
+      receipt: { calls: 5, splitCount: 1, compactSingleFallbackCount: 2 },
+    })
+    expect(observedPurposes).toEqual([
+      'chapter-blueprints',
+      'chapter-blueprints',
+      'chapter-blueprints:compact-single',
+      'chapter-blueprints',
+      'chapter-blueprints:compact-single',
+    ])
   })
 
   it('returns no items when the compact single fallback is also length-truncated', async () => {

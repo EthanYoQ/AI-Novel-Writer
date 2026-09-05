@@ -52,6 +52,10 @@ export interface EditorTab {
   reportPath?: string
   /** 原始 AI 审稿报告的数据库标识；人工确认快照与审稿修稿均以此为来源。 */
   reviewId?: number
+  /** 叙事线编辑器本次打开的视图。 */
+  narrativeThreadView?: 'plot-tree' | 'plans'
+  /** 重复打开同一叙事线 Tab 时递增，确保本次视图请求生效。 */
+  narrativeThreadViewRequest?: number
 }
 
 interface EditorState {
@@ -194,6 +198,12 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
                 ...(tabWithDraftState.draftStatus === undefined
                   ? {}
                   : { draftStatus: tabWithDraftState.draftStatus }),
+                ...(tabWithDraftState.narrativeThreadView === undefined
+                  ? {}
+                  : {
+                      narrativeThreadView: tabWithDraftState.narrativeThreadView,
+                      narrativeThreadViewRequest: (t.narrativeThreadViewRequest ?? 0) + 1,
+                    }),
               }
             : t),
           activeTabId: existing.id,
@@ -202,7 +212,13 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     } else {
       // 新开 Tab
       set((s) => ({
-        tabs: [...s.tabs, tabWithDraftState],
+        tabs: [
+          ...s.tabs,
+          tabWithDraftState.type === 'narrative-thread'
+            && tabWithDraftState.narrativeThreadView !== undefined
+            ? { ...tabWithDraftState, narrativeThreadViewRequest: 1 }
+            : tabWithDraftState,
+        ],
         activeTabId: tabWithDraftState.id,
       }))
     }

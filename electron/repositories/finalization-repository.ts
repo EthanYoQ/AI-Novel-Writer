@@ -1,4 +1,5 @@
 import { getProjectDb } from '../database'
+import { countDraftUnits } from '../../src/shared/draft-units'
 
 export type PublicationStatus = 'pending' | 'published'
 
@@ -121,7 +122,7 @@ export class FinalizationRepository {
         UPDATE drafts
         SET status = 'finalized', word_count = ?, updated_at = datetime('now')
         WHERE id = ?
-      `).run(input.content.length, input.draftId)
+      `).run(countDraftUnits(input.content), input.draftId)
       db.prepare(`
         INSERT INTO finalization_outbox (
           finalization_id, draft_id, chapter_number, chapter_title,

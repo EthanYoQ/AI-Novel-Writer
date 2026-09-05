@@ -7,6 +7,7 @@ import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useAgentStore } from '../../../../stores/agent-store'
 import ConfirmCard from '../ConfirmCard'
+import ArtifactCard from '../ArtifactCard'
 
 const resolveToolConfirmation = vi.fn()
 const cancelGeneration = vi.fn()
@@ -64,6 +65,24 @@ afterEach(async () => {
 })
 
 describe('Agent domain proposal confirmation', () => {
+  it('shows generic confirmation and artifact labels in English', async () => {
+    useLocaleStore.setState({ locale: 'en-US', initialized: true })
+    await act(async () => root.render(<>
+      <ConfirmCard toolCall={{
+        id: 'write-1', toolName: 'write_file', arguments: { file_path: 'chapter.md' },
+        status: 'waiting_confirm', source: 'builtin', projectSession: session,
+      }} />
+      <ArtifactCard artifact={{
+        type: 'file_created', name: 'chapter.md', path: 'C:/novels/A/chapter.md',
+        projectPath: session.projectPath, projectSession: session,
+      }} />
+    </>))
+
+    await expect.element(page.getByText('Will write file: chapter.md')).toBeVisible()
+    await expect.element(page.getByText('New file')).toBeVisible()
+    expect(container.textContent).not.toMatch(/将写入文件|新建文件/u)
+  })
+
   it('shows an English field diff instead of raw tool JSON and approves the existing gate', async () => {
     useLocaleStore.setState({ locale: 'en-US', initialized: true })
     await act(async () => root.render(<ConfirmCard toolCall={{

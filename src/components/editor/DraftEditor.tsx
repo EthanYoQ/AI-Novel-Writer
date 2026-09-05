@@ -524,7 +524,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
             {/* 字数 */}
             {charCount > 0 && (
               <span className="text-xs tabular-nums mr-1" style={{ color: 'var(--color-text-muted)' }}>
-                {text(`${charCount.toLocaleString(locale)} 字`, `${charCount.toLocaleString(locale)} characters`)}
+                {text(`${charCount.toLocaleString(locale)} 字`, `${charCount.toLocaleString(locale)} words`)}
               </span>
             )}
 
@@ -656,7 +656,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           <div className="flex items-center gap-2 flex-shrink-0">
             {charCount > 0 && (
               <span className="text-xs tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
-                {text(`${charCount.toLocaleString(locale)} 字`, `${charCount.toLocaleString(locale)} characters`)}
+                {text(`${charCount.toLocaleString(locale)} 字`, `${charCount.toLocaleString(locale)} words`)}
               </span>
             )}
             <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>

@@ -79,6 +79,10 @@ describe('core model prompt language contract', () => {
     expect(enUS.detailSystem).toContain('Explicit author facts')
     expect(enUS.manifestSystem).not.toMatch(/[\u3400-\u9fff]/u)
     expect(enUS.detailContract).toContain('Immutable character-detail JSON contract')
+    expect(zhCN.detailContract).toContain('appearance、personality、background、abilities、motivation、arc、notes 每项不超过 120 字符')
+    expect(zhCN.detailContract).toContain('currentState 的文本字段每项不超过 80 字符')
+    expect(enUS.detailContract).toContain('appearance, personality, background, abilities, motivation, arc, and notes within 120 characters each')
+    expect(enUS.detailContract).toContain('each currentState text field within 80 characters')
   })
 
   it('appends authoritative project facts omitted by a custom architecture template', () => {

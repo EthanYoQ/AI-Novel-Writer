@@ -11,8 +11,8 @@
  */
 
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
-import type { WorkflowStatus } from '../../stores/workflow-store'
 import type { WritingLanguage } from '../../shared/writing-language'
+import type { WorkflowStatus } from '../../stores/workflow-store'
 
 // ===== JSON Schema 简化类型 =====
 
@@ -83,6 +83,10 @@ export interface ToolResult {
  */
 export interface AgentExecutionContext {
   readonly projectSession: ProjectSessionContext | null
+  /** Visible interface language frozen for this complete Agent turn. */
+  readonly uiLocale: import('../../i18n/types').Locale
+  /** Model-facing language frozen for this complete Agent turn. */
+  readonly writingLanguage: WritingLanguage
   /**
    * Model explicitly selected for this Agent turn. It is captured outside of
    * LLM tool arguments so a model response cannot choose a billable model.
@@ -202,8 +206,11 @@ class ToolRegistryImpl {
    * - file_path (string, 必填): 相对于项目根目录的文件路径
    * ```
    */
-  generateToolPrompt(writingLanguage: WritingLanguage = 'zh-CN'): string {
-    const tools = this.listAll()
+  generateToolPrompt(
+    writingLanguage: WritingLanguage = 'zh-CN',
+    includeTool: (tool: AgentTool) => boolean = () => true,
+  ): string {
+    const tools = this.listAll().filter(includeTool)
     if (tools.length === 0) return ''
 
     const english = writingLanguage === 'en-US'
@@ -221,12 +228,13 @@ Use exactly this XML format:
 
 ### Immutable rules
 
-1. Put at most one <tool_call> block in each response.
-2. After a tool runs, the application returns <tool_result>.
-3. Continue after <tool_result> and answer the user from the returned data.
-4. Call another tool in the next turn only when more data is required.
-5. Never quote or reveal tool-call markup in story prose.
-6. Read-only tools run directly. Write tools require user confirmation.
+1. Inside <tool_call>, emit exactly one JSON object; do not use <name> or <arguments> child tags.
+2. Put at most one <tool_call> block in each response.
+3. After a tool runs, the application returns <tool_result>.
+4. Continue after <tool_result> and answer the user from the returned data.
+5. Call another tool in the next turn only when more data is required.
+6. Never quote or reveal tool-call markup in story prose.
+7. Read-only tools run directly. Write tools require user confirmation.
 
 ### Available tools
 
@@ -244,12 +252,13 @@ Use exactly this XML format:
 
 ### 重要规则
 
-1. **每次回复最多放一个** <tool_call> 标签。
-2. 调用工具后，系统会自动执行并返回 <tool_result> 结果。
-3. **收到 <tool_result> 后你必须继续推理**，根据工具返回的数据回答用户问题。不要就此停止。
-4. 如果一个工具的结果不够，你可以在下一轮继续调用另一个工具。
-5. 不要在正文中引用或复述 <tool_call> 标签的内容。
-6. 只读工具自动执行。写入型工具需要用户确认。
+1. <tool_call> 内必须只包含一个 JSON 对象；禁止使用 <name> 或 <arguments> 子标签。
+2. **每次回复最多放一个** <tool_call> 标签。
+3. 调用工具后，系统会自动执行并返回 <tool_result> 结果。
+4. **收到 <tool_result> 后你必须继续推理**，根据工具返回的数据回答用户问题。不要就此停止。
+5. 如果一个工具的结果不够，你可以在下一轮继续调用另一个工具。
+6. 不要在正文中引用或复述 <tool_call> 标签的内容。
+7. 只读工具自动执行。写入型工具需要用户确认。
 
 ### 示例交互
 
@@ -272,7 +281,10 @@ Use exactly this XML format:
         : ''
 
       prompt += `#### ${displayName}${sourceTag}${confirmTag}\n`
-      prompt += `${english ? (tool.descriptionEn ?? tool.description) : tool.description}\n`
+      const toolDescription = english
+        ? (tool.descriptionEn ?? (tool.source === 'builtin' ? '' : tool.description))
+        : tool.description
+      prompt += `${toolDescription}\n`
 
       // 生成参数说明
       const { properties, required = [] } = tool.inputSchema
@@ -282,7 +294,9 @@ Use exactly this XML format:
           const isRequired = required.includes(key)
           const reqTag = isRequired ? (english ? 'required' : '必填') : (english ? 'optional' : '可选')
           let paramDesc = `- ${key} (${schema.type}, ${reqTag})`
-          const description = english ? (schema.descriptionEn ?? schema.description) : schema.description
+          const description = english
+            ? (schema.descriptionEn ?? (tool.source === 'builtin' ? '' : schema.description))
+            : schema.description
           if (description) paramDesc += `: ${description}`
           if (schema.enum) {
             paramDesc += english

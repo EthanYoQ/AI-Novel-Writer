@@ -1,6 +1,7 @@
 import { ipc } from '../../ipc-client'
 import { skillRegistry } from '../skill-registry'
 import { buildAgentTool } from '../tool-registry'
+import { agentToolText } from './project-context'
 
 export const installWritingSkillTool = buildAgentTool({
   name: 'install_writing_skill',
@@ -21,19 +22,30 @@ export const installWritingSkillTool = buildAgentTool({
   },
   requiresConfirmation: true,
   isReadOnly: false,
-  execute: async (args) => {
+  execute: async (args, context) => {
+    const text = (zhCN: string, enUS: string) => agentToolText(context, zhCN, enUS)
     const sourceUrl = args.source_url
     if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) {
-      return { success: false, content: '', error: '缺少 source_url' }
+      return { success: false, content: '', error: text('缺少 source_url', 'The source_url argument is required') }
     }
     const result = await ipc.invoke('skills:install-github', sourceUrl)
     if (!result.success || !result.skill) {
-      return { success: false, content: '', error: result.error ?? 'Skill 安装失败' }
+      const detail = result.error
+      return {
+        success: false,
+        content: '',
+        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail ?? '')
+          ? text('Skill 安装失败', 'Could not install the writing Skill')
+          : detail ?? text('Skill 安装失败', 'Could not install the writing Skill'),
+      }
     }
     await skillRegistry.loadAll()
     return {
       success: true,
-      content: `已安装写作 Skill“${result.skill.name}”。它尚未绑定到项目阶段。`,
+      content: text(
+        `已安装写作 Skill“${result.skill.name}”。它尚未绑定到项目阶段。`,
+        `Installed writing Skill "${result.skill.name}". It is not bound to a project stage yet.`,
+      ),
     }
   },
 })

@@ -11,6 +11,8 @@
 import type { StepCallbacks, WorkflowContext } from '../../stores/workflow-store'
 import type { AllInvokeChannels, InvokeChannel, ProjectSessionContext } from '../../shared/ipc-channels'
 import { ipc } from '../ipc-client'
+import { localize } from '../../i18n/core'
+import type { Locale } from '../../i18n/types'
 
 /** Project-level post-processing is fail-closed: never borrow the active lease. */
 function invokeForProjectSession<C extends InvokeChannel>(
@@ -68,24 +70,33 @@ export async function withRetry(
   label: string,
   callbacks: StepCallbacks,
   isCancelled?: () => boolean,
+  uiLocale: Locale = 'zh-CN',
 ): Promise<{ ok: boolean; error?: string; attempts: number }> {
+  const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (isCancelled?.()) throw new Error('工作流已取消')
+    if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
     try {
       await fn()
-      if (isCancelled?.()) throw new Error('工作流已取消')
+      if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
       return { ok: true, attempts: attempt + 1 }
     } catch (err) {
-      if (isCancelled?.()) throw new Error('工作流已取消')
+      if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
       const errMsg = err instanceof Error ? err.message : String(err)
       if (attempt < maxRetries) {
-        callbacks.log(`  ⚠️ ${label} 第${attempt + 1}次失败，正在重试...（${errMsg}）`)
+        callbacks.log(text(
+          `  ${label} 第${attempt + 1}次失败，正在重试...（${errMsg}）`,
+          `  ${label} failed on attempt ${attempt + 1}; retrying... (${errMsg})`,
+        ))
       } else {
         return { ok: false, error: errMsg, attempts: attempt + 1 }
       }
     }
   }
-  return { ok: false, error: '未知错误', attempts: maxRetries + 1 }
+  return {
+    ok: false,
+    error: text('未知错误', 'Unknown error'),
+    attempts: maxRetries + 1,
+  }
 }
 
 // ===== 后处理流水线 =====
@@ -236,12 +247,22 @@ export async function runPostProcessPipeline(
   const onlyFailed = options?.onlyFailed ?? false
   const stopOnFailure = options?.stopOnFailure ?? false
   const cancellation = options?.cancellation
+  const uiLocale = cancellation?.uiLocale ?? 'zh-CN'
+  const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   const projectSession = options?.projectSession ?? cancellation?.projectSession ?? undefined
   const assertNotCancelled = () => {
-    if (cancellation?.cancelled) throw new Error('工作流已取消')
+    if (cancellation?.cancelled) {
+      throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+    }
   }
 
   assertNotCancelled()
+  if (!projectSession) {
+    throw new Error(text(
+      '后处理缺少冻结项目会话，已拒绝项目数据访问',
+      'Post-processing is missing a frozen project session, so project data access was denied.',
+    ))
+  }
   const { sourceType, sourceId } = parseScope(scope)
 
   // 判断是否存在已有 instance
@@ -249,7 +270,10 @@ export async function runPostProcessPipeline(
 
   if (!onlyFailed || !run) {
     // 新建跑批
-    callbacks.log(`  初始化后处理跑批...`)
+    callbacks.log(text(
+      '  初始化后处理跑批...',
+      '  Initializing post-processing run...',
+    ))
     assertNotCancelled()
     const createRes = await invokeForProjectSession(projectSession, 'db:post-process-create-run', {
       triggerSourceType: sourceType,
@@ -258,7 +282,11 @@ export async function runPostProcessPipeline(
       steps: steps.map(s => ({ key: s.key, label: s.label, critical: s.critical }))
     }, projectPath)
     if (!createRes.success || !createRes.id) {
-      throw new Error(`创建跑批失败: ${createRes.error}`)
+      const error = createRes.error || text('未知错误', 'Unknown error')
+      throw new Error(text(
+        `创建跑批失败: ${error}`,
+        `Failed to create the post-processing run: ${error}`,
+      ))
     }
     // createRes.id 是本次跑批的唯一身份。禁止再以“最新一条”反查：
     // SQLite 时间精度为秒，并发创建时反查可能拿到同秒内的另一条 Run。
@@ -287,7 +315,10 @@ export async function runPostProcessPipeline(
 
     // 修复模式：跳过已成功的步骤
     if (onlyFailed && existingStep?.ok) {
-      callbacks.log(`  ⏭️ ${step.label} — 已成功，跳过`)
+      callbacks.log(text(
+        `  ${step.label} — 已成功，跳过`,
+        `  ${step.label} already succeeded; skipping`,
+      ))
       continue
     }
 
@@ -297,29 +328,40 @@ export async function runPostProcessPipeline(
       step.label,
       callbacks,
       () => cancellation?.cancelled === true,
+      uiLocale,
     )
 
     if (result.ok) {
       assertNotCancelled()
       const markResult = await invokeForProjectSession(projectSession, 'db:post-process-mark-step-ok', runId, step.key, projectPath)
       if (!markResult.success) {
-        throw new Error(`记录后处理成功状态失败: ${markResult.error || '未知错误'}`)
+        throw new Error(text(
+          `记录后处理成功状态失败: ${markResult.error || '未知错误'}`,
+          `Failed to record the successful post-processing state: ${markResult.error || 'Unknown error'}`,
+        ))
       }
     } else {
       assertNotCancelled()
+      const stepError = result.error || text('未知错误', 'Unknown error')
       const markResult = await invokeForProjectSession(
         projectSession,
         'db:post-process-mark-step-failed',
         runId,
         step.key,
-        result.error || '未知错误',
+        stepError,
         projectPath,
       )
       if (!markResult.success) {
-        throw new Error(`记录后处理失败状态失败: ${markResult.error || '未知错误'}`)
+        throw new Error(text(
+          `记录后处理失败状态失败: ${markResult.error || '未知错误'}`,
+          `Failed to record the failed post-processing state: ${markResult.error || 'Unknown error'}`,
+        ))
       }
       if (stopOnFailure) {
-        throw new Error(`后处理步骤失败：${step.label} — ${result.error || '未知错误'}`)
+        throw new Error(text(
+          `后处理步骤失败：${step.label} — ${stepError}`,
+          `Post-processing step failed: ${step.label} — ${stepError}`,
+        ))
       }
     }
   }
@@ -354,17 +396,32 @@ export async function runPostProcessPipeline(
   const successSteps = Object.values(status.steps).filter(s => s.ok)
 
   callbacks.log('')
-  callbacks.log(`━━━━━━━━━━ ${sourceLabel} 后处理汇总 ━━━━━━━━━━`)
+  callbacks.log(text(
+    `${sourceLabel} 后处理汇总`,
+    `${sourceLabel} post-processing summary`,
+  ))
   for (const [, r] of Object.entries(status.steps)) {
-    callbacks.log(`  ${r.ok ? '✅' : '❌'} ${r.label}${r.ok ? '' : ` — ${r.error}`}`)
+    callbacks.log(text(
+      `  ${r.ok ? '成功' : '失败'}：${r.label}${r.ok ? '' : ` — ${r.error}`}`,
+      `  ${r.ok ? 'Succeeded' : 'Failed'}: ${r.label}${r.ok ? '' : ` — ${r.error}`}`,
+    ))
   }
-  callbacks.log(`━━━━━━━━━━ ${successSteps.length}/${Object.keys(status.steps).length} 成功 ━━━━━━━━━━`)
+  callbacks.log(text(
+    `${successSteps.length}/${Object.keys(status.steps).length} 成功`,
+    `${successSteps.length}/${Object.keys(status.steps).length} succeeded`,
+  ))
 
   if (failedSteps.length > 0) {
-    const failedLabels = failedSteps.map(r => r.label).join('、')
-    callbacks.log(`⚠️ 以下后处理步骤失败：${failedLabels}`)
+    const failedLabels = failedSteps.map(r => r.label).join(uiLocale === 'en-US' ? ', ' : '、')
+    callbacks.log(text(
+      `以下后处理步骤失败：${failedLabels}`,
+      `The following post-processing steps failed: ${failedLabels}`,
+    ))
     if (failedSteps.some(s => s.critical)) {
-      callbacks.log('💡 存在关键步骤失败，后续流程可能被阻断。请在对应页面使用「重试」功能修复')
+      callbacks.log(text(
+        '存在关键步骤失败，后续流程可能被阻断。请在对应页面使用「重试」功能修复',
+        'A critical step failed and may block later work. Use Retry on the corresponding page to repair it.',
+      ))
     }
   }
 

@@ -25,13 +25,13 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">Download desktop (Windows / macOS)</a> · <a href="https://www.npmjs.com/package/@ethanyoq/dsh-ai-novel-writer">Install the DeepSeek Harness Web plugin</a>
 </p>
 
-> **DeepSeek Harness plugin notice:** this is an early MVP with less than 10% of the desktop application's capabilities, not a desktop replacement. Use the desktop edition above for a complete project tree, batch workflows, a mature editor, or automated review.
+> **DeepSeek Harness plugin notice:** the `0.1.0` preview is currently frozen and has no short-term feature work planned. It has less than 10% of the desktop application's capabilities and is not a desktop replacement. Use the desktop edition above for a complete project tree, batch workflows, a mature editor, or automated review.
 
 <p align="center">
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
-> ## v0.9.0 long-form continuity and a complete revision loop
+> ## v0.9.0 feature baseline (historical release)
 >
 > [v0.9.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.9.0) makes continuity, chapter control, and review-driven revision more complete for long-form fiction while continuing to ship Windows, macOS Apple Silicon, and macOS Intel installers:
 >
@@ -49,7 +49,7 @@
 
 ## DeepSeek Harness plugin (early MVP)
 
-In addition to the Windows and macOS desktop editions, the [plugin directory](https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer) contains the `@ethanyoq/dsh-ai-novel-writer` `0.1.0` developer preview. The DeepSeek Harness V2 workbench is an intentionally narrow early MVP with less than 10% of the desktop application's capabilities; it does not read desktop `.vela` projects and is not a replacement for the desktop project tree, batch workflows, mature editor, or automated review.
+In addition to the Windows and macOS desktop editions, the repository retains the `@ethanyoq/dsh-ai-novel-writer` `0.1.0` developer preview. The plugin is currently frozen, with no short-term feature work planned. The DeepSeek Harness V2 workbench is an intentionally narrow early MVP with less than 10% of the desktop application's capabilities; it does not read desktop `.vela` projects and is not a replacement for the desktop project tree, batch workflows, mature editor, or automated review.
 
 V2 offers one human-reviewed authoring chain: project settings → story architecture → characters → whole-book outline → per-chapter blueprint → per-chapter prose. When a model Proposal arrives, its draft first fills the right-side workbench editor for human review and editing; authoritative project state changes only after the user explicitly applies the Proposal.
 
@@ -60,25 +60,7 @@ dsh plugin --profile web add @ethanyoq/dsh-ai-novel-writer
 dsh --profile web
 ```
 
-For development, install it from source in the plugin directory:
-
-```sh
-git clone https://github.com/EthanYoQ/AI-Novel-Writer.git
-cd AI-Novel-Writer/plugins/dsh-ai-novel-writer
-pnpm install
-pnpm run build
-dsh plugin --profile web add .
-dsh --profile web
-```
-
-To install an immutable local build instead of a live source link, pack and install the tarball:
-
-```sh
-pnpm pack --pack-destination ../../.runtime/.cache
-cd ../..
-dsh plugin --profile web add ./.runtime/.cache/ethanyoq-dsh-ai-novel-writer-0.1.0.tgz
-dsh --profile web
-```
+The [plugin installation guide](plugins/dsh-ai-novel-writer/docs/official-dsh-plugin-installation.md) separately owns source development, immutable tarball installation, and the Windows path-with-spaces limitation. This root README does not duplicate those changing maintainer steps.
 
 After Web starts, open **Novel Workbench**, install the **AI 小说作家 V2** Preset, then create a new Session with that Preset. AI drafting first fills the local editor in the right-side workbench for human review and editing; applying the Proposal is the only action that changes the project. See the [plugin README](plugins/dsh-ai-novel-writer/README.md) for features, project format, qualification coverage, and removal. Do not run `dsh plugin add github:EthanYoQ/AI-Novel-Writer`: the repository root package is the desktop application, not an activatable DSH bundle.
 
@@ -112,6 +94,8 @@ flowchart LR
 | Chapter-level generation | Builds context around the current chapter blueprint and related material to reduce cross-chapter drift. |
 | Review and revision | Produces structured review information for a draft and uses that report as revision input. |
 | Character cards and project material | Maintains characters, worldbuilding, blueprints, drafts, and finals in the project. Project sessions prevent an old window from writing into a newly reopened project. |
+| Plot tree and narrative threads | Shows main plots, subplots, and source progress on chapter tracks. The plot tree is a rebuildable read-only snapshot, not a replacement for author facts. |
+| Writing Skills and prompt templates | Binds supplemental methods by writing stage and customizes Chinese or English creative guidance while hidden contracts preserve language, output structure, and tool protocols. |
 | Reference text and knowledge base | Imports common text formats as reference material. SQLite FTS remains available when no embedding model is configured. |
 | Batch writing task | A separate batch chapter task supports 1–10 chapters, pause, and cancel; downstream processing failure stops later chapters. |
 | Chinese and English UI | The first launch can follow the system locale; a manual choice is persisted. |
@@ -170,7 +154,7 @@ ai-novel-writer-setup-<version>.exe
 
 1. Download formal installers only from [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest).
 2. The installer updates the application and should not delete novel projects, character cards, or existing settings. Back up important work before any upgrade.
-3. After installation, use **Check for updates** on the welcome page. When a formal update is found, the app downloads it and offers **Restart and update / Later**.
+3. After installation, use **Check for updates** on the welcome page. The app also performs at most one successful silent check per local day after startup. A discovered update is announced first and downloads only after the user chooses **Download update**; when the download finishes, the app offers **Restart and update / Later**.
 4. Older portable ZIP builds cannot obtain their first updater automatically. Install a formal installer manually once; new portable ZIP releases are no longer maintained.
 
 The installer is not code-signed at present. Windows may show publisher or reputation warnings; continue only after confirming that the download page is this repository's official GitHub Release.
@@ -185,7 +169,7 @@ ai-novel-writer-mac-x64-<version>-installer.dmg
 ```
 
 1. `arm64` supports Apple Silicon Macs (M1, M2, M3, M4, and later); `x64` supports Intel Macs.
-2. Drag the app from the DMG to Applications. This macOS release has no in-app updater; download future versions manually from the same Release page.
+2. Drag the app from the DMG to Applications. The app can check the latest formal GitHub Release and display a reminder, but it does not download or replace the macOS app. The update action opens the official Release page so the user can download the installer for the correct architecture.
 3. Neither installer has a Developer ID signature or notarization (ARM64 is ad-hoc signed; x64 is unsigned). If Gatekeeper blocks it, confirm that the source is this repository's official GitHub Release, then Control-click the app in Finder and choose **Open**, or allow it in **System Settings → Privacy & Security**.
 
 ## Current limits
@@ -194,6 +178,10 @@ ai-novel-writer-mac-x64-<version>-installer.dmg
 - The app does not replace authorial judgment, fact checking, or copyright decisions. Review AI output before using it.
 - It does not provide online publishing, a reading community, or cloud-model accounts.
 - Formal installers are built in GitHub Actions. Windows, macOS ARM64, and macOS x64 candidates each pass their own qualification before they are listed in one GitHub Release.
+
+## Development and architecture documentation
+
+See [`docs/README.md`](docs/README.md) for documentation authority, ADRs, research, agent rules, and dated handoffs. The DeepSeek Harness plugin has its own [plugin documentation](plugins/dsh-ai-novel-writer/README.md) and does not define desktop behavior.
 
 ## License
 

@@ -24,9 +24,16 @@ import type {
   FinalizedContinuityFactCategory,
 } from '../../../shared/finalized-continuity'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
-import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
-import type { CharacterRosterEntry, CharacterRosterRole } from '../../../shared/character-roster'
+import {
+  requireWorkflowProjectSession,
+  workflowUiLocale,
+  workflowUiText,
+  workflowWritingLanguage,
+} from '../workflow-project-session'
+import type { CharacterRosterEntry } from '../../../shared/character-roster'
 import { writingLanguageText } from '../../../shared/writing-language'
+import { localize } from '../../../i18n/core'
+import type { Locale } from '../../../i18n/types'
 
 export interface FinalizeChapterParams {
   draftPath: string
@@ -64,6 +71,22 @@ function parseJSON<T>(text: string): T {
 const CONTINUITY_FACT_LIMIT = 12
 const CONTINUITY_STATEMENT_LIMIT = 280
 const CONTINUITY_EVIDENCE_LIMIT = 240
+const CHARACTER_EXTRACTION_SAMPLE_MAX_CHARS = 10_000
+
+function characterExtractionSample(content: string, writingLanguage: 'zh-CN' | 'en-US'): string {
+  const trimmed = content.trim()
+  if (trimmed.length <= CHARACTER_EXTRACTION_SAMPLE_MAX_CHARS) return trimmed
+
+  const omission = writingLanguageText(
+    writingLanguage,
+    '\n\n【中段已按角色提取上下文预算省略】\n\n',
+    '\n\n[Middle omitted to fit the character-extraction context budget]\n\n',
+  )
+  const sampledChars = CHARACTER_EXTRACTION_SAMPLE_MAX_CHARS - omission.length
+  const headChars = Math.ceil(sampledChars / 2)
+  const tailChars = Math.floor(sampledChars / 2)
+  return `${trimmed.slice(0, headChars).trimEnd()}${omission}${trimmed.slice(-tailChars).trimStart()}`
+}
 
 function factCategory(statement: string): FinalizedContinuityFactCategory {
   if (/(?:角色|状态|持有|受伤|位于|死亡|身亡|牺牲|去世|character|holds?|injur|location|dead|died|deceased)/iu.test(statement)) return 'character-state'
@@ -166,17 +189,19 @@ export function buildFinalizePostProcessSteps(
   generation: FinalizePostProcessGeneration,
   finalizedDraftId?: number,
   chapterEntities: readonly string[] = [],
+  uiLocale: Locale = 'zh-CN',
 ): PostProcessStep[] {
   const steps: PostProcessStep[] = []
+  const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
 
   // ─── 步骤 1: 导入知识库 ───────────────────────────────────────────
   steps.push({
     key: 'kb_import',
-    label: '导入知识库',
+    label: text('导入知识库', 'Import into knowledge base'),
     critical: true,
     executor: async (callbacks, context) => {
       if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
-      if (context.cancelled) throw new Error('工作流已取消')
+      if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
       const projectSession = requireWorkflowProjectSession(context)
       const writingLanguage = workflowWritingLanguage(context)
       const contentFileName = chapterTitle
@@ -193,9 +218,13 @@ export function buildFinalizePostProcessSteps(
         contentFileName,
         _project.path,
       ) as { success: boolean; error?: string; chunkCount?: number; docId?: string }
-      requireIpcSuccess(result, '导入知识库')
+      requireIpcSuccess(result, text('导入知识库', 'Import into knowledge base'))
       if (finalizedDraftId !== undefined) {
-        if (!result.docId) throw new Error('知识库导入成功但缺少文档身份收据')
+        if (!result.docId) throw new Error(workflowUiText(
+          context,
+          '知识库导入成功但缺少文档身份收据',
+          'The knowledge-base import succeeded but returned no document identity receipt.',
+        ))
         const linked = await ipc.invokeWithProjectSession(
           projectSession,
           'db:finalization-link-knowledge-document',
@@ -203,31 +232,42 @@ export function buildFinalizePostProcessSteps(
           result.docId,
           _project.path,
         )
-        requireIpcSuccess(linked, '登记定稿知识文档身份')
+        requireIpcSuccess(linked, text(
+          '登记定稿知识文档身份',
+          'Link finalized knowledge document identity',
+        ))
       }
-      callbacks.log(`正文章节已导入知识库（${result.chunkCount} 块）`)
+      callbacks.log(workflowUiText(
+        context,
+        `正文章节已导入知识库（${result.chunkCount} 块）`,
+        `Manuscript chapter imported into the knowledge base (${result.chunkCount} chunks)`,
+      ))
     },
   })
 
   // ─── 步骤 2: 本章剧情要点提取 ─────────────────────────────────────
   steps.push({
       key: 'chapter_notes',
-      label: '章节剧情要点',
+      label: text('章节剧情要点', 'Chapter plot notes'),
       critical: true,
       executor: async (callbacks, context) => {
         if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
-        if (context.cancelled) throw new Error('工作流已取消')
+        if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         const projectSession = requireWorkflowProjectSession(context)
         const writingLanguage = workflowWritingLanguage(context)
         const notesTemplate = await resolvePromptTemplate('generate_chapter_notes', projectSession, writingLanguage)
-        if (!notesTemplate) throw new Error('未找到章节要点模板')
+        if (!notesTemplate) throw new Error(workflowUiText(
+          context,
+          '未找到章节要点模板',
+          'Chapter-notes template not found.',
+        ))
         const notesBuilder = new PostProcessPromptBuilder(notesTemplate, writingLanguage)
           .withChapterContent(draftContent)
           .withChapterNumber(chapterNumber)
           .withChapterTitle(chapterTitle)
 
         const cleanNotes = await generation.complete(notesBuilder, callbacks, 'visible-text', context)
-        if (context?.cancelled) throw new Error('工作流已取消')
+        if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
 
         if (finalizedDraftId !== undefined) {
           const facts = buildFinalizedContinuityFacts(
@@ -247,12 +287,19 @@ export function buildFinalizePostProcessSteps(
             },
             _project.path,
           )
-          requireIpcSuccess(continuityResult, '保存定稿连续性事实')
-          callbacks.log(`已投影连续性事实：${facts.length} 条`)
+          requireIpcSuccess(continuityResult, text(
+            '保存定稿连续性事实',
+            'Save finalized continuity facts',
+          ))
+          callbacks.log(workflowUiText(
+            context,
+            `已投影连续性事实：${facts.length} 条`,
+            `Projected continuity facts: ${facts.length}`,
+          ))
         }
 
         // 兼容已有蓝图项目；作者原稿无蓝图时，权威事实仍已由定稿投影保存。
-        if (context?.cancelled) throw new Error('工作流已取消')
+        if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         const result = await ipc.invokeWithProjectSession(
           projectSession,
           'db:blueprint-update-notes',
@@ -260,11 +307,19 @@ export function buildFinalizePostProcessSteps(
           cleanNotes,
           _project.path,
         )
-        requireIpcSuccess(result, '写入章节剧情要点')
+        requireIpcSuccess(result, text('写入章节剧情要点', 'Write chapter plot notes'))
         callbacks.log(
           result.updated === false
-            ? '本章剧情要点提取完成（已保存定稿连续性事实）'
-            : '本章剧情要点提取完成（已写入蓝图）',
+            ? workflowUiText(
+                context,
+                '本章剧情要点提取完成（已保存定稿连续性事实）',
+                'Chapter plot-note extraction completed; finalized continuity facts were saved.',
+              )
+            : workflowUiText(
+                context,
+                '本章剧情要点提取完成（已写入蓝图）',
+                'Chapter plot-note extraction completed and was written to the blueprint.',
+              ),
         )
       },
     })
@@ -272,31 +327,39 @@ export function buildFinalizePostProcessSteps(
   // ─── 步骤 3: 角色状态更新 ────────────────────────────────────────
   steps.push({
       key: 'character_cards',
-      label: '角色状态更新',
+      label: text('角色状态更新', 'Update character state'),
       critical: false,
       executor: async (callbacks, context) => {
         if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
-        if (context.cancelled) throw new Error('工作流已取消')
+        if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         const projectSession = requireWorkflowProjectSession(context)
         const writingLanguage = workflowWritingLanguage(context)
         const cardTemplate = await resolvePromptTemplate('update_character_cards', projectSession, writingLanguage)
-        if (!cardTemplate) throw new Error('未找到角色状态模板')
-        // 章节定稿只读取并提交结构化角色名单。状态、新角色、图谱投影和
-        // revision 由同一个 roster receipt 结算，绝不逐张卡片部分成功。
+        if (!cardTemplate) throw new Error(workflowUiText(
+          context,
+          '未找到角色状态模板',
+          'Character-state template not found.',
+        ))
+        // 章节定稿只更新已存在的结构化角色状态。新角色必须来自作者确认
+        // 或已提交蓝图的明确候选，不能由正文后处理模型自由创建。
         const roster = await ipc.invokeWithProjectSession(
           projectSession,
           'db:character-roster-read',
           _project.path,
         )
         if (roster.status !== 'ready' && roster.status !== 'empty') {
-          throw new Error('角色名单当前不可安全更新；请先完成旧项目修复或处理数据不一致状态')
+          throw new Error(workflowUiText(
+            context,
+            '角色名单当前不可安全更新；请先完成旧项目修复或处理数据不一致状态',
+            'The character roster cannot be updated safely. Repair the legacy project or resolve its inconsistent data first.',
+          ))
         }
         const allChars = roster.entries
-        if (context?.cancelled) throw new Error('工作流已取消')
+        if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         const simpleCards = allChars.map((c) => ({ name: c.name, role: c.role }))
 
         const cardBuilder = new PostProcessPromptBuilder(cardTemplate, writingLanguage)
-          .withChapterContent(draftContent.slice(0, 5000))
+          .withChapterContent(characterExtractionSample(draftContent, writingLanguage))
           .withChapterNumber(chapterNumber)
           .withExistingCardsJson(simpleCards)
 
@@ -306,7 +369,7 @@ export function buildFinalizePostProcessSteps(
           'structured-data',
           context,
         )
-        if (context?.cancelled) throw new Error('工作流已取消')
+        if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         type LLMUpdateState = {
           location?: string
           powerLevel?: string
@@ -318,7 +381,6 @@ export function buildFinalizePostProcessSteps(
 
         const cardUpdates = parseJSON<{
           updates?: Array<{ name: string; currentState: LLMUpdateState }>
-          newCharacters?: Array<{ name: string; role: string; currentState: LLMUpdateState }>
         }>(cardsResult)
 
         const updatesByName = new Map(
@@ -351,43 +413,8 @@ export function buildFinalizePostProcessSteps(
           })
         }
 
-        let newCharCount = 0
-        const existingNames = new Set(allChars.map(character => character.name))
-        if (Array.isArray(cardUpdates.newCharacters)) {
-          for (const newChar of cardUpdates.newCharacters) {
-            if (context?.cancelled) throw new Error('工作流已取消')
-            if (typeof newChar.name !== 'string' || !newChar.name.trim()) continue
-            const name = newChar.name.trim()
-            if (existingNames.has(name)) continue
-            const cs = newChar.currentState || {}
-            const role: CharacterRosterRole = (
-              newChar.role === 'protagonist'
-              || newChar.role === 'antagonist'
-              || newChar.role === 'supporting'
-              || newChar.role === 'minor'
-            ) ? newChar.role : 'supporting'
-            changedEntries.push({
-              name,
-              role,
-              gender: '', age: '', appearance: '', personality: '', background: '',
-              abilities: '', motivation: '', relationships: [], arc: '', notes: '',
-              currentState: {
-                location: cs.location || '',
-                powerLevel: cs.powerLevel || '',
-                physicalState: cs.physicalState || '',
-                mentalState: cs.mentalState || '',
-                keyItems: cs.keyItems || '',
-                recentEvents: cs.recentEvents || '',
-                updatedAtChapter: chapterNumber,
-              },
-            })
-            existingNames.add(name)
-            newCharCount += 1
-          }
-        }
-
-        if (updatedCount > 0 || newCharCount > 0) {
-          if (context?.cancelled) throw new Error('工作流已取消')
+        if (updatedCount > 0) {
+          if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
           const result = await ipc.invokeWithProjectSession(
             projectSession,
             'db:character-roster-commit',
@@ -403,10 +430,17 @@ export function buildFinalizePostProcessSteps(
             _project.path,
           )
           if (!result.success || !result.receipt) {
-            throw new Error(result.error || '角色状态与新角色登记未能原子提交')
+            throw new Error(result.error || workflowUiText(
+              context,
+              '角色状态未能原子提交',
+              'Character-state updates could not be committed atomically.',
+            ))
           }
-          if (updatedCount > 0) callbacks.log(`更新角色动态状态: ${updatedCount} 名`)
-          if (newCharCount > 0) callbacks.log(`自动提取并登记 ${newCharCount} 名新出场角色`)
+          if (updatedCount > 0) callbacks.log(workflowUiText(
+            context,
+            `更新角色动态状态: ${updatedCount} 名`,
+            `Updated dynamic character state: ${updatedCount}`,
+          ))
         }
       },
     })
@@ -415,19 +449,27 @@ export function buildFinalizePostProcessSteps(
   if (chapterNumber % 5 === 0) {
     steps.push({
       key: 'style_analysis',
-      label: '文风自动学习',
+      label: text('文风自动学习', 'Automatic style learning'),
       critical: false,
       executor: async (callbacks, context) => {
         if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
-        if (context.cancelled) throw new Error('工作流已取消')
-        callbacks.log('触发文风自动学习（每5章一次）...')
+        if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+        callbacks.log(workflowUiText(
+          context,
+          '触发文风自动学习（每5章一次）...',
+          'Starting automatic style learning (every five chapters)...',
+        ))
         const { AnalyzeWritingStyleCommand } = await import('./analyze-style.command')
         await new AnalyzeWritingStyleCommand().execute({
           step: {} as unknown,
           context,
           callbacks,
         })
-        callbacks.log('文风分析完成，已更新配置')
+        callbacks.log(workflowUiText(
+          context,
+          '文风分析完成，已更新配置',
+          'Style analysis completed and the configuration was updated.',
+        ))
       },
     })
   }
@@ -463,7 +505,9 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       complete: async (builder, stepCallbacks, output, generationContext) => this.callLLM(
         builder.build(),
         builder.getSystemRole(),
-        stepCallbacks,
+        output === 'structured-data'
+          ? { ...stepCallbacks, appendText: () => undefined }
+          : stepCallbacks,
         {
           ...(output === 'structured-data' ? { responseFormat: { type: 'json_object' } } : {}),
           purpose: 'post-process',
@@ -480,6 +524,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       generation,
       this.params.draftId,
       this.params.chapterEntities,
+      workflowUiLocale(context),
     )
     return runPostProcessPipeline(
       this.params.project.path,
@@ -505,31 +550,44 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
+    const uiText = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
-    if (!project) throw new Error('未打开项目')
+    if (!project) throw new Error(uiText('未打开项目', 'No project is open.'))
     if (!sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(project),
     )) {
-      throw new Error('项目已切换，已停止对原项目的定稿操作')
+      throw new Error(uiText(
+        '项目已切换，已停止对原项目的定稿操作',
+        'The project changed, so finalization of the previous project was stopped.',
+      ))
     }
 
-    callbacks.log('\n===== 开始定稿与后处理分析 =====')
+    callbacks.log(uiText(
+      '\n===== 开始定稿与后处理分析 =====',
+      '\n===== Starting finalization and post-processing analysis =====',
+    ))
 
     const snapshot = this.params.snapshot ?? await this.createBatchSnapshot(context, project.path)
     if (snapshot.projectPath !== project.path) {
-      throw new Error('定稿快照属于已切换的项目会话')
+      throw new Error(uiText(
+        '定稿快照属于已切换的项目会话',
+        'The finalization snapshot belongs to a project session that is no longer active.',
+      ))
     }
     const refinedDraftText = snapshot.content
-    if (!refinedDraftText) throw new Error('没有定稿内容')
+    if (!refinedDraftText) throw new Error(uiText('没有定稿内容', 'There is no content to finalize.'))
 
     // SQLite 正文、状态和 publication outbox 由主进程在一个事务内提交。这里绝不
     // 再读取旧数据库正文，也不以 renderer 路径写实体稿。
     this.assertNotCancelled(context)
     const commit = await commitFinalizationSnapshot(snapshot)
     if (!commit.committed || !commit.finalizationId || !commit.contentHash || commit.draftId === undefined) {
-      throw new Error(commit.error || '定稿事务未提交')
+      throw new Error(commit.error || uiText(
+        '定稿事务未提交',
+        'The finalization transaction was not committed.',
+      ))
     }
 
     // 事实已提交就立即通知 reconciliation；即使实体稿或后处理随后失败，也绝不
@@ -550,15 +608,28 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
       source: this.params.eventSource ?? 'manual',
     })
     if (!commit.success) {
-      callbacks.log(commit.error || '定稿已提交、实体稿待发布')
-      throw new Error(commit.error || '定稿已提交、实体稿待发布')
+      const publicationError = commit.error || uiText(
+        '定稿已提交、实体稿待发布',
+        'Finalization was committed, but manuscript publication is still pending.',
+      )
+      callbacks.log(publicationError)
+      throw new Error(publicationError)
     }
-    callbacks.log(`定稿内容已提交到 SQLite 并发布实体稿（第${snapshot.chapterNumber}章）`)
+    callbacks.log(uiText(
+      `定稿内容已提交到 SQLite 并发布实体稿（第${snapshot.chapterNumber}章）`,
+      `Finalized content committed to SQLite and published as a manuscript (Chapter ${snapshot.chapterNumber})`,
+    ))
 
     // 3. 通过 PostProcessPipeline 执行后处理（状态持久化 + 支持重试）
-    callbacks.log('正在启动后台大模型推演系统更新全书状态...')
+    callbacks.log(uiText(
+      '正在启动后台大模型推演系统更新全书状态...',
+      'Starting background AI post-processing to update the novel state...',
+    ))
 
-    const sourceLabel = `第${snapshot.chapterNumber}章定稿`
+    const sourceLabel = uiText(
+      `第${snapshot.chapterNumber}章定稿`,
+      `Chapter ${snapshot.chapterNumber} finalization`,
+    )
     const chapterEntities = this.params.chapterInfo.characters.length > 0
       ? this.params.chapterInfo.characters
       : (await ipc.invokeWithProjectSession(
@@ -584,11 +655,17 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
         .filter((step) => !step.ok)
         .map((step) => step.label)
       if (failedLabels.length > 0) {
-        throw new Error(`后处理失败，批量创作已停止：${failedLabels.join('、')}`)
+        throw new Error(uiText(
+          `后处理失败，批量创作已停止：${failedLabels.join('、')}`,
+          `Post-processing failed, so batch creation was stopped: ${failedLabels.join(', ')}`,
+        ))
       }
     }
 
-    callbacks.log('\n第' + snapshot.chapterNumber + '章创作全流程彻底完成')
+    callbacks.log(uiText(
+      `\n第${snapshot.chapterNumber}章创作全流程彻底完成`,
+      `\nChapter ${snapshot.chapterNumber} creation workflow fully completed`,
+    ))
     this.assertNotCancelled(context)
     await useProjectStore.getState().refreshFileTree(project.path, undefined, projectSession)
   }

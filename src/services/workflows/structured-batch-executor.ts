@@ -25,6 +25,7 @@ export interface StructuredBatchContract<TInput, TOutput> {
   buildCompactSingleTask?(input: {
     item: TInput
     validatedPrefix: readonly TOutput[]
+    diagnostic?: { code: string; path: string; field: string }
   }): GenerationTask
   inputKey(input: TInput): StructuredItemKey
   outputKey(output: TOutput): StructuredItemKey
@@ -74,7 +75,13 @@ export interface StructuredBatchFailure {
     | 'max_calls'
     | 'max_requested_tokens'
     | 'invalid_limit'
-  diagnostic?: { code: string; path: string; field: string }
+  diagnostic?: {
+    code: string
+    path: string
+    field: string
+    actualCharacters?: number
+    maxCharacters?: number
+  }
 }
 
 export type StructuredBatchResult<TOutput> =
@@ -155,7 +162,10 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         }
       }
 
-      const executeBatch = async (items: readonly TInput[]): Promise<void> => {
+      const executeBatch = async (
+        items: readonly TInput[],
+        compact?: { diagnostic?: { code: string; path: string; field: string } },
+      ): Promise<void> => {
         if (input.signal?.aborted) {
           throw new ExecutionFailure({
             code: 'cancelled',
@@ -163,22 +173,42 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
             message: '结构化生成已取消',
           })
         }
-        const task = {
-          ...contract.buildTask({
+        let builtTask: GenerationTask
+        if (compact) {
+          try {
+            builtTask = contract.buildCompactSingleTask!({
+              item: items[0]!,
+              validatedPrefix: [...validated],
+              ...(compact.diagnostic ? { diagnostic: compact.diagnostic } : {}),
+            })
+          } catch {
+            throw new ExecutionFailure({
+              code: 'invalid_output',
+              reason: 'invalid_item',
+              message: '紧凑单项任务构建失败',
+            })
+          }
+        } else {
+          builtTask = contract.buildTask({
             items: [...items],
             validatedPrefix: [...validated],
-          }),
+          })
+        }
+        const task = {
+          ...builtTask,
           reasoningStage: 'planning' as const,
         }
         if (task.output !== 'structured-data') {
           throw new ExecutionFailure({
             code: 'invalid_output',
             reason: 'invalid_item',
-            message: '结构化批次合同必须请求 structured-data 输出',
+            message: compact
+              ? '紧凑单项任务必须请求 structured-data 输出'
+              : '结构化批次合同必须请求 structured-data 输出',
           })
         }
 
-        let outcome = await session.complete(task, { signal: input.signal })
+        const outcome = await session.complete(task, { signal: input.signal })
         recordAttempt(outcome.receipt)
         if (input.signal?.aborted) {
           throw new ExecutionFailure({
@@ -188,52 +218,27 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           })
         }
         const singleItemKey = items.length === 1 ? contract.inputKey(items[0]!) : undefined
+        const canUseCompactFallback = (
+          items.length === 1
+          && singleItemKey !== undefined
+          && Boolean(contract.buildCompactSingleTask)
+          && !compactFallbackKeys.has(singleItemKey)
+          && compactFallbackKeys.size < maxCompactSingleFallbacks
+        )
+        const runCompactFallback = async (
+          diagnostic?: { code: string; path: string; field: string },
+        ): Promise<void> => {
+          compactFallbackKeys.add(singleItemKey!)
+          receipt.compactSingleFallbackCount = compactFallbackKeys.size
+          await executeBatch(items, { ...(diagnostic ? { diagnostic } : {}) })
+        }
         if (
           outcome.status === 'incomplete'
           && outcome.finishReason === 'length'
-          && items.length === 1
-          && singleItemKey !== undefined
-          && contract.buildCompactSingleTask
-          && !compactFallbackKeys.has(singleItemKey)
-          && compactFallbackKeys.size < maxCompactSingleFallbacks
+          && canUseCompactFallback
         ) {
-          compactFallbackKeys.add(singleItemKey)
-          receipt.compactSingleFallbackCount = compactFallbackKeys.size
-          let compactTask: GenerationTask
-          try {
-            compactTask = {
-              ...contract.buildCompactSingleTask({
-                item: items[0]!,
-                validatedPrefix: [...validated],
-              }),
-              reasoningStage: 'planning',
-            }
-          } catch {
-            throw new ExecutionFailure({
-              code: 'invalid_output',
-              reason: 'invalid_item',
-              message: '紧凑单项任务构建失败',
-            })
-          }
-          if (compactTask.output !== 'structured-data') {
-            throw new ExecutionFailure({
-              code: 'invalid_output',
-              reason: 'invalid_item',
-              message: '紧凑单项任务必须请求 structured-data 输出',
-            })
-          }
-          outcome = await session.complete(
-            compactTask,
-            { signal: input.signal },
-          )
-          recordAttempt(outcome.receipt)
-          if (input.signal?.aborted) {
-            throw new ExecutionFailure({
-              code: 'cancelled',
-              reason: 'cancelled',
-              message: '结构化生成已取消',
-            })
-          }
+          await runCompactFallback()
+          return
         }
         if (outcome.status === 'incomplete') {
           if (outcome.finishReason !== 'length') {
@@ -335,6 +340,21 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           if (!Array.isArray(decoded)) throw new TypeError('decoder did not return an array')
         } catch (error) {
           const diagnostic = structuredContractDiagnostic(error)
+          if (diagnostic && items.length > 1) {
+            const midpoint = Math.floor(items.length / 2)
+            receipt.splitCount += 1
+            await executeBatch(items.slice(0, midpoint))
+            await executeBatch(items.slice(midpoint))
+            return
+          }
+          if (diagnostic && canUseCompactFallback) {
+            await runCompactFallback({
+              code: diagnostic.code,
+              path: diagnostic.path,
+              field: diagnostic.field,
+            })
+            return
+          }
           throw new ExecutionFailure({
             code: 'invalid_output',
             reason: diagnostic
@@ -348,7 +368,19 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
               ? '结构化输出经一次语法修复后仍无法按合同解码'
               : '结构化输出无法按合同解码',
             ...(diagnostic
-              ? { diagnostic: { code: diagnostic.code, path: diagnostic.path, field: diagnostic.field } }
+              ? {
+                  diagnostic: {
+                    code: diagnostic.code,
+                    path: diagnostic.path,
+                    field: diagnostic.field,
+                    ...(diagnostic.actualCharacters !== undefined
+                      ? { actualCharacters: diagnostic.actualCharacters }
+                      : {}),
+                    ...(diagnostic.maxCharacters !== undefined
+                      ? { maxCharacters: diagnostic.maxCharacters }
+                      : {}),
+                  },
+                }
               : {}),
           })
         }

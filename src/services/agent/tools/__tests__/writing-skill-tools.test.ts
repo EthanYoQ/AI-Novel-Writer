@@ -74,7 +74,7 @@ describe('writing skill agent tools', () => {
     await expect(bindWritingSkillTool.execute({
       skill_id: 'builtin:natural-prose-refinement',
       stage: 'refinement',
-    }, { projectSession, selectedModelId: null })).resolves.toMatchObject({ success: true })
+    }, { projectSession, selectedModelId: null, uiLocale: 'zh-CN', writingLanguage: 'zh-CN' })).resolves.toMatchObject({ success: true })
     expect(saveWritingSkillBinding).toHaveBeenCalledWith(
       projectSession,
       'refinement',

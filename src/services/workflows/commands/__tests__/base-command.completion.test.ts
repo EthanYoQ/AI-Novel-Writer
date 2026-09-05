@@ -158,7 +158,7 @@ describe('BaseWorkflowCommand completion boundary', () => {
   })
 
   it.each([
-    { leasedCap: 16_384, expectedRequest: 12_288 },
+    { leasedCap: 16_384, expectedRequest: 8192 },
     { leasedCap: 8192, expectedRequest: 8192 },
   ])('uses the bounded character-architecture policy without exceeding a $leasedCap-capability lease', async ({ leasedCap, expectedRequest }) => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
@@ -182,11 +182,11 @@ describe('BaseWorkflowCommand completion boundary', () => {
     expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(expectedRequest)
     expect(WORKFLOW_GENERATION_BUDGETS['character-architecture']).toEqual({
       maxAttempts: 12,
-      maxRequestedOutputTokens: 147_456,
-      maxRequestedOutputTokensPerAttempt: 12_288,
-      deadlineMs: 10 * 60_000,
+      maxRequestedOutputTokens: 98_304,
+      maxRequestedOutputTokensPerAttempt: 8192,
+      deadlineMs: 20 * 60_000,
     })
-    expect(12 * WORKFLOW_GENERATION_BUDGETS['character-architecture'].maxRequestedOutputTokensPerAttempt).toBe(147_456)
+    expect(12 * WORKFLOW_GENERATION_BUDGETS['character-architecture'].maxRequestedOutputTokensPerAttempt).toBe(98_304)
   })
 
   it('keeps ordinary generation single-shot and fail-closed while an unknown model uses its leased cap', async () => {
@@ -207,6 +207,23 @@ describe('BaseWorkflowCommand completion boundary', () => {
 
     expect(completeWithLease).toHaveBeenCalledOnce()
     expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(2048)
+  })
+
+  it('uses the frozen UI locale for an ordinary terminal failure', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '半截结果', finishReason: 'length' })
+    const environment: GenerationRuntimeEnvironment = {
+      snapshotDefaultModelId: () => 'model-a',
+      beginModelExecution: vi.fn().mockResolvedValue(leaseReceipt()),
+      completeWithLease,
+      closeModelExecution: vi.fn().mockResolvedValue(undefined),
+    }
+
+    await expect(new CompletionProbeCommand(dependenciesFor(environment)).execute({
+      step: { kind: 'single' } satisfies ProbeStep,
+      context: { ...context, uiLocale: 'en-US', writingLanguage: 'zh-CN' },
+      callbacks,
+    })).rejects.toThrow('AI output reached the model maximum length and is incomplete')
   })
 
   it('shares one frozen lease and budget across a structured continuation after the default changes', async () => {

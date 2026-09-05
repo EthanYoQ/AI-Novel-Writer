@@ -203,6 +203,10 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
             <div className="grid grid-cols-3 gap-4">
               <Field label={text('类型', 'Genre')}>
                 <NativeSelect value={config.genre} onChange={(e) => update('genre', e.target.value)}>
+                  <option value="" disabled>{text('请选择类型', 'Select a genre')}</option>
+                  {config.genre && !genres.includes(config.genre) && (
+                    <option value={config.genre}>{config.genre}</option>
+                  )}
                   {genres.map((g) => <option key={g} value={g}>{text(g, GENRE_EN[g] ?? g)}</option>)}
                 </NativeSelect>
               </Field>
@@ -211,6 +215,10 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
               </Field>
               <Field label={text('目标受众', 'Audience')}>
                 <NativeSelect value={config.targetAudience} onChange={(e) => update('targetAudience', e.target.value)}>
+                  <option value="" disabled>{text('请选择目标受众', 'Select an audience')}</option>
+                  {config.targetAudience && !Object.hasOwn(AUDIENCE_EN, config.targetAudience) && (
+                    <option value={config.targetAudience}>{config.targetAudience}</option>
+                  )}
                   {Object.entries(AUDIENCE_EN).map(([value, labelEn]) => (
                     <option key={value} value={value}>{text(value, labelEn)}</option>
                   ))}

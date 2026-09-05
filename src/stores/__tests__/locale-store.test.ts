@@ -48,6 +48,22 @@ describe('locale store', () => {
     expect(state.getState().locale).toBe('en-US')
   })
 
+  it('notifies components that subscribe only to locale readers', async () => {
+    const state = createStore(createLocaleState({
+      loadConfig: async () => ({}),
+      saveLocale: vi.fn(),
+      systemLocale: () => 'zh-CN',
+      setDocumentLanguage: vi.fn(),
+    }))
+    const initialText = state.getState().text
+    const initialTranslate = state.getState().t
+
+    await state.getState().setLocale('en-US')
+
+    expect(state.getState().text).not.toBe(initialText)
+    expect(state.getState().t).not.toBe(initialTranslate)
+  })
+
   it('localizes colocated component copy with the active locale', async () => {
     const state = createStore(createLocaleState({
       loadConfig: async () => ({}),

@@ -10,6 +10,14 @@ export function isWindowsUpdateRuntimeEnabled(
   return platform === 'win32' && isPackaged && !devServerUrl
 }
 
+export function isMacUpdateReminderEnabled(
+  isPackaged: boolean,
+  devServerUrl: string | undefined,
+  platform = process.platform,
+): boolean {
+  return platform === 'darwin' && isPackaged && !devServerUrl
+}
+
 /**
  * Electron Builder 将发布更新源写入 resources/app-update.yml。解压测试包没有
  * 这个文件时，不能把本地配置缺失误导为网络故障，更不能启动更新器探测。

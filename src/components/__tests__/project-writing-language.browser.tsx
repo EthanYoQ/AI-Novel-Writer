@@ -115,6 +115,62 @@ describe('project writing language', () => {
     },
   )
 
+  it.each(['zh-CN', 'en-US'] as const)(
+    'preserves custom model-generated select values in a $uiLocale interface',
+    async (uiLocale) => {
+      const currentProject = project(`custom-config-${uiLocale}`, 'en-US')
+      currentProject.novelConfig.genre = 'Contemporary Romance'
+      currentProject.novelConfig.targetAudience = 'Adult readers interested in realistic relationships'
+      useLocaleStore.setState({ locale: uiLocale })
+      useProjectStore.setState({ currentProject })
+      setActiveProjectSessionContext({
+        projectId: currentProject.id,
+        leaseId: currentProject.sessionLease!,
+        projectPath: currentProject.path,
+      })
+
+      await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+
+      const options = Array.from(document.querySelectorAll('option'))
+      const genre = options.find(option => option.value === currentProject.novelConfig.genre)
+      const audience = options.find(option => option.value === currentProject.novelConfig.targetAudience)
+      expect({ text: genre?.textContent, selected: genre?.selected }).toEqual({
+        text: 'Contemporary Romance',
+        selected: true,
+      })
+      expect({ text: audience?.textContent, selected: audience?.selected }).toEqual({
+        text: 'Adult readers interested in realistic relationships',
+        selected: true,
+      })
+    },
+  )
+
+  it.each([
+    { uiLocale: 'zh-CN', labels: ['请选择类型', '请选择目标受众'] },
+    { uiLocale: 'en-US', labels: ['Select a genre', 'Select an audience'] },
+  ] as const)('shows empty configuration placeholders in a $uiLocale interface', async ({ uiLocale, labels }) => {
+    const currentProject = project(`empty-config-${uiLocale}`, 'en-US')
+    currentProject.novelConfig.genre = ''
+    currentProject.novelConfig.targetAudience = ''
+    useLocaleStore.setState({ locale: uiLocale })
+    useProjectStore.setState({ currentProject })
+    setActiveProjectSessionContext({
+      projectId: currentProject.id,
+      leaseId: currentProject.sessionLease!,
+      projectPath: currentProject.path,
+    })
+
+    await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+
+    const emptyOptions = Array.from(document.querySelectorAll<HTMLOptionElement>('option[value=""]'))
+    expect(emptyOptions.map(option => option.textContent)).toEqual(labels)
+    expect(emptyOptions.every(option => option.selected)).toBe(true)
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({
+      genre: '',
+      targetAudience: '',
+    })
+  })
+
   it('keeps the UI locale independent and follows the active project when projects switch', async () => {
     const projectA = project('A', 'en-US')
     useLocaleStore.setState({ locale: 'zh-CN' })

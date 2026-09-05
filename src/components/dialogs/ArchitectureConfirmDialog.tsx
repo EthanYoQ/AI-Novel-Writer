@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Wand2, AlertCircle, AlertTriangle, Check, ChevronDown, ChevronRight } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { guardArchitectureGeneration, guardCharacterRegeneration } from '../../services/workflow-guards'
@@ -45,11 +45,20 @@ export default function ArchitectureConfirmDialog({
 }: Props) {
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
 
   // 默认：未生成的全部勾选；或使用 initialSelectedSteps 覆盖
   const [checked, setChecked] = useState<Record<ArchStepKey, boolean>>(() => {
     return createDefaultArchitectureSelection(archStatus, initialSelectedSteps)
   })
+  const wasOpen = useRef(false)
+
+  useEffect(() => {
+    if (isOpen && !wasOpen.current) {
+      setChecked(createDefaultArchitectureSelection(archStatus, initialSelectedSteps))
+    }
+    wasOpen.current = isOpen
+  }, [archStatus, initialSelectedSteps, isOpen])
 
   // 每步的补充指导
   const [stepGuidance, setStepGuidance] = useState<Record<string, string>>({})
@@ -90,7 +99,7 @@ export default function ArchitectureConfirmDialog({
 
       // 前置校验 2：如果勾选了角色图谱（意味着将重新生成角色卡），则必须确保蓝图为空
       if (selectedSteps.includes('characters') && archStatus.characters) {
-        const charGuard = await guardCharacterRegeneration()
+        const charGuard = await guardCharacterRegeneration(undefined, locale)
         if (!charGuard.ok) {
           setGuardError(charGuard.message || text('角色卡不可重新生成', 'Character cards cannot be regenerated.'))
           return

@@ -261,6 +261,21 @@ export function registerKBController(
     return knowledgeBaseLoader.run((kb) => kb.importText(text, fileName, projectPath, protocol, model))
   })
 
+  ipcMain.handle('kb:import-planning-text', async (_event, text: string, fileName: string, expectedProjectPath: string) => {
+    const projectPath = requireProjectPath(expectedProjectPath)
+    const embConfig = getEmbeddingConfig()
+    const protocol = embConfig?.protocol ?? 'openai'
+    const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
+    return knowledgeBaseLoader.run((kb) => kb.importText(
+      text,
+      fileName,
+      projectPath,
+      protocol,
+      model,
+      { mode: 'fts-only' },
+    ))
+  })
+
   ipcMain.handle('kb:import-reference-text', async (
     _event,
     chapterNumber: number,

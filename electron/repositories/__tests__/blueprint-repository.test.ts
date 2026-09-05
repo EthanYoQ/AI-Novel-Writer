@@ -354,7 +354,12 @@ describe('BlueprintRepository range commit', () => {
         endChapter: 2,
         blueprints: [
           blueprintFor(1),
-          { ...blueprintFor(2), relationshipHints: [{ from: '甲', to: '乙', relation: '同盟' }] },
+          {
+            ...blueprintFor(2),
+            characters: ['主角', '周砚'],
+            newCharacterCandidates: [{ name: '周砚', role: 'supporting' }],
+            relationshipHints: [{ from: '主角', to: '周砚', relation: '同盟' }],
+          },
         ],
       })
       const firstRestartImage = db.serialize()
@@ -376,7 +381,10 @@ describe('BlueprintRepository range commit', () => {
         expectedRevision: 0,
         schemaVersion: 1,
         intent: 'blueprint_sync',
-        entries: [rosterEntry('主角')],
+        entries: [
+          rosterEntry('主角', [{ target: '周砚', relation: '同盟' }]),
+          rosterEntry('周砚', [{ target: '主角', relation: '同盟' }]),
+        ],
       })
 
       const completed = BlueprintRepository.completeCharacterSyncOperation(

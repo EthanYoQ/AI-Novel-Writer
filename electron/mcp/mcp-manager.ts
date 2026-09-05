@@ -203,6 +203,7 @@ class MCPManagerImpl {
     const proc = spawn(command, args, {
       env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     })
 
     runtime.process = proc

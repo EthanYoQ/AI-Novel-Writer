@@ -93,6 +93,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       synopsis TEXT DEFAULT '',                   -- 情节总大纲
       -- [系统缓存]
       character_states TEXT DEFAULT '',           -- 全书角色动态快照
+      plot_tree_snapshot TEXT NOT NULL DEFAULT '',-- 可重建的剧情树派生快照
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -918,6 +919,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   addProjectCoreTextColumn('core_outline', 'synopsis')
   addProjectCoreTextColumn('world_setting', 'worldbuilding')
   addProjectCoreTextColumn('protagonist_profile')
+  addProjectCoreTextColumn('plot_tree_snapshot')
   if (!projectCoreColumns.has('writing_language')) {
     db.exec("ALTER TABLE project_core ADD COLUMN writing_language TEXT NOT NULL DEFAULT 'zh-CN'")
     projectCoreColumns.add('writing_language')

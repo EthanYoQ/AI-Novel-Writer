@@ -9,6 +9,8 @@
 import { ipc } from './ipc-client'
 import { requireIpcSuccess } from './ipc-result'
 import { useWorkflowStore } from '../stores/workflow-store'
+import { useLocaleStore } from '../stores/locale-store'
+import type { Locale } from '../i18n/types'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import {
   getActiveProjectSessionContext,
@@ -41,8 +43,6 @@ export interface ExportProjectSnapshot {
   }>
 }
 
-const PROJECT_SESSION_CHANGED_ERROR = '项目会话已变化，本次导出已取消'
-
 function isProjectSessionCurrent(projectSession: ProjectSessionContext): boolean {
   return sameProjectSessionContext(projectSession, getActiveProjectSessionContext())
 }
@@ -56,8 +56,13 @@ function isMatchingProjectSnapshot(
     && sameProjectPathKey(project.path, projectSession.projectPath)
 }
 
-function staleExportResult(): { success: false; error: string } {
-  return { success: false, error: PROJECT_SESSION_CHANGED_ERROR }
+function staleExportResult(locale: Locale): { success: false; error: string } {
+  return {
+    success: false,
+    error: locale === 'en-US'
+      ? 'The project session changed. This export was cancelled.'
+      : '项目会话已变化，本次导出已取消',
+  }
 }
 
 /** 导出全书 */
@@ -66,12 +71,17 @@ export async function exportNovel(
   project: ExportProjectSnapshot,
   projectSession: ProjectSessionContext,
 ): Promise<{ success: boolean; path?: string; error?: string }> {
+  const uiLocale = useLocaleStore.getState().locale
+  const text = (zhCNText: string, enUSText: string) => uiLocale === 'en-US' ? enUSText : zhCNText
   if (!isMatchingProjectSnapshot(project, projectSession) || !isProjectSessionCurrent(projectSession)) {
-    return staleExportResult()
+    return staleExportResult(uiLocale)
   }
 
   const addLog = useWorkflowStore.getState().addLog
-  addLog('info', `开始导出（${formatLabel(options.format)}）...`)
+  addLog('info', text(
+    `开始导出（${formatLabel(options.format, uiLocale)}）...`,
+    `Starting export (${formatLabel(options.format, uiLocale)})...`,
+  ), uiLocale)
 
   try {
     // 遍历所有章节蓝图，取定稿内容
@@ -81,7 +91,7 @@ export async function exportNovel(
       'db:blueprint-get-all',
       projectSession.projectPath,
     ) as unknown as Array<Record<string, unknown>>
-    if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
+    if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
     const sortedBps = blueprints ? blueprints.sort((a, b) => (a.chapterNumber as number) - (b.chapterNumber as number)) : []
 
     for (const bp of sortedBps) {
@@ -91,7 +101,7 @@ export async function exportNovel(
         bp.chapterNumber as number,
         projectSession.projectPath,
       )
-      if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
+      if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
       if (meta && (meta as { id: number }).id !== undefined) {
         const full = await ipc.invokeWithProjectSession(
           projectSession,
@@ -99,7 +109,7 @@ export async function exportNovel(
           (meta as { id: number }).id,
           projectSession.projectPath,
         )
-        if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
+        if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
         if (full && (full as { content?: string }).content) {
           chapterContents.push({
             chapterNumber: bp.chapterNumber as number,
@@ -112,11 +122,17 @@ export async function exportNovel(
     }
 
     if (chapterContents.length === 0) {
-      return { success: false, error: '无可导出的章节（无定稿章节）' }
+      return {
+        success: false,
+        error: text('无可导出的章节（无定稿章节）', 'There are no finalized chapters to export.'),
+      }
     }
 
-    if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
-    addLog('info', `找到 ${chapterContents.length} 个已定稿章节`)
+    if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+    addLog('info', text(
+      `找到 ${chapterContents.length} 个已定稿章节`,
+      `Found ${chapterContents.length} finalized chapters.`,
+    ), uiLocale)
 
     let outputPath = ''
     const projectFileStem = exportFileStem(project.name)
@@ -134,7 +150,7 @@ export async function exportNovel(
             'db:project-core-get',
             projectSession.projectPath,
           )
-          if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
+          if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
           if (core?.synopsis) {
             content += core.synopsis + '\n\n---\n\n'
           }
@@ -147,8 +163,12 @@ export async function exportNovel(
 
         outputPath = `${projectFileStem}.md`
         const writeResult = await ipc.invoke('fs:grant-write-file', options.grantId, outputPath, content)
-        if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
-        requireIpcSuccess(writeResult, '写入导出文件')
+        if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+        requireIpcSuccess(
+          writeResult,
+          text('写入导出文件', 'Write export file'),
+          text('写入导出文件失败', 'Failed to write the exported file.'),
+        )
         break
       }
 
@@ -156,13 +176,21 @@ export async function exportNovel(
         // 每章一个 Markdown
         const splitDir = projectFileStem
         const mkdirResult = await ipc.invoke('fs:grant-mkdir', options.grantId, splitDir)
-        if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
-        requireIpcSuccess(mkdirResult, '创建导出目录')
+        if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+        requireIpcSuccess(
+          mkdirResult,
+          text('创建导出目录', 'Create export directory'),
+          text('创建导出目录失败', 'Failed to create the export directory.'),
+        )
 
         for (const ch of chapterContents) {
           const writeResult = await ipc.invoke('fs:grant-write-file', options.grantId, `${splitDir}/${ch.name}`, ch.content)
-          if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
-          requireIpcSuccess(writeResult, `导出章节 ${ch.name}`)
+          if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+          requireIpcSuccess(
+            writeResult,
+            text(`导出章节 ${ch.name}`, `Export chapter ${ch.name}`),
+            text(`导出章节 ${ch.name} 失败`, `Failed to export chapter ${ch.name}.`),
+          )
         }
 
         outputPath = splitDir
@@ -191,18 +219,22 @@ export async function exportNovel(
 
         outputPath = `${projectFileStem}.txt`
         const writeResult = await ipc.invoke('fs:grant-write-file', options.grantId, outputPath, content)
-        if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
-        requireIpcSuccess(writeResult, '写入导出文件')
+        if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+        requireIpcSuccess(
+          writeResult,
+          text('写入导出文件', 'Write export file'),
+          text('写入导出文件失败', 'Failed to write the exported file.'),
+        )
         break
       }
     }
 
-    if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
-    addLog('info', `导出完成: ${outputPath}`)
+    if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+    addLog('info', text(`导出完成: ${outputPath}`, `Export complete: ${outputPath}`), uiLocale)
     return { success: true, path: outputPath }
   } catch (error) {
-    if (!isProjectSessionCurrent(projectSession)) return staleExportResult()
-    addLog('error', `导出失败: ${error}`)
+    if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+    addLog('error', text(`导出失败: ${error}`, `Export failed: ${error}`), uiLocale)
     return { success: false, error: String(error) }
   }
 }
@@ -218,11 +250,11 @@ function exportFileStem(name: string): string {
   return normalized || 'novel'
 }
 
-function formatLabel(format: ExportFormat): string {
-  const labels: Record<ExportFormat, string> = {
-    'merged-md': '合并 Markdown',
-    'split-md': '分章 Markdown',
-    'txt': '纯文本 TXT',
+function formatLabel(format: ExportFormat, locale: Locale): string {
+  const labels: Record<ExportFormat, readonly [string, string]> = {
+    'merged-md': ['合并 Markdown', 'Merged Markdown'],
+    'split-md': ['分章 Markdown', 'Split Markdown'],
+    'txt': ['纯文本 TXT', 'Plain text (TXT)'],
   }
-  return labels[format]
+  return labels[format][locale === 'en-US' ? 1 : 0]
 }

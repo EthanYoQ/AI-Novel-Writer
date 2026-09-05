@@ -25,6 +25,7 @@ import type {
   NarrativeThreadPlanRecord,
   NarrativeThreadView,
 } from './narrative-thread'
+import type { PlotTreeSnapshot, PlotTreeSourceBundle } from './plot-tree'
 import type {
   UpdateActionResponse,
   UpdateCheckResponse,
@@ -82,6 +83,14 @@ export interface UpdateChannels {
   'update:check': {
     args: []
     return: UpdateCheckResponse
+  }
+  'update:download': {
+    args: []
+    return: UpdateActionResponse
+  }
+  'update:open-release': {
+    args: []
+    return: UpdateActionResponse
   }
   'update:defer-reminder': {
     args: [days: UpdateReminderDelay]
@@ -253,6 +262,10 @@ export interface ProjectChannels {
   'project:recent-list': {
     args: []
     return: Array<{ name: string; path: string; updatedAt: string }>
+  }
+  'project:recent-remove': {
+    args: [projectPath: string]
+    return: { success: boolean; error?: string }
   }
   'project:delete': {
     args: [projectPath: string, projectId: string, sessionLease: string]
@@ -843,6 +856,18 @@ export interface DatabaseChannels {
     args: [input: NarrativeThreadEventInput, expectedProjectPath: string]
     return: { success: boolean; event?: NarrativeThreadEvent; error?: string }
   }
+  'db:plot-tree-read': {
+    args: [expectedProjectPath: string]
+    return: PlotTreeSourceBundle
+  }
+  'db:plot-tree-save': {
+    args: [snapshot: PlotTreeSnapshot, expectedSourceRevision: string, expectedProjectPath: string]
+    return: { success: boolean; snapshot?: PlotTreeSnapshot; errorCode?: 'sources-changed'; error?: string }
+  }
+  'db:plot-tree-clear': {
+    args: [expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
   'db:draft-next-version': { args: [chapterNumber: number, expectedProjectPath: string]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:draft-update-content': { args: [id: number, content: string, wordCount: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
@@ -901,6 +926,7 @@ export interface KnowledgeBaseChannels {
   'kb:import-document': { args: [grantId: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
   'kb:import-folder': { args: [grantId: string, expectedProjectPath: string]; return: { success: boolean; importedCount: number; failedFiles: string[]; error?: string; errorCode?: AppErrorCode } }
   'kb:import-text': { args: [text: string, fileName: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
+  'kb:import-planning-text': { args: [text: string, fileName: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
   'kb:import-reference-text': {
     args: [
       chapterNumber: number,

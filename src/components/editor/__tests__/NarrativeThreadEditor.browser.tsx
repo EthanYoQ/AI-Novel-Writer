@@ -7,7 +7,14 @@ import type { ProjectData } from '../../../shared/ipc-channels'
 import { useProjectStore } from '../../../stores/project-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useLLMStore } from '../../../stores/llm-store'
+import { useEditorStore } from '../../../stores/editor-store'
+import { useWorkflowStore } from '../../../stores/workflow-store'
 import type { NarrativeThreadCandidateGenerator } from '../../../services/narrative-thread-candidate-generator'
+import {
+  PlotTreeGenerationError,
+  PlotTreeIncompleteError,
+  PlotTreeResponseError,
+} from '../../../services/plot-tree-generator'
 import NarrativeThreadEditor from '../NarrativeThreadEditor'
 
 const PROJECT_PATH = 'C:\\novels\\narrative-thread'
@@ -15,10 +22,15 @@ let root: Root | undefined
 let container: HTMLDivElement | undefined
 let plans: Array<Record<string, unknown>> = []
 let eventFailure = ''
+let plotSources: Record<string, unknown>
+let plotSaveResponse: Record<string, unknown> | null = null
+let plotClearResponse: Record<string, unknown> | null = null
 let invoke: ReturnType<typeof vi.fn>
 const originalProjectState = useProjectStore.getState()
 const originalLocaleState = useLocaleStore.getState()
 const originalLLMState = useLLMStore.getState()
+const originalEditorState = useEditorStore.getState()
+const originalGlobalLogs = useWorkflowStore.getState().globalLogs
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -39,6 +51,17 @@ function installIpc() {
       userGuidance: '', notes: '', notesUpdatedAt: '',
     }]
     if (channel === 'db:narrative-thread-list') return plans
+    if (channel === 'db:plot-tree-read') return plotSources
+    if (channel === 'db:plot-tree-save') {
+      if (plotSaveResponse) return plotSaveResponse
+      plotSources = { ...plotSources, snapshot: args[0] }
+      return { success: true, snapshot: args[0] }
+    }
+    if (channel === 'db:plot-tree-clear') {
+      if (plotClearResponse) return plotClearResponse
+      plotSources = { ...plotSources, snapshot: null }
+      return { success: true }
+    }
     if (channel === 'db:narrative-thread-plan-create') {
       const input = args[0] as Record<string, unknown>
       plans = [{ ...input, id: 1, status: 'planned', dormantChapters: 2, overdue: false, events: [], createdAt: '', updatedAt: '' }]
@@ -68,6 +91,32 @@ function installIpc() {
 beforeEach(() => {
   plans = []
   eventFailure = ''
+  plotSaveResponse = null
+  plotClearResponse = null
+  plotSources = {
+    writingLanguage: 'zh-CN',
+    synopsis: { content: '林岚追查被篡改的航海日志。' },
+    blueprints: [{
+      chapterNumber: 2, title: '刻痕之谜', purpose: '引出幕后对手', keyEvents: '林岚再次发现相同刻痕。',
+    }],
+    finalizedChapters: [],
+    narrativeThreads: [],
+    sourceRevision: 'a'.repeat(64),
+    snapshot: {
+      version: 1,
+      generatedAt: '2026-09-02T08:00:00.000Z',
+      writingLanguage: 'zh-CN',
+      sourceRevision: 'b'.repeat(64),
+      tracks: [{
+        id: 'main-old', title: '旧航海日志', role: 'main', startChapter: 1, endChapter: 3,
+        summary: '追查日志的真相。',
+        events: [{
+          status: 'planned', chapterNumber: 2, summary: '发现第二处刻痕',
+          sources: [{ type: 'blueprint', chapterNumber: 2 }],
+        }],
+      }],
+    },
+  }
   useLocaleStore.setState({ locale: 'zh-CN' })
   const project: ProjectData = {
     id: 'thread-project', sessionLease: 'thread-lease', name: '线索测试', path: PROJECT_PATH,
@@ -84,6 +133,8 @@ beforeEach(() => {
     defaultModelId: 'glm',
     loaded: true,
   })
+  useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
+  useWorkflowStore.setState({ globalLogs: [] })
   setActiveProjectSessionContext({ projectId: project.id, leaseId: project.sessionLease!, projectPath: PROJECT_PATH })
   installIpc()
   container = document.createElement('div')
@@ -99,9 +150,424 @@ afterEach(async () => {
   useProjectStore.setState(originalProjectState)
   useLocaleStore.setState(originalLocaleState)
   useLLMStore.setState(originalLLMState)
+  useEditorStore.setState(originalEditorState)
+  useWorkflowStore.setState({ globalLogs: originalGlobalLogs })
 })
 
 describe('NarrativeThreadEditor', () => {
+  it('opens the plot tree, refreshes it with the selected model, and keeps plans in the same editor', async () => {
+    const refreshedSnapshot = {
+      version: 1 as const,
+      generatedAt: '2026-09-03T08:00:00.000Z',
+      writingLanguage: 'zh-CN' as const,
+      sourceRevision: 'a'.repeat(64),
+      tracks: [{
+        id: 'main-new', title: '航海日志真相', role: 'main' as const, startChapter: 1, endChapter: 4,
+        summary: '林岚找出篡改者。',
+        events: [{
+          status: 'planned' as const, chapterNumber: 2, summary: '发现第二处刻痕',
+          sources: [{ type: 'blueprint' as const, chapterNumber: 2 }],
+        }],
+      }],
+    }
+    const plotTreeGenerator = vi.fn().mockResolvedValue(refreshedSnapshot)
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={plotTreeGenerator}
+      />,
+    ))
+    await vi.waitFor(() => {
+      expect(container?.textContent).toContain('旧航海日志')
+      expect(container?.textContent).toContain('剧情资料已有更新')
+    })
+
+    const modelSelect = container!.querySelector<HTMLSelectElement>('#plot-tree-model')!
+    await act(async () => {
+      modelSelect.value = 'grok'
+      modelSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('刷新剧情树'))?.click())
+
+    await vi.waitFor(() => expect(container?.textContent).toContain('航海日志真相'))
+    expect(plotTreeGenerator).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: 'grok',
+      projectSession: expect.objectContaining({
+        projectId: 'thread-project',
+        leaseId: 'thread-lease',
+        projectPath: PROJECT_PATH,
+      }),
+      sources: expect.objectContaining({ sourceRevision: 'a'.repeat(64) }),
+    }))
+    expect(invoke).toHaveBeenCalledWith(
+      'db:plot-tree-save',
+      refreshedSnapshot,
+      'a'.repeat(64),
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'thread-project', leaseId: 'thread-lease' }),
+    )
+    expect(useLLMStore.getState().defaultModelId).toBe('glm')
+
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('发现第二处刻痕'))?.click())
+    await vi.waitFor(() => expect(container?.textContent).toContain('第 2 章蓝图'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('第 2 章蓝图'))?.click())
+    expect(useEditorStore.getState().tabs).toContainEqual(expect.objectContaining({
+      type: 'chapter-card',
+      chapterNumber: 2,
+    }))
+
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('计划清单'))?.click())
+    await vi.waitFor(() => expect(container?.textContent).toContain('新建计划'))
+  })
+
+  it('does not mark a snapshot stale when its source revision still matches', async () => {
+    plotSources = {
+      ...plotSources,
+      snapshot: {
+        ...(plotSources.snapshot as Record<string, unknown>),
+        generatedAt: '2026-09-01T08:00:00.000Z',
+        sourceRevision: 'a'.repeat(64),
+      },
+    }
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    expect(container?.textContent).not.toContain('剧情资料已有更新')
+  })
+
+  it('keeps a legacy snapshot without a revision visible and marks it stale', async () => {
+    const legacySnapshot = { ...(plotSources.snapshot as Record<string, unknown>) }
+    delete legacySnapshot.sourceRevision
+    plotSources = { ...plotSources, snapshot: legacySnapshot }
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    expect(container?.textContent).toContain('剧情资料已有更新')
+  })
+
+  it('keeps the previous plot tree when refresh fails and shows a safe fallback', async () => {
+    const plotTreeGenerator = vi.fn().mockRejectedValue(new Error('模型连接失败，请稍后重试。'))
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={plotTreeGenerator}
+      />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('刷新剧情树'))?.click())
+
+    await vi.waitFor(() => expect(container?.textContent).toContain('剧情树生成失败。'))
+    expect(container?.textContent).not.toContain('模型连接失败，请稍后重试。')
+    expect(container?.textContent).toContain('旧航海日志')
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:plot-tree-save')).toBe(false)
+  })
+
+  it('shows an English incomplete-generation reason for a Chinese project', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    const plotTreeGenerator = vi.fn().mockRejectedValue(
+      new PlotTreeIncompleteError('zh-CN', 'length'),
+    )
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={plotTreeGenerator}
+      />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Refresh plot tree'))?.click())
+
+    await vi.waitFor(() => expect(container?.textContent)
+      .toContain('Plot-tree output reached the model maximum output length and was not saved.'))
+    expect(container?.textContent).not.toContain('剧情树输出达到模型最大长度')
+    expect(useWorkflowStore.getState().globalLogs.at(-1)).toMatchObject({
+      level: 'error',
+      message: expect.stringContaining('length'),
+    })
+  })
+
+  it.each([
+    [
+      'invalid_json',
+      'The model did not return parseable plot-tree JSON; the previous snapshot remains unchanged.',
+    ],
+    [
+      'invalid_contract',
+      'The model returned an invalid plot-tree structure or source reference; the previous snapshot remains unchanged.',
+    ],
+  ] as const)('localizes and logs the safe plot-tree response code without exposing model output', async (code, expected) => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    const plotTreeGenerator = vi.fn().mockRejectedValue(
+      new PlotTreeResponseError(code, 'PRIVATE_MODEL_OUTPUT'),
+    )
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={plotTreeGenerator}
+      />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Refresh plot tree'))?.click())
+
+    await vi.waitFor(() => expect(container?.textContent).toContain(expected))
+    expect(container?.textContent).not.toContain('PRIVATE_MODEL_OUTPUT')
+    expect(useWorkflowStore.getState().globalLogs.at(-1)).toMatchObject({
+      level: 'error',
+      message: expect.stringContaining(code),
+    })
+    expect(useWorkflowStore.getState().globalLogs.at(-1)?.message).not.toContain('PRIVATE_MODEL_OUTPUT')
+  })
+
+  it.each([
+    [
+      'DEADLINE_EXHAUSTED',
+      'Plot-tree generation exceeded the session deadline; the previous snapshot remains unchanged. Try again later.',
+    ],
+    [
+      'PROVIDER_REQUEST_FAILED',
+      'The plot-tree model request failed; the previous snapshot remains unchanged. Check the model connection and try again.',
+    ],
+  ] as const)('localizes and logs generation failure %s without saving', async (code, expected) => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    const plotTreeGenerator = vi.fn().mockRejectedValue(new PlotTreeGenerationError(code))
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={plotTreeGenerator}
+      />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Refresh plot tree'))?.click())
+
+    await vi.waitFor(() => expect(container?.textContent).toContain(expected))
+    expect(container?.textContent).toContain('旧航海日志')
+    expect(useWorkflowStore.getState().globalLogs.at(-1)).toMatchObject({
+      level: 'error',
+      message: expect.stringContaining(code),
+    })
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:plot-tree-save')).toBe(false)
+  })
+
+  it('keeps the UI locale that was active when plot-tree generation started', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    let finishRequest: (() => void) | undefined
+    const requestGate = new Promise<void>((resolve) => { finishRequest = resolve })
+    const plotTreeGenerator = vi.fn(async () => {
+      await requestGate
+      throw new PlotTreeGenerationError('DEADLINE_EXHAUSTED')
+    })
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={plotTreeGenerator}
+      />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Refresh plot tree'))?.click())
+    await vi.waitFor(() => expect(plotTreeGenerator).toHaveBeenCalledOnce())
+
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    await act(async () => finishRequest?.())
+
+    await vi.waitFor(() => expect(container?.textContent)
+      .toContain('Plot-tree generation exceeded the session deadline'))
+    expect(container?.textContent).not.toContain('剧情树生成超过会话截止时间')
+  })
+
+  it('shows known snapshot and save failures in English', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    const invalidSnapshotGenerator = vi.fn().mockRejectedValue(new Error('剧情树轨道无效'))
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={invalidSnapshotGenerator}
+      />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Refresh plot tree'))?.click())
+    await vi.waitFor(() => expect(container?.textContent)
+      .toContain('The plot-tree snapshot is invalid.'))
+    expect(container?.textContent).not.toContain('剧情树轨道无效')
+
+    plotSaveResponse = { success: false, error: 'PRIVATE_PROJECT_CONTENT' }
+    const validSnapshotGenerator = vi.fn().mockResolvedValue(plotSources.snapshot)
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={validSnapshotGenerator}
+      />,
+    ))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Refresh plot tree'))?.click())
+    await vi.waitFor(() => expect(container?.textContent).toContain('Could not save the plot tree.'))
+    expect(container?.textContent).not.toContain('PRIVATE_PROJECT_CONTENT')
+    expect(useWorkflowStore.getState().globalLogs.at(-1)).toMatchObject({
+      level: 'error',
+      message: expect.stringContaining('save_failed'),
+    })
+    expect(useWorkflowStore.getState().globalLogs.at(-1)?.message).not.toContain('PRIVATE_PROJECT_CONTENT')
+  })
+
+  it.each([
+    'Error: 剧情树快照清除失败',
+    'Error: 项目数据库未打开',
+  ])('shows a known clear failure in Chinese: %s', async (error) => {
+    plotClearResponse = { success: false, error }
+    await act(async () => root?.render(
+      <NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('清除剧情树'))?.click())
+
+    await vi.waitFor(() => expect(container?.textContent).toContain('无法清除剧情树。'))
+  })
+
+  it('clears the derived plot-tree snapshot through the current project session', async () => {
+    await act(async () => root?.render(
+      <NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('清除剧情树'))?.click())
+
+    await vi.waitFor(() => expect(container?.textContent).toContain('尚未生成剧情树'))
+    expect(invoke).toHaveBeenCalledWith(
+      'db:plot-tree-clear',
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'thread-project', leaseId: 'thread-lease' }),
+    )
+    expect(plotSources).toMatchObject({
+      synopsis: { content: '林岚追查被篡改的航海日志。' },
+      blueprints: [{ chapterNumber: 2 }],
+      snapshot: null,
+    })
+  })
+
+  it('reloads changed sources after rejecting a snapshot generated from stale facts', async () => {
+    plotSaveResponse = {
+      success: false,
+      errorCode: 'sources-changed',
+      error: 'PRIVATE_PROJECT_CONTENT',
+    }
+    const plotTreeGenerator = vi.fn().mockResolvedValue(plotSources.snapshot)
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={plotTreeGenerator}
+      />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('刷新剧情树'))?.click())
+
+    await vi.waitFor(() => expect(container?.textContent).toContain('生成期间已更新'))
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:plot-tree-read')).toHaveLength(2)
+    expect(useWorkflowStore.getState().globalLogs.at(-1)).toMatchObject({
+      level: 'error',
+      message: expect.stringContaining('sources_changed'),
+    })
+    expect(useWorkflowStore.getState().globalLogs.at(-1)?.message).not.toContain('PRIVATE_PROJECT_CONTENT')
+  })
+
+  it('explains when the selected plot-tree model is removed', async () => {
+    await act(async () => root?.render(
+      <NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />,
+    ))
+    await vi.waitFor(() => expect(container?.querySelector('#plot-tree-model')).not.toBeNull())
+    const modelSelect = container!.querySelector<HTMLSelectElement>('#plot-tree-model')!
+    await act(async () => {
+      modelSelect.value = 'grok'
+      modelSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => useLLMStore.setState({
+      models: useLLMStore.getState().models.filter(model => model.id !== 'grok'),
+    }))
+
+    await vi.waitFor(() => expect(container?.textContent).toContain('所选剧情树模型已不可用'))
+    expect(Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('刷新剧情树'))?.hasAttribute('disabled'))
+      .toBe(true)
+  })
+
+  it('opens the narrative plan referenced by a plot-tree event', async () => {
+    plans = [{
+      id: 9, title: '被篡改的日志', type: '伏笔', targetStartChapter: 2,
+      targetEndChapter: 4, authorIntent: '第四章揭示篡改者。', status: 'planned',
+      dormantChapters: 0, overdue: false, events: [], createdAt: '', updatedAt: '',
+    }]
+    plotSources = {
+      ...plotSources,
+      narrativeThreads: plans,
+      snapshot: {
+        version: 1,
+        generatedAt: '2026-09-03T08:00:00.000Z',
+        writingLanguage: 'zh-CN',
+        sourceRevision: 'a'.repeat(64),
+        tracks: [{
+          id: 'subplot-log', title: '日志伏笔', role: 'subplot', parentTrackId: 'main-old',
+          startChapter: 2, endChapter: 4, summary: '日志真相等待回收。',
+          events: [{
+            status: 'planned', chapterNumber: 2, summary: '日志线索出现',
+            sources: [{ type: 'narrative-thread', planId: 9 }],
+          }],
+        }, {
+          id: 'main-old', title: '主线', role: 'main', startChapter: 1, endChapter: 4,
+          summary: '追查日志。', events: [{
+            status: 'planned', chapterNumber: 2, summary: '开始追查',
+            sources: [{ type: 'blueprint', chapterNumber: 2 }],
+          }],
+        }],
+      },
+    }
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('日志线索出现'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('日志线索出现'))?.click())
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('叙事计划 #9'))?.click())
+
+    await vi.waitFor(() => expect(container?.querySelector('#narrative-plan-9')?.textContent)
+      .toContain('被篡改的日志'))
+    expect(container?.querySelector<HTMLElement>('#narrative-plan-9')?.style.borderColor)
+      .toBe('var(--color-accent)')
+  })
+
   it('creates a plan and confirms an event from a finalized chapter', async () => {
     await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} />))
     await vi.waitFor(() => expect(container?.textContent).toContain('暂无伏笔或叙事线索'))
@@ -147,7 +613,7 @@ describe('NarrativeThreadEditor', () => {
     await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} />))
 
     await vi.waitFor(() => {
-      expect(container?.textContent).toContain('Foreshadowing & narrative threads')
+      expect(container?.textContent).toContain('Plot tree & narrative threads')
       expect(container?.textContent).toContain('Progressing')
       expect(container?.textContent).toContain('Chapter 1')
       expect(container?.textContent).toContain('Confirm finalized event')

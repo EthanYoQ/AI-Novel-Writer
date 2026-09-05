@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ModelExecutionLeaseReceipt, ProjectData } from '../../../shared/ipc-channels'
+import type {
+  ModelExecutionLeaseReceipt,
+  ProjectData,
+  ProjectSessionContext,
+} from '../../../shared/ipc-channels'
 import type { CreativeStrategy } from '../../../shared/reasoning-types'
 
 const mocks = vi.hoisted(() => ({
@@ -145,6 +149,161 @@ describe('GenerationRuntime renderer lease adapter', () => {
         reasoningStage: 'drafting',
       }),
     ])
+  })
+
+  it('uses an explicitly captured strategy instead of the project active when the runtime opens', async () => {
+    useProjectStore.setState({ currentProject: project('project-b', 'fluent-drafting') })
+    const runtime = await createGenerationRuntime({
+      creativeStrategy: 'consistency-first',
+      budget: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+
+    await runtime.execute(({ session }) => session.complete({
+      purpose: 'explicit-project-strategy',
+      reasoningStage: 'general',
+      output: 'visible-text',
+      messages: [{ role: 'user', content: 'write' }],
+    }))
+
+    const streamCall = mocks.invoke.mock.calls.find(([channel]) => channel === 'llm:generate-stream')
+    expect(streamCall?.[2]).toEqual(expect.objectContaining({
+      creativeStrategy: 'consistency-first',
+    }))
+  })
+
+  it('keeps the captured project session while the model lease is opening', async () => {
+    const projectSession: ProjectSessionContext = {
+      projectId: 'project-a',
+      leaseId: 'lease-project-a',
+      projectPath: 'C:/projects/project-a',
+    }
+    const expectedProjectSession = { ...projectSession }
+    let resolveLease: ((value: { success: true; lease: ModelExecutionLeaseReceipt }) => void) | undefined
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'llm:begin-execution-lease') {
+        return new Promise(resolve => { resolveLease = resolve })
+      }
+      if (channel === 'llm:close-execution-lease') return { success: true }
+      if (channel === 'llm:generate-stream') {
+        const requestId = String(args[0])
+        queueMicrotask(() => {
+          mocks.listeners.get('llm:stream-done')?.({
+            requestId,
+            fullText: 'leased completion',
+            finishReason: 'stop',
+          } as never)
+        })
+        return { requestId, started: true }
+      }
+      throw new Error(`unexpected channel: ${channel}`)
+    })
+
+    const runtimePromise = createGenerationRuntime({
+      projectSession,
+      budget: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+    await vi.waitFor(() => expect(resolveLease).toBeTypeOf('function'))
+    useProjectStore.setState({ currentProject: project('project-b', 'fluent-drafting') })
+    projectSession.projectId = 'mutated-after-capture'
+    resolveLease!({ success: true, lease: LEASE })
+
+    const runtime = await runtimePromise
+    await runtime.execute(({ session }) => session.complete({
+      purpose: 'project-session-freeze',
+      reasoningStage: 'planning',
+      output: 'structured-data',
+      messages: [{ role: 'user', content: 'project A facts' }],
+    }))
+
+    const streamCall = mocks.invoke.mock.calls.find(([channel]) => channel === 'llm:generate-stream')
+    expect(streamCall?.[2]).toEqual(expect.objectContaining({
+      projectSession: expectedProjectSession,
+    }))
+    expect(Object.isFrozen(streamCall?.[2]?.projectSession)).toBe(true)
+  })
+
+  it('captures the current project session before an implicit model lease starts', async () => {
+    let resolveLease: ((value: { success: true; lease: ModelExecutionLeaseReceipt }) => void) | undefined
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'llm:begin-execution-lease') {
+        return new Promise(resolve => { resolveLease = resolve })
+      }
+      if (channel === 'llm:close-execution-lease') return { success: true }
+      if (channel === 'llm:generate-stream') {
+        const requestId = String(args[0])
+        queueMicrotask(() => {
+          mocks.listeners.get('llm:stream-done')?.({
+            requestId,
+            fullText: 'leased completion',
+            finishReason: 'stop',
+          } as never)
+        })
+        return { requestId, started: true }
+      }
+      throw new Error(`unexpected channel: ${channel}`)
+    })
+
+    const runtimePromise = createGenerationRuntime({
+      budget: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+    await vi.waitFor(() => expect(resolveLease).toBeTypeOf('function'))
+    useProjectStore.setState({ currentProject: project('project-b', 'fluent-drafting') })
+    resolveLease!({ success: true, lease: LEASE })
+
+    const runtime = await runtimePromise
+    await runtime.execute(({ session }) => session.complete({
+      purpose: 'implicit-project-session-freeze',
+      reasoningStage: 'planning',
+      output: 'structured-data',
+      messages: [{ role: 'user', content: 'project A facts' }],
+    }))
+
+    const streamCall = mocks.invoke.mock.calls.find(([channel]) => channel === 'llm:generate-stream')
+    expect(streamCall?.[2]).toEqual(expect.objectContaining({
+      projectSession: {
+        projectId: 'project-a',
+        leaseId: 'lease-project-a',
+        projectPath: 'C:/projects/project-a',
+      },
+    }))
+    expect(Object.isFrozen(streamCall?.[2]?.projectSession)).toBe(true)
+  })
+
+  it('leaves the generation request unbound when no project is open', async () => {
+    useProjectStore.setState({ currentProject: null })
+    const runtime = await createGenerationRuntime({
+      budget: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+
+    await runtime.execute(({ session }) => session.complete({
+      purpose: 'projectless-generation',
+      reasoningStage: 'planning',
+      output: 'structured-data',
+      messages: [{ role: 'user', content: 'projectless facts' }],
+    }))
+
+    const streamCall = mocks.invoke.mock.calls.find(([channel]) => channel === 'llm:generate-stream')
+    expect(streamCall?.[2]).toEqual(expect.objectContaining({ projectSession: undefined }))
   })
 
   it('binds begin, stream attempts, and close to one lease-authoritative IPC path', async () => {

@@ -435,12 +435,6 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
         await get().loadChapterDrafts(chapterNumber, expectedProjectPath, projectSession)
       }
       if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
-      await useProjectStore.getState().refreshFileTree(
-        expectedProjectPath,
-        undefined,
-        projectSession,
-      )
-      if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
 
       return { success: true }
     } catch (e) {

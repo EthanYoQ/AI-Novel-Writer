@@ -109,6 +109,89 @@ describeWithChrome('UpdateSection browser interactions', () => {
     await page.close()
   }, 15_000)
 
+  it('downloads a Windows update only after the explicit download action', async () => {
+    const page = await openHarness()
+    await page.evaluate(() => window.__updateHarness.setUpdateState({
+      status: 'available',
+      currentVersion: '0.2.5',
+      availableVersion: '0.2.6',
+      updateAction: 'download',
+      isReminderDeferred: false,
+    }))
+
+    await page.getByRole('button', { name: '下载更新', exact: true }).click()
+    await page.waitForFunction(() => window.__updateHarness.downloadCalls === 1)
+
+    expect(await page.evaluate(() => window.__updateHarness.downloadCalls)).toBe(1)
+    expect(await page.evaluate(() => window.__updateHarness.installCalls)).toBe(0)
+    await page.close()
+  }, 15_000)
+
+  it('opens the fixed Release page instead of downloading on macOS', async () => {
+    const page = await openHarness()
+    await page.evaluate(() => window.__updateHarness.setUpdateState({
+      status: 'available',
+      currentVersion: '0.2.5',
+      availableVersion: '0.2.6',
+      updateAction: 'open-release',
+      isReminderDeferred: false,
+    }))
+
+    await page.getByRole('button', { name: '打开下载页', exact: true }).click()
+    await page.waitForFunction(() => window.__updateHarness.openReleaseCalls === 1)
+
+    expect(await page.evaluate(() => window.__updateHarness.openReleaseCalls)).toBe(1)
+    expect(await page.evaluate(() => window.__updateHarness.downloadCalls)).toBe(0)
+    await page.close()
+  }, 15_000)
+
+  it('shows one persistent global reminder per version and opens the existing Home update section', async () => {
+    const page = await openHarness()
+
+    await page.getByRole('button', { name: '查看更新', exact: true }).waitFor()
+    expect(await page.getByRole('button', { name: '查看更新', exact: true }).count()).toBe(1)
+    await page.evaluate(() => window.__updateHarness.setUpdateState({
+      status: 'downloaded',
+      currentVersion: '0.2.5',
+      availableVersion: '0.2.6',
+      updateAction: 'download',
+      isReminderDeferred: false,
+    }))
+    expect(await page.getByRole('button', { name: '查看更新', exact: true }).count()).toBe(1)
+
+    await page.getByRole('button', { name: '查看更新', exact: true }).click()
+    await page.waitForFunction(() => window.__updateHarness.getSidebarView() === 'home')
+    expect(await page.evaluate(() => window.__updateHarness.getSidebarView())).toBe('home')
+    await page.close()
+  }, 15_000)
+
+  it('dismisses the global reminder while deferred and can remind the same version after expiry', async () => {
+    const page = await openHarness()
+    const reminder = page.getByRole('button', { name: '查看更新', exact: true })
+    await reminder.waitFor()
+
+    await page.evaluate(() => window.__updateHarness.setUpdateState({
+      status: 'downloaded',
+      currentVersion: '0.2.5',
+      availableVersion: '0.2.6',
+      updateAction: 'download',
+      isReminderDeferred: true,
+      reminderUntil: '2026-08-01T00:00:00.000Z',
+    }))
+    await page.waitForFunction(() => document.querySelectorAll('#vela-action-toast-root button').length === 0)
+
+    await page.evaluate(() => window.__updateHarness.setUpdateState({
+      status: 'downloaded',
+      currentVersion: '0.2.5',
+      availableVersion: '0.2.6',
+      updateAction: 'download',
+      isReminderDeferred: false,
+    }))
+    await reminder.waitFor()
+    expect(await reminder.count()).toBe(1)
+    await page.close()
+  }, 15_000)
+
   it('uses the visible thirty-day action to postpone a downloaded update', async () => {
     const page = await openHarness()
 

@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import type BetterSqlite3 from 'better-sqlite3'
 
 import { getProjectDb } from '../../database'
+import { countDraftUnits } from '../../../src/shared/draft-units'
 import { FinalizationRepository } from '../finalization-repository'
 
 vi.mock('../../database', () => ({
@@ -28,7 +29,7 @@ function commitSnapshot(): ReturnType<typeof FinalizationRepository.commit> {
     draftId: 17,
     chapterNumber: 1,
     chapterTitle: '第一章',
-    content: '用户看到的定稿快照',
+    content: 'Finalized snapshot shown to the user',
     contentHash: 'snapshot-hash',
     contentRevision: 8,
     targetFileName: '第1章 第一章.txt',
@@ -82,16 +83,16 @@ describe('FinalizationRepository transaction seam', () => {
       publicationStatus: 'pending',
     })
     expect(db.prepare('SELECT body FROM contents WHERE id = 11').get())
-      .toEqual({ body: '用户看到的定稿快照' })
+      .toEqual({ body: 'Finalized snapshot shown to the user' })
     expect(db.prepare('SELECT status, word_count FROM drafts WHERE id = 17').get())
-      .toEqual({ status: 'finalized', word_count: '用户看到的定稿快照'.length })
+      .toEqual({ status: 'finalized', word_count: countDraftUnits('Finalized snapshot shown to the user') })
     expect(db.prepare('SELECT * FROM finalization_outbox').get())
       .toMatchObject({
         finalization_id: 'finalization-1',
         draft_id: 17,
         content_hash: 'snapshot-hash',
         content_revision: 8,
-        content_snapshot: '用户看到的定稿快照',
+        content_snapshot: 'Finalized snapshot shown to the user',
         target_file_name: '第1章 第一章.txt',
         publication_status: 'pending',
       })
@@ -105,7 +106,7 @@ describe('FinalizationRepository transaction seam', () => {
       draftId: 17,
       chapterNumber: 1,
       chapterTitle: '第一章',
-      content: '用户看到的定稿快照',
+      content: 'Finalized snapshot shown to the user',
       contentHash: 'snapshot-hash',
       contentRevision: 8,
       // 第二次调用在物理文件已经出现时可能计算出不同的碰撞候选；不能因此破坏幂等。

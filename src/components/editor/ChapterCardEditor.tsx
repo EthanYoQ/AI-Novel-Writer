@@ -91,7 +91,13 @@ function isCurrentProjectSession(projectSession: ProjectSessionContext): boolean
 }
 
 /** 章节蓝图编辑器 — 读写 directory.json */
-export default function ChapterCardEditor({ projectKey }: { projectKey: string }) {
+export default function ChapterCardEditor({
+  projectKey,
+  initialChapterNumber,
+}: {
+  projectKey: string
+  initialChapterNumber?: number
+}) {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
@@ -127,6 +133,15 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
   const [showBlueprintDialog, setShowBlueprintDialog] = useState(false)
   const [showBatchCreationDialog, setShowBatchCreationDialog] = useState(false)
   const [recoveringLegacyImportedText, setRecoveringLegacyImportedText] = useState(false)
+
+  useEffect(() => {
+    if (loading || initialChapterNumber === undefined) return
+    const targetIndex = blueprintsRef.current.findIndex(
+      blueprint => blueprint.chapterNumber === initialChapterNumber,
+    )
+    if (targetIndex >= 0) setSelectedIdx(targetIndex)
+  }, [initialChapterNumber, loading])
+
   const roleLabel = (role: string) => text(role, ({
     建置: 'Setup',
     铺垫: 'Foreshadowing',

@@ -57,6 +57,10 @@ const RAW_AI_REVIEW_JSON = JSON.stringify({
   summary: '原始 AI JSON 不是人工确认快照。',
   items: [{ category: '连续性', severity: 'error', description: '未经确认的原始问题。' }],
 })
+const PASSING_REVIEW_JSON = JSON.stringify({
+  summary: 'ok',
+  items: [{ category: '剧情连贯性', severity: 'pass', description: '未发现矛盾' }],
+})
 
 function leaseReceipt(modelId = 'model-a'): ModelExecutionLeaseReceipt {
   return {
@@ -833,7 +837,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
 describe('ReviewChapterCommand reasoning stage', () => {
   it('maps current deterministic findings into the persisted review for human confirmation', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
-      .mockResolvedValue({ content: '{"summary":"ok","items":[]}', finishReason: 'stop' })
+      .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
     const createParams: Array<{ content: string }> = []
     stubIpc(vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'kb:search' || channel === 'db:character-get-all') return []
@@ -858,14 +862,20 @@ describe('ReviewChapterCommand reasoning stage', () => {
 
     await chapterReviewCommand(completeWithLease).execute({ step: {}, context: workflowContext(), callbacks: callbacks() })
 
-    expect(JSON.parse(createParams[0]!.content).items).toEqual([
+    expect(JSON.parse(createParams[0]!.content).items).toEqual(expect.arrayContaining([
       expect.objectContaining({ category: '确定性一致性预检', stableFactKey: expect.stringMatching(/^fact:[0-9a-f]{16}$/u) }),
-    ])
+    ]))
   })
 
   it('preserves the AI review when deterministic continuity evidence cannot be read', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
-      .mockResolvedValue({ content: '{"summary":"AI review","items":[]}', finishReason: 'stop' })
+      .mockResolvedValue({
+        content: JSON.stringify({
+          summary: 'AI review',
+          items: [{ category: 'continuity', severity: 'pass', description: 'No conflict found.' }],
+        }),
+        finishReason: 'stop',
+      })
     const createParams: Array<{ content: string }> = []
     stubIpc(vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'kb:search' || channel === 'db:character-get-all') return []
@@ -890,13 +900,16 @@ describe('ReviewChapterCommand reasoning stage', () => {
       step: {}, context: workflowContext(), callbacks: stepCallbacks,
     })).resolves.toContain('AI review')
 
-    expect(JSON.parse(createParams[0]!.content)).toEqual({ summary: 'AI review', items: [] })
+    expect(JSON.parse(createParams[0]!.content)).toEqual({
+      summary: 'AI review',
+      items: [{ category: 'continuity', severity: 'pass', description: 'No conflict found.' }],
+    })
     expect(stepCallbacks.log).toHaveBeenCalledWith('一致性证据暂时不可用；AI 审稿仍会继续。')
   })
 
   it('uses the frozen English UI locale for visible review logs and the report tab independently of Chinese writing', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
-      .mockResolvedValue({ content: '{"summary":"ok","items":[]}', finishReason: 'stop' })
+      .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
     stubIpc(vi.fn(async (channel: string) => {
       if (channel === 'kb:search' || channel === 'db:character-get-all') return []
       if (channel === 'db:project-core-get') return {}
@@ -926,7 +939,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
 
   it('routes the public review workflow through the review stage', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
-      .mockResolvedValue({ content: '{"summary":"ok","items":[]}', finishReason: 'stop' })
+      .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
     stubIpc(vi.fn(async (channel: string) => {
       if (channel === 'kb:search') return []
       if (channel === 'db:character-get-all') return []
