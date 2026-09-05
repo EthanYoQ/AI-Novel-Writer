@@ -518,7 +518,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     })
     stubIpc(invoke)
 
-    await expect(command(completeWithLease, source, {
+    const error = await command(completeWithLease, source, {
       id: 1,
       chapterNumber: 1,
       version: 1,
@@ -528,7 +528,12 @@ describe('RefineDraftCommand bounded visible completion', () => {
       step: {},
       context: workflowContext(),
       callbacks: callbacks(),
-    })).rejects.toThrow('SOURCE_DRAFT_CHANGED')
+    }).catch(cause => cause)
+
+    expect(error).toMatchObject({
+      code: 'SOURCE_DRAFT_CHANGED',
+      message: '源草稿在 AI 修稿期间已变化。修订未保存，请重新打开当前草稿后再次执行 AI 修稿。',
+    })
 
     expect(invoke.mock.calls).toEqual([[
       'db:revision-replace-pending',
@@ -898,7 +903,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
     })
     stubIpc(invoke)
 
-    await expect(chapterReviewCommand(completeWithLease, source, 1, {
+    const error = await chapterReviewCommand(completeWithLease, source, 1, {
       id: 1,
       chapterNumber: 1,
       version: 1,
@@ -906,9 +911,14 @@ describe('ReviewChapterCommand reasoning stage', () => {
       contentRevision: 8,
     }).execute({
       step: {},
-      context: workflowContext(),
+      context: { ...workflowContext(), writingLanguage: 'en-US' },
       callbacks: callbacks(),
-    })).rejects.toThrow('SOURCE_DRAFT_CHANGED')
+    }).catch(cause => cause)
+
+    expect(error).toMatchObject({
+      code: 'SOURCE_DRAFT_CHANGED',
+      message: 'The source draft changed during AI review. The review report was not saved. Reopen the current draft and run AI review again.',
+    })
 
     expect(invoke.mock.calls.filter(([channel]) => (
       channel === 'db:draft-get-full'

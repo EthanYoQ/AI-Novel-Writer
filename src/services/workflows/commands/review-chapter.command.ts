@@ -18,6 +18,7 @@ import { readConsistencyPreflight } from '../../consistency-preflight'
 import { mergeConsistencyFindingsIntoReview, type ReviewLike } from '../../../shared/consistency-preflight'
 import type { ChapterBlueprint } from '../directory-workflow'
 import type { FrozenDraftSourceIdentity } from '../chapter-workflow'
+import { throwIfSourceDraftChanged } from '../source-draft-changed'
 
 
 export interface ReviewChapterParams {
@@ -342,6 +343,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
         },
       } : {}),
     }, context.projectPath)
+    throwIfSourceDraftChanged(createResult, writingLanguage, 'review')
     requireIpcSuccess(createResult, text('保存审稿报告', 'Save the review report'))
     const revIndex = createResult.reviewIndex ?? 0
 
