@@ -25,6 +25,7 @@ type Blueprint = {
   purpose: string
   keyEvents: string
   characters: string[]
+  newCharacterCandidates?: Array<{ name: string; role: 'protagonist' | 'antagonist' | 'supporting' | 'minor' }>
   suspenseHook: string
   userGuidance: string
   notes: string
@@ -96,6 +97,7 @@ function modelBlueprint(chapterNumber: number, overrides: Partial<Blueprint> = {
     purpose: candidate.purpose,
     keyEvents: candidate.keyEvents,
     characters: candidate.characters,
+    newCharacterCandidates: candidate.newCharacterCandidates,
     relationships: candidate.relationshipHints,
     suspenseHook: candidate.suspenseHook,
   }
@@ -1260,6 +1262,7 @@ describe('GenerateDirectoryCommand', () => {
   it('synchronizes character candidates only after the committed blueprint receipt exists', async () => {
     const committed = blueprint(1, {
       characters: ['林岚', '周砚'],
+      newCharacterCandidates: [{ name: '周砚', role: 'supporting' }],
       relationshipHints: [{ from: '林岚', to: '周砚', relation: '共同追查真相' }],
     })
     const invoke = stubIpcInvoke(successfulCommitHandler({
@@ -1300,6 +1303,17 @@ describe('GenerateDirectoryCommand', () => {
     const syncAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:character-roster-read')
     expect(committedAt).toBeGreaterThanOrEqual(0)
     expect(syncAt).toBeGreaterThan(committedAt)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({
+        intent: 'blueprint_sync',
+        entries: [expect.objectContaining({
+          name: '周砚',
+        })],
+      }),
+      projectSnapshot.expectedProjectPath,
+      context.projectSession,
+    )
     expect(context.data.blueprintCommitReceipt).toMatchObject({ chapterNumbers: [1] })
     expect(context.data.blueprintCharacterSyncReceipt).toMatchObject({
       blueprintCommitOperationId: 'directory-test-run-1-1',

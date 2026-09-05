@@ -1,23 +1,30 @@
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
-import type {
+import {
+  characterRosterIdentityKey,
   CharacterRosterCommitReceipt,
   CharacterRosterEntry,
 } from '../../shared/character-roster'
+import type { BlueprintNewCharacterCandidate } from '../../shared/blueprint-semantic-contract'
+import { normalizeCharacterRole } from '../../shared/character-role'
 import { ipc } from '../ipc-client'
 import {
+  normalizeCharacterCardsForPersistence,
   normalizeCharacterRelationshipEdges,
   type CharacterRelationshipEdge,
 } from './character-card-normalizer'
+import { characterRosterEntryFromCard } from '../character-roster-client'
 import { randomUUID } from '../../utils/id'
 
 export interface BlueprintCharacterCandidateSource {
   chapterNumber: number
   characters: readonly string[]
+  newCharacterCandidates?: readonly BlueprintNewCharacterCandidate[]
   relationshipHints?: unknown
 }
 
-function characterKey(name: string): string {
-  return name.trim().toLocaleLowerCase('en-US')
+type CharacterSource = {
+  name: string
+  role: BlueprintNewCharacterCandidate['role']
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -151,10 +158,10 @@ function assertIpcSuccess(result: { success: boolean; error?: string }): void {
 }
 
 /**
- * Enriches relationships only for characters that already exist in the
- * authoritative roster. Blueprint references are planning data, not permission
- * to create character cards; unknown names remain in the blueprint until the
- * author explicitly creates or imports them.
+ * Creates only reusable characters explicitly declared by a persisted
+ * blueprint. Names that merely appear in `characters` remain chapter-scoped
+ * planning references, while declared candidates and existing roster members
+ * may receive structured relationship edges.
  */
 export async function syncBlueprintCharacterCandidates(
   blueprints: readonly BlueprintCharacterCandidateSource[],
@@ -162,7 +169,25 @@ export async function syncBlueprintCharacterCandidates(
   projectSession: ProjectSessionContext,
   operationId = `blueprint-sync-${randomUUID()}`,
 ): Promise<CharacterRosterCommitReceipt | null> {
-  if (!blueprints.some(blueprint => hasRelationshipHints(blueprint.relationshipHints))) return null
+  const sourcesByKey = new Map<string, CharacterSource>()
+  for (const blueprint of blueprints) {
+    const blueprintNames = new Set(blueprint.characters.map(characterRosterIdentityKey))
+    for (const candidate of blueprint.newCharacterCandidates ?? []) {
+      if (!candidate || typeof candidate.name !== 'string' || !candidate.name.trim()) continue
+      const name = candidate.name.trim()
+      const key = characterRosterIdentityKey(name)
+      if (!blueprintNames.has(key)) continue
+      const source = sourcesByKey.get(key) ?? {
+        name,
+        role: normalizeCharacterRole(candidate.role),
+      }
+      sourcesByKey.set(key, source)
+    }
+  }
+  if (
+    sourcesByKey.size === 0
+    && !blueprints.some(blueprint => hasRelationshipHints(blueprint.relationshipHints))
+  ) return null
 
   const roster = await ipc.invokeWithProjectSession(
     projectSession,
@@ -172,17 +197,35 @@ export async function syncBlueprintCharacterCandidates(
   if (roster.status !== 'ready' && roster.status !== 'empty') {
     throw new Error('角色名单当前不可安全同步；请先完成旧项目修复或处理数据不一致状态')
   }
-  const existingByKey = new Map(roster.entries.map(character => [characterKey(character.name), character]))
-  const canonicalNameByKey = new Map(
-    [...existingByKey].map(([key, character]) => [key, character.name] as const),
+  const existingByKey = new Map(
+    roster.entries.map(character => [characterRosterIdentityKey(character.name), character]),
   )
+  const canonicalNameByKey = new Map(
+    [...sourcesByKey].map(([key, source]) => [key, source.name] as const),
+  )
+  for (const [key, character] of existingByKey) canonicalNameByKey.set(key, character.name)
   const allNames = new Set(canonicalNameByKey.values())
-  const resolveName = (name: string): string | undefined => canonicalNameByKey.get(characterKey(name))
+  const resolveName = (name: string): string | undefined => (
+    canonicalNameByKey.get(characterRosterIdentityKey(name))
+  )
 
   const relationshipGraph = new Map<string, CharacterRelationshipEdge[]>()
   for (const blueprint of blueprints) {
     collectRelationshipHints(blueprint.relationshipHints, allNames, resolveName, relationshipGraph)
   }
+
+  const candidates = normalizeCharacterCardsForPersistence(
+    [...sourcesByKey]
+      .filter(([key]) => !existingByKey.has(key))
+      .map(([, source]) => ({
+        name: source.name,
+        role: source.role,
+      })),
+  ).map(candidate => ({
+    ...characterRosterEntryFromCard(candidate),
+    relationships: (relationshipGraph.get(candidate.name) ?? [])
+      .filter(edge => !existingByKey.get(characterRosterIdentityKey(edge.target))?.legacyRelationshipNotes),
+  }))
 
   const changedExisting: CharacterRosterEntry[] = []
   for (const [key, existing] of existingByKey) {
@@ -193,14 +236,14 @@ export async function syncBlueprintCharacterCandidates(
       relationshipGraph.get(existing.name)
       ?? relationshipGraph.get(canonicalNameByKey.get(key) ?? '')
       ?? []
-    ).filter(edge => !existingByKey.get(characterKey(edge.target))?.legacyRelationshipNotes)
+    ).filter(edge => !existingByKey.get(characterRosterIdentityKey(edge.target))?.legacyRelationshipNotes)
     if (additions.length === 0) continue
     const mergedEdges = mergeRelationshipEdges(existing.relationships, additions)
     if (mergedEdges.length === existing.relationships.length) continue
     changedExisting.push({ ...existing, relationships: mergedEdges })
   }
 
-  if (changedExisting.length === 0) return null
+  if (changedExisting.length === 0 && candidates.length === 0) return null
   const result = await ipc.invokeWithProjectSession(
     projectSession,
     'db:character-roster-commit',
@@ -212,7 +255,7 @@ export async function syncBlueprintCharacterCandidates(
       // incremental intents never echo untouched cards back through IPC. This
       // keeps legacy free-text relationship evidence read-only and lets the
       // deep module merge only the changed/new structured entries.
-      entries: changedExisting,
+      entries: [...changedExisting, ...candidates],
     },
     expectedProjectPath,
   )

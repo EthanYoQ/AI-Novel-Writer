@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import { getProjectDb } from '../database'
 import { CharacterRosterRepository } from './character-roster-repository'
 import { blueprintCharacterSyncFactError } from '../../src/shared/blueprint-character-sync-evidence'
+import type { BlueprintNewCharacterCandidate } from '../../src/shared/blueprint-semantic-contract'
 
 /** 蓝图行类型（DB 蛇形命名） */
 export interface BlueprintRow {
@@ -33,6 +34,8 @@ export interface BlueprintData {
     purpose: string
     keyEvents: string
     characters: string[]
+    /** Important recurring characters first introduced by this blueprint. */
+    newCharacterCandidates?: BlueprintNewCharacterCandidate[]
     /**
      * Relationship payload from the just-generated blueprint. It is not part
      * of the editable blueprints table; an atomic range commit retains it in
@@ -430,7 +433,7 @@ function assertAuthoritativeCharacterSyncCompletion(
     }
 }
 
-function snapshotWithRelationshipHints(
+function snapshotWithCharacterSyncFacts(
     persisted: readonly BlueprintData[],
     characterSyncInput: readonly BlueprintData[],
 ): BlueprintData[] {
@@ -438,8 +441,15 @@ function snapshotWithRelationshipHints(
         characterSyncInput.map(blueprint => [blueprint.chapterNumber, blueprint] as const),
     )
     return persisted.map((blueprint) => {
-        const relationshipHints = inputByChapter.get(blueprint.chapterNumber)?.relationshipHints
-        return relationshipHints === undefined ? blueprint : { ...blueprint, relationshipHints }
+        const input = inputByChapter.get(blueprint.chapterNumber)
+        if (!input) return blueprint
+        return {
+            ...blueprint,
+            ...(input.relationshipHints === undefined ? {} : { relationshipHints: input.relationshipHints }),
+            ...(input.newCharacterCandidates === undefined
+                ? {}
+                : { newCharacterCandidates: input.newCharacterCandidates }),
+        }
     })
 }
 
@@ -554,7 +564,7 @@ export class BlueprintRepository {
             startChapter: operation.start_chapter,
             endChapter: operation.end_chapter,
         })
-        const snapshot = snapshotWithRelationshipHints(persisted, characterSyncInput)
+        const snapshot = snapshotWithCharacterSyncFacts(persisted, characterSyncInput)
         const characterSyncOperation = readCharacterSyncOperation(
             db,
             characterSyncOperationId(operation.operation_id),
@@ -598,7 +608,7 @@ export class BlueprintRepository {
                     startChapter: existingOperation.start_chapter,
                     endChapter: existingOperation.end_chapter,
                 })
-                const snapshot = snapshotWithRelationshipHints(persisted, characterSyncInput)
+                const snapshot = snapshotWithCharacterSyncFacts(persisted, characterSyncInput)
                 const characterSyncOperation = readCharacterSyncOperation(
                     db,
                     characterSyncOperationId(existingOperation.operation_id),
@@ -671,7 +681,7 @@ export class BlueprintRepository {
                 request.endChapter,
                 JSON.stringify(characterSyncInput),
             )
-            const snapshot = snapshotWithRelationshipHints(persisted, characterSyncInput)
+            const snapshot = snapshotWithCharacterSyncFacts(persisted, characterSyncInput)
             const characterSyncOperation = readCharacterSyncOperation(db, syncOperationId)
             if (!characterSyncOperation) throw new Error('蓝图提交未创建可恢复的角色同步操作')
 

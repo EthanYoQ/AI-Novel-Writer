@@ -34,6 +34,7 @@ describe('blueprint semantic contract', () => {
       purpose: '让主角接下无法回避的委托',
       keyEvents: '主角收到失踪多年的兄长寄来的密信，并在信封夹层发现追踪器。',
       characters: ['林岚', '周砚'],
+      newCharacterCandidates: [],
       relationshipHints: [{ from: '林岚', to: '周砚', relation: '临时盟友' }],
       suspenseHook: '追踪器忽然亮起，显示信件刚从屋内发出。',
     }])
@@ -138,6 +139,24 @@ describe('blueprint semantic contract', () => {
     expect(validateBlueprintSemanticItem(validBlueprint({
       relationships: [{ from: '林岚', to: '周砚', relation: '' }],
     }))).toContain('code=empty_value path=blueprint.relationships[0].relation')
+  })
+
+  it('defaults omitted candidates and validates explicit recurring candidates', () => {
+    expect(decodeBlueprintSemanticPayload({ blueprints: [validBlueprint()] }, [1])[0]
+      .newCharacterCandidates).toEqual([])
+    expect(decodeBlueprintSemanticPayload({
+      blueprints: [validBlueprint({
+        newCharacterCandidates: [{ name: '周砚', role: 'supporting' }],
+      })],
+    }, [1])[0].newCharacterCandidates).toEqual([{ name: '周砚', role: 'supporting' }])
+    expect(validateBlueprintSemanticItem(validBlueprint({
+      newCharacterCandidates: [{ name: '未出场者', role: 'supporting' }],
+    }))).toContain('code=invalid_value path=blueprint.newCharacterCandidates[0].name')
+    expect(validateBlueprintSemanticItem(validBlueprint({
+      newCharacterCandidates: [{ name: '周砚', role: 'guest-star' }],
+    }))).toContain('code=invalid_value path=blueprint.newCharacterCandidates[0].role')
+    expect(blueprintSemanticGenerationContract('zh-CN')).toContain('一次性路人不得声明为候选')
+    expect(blueprintSemanticGenerationContract('en-US')).toContain('never include incidental figures')
   })
 
   it.each([

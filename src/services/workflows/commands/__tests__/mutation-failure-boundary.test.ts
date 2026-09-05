@@ -606,6 +606,46 @@ describe('workflow mutation failure boundaries', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
   })
 
+  it('ignores model-reported new characters during finalization', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:character-roster-read') {
+        return {
+          status: 'ready',
+          revision: 4,
+          entries: [{ name: '林岚', role: 'protagonist', currentState: {} }],
+        }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    useLLMStore.setState({
+      defaultModelId: 'model',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        streamCallbacks.onDone?.(JSON.stringify({
+          updates: [],
+          newCharacters: [
+            { name: '快递员', role: 'supporting', currentState: {} },
+            { name: '凭空角色', role: 'antagonist', currentState: {} },
+          ],
+        }), undefined, 'stop')
+        return 'request-1'
+      }),
+    })
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      1,
+      '第一章',
+      '快递员把信封放在桌上。',
+      testPostProcessGeneration(),
+      undefined,
+      ['林岚', '快递员'],
+    ).find(candidate => candidate.key === 'character_cards')
+
+    await step!.executor(callbacks(), context())
+
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
+  })
+
   it('samples both ends of a long finalized chapter for one bounded character extraction request', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'db:character-roster-read') {

@@ -30,7 +30,7 @@ import {
   workflowUiText,
   workflowWritingLanguage,
 } from '../workflow-project-session'
-import type { CharacterRosterEntry, CharacterRosterRole } from '../../../shared/character-roster'
+import type { CharacterRosterEntry } from '../../../shared/character-roster'
 import { writingLanguageText } from '../../../shared/writing-language'
 import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
@@ -340,8 +340,8 @@ export function buildFinalizePostProcessSteps(
           '未找到角色状态模板',
           'Character-state template not found.',
         ))
-        // 章节定稿只读取并提交结构化角色名单。状态、新角色、图谱投影和
-        // revision 由同一个 roster receipt 结算，绝不逐张卡片部分成功。
+        // 章节定稿只更新已存在的结构化角色状态。新角色必须来自作者确认
+        // 或已提交蓝图的明确候选，不能由正文后处理模型自由创建。
         const roster = await ipc.invokeWithProjectSession(
           projectSession,
           'db:character-roster-read',
@@ -381,7 +381,6 @@ export function buildFinalizePostProcessSteps(
 
         const cardUpdates = parseJSON<{
           updates?: Array<{ name: string; currentState: LLMUpdateState }>
-          newCharacters?: Array<{ name: string; role: string; currentState: LLMUpdateState }>
         }>(cardsResult)
 
         const updatesByName = new Map(
@@ -414,42 +413,7 @@ export function buildFinalizePostProcessSteps(
           })
         }
 
-        let newCharCount = 0
-        const existingNames = new Set(allChars.map(character => character.name))
-        if (Array.isArray(cardUpdates.newCharacters)) {
-          for (const newChar of cardUpdates.newCharacters) {
-            if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
-            if (typeof newChar.name !== 'string' || !newChar.name.trim()) continue
-            const name = newChar.name.trim()
-            if (existingNames.has(name)) continue
-            const cs = newChar.currentState || {}
-            const role: CharacterRosterRole = (
-              newChar.role === 'protagonist'
-              || newChar.role === 'antagonist'
-              || newChar.role === 'supporting'
-              || newChar.role === 'minor'
-            ) ? newChar.role : 'supporting'
-            changedEntries.push({
-              name,
-              role,
-              gender: '', age: '', appearance: '', personality: '', background: '',
-              abilities: '', motivation: '', relationships: [], arc: '', notes: '',
-              currentState: {
-                location: cs.location || '',
-                powerLevel: cs.powerLevel || '',
-                physicalState: cs.physicalState || '',
-                mentalState: cs.mentalState || '',
-                keyItems: cs.keyItems || '',
-                recentEvents: cs.recentEvents || '',
-                updatedAtChapter: chapterNumber,
-              },
-            })
-            existingNames.add(name)
-            newCharCount += 1
-          }
-        }
-
-        if (updatedCount > 0 || newCharCount > 0) {
+        if (updatedCount > 0) {
           if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
           const result = await ipc.invokeWithProjectSession(
             projectSession,
@@ -468,19 +432,14 @@ export function buildFinalizePostProcessSteps(
           if (!result.success || !result.receipt) {
             throw new Error(result.error || workflowUiText(
               context,
-              '角色状态与新角色登记未能原子提交',
-              'Character-state updates and new-character registration could not be committed atomically.',
+              '角色状态未能原子提交',
+              'Character-state updates could not be committed atomically.',
             ))
           }
           if (updatedCount > 0) callbacks.log(workflowUiText(
             context,
             `更新角色动态状态: ${updatedCount} 名`,
             `Updated dynamic character state: ${updatedCount}`,
-          ))
-          if (newCharCount > 0) callbacks.log(workflowUiText(
-            context,
-            `自动提取并登记 ${newCharCount} 名新出场角色`,
-            `Extracted and registered ${newCharCount} newly appearing characters`,
           ))
         }
       },

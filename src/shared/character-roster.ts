@@ -12,6 +12,11 @@ export const CHARACTER_ROSTER_ROLES = CHARACTER_ROLES
 
 export type CharacterRosterRole = CharacterRole
 
+/** Canonical identity key shared by roster mutation boundaries. */
+export function characterRosterIdentityKey(name: string): string {
+  return name.trim().toLocaleLowerCase('en-US')
+}
+
 export type CharacterRosterMigrationState =
   | 'empty'
   | 'legacy_cards_preserved'
