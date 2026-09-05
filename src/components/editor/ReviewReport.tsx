@@ -29,7 +29,7 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { useLLMStore } from '../../stores/llm-store'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
-import type { ModelProfile } from '../../shared/ipc-channels'
+import type { ExpectedDraftSource, ModelProfile } from '../../shared/ipc-channels'
 import { resolveWritingLanguage, type WritingLanguage } from '../../shared/writing-language'
 import {
   createHumanConfirmedReviewSnapshot,
@@ -312,6 +312,18 @@ function confirmationSourceReviewId(
   return snapshot?.sourceReviewId ?? reviewId
 }
 
+function matchesReviewSource(
+  source: ExpectedDraftSource,
+  draft: { id: number; chapterNumber: number; version: number; status: string },
+  content: string,
+): boolean {
+  return source.id === draft.id
+    && source.chapterNumber === draft.chapterNumber
+    && source.version === draft.version
+    && source.status === draft.status
+    && source.content === content
+}
+
 /** 审稿报告查看器 */
 export default function ReviewReport(props: ReviewReportProps) {
   const snapshot = parseHumanConfirmedReviewSnapshot(props.reportText)
@@ -481,31 +493,6 @@ function ReviewReportSession({
       return
     }
 
-    const snapshot = createHumanConfirmedReviewSnapshot({
-      sourceReviewId,
-      summary,
-      authorGuidance,
-      items: items.map(({
-        category, severity, description, quote, stableFactKey, sourceChapter, decision, origin,
-      }) => ({
-        category,
-        severity,
-        description,
-        ...(quote?.trim() ? { quote: quote.trim() } : {}),
-        ...(stableFactKey ? { stableFactKey } : {}),
-        ...(sourceChapter ? { sourceChapter } : {}),
-        decision,
-        origin,
-      })),
-    })
-    if (!snapshot) {
-      setChecklistError(text(
-        '审稿清单包含未填写的分类、问题或严重程度；请补充后再确认。',
-        'The checklist has an empty category, issue, or severity. Complete it before confirming.',
-      ))
-      return
-    }
-
     setConfirming(true)
     try {
       const { parseDraftMeta } = await import('../../services/workflows/chapter-workflow')
@@ -524,6 +511,60 @@ function ReviewReportSession({
         return
       }
 
+      const sourceReview = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:review-get-full',
+        sourceReviewId,
+        projectSession.projectPath,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
+      const { readDraftBody } = await import('../../stores/draft-store')
+      const currentDraftContent = await readDraftBody(
+        draftPath,
+        projectSession.projectPath,
+        projectSession,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
+      if (
+        !sourceReview
+        || sourceReview.id !== sourceReviewId
+        || sourceReview.baseDraftId !== draftMeta.id
+        || !sourceReview.sourceDraft
+        || !matchesReviewSource(sourceReview.sourceDraft, draftMeta, currentDraftContent)
+      ) {
+        setChecklistError(text(
+          '源草稿已变化，无法确认这份旧审稿；请重新运行 AI 审稿。',
+          'The source draft changed, so this stale review cannot be confirmed. Run AI review again.',
+        ))
+        return
+      }
+
+      const snapshot = createHumanConfirmedReviewSnapshot({
+        sourceReviewId,
+        sourceDraft: sourceReview.sourceDraft,
+        summary,
+        authorGuidance,
+        items: items.map(({
+          category, severity, description, quote, stableFactKey, sourceChapter, decision, origin,
+        }) => ({
+          category,
+          severity,
+          description,
+          ...(quote?.trim() ? { quote: quote.trim() } : {}),
+          ...(stableFactKey ? { stableFactKey } : {}),
+          ...(sourceChapter ? { sourceChapter } : {}),
+          decision,
+          origin,
+        })),
+      })
+      if (!snapshot) {
+        setChecklistError(text(
+          '审稿清单包含未填写的分类、问题或严重程度；请补充后再确认。',
+          'The checklist has an empty category, issue, or severity. Complete it before confirming.',
+        ))
+        return
+      }
+
       const reviewIndex = await ipc.invokeWithProjectSession(
         projectSession,
         'db:review-next-index',
@@ -532,12 +573,20 @@ function ReviewReportSession({
       )
       if (!isProjectSessionCurrent(projectSession)) return
       const content = serializeHumanConfirmedReviewSnapshot(snapshot)
-      const createResult = requireIpcSuccess(
-        await ipc.invokeWithProjectSession(projectSession, 'db:review-create', {
+      const createResponse = await ipc.invokeWithProjectSession(projectSession, 'db:review-create', {
           baseDraftId: draftMeta.id,
           reviewIndex,
           content,
-        }, projectSession.projectPath),
+          expectedSource: sourceReview.sourceDraft,
+        }, projectSession.projectPath)
+      if (createResponse.errorCode === 'SOURCE_DRAFT_CHANGED') {
+        throw new Error(text(
+          '确认期间源草稿已变化，清单未保存；请重新运行 AI 审稿。',
+          'The source draft changed during confirmation, so the checklist was not saved. Run AI review again.',
+        ))
+      }
+      const createResult = requireIpcSuccess(
+        createResponse,
         text('保存确认审稿清单', 'Save confirmed review checklist'),
       )
       if (!isProjectSessionCurrent(projectSession)) return
@@ -635,6 +684,15 @@ function ReviewReportSession({
         return text(
           '找不到关联草稿，未启动修稿。',
           'The associated draft could not be found; revision was not started.',
+        )
+      }
+      if (
+        !confirmed.snapshot.sourceDraft
+        || !matchesReviewSource(confirmed.snapshot.sourceDraft, draftMeta, draftContent)
+      ) {
+        return text(
+          '源草稿已变化，未启动修稿；请重新运行 AI 审稿并确认清单。',
+          'The source draft changed, so revision was not started. Run AI review and confirm the checklist again.',
         )
       }
 

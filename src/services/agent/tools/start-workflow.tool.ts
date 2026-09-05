@@ -78,6 +78,7 @@ export const startWorkflowTool = buildAgentTool({
         ...(chapterNumber === undefined ? {} : { chapterNumber }),
       } as CreativeIntent, projectSession, {
         generationModelId,
+        assertActive: () => assertAgentToolActive(context),
         onRegistered: context?.markSideEffectStarted,
       })
 

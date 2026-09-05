@@ -41,6 +41,10 @@ beforeEach(() => {
       merged_to_draft_id INTEGER,
       user_prompt TEXT DEFAULT '',
       review_source_id INTEGER,
+      source_draft_chapter_number INTEGER,
+      source_draft_version INTEGER,
+      source_draft_status TEXT,
+      source_content TEXT,
       content_id INTEGER NOT NULL,
       word_count INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
@@ -57,7 +61,25 @@ beforeEach(() => {
 
 afterEach(() => db.close())
 
+const expectedSource = {
+  id: 1,
+  chapterNumber: 1,
+  version: 1,
+  status: 'draft' as const,
+  content: '原稿',
+}
+
 describe('RevisionRepository.replacePending', () => {
+  it('rejects creating a new revision without a frozen source', () => {
+    expect(() => RevisionRepository.replacePending({
+      baseDraftId: 1,
+      revisionType: 'refine',
+      content: '无来源修订',
+      wordCount: 6,
+    })).toThrow('SOURCE_DRAFT_CHANGED')
+    expect(RevisionRepository.listByDraft(1)).toEqual([])
+  })
+
   it.each([
     ['id', { id: 999, chapterNumber: 1, version: 1, status: 'draft', content: '原稿' }],
     ['chapter', { id: 1, chapterNumber: 2, version: 1, status: 'draft', content: '原稿' }],
@@ -96,7 +118,16 @@ describe('RevisionRepository.replacePending', () => {
     })
 
     expect(replacement).toEqual({ id: 1, revisionIndex: 1 })
-    expect(RevisionRepository.getFull(replacement.id)?.content).toBe('合法新修订')
+    expect(RevisionRepository.getFull(replacement.id)).toMatchObject({
+      content: '合法新修订',
+      sourceDraft: {
+        id: 1,
+        chapterNumber: 1,
+        version: 1,
+        status: 'draft',
+        content: '原稿',
+      },
+    })
   })
 
   it('creates the replacement and discards every previous pending revision in one transaction', () => {
@@ -105,12 +136,14 @@ describe('RevisionRepository.replacePending', () => {
       revisionType: 'refine',
       content: '旧修订一',
       wordCount: 5,
+      expectedSource,
     })
     const second = RevisionRepository.create({
       baseDraftId: 1,
       revisionType: 'review-fix',
       content: '旧修订二',
       wordCount: 5,
+      expectedSource,
     })
 
     const replacement = RevisionRepository.replacePending({
@@ -118,6 +151,7 @@ describe('RevisionRepository.replacePending', () => {
       revisionType: 'refine',
       content: '完整新修订',
       wordCount: 6,
+      expectedSource,
     })
 
     expect(replacement.revisionIndex).toBe(3)
@@ -136,6 +170,7 @@ describe('RevisionRepository.replacePending', () => {
       revisionType: 'refine',
       content: '仍需保留的修订',
       wordCount: 7,
+      expectedSource,
     })
     db.exec(`
       CREATE TRIGGER reject_replacement BEFORE INSERT ON revisions
@@ -151,6 +186,7 @@ describe('RevisionRepository.replacePending', () => {
       revisionType: 'refine',
       content: '失败的新修订',
       wordCount: 6,
+      expectedSource,
     })).toThrow('replacement rejected')
 
     expect(RevisionRepository.getPending(1).map(item => item.id)).toEqual([original.id])
@@ -176,6 +212,7 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       revisionType: 'refine',
       content: 'AI 修订候选',
       wordCount: 7,
+      expectedSource,
     })
 
     const receipt = RevisionRepository.mergeIntoDraft(mergeRequest(revision.id))
@@ -212,6 +249,7 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       revisionType: 'refine',
       content: 'AI 修订候选',
       wordCount: 7,
+      expectedSource,
     })
     db.exec(`
       CREATE TRIGGER reject_merge_${table} BEFORE UPDATE ON ${table}
@@ -237,6 +275,7 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       revisionType: 'refine',
       content: 'AI 修订候选',
       wordCount: 7,
+      expectedSource,
     })
     const request = mergeRequest(revision.id)
     RevisionRepository.mergeIntoDraft(request)
@@ -261,6 +300,7 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       revisionType: 'refine',
       content: 'AI 修订候选',
       wordCount: 7,
+      expectedSource,
     })
     expect(() => RevisionRepository.mergeIntoDraft({
       ...mergeRequest(revision.id),
@@ -283,6 +323,25 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       FROM drafts JOIN contents ON contents.id = drafts.content_id
       WHERE drafts.id = 1
     `).get()).toEqual({ status: 'finalized', word_count: 0, body: '原稿' })
+    expect(RevisionRepository.getFull(revision.id)?.status).toBe('pending')
+  })
+
+  it('rejects rebasing an old revision onto a newly saved draft even when the renderer calls that body expected', () => {
+    const revision = RevisionRepository.create({
+      baseDraftId: 1,
+      revisionType: 'refine',
+      content: '基于 A 的 AI 修订候选',
+      wordCount: 10,
+      expectedSource,
+    })
+    db.prepare('UPDATE contents SET body = ? WHERE id = 1').run('原稿+B')
+
+    expect(() => RevisionRepository.mergeIntoDraft({
+      ...mergeRequest(revision.id),
+      expectedDraftContent: '原稿+B',
+    })).toThrow('生成时源稿')
+
+    expect(db.prepare('SELECT body FROM contents WHERE id = 1').get()).toEqual({ body: '原稿+B' })
     expect(RevisionRepository.getFull(revision.id)?.status).toBe('pending')
   })
 })

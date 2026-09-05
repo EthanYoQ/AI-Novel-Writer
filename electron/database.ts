@@ -253,6 +253,10 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       merged_to_draft_id INTEGER,                 -- 合并产出的新 draft
       user_prompt TEXT DEFAULT '',                -- 用户指导
       review_source_id INTEGER,                   -- 关联审稿 ID
+      source_draft_chapter_number INTEGER,        -- 生成时冻结源稿章节
+      source_draft_version INTEGER,               -- 生成时冻结源稿版本
+      source_draft_status TEXT,                   -- 生成时冻结源稿状态
+      source_content TEXT,                        -- 生成时冻结源稿正文
       content_id INTEGER NOT NULL,                -- FK -> contents
       word_count INTEGER DEFAULT 0,               -- 字数缓存
       created_at TEXT DEFAULT (datetime('now')),
@@ -270,6 +274,10 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       base_draft_id INTEGER NOT NULL,             -- 审查对象 FK
       review_index INTEGER NOT NULL,              -- 审阅顺位
+      source_draft_chapter_number INTEGER,        -- 审稿时冻结源稿章节
+      source_draft_version INTEGER,               -- 审稿时冻结源稿版本
+      source_draft_status TEXT,                   -- 审稿时冻结源稿状态
+      source_content TEXT,                        -- 审稿时冻结源稿正文
       content_id INTEGER NOT NULL,                -- FK -> contents
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (base_draft_id) REFERENCES drafts(id) ON DELETE CASCADE,
@@ -543,6 +551,21 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `)
+
+  // Legacy rows cannot be safely rebound to today's mutable draft body. Add
+  // nullable columns and leave old source identity unknown so merge/refine can fail closed.
+  for (const table of ['revisions', 'reviews'] as const) {
+    const columns = new Set(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(column => column.name),
+    )
+    const addSourceColumn = (name: string, type: string) => {
+      if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`)
+    }
+    addSourceColumn('source_draft_chapter_number', 'INTEGER')
+    addSourceColumn('source_draft_version', 'INTEGER')
+    addSourceColumn('source_draft_status', 'TEXT')
+    addSourceColumn('source_content', 'TEXT')
+  }
 
   // Durable continuity facts were added to the existing summary projection so
   // older projects keep their legacy snapshots while new rows bind to a

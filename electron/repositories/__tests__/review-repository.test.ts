@@ -36,6 +36,10 @@ beforeEach(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       base_draft_id INTEGER NOT NULL,
       review_index INTEGER NOT NULL,
+      source_draft_chapter_number INTEGER,
+      source_draft_version INTEGER,
+      source_draft_status TEXT,
+      source_content TEXT,
       content_id INTEGER NOT NULL,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (base_draft_id) REFERENCES drafts(id) ON DELETE CASCADE,
@@ -51,6 +55,14 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('ReviewRepository.create', () => {
+  it('rejects creating a new review without a frozen source', () => {
+    expect(() => ReviewRepository.create({
+      baseDraftId: 1,
+      content: '{"summary":"unbound"}',
+    })).toThrow('SOURCE_DRAFT_CHANGED')
+    expect(ReviewRepository.listByDraft(1)).toEqual([])
+  })
+
   it('atomically rejects stale frozen source content without allocating a review or content', () => {
     const contentsBefore = db.prepare('SELECT COUNT(*) AS count FROM contents').get() as { count: number }
 
@@ -98,5 +110,24 @@ describe('ReviewRepository.create', () => {
     expect(ReviewRepository.listByDraft(1).map(review => [review.id, review.reviewIndex]))
       .toEqual([[first.id, 1], [second.id, 2]])
     expect([first.reviewIndex, second.reviewIndex]).toEqual([1, 2])
+    expect(ReviewRepository.getFull(first.id)?.sourceDraft).toEqual({
+      id: 1,
+      chapterNumber: 1,
+      version: 1,
+      status: 'draft',
+      content: '原稿',
+    })
+  })
+
+  it('keeps a legacy review readable but marks its generation source as unavailable', () => {
+    const contentId = ContentRepository.create('{"summary":"legacy"}')
+    const legacy = db.prepare(`
+      INSERT INTO reviews (base_draft_id, review_index, content_id) VALUES (1, 1, ?)
+    `).run(contentId)
+
+    expect(ReviewRepository.getFull(Number(legacy.lastInsertRowid))).toMatchObject({
+      content: '{"summary":"legacy"}',
+      sourceDraft: null,
+    })
   })
 })

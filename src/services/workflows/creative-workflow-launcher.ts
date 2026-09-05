@@ -52,6 +52,8 @@ export interface CreativeWorkflowLaunchReceipt {
  */
 export interface CreativeWorkflowLaunchOptions {
   readonly generationModelId?: string
+  /** Last caller-owned cancellation gate before authoritative registration. */
+  readonly assertActive?: () => void
   /** Called only after the workflow run is visible in the authoritative store. */
   readonly onRegistered?: () => void
 }
@@ -174,6 +176,7 @@ export async function launchCreativeWorkflow(
   }
 
   const runId = randomUUID()
+  options.assertActive?.()
   const completion = useWorkflowStore.getState().startWorkflow({ ...definition, runId, uiLocale })
   void completion.catch((error) => {
     useWorkflowStore.getState().addLog(

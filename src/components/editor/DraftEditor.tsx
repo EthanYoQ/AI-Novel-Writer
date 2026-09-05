@@ -88,6 +88,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     modifiedContent: string
     revisionPath: string
     targetSnapshot: { content: string; contentRevision: number }
+    staleReason: string | null
   } | null>(null)
 
   // 后处理失败状态（用于控制是否展示修复按钮）
@@ -480,12 +481,12 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     const revPath = `vela://revision/${rev.id}`
 
     // 读取原稿和修稿
-    const [origContent, revContent] = await Promise.all([
+    const [currentSavedContent, revision] = await Promise.all([
       readDraftBody(filePath, projectKey, projectSession),
-      readDraftBody(revPath, projectKey, projectSession),
+      ipc.invokeWithProjectSession(projectSession, 'db:revision-get-full', rev.id, projectKey),
     ])
     if (!isProjectSessionCurrent(projectSession)) return
-    if (!origContent && !revContent) return
+    if (!revision) return
     const currentTarget = useEditorStore.getState().tabs.find(
       tab => tab.id === tabId && tab.projectKey === projectKey,
     )
@@ -502,12 +503,30 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       return
     }
 
-    // 设置弹窗数据，不再打开新 Tab
+    const source = revision.sourceDraft
+    const staleReason = !source
+      ? text(
+          '旧修订稿缺少生成时源稿，修订仍可查看但不能合并。',
+          'This legacy revision has no generation source. It remains viewable but cannot be merged.',
+        )
+      : source.id !== meta.id
+        || source.chapterNumber !== meta.chapterNumber
+        || source.version !== meta.version
+        || source.status !== (currentTarget.draftStatus ?? meta.status)
+        || source.content !== currentSavedContent
+        ? text(
+            '当前草稿已不是该修订稿的生成时源稿，修订仍可查看但不能合并。',
+            'The current draft no longer matches this revision’s generation source. It remains viewable but cannot be merged.',
+          )
+        : null
+
+    // 始终展示修订与其真实冻结源；旧行或 stale 源只读，不用当前正文重基。
     setMergeData({
-      originalContent: origContent,
-      modifiedContent: revContent,
+      originalContent: source?.content ?? '',
+      modifiedContent: revision.content,
       revisionPath: revPath,
       targetSnapshot,
+      staleReason,
     })
   }
 
@@ -515,6 +534,10 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const handleMergeComplete = async (mergedText: string) => {
     const projectSession = captureProjectSession(currentProject)
     if (!meta || !mergeData || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    if (mergeData.staleReason) {
+      toast.warning(mergeData.staleReason)
+      return
+    }
     const chapterDir = `vela://draft/ch${meta.chapterNumber}`
     const currentTarget = useEditorStore.getState().tabs.find(
       tab => tab.id === tabId && tab.projectKey === projectKey,
@@ -951,12 +974,21 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           {/* 合并视图主体 */}
           <div className="flex-1 overflow-hidden" style={{ height: 'calc(85vh - 38px - 1px)' }}>
             {mergeData && (
-              <ThreeWayMerge
-                originalContent={mergeData.originalContent}
-                modifiedContent={mergeData.modifiedContent}
-                onComplete={handleMergeComplete}
-                onCancel={() => setMergeData(null)}
-              />
+              <div className="flex h-full flex-col">
+                {mergeData.staleReason && (
+                  <div role="alert" className="border-b border-[var(--color-border)] px-4 py-2 text-sm text-[var(--color-warning-text)]">
+                    {mergeData.staleReason}
+                  </div>
+                )}
+                <div className="min-h-0 flex-1">
+                  <ThreeWayMerge
+                    originalContent={mergeData.originalContent}
+                    modifiedContent={mergeData.modifiedContent}
+                    onComplete={handleMergeComplete}
+                    onCancel={() => setMergeData(null)}
+                  />
+                </div>
+              </div>
             )}
           </div>
         </DialogContent>

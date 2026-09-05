@@ -3,6 +3,8 @@ import { WRITING_LANGUAGES, type WritingLanguage } from './writing-language'
 
 export type PlotTreeTrackRole = 'main' | 'subplot'
 export type PlotTreeEventStatus = 'planned' | 'occurred'
+/** Immutable snapshot safety ceiling, independent of the project's current source range. */
+export const MAX_PLOT_TREE_CHAPTER_NUMBER = 4_294_967_295
 
 export type PlotTreeSourceReference =
   | { type: 'blueprint'; chapterNumber: number }
@@ -77,7 +79,7 @@ export interface PlotTreeSourceBundle {
   narrativeThreads: PlotTreeNarrativeThreadSource[]
   sourceRevision: string
   snapshot: PlotTreeSnapshot | null
-  /** A corrupt or source-incompatible stored snapshot was isolated without deleting it. */
+  /** A corrupt or structurally unsafe stored snapshot was isolated without deleting it. */
   storedSnapshotInvalid?: true
 }
 
@@ -101,14 +103,24 @@ function positiveInteger(value: unknown, label: string): number {
   return value as number
 }
 
+function validChapterNumber(value: unknown): value is number {
+  return Number.isSafeInteger(value)
+    && (value as number) >= 1
+    && (value as number) <= MAX_PLOT_TREE_CHAPTER_NUMBER
+}
+
+function chapterInteger(value: unknown, label: string): number {
+  if (!validChapterNumber(value)) throw new Error(`剧情树${label}无效`)
+  return value
+}
+
 function nonEmptyString(value: unknown): boolean {
   return typeof value === 'string' && Boolean(value.trim())
 }
 
 function validChapterRange(start: unknown, end: unknown): start is number {
-  return Number.isSafeInteger(start)
-    && Number.isSafeInteger(end)
-    && (start as number) >= 1
+  return validChapterNumber(start)
+    && validChapterNumber(end)
     && (end as number) >= (start as number)
 }
 
@@ -117,8 +129,7 @@ function plotTreeSourceChapterBounds(
 ): { startChapter: number; endChapter: number } | null {
   const ranges: Array<readonly [number, number]> = []
   for (const blueprint of Array.isArray(sources.blueprints) ? sources.blueprints : []) {
-    if (Number.isSafeInteger(blueprint?.chapterNumber)
-      && blueprint.chapterNumber >= 1
+    if (validChapterNumber(blueprint?.chapterNumber)
       && [blueprint.title, blueprint.purpose, blueprint.keyEvents].some(nonEmptyString)) {
       ranges.push([blueprint.chapterNumber, blueprint.chapterNumber])
     }
@@ -126,8 +137,7 @@ function plotTreeSourceChapterBounds(
   for (const chapter of Array.isArray(sources.finalizedChapters) ? sources.finalizedChapters : []) {
     if (Number.isSafeInteger(chapter?.draftId)
       && chapter.draftId >= 1
-      && Number.isSafeInteger(chapter.chapterNumber)
-      && chapter.chapterNumber >= 1
+      && validChapterNumber(chapter.chapterNumber)
       && [chapter.title, chapter.summary].some(nonEmptyString)) {
       ranges.push([chapter.chapterNumber, chapter.chapterNumber])
     }
@@ -169,12 +179,12 @@ function sourceReference(value: unknown): PlotTreeSourceReference {
   const input = record(value)
   if (!input) throw new Error('剧情树来源引用无效')
   if (input.type === 'blueprint') {
-    const chapterNumber = positiveInteger(input.chapterNumber, '来源章节')
+    const chapterNumber = chapterInteger(input.chapterNumber, '来源章节')
     return { type: 'blueprint', chapterNumber }
   }
   if (input.type === 'finalized-chapter') {
     const draftId = positiveInteger(input.draftId, '来源定稿')
-    const chapterNumber = positiveInteger(input.chapterNumber, '来源章节')
+    const chapterNumber = chapterInteger(input.chapterNumber, '来源章节')
     return { type: 'finalized-chapter', draftId, chapterNumber }
   }
   if (input.type === 'narrative-thread') {
@@ -184,7 +194,7 @@ function sourceReference(value: unknown): PlotTreeSourceReference {
       : positiveInteger(input.eventId, '来源叙事事件')
     const chapterNumber = input.chapterNumber === undefined
       ? undefined
-      : positiveInteger(input.chapterNumber, '来源章节')
+      : chapterInteger(input.chapterNumber, '来源章节')
     if ((eventId === undefined) !== (chapterNumber === undefined)) {
       throw new Error('剧情树叙事来源引用无效')
     }
@@ -275,8 +285,8 @@ export function assertStoredPlotTreeSnapshot(
     const id = text(track.id, '轨道 ID')
     const title = text(track.title, '轨道标题')
     const summary = text(track.summary, '轨道摘要')
-    const startChapter = positiveInteger(track.startChapter, '轨道开始章节')
-    const endChapter = positiveInteger(track.endChapter, '轨道结束章节')
+    const startChapter = chapterInteger(track.startChapter, '轨道章节范围')
+    const endChapter = chapterInteger(track.endChapter, '轨道章节范围')
     if (endChapter < startChapter) throw new Error('剧情树轨道章节范围无效')
     if (!Array.isArray(track.events) || track.events.length === 0) {
       throw new Error('剧情树轨道事件无效')
@@ -290,7 +300,7 @@ export function assertStoredPlotTreeSnapshot(
         throw new Error('剧情树事件缺少来源引用')
       }
       const status = event.status as PlotTreeEventStatus
-      const chapterNumber = positiveInteger(event.chapterNumber, '事件章节')
+      const chapterNumber = chapterInteger(event.chapterNumber, '事件章节')
       const eventSources = event.sources.map(sourceReference)
       if (!eventSources.every(source => sourceSupportsEvent(source, status, chapterNumber))) {
         throw new Error('剧情树事件状态与来源不匹配')

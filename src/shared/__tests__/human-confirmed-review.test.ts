@@ -17,12 +17,20 @@ const rawAiReport = JSON.stringify({
     { category: '措辞', severity: 'pass', description: '表达自然。' },
   ],
 })
+const sourceDraft = Object.freeze({
+  id: 7,
+  chapterNumber: 1,
+  version: 2,
+  status: 'reviewed' as const,
+  content: '审稿生成时的冻结正文。',
+})
 
 describe('human-confirmed review snapshot contract', () => {
   it('keeps the raw AI report separate while ignore, restore, add, and confirm produce an immutable selected-work snapshot', () => {
     const sourceBeforeReview = rawAiReport
     const initiallyConfirmed = createHumanConfirmedReviewSnapshot({
       sourceReviewId: 42,
+      sourceDraft,
       summary: '原始 AI 总结：只供人工阅读，不能直接送入修稿模型。',
       authorGuidance: '',
       items: [
@@ -35,12 +43,14 @@ describe('human-confirmed review snapshot contract', () => {
 
     const afterIgnore = createHumanConfirmedReviewSnapshot({
       ...initiallyConfirmed!,
+      sourceDraft,
       items: initiallyConfirmed!.items.map(item => (
         item.description === '转场可以更紧凑。' ? { ...item, decision: 'ignore' as const } : item
       )),
     })
     const afterRestoreAndAdd = createHumanConfirmedReviewSnapshot({
       ...afterIgnore!,
+      sourceDraft,
       authorGuidance: '保留第一段的悬念，不要扩写背景设定。',
       items: [
         ...afterIgnore!.items.map(item => (
@@ -58,6 +68,7 @@ describe('human-confirmed review snapshot contract', () => {
 
     expect(afterRestoreAndAdd).toMatchObject({
       sourceReviewId: 42,
+      sourceDraft,
       authorGuidance: '保留第一段的悬念，不要扩写背景设定。',
       items: [
         { severity: 'error', decision: 'apply', origin: 'ai' },
@@ -68,6 +79,7 @@ describe('human-confirmed review snapshot contract', () => {
     })
     expect(Object.isFrozen(afterRestoreAndAdd)).toBe(true)
     expect(Object.isFrozen(afterRestoreAndAdd!.items)).toBe(true)
+    expect(Object.isFrozen(afterRestoreAndAdd!.sourceDraft)).toBe(true)
     expect(hasIncludedReviewItems(afterRestoreAndAdd!)).toBe(true)
     expect(hasIncludedReviewWork(afterRestoreAndAdd!)).toBe(true)
 
@@ -80,6 +92,7 @@ describe('human-confirmed review snapshot contract', () => {
   it('renders only confirmed apply items and explicit author guidance, and treats an all-ignored review as no model work', () => {
     const noWork = createHumanConfirmedReviewSnapshot({
       sourceReviewId: 42,
+      sourceDraft,
       summary: 'AI-only summary must not reach the model.',
       authorGuidance: '   ',
       items: [
@@ -99,6 +112,7 @@ describe('human-confirmed review snapshot contract', () => {
 
     const guidanceOnly = createHumanConfirmedReviewSnapshot({
       ...noWork!,
+      sourceDraft,
       authorGuidance: '即使有补充说明，也没有作者选择纳入的修稿项。',
     })
     expect(hasIncludedReviewItems(guidanceOnly!)).toBe(false)
@@ -106,6 +120,7 @@ describe('human-confirmed review snapshot contract', () => {
 
     const selectedWork = createHumanConfirmedReviewSnapshot({
       sourceReviewId: 42,
+      sourceDraft,
       summary: 'AI-only summary must not reach the model.',
       authorGuidance: '保持第一段悬念。',
       items: [

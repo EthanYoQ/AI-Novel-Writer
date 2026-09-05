@@ -46,6 +46,13 @@ const CONFIRMED_REVIEW_CONTENT = JSON.stringify({
   kind: 'human-confirmed-review',
   schemaVersion: 1,
   sourceReviewId: 7,
+  sourceDraft: {
+    id: 1,
+    chapterNumber: 1,
+    version: 1,
+    status: 'draft',
+    content: '原稿',
+  },
   summary: '需要修复连续性问题。',
   authorGuidance: '',
   items: [{
@@ -769,8 +776,22 @@ describe('workflow mutation failure boundaries', () => {
       if (channel === 'db:draft-get-meta') {
         return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
       }
+      if (channel === 'db:draft-get-full') {
+        return { id: 1, chapterNumber: 1, version: 1, status: 'draft', content: '原稿' }
+      }
       if (channel === 'db:review-get-full') {
-        return { id: 7, baseDraftId: 1, content: CONFIRMED_REVIEW_CONTENT }
+        return {
+          id: 7,
+          baseDraftId: 1,
+          content: CONFIRMED_REVIEW_CONTENT,
+          sourceDraft: {
+            id: 1,
+            chapterNumber: 1,
+            version: 1,
+            status: 'draft',
+            content: '原稿',
+          },
+        }
       }
       if (channel === 'db:revision-get-pending') return []
       if (channel === 'db:revision-create' || channel === 'db:revision-replace-pending') {

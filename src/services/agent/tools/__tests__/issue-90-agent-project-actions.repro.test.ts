@@ -88,6 +88,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   toolRegistry.unregister('start_workflow')
   vi.unstubAllGlobals()
   useProjectStore.setState({ currentProject: null })
@@ -189,6 +190,78 @@ describe('Issue #90 AI assistant project actions', () => {
 
     expect(result.success).toBe(true)
     expect(markSideEffectStarted).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not register a workflow when the Agent is stopped during an asynchronous guard', async () => {
+    let finishGuard: ((core: { premise: string; charactersArch: string; worldbuilding: string; synopsis: string }) => void) | undefined
+    const guardResult = new Promise<{ premise: string; charactersArch: string; worldbuilding: string; synopsis: string }>((resolve) => {
+      finishGuard = resolve
+    })
+    const invoke = stubWorkflowIpc({ 'db:project-core-get': guardResult })
+    const controller = new AbortController()
+    const markSideEffectStarted = vi.fn()
+    const launched = startWorkflowTool.execute(
+      { workflow: 'generate_blueprint' },
+      { ...createAgentExecutionContext(), abortSignal: controller.signal, markSideEffectStarted },
+    )
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      'db:project-core-get',
+      projectPath,
+      expect.anything(),
+    ))
+
+    controller.abort()
+    const complete = '完整架构信息'.repeat(20)
+    finishGuard?.({ premise: complete, charactersArch: complete, worldbuilding: complete, synopsis: complete })
+    const result = await launched
+
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/取消|cancel/u) })
+    expect(markSideEffectStarted).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().activeRuns).toEqual([])
+    expect(useWorkflowStore.getState().history).toEqual([])
+  })
+
+  it('does not register a late workflow after an asynchronous guard exceeds the Agent tool timeout', async () => {
+    vi.useFakeTimers()
+    let finishGuard: ((core: { premise: string; charactersArch: string; worldbuilding: string; synopsis: string }) => void) | undefined
+    const guardResult = new Promise<{ premise: string; charactersArch: string; worldbuilding: string; synopsis: string }>((resolve) => {
+      finishGuard = resolve
+    })
+    stubWorkflowIpc({ 'db:project-core-get': guardResult })
+    toolRegistry.register(startWorkflowTool)
+    const callbacks = {
+      onTextChunk: vi.fn(),
+      onToolCallStart: vi.fn(),
+      onToolCallComplete: vi.fn(),
+      onToolCallConfirmRequired: vi.fn(async () => true),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+    const run = runAgentLoop(
+      'system',
+      [],
+      '生成章节蓝图',
+      'model',
+      vi.fn()
+        .mockResolvedValueOnce('start_workflow\n{"workflow":"generate_blueprint"}')
+        .mockResolvedValueOnce('已停止。'),
+      callbacks,
+      undefined,
+      createAgentExecutionContext(),
+    )
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    await run
+    const complete = '完整架构信息'.repeat(20)
+    finishGuard?.({ premise: complete, charactersArch: complete, worldbuilding: complete, synopsis: complete })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(callbacks.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      error: expect.stringContaining('超时'),
+    }))
+    expect(useWorkflowStore.getState().activeRuns).toEqual([])
+    expect(useWorkflowStore.getState().history).toEqual([])
   })
 
   it('freezes the English locale before asynchronous draft guards complete', async () => {

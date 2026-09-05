@@ -847,13 +847,18 @@ export function registerDatabaseController() {
     reviewSourceId?: number
     content: string
     wordCount: number
+    expectedSource?: ExpectedDraftSource
   }, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const created = RevisionRepository.create(params)
       return { success: true, id: created.id, revisionIndex: created.revisionIndex }
     } catch (err) {
-      return { success: false, error: String(err) }
+      return {
+        success: false,
+        ...(isSourceDraftChangedError(err) ? { errorCode: SOURCE_DRAFT_CHANGED } : {}),
+        error: String(err),
+      }
     }
   })
 

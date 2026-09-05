@@ -274,6 +274,41 @@ describe('PlotTreeRepository', () => {
     expect(afterDeletion.sourceRevision).not.toBe(sources.sourceRevision)
   })
 
+  it.each([1, 6])('retains a valid snapshot after boundary source chapter %i is deleted', (deletedChapter) => {
+    const db = getProjectDb()!
+    db.prepare(`
+      INSERT INTO blueprints (chapter_number, title, purpose, key_events)
+      VALUES
+        (1, 'Opening', 'Open the story', 'The investigation begins.'),
+        (6, 'Reveal', 'Resolve the mystery', 'The hidden street returns.')
+    `).run()
+    const sources = PlotTreeRepository.read()
+    const snapshot: PlotTreeSnapshot = {
+      version: 1,
+      generatedAt: '2030-01-02T03:04:05.000Z',
+      writingLanguage: 'en-US',
+      sourceRevision: sources.sourceRevision,
+      tracks: [{
+        id: 'main', title: 'Main plot', role: 'main', startChapter: 1, endChapter: 6,
+        summary: 'The verified main plot.',
+        events: [1, 6].map(chapterNumber => ({
+          status: 'planned' as const,
+          chapterNumber,
+          summary: `Chapter ${chapterNumber}`,
+          sources: [{ type: 'blueprint' as const, chapterNumber }],
+        })),
+      }],
+    }
+    PlotTreeRepository.save(snapshot, sources.sourceRevision)
+
+    db.prepare('DELETE FROM blueprints WHERE chapter_number = ?').run(deletedChapter)
+
+    const afterDeletion = PlotTreeRepository.read()
+    expect(afterDeletion.snapshot).toEqual(snapshot)
+    expect(afterDeletion.storedSnapshotInvalid).toBeUndefined()
+    expect(afterDeletion.sourceRevision).not.toBe(sources.sourceRevision)
+  })
+
   it('rejects changed source content when SQLite timestamps stay in the same second', () => {
     const db = getProjectDb()!
     ProjectCoreRepository.update({ synopsis: 'A courier follows the original map.' })
@@ -462,6 +497,32 @@ describe('PlotTreeRepository', () => {
     expect(read.storedSnapshotInvalid).toBe(true)
     expect(read.blueprints).toHaveLength(1)
     expect(read.finalizedChapters).toHaveLength(1)
+    expect(db.prepare("SELECT plot_tree_snapshot FROM project_core WHERE id = 'main'").get())
+      .toEqual({ plot_tree_snapshot: raw })
+  })
+
+  it('isolates an oversized stored snapshot when no current event sources exist', () => {
+    const db = getProjectDb()!
+    const oversized = {
+      version: 1,
+      generatedAt: '2030-01-02T03:04:05.000Z',
+      writingLanguage: 'en-US',
+      tracks: [{
+        id: 'main', title: 'Broken range', role: 'main', startChapter: 1,
+        endChapter: 4_294_967_296, summary: 'Must not reach the renderer.',
+        events: [{
+          status: 'planned', chapterNumber: 1, summary: 'The opening.',
+          sources: [{ type: 'blueprint', chapterNumber: 1 }],
+        }],
+      }],
+    }
+    const raw = JSON.stringify(oversized)
+    db.prepare("UPDATE project_core SET plot_tree_snapshot = ? WHERE id = 'main'").run(raw)
+
+    const read = PlotTreeRepository.read()
+
+    expect(read.snapshot).toBeNull()
+    expect(read.storedSnapshotInvalid).toBe(true)
     expect(db.prepare("SELECT plot_tree_snapshot FROM project_core WHERE id = 'main'").get())
       .toEqual({ plot_tree_snapshot: raw })
   })
