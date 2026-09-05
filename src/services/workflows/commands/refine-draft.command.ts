@@ -102,35 +102,27 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
     )) throw new Error(text('当前项目已切换，修稿结果未保存', 'The project changed, so the revision was not saved.'))
 
     const frozenSource = this.params.sourceDraft
-    const baseDraft = frozenSource
-      ? await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:draft-get-full',
-          frozenSource.id,
-          context.projectPath,
-        )
+    const legacyBaseDraft = frozenSource
+      ? null
       : await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
-    if (!baseDraft) throw new Error(text('找不到基准草稿版本', 'The source draft version could not be found.'))
-    if (frozenSource && (
-      baseDraft.id !== frozenSource.id
-      || baseDraft.chapterNumber !== frozenSource.chapterNumber
-      || baseDraft.version !== frozenSource.version
-      || baseDraft.status !== frozenSource.status
-      || !('content' in baseDraft)
-      || baseDraft.content !== draft
-    )) {
-      throw new Error(text(
-        '源草稿在修稿期间已变化，修订结果未保存',
-        'The source draft changed during refinement, so the revision was not saved.',
-      ))
-    }
+    const baseDraftId = frozenSource?.id ?? legacyBaseDraft?.id
+    if (baseDraftId === undefined) throw new Error(text('找不到基准草稿版本', 'The source draft version could not be found.'))
 
     this.assertNotCancelled(context)
     const createRes = await ipc.invokeWithProjectSession(projectSession, 'db:revision-replace-pending', {
-      baseDraftId: baseDraft.id,
+      baseDraftId,
       revisionType: 'refine',
       content: cleanRefined,
       wordCount: countDraftUnits(cleanRefined),
+      ...(frozenSource ? {
+        expectedSource: {
+          id: frozenSource.id,
+          chapterNumber: frozenSource.chapterNumber,
+          version: frozenSource.version,
+          status: frozenSource.status,
+          content: draft,
+        },
+      } : {}),
     }, context.projectPath)
     requireIpcSuccess(createRes, text('创建修订稿', 'Create the pending revision'))
     if (createRes.id === undefined) {

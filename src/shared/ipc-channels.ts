@@ -12,6 +12,7 @@ import type { EmbeddingOptions } from './embedding-options'
 import type { ModelCapabilities } from './provider-presets'
 import type { ModelProviderResourceId } from './model-provider-resources'
 import type { WritingLanguage } from './writing-language'
+import type { DraftStatus } from './draft-status'
 import type {
   FinalizedContinuityProjection,
   SaveFinalizedContinuityRequest,
@@ -200,6 +201,17 @@ export interface ProjectSessionContext {
   leaseId: string
   projectPath: string
 }
+
+/** Renderer-captured source draft contract revalidated by the main-process write transaction. */
+export interface ExpectedDraftSource {
+  id: number
+  chapterNumber: number
+  version: number
+  status: DraftStatus
+  content: string
+}
+
+export type SourceDraftGuardErrorCode = 'SOURCE_DRAFT_CHANGED'
 
 // ===== 项目管理 =====
 export interface CreateProjectConfig {
@@ -886,7 +898,7 @@ export interface DatabaseChannels {
 
   // 5. revisions
   'db:revision-create': { args: [params: { baseDraftId: number; revisionType: 'refine' | 'review-fix'; userPrompt?: string; reviewSourceId?: number; content: string; wordCount: number }, expectedProjectPath: string]; return: { success: boolean; id?: number; revisionIndex?: number; error?: string } }
-  'db:revision-replace-pending': { args: [params: { baseDraftId: number; revisionType: 'refine' | 'review-fix'; userPrompt?: string; reviewSourceId?: number; content: string; wordCount: number }, expectedProjectPath: string]; return: { success: boolean; id?: number; revisionIndex?: number; error?: string } }
+  'db:revision-replace-pending': { args: [params: { baseDraftId: number; revisionType: 'refine' | 'review-fix'; userPrompt?: string; reviewSourceId?: number; content: string; wordCount: number; expectedSource?: ExpectedDraftSource }, expectedProjectPath: string]; return: { success: boolean; id?: number; revisionIndex?: number; errorCode?: SourceDraftGuardErrorCode; error?: string } }
   'db:revision-list': { args: [baseDraftId: number, expectedProjectPath: string]; return: RevisionMeta[] }
   'db:revision-get-pending': { args: [baseDraftId: number, expectedProjectPath: string]; return: RevisionMeta[] }
   'db:revision-get-full': { args: [id: number, expectedProjectPath: string]; return: RevisionFull | null }
@@ -915,7 +927,7 @@ export interface DatabaseChannels {
   'db:revision-mark-discarded': { args: [id: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
 
   // 6. reviews
-  'db:review-create': { args: [params: { baseDraftId: number; reviewIndex: number; content: string }, expectedProjectPath: string]; return: { success: boolean; id?: number; error?: string } }
+  'db:review-create': { args: [params: { baseDraftId: number; reviewIndex?: number; content: string; expectedSource?: ExpectedDraftSource }, expectedProjectPath: string]; return: { success: boolean; id?: number; reviewIndex?: number; errorCode?: SourceDraftGuardErrorCode; error?: string } }
   'db:review-list': { args: [baseDraftId: number, expectedProjectPath: string]; return: ReviewMeta[] }
   'db:review-get-latest': { args: [baseDraftId: number, expectedProjectPath: string]; return: ReviewFull | null }
   'db:review-get-full': { args: [id: number, expectedProjectPath: string]; return: ReviewFull | null }

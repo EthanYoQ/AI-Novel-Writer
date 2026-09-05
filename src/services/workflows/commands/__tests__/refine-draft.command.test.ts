@@ -511,17 +511,9 @@ describe('RefineDraftCommand bounded visible completion', () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
       .mockResolvedValue({ content: revision, finishReason: 'stop' })
     const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:draft-get-full') {
-        return {
-          id: 1,
-          chapterNumber: 1,
-          version: 1,
-          status: 'draft',
-          source: 'write',
-          content: '修稿期间被改写的正文。',
-        }
+      if (channel === 'db:revision-replace-pending') {
+        return { success: false, errorCode: 'SOURCE_DRAFT_CHANGED', error: 'SOURCE_DRAFT_CHANGED' }
       }
-      if (channel === 'db:revision-replace-pending') return { success: true, id: 9, revisionIndex: 2 }
       throw new Error(`unexpected IPC: ${channel}`)
     })
     stubIpc(invoke)
@@ -536,11 +528,23 @@ describe('RefineDraftCommand bounded visible completion', () => {
       step: {},
       context: workflowContext(),
       callbacks: callbacks(),
-    })).rejects.toThrow('源草稿在修稿期间已变化')
+    })).rejects.toThrow('SOURCE_DRAFT_CHANGED')
 
-    expect(invoke).toHaveBeenCalledWith('db:draft-get-full', 1, PROJECT_PATH, PROJECT_SESSION)
-    expect(invoke.mock.calls.some(([channel]) => channel === 'db:draft-get-meta')).toBe(false)
-    expect(invoke.mock.calls.some(([channel]) => channel === 'db:revision-replace-pending')).toBe(false)
+    expect(invoke.mock.calls).toEqual([[
+      'db:revision-replace-pending',
+      expect.objectContaining({
+        baseDraftId: 1,
+        expectedSource: {
+          id: 1,
+          chapterNumber: 1,
+          version: 1,
+          status: 'draft',
+          content: source,
+        },
+      }),
+      PROJECT_PATH,
+      PROJECT_SESSION,
+    ]])
   })
 
   it('rejects a final stop that is materially shorter than the source before any revision IPC', async () => {
@@ -886,19 +890,10 @@ describe('ReviewChapterCommand reasoning stage', () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'db:continuity-list-before' || channel === 'db:character-get-all' || channel === 'db:blueprint-get-all') return []
       if (channel === 'db:project-core-get') return {}
-      if (channel === 'db:draft-get-full') {
-        return {
-          id: 1,
-          chapterNumber: 1,
-          version: 1,
-          status: 'draft',
-          source: 'write',
-          content: '审稿期间被改写的正文。',
-        }
-      }
-      if (channel === 'db:review-next-index') return 1
       if (channel === 'db:blueprint-get') return null
-      if (channel === 'db:review-create') return { success: true, id: 77 }
+      if (channel === 'db:review-create') {
+        return { success: false, errorCode: 'SOURCE_DRAFT_CHANGED', error: 'SOURCE_DRAFT_CHANGED' }
+      }
       throw new Error(`unexpected IPC: ${channel}`)
     })
     stubIpc(invoke)
@@ -913,11 +908,28 @@ describe('ReviewChapterCommand reasoning stage', () => {
       step: {},
       context: workflowContext(),
       callbacks: callbacks(),
-    })).rejects.toThrow('源草稿在审稿期间已变化')
+    })).rejects.toThrow('SOURCE_DRAFT_CHANGED')
 
-    expect(invoke).toHaveBeenCalledWith('db:draft-get-full', 1, PROJECT_PATH, PROJECT_SESSION)
-    expect(invoke.mock.calls.some(([channel]) => channel === 'db:draft-get-meta')).toBe(false)
-    expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(false)
+    expect(invoke.mock.calls.filter(([channel]) => (
+      channel === 'db:draft-get-full'
+      || channel === 'db:draft-get-meta'
+      || channel === 'db:review-next-index'
+      || channel === 'db:review-create'
+    ))).toEqual([[
+      'db:review-create',
+      expect.objectContaining({
+        baseDraftId: 1,
+        expectedSource: {
+          id: 1,
+          chapterNumber: 1,
+          version: 1,
+          status: 'draft',
+          content: source,
+        },
+      }),
+      PROJECT_PATH,
+      PROJECT_SESSION,
+    ]])
   })
 
   it('keeps the complete source chapter in a length replacement request', async () => {

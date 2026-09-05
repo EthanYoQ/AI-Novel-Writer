@@ -5,6 +5,8 @@
  */
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
+import type { ExpectedDraftSource } from '../../src/shared/ipc-channels'
+import { assertExpectedDraftSource } from './draft-source-guard'
 
 /** 审稿元数据 */
 export interface ReviewMeta {
@@ -36,12 +38,16 @@ export class ReviewRepository {
         baseDraftId: number
         reviewIndex?: number
         content: string
-    }): number {
+        expectedSource?: ExpectedDraftSource
+    }): { id: number; reviewIndex: number } {
         const db = getProjectDb()
         if (!db) throw new Error('[ReviewRepository] 数据库未连接')
 
         // 事务内原子分配 review_index，避免 getNextIndex + create 竞态
         const tx = db.transaction(() => {
+            if (params.expectedSource) {
+                assertExpectedDraftSource(db, params.baseDraftId, params.expectedSource)
+            }
             const row = db.prepare(`
         SELECT MAX(review_index) as maxIdx FROM reviews WHERE base_draft_id = ?
       `).get(params.baseDraftId) as { maxIdx: number | null }
@@ -52,7 +58,7 @@ export class ReviewRepository {
         INSERT INTO reviews (base_draft_id, review_index, content_id)
         VALUES (?, ?, ?)
       `).run(params.baseDraftId, reviewIndex, contentId)
-            return Number(result.lastInsertRowid)
+            return { id: Number(result.lastInsertRowid), reviewIndex }
         })
 
         return tx()

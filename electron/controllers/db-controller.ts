@@ -38,6 +38,11 @@ import { importInspectionStore } from '../services/import-inspection-store'
 import { loadApplicationImportSourceSecret } from '../services/import-source-identity-secret'
 import { RevisionRepository } from '../repositories/revision-repository'
 import { ReviewRepository } from '../repositories/review-repository'
+import {
+  isSourceDraftChangedError,
+  SOURCE_DRAFT_CHANGED,
+} from '../repositories/draft-source-guard'
+import type { ExpectedDraftSource } from '../../src/shared/ipc-channels'
 import { PostProcessRepository } from '../repositories/post-process-repository'
 
 // 沿用的旧表
@@ -835,7 +840,7 @@ export function registerDatabaseController() {
   // ============================================================
   // 5. revisions — 修稿
   // ============================================================
-ipcMain.handle('db:revision-create', async (_event, params: {
+  ipcMain.handle('db:revision-create', async (_event, params: {
     baseDraftId: number
     revisionType: 'refine' | 'review-fix'
     userPrompt?: string
@@ -859,13 +864,18 @@ ipcMain.handle('db:revision-create', async (_event, params: {
     reviewSourceId?: number
     content: string
     wordCount: number
+    expectedSource?: ExpectedDraftSource
   }, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const created = RevisionRepository.replacePending(params)
       return { success: true, id: created.id, revisionIndex: created.revisionIndex }
     } catch (err) {
-      return { success: false, error: String(err) }
+      return {
+        success: false,
+        ...(isSourceDraftChangedError(err) ? { errorCode: SOURCE_DRAFT_CHANGED } : {}),
+        error: String(err),
+      }
     }
   })
 
@@ -923,15 +933,20 @@ ipcMain.handle('db:revision-create', async (_event, params: {
   // ============================================================
   ipcMain.handle('db:review-create', async (_event, params: {
     baseDraftId: number
-    reviewIndex: number
+    reviewIndex?: number
     content: string
+    expectedSource?: ExpectedDraftSource
   }, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      const id = ReviewRepository.create(params)
-      return { success: true, id }
+      const created = ReviewRepository.create(params)
+      return { success: true, id: created.id, reviewIndex: created.reviewIndex }
     } catch (err) {
-      return { success: false, error: String(err) }
+      return {
+        success: false,
+        ...(isSourceDraftChangedError(err) ? { errorCode: SOURCE_DRAFT_CHANGED } : {}),
+        error: String(err),
+      }
     }
   })
 

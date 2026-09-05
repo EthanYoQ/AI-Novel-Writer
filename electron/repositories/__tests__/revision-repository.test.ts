@@ -58,6 +58,47 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('RevisionRepository.replacePending', () => {
+  it.each([
+    ['id', { id: 999, chapterNumber: 1, version: 1, status: 'draft', content: '原稿' }],
+    ['chapter', { id: 1, chapterNumber: 2, version: 1, status: 'draft', content: '原稿' }],
+    ['version', { id: 1, chapterNumber: 1, version: 2, status: 'draft', content: '原稿' }],
+    ['status', { id: 1, chapterNumber: 1, version: 1, status: 'reviewed', content: '原稿' }],
+    ['content', { id: 1, chapterNumber: 1, version: 1, status: 'draft', content: '过期原稿' }],
+  ] as const)('atomically rejects a stale frozen source %s without allocating content', (_field, expectedSource) => {
+    const contentsBefore = db.prepare('SELECT COUNT(*) AS count FROM contents').get() as { count: number }
+
+    expect(() => RevisionRepository.replacePending({
+      baseDraftId: 1,
+      revisionType: 'refine',
+      content: '不应保存的修订',
+      wordCount: 7,
+      expectedSource,
+    })).toThrow('SOURCE_DRAFT_CHANGED')
+
+    expect(RevisionRepository.listByDraft(1)).toEqual([])
+    expect(db.prepare('SELECT COUNT(*) AS count FROM contents').get())
+      .toEqual(contentsBefore)
+  })
+
+  it('validates the frozen source and creates the replacement in one transaction', () => {
+    const replacement = RevisionRepository.replacePending({
+      baseDraftId: 1,
+      revisionType: 'refine',
+      content: '合法新修订',
+      wordCount: 6,
+      expectedSource: {
+        id: 1,
+        chapterNumber: 1,
+        version: 1,
+        status: 'draft',
+        content: '原稿',
+      },
+    })
+
+    expect(replacement).toEqual({ id: 1, revisionIndex: 1 })
+    expect(RevisionRepository.getFull(replacement.id)?.content).toBe('合法新修订')
+  })
+
   it('creates the replacement and discards every previous pending revision in one transaction', () => {
     const first = RevisionRepository.create({
       baseDraftId: 1,

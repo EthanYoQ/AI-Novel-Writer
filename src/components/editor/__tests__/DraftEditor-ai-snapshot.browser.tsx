@@ -60,20 +60,6 @@ beforeEach(async () => {
     if (channel === 'db:draft-list') return [{ id: 7, version: 1 }]
     if (channel === 'db:revision-get-pending' || channel === 'db:review-list') return []
     if (channel === 'db:draft-update-content') return { success: true }
-    if (channel === 'db:draft-get-full') {
-      return {
-        id: 7,
-        chapterNumber: 1,
-        version: 1,
-        status: 'draft',
-        source: 'write',
-        contentId: 70,
-        wordCount: SCREEN_BODY.length,
-        createdAt: '2026-09-06T00:00:00.000Z',
-        updatedAt: '2026-09-06T00:01:00.000Z',
-        content: SCREEN_BODY,
-      }
-    }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
   Object.defineProperty(window, 'velaAPI', {
@@ -205,11 +191,49 @@ describe('DraftEditor AI source snapshot', () => {
       PROJECT_PATH,
       PROJECT_SESSION,
     ])
-    expect(invoke.mock.calls).toContainEqual([
-      'db:draft-get-full',
-      7,
-      PROJECT_PATH,
-      PROJECT_SESSION,
-    ])
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:draft-get-full')).toBe(false)
   })
+
+  it.each(['AI 修稿', 'AI 审稿'] as const)(
+    'does not start %s when the author keeps typing while the frozen source is being verified',
+    async (action) => {
+      const originalInvoke = invoke.getMockImplementation() as
+        | ((channel: string, ...args: unknown[]) => unknown)
+        | undefined
+      if (!originalInvoke) throw new Error('missing IPC fixture')
+      let releaseDraftSave!: () => void
+      const draftSaveGate = new Promise<void>((resolve) => {
+        releaseDraftSave = resolve
+      })
+      invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+        if (channel === 'db:draft-update-content') await draftSaveGate
+        return originalInvoke(channel, ...args)
+      })
+
+      await act(async () => page.getByRole('button', { name: action }).click())
+      await act(async () => page.getByRole('button', { name: '确认执行' }).click())
+      await vi.waitFor(() => expect(
+        invoke.mock.calls.some(([channel]) => channel === 'db:draft-update-content'),
+      ).toBe(true))
+
+      const bodyAfterConfirmation = `${SCREEN_BODY}，确认后继续输入。`
+      const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+      await act(async () => view.dispatch({
+        changes: { from: view.state.doc.length, insert: '，确认后继续输入。' },
+      }))
+      expect(useEditorStore.getState().tabs[0]).toMatchObject({
+        content: bodyAfterConfirmation,
+        contentRevision: 2,
+        dirty: true,
+      })
+
+      releaseDraftSave()
+      await act(async () => {
+        await draftSaveGate
+        await new Promise(resolve => setTimeout(resolve, 20))
+      })
+
+      expect(startWorkflow).not.toHaveBeenCalled()
+    },
+  )
 })

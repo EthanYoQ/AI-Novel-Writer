@@ -17,6 +17,7 @@ import {
   parseDraftMeta,
   type DraftMeta,
   type DraftStatus,
+  type FrozenDraftSourceIdentity,
 } from '../../services/workflows/chapter-workflow'
 import { getPendingRevisions, getReviewsForVersion, type RevisionEntry } from '../../services/draft-index'
 import { readDraftBody } from '../../stores/draft-store'
@@ -257,27 +258,31 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
 
     if (targetTab.dirty) await doSave(body)
     if (!isProjectSessionCurrent(projectSession)) return null
-    const stored = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:draft-get-full',
-      sourceDraft.id,
-      projectSession.projectPath,
+    return Object.freeze({ body, sourceDraft })
+  }
+
+  const isFrozenAISourceCurrent = (
+    body: string,
+    sourceDraft: FrozenDraftSourceIdentity,
+  ): boolean => {
+    const currentTab = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
     )
     if (
-      !stored
-      || stored.id !== sourceDraft.id
-      || stored.chapterNumber !== sourceDraft.chapterNumber
-      || stored.version !== sourceDraft.version
-      || stored.status !== sourceDraft.status
-      || stored.content !== body
+      !currentTab
+      || currentTab.content !== body
+      || (currentTab.contentRevision ?? 0) !== sourceDraft.contentRevision
+      || (currentTab.draftId !== undefined && currentTab.draftId !== sourceDraft.id)
+      || (currentTab.chapterNumber !== undefined && currentTab.chapterNumber !== sourceDraft.chapterNumber)
+      || (currentTab.draftStatus !== undefined && currentTab.draftStatus !== sourceDraft.status)
     ) {
       toast.warning(text(
-        '保存期间草稿基准已变化，AI 操作未启动',
-        'The draft source changed while it was being saved, so the AI action was not started.',
+        '确认后正文已变化，本次 AI 操作未启动',
+        'The draft changed after confirmation, so the AI action was not started.',
       ))
-      return null
+      return false
     }
-    return Object.freeze({ body, sourceDraft })
+    return true
   }
 
   /** 执行 AI 修稿（含用户自定义提示词） */
@@ -290,6 +295,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       const { useWorkflowStore } = await import('../../stores/workflow-store')
       const { createRefineOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
+      if (!isFrozenAISourceCurrent(source.body, source.sourceDraft)) return
 
       useWorkflowStore.getState().startWorkflow(createRefineOnlyWorkflow({
         projectPath: projectSession.projectPath,
@@ -316,6 +322,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       const { useWorkflowStore } = await import('../../stores/workflow-store')
       const { createReviewOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
+      if (!isFrozenAISourceCurrent(source.body, source.sourceDraft)) return
 
       useWorkflowStore.getState().startWorkflow(createReviewOnlyWorkflow({
         projectPath: projectSession.projectPath,

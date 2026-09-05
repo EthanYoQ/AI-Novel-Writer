@@ -319,38 +319,31 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     }
 
     const frozenSource = this.params.sourceDraft
-    const baseDraft = frozenSource
-      ? await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:draft-get-full',
-          frozenSource.id,
-          context.projectPath,
-        )
+    const legacyBaseDraft = frozenSource
+      ? null
       : await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
-    if (!baseDraft) throw new Error(text('找不到基准草稿版本', 'The source draft version could not be found.'))
-    if (frozenSource && (
-      baseDraft.id !== frozenSource.id
-      || baseDraft.chapterNumber !== frozenSource.chapterNumber
-      || baseDraft.version !== frozenSource.version
-      || baseDraft.status !== frozenSource.status
-      || !('content' in baseDraft)
-      || baseDraft.content !== draft
-    )) {
-      throw new Error(text(
-        '源草稿在审稿期间已变化，审稿报告未保存',
-        'The source draft changed during review, so the review report was not saved.',
-      ))
+    const baseDraftId = frozenSource?.id ?? legacyBaseDraft?.id
+    const baseVersion = frozenSource?.version ?? legacyBaseDraft?.version
+    if (baseDraftId === undefined || baseVersion === undefined) {
+      throw new Error(text('找不到基准草稿版本', 'The source draft version could not be found.'))
     }
-    const baseVersion = baseDraft.version
-    const revIndex = await ipc.invokeWithProjectSession(projectSession, 'db:review-next-index', baseDraft.id, context.projectPath)
 
     this.assertNotCancelled(context)
     const createResult = await ipc.invokeWithProjectSession(projectSession, 'db:review-create', {
-      baseDraftId: baseDraft.id,
-      reviewIndex: revIndex,
+      baseDraftId,
       content: JSON.stringify(parsedResult, null, 2),
+      ...(frozenSource ? {
+        expectedSource: {
+          id: frozenSource.id,
+          chapterNumber: frozenSource.chapterNumber,
+          version: frozenSource.version,
+          status: frozenSource.status,
+          content: draft,
+        },
+      } : {}),
     }, context.projectPath)
     requireIpcSuccess(createResult, text('保存审稿报告', 'Save the review report'))
+    const revIndex = createResult.reviewIndex ?? 0
 
     // 将审稿报告 JSON 序列化为字符串，作为 content 传给 Tab
     // EditorArea 渲染 ReviewReport 的条件：activeTab.content 存在

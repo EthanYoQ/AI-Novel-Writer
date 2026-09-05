@@ -6,6 +6,8 @@
  */
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
+import type { ExpectedDraftSource } from '../../src/shared/ipc-channels'
+import { assertExpectedDraftSource } from './draft-source-guard'
 
 /** 修稿元数据（不含正文） */
 export interface RevisionMeta {
@@ -115,11 +117,15 @@ export class RevisionRepository {
         reviewSourceId?: number
         content: string
         wordCount: number
+        expectedSource?: ExpectedDraftSource
     }): { id: number; revisionIndex: number } {
         const db = getProjectDb()
         if (!db) throw new Error('[RevisionRepository] 数据库未连接')
 
         return db.transaction(() => {
+            if (params.expectedSource) {
+                assertExpectedDraftSource(db, params.baseDraftId, params.expectedSource)
+            }
             const row = db.prepare(`
         SELECT MAX(revision_index) as maxIdx FROM revisions WHERE base_draft_id = ?
       `).get(params.baseDraftId) as { maxIdx: number | null }
