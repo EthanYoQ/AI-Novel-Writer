@@ -8,6 +8,9 @@ import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
 import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
+import { localize } from '../../i18n/core'
+import type { Locale } from '../../i18n/types'
+import { useLocaleStore } from '../../stores/locale-store'
 
 // ==========================================
 // 1. 结构与类型导出 (保留对外的向后兼容)
@@ -33,6 +36,8 @@ export interface ChapterInfo {
 export interface ChapterWorkflowOptions {
   /** A frozen Agent-originated model choice for this draft run only. */
   generationModelId?: string
+  /** Visible interface locale captured by the launcher. */
+  uiLocale?: Locale
 }
 
 export interface RefineOnlyParams {
@@ -114,11 +119,20 @@ function finalizeWriteResourceKeys(chapterNumber: number): readonly string[] {
 function workflowProjectSession(
   projectPath: string,
   sourceProjectSession: ProjectSessionContext,
+  uiLocale: Locale = chapterWorkflowLocale(),
 ): ProjectSessionContext {
   if (!sameProjectPathKey(sourceProjectSession.projectPath, projectPath)) {
-    throw new Error('工作流项目会话与目标路径不匹配')
+    throw new Error(localize(
+      uiLocale,
+      '工作流项目会话与目标路径不匹配',
+      'Workflow project session does not match the target path',
+    ))
   }
   return Object.freeze({ ...sourceProjectSession })
+}
+
+function chapterWorkflowLocale(locale?: Locale): Locale {
+  return locale ?? useLocaleStore.getState().locale
 }
 
 export async function parseDraftMeta(
@@ -202,6 +216,7 @@ export function createChapterWorkflow(
   sourceProjectSession: ProjectSessionContext,
   options: ChapterWorkflowOptions = {},
 ): WorkflowDefinition {
+  const uiLocale = chapterWorkflowLocale(options.uiLocale)
   const generationModelId = options.generationModelId?.trim() || undefined
   const chapterWordsTarget = normalizeChapterWordsTarget(chapterInfo.wordsTarget)
   const frozenChapterInfo = Object.freeze({ ...chapterInfo, wordsTarget: chapterWordsTarget })
@@ -209,15 +224,23 @@ export function createChapterWorkflow(
     type: 'chapter_creation',
     projectPath: chapterInfo.projectPath,
     projectSession: workflowProjectSession(chapterInfo.projectPath, sourceProjectSession),
+    uiLocale,
     ...(generationModelId ? { generationModelId } : {}),
     chapterWordsTarget,
     resourceKeys: [workflowResourceKey('chapter', chapterInfo.chapterNumber)],
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
-    title: `写稿 — 第 ${chapterInfo.chapterNumber} 章 · ${chapterInfo.title}`,
+    title: localize(uiLocale,
+      `写稿 — 第 ${chapterInfo.chapterNumber} 章 · ${chapterInfo.title}`,
+      `Draft — Chapter ${chapterInfo.chapterNumber} · ${chapterInfo.title}`,
+    ),
     steps: [
       {
-        name: '写稿',
-        description: '基于架构 + 蓝图 + 上下文调用 Command 生成草稿',
+        name: localize(uiLocale, '写稿', 'Draft chapter'),
+        description: localize(
+          uiLocale,
+          '基于架构 + 蓝图 + 上下文调用 Command 生成草稿',
+          'Generate a draft from the architecture, blueprint, and context',
+        ),
         executor: async (step, context, callbacks) => {
           const { GenerateDraftCommand } = await import('./commands/generate-draft.command')
           const cmd = new GenerateDraftCommand(frozenChapterInfo)
@@ -225,7 +248,14 @@ export function createChapterWorkflow(
         },
       },
     ],
-    onComplete: { mode: 'open', message: `第${chapterInfo.chapterNumber}章草稿已生成` },
+    onComplete: {
+      mode: 'open',
+      message: localize(
+        uiLocale,
+        `第${chapterInfo.chapterNumber}章草稿已生成`,
+        `Chapter ${chapterInfo.chapterNumber} draft generated`,
+      ),
+    },
   }
 }
 
@@ -233,17 +263,26 @@ export function createRefineOnlyWorkflow(
   params: RefineOnlyParams,
   sourceProjectSession: ProjectSessionContext,
 ): WorkflowDefinition {
+  const uiLocale = chapterWorkflowLocale()
   return {
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
+    uiLocale,
     resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
-    title: `修稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    title: localize(uiLocale,
+      `修稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+      `Revise — Chapter ${params.chapterNumber} ${params.chapterTitle}`,
+    ),
     steps: [
       {
-        name: '修稿',
-        description: '在保留作者事实与叙事意图的前提下精修草稿，保存修订并打开合并视图',
+        name: localize(uiLocale, '修稿', 'Revise draft'),
+        description: localize(
+          uiLocale,
+          '在保留作者事实与叙事意图的前提下精修草稿，保存修订并打开合并视图',
+          'Revise the draft while preserving authorial facts and intent, save the revision, and open the merge view',
+        ),
         executor: async (step, context, callbacks) => {
           const { RefineDraftCommand } = await import('./commands/refine-draft.command')
           const cmd = new RefineDraftCommand({
@@ -265,19 +304,28 @@ export function createRefineFromReviewWorkflow(
   params: RefineFromReviewParams,
   sourceProjectSession: ProjectSessionContext,
 ): WorkflowDefinition {
+  const uiLocale = chapterWorkflowLocale()
   const generationModelId = params.generationModelId?.trim() || undefined
   return {
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
+    uiLocale,
     ...(generationModelId ? { generationModelId } : {}),
     resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
-    title: `审稿修复 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    title: localize(uiLocale,
+      `审稿修复 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+      `Apply review — Chapter ${params.chapterNumber} ${params.chapterTitle}`,
+    ),
     steps: [
       {
-        name: '审稿驱动修稿',
-        description: '根据审稿报告精准修复问题调用 Command',
+        name: localize(uiLocale, '审稿驱动修稿', 'Revise from review'),
+        description: localize(
+          uiLocale,
+          '根据审稿报告精准修复问题调用 Command',
+          'Apply the confirmed review findings to the draft',
+        ),
         executor: async (step, context, callbacks) => {
           const { RefineFromReviewCommand } = await import('./commands/refine-from-review.command')
           const cmd = new RefineFromReviewCommand({
@@ -299,17 +347,26 @@ export function createReviewOnlyWorkflow(
   params: ReviewOnlyParams,
   sourceProjectSession: ProjectSessionContext,
 ): WorkflowDefinition {
+  const uiLocale = chapterWorkflowLocale()
   return {
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
+    uiLocale,
     resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
-    title: `审稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    title: localize(uiLocale,
+      `审稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+      `Review — Chapter ${params.chapterNumber} ${params.chapterTitle}`,
+    ),
     steps: [
       {
-        name: '审稿',
-        description: '一致性检查（角色/剧情/世界观），生成审稿报告',
+        name: localize(uiLocale, '审稿', 'Review chapter'),
+        description: localize(
+          uiLocale,
+          '一致性检查（角色/剧情/世界观），生成审稿报告',
+          'Check character, plot, and worldbuilding consistency and generate a review report',
+        ),
         executor: async (step, context, callbacks) => {
           const { ReviewChapterCommand } = await import('./commands/review-chapter.command')
           const cmd = new ReviewChapterCommand({
@@ -322,7 +379,14 @@ export function createReviewOnlyWorkflow(
         },
       },
     ],
-    onComplete: { mode: 'open', message: `第${params.chapterNumber}章审稿完成` },
+    onComplete: {
+      mode: 'open',
+      message: localize(
+        uiLocale,
+        `第${params.chapterNumber}章审稿完成`,
+        `Chapter ${params.chapterNumber} review completed`,
+      ),
+    },
   }
 }
 
@@ -330,18 +394,27 @@ export function createFinalizeWorkflow(
   params: FinalizeOnlyParams,
   sourceProjectSession: ProjectSessionContext,
 ): WorkflowDefinition {
+  const uiLocale = chapterWorkflowLocale()
   const chapterInfo: ChapterInfo = { projectPath: params.projectPath, chapterNumber: params.chapterNumber, title: params.chapterTitle, role: '', purpose: '', characters: [], keyEvents: '' }
   return {
     type: 'chapter_creation',
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
+    uiLocale,
     resourceKeys: finalizeWriteResourceKeys(params.chapterNumber),
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
-    title: `定稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+    title: localize(uiLocale,
+      `定稿 — 第${params.chapterNumber}章 ${params.chapterTitle}`,
+      `Finalize — Chapter ${params.chapterNumber} ${params.chapterTitle}`,
+    ),
     steps: [
       {
-        name: '定稿',
-        description: '写入 manuscript/，开启后处理 Command 更新三路大纲',
+        name: localize(uiLocale, '定稿', 'Finalize chapter'),
+        description: localize(
+          uiLocale,
+          '写入 manuscript/，开启后处理 Command 更新三路大纲',
+          'Write to manuscript/ and run post-processing to update the three outlines',
+        ),
         executor: async (step, context, callbacks) => {
           const { FinalizeChapterCommand } = await import('./commands/finalize-chapter.command')
           const cmd = new FinalizeChapterCommand({
@@ -357,7 +430,14 @@ export function createFinalizeWorkflow(
     ],
     // 定稿界面结算只由携带 immutable snapshot 的 FINALIZE_COMPLETE 完成；不要在
     // workflow onComplete 中重新读 DB 并打开/覆盖旧 tab。
-    onComplete: { mode: 'silent', message: `第${params.chapterNumber}章已定稿。` },
+    onComplete: {
+      mode: 'silent',
+      message: localize(
+        uiLocale,
+        `第${params.chapterNumber}章已定稿。`,
+        `Chapter ${params.chapterNumber} finalized.`,
+      ),
+    },
   }
 }
 
@@ -370,17 +450,26 @@ export function createRepairFinalizeWorkflow(
   projectPath: string,
   sourceProjectSession: ProjectSessionContext,
 ): WorkflowDefinition {
+  const uiLocale = chapterWorkflowLocale()
+  const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   return {
     type: 'chapter_creation',
     projectPath,
-    projectSession: workflowProjectSession(projectPath, sourceProjectSession),
+    projectSession: workflowProjectSession(projectPath, sourceProjectSession, uiLocale),
+    uiLocale,
     resourceKeys: finalizeWriteResourceKeys(chapterNumber),
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
-    title: `修复后处理 — 第${chapterNumber}章`,
+    title: text(
+      `修复后处理 — 第${chapterNumber}章`,
+      `Repair post-processing — Chapter ${chapterNumber}`,
+    ),
     steps: [
       {
-        name: '重建后处理',
-        description: '从定稿正文重新生成章节要点、连续性事实和角色状态',
+        name: text('重建后处理', 'Rebuild post-processing'),
+        description: text(
+          '从定稿正文重新生成章节要点、连续性事实和角色状态',
+          'Regenerate chapter notes, continuity facts, and character state from the finalized manuscript',
+        ),
         executor: async (_step, context, callbacks) => {
           const { useProjectStore } = await import('../../stores/project-store')
           const { ipc } = await import('../ipc-client')
@@ -389,7 +478,10 @@ export function createRepairFinalizeWorkflow(
           const projectSession = requireWorkflowProjectSession(context)
           const project = useProjectStore.getState().currentProject
           if (!project || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(project))) {
-            throw new Error('当前项目已切换，修复已停止')
+            throw new Error(text(
+              '当前项目已切换，修复已停止',
+              'The project changed, so repair was stopped.',
+            ))
           }
 
           // 使用数据库定稿源
@@ -399,12 +491,18 @@ export function createRepairFinalizeWorkflow(
             chapterNumber,
             projectPath,
           )
-          if (!draftMeta) throw new Error(`第 ${chapterNumber} 章的定稿记录未获取到`)
+          if (!draftMeta) throw new Error(text(
+            `第 ${chapterNumber} 章的定稿记录未获取到`,
+            `The finalized record for Chapter ${chapterNumber} could not be found.`,
+          ))
           const full = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', draftMeta.id, projectPath)
-          if (!full) throw new Error(`正文提取失败: ID=${draftMeta.id}`)
+          if (!full) throw new Error(text(
+            `正文提取失败: ID=${draftMeta.id}`,
+            `Could not read finalized manuscript content: ID=${draftMeta.id}`,
+          ))
 
           // 从数据库蓝图读取正式标题
-          let chapterTitle = `第${chapterNumber}章`
+          let chapterTitle = text(`第${chapterNumber}章`, `Chapter ${chapterNumber}`)
           let chapterEntities: string[] = []
           try {
             const bp = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', chapterNumber, projectPath)
@@ -420,7 +518,10 @@ export function createRepairFinalizeWorkflow(
             chapterTitle,
             draftContent: full.content,
             draftId: draftMeta.id,
-            sourceLabel: `第${chapterNumber}章定稿`,
+            sourceLabel: text(
+              `第${chapterNumber}章定稿`,
+              `Chapter ${chapterNumber} finalized manuscript`,
+            ),
             onlyFailed: false,
             chapterEntities,
           }).execute({ step: {}, context, callbacks })
@@ -435,6 +536,12 @@ export function createRepairFinalizeWorkflow(
         },
       },
     ],
-      onComplete: { mode: 'open', message: `第${chapterNumber}章后处理修复完成` },
+    onComplete: {
+      mode: 'open',
+      message: text(
+        `第${chapterNumber}章后处理修复完成`,
+        `Chapter ${chapterNumber} post-processing repair completed`,
+      ),
+    },
   }
 }

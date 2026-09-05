@@ -26,6 +26,89 @@ export interface ReviewChapterParams {
   reviewFocus?: string
 }
 
+const REVIEW_SUMMARY_MAX_CHARACTERS = 120
+const REVIEW_DESCRIPTION_MAX_CHARACTERS = 200
+const REVIEW_QUOTE_MAX_CHARACTERS = 160
+
+interface ReviewResultItem extends Record<string, unknown> {
+  category: string
+  severity: 'error' | 'warning' | 'pass'
+  description: string
+  quote?: string
+}
+
+interface ReviewResult extends Record<string, unknown> {
+  summary: string
+  items: ReviewResultItem[]
+}
+
+function isBoundedText(value: unknown, maxCharacters: number): value is string {
+  return typeof value === 'string'
+    && Boolean(value.trim())
+    && Array.from(value.trim()).length <= maxCharacters
+}
+
+function boundText(value: string, maxCharacters: number): string {
+  return Array.from(value.trim()).slice(0, maxCharacters).join('')
+}
+
+function isReviewShape(value: unknown): value is ReviewResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const review = value as Record<string, unknown>
+  if (Object.keys(review).some(key => key !== 'summary' && key !== 'items')
+    || typeof review.summary !== 'string'
+    || !Array.isArray(review.items)
+    || review.items.length < 1
+    || review.items.length > 10) return false
+  return review.items.every((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+    const record = item as Record<string, unknown>
+    const severity = record.severity
+    return !Object.keys(record).some(key => (
+      key !== 'category'
+      && key !== 'severity'
+      && key !== 'description'
+      && key !== 'quote'
+    ))
+      && typeof record.category === 'string'
+      && (severity === 'error' || severity === 'warning' || severity === 'pass')
+      && typeof record.description === 'string'
+      && (record.quote === undefined
+        ? severity === 'pass'
+        : typeof record.quote === 'string')
+  })
+}
+
+function isReviewResult(value: unknown): value is ReviewResult {
+  return isReviewShape(value)
+    && isBoundedText(value.summary, REVIEW_SUMMARY_MAX_CHARACTERS)
+    && value.items.every(item => (
+      Boolean(item.category.trim())
+      && isBoundedText(item.description, REVIEW_DESCRIPTION_MAX_CHARACTERS)
+      && (item.quote === undefined || isBoundedText(item.quote, REVIEW_QUOTE_MAX_CHARACTERS))
+    ))
+}
+
+function parseReviewResult(content: string): ReviewResult {
+  const trimmed = content.trim()
+  const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
+  const parsed: unknown = JSON.parse(fenced?.[1]?.trim() ?? trimmed)
+  if (!isReviewShape(parsed)) throw new Error('invalid review contract')
+  const bounded: ReviewResult = {
+    summary: boundText(parsed.summary, REVIEW_SUMMARY_MAX_CHARACTERS),
+    items: parsed.items.map(item => ({
+      category: item.category,
+      severity: item.severity,
+      description: boundText(item.description, REVIEW_DESCRIPTION_MAX_CHARACTERS),
+      ...(item.quote === undefined
+        ? {}
+        : { quote: boundText(item.quote, REVIEW_QUOTE_MAX_CHARACTERS) }),
+    })),
+  }
+  if (!isReviewResult(bounded)) throw new Error('invalid review contract')
+  return bounded
+}
+
 export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
   constructor(
     private params: ReviewChapterParams,
@@ -96,9 +179,11 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     callbacks.log(text('调用 AI 审查员对本章进行多维度扫描...', 'Running the AI continuity review...'))
 
     // 期望 JSON 格式返回
-    const reviewResultRaw = await this.callLLMWithBuilder(
-      promptBuilder,
+    const reviewResultRaw = await this.callLLMWithBoundedCompletion(
+      promptBuilder.build(),
+      promptBuilder.getSystemRole(),
       callbacks,
+      { mode: 'replace-structured-output', maxContinuations: 1 },
       {
         responseFormat: { type: 'json_object' },
         purpose: 'review-chapter',
@@ -111,22 +196,21 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
 
     const reviewResultClean = this.stripThinkingTags(reviewResultRaw)
 
+    let parsedResult: ReviewLike
+    try {
+      parsedResult = parseReviewResult(reviewResultClean)
+    } catch {
+      throw new Error(text(
+        'AI 返回的审稿结果无效，因此未保存报告。',
+        'The AI review response was invalid, so no report was saved.',
+      ))
+    }
+
     const baseDraft = await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
     if (!baseDraft) throw new Error(text('找不到基准草稿版本', 'The source draft version could not be found.'))
     const baseVersion = baseDraft.version
 
     const revIndex = await ipc.invokeWithProjectSession(projectSession, 'db:review-next-index', baseDraft.id, context.projectPath)
-
-    let parsedResult: ReviewLike
-    try {
-      const parsed = this.parseJSON(reviewResultClean)
-      parsedResult = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? parsed as ReviewLike
-        : { summary: text('解析失败', 'Parsing failed'), items: [] }
-    } catch {
-      callbacks.log(text('审稿结果解析失败，返回原始文本', 'The review result could not be parsed; preserving the raw response.'))
-      parsedResult = { summary: text('解析失败', 'Parsing failed'), items: [] }
-    }
 
     const blueprint = await ipc.invokeWithProjectSession(
       projectSession, 'db:blueprint-get', this.params.chapterNumber, context.projectPath,

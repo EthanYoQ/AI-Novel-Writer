@@ -101,5 +101,6 @@ describe('draft-store merged revision persistence', () => {
       11,
       projectPath,
     )
+    expect(refreshFileTree).not.toHaveBeenCalled()
   })
 })

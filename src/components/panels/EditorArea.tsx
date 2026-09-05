@@ -660,13 +660,22 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           <CharacterEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
         {activeTab?.type === 'chapter-card' && activeTab.projectKey && (
-          <ChapterCardEditor key={activeTab.id} projectKey={activeTab.projectKey} />
+          <ChapterCardEditor
+            key={activeTab.id}
+            projectKey={activeTab.projectKey}
+            initialChapterNumber={activeTab.chapterNumber}
+          />
         )}
         {activeTab?.type === 'world-building' && activeTab.projectKey && (
           <WorldBuildingEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
         {activeTab?.type === 'narrative-thread' && activeTab.projectKey === currentProject.path && (
-          <NarrativeThreadEditor key={activeTab.id} projectKey={activeTab.projectKey} />
+          <NarrativeThreadEditor
+            key={activeTab.id}
+            projectKey={activeTab.projectKey}
+            initialView={activeTab.narrativeThreadView ?? 'plans'}
+            viewRequest={activeTab.narrativeThreadViewRequest}
+          />
         )}
         {activeTab?.type === 'arch-file' && activeTab.filePath && activeTab.projectKey && (
           <ArchFileViewer

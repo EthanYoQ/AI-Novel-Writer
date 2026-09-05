@@ -10,7 +10,7 @@ export type BottomTab = 'tasks' | 'log' | 'models'
 export type RightView = 'agent' | 'ai-output'
 
 /** 左侧主导航当前视觉激活项 */
-export type LeftRailItem = SidebarView | 'blueprint' | 'world' | 'ai' | BottomTab
+export type LeftRailItem = SidebarView | 'blueprint' | 'world' | 'plot-tree' | BottomTab
 
 /** 设置弹窗分类 */
 export type SettingsSection = 'llm' | 'embedding' | 'proxy' | 'editor' | 'prompts' | 'skills' | 'about'
@@ -122,7 +122,7 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
   setAIPanelOpen: (open) => set({ aiPanelOpen: open }),
   setAIPanelWidth: (width) => set({ aiPanelWidth: Math.max(260, Math.min(600, width)) }),
   setRightView: (view) => set({ rightView: view }),
-  openRightPanel: (view) => set({ aiPanelOpen: true, rightView: view, activeRailItem: 'ai' }),
+  openRightPanel: (view) => set({ aiPanelOpen: true, rightView: view }),
 
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
   setBottomTab: (tab) =>

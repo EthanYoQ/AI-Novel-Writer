@@ -139,8 +139,12 @@ export default function TitleBar() {
           <ScrollText size={18} strokeWidth={1.7} />
         </div>
         <div className="leading-tight min-w-[112px]">
-          <div className="text-sm font-semibold brand-gradient">{APP_BRAND.zhName}</div>
-          <div className="text-[0.68rem] opacity-75">{APP_BRAND.enName}</div>
+          <div className="text-sm font-semibold brand-gradient">
+            {locale === 'zh-CN' ? APP_BRAND.zhName : APP_BRAND.enName}
+          </div>
+          {locale === 'zh-CN' && (
+            <div className="text-[0.68rem] opacity-75">{APP_BRAND.enName}</div>
+          )}
         </div>
       </div>
 

@@ -4,6 +4,7 @@ import { exportNovel } from '../export-service'
 import { ipc } from '../ipc-client'
 import { setActiveProjectSessionContext } from '../../shared/project-session-context'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import { useLocaleStore } from '../../stores/locale-store'
 
 vi.mock('../ipc-client', () => ({
   ipc: {
@@ -45,6 +46,7 @@ vi.mock('../../stores/workflow-store', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useLocaleStore.setState({ locale: 'zh-CN' })
   setActiveProjectSessionContext(projectSession)
   vi.mocked(ipc.invoke).mockResolvedValue({ success: true } as never)
   vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (_session: ProjectSessionContext, channel: string) => {
@@ -61,6 +63,48 @@ afterEach(() => {
 })
 
 describe('exportNovel project session ownership', () => {
+  it('freezes the English UI locale for export logs while the request is running', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    let resolveBlueprints: ((value: Array<{ chapterNumber: number }>) => void) | undefined
+    vi.mocked(ipc.invokeWithProjectSession).mockImplementationOnce(() =>
+      new Promise((resolve) => { resolveBlueprints = resolve }),
+    )
+
+    const exporting = exportNovel(
+      { format: 'merged-md', grantId: 'export-grant' },
+      projectSnapshot,
+      projectSession,
+    )
+    await vi.waitFor(() => expect(resolveBlueprints).toBeTypeOf('function'))
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    resolveBlueprints!([])
+
+    await expect(exporting).resolves.toEqual({
+      success: false,
+      error: 'There are no finalized chapters to export.',
+    })
+    expect(addLog).toHaveBeenCalledWith('info', 'Starting export (Merged Markdown)...', 'en-US')
+  })
+
+  it('uses an English action and fallback when an export write fails', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    vi.mocked(ipc.invoke).mockResolvedValueOnce({ success: false } as never)
+
+    await expect(exportNovel(
+      { format: 'txt', grantId: 'export-grant' },
+      projectSnapshot,
+      projectSession,
+    )).resolves.toEqual({
+      success: false,
+      error: 'Error: Failed to write the exported file.',
+    })
+    expect(addLog).toHaveBeenLastCalledWith(
+      'error',
+      'Export failed: Error: Failed to write the exported file.',
+      'en-US',
+    )
+  })
+
   it('reads project data through the frozen session and writes only through the granted directory capability', async () => {
     await expect(exportNovel(
       { format: 'merged-md', grantId: 'export-grant', includeOutline: true },

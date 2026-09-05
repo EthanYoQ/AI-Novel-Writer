@@ -369,14 +369,24 @@ describe('GenerateDirectoryCommand', () => {
 
   it('sends English blueprint instructions through the provider request for an English project', async () => {
     stubIpcInvoke(successfulCommitHandler())
-    let observedTask: GenerationTask | undefined
+    const observedTasks: GenerationTask[] = []
     const session = generationSession(async task => {
-      observedTask = task
+      observedTasks.push(task)
+      const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
+      const diagnosticRebuild = prompt.includes('[Previous contract violation]')
       return {
         status: 'completed',
-        content: blueprintJson([1]),
+        content: JSON.stringify({
+          blueprints: [modelBlueprint(1, {
+            role: 'inciting incident',
+            relationshipHints: diagnosticRebuild
+              ? []
+              : [{ from: '主角', to: 'Unknown character', relation: 'rival' }],
+            suspenseHook: 'A sealed letter names the next suspect.',
+          })],
+        }),
         finishReason: 'stop',
-        receipt: generationReceipt(1, 'stop'),
+        receipt: generationReceipt(observedTasks.length, 'stop', task.purpose),
       }
     })
     const command = new GenerateDirectoryCommand(
@@ -399,11 +409,22 @@ describe('GenerateDirectoryCommand', () => {
 
     await command.execute({ step: {}, context, callbacks: stepCallbacks() })
 
+    const observedTask = observedTasks.at(-1)
     const system = observedTask?.messages.find(message => message.role === 'system')?.content ?? ''
     const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(observedTasks).toHaveLength(2)
+    expect(observedTasks.map(task => task.purpose)).toEqual([
+      'chapter-blueprint-directory',
+      'chapter-blueprint-directory:compact-single:chapter-1',
+    ])
+    expect(observedTask?.purpose).toBe('chapter-blueprint-directory:compact-single:chapter-1')
     expect(system).toContain('You are an experienced chapter architect')
     expect(system).toContain('[Immutable system contract]')
-    expect(user).toContain('Generate chapter blueprints from chapter 1 through chapter 1')
+    expect(user).toContain('Build the complete chapter blueprint from only the bounded facts below.')
+    expect(user).toContain('"suspenseHookCharacters":160')
+    expect(user).toContain('"role":"short structural label"')
+    expect(user).toContain('code=relationship_endpoint_not_in_characters path=blueprints[0].relationships[0]')
+    expect(user).not.toContain('actualCharacters')
     expect(user).toContain('Science fiction')
     expect(user).not.toContain('科幻')
     expect(user).toContain('The sign “夜航 Café” must remain byte-for-byte unchanged.')
@@ -550,10 +571,10 @@ describe('GenerateDirectoryCommand', () => {
       .toHaveLength(1)
     expect(createRuntime).toHaveBeenCalledWith({
       budget: {
-        maxAttempts: 15,
-        maxRequestedOutputTokens: 61_440,
+        maxAttempts: 20,
+        maxRequestedOutputTokens: 81_920,
         maxRequestedOutputTokensPerAttempt: 4_096,
-        deadlineMs: 600_000,
+        deadlineMs: 1_800_000,
       },
     })
   })
@@ -593,10 +614,10 @@ describe('GenerateDirectoryCommand', () => {
     expect(observedRanges).toEqual([[10, 14], [15, 19], [20, 20]])
     expect(createRuntime).toHaveBeenCalledWith({
       budget: {
-        maxAttempts: 23,
-        maxRequestedOutputTokens: 94_208,
+        maxAttempts: 31,
+        maxRequestedOutputTokens: 126_976,
         maxRequestedOutputTokensPerAttempt: 4_096,
-        deadlineMs: 600_000,
+        deadlineMs: 1_800_000,
       },
     })
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
@@ -761,10 +782,10 @@ describe('GenerateDirectoryCommand', () => {
       .toHaveLength(1)
     expect(createRuntime).toHaveBeenCalledWith({
       budget: {
-        maxAttempts: 11,
-        maxRequestedOutputTokens: 45_056,
+        maxAttempts: 15,
+        maxRequestedOutputTokens: 61_440,
         maxRequestedOutputTokensPerAttempt: 4_096,
-        deadlineMs: 600_000,
+        deadlineMs: 1_800_000,
       },
     })
   })
@@ -854,14 +875,17 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
 
-    await expect(command.execute({
+    const failure = await command.execute({
       step: {},
-      context: workflowContext(),
+      context: { ...workflowContext(), uiLocale: 'en-US' },
       callbacks,
-    })).rejects.toThrow(
-      /purpose=chapter-blueprint-directory:compact-single:chapter-1 finishReason=length requestedTokens=4096/u,
-    )
+    }).then(() => null, error => error as Error)
 
+    expect(failure?.message).not.toMatch(/[\u3400-\u9fff]/u)
+    expect(failure?.message).toContain('code=limit_exceeded reason=output_limit')
+    expect(failure?.message).toContain(
+      'purpose=chapter-blueprint-directory:compact-single:chapter-1 finishReason=length requestedTokens=4096',
+    )
     expect(attempt).toBe(2)
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining(
       'purpose=chapter-blueprint-directory:compact-single:chapter-1 finishReason=length requestedTokens=4096',
@@ -998,32 +1022,122 @@ describe('GenerateDirectoryCommand', () => {
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })).rejects.toThrow(/code=missing_item path=blueprints/u)
+    })).rejects.toThrow(/code=unexpected_item path=blueprints/u)
 
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
 
-  it('rejects an empty required purpose before any database write', async () => {
+  it('bounds an overlong generated suspense hook and commits without another model call', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
-    const session = generationSession(async () => ({
+    const overlongHook = 'h'.repeat(180)
+    const complete = vi.fn(async () => ({
       status: 'completed',
-      content: JSON.stringify({ blueprints: [modelBlueprint(1, { purpose: '' })] }),
+      content: JSON.stringify({ blueprints: [modelBlueprint(1, { suspenseHook: overlongHook })] }),
       finishReason: 'stop',
       receipt: generationReceipt(1, 'stop'),
-    }))
+    } as const))
+    const session = generationSession(complete)
     const command = new GenerateDirectoryCommand(
       { mode: 'full', count: 1 },
       { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 1 } },
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
 
-    await expect(command.execute({
+    const result = await command.execute({
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })).rejects.toThrow(/code=invalid_value path=blueprints\[0\]\.purpose/u)
+    })
 
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
+    expect(complete).toHaveBeenCalledOnce()
+    expect(result[0]?.suspenseHook).toBe('h'.repeat(160))
+    expect(invoke.mock.calls.find(([channel]) => channel === 'db:blueprint-commit-range')?.[1])
+      .toMatchObject({ blueprints: [expect.objectContaining({ suspenseHook: 'h'.repeat(160) })] })
+  })
+
+  it('bounds an overlong generated relationship description and commits without another model call', async () => {
+    const invoke = stubIpcInvoke(successfulCommitHandler({
+      other: channel => channel === 'db:character-roster-read'
+        ? { status: 'empty', revision: 0, entries: [] }
+        : { success: true },
+    }))
+    const overlongRelation = 'r'.repeat(105)
+    const complete = vi.fn(async () => ({
+      status: 'completed',
+      content: JSON.stringify({
+        blueprints: [modelBlueprint(1, {
+          characters: ['主角', '盟友'],
+          relationshipHints: [{ from: '主角', to: '盟友', relation: overlongRelation }],
+        })],
+      }),
+      finishReason: 'stop',
+      receipt: generationReceipt(1, 'stop'),
+    } as const))
+    const session = generationSession(complete)
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 1 } },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+
+    const result = await command.execute({
+      step: {},
+      context: workflowContext(),
+      callbacks: stepCallbacks(),
+    })
+
+    const boundedRelation = 'r'.repeat(80)
+    expect(complete).toHaveBeenCalledOnce()
+    expect(result[0]?.relationshipHints).toEqual([
+      { from: '主角', to: '盟友', relation: boundedRelation },
+    ])
+    expect(invoke.mock.calls.find(([channel]) => channel === 'db:blueprint-commit-range')?.[1])
+      .toMatchObject({
+        blueprints: [expect.objectContaining({
+          relationshipHints: [{ from: '主角', to: '盟友', relation: boundedRelation }],
+        })],
+      })
+  })
+
+  it('normalizes all safe overlong text when a supported relationship alias triggers recovery', async () => {
+    const invoke = stubIpcInvoke(successfulCommitHandler({
+      other: channel => channel === 'db:character-roster-read'
+        ? { status: 'empty', revision: 0, entries: [] }
+        : { success: true },
+    }))
+    const candidate = modelBlueprint(1, {
+      characters: ['主角', '盟友'],
+      purpose: 'p'.repeat(260),
+    })
+    delete candidate.relationships
+    candidate.relationshipHints = [
+      { from: '主角', to: '盟友', relation: 'r'.repeat(105) },
+    ]
+    const complete = vi.fn(async () => ({
+      status: 'completed',
+      content: JSON.stringify({ blueprints: [candidate] }),
+      finishReason: 'stop',
+      receipt: generationReceipt(1, 'stop'),
+    } as const))
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 1 } },
+      { createRuntime: vi.fn(async () => testRuntime(generationSession(complete))) },
+    )
+
+    const result = await command.execute({
+      step: {},
+      context: workflowContext(),
+      callbacks: stepCallbacks(),
+    })
+
+    expect(complete).toHaveBeenCalledOnce()
+    expect(result[0]).toMatchObject({
+      purpose: 'p'.repeat(240),
+      relationshipHints: [{ from: '主角', to: '盟友', relation: 'r'.repeat(80) }],
+    })
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
+      .toHaveLength(1)
   })
 
   it('does not synthesize a missing required title in strict generation output', async () => {
@@ -1067,12 +1181,15 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
 
+    const context = { ...workflowContext(), uiLocale: 'en-US' as const }
     const failure = await command.execute({
       step: {},
-      context: workflowContext(),
+      context,
       callbacks: stepCallbacks(),
     }).then(() => null, error => error as Error & { diagnostic?: unknown })
 
+    expect(failure?.message).not.toMatch(/[\u3400-\u9fff]/u)
+    expect(failure?.message).toContain('Structured contract diagnostic')
     expect(failure?.message).toContain('code=missing_field')
     expect(failure?.message).toContain('path=blueprints[0].relationships')
     expect(failure?.diagnostic).toMatchObject({ code: 'missing_field', path: 'blueprints[0].relationships' })

@@ -37,6 +37,22 @@ const fallbackInstallError: UpdateError = {
   safeTechnicalDetails: 'INSTALL_FAILED',
 }
 
+const fallbackDownloadError: UpdateError = {
+  code: 'DOWNLOAD_FAILED',
+  phase: 'download',
+  reason: 'unknown',
+  retryable: true,
+  safeTechnicalDetails: 'UPDATE_OPERATION_FAILED',
+}
+
+const fallbackOpenReleaseError: UpdateError = {
+  code: 'OPEN_RELEASE_FAILED',
+  phase: 'navigation',
+  reason: 'open-release-failed',
+  retryable: true,
+  safeTechnicalDetails: 'OPEN_RELEASE_FAILED',
+}
+
 const MAX_TIMER_DELAY_MS = 2_147_000_000
 
 /**
@@ -156,6 +172,30 @@ export function useUpdateState() {
     }
   }, [presentation.canDefer])
 
+  const downloadUpdate = useCallback(async () => {
+    if (!presentation.canDownload || !ipc.isElectron) return
+    setManualActionError(undefined)
+    try {
+      const response = await ipc.invoke('update:download')
+      setState(response.state)
+      setManualActionError(response.error)
+    } catch {
+      setManualActionError(fallbackDownloadError)
+    }
+  }, [presentation.canDownload])
+
+  const openRelease = useCallback(async () => {
+    if (!presentation.canOpenRelease || !ipc.isElectron) return
+    setManualActionError(undefined)
+    try {
+      const response = await ipc.invoke('update:open-release')
+      setState(response.state)
+      setManualActionError(response.error)
+    } catch {
+      setManualActionError(fallbackOpenReleaseError)
+    }
+  }, [presentation.canOpenRelease])
+
   const requestInstall = useCallback(async () => {
     if (!presentation.canInstall || !ipc.isElectron) return
     setManualActionError(undefined)
@@ -176,6 +216,8 @@ export function useUpdateState() {
     lastReminderDays,
     checkForUpdates,
     deferReminder,
+    downloadUpdate,
+    openRelease,
     requestInstall,
   }
 }

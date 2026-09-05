@@ -33,6 +33,8 @@ describe('update IPC controller', () => {
     const service: UpdateServiceFacade = {
       getState: vi.fn(() => currentState),
       checkManually: vi.fn(async () => manualResponse),
+      downloadUpdate: vi.fn(async () => actionResponse),
+      openRelease: vi.fn(async () => actionResponse),
       deferReminder: vi.fn(async () => actionResponse),
       requestInstall: vi.fn(async () => actionResponse),
       subscribe: (listener) => {
@@ -46,9 +48,13 @@ describe('update IPC controller', () => {
 
     expect(await handlers.get('update:get-state')!({})).toEqual(currentState)
     expect(await handlers.get('update:check')!({})).toEqual(manualResponse)
+    expect(await handlers.get('update:download')!({})).toEqual(actionResponse)
+    expect(await handlers.get('update:open-release')!({})).toEqual(actionResponse)
     expect(await handlers.get('update:defer-reminder')!({}, 30)).toEqual(actionResponse)
     expect(await handlers.get('update:quit-and-install')!({})).toEqual(actionResponse)
     expect(service.deferReminder).toHaveBeenCalledWith(30)
+    expect(service.downloadUpdate).toHaveBeenCalledOnce()
+    expect(service.openRelease).toHaveBeenCalledOnce()
     expect(service.requestInstall).toHaveBeenCalledOnce()
 
     const downloaded = { ...state('downloaded'), availableVersion: '0.2.6' }

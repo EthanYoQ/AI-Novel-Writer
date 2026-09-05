@@ -100,6 +100,18 @@ describe('getUpdatePresentation', () => {
     })
   })
 
+  it('exposes the platform-specific action after a release is found', () => {
+    expect(getUpdatePresentation({
+      state: { ...baseState, status: 'available', availableVersion: '0.2.6', updateAction: 'download' },
+      manualCheckRequested: false,
+    })).toMatchObject({ canDownload: true, canOpenRelease: false })
+
+    expect(getUpdatePresentation({
+      state: { ...baseState, status: 'available', availableVersion: '0.2.6', updateAction: 'open-release' },
+      manualCheckRequested: false,
+    })).toMatchObject({ canDownload: false, canOpenRelease: true })
+  })
+
   it('hides a deferred update without disabling manual checking', () => {
     expect(getUpdatePresentation({
       state: {

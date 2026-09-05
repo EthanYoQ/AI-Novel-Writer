@@ -4,9 +4,14 @@ import { registerMCPHandlers } from './mcp/mcp-ipc-bridge'
 import { mainT } from './i18n'
 import { registerUpdateController } from './controllers/update-controller'
 import { createElectronUpdaterBackend } from './services/electron-updater-adapter'
+import {
+  GITHUB_LATEST_RELEASE_PAGE,
+  createGitHubReleaseUpdateBackend,
+} from './services/github-release-update-backend'
 import { GlobalConfigUpdatePreferencesStore } from './services/update-preferences-store'
 import {
   hasWindowsUpdateConfiguration,
+  isMacUpdateReminderEnabled,
   isWindowsUpdateRuntimeEnabled,
 } from './services/update-runtime'
 import { startUpdateRuntime } from './services/update-startup'
@@ -232,15 +237,21 @@ app.whenReady().then(async () => {
   registerMCPHandlers()
   // 更新功能失败不能阻断作者进入应用；窗口先于更新运行时创建。
   createWindow()
-  const updateRuntimeEnabled = isWindowsUpdateRuntimeEnabled(app.isPackaged, VITE_DEV_SERVER_URL)
-  const updateConfiguration = updateRuntimeEnabled && !hasWindowsUpdateConfiguration()
+  const windowsUpdateEnabled = isWindowsUpdateRuntimeEnabled(app.isPackaged, VITE_DEV_SERVER_URL)
+  const macUpdateReminderEnabled = isMacUpdateReminderEnabled(app.isPackaged, VITE_DEV_SERVER_URL)
+  const updateRuntimeEnabled = windowsUpdateEnabled || macUpdateReminderEnabled
+  const updateConfiguration = windowsUpdateEnabled && !hasWindowsUpdateConfiguration()
     ? 'missing'
     : 'available'
   startUpdateRuntime({
     updateRuntimeEnabled,
     updateConfiguration,
     currentVersion: app.getVersion(),
-    createBackend: createElectronUpdaterBackend,
+    updateAction: windowsUpdateEnabled ? 'download' : 'open-release',
+    openRelease: () => shell.openExternal(GITHUB_LATEST_RELEASE_PAGE),
+    createBackend: windowsUpdateEnabled
+      ? createElectronUpdaterBackend
+      : createGitHubReleaseUpdateBackend,
     createPreferences: () => new GlobalConfigUpdatePreferencesStore(),
     registerController: updateService => {
       registerUpdateController(updateService, { ipc: ipcMain, publish: publishUpdateState })

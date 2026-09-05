@@ -10,6 +10,7 @@ import { chromium } from 'playwright'
 const scriptPath = fileURLToPath(import.meta.url)
 
 const checkUpdateNames = /^(检查更新|Check for updates)$/
+const downloadUpdateNames = /^(下载更新|Download update)$/
 const restartUpdateNames = /^(立即重启更新|Restart and update now)$/
 
 function assert(condition, message) {
@@ -87,16 +88,20 @@ function attachPageDiagnostics(page, evidence) {
   })
 }
 
-async function waitForAvailableUpdateControl(checkButton, restartButton, timeoutMilliseconds) {
+async function waitForAvailableUpdateControl(checkButton, downloadButton, restartButton, timeoutMilliseconds) {
   const deadline = Date.now() + timeoutMilliseconds
   while (Date.now() < deadline) {
     if (await restartButton.isVisible().catch(() => false)) return 'restart'
+    if (
+      await downloadButton.isVisible().catch(() => false)
+      && await downloadButton.isEnabled().catch(() => false)
+    ) return 'download'
     const checkIsReady = await checkButton.isVisible().catch(() => false)
       && await checkButton.isEnabled().catch(() => false)
     if (checkIsReady) return 'check'
     await delay(250)
   }
-  throw new Error('Timed out waiting for either an enabled update check or a downloaded update')
+  throw new Error('Timed out waiting for an update check, download, or restart action')
 }
 
 async function triggerRealUpdate({ endpoint, expectedVersion, evidenceRoot }) {
@@ -111,6 +116,7 @@ async function triggerRealUpdate({ endpoint, expectedVersion, evidenceRoot }) {
     console: [],
     pageErrors: [],
     usedControl: null,
+    downloadControl: null,
     restartControl: null,
   }
   let browser
@@ -122,16 +128,21 @@ async function triggerRealUpdate({ endpoint, expectedVersion, evidenceRoot }) {
     await page.screenshot({ path: join(screenshots, 'before-check-update.png'), fullPage: true })
 
     const restartButton = page.getByRole('button', { name: restartUpdateNames })
+    const downloadButton = page.getByRole('button', { name: downloadUpdateNames })
     const checkButton = page.getByRole('button', { name: checkUpdateNames })
-    const availableControl = await waitForAvailableUpdateControl(checkButton, restartButton, 300_000)
+    const availableControl = await waitForAvailableUpdateControl(checkButton, downloadButton, restartButton, 300_000)
     if (availableControl === 'check') {
       evidence.usedControl = await checkButton.innerText()
       await checkButton.click()
-    } else {
-      // The production runtime can begin its formal-release check immediately
-      // at startup. A disabled check button plus the real downloaded-state
-      // restart control proves that path completed before automation arrived.
+      await downloadButton.waitFor({ state: 'visible', timeout: 300_000 })
+      evidence.downloadControl = await downloadButton.innerText()
+      await downloadButton.click()
+    } else if (availableControl === 'download') {
       evidence.usedControl = 'startup-auto-check'
+      evidence.downloadControl = await downloadButton.innerText()
+      await downloadButton.click()
+    } else {
+      evidence.usedControl = 'already-downloaded'
     }
 
     await restartButton.waitFor({ state: 'visible', timeout: 300_000 })

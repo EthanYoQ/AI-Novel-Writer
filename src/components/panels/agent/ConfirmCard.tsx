@@ -119,11 +119,20 @@ function generateDescription(
 ): string {
   switch (toolName) {
     case 'write_file':
-      return `将写入文件：${args.file_path ?? '未知路径'}`
+      return text(
+        `将写入文件：${args.file_path ?? '未知路径'}`,
+        `Will write file: ${args.file_path ?? 'Unknown path'}`,
+      )
     case 'open_editor':
-      return `将在编辑器中打开：${args.file_path ?? '未知文件'}`
+      return text(
+        `将在编辑器中打开：${args.file_path ?? '未知文件'}`,
+        `Will open in the editor: ${args.file_path ?? 'Unknown file'}`,
+      )
     case 'start_workflow':
-      return `将启动工作流：${args.workflow ?? '未知工作流'}${args.chapter_number ? `（第 ${args.chapter_number} 章）` : ''}`
+      return text(
+        `将启动工作流：${args.workflow ?? '未知工作流'}${args.chapter_number ? `（第 ${args.chapter_number} 章）` : ''}`,
+        `Will start workflow: ${args.workflow ?? 'Unknown workflow'}${args.chapter_number ? ` (Chapter ${args.chapter_number})` : ''}`,
+      )
     case 'propose_novel_config':
       return text('小说配置变更提案', 'Novel configuration change proposal')
     case 'propose_chapter_blueprint':
@@ -132,6 +141,6 @@ function generateDescription(
         `Chapter ${args.chapter_number ?? '?'} blueprint change proposal`,
       )
     default:
-      return `将执行操作：${toolName}`
+      return text(`将执行操作：${toolName}`, `Will run operation: ${toolName}`)
   }
 }

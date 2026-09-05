@@ -79,7 +79,7 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
     isSubmittingRef.current = true
     setIsSubmitting(true)
     try {
-      // 检测已填写的核心字段，提示用户确认覆盖
+      // 已有作者内容时先确认扩写范围
       const cfg = currentProject?.novelConfig
       const filledFields: string[] = []
       if (cfg?.coreOutline?.trim()) filledFields.push(text('核心大纲', 'Core outline'))
@@ -93,8 +93,8 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
         setConfirming(true)
         const fieldList = filledFields.map(f => `• ${f}`).join('\n')
         const ok = await confirm(
-          text(`以下字段已有内容，继续生成将覆盖：\n\n${fieldList}\n\n确定要重新生成吗？`, `These fields already contain data and will be overwritten:\n\n${fieldList}\n\nGenerate again?`),
-          { title: text('配置已存在', 'Configuration exists'), confirmText: text('继续覆盖', 'Overwrite'), cancelText: text('取消', 'Cancel') }
+          text(`以下字段已有作者内容，AI 将保留原文并追加补充：\n\n${fieldList}\n\n确定要继续扩写吗？`, `These fields already contain author-written content. AI will preserve it and append useful additions:\n\n${fieldList}\n\nContinue expanding?`),
+          { title: text('扩写已有配置', 'Expand existing configuration'), confirmText: text('继续扩写', 'Expand'), cancelText: text('取消', 'Cancel') }
         )
         setConfirming(false)
         if (!ok || !isProjectSessionCurrent(projectSession)) return
@@ -116,7 +116,7 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
         return
       }
 
-      // 覆盖确认通过后，立即关闭弹窗
+      // 扩写确认通过后，立即关闭弹窗
       onClose()
       toast.info(text('正在根据脑洞生成小说配置...', 'Generating novel configuration from your idea...'))
       addLog('info', text(`正在根据创作脑洞生成小说配置（规模：${totalChapters} 章 / ${wordsPerChapter} 字/章）...`, `Generating novel configuration (${totalChapters} chapters / ${wordsPerChapter} words per chapter)...`))

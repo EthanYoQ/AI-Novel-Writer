@@ -150,6 +150,36 @@ describe('architecture workflow project context', () => {
     )
   })
 
+  it('uses the caller-frozen locale after the live locale changes', () => {
+    useProjectStore.setState({
+      currentProject: {
+        id: 'project-A',
+        sessionLease: 'lease-A',
+        name: 'A',
+        path: 'C:/projects/A',
+        novelConfig: {},
+        characterStates: '',
+        createdAt: '',
+        updatedAt: '',
+      } as never,
+    })
+    useLocaleStore.setState({ locale: 'en-US' })
+    const frozenLocale = useLocaleStore.getState().locale
+    useLocaleStore.setState({ locale: 'zh-CN' })
+
+    const workflow = createArchitectureWorkflow({
+      projectPath: 'C:/projects/A',
+      projectSession: { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
+      selectedSteps: ['premise'],
+    }, frozenLocale)
+
+    expect(workflow).toMatchObject({
+      uiLocale: 'en-US',
+      title: 'Generate story architecture',
+      steps: [expect.objectContaining({ name: 'Story premise' })],
+    })
+  })
+
   it('stops a later step when the user switches projects between workflow steps', async () => {
     useProjectStore.setState({
       currentProject: {

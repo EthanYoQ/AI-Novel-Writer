@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   UpdateService,
@@ -129,7 +129,7 @@ describe('UpdateService', () => {
     expect(service.getState()).toMatchObject({ status: 'error' })
   })
 
-  it('checks at most once per calendar day automatically while manual checks remain forceable', async () => {
+  it('records at most one successful automatic check per calendar day while manual checks remain forceable', async () => {
     const updater = new FakeUpdater()
     const service = new UpdateService({
       updater,
@@ -146,10 +146,28 @@ describe('UpdateService', () => {
     expect(updater.checkCalls).toBe(2)
   })
 
-  it('serializes automatic and manual check-download operations without joining the manual check', async () => {
+  it('retries on the next startup when the earlier automatic check failed', async () => {
+    const updater = new FakeUpdater()
+    const preferences = createPreferencesStore()
+    const options = {
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences,
+      now: () => new Date('2026-07-25T09:00:00+08:00'),
+    }
+    updater.checkError = new Error('offline')
+
+    await new UpdateService(options).checkAutomatically()
+    updater.checkError = undefined
+    await new UpdateService(options).checkAutomatically()
+
+    expect(updater.checkCalls).toBe(2)
+  })
+
+  it('serializes automatic and manual checks without joining the manual check', async () => {
     const automaticCheck = deferred<UpdateCheckResult | null>()
     const manualCheck = deferred<UpdateCheckResult | null>()
-    const manualDownload = deferred<string[]>()
     const checks = [automaticCheck, manualCheck]
     const events: string[] = []
     let activeOperations = 0
@@ -168,13 +186,7 @@ describe('UpdateService', () => {
         return result
       },
       downloadUpdate: async () => {
-        events.push('download-2-start')
-        activeOperations += 1
-        maxConcurrency = Math.max(maxConcurrency, activeOperations)
-        const result = await manualDownload.promise
-        activeOperations -= 1
-        events.push('download-2-end')
-        return result
+        throw new Error('download must require an explicit action')
       },
       quitAndInstall: () => undefined,
     }
@@ -198,12 +210,6 @@ describe('UpdateService', () => {
     expect(events).toEqual(['check-1-start', 'check-1-end', 'check-2-start'])
 
     manualCheck.resolve({ updateInfo: { version: '0.2.6' } })
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(events.at(-1)).toBe('download-2-start')
-    expect(maxConcurrency).toBe(1)
-
-    manualDownload.resolve([])
     await expect(manualResult).resolves.toMatchObject({
       success: true,
       checked: true,
@@ -214,18 +220,16 @@ describe('UpdateService', () => {
       'check-1-end',
       'check-2-start',
       'check-2-end',
-      'download-2-start',
-      'download-2-end',
     ])
     expect(checkIndex).toBe(2)
     expect(maxConcurrency).toBe(1)
     expect(service.getState()).toMatchObject({
-      status: 'downloaded',
+      status: 'available',
       availableVersion: '0.2.6',
     })
   })
 
-  it('downloads a newer stable update and exposes its downloaded state', async () => {
+  it('waits for an explicit download request after finding a newer stable update', async () => {
     const updater = new FakeUpdater({ updateInfo: { version: '0.2.6', releaseName: 'v0.2.6' } })
     const service = new UpdateService({
       updater,
@@ -237,12 +241,68 @@ describe('UpdateService', () => {
 
     await service.checkManually()
 
-    expect(updater.downloadCalls).toBe(1)
+    expect(updater.downloadCalls).toBe(0)
     expect(service.getState()).toMatchObject({
-      status: 'downloaded',
+      status: 'available',
       availableVersion: '0.2.6',
       releaseName: 'v0.2.6',
     })
+
+    await service.downloadUpdate()
+
+    expect(updater.downloadCalls).toBe(1)
+    expect(service.getState()).toMatchObject({ status: 'downloaded' })
+  })
+
+  it('rejects a concurrent download request without starting a second backend download or rolling back success', async () => {
+    const pendingDownload = deferred<string[]>()
+    const downloadUpdate = vi.fn(() => pendingDownload.promise)
+    const service = new UpdateService({
+      updater: {
+        checkForUpdates: async () => ({ updateInfo: { version: '0.2.6' } }),
+        downloadUpdate,
+        quitAndInstall: () => undefined,
+      },
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore(),
+    })
+    await service.checkManually()
+
+    const first = service.downloadUpdate()
+    const concurrent = service.downloadUpdate()
+
+    expect(downloadUpdate).toHaveBeenCalledOnce()
+    await expect(concurrent).resolves.toMatchObject({
+      success: false,
+      error: { code: 'DOWNLOAD_NOT_READY' },
+      state: { status: 'downloading' },
+    })
+    pendingDownload.resolve([])
+    await expect(first).resolves.toMatchObject({ success: true, state: { status: 'downloaded' } })
+    expect(downloadUpdate).toHaveBeenCalledOnce()
+    expect(service.getState()).toMatchObject({ status: 'downloaded' })
+  })
+
+  it('opens the injected release page instead of downloading on macOS reminder mode', async () => {
+    const updater = new FakeUpdater({ updateInfo: { version: '0.2.6' } })
+    const openRelease = vi.fn(async () => undefined)
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      updateAction: 'open-release',
+      openRelease,
+      preferences: createPreferencesStore(),
+    })
+
+    await service.checkManually()
+
+    expect(service.getState()).toMatchObject({ status: 'available', updateAction: 'open-release' })
+    await expect(service.downloadUpdate()).resolves.toMatchObject({ success: false })
+    await expect(service.openRelease()).resolves.toMatchObject({ success: true })
+    expect(updater.downloadCalls).toBe(0)
+    expect(openRelease).toHaveBeenCalledOnce()
   })
 
   it('persists an available release before download so a later run can safely recover it', async () => {
@@ -300,6 +360,7 @@ describe('UpdateService', () => {
 
     await service.checkManually()
     expect(updater.checkCalls).toBe(1)
+    await service.downloadUpdate()
     expect(service.getState()).toMatchObject({ status: 'downloaded' })
   })
 
@@ -436,6 +497,7 @@ describe('UpdateService', () => {
     service.subscribe((state) => states.push(state))
 
     await service.checkManually()
+    await service.downloadUpdate()
 
     expect(states).toContainEqual(expect.objectContaining({
       status: 'downloading',
@@ -456,6 +518,7 @@ describe('UpdateService', () => {
     })
 
     await service.checkManually()
+    await service.downloadUpdate()
     updater.checkError = new Error('offline after download')
     const redundantCheck = await service.checkManually()
 
@@ -469,7 +532,7 @@ describe('UpdateService', () => {
     expect(updater.quitCalls).toBe(1)
   })
 
-  it('re-checks downloaded state inside the queue so overlapping checks download only once', async () => {
+  it('downloads only once after overlapping checks discover the same release', async () => {
     const firstCheck = deferred<UpdateCheckResult | null>()
     let checkCalls = 0
     let downloadCalls = 0
@@ -498,8 +561,11 @@ describe('UpdateService', () => {
     firstCheck.resolve({ updateInfo: { version: '0.2.6' } })
 
     await expect(automatic).resolves.toMatchObject({ success: true, updateAvailable: true })
-    await expect(manual).resolves.toMatchObject({ success: true, checked: false, updateAvailable: true })
-    expect(checkCalls).toBe(1)
+    await expect(manual).resolves.toMatchObject({ success: true, checked: true, updateAvailable: true })
+    expect(checkCalls).toBe(2)
+    expect(downloadCalls).toBe(0)
+    await service.downloadUpdate()
+    await service.downloadUpdate()
     expect(downloadCalls).toBe(1)
   })
 
@@ -570,7 +636,8 @@ describe('UpdateService', () => {
       preferences: createPreferencesStore(),
     })
 
-    const result = await service.checkManually()
+    await service.checkManually()
+    const result = await service.downloadUpdate()
 
     expect(result).toMatchObject({
       success: false,
@@ -627,7 +694,8 @@ describe('UpdateService', () => {
       now: () => new Date('2026-07-25T09:00:00+08:00'),
     })
 
-    const result = await service.checkManually()
+    await service.checkManually()
+    const result = await service.downloadUpdate()
 
     expect(result).toMatchObject({ success: false, error: { code: 'DOWNLOAD_FAILED' } })
     expect(JSON.stringify(result)).not.toContain('download URL')

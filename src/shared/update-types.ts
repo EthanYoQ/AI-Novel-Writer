@@ -17,7 +17,7 @@ export interface UpdateCheckResult {
 export interface UpdatePreferences {
   /** 最近一次检查的时间，供界面显示。 */
   lastCheckedAt?: string
-  /** 最近一次自动检查对应的本地日历日，限制为每天最多一次。 */
+  /** 最近一次成功自动检查对应的本地日历日，成功检查每天最多一次。 */
   lastAutomaticCheckDate?: string
   /** 已确认高于当前版本的正式更新；重启后只恢复“可继续准备”，不伪造已下载状态。 */
   availableUpdate?: UpdateReleaseInfo
@@ -32,12 +32,14 @@ export interface UpdateReminder {
 
 export type UpdateReminderDelay = 7 | 30
 
+export type UpdateAction = 'download' | 'open-release'
+
 export type UpdateStatus = 'idle' | 'checking' | 'not-available' | 'available' | 'downloading' | 'downloaded' | 'error' | 'disabled'
 
-export type UpdateErrorCode = 'UPDATES_DISABLED' | 'UPDATE_CONFIGURATION_MISSING' | 'CHECK_FAILED' | 'DOWNLOAD_FAILED' | 'INSTALL_NOT_READY' | 'INSTALL_FAILED' | 'REMINDER_NOT_AVAILABLE' | 'REMINDER_SAVE_FAILED' | 'INVALID_REMINDER_DELAY'
+export type UpdateErrorCode = 'UPDATES_DISABLED' | 'UPDATE_CONFIGURATION_MISSING' | 'CHECK_FAILED' | 'DOWNLOAD_NOT_READY' | 'DOWNLOAD_FAILED' | 'INSTALL_NOT_READY' | 'INSTALL_FAILED' | 'OPEN_RELEASE_FAILED' | 'REMINDER_NOT_AVAILABLE' | 'REMINDER_SAVE_FAILED' | 'INVALID_REMINDER_DELAY'
 
 /** Which safe, user-facing update operation produced the error. */
-export type UpdateErrorPhase = 'configuration' | 'check' | 'download' | 'install' | 'reminder'
+export type UpdateErrorPhase = 'configuration' | 'check' | 'download' | 'install' | 'navigation' | 'reminder'
 
 /** Stable classifications; raw updater/network errors never cross the IPC boundary. */
 export type UpdateErrorReason =
@@ -56,6 +58,7 @@ export type UpdateErrorReason =
   | 'reminder-save-failed'
   | 'invalid-reminder-delay'
   | 'install-failed'
+  | 'open-release-failed'
   | 'unknown'
 
 /** Allowlisted diagnostics that are safe to retain and render without credentials or paths. */
@@ -71,8 +74,10 @@ export type SafeUpdateTechnicalDetails =
   | 'UPDATE_METADATA_INVALID'
   | 'UPDATE_ASSET_MISSING'
   | 'UPDATE_OPERATION_FAILED'
+  | 'DOWNLOAD_NOT_READY'
   | 'INSTALL_NOT_READY'
   | 'INSTALL_FAILED'
+  | 'OPEN_RELEASE_FAILED'
   | 'REMINDER_NOT_AVAILABLE'
   | 'REMINDER_SAVE_FAILED'
   | 'INVALID_REMINDER_DELAY'
@@ -97,6 +102,7 @@ export interface UpdateState {
   status: UpdateStatus
   currentVersion: string
   availableVersion?: string
+  updateAction?: UpdateAction
   releaseName?: string
   releaseNotes?: string
   releaseDate?: string

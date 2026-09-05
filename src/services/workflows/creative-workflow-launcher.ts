@@ -20,6 +20,7 @@ import { createArchitectureWorkflow, type ArchitectureWorkflowParams } from './a
 import { createChapterWorkflow } from './chapter-workflow'
 import { createDirectoryWorkflow, type DirectoryWorkflowParams } from './directory-workflow'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
+import type { Locale } from '../../i18n/types'
 
 export type CreativeWorkflowName =
   | 'generate_draft'
@@ -53,24 +54,38 @@ export interface CreativeWorkflowLaunchOptions {
   readonly generationModelId?: string
 }
 
-function requireGuardAccepted(result: GuardResult): void {
-  if (!result.ok) throw new Error(result.message ?? '创作工作流前置条件未满足')
+function requireGuardAccepted(result: GuardResult, uiLocale: Locale): void {
+  if (!result.ok) {
+    throw new Error(result.message ?? (uiLocale === 'en-US'
+      ? 'Creative workflow prerequisites are not satisfied'
+      : '创作工作流前置条件未满足'))
+  }
 }
 
 async function guardIntent(
   intent: CreativeIntent,
   projectSession: ProjectSessionContext,
+  uiLocale: Locale,
 ): Promise<void> {
   if (intent.workflow === 'generate_architecture') {
-    requireGuardAccepted(guardArchitectureGeneration(projectSession.projectPath, projectSession))
+    requireGuardAccepted(
+      guardArchitectureGeneration(projectSession.projectPath, projectSession, uiLocale),
+      uiLocale,
+    )
     return
   }
   if (intent.workflow === 'generate_blueprint') {
-    requireGuardAccepted(await guardDirectoryGeneration(projectSession.projectPath, projectSession))
+    requireGuardAccepted(
+      await guardDirectoryGeneration(projectSession.projectPath, projectSession, uiLocale),
+      uiLocale,
+    )
     return
   }
   if (intent.workflow === 'generate_draft') {
-    requireGuardAccepted(await guardChapterWriting(intent.chapterNumber, projectSession.projectPath, projectSession))
+    requireGuardAccepted(
+      await guardChapterWriting(intent.chapterNumber, projectSession.projectPath, projectSession, uiLocale),
+      uiLocale,
+    )
   }
 }
 
@@ -86,6 +101,7 @@ async function definitionFor(
   intent: CreativeIntent,
   projectSession: ProjectSessionContext,
   generationModelId?: string,
+  uiLocale?: Locale,
 ): Promise<WorkflowDefinition> {
   const project = currentProjectFor(projectSession)
 
@@ -95,10 +111,10 @@ async function definitionFor(
       projectSession,
       selectedSteps: intent.selectedSteps,
       stepGuidance: intent.stepGuidance,
-    })
+    }, uiLocale)
   }
   if (intent.workflow === 'generate_blueprint') {
-    return createDirectoryWorkflow(intent.params ?? { mode: 'full' }, project.path, projectSession)
+    return createDirectoryWorkflow(intent.params ?? { mode: 'full' }, project.path, projectSession, uiLocale)
   }
   if (intent.workflow === 'generate_draft') {
     if (!Number.isInteger(intent.chapterNumber) || intent.chapterNumber < 1) {
@@ -125,7 +141,7 @@ async function definitionFor(
       suspenseHook: blueprint.suspenseHook,
       userGuidance: blueprint.userGuidance,
       wordsTarget: normalizeChapterWordsTarget(project.novelConfig.wordsPerChapter),
-    }, projectSession, { generationModelId })
+    }, projectSession, { generationModelId, uiLocale })
   }
 
   throw new Error(`${intent.workflow} 需要明确的草稿 ID 和不可变正文快照；请先打开目标草稿后从编辑器启动`)
@@ -138,25 +154,33 @@ export async function launchCreativeWorkflow(
   options: CreativeWorkflowLaunchOptions = {},
 ): Promise<CreativeWorkflowLaunchReceipt> {
   const generationModelId = options.generationModelId?.trim() || undefined
+  const uiLocale = useLocaleStore.getState().locale
   currentProjectFor(projectSession)
-  await guardIntent(intent, projectSession)
+  await guardIntent(intent, projectSession, uiLocale)
   currentProjectFor(projectSession)
   const definition = await definitionFor(
     intent,
     Object.freeze({ ...projectSession }),
     generationModelId,
+    uiLocale,
   )
   currentProjectFor(projectSession)
 
   const conflict = useWorkflowStore.getState().getResourceConflict(definition)
   if (conflict) {
-    throw new Error(workflowResourceConflictMessage(useLocaleStore.getState().locale, conflict.title))
+    throw new Error(workflowResourceConflictMessage(uiLocale, conflict.title))
   }
 
   const runId = randomUUID()
-  const completion = useWorkflowStore.getState().startWorkflow({ ...definition, runId })
+  const completion = useWorkflowStore.getState().startWorkflow({ ...definition, runId, uiLocale })
   void completion.catch((error) => {
-    useWorkflowStore.getState().addLog('error', `[失败] 工作流启动后异常：${String(error)}`)
+    useWorkflowStore.getState().addLog(
+      'error',
+      uiLocale === 'en-US'
+        ? `[Failed] Workflow errored after launch: ${String(error)}`
+        : `[失败] 工作流启动后异常：${String(error)}`,
+      uiLocale,
+    )
   })
 
   const state = useWorkflowStore.getState()

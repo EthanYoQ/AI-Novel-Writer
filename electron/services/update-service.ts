@@ -7,6 +7,7 @@
 
 import type {
   UpdateActionResponse,
+  UpdateAction,
   UpdateCheckResponse,
   UpdateCheckResult,
   UpdateDownloadProgress,
@@ -25,6 +26,7 @@ import type {
 
 export type {
   UpdateActionResponse,
+  UpdateAction,
   UpdateCheckResponse,
   UpdateCheckResult,
   UpdateDownloadProgress,
@@ -60,6 +62,8 @@ export interface UpdateServiceOptions {
   isPackaged: boolean
   /** A packaged test/unpacked build may lack Electron Builder's app-update.yml. */
   updateConfiguration?: 'available' | 'missing'
+  updateAction?: UpdateAction
+  openRelease?(): Promise<void>
   preferences: UpdatePreferencesStore
   now?: () => Date
 }
@@ -182,7 +186,7 @@ export function isHigherStableVersion(candidate: string, current: string): boole
 }
 
 /**
- * 更新服务的最小公共行为：在已打包的应用中，自动检查每天最多一次；
+ * 更新服务的最小公共行为：在已打包的应用中，成功自动检查每天最多一次；
  * 用户手动检查始终可以绕过该频率限制。
  */
 export class UpdateService {
@@ -209,6 +213,7 @@ export class UpdateService {
       currentVersion: options.currentVersion,
       ...(availableUpdate ? {
         availableVersion: availableUpdate.version,
+        updateAction: options.updateAction ?? 'download',
         releaseName: availableUpdate.releaseName,
         releaseNotes: availableUpdate.releaseNotes,
         releaseDate: availableUpdate.releaseDate,
@@ -259,14 +264,20 @@ export class UpdateService {
       return this.response({ success: true, checked: false })
     }
 
-    if (!this.writePreferences({
-      ...preferences,
-      lastCheckedAt: now.toISOString(),
-      lastAutomaticCheckDate: today,
-    })) {
+    if (!this.writePreferences(preferences)) {
       return this.response({ success: false, checked: false })
     }
-    return this.enqueueCheck(() => this.performCheck('automatic', now))
+    return this.enqueueCheck(async () => {
+      const result = await this.performCheck('automatic', now)
+      if (result.success && result.checked) {
+        this.writePreferences({
+          ...(this.readPreferences() ?? preferences),
+          lastCheckedAt: now.toISOString(),
+          lastAutomaticCheckDate: today,
+        })
+      }
+      return result
+    })
   }
 
   async checkManually(): Promise<UpdateCheckResponse> {
@@ -325,6 +336,7 @@ export class UpdateService {
         ...this.state,
         status: 'not-available',
         availableVersion: undefined,
+        updateAction: undefined,
         releaseName: undefined,
         releaseNotes: undefined,
         releaseDate: undefined,
@@ -338,22 +350,64 @@ export class UpdateService {
     this.rememberAvailableUpdate(update)
     this.setState({
       ...this.state,
-      status: 'downloading',
+      status: 'available',
       availableVersion: update.version,
+      updateAction: this.options.updateAction ?? 'download',
       releaseName: update.releaseName,
       releaseNotes: update.releaseNotes,
       releaseDate: update.releaseDate,
       ...this.reminderStateFor(update.version),
       downloadProgress: undefined,
     })
+    return this.response({ success: true, checked: true, updateAvailable: true })
+  }
+
+  /** Windows only: download starts after an explicit renderer request. */
+  async downloadUpdate(): Promise<UpdateActionResponse> {
+    if (
+      !this.options.isPackaged
+      || this.state.updateAction !== 'download'
+      || !this.state.availableVersion
+    ) {
+      return this.actionResponse(false, makeUpdateError('DOWNLOAD_NOT_READY', 'download', 'not-ready', true, 'DOWNLOAD_NOT_READY'))
+    }
+    if (this.downloadedVersion === this.state.availableVersion) {
+      return this.actionResponse(true)
+    }
+    if (this.state.status !== 'available') {
+      return this.actionResponse(false, makeUpdateError('DOWNLOAD_NOT_READY', 'download', 'not-ready', true, 'DOWNLOAD_NOT_READY'))
+    }
+
+    const version = this.state.availableVersion
+    this.setState({ ...this.state, status: 'downloading', downloadProgress: undefined, error: undefined })
     try {
       await this.options.updater.downloadUpdate()
     } catch (error) {
-      return this.handleFailure(mode, classifyUpdateFailure('download', error), 'available')
+      const failure = classifyUpdateFailure('download', error)
+      this.setState({ ...this.state, status: 'available', error: undefined })
+      return this.actionResponse(false, failure)
     }
-    this.downloadedVersion = update.version
+    this.downloadedVersion = version
     this.setState({ ...this.state, status: 'downloaded' })
-    return this.response({ success: true, checked: true, updateAvailable: true })
+    return this.actionResponse(true)
+  }
+
+  /** macOS only: the injected closure opens one fixed, trusted Releases URL. */
+  async openRelease(): Promise<UpdateActionResponse> {
+    if (
+      !this.options.isPackaged
+      || this.state.updateAction !== 'open-release'
+      || !this.state.availableVersion
+      || !this.options.openRelease
+    ) {
+      return this.actionResponse(false, makeUpdateError('OPEN_RELEASE_FAILED', 'navigation', 'not-ready', false, 'OPEN_RELEASE_FAILED'))
+    }
+    try {
+      await this.options.openRelease()
+      return this.actionResponse(true)
+    } catch {
+      return this.actionResponse(false, makeUpdateError('OPEN_RELEASE_FAILED', 'navigation', 'open-release-failed', true, 'OPEN_RELEASE_FAILED'))
+    }
   }
 
   async deferReminder(days: UpdateReminderDelay): Promise<UpdateActionResponse> {
@@ -477,7 +531,7 @@ export class UpdateService {
       return this.response({ success: false, checked, error })
     }
 
-    // 自动检查与后台下载的失败只留在主进程；不向渲染进程提供打扰性错误状态。
+    // 自动检查失败只留在主进程；不向渲染进程提供打扰性错误状态。
     this.setState({ ...this.state, status: automaticStatus, error: undefined })
     return this.response({ success: false, checked })
   }

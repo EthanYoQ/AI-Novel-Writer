@@ -143,7 +143,10 @@ export function PostProcessStatusPanel({
         className,
       )}>
         <Clock size={12} className="text-[var(--color-warning,#f59e0b)]" />
-        <span>{status.sourceLabel} {text('正在处理', 'Processing')}（{successCount}/{totalCount}）</span>
+        <span>{text(
+          `${status.sourceLabel} 正在处理（${successCount}/${totalCount}）`,
+          `${status.sourceLabel} Processing (${successCount}/${totalCount})`,
+        )}</span>
       </div>
     )
   }
@@ -156,7 +159,10 @@ export function PostProcessStatusPanel({
         className,
       )}>
         <CheckCircle2 size={12} />
-        <span>{status.sourceLabel} 完成（{successCount}/{totalCount}）</span>
+        <span>{text(
+          `${status.sourceLabel} 完成（${successCount}/${totalCount}）`,
+          `${status.sourceLabel} complete (${successCount}/${totalCount})`,
+        )}</span>
       </div>
     )
   }
@@ -182,7 +188,10 @@ export function PostProcessStatusPanel({
               : 'text-[var(--color-warning,#f59e0b)]'
           } />
           <span className="text-[11px] font-medium text-[var(--color-text)]">
-            {status.sourceLabel} — {failedSteps.length} 个步骤失败
+            {text(
+              `${status.sourceLabel} — ${failedSteps.length} 个步骤失败`,
+              `${status.sourceLabel} — ${failedSteps.length} ${failedSteps.length === 1 ? 'step' : 'steps'} failed`,
+            )}
           </span>
           <span className="text-[10px] text-[var(--color-text-muted)]">
             ({successCount}/{totalCount})
@@ -261,7 +270,10 @@ export function PostProcessStatusPanel({
             <div className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)]">
               <Clock size={10} />
               <span>
-                上次尝试 {new Date(status.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                {text(
+                  `上次尝试 ${new Date(status.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`,
+                  `Last attempt ${new Date(status.updatedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`,
+                )}
               </span>
             </div>
             {onRetry && (

@@ -11,7 +11,11 @@ import { ipc } from '../../ipc-client'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
-import { requireWorkflowProjectSession, workflowWritingLanguage } from '../workflow-project-session'
+import {
+  requireWorkflowProjectSession,
+  workflowUiText,
+  workflowWritingLanguage,
+} from '../workflow-project-session'
 import {
   DIR_PROMPTS
 } from '../../../shared/project-paths'
@@ -34,14 +38,21 @@ import type { FinalizedContinuityProjection } from '../../../shared/finalized-co
 import type { NarrativeThreadView } from '../../../shared/narrative-thread'
 import { promptLanguageText } from '../../prompt-language'
 import { countDraftUnits } from '../../../shared/draft-units'
+import { GENERATED_GLOBAL_GUIDANCE_MAX_CHARS } from '../novel-config-expansion'
 
 export { countDraftUnits } from '../../../shared/draft-units'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
+const DRAFT_AUTHOR_FACT_MAX_CHARS = 1000
 const MIN_TARGET_COMPLETION_RATIO = 0.82
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const MAX_TARGET_OVERAGE_RATIO = 0.12
 const PREVIOUS_ENDING_MAX_CHARS = 1000
+const NEXT_CHAPTER_HEAD_MAX_CHARS = 1200
+const CROSS_CHAPTER_REUSE_CJK_NGRAM_CHARS = 8
+const CROSS_CHAPTER_REUSE_ENGLISH_NGRAM_CHARS = 20
+const CROSS_CHAPTER_REUSE_LONG_RUN_CHARS = 80
+const CROSS_CHAPTER_REUSE_TOTAL_CHARS = 36
 const ACTIVE_THREAD_CONTEXT_MAX_CHARS = 1200
 const ACTIVE_THREAD_CONTEXT_MAX_ITEMS = 6
 const STREAM_PREVIEW_INTERVAL_MS = 250
@@ -154,7 +165,76 @@ const DEFAULT_DEPENDENCIES: GenerateDraftCommandDependencies = {
 
 /** Use the same bounded previous-ending window for finalized and in-batch prose. */
 export function previousChapterEnding(content: string): string {
-  return content.slice(-PREVIOUS_ENDING_MAX_CHARS)
+  const trimmed = content.trim()
+  if (trimmed.length <= PREVIOUS_ENDING_MAX_CHARS) return trimmed
+
+  const tail = trimmed.slice(-PREVIOUS_ENDING_MAX_CHARS)
+  const firstBoundary = /(?:\r?\n\s*\r?\n|[。！？!?][”’"'）)\]】」』]*|\.[”’"')\]]*(?=\s|$))/u.exec(tail)
+  if (!firstBoundary) return tail.trim()
+
+  return tail.slice(firstBoundary.index + firstBoundary[0].length).trim() || tail.trim()
+}
+
+function boundedPromptPrefix(content: string, maxChars: number): string {
+  const trimmed = content.trim()
+  if (trimmed.length <= maxChars) return trimmed
+
+  const prefix = trimmed.slice(0, maxChars)
+  const boundary = /(?:\r?\n|[。！？!?][”’"'）)\]】」』]*|\.[”’"')\]]*(?=\s|$))/gu
+  let safeEnd = 0
+  for (const match of prefix.matchAll(boundary)) {
+    safeEnd = match.index + match[0].length
+  }
+  return prefix.slice(0, safeEnd || maxChars).trim()
+}
+
+function hasSubstantialPreviousChapterReuse(
+  previousEnding: string,
+  draft: string,
+  writingLanguage: WritingLanguage,
+): boolean {
+  const ngramCharacters = writingLanguage === 'en-US'
+    ? CROSS_CHAPTER_REUSE_ENGLISH_NGRAM_CHARS
+    : CROSS_CHAPTER_REUSE_CJK_NGRAM_CHARS
+  const normalize = (text: string) => text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '')
+  const previous = normalize(previousEnding)
+  const nextHead = normalize(draft.slice(0, NEXT_CHAPTER_HEAD_MAX_CHARS))
+  if (previous.length < ngramCharacters || nextHead.length < ngramCharacters) {
+    return false
+  }
+
+  const previousNgrams = new Set<string>()
+  for (let index = 0; index <= previous.length - ngramCharacters; index += 1) {
+    previousNgrams.add(previous.slice(index, index + ngramCharacters))
+  }
+
+  const covered = new Uint8Array(nextHead.length)
+  for (let index = 0; index <= nextHead.length - ngramCharacters; index += 1) {
+    if (!previousNgrams.has(nextHead.slice(index, index + ngramCharacters))) continue
+    for (let offset = index; offset < index + ngramCharacters; offset += 1) {
+      covered[offset] = 1
+    }
+  }
+
+  let matchedChars = 0
+  let matchedRuns = 0
+  let runLength = 0
+  for (let index = 0; index <= covered.length; index += 1) {
+    if (covered[index]) {
+      runLength += 1
+      continue
+    }
+    if (runLength >= CROSS_CHAPTER_REUSE_LONG_RUN_CHARS) return true
+    if (runLength >= ngramCharacters) {
+      matchedChars += runLength
+      matchedRuns += 1
+    }
+    runLength = 0
+  }
+  return matchedRuns >= 2 && matchedChars >= CROSS_CHAPTER_REUSE_TOTAL_CHARS
 }
 
 function observeWorkflowCancellation(context: CommandExecuteParams['context']): {
@@ -174,14 +254,19 @@ function observeWorkflowCancellation(context: CommandExecuteParams['context']): 
 
 function logDraftAttempt(
   callbacks: CommandExecuteParams['callbacks'],
-  phase: string,
+  context: CommandExecuteParams['context'],
+  phase: { zhCN: string; enUS: string },
   receipt: GenerationAttemptReceipt,
 ): void {
-  callbacks.log(
-    `  ${phase}：租约请求上限 ${receipt.budget.requestedOutputTokens} Tokens` +
-    `（单次上限 ${receipt.budget.maxRequestedOutputTokensPerAttempt}，` +
-    `累计 ${receipt.budget.cumulativeRequestedOutputTokens}/${receipt.budget.maxRequestedOutputTokens}）`,
-  )
+  callbacks.log(workflowUiText(
+    context,
+    `  ${phase.zhCN}：租约请求上限 ${receipt.budget.requestedOutputTokens} Tokens` +
+      `（单次上限 ${receipt.budget.maxRequestedOutputTokensPerAttempt}，` +
+      `累计 ${receipt.budget.cumulativeRequestedOutputTokens}/${receipt.budget.maxRequestedOutputTokens}）`,
+    `  ${phase.enUS}: lease request limit ${receipt.budget.requestedOutputTokens} tokens ` +
+      `(per-attempt limit ${receipt.budget.maxRequestedOutputTokensPerAttempt}, ` +
+      `cumulative ${receipt.budget.cumulativeRequestedOutputTokens}/${receipt.budget.maxRequestedOutputTokens})`,
+  ))
 }
 
 function completionFromOutcome(outcome: GenerationOutcome): LLMCompletion {
@@ -195,52 +280,6 @@ function workflowGenerationModelId(context: CommandExecuteParams['context']): st
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
 export function appendVisibleDraftContinuation(draft: string, continuation: string): string {
   return appendVisibleTextContinuation(draft, continuation, sanitizeDraftText)
-}
-
-function takeSentenceBoundaryWithin(text: string, maxChars: number): string {
-  let units = 0
-  let boundaryIndex = -1
-  let segmentStart = 0
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]
-    if (!'。！？….?!'.includes(char)) continue
-
-    let candidateBoundary = index + 1
-    while (candidateBoundary < text.length && '”’」』）】'.includes(text[candidateBoundary])) {
-      candidateBoundary += 1
-    }
-    units += countDraftUnits(text.slice(segmentStart, candidateBoundary))
-    if (units > maxChars) break
-    boundaryIndex = candidateBoundary
-    segmentStart = candidateBoundary
-    index = candidateBoundary - 1
-  }
-
-  return boundaryIndex > 0 ? text.slice(0, boundaryIndex).trim() : ''
-}
-
-function capDraftAtNaturalBoundary(text: string, maxChars: number): string {
-  const cleaned = sanitizeDraftText(text)
-  if (countDraftUnits(cleaned) <= maxChars) return cleaned
-
-  const paragraphs = cleaned.split(/\n\s*\n/).map(paragraph => paragraph.trim()).filter(Boolean)
-  let capped = ''
-
-  for (const paragraph of paragraphs) {
-    const candidate = capped ? `${capped}\n\n${paragraph}` : paragraph
-    if (countDraftUnits(candidate) <= maxChars) {
-      capped = candidate
-      continue
-    }
-
-    const remaining = maxChars - countDraftUnits(capped)
-    const sentence = takeSentenceBoundaryWithin(paragraph, remaining)
-    if (sentence) capped = capped ? `${capped}\n\n${sentence}` : sentence
-    break
-  }
-
-  return capped.trim()
 }
 
 export class GenerateDraftCommand extends BaseWorkflowCommand {
@@ -259,6 +298,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
   }
 
   async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const uiText = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const expectedProjectPath = this.chapterInfo.projectPath
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
@@ -266,12 +306,18 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       projectSession,
       projectSessionContextFromProject(project),
     )) {
-      throw new Error('当前项目已切换，章节生成已停止')
+      throw new Error(uiText(
+        '当前项目已切换，章节生成已停止',
+        'The project changed, so chapter generation was stopped.',
+      ))
     }
     const novelConfig = Object.freeze({ ...project.novelConfig })
     const writingLanguage = workflowWritingLanguage(context)
 
-    callbacks.log('拼装章节上下文 (强类型注入中)...')
+    callbacks.log(uiText(
+      '拼装章节上下文 (强类型注入中)...',
+      'Building chapter context...',
+    ))
 
     const architecture = await this.readArchitecture(expectedProjectPath, projectSession)
     const projectPrompts = await this.readProjectPrompts(
@@ -279,7 +325,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       projectSession,
       writingLanguage,
     )
-    const mergedGuidance = [novelConfig.globalGuidance || '', projectPrompts].filter(Boolean).join('\n\n')
+    const mergedGuidance = [
+      boundedPromptPrefix(
+        novelConfig.globalGuidance || '',
+        GENERATED_GLOBAL_GUIDANCE_MAX_CHARS,
+      ),
+      projectPrompts,
+    ].filter(Boolean).join('\n\n')
 
     const characterState = await this.readCharacterStates(
       expectedProjectPath,
@@ -309,18 +361,38 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const isFirstChapter = this.chapterInfo.chapterNumber === 1
     const templateKey = isFirstChapter ? 'first_chapter_draft' : 'next_chapter_draft'
     const template = await resolvePromptTemplate(templateKey, projectSession, writingLanguage)
-    if (!template) throw new Error(`未找到模板: ${templateKey}`)
+    if (!template) throw new Error(uiText(
+      `未找到模板: ${templateKey}`,
+      `Template not found: ${templateKey}`,
+    ))
 
     // ==========================================
     // Prompt 构建——按「稳定前缀 → 可变后缀」排列
     // 以最大化 LLM 上下文缓存命中率
     // ==========================================
+    const writingStyle = boundedPromptPrefix(
+      novelConfig.writingStyle || '',
+      DRAFT_AUTHOR_FACT_MAX_CHARS,
+    )
+    const novelConfigFacts = {
+      ...novelConfig,
+      coreOutline: boundedPromptPrefix(novelConfig.coreOutline || '', DRAFT_AUTHOR_FACT_MAX_CHARS),
+      worldSetting: boundedPromptPrefix(novelConfig.worldSetting || '', DRAFT_AUTHOR_FACT_MAX_CHARS),
+      goldenFinger: boundedPromptPrefix(novelConfig.goldenFinger || '', DRAFT_AUTHOR_FACT_MAX_CHARS),
+      protagonistProfile: boundedPromptPrefix(
+        novelConfig.protagonistProfile || '',
+        DRAFT_AUTHOR_FACT_MAX_CHARS,
+      ),
+      globalGuidance: undefined,
+      writingStyle: undefined,
+    }
+    const novelConfigFactsJson = JSON.stringify(novelConfigFacts, null, 2)
     const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       // ---- 缓存命中区（跨章稳定，前缀对齐）----
       .withArchitecture(architecture)
       .withGlobalGuidance(mergedGuidance)
-      .withWritingStyle(novelConfig.writingStyle || '')
-      .withNovelConfig(novelConfig)
+      .withWritingStyle(writingStyle)
+      .withNovelConfig(novelConfigFactsJson)
       .withWordNumber(normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter))
       // ---- 章节公共区（首章与后续章都必须完整注入）----
       .withChapterInfo(this.chapterInfo)
@@ -331,6 +403,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         '(no author guidance)',
       ))
 
+    let previousEnding = ''
     if (!isFirstChapter) {
       // 从蓝图 JSON 的 notes 字段读取章节要点时间线（按序拼装，利于前缀缓存）
       const chapterTimeline = await this.readChapterNotesTimeline(
@@ -340,15 +413,21 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         writingLanguage,
         this.chapterInfo.characters,
       )
-      callbacks.log(`  已加载章节要点与连续性事实（${chapterTimeline.factCount} 条）`)
+      callbacks.log(uiText(
+        `  已加载章节要点与连续性事实（${chapterTimeline.factCount} 条）`,
+        `  Loaded chapter notes and continuity facts (${chapterTimeline.factCount})`,
+      ))
       const activeThreads = await this.readActiveNarrativeThreads(
         expectedProjectPath,
         projectSession,
         writingLanguage,
       )
-      callbacks.log(`  已加载相关活跃叙事线索（${activeThreads.count} 条）`)
+      callbacks.log(uiText(
+        `  已加载相关活跃叙事线索（${activeThreads.count} 条）`,
+        `  Loaded relevant active narrative threads (${activeThreads.count})`,
+      ))
 
-      let previousEnding = this.previousDraftEnding ?? ''
+      previousEnding = this.previousDraftEnding ?? ''
       if (!previousEnding) {
         try {
           const prevNum = this.chapterInfo.chapterNumber - 1
@@ -362,11 +441,22 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
       let filteredContext = ''
       try {
-        callbacks.log('  🔍 检索知识库相关片段...')
-        let searchQuery = `${this.chapterInfo.title} ${this.chapterInfo.keyEvents} ${this.chapterInfo.characters.join(' ')}`
-        if (this.chapterInfo.knowledgeQueryHint?.trim()) {
-          searchQuery += ` ${this.chapterInfo.knowledgeQueryHint.trim()}`
-          callbacks.log(`  📌 追加用户检索关键词：${this.chapterInfo.knowledgeQueryHint.trim()}`)
+        callbacks.log(uiText(
+          '  检索知识库相关片段...',
+          '  Searching the knowledge base for relevant passages...',
+        ))
+        const knowledgeQueryHint = this.chapterInfo.knowledgeQueryHint?.trim() ?? ''
+        const searchQuery = [
+          knowledgeQueryHint,
+          this.chapterInfo.title,
+          this.chapterInfo.keyEvents,
+          this.chapterInfo.characters.join(' '),
+        ].filter(Boolean).join(' ')
+        if (knowledgeQueryHint) {
+          callbacks.log(uiText(
+            `  追加用户检索关键词：${knowledgeQueryHint}`,
+            `  Added author search keywords: ${knowledgeQueryHint}`,
+          ))
         }
         const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
           projectSession,
@@ -404,7 +494,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
     const maxDraftChars = maxDraftCharsForTarget(targetChars)
 
-    callbacks.log('调用 AI 生成章节草稿...')
+    callbacks.log(uiText(
+      '调用 AI 生成章节草稿...',
+      'Calling AI to generate the chapter draft...',
+    ))
     let draftPersisted = false
     try {
       this.assertNotCancelled(context)
@@ -420,8 +513,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         cleanDraftText = await runtime.execute(async ({ session }) => {
           const draftingSession = injectWritingSkillIntoSession(session, context, 'drafting')
           if (context.writingSkills?.drafting) {
-            callbacks.log(promptLanguageText(
-              writingLanguage,
+            callbacks.log(uiText(
               `本次 drafting 阶段使用已冻结写作 Skill：${context.writingSkills.drafting.name}`,
               `Using the workflow-start-frozen writing skill for drafting: ${context.writingSkills.drafting.name}`,
             ))
@@ -453,14 +545,25 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             preview.stop()
           }
           const initialCompletion = completionFromOutcome(initialOutcome)
-          logDraftAttempt(callbacks, '初始生成', initialOutcome.receipt)
-          callbacks.log(`  初始生成响应结束：finishReason=${initialCompletion.finishReason}`)
+          logDraftAttempt(
+            callbacks,
+            context,
+            { zhCN: '初始生成', enUS: 'Initial generation' },
+            initialOutcome.receipt,
+          )
+          callbacks.log(uiText(
+            `  初始生成响应结束：finishReason=${initialCompletion.finishReason}`,
+            `  Initial generation response ended: finishReason=${initialCompletion.finishReason}`,
+          ))
           const initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content))
-          callbacks.log(`  初始生成可见单位：visibleUnits=${countDraftUnits(initialVisibleDraft)}`)
+          callbacks.log(uiText(
+            `  初始生成可见单位：visibleUnits=${countDraftUnits(initialVisibleDraft)}`,
+            `  Initial generation visible units: visibleUnits=${countDraftUnits(initialVisibleDraft)}`,
+          ))
           callbacks.replaceText?.(initialVisibleDraft)
           callbacks.setProgress(90)
           this.assertNotCancelled(context)
-          return this.extendDraftIfNeeded({
+          const completedDraft = await this.extendDraftIfNeeded({
             session: draftingSession,
             signal: cancellation.signal,
             initialDraft: initialVisibleDraft,
@@ -472,13 +575,192 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             chapterInfo: this.chapterInfo,
             futureBlueprints: futureBlueprintsStr,
             globalGuidance: mergedGuidance,
-            writingStyle: novelConfig.writingStyle || '',
+            writingStyle,
+            novelConfigFacts: novelConfigFactsJson,
             writingLanguage,
             reasoning: initialOutcome.receipt.capabilities.reasoning === true,
           })
+          const completedUnits = countDraftUnits(completedDraft)
+          if (completedUnits <= maxDraftChars) return completedDraft
+
+          callbacks.log(uiText(
+            `  草稿超过目标容差，将在当前模型会话中压缩至不超过 ${maxDraftChars} 个正文单位`,
+            `  Draft exceeded the target tolerance; compressing it in the current model session to at most ${maxDraftChars} prose units`,
+          ))
+          const minimumDraftChars = Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
+          const lengthRewritePrompt = (draft: string, currentUnits: number, final: boolean) => {
+            const rewriteMaxDraftChars = final ? Math.floor(targetChars * 0.9) : maxDraftChars
+            const paragraphCount = Math.max(4, Math.min(80, Math.round(rewriteMaxDraftChars / 100)))
+            const paragraphUnits = Math.round(rewriteMaxDraftChars / paragraphCount)
+            const rewriteChapterInfo = final
+              ? { ...this.chapterInfo, wordsTarget: rewriteMaxDraftChars }
+              : this.chapterInfo
+            const sourceDraft = final ? previousChapterEnding(draft) : draft
+            return promptLanguageText(
+              writingLanguage,
+              `${final
+                ? '上一轮完整重写结果未落入本地长度范围；这是最终压缩阶段的有界完整重写。不要继续逐句删改上一稿；请从空白页重新写作。'
+                : `当前完整章节经本地计数有 ${currentUnits} 个正文单位，需要压缩并完整重写。`}
+
+【硬性要求】
+- 只输出重写后的完整章节正文，不要解释、总结、Markdown 或思考过程。
+${final
+  ? `- 本次兜底写作目标为 ${rewriteMaxDraftChars} 个正文单位，不得超过 ${rewriteMaxDraftChars} 个正文单位；中文汉字与英文单词计数，标点和空白不计。`
+  : `- 本地计数结果不得少于 ${minimumDraftChars} 个正文单位，也不得超过 ${rewriteMaxDraftChars} 个正文单位；中文汉字与英文单词计数，标点和空白不计。`}
+${final ? `- 全章绝对不得超过 ${paragraphCount} 个自然段，每段不得超过约 ${paragraphUnits} 个正文单位；总计不得超过上述兜底目标。
+- 对白必须并入人物动作、反应或环境描写所在的段落，不得让一句对白或单个动作独占一段。
+- 交付前自行核对段落数与正文单位预算，不要输出核对过程。` : ''}
+- 完整保留本章蓝图中的每一个事件、角色行动、因果关系与关键结果。
+- 保留原稿结尾的最终事件与结果，并以完整、自然的句子或段落收束。
+- 优先删除重复说明、复述、冗余对话和装饰性描写，不得用删除蓝图事件或结尾来满足长度。
+- 不得只输出节选，不得提前写后续章节。
+
+【本章蓝图】
+${JSON.stringify(rewriteChapterInfo, null, 2)}
+
+${final ? '【仅供事实核对的原稿结尾】' : '【待压缩的完整章节草稿】'}
+${sourceDraft}`,
+              `${final
+                ? 'The previous full rewrite fell outside the local length range. This is a bounded full rewrite in the final compression stage. Do not keep line-editing the prior draft; rewrite it from a blank page.'
+                : `The complete chapter currently contains ${currentUnits} locally counted prose units and must be compressed and rewritten in full.`}
+
+[Requirements]
+- Output only the complete rewritten chapter prose; do not include explanations, summaries, Markdown, or reasoning.
+${final
+  ? `- The fallback writing target is ${rewriteMaxDraftChars} prose units; do not exceed ${rewriteMaxDraftChars} prose units. Chinese Han characters and English words count, while punctuation and whitespace do not.`
+  : `- The local count must be at least ${minimumDraftChars} prose units and no more than ${rewriteMaxDraftChars}; Chinese Han characters and English words count, while punctuation and whitespace do not.`}
+${final ? `- Use no more than ${paragraphCount} natural paragraphs, with each paragraph no longer than about ${paragraphUnits} prose units; the total must not exceed the fallback target above.
+- Fold dialogue into the paragraph containing character action, reaction, or setting; do not give one line of dialogue or one action its own paragraph.
+- Before delivery, silently verify the paragraph count and prose-unit budget; do not output the verification.` : ''}
+- Preserve every blueprint event, character action, causal link, and key outcome.
+- Preserve the final event and outcome from the original ending, and finish with a complete, natural sentence or paragraph.
+- Remove repeated explanation, recap, redundant dialogue, and decorative description first; never remove blueprint events or the ending to meet the limit.
+- Do not output an excerpt and do not advance into later chapters.
+
+[Current chapter blueprint]
+${JSON.stringify(rewriteChapterInfo, null, 2)}
+
+[${final ? 'Original ending for fact checking only' : 'Complete chapter draft to compress'}]
+${sourceDraft}`,
+            )
+          }
+          const repairPrompt = lengthRewritePrompt(
+            completedDraft,
+            completedUnits,
+            false,
+          )
+          const repairOutcome = await draftingSession.complete({
+            purpose: 'chapter-draft-length-repair',
+            reasoningStage: 'drafting',
+            output: 'visible-text',
+            messages: [
+              { role: 'system', content: promptBuilder.getSystemRole() },
+              { role: 'user', content: repairPrompt },
+            ],
+          }, { signal: cancellation.signal })
+          const repairCompletion = completionFromOutcome(repairOutcome)
+          logDraftAttempt(
+            callbacks,
+            context,
+            { zhCN: '章节长度修复', enUS: 'Chapter length repair' },
+            repairOutcome.receipt,
+          )
+          this.assertNotCancelled(context)
+          if (repairCompletion.finishReason !== 'stop') {
+            throw new Error(uiText(
+              '章节长度修复未完整结束，结果未保存。',
+              'The chapter length repair did not complete, so the result was not saved.',
+            ))
+          }
+          const repairedDraft = sanitizeDraftText(this.stripThinkingTags(repairCompletion.content))
+          const repairedUnits = countDraftUnits(repairedDraft)
+          if (repairedUnits > maxDraftChars || repairedUnits < minimumDraftChars) {
+            callbacks.log(uiText(
+              `  首次长度修复结果为 ${repairedUnits} 个正文单位，超出本地长度范围，将执行最后一次完整重写`,
+              `  The first length repair has ${repairedUnits} prose units, outside the local length range; running one final full rewrite`,
+            ))
+            const finalOutcome = await draftingSession.complete({
+              purpose: 'chapter-draft-length-final-rewrite',
+              reasoningStage: 'drafting',
+              output: 'visible-text',
+              messages: [
+                { role: 'system', content: promptBuilder.getSystemRole() },
+                {
+                  role: 'user',
+                  content: lengthRewritePrompt(repairedDraft, repairedUnits, true),
+                },
+              ],
+            }, { signal: cancellation.signal })
+            const finalCompletion = completionFromOutcome(finalOutcome)
+            logDraftAttempt(
+              callbacks,
+              context,
+              { zhCN: '最终完整重写', enUS: 'Final full rewrite' },
+              finalOutcome.receipt,
+            )
+            this.assertNotCancelled(context)
+            if (finalCompletion.finishReason !== 'stop') {
+              throw new Error(uiText(
+                '最终完整重写未完整结束，结果未保存。',
+                'The final full rewrite did not complete, so the result was not saved.',
+              ))
+            }
+            let finalDraft = sanitizeDraftText(this.stripThinkingTags(finalCompletion.content))
+            let finalUnits = countDraftUnits(finalDraft)
+            if (finalUnits > maxDraftChars || finalUnits < minimumDraftChars) {
+              callbacks.log(uiText(
+                `  最终完整重写结果为 ${finalUnits} 个正文单位，超出本地长度范围，将执行唯一一次重写重试`,
+                `  The final full rewrite has ${finalUnits} prose units, outside the local length range; running the single rewrite retry`,
+              ))
+              const retryOutcome = await draftingSession.complete({
+                purpose: 'chapter-draft-length-final-rewrite-retry',
+                reasoningStage: 'drafting',
+                output: 'visible-text',
+                messages: [
+                  { role: 'system', content: promptBuilder.getSystemRole() },
+                  {
+                    role: 'user',
+                    content: lengthRewritePrompt(finalDraft, finalUnits, true),
+                  },
+                ],
+              }, { signal: cancellation.signal })
+              const retryCompletion = completionFromOutcome(retryOutcome)
+              logDraftAttempt(
+                callbacks,
+                context,
+                { zhCN: '最终完整重写重试', enUS: 'Final full rewrite retry' },
+                retryOutcome.receipt,
+              )
+              this.assertNotCancelled(context)
+              if (retryCompletion.finishReason !== 'stop') {
+                throw new Error(uiText(
+                  '最终完整重写重试未完整结束，结果未保存。',
+                  'The final full rewrite retry did not complete, so the result was not saved.',
+                ))
+              }
+              finalDraft = sanitizeDraftText(this.stripThinkingTags(retryCompletion.content))
+              finalUnits = countDraftUnits(finalDraft)
+              if (finalUnits > maxDraftChars) {
+                throw new Error(uiText(
+                  `最终完整重写后仍超过 ${maxDraftChars} 个正文单位，结果未保存。`,
+                  `The final full rewrite still exceeds ${maxDraftChars} prose units, so the result was not saved.`,
+                ))
+              }
+            }
+            if (finalUnits < minimumDraftChars) {
+              throw new Error(uiText(
+                '最终完整重写删减过多，结果未保存。',
+                'The final full rewrite removed too much prose, so the result was not saved.',
+              ))
+            }
+            callbacks.replaceText?.(finalDraft)
+            return finalDraft
+          }
+          callbacks.replaceText?.(repairedDraft)
+          return repairedDraft
         })
       } catch (error) {
-        if (context.cancelled) throw new Error('工作流已取消')
+        if (context.cancelled) throw new Error(uiText('工作流已取消', 'Workflow was cancelled.'))
         throw error
       } finally {
         cancellation.dispose()
@@ -487,12 +769,11 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         }
       }
       this.assertNotCancelled(context)
-      const boundedDraftText = capDraftAtNaturalBoundary(cleanDraftText, maxDraftChars)
-      if (!boundedDraftText) {
-        throw new Error('草稿超过目标字数容差，且无法在自然句或段落边界内安全截断，结果未保存。')
-      }
-      if (boundedDraftText !== cleanDraftText) {
-        callbacks.log(`  草稿超过目标容差，已在自然边界收束至约 ${countDraftUnits(boundedDraftText)}/${targetChars} 字`)
+      if (hasSubstantialPreviousChapterReuse(previousEnding, cleanDraftText, writingLanguage)) {
+        throw new Error(uiText(
+          '新章节开头与上一章结尾存在大段重演，结果未保存。请重新生成，并让本章从上一章已完成事件之后继续。',
+          'The new chapter substantially replays the previous ending, so it was not saved. Regenerate it and continue after the events already completed in the previous chapter.',
+        ))
       }
 
       // 落于数据库
@@ -500,7 +781,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         projectSession,
         projectSessionContextFromProject(useProjectStore.getState().currentProject),
       )) {
-        throw new Error('当前项目已切换，已拒绝保存章节草稿')
+        throw new Error(uiText(
+          '当前项目已切换，已拒绝保存章节草稿',
+          'The project changed, so saving the chapter draft was refused.',
+        ))
       }
       this.assertNotCancelled(context)
       const nextVersion: number = await ipc.invokeWithProjectSession(
@@ -514,20 +798,20 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         chapterNumber: this.chapterInfo.chapterNumber,
         version: nextVersion,
         source: 'write',
-        content: boundedDraftText,
-        wordCount: countDraftUnits(boundedDraftText),
+        content: cleanDraftText,
+        wordCount: countDraftUnits(cleanDraftText),
       }, expectedProjectPath)
       if (!createResult.success || !createResult.id) {
-        throw new Error(createResult.error || '章节草稿保存失败')
+        throw new Error(createResult.error || uiText('章节草稿保存失败', 'Failed to save the chapter draft.'))
       }
       this.assertNotCancelled(context)
       draftPersisted = true
-      callbacks.replaceText?.(boundedDraftText)
+      callbacks.replaceText?.(cleanDraftText)
 
       const pseudoPath = createResult.id ? `vela://draft/${createResult.id}` : `vela://draft/ch${this.chapterInfo.chapterNumber}/v${nextVersion}`
 
-      context.data.draft = boundedDraftText
-      context.data.draftContent = boundedDraftText
+      context.data.draft = cleanDraftText
+      context.data.draftContent = cleanDraftText
       context.data.draftPath = pseudoPath
       context.data.chapterNumber = this.chapterInfo.chapterNumber
       context.data.chapterInfo = this.chapterInfo
@@ -544,21 +828,30 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         if (!sameProjectSessionContext(
           projectSession,
           projectSessionContextFromProject(useProjectStore.getState().currentProject),
-        )) throw new Error('当前项目已切换，已拒绝打开旧草稿')
+        )) throw new Error(uiText(
+          '当前项目已切换，已拒绝打开旧草稿',
+          'The project changed, so opening the old draft was refused.',
+        ))
         const { useEditorStore } = await import('../../../stores/editor-store')
         useEditorStore.getState().openFile({
           id: pseudoPath,
-          name: `第${this.chapterInfo.chapterNumber}章 ${this.chapterInfo.title} v${nextVersion}`,
+          name: uiText(
+            `第${this.chapterInfo.chapterNumber}章 ${this.chapterInfo.title} v${nextVersion}`,
+            `Chapter ${this.chapterInfo.chapterNumber} ${this.chapterInfo.title} v${nextVersion}`,
+          ),
           type: 'chapter',
           filePath: pseudoPath,
-          content: boundedDraftText,
-          savedContent: boundedDraftText,
+          content: cleanDraftText,
+          savedContent: cleanDraftText,
           projectKey: expectedProjectPath,
         })
       } catch { /* 忽略 */ }
 
-      callbacks.log(`✅ 草稿已自动入库保存为版本 v${nextVersion}（${countDraftUnits(boundedDraftText)} 字）`)
-      return boundedDraftText
+      callbacks.log(uiText(
+        `草稿已自动入库保存为版本 v${nextVersion}（${countDraftUnits(cleanDraftText)} 字）`,
+        `Draft saved automatically as version v${nextVersion} (${countDraftUnits(cleanDraftText)} units)`,
+      ))
+      return cleanDraftText
     } catch (error) {
       if (!draftPersisted) callbacks.replaceText?.('')
       throw error
@@ -593,9 +886,15 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     futureBlueprints: string
     globalGuidance: string
     writingStyle: string
+    novelConfigFacts: string
     writingLanguage: WritingLanguage
     reasoning: boolean
   }): Promise<string> {
+    const uiText = (zhCNText: string, enUSText: string) => workflowUiText(
+      params.context,
+      zhCNText,
+      enUSText,
+    )
     let draft = params.initialDraft
     let rounds = 0
     let lastFinishReason = params.initialFinishReason
@@ -608,8 +907,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       && countDraftUnits(draft) < 100
     ) {
       throw new Error(
-        '模型的输出预算主要消耗在推理阶段，尚未产生足够正文。无法安全续接隐藏推理过程；' +
-        '请关闭模型思考模式、提高最大输出 Tokens，或改用更适合正文创作的非推理模型。',
+        uiText(
+          '模型的输出预算主要消耗在推理阶段，尚未产生足够正文。无法安全续接隐藏推理过程；' +
+            '请关闭模型思考模式、提高最大输出 Tokens，或改用更适合正文创作的非推理模型。',
+          'The model spent most of its output budget on reasoning and did not produce enough prose. Hidden reasoning cannot be continued safely. ' +
+            'Disable reasoning mode, increase the maximum output tokens, or use a non-reasoning model better suited to drafting.',
+        ),
       )
     }
 
@@ -617,7 +920,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       if (params.context.cancelled) break
       rounds += 1
       const currentChars = countDraftUnits(draft)
-      params.callbacks.log(`  自动续写第 ${rounds} 段：当前约 ${currentChars}/${params.targetChars} 字`)
+      params.callbacks.log(uiText(
+        `  自动续写第 ${rounds} 段：当前约 ${currentChars}/${params.targetChars} 字`,
+        `  Auto-continuation ${rounds}: currently about ${currentChars}/${params.targetChars} units`,
+      ))
 
       const remaining = Math.max(0, params.targetChars - currentChars)
       const visibleTail = sanitizeDraftText(draft).slice(-CONTINUE_PROMPT_MAX_CHARS)
@@ -654,6 +960,9 @@ ${params.globalGuidance}
 【文风要求】
 ${params.writingStyle || '（无）'}
 
+【小说配置事实】
+${params.novelConfigFacts}
+
 【已写正文末尾】
 ${visibleTail}`,
         `${recoveryInstruction}Continue the current chapter seamlessly.
@@ -677,6 +986,9 @@ ${params.globalGuidance}
 
 [Writing style]
 ${params.writingStyle || '(none)'}
+
+[Novel configuration facts]
+${params.novelConfigFacts}
 
 [End of existing manuscript]
 ${visibleTail}`,
@@ -710,8 +1022,16 @@ ${visibleTail}`,
         preview.stop()
       }
       const addition = completionFromOutcome(outcome)
-      logDraftAttempt(params.callbacks, `自动续写第 ${rounds} 段`, outcome.receipt)
-      params.callbacks.log(`  自动续写第 ${rounds} 段响应结束：finishReason=${addition.finishReason}`)
+      logDraftAttempt(
+        params.callbacks,
+        params.context,
+        { zhCN: `自动续写第 ${rounds} 段`, enUS: `Auto-continuation ${rounds}` },
+        outcome.receipt,
+      )
+      params.callbacks.log(uiText(
+        `  自动续写第 ${rounds} 段响应结束：finishReason=${addition.finishReason}`,
+        `  Auto-continuation ${rounds} response ended: finishReason=${addition.finishReason}`,
+      ))
       this.assertNotCancelled(params.context)
       const beforeChars = countDraftUnits(draft)
       const visibleAddition = sanitizeDraftText(this.stripThinkingTags(addition.content))
@@ -721,20 +1041,29 @@ ${visibleTail}`,
       )
       const mergedDelta = countDraftUnits(candidateDraft) - beforeChars
       const accepted = addition.finishReason === 'stop' || mergedDelta >= 300
-      params.callbacks.log(
+      params.callbacks.log(uiText(
         `  自动续写可见单位：visibleUnitsBefore=${beforeChars} `
-        + `candidateVisibleUnits=${countDraftUnits(visibleAddition)} `
-        + `mergedDelta=${mergedDelta} accepted=${accepted}`,
-      )
+          + `candidateVisibleUnits=${countDraftUnits(visibleAddition)} `
+          + `mergedDelta=${mergedDelta} accepted=${accepted}`,
+        `  Auto-continuation visible units: visibleUnitsBefore=${beforeChars} `
+          + `candidateVisibleUnits=${countDraftUnits(visibleAddition)} `
+          + `mergedDelta=${mergedDelta} accepted=${accepted}`,
+      ))
       if (addition.finishReason === 'length' && mergedDelta < 300) {
         params.callbacks.replaceText?.(draft)
         if (noProgressRecoveryUsed) {
-          throw new Error('唯一一次无进展恢复请求仍未增加足够的新正文，结果未保存。请缩短章节目标后重试。')
+          throw new Error(uiText(
+            '唯一一次无进展恢复请求仍未增加足够的新正文，结果未保存。请缩短章节目标后重试。',
+            'The single no-progress recovery request still did not add enough new prose, so the result was not saved. Shorten the chapter target and try again.',
+          ))
         }
         noProgressRecoveryUsed = true
         recoveryPending = true
         lastFinishReason = addition.finishReason
-        params.callbacks.log('  本轮低增量截断内容已丢弃，将使用剩余预算执行一次无进展恢复请求')
+        params.callbacks.log(uiText(
+          '  本轮低增量截断内容已丢弃，将使用剩余预算执行一次无进展恢复请求',
+          '  Discarded this low-progress truncated continuation; using the remaining budget for one no-progress recovery request',
+        ))
         continue
       }
       draft = candidateDraft
@@ -749,14 +1078,31 @@ ${visibleTail}`,
     // word-count threshold is not proof that the model completed its sentence
     // or scene, so never persist it as a successful chapter.
     if (lastFinishReason !== 'stop') {
-      throw this.createIncompleteCompletionError(lastFinishReason)
+      const error = this.createIncompleteCompletionError(lastFinishReason)
+      error.message = uiText(error.message, (() => {
+        switch (lastFinishReason) {
+          case 'length':
+            return 'AI output reached the model maximum length and is incomplete. Increase the maximum output tokens or shorten the task, then try again.'
+          case 'content_filter':
+            return 'AI output was stopped by content restrictions, so the result was not saved.'
+          case 'cancelled':
+            return 'AI generation was cancelled, so the result was not saved.'
+          default:
+            return 'AI generation did not complete normally, so the result was not saved.'
+        }
+      })())
+      throw error
     }
 
     const lowerBound = Math.floor(params.targetChars * MIN_TARGET_COMPLETION_RATIO)
     if (countDraftUnits(draft) < lowerBound) {
       throw new Error(
-        `模型已声明生成结束，但正文仅约 ${countDraftUnits(draft)}/${params.targetChars} 字，明显未达到章节目标，结果未保存。` +
-        '请提高最大输出 Tokens、降低本章目标字数，或改用输出能力更强的模型后重试。',
+        uiText(
+          `模型已声明生成结束，但正文仅约 ${countDraftUnits(draft)}/${params.targetChars} 字，明显未达到章节目标，结果未保存。` +
+            '请提高最大输出 Tokens、降低本章目标字数，或改用输出能力更强的模型后重试。',
+          `The model reported completion, but the draft is only about ${countDraftUnits(draft)}/${params.targetChars} units and clearly misses the chapter target, so it was not saved. ` +
+            'Increase the maximum output tokens, lower the chapter target, or use a model with greater output capacity and try again.',
+        ),
       )
     }
 

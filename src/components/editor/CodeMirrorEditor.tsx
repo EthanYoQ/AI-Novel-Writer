@@ -57,6 +57,7 @@ export default function CodeMirrorEditor({
   onChange,
   onSave,
   onCharCountChange,
+  placeholder,
   mode = 'document',
 }: CodeMirrorEditorProps) {
   const uiText = useLocaleStore(s => s.text)
@@ -382,6 +383,7 @@ export default function CodeMirrorEditor({
           <CodeMirror
             ref={editorRef}
             value={editorContent}
+            placeholder={placeholder}
             height="100%"
             className="h-full"
             theme={cmTheme}

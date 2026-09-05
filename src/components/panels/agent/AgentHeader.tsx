@@ -8,11 +8,13 @@ import { confirm } from '../../ui/Confirm'
 import { IconBtn } from '../../ui/IconBtn'
 import { MenuItem } from '../../ui/MenuItem'
 import { useOutsideClick } from '../../../hooks/useOutsideClick'
+import { useLocaleStore } from '../../../stores/locale-store'
 
 /**
  * Agent 面板顶部工具栏
  */
 export default function AgentHeader() {
+  const text = useLocaleStore(s => s.text)
   const { createConversation, toggleHistory, showHistory, getActiveConversation } = useAgentStore()
   const toggleAIPanel = useLayoutStore(s => s.toggleAIPanel)
   const [showMore, setShowMore] = useState(false)
@@ -56,7 +58,7 @@ export default function AgentHeader() {
         className="flex min-w-0 items-center overflow-hidden text-ellipsis whitespace-nowrap gap-1"
         style={{ color: 'var(--color-text-secondary)', fontSize: '0.75rem', fontWeight: 500 }}
       >
-        AI 写作助手
+        {text('AI 写作助手', 'AI Writing Assistant')}
       </div>
 
       {/* 右侧工具按钮组 */}
@@ -64,7 +66,7 @@ export default function AgentHeader() {
 
         {/* 新建对话按钮 */}
         <IconBtn
-          title={isCurrentEmpty ? '当前对话为空，请先发送消息' : '新建对话'}
+          title={isCurrentEmpty ? text('当前对话为空，请先发送消息', 'The current conversation is empty') : text('新建对话', 'New conversation')}
           disabled={isCurrentEmpty}
           onClick={handleNew}
           size={18}
@@ -74,7 +76,7 @@ export default function AgentHeader() {
 
         {/* 历史记录按钮 */}
         <IconBtn
-          title="历史对话"
+          title={text('历史对话', 'Conversation history')}
           onClick={toggleHistory}
           active={showHistory}
           size={18}
@@ -85,7 +87,7 @@ export default function AgentHeader() {
         {/* 更多菜单 */}
         <div className="relative" ref={moreRef}>
           <IconBtn
-            title="更多选项"
+            title={text('更多选项', 'More options')}
             onClick={() => { setShowMore(v => !v); setSubView('main') }}
             active={showMore}
             size={18}
@@ -102,33 +104,32 @@ export default function AgentHeader() {
                 backgroundColor: 'var(--color-sidebar)',
                 border: '1px solid var(--color-border)',
                 boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-                transition: 'width 0.15s ease',
               }}
             >
               {/* ===== 主菜单视图 ===== */}
               {subView === 'main' && (
                 <>
                   <MenuItem
-                    label="MCP 服务器"
+                    label={text('MCP 服务器', 'MCP servers')}
                     icon={<Server size={13} />}
-                    shortcut={connectedCount > 0 ? `${connectedCount} 在线` : ''}
+                    shortcut={connectedCount > 0 ? text(`${connectedCount} 在线`, `${connectedCount} online`) : ''}
                     onClick={() => setSubView('mcp')}
                   />
                   <MenuItem
-                    label="技能列表"
+                    label={text('技能列表', 'Skills')}
                     icon={<Sparkles size={13} />}
-                    shortcut={skills.length > 0 ? `${skills.length} 个` : ''}
+                    shortcut={skills.length > 0 ? text(`${skills.length} 个`, `${skills.length}`) : ''}
                     onClick={() => setSubView('skills')}
                   />
                   <div style={{ height: 1, backgroundColor: 'var(--color-border)', margin: '4px 0' }} />
                   <MenuItem
-                    label="清空所有对话"
+                    label={text('清空所有对话', 'Clear all conversations')}
                     danger
                     onClick={async () => {
                       setShowMore(false)
-                      const ok = await confirm('确定要清空所有对话记录？\n此操作不可撤销。', {
-                        title: '清空对话记录',
-                        confirmText: '确认清空',
+                      const ok = await confirm(text('确定要清空所有对话记录？\n此操作不可撤销。', 'Clear all conversation history?\nThis cannot be undone.'), {
+                        title: text('清空对话记录', 'Clear conversation history'),
+                        confirmText: text('确认清空', 'Clear all'),
                         danger: true,
                       })
                       if (ok) useAgentStore.getState().clearAll()
@@ -158,7 +159,7 @@ export default function AgentHeader() {
         </div>
 
         {/* 关闭面板按钮 */}
-        <IconBtn title="关闭 Agent 面板" onClick={handleClose} size={18}>
+        <IconBtn title={text('关闭 Agent 面板', 'Close Agent panel')} onClick={handleClose} size={18}>
           <X size={15} strokeWidth={1.5} />
         </IconBtn>
       </div>
@@ -177,6 +178,7 @@ function MCPSubView({
   toolCount: number
   onBack: () => void
 }) {
+  const text = useLocaleStore(s => s.text)
   const connectedCount = servers.filter(s => s.status === 'connected').length
 
   return (
@@ -190,9 +192,9 @@ function MCPSubView({
         onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
       >
         <ChevronRight size={12} style={{ transform: 'rotate(180deg)' }} />
-        <span className="font-medium">MCP 服务器</span>
+        <span className="font-medium">{text('MCP 服务器', 'MCP servers')}</span>
         <span className="ml-auto text-[0.68rem] opacity-50">
-          {connectedCount}/{servers.length} 在线
+          {text(`${connectedCount}/${servers.length} 在线`, `${connectedCount}/${servers.length} online`)}
         </span>
       </button>
 
@@ -201,9 +203,9 @@ function MCPSubView({
       {/* 服务器列表 */}
       {servers.length === 0 ? (
         <div className="px-3 py-3 text-xs text-center" style={{ color: 'var(--color-text-muted)' }}>
-          <div className="mb-1">暂无 MCP 服务器</div>
+          <div className="mb-1">{text('暂无 MCP 服务器', 'No MCP servers')}</div>
           <div className="text-[0.68rem] opacity-60">
-            在用户配置目录中配置 MCP 服务器
+            {text('在用户配置目录中配置 MCP 服务器', 'Configure MCP servers in your user configuration directory')}
           </div>
         </div>
       ) : (
@@ -236,8 +238,11 @@ function MCPSubView({
                 </span>
               )}
               {server.status === 'error' && (
-                <span className="text-[0.65rem] text-[var(--color-error-text)] truncate max-w-[80px]" title={server.error}>
-                  错误
+                <span
+                  className="text-[0.65rem] text-[var(--color-error-text)] truncate max-w-[80px]"
+                  title={text('服务器连接失败', 'Server connection failed')}
+                >
+                  {text('错误', 'Error')}
                 </span>
               )}
             </div>
@@ -250,7 +255,7 @@ function MCPSubView({
         <>
           <div style={{ height: 1, backgroundColor: 'var(--color-border)', margin: '2px 0' }} />
           <div className="px-3 py-1.5 text-[0.68rem]" style={{ color: 'var(--color-text-muted)' }}>
-            共 {toolCount} 个 MCP 工具已注册
+            {text(`共 ${toolCount} 个 MCP 工具已注册`, `${toolCount} MCP tools registered`)}
           </div>
         </>
       )}
@@ -267,12 +272,14 @@ function SkillSubView({
   skills: LoadedSkill[]
   onBack: () => void
 }) {
+  const locale = useLocaleStore(s => s.locale)
+  const text = useLocaleStore(s => s.text)
   /** 来源徽章颜色 */
   const sourceBadge = (source: string) => {
     switch (source) {
-      case 'builtin': return { bg: 'color-mix(in srgb, var(--color-info) 12%, transparent)', color: 'var(--color-info)', label: '内置' }
-      case 'user': return { bg: 'color-mix(in srgb, var(--color-accent) 12%, transparent)', color: 'var(--color-accent)', label: '用户' }
-      case 'project': return { bg: 'color-mix(in srgb, var(--color-success) 12%, transparent)', color: 'var(--color-success-text)', label: '项目' }
+      case 'builtin': return { bg: 'color-mix(in srgb, var(--color-info) 12%, transparent)', color: 'var(--color-info)', label: text('内置', 'Built-in') }
+      case 'user': return { bg: 'color-mix(in srgb, var(--color-accent) 12%, transparent)', color: 'var(--color-accent)', label: text('用户', 'User') }
+      case 'project': return { bg: 'color-mix(in srgb, var(--color-success) 12%, transparent)', color: 'var(--color-success-text)', label: text('项目', 'Project') }
       default: return { bg: 'var(--color-hover)', color: 'var(--color-text-muted)', label: source }
     }
   }
@@ -288,9 +295,9 @@ function SkillSubView({
         onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
       >
         <ChevronRight size={12} style={{ transform: 'rotate(180deg)' }} />
-        <span className="font-medium">技能列表</span>
+        <span className="font-medium">{text('技能列表', 'Skills')}</span>
         <span className="ml-auto text-[0.68rem] opacity-50">
-          {skills.length} 个技能
+          {text(`${skills.length} 个技能`, `${skills.length} skills`)}
         </span>
       </button>
 
@@ -299,9 +306,9 @@ function SkillSubView({
       {/* Skill 列表 */}
       {skills.length === 0 ? (
         <div className="px-3 py-3 text-xs text-center" style={{ color: 'var(--color-text-muted)' }}>
-          <div className="mb-1">暂无可用技能</div>
+          <div className="mb-1">{text('暂无可用技能', 'No skills available')}</div>
           <div className="text-[0.68rem] opacity-60">
-            在用户技能目录放入 SKILL.md 文件
+            {text('在用户技能目录放入 SKILL.md 文件', 'Add SKILL.md files to your user skills directory')}
           </div>
         </div>
       ) : (
@@ -317,7 +324,9 @@ function SkillSubView({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="font-medium truncate" style={{ color: 'var(--color-text)' }}>
-                      {skill.metadata.displayName ?? skill.metadata.name}
+                      {locale === 'en-US'
+                        ? (skill.writingSkill.metadata.displayName ?? skill.metadata.name)
+                        : (skill.metadata.displayName ?? skill.metadata.name)}
                     </span>
                     <span
                       className="text-[0.6rem] px-1 py-0 rounded flex-shrink-0"
@@ -330,7 +339,9 @@ function SkillSubView({
                     className="text-[0.68rem] truncate mt-0.5"
                     style={{ color: 'var(--color-text-muted)' }}
                   >
-                    {skill.metadata.description}
+                    {locale === 'en-US'
+                      ? skill.writingSkill.metadata.description
+                      : skill.metadata.description}
                   </div>
                 </div>
               </div>
@@ -342,7 +353,7 @@ function SkillSubView({
       {/* 底部提示 */}
       <div style={{ height: 1, backgroundColor: 'var(--color-border)', margin: '2px 0' }} />
       <div className="px-3 py-1.5 text-[0.68rem]" style={{ color: 'var(--color-text-muted)' }}>
-        输入 <code className="px-0.5 rounded" style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-accent)' }}>/</code> 可快速调用技能
+        {text('输入', 'Type')} <code className="px-0.5 rounded" style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-accent)' }}>/</code> {text('可快速调用技能', 'to quickly invoke a skill')}
       </div>
     </>
   )

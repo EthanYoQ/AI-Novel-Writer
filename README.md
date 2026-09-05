@@ -25,13 +25,13 @@
   <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载桌面版（Windows / macOS）</a> · <a href="https://www.npmjs.com/package/@ethanyoq/dsh-ai-novel-writer">安装 DeepSeek Harness Web 插件</a>
 </p>
 
-> **DeepSeek Harness 插件提示：** 当前插件是早期 MVP，能力不足桌面软件版的 10%，不能替代桌面版。需要完整项目树、批量工作流、成熟编辑器或自动审校时，请使用上方的桌面版。
+> **DeepSeek Harness 插件提示：** `0.1.0` 预览版目前冻结维护，短期不扩展功能；它的能力不足桌面软件版的 10%，不能替代桌面版。需要完整项目树、批量工作流、成熟编辑器或自动审校时，请使用上方的桌面版。
 
 <p align="center">
   <img src="docs/assets/readme/ui-zh-v085-project-config.png" alt="AI 小说作家 v0.8.5：在本地桌面工作台中配置长篇小说的故事前提、世界观、角色、蓝图与章节" width="100%" />
 </p>
 
-> ## v0.9.0 长篇一致性与完整创作闭环
+> ## v0.9.0 功能基线（历史发布）
 >
 > [v0.9.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.9.0) 让长篇小说的设定继承、章节控制与审稿修稿更完整，并继续提供 Windows、macOS Apple Silicon 与 macOS Intel 安装包：
 >
@@ -48,7 +48,7 @@
 
 ## DeepSeek Harness 插件（早期 MVP）
 
-除了 Windows 与 macOS 桌面版，本仓库还在 [插件目录](https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer) 维护 `@ethanyoq/dsh-ai-novel-writer` `0.1.0` 开发预览。DeepSeek Harness 的 V2 工作台是刻意收敛的早期 MVP，当前能力不足桌面软件版的 10%；它不读取桌面版 `.vela` 项目，也不能替代桌面版的项目树、批量工作流、成熟编辑器或自动审校。
+除了 Windows 与 macOS 桌面版，本仓库还保留 `@ethanyoq/dsh-ai-novel-writer` `0.1.0` 开发预览。该插件目前冻结维护，短期不扩展功能。DeepSeek Harness 的 V2 工作台是刻意收敛的早期 MVP，当前能力不足桌面软件版的 10%；它不读取桌面版 `.vela` 项目，也不能替代桌面版的项目树、批量工作流、成熟编辑器或自动审校。
 
 V2 只提供人工审核的最小创作链：项目设置 → 故事架构 → 人物设定 → 全书纲要 → 逐章蓝图 → 逐章正文。模型生成的待审核建议到达 Proposal 收件箱后，会先填入右侧工作台的本地编辑表单，供人工查看和修改；只有用户明确审核并应用 Proposal，权威项目状态才会改变。
 
@@ -59,25 +59,7 @@ dsh plugin --profile web add @ethanyoq/dsh-ai-novel-writer
 dsh --profile web
 ```
 
-开发时也可以从源码安装：
-
-```sh
-git clone https://github.com/EthanYoQ/AI-Novel-Writer.git
-cd AI-Novel-Writer/plugins/dsh-ai-novel-writer
-pnpm install
-pnpm run build
-dsh plugin --profile web add .
-dsh --profile web
-```
-
-如需安装一份不随源码目录继续变化的构建产物，可先打包再安装：
-
-```sh
-pnpm pack --pack-destination ../../.runtime/.cache
-cd ../..
-dsh plugin --profile web add ./.runtime/.cache/ethanyoq-dsh-ai-novel-writer-0.1.0.tgz
-dsh --profile web
-```
+源码开发、固定 tarball 安装和 Windows 含空格路径限制由[插件安装指南](plugins/dsh-ai-novel-writer/docs/official-dsh-plugin-installation.md)单独维护，根 README 不复制这些易变化的维护者步骤。
 
 启动 Web 后，打开“小说工作台”，安装 **“AI 小说作家 V2”** Preset；随后新建会话并选择该 Preset。V2 的 AI 起草结果会先回填到右侧工作台的本地编辑表单，供人工修改和审核；点击应用 Proposal 才会写入项目。完整功能、项目格式、验证范围和卸载方式见[插件说明](plugins/dsh-ai-novel-writer/README.md)。不要使用 `dsh plugin add github:EthanYoQ/AI-Novel-Writer`：仓库根包是桌面应用，不是可激活的 DSH bundle。
 
@@ -111,6 +93,8 @@ flowchart LR
 | 章节级生成 | 生成时围绕当前章节的蓝图和相关资料组织上下文，减少跨章跑题。 |
 | 审稿与修稿 | 为草稿生成结构化审稿信息，并以报告作为修稿输入。 |
 | 角色卡与项目资料 | 在项目内维护角色、世界观、蓝图、草稿和定稿；项目会话机制避免旧窗口向重新打开的项目写入数据。 |
+| 剧情树与叙事线索 | 以章节轨道展示主线、支线和来源进度；剧情树是可重建的只读快照，不会取代作者事实。 |
+| 写作 Skills 与提示词模板 | 可按创作阶段绑定补充写作方法并定制中英文创作指导；语言、输出结构和工具协议仍由隐藏合同保护。 |
 | 参考文本与知识库 | 可导入常见文本格式作为参考资料；未配置 embedding 时仍可使用 SQLite FTS 全文检索。 |
 | 批量创作任务 | 单独的批量章节创作任务可设为 1–10 章，支持暂停、取消；后处理失败会停止后续章节。 |
 | 中英文界面 | 首次启动可跟随系统语言，手动选择会持久保存。 |
@@ -169,7 +153,7 @@ ai-novel-writer-setup-<版本号>.exe
 
 1. 只从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载正式安装包。
 2. 安装程序更新应用本身，不应删除小说项目、角色卡或已有设置；仍建议在升级前自行备份重要作品。
-3. 安装后可在欢迎页使用“检查更新”。发现正式更新后，应用先下载，再提供“立即重启更新 / 稍后”的选择。
+3. 安装后可在欢迎页使用“检查更新”；应用启动后也会按每日一次的成功检查频率静默检查。发现正式更新时先提示，只有用户点击“下载更新”后才开始下载；下载完成后再提供“立即重启更新 / 稍后”的选择。
 4. 旧版便携 ZIP 不能自行获得首个更新器版本，需要手动安装一次正式安装包；后续不再维护新的便携 ZIP。
 
 当前安装程序尚未进行代码签名。Windows 可能显示发布者或信誉提示；请确认下载页面属于本项目的官方 GitHub Release 后再继续。
@@ -184,7 +168,7 @@ ai-novel-writer-mac-x64-<版本号>-installer.dmg
 ```
 
 1. `arm64` 适用于 Apple Silicon Mac（M1、M2、M3、M4 等）；`x64` 适用于 Intel Mac。
-2. 将 DMG 中的应用拖入“应用程序”文件夹后启动；本版本不提供 macOS 应用内更新，请从同一 Release 页面手动下载后续版本。
+2. 将 DMG 中的应用拖入“应用程序”文件夹后启动。应用可以检查 GitHub 最新正式版并显示提醒，但不会在 macOS 内下载或替换程序；更新操作只打开官方 Release 页面，由用户手动下载对应架构的后续版本。
 3. 两个安装包均未使用 Developer ID 签名且未公证（ARM64 为 ad-hoc 签名，x64 为未签名）。若 Gatekeeper 阻止打开，请确认来源是本项目的官方 GitHub Release，然后在 Finder 中按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。
 
 ## 当前限制
@@ -193,6 +177,10 @@ ai-novel-writer-mac-x64-<版本号>-installer.dmg
 - 不替代作者的创意、事实核查或版权判断；AI 输出需要作者审阅。
 - 不提供在线发布、阅读社区或云端模型账号。
 - 正式安装包由 GitHub Actions 云端构建；Windows、macOS ARM64 与 macOS x64 会各自通过资格检查后，才会进入同一个 GitHub Release。
+
+## 开发与架构文档
+
+文档权威层级、ADR、调研、Agent 规则和任务交接入口见 [`docs/README.md`](docs/README.md)。DeepSeek Harness 插件拥有独立的[插件说明](plugins/dsh-ai-novel-writer/README.md)，不作为桌面版行为的来源。
 
 ## 许可证
 

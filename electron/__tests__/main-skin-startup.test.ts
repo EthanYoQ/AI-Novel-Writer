@@ -25,7 +25,13 @@ const mocks = vi.hoisted(() => {
     BrowserWindow,
     registerIPCHandlers: vi.fn(() => calls.push('ipc')),
     registerMCPHandlers: vi.fn(() => calls.push('mcp')),
-    startUpdateRuntime: vi.fn(() => calls.push('update-runtime')),
+    startUpdateRuntime: vi.fn((options: unknown) => {
+      void options
+      calls.push('update-runtime')
+    }),
+    createGitHubReleaseUpdateBackend: vi.fn(),
+    isMacUpdateReminderEnabled: vi.fn(() => false),
+    openExternal: vi.fn(async () => undefined),
     app: {
       commandLine: { appendSwitch: vi.fn() },
       getLocale: () => 'zh-CN',
@@ -45,18 +51,23 @@ vi.mock('electron', () => ({
   app: mocks.app,
   BrowserWindow: mocks.BrowserWindow,
   ipcMain: { removeHandler: vi.fn() },
-  shell: { openExternal: vi.fn() },
+  shell: { openExternal: mocks.openExternal },
 }))
 vi.mock('../ipc-handlers', () => ({ registerIPCHandlers: mocks.registerIPCHandlers }))
 vi.mock('../mcp/mcp-ipc-bridge', () => ({ registerMCPHandlers: mocks.registerMCPHandlers }))
 vi.mock('../i18n', () => ({ mainT: () => 'AI Novel Writer' }))
 vi.mock('../controllers/update-controller', () => ({ registerUpdateController: vi.fn() }))
 vi.mock('../services/electron-updater-adapter', () => ({ createElectronUpdaterBackend: vi.fn() }))
+vi.mock('../services/github-release-update-backend', () => ({
+  GITHUB_LATEST_RELEASE_PAGE: 'https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest',
+  createGitHubReleaseUpdateBackend: mocks.createGitHubReleaseUpdateBackend,
+}))
 vi.mock('../services/update-preferences-store', () => ({
   GlobalConfigUpdatePreferencesStore: class MockUpdatePreferencesStore {},
 }))
 vi.mock('../services/update-runtime', () => ({
   hasWindowsUpdateConfiguration: () => true,
+  isMacUpdateReminderEnabled: mocks.isMacUpdateReminderEnabled,
   isWindowsUpdateRuntimeEnabled: () => false,
 }))
 vi.mock('../services/update-startup', () => ({ startUpdateRuntime: mocks.startUpdateRuntime }))
@@ -90,6 +101,8 @@ describe('interactive Electron startup', () => {
     mocks.registerMCPHandlers.mockClear()
     mocks.startUpdateRuntime.mockReset()
     mocks.startUpdateRuntime.mockImplementation(() => mocks.calls.push('update-runtime'))
+    mocks.isMacUpdateReminderEnabled.mockReturnValue(false)
+    mocks.openExternal.mockClear()
     mocks.BrowserWindow.mockClear()
   })
 
@@ -117,5 +130,23 @@ describe('interactive Electron startup', () => {
 
     expect(mocks.calls).toContain('create-window')
     expect(mocks.BrowserWindow).toHaveBeenCalledOnce()
+  })
+
+  it('wires packaged macOS reminders to metadata checks and one fixed Releases page', async () => {
+    mocks.isMacUpdateReminderEnabled.mockReturnValue(true)
+
+    await import('../main')
+    await vi.waitFor(() => expect(mocks.startUpdateRuntime).toHaveBeenCalled())
+
+    const options = mocks.startUpdateRuntime.mock.calls[0]![0] as {
+      openRelease(): Promise<void>
+    }
+    expect(options).toMatchObject({
+      updateRuntimeEnabled: true,
+      updateAction: 'open-release',
+      createBackend: mocks.createGitHubReleaseUpdateBackend,
+    })
+    await options.openRelease()
+    expect(mocks.openExternal).toHaveBeenCalledWith('https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest')
   })
 })

@@ -1123,6 +1123,7 @@ function FontSelect({
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const { locale, text } = useLocaleStore()
   const current = FONT_OPTIONS.find((o) => o.id === value) ?? FONT_OPTIONS[0]
 
   // 点击外部关闭
@@ -1154,10 +1155,10 @@ function FontSelect({
           className="flex-1 text-sm truncate"
           style={{ fontFamily: current.family }}
         >
-          {current.label}
+          {text(current.label, current.labelEn)}
         </span>
         <span className="text-xs flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
-          {current.preview}
+          {text(current.preview, current.previewEn)}
         </span>
         <ChevronDown
           size={13}
@@ -1207,14 +1208,16 @@ function FontSelect({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-medium" style={{ color: 'var(--color-text)', fontFamily: opt.family }}>
-                    {opt.label}
+                    {text(opt.label, opt.labelEn)}
                   </span>
-                  <span className="text-[0.65rem]" style={{ color: 'var(--color-text-muted)' }}>
-                    {opt.labelEn}
-                  </span>
+                  {locale === 'zh-CN' && (
+                    <span className="text-[0.65rem]" style={{ color: 'var(--color-text-muted)' }}>
+                      {opt.labelEn}
+                    </span>
+                  )}
                 </div>
                 <p className="text-[0.65rem] truncate mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                  {opt.desc}
+                  {text(opt.desc, opt.descEn)}
                 </p>
               </div>
 
@@ -1223,7 +1226,7 @@ function FontSelect({
                 className="text-sm flex-shrink-0"
                 style={{ fontFamily: opt.family, color: 'var(--color-text-secondary)' }}
               >
-                {opt.preview}
+                {text(opt.preview, opt.previewEn)}
               </span>
             </button>
           ))}

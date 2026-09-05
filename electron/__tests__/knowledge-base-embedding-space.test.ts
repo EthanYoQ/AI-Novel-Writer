@@ -26,6 +26,7 @@ import {
   getChunksWithoutVectors,
   getConnection,
   getEmbeddingSpaces,
+  listDocuments,
   search,
 } from '../vector-store'
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
@@ -55,12 +56,71 @@ describe('知识库嵌入空间回填', () => {
       modelName: 'fake-embedding',
     })).resolves.toMatchObject({ success: true, chunkCount: 1 })
 
+    await expect(listDocuments(projectPath)).resolves.toEqual([
+      expect.objectContaining({ fileName, corpusKind: 'project-knowledge' }),
+    ])
+
     const results = await searchKnowledgeFTS('夜航 Café', projectPath, 5)
     expect(results).toEqual([
       expect.objectContaining({ fileName, text: content }),
     ])
     const restored = results[0]?.text ?? ''
     expect(Buffer.from(restored, 'utf8')).toEqual(Buffer.from(content, 'utf8'))
+  })
+
+  it('imports planning material as FTS-only without calling an embedding provider', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-planning-local-'))
+    projects.push(projectPath)
+    const content = '林晓是一名数据调查员。'
+
+    await expect(importText(content, '人物设定.md', projectPath, 'openai', {
+      baseUrl: 'https://embedding.example/v1',
+      apiKey: 'configured-key',
+      modelName: 'embedding-model',
+    }, { mode: 'fts-only' })).resolves.toMatchObject({ success: true, chunkCount: 1 })
+
+    expect(generateEmbeddingsMock).not.toHaveBeenCalled()
+    await expect(searchKnowledgeFTS('数据调查员', projectPath, 5)).resolves.toEqual([
+      expect.objectContaining({ fileName: '人物设定.md', text: content }),
+    ])
+  })
+
+  it('keeps the first finalized chapter FTS-only when local planning material already awaits an explicit rebuild', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-planning-then-finalize-'))
+    projects.push(projectPath)
+    const model = {
+      baseUrl: 'https://embedding.example/v1',
+      apiKey: 'configured-key',
+      modelName: 'embedding-model',
+    }
+
+    await expect(importText(
+      '作者创作资料。',
+      'planning-material.txt',
+      projectPath,
+      'openai',
+      model,
+      { mode: 'fts-only' },
+    )).resolves.toMatchObject({ success: true, chunkCount: 1 })
+    generateEmbeddingsMock.mockResolvedValue([[0.1, 0.2, 0.3]])
+
+    await expect(importText(
+      '第一章定稿正文。',
+      '第1章 初遇.txt',
+      projectPath,
+      'openai',
+      model,
+    )).resolves.toMatchObject({ success: true, chunkCount: 1 })
+
+    expect(generateEmbeddingsMock).not.toHaveBeenCalled()
+    await expect(getEmbeddingSpaces(projectPath)).resolves.toEqual({
+      version: 1,
+      activeGeneration: null,
+      spaces: [],
+    })
+    await expect(searchKnowledgeFTS('第一章定稿正文', projectPath, 5)).resolves.toEqual([
+      expect.objectContaining({ fileName: '第1章 初遇.txt', text: '第一章定稿正文。' }),
+    ])
   })
 
   it('写作检索的 FTS 与语义路径都按 corpus kind 排除参照语料', async () => {
@@ -133,6 +193,52 @@ describe('知识库嵌入空间回填', () => {
       ]))
       expect(JSON.stringify(results)).not.toContain('REFERENCE_SENTINEL')
     }
+  })
+
+  it('ranks every lexical match before topK so a late explicit planning hint is retained', async () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-planning-ranking-'))
+    projects.push(projectPath)
+    const model = {
+      baseUrl: 'https://embedding.example/v1',
+      apiKey: 'test-key-not-persisted',
+      modelName: 'fake-embedding',
+    }
+    for (let index = 0; index < 7; index += 1) {
+      await importText(
+        `林晓的普通课程记录 ${index}。`,
+        `generic-${index}.md`,
+        projectPath,
+        'openai',
+        model,
+        { mode: 'fts-only' },
+      )
+    }
+    await importText(
+      '作者检索哨兵：周岚隐瞒历史事故以保护幸存者。',
+      'author-planning.md',
+      projectPath,
+      'openai',
+      model,
+      { mode: 'fts-only' },
+    )
+    expect(generateEmbeddingsMock).not.toHaveBeenCalled()
+
+    const results = await searchKnowledgeFTS(
+      '作者检索哨兵 林晓 数据对峙 异常标签 旧实验室 陆星辰 系统警报 第七章 保护幸存者 历史事故',
+      projectPath,
+      2,
+      undefined,
+      ['reference'],
+    )
+
+    expect(results).toHaveLength(2)
+    expect(results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fileName: 'author-planning.md',
+        text: '作者检索哨兵：周岚隐瞒历史事故以保护幸存者。',
+      }),
+    ]))
+    expect(results[0]?.fileName).toBe('author-planning.md')
   })
 
   it('回填按模型实际 1536 维建空间并激活，不重建 chunks 全文表', async () => {

@@ -298,6 +298,8 @@ interface ProjectState {
   ) => Promise<void>
   /** 加载最近项目 */
   loadRecentProjects: () => Promise<void>
+  /** 只移除最近项目记录，不删除项目目录或数据 */
+  removeRecentProject: (projectPath: string) => Promise<boolean>
   /** 删除项目目录和项目数据 */
   deleteProject: (projectPath: string) => Promise<boolean>
   /** 关闭项目 */
@@ -738,6 +740,31 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       return true
     })
     set({ recentProjects })
+  },
+
+  removeRecentProject: async (projectPath) => {
+    try {
+      const result = await ipc.invoke('project:recent-remove', projectPath)
+      if (!result.success) {
+        alertError(
+          projectError(result.error),
+          { title: projectText('移除最近项目失败', 'Failed to remove recent project') },
+        )
+        return false
+      }
+      set(state => ({
+        recentProjects: state.recentProjects.filter(project => (
+          !sameProjectPathKey(project.path, projectPath)
+        )),
+      }))
+      return true
+    } catch (error) {
+      alertError(
+        projectError(error),
+        { title: projectText('移除最近项目异常', 'Unexpected recent-project removal error') },
+      )
+      return false
+    }
   },
 
   deleteProject: async (projectPath) => {

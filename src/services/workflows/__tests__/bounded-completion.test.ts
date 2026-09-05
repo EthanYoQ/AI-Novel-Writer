@@ -96,6 +96,27 @@ describe('bounded completion', () => {
     expect(requestContinuation).toHaveBeenCalledTimes(2)
   })
 
+  it('localizes terminal errors by UI locale without changing the writing-language prompt', async () => {
+    const requestContinuation = vi.fn().mockResolvedValue({
+      content: '{"chapters":[',
+      finishReason: 'length',
+    })
+
+    await expect(completeBoundedCompletion({
+      initial: { content: '{"chapters":[', finishReason: 'length' },
+      mode: 'replace-structured-output',
+      maxContinuations: 1,
+      originalPrompt: '返回章节 JSON',
+      writingLanguage: 'zh-CN',
+      uiLocale: 'en-US',
+      requestContinuation,
+    })).rejects.toThrow('Automatic continuation ran 1 time but the output is still incomplete')
+
+    expect(requestContinuation).toHaveBeenCalledOnce()
+    expect(requestContinuation.mock.calls[0]?.[0]).toContain('上一轮结构化输出因长度限制而中断')
+    expect(requestContinuation.mock.calls[0]?.[0]).not.toContain('The previous structured output')
+  })
+
   it.each(['content_filter', 'cancelled', 'error', 'unknown'] as const)(
     'fails closed without continuing a %s completion',
     async (finishReason) => {

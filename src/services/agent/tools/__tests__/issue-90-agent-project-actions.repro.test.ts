@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useProjectStore } from '../../../../stores/project-store'
+import { useLocaleStore } from '../../../../stores/locale-store'
 import { useWorkflowStore } from '../../../../stores/workflow-store'
 import { runAgentLoop } from '../../agent-engine'
 import { toolRegistry } from '../../tool-registry'
@@ -73,6 +74,7 @@ function stubWorkflowIpc(overrides: Partial<Record<string, unknown>> = {}): Retu
 }
 
 beforeEach(() => {
+  useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: project as never })
   useWorkflowStore.setState({
     activeRuns: [],
@@ -176,6 +178,24 @@ describe('Issue #90 AI assistant project actions', () => {
     }))
   })
 
+  it('freezes the English locale before asynchronous draft guards complete', async () => {
+    stubWorkflowIpc()
+    useLocaleStore.setState({ locale: 'en-US' })
+    const projectSession = createAgentExecutionContext().projectSession
+    if (!projectSession) throw new Error('test project session missing')
+
+    const launched = launchCreativeWorkflow({ workflow: 'generate_draft', chapterNumber: 1 }, projectSession)
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    const receipt = await launched
+
+    expect(useWorkflowStore.getState().activeRuns).toContainEqual(expect.objectContaining({
+      id: receipt.runId,
+      uiLocale: 'en-US',
+      title: 'Draft — Chapter 1 · 最后的灯',
+      steps: [expect.objectContaining({ name: 'Draft chapter' })],
+    }))
+  })
+
   it.each([
     { workflow: 'generate_draft', chapter_number: 1 },
     { workflow: 'generate_architecture' },
@@ -200,6 +220,33 @@ describe('Issue #90 AI assistant project actions', () => {
       projectPath,
       status: 'running',
     }))
+  })
+
+  it('returns an English start receipt from the frozen project writing language', async () => {
+    stubWorkflowIpc()
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    useProjectStore.setState({
+      currentProject: {
+        ...project,
+        novelConfig: { ...project.novelConfig, writingLanguage: 'en-US' },
+      } as never,
+    })
+
+    const context = createAgentExecutionContext()
+    const result = await startWorkflowTool.execute(
+      { workflow: 'generate_draft', chapter_number: 1 },
+      context,
+    )
+
+    expect(result.success).toBe(true)
+    expect(result.content).toMatch(/^Started the draft \(Chapter 1\) workflow/)
+    expect(result.content).not.toMatch(/[\u3400-\u9fff]/u)
+
+    const failure = await startWorkflowTool.execute(
+      { workflow: 'review', chapter_number: 1 },
+      context,
+    )
+    expect(failure.error).toBe('Could not start the review (Chapter 1) workflow.')
   })
 
   it('executes a confirmed raw start_workflow response through the real draft launcher', async () => {

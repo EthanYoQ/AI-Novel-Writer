@@ -22,30 +22,37 @@ export interface LocaleState {
 }
 
 export function createLocaleState(dependencies: LocaleDependencies): StateCreator<LocaleState> {
-  return (set, get) => ({
-    locale: resolveLocale(dependencies.systemLocale()),
-    initialized: false,
-    async init() {
-      const config = await dependencies.loadConfig()
-      const locale = config.locale ?? resolveLocale(dependencies.systemLocale())
-      dependencies.setDocumentLanguage(locale)
-      set({ locale, initialized: true })
-    },
-    async setLocale(locale) {
-      set({ locale })
-      dependencies.setDocumentLanguage(locale)
-      await dependencies.saveLocale(locale)
-    },
-    async toggleLocale() {
-      await get().setLocale(get().locale === 'zh-CN' ? 'en-US' : 'zh-CN')
-    },
-    t(key, params) {
-      return translate(get().locale, key, params)
-    },
-    text(zhCNText, enUSText, params) {
-      return localize(get().locale, zhCNText, enUSText, params)
-    },
-  })
+  return (set, get) => {
+    // Components commonly select only `t` or `text`. Refreshing these reader
+    // identities with the locale makes those subscriptions reactive while the
+    // functions still resolve the latest locale when called from callbacks.
+    const localeReaders = () => ({
+      t: (key: MessageKey, params?: MessageParams) => translate(get().locale, key, params),
+      text: (zhCNText: string, enUSText: string, params?: MessageParams) => (
+        localize(get().locale, zhCNText, enUSText, params)
+      ),
+    })
+
+    return {
+      locale: resolveLocale(dependencies.systemLocale()),
+      initialized: false,
+      ...localeReaders(),
+      async init() {
+        const config = await dependencies.loadConfig()
+        const locale = config.locale ?? resolveLocale(dependencies.systemLocale())
+        dependencies.setDocumentLanguage(locale)
+        set({ locale, initialized: true, ...localeReaders() })
+      },
+      async setLocale(locale) {
+        set({ locale, ...localeReaders() })
+        dependencies.setDocumentLanguage(locale)
+        await dependencies.saveLocale(locale)
+      },
+      async toggleLocale() {
+        await get().setLocale(get().locale === 'zh-CN' ? 'en-US' : 'zh-CN')
+      },
+    }
+  }
 }
 
 const browserDependencies: LocaleDependencies = {

@@ -18,6 +18,7 @@ import {
   type ToolArtifact,
 } from './tool-registry'
 import { createAgentExecutionContext } from './tools/project-context'
+import { writingLanguageText, type WritingLanguage } from '../../shared/writing-language'
 
 // ===== 常量 =====
 
@@ -126,6 +127,12 @@ export async function runAgentLoop(
   // One agent run gets one immutable project identity. Tool calls later in the
   // loop must not silently borrow a lease issued after a same-path reopen.
   const executionContext = providedExecutionContext ?? createAgentExecutionContext(modelId)
+  const modelText = (zhCN: string, enUS: string) => (
+    writingLanguageText(executionContext.writingLanguage, zhCN, enUS)
+  )
+  const uiText = (zhCN: string, enUS: string) => (
+    executionContext.uiLocale === 'en-US' ? enUS : zhCN
+  )
 
   // 构建消息列表
   const messages: LLMMessage[] = [
@@ -140,7 +147,7 @@ export async function runAgentLoop(
   while (rounds < MAX_TOOL_ROUNDS) {
     // 检查中止信号
     if (abortSignal?.aborted) {
-      callbacks.onDone(fullAssistantText + '\n\n_（已停止生成）_', allToolCalls, allArtifacts)
+      callbacks.onDone(fullAssistantText + uiText('\n\n_（已停止生成）_', '\n\n_(Generation stopped)_'), allToolCalls, allArtifacts)
       return
     }
 
@@ -150,14 +157,18 @@ export async function runAgentLoop(
     let llmResponse: string
     try {
       llmResponse = await generateFn(messages, modelId ?? '')
-    } catch (error) {
-      callbacks.onError(`LLM 调用失败：${String(error)}`)
+    } catch {
+      if (abortSignal?.aborted) {
+        callbacks.onDone(fullAssistantText + uiText('\n\n_（已停止生成）_', '\n\n_(Generation stopped)_'), allToolCalls, allArtifacts)
+        return
+      }
+      callbacks.onError(uiText('AI 请求失败，请重试。', 'The AI request failed. Please try again.'))
       return
     }
 
     // 检查中止
     if (abortSignal?.aborted) {
-      callbacks.onDone(fullAssistantText + '\n\n_（已停止生成）_', allToolCalls, allArtifacts)
+      callbacks.onDone(fullAssistantText + uiText('\n\n_（已停止生成）_', '\n\n_(Generation stopped)_'), allToolCalls, allArtifacts)
       return
     }
 
@@ -201,9 +212,12 @@ export async function runAgentLoop(
       const tool = toolRegistry.get(tc.name)
       if (!tool) {
         toolCallInfo.status = 'failed'
-        toolCallInfo.error = `未知工具：${tc.name}`
+        toolCallInfo.error = uiText(`未知工具：${tc.name}`, `Unknown tool: ${tc.name}`)
         callbacks.onToolCallComplete(toolCallInfo)
-        observationParts.push(`<tool_result name="${tc.name}" error="true">\n未知工具：${tc.name}。可用工具：${toolRegistry.listAll().map(t => t.name).join(', ')}\n</tool_result>`)
+        observationParts.push(`<tool_result name="${tc.name}" error="true">\n${modelText(
+          `未知工具：${tc.name}。可用工具：${toolRegistry.listAll().map(t => t.name).join(', ')}`,
+          `Unknown tool: ${tc.name}. Available tools: ${toolRegistry.listAll().map(t => t.name).join(', ')}`,
+        )}\n</tool_result>`)
         continue
       }
 
@@ -220,9 +234,9 @@ export async function runAgentLoop(
         confirmationDecision = typeof response === 'boolean' ? { confirmed: response } : response
         if (!confirmationDecision.confirmed) {
           toolCallInfo.status = 'failed'
-          toolCallInfo.error = '用户拒绝执行'
+          toolCallInfo.error = uiText('用户拒绝执行', 'The user declined this action')
           callbacks.onToolCallComplete(toolCallInfo)
-          observationParts.push(`<tool_result name="${tc.name}" error="true">\n用户拒绝了此操作\n</tool_result>`)
+          observationParts.push(`<tool_result name="${tc.name}" error="true">\n${modelText('用户拒绝了此操作', 'The user declined this action')}\n</tool_result>`)
           continue
         }
         // The waiting confirmation card already represents this call. Its
@@ -243,14 +257,22 @@ export async function runAgentLoop(
           tc.arguments,
           executionContext,
           TOOL_TIMEOUT_MS,
+          executionContext.writingLanguage,
         )
 
         // 截断过长的结果
-        const truncatedContent = truncateResult(result.content, TOOL_RESULT_MAX_CHARS)
+        const truncatedContent = truncateResult(
+          result.content,
+          TOOL_RESULT_MAX_CHARS,
+          executionContext.writingLanguage,
+        )
 
         toolCallInfo.status = result.success ? 'completed' : 'failed'
-        toolCallInfo.result = truncatedContent
-        if (result.error) toolCallInfo.error = result.error
+        if (result.success) {
+          toolCallInfo.result = truncatedContent
+        } else {
+          toolCallInfo.error = uiText('工具执行失败，请重试。', 'Tool execution failed. Please try again.')
+        }
         if (result.artifacts) allArtifacts.push(...result.artifacts)
 
         callbacks.onToolCallComplete(toolCallInfo)
@@ -261,25 +283,34 @@ export async function runAgentLoop(
             roundToolCalls.splice(toolIndex + 1, 0, ...confirmationDecision.blueprintProposals)
           }
         } else {
-          observationParts.push(`<tool_result name="${tc.name}" error="true">\n${result.error ?? truncatedContent}\n</tool_result>`)
+          observationParts.push(`<tool_result name="${tc.name}" error="true">\n${modelText('工具执行失败。', 'Tool execution failed.')}\n</tool_result>`)
         }
-      } catch (error) {
+      } catch {
         toolCallInfo.status = 'failed'
-        toolCallInfo.error = `执行异常：${String(error)}`
+        toolCallInfo.error = uiText('工具执行失败，请重试。', 'Tool execution failed. Please try again.')
         callbacks.onToolCallComplete(toolCallInfo)
-        observationParts.push(`<tool_result name="${tc.name}" error="true">\n执行异常：${String(error)}\n</tool_result>`)
+        observationParts.push(`<tool_result name="${tc.name}" error="true">\n${modelText('工具执行失败。', 'Tool execution failed.')}\n</tool_result>`)
       }
     }
 
     // 将所有 tool 结果作为 user role 的 observation 注入
     // 加上明确提示，防止 LLM 误以为这是用户新发言
-    const observation = `[以下是工具执行结果，请根据结果继续回答用户的问题]\n\n${observationParts.join('\n\n')}\n\n[请根据上面的工具结果，继续回答用户的原始问题。如果需要更多信息可以继续调用工具。]`
+    const observation = `${modelText(
+      '[以下是工具执行结果，请根据结果继续回答用户的问题]',
+      '[The following are tool results. Continue answering the user based on them.]',
+    )}\n\n${observationParts.join('\n\n')}\n\n${modelText(
+      '[请根据上面的工具结果，继续回答用户的原始问题。如果需要更多信息可以继续调用工具。]',
+      '[Continue answering the original request using the tool results above. Call another tool only if more information is needed.]',
+    )}`
     messages.push({ role: 'user', content: observation })
   }
 
   // 达到最大循环次数
   if (rounds >= MAX_TOOL_ROUNDS) {
-    fullAssistantText += '\n\n⚠️ 已达到最大工具调用次数限制，自动停止。'
+    fullAssistantText += uiText(
+      '\n\n已达到最大工具调用次数限制，自动停止。',
+      '\n\nThe maximum number of tool calls was reached, so generation stopped.',
+    )
   }
 
   callbacks.onDone(fullAssistantText, allToolCalls, allArtifacts)
@@ -320,6 +351,47 @@ function parseRegisteredRawToolCall(text: string): ParsedToolCall | null {
   }
 }
 
+function parseRegisteredJsonEnvelope(text: string): ParsedToolCall | null {
+  const envelope = text.trim()
+  if (!envelope.startsWith('{') || !envelope.endsWith('}')) return null
+
+  try {
+    const value: unknown = JSON.parse(envelope)
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const keys = Object.keys(value)
+    if (keys.length !== 2 || !keys.includes('name') || !keys.includes('arguments')) return null
+    const { name, arguments: args } = value as Record<string, unknown>
+    if (
+      typeof name !== 'string'
+      || !toolRegistry.get(name)
+      || !args
+      || typeof args !== 'object'
+      || Array.isArray(args)
+    ) return null
+    return { name, arguments: args as Record<string, unknown> }
+  } catch {
+    return null
+  }
+}
+
+function parseTaggedToolCallContent(text: string): ParsedToolCall | null {
+  const emptyTool = /^<([A-Za-z][\w.-]*)>\s*<\/\1>$/.exec(text)
+  if (emptyTool && toolRegistry.get(emptyTool[1])) {
+    return { name: emptyTool[1], arguments: {} }
+  }
+
+  const match = /^<name>\s*([A-Za-z][\w.-]*)\s*<\/name>\s*<arguments>\s*(\{[\s\S]*\})\s*<\/arguments>$/.exec(text)
+  if (!match) return null
+
+  try {
+    const args: unknown = JSON.parse(match[2])
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return null
+    return { name: match[1], arguments: args as Record<string, unknown> }
+  } catch {
+    return null
+  }
+}
+
 /**
  * 从 LLM 输出中解析 <tool_call>...</tool_call> 标签
  *
@@ -333,6 +405,11 @@ export function parseToolCalls(text: string): {
   const rawToolCall = parseRegisteredRawToolCall(text)
   if (rawToolCall) {
     return { textParts: [], toolCalls: [rawToolCall] }
+  }
+
+  const jsonEnvelope = parseRegisteredJsonEnvelope(text)
+  if (jsonEnvelope) {
+    return { textParts: [], toolCalls: [jsonEnvelope] }
   }
 
   const toolCalls: ParsedToolCall[] = []
@@ -366,7 +443,16 @@ export function parseToolCalls(text: string): {
       }
     } catch { /* 尝试容错解析 */ }
 
-    // 策略 2：从内容中提取 JSON 对象（LLM 可能在 JSON 前后加了额外文字）
+    // 策略 2：兼容供应商在 tool_call 内输出严格的 name/arguments 子标签。
+    if (!parsed) {
+      const taggedToolCall = parseTaggedToolCallContent(rawContent)
+      if (taggedToolCall) {
+        toolCalls.push(taggedToolCall)
+        parsed = true
+      }
+    }
+
+    // 策略 3：从内容中提取 JSON 对象（LLM 可能在 JSON 前后加了额外文字）
     if (!parsed) {
       const jsonMatch = rawContent.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
@@ -413,11 +499,16 @@ async function executeToolWithTimeout(
   args: Record<string, unknown>,
   context: AgentExecutionContext,
   timeoutMs: number,
+  writingLanguage: WritingLanguage,
 ): Promise<ToolResult> {
   return Promise.race([
     executeFn(args, context),
     new Promise<ToolResult>((_, reject) =>
-      setTimeout(() => reject(new Error(`工具执行超时（${timeoutMs / 1000}s）`)), timeoutMs)
+      setTimeout(() => reject(new Error(writingLanguageText(
+        writingLanguage,
+        `工具执行超时（${timeoutMs / 1000}s）`,
+        `Tool execution timed out (${timeoutMs / 1000}s)`,
+      ))), timeoutMs)
     ),
   ])
 }
@@ -425,7 +516,11 @@ async function executeToolWithTimeout(
 /**
  * 截断过长的 Tool 结果
  */
-function truncateResult(content: string, maxChars: number): string {
+function truncateResult(content: string, maxChars: number, writingLanguage: WritingLanguage): string {
   if (content.length <= maxChars) return content
-  return content.slice(0, maxChars) + `\n\n…（内容已截断，完整内容共 ${content.length} 字符。可使用 read_file 工具获取完整文件内容）`
+  return content.slice(0, maxChars) + writingLanguageText(
+    writingLanguage,
+    `\n\n…（内容已截断，完整内容共 ${content.length} 字符。可使用 read_file 工具获取完整文件内容）`,
+    `\n\n... (Result truncated. The complete content is ${content.length} characters; use read_file to retrieve it.)`,
+  )
 }

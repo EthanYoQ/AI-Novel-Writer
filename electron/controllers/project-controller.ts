@@ -700,6 +700,15 @@ export function registerProjectController() {
     return loadRecentProjects()
   })
 
+  ipcMain.handle('project:recent-remove', async (_event, projectPath: string) => {
+    try {
+      removeRecentProject(projectPath)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
+  })
+
   ipcMain.handle(
     'project:delete',
     async (

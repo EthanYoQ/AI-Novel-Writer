@@ -1,5 +1,6 @@
 import type { LLMFinishReason } from '../../shared/ipc-channels'
 import type { WritingLanguage } from '../../shared/writing-language'
+import { localize, type Locale } from '../../i18n/core'
 import { promptLanguageText } from '../prompt-language'
 import { stripThinkingTags } from './workflow-utils'
 
@@ -67,6 +68,7 @@ export interface BoundedCompletionRequest {
   maxContinuations: number
   originalPrompt: string
   writingLanguage: WritingLanguage
+  uiLocale?: Locale
   promptBudget?: BoundedCompletionPromptBudget
   preserveCompleteStructuredPrompt?: boolean
   requestContinuation: (prompt: string) => Promise<BoundedCompletion>
@@ -105,19 +107,33 @@ function visibleProseUnitCount(text: string): number {
   return text.match(/[\p{L}\p{N}]/gu)?.length ?? 0
 }
 
-function noVisibleContinuationProgressError(): Error {
-  return new Error('AI 续写未增加新的可见正文，结果未被保存。请重试或缩短本次修改范围。')
+function noVisibleContinuationProgressError(uiLocale: Locale): Error {
+  return new Error(localize(
+    uiLocale,
+    'AI 续写未增加新的可见正文，结果未被保存。请重试或缩短本次修改范围。',
+    'The AI continuation added no new visible prose, so the result was not saved. Try again or shorten the requested edit.',
+  ))
 }
 
-function mechanicalCompletionError(reason: string): Error {
-  return new Error(`AI 输出包含${reason}，可能仍不完整，结果未被保存。`)
+function mechanicalCompletionError(uiLocale: Locale, zhCNReason: string, enUSReason: string): Error {
+  return new Error(localize(
+    uiLocale,
+    `AI 输出包含${zhCNReason}，可能仍不完整，结果未被保存。`,
+    `AI output contains ${enUSReason} and may still be incomplete, so it was not saved.`,
+  ))
 }
 
-function assertMechanicallyCompleteVisibleText(content: string): void {
+function assertMechanicallyCompleteVisibleText(content: string, uiLocale: Locale): void {
   const trimmed = content.trim()
-  if (visibleProseUnitCount(trimmed) === 0) throw mechanicalCompletionError('空白或无可见正文')
-  if (/(?:^|\n)\s*```/u.test(trimmed)) throw mechanicalCompletionError('代码围栏')
-  if (/<\/?\s*think(?:\s|>|$)/iu.test(trimmed)) throw mechanicalCompletionError('think 标签残片')
+  if (visibleProseUnitCount(trimmed) === 0) {
+    throw mechanicalCompletionError(uiLocale, '空白或无可见正文', 'blank or no visible prose')
+  }
+  if (/(?:^|\n)\s*```/u.test(trimmed)) {
+    throw mechanicalCompletionError(uiLocale, '代码围栏', 'a code fence')
+  }
+  if (/<\/?\s*think(?:\s|>|$)/iu.test(trimmed)) {
+    throw mechanicalCompletionError(uiLocale, 'think 标签残片', 'a leftover think tag')
+  }
 
   const paragraphs = trimmed
     .split(/\n\s*\n+/u)
@@ -128,7 +144,7 @@ function assertMechanicallyCompleteVisibleText(content: string): void {
     visibleProseUnitCount(opening) <= MAX_META_OPENING_VISIBLE_UNITS
     && /^(?:(?:以下|下面)(?:是|为).{0,40}(?:修订|修改|重写|生成|完成|提供|正文|章节|内容)|(?:根据|按照)(?:您|用户).{0,40}(?:要求|指示)|这是(?:我为您|根据您的要求).{0,30}(?:修订|修改|重写|生成)|here\s+is|below\s+is|as\s+requested|certainly[,!:]?\s+(?:here\s+is|i(?:'ve|\s+have))|i\s+(?:have\s+(?:revised|rewritten|generated)|will\s+(?:provide|write|revise))\b)/iu.test(opening)
   ) {
-    throw mechanicalCompletionError('首段元话术')
+    throw mechanicalCompletionError(uiLocale, '首段元话术', 'opening meta commentary')
   }
 
   if (
@@ -136,7 +152,7 @@ function assertMechanicallyCompleteVisibleText(content: string): void {
     || trimmed.includes(EN_US_TRUNCATION_MARKER.trim())
     || paragraphs.some(paragraph => /^(?:…\s*)?(?:\[(?:内容已按上下文预算截断|内容截断|输出被截断|content truncated to fit the context budget|truncated)\]|[（(]?(?:未完待续|未完)[）)]?)(?:\s*…)?$/iu.test(paragraph))
   ) {
-    throw mechanicalCompletionError('截断标记')
+    throw mechanicalCompletionError(uiLocale, '截断标记', 'a truncation marker')
   }
 
   const duplicateCandidateGroups = [
@@ -148,7 +164,9 @@ function assertMechanicallyCompleteVisibleText(content: string): void {
     for (const paragraph of candidates) {
       const normalized = paragraph.replace(/\s+/gu, ' ').trim()
       if (visibleProseUnitCount(normalized) < MIN_OBVIOUS_DUPLICATE_PARAGRAPH_VISIBLE_UNITS) continue
-      if (seenParagraphs.has(normalized)) throw mechanicalCompletionError('明显重复段落')
+      if (seenParagraphs.has(normalized)) {
+        throw mechanicalCompletionError(uiLocale, '明显重复段落', 'an obviously duplicated paragraph')
+      }
       seenParagraphs.add(normalized)
     }
   }
@@ -171,7 +189,10 @@ export function appendVisibleTextContinuation(
   return redactVisibleText([visibleExisting, newVisibleText].filter(Boolean).join('\n\n'))
 }
 
-function incompleteCompletionError(finishReason: LLMFinishReason): BoundedCompletionFailure {
+function incompleteCompletionError(
+  finishReason: LLMFinishReason,
+  uiLocale: Locale,
+): BoundedCompletionFailure {
   // `stop` should not reach this path, but preserve fail-closed behavior if a
   // legacy caller does invoke the public helper with it.
   const failureCode: BoundedCompletionFailureCode = finishReason === 'stop'
@@ -182,30 +203,55 @@ function incompleteCompletionError(finishReason: LLMFinishReason): BoundedComple
     case 'length':
       return new BoundedCompletionFailure(
         failureCode,
-        'AI 输出达到模型最大长度，结果不完整。请提高模型最大输出 Tokens 或缩短本次任务后重试。',
+        localize(
+          uiLocale,
+          'AI 输出达到模型最大长度，结果不完整。请提高模型最大输出 Tokens 或缩短本次任务后重试。',
+          'AI output reached the model maximum length and is incomplete. Increase the maximum output tokens or shorten the task, then try again.',
+        ),
       )
     case 'content_filter':
-      return new BoundedCompletionFailure(failureCode, 'AI 输出因内容限制而未完成，结果未被保存。')
+      return new BoundedCompletionFailure(failureCode, localize(
+        uiLocale,
+        'AI 输出因内容限制而未完成，结果未被保存。',
+        'AI output was stopped by content restrictions, so the result was not saved.',
+      ))
     case 'cancelled':
-      return new BoundedCompletionFailure(failureCode, 'AI 生成已取消，结果未被保存。')
+      return new BoundedCompletionFailure(failureCode, localize(
+        uiLocale,
+        'AI 生成已取消，结果未被保存。',
+        'AI generation was cancelled, so the result was not saved.',
+      ))
     default:
-      return new BoundedCompletionFailure(failureCode, 'AI 未正常完成生成，结果未被保存。')
+      return new BoundedCompletionFailure(failureCode, localize(
+        uiLocale,
+        'AI 未正常完成生成，结果未被保存。',
+        'AI generation did not complete normally, so the result was not saved.',
+      ))
   }
 }
 
-export function createBoundedCompletionError(finishReason: LLMFinishReason): BoundedCompletionFailure {
-  return incompleteCompletionError(finishReason)
+export function createBoundedCompletionError(
+  finishReason: LLMFinishReason,
+  uiLocale: Locale = 'zh-CN',
+): BoundedCompletionFailure {
+  return incompleteCompletionError(finishReason, uiLocale)
 }
 
-function continuationLimitExceededError(maxContinuations: number): Error {
+function continuationLimitExceededError(maxContinuations: number, uiLocale: Locale): Error {
   return new Error(
-    `AI 输出连续达到模型最大长度，已自动续写 ${maxContinuations} 次仍未完成，结果未被保存。` +
-    '请提高模型最大输出 Tokens、缩短本次任务，或拆分为更小批次后重试。',
+    localize(
+      uiLocale,
+      `AI 输出连续达到模型最大长度，已自动续写 ${maxContinuations} 次仍未完成，结果未被保存。` +
+        '请提高模型最大输出 Tokens、缩短本次任务，或拆分为更小批次后重试。',
+      `AI output repeatedly reached the model maximum length. Automatic continuation ran ${maxContinuations} ` +
+        `${maxContinuations === 1 ? 'time' : 'times'} but the output is still incomplete, so it was not saved. ` +
+        'Increase the maximum output tokens, shorten the task, or split it into smaller batches and try again.',
+    ),
   )
 }
 
-function assertNotCancelled(isCancelled?: () => boolean): void {
-  if (isCancelled?.()) throw new Error('工作流已取消')
+function assertNotCancelled(uiLocale: Locale, isCancelled?: () => boolean): void {
+  if (isCancelled?.()) throw new Error(localize(uiLocale, '工作流已取消', 'Workflow was cancelled.'))
 }
 
 function modeContinuationLimit(mode: BoundedCompletionMode): number {
@@ -214,20 +260,31 @@ function modeContinuationLimit(mode: BoundedCompletionMode): number {
     : MAX_TEXT_CONTINUATIONS
 }
 
-function assertValidContinuationLimit(mode: BoundedCompletionMode, maxContinuations: number): void {
+function assertValidContinuationLimit(
+  mode: BoundedCompletionMode,
+  maxContinuations: number,
+  uiLocale: Locale,
+): void {
   if (
     !Number.isSafeInteger(maxContinuations)
     || maxContinuations < 0
     || maxContinuations > MAX_BOUNDED_CONTINUATIONS
   ) {
-    throw new Error(`自动续写次数必须是 0 到 ${MAX_BOUNDED_CONTINUATIONS} 的整数。请缩短任务或提高模型最大输出 Tokens 后重试。`)
+    throw new Error(localize(
+      uiLocale,
+      `自动续写次数必须是 0 到 ${MAX_BOUNDED_CONTINUATIONS} 的整数。请缩短任务或提高模型最大输出 Tokens 后重试。`,
+      `The automatic-continuation limit must be an integer from 0 to ${MAX_BOUNDED_CONTINUATIONS}. Shorten the task or increase the maximum output tokens, then try again.`,
+    ))
   }
   const modeLimit = modeContinuationLimit(mode)
   if (maxContinuations > modeLimit) {
-    throw new Error(
+    throw new Error(localize(
+      uiLocale,
       `当前输出类型最多自动续写 ${modeLimit} 次。` +
-      '请缩短本次任务、提高模型最大输出 Tokens，或拆分为更小批次后重试。',
-    )
+        '请缩短本次任务、提高模型最大输出 Tokens，或拆分为更小批次后重试。',
+      `This output type allows at most ${modeLimit} automatic continuations. ` +
+        'Shorten the task, increase the maximum output tokens, or split it into smaller batches and try again.',
+    ))
   }
 }
 
@@ -243,30 +300,33 @@ function nonNegativeSafeInteger(value: unknown): number {
     : 0
 }
 
-function insufficientContextBudgetError(): Error {
-  return new Error(
+function insufficientContextBudgetError(uiLocale: Locale): Error {
+  return new Error(localize(
+    uiLocale,
     '当前模型上下文预算不足以安全续写，结果未被保存。' +
-    '请提高上下文窗口、降低最大输出 Tokens，或缩短本次任务后重试。',
-  )
+      '请提高上下文窗口、降低最大输出 Tokens，或缩短本次任务后重试。',
+    'The current model context budget is too small for a safe continuation, so the result was not saved. ' +
+      'Increase the context window, lower the maximum output tokens, or shorten the task and try again.',
+  ))
 }
 
-function continuationPromptCharBudget(budget?: BoundedCompletionPromptBudget): number {
+function continuationPromptCharBudget(uiLocale: Locale, budget?: BoundedCompletionPromptBudget): number {
   const contextWindowTokens = positiveSafeInteger(budget?.contextWindowTokens)
   if (contextWindowTokens === null) {
     // Unknown means unknown: bound the continuation prompt by product policy,
     // but never invent an 8k model window and subtract the leased output cap.
     const availableChars = SAFE_UNKNOWN_CONTINUATION_PROMPT_CHARS
       - nonNegativeSafeInteger(budget?.systemPromptChars)
-    if (availableChars <= 0) throw insufficientContextBudgetError()
+    if (availableChars <= 0) throw insufficientContextBudgetError(uiLocale)
     return Math.min(MAX_CONTINUATION_PROMPT_CHARS, availableChars)
   }
   const maxOutputTokens = positiveSafeInteger(budget?.maxOutputTokens)
-  if (maxOutputTokens === null) throw insufficientContextBudgetError()
+  if (maxOutputTokens === null) throw insufficientContextBudgetError(uiLocale)
   const inputTokens = contextWindowTokens - maxOutputTokens - CONTEXT_SAFETY_RESERVE_TOKENS
   const availableChars = Math.floor(inputTokens * ESTIMATED_CHARS_PER_TOKEN)
     - nonNegativeSafeInteger(budget?.systemPromptChars)
   const boundedChars = Math.min(MAX_CONTINUATION_PROMPT_CHARS, availableChars)
-  if (inputTokens <= 0 || boundedChars <= 0) throw insufficientContextBudgetError()
+  if (inputTokens <= 0 || boundedChars <= 0) throw insufficientContextBudgetError(uiLocale)
   return boundedChars
 }
 
@@ -354,6 +414,7 @@ function buildContinuationPrompt(
   visibleText: string,
   maxChars: number,
   writingLanguage: WritingLanguage,
+  uiLocale: Locale,
 ): string {
   const build = (original: string, visible: string) => mode === 'replace-structured-output'
     ? buildStructuredReplacementPrompt(original, visible, writingLanguage)
@@ -364,7 +425,7 @@ function buildContinuationPrompt(
   const originalMinimum = originalPrompt ? Math.min(MIN_ORIGINAL_TASK_CHARS, originalPrompt.length) : 0
   const visibleMinimum = visibleText ? Math.min(MIN_VISIBLE_REFERENCE_CHARS, visibleText.length) : 0
   if (variableBudget < originalMinimum + visibleMinimum) {
-    throw insufficientContextBudgetError()
+    throw insufficientContextBudgetError(uiLocale)
   }
 
   const originalBudget = originalPrompt
@@ -385,7 +446,7 @@ function buildContinuationPrompt(
     truncateWithHeadAndTail(originalPrompt, expandedOriginalBudget, writingLanguage),
     truncateVisibleReference(mode, visibleText, expandedVisibleBudget, writingLanguage),
   )
-  if (prompt.length > maxChars) throw insufficientContextBudgetError()
+  if (prompt.length > maxChars) throw insufficientContextBudgetError(uiLocale)
   return prompt
 }
 
@@ -395,7 +456,8 @@ function buildContinuationPrompt(
  * outputs replace a partial response, while visible prose is overlap-merged.
  */
 export async function completeBoundedCompletion(request: BoundedCompletionRequest): Promise<string> {
-  assertValidContinuationLimit(request.mode, request.maxContinuations)
+  const uiLocale = request.uiLocale ?? 'zh-CN'
+  assertValidContinuationLimit(request.mode, request.maxContinuations, uiLocale)
   const redact = request.redactVisibleText ?? redactVisibleCompletionText
   const merge = request.mergeVisibleText ?? appendVisibleTextContinuation
   let content = redact(request.initial.content)
@@ -403,10 +465,10 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
   let continuationCount = 0
 
   while (finishReason !== 'stop') {
-    assertNotCancelled(request.isCancelled)
-    if (finishReason !== 'length') throw incompleteCompletionError(finishReason)
+    assertNotCancelled(uiLocale, request.isCancelled)
+    if (finishReason !== 'length') throw incompleteCompletionError(finishReason, uiLocale)
     if (continuationCount >= request.maxContinuations) {
-      throw continuationLimitExceededError(request.maxContinuations)
+      throw continuationLimitExceededError(request.maxContinuations, uiLocale)
     }
 
     const continuationPrompt = request.mode === 'replace-structured-output'
@@ -420,11 +482,12 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
           request.mode,
           request.originalPrompt,
           content,
-          continuationPromptCharBudget(request.promptBudget),
+          continuationPromptCharBudget(uiLocale, request.promptBudget),
           request.writingLanguage,
+          uiLocale,
         )
     const next = await request.requestContinuation(continuationPrompt)
-    assertNotCancelled(request.isCancelled)
+    assertNotCancelled(uiLocale, request.isCancelled)
     continuationCount += 1
     const nextVisible = redact(next.content)
     if (request.mode === 'replace-structured-output') {
@@ -432,14 +495,14 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
     } else {
       const merged = merge(content, nextVisible)
       if (visibleProseUnitCount(merged) <= visibleProseUnitCount(content)) {
-        throw noVisibleContinuationProgressError()
+        throw noVisibleContinuationProgressError(uiLocale)
       }
       content = merged
     }
     finishReason = next.finishReason
   }
 
-  assertNotCancelled(request.isCancelled)
-  if (request.mode === 'append-visible-text') assertMechanicallyCompleteVisibleText(content)
+  assertNotCancelled(uiLocale, request.isCancelled)
+  if (request.mode === 'append-visible-text') assertMechanicallyCompleteVisibleText(content, uiLocale)
   return content
 }

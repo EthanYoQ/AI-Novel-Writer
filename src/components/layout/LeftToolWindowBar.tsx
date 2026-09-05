@@ -5,7 +5,7 @@ import {
   Home,
   ListTree,
   Globe2,
-  Bot,
+  GitBranch,
   ListChecks,
   Settings,
   ScrollText,
@@ -79,7 +79,7 @@ export default function LeftToolWindowBar() {
 
   /** Home 按钮是否激活 */
   const homeActive = activeRailItem === 'home'
-  const aiActive = activeRailItem === 'ai'
+  const plotTreeActive = activeRailItem === 'plot-tree'
 
   return (
     <div
@@ -140,11 +140,19 @@ export default function LeftToolWindowBar() {
           onClick={() => setSidebarView('knowledge', 'world')}
         />
         <LeftNavButton
-          icon={Bot}
-          label="AI"
-          active={aiActive}
-          title={text('配置模型 API', 'Configure model API')}
-          onClick={() => openSettings('llm', 'ai')}
+          icon={GitBranch}
+          label={text('剧情', 'Plot tree')}
+          active={plotTreeActive}
+          title={text('剧情树', 'Plot tree')}
+          onClick={() => {
+            setSidebarView('project', 'plot-tree')
+            openBuiltinEditor(
+              'narrative-thread-editor',
+              text('剧情树与叙事线索', 'Plot tree & narrative threads'),
+              'narrative-thread',
+              'plot-tree',
+            )
+          }}
         />
       </div>
 

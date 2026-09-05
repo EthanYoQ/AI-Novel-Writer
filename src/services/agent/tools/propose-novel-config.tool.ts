@@ -1,8 +1,8 @@
 import type { NovelConfig } from '../../../shared/ipc-channels'
 import { useProjectStore } from '../../../stores/project-store'
 import { ipc } from '../../ipc-client'
-import { buildAgentTool } from '../tool-registry'
-import { assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { buildAgentTool, type AgentExecutionContext } from '../tool-registry'
+import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
 
 const STRING_FIELDS = new Set<keyof NovelConfig>([
   'genre', 'subGenre', 'targetAudience', 'coreOutline', 'worldSetting', 'goldenFinger',
@@ -34,9 +34,10 @@ function plainChanges(args: Record<string, unknown>): Record<string, unknown> | 
 export function buildNovelConfigProposal(
   args: Record<string, unknown>,
   current: NovelConfig,
+  context?: AgentExecutionContext,
 ): NovelConfigProposal {
   const candidate = plainChanges(args)
-  if (!candidate || Object.keys(candidate).length === 0) return { valid: false, error: '缺少小说配置变更字段' }
+  if (!candidate || Object.keys(candidate).length === 0) return { valid: false, error: agentToolText(context, '缺少小说配置变更字段', 'No novel configuration changes were provided') }
   const changes: Record<string, unknown> = {}
   for (const [field, proposed] of Object.entries(candidate)) {
     const canonicalField = field === 'narrativePov' ? 'narrativePOV' : field
@@ -44,16 +45,16 @@ export function buildNovelConfigProposal(
       ? proposed === '简体中文' ? 'zh-CN' : proposed === 'English' ? 'en-US' : proposed
       : proposed
     if (STRING_FIELDS.has(canonicalField as keyof NovelConfig)) {
-      if (typeof normalizedValue !== 'string') return { valid: false, error: `字段 ${field} 必须是文本` }
+      if (typeof normalizedValue !== 'string') return { valid: false, error: agentToolText(context, `字段 ${field} 必须是文本`, `Field ${field} must be text`) }
     } else if (NUMBER_FIELDS.has(canonicalField as keyof NovelConfig)) {
-      if (!Number.isInteger(normalizedValue) || (normalizedValue as number) <= 0) return { valid: false, error: `字段 ${field} 必须是正整数` }
+      if (!Number.isInteger(normalizedValue) || (normalizedValue as number) <= 0) return { valid: false, error: agentToolText(context, `字段 ${field} 必须是正整数`, `Field ${field} must be a positive integer`) }
     } else if (canonicalField in ENUM_FIELDS) {
       const allowedValues = ENUM_FIELDS[canonicalField as keyof NovelConfig] ?? []
       if (!allowedValues.includes(String(normalizedValue))) {
-        return { valid: false, error: `字段 ${field} 的值 ${JSON.stringify(normalizedValue)} 不受支持；允许值：${allowedValues.join('、')}` }
+        return { valid: false, error: agentToolText(context, `字段 ${field} 的值 ${JSON.stringify(normalizedValue)} 不受支持；允许值：${allowedValues.join('、')}`, `Field ${field} has unsupported value ${JSON.stringify(normalizedValue)}; allowed values: ${allowedValues.join(', ')}`) }
       }
     } else {
-      return { valid: false, error: `未知小说配置字段：${field}` }
+      return { valid: false, error: agentToolText(context, `未知小说配置字段：${field}`, `Unknown novel configuration field: ${field}`) }
     }
     changes[canonicalField] = normalizedValue
   }
@@ -84,6 +85,7 @@ export const proposeNovelConfigTool = buildAgentTool({
       blueprint_changes: {
         type: 'array',
         description: '可选的未写章节蓝图差异候选；每项包含 chapter_number 与 changes，不会随配置自动写入',
+        descriptionEn: 'Optional change candidates for unwritten chapter blueprints; each item contains chapter_number and changes and is not written automatically with the configuration',
       },
     },
     required: ['changes'],
@@ -92,15 +94,25 @@ export const proposeNovelConfigTool = buildAgentTool({
   isReadOnly: false,
   execute: async (args, context) => {
     const { project, projectSession } = requireAgentProject(context)
-    const proposal = buildNovelConfigProposal(args, project.novelConfig)
+    const text = (zhCN: string, enUS: string) => agentToolText(context, zhCN, enUS)
+    const proposal = buildNovelConfigProposal(args, project.novelConfig, context)
     if (!proposal.valid) return { success: false, content: '', error: proposal.error }
     const nextConfig = { ...project.novelConfig, ...proposal.changes }
     const result = await ipc.invokeWithProjectSession(
       projectSession, 'project:update-config', project.id, { novelConfig: nextConfig }, project.path,
     )
     assertAgentProjectCurrent(context)
-    if (!result.success) return { success: false, content: '', error: result.error ?? '小说配置写入失败' }
+    if (!result.success) {
+      const detail = result.error
+      return {
+        success: false,
+        content: '',
+        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail ?? '')
+          ? text('小说配置写入失败', 'Could not update the novel configuration')
+          : detail ?? text('小说配置写入失败', 'Could not update the novel configuration'),
+      }
+    }
     useProjectStore.getState().updateNovelConfig(proposal.changes, projectSession)
-    return { success: true, content: `小说配置已更新（${proposal.diffs.length} 个字段）` }
+    return { success: true, content: text(`小说配置已更新（${proposal.diffs.length} 个字段）`, `Novel configuration updated (${proposal.diffs.length} fields)`) }
   },
 })
