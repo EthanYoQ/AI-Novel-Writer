@@ -6,6 +6,7 @@ import { useProjectStore } from '../project-store'
 import { useLocaleStore } from '../locale-store'
 import { createBoundedCompletionError } from '../../services/workflows/bounded-completion'
 import { PromptBudgetExceededError } from '../../services/generation/generation-harness'
+import { SourceDraftChangedError } from '../../services/workflows/source-draft-changed'
 
 const projectPath = 'C:\\test-project'
 
@@ -380,6 +381,35 @@ describe('workflow pause at a safe step boundary', () => {
         status: 'failed',
         error: 'AI 输出因内容限制而未完成，结果未被保存。',
         failureCode: 'content_filter',
+      })],
+    })
+  })
+
+  it('preserves a stale-source error code on the failed step and final run', async () => {
+    const failure = new SourceDraftChangedError(
+      'The source draft changed during AI refinement. The revision was not saved.',
+    )
+
+    await useWorkflowStore.getState().startWorkflow({
+      type: 'chapter_creation',
+      title: 'Stale source test',
+      projectPath,
+      projectSession: frozenSession(),
+      steps: [{
+        name: 'Refine',
+        description: 'Refine the draft',
+        executor: async () => { throw failure },
+      }],
+    })
+
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({
+      status: 'failed',
+      error: failure.message,
+      errorCode: 'SOURCE_DRAFT_CHANGED',
+      steps: [expect.objectContaining({
+        status: 'failed',
+        error: failure.message,
+        errorCode: 'SOURCE_DRAFT_CHANGED',
       })],
     })
   })

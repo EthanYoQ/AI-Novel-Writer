@@ -526,13 +526,13 @@ describe('RefineDraftCommand bounded visible completion', () => {
       contentRevision: 4,
     }).execute({
       step: {},
-      context: workflowContext(),
+      context: { ...workflowContext(), writingLanguage: 'zh-CN', uiLocale: 'en-US' },
       callbacks: callbacks(),
     }).catch(cause => cause)
 
     expect(error).toMatchObject({
       code: 'SOURCE_DRAFT_CHANGED',
-      message: '源草稿在 AI 修稿期间已变化。修订未保存，请重新打开当前草稿后再次执行 AI 修稿。',
+      message: 'The source draft changed during AI refinement. The revision was not saved. Reopen the current draft and run AI refinement again.',
     })
 
     expect(invoke.mock.calls).toEqual([[
@@ -911,13 +911,13 @@ describe('ReviewChapterCommand reasoning stage', () => {
       contentRevision: 8,
     }).execute({
       step: {},
-      context: { ...workflowContext(), writingLanguage: 'en-US' },
+      context: { ...workflowContext(), writingLanguage: 'en-US', uiLocale: 'zh-CN' },
       callbacks: callbacks(),
     }).catch(cause => cause)
 
     expect(error).toMatchObject({
       code: 'SOURCE_DRAFT_CHANGED',
-      message: 'The source draft changed during AI review. The review report was not saved. Reopen the current draft and run AI review again.',
+      message: '源草稿在 AI 审稿期间已变化。审稿报告未保存，请重新打开当前草稿后再次执行 AI 审稿。',
     })
 
     expect(invoke.mock.calls.filter(([channel]) => (

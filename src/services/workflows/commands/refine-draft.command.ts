@@ -125,7 +125,7 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
         },
       } : {}),
     }, context.projectPath)
-    throwIfSourceDraftChanged(createRes, writingLanguage, 'refine')
+    throwIfSourceDraftChanged(createRes, workflowUiLocale(context), 'refine')
     requireIpcSuccess(createRes, text('创建修订稿', 'Create the pending revision'))
     if (createRes.id === undefined) {
       throw new Error(text('创建修订稿失败：未返回修订稿编号', 'The pending revision did not return an ID.'))

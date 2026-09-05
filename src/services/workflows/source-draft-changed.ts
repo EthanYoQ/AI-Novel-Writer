@@ -1,5 +1,5 @@
 import type { SourceDraftGuardErrorCode } from '../../shared/ipc-channels'
-import type { WritingLanguage } from '../../shared/writing-language'
+import type { Locale } from '../../i18n/types'
 
 export const SOURCE_DRAFT_CHANGED: SourceDraftGuardErrorCode = 'SOURCE_DRAFT_CHANGED'
 
@@ -14,11 +14,11 @@ export class SourceDraftChangedError extends Error {
 
 export function throwIfSourceDraftChanged(
   result: { errorCode?: SourceDraftGuardErrorCode },
-  writingLanguage: WritingLanguage,
+  uiLocale: Locale,
   operation: 'refine' | 'review',
 ): void {
   if (result.errorCode !== SOURCE_DRAFT_CHANGED) return
-  if (writingLanguage === 'zh-CN') {
+  if (uiLocale === 'zh-CN') {
     throw new SourceDraftChangedError(operation === 'refine'
       ? '源草稿在 AI 修稿期间已变化。修订未保存，请重新打开当前草稿后再次执行 AI 修稿。'
       : '源草稿在 AI 审稿期间已变化。审稿报告未保存，请重新打开当前草稿后再次执行 AI 审稿。')

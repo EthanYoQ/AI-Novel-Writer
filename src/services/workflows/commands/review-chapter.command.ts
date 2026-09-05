@@ -10,6 +10,7 @@ import type { FinalizedContinuityProjection } from '../../../shared/finalized-co
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import {
   requireWorkflowProjectSession,
+  workflowUiLocale,
   workflowUiText,
   workflowWritingLanguage,
 } from '../workflow-project-session'
@@ -343,7 +344,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
         },
       } : {}),
     }, context.projectPath)
-    throwIfSourceDraftChanged(createResult, writingLanguage, 'review')
+    throwIfSourceDraftChanged(createResult, workflowUiLocale(context), 'review')
     requireIpcSuccess(createResult, text('保存审稿报告', 'Save the review report'))
     const revIndex = createResult.reviewIndex ?? 0
 
