@@ -233,14 +233,14 @@ describe('llm generation parameter policy controller integration', () => {
       reasoning: {
         adapter: 'deepseek-v4-thinking',
         thinking: 'enabled',
-        reasoningEffort: 'high',
+        reasoningEffort: 'low',
       },
     })
     expect(mocks.generate.mock.calls.at(-1)?.[2]).toMatchObject({
       reasoning: {
         adapter: 'deepseek-v4-thinking',
         thinking: 'enabled',
-        reasoningEffort: 'high',
+        reasoningEffort: 'low',
       },
     })
     await handler('llm:cancel')({}, 'deepseek-v4-stream')

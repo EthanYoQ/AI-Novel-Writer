@@ -28,6 +28,10 @@ export const installWritingSkillTool = buildAgentTool({
     if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) {
       return { success: false, content: '', error: text('缺少 source_url', 'The source_url argument is required') }
     }
+    if (context?.abortSignal?.aborted) {
+      return { success: false, content: '', error: text('安装已在提交前取消', 'Installation was cancelled before commit') }
+    }
+    context?.markSideEffectStarted?.()
     const result = await ipc.invoke('skills:install-github', sourceUrl)
     if (!result.success || !result.skill) {
       const detail = result.error

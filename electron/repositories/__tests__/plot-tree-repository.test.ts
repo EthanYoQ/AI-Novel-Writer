@@ -436,4 +436,33 @@ describe('PlotTreeRepository', () => {
     }))
     expect(PlotTreeRepository.read().snapshot).toBeNull()
   })
+
+  it('isolates an oversized stored snapshot without deleting it or its author sources', () => {
+    seedFacts()
+    const db = getProjectDb()!
+    const oversized = {
+      version: 1,
+      generatedAt: '2030-01-02T03:04:05.000Z',
+      writingLanguage: 'en-US',
+      tracks: [{
+        id: 'main', title: 'Broken range', role: 'main', startChapter: 1,
+        endChapter: 4_294_967_296, summary: 'Must not reach the renderer.',
+        events: [{
+          status: 'planned', chapterNumber: 1, summary: 'The opening.',
+          sources: [{ type: 'blueprint', chapterNumber: 1 }],
+        }],
+      }],
+    }
+    const raw = JSON.stringify(oversized)
+    db.prepare("UPDATE project_core SET plot_tree_snapshot = ? WHERE id = 'main'").run(raw)
+
+    const read = PlotTreeRepository.read()
+
+    expect(read.snapshot).toBeNull()
+    expect(read.storedSnapshotInvalid).toBe(true)
+    expect(read.blueprints).toHaveLength(1)
+    expect(read.finalizedChapters).toHaveLength(1)
+    expect(db.prepare("SELECT plot_tree_snapshot FROM project_core WHERE id = 'main'").get())
+      .toEqual({ plot_tree_snapshot: raw })
+  })
 })

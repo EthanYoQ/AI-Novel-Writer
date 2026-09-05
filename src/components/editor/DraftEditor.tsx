@@ -86,6 +86,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     originalContent: string
     modifiedContent: string
     revisionPath: string
+    targetSnapshot: { content: string; contentRevision: number }
   } | null>(null)
 
   // 后处理失败状态（用于控制是否展示修复按钮）
@@ -408,6 +409,20 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const openPendingRevision = async (rev: RevisionEntry) => {
     const projectSession = captureProjectSession(currentProject)
     if (!meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    const targetTab = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )
+    if (!targetTab || targetTab.dirty) {
+      toast.warning(text(
+        '当前正文有未保存修改，请先保存并重新打开修订对比',
+        'The draft has unsaved changes. Save it and reopen the revision comparison.',
+      ))
+      return
+    }
+    const targetSnapshot = {
+      content: targetTab.content ?? content,
+      contentRevision: targetTab.contentRevision ?? 0,
+    }
     // 使用 vela://revision/{id} 协议路径读取修稿内容
     const revPath = `vela://revision/${rev.id}`
 
@@ -418,12 +433,28 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     ])
     if (!isProjectSessionCurrent(projectSession)) return
     if (!origContent && !revContent) return
+    const currentTarget = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )
+    if (
+      !currentTarget
+      || currentTarget.dirty
+      || currentTarget.content !== targetSnapshot.content
+      || (currentTarget.contentRevision ?? 0) !== targetSnapshot.contentRevision
+    ) {
+      toast.warning(text(
+        '读取修订期间正文已变化，请保存后重新打开修订对比',
+        'The draft changed while the revision was loading. Save it and reopen the comparison.',
+      ))
+      return
+    }
 
     // 设置弹窗数据，不再打开新 Tab
     setMergeData({
       originalContent: origContent,
       modifiedContent: revContent,
       revisionPath: revPath,
+      targetSnapshot,
     })
   }
 
@@ -432,6 +463,21 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     const projectSession = captureProjectSession(currentProject)
     if (!meta || !mergeData || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     const chapterDir = `vela://draft/ch${meta.chapterNumber}`
+    const currentTarget = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )
+    if (
+      !currentTarget
+      || currentTarget.dirty
+      || currentTarget.content !== mergeData.targetSnapshot.content
+      || (currentTarget.contentRevision ?? 0) !== mergeData.targetSnapshot.contentRevision
+    ) {
+      toast.warning(text(
+        '打开对比后正文已变化，未提交修订；请保存后重新打开',
+        'The draft changed after the comparison opened. The revision was not committed; save and reopen it.',
+      ))
+      return
+    }
 
     try {
       const { useDraftStore } = await import('../../stores/draft-store')
@@ -441,6 +487,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         filePath,
         mergeData.revisionPath,
         mergedText,
+        mergeData.originalContent,
         projectKey,
         projectSession,
       )

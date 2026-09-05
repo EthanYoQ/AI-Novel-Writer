@@ -12,7 +12,10 @@ import {
   GenerateWorldBuildingCommand,
   GeneratePlotArchitectureCommand,
 } from '../architecture.command'
-import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+import {
+  createWorkflowRuntimeDependencies,
+  workflowRuntimeDependencies,
+} from './workflow-generation-runtime.fixture'
 import {
   clearProjectCustomPrompts,
   getBuiltinPromptTemplate,
@@ -772,7 +775,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         genre: 'fantasy',
         totalChapters: 20,
         wordsPerChapter: 2500,
-        globalGuidance: 'G'.repeat(24_001),
+        globalGuidance: 'G'.repeat(32_769),
         referenceWorks: '',
       } as never,
     })
@@ -788,14 +791,14 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       name: 'PromptBudgetExceededError',
       code: 'PROMPT_BUDGET_EXHAUSTED',
       report: {
-        limitUtf8Bytes: 24_000,
+        limitUtf8Bytes: 32_768,
         reservedOutputTokens: 8192,
         modelId: 'model-1',
         errorCode: 'PROMPT_BUDGET_EXHAUSTED',
         sections: expect.arrayContaining([
           {
             sectionName: 'global-guidance',
-            utf8Bytes: 24_020,
+            utf8Bytes: 32_788,
           },
         ]),
       },
@@ -835,6 +838,60 @@ describe('GenerateCharactersCommand structured roster seam', () => {
 
     expect(failure).not.toMatchObject({ code: 'PROMPT_BUDGET_EXHAUSTED' })
     expect(generateStream).toHaveBeenCalledOnce()
+  })
+
+  it('lets a 25,457-byte author context reach a frozen large-window provider unchanged', async () => {
+    const authorGuidance = 'G'.repeat(25_457)
+    const generateStream = createResponseStream([JSON.stringify({ slots: [] })])
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:project-core-get') {
+        return { premise: 'A sufficiently detailed premise for a large-window character-planning request.' }
+      }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+    })
+    const command = new RuntimeGenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: {
+        genre: 'fantasy',
+        totalChapters: 20,
+        wordsPerChapter: 2_500,
+        globalGuidance: authorGuidance,
+      } as never,
+    }, createWorkflowRuntimeDependencies({
+      source: {
+        contextWindowTokens: 'verified-provider-preset',
+        maxOutputTokens: 'user-operational-cap',
+        featureFlags: 'verified-provider-preset',
+      },
+      subjectFingerprint: 'd'.repeat(64),
+      contextWindowTokens: 1_000_000,
+      maxOutputTokens: 8192,
+      reasoning: true,
+      structuredOutput: true,
+      usage: true,
+    }))
+
+    let failure: unknown
+    try {
+      await command.execute({ step: {}, context, callbacks })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).not.toMatchObject({ code: 'PROMPT_BUDGET_EXHAUSTED' })
+    expect(generateStream).toHaveBeenCalledOnce()
+    const outboundMessages = generateStream.mock.calls[0]?.[0] ?? []
+    expect(outboundMessages.map(message => message.content).join('\n')).toContain(authorGuidance)
+    expect(outboundMessages.reduce(
+      (total, message) => total + new TextEncoder().encode(message.content).byteLength,
+      0,
+    )).toBeLessThanOrEqual(32_768)
   })
 
   it('generates a dual-protagonist eight-slot manifest before one atomic roster commit', async () => {
@@ -1804,7 +1861,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const generateStream = createResponseStream(['{"slots":['], ['length'])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'prompt:load-global') return []
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
         return { premise: 'A sufficiently detailed premise for a protected character-manifest continuation request.' }
@@ -1835,7 +1892,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         genre: 'fantasy',
         totalChapters: 100,
         wordsPerChapter: 3000,
-        globalGuidance: 'G'.repeat(22_000),
+        globalGuidance: 'G'.repeat(30_500),
       } as never,
     })
 
@@ -1850,10 +1907,10 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       name: 'PromptBudgetExceededError',
       code: 'PROMPT_BUDGET_EXHAUSTED',
       report: {
-        limitUtf8Bytes: 24_000,
+        limitUtf8Bytes: 32_768,
         errorCode: 'PROMPT_BUDGET_EXHAUSTED',
         sections: expect.arrayContaining([
-          { sectionName: 'global-guidance', utf8Bytes: 22_019 },
+          { sectionName: 'global-guidance', utf8Bytes: 30_519 },
           expect.objectContaining({ sectionName: 'prompt-overhead' }),
         ]),
       },

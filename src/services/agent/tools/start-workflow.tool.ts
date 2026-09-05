@@ -3,7 +3,7 @@
  */
 import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { launchCreativeWorkflow, type CreativeIntent } from '../../workflows/creative-workflow-launcher'
-import { requireAgentProject } from './project-context'
+import { assertAgentToolActive, requireAgentProject } from './project-context'
 import { DEFAULT_WRITING_LANGUAGE, writingLanguageText } from '../../../shared/writing-language'
 
 export const startWorkflowTool = buildAgentTool({
@@ -72,6 +72,7 @@ export const startWorkflowTool = buildAgentTool({
       : ''
 
     try {
+      assertAgentToolActive(context)
       const receipt = await launchCreativeWorkflow({
         workflow,
         ...(chapterNumber === undefined ? {} : { chapterNumber }),

@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   draftGetMeta: vi.fn(),
   draftListAll: vi.fn((): Array<Record<string, unknown>> => []),
   draftUpdateContent: vi.fn(),
+  draftDelete: vi.fn(),
   postProcessCreateRun: vi.fn(() => 'run-1'),
   postProcessGetLatestRun: vi.fn(),
   postProcessGetSteps: vi.fn(() => []),
@@ -140,7 +141,7 @@ vi.mock('../../repositories/draft-repository', () => ({
     getNextVersion: vi.fn(() => 1),
     updateStatus: vi.fn(),
     updateContent: mocks.draftUpdateContent,
-    delete: vi.fn(),
+    delete: mocks.draftDelete,
   },
 }))
 
@@ -837,6 +838,24 @@ describe('database controller project context guard', () => {
       error: expect.stringContaining('已定稿正文为只读内容'),
     })
     expect(mocks.draftUpdateContent).not.toHaveBeenCalled()
+  })
+
+  it('returns a stable redirect code when generic deletion races with finalization', async () => {
+    mocks.draftDelete.mockImplementationOnce(() => {
+      throw Object.assign(new Error('草稿已定稿，请通过定稿删除入口'), {
+        code: 'FINALIZED_DRAFT_DELETE_REQUIRED',
+      })
+    })
+
+    await expect(handler('db:draft-delete')(
+      {},
+      1,
+      'C:/projects/A',
+    )).resolves.toEqual({
+      success: false,
+      errorCode: 'FINALIZED_DRAFT_DELETE_REQUIRED',
+    })
+    expect(mocks.draftDelete).toHaveBeenCalledWith(1)
   })
 
   it('rejects draft access that omits the required project identity', async () => {

@@ -66,6 +66,43 @@ describe('editor tab save settlement', () => {
     })
   })
 
+  it('settles a merged revision into the unchanged target tab', () => {
+    const tabAtMergeStart = useEditorStore.getState().tabs[0]
+    useEditorStore.getState().settleMergedRevision('draft-a', {
+      content: tabAtMergeStart.content ?? '',
+      contentRevision: tabAtMergeStart.contentRevision ?? 0,
+    }, '人工确认后的合并正文')
+
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({
+      content: '人工确认后的合并正文',
+      savedContent: '人工确认后的合并正文',
+      contentRevision: 4,
+      dirty: false,
+    })
+  })
+
+  it('preserves input that arrives while a merged revision commit is pending', () => {
+    const tabAtMergeStart = useEditorStore.getState().tabs[0]
+    const snapshot = {
+      content: tabAtMergeStart.content ?? '',
+      contentRevision: tabAtMergeStart.contentRevision ?? 0,
+    }
+
+    useEditorStore.getState().updateTabContent('draft-a', '提交等待期间继续输入 C')
+    useEditorStore.getState().settleMergedRevision(
+      'draft-a',
+      snapshot,
+      '人工确认后的合并正文',
+    )
+
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({
+      content: '提交等待期间继续输入 C',
+      savedContent: '人工确认后的合并正文',
+      contentRevision: 4,
+      dirty: true,
+    })
+  })
+
   it('refreshes database draft identity metadata when an existing tab is reopened', () => {
     useEditorStore.getState().openFile({
       id: 'draft-a',

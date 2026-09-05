@@ -14,6 +14,7 @@ import {
   parsePlotTreeSnapshot,
   PLOT_TREE_GENERATION_BUDGET,
   PlotTreeGenerationError,
+  PlotTreeSourceError,
 } from '../plot-tree-generator'
 
 const PROJECT_SESSION = Object.freeze({
@@ -94,6 +95,72 @@ const modelResponse = {
 }
 
 describe('plot tree AI boundary', () => {
+  it.each([
+    ['synopsis only', () => {
+      const value = sources()
+      value.blueprints = []
+      value.finalizedChapters = []
+      value.narrativeThreads = []
+      return value
+    }],
+    ['non-empty invalid source rows', () => {
+      const value = sources()
+      value.blueprints = [{ chapterNumber: 0, title: '', purpose: '', keyEvents: '' }]
+      value.finalizedChapters = [{ draftId: 0, chapterNumber: 1, title: '', summary: '' }]
+      value.narrativeThreads = []
+      return value
+    }],
+  ] as const)('rejects %s before creating a provider runtime', async (_label, buildSources) => {
+    const createRuntime = vi.fn()
+
+    await expect(generatePlotTree({
+      modelId: 'grok-frozen',
+      projectSession: PROJECT_SESSION,
+      sources: buildSources(),
+      signal: new AbortController().signal,
+    }, {
+      createRuntime,
+      now: () => '2026-09-02T03:04:05.000Z',
+    })).rejects.toBeInstanceOf(PlotTreeSourceError)
+
+    expect(createRuntime).not.toHaveBeenCalled()
+  })
+
+  it('rejects a model-expanded chapter range outside the real source domain', () => {
+    const singleChapter = sources()
+    singleChapter.narrativeThreads = []
+
+    expect(() => parsePlotTreeSnapshot(JSON.stringify({
+      tracks: [{
+        ...modelResponse.tracks[0],
+        startChapter: 1,
+        endChapter: 4_294_967_296,
+        events: [modelResponse.tracks[0]!.events[0]],
+      }],
+    }), singleChapter)).toThrow(/章节范围|chapter range/u)
+  })
+
+  it.each([
+    ['non-safe integer', Number.MAX_SAFE_INTEGER + 1],
+    ['fraction', 1.5],
+    ['negative', -1],
+    ['missing', undefined],
+  ])('rejects a %s track end chapter', (_label, endChapter) => {
+    expect(() => parsePlotTreeSnapshot(JSON.stringify({
+      tracks: [{
+        ...modelResponse.tracks[0],
+        startChapter: 1,
+        endChapter,
+      }],
+    }), sources())).toThrow(/章节|chapter/u)
+  })
+
+  it('rejects an inverted track range', () => {
+    expect(() => parsePlotTreeSnapshot(JSON.stringify({
+      tracks: [{ ...modelResponse.tracks[0], startChapter: 5, endChapter: 1 }],
+    }), sources())).toThrow(/章节范围|chapter range/u)
+  })
+
   it('allows one initial request plus one replacement in the ten-minute planning window', () => {
     expect(PLOT_TREE_GENERATION_BUDGET).toMatchObject({
       maxAttempts: 2,

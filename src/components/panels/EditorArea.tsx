@@ -747,13 +747,30 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                       return
                     }
 
+                    let mergeCommitted = false
                     try {
                       const chapterDir = mergeTab.chapterDir
                       const filePath = mergeTab.filePath
                       const revPath = mergeTab.revisionPath
                       const chapterNum = mergeTab.chapterNumber
+                      const expectedDraftContent = mergeTab.originalContent
 
-                      if (chapterDir && filePath && revPath) {
+                      if (chapterDir && filePath && revPath && expectedDraftContent !== undefined) {
+                        const targetTab = useEditorStore.getState().tabs.find(tab => (
+                          tab.type === 'chapter'
+                          && tab.projectKey === mergeTab.projectKey
+                          && tab.filePath === filePath
+                        ))
+                        if (targetTab && (
+                          targetTab.dirty
+                          || targetTab.content !== expectedDraftContent
+                        )) {
+                          toast.warning(text(
+                            '打开对比后正文已变化，未提交修订；请保存后重新打开',
+                            'The draft changed after the comparison opened. The revision was not committed; save and reopen it.',
+                          ))
+                          return
+                        }
                         const { useDraftStore } = await import('../../stores/draft-store')
                         if (!isProjectSessionCurrent(projectSession)) return
 
@@ -763,12 +780,14 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                           filePath,
                           revPath,
                           mergedText,
+                          expectedDraftContent,
                           projectSession.projectPath,
                           projectSession,
                         )
                         if (!isProjectSessionCurrent(projectSession)) return
 
                         if (result.success) {
+                          mergeCommitted = true
                           toast.success(text('合并完成，草稿已更新', 'Merge complete; draft updated'))
                         } else {
                           toast.error(text(`合并失败：${result.error}`, `Merge failed: ${result.error}`))
@@ -778,7 +797,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                       if (!isProjectSessionCurrent(projectSession)) return
                       toast.error(text(`合并出错：${e}`, `Merge error: ${e}`))
                     } finally {
-                      if (isProjectSessionCurrent(projectSession)) {
+                      if (mergeCommitted && isProjectSessionCurrent(projectSession)) {
                         useEditorStore.getState().closeTab(mergeTab.id)
                       }
                     }

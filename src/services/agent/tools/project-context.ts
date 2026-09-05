@@ -14,6 +14,8 @@ import {
 
 export const PROJECT_CHANGED_ERROR = '当前项目已切换，本次工具结果已丢弃'
 export const PROJECT_CHANGED_ERROR_EN = 'The current project changed, so this tool result was discarded'
+export const AGENT_TOOL_CANCELLED_ERROR = '本次工具操作已在提交前取消'
+export const AGENT_TOOL_CANCELLED_ERROR_EN = 'This tool operation was cancelled before commit'
 
 export function agentToolText(
   context: AgentExecutionContext | undefined,
@@ -89,4 +91,16 @@ export function assertAgentProjectCurrent(context?: AgentExecutionContext): void
       PROJECT_CHANGED_ERROR_EN,
     ))
   }
+}
+
+/** Last renderer-side gate before an Agent tool starts an observable side effect. */
+export function assertAgentToolActive(context?: AgentExecutionContext): void {
+  if (context?.abortSignal?.aborted) {
+    throw new Error(agentToolText(
+      context,
+      AGENT_TOOL_CANCELLED_ERROR,
+      AGENT_TOOL_CANCELLED_ERROR_EN,
+    ))
+  }
+  assertAgentProjectCurrent(context)
 }

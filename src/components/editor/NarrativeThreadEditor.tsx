@@ -13,6 +13,7 @@ import type {
   PlotTreeSourceBundle,
   PlotTreeSourceReference,
 } from '../../shared/plot-tree'
+import { hasUsablePlotTreeEventSource } from '../../shared/plot-tree'
 import { resolveWritingLanguage } from '../../shared/writing-language'
 import { ipc } from '../../services/ipc-client'
 import {
@@ -26,6 +27,7 @@ import {
   PlotTreeGenerationError,
   PlotTreeIncompleteError,
   PlotTreeResponseError,
+  PlotTreeSourceError,
   type GeneratePlotTreeInput,
   type PlotTreeGenerationErrorCode,
   type PlotTreeResponseErrorCode,
@@ -101,6 +103,12 @@ function plotTreeErrorMessage(
           '模型返回的剧情树结构或来源引用无效，旧快照保持不变。',
           'The model returned an invalid plot-tree structure or source reference; the previous snapshot remains unchanged.',
         )
+  }
+  if (error instanceof PlotTreeSourceError) {
+    return text(
+      '请先添加章节蓝图、定稿或叙事线索，再生成剧情树。',
+      'Add a chapter blueprint, finalized chapter, or narrative thread before generating a plot tree.',
+    )
   }
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   const message = raw.replace(/^Error:\s*/, '')
@@ -685,6 +693,8 @@ export default function NarrativeThreadEditor({
             selectedModelId={selectedPlotModel?.id ?? null}
             busy={plotBusy}
             error={plotError || plotModelSelectionError}
+            sourceReady={Boolean(plotSources && hasUsablePlotTreeEventSource(plotSources))}
+            storedSnapshotInvalid={plotSources?.storedSnapshotInvalid === true}
             onModelChange={setPlotModelId}
             onGenerate={() => void refreshPlotTree()}
             onClear={() => void clearPlotTree()}

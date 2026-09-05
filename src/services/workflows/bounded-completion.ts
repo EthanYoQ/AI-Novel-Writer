@@ -472,7 +472,6 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
     }
 
     const continuationPrompt = request.mode === 'replace-structured-output'
-      && request.preserveCompleteStructuredPrompt
       ? buildStructuredReplacementPrompt(
           request.originalPrompt,
           content,

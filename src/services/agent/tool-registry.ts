@@ -92,6 +92,12 @@ export interface AgentExecutionContext {
    * LLM tool arguments so a model response cannot choose a billable model.
    */
   readonly selectedModelId: string | null
+  /** One tool call's cancellation signal; write tools check it before crossing their commit point. */
+  readonly abortSignal?: AbortSignal
+  /** Stable identity of the visible tool call and its eventual receipt. */
+  readonly operationId?: string
+  /** Marks the point after which a transport failure cannot be reported as a clean rollback. */
+  readonly markSideEffectStarted?: () => void
 }
 
 // ===== Tool 定义 =====

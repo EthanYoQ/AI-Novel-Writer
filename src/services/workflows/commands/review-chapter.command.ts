@@ -4,9 +4,9 @@ import { resolvePromptTemplate } from '../../prompt-templates'
 import { ReviewPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
-import { unwrapKnowledgeValue } from '../../knowledge-service'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
+import type { FinalizedContinuityProjection } from '../../../shared/finalized-continuity'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import {
   requireWorkflowProjectSession,
@@ -109,6 +109,41 @@ function parseReviewResult(content: string): ReviewResult {
   return bounded
 }
 
+function formatFinalizedHistory(
+  projections: readonly FinalizedContinuityProjection[],
+  writingLanguage: NonNullable<CommandExecuteParams['context']['writingLanguage']>,
+): string {
+  const header = promptLanguageText(
+    writingLanguage,
+    '【已确认定稿历史｜唯一已发生事实源】',
+    '[Finalized history | the only source of events that have already happened]',
+  )
+  if (projections.length === 0) return `${header}\n${promptLanguageText(
+    writingLanguage,
+    '（当前章节之前没有已定稿历史）',
+    '(there is no finalized history before the current chapter)',
+  )}`
+  return [
+    header,
+    ...projections.map((projection) => {
+      const facts = (projection.facts ?? []).map(fact => promptLanguageText(
+        writingLanguage,
+        `- [${fact.category}] ${fact.statement}（来源第${fact.sourceChapter}章；证据：${fact.evidence}）`,
+        `- [${fact.category}] ${fact.statement} (source: Chapter ${fact.sourceChapter}; evidence: ${fact.evidence})`,
+      ))
+      return [
+        promptLanguageText(
+          writingLanguage,
+          `### 第${projection.chapterNumber}章 ${projection.chapterTitle}`,
+          `### Chapter ${projection.chapterNumber}: ${projection.chapterTitle}`,
+        ),
+        projection.chapterNotes,
+        ...facts,
+      ].filter(Boolean).join('\n')
+    }),
+  ].join('\n\n')
+}
+
 export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
   constructor(
     private params: ReviewChapterParams,
@@ -135,32 +170,23 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     if (!draft) throw new Error(text('无草稿内容', 'There is no draft content to review.'))
 
     callbacks.log(text('准备启动一致性审查引擎...', 'Preparing the continuity review...'))
-    callbacks.log(text('  检索全书设定档案...', '  Retrieving established story facts...'))
+    callbacks.log(text('  读取已定稿连续性事实...', '  Reading finalized continuity facts...'))
 
-    // 使用向量检索获取与待审章节相关的历史上下文（替代全局摘要）
-    let contextSummary = promptLanguageText(writingLanguage, '（无上下文参考）', '(no relevant prior context)')
+    let contextSummary = formatFinalizedHistory([], writingLanguage)
     try {
-      // 从待审内容中提取前 200 字作为检索 query
-      const queryText = draft.slice(0, 200)
-      const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
+      const projections = await ipc.invokeWithProjectSession(
         projectSession,
-        'kb:search',
-        queryText,
-        5,
+        'db:continuity-list-before',
+        this.params.chapterNumber,
         context.projectPath,
-      ))
-      if (results.length > 0) {
-        contextSummary = results
-          .map((r: { fileName: string; score: number; text: string }, i: number) =>
-            promptLanguageText(
-              writingLanguage,
-              `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
-              `[${i + 1}] (${r.fileName}, relevance ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
-            ))
-          .join('\n\n')
-      }
+      )
+      contextSummary = formatFinalizedHistory(projections, writingLanguage)
     } catch {
-      contextSummary = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
+      contextSummary = promptLanguageText(
+        writingLanguage,
+        '【已确认定稿历史｜唯一已发生事实源】\n（连续性投影暂时不可用；未使用知识库资料替代）',
+        '[Finalized history | the only source of events that have already happened]\n(continuity projection unavailable; knowledge-base material was not substituted)',
+      )
     }
 
     const characterState = await this.readCharacterStates(context.projectPath, projectSession, writingLanguage)

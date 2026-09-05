@@ -102,6 +102,12 @@ interface EditorState {
   markTabSaved: (tabId: string, savedContent?: string) => void
   /** 按保存开始时的快照结算；期间有新输入时只更新已保存基准。 */
   settleTabSave: (tabId: string, snapshot: EditorTabSaveSnapshot) => void
+  /** 结算修订合并；期间有新输入时保留当前正文与未保存状态。 */
+  settleMergedRevision: (
+    tabId: string,
+    snapshot: EditorTabSaveSnapshot,
+    mergedContent: string,
+  ) => void
   /** 清空所有 Tab */
   clearTabs: () => void
   /** 只清理指定项目的 Tab 与后台草稿，保留其他项目的未保存内容。 */
@@ -314,6 +320,32 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
           ...tab,
           savedContent: snapshot.content,
           dirty: !snapshotStillCurrent,
+        }
+      }),
+    }))
+  },
+
+  settleMergedRevision: (tabId, snapshot, mergedContent) => {
+    set((state) => ({
+      tabs: state.tabs.map(tab => {
+        if (tab.id !== tabId) return tab
+        const snapshotStillCurrent = (
+          (tab.contentRevision ?? 0) === snapshot.contentRevision
+          && tab.content === snapshot.content
+        )
+        if (!snapshotStillCurrent) {
+          return {
+            ...tab,
+            savedContent: mergedContent,
+            dirty: true,
+          }
+        }
+        return {
+          ...tab,
+          content: mergedContent,
+          savedContent: mergedContent,
+          contentRevision: (tab.contentRevision ?? 0) + (tab.content === mergedContent ? 0 : 1),
+          dirty: false,
         }
       }),
     }))

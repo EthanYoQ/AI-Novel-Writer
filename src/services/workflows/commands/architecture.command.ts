@@ -206,7 +206,7 @@ const CHARACTER_DETAIL_DESCRIPTION_FIELDS = [
 const CHARACTER_STATE_TEXT_FIELDS = [
   'location', 'powerLevel', 'physicalState', 'mentalState', 'keyItems', 'recentEvents',
 ] as const
-const MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES = 24_000
+const MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES = 32_768
 
 function promptUtf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength

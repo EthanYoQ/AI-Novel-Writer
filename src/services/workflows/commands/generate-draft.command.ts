@@ -38,12 +38,10 @@ import type { FinalizedContinuityProjection } from '../../../shared/finalized-co
 import type { NarrativeThreadView } from '../../../shared/narrative-thread'
 import { promptLanguageText } from '../../prompt-language'
 import { countDraftUnits } from '../../../shared/draft-units'
-import { GENERATED_GLOBAL_GUIDANCE_MAX_CHARS } from '../novel-config-expansion'
 
 export { countDraftUnits } from '../../../shared/draft-units'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
-const DRAFT_AUTHOR_FACT_MAX_CHARS = 1000
 const MIN_TARGET_COMPLETION_RATIO = 0.82
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const MAX_TARGET_OVERAGE_RATIO = 0.12
@@ -52,7 +50,6 @@ const NEXT_CHAPTER_HEAD_MAX_CHARS = 1200
 const CROSS_CHAPTER_REUSE_CJK_NGRAM_CHARS = 8
 const CROSS_CHAPTER_REUSE_ENGLISH_NGRAM_CHARS = 20
 const CROSS_CHAPTER_REUSE_LONG_RUN_CHARS = 80
-const CROSS_CHAPTER_REUSE_TOTAL_CHARS = 36
 const ACTIVE_THREAD_CONTEXT_MAX_CHARS = 1200
 const ACTIVE_THREAD_CONTEXT_MAX_ITEMS = 6
 const STREAM_PREVIEW_INTERVAL_MS = 250
@@ -175,19 +172,6 @@ export function previousChapterEnding(content: string): string {
   return tail.slice(firstBoundary.index + firstBoundary[0].length).trim() || tail.trim()
 }
 
-function boundedPromptPrefix(content: string, maxChars: number): string {
-  const trimmed = content.trim()
-  if (trimmed.length <= maxChars) return trimmed
-
-  const prefix = trimmed.slice(0, maxChars)
-  const boundary = /(?:\r?\n|[。！？!?][”’"'）)\]】」』]*|\.[”’"')\]]*(?=\s|$))/gu
-  let safeEnd = 0
-  for (const match of prefix.matchAll(boundary)) {
-    safeEnd = match.index + match[0].length
-  }
-  return prefix.slice(0, safeEnd || maxChars).trim()
-}
-
 function hasSubstantialPreviousChapterReuse(
   previousEnding: string,
   draft: string,
@@ -219,8 +203,6 @@ function hasSubstantialPreviousChapterReuse(
     }
   }
 
-  let matchedChars = 0
-  let matchedRuns = 0
   let runLength = 0
   for (let index = 0; index <= covered.length; index += 1) {
     if (covered[index]) {
@@ -228,13 +210,9 @@ function hasSubstantialPreviousChapterReuse(
       continue
     }
     if (runLength >= CROSS_CHAPTER_REUSE_LONG_RUN_CHARS) return true
-    if (runLength >= ngramCharacters) {
-      matchedChars += runLength
-      matchedRuns += 1
-    }
     runLength = 0
   }
-  return matchedRuns >= 2 && matchedChars >= CROSS_CHAPTER_REUSE_TOTAL_CHARS
+  return false
 }
 
 function observeWorkflowCancellation(context: CommandExecuteParams['context']): {
@@ -326,10 +304,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       writingLanguage,
     )
     const mergedGuidance = [
-      boundedPromptPrefix(
-        novelConfig.globalGuidance || '',
-        GENERATED_GLOBAL_GUIDANCE_MAX_CHARS,
-      ),
+      novelConfig.globalGuidance?.trim() || '',
       projectPrompts,
     ].filter(Boolean).join('\n\n')
 
@@ -370,23 +345,49 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     // Prompt 构建——按「稳定前缀 → 可变后缀」排列
     // 以最大化 LLM 上下文缓存命中率
     // ==========================================
-    const writingStyle = boundedPromptPrefix(
-      novelConfig.writingStyle || '',
-      DRAFT_AUTHOR_FACT_MAX_CHARS,
-    )
+    const writingStyle = novelConfig.writingStyle?.trim() || ''
     const novelConfigFacts = {
       ...novelConfig,
-      coreOutline: boundedPromptPrefix(novelConfig.coreOutline || '', DRAFT_AUTHOR_FACT_MAX_CHARS),
-      worldSetting: boundedPromptPrefix(novelConfig.worldSetting || '', DRAFT_AUTHOR_FACT_MAX_CHARS),
-      goldenFinger: boundedPromptPrefix(novelConfig.goldenFinger || '', DRAFT_AUTHOR_FACT_MAX_CHARS),
-      protagonistProfile: boundedPromptPrefix(
-        novelConfig.protagonistProfile || '',
-        DRAFT_AUTHOR_FACT_MAX_CHARS,
-      ),
       globalGuidance: undefined,
       writingStyle: undefined,
     }
     const novelConfigFactsJson = JSON.stringify(novelConfigFacts, null, 2)
+    let filteredContext = ''
+    try {
+      callbacks.log(uiText(
+        '  检索知识库相关片段...',
+        '  Searching the knowledge base for relevant passages...',
+      ))
+      const knowledgeQueryHint = this.chapterInfo.knowledgeQueryHint?.trim() ?? ''
+      const searchQuery = [
+        knowledgeQueryHint,
+        this.chapterInfo.title,
+        this.chapterInfo.keyEvents,
+        this.chapterInfo.characters.join(' '),
+      ].filter(Boolean).join(' ')
+      if (knowledgeQueryHint) {
+        callbacks.log(uiText(
+          `  追加用户检索关键词：${knowledgeQueryHint}`,
+          `  Added author search keywords: ${knowledgeQueryHint}`,
+        ))
+      }
+      const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
+        projectSession,
+        'kb:search-writing-context',
+        searchQuery,
+        5,
+        expectedProjectPath,
+      ))
+      filteredContext = results.length > 0
+        ? results.map((r: { fileName: string; score: number; text: string }, i: number) => promptLanguageText(
+            writingLanguage,
+            `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
+            `[${i + 1}] (${r.fileName}, relevance ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
+          )).join('\n\n')
+        : promptLanguageText(writingLanguage, '（知识库中无相关内容）', '(no relevant knowledge-base context)')
+    } catch {
+      filteredContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
+    }
     const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       // ---- 缓存命中区（跨章稳定，前缀对齐）----
       .withArchitecture(architecture)
@@ -397,6 +398,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       // ---- 章节公共区（首章与后续章都必须完整注入）----
       .withChapterInfo(this.chapterInfo)
       .withFutureBlueprints(futureBlueprintsStr)
+      .withFilteredContext('')
       .withUserGuidance(this.chapterInfo.userGuidance?.trim() || promptLanguageText(
         writingLanguage,
         '（无微操指导）',
@@ -439,43 +441,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         } catch { /* 忽略 */ }
       }
 
-      let filteredContext = ''
-      try {
-        callbacks.log(uiText(
-          '  检索知识库相关片段...',
-          '  Searching the knowledge base for relevant passages...',
-        ))
-        const knowledgeQueryHint = this.chapterInfo.knowledgeQueryHint?.trim() ?? ''
-        const searchQuery = [
-          knowledgeQueryHint,
-          this.chapterInfo.title,
-          this.chapterInfo.keyEvents,
-          this.chapterInfo.characters.join(' '),
-        ].filter(Boolean).join(' ')
-        if (knowledgeQueryHint) {
-          callbacks.log(uiText(
-            `  追加用户检索关键词：${knowledgeQueryHint}`,
-            `  Added author search keywords: ${knowledgeQueryHint}`,
-          ))
-        }
-        const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
-          projectSession,
-          'kb:search-writing-context',
-          searchQuery,
-          5,
-          expectedProjectPath,
-        ))
-        filteredContext = results.length > 0
-          ? results.map((r: { fileName: string; score: number; text: string }, i: number) => promptLanguageText(
-              writingLanguage,
-              `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
-              `[${i + 1}] (${r.fileName}, relevance ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
-            )).join('\n\n')
-          : promptLanguageText(writingLanguage, '（知识库中无相关内容）', '(no relevant knowledge-base context)')
-      } catch {
-        filteredContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
-      }
-
       promptBuilder
         // ---- 缓存命中区续（要点时间线按序追加，前缀对齐）----
         .withGlobalSummary([chapterTimeline.text, activeThreads.text].filter(Boolean).join('\n\n'))
@@ -486,11 +451,17 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           '（无前文）',
           '(no previous manuscript)',
         ))
-        .withFilteredContext(filteredContext)
         .withShortSummary('')
     }
 
-    const prompt = promptBuilder.build()
+    const prompt = [
+      promptBuilder.build(),
+      promptLanguageText(
+        writingLanguage,
+        `【本章相关规划资料（仅作创作参考，不代表已经发生）】\n${filteredContext}`,
+        `[Planning material relevant to this chapter (creative reference only; not established history)]\n${filteredContext}`,
+      ),
+    ].join('\n\n')
     const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
     const maxDraftChars = maxDraftCharsForTarget(targetChars)
 
@@ -595,7 +566,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             const rewriteChapterInfo = final
               ? { ...this.chapterInfo, wordsTarget: rewriteMaxDraftChars }
               : this.chapterInfo
-            const sourceDraft = final ? previousChapterEnding(draft) : draft
+            const sourceDraft = draft
             return promptLanguageText(
               writingLanguage,
               `${final
@@ -618,7 +589,17 @@ ${final ? `- 全章绝对不得超过 ${paragraphCount} 个自然段，每段不
 【本章蓝图】
 ${JSON.stringify(rewriteChapterInfo, null, 2)}
 
-${final ? '【仅供事实核对的原稿结尾】' : '【待压缩的完整章节草稿】'}
+【冻结的作者约束】
+全局写作要求：
+${mergedGuidance}
+
+文风要求：
+${writingStyle}
+
+作者小说配置事实：
+${novelConfigFactsJson}
+
+【待重写的完整章节草稿】
 ${sourceDraft}`,
               `${final
                 ? 'The previous full rewrite fell outside the local length range. This is a bounded full rewrite in the final compression stage. Do not keep line-editing the prior draft; rewrite it from a blank page.'
@@ -640,7 +621,17 @@ ${final ? `- Use no more than ${paragraphCount} natural paragraphs, with each pa
 [Current chapter blueprint]
 ${JSON.stringify(rewriteChapterInfo, null, 2)}
 
-[${final ? 'Original ending for fact checking only' : 'Complete chapter draft to compress'}]
+[Frozen author constraints]
+Global writing guidance:
+${mergedGuidance}
+
+Writing style:
+${writingStyle}
+
+Author novel-configuration facts:
+${novelConfigFactsJson}
+
+[Complete chapter draft to rewrite]
 ${sourceDraft}`,
             )
           }

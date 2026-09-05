@@ -3,8 +3,10 @@ import { createHash } from 'node:crypto'
 import { getProjectDb } from '../database'
 import { NarrativeThreadRepository } from './narrative-thread-repository'
 import {
+  assertPlotTreeSnapshotChapterBounds,
   assertPlotTreeSnapshot,
   assertStoredPlotTreeSnapshot,
+  hasUsablePlotTreeEventSource,
   type PlotTreeSnapshot,
   type PlotTreeSourceBundle,
 } from '../../src/shared/plot-tree'
@@ -109,9 +111,13 @@ export class PlotTreeRepository {
     }
     if (core.plot_tree_snapshot) {
       try {
-        bundle.snapshot = assertStoredPlotTreeSnapshot(JSON.parse(core.plot_tree_snapshot))
+        const stored = assertStoredPlotTreeSnapshot(JSON.parse(core.plot_tree_snapshot))
+        bundle.snapshot = hasUsablePlotTreeEventSource(bundle)
+          ? assertPlotTreeSnapshotChapterBounds(stored, bundle)
+          : stored
       } catch {
         bundle.snapshot = null
+        bundle.storedSnapshotInvalid = true
       }
     }
     return bundle

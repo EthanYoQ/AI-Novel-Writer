@@ -174,11 +174,13 @@ function reviewCommand(
 
 function chapterReviewCommand(
   completeWithLease: GenerationRuntimeEnvironment['completeWithLease'],
+  draftContent = '待审章节正文。',
+  chapterNumber = 1,
 ): ReviewChapterCommand {
   return new ReviewChapterCommand({
     draftPath: 'vela://draft/1',
-    draftContent: '待审章节正文。',
-    chapterNumber: 1,
+    draftContent,
+    chapterNumber,
   }, runtimeDependencies(completeWithLease))
 }
 
@@ -835,6 +837,85 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
 })
 
 describe('ReviewChapterCommand reasoning stage', () => {
+  it('keeps the complete source chapter in a length replacement request', async () => {
+    const sourceDraft = [
+      'SOURCE_DRAFT_HEAD',
+      '甲'.repeat(10_000),
+      'SOURCE_DRAFT_MIDDLE_CONFLICT',
+      '乙'.repeat(10_000),
+      'SOURCE_DRAFT_TAIL',
+    ].join('\n')
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValueOnce({ content: '{"summary":"', finishReason: 'length' })
+      .mockResolvedValueOnce({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
+    stubIpc(vi.fn(async (channel: string) => {
+      if (channel === 'kb:search' || channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:draft-get-meta') return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: true, id: 77 }
+      if (channel === 'db:blueprint-get') return null
+      throw new Error(`unexpected IPC: ${channel}`)
+    }))
+
+    await chapterReviewCommand(completeWithLease, sourceDraft).execute({
+      step: {}, context: workflowContext(), callbacks: callbacks(),
+    })
+
+    expect(completeWithLease).toHaveBeenCalledTimes(2)
+    const replacementRequest = completeWithLease.mock.calls[1]?.[0].messages
+      .map(message => message.content).join('\n') ?? ''
+    expect(replacementRequest).toContain('SOURCE_DRAFT_HEAD')
+    expect(replacementRequest).toContain('SOURCE_DRAFT_MIDDLE_CONFLICT')
+    expect(replacementRequest).toContain('SOURCE_DRAFT_TAIL')
+  })
+
+  it('uses finalized continuity as the only established-history source in the review request', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:continuity-list-before') return [{
+        draftId: 7,
+        chapterNumber: 1,
+        chapterTitle: '离港',
+        chapterNotes: '顾舟仍留在月桂港。',
+        facts: [{
+          category: 'character-state',
+          entities: ['顾舟'],
+          statement: 'FINALIZED_HISTORY_FACT：顾舟仍留在月桂港。',
+          sourceChapter: 1,
+          evidence: '码头登记仍有顾舟的名字。',
+        }],
+      }]
+      if (channel === 'kb:search') return [
+        { text: 'REFERENCE_WORK_POLLUTANT：同名角色早已离港。', score: 1, fileName: '参考作品.md' },
+        { text: 'FUTURE_PLAN_POLLUTANT：顾舟将在第十章离港。', score: 1, fileName: '未来计划.md' },
+        { text: 'UNKNOWN_SOURCE_POLLUTANT', score: 1, fileName: 'legacy.md' },
+      ]
+      if (channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:draft-get-meta') return { id: 2, chapterNumber: 2, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: true, id: 77 }
+      if (channel === 'db:blueprint-get') return null
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubIpc(invoke)
+
+    await chapterReviewCommand(completeWithLease, '顾舟检查码头的潮汐钟。', 2).execute({
+      step: {}, context: workflowContext(), callbacks: callbacks(),
+    })
+
+    const reviewRequest = completeWithLease.mock.calls[0]?.[0].messages
+      .map(message => message.content).join('\n') ?? ''
+    expect(reviewRequest).toContain('FINALIZED_HISTORY_FACT')
+    expect(reviewRequest).toContain('唯一已发生事实源')
+    expect(reviewRequest).not.toContain('REFERENCE_WORK_POLLUTANT')
+    expect(reviewRequest).not.toContain('FUTURE_PLAN_POLLUTANT')
+    expect(reviewRequest).not.toContain('UNKNOWN_SOURCE_POLLUTANT')
+    expect(invoke.mock.calls.some(([channel]) => channel === 'kb:search')).toBe(false)
+  })
+
   it('maps current deterministic findings into the persisted review for human confirmation', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
       .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })

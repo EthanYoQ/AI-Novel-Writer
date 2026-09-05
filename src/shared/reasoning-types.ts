@@ -33,7 +33,7 @@ export type ProviderReasoningDirective =
   | {
       adapter: 'deepseek-v4-thinking'
       thinking: 'enabled'
-      reasoningEffort: 'high' | 'max'
+      reasoningEffort: 'low' | 'high' | 'max'
     }
 
 export interface VerifiedReasoningMapping {

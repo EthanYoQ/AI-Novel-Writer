@@ -4,7 +4,7 @@
 import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { ipc } from '../../ipc-client'
 import { validatePath } from './safe-path'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentToolActive, requireAgentProject } from './project-context'
 import { projectFactWorkflowForFilePath } from '../../project-fact-targets'
 
 export const writeFileTool = buildAgentTool({
@@ -62,6 +62,8 @@ export const writeFileTool = buildAgentTool({
       ) }
     }
 
+    assertAgentToolActive(context)
+    context?.markSideEffectStarted?.()
     const result = await ipc.invokeWithProjectSession(
       projectSession,
       'fs:write-file',
@@ -69,7 +71,6 @@ export const writeFileTool = buildAgentTool({
       content,
       project.path,
     )
-    assertAgentProjectCurrent(context)
     if (!result.success) {
       const detail = result.error
       return {

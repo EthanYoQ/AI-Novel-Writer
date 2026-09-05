@@ -308,6 +308,17 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           }
           if (repaired.status === 'incomplete') {
             if (repaired.finishReason === 'length') {
+              if (items.length > 1) {
+                const midpoint = Math.floor(items.length / 2)
+                receipt.splitCount += 1
+                await executeBatch(items.slice(0, midpoint))
+                await executeBatch(items.slice(midpoint))
+                return
+              }
+              if (canUseCompactFallback) {
+                await runCompactFallback()
+                return
+              }
               throw new ExecutionFailure({
                 code: 'limit_exceeded',
                 reason: 'output_limit',

@@ -2,7 +2,7 @@ import { WRITING_SKILL_STAGES, type WritingSkillStage } from '../../../shared/wr
 import { saveWritingSkillBinding } from '../writing-skill-bindings'
 import { skillRegistry } from '../skill-registry'
 import { buildAgentTool } from '../tool-registry'
-import { agentToolText, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentToolActive, requireAgentProject } from './project-context'
 
 export const bindWritingSkillTool = buildAgentTool({
   name: 'bind_writing_skill',
@@ -41,7 +41,18 @@ export const bindWritingSkillTool = buildAgentTool({
       return { success: false, content: '', error: text('该 Skill 不存在或不兼容提示词型写作流程', 'The Skill does not exist or is incompatible with the prompt-only writing workflow') }
     }
     const { projectSession } = requireAgentProject(context)
-    await saveWritingSkillBinding(projectSession, stage as WritingSkillStage, skillId)
+    assertAgentToolActive(context)
+    if (context?.abortSignal) {
+      await saveWritingSkillBinding(
+        projectSession,
+        stage as WritingSkillStage,
+        skillId,
+        context.abortSignal,
+        context.markSideEffectStarted,
+      )
+    } else {
+      await saveWritingSkillBinding(projectSession, stage as WritingSkillStage, skillId)
+    }
     return {
       success: true,
       content: text(

@@ -1,7 +1,7 @@
 import type { BlueprintData } from '../../../../electron/repositories/blueprint-repository'
 import { ipc } from '../../ipc-client'
 import { buildAgentTool, type AgentExecutionContext } from '../tool-registry'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requireAgentProject } from './project-context'
 import type { ProposalFieldDiff } from './propose-novel-config.tool'
 
 const STRING_FIELDS = new Set<keyof BlueprintData>([
@@ -99,10 +99,11 @@ export const proposeChapterBlueprintTool = buildAgentTool({
     if (!current) return { success: false, content: '', error: text(`第 ${chapterNumber} 章蓝图不存在`, `The blueprint for Chapter ${chapterNumber} does not exist`) }
     const proposal = buildChapterBlueprintProposal(args, current, context)
     if (!proposal.valid) return { success: false, content: '', error: proposal.error }
+    assertAgentToolActive(context)
+    context?.markSideEffectStarted?.()
     const result = await ipc.invokeWithProjectSession(
       projectSession, 'db:blueprint-upsert', { ...current, ...proposal.changes }, project.path,
     )
-    assertAgentProjectCurrent(context)
     if (!result.success) {
       const detail = result.error
       return {

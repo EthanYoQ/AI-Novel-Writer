@@ -38,7 +38,7 @@ export interface ToolCallInfo {
   id: string
   toolName: string
   arguments: Record<string, unknown>
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'waiting_confirm'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'result_unknown' | 'waiting_confirm'
   result?: string
   error?: string
   /** Tool 来源标记 */
@@ -195,6 +195,7 @@ export async function runAgentLoop(
     // 配置写入成功后插入此轮，并继续走同一条确认与工具执行路径。
     const observationParts: string[] = []
     const roundToolCalls = [...toolCalls]
+    let resultUnknown = false
 
     for (let toolIndex = 0; toolIndex < roundToolCalls.length; toolIndex++) {
       if (abortSignal?.aborted) break
@@ -251,13 +252,20 @@ export async function runAgentLoop(
 
       // 执行 Tool
 
+      let sideEffectStarted = false
       try {
         const result = await executeToolWithTimeout(
           tool.execute,
           tc.arguments,
-          executionContext,
+          Object.freeze({
+            ...executionContext,
+            operationId: toolCallInfo.id,
+            markSideEffectStarted: () => { sideEffectStarted = true },
+          }),
           TOOL_TIMEOUT_MS,
           executionContext.writingLanguage,
+          tool.isReadOnly,
+          abortSignal,
         )
 
         // 截断过长的结果
@@ -285,12 +293,35 @@ export async function runAgentLoop(
         } else {
           observationParts.push(`<tool_result name="${tc.name}" error="true">\n${modelText('工具执行失败。', 'Tool execution failed.')}\n</tool_result>`)
         }
-      } catch {
-        toolCallInfo.status = 'failed'
-        toolCallInfo.error = uiText('工具执行失败，请重试。', 'Tool execution failed. Please try again.')
+      } catch (error) {
+        const unknownWriteResult = !tool.isReadOnly && sideEffectStarted
+        toolCallInfo.status = unknownWriteResult ? 'result_unknown' : 'failed'
+        toolCallInfo.error = unknownWriteResult
+          ? uiText(
+              '操作可能已提交，但回执未返回；结果待确认，本轮不会自动重试。',
+              'The operation may have committed, but no receipt returned. Its result is unknown and this run will not retry it automatically.',
+            )
+          : error instanceof ToolExecutionTimeoutError
+          ? uiText('工具停止等待：执行超时，操作已取消。', 'Tool wait timed out; the operation was cancelled.')
+          : abortSignal?.aborted
+            ? uiText('工具已在提交前取消。', 'The tool was cancelled before commit.')
+            : uiText('工具执行失败，请重试。', 'Tool execution failed. Please try again.')
         callbacks.onToolCallComplete(toolCallInfo)
-        observationParts.push(`<tool_result name="${tc.name}" error="true">\n${modelText('工具执行失败。', 'Tool execution failed.')}\n</tool_result>`)
+        if (unknownWriteResult) {
+          resultUnknown = true
+          break
+        } else {
+          observationParts.push(`<tool_result name="${tc.name}" error="true">\n${modelText('工具执行失败。', 'Tool execution failed.')}\n</tool_result>`)
+        }
       }
+    }
+
+    if (resultUnknown) {
+      callbacks.onDone(fullAssistantText + uiText(
+        '\n\n_（写入结果待确认；为避免重复写入，本轮已停止。）_',
+        '\n\n_(The write result is unknown. This run stopped to avoid a duplicate write.)_',
+      ), allToolCalls, allArtifacts)
+      return
     }
 
     // 将所有 tool 结果作为 user role 的 observation 注入
@@ -500,18 +531,48 @@ async function executeToolWithTimeout(
   context: AgentExecutionContext,
   timeoutMs: number,
   writingLanguage: WritingLanguage,
+  isReadOnly: boolean,
+  outerSignal?: AbortSignal,
 ): Promise<ToolResult> {
-  return Promise.race([
-    executeFn(args, context),
-    new Promise<ToolResult>((_, reject) =>
-      setTimeout(() => reject(new Error(writingLanguageText(
-        writingLanguage,
-        `工具执行超时（${timeoutMs / 1000}s）`,
-        `Tool execution timed out (${timeoutMs / 1000}s)`,
-      ))), timeoutMs)
-    ),
-  ])
+  const controller = new AbortController()
+  const forwardAbort = () => controller.abort(outerSignal?.reason)
+  if (outerSignal?.aborted) forwardAbort()
+  else outerSignal?.addEventListener('abort', forwardAbort, { once: true })
+  const toolContext = Object.freeze({ ...context, abortSignal: controller.signal })
+  const execution = executeFn(args, toolContext)
+
+  // A write may already have crossed an IPC/main-process commit point. Waiting
+  // for its real receipt is safer than returning "failed" and inviting a retry.
+  if (!isReadOnly) {
+    try {
+      return await execution
+    } finally {
+      outerSignal?.removeEventListener('abort', forwardAbort)
+    }
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      execution,
+      new Promise<ToolResult>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort()
+          reject(new ToolExecutionTimeoutError(writingLanguageText(
+            writingLanguage,
+            `工具执行超时（${timeoutMs / 1000}s）`,
+            `Tool execution timed out (${timeoutMs / 1000}s)`,
+          )))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    outerSignal?.removeEventListener('abort', forwardAbort)
+  }
 }
+
+class ToolExecutionTimeoutError extends Error {}
 
 /**
  * 截断过长的 Tool 结果

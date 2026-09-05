@@ -77,6 +77,8 @@ export interface PlotTreeSourceBundle {
   narrativeThreads: PlotTreeNarrativeThreadSource[]
   sourceRevision: string
   snapshot: PlotTreeSnapshot | null
+  /** A corrupt or source-incompatible stored snapshot was isolated without deleting it. */
+  storedSnapshotInvalid?: true
 }
 
 export function isPlotTreeSourceRevision(value: unknown): value is string {
@@ -97,6 +99,70 @@ function text(value: unknown, label: string): string {
 function positiveInteger(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error(`剧情树${label}无效`)
   return value as number
+}
+
+function nonEmptyString(value: unknown): boolean {
+  return typeof value === 'string' && Boolean(value.trim())
+}
+
+function validChapterRange(start: unknown, end: unknown): start is number {
+  return Number.isSafeInteger(start)
+    && Number.isSafeInteger(end)
+    && (start as number) >= 1
+    && (end as number) >= (start as number)
+}
+
+function plotTreeSourceChapterBounds(
+  sources: PlotTreeSourceBundle,
+): { startChapter: number; endChapter: number } | null {
+  const ranges: Array<readonly [number, number]> = []
+  for (const blueprint of Array.isArray(sources.blueprints) ? sources.blueprints : []) {
+    if (Number.isSafeInteger(blueprint?.chapterNumber)
+      && blueprint.chapterNumber >= 1
+      && [blueprint.title, blueprint.purpose, blueprint.keyEvents].some(nonEmptyString)) {
+      ranges.push([blueprint.chapterNumber, blueprint.chapterNumber])
+    }
+  }
+  for (const chapter of Array.isArray(sources.finalizedChapters) ? sources.finalizedChapters : []) {
+    if (Number.isSafeInteger(chapter?.draftId)
+      && chapter.draftId >= 1
+      && Number.isSafeInteger(chapter.chapterNumber)
+      && chapter.chapterNumber >= 1
+      && [chapter.title, chapter.summary].some(nonEmptyString)) {
+      ranges.push([chapter.chapterNumber, chapter.chapterNumber])
+    }
+  }
+  for (const thread of Array.isArray(sources.narrativeThreads) ? sources.narrativeThreads : []) {
+    if (Number.isSafeInteger(thread?.id)
+      && thread.id >= 1
+      && validChapterRange(thread.targetStartChapter, thread.targetEndChapter)
+      && [thread.title, thread.type, thread.authorIntent].every(nonEmptyString)) {
+      ranges.push([thread.targetStartChapter, thread.targetEndChapter])
+    }
+  }
+  if (ranges.length === 0) return null
+  return {
+    startChapter: Math.min(...ranges.map(([start]) => start)),
+    endChapter: Math.max(...ranges.map(([, end]) => end)),
+  }
+}
+
+/** True only when at least one current fact can legally support a plot-tree event. */
+export function hasUsablePlotTreeEventSource(sources: PlotTreeSourceBundle): boolean {
+  return plotTreeSourceChapterBounds(sources) !== null
+}
+
+/** Rejects model-controlled track ranges that exceed the current authoritative source domain. */
+export function assertPlotTreeSnapshotChapterBounds(
+  snapshot: PlotTreeSnapshot,
+  sources: PlotTreeSourceBundle,
+): PlotTreeSnapshot {
+  const bounds = plotTreeSourceChapterBounds(sources)
+  if (!bounds) throw new Error('剧情树缺少有效事件来源')
+  if (snapshot.tracks.some(track => (
+    track.startChapter < bounds.startChapter || track.endChapter > bounds.endChapter
+  ))) throw new Error('剧情树轨道章节范围超出当前剧情来源')
+  return snapshot
 }
 
 function sourceReference(value: unknown): PlotTreeSourceReference {
@@ -297,5 +363,5 @@ export function assertPlotTreeSnapshot(
       ))) throw new Error('剧情树事件状态与来源不匹配')
     }
   }
-  return snapshot
+  return assertPlotTreeSnapshotChapterBounds(snapshot, sources)
 }

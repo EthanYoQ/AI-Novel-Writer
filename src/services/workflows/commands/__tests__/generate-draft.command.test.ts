@@ -568,6 +568,30 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  it.each([1, 2])('sends retrieved planning material in the Chapter %s draft request', async (chapterNumber) => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('本章正文持续推进。'.repeat(60), 'stop')
+    })
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber,
+      wordsTarget: 500,
+      knowledgeResults: [{
+        text: '规划资料唯一事实：月桂港的潮汐钟每天倒走十三分钟。',
+        score: 0.99,
+        fileName: 'world-notes.md',
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(invoke.mock.calls.some(([channel]) => channel === 'kb:search-writing-context')).toBe(true)
+    expect(observedTask?.messages.map(message => message.content).join('\n'))
+      .toContain('规划资料唯一事实：月桂港的潮汐钟每天倒走十三分钟。')
+  })
+
   it.each([
     { writingLanguage: 'zh-CN' as const, completedBoundary: '已经发生完毕', forbiddenReplay: '不得引用、摘要、回放或重演' },
     { writingLanguage: 'en-US' as const, completedBoundary: 'have already happened', forbiddenReplay: 'Do not quote, summarize, replay, or restage' },
@@ -625,7 +649,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(completePrompt).toContain(coreOutline)
   })
 
-  it('keeps authored guidance intact while every draft request uses a bounded sentence projection', async () => {
+  it('keeps the head, middle, and tail of authored guidance in every draft request', async () => {
     const authorGuidance = [
       'AUTHOR_RULE_BEGIN。',
       '保持因果推进。'.repeat(80),
@@ -651,14 +675,14 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(requestPrompts).toHaveLength(3)
     for (const prompt of requestPrompts) {
       expect(prompt).toContain('AUTHOR_RULE_BEGIN')
-      expect(prompt).not.toContain('PARTIAL_RULE_SHOULD_NOT_APPEAR')
-      expect(prompt).not.toContain('AUTHOR_RULE_AFTER_LIMIT')
+      expect(prompt).toContain('PARTIAL_RULE_SHOULD_NOT_APPEAR')
+      expect(prompt).toContain('AUTHOR_RULE_AFTER_LIMIT')
     }
     expect(useProjectStore.getState().currentProject?.novelConfig.globalGuidance)
       .toBe(authorGuidance)
   })
 
-  it('uses the same bounded author-configuration projections for initial drafting and every continuation', async () => {
+  it('keeps every authored configuration fact in initial drafting and every continuation', async () => {
     const longField = (name: string) => [
       `${name}_BEGIN。`,
       '保留稳定的作者事实。'.repeat(75),
@@ -693,8 +717,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     for (const prompt of requestPrompts) {
       for (const name of ['GUIDANCE', 'STYLE', 'OUTLINE', 'WORLD', 'ADVANTAGE', 'PROTAGONIST']) {
         expect(prompt).toContain(`${name}_BEGIN`)
-        expect(prompt).not.toContain(`${name}_PARTIAL_SHOULD_NOT_APPEAR`)
-        expect(prompt).not.toContain(`${name}_AFTER_LIMIT`)
+        expect(prompt).toContain(`${name}_PARTIAL_SHOULD_NOT_APPEAR`)
+        expect(prompt).toContain(`${name}_AFTER_LIMIT`)
       }
     }
     expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject(authoredConfig)
@@ -723,7 +747,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expectNoDraftPersistence(invoke)
   })
 
-  it('rejects cumulative reuse spread across several short passages', async () => {
+  it('does not hard-reject cumulative reuse spread across short fragments', async () => {
     const previousEnding = [
       '远处，走廊尽头传来急促的脚步声，皮靴踏在金属地面上，一声声，冷硬如铁砧。',
       '残片像一枚倒计时的活体引信，在皮肉下高频搏动。',
@@ -745,10 +769,43 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       previousFinalizedContent: `${'此前事件。'.repeat(150)}${previousEnding}`,
     })
 
-    await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('重演')
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('本章的新事件')
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({ content: expect.stringContaining('本章的新事件') }),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
 
-    expectNoDraftPersistence(invoke)
+  it.each([
+    {
+      previous: '她把空账簿寄给联邦中央档案管理总局第七特别调查委员会，又通知北方边境异常能量联合观测实验研究中心，当夜离港。',
+      next: '三日后，联邦中央档案管理总局第七特别调查委员会撤销通缉；北方边境异常能量联合观测实验研究中心则发现一颗新卫星。',
+    },
+    {
+      previous: '顾舟向泛大陆古代文字数字化保护与联合研究理事会递交拓片，并请环赤道深海热泉生态长期监测联合实验室保管样本。',
+      next: '半年后，泛大陆古代文字数字化保护与联合研究理事会公布了新译文；环赤道深海热泉生态长期监测联合实验室则报告了物种迁徙。',
+    },
+  ])('allows repeated long proper names when the surrounding events are different', async ({ previous, next }) => {
+    const runtime = fakeRuntime(() => outcome(
+      `${next}\n\n${'本章沿着全新的因果继续推进。'.repeat(32)}`,
+      'stop',
+    ))
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      previousFinalizedContent: `${'此前事件。'.repeat(150)}${previous}`,
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain(next)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({ content: expect.stringContaining(next) }),
+      expect.anything(),
+      expect.anything(),
+    )
   })
 
   it('allows a short state echo before the new chapter advances', async () => {
@@ -1336,10 +1393,17 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
   it('uses the bounded final rewrite when the first English length repair underfills', async () => {
     const acceptedDraft = 'delta '.repeat(2250)
+    const repairDraft = [
+      'REPAIR_SOURCE_HEAD',
+      'gamma '.repeat(900),
+      'REPAIR_SOURCE_MIDDLE',
+      'gamma '.repeat(932),
+      'REPAIR_SOURCE_TAIL',
+    ].join(' ')
     const runtime = fakeOutcomes(
       outcome('alpha '.repeat(1831), 'stop', 1),
       outcome('beta '.repeat(1032), 'stop', 2),
-      outcome('gamma '.repeat(1835), 'stop', 3),
+      outcome(repairDraft, 'stop', 3),
       outcome(acceptedDraft, 'stop', 4),
     )
     const { invoke, context, callbacks, command } = setup({
@@ -1347,6 +1411,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       writingLanguage: 'en-US',
       wordsPerChapter: 6000,
       wordsTarget: 2500,
+      globalGuidance: 'FROZEN_GLOBAL_RULE',
+      coreOutline: 'FROZEN_CORE_FACT',
     })
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(acceptedDraft.trim())
@@ -1360,6 +1426,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const repairPrompt = runtime.complete.mock.calls[2]?.[0].messages
       .find(message => message.role === 'user')?.content ?? ''
     expect(repairPrompt).toContain('2863 locally counted prose units')
+    const finalRewriteRequest = runtime.complete.mock.calls[3]?.[0].messages
+      .map(message => message.content).join('\n') ?? ''
+    expect(finalRewriteRequest).toContain('REPAIR_SOURCE_HEAD')
+    expect(finalRewriteRequest).toContain('REPAIR_SOURCE_MIDDLE')
+    expect(finalRewriteRequest).toContain('REPAIR_SOURCE_TAIL')
+    expect(finalRewriteRequest).toContain('FROZEN_GLOBAL_RULE')
+    expect(finalRewriteRequest).toContain('FROZEN_CORE_FACT')
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
       expect.objectContaining({ content: acceptedDraft.trim() }),
@@ -1461,15 +1534,15 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       ? '对白必须并入人物动作、反应或环境描写所在的段落'
       : 'Fold dialogue into the paragraph containing character action, reaction, or setting')
     expect(finalPrompt).toContain(writingLanguage === 'zh-CN'
-      ? '【仅供事实核对的原稿结尾】'
-      : '[Original ending for fact checking only]')
+      ? '【待重写的完整章节草稿】'
+      : '[Complete chapter draft to rewrite]')
     expect(finalPrompt).toContain(`"wordsTarget": ${finalTarget}`)
     expect(finalPrompt).not.toContain(`"wordsTarget": ${wordsTarget}`)
     expect(finalPrompt).toContain('发现密钥；切断警报；带着证据离开机房')
     expect(finalPrompt).toContain('ENDING_SENTINEL')
-    expect(finalPrompt).not.toContain('FRONT_SENTINEL')
-    expect(finalPrompt).not.toContain('MIDDLE_SENTINEL')
-    expect(finalPrompt).not.toContain('乙'.repeat(80))
+    expect(finalPrompt).toContain('FRONT_SENTINEL')
+    expect(finalPrompt).toContain('MIDDLE_SENTINEL')
+    expect(finalPrompt).toContain('乙'.repeat(80))
     const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
     expect((persisted?.[1] as { content: string }).content).toBe(finalDraft)
   })

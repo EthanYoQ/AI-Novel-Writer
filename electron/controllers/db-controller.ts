@@ -803,6 +803,14 @@ export function registerDatabaseController() {
       DraftRepository.delete(id)
       return { success: true }
     } catch (err) {
+      if (
+        err
+        && typeof err === 'object'
+        && 'code' in err
+        && err.code === 'FINALIZED_DRAFT_DELETE_REQUIRED'
+      ) {
+        return { success: false, errorCode: 'FINALIZED_DRAFT_DELETE_REQUIRED' as const }
+      }
       return { success: false, error: String(err) }
     }
   })
@@ -879,6 +887,15 @@ ipcMain.handle('db:revision-create', async (_event, params: {
   ipcMain.handle('db:revision-next-index', async (_event, baseDraftId: number, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return RevisionRepository.getNextIndex(baseDraftId)
+  })
+
+  ipcMain.handle('db:revision-merge', async (_event, request: Parameters<typeof RevisionRepository.mergeIntoDraft>[0], expectedProjectPath: string) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      return { success: true, receipt: RevisionRepository.mergeIntoDraft(request) }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
   })
 
   ipcMain.handle('db:revision-mark-merged', async (_event, id: number, mergedToDraftId: number, expectedProjectPath: string) => {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { EditorView } from '@codemirror/view'
 
 import type { ModelExecutionLeaseReceipt } from '../../../shared/ipc-channels'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -41,12 +42,16 @@ let root: Root
 let container: HTMLDivElement
 let invoke: ReturnType<typeof vi.fn>
 let listeners: Map<string, EventListener>
+let deferStream: boolean
+let pendingRequestId: string | null
 
 beforeEach(() => {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
   listeners = new Map()
+  deferStream = false
+  pendingRequestId = null
   useLLMStore.setState({
     defaultModelId: 'editor-model',
     loaded: true,
@@ -58,14 +63,17 @@ beforeEach(() => {
     if (channel === 'llm:close-execution-lease') return { success: true }
     if (channel === 'llm:generate-stream') {
       const requestId = String(args[0])
-      queueMicrotask(() => {
-        listeners.get('llm:stream-chunk')?.({ requestId, chunk: '残缺片段' } as never)
-        listeners.get('llm:stream-done')?.({
-          requestId,
-          fullText: '残缺片段',
-          finishReason: 'length',
-        } as never)
-      })
+      pendingRequestId = requestId
+      if (!deferStream) {
+        queueMicrotask(() => {
+          listeners.get('llm:stream-chunk')?.({ requestId, chunk: '残缺片段' } as never)
+          listeners.get('llm:stream-done')?.({
+            requestId,
+            fullText: '残缺片段',
+            finishReason: 'length',
+          } as never)
+        })
+      }
       return { requestId, started: true }
     }
     throw new Error(`Unexpected IPC channel: ${channel}`)
@@ -136,5 +144,58 @@ describe('CodeMirror editor AI generation boundary', () => {
       expect.objectContaining({ reasoningStage: 'review' }),
     )
     expect(invoke).toHaveBeenCalledWith('llm:close-execution-lease', 'editor-generation-lease')
+  })
+
+  it('applies a delayed AI result to the frozen original selection instead of a later selection', async () => {
+    deferStream = true
+    await act(async () => root.render(
+      <CodeMirrorEditor content="甲乙" mode="prose" />,
+    ))
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+
+    await act(async () => page.getByText('甲乙').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await act(async () => view.dispatch({ selection: { anchor: 1, head: 2 } }))
+
+    await act(async () => {
+      const requestId = pendingRequestId!
+      listeners.get('llm:stream-chunk')?.({ requestId, chunk: '替换甲' } as never)
+      listeners.get('llm:stream-done')?.({
+        requestId,
+        fullText: '替换甲',
+        finishReason: 'stop',
+      } as never)
+    })
+    await expect.element(page.getByText('替换甲')).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '替换' }).click())
+
+    expect(view.state.doc.toString()).toBe('替换甲')
+  })
+
+  it('keeps a delayed result copyable but refuses stale offsets after the document changes', async () => {
+    deferStream = true
+    await act(async () => root.render(
+      <CodeMirrorEditor content="甲乙" mode="prose" />,
+    ))
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+
+    await act(async () => page.getByText('甲乙').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await act(async () => view.dispatch({ changes: { from: 0, insert: '新' } }))
+
+    await act(async () => {
+      const requestId = pendingRequestId!
+      listeners.get('llm:stream-done')?.({
+        requestId,
+        fullText: '替换甲',
+        finishReason: 'stop',
+      } as never)
+    })
+    await expect.element(page.getByText('替换甲')).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '替换' }).click())
+
+    expect(view.state.doc.toString()).toBe('新甲乙')
+    await expect.element(page.getByText('正文或原目标已变化，结果未应用；你仍可复制预览内容')).toBeVisible()
+    await expect.element(page.getByText('替换甲')).toBeVisible()
   })
 })

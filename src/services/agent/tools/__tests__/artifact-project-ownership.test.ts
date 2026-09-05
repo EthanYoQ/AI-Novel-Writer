@@ -64,4 +64,59 @@ describe('tool artifact project ownership', () => {
     expect(Object.isFrozen(result.artifacts?.[0])).toBe(true)
     expect(Object.isFrozen(result.artifacts?.[0].projectSession)).toBe(true)
   })
+
+  it('refuses an aborted write before invoking the authoritative filesystem boundary', async () => {
+    const invoke = vi.fn(async () => ({ success: true }))
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+    })
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(writeFileTool.execute({
+      file_path: 'chapters/1.md',
+      content: 'must not be written',
+    }, {
+      ...createAgentExecutionContext(),
+      operationId: 'write-before-commit',
+      abortSignal: controller.signal,
+    })).rejects.toThrow(/取消|cancel/u)
+
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('reports the original write receipt after the response is delayed across a project switch', async () => {
+    let finishWrite: (() => void) | undefined
+    let commits = 0
+    const invoke = vi.fn(async () => {
+      commits++
+      await new Promise<void>(resolve => { finishWrite = resolve })
+      return { success: true }
+    })
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+    })
+    const executionContext = createAgentExecutionContext()
+    const resultPromise = writeFileTool.execute({
+      file_path: 'chapters/1.md',
+      content: 'committed once',
+    }, executionContext)
+    await vi.waitFor(() => expect(commits).toBe(1))
+
+    useProjectStore.setState({
+      currentProject: {
+        id: 'B', sessionLease: 'lease-B', name: 'B', path: 'C:\\novels\\B', novelConfig: {},
+      } as never,
+    })
+    finishWrite?.()
+
+    await expect(resultPromise).resolves.toMatchObject({
+      success: true,
+      artifacts: [expect.objectContaining({
+        projectPath: projectAPath,
+        projectSession: expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+      })],
+    })
+    expect(commits).toBe(1)
+  })
 })

@@ -1,5 +1,6 @@
 import {
   assertPlotTreeSnapshot,
+  hasUsablePlotTreeEventSource,
   type PlotTreeSnapshot,
   type PlotTreeSourceBundle,
 } from '../shared/plot-tree'
@@ -57,6 +58,16 @@ export class PlotTreeResponseError extends Error {
   constructor(readonly code: PlotTreeResponseErrorCode, message: string) {
     super(message)
     this.name = 'PlotTreeResponseError'
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
+export class PlotTreeSourceError extends Error {
+  readonly code = 'NO_EVENT_SOURCES'
+
+  constructor() {
+    super('NO_EVENT_SOURCES')
+    this.name = 'PlotTreeSourceError'
     Object.setPrototypeOf(this, new.target.prototype)
   }
 }
@@ -190,6 +201,7 @@ export async function generatePlotTree(
     now: () => new Date().toISOString(),
   },
 ): Promise<PlotTreeSnapshot> {
+  if (!hasUsablePlotTreeEventSource(input.sources)) throw new PlotTreeSourceError()
   const runtime = await dependencies.createRuntime({
     budget: PLOT_TREE_GENERATION_BUDGET,
     modelId: input.modelId,

@@ -40,7 +40,7 @@ function providerDirective(
     if (effective === 'off' && value === 'disabled') {
       return { adapter: mapping.adapter, thinking: 'disabled' }
     }
-    return (effective === 'high' || effective === 'max') && value === effective
+    return (effective === 'low' || effective === 'high' || effective === 'max') && value === effective
       ? {
           adapter: mapping.adapter,
           thinking: 'enabled',

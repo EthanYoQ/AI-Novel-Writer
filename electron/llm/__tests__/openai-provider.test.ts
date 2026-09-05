@@ -254,7 +254,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     }
   })
 
-  it('maps auto DeepSeek V4 drafts to enabled high effort in normal and streaming requests', async () => {
+  it('maps auto DeepSeek V4 drafts to enabled low effort in normal and streaming requests', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -291,9 +291,37 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
       expect(JSON.parse(String(request.body))).toMatchObject({
         thinking: { type: 'enabled' },
-        reasoning_effort: 'high',
+        reasoning_effort: 'low',
       })
     }
+  })
+
+  it.each([
+    ['low', 'low'],
+    ['medium', 'high'],
+    ['high', 'high'],
+    ['max', 'max'],
+  ] as const)('serializes official DeepSeek V4 override %s as %s', async (
+    override,
+    expectedEffort,
+  ) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const model = { ...legacyDeepSeekV4Model, reasoningOverride: override }
+
+    await new OpenAIProvider().generate(
+      model,
+      [{ role: 'user', content: '返回正文' }],
+      resolveGenerationParameters(model, { maxTokens: 512, reasoningStage: 'drafting' }),
+    )
+
+    expect(requestBody(fetchMock)).toMatchObject({
+      thinking: { type: 'enabled' },
+      reasoning_effort: expectedEffort,
+    })
   })
 
   it('omits Kimi K3 fixed sampling and generic thinking fields for non-stream generation', async () => {

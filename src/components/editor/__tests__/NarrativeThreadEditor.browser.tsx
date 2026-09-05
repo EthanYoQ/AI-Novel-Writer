@@ -226,6 +226,81 @@ describe('NarrativeThreadEditor', () => {
     await vi.waitFor(() => expect(container?.textContent).toContain('新建计划'))
   })
 
+  it('keeps sparse and long plot histories inside a bounded chapter window', async () => {
+    const eventChapters = [1, ...Array.from({ length: 130 }, (_, index) => index + 2), 10_000]
+    plotSources = {
+      ...plotSources,
+      snapshot: {
+        version: 1,
+        generatedAt: '2026-09-03T08:00:00.000Z',
+        writingLanguage: 'zh-CN',
+        sourceRevision: 'a'.repeat(64),
+        tracks: [{
+          id: 'long-main', title: '长篇主线', role: 'main', startChapter: 1, endChapter: 10_000,
+          summary: '跨越稀疏章节的主线。',
+          events: eventChapters.map(chapterNumber => ({
+            status: 'planned', chapterNumber, summary: `事件 ${chapterNumber}`,
+            sources: [{ type: 'narrative-thread', planId: 9 }],
+          })),
+        }],
+      },
+    }
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('长篇主线'))
+
+    expect(container!.querySelectorAll('thead th')).toHaveLength(41)
+    expect(container?.textContent).toContain('第 1 章')
+    expect(container?.textContent).not.toContain('第 10000 章')
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('下一组章节'))?.click())
+    expect(container?.textContent).toContain('第 41 章')
+  })
+
+  it('shows an actionable no-source message and does not call the generator', async () => {
+    plotSources = {
+      ...plotSources,
+      blueprints: [],
+      finalizedChapters: [],
+      narrativeThreads: [],
+      snapshot: null,
+    }
+    const plotTreeGenerator = vi.fn()
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={plotTreeGenerator}
+      />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('请先添加章节蓝图、定稿或叙事线索'))
+
+    const generate = Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('生成剧情树'))
+    expect(generate?.disabled).toBe(true)
+    generate?.click()
+    expect(plotTreeGenerator).not.toHaveBeenCalled()
+  })
+
+  it('reports an isolated invalid stored snapshot without hiding the author sources', async () => {
+    plotSources = {
+      ...plotSources,
+      snapshot: null,
+      storedSnapshotInvalid: true,
+    }
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />,
+    ))
+
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧剧情树快照无法安全显示'))
+    expect(container?.textContent).toContain('生成剧情树')
+    expect(plotSources.blueprints).toHaveLength(1)
+  })
+
   it('does not mark a snapshot stale when its source revision still matches', async () => {
     plotSources = {
       ...plotSources,

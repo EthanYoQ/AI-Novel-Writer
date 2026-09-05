@@ -30,6 +30,8 @@ function StatusIcon({ status }: { status: ToolCallInfo['status'] }) {
       return <CheckCircle2 size={13} className="tool-call-status completed" />
     case 'failed':
       return <XCircle size={13} className="tool-call-status failed" />
+    case 'result_unknown':
+      return <AlertTriangle size={13} className="tool-call-status waiting_confirm" />
     case 'running':
       return <Loader2 size={13} className="tool-call-status running tool-spinner" />
     case 'waiting_confirm':
@@ -48,6 +50,7 @@ function statusLabel(
   switch (status) {
     case 'completed': return text('完成', 'Completed')
     case 'failed': return text('失败', 'Failed')
+    case 'result_unknown': return text('结果待确认', 'Result unknown')
     case 'running': return text('执行中', 'Running')
     case 'waiting_confirm': return text('待确认', 'Waiting for confirmation')
     case 'pending': return text('等待中', 'Pending')

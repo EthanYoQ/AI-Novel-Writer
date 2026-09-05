@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ExternalLink, GitBranch, Loader2, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ExternalLink, GitBranch, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 
 import type { ModelProfile } from '../../shared/ipc-channels'
 import type {
@@ -13,6 +13,7 @@ import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 
 const CHAPTER_WIDTH = 128
+const CHAPTER_WINDOW_SIZE = 40
 
 interface PlotTreeViewProps {
   snapshot: PlotTreeSnapshot | null
@@ -22,6 +23,8 @@ interface PlotTreeViewProps {
   selectedModelId: string | null
   busy: boolean
   error: string
+  sourceReady: boolean
+  storedSnapshotInvalid: boolean
   onModelChange: (modelId: string) => void
   onGenerate: () => void
   onClear: () => void
@@ -46,6 +49,8 @@ export default function PlotTreeView({
   selectedModelId,
   busy,
   error,
+  sourceReady,
+  storedSnapshotInvalid,
   onModelChange,
   onGenerate,
   onClear,
@@ -54,25 +59,32 @@ export default function PlotTreeView({
   const text = useLocaleStore(state => state.text)
   const viewportRef = useRef<HTMLDivElement>(null)
   const [selectedEvent, setSelectedEvent] = useState<PlotTreeEvent | null>(null)
-  const maxChapter = useMemo(() => Math.max(
-    1,
-    currentChapter,
-    ...(snapshot?.tracks.flatMap(track => [
-      track.startChapter,
-      track.endChapter,
-      ...track.events.map(event => event.chapterNumber),
-    ]) ?? []),
-  ), [currentChapter, snapshot])
-  const chapters = useMemo(
-    () => Array.from({ length: maxChapter }, (_, index) => index + 1),
-    [maxChapter],
-  )
+  const [requestedWindowStart, setRequestedWindowStart] = useState<number | null>(null)
+  const allChapters = useMemo(() => {
+    const values = new Set<number>()
+    const add = (chapter: number) => {
+      if (Number.isSafeInteger(chapter) && chapter >= 1) values.add(chapter)
+    }
+    add(currentChapter)
+    for (const track of snapshot?.tracks ?? []) {
+      add(track.startChapter)
+      add(track.endChapter)
+      for (const event of track.events) add(event.chapterNumber)
+    }
+    return [...values].sort((left, right) => left - right)
+  }, [currentChapter, snapshot])
+  const currentIndex = allChapters.findIndex(chapter => chapter >= currentChapter)
+  const centeredWindowStart = Math.max(0, currentIndex - Math.floor(CHAPTER_WINDOW_SIZE / 2))
+  const maximumWindowStart = Math.max(0, allChapters.length - CHAPTER_WINDOW_SIZE)
+  const chapterWindowStart = Math.min(requestedWindowStart ?? centeredWindowStart, maximumWindowStart)
+  const chapters = allChapters.slice(chapterWindowStart, chapterWindowStart + CHAPTER_WINDOW_SIZE)
   const stale = Boolean(snapshot && snapshot.sourceRevision !== sourceRevision)
 
   useEffect(() => {
     if (!viewportRef.current) return
-    viewportRef.current.scrollLeft = Math.max(0, (currentChapter - 2) * CHAPTER_WIDTH)
-  }, [currentChapter, snapshot])
+    const currentIndex = chapters.indexOf(currentChapter)
+    viewportRef.current.scrollLeft = Math.max(0, (currentIndex - 1) * CHAPTER_WIDTH)
+  }, [chapters, currentChapter])
 
   return (
     <section className="space-y-4">
@@ -90,7 +102,7 @@ export default function PlotTreeView({
               {models.map(model => <option key={model.id} value={model.id}>{model.name || model.modelName}</option>)}
             </NativeSelect>
           </label>
-          <Button variant="ai" onClick={onGenerate} disabled={busy || !selectedModelId}>
+          <Button variant="ai" onClick={onGenerate} disabled={busy || !selectedModelId || !sourceReady}>
             {busy ? <Loader2 size={14} className="animate-spin" /> : snapshot ? <RefreshCw size={14} /> : <GitBranch size={14} />}
             {busy
               ? text('生成中...', 'Generating...')
@@ -107,6 +119,14 @@ export default function PlotTreeView({
           'AI summarizes existing outlines, blueprints, finalized chapters, and narrative plans read-only. The plot tree never rewrites project facts.',
         )}</p>
         {stale && <p role="status" className="text-xs" style={{ color: 'var(--color-warning-text)' }}>{text('剧情资料已有更新，可刷新剧情树。', 'Plot sources have changed. Refresh the plot tree when ready.')}</p>}
+        {!sourceReady && <p role="status" className="text-xs" style={{ color: 'var(--color-warning-text)' }}>{text(
+          '请先添加章节蓝图、定稿或叙事线索，再生成剧情树。',
+          'Add a chapter blueprint, finalized chapter, or narrative thread before generating a plot tree.',
+        )}</p>}
+        {storedSnapshotInvalid && <p role="alert" className="text-xs" style={{ color: 'var(--color-warning-text)' }}>{text(
+          '旧剧情树快照无法安全显示，已隔离；作者资料未被修改，请重新生成。',
+          'The stored plot-tree snapshot could not be displayed safely and was isolated. Author sources were not changed; generate it again.',
+        )}</p>}
         {error && <p role="alert" className="text-xs" style={{ color: 'var(--color-error-text)' }}>{error}</p>}
       </div>
 
@@ -117,7 +137,33 @@ export default function PlotTreeView({
       )}
 
       {snapshot && (
-        <div ref={viewportRef} className="overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--color-border)' }}>
+        <div className="space-y-2">
+          {allChapters.length > CHAPTER_WINDOW_SIZE && <div className="flex items-center justify-end gap-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={chapterWindowStart === 0}
+              onClick={() => setRequestedWindowStart(Math.max(0, chapterWindowStart - CHAPTER_WINDOW_SIZE))}
+            >
+              <ChevronLeft size={13} />{text('上一组章节', 'Previous chapters')}
+            </Button>
+            <span>{text(
+              `显示 ${chapters[0]}–${chapters.at(-1)} 章（共 ${allChapters.length} 个有内容的章节）`,
+              `Showing Chapters ${chapters[0]}–${chapters.at(-1)} (${allChapters.length} chapters with content)`,
+            )}</span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={chapterWindowStart + CHAPTER_WINDOW_SIZE >= allChapters.length}
+              onClick={() => setRequestedWindowStart(Math.min(
+                maximumWindowStart,
+                chapterWindowStart + CHAPTER_WINDOW_SIZE,
+              ))}
+            >
+              {text('下一组章节', 'Next chapters')}<ChevronRight size={13} />
+            </Button>
+          </div>}
+          <div ref={viewportRef} className="overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--color-border)' }}>
           <table className="border-collapse text-xs" style={{ minWidth: 208 + chapters.length * CHAPTER_WIDTH, tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ background: 'var(--color-panel)' }}>
@@ -187,6 +233,7 @@ export default function PlotTreeView({
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

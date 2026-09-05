@@ -871,7 +871,14 @@ export interface DatabaseChannels {
   'db:draft-next-version': { args: [chapterNumber: number, expectedProjectPath: string]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:draft-update-content': { args: [id: number, content: string, wordCount: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
-  'db:draft-delete': { args: [id: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
+  'db:draft-delete': {
+    args: [id: number, expectedProjectPath: string]
+    return: {
+      success: boolean
+      errorCode?: 'FINALIZED_DRAFT_DELETE_REQUIRED'
+      error?: string
+    }
+  }
   'db:finalization-link-knowledge-document': {
     args: [draftId: number, documentId: string, expectedProjectPath: string]
     return: { success: boolean; finalization?: { knowledgeDocumentId: string }; error?: string }
@@ -884,6 +891,26 @@ export interface DatabaseChannels {
   'db:revision-get-pending': { args: [baseDraftId: number, expectedProjectPath: string]; return: RevisionMeta[] }
   'db:revision-get-full': { args: [id: number, expectedProjectPath: string]; return: RevisionFull | null }
   'db:revision-next-index': { args: [baseDraftId: number, expectedProjectPath: string]; return: number }
+  'db:revision-merge': {
+    args: [request: {
+      revisionId: number
+      targetDraftId: number
+      expectedDraftContent: string
+      mergedContent: string
+      wordCount: number
+    }, expectedProjectPath: string]
+    return: {
+      success: boolean
+      receipt?: {
+        revisionId: number
+        targetDraftId: number
+        status: 'revised'
+        wordCount: number
+        idempotent: boolean
+      }
+      error?: string
+    }
+  }
   'db:revision-mark-merged': { args: [id: number, mergedToDraftId: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:revision-mark-discarded': { args: [id: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
 

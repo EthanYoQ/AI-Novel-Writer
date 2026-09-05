@@ -5,7 +5,7 @@ import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { useEditorStore } from '../../../stores/editor-store'
 import { ipc } from '../../ipc-client'
 import { validatePath } from './safe-path'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requireAgentProject } from './project-context'
 
 export const openEditorTool = buildAgentTool({
   name: 'open_editor',
@@ -67,6 +67,7 @@ export const openEditorTool = buildAgentTool({
     }
 
     // 在编辑器中打开
+    assertAgentToolActive(context)
     const fileName = filePath.split('/').pop() ?? filePath
     useEditorStore.getState().openFile({
       id: `agent-${Date.now()}`,

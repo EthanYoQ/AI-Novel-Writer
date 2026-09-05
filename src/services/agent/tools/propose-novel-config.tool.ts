@@ -2,7 +2,7 @@ import type { NovelConfig } from '../../../shared/ipc-channels'
 import { useProjectStore } from '../../../stores/project-store'
 import { ipc } from '../../ipc-client'
 import { buildAgentTool, type AgentExecutionContext } from '../tool-registry'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentToolActive, requireAgentProject } from './project-context'
 
 const STRING_FIELDS = new Set<keyof NovelConfig>([
   'genre', 'subGenre', 'targetAudience', 'coreOutline', 'worldSetting', 'goldenFinger',
@@ -98,10 +98,11 @@ export const proposeNovelConfigTool = buildAgentTool({
     const proposal = buildNovelConfigProposal(args, project.novelConfig, context)
     if (!proposal.valid) return { success: false, content: '', error: proposal.error }
     const nextConfig = { ...project.novelConfig, ...proposal.changes }
+    assertAgentToolActive(context)
+    context?.markSideEffectStarted?.()
     const result = await ipc.invokeWithProjectSession(
       projectSession, 'project:update-config', project.id, { novelConfig: nextConfig }, project.path,
     )
-    assertAgentProjectCurrent(context)
     if (!result.success) {
       const detail = result.error
       return {

@@ -145,9 +145,9 @@ export function createProviderCatalog(): ProviderPreset[] {
         // https://api-docs.deepseek.com/guides/thinking_mode/
         reasoningMapping: {
           adapter: 'deepseek-v4-thinking',
-          supportedEfforts: ['off', 'high', 'max'],
-          providerValues: { off: 'disabled', high: 'high', max: 'max' },
-          requestAliases: { low: 'high', medium: 'high' },
+          supportedEfforts: ['off', 'low', 'high', 'max'],
+          providerValues: { off: 'disabled', low: 'low', high: 'high', max: 'max' },
+          requestAliases: { medium: 'high' },
         },
       },
       {
@@ -163,9 +163,9 @@ export function createProviderCatalog(): ProviderPreset[] {
         // https://api-docs.deepseek.com/guides/thinking_mode/
         reasoningMapping: {
           adapter: 'deepseek-v4-thinking',
-          supportedEfforts: ['off', 'high', 'max'],
-          providerValues: { off: 'disabled', high: 'high', max: 'max' },
-          requestAliases: { low: 'high', medium: 'high' },
+          supportedEfforts: ['off', 'low', 'high', 'max'],
+          providerValues: { off: 'disabled', low: 'low', high: 'high', max: 'max' },
+          requestAliases: { medium: 'high' },
         },
       },
     ],
