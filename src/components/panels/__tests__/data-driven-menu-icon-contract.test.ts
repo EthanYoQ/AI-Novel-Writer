@@ -51,27 +51,19 @@ describe('data-driven menu icon contract', () => {
   })
 
   it('renders every @ mention target with shared icons instead of Unicode glyphs', () => {
-    const previousLocale = useLocaleStore.getState().locale
-    const testLocale = 'zh-CN'
-    useLocaleStore.setState({ locale: testLocale })
+    const targets = getAllMentionTargets(useLocaleStore.getInitialState().locale)
+    const markup = renderToStaticMarkup(createElement(MentionMenu, {
+      query: '',
+      onSelect: () => undefined,
+      onClose: () => undefined,
+    }))
 
-    try {
-      const targets = getAllMentionTargets(testLocale)
-      const markup = renderToStaticMarkup(createElement(MentionMenu, {
-        query: '',
-        onSelect: () => undefined,
-        onClose: () => undefined,
-      }))
-
-      for (const target of targets) {
-        expect(markup).toContain(target.displayName)
-        expect(target).not.toHaveProperty('icon')
-      }
-      expect(JSON.stringify(targets)).not.toMatch(pseudoIconPattern)
-      expect(markup).not.toMatch(pseudoIconPattern)
-      expect(markup).toContain('<svg')
-    } finally {
-      useLocaleStore.setState({ locale: previousLocale })
+    for (const target of targets) {
+      expect(markup).toContain(target.displayName)
+      expect(target).not.toHaveProperty('icon')
     }
+    expect(JSON.stringify(targets)).not.toMatch(pseudoIconPattern)
+    expect(markup).not.toMatch(pseudoIconPattern)
+    expect(markup).toContain('<svg')
   })
 })

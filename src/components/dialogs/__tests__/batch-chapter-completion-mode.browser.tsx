@@ -621,8 +621,7 @@ describe('batch chapter completion mode browser flow', () => {
         ['llm:begin-execution-lease', 'grok-browser'],
       ])
     expect(invoke.mock.calls.some(([channel]) => (
-      channel === 'db:draft-get-finalized'
-      || channel === 'finalization:commit'
+      channel === 'finalization:commit'
       || channel === 'kb:import-text'
       || channel === 'db:blueprint-update-notes'
       || String(channel).startsWith('db:character-roster-')
