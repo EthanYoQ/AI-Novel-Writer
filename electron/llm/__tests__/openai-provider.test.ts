@@ -49,11 +49,11 @@ function requestBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknow
   return JSON.parse(String(request.body)) as Record<string, unknown>
 }
 
-function sseReader(...messages: string[]) {
+function sseReader(...messages: Array<string | Uint8Array>) {
   const encoder = new TextEncoder()
   const reads: Array<{ done: boolean; value?: Uint8Array }> = messages.map(message => ({
     done: false,
-    value: encoder.encode(message),
+    value: typeof message === 'string' ? encoder.encode(message) : message,
   }))
   reads.push({ done: true, value: undefined })
   return { read: vi.fn(async () => reads.shift()) }
@@ -88,7 +88,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        body: { getReader: () => sseReader('data: [DONE]\n') },
+        body: { getReader: () => sseReader('data: [DONE]\n\n') },
       })
     vi.stubGlobal('fetch', fetchMock)
     const model = {
@@ -145,8 +145,8 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       ok: true,
       body: {
         getReader: () => sseReader(
-          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
-          'data: [DONE]\n',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+          'data: [DONE]\n\n',
         ),
       },
     })
@@ -183,7 +183,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        body: { getReader: () => sseReader('data: [DONE]\n') },
+        body: { getReader: () => sseReader('data: [DONE]\n\n') },
       })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -221,7 +221,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        body: { getReader: () => sseReader('data: [DONE]\n') },
+        body: { getReader: () => sseReader('data: [DONE]\n\n') },
       })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -262,7 +262,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        body: { getReader: () => sseReader('data: [DONE]\n') },
+        body: { getReader: () => sseReader('data: [DONE]\n\n') },
       })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -345,7 +345,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
   it('omits Kimi K3 fixed sampling and generic thinking fields for stream generation', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      body: { getReader: () => sseReader('data: [DONE]\n') },
+      body: { getReader: () => sseReader('data: [DONE]\n\n') },
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -406,8 +406,8 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       ok: true,
       body: {
         getReader: () => sseReader(
-          'data: {"choices":[{"delta":{"content":"被截断"},"finish_reason":"length"}]}\n',
-          'data: [DONE]\n',
+          'data: {"choices":[{"delta":{"content":"被截断"},"finish_reason":"length"}]}\n\n',
+          'data: [DONE]\n\n',
         ),
       },
     })
@@ -433,8 +433,8 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       ok: true,
       body: {
         getReader: () => sseReader(
-          'data: {"choices":[{"delta":{"content":"正文"},"finish_reason":"provider_custom"}]}\n',
-          'data: [DONE]\n',
+          'data: {"choices":[{"delta":{"content":"正文"},"finish_reason":"provider_custom"}]}\n\n',
+          'data: [DONE]\n\n',
         ),
       },
     }))
@@ -464,8 +464,8 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       ok: true,
       body: {
         getReader: () => sseReader(
-          `data: {"choices":[{"delta":{"content":"正文"},"finish_reason":"${providerReason}"}]}\n`,
-          'data: [DONE]\n',
+          `data: {"choices":[{"delta":{"content":"正文"},"finish_reason":"${providerReason}"}]}\n\n`,
+          'data: [DONE]\n\n',
         ),
       },
     }))
@@ -490,8 +490,8 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       ok: true,
       body: {
         getReader: () => sseReader(
-          'data: {"choices":[{"delta":{"content":"正文"}}]}\n',
-          'data: [DONE]\n',
+          'data: {"choices":[{"delta":{"content":"正文"}}]}\n\n',
+          'data: [DONE]\n\n',
         ),
       },
     }))
@@ -514,9 +514,9 @@ describe('OpenAIProvider NovelAI compatibility', () => {
       ok: true,
       body: {
         getReader: () => sseReader(
-          'data: {"choices":[{"delta":{"content":"正文"},"finish_reason":"stop"}]}\n',
-          'data: {"choices":[],"usage":{"prompt_tokens":13,"completion_tokens":21,"total_tokens":34}}\n',
-          'data: [DONE]\n',
+          'data: {"choices":[{"delta":{"content":"正文"},"finish_reason":"stop"}]}\n\n',
+          'data: {"choices":[],"usage":{"prompt_tokens":13,"completion_tokens":21,"total_tokens":34}}\n\n',
+          'data: [DONE]\n\n',
         ),
       },
     })
@@ -551,7 +551,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       body: {
-        getReader: () => sseReader('data: {"choices":[{"delta":{"content":"半句"}}]}\n'),
+        getReader: () => sseReader('data: {"choices":[{"delta":{"content":"半句"}}]}\n\n'),
       },
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -568,6 +568,191 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onDone).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('完成标记前结束'))
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('完成标记前结束'), '半句', undefined)
+  })
+
+  it('decodes split UTF-8 and accepts LF, CRLF, CR, and data without a space', async () => {
+    const bytes = new TextEncoder().encode([
+      'data:{"choices":[{"delta":{"content":"甲"}}]}\r\n\r\n',
+      'data: {"choices":[{"delta":{"content":"乙"}}]}\r\r',
+      'data: {"choices":[{"delta":{"content":"丙"},"finish_reason":"stop"}]}\n\n',
+      'data:[DONE]\n\n',
+    ].join(''))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => sseReader(...Array.from(bytes, byte => Uint8Array.of(byte))) },
+    }))
+    const onChunk = vi.fn()
+    const onDone = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk,
+      onDone,
+      onError: vi.fn(),
+    })
+
+    expect(onChunk.mock.calls.flat()).toEqual(['甲', '乙', '丙'])
+    expect(onDone).toHaveBeenCalledWith('甲乙丙', undefined, 'stop')
+  })
+
+  it('joins multiple data fields in one SSE event before parsing JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => sseReader(
+        'data: {"choices":\ndata: [{"delta":{"content":"MIDDLE"},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ) },
+    }))
+    const onDone = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone,
+      onError: vi.fn(),
+    })
+
+    expect(onDone).toHaveBeenCalledWith('MIDDLE', undefined, 'stop')
+  })
+
+  it('rejects malformed JSON without allowing a later stop and DONE to certify the stream', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => sseReader(
+        'data: {"choices":[{"delta":{"content":"HEAD"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"BROKEN"}}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ) },
+    }))
+    const onDone = vi.fn()
+    const onError = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone,
+      onError,
+    })
+
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('JSON'), 'HEAD', undefined)
+  })
+
+  it('rejects non-string content instead of stringifying it', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => sseReader(
+        'data: {"choices":[{"delta":{"content":"HEAD"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":{"text":"MIDDLE"}}}]}\n\n',
+        'data: [DONE]\n\n',
+      ) },
+    }))
+    const onChunk = vi.fn()
+    const onError = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk,
+      onDone: vi.fn(),
+      onError,
+    })
+
+    expect(onChunk.mock.calls.flat()).toEqual(['HEAD'])
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('content'), 'HEAD', undefined)
+  })
+
+  it('treats a provider error object as fatal even when stop and DONE follow', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => sseReader(
+        'data: {"choices":[{"delta":{"content":"HEAD"}}]}\n\n',
+        'data: {"error":{"message":"CONTROLLED_PROVIDER_ERROR","type":"server_error"}}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ) },
+    }))
+    const onDone = vi.fn()
+    const onError = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone,
+      onError,
+    })
+
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('CONTROLLED_PROVIDER_ERROR'), 'HEAD', undefined)
+  })
+
+  it('does not swallow an onChunk consumer exception as malformed provider data', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => sseReader(
+        'data: {"choices":[{"delta":{"content":"HEAD"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"MIDDLE"}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ) },
+    }))
+    const onDone = vi.fn()
+    const onError = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: chunk => {
+        if (chunk === 'MIDDLE') throw new Error('CONTROLLED_CONSUMER_REJECTION')
+      },
+      onDone,
+      onError,
+    })
+
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('CONTROLLED_CONSUMER_REJECTION'), 'HEADMIDDLE', undefined)
+  })
+
+  it('accepts comments, usage-only events, and empty deltas as legal control traffic', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => sseReader(
+        ': keepalive\n\n',
+        'data: {"choices":[{"delta":{}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"TEXT"},"finish_reason":"stop"}]}\n\n',
+        'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}\n\n',
+        'data: [DONE]\n\n',
+      ) },
+    }))
+    const onDone = vi.fn()
+    const onError = vi.fn()
+
+    await new OpenAIProvider().generateStream(novelAIModel, [], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone,
+      onError,
+    })
+
+    expect(onError).not.toHaveBeenCalled()
+    expect(onDone).toHaveBeenCalledWith('TEXT', {
+      promptTokens: 1,
+      completionTokens: 2,
+      totalTokens: 3,
+    }, 'stop')
   })
 })

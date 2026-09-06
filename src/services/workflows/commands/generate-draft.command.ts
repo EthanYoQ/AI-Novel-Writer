@@ -38,6 +38,7 @@ import type { FinalizedContinuityProjection } from '../../../shared/finalized-co
 import type { NarrativeThreadView } from '../../../shared/narrative-thread'
 import { promptLanguageText } from '../../prompt-language'
 import { countDraftUnits } from '../../../shared/draft-units'
+import type { RecoveryChapterSource } from '../../../shared/recovery-candidate'
 
 export { countDraftUnits } from '../../../shared/draft-units'
 
@@ -95,7 +96,7 @@ function createDraftStreamPreview(
   replaceText: ((text: string) => void) | undefined,
   composeVisibleText: (rawText: string) => string,
   initialRenderedText = '',
-): { push(chunk: string): void; stop(): void } {
+): { push(chunk: string): void; snapshot(): string; stop(): void } {
   let active = true
   let rawText = ''
   let renderedText = initialRenderedText
@@ -123,6 +124,9 @@ function createDraftStreamPreview(
       }
       const delay = Math.max(0, STREAM_PREVIEW_INTERVAL_MS - (Date.now() - lastRenderedAt))
       timer = setTimeout(render, delay)
+    },
+    snapshot() {
+      return composeVisibleText(rawText)
     },
     stop() {
       active = false
@@ -255,6 +259,27 @@ function workflowGenerationModelId(context: CommandExecuteParams['context']): st
   return context.generationModelId?.trim() || undefined
 }
 
+function recoveryFailureCode(error: unknown, cancelled: boolean): string {
+  if (cancelled) return 'CANCELLED'
+  if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') {
+    return error.code.slice(0, 160)
+  }
+  return 'GENERATION_FAILED'
+}
+
+function recoveryChapterSource(chapter: ChapterInfo): RecoveryChapterSource {
+  return {
+    chapterNumber: chapter.chapterNumber,
+    title: chapter.title,
+    role: chapter.role,
+    purpose: chapter.purpose,
+    keyEvents: chapter.keyEvents,
+    characters: [...chapter.characters],
+    suspenseHook: chapter.suspenseHook ?? '',
+    userGuidance: chapter.userGuidance ?? '',
+  }
+}
+
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
 export function appendVisibleDraftContinuation(draft: string, continuation: string): string {
   return appendVisibleTextContinuation(draft, continuation, sanitizeDraftText)
@@ -275,7 +300,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       : undefined
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  async execute({ step, context, callbacks }: CommandExecuteParams): Promise<string> {
     const uiText = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const expectedProjectPath = this.chapterInfo.projectPath
     const projectSession = requireWorkflowProjectSession(context)
@@ -312,6 +337,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       expectedProjectPath,
       projectSession,
       writingLanguage,
+      this.chapterInfo.characters,
     )
     let futureBlueprintsStr = promptLanguageText(
       writingLanguage,
@@ -397,6 +423,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       .withWordNumber(normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter))
       // ---- 章节公共区（首章与后续章都必须完整注入）----
       .withChapterInfo(this.chapterInfo)
+      .withCharacterStates('')
       .withFutureBlueprints(futureBlueprintsStr)
       .withFilteredContext('')
       .withUserGuidance(this.chapterInfo.userGuidance?.trim() || promptLanguageText(
@@ -406,6 +433,11 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       ))
 
     let previousEnding = ''
+    let frozenContinuityContext = promptLanguageText(
+      writingLanguage,
+      '（首章无既往定稿连续性）',
+      '(the first chapter has no prior finalized continuity)',
+    )
     if (!isFirstChapter) {
       // 从蓝图 JSON 的 notes 字段读取章节要点时间线（按序拼装，利于前缀缓存）
       const chapterTimeline = await this.readChapterNotesTimeline(
@@ -428,6 +460,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `  已加载相关活跃叙事线索（${activeThreads.count} 条）`,
         `  Loaded relevant active narrative threads (${activeThreads.count})`,
       ))
+      frozenContinuityContext = [chapterTimeline.text, activeThreads.text].filter(Boolean).join('\n\n')
 
       previousEnding = this.previousDraftEnding ?? ''
       if (!previousEnding) {
@@ -444,7 +477,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       promptBuilder
         // ---- 缓存命中区续（要点时间线按序追加，前缀对齐）----
         .withGlobalSummary([chapterTimeline.text, activeThreads.text].filter(Boolean).join('\n\n'))
-        .withCharacterStates(characterState)
         // ---- 缓存失效区（逐章变化）----
         .withPreviousEnding(previousEnding || promptLanguageText(
           writingLanguage,
@@ -458,8 +490,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       promptBuilder.build(),
       promptLanguageText(
         writingLanguage,
-        `【本章相关规划资料（仅作创作参考，不代表已经发生）】\n${filteredContext}`,
-        `[Planning material relevant to this chapter (creative reference only; not established history)]\n${filteredContext}`,
+        `【冻结的本章相关角色状态】\n${characterState}\n\n【本章相关规划资料（仅作创作参考，不代表已经发生）】\n${filteredContext}`,
+        `[Frozen character states relevant to this chapter]\n${characterState}\n\n[Planning material relevant to this chapter (creative reference only; not established history)]\n${filteredContext}`,
       ),
     ].join('\n\n')
     const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
@@ -470,6 +502,20 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       'Calling AI to generate the chapter draft...',
     ))
     let draftPersisted = false
+    let recoverableDraftCandidate = ''
+    const recoveryAlternatives: Array<{ stepId: string; visibleText: string }> = []
+    const workflowStepId = step && typeof step === 'object' && 'id' in step && typeof step.id === 'string'
+      ? step.id
+      : 'generate-draft'
+    const rememberAlternative = (stepId: string, text: string) => {
+      const visibleText = sanitizeDraftText(text)
+      if (
+        !visibleText
+        || visibleText === recoverableDraftCandidate
+        || recoveryAlternatives.at(-1)?.visibleText === visibleText
+      ) return
+      recoveryAlternatives.push({ stepId, visibleText })
+    }
     try {
       this.assertNotCancelled(context)
       const cancellation = observeWorkflowCancellation(context)
@@ -512,6 +558,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
                 preview.push(chunk)
               },
             })
+          } catch (error) {
+            recoverableDraftCandidate = preview.snapshot()
+            throw error
           } finally {
             preview.stop()
           }
@@ -527,6 +576,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             `  Initial generation response ended: finishReason=${initialCompletion.finishReason}`,
           ))
           const initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content))
+          recoverableDraftCandidate = initialVisibleDraft
           callbacks.log(uiText(
             `  初始生成可见单位：visibleUnits=${countDraftUnits(initialVisibleDraft)}`,
             `  Initial generation visible units: visibleUnits=${countDraftUnits(initialVisibleDraft)}`,
@@ -548,9 +598,14 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             globalGuidance: mergedGuidance,
             writingStyle,
             novelConfigFacts: novelConfigFactsJson,
+            characterState,
+            continuityContext: frozenContinuityContext,
+            relevantReferenceContext: filteredContext,
             writingLanguage,
             reasoning: initialOutcome.receipt.capabilities.reasoning === true,
+            onRecoverableCandidate: candidate => { recoverableDraftCandidate = candidate },
           })
+          recoverableDraftCandidate = completedDraft
           const completedUnits = countDraftUnits(completedDraft)
           if (completedUnits <= maxDraftChars) return completedDraft
 
@@ -599,6 +654,15 @@ ${writingStyle}
 作者小说配置事实：
 ${novelConfigFactsJson}
 
+【冻结的相关角色状态】
+${characterState}
+
+【冻结的已定稿连续性与活跃线索】
+${frozenContinuityContext}
+
+【冻结的本章相关规划资料（仅作参考，不代表已经发生）】
+${filteredContext}
+
 【待重写的完整章节草稿】
 ${originalSourceDraft}`,
               `${final
@@ -631,6 +695,15 @@ ${writingStyle}
 Author novel-configuration facts:
 ${novelConfigFactsJson}
 
+[Frozen relevant character states]
+${characterState}
+
+[Frozen finalized continuity and active threads]
+${frozenContinuityContext}
+
+[Frozen planning material relevant to this chapter (reference only; not established history)]
+${filteredContext}
+
 [Complete chapter draft to rewrite]
 ${originalSourceDraft}`,
             )
@@ -639,15 +712,27 @@ ${originalSourceDraft}`,
             completedUnits,
             false,
           )
-          const repairOutcome = await draftingSession.complete({
-            purpose: 'chapter-draft-length-repair',
-            reasoningStage: 'drafting',
-            output: 'visible-text',
-            messages: [
-              { role: 'system', content: promptBuilder.getSystemRole() },
-              { role: 'user', content: repairPrompt },
-            ],
-          }, { signal: cancellation.signal })
+          const completeLengthRewrite = async (purpose: string, userPrompt: string) => {
+            let streamedText = ''
+            try {
+              return await draftingSession.complete({
+                purpose,
+                reasoningStage: 'drafting',
+                output: 'visible-text',
+                messages: [
+                  { role: 'system', content: promptBuilder.getSystemRole() },
+                  { role: 'user', content: userPrompt },
+                ],
+              }, {
+                signal: cancellation.signal,
+                onChunk: chunk => { streamedText += chunk },
+              })
+            } catch (error) {
+              rememberAlternative(purpose, visibleDraftStreamText(streamedText))
+              throw error
+            }
+          }
+          const repairOutcome = await completeLengthRewrite('chapter-draft-length-repair', repairPrompt)
           const repairCompletion = completionFromOutcome(repairOutcome)
           logDraftAttempt(
             callbacks,
@@ -656,31 +741,24 @@ ${originalSourceDraft}`,
             repairOutcome.receipt,
           )
           this.assertNotCancelled(context)
+          const repairedDraft = sanitizeDraftText(this.stripThinkingTags(repairCompletion.content))
+          rememberAlternative('chapter-draft-length-repair', repairedDraft)
           if (repairCompletion.finishReason !== 'stop') {
             throw new Error(uiText(
               '章节长度修复未完整结束，结果未保存。',
               'The chapter length repair did not complete, so the result was not saved.',
             ))
           }
-          const repairedDraft = sanitizeDraftText(this.stripThinkingTags(repairCompletion.content))
           const repairedUnits = countDraftUnits(repairedDraft)
           if (repairedUnits > maxDraftChars || repairedUnits < minimumDraftChars) {
             callbacks.log(uiText(
               `  首次长度修复结果为 ${repairedUnits} 个正文单位，超出本地长度范围，将执行最后一次完整重写`,
               `  The first length repair has ${repairedUnits} prose units, outside the local length range; running one final full rewrite`,
             ))
-            const finalOutcome = await draftingSession.complete({
-              purpose: 'chapter-draft-length-final-rewrite',
-              reasoningStage: 'drafting',
-              output: 'visible-text',
-              messages: [
-                { role: 'system', content: promptBuilder.getSystemRole() },
-                {
-                  role: 'user',
-                  content: lengthRewritePrompt(repairedUnits, true),
-                },
-              ],
-            }, { signal: cancellation.signal })
+            const finalOutcome = await completeLengthRewrite(
+              'chapter-draft-length-final-rewrite',
+              lengthRewritePrompt(repairedUnits, true),
+            )
             const finalCompletion = completionFromOutcome(finalOutcome)
             logDraftAttempt(
               callbacks,
@@ -689,31 +767,24 @@ ${originalSourceDraft}`,
               finalOutcome.receipt,
             )
             this.assertNotCancelled(context)
+            let finalDraft = sanitizeDraftText(this.stripThinkingTags(finalCompletion.content))
+            rememberAlternative('chapter-draft-length-final-rewrite', finalDraft)
             if (finalCompletion.finishReason !== 'stop') {
               throw new Error(uiText(
                 '最终完整重写未完整结束，结果未保存。',
                 'The final full rewrite did not complete, so the result was not saved.',
               ))
             }
-            let finalDraft = sanitizeDraftText(this.stripThinkingTags(finalCompletion.content))
             let finalUnits = countDraftUnits(finalDraft)
             if (finalUnits > maxDraftChars || finalUnits < minimumDraftChars) {
               callbacks.log(uiText(
                 `  最终完整重写结果为 ${finalUnits} 个正文单位，超出本地长度范围，将执行唯一一次重写重试`,
                 `  The final full rewrite has ${finalUnits} prose units, outside the local length range; running the single rewrite retry`,
               ))
-              const retryOutcome = await draftingSession.complete({
-                purpose: 'chapter-draft-length-final-rewrite-retry',
-                reasoningStage: 'drafting',
-                output: 'visible-text',
-                messages: [
-                  { role: 'system', content: promptBuilder.getSystemRole() },
-                  {
-                    role: 'user',
-                    content: lengthRewritePrompt(finalUnits, true),
-                  },
-                ],
-              }, { signal: cancellation.signal })
+              const retryOutcome = await completeLengthRewrite(
+                'chapter-draft-length-final-rewrite-retry',
+                lengthRewritePrompt(finalUnits, true),
+              )
               const retryCompletion = completionFromOutcome(retryOutcome)
               logDraftAttempt(
                 callbacks,
@@ -729,6 +800,7 @@ ${originalSourceDraft}`,
                 ))
               }
               finalDraft = sanitizeDraftText(this.stripThinkingTags(retryCompletion.content))
+              rememberAlternative('chapter-draft-length-final-rewrite-retry', finalDraft)
               finalUnits = countDraftUnits(finalDraft)
               if (finalUnits > maxDraftChars) {
                 throw new Error(uiText(
@@ -843,7 +915,58 @@ ${originalSourceDraft}`,
       ))
       return cleanDraftText
     } catch (error) {
-      if (!draftPersisted) callbacks.replaceText?.('')
+      if (!draftPersisted && recoverableDraftCandidate) {
+        callbacks.replaceText?.(recoverableDraftCandidate)
+        const failureCode = recoveryFailureCode(error, context.cancelled)
+        const failureReason = error instanceof Error ? error.message : String(error)
+        const candidates = [
+          { stepId: workflowStepId, visibleText: recoverableDraftCandidate },
+          ...recoveryAlternatives,
+        ]
+        let replacesCandidateId: string | undefined
+        try {
+          for (const candidate of candidates) {
+            const result = await ipc.invokeWithProjectSession(
+              projectSession,
+              'db:recovery-candidate-record',
+              {
+                runId: context.runId,
+                stepId: candidate.stepId,
+                chapterNumber: this.chapterInfo.chapterNumber,
+                chapterTitle: this.chapterInfo.title,
+                source: recoveryChapterSource(this.chapterInfo),
+                visibleText: candidate.visibleText,
+                failureCode,
+                failureReason,
+                ...(replacesCandidateId ? { replacesCandidateId } : {}),
+              },
+              expectedProjectPath,
+            )
+            if (!result.success || !result.candidate) {
+              throw new Error(result.error || uiText('未知存储错误', 'Unknown storage error.'))
+            }
+            replacesCandidateId = result.candidate.candidateId
+          }
+          callbacks.log(uiText(
+            '生成未能安全完成；已收到的可见正文已保存为项目恢复候选，未进入草稿库。',
+            'Generation could not complete safely. The visible prose was saved as a project recovery candidate and was not added to the draft library.',
+          ))
+        } catch (persistenceError) {
+          const persistenceReason = persistenceError instanceof Error
+            ? persistenceError.message
+            : String(persistenceError)
+          callbacks.log(uiText(
+            `恢复候选保存失败；可见正文仍保留在当前步骤中：${persistenceReason}`,
+            `Saving the recovery candidate failed. The visible prose remains in the current step: ${persistenceReason}`,
+          ))
+          throw new Error(uiText(
+            `${failureReason}；恢复候选保存失败：${persistenceReason}`,
+            `${failureReason}; saving the recovery candidate failed: ${persistenceReason}`,
+          ))
+        }
+      } else if (!draftPersisted) {
+        callbacks.replaceText?.('')
+      }
       throw error
     }
   }
@@ -877,8 +1000,12 @@ ${originalSourceDraft}`,
     globalGuidance: string
     writingStyle: string
     novelConfigFacts: string
+    characterState: string
+    continuityContext: string
+    relevantReferenceContext: string
     writingLanguage: WritingLanguage
     reasoning: boolean
+    onRecoverableCandidate(candidate: string): void
   }): Promise<string> {
     const uiText = (zhCNText: string, enUSText: string) => workflowUiText(
       params.context,
@@ -953,6 +1080,15 @@ ${params.writingStyle || '（无）'}
 【小说配置事实】
 ${params.novelConfigFacts}
 
+【冻结的相关角色状态】
+${params.characterState}
+
+【冻结的已定稿连续性与活跃线索】
+${params.continuityContext}
+
+【冻结的本章相关规划资料（仅作参考，不代表已经发生）】
+${params.relevantReferenceContext}
+
 【已写正文末尾】
 ${visibleTail}`,
         `${recoveryInstruction}Continue the current chapter seamlessly.
@@ -979,6 +1115,15 @@ ${params.writingStyle || '(none)'}
 
 [Novel configuration facts]
 ${params.novelConfigFacts}
+
+[Frozen relevant character states]
+${params.characterState}
+
+[Frozen finalized continuity and active threads]
+${params.continuityContext}
+
+[Frozen planning material relevant to this chapter (reference only; not established history)]
+${params.relevantReferenceContext}
 
 [End of existing manuscript]
 ${visibleTail}`,
@@ -1008,6 +1153,9 @@ ${visibleTail}`,
             preview.push(chunk)
           },
         })
+      } catch (error) {
+        params.onRecoverableCandidate(preview.snapshot())
+        throw error
       } finally {
         preview.stop()
       }
@@ -1057,6 +1205,7 @@ ${visibleTail}`,
         continue
       }
       draft = candidateDraft
+      params.onRecoverableCandidate(draft)
       params.callbacks.replaceText?.(draft)
       lastFinishReason = addition.finishReason
       recoveryPending = false
@@ -1067,6 +1216,14 @@ ${visibleTail}`,
     // A length finish is always an incomplete physical response. Reaching a
     // word-count threshold is not proof that the model completed its sentence
     // or scene, so never persist it as a successful chapter.
+    if (
+      lastFinishReason === 'length'
+      && countDraftUnits(draft) > maxDraftCharsForTarget(params.targetChars)
+    ) {
+      // This is still an incomplete candidate; the caller must run the bounded
+      // full-chapter length replacement before it can be persisted.
+      return draft
+    }
     if (lastFinishReason !== 'stop') {
       const error = this.createIncompleteCompletionError(lastFinishReason)
       error.message = uiText(error.message, (() => {
@@ -1143,11 +1300,14 @@ ${visibleTail}`,
     projectPath: string,
     projectSession: ProjectSessionContext,
     writingLanguage: WritingLanguage,
+    relevantCharacterNames: readonly string[],
   ): Promise<string> {
     try {
       const allChars = await ipc.invokeWithProjectSession(projectSession, 'db:character-get-all', projectPath)
       const states: string[] = []
+      const relevantNames = new Set(relevantCharacterNames.map(name => name.trim()).filter(Boolean))
       for (const card of allChars) {
+        if (!relevantNames.has(card.name)) continue
         if (card.name && card.currentState) {
           const cs = card.currentState
           states.push(promptLanguageText(

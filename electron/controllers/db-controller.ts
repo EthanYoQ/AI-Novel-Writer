@@ -52,6 +52,8 @@ import { ConsistencyExemptionRepository } from '../repositories/consistency-exem
 import { NarrativeThreadRepository } from '../repositories/narrative-thread-repository'
 import { PlotTreeRepository } from '../repositories/plot-tree-repository'
 import { isPlotTreeSourceRevision } from '../../src/shared/plot-tree'
+import { RecoveryCandidateRepository } from '../repositories/recovery-candidate-repository'
+import type { RecoveryCandidateRecordInput } from '../../src/shared/recovery-candidate'
 
 type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 
@@ -86,6 +88,9 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:draft-update-status',
   'db:draft-update-content',
   'db:draft-delete',
+  'db:recovery-candidate-record',
+  'db:recovery-candidate-update',
+  'db:recovery-candidate-resolve',
   'db:finalization-link-knowledge-document',
   'db:revision-create',
   'db:revision-replace-pending',
@@ -663,6 +668,11 @@ export function registerDatabaseController() {
     return FinalizedDraftImportRepository.authoritySequence()
   })
 
+  ipcMain.handle('db:draft-export-snapshot', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return FinalizationRepository.listAuthoritativeForExport()
+  })
+
   ipcMain.handle('db:continuity-save-finalized', async (_event, request, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
@@ -817,6 +827,57 @@ export function registerDatabaseController() {
         return { success: false, errorCode: 'FINALIZED_DRAFT_DELETE_REQUIRED' as const }
       }
       return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:recovery-candidate-record', async (
+    _event,
+    request: RecoveryCandidateRecordInput,
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      const active = projectAccess.captureCurrentSession()
+      if (!active) throw new Error('缺少当前项目会话，已拒绝保存恢复候选')
+      const candidate = RecoveryCandidateRepository.record({ ...request, projectId: active.projectId })
+      return { success: true, candidate }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('db:recovery-candidate-list', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return RecoveryCandidateRepository.listPending()
+  })
+
+  ipcMain.handle('db:recovery-candidate-update', async (
+    _event,
+    candidateId: string,
+    visibleText: string,
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      const candidate = RecoveryCandidateRepository.updatePending(candidateId, visibleText)
+      return { success: true, candidate }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('db:recovery-candidate-resolve', async (
+    _event,
+    candidateId: string,
+    status: 'continued' | 'discarded',
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      RecoveryCandidateRepository.resolve(candidateId, status)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: String(error) }
     }
   })
 

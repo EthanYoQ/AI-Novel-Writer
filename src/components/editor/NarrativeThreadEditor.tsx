@@ -25,9 +25,11 @@ import {
 import {
   generatePlotTree,
   PlotTreeGenerationError,
+  PlotTreeInputLimitError,
   PlotTreeIncompleteError,
   PlotTreeResponseError,
   PlotTreeSourceError,
+  PlotTreeSourceLimitError,
   type GeneratePlotTreeInput,
   type PlotTreeGenerationErrorCode,
   type PlotTreeResponseErrorCode,
@@ -103,6 +105,18 @@ function plotTreeErrorMessage(
           '模型返回的剧情树结构或来源引用无效，旧快照保持不变。',
           'The model returned an invalid plot-tree structure or source reference; the previous snapshot remains unchanged.',
         )
+  }
+  if (error instanceof PlotTreeSourceLimitError) {
+    return text(
+      `剧情树完整来源上限为 ${error.maximum} 个章节；本次未调用模型，旧快照保持不变。`,
+      `The complete plot-tree source limit is ${error.maximum} chapters; the model was not called and the previous snapshot remains unchanged.`,
+    )
+  }
+  if (error instanceof PlotTreeInputLimitError) {
+    return text(
+      '压缩后的剧情资料仍超过安全上下文上限；本次未调用模型，旧快照保持不变。请缩短资料后重试。',
+      'The compacted plot sources still exceed the safe context limit; the model was not called and the previous snapshot remains unchanged. Shorten the sources and try again.',
+    )
   }
   if (error instanceof PlotTreeSourceError) {
     return text(

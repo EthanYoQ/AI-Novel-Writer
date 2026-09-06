@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Save, Sparkles, Info, Loader2, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
+import { registerEditorExitSaveHandler } from '../../stores/editor-store'
 import { useLLMStore } from '../../stores/llm-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import type { NovelConfig } from '../../shared/ipc-channels'
@@ -61,19 +62,16 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
   // 直接从 Store 读取配置 — 单一数据源，无需 local state 镜像
   const projectMatches = currentProject?.path === projectKey
   const config = projectMatches ? currentProject.novelConfig : null
-
-  if (!config) return (
-    <div className="h-full flex items-center justify-center" style={{ color: 'var(--color-text-muted)' }}>
-      <span className="text-sm opacity-50">
-        {projectMatches
-          ? text('加载配置中...', 'Loading configuration...')
-          : text('此标签属于另一个项目，请切回原项目后继续。', 'This tab belongs to another project. Switch back to continue.')}
-      </span>
-    </div>
-  )
+  const exitSaveRef = useRef<() => Promise<void>>(async () => undefined)
+  useEffect(() => registerEditorExitSaveHandler({
+      type: 'config',
+      projectKey,
+      save: () => exitSaveRef.current(),
+    }), [projectKey])
 
   // 直接写 Store — 消除双向同步风险
   const update = <K extends keyof NovelConfig>(key: K, value: NovelConfig[K]) => {
+    if (!config) return
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     updateNovelConfig({ [key]: value }, projectSession)
@@ -97,6 +95,19 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
   }
+  useEffect(() => {
+    exitSaveRef.current = handleSave
+  })
+
+  if (!config) return (
+    <div className="h-full flex items-center justify-center" style={{ color: 'var(--color-text-muted)' }}>
+      <span className="text-sm opacity-50">
+        {projectMatches
+          ? text('加载配置中...', 'Loading configuration...')
+          : text('此标签属于另一个项目，请切回原项目后继续。', 'This tab belongs to another project. Switch back to continue.')}
+      </span>
+    </div>
+  )
 
   /** AI 生成配置 — 打开弹框 */
   const handleAIGenerate = () => {

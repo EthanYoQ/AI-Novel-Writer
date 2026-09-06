@@ -84,7 +84,10 @@ describe('createRepairFinalizeWorkflow', () => {
     })
   })
 
-  it('rebuilds every derived result instead of skipping previously successful steps', async () => {
+  it.each([
+    ['all failed steps', undefined],
+    ['one failed step', 'character_cards'],
+  ] as const)('retries %s without rerunning successful steps', async (_label, stepKey) => {
     useProjectStore.setState({
       currentProject: {
         id: PROJECT_SESSION.projectId,
@@ -107,7 +110,7 @@ describe('createRepairFinalizeWorkflow', () => {
     })
     vi.stubGlobal('window', { velaAPI: { invoke } })
 
-    const workflow = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION)
+    const workflow = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION, stepKey)
     const step = workflow.steps[0]!
     await step.executor({
       ...step,
@@ -119,7 +122,8 @@ describe('createRepairFinalizeWorkflow', () => {
     expect(postProcess.params).toEqual([expect.objectContaining({
       chapterNumber: 3,
       draftId: 17,
-      onlyFailed: false,
+      onlyFailed: true,
+      stepKey,
     })])
     expect(postProcess.execute).toHaveBeenCalledOnce()
   })

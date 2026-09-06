@@ -5,6 +5,7 @@ import { useDraftStore } from '../../../../stores/draft-store'
 import { readArchitectureTool } from '../read-architecture.tool'
 import { readFileTool } from '../read-file.tool'
 import { searchKnowledgeTool } from '../search-knowledge.tool'
+import { listChaptersTool } from '../list-chapters.tool'
 import { createAgentExecutionContext } from '../project-context'
 import { builtinTools } from '..'
 
@@ -95,6 +96,52 @@ describe('agent project read tools', () => {
     expect(readFileTool.description).not.toContain('架构文件、蓝图')
     expect(readFileTool.inputSchema.properties.file_path.description).toContain('read_architecture')
     expect(readFileTool.inputSchema.properties.file_path.description).not.toContain('02_architecture')
+  })
+
+  it('lists sparse finalized chapters from one authoritative database read', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:blueprint-get-all') {
+        return [{ chapterNumber: 3 }, { chapterNumber: 1 }, { chapterNumber: 3 }]
+      }
+      if (channel === 'db:draft-list-all') {
+        return [
+          { chapterNumber: 10, status: 'finalized' },
+          { chapterNumber: 2, status: 'draft' },
+          { chapterNumber: 3, status: 'finalized' },
+          { chapterNumber: 10, status: 'finalized' },
+        ]
+      }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', { velaAPI: { invoke } })
+
+    const result = await listChaptersTool.execute({}, createAgentExecutionContext())
+
+    expect(result).toMatchObject({ success: true })
+    expect(result.content).toContain('| 10 | ❌ | ✅ | ✅ |')
+    expect(result.content).toContain('总计：4 个章节，2 个蓝图，3 个草稿，2 个定稿')
+    const rowIndexes = [1, 2, 3, 10].map(chapter => result.content.indexOf(`| ${chapter} |`))
+    expect(rowIndexes).toEqual([...rowIndexes].sort((left, right) => left - right))
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      'db:blueprint-get-all',
+      'db:draft-list-all',
+    ])
+  })
+
+  it('fails the chapter listing when the authoritative draft read fails', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:blueprint-get-all') return [{ chapterNumber: 1 }]
+      if (channel === 'db:draft-list-all') throw new Error('draft list failed')
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', { velaAPI: { invoke } })
+
+    await expect(listChaptersTool.execute({}, createAgentExecutionContext())).resolves.toMatchObject({
+      success: false,
+      content: '',
+      error: expect.stringContaining('draft list failed'),
+    })
+    expect(invoke).toHaveBeenCalledTimes(2)
   })
 
   it('keeps a missing project file failure actionable without retrying or creating a file', async () => {

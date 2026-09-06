@@ -209,6 +209,27 @@ describe('BaseWorkflowCommand completion boundary', () => {
     expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(2048)
   })
 
+  it('keeps a protocol-error candidate visible while rejecting it as a completed workflow result', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: '可恢复候选正文', finishReason: 'error' })
+    const environment: GenerationRuntimeEnvironment = {
+      snapshotDefaultModelId: () => 'model-a',
+      beginModelExecution: vi.fn().mockResolvedValue(leaseReceipt()),
+      completeWithLease,
+      closeModelExecution: vi.fn().mockResolvedValue(undefined),
+    }
+    const appendText = vi.fn()
+
+    await expect(new CompletionProbeCommand(dependenciesFor(environment)).execute({
+      step: { kind: 'single' } satisfies ProbeStep,
+      context,
+      callbacks: { ...callbacks, appendText },
+    })).rejects.toThrow()
+
+    expect(appendText).toHaveBeenCalledWith('可恢复候选正文')
+    expect(completeWithLease).toHaveBeenCalledOnce()
+  })
+
   it('uses the frozen UI locale for an ordinary terminal failure', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
       .mockResolvedValue({ content: '半截结果', finishReason: 'length' })

@@ -123,6 +123,13 @@ export class OpenAIProvider implements ILLMProvider {
   }
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
+    let fullText = ''
+    let usage: TokenUsage | undefined
+    const fail = (error: string) => {
+      const visibleCandidate = this.stripThinking(fullText)
+      opts.onError(error, visibleCandidate || undefined, usage)
+    }
+
     try {
       const url = resolveOpenAIChatCompletionsUrl(model.baseUrl, model.provider)
       const body = this.buildRequestBody(model, messages, opts, true)
@@ -150,118 +157,186 @@ export class OpenAIProvider implements ILLMProvider {
       }
 
       const decoder = new TextDecoder()
-      let fullText = ''
       let isThinking = false
-      let buffer = ''
+      let lineBuffer = ''
+      let dataLines: string[] = []
       let sawDone = false
       let finishReason: LLMFinishReason = 'unknown'
-      let usage: TokenUsage | undefined
+      let fatalError: string | null = null
 
-      const processLine = (line: string) => {
-        if (!line.startsWith('data: ')) return
-        const json = line.slice(6).trim()
+      const processEvent = (data: string) => {
+        if (fatalError || sawDone) return
+        const json = data.trim()
+        if (!json) return
         if (json === '[DONE]') {
           sawDone = true
           return
         }
-        if (!json) return
+
+        let parsed: unknown
         try {
-          const parsed = JSON.parse(json) as {
-            choices?: Array<{
-              delta: { content?: string, reasoning_content?: string }
-              finish_reason?: string | null
-            }>
-            usage?: {
-              prompt_tokens?: number
-              completion_tokens?: number
-              total_tokens?: number
-            }
-          }
-          const choice = parsed.choices?.[0]
-          if (choice?.finish_reason !== undefined && choice.finish_reason !== null) {
-            finishReason = this.normalizeFinishReason(choice.finish_reason)
-          }
-          const delta = choice?.delta
+          parsed = JSON.parse(json)
+        } catch {
+          fatalError = '响应流包含损坏的 JSON 数据'
+          return
+        }
 
-          let emitChunk = ''
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          fatalError = '响应流包含无效的 OpenAI 数据对象'
+          return
+        }
+        const payload = parsed as Record<string, unknown>
+        if (Object.hasOwn(payload, 'error')) {
+          const providerError = payload.error
+          const message = providerError !== null && typeof providerError === 'object'
+            && typeof (providerError as Record<string, unknown>).message === 'string'
+            ? (providerError as Record<string, unknown>).message
+            : '供应商返回流式错误'
+          fatalError = `供应商返回流式错误：${message}`
+          return
+        }
 
-          // 如果存在思维链内容
-          if (delta?.reasoning_content) {
-            if (!isThinking) {
-              isThinking = true
-              emitChunk += '<think>\n'
-            }
-            emitChunk += delta.reasoning_content
-          }
-
-          // 如果开始输出正文
-          if (delta?.content !== undefined && delta?.content !== null) {
-            if (isThinking) {
-              isThinking = false
-              emitChunk += '\n</think>\n\n'
-            }
-            if (delta?.content) {
-              emitChunk += delta.content
-            }
-          }
-
-          if (emitChunk) {
-            fullText += emitChunk
-            opts.onChunk(emitChunk)
-          }
-
-          const reportedUsage = parsed.usage
+        const reportedUsage = payload.usage
+        if (reportedUsage !== null && typeof reportedUsage === 'object' && !Array.isArray(reportedUsage)) {
+          const rawUsage = reportedUsage as Record<string, unknown>
           if (
-            typeof reportedUsage?.prompt_tokens === 'number'
-            && typeof reportedUsage.completion_tokens === 'number'
-            && typeof reportedUsage.total_tokens === 'number'
+            typeof rawUsage.prompt_tokens === 'number'
+            && typeof rawUsage.completion_tokens === 'number'
+            && typeof rawUsage.total_tokens === 'number'
           ) {
             usage = {
-              promptTokens: reportedUsage.prompt_tokens,
-              completionTokens: reportedUsage.completion_tokens,
-              totalTokens: reportedUsage.total_tokens,
+              promptTokens: rawUsage.prompt_tokens,
+              completionTokens: rawUsage.completion_tokens,
+              totalTokens: rawUsage.total_tokens,
             }
           }
-        } catch {
-          // Ignore non-data SSE lines and malformed keepalives. A normal
-          // completion still requires the explicit [DONE] marker below.
+        }
+
+        if (payload.choices === undefined) return
+        if (!Array.isArray(payload.choices)) {
+          fatalError = '响应流的 choices 类型无效'
+          return
+        }
+        const rawChoice = payload.choices[0]
+        if (rawChoice === undefined) return
+        if (rawChoice === null || typeof rawChoice !== 'object' || Array.isArray(rawChoice)) {
+          fatalError = '响应流的 choice 类型无效'
+          return
+        }
+        const choice = rawChoice as Record<string, unknown>
+        if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
+          if (typeof choice.finish_reason !== 'string') {
+            fatalError = '响应流的 finish_reason 类型无效'
+            return
+          }
+          finishReason = this.normalizeFinishReason(choice.finish_reason)
+        }
+
+        if (choice.delta === undefined) return
+        if (choice.delta === null || typeof choice.delta !== 'object' || Array.isArray(choice.delta)) {
+          fatalError = '响应流的 delta 类型无效'
+          return
+        }
+        const delta = choice.delta as Record<string, unknown>
+        if (delta.reasoning_content !== undefined && delta.reasoning_content !== null
+          && typeof delta.reasoning_content !== 'string') {
+          fatalError = '响应流的 reasoning_content 类型无效'
+          return
+        }
+        if (delta.content !== undefined && delta.content !== null && typeof delta.content !== 'string') {
+          fatalError = '响应流的 content 类型无效'
+          return
+        }
+
+        let emitChunk = ''
+        if (delta.reasoning_content) {
+          if (!isThinking) {
+            isThinking = true
+            emitChunk += '<think>\n'
+          }
+          emitChunk += delta.reasoning_content
+        }
+        if (delta.content !== undefined && delta.content !== null) {
+          if (isThinking) {
+            isThinking = false
+            emitChunk += '\n</think>\n\n'
+          }
+          emitChunk += delta.content
+        }
+        if (emitChunk) {
+          fullText += emitChunk
+          opts.onChunk(emitChunk)
         }
       }
 
-      let streamEnded = false
-      while (!streamEnded) {
-        const { done, value } = await reader.read()
-        streamEnded = done
-        if (done) continue
-
-        buffer += decoder.decode(value, { stream: true })
-        const segments = buffer.split('\n')
-        buffer = segments.pop() ?? ''
-        for (const line of segments) processLine(line)
+      const processLine = (line: string) => {
+        if (line === '') {
+          if (dataLines.length > 0) processEvent(dataLines.join('\n'))
+          dataLines = []
+          return
+        }
+        if (line.startsWith(':')) return
+        const colon = line.indexOf(':')
+        const field = colon === -1 ? line : line.slice(0, colon)
+        if (field !== 'data') return
+        let value = colon === -1 ? '' : line.slice(colon + 1)
+        if (value.startsWith(' ')) value = value.slice(1)
+        dataLines.push(value)
       }
 
-      buffer += decoder.decode()
-      if (buffer.trim()) {
-        processLine(buffer)
+      const processText = (text: string, final = false) => {
+        lineBuffer += text
+        let consumed = 0
+        for (let index = 0; index < lineBuffer.length;) {
+          const character = lineBuffer[index]
+          if (character !== '\r' && character !== '\n') {
+            index += 1
+            continue
+          }
+          if (character === '\r' && index + 1 === lineBuffer.length && !final) break
+          processLine(lineBuffer.slice(consumed, index))
+          index += character === '\r' && lineBuffer[index + 1] === '\n' ? 2 : 1
+          consumed = index
+          if (fatalError || sawDone) break
+        }
+        lineBuffer = lineBuffer.slice(consumed)
+        if (final && !fatalError && !sawDone) {
+          if (lineBuffer) processLine(lineBuffer)
+          lineBuffer = ''
+          processLine('')
+        }
+      }
+
+      while (!fatalError && !sawDone) {
+        const { done, value } = await reader.read()
+        if (done) break
+        processText(decoder.decode(value, { stream: true }))
+      }
+
+      if (!fatalError && !sawDone) {
+        processText(decoder.decode(), true)
+      }
+
+      if (fatalError) {
+        throw new Error(fatalError)
       }
 
       if (!sawDone) {
-        opts.onError('响应流在完成标记前结束，生成结果不完整')
-        return
+        throw new Error('响应流在完成标记前结束，生成结果不完整')
       }
 
       if (isThinking) {
         const closeTag = '\n</think>\n\n'
-        fullText += closeTag
         opts.onChunk(closeTag)
+        fullText += closeTag
       }
 
       opts.onDone(this.stripThinking(fullText), usage, finishReason)
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
-        opts.onError('已取消生成')
+        fail('已取消生成')
       } else {
-        opts.onError(String(error))
+        fail(String(error))
       }
     }
   }

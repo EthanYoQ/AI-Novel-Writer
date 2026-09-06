@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { getProjectDb } from '../database'
 import { countDraftUnits } from '../../src/shared/draft-units'
 
@@ -45,6 +46,26 @@ interface FinalizationRow {
   content_snapshot: string
 }
 
+export interface FinalizedDraftExportSnapshot {
+  draftId: number
+  chapterNumber: number
+  version: number
+  title: string
+  content: string
+}
+
+interface FinalizedDraftExportRow {
+  draft_id: number
+  chapter_number: number
+  version: number
+  body: string
+  finalization_id: string | null
+  outbox_chapter_number: number | null
+  chapter_title: string | null
+  content_hash: string | null
+  content_snapshot: string | null
+}
+
 function rowToRecord(row: FinalizationRow): FinalizationRecord {
   return {
     finalizationId: row.finalization_id,
@@ -85,6 +106,66 @@ function hasSameFinalizationInput(
  * transaction 共同提交；任何一个 statement 失败都会回滚其余变化。
  */
 export class FinalizationRepository {
+  /** One transactionally frozen, highest-version finalized fact per chapter. */
+  static listAuthoritativeForExport(): FinalizedDraftExportSnapshot[] {
+    const db = requireDatabase()
+    return db.transaction(() => {
+      const rows = db.prepare(`
+        SELECT drafts.id AS draft_id, drafts.chapter_number, drafts.version,
+               contents.body, finalization_outbox.finalization_id,
+               finalization_outbox.chapter_number AS outbox_chapter_number,
+               finalization_outbox.chapter_title, finalization_outbox.content_hash,
+               finalization_outbox.content_snapshot
+        FROM drafts
+        JOIN contents ON contents.id = drafts.content_id
+        LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+        WHERE drafts.status = 'finalized'
+        ORDER BY drafts.chapter_number ASC, drafts.version DESC, drafts.id DESC
+      `).all() as FinalizedDraftExportRow[]
+
+      const snapshots: FinalizedDraftExportSnapshot[] = []
+      const selectedVersions = new Map<number, number>()
+      for (const row of rows) {
+        const selectedVersion = selectedVersions.get(row.chapter_number)
+        if (selectedVersion !== undefined) {
+          if (selectedVersion === row.version) {
+            throw new Error(`第 ${row.chapter_number} 章存在重复定稿版本，无法确定导出正文`)
+          }
+          continue
+        }
+        if (
+          !Number.isSafeInteger(row.draft_id) || row.draft_id < 1
+          || !Number.isSafeInteger(row.chapter_number) || row.chapter_number < 1
+          || !Number.isSafeInteger(row.version) || row.version < 1
+        ) throw new Error('定稿导出快照身份无效')
+        if (typeof row.body !== 'string' || row.body.trim().length === 0) {
+          throw new Error(`第 ${row.chapter_number} 章定稿正文为空`)
+        }
+        if (row.finalization_id !== null) {
+          if (row.outbox_chapter_number !== row.chapter_number) {
+            throw new Error('定稿导出快照身份不一致')
+          }
+          if (row.content_snapshot !== row.body) {
+            throw new Error('定稿导出快照正文不一致')
+          }
+          const actualHash = createHash('sha256').update(row.body, 'utf8').digest('hex')
+          if (row.content_hash !== actualHash) {
+            throw new Error('定稿导出快照摘要不一致')
+          }
+        }
+        selectedVersions.set(row.chapter_number, row.version)
+        snapshots.push({
+          draftId: row.draft_id,
+          chapterNumber: row.chapter_number,
+          version: row.version,
+          title: row.chapter_title?.trim() ?? '',
+          content: row.body,
+        })
+      }
+      return snapshots
+    })()
+  }
+
   static commit(input: FinalizationCommitInput): FinalizationRecord {
     const db = requireDatabase()
     const transaction = db.transaction(() => {

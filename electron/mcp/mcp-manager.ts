@@ -13,7 +13,16 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
-import { app } from 'electron'
+import { isDeepStrictEqual } from 'node:util'
+import { VELA_HOME } from '../utils/config-utils'
+import type {
+  MCPConfigLoadResult,
+  MCPConnectionStatus,
+  MCPResourceDescription,
+  MCPServerStatus,
+  MCPServerSummary,
+  MCPToolDescription,
+} from '../../src/shared/ipc-channels'
 
 // ===== 类型定义 =====
 
@@ -46,7 +55,7 @@ export interface MCPConfig {
 }
 
 /** MCP Tool 描述 */
-export interface MCPToolDesc {
+export interface MCPToolDesc extends MCPToolDescription {
   /** 工具名（MCP 原始名称） */
   name: string
   /** 描述 */
@@ -58,7 +67,7 @@ export interface MCPToolDesc {
 }
 
 /** MCP 资源描述 */
-export interface MCPResourceDesc {
+export interface MCPResourceDesc extends MCPResourceDescription {
   uri: string
   name: string
   description?: string
@@ -67,8 +76,6 @@ export interface MCPResourceDesc {
 }
 
 /** 服务器连接状态 */
-export type MCPConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
-
 /** 服务器运行时状态 */
 interface MCPServerRuntime {
   config: MCPServerConfig
@@ -92,6 +99,7 @@ interface MCPServerRuntime {
 
 class MCPManagerImpl {
   private servers: Map<string, MCPServerRuntime> = new Map()
+  private loadedConfigs: Map<string, MCPServerConfig> = new Map()
 
   /** 状态变更通知回调（通知渲染进程） */
   private onStatusChange?: (serverId: string, status: MCPConnectionStatus, error?: string) => void
@@ -109,44 +117,94 @@ class MCPManagerImpl {
 
   /** 获取 MCP 配置文件默认路径 */
   getDefaultConfigPath(): string {
-    return join(app.getPath('home'), '.vela', 'mcp_config.json')
+    return join(VELA_HOME, 'mcp_config.json')
   }
 
   /**
    * 加载 MCP 配置文件
    * 兼容 Claude Desktop 格式
    */
-  async loadConfig(configPath?: string): Promise<MCPServerConfig[]> {
-    const path = configPath ?? this.getDefaultConfigPath()
-
-
+  async loadConfig(): Promise<MCPConfigLoadResult> {
+    const path = this.getDefaultConfigPath()
+    this.loadedConfigs.clear()
+    const revoke = async (result: MCPConfigLoadResult): Promise<MCPConfigLoadResult> => {
+      await this.disconnectAll()
+      return result
+    }
     try {
       const raw = await readFile(path, 'utf-8')
-      const config: MCPConfig = JSON.parse(raw)
+      const parsed: unknown = JSON.parse(raw)
 
-      if (!config.mcpServers || typeof config.mcpServers !== 'object') {
-        return []
+      if (
+        !parsed
+        || typeof parsed !== 'object'
+        || !('mcpServers' in parsed)
+        || !parsed.mcpServers
+        || typeof parsed.mcpServers !== 'object'
+        || Array.isArray(parsed.mcpServers)
+      ) {
+        return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏，未加载任何服务器' })
       }
 
-      return Object.entries(config.mcpServers).map(([id, cfg]) => ({
-        id,
-        name: id,
-        transport: cfg.url ? 'sse' as const : 'stdio' as const,
-        command: cfg.command,
-        args: cfg.args,
-        env: cfg.env,
-        url: cfg.url,
-      }))
-    } catch {
-      // 配置文件不存在或格式错误，静默处理
-      return []
+      const servers: MCPServerSummary[] = []
+      const trustedConfigs = new Map<string, MCPServerConfig>()
+      for (const [id, value] of Object.entries(parsed.mcpServers)) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏，未加载任何服务器' })
+        }
+        const cfg = value as MCPConfig['mcpServers'][string]
+        if (
+          (cfg.command !== undefined && typeof cfg.command !== 'string')
+          || (cfg.args !== undefined && (!Array.isArray(cfg.args) || cfg.args.some(arg => typeof arg !== 'string')))
+          || (cfg.env !== undefined && (
+            !cfg.env
+            || typeof cfg.env !== 'object'
+            || Array.isArray(cfg.env)
+            || Object.values(cfg.env).some(entry => typeof entry !== 'string')
+          ))
+          || (cfg.url !== undefined && typeof cfg.url !== 'string')
+        ) {
+          return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏，未加载任何服务器' })
+        }
+        const hasCommand = typeof cfg.command === 'string' && cfg.command.trim().length > 0
+        const hasUrl = typeof cfg.url === 'string' && cfg.url.trim().length > 0
+        if (hasCommand === hasUrl) {
+          return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏，未加载任何服务器' })
+        }
+        const trustedConfig: MCPServerConfig = {
+          id,
+          name: id,
+          transport: hasUrl ? 'sse' : 'stdio',
+          command: cfg.command,
+          args: cfg.args,
+          env: cfg.env,
+          url: cfg.url,
+        }
+        trustedConfigs.set(id, trustedConfig)
+        servers.push({ id, name: id, transport: trustedConfig.transport })
+      }
+      for (const [id, runtime] of this.servers) {
+        const trustedConfig = trustedConfigs.get(id)
+        if (!trustedConfig || !isDeepStrictEqual(runtime.config, trustedConfig)) {
+          await this.disconnect(id)
+        }
+      }
+      this.loadedConfigs = trustedConfigs
+      return { status: 'loaded', servers }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return revoke({ status: 'missing', servers: [] })
+      }
+      return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏或无法读取，未加载任何服务器' })
     }
   }
 
   /**
    * 连接到 MCP 服务器
    */
-  async connect(config: MCPServerConfig): Promise<void> {
+  async connect(serverId: string): Promise<void> {
+    const config = this.loadedConfigs.get(serverId)
+    if (!config) throw new Error('MCP 服务器未配置或配置尚未加载')
     if (this.servers.has(config.id)) {
       await this.disconnect(config.id)
     }
@@ -167,11 +225,7 @@ class MCPManagerImpl {
       if (config.transport === 'stdio') {
         await this.connectStdio(runtime)
       } else {
-        // SSE 暂时跳过，标记为错误
-        runtime.status = 'error'
-        runtime.error = 'SSE 传输暂未实现'
-        this.notifyStatusChange(config.id, 'error', runtime.error)
-        return
+        throw new Error('SSE 传输暂未实现')
       }
 
       // 初始化 MCP 会话
@@ -186,10 +240,14 @@ class MCPManagerImpl {
       runtime.status = 'connected'
       this.notifyStatusChange(config.id, 'connected')
       this.notifyToolsChange()
-    } catch (error) {
+    } catch {
+      runtime.process?.kill()
+      runtime.pendingRequests.forEach(p => p.reject(new Error('MCP 服务器连接失败')))
+      runtime.pendingRequests.clear()
       runtime.status = 'error'
-      runtime.error = String(error)
+      runtime.error = 'MCP 服务器连接失败'
       this.notifyStatusChange(config.id, 'error', runtime.error)
+      throw new Error(runtime.error)
     }
   }
 
@@ -222,13 +280,19 @@ class MCPManagerImpl {
     // 监听进程退出
     proc.on('exit', (code) => {
       console.log(`[MCP:${runtime.config.id}] 进程退出，code=${code}`)
+      if (runtime.status === 'error') return
       runtime.status = 'disconnected'
       this.notifyStatusChange(runtime.config.id, 'disconnected')
     })
 
-    proc.on('error', (error) => {
+    proc.on('error', () => {
+      if (runtime.status === 'connecting') {
+        runtime.pendingRequests.forEach(p => p.reject(new Error('MCP 服务器连接失败')))
+        runtime.pendingRequests.clear()
+        return
+      }
       runtime.status = 'error'
-      runtime.error = `进程启动失败：${error.message}`
+      runtime.error = 'MCP 服务器连接失败'
       this.notifyStatusChange(runtime.config.id, 'error', runtime.error)
     })
   }
@@ -413,13 +477,7 @@ class MCPManagerImpl {
   }
 
   /** 获取所有服务器状态 */
-  getServersStatus(): Array<{
-    id: string
-    name: string
-    status: MCPConnectionStatus
-    toolCount: number
-    error?: string
-  }> {
+  getServersStatus(): MCPServerStatus[] {
     return Array.from(this.servers.values()).map(r => ({
       id: r.config.id,
       name: r.config.name,

@@ -717,6 +717,41 @@ describe('CharacterRosterRepository public read/commit seam', () => {
     ]))
   })
 
+  it.each(['architecture_generation', 'novel_import'] as const)(
+    'merges a canonical-equivalent %s identity while preserving manual fields',
+    (intent) => {
+      const existing = {
+        ...commitRequest().entries[0],
+        name: 'Alice',
+        appearance: '作者手写的旧斗篷',
+        background: '',
+        relationships: [],
+      }
+      const initial = CharacterRosterRepository.commit(commitRequest({ entries: [existing] }))
+
+      const receipt = CharacterRosterRepository.commit({
+        operationId: `${intent}-canonical-existing-name`,
+        expectedRevision: initial.revision,
+        schemaVersion: 1,
+        intent,
+        entries: [{
+          ...existing,
+          name: ' ALICE ',
+          appearance: '模型试图覆盖的银色斗篷',
+          background: '模型补齐的航海经历',
+        }],
+      })
+
+      expect(receipt.snapshot.entries).toEqual([
+        expect.objectContaining({
+          name: 'Alice',
+          appearance: '作者手写的旧斗篷',
+          background: '模型补齐的航海经历',
+        }),
+      ])
+    },
+  )
+
   it('archives legacy Markdown as migration evidence instead of parsing it as a roster', () => {
     db.exec(`
       DELETE FROM character_roster_meta;
@@ -895,5 +930,45 @@ describe('CharacterRosterRepository public read/commit seam', () => {
     })
     expect(ProjectCoreRepository.get()?.charactersArch).toBe(receipt.snapshot.renderedMarkdown)
     expect(CharacterRepository.getByName('手工主角')).toEqual(cardBefore)
+  })
+
+  it('rejects chapter-progress additions and canonical duplicate names at the repository boundary', () => {
+    const initial = CharacterRosterRepository.commit(commitRequest())
+    const existing = initial.snapshot.entries[0]
+    const unknown = {
+      ...existing,
+      name: '未知角色',
+      relationships: [],
+      currentState: {
+        location: '码头',
+        powerLevel: '',
+        physicalState: '',
+        mentalState: '',
+        keyItems: '',
+        recentEvents: '突然出现',
+        updatedAtChapter: 2,
+      },
+    }
+
+    expect(() => CharacterRosterRepository.commit({
+      operationId: 'chapter-progress-unknown',
+      expectedRevision: initial.revision,
+      schemaVersion: 1,
+      intent: 'chapter_progress',
+      entries: [unknown],
+    })).toThrow(/不能创建未知角色/)
+    expect(CharacterRosterRepository.read()).toEqual(initial.snapshot)
+
+    expect(() => CharacterRosterRepository.commit({
+      operationId: 'chapter-progress-duplicate',
+      expectedRevision: initial.revision,
+      schemaVersion: 1,
+      intent: 'chapter_progress',
+      entries: [
+        { ...existing, relationships: [] },
+        { ...existing, name: ` ${existing.name.toLocaleUpperCase('en-US')} `, relationships: [] },
+      ],
+    })).toThrow(/角色名必须唯一/)
+    expect(CharacterRosterRepository.read()).toEqual(initial.snapshot)
   })
 })

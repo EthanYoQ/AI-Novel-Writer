@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import path from 'node:path'
-import { FileNode, type ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { FileNode, type FileWriteCommitState, type ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { getCurrentProjectPath } from '../database'
 import { projectAccess } from '../services/project-access'
@@ -11,6 +11,7 @@ import {
 } from '../utils/project-context'
 import {
   createSecureFileCapability,
+  atomicWriteFailureCommitState,
   windowsSafeFileSystem,
   type SecureFileCapability,
   type WindowsSafeFileSystem,
@@ -60,7 +61,11 @@ function isMissingFileError(error: unknown): boolean {
 }
 
 /** Do not expose filesystem paths or raw Node errors across the IPC boundary. */
-function projectFilesystemFailure(channel: string, error: unknown): unknown {
+function projectFilesystemFailure(
+  channel: string,
+  error: unknown,
+  commitState: FileWriteCommitState = 'not_committed',
+): unknown {
   const internalMessage = error instanceof Error ? error.message : ''
   const projectAccessMessage = () => {
     if (/缺少项目会话上下文/.test(internalMessage)) {
@@ -110,7 +115,11 @@ function projectFilesystemFailure(channel: string, error: unknown): unknown {
     channel === 'fs:write-file'
     || channel === 'fs:mkdir'
     || channel === 'fs:write-json'
-  ) return { success: false, error: accessMessage ?? text('无法写入项目文件。', 'Could not write the project file.') }
+  ) return {
+    success: false,
+    ...(channel === 'fs:write-file' ? { commitState } : {}),
+    error: accessMessage ?? text('无法写入项目文件。', 'Could not write the project file.'),
+  }
   throw error
 }
 
@@ -234,6 +243,7 @@ export function registerFSController(
     content: string,
     expectedProjectPath: string,
   ) => {
+    const outcome = { commitState: 'not_committed' as FileWriteCommitState }
     try {
         assertProjectFileOperation(context, filePath, expectedProjectPath, 'writable')
         return await withFileMutex(filePath, async () => {
@@ -247,11 +257,15 @@ export function registerFSController(
             // this exact commit point; an old lease must not replace a file.
             assertProjectFileOperation(context, filePath, expectedProjectPath, 'writable')
           })
+          outcome.commitState = 'committed'
           assertProjectFileOperation(context, filePath, expectedProjectPath, 'existing')
-          return { success: true }
+          return { success: true, commitState: outcome.commitState }
         })
     } catch (error) {
-      return projectFilesystemFailure('fs:write-file', error)
+      if (outcome.commitState !== 'committed') {
+        outcome.commitState = atomicWriteFailureCommitState(error) ?? 'not_committed'
+      }
+      return projectFilesystemFailure('fs:write-file', error, outcome.commitState)
     }
   })
 

@@ -1,6 +1,23 @@
 import type { NovelConfig } from '../../shared/ipc-channels'
 
 export const GENERATED_GLOBAL_GUIDANCE_MAX_CHARS = 600
+export const GENERATED_GLOBAL_GUIDANCE_MIN_RULES = 4
+export const GENERATED_GLOBAL_GUIDANCE_MAX_RULES = 8
+
+export function generatedGlobalGuidanceRuleCount(content: string): number {
+  return content
+    .split(/\r?\n/u)
+    .map(rule => rule.trim())
+    .filter(Boolean)
+    .length
+}
+
+export function isGeneratedGlobalGuidanceValid(content: string): boolean {
+  const ruleCount = generatedGlobalGuidanceRuleCount(content)
+  return Array.from(content.trim()).length <= GENERATED_GLOBAL_GUIDANCE_MAX_CHARS
+    && ruleCount >= GENERATED_GLOBAL_GUIDANCE_MIN_RULES
+    && ruleCount <= GENERATED_GLOBAL_GUIDANCE_MAX_RULES
+}
 
 export const EXPANDABLE_NOVEL_CONFIG_FIELDS = [
   'coreOutline',

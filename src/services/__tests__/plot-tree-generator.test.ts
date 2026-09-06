@@ -13,6 +13,7 @@ import {
   generatePlotTree,
   parsePlotTreeSnapshot,
   PLOT_TREE_GENERATION_BUDGET,
+  PLOT_TREE_INPUT_MAX_CHARACTERS,
   PlotTreeGenerationError,
   PlotTreeSourceError,
 } from '../plot-tree-generator'
@@ -335,16 +336,16 @@ describe('plot tree AI boundary', () => {
     },
   )
 
-  it('projects oversized project sources into a bounded model input', async () => {
+  it.each([150, 200])('includes every blueprint and finalized chapter for a %i-chapter project', async (chapterCount) => {
     const oversized = sources()
     oversized.synopsis.content = 'S'.repeat(10_000)
-    oversized.blueprints = Array.from({ length: 121 }, (_, index) => ({
+    oversized.blueprints = Array.from({ length: chapterCount }, (_, index) => ({
       chapterNumber: index + 1,
       title: `Title ${index} ${'T'.repeat(500)}`,
       purpose: 'P'.repeat(1_000),
       keyEvents: 'K'.repeat(1_000),
     }))
-    oversized.finalizedChapters = Array.from({ length: 121 }, (_, index) => ({
+    oversized.finalizedChapters = Array.from({ length: chapterCount }, (_, index) => ({
       draftId: 41 + index,
       chapterNumber: index + 1,
       title: `Final ${index} ${'T'.repeat(500)}`,
@@ -401,13 +402,14 @@ describe('plot tree AI boundary', () => {
     })
 
     const facts = JSON.parse(task?.messages[1]?.content ?? '{}')
-    expect(facts.synopsis).toHaveLength(6_000)
-    expect(facts.blueprints).toHaveLength(120)
-    expect(facts.finalizedChapters).toHaveLength(120)
-    expect(facts.narrativeThreads).toHaveLength(40)
-    expect(facts.narrativeThreads[0].events).toHaveLength(12)
-    expect(facts.blueprints.at(-1).chapterNumber).toBe(121)
-    expect(facts.finalizedChapters.at(-1).chapterNumber).toBe(121)
+    expect(facts.synopsis).toHaveLength(3_000)
+    expect(facts.blueprints).toHaveLength(chapterCount)
+    expect(facts.finalizedChapters).toHaveLength(chapterCount)
+    expect(facts.narrativeThreads).toHaveLength(41)
+    expect(facts.narrativeThreads[0].events).toHaveLength(13)
+    expect(facts.blueprints.at(-1).chapterNumber).toBe(chapterCount)
+    expect(facts.finalizedChapters.at(-1).chapterNumber).toBe(chapterCount)
+    expect(task?.messages[1]?.content.length).toBeLessThanOrEqual(PLOT_TREE_INPUT_MAX_CHARACTERS)
     expect(facts.narrativeThreads.at(-1).id).toBe(47)
     expect(facts.narrativeThreads[0].events.at(-1).id).toBe(23)
     expect(facts.blueprints[0]).toMatchObject({
@@ -415,6 +417,67 @@ describe('plot tree AI boundary', () => {
       purpose: expect.stringMatching(/^P+…P+$/u),
       keyEvents: expect.stringMatching(/^K+…K+$/u),
     })
+  })
+
+  it('rejects sources beyond the complete-input ceiling before creating a runtime', async () => {
+    const oversized = sources()
+    oversized.blueprints = Array.from({ length: 201 }, (_, index) => ({
+      chapterNumber: index + 1,
+      title: `Chapter ${index + 1}`,
+      purpose: 'Advance the plot.',
+      keyEvents: 'A sourced event occurs.',
+    }))
+    const createRuntime = vi.fn()
+
+    await expect(generatePlotTree({
+      modelId: 'grok-frozen',
+      projectSession: PROJECT_SESSION,
+      sources: oversized,
+      signal: new AbortController().signal,
+    }, {
+      createRuntime,
+      now: () => '2026-09-02T03:04:05.000Z',
+    })).rejects.toMatchObject({
+      name: 'PlotTreeSourceLimitError',
+      code: 'SOURCE_LIMIT_EXCEEDED',
+    })
+    expect(createRuntime).not.toHaveBeenCalled()
+  })
+
+  it('rejects complete source facts that exceed the explicit context budget before creating a runtime', async () => {
+    const oversized = sources()
+    oversized.narrativeThreads = Array.from({ length: 1_000 }, (_, index) => ({
+      id: index + 1,
+      title: `Thread ${index + 1}`,
+      type: 'subplot',
+      targetStartChapter: 1,
+      targetEndChapter: 1,
+      authorIntent: 'A'.repeat(1_000),
+      status: 'planned' as const,
+      events: Array.from({ length: 5 }, (_, eventIndex) => ({
+        id: eventIndex + 1,
+        chapterNumber: 1,
+        type: 'planted' as const,
+        evidence: 'E'.repeat(1_000),
+        reason: 'R'.repeat(1_000),
+      })),
+    }))
+    const createRuntime = vi.fn()
+
+    await expect(generatePlotTree({
+      modelId: 'grok-frozen',
+      projectSession: PROJECT_SESSION,
+      sources: oversized,
+      signal: new AbortController().signal,
+    }, {
+      createRuntime,
+      now: () => '2026-09-02T03:04:05.000Z',
+    })).rejects.toMatchObject({
+      name: 'PlotTreeInputLimitError',
+      code: 'SOURCE_INPUT_TOO_LARGE',
+      maximumCharacters: PLOT_TREE_INPUT_MAX_CHARACTERS,
+    })
+    expect(createRuntime).not.toHaveBeenCalled()
   })
 
   it.each([

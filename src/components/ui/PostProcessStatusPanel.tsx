@@ -26,7 +26,7 @@ import {
 interface PostProcessStatusPanelProps {
   /** 状态文件 scope 标识，如 'chapter_1_finalize' */
   scope: string
-  /** 重试回调（传 stepKey 则单步重试，不传则全部重试） */
+  /** 重试回调（传 stepKey 则单步重试，不传则重试全部失败步骤） */
   onRetry?: (stepKey?: string) => void
   /** 是否默认展开（默认 false，折叠显示摘要） */
   defaultExpanded?: boolean

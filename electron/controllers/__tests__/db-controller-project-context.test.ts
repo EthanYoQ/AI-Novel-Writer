@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   closeProjectDatabase: vi.fn(),
   invalidateCurrentSession: vi.fn(),
   assertCurrentProjectContext: vi.fn(),
+  captureCurrentSession: vi.fn(),
   projectCoreGet: vi.fn(),
   projectCoreUpdate: vi.fn(),
   projectClearGeneratedData: vi.fn(() => ({ cleared: [] })),
@@ -54,6 +55,10 @@ const mocks = vi.hoisted(() => ({
   postProcessMarkStepOk: vi.fn(),
   postProcessMarkStepFailed: vi.fn(),
   postProcessIsAllCriticalPassed: vi.fn(() => true),
+  recoveryRecord: vi.fn(),
+  recoveryListPending: vi.fn((): unknown[] => []),
+  recoveryUpdatePending: vi.fn(),
+  recoveryResolve: vi.fn(),
 }))
 
 vi.mock('electron', () => ({
@@ -74,6 +79,7 @@ vi.mock('../../services/project-access', () => ({
   projectAccess: {
     invalidateCurrentSession: mocks.invalidateCurrentSession,
     assertCurrentProjectContext: mocks.assertCurrentProjectContext,
+    captureCurrentSession: mocks.captureCurrentSession,
   },
 }))
 
@@ -125,6 +131,15 @@ vi.mock('../../repositories/post-process-repository', () => ({
     markStepOk: mocks.postProcessMarkStepOk,
     markStepFailed: mocks.postProcessMarkStepFailed,
     isAllCriticalPassed: mocks.postProcessIsAllCriticalPassed,
+  },
+}))
+
+vi.mock('../../repositories/recovery-candidate-repository', () => ({
+  RecoveryCandidateRepository: {
+    record: mocks.recoveryRecord,
+    listPending: mocks.recoveryListPending,
+    updatePending: mocks.recoveryUpdatePending,
+    resolve: mocks.recoveryResolve,
   },
 }))
 
@@ -234,6 +249,11 @@ beforeEach(() => {
     }
     return { rootPath: currentProjectPath }
   })
+  mocks.captureCurrentSession.mockImplementation(() => ({
+    projectId: `project-${mocks.currentProjectPath.split('/').at(-1)}`,
+    leaseId: `lease-${mocks.currentProjectPath.split('/').at(-1)}`,
+    rootPath: mocks.currentProjectPath,
+  }))
 })
 
 describe('database controller project context guard', () => {
@@ -862,6 +882,59 @@ describe('database controller project context guard', () => {
     await expect(rawHandler('db:draft-get-full')({}, 1))
       .rejects.toThrow(/缺少项目会话上下文/)
     expect(mocks.draftGetFull).not.toHaveBeenCalled()
+  })
+
+  it('guards recovery candidate record, list, update, and resolve with the current project session', async () => {
+    const request = {
+      runId: 'run-recovery',
+      stepId: 'generate-draft',
+      chapterNumber: 1,
+      chapterTitle: '第一章',
+      source: blueprint(),
+      visibleText: '候选正文',
+      failureCode: 'PROVIDER_REQUEST_FAILED',
+      failureReason: 'connection reset',
+    }
+    const candidate = {
+      ...request,
+      candidateId: 'candidate-1',
+      sourceHash: 'a'.repeat(64),
+      contentHash: 'b'.repeat(64),
+      status: 'pending',
+      replacesCandidateId: null,
+      sourceCurrent: true,
+      createdAt: '2026-09-06T00:00:00.000Z',
+      resolvedAt: null,
+    }
+    mocks.recoveryRecord.mockReturnValueOnce(candidate)
+    mocks.recoveryListPending.mockReturnValueOnce([candidate])
+    mocks.recoveryUpdatePending.mockReturnValueOnce(candidate)
+
+    await expect(handler('db:recovery-candidate-record')({}, request, 'C:/projects/A'))
+      .resolves.toEqual({ success: true, candidate })
+    await expect(handler('db:recovery-candidate-list')({}, 'C:/projects/A'))
+      .resolves.toEqual([candidate])
+    await expect(handler('db:recovery-candidate-update')({}, 'candidate-1', '候选正文', 'C:/projects/A'))
+      .resolves.toEqual({ success: true, candidate })
+    await expect(handler('db:recovery-candidate-resolve')({}, 'candidate-1', 'continued', 'C:/projects/A'))
+      .resolves.toEqual({ success: true })
+
+    mocks.currentProjectPath = 'C:/projects/B'
+    await expect(handler('db:recovery-candidate-record')({}, request, 'C:/projects/A'))
+      .resolves.toMatchObject({ success: false })
+    await expect(handler('db:recovery-candidate-list')({}, 'C:/projects/A'))
+      .rejects.toThrow(/项目上下文已切换/)
+    await expect(handler('db:recovery-candidate-update')({}, 'candidate-1', '候选正文', 'C:/projects/A'))
+      .resolves.toMatchObject({ success: false })
+    await expect(handler('db:recovery-candidate-resolve')({}, 'candidate-1', 'discarded', 'C:/projects/A'))
+      .resolves.toMatchObject({ success: false })
+
+    expect(mocks.recoveryRecord).toHaveBeenCalledOnce()
+    expect(mocks.recoveryRecord).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project-A' }))
+    expect(mocks.recoveryListPending).toHaveBeenCalledOnce()
+    expect(mocks.recoveryUpdatePending).toHaveBeenCalledOnce()
+    expect(mocks.recoveryUpdatePending).toHaveBeenCalledWith('candidate-1', '候选正文')
+    expect(mocks.recoveryResolve).toHaveBeenCalledOnce()
   })
 
   it('closes only the explicitly matched project database', async () => {

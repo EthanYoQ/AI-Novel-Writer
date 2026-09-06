@@ -33,6 +33,22 @@ function loadModelConfigs(): ModelProfile[] {
   return readJsonFile<ModelProfile[]>(MODELS_CONFIG_PATH, [])
 }
 
+function loadModelConfigsForUpdate(): ModelProfile[] {
+  const result = tryReadJsonFile<ModelProfile[]>(MODELS_CONFIG_PATH)
+  if (result.status === 'error') {
+    throw new Error('模型配置损坏，已拒绝覆盖', { cause: result.error })
+  }
+  return result.status === 'ok' ? result.value : []
+}
+
+function loadGlobalConfigForUpdate(): GlobalConfig {
+  const result = tryReadJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH)
+  if (result.status === 'error') {
+    throw new Error('全局配置损坏，已拒绝覆盖', { cause: result.error })
+  }
+  return result.status === 'ok' ? result.value : { ...DEFAULT_GLOBAL_CONFIG }
+}
+
 function saveModelConfigs(models: ModelProfile[]) {
   writeJsonFile(MODELS_CONFIG_PATH, models)
 }
@@ -209,9 +225,18 @@ export function registerLLMController() {
         })
         activeStreams.delete(requestId)
       },
-      onError: (error: string) => {
-        recordOnce({ success: false, error })
-        win?.webContents.send('llm:stream-error', { requestId, error })
+      onError: (error: string, content?: string, usage?: TokenUsage) => {
+        recordOnce({ success: false, usage, error })
+        if (content !== undefined) {
+          win?.webContents.send('llm:stream-done', {
+            requestId,
+            fullText: content,
+            usage,
+            finishReason: 'error',
+          })
+        } else {
+          win?.webContents.send('llm:stream-error', { requestId, error })
+        }
         activeStreams.delete(requestId)
       },
     })
@@ -243,7 +268,7 @@ export function registerLLMController() {
 
   ipcMain.handle('llm:save-model', async (_event, model: ModelProfile) => {
     try {
-      const models = loadModelConfigs()
+      const models = loadModelConfigsForUpdate()
       const idx = models.findIndex((m) => m.id === model.id)
       if (idx >= 0) models[idx] = model
       else models.push(model)
@@ -304,7 +329,7 @@ export function registerLLMController() {
 
   ipcMain.handle('llm:set-default-model', async (_event, modelId: string | null) => {
     try {
-      const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
+      const config = loadGlobalConfigForUpdate()
       config.defaultModelId = modelId
       writeJsonFile(GLOBAL_CONFIG_PATH, config)
       return { success: true }
@@ -320,7 +345,7 @@ export function registerLLMController() {
 
   ipcMain.handle('llm:set-default-embedding-model', async (_event, modelId: string | null) => {
     try {
-      const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
+      const config = loadGlobalConfigForUpdate()
       config.defaultEmbeddingModelId = modelId
       writeJsonFile(GLOBAL_CONFIG_PATH, config)
       return { success: true }

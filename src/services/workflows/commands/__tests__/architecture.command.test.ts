@@ -58,7 +58,7 @@ const validConfigJson = JSON.stringify({
   worldSetting: '灵脉决定城邦兴衰，宗门垄断资源，边境异变正在瓦解旧有秩序。',
   goldenFinger: '主角能够解析残缺功法，但每次使用都会付出记忆损耗的代价。',
   protagonistProfile: '外表谨慎克制，内心执着于守护家人，在利益与承诺间不断抉择。',
-  globalGuidance: '前期建立危机，中期扩大阵营冲突，后期收束伏笔并完成终局对决。',
+  globalGuidance: ['保持因果推进。', '保留已建立的角色状态。', '用行动升级冲突。', '收束已兑现的伏笔。'].join('\n'),
   writingStyle: '节奏紧凑，场景切换清晰，对话简洁有张力，行动描写强调因果。',
 })
 
@@ -407,23 +407,23 @@ describe('GenerateConfigCommand error boundaries', () => {
     {
       case: 'at a natural boundary',
       generatedGuidance: `${'规'.repeat(580)}。\n${'不'.repeat(84)}`,
-      expectedGuidance: `${'规'.repeat(580)}。`,
     },
     {
       case: 'without splitting a Unicode code point',
       generatedGuidance: `${'A'.repeat(599)}😀${'B'.repeat(10)}`,
-      expectedGuidance: `${'A'.repeat(599)}😀`,
     },
-  ])('bounds generated global guidance $case before applying config', async ({
+  ])('replaces invalid generated global guidance $case before applying config', async ({
     generatedGuidance,
-    expectedGuidance,
   }) => {
     const overlongConfig = JSON.stringify({
       ...JSON.parse(validConfigJson),
       globalGuidance: generatedGuidance,
     })
+    const replacementGuidance = ['保持因果推进。', '保留既有角色状态。', '用行动升级冲突。', '只收束已经铺设的伏笔。'].join('\n')
+    let generationCall = 0
     const generateStream = vi.fn(async (_messages, streamCallbacks) => {
-      streamCallbacks.onDone?.(overlongConfig, undefined, 'stop')
+      generationCall += 1
+      streamCallbacks.onDone?.(generationCall === 1 ? overlongConfig : replacementGuidance, undefined, 'stop')
       return 'config-request'
     })
     useLLMStore.setState({
@@ -438,10 +438,10 @@ describe('GenerateConfigCommand error boundaries', () => {
     await expect(command.execute({ step: {}, context, callbacks }))
       .resolves.toBe('生成的配置已成功应用！')
 
-    expect(generateStream).toHaveBeenCalledOnce()
+    expect(generateStream).toHaveBeenCalledTimes(2)
     expect(onGenerated).toHaveBeenCalledOnce()
     const appliedGuidance = (onGenerated.mock.calls[0]?.[0] as { globalGuidance: string }).globalGuidance
-    expect(appliedGuidance).toBe(expectedGuidance)
+    expect(appliedGuidance).toBe(replacementGuidance)
     expect(Array.from(appliedGuidance).length).toBeLessThanOrEqual(600)
     expect(appliedGuidance).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/u)
     expect(saveProject).toHaveBeenCalledOnce()

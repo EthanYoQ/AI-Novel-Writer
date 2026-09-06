@@ -30,6 +30,10 @@ afterEach(() => {
   toolRegistry.unregister('delayed_write_probe')
   toolRegistry.unregister('cancelled_write_probe')
   toolRegistry.unregister('unknown_write_probe')
+  toolRegistry.unregister('returned_unknown_write_probe')
+  toolRegistry.unregister('returned_not_committed_write_probe')
+  toolRegistry.unregister('precommit_failure_probe')
+  toolRegistry.unregister('read_failure_probe')
 })
 
 describe('Agent tool timeout boundary', () => {
@@ -104,7 +108,7 @@ describe('Agent tool timeout boundary', () => {
     }))
   })
 
-  it('waits for a delayed post-commit write receipt instead of timing out and retrying', async () => {
+  it('bounds foreground waiting after a write is dispatched and keeps a late receipt on the old operation', async () => {
     vi.useFakeTimers()
     let finishWrite: ((result: ToolResult) => void) | undefined
     const execute = vi.fn(async (_args: Record<string, unknown>, execution?: AgentExecutionContext) => (
@@ -131,14 +135,18 @@ describe('Agent tool timeout boundary', () => {
     )
     await vi.advanceTimersByTimeAsync(30_000)
 
-    expect(ui.onDone).not.toHaveBeenCalled()
+    expect(ui.onDone).toHaveBeenCalledWith(
+      expect.stringContaining('stopped to avoid a duplicate write'),
+      expect.anything(),
+      expect.anything(),
+    )
     expect(execute).toHaveBeenCalledOnce()
     finishWrite?.({ success: true, content: 'committed once' })
     await run
 
     expect(execute).toHaveBeenCalledOnce()
     expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'completed', result: 'committed once',
+      status: 'result_unknown',
     }))
   })
 
@@ -198,6 +206,7 @@ describe('Agent tool timeout boundary', () => {
     expect(generate).toHaveBeenCalledOnce()
     expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
       status: 'result_unknown',
+      commitState: 'unknown',
       error: expect.stringContaining('result is unknown'),
     }))
     expect(ui.onDone).toHaveBeenCalledWith(
@@ -205,5 +214,106 @@ describe('Agent tool timeout boundary', () => {
       expect.anything(),
       expect.anything(),
     )
+  })
+
+  it('treats a normally returned unknown write result the same as a rejected receipt', async () => {
+    const execute = vi.fn(async (_args: Record<string, unknown>, execution?: AgentExecutionContext) => {
+      execution?.markSideEffectStarted?.()
+      return {
+        success: false,
+        content: '',
+        error: 'receipt unavailable',
+        commitState: 'unknown',
+      } as ToolResult & { commitState: 'unknown' }
+    })
+    toolRegistry.register({
+      name: 'returned_unknown_write_probe', description: 'probe', source: 'builtin',
+      inputSchema: { type: 'object', properties: {} }, requiresConfirmation: false, isReadOnly: false,
+      execute,
+    })
+    const ui = callbacks()
+    const generate = vi.fn()
+      .mockResolvedValueOnce('<tool_call>{"name":"returned_unknown_write_probe","arguments":{}}</tool_call>')
+      .mockResolvedValueOnce('<tool_call>{"name":"returned_unknown_write_probe","arguments":{}}</tool_call>')
+
+    await runAgentLoop('system', [], 'write', 'model', generate, ui, undefined, context())
+
+    expect(execute).toHaveBeenCalledOnce()
+    expect(generate).toHaveBeenCalledOnce()
+    expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'result_unknown',
+      commitState: 'unknown',
+    }))
+  })
+
+  it('continues after a normally returned write failure is known not to have committed', async () => {
+    const execute = vi.fn(async () => ({
+      success: false,
+      content: '',
+      error: 'validation rejected',
+      commitState: 'not_committed',
+    } as ToolResult & { commitState: 'not_committed' }))
+    toolRegistry.register({
+      name: 'returned_not_committed_write_probe', description: 'probe', source: 'builtin',
+      inputSchema: { type: 'object', properties: {} }, requiresConfirmation: false, isReadOnly: false,
+      execute,
+    })
+    const ui = callbacks()
+    const generate = vi.fn()
+      .mockResolvedValueOnce('<tool_call>{"name":"returned_not_committed_write_probe","arguments":{}}</tool_call>')
+      .mockResolvedValueOnce('handled')
+
+    await runAgentLoop('system', [], 'write', 'model', generate, ui, undefined, context())
+
+    expect(generate).toHaveBeenCalledTimes(2)
+    expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      commitState: 'not_committed',
+    }))
+  })
+
+  it('marks rejected writes before dispatch as not committed', async () => {
+    toolRegistry.register({
+      name: 'precommit_failure_probe', description: 'probe', source: 'builtin',
+      inputSchema: { type: 'object', properties: {} }, requiresConfirmation: false, isReadOnly: false,
+      execute: async () => { throw new Error('validation failed before dispatch') },
+    })
+    const ui = callbacks()
+    await runAgentLoop(
+      'system', [], 'write', 'model',
+      vi.fn()
+        .mockResolvedValueOnce('<tool_call>{"name":"precommit_failure_probe","arguments":{}}</tool_call>')
+        .mockResolvedValueOnce('handled'),
+      ui,
+      undefined,
+      context(),
+    )
+
+    expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      commitState: 'not_committed',
+    }))
+  })
+
+  it('does not invent a commit state for a rejected read-only tool', async () => {
+    toolRegistry.register({
+      name: 'read_failure_probe', description: 'probe', source: 'builtin',
+      inputSchema: { type: 'object', properties: {} }, requiresConfirmation: false, isReadOnly: true,
+      execute: async () => { throw new Error('read failed') },
+    })
+    const ui = callbacks()
+    await runAgentLoop(
+      'system', [], 'read', 'model',
+      vi.fn()
+        .mockResolvedValueOnce('<tool_call>{"name":"read_failure_probe","arguments":{}}</tool_call>')
+        .mockResolvedValueOnce('handled'),
+      ui,
+      undefined,
+      context(),
+    )
+
+    const completed = ui.onToolCallComplete.mock.calls[0]?.[0]
+    expect(completed).toMatchObject({ status: 'failed' })
+    expect(completed).not.toHaveProperty('commitState')
   })
 })

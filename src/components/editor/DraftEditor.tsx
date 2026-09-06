@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Sparkles, Search, BadgeCheck, Save, FileStack, FileText, Wrench, Check } from 'lucide-react'
 
 import { useProjectStore } from '../../stores/project-store'
-import { useEditorStore } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import CodeMirrorEditor from './CodeMirrorEditor'
@@ -236,6 +236,17 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     }
   }
 
+  const exitSaveRef = useRef(doSave)
+  useEffect(() => {
+    exitSaveRef.current = doSave
+  })
+  useEffect(() => registerEditorExitSaveHandler({
+      tabId,
+      type: 'chapter',
+      projectKey,
+      save: () => exitSaveRef.current(currentBodyRef.current),
+    }), [projectKey, tabId])
+
   const freezeDraftSourceForAI = async (projectSession: NonNullable<ReturnType<typeof captureProjectSession>>) => {
     if (!meta) return null
     const targetTab = useEditorStore.getState().tabs.find(
@@ -434,7 +445,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   }, [currentProject, projectKey, tabId, text])
 
   /** 修复定稿后处理 — 只重跑失败的步骤 */
-  const doRepairFinalize = useCallback(async () => {
+  const doRepairFinalize = useCallback(async (stepKey?: string) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || isChapterBusy || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     try {
@@ -450,7 +461,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       const { createRepairFinalizeWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
       useWorkflowStore.getState().startWorkflow(
-        createRepairFinalizeWorkflow(meta.chapterNumber, projectSession.projectPath, projectSession),
+        createRepairFinalizeWorkflow(meta.chapterNumber, projectSession.projectPath, projectSession, stepKey),
         false,
       )
     } catch (e) {
@@ -803,7 +814,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={doRepairFinalize}
+                onClick={() => void doRepairFinalize()}
                 disabled={isChapterBusy}
                 title={text('重新执行失败的后处理步骤（角色卡、知识库等）', 'Retry failed post-processing steps such as character cards and knowledge indexing')}
               >
@@ -820,7 +831,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         <div className="px-3 py-1.5" style={{ borderBottom: '1px solid var(--color-border)' }}>
           <PostProcessStatusPanel
             scope={getChapterFinalizeScope(meta.chapterNumber)}
-            onRetry={() => doRepairFinalize()}
+            onRetry={doRepairFinalize}
             onStatusLoad={setHasProcessFailure}
           />
         </div>

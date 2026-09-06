@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle, AlertTriangle, SlidersHorizontal } from 'lucide-react'
+import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle, AlertTriangle, SlidersHorizontal, Copy, Pencil, Trash2 } from 'lucide-react'
 import {
   useWorkflowStore,
   type WorkflowFailureCode,
@@ -15,11 +15,13 @@ import {
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { RecoveryCandidate } from '../../shared/recovery-candidate'
 import type { PromptBudgetReport } from '../../services/generation/generation-harness'
 import MarkdownContent from '../ui/MarkdownContent'
 import { presentWorkflowFailure } from './ai-output-failure-presentation'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { Locale } from '../../i18n/types'
+import { ipc } from '../../services/ipc-client'
 
 function runText(locale: Locale, zhCNText: string, enUSText: string): string {
   return locale === 'en-US' ? enUSText : zhCNText
@@ -37,7 +39,10 @@ export default function AIOutputPanel() {
   const activeRun = getActiveStreamingRun()
   const activeRunId = activeRun?.id
   const currentLocale = useLocaleStore(s => s.locale)
+  const currentProject = useProjectStore(s => s.currentProject)
   const [viewRunId, setViewRunId] = useState<string | null>(null)
+  const [recoveryCandidates, setRecoveryCandidates] = useState<RecoveryCandidate[]>([])
+  const [recoveryError, setRecoveryError] = useState('')
 
   console.log('[AIOutputPanel] render: viewRunId=', viewRunId, 'activeRun=', activeRun?.id, activeRun?.status, 'activeRuns.len=', activeRuns.length)
 
@@ -50,6 +55,111 @@ export default function AIOutputPanel() {
     }, 0)
     return () => window.clearTimeout(syncTimer)
   }, [activeRunId])
+
+  useEffect(() => {
+    const projectSession = projectSessionContextFromProject(currentProject)
+    if (!projectSession || !currentProject) {
+      const clearTimer = window.setTimeout(() => {
+        setRecoveryCandidates([])
+        setRecoveryError('')
+      }, 0)
+      return () => window.clearTimeout(clearTimer)
+    }
+    let active = true
+    void ipc.invokeWithProjectSession(
+      projectSession,
+      'db:recovery-candidate-list',
+      currentProject.path,
+    ).then(candidates => {
+      if (!active) return
+      const latestProject = useProjectStore.getState().currentProject
+      if (!sameProjectSessionContext(projectSession, projectSessionContextFromProject(latestProject))) return
+      setRecoveryCandidates(candidates)
+      setRecoveryError('')
+    }).catch(error => {
+      if (!active) return
+      setRecoveryCandidates([])
+      setRecoveryError(error instanceof Error ? error.message : String(error))
+    })
+    return () => { active = false }
+  }, [currentProject])
+
+  const continueRecoveryCandidate = async (candidate: RecoveryCandidate) => {
+    const project = useProjectStore.getState().currentProject
+    const projectSession = projectSessionContextFromProject(project)
+    if (
+      !project
+      || !sameProjectPathKey(project.path, currentProject?.path)
+      || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(currentProject))
+      || !candidate.sourceCurrent
+    ) return
+    const result = await ipc.invokeWithProjectSession(
+      projectSession!,
+      'db:recovery-candidate-update',
+      candidate.candidateId,
+      candidate.visibleText,
+      project.path,
+    )
+    if (!result.success || !result.candidate) {
+      setRecoveryError(result.error || runText(currentLocale, '恢复候选操作失败', 'Recovery candidate action failed'))
+      return
+    }
+    const currentCandidate = result.candidate
+    useEditorStore.getState().openFile({
+      id: `recovery:${currentCandidate.candidateId}`,
+      name: runText(
+        currentLocale,
+        `恢复候选 · 第${currentCandidate.chapterNumber}章 ${currentCandidate.chapterTitle}`,
+        `Recovery candidate · Chapter ${currentCandidate.chapterNumber} ${currentCandidate.chapterTitle}`,
+      ),
+      type: 'chapter',
+      filePath: `vela://recovery/${currentCandidate.candidateId}`,
+      content: currentCandidate.visibleText,
+      savedContent: currentCandidate.visibleText,
+      dirty: false,
+      projectKey: project.path,
+      projectSessionLease: projectSession!.leaseId,
+    })
+    setRecoveryCandidates(items => items.filter(item => item.candidateId !== candidate.candidateId))
+    setRecoveryError('')
+  }
+
+  const discardRecoveryCandidate = async (candidate: RecoveryCandidate) => {
+    const project = useProjectStore.getState().currentProject
+    const projectSession = projectSessionContextFromProject(project)
+    if (
+      !project
+      || !sameProjectPathKey(project.path, currentProject?.path)
+      || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(currentProject))
+    ) return
+    const result = await ipc.invokeWithProjectSession(
+      projectSession!,
+      'db:recovery-candidate-resolve',
+      candidate.candidateId,
+      'discarded',
+      project.path,
+    )
+    if (!result.success) {
+      setRecoveryError(result.error || runText(currentLocale, '恢复候选操作失败', 'Recovery candidate action failed'))
+      return
+    }
+    setRecoveryCandidates(items => items.filter(item => item.candidateId !== candidate.candidateId))
+    setRecoveryError('')
+  }
+
+  const copyRecoveryCandidate = async (candidate: RecoveryCandidate) => {
+    const latestProject = useProjectStore.getState().currentProject
+    if (!sameProjectSessionContext(
+      projectSessionContextFromProject(latestProject),
+      projectSessionContextFromProject(currentProject),
+    )) return
+    try {
+      await navigator.clipboard.writeText(candidate.visibleText)
+      setRecoveryError('')
+    } catch (error) {
+      setRecoveryError(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   const viewRun: WorkflowRun | undefined =
     activeRuns.find(r => r.id === viewRunId) ||
@@ -94,26 +204,87 @@ export default function AIOutputPanel() {
       </div>
 
       {/* 内容区 */}
-      <div className="flex-1 overflow-hidden">
-        {viewRun ? (
-          <ActiveRunView
-            run={viewRun}
-            activeRuns={activeRuns}
-            onSwitchRun={setViewRunId}
+      <div className="flex-1 overflow-hidden flex flex-col">
+        {(recoveryCandidates.length > 0 || recoveryError) && (
+          <RecoveryCandidateSection
+            candidates={recoveryCandidates}
+            error={recoveryError}
+            locale={currentLocale}
+            onCopy={copyRecoveryCandidate}
+            onContinue={candidate => { void continueRecoveryCandidate(candidate) }}
+            onDiscard={candidate => { void discardRecoveryCandidate(candidate) }}
           />
-        ) : (
-          <div className="h-full overflow-y-auto">
-            {recentHistory.length === 0 ? (
-              <EmptyState />
-            ) : (
-              <div className="px-3 py-3">
-                <HistoryList items={recentHistory} onSelect={setViewRunId} locale={visibleLocale} />
-              </div>
-            )}
-          </div>
         )}
+        <div className="flex-1 overflow-hidden">
+          {viewRun ? (
+            <ActiveRunView
+              run={viewRun}
+              activeRuns={activeRuns}
+              onSwitchRun={setViewRunId}
+            />
+          ) : (
+            <div className="h-full overflow-y-auto">
+              {recentHistory.length === 0 ? (
+                <EmptyState />
+              ) : (
+                <div className="px-3 py-3">
+                  <HistoryList items={recentHistory} onSelect={setViewRunId} locale={visibleLocale} />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  )
+}
+
+function RecoveryCandidateSection({
+  candidates,
+  error,
+  locale,
+  onCopy,
+  onContinue,
+  onDiscard,
+}: {
+  candidates: RecoveryCandidate[]
+  error: string
+  locale: Locale
+  onCopy: (candidate: RecoveryCandidate) => void
+  onContinue: (candidate: RecoveryCandidate) => void
+  onDiscard: (candidate: RecoveryCandidate) => void
+}) {
+  return (
+    <section className="max-h-[45%] overflow-y-auto border-b px-3 py-2" style={{ borderColor: 'var(--color-border)' }}>
+      <div className="mb-2 text-xs font-medium" style={{ color: 'var(--color-text)' }}>
+        {runText(locale, '恢复候选', 'Recovery candidates')}
+      </div>
+      {error && <p role="alert" className="mb-2 text-xs" style={{ color: 'var(--color-error-text)' }}>{error}</p>}
+      {candidates.map(candidate => (
+        <article key={candidate.candidateId} className="mb-2 rounded-md border p-2 text-xs" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="font-medium" style={{ color: 'var(--color-text)' }}>
+            {runText(
+              locale,
+              `${candidate.replacesCandidateId ? '替代候选' : '原始候选'} · 第${candidate.chapterNumber}章 ${candidate.chapterTitle}`,
+              `${candidate.replacesCandidateId ? 'Replacement candidate' : 'Original candidate'} · Chapter ${candidate.chapterNumber} ${candidate.chapterTitle}`,
+            )}
+          </div>
+          {!candidate.sourceCurrent && (
+            <p className="mt-1" style={{ color: 'var(--color-warning-text)' }}>
+              {runText(locale, '源章节已变化；可复制或放弃，但不能直接继续。', 'The source chapter changed. You can copy or discard this candidate, but cannot continue it directly.')}
+            </p>
+          )}
+          <div className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap" style={{ color: 'var(--color-text-secondary)' }}>
+            {candidate.visibleText}
+          </div>
+          <div className="mt-2 flex gap-1.5">
+            <button type="button" className="icon-btn px-2" onClick={() => onCopy(candidate)}><Copy size={12} />{runText(locale, '复制', 'Copy')}</button>
+            <button type="button" className="icon-btn px-2" disabled={!candidate.sourceCurrent} onClick={() => onContinue(candidate)}><Pencil size={12} />{runText(locale, '继续编辑', 'Continue editing')}</button>
+            <button type="button" className="icon-btn px-2" onClick={() => onDiscard(candidate)}><Trash2 size={12} />{runText(locale, '放弃', 'Discard')}</button>
+          </div>
+        </article>
+      ))}
+    </section>
   )
 }
 

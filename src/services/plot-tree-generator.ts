@@ -21,14 +21,19 @@ export const PLOT_TREE_GENERATION_BUDGET = Object.freeze({
   deadlineMs: 10 * 60_000,
 })
 
+export const PLOT_TREE_INPUT_MAX_CHARACTERS = 220_000
+
 const PLOT_TREE_SOURCE_LIMITS = Object.freeze({
   synopsisCharacters: 6_000,
   labelCharacters: 160,
   detailCharacters: 320,
-  blueprints: 120,
-  finalizedChapters: 120,
-  narrativeThreads: 40,
-  eventsPerThread: 12,
+  largeProjectThreshold: 120,
+  largeProjectSynopsisCharacters: 3_000,
+  largeProjectLabelCharacters: 48,
+  largeProjectDetailCharacters: 64,
+  largeProjectEventDetailCharacters: 24,
+  blueprints: 200,
+  finalizedChapters: 200,
 })
 
 export interface GeneratePlotTreeInput {
@@ -68,6 +73,26 @@ export class PlotTreeSourceError extends Error {
   constructor() {
     super('NO_EVENT_SOURCES')
     this.name = 'PlotTreeSourceError'
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
+export class PlotTreeSourceLimitError extends Error {
+  readonly code = 'SOURCE_LIMIT_EXCEEDED'
+
+  constructor(readonly maximum: number) {
+    super('SOURCE_LIMIT_EXCEEDED')
+    this.name = 'PlotTreeSourceLimitError'
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
+export class PlotTreeInputLimitError extends Error {
+  readonly code = 'SOURCE_INPUT_TOO_LARGE'
+
+  constructor(readonly maximumCharacters: number) {
+    super('SOURCE_INPUT_TOO_LARGE')
+    this.name = 'PlotTreeInputLimitError'
     Object.setPrototypeOf(this, new.target.prototype)
   }
 }
@@ -129,44 +154,42 @@ function boundedText(value: string, maximum: number): string {
   return `${value.slice(0, head)}…${value.slice(-(maximum - head - 1))}`
 }
 
-function boundedItems<T>(values: readonly T[], maximum: number): T[] {
-  if (values.length <= maximum) return [...values]
-  const lastIndex = values.length - 1
-  return Array.from({ length: maximum }, (_, index) => (
-    values[Math.round((index * lastIndex) / (maximum - 1))]!
-  ))
-}
-
 function generationFacts(sources: PlotTreeSourceBundle) {
   const limits = PLOT_TREE_SOURCE_LIMITS
+  const largeProject = sources.blueprints.length > limits.largeProjectThreshold
+    || sources.finalizedChapters.length > limits.largeProjectThreshold
+  const labelCharacters = largeProject ? limits.largeProjectLabelCharacters : limits.labelCharacters
+  const detailCharacters = largeProject ? limits.largeProjectDetailCharacters : limits.detailCharacters
+  const eventDetailCharacters = largeProject ? limits.largeProjectEventDetailCharacters : limits.detailCharacters
+  const synopsisCharacters = largeProject ? limits.largeProjectSynopsisCharacters : limits.synopsisCharacters
   return {
-    synopsis: boundedText(sources.synopsis.content, limits.synopsisCharacters),
-    blueprints: boundedItems(sources.blueprints, limits.blueprints).map(blueprint => ({
+    synopsis: boundedText(sources.synopsis.content, synopsisCharacters),
+    blueprints: sources.blueprints.map(blueprint => ({
       chapterNumber: blueprint.chapterNumber,
-      title: boundedText(blueprint.title, limits.labelCharacters),
-      purpose: boundedText(blueprint.purpose, limits.detailCharacters),
-      keyEvents: boundedText(blueprint.keyEvents, limits.detailCharacters),
+      title: boundedText(blueprint.title, labelCharacters),
+      purpose: boundedText(blueprint.purpose, detailCharacters),
+      keyEvents: boundedText(blueprint.keyEvents, detailCharacters),
     })),
-    finalizedChapters: boundedItems(sources.finalizedChapters, limits.finalizedChapters).map(chapter => ({
+    finalizedChapters: sources.finalizedChapters.map(chapter => ({
       draftId: chapter.draftId,
       chapterNumber: chapter.chapterNumber,
-      title: boundedText(chapter.title, limits.labelCharacters),
-      summary: boundedText(chapter.summary, limits.detailCharacters),
+      title: boundedText(chapter.title, labelCharacters),
+      summary: boundedText(chapter.summary, detailCharacters),
     })),
-    narrativeThreads: boundedItems(sources.narrativeThreads, limits.narrativeThreads).map(thread => ({
+    narrativeThreads: sources.narrativeThreads.map(thread => ({
       id: thread.id,
-      title: boundedText(thread.title, limits.labelCharacters),
-      type: boundedText(thread.type, limits.labelCharacters),
+      title: boundedText(thread.title, labelCharacters),
+      type: boundedText(thread.type, labelCharacters),
       targetStartChapter: thread.targetStartChapter,
       targetEndChapter: thread.targetEndChapter,
-      authorIntent: boundedText(thread.authorIntent, limits.detailCharacters),
+      authorIntent: boundedText(thread.authorIntent, detailCharacters),
       status: thread.status,
-      events: boundedItems(thread.events, limits.eventsPerThread).map(event => ({
+      events: thread.events.map(event => ({
         id: event.id,
         chapterNumber: event.chapterNumber,
         type: event.type,
-        evidence: boundedText(event.evidence, limits.detailCharacters),
-        reason: boundedText(event.reason, limits.detailCharacters),
+        evidence: boundedText(event.evidence, eventDetailCharacters),
+        reason: boundedText(event.reason, eventDetailCharacters),
       })),
     })),
   }
@@ -202,6 +225,14 @@ export async function generatePlotTree(
   },
 ): Promise<PlotTreeSnapshot> {
   if (!hasUsablePlotTreeEventSource(input.sources)) throw new PlotTreeSourceError()
+  if (input.sources.blueprints.length > PLOT_TREE_SOURCE_LIMITS.blueprints
+    || input.sources.finalizedChapters.length > PLOT_TREE_SOURCE_LIMITS.finalizedChapters) {
+    throw new PlotTreeSourceLimitError(PLOT_TREE_SOURCE_LIMITS.blueprints)
+  }
+  const facts = JSON.stringify(generationFacts(input.sources))
+  if (facts.length > PLOT_TREE_INPUT_MAX_CHARACTERS) {
+    throw new PlotTreeInputLimitError(PLOT_TREE_INPUT_MAX_CHARACTERS)
+  }
   const runtime = await dependencies.createRuntime({
     budget: PLOT_TREE_GENERATION_BUDGET,
     modelId: input.modelId,
@@ -209,7 +240,6 @@ export async function generatePlotTree(
   })
   try {
     return await runtime.execute(async ({ session }) => {
-      const facts = JSON.stringify(generationFacts(input.sources))
       const task = (replacement: boolean) => ({
         purpose: replacement ? 'plot-tree-snapshot-replacement' : 'plot-tree-snapshot',
         reasoningStage: 'planning' as const,

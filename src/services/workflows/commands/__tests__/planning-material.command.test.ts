@@ -513,4 +513,90 @@ describe('planning material character extraction', () => {
     expect(observedPrompt.slice(firstStart, secondMarkerStart)).toHaveLength(11_999)
     expect(observedPrompt.slice(secondStart)).toBe(`😀${'b'.repeat(10)}`)
   })
+
+  it.each([
+    ['missing characterCards', { sourceId: '1:1' }],
+    ['non-array characterCards', { sourceId: '1:1', characterCards: {} }],
+    ['invalid card member', { sourceId: '1:1', characterCards: [null] }],
+    ['invalid optional field', { sourceId: '1:1', characterCards: [{ name: '林晓', role: 'protagonist', age: 18 }] }],
+    ['invalid relationship member', { sourceId: '1:1', characterCards: [{ name: '林晓', role: 'protagonist', relationships: [{ target: '周岚' }] }] }],
+  ] as const)('rejects %s instead of filtering the bad shape into an empty result', async (_case, result) => {
+    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.(JSON.stringify({ results: [result] }), undefined, 'stop')
+      return 'planning-material-request'
+    })
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+
+    await expect(new ExtractPlanningMaterialCharactersCommand([
+      { fileName: '人物设定.md', text: '林晓是十八岁的主角，认识周岚。' },
+    ]).execute({ step: {}, context, callbacks })).rejects.toThrow(
+      '角色卡提取失败（code=invalid_output；reason=invalid_item）。',
+    )
+
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(context.data).not.toHaveProperty('planningMaterialCharacterCandidates')
+  })
+
+  it('runs the 16-call minimum boundary and includes the final material chunk', async () => {
+    const observedSourceIds: string[] = []
+    const generateStream = vi.fn(async (messages, streamCallbacks) => {
+      const prompt = messages.find((message: { role: string; content: string }) => message.role === 'user')?.content ?? ''
+      const sourceIds = [...prompt.matchAll(/【资料 ([^｜]+)｜/gu)].map(match => match[1])
+      observedSourceIds.push(...sourceIds)
+      streamCallbacks.onDone?.(JSON.stringify({
+        results: sourceIds.map(sourceId => ({ sourceId, characterCards: [] })),
+      }), undefined, 'stop')
+      return `planning-material-request-${observedSourceIds.length}`
+    })
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const materials = Array.from({ length: 32 }, (_, index) => ({
+      fileName: `资料-${index + 1}.md`,
+      text: `第 ${index + 1} 份资料没有角色。`,
+    }))
+
+    await expect(new ExtractPlanningMaterialCharactersCommand(materials)
+      .execute({ step: {}, context, callbacks })).resolves.toContain('未发现明确角色')
+
+    expect(generateStream).toHaveBeenCalledTimes(16)
+    expect(observedSourceIds).toHaveLength(32)
+    expect(observedSourceIds.at(-1)).toBe('32:1')
+  })
+
+  it('rejects the 17-call minimum boundary before sending any material', async () => {
+    const generateStream = vi.fn()
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const materials = Array.from({ length: 33 }, (_, index) => ({
+      fileName: `资料-${index + 1}.md`,
+      text: `第 ${index + 1} 份资料没有角色。`,
+    }))
+
+    await expect(new ExtractPlanningMaterialCharactersCommand(materials)
+      .execute({ step: {}, context, callbacks })).rejects.toThrow('至少需要 17 次模型调用')
+
+    expect(generateStream).not.toHaveBeenCalled()
+    expect(context.data).not.toHaveProperty('planningMaterialCharacterCandidates')
+  })
+
+  it('does not carry a cancelled extraction candidate into a reopened run', async () => {
+    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.(JSON.stringify({
+        results: [{ sourceId: '1:1', characterCards: [] }],
+      }), undefined, 'stop')
+      return 'planning-material-request'
+    })
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const materials = [{ fileName: '资料.md', text: '本资料没有角色。' }]
+
+    context.cancelled = true
+    await expect(new ExtractPlanningMaterialCharactersCommand(materials)
+      .execute({ step: {}, context, callbacks })).rejects.toThrow('工作流已取消')
+    expect(generateStream).not.toHaveBeenCalled()
+    expect(context.data).not.toHaveProperty('planningMaterialCharacterCandidates')
+
+    context.cancelled = false
+    await expect(new ExtractPlanningMaterialCharactersCommand(materials)
+      .execute({ step: {}, context, callbacks })).resolves.toContain('未发现明确角色')
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(context.data).toHaveProperty('planningMaterialCharacterCandidates', [])
+  })
 })

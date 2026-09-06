@@ -44,6 +44,9 @@ let invoke: ReturnType<typeof vi.fn>
 let listeners: Map<string, EventListener>
 let deferStream: boolean
 let pendingRequestId: string | null
+let deferFirstLease: boolean
+let rejectFirstLease: ((error: Error) => void) | null
+let leaseRequestCount: number
 
 beforeEach(() => {
   container = document.createElement('div')
@@ -52,6 +55,9 @@ beforeEach(() => {
   listeners = new Map()
   deferStream = false
   pendingRequestId = null
+  deferFirstLease = false
+  rejectFirstLease = null
+  leaseRequestCount = 0
   useLLMStore.setState({
     defaultModelId: 'editor-model',
     loaded: true,
@@ -59,7 +65,15 @@ beforeEach(() => {
   })
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
-    if (channel === 'llm:begin-execution-lease') return { success: true, lease: LEASE }
+    if (channel === 'llm:begin-execution-lease') {
+      leaseRequestCount += 1
+      if (deferFirstLease && leaseRequestCount === 1) {
+        return new Promise((_resolve, reject) => {
+          rejectFirstLease = reject
+        })
+      }
+      return { success: true, lease: LEASE }
+    }
     if (channel === 'llm:close-execution-lease') return { success: true }
     if (channel === 'llm:generate-stream') {
       const requestId = String(args[0])
@@ -226,5 +240,39 @@ describe('CodeMirror editor AI generation boundary', () => {
     expect(view.state.doc.toString()).toBe('甲乙')
     await expect.element(page.getByText('正文已变为只读，结果未应用；你仍可复制预览内容')).toBeVisible()
     await expect.element(page.getByText('替换甲')).toBeVisible()
+  })
+
+  it('keeps request B visible when cancelled request A fails after B succeeds', async () => {
+    deferFirstLease = true
+    deferStream = true
+    await act(async () => root.render(
+      <CodeMirrorEditor content="甲乙" mode="prose" />,
+    ))
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+
+    await act(async () => page.getByText('甲乙').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await vi.waitFor(() => expect(rejectFirstLease).not.toBeNull())
+    await act(async () => page.getByRole('button', { name: '取消' }).click())
+
+    await act(async () => {
+      view.dispatch({ selection: { anchor: 0 } })
+      view.dispatch({ selection: { anchor: 0, head: 2 } })
+    })
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await vi.waitFor(() => expect(pendingRequestId).not.toBeNull())
+    await act(async () => {
+      listeners.get('llm:stream-done')?.({
+        requestId: pendingRequestId!,
+        fullText: 'B 的结果',
+        finishReason: 'stop',
+      } as never)
+    })
+    await expect.element(page.getByText('B 的结果')).toBeVisible()
+
+    await act(async () => rejectFirstLease!(new Error('A late failure')))
+
+    await expect.element(page.getByText('B 的结果')).toBeVisible()
+    await expect.element(page.getByText('生成失败，结果不可应用')).not.toBeInTheDocument()
   })
 })

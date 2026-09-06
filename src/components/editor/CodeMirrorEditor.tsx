@@ -102,6 +102,11 @@ export default function CodeMirrorEditor({
     documentText: string
   } | null>(null)
 
+  useEffect(() => () => {
+    aiRequestSequenceRef.current += 1
+    aiTargetRef.current = null
+  }, [])
+
   useEffect(() => {
     if (aiResult === '') {
       const timer = setInterval(() => setLoadingDots(d => d.length >= 3 ? '.' : d + '.'), 400)
@@ -280,11 +285,12 @@ export default function CodeMirrorEditor({
   // AI 菜单处理（流式调用，实时显示生成内容）
   const handleAIAction = async (action: EditorAIAction) => {
     let runtime: Awaited<ReturnType<typeof createGenerationRuntime>> | null = null
+    let requestSequence: number | null = null
     try {
       if (!selectionRange || !editorRef.current?.view) return
       const view = editorRef.current.view
       const selectedText = view.state.sliceDoc(selectionRange.from, selectionRange.to)
-      const requestSequence = ++aiRequestSequenceRef.current
+      requestSequence = ++aiRequestSequenceRef.current
       aiTargetRef.current = {
         requestSequence,
         from: selectionRange.from,
@@ -329,6 +335,7 @@ export default function CodeMirrorEditor({
       setAiResult(outcome.content)
     } catch (e) {
       console.error(e)
+      if (requestSequence !== aiRequestSequenceRef.current) return
       setAiResult('')
       setAiError(uiText('生成失败，结果不可应用', 'Generation failed; the result cannot be applied.'))
     } finally {

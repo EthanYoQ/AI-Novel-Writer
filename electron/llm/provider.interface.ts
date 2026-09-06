@@ -26,7 +26,8 @@ export interface LLMStreamOptions extends LLMGenerateOptions {
    * that a creative workflow may commit it.
    */
   onDone: (fullText: string, usage: TokenUsage | undefined, finishReason: LLMFinishReason) => void
-  onError: (error: string) => void
+  /** Optional content is the already-delivered visible candidate, never hidden reasoning. */
+  onError: (error: string, content?: string, usage?: TokenUsage) => void
 }
 
 export interface ILLMProvider {

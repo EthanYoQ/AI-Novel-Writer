@@ -6,9 +6,10 @@ import type { GlobalConfig } from '../shared/ipc-channels'
 
 export interface LocaleDependencies {
   loadConfig: () => Promise<Partial<GlobalConfig>>
-  saveLocale: (locale: Locale) => Promise<void>
+  saveLocale: (locale: Locale) => Promise<{ success: boolean; error?: string }>
   systemLocale: () => string | undefined
   setDocumentLanguage: (locale: Locale) => void
+  reportError?: (message: string, title: string) => void | Promise<void>
 }
 
 export interface LocaleState {
@@ -44,9 +45,27 @@ export function createLocaleState(dependencies: LocaleDependencies): StateCreato
         set({ locale, initialized: true, ...localeReaders() })
       },
       async setLocale(locale) {
+        const previousLocale = get().locale
+        if (locale === previousLocale) return
         set({ locale, ...localeReaders() })
         dependencies.setDocumentLanguage(locale)
-        await dependencies.saveLocale(locale)
+        try {
+          const result = await dependencies.saveLocale(locale)
+          if (!result.success) throw new Error(result.error ?? 'Failed to persist locale')
+        } catch (error) {
+          if (get().locale === locale) {
+            set({ locale: previousLocale, ...localeReaders() })
+            dependencies.setDocumentLanguage(previousLocale)
+          }
+          await dependencies.reportError?.(
+            localize(
+              previousLocale,
+              `语言设置保存失败：${error instanceof Error ? error.message : String(error)}`,
+              `Could not save the language setting: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+            localize(previousLocale, '语言设置保存失败', 'Could not save language setting'),
+          )
+        }
       },
       async toggleLocale() {
         await get().setLocale(get().locale === 'zh-CN' ? 'en-US' : 'zh-CN')
@@ -57,13 +76,14 @@ export function createLocaleState(dependencies: LocaleDependencies): StateCreato
 
 const browserDependencies: LocaleDependencies = {
   loadConfig: () => ipc.invoke('config:get'),
-  async saveLocale(locale) {
-    const result = await ipc.invoke('config:set', { locale })
-    if (!result.success) throw new Error(result.error ?? 'Failed to persist locale')
-  },
+  saveLocale: locale => ipc.invoke('config:set', { locale }),
   systemLocale: () => globalThis.navigator?.language,
   setDocumentLanguage(locale) {
     if (globalThis.document) globalThis.document.documentElement.lang = locale
+  },
+  async reportError(message, title) {
+    const { alertError } = await import('../components/ui/AlertDialog')
+    await alertError(message, { title })
   },
 }
 

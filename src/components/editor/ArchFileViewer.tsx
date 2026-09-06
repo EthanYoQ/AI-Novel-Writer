@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { Save, RefreshCw, Sparkles, Loader2, AlertTriangle, FileText } from 'lucide-react'
 import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
-import { useEditorStore } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
@@ -225,6 +225,16 @@ function ArchFileViewerSession({
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
   }, [filePath, isCharacterProjection, projectKey, tabId])
+
+  useEffect(() => {
+    if (isCharacterProjection) return
+    return registerEditorExitSaveHandler({
+      tabId,
+      type: 'arch-file',
+      projectKey,
+      save: () => handleSave(currentContentRef.current),
+    })
+  }, [handleSave, isCharacterProjection, projectKey, tabId])
 
   /** 从 DB 重新加载（AI 生成后刷新用） */
   const handleReload = useCallback(async () => {

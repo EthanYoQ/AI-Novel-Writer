@@ -162,7 +162,7 @@ function fakeRuntime(
   completeAttempt: (
     attempt: number,
     task: GenerationTask,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; onChunk?: (chunk: string) => void },
   ) => GenerationOutcome | Promise<GenerationOutcome>,
 ) {
   let attempt = 0
@@ -268,7 +268,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
     keyEvents?: string
     knowledgeQueryHint?: string
+    characterCards?: Array<{
+      name: string
+      role: string
+      currentState: Record<string, unknown>
+    }>
   }) {
+    let recoveryCandidateSequence = 0
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts')) return false
@@ -295,9 +301,20 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           : null
       }
       if (channel === 'kb:search-writing-context') return options.knowledgeResults ?? []
-      if (channel === 'fs:list-dir' || channel === 'db:character-get-all') return []
+      if (channel === 'db:character-get-all') return options.characterCards ?? []
+      if (channel === 'fs:list-dir') return []
       if (channel === 'db:draft-next-version') return 1
       if (channel === 'db:draft-create') return { success: true, id: 'draft-1' }
+      if (channel === 'db:recovery-candidate-record') {
+        recoveryCandidateSequence += 1
+        return {
+          success: true,
+          candidate: {
+            ...(args[0] as Record<string, unknown>),
+            candidateId: `candidate-${recoveryCandidateSequence}`,
+          },
+        } as { success: boolean; candidate?: { candidateId: string }; error?: string }
+      }
       throw new Error(`unexpected IPC: ${channel}`)
     })
     vi.stubGlobal('window', {
@@ -348,6 +365,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       log: vi.fn(),
       setProgress: vi.fn(),
       appendText: vi.fn(),
+      replaceText: vi.fn(),
     }
     const command = new GenerateDraftCommand({
       projectPath,
@@ -368,6 +386,127 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(invoke).not.toHaveBeenCalledWith('db:draft-next-version', expect.anything(), expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   }
+
+  it('persists visible prose from an interrupted stream before returning the error', async () => {
+    const runtime = fakeRuntime((_attempt, _task, options) => {
+      options?.onChunk?.('<think>private reasoning</think>林岚推开驾驶室的门。')
+      throw Object.assign(new Error('connection reset'), { code: 'PROVIDER_REQUEST_FAILED' })
+    })
+    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500 })
+
+    await expect(command.execute({
+      step: { id: 'draft-step' },
+      context,
+      callbacks,
+    })).rejects.toThrow('connection reset')
+
+    expect(invoke).toHaveBeenCalledWith(
+      'db:recovery-candidate-record',
+      expect.objectContaining({
+        runId: context.runId,
+        stepId: 'draft-step',
+        chapterNumber: 1,
+        visibleText: '林岚推开驾驶室的门。',
+        failureCode: 'PROVIDER_REQUEST_FAILED',
+      }),
+      projectPath,
+      context.projectSession,
+    )
+    expectNoDraftPersistence(invoke)
+  })
+
+  it('persists received prose when cancellation wins the generation race', async () => {
+    const activeContext: { value?: WorkflowContext } = {}
+    const runtime = fakeRuntime((_attempt, _task, options) => {
+      options?.onChunk?.('取消前已经收到的正文。')
+      if (activeContext.value) activeContext.value.cancelled = true
+      throw Object.assign(new Error('aborted'), { code: 'CANCELLED' })
+    })
+    const prepared = setup({ runtime, wordsTarget: 500 })
+    activeContext.value = prepared.context
+
+    await expect(prepared.command.execute({
+      step: { id: 'draft-step' },
+      context: prepared.context,
+      callbacks: prepared.callbacks,
+    })).rejects.toThrow('工作流已取消')
+
+    expect(prepared.invoke).toHaveBeenCalledWith(
+      'db:recovery-candidate-record',
+      expect.objectContaining({
+        visibleText: '取消前已经收到的正文。',
+        failureCode: 'CANCELLED',
+      }),
+      projectPath,
+      prepared.context.projectSession,
+    )
+  })
+
+  it('persists a quality-short candidate and never promotes it to drafts', async () => {
+    const runtime = fakeRuntime(() => outcome('正文太短。', 'stop'))
+    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500 })
+
+    await expect(command.execute({ step: { id: 'draft-step' }, context, callbacks }))
+      .rejects.toThrow(/明显未达到章节目标/u)
+
+    expect(invoke).toHaveBeenCalledWith(
+      'db:recovery-candidate-record',
+      expect.objectContaining({ visibleText: expect.stringContaining('正文太短。') }),
+      projectPath,
+      context.projectSession,
+    )
+    expectNoDraftPersistence(invoke)
+  })
+
+  it('persists the original and failed length-replacement candidates with lineage', async () => {
+    const original = '原始章节内容。'.repeat(120)
+    const replacement = '替代版本仍被截断。'.repeat(20)
+    const runtime = fakeOutcomes(
+      outcome(original, 'stop', 1),
+      outcome(replacement, 'length', 2),
+    )
+    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500 })
+
+    await expect(command.execute({ step: { id: 'draft-step' }, context, callbacks }))
+      .rejects.toThrow(/长度修复未完整结束/u)
+
+    const records = invoke.mock.calls.filter(([channel]) => channel === 'db:recovery-candidate-record')
+    expect(records).toHaveLength(2)
+    expect(records[0]?.[1]).toMatchObject({
+      stepId: 'draft-step',
+      visibleText: original,
+    })
+    expect(records[1]?.[1]).toMatchObject({
+      stepId: 'chapter-draft-length-repair',
+      visibleText: replacement,
+      replacesCandidateId: 'candidate-1',
+    })
+  })
+
+  it('keeps the in-memory text and reports when candidate persistence fails', async () => {
+    const runtime = fakeRuntime(() => outcome('正文太短。', 'stop'))
+    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500 })
+    const baseInvoke = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:recovery-candidate-record') {
+        return { success: false, error: 'disk full' }
+      }
+      return baseInvoke(channel, ...args)
+    })
+
+    await expect(command.execute({ step: { id: 'draft-step' }, context, callbacks }))
+      .rejects.toThrow(/恢复候选保存失败.*disk full/u)
+    expect(callbacks.replaceText).toHaveBeenLastCalledWith(expect.stringContaining('正文太短。'))
+  })
+
+  it('does not create a recovery candidate for a successful generation', async () => {
+    const runtime = fakeOutcomes(outcome('正'.repeat(450), 'stop'))
+    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500 })
+
+    await command.execute({ step: { id: 'draft-step' }, context, callbacks })
+
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:recovery-candidate-record')).toBe(false)
+  })
 
   it('uses the frozen English UI locale for draft start and save logs', async () => {
     const runtime = fakeRuntime(() => outcome('Draft prose. '.repeat(250), 'stop'))
@@ -1144,7 +1283,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
-  it('clears provisional text after a failed attempt and ignores its late chunks', async () => {
+  it('keeps provisional text as a recovery candidate after a failed attempt and ignores late chunks', async () => {
     let lateChunk: ((chunk: string) => void) | undefined
     const runtime = fakeRuntime((_attempt, _task, options) => {
       lateChunk = (options as { onChunk?: (chunk: string) => void } | undefined)?.onChunk
@@ -1161,10 +1300,16 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       callbacks,
     })).rejects.toThrow('provider disconnected')
 
-    expect(replaceText).toHaveBeenLastCalledWith('')
+    expect(replaceText).toHaveBeenLastCalledWith('不会落盘的正文')
     lateChunk?.('晚到的正文')
-    expect(replaceText).toHaveBeenLastCalledWith('')
+    expect(replaceText).toHaveBeenLastCalledWith('不会落盘的正文')
     expect(JSON.stringify(replaceText.mock.calls)).not.toContain('晚到的正文')
+    expect(setupResult.invoke).toHaveBeenCalledWith(
+      'db:recovery-candidate-record',
+      expect.objectContaining({ visibleText: '不会落盘的正文' }),
+      expect.anything(),
+      expect.anything(),
+    )
     expectNoDraftPersistence(setupResult.invoke)
   })
 
@@ -1278,6 +1423,152 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('续')
     expect(runtime.complete).toHaveBeenCalledTimes(2)
+  })
+
+  it('routes an over-target length candidate into the bounded full-chapter replacement', async () => {
+    const initialCandidate = `${'甲'.repeat(4000)}。`
+    const replacement = `${'乙'.repeat(2800)}。`
+    const runtime = fakeOutcomes(
+      outcome(initialCandidate, 'length', 1),
+      outcome(replacement, 'stop', 2),
+    )
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      wordsPerChapter: 3000,
+      wordsTarget: 3000,
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(replacement)
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
+      'chapter-draft',
+      'chapter-draft-length-repair',
+    ])
+    const repairPrompt = runtime.complete.mock.calls[1]?.[0].messages
+      .find(message => message.role === 'user')?.content ?? ''
+    expect(repairPrompt).toContain(initialCandidate)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({ content: replacement }),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
+  it('keeps an over-target length candidate visible when the shared budget cannot replace it', async () => {
+    const initialCandidate = `${'甲'.repeat(4000)}。`
+    const runtime = fakeRuntime((attempt) => {
+      if (attempt === 1) return outcome(initialCandidate, 'length', 1)
+      throw new Error('生成会话已用尽请求次数。')
+    })
+    const setupResult = setup({ runtime, wordsPerChapter: 3000, wordsTarget: 3000 })
+    const replaceText = vi.fn()
+    const callbacks = Object.assign(setupResult.callbacks, { replaceText })
+
+    await expect(setupResult.command.execute({
+      step: {},
+      context: setupResult.context,
+      callbacks,
+    })).rejects.toThrow('生成会话已用尽请求次数')
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
+      'chapter-draft',
+      'chapter-draft-length-repair',
+    ])
+    expect(replaceText).toHaveBeenLastCalledWith(initialCandidate)
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('已保存为项目恢复候选'))
+    expectNoDraftPersistence(setupResult.invoke)
+  })
+
+  it('keeps frozen relevant state, continuity, and selected references in continuation and compression', async () => {
+    const characterStateSentinel = 'UNIQUE_ROLE_STATE_MIDDLE_SENTINEL'
+    const continuitySentinel = 'UNIQUE_FINALIZED_FACT_MIDDLE_SENTINEL'
+    const referenceSentinel = 'UNIQUE_SELECTED_REFERENCE_MIDDLE_SENTINEL'
+    const characterCards = [
+      {
+        name: '林岚',
+        role: 'protagonist',
+        currentState: {
+          powerLevel: '普通人',
+          location: '旧档案馆',
+          physicalState: '轻伤',
+          mentalState: characterStateSentinel,
+          keyItems: '蓝色钥匙',
+          recentEvents: '接到交接任务',
+          updatedAtChapter: 1,
+        },
+      },
+      {
+        name: '周岚',
+        role: 'supporting',
+        currentState: { mentalState: 'IRRELEVANT_ROLE_STATE_SENTINEL' },
+      },
+    ]
+    const sharedSetup = {
+      chapterNumber: 2,
+      characters: ['林岚'],
+      characterCards,
+      continuity: [{
+        draftId: 41,
+        chapterNumber: 1,
+        chapterTitle: '交接',
+        chapterNotes: continuitySentinel,
+        facts: [{
+          category: 'character-state' as const,
+          entities: ['林岚'],
+          statement: continuitySentinel,
+          sourceChapter: 1,
+          evidence: '第一章定稿中段',
+        }],
+      }],
+      knowledgeResults: [{ fileName: 'author-notes.md', score: 0.99, text: referenceSentinel }],
+    }
+    const initialRuntime = fakeOutcomes(outcome(`${'首'.repeat(500)}。`, 'stop', 1))
+    const initial = setup({
+      runtime: initialRuntime,
+      chapterNumber: 1,
+      wordsTarget: 500,
+      characters: sharedSetup.characters,
+      characterCards,
+    })
+    await initial.command.execute({ step: {}, context: initial.context, callbacks: initial.callbacks })
+    const initialPrompt = initialRuntime.complete.mock.calls[0]?.[0].messages
+      .find(message => message.role === 'user')?.content ?? ''
+    const continuationRuntime = fakeOutcomes(
+      outcome('初'.repeat(100), 'length', 1),
+      outcome(`${'续'.repeat(400)}。`, 'stop', 2),
+    )
+    const continuation = setup({
+      runtime: continuationRuntime,
+      wordsTarget: 500,
+      ...sharedSetup,
+    })
+    await continuation.command.execute({ step: {}, context: continuation.context, callbacks: continuation.callbacks })
+    const continuationPrompt = continuationRuntime.complete.mock.calls[1]?.[0].messages
+      .find(message => message.role === 'user')?.content ?? ''
+
+    const compressionRuntime = fakeOutcomes(
+      outcome(`${'甲'.repeat(4000)}。`, 'length', 1),
+      outcome(`${'乙'.repeat(2800)}。`, 'stop', 2),
+    )
+    const compression = setup({
+      runtime: compressionRuntime,
+      wordsPerChapter: 3000,
+      wordsTarget: 3000,
+      ...sharedSetup,
+    })
+    await compression.command.execute({ step: {}, context: compression.context, callbacks: compression.callbacks })
+    const compressionPrompt = compressionRuntime.complete.mock.calls[1]?.[0].messages
+      .find(message => message.role === 'user')?.content ?? ''
+
+    for (const prompt of [initialPrompt, continuationPrompt, compressionPrompt]) {
+      expect(prompt).toContain(characterStateSentinel)
+      expect(prompt).not.toContain('IRRELEVANT_ROLE_STATE_SENTINEL')
+    }
+    for (const prompt of [continuationPrompt, compressionPrompt]) {
+      expect(prompt).toContain(continuitySentinel)
+      expect(prompt).toContain(referenceSentinel)
+    }
   })
 
   it('recovers once from an output-limited continuation with no visible progress and commits only the recovered draft', async () => {

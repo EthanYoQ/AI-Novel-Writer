@@ -36,7 +36,7 @@ import { confirm } from '../ui/Confirm'
 import { globalEventBus } from '../../shared/event-bus'
 import { shouldRefreshBlueprints } from './blueprint-refresh'
 import { useLocaleStore } from '../../stores/locale-store'
-import { useEditorStore } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import {
   CHAPTER_CARD_TAB_ID,
   captureBlueprintSnapshots,
@@ -438,6 +438,16 @@ export default function ChapterCardEditor({
       if (isCurrentProjectSession(projectSession)) setSaving(false)
     }
   }
+
+  const exitSaveRef = useRef(handleSaveAll)
+  useEffect(() => {
+    exitSaveRef.current = handleSaveAll
+  })
+  useEffect(() => registerEditorExitSaveHandler({
+      type: 'chapter-card',
+      projectKey,
+      save: () => exitSaveRef.current(),
+    }), [projectKey])
 
   /** 新建空章节 */
   const handleAddChapter = () => {

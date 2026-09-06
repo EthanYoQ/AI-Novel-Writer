@@ -7,6 +7,7 @@ import {
   type CharacterRosterEntry,
 } from '../../../shared/character-roster'
 import { CHARACTER_ROLES, CHARACTER_ROLE_LABELS } from '../../../shared/character-role'
+import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { useProjectStore } from '../../../stores/project-store'
 import { promptLanguageText } from '../../prompt-language'
@@ -19,11 +20,13 @@ import { requireWorkflowProjectSession, workflowUiText, workflowWritingLanguage 
 import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
+  WORKFLOW_GENERATION_BUDGETS,
   type CommandExecuteParams,
   type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
 
 const MATERIAL_CHUNK_CHARACTERS = 12_000
+const MATERIAL_EXTRACTION_BATCH_SIZE = 2
 const MATERIAL_CHUNK_BOUNDARY_START = Math.floor(MATERIAL_CHUNK_CHARACTERS * 0.8)
 const PLANNING_MATERIAL_CHARACTER_CANDIDATES = 'planningMaterialCharacterCandidates'
 
@@ -117,18 +120,81 @@ function materialChunks(materials: readonly PlanningMaterial[]): MaterialChunk[]
 function parseExtraction(content: string): MaterialExtraction[] {
   const trimmed = content.trim()
   const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
-  const root = JSON.parse(fenced?.[1]?.trim() ?? trimmed) as { results?: unknown }
-  if (!Array.isArray(root.results)) throw new Error('角色提取响应缺少 results')
-  return root.results.map((candidate) => {
+  const root = JSON.parse(fenced?.[1]?.trim() ?? trimmed) as unknown
+  if (!root || typeof root !== 'object' || Array.isArray(root)) {
+    throw new StructuredContractDiagnostic('invalid_envelope', '$')
+  }
+  const rootRecord = root as Record<string, unknown>
+  if (Object.keys(rootRecord).some(key => key !== 'results')) {
+    throw new StructuredContractDiagnostic('unexpected_item', '$')
+  }
+  if (!Array.isArray(rootRecord.results)) {
+    throw new StructuredContractDiagnostic(
+      Object.hasOwn(rootRecord, 'results') ? 'invalid_type' : 'missing_field',
+      '$.results',
+    )
+  }
+  const resultKeys = new Set(['sourceId', 'characterCards'])
+  const cardKeys = new Set([
+    'name', 'role', ...MATERIAL_CHARACTER_TEXT_FIELDS, 'relationships',
+  ])
+  const requireNonEmptyText = (value: unknown, path: string): string => {
+    if (typeof value !== 'string') throw new StructuredContractDiagnostic('invalid_type', path)
+    if (!value.trim()) throw new StructuredContractDiagnostic('empty_value', path)
+    return value
+  }
+  return rootRecord.results.map((candidate, resultIndex) => {
+    const resultPath = `$.results[${resultIndex}]`
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
-      throw new Error('角色提取结果必须是对象')
+      throw new StructuredContractDiagnostic('invalid_type', resultPath)
     }
     const value = candidate as Record<string, unknown>
+    for (const key of Object.keys(value)) {
+      if (!resultKeys.has(key)) throw new StructuredContractDiagnostic('unexpected_item', `${resultPath}.${key}`)
+    }
+    const sourceId = requireNonEmptyText(value.sourceId, `${resultPath}.sourceId`)
+    if (!Array.isArray(value.characterCards)) {
+      throw new StructuredContractDiagnostic(
+        Object.hasOwn(value, 'characterCards') ? 'invalid_type' : 'missing_field',
+        `${resultPath}.characterCards`,
+      )
+    }
+    const characterCards = value.characterCards.map((card, cardIndex) => {
+      const cardPath = `${resultPath}.characterCards[${cardIndex}]`
+      if (!card || typeof card !== 'object' || Array.isArray(card)) {
+        throw new StructuredContractDiagnostic('invalid_type', cardPath)
+      }
+      const cardValue = card as Record<string, unknown>
+      for (const key of Object.keys(cardValue)) {
+        if (!cardKeys.has(key)) throw new StructuredContractDiagnostic('unexpected_item', `${cardPath}.${key}`)
+      }
+      requireNonEmptyText(cardValue.name, `${cardPath}.name`)
+      requireNonEmptyText(cardValue.role, `${cardPath}.role`)
+      for (const field of MATERIAL_CHARACTER_TEXT_FIELDS) {
+        if (Object.hasOwn(cardValue, field)) requireNonEmptyText(cardValue[field], `${cardPath}.${field}`)
+      }
+      if (Object.hasOwn(cardValue, 'relationships')) {
+        if (!Array.isArray(cardValue.relationships)) {
+          throw new StructuredContractDiagnostic('invalid_type', `${cardPath}.relationships`)
+        }
+        for (const [relationshipIndex, relationship] of cardValue.relationships.entries()) {
+          const relationshipPath = `${cardPath}.relationships[${relationshipIndex}]`
+          if (!relationship || typeof relationship !== 'object' || Array.isArray(relationship)) {
+            throw new StructuredContractDiagnostic('invalid_type', relationshipPath)
+          }
+          const relationshipValue = relationship as Record<string, unknown>
+          if (Object.keys(relationshipValue).some(key => key !== 'target' && key !== 'relation')) {
+            throw new StructuredContractDiagnostic('unexpected_item', relationshipPath)
+          }
+          requireNonEmptyText(relationshipValue.target, `${relationshipPath}.target`)
+          requireNonEmptyText(relationshipValue.relation, `${relationshipPath}.relation`)
+        }
+      }
+      return cardValue
+    })
     return {
-      sourceId: typeof value.sourceId === 'string' ? value.sourceId : '',
-      characterCards: Array.isArray(value.characterCards)
-        ? value.characterCards.filter(card => Boolean(card) && typeof card === 'object' && !Array.isArray(card)) as Array<Record<string, unknown>>
-        : [],
+      sourceId,
+      characterCards,
     }
   })
 }
@@ -208,6 +274,14 @@ export class ExtractPlanningMaterialCharactersCommand extends BaseWorkflowComman
       context.data[PLANNING_MATERIAL_CHARACTER_CANDIDATES] = []
       return formatCandidatePreview([], context)
     }
+    const minimumCalls = Math.ceil(chunks.length / MATERIAL_EXTRACTION_BATCH_SIZE)
+    const callCap = WORKFLOW_GENERATION_BUDGETS.structured.maxAttempts
+    if (minimumCalls > callCap) {
+      throw new Error(text(
+        `所选资料会生成 ${chunks.length} 个分块，按每批 ${MATERIAL_EXTRACTION_BATCH_SIZE} 块至少需要 ${minimumCalls} 次模型调用，超过本次上限 ${callCap} 次。尚未发送任何资料；请减少本次选择后分批提取。`,
+        `The selected material produces ${chunks.length} chunks and needs at least ${minimumCalls} model calls at ${MATERIAL_EXTRACTION_BATCH_SIZE} chunks per batch, exceeding this run's ${callCap}-call limit. No material was sent; reduce the selection and extract it in separate runs.`,
+      ))
+    }
     callbacks.log(text('正在从创作资料中提取角色卡...', 'Extracting character cards from the planning material...'))
 
     const contract: StructuredBatchContract<MaterialChunk, MaterialExtraction> = {
@@ -262,7 +336,7 @@ export class ExtractPlanningMaterialCharactersCommand extends BaseWorkflowComman
       onAttempt: receipt => this.reportGenerationPromptBudget(callbacks, receipt),
     }).execute({
       items: chunks,
-      limits: { maxBatchItems: 2 },
+      limits: { maxBatchItems: MATERIAL_EXTRACTION_BATCH_SIZE },
       signal: generation.signal,
     })
     if (!extraction.ok) {

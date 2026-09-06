@@ -33,6 +33,9 @@ import { createStructuredBatchExecutor, type StructuredBatchContract } from '../
 import { localizeNovelConfigFacts } from '../../../shared/novel-config-localization'
 import {
   GENERATED_GLOBAL_GUIDANCE_MAX_CHARS,
+  GENERATED_GLOBAL_GUIDANCE_MAX_RULES,
+  GENERATED_GLOBAL_GUIDANCE_MIN_RULES,
+  isGeneratedGlobalGuidanceValid,
   mergeExpandedNovelConfig,
 } from '../novel-config-expansion'
 
@@ -100,19 +103,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function boundedGeneratedGlobalGuidance(content: string): string {
-  const characters = Array.from(content)
-  if (characters.length <= GENERATED_GLOBAL_GUIDANCE_MAX_CHARS) return content
-
-  const prefix = characters.slice(0, GENERATED_GLOBAL_GUIDANCE_MAX_CHARS).join('')
-  const boundary = /(?:\r?\n|[。！？!?][”’"'）)\]】」』]*|\.[”’"')\]]*(?=\s|$))/gu
-  let safeEnd = 0
-  for (const match of prefix.matchAll(boundary)) {
-    safeEnd = match.index + match[0].length
-  }
-  return (safeEnd ? prefix.slice(0, safeEnd) : prefix).trim()
-}
-
 function decodeCompleteNovelConfig(
   content: string,
   expectedTotalChapters: number,
@@ -135,7 +125,6 @@ function decodeCompleteNovelConfig(
     }
     textFields[field] = value[field].trim()
   }
-  textFields.globalGuidance = boundedGeneratedGlobalGuidance(textFields.globalGuidance)
   if (typeof value.plotStructure !== 'string' || !PLOT_STRUCTURES.has(value.plotStructure as NovelConfig['plotStructure'])) {
     throw new Error('AI 返回的小说配置包含非法 plotStructure')
   }
@@ -576,6 +565,35 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
         'AI 返回的小说配置不完整或无效，结果未应用。详细信息: ' + String(e),
         'The AI novel configuration was incomplete or invalid, so the result was not applied.',
       ))
+    }
+    if (!isGeneratedGlobalGuidanceValid(parsed.globalGuidance)) {
+      callbacks.log(text(
+        '生成的全局写作要求不符合 4–8 条简短规则合同，正在执行唯一一次字段级完整替代。',
+        'The generated global guidance did not satisfy the 4–8 short-rule contract; requesting the single field-level replacement.',
+      ))
+      const replacement = await this.callLLM(
+        promptLanguageText(
+          writingLanguage,
+          `只纠正小说配置中的 globalGuidance 字段。写 ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} 条跨章节长期有效的简短规则，每条独占一行，总计不超过 ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} 字符。不得逐章列大纲、分配章节区间或复述核心大纲。只输出规则正文，不要标题、解释、Markdown 或 JSON。\n\n【已验证的其余小说配置，仅作上下文】\n${JSON.stringify({ ...parsed, globalGuidance: undefined }, null, 2)}`,
+          `Correct only the globalGuidance field in the novel configuration. Write ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} short, stable cross-chapter rules, one per line, within ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} characters total. Do not enumerate chapters, allocate chapter ranges, or restate the core outline. Output only the rules, with no title, explanation, Markdown, or JSON.\n\n[Validated remaining novel configuration — context only]\n${JSON.stringify({ ...parsed, globalGuidance: undefined }, null, 2)}`,
+        ),
+        promptBuilder.getSystemRole(),
+        callbacks,
+        {
+          purpose: 'generate-global-guidance-replacement',
+          reasoningStage: 'planning',
+          writingSkillStage: 'planning',
+        },
+        context,
+      )
+      const replacementGuidance = this.stripThinkingTags(replacement).trim()
+      if (!isGeneratedGlobalGuidanceValid(replacementGuidance)) {
+        throw new Error(text(
+          `全局写作要求仍不符合 ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} 条且不超过 ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} 字符的合同，配置未应用。`,
+          `The global guidance still does not satisfy the ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES}-rule, ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS}-character contract, so the configuration was not applied.`,
+        ))
+      }
+      parsed = { ...parsed, globalGuidance: replacementGuidance }
     }
 
     this.assertNotCancelled(context)

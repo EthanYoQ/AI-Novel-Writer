@@ -19,6 +19,7 @@ import {
 } from './tool-registry'
 import { createAgentExecutionContext } from './tools/project-context'
 import { writingLanguageText, type WritingLanguage } from '../../shared/writing-language'
+import type { FileWriteCommitState } from '../../shared/ipc-channels'
 
 // ===== 常量 =====
 
@@ -41,6 +42,7 @@ export interface ToolCallInfo {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'result_unknown' | 'waiting_confirm'
   result?: string
   error?: string
+  commitState?: FileWriteCommitState
   /** Tool 来源标记 */
   source?: string
   /** Frozen project identity used to render and execute a confirmed domain proposal. */
@@ -235,6 +237,7 @@ export async function runAgentLoop(
         confirmationDecision = typeof response === 'boolean' ? { confirmed: response } : response
         if (!confirmationDecision.confirmed) {
           toolCallInfo.status = 'failed'
+          if (!tool.isReadOnly) toolCallInfo.commitState = 'not_committed'
           toolCallInfo.error = uiText('用户拒绝执行', 'The user declined this action')
           callbacks.onToolCallComplete(toolCallInfo)
           observationParts.push(`<tool_result name="${tc.name}" error="true">\n${modelText('用户拒绝了此操作', 'The user declined this action')}\n</tool_result>`)
@@ -275,6 +278,18 @@ export async function runAgentLoop(
           executionContext.writingLanguage,
         )
 
+        toolCallInfo.commitState = result.commitState
+        if (!tool.isReadOnly && result.commitState === 'unknown') {
+          toolCallInfo.status = 'result_unknown'
+          toolCallInfo.error = uiText(
+            '操作可能已提交，但回执未返回；结果待确认，本轮不会自动重试。',
+            'The operation may have committed, but no receipt returned. Its result is unknown and this run will not retry it automatically.',
+          )
+          callbacks.onToolCallComplete(toolCallInfo)
+          resultUnknown = true
+          break
+        }
+
         toolCallInfo.status = result.success ? 'completed' : 'failed'
         if (result.success) {
           toolCallInfo.result = truncatedContent
@@ -295,6 +310,9 @@ export async function runAgentLoop(
         }
       } catch (error) {
         const unknownWriteResult = !tool.isReadOnly && sideEffectStarted
+        if (!tool.isReadOnly) {
+          toolCallInfo.commitState = unknownWriteResult ? 'unknown' : 'not_committed'
+        }
         toolCallInfo.status = unknownWriteResult ? 'result_unknown' : 'failed'
         toolCallInfo.error = unknownWriteResult
           ? uiText(
@@ -548,10 +566,9 @@ async function executeToolWithTimeout(
       execution,
       new Promise<ToolResult>((_, reject) => {
         timer = setTimeout(() => {
-          // Once a write crosses its explicit commit point, keep waiting for
-          // the real receipt instead of turning latency into a retryable error.
-          if (!isReadOnly && hasSideEffectStarted()) return
-          controller.abort()
+          // A dispatched write gets the same finite foreground wait, but is
+          // reported as unknown rather than cancelled/retryable.
+          if (isReadOnly || !hasSideEffectStarted()) controller.abort()
           reject(new ToolExecutionTimeoutError(writingLanguageText(
             writingLanguage,
             `工具执行超时（${timeoutMs / 1000}s）`,

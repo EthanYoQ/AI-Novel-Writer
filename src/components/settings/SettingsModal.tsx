@@ -1020,6 +1020,7 @@ function ProxySection() {
   }>({ enabled: false, type: 'http', host: '', port: 7890 })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     ipc.invoke('config:get').then((cfg) => {
@@ -1036,10 +1037,21 @@ function ProxySection() {
 
   const handleSave = async () => {
     setSaving(true)
-    await ipc.invoke('config:set', { proxy }).catch(() => { })
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    setSaveError(null)
+    try {
+      const result = await ipc.invoke('config:set', { proxy })
+      if (!result.success) throw new Error(result.error || text('未知错误', 'Unknown error'))
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (error) {
+      setSaved(false)
+      setSaveError(text(
+        `代理配置保存失败：${error instanceof Error ? error.message : String(error)}`,
+        `Could not save proxy settings: ${error instanceof Error ? error.message : String(error)}`,
+      ))
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -1107,6 +1119,7 @@ function ProxySection() {
         {saved ? <Check size={13} /> : <Save size={13} />}
         {saved ? text('已保存', 'Saved') : saving ? text('保存中...', 'Saving...') : text('保存代理配置', 'Save proxy settings')}
       </Button>
+      {saveError && <p role="alert" className="text-xs" style={{ color: 'var(--color-error-text)' }}>{saveError}</p>}
     </div>
   )
 }
@@ -1240,6 +1253,8 @@ function EditorSection() {
   const { writingFont, setWritingFont, uiFont, setUiFont } = useThemeStore()
   const { locale, setLocale, t, text } = useLocaleStore()
   const [autoOpenNextChapterAfterFinalize, setAutoOpenNextChapterAfterFinalize] = useState(false)
+  const [autoOpenNextSaving, setAutoOpenNextSaving] = useState(false)
+  const [autoOpenNextError, setAutoOpenNextError] = useState<string | null>(null)
 
   useEffect(() => {
     ipc.invoke('config:get').then((config) => {
@@ -1247,9 +1262,23 @@ function EditorSection() {
     }).catch(() => {})
   }, [])
 
-  const setAutoOpenNext = (checked: boolean) => {
+  const setAutoOpenNext = async (checked: boolean) => {
+    const previous = autoOpenNextChapterAfterFinalize
     setAutoOpenNextChapterAfterFinalize(checked)
-    void ipc.invoke('config:set', { autoOpenNextChapterAfterFinalize: checked })
+    setAutoOpenNextSaving(true)
+    setAutoOpenNextError(null)
+    try {
+      const result = await ipc.invoke('config:set', { autoOpenNextChapterAfterFinalize: checked })
+      if (!result.success) throw new Error(result.error || text('未知错误', 'Unknown error'))
+    } catch (error) {
+      setAutoOpenNextChapterAfterFinalize(previous)
+      setAutoOpenNextError(text(
+        `自动打开下一章设置保存失败：${error instanceof Error ? error.message : String(error)}`,
+        `Could not save the open-next-chapter setting: ${error instanceof Error ? error.message : String(error)}`,
+      ))
+    } finally {
+      setAutoOpenNextSaving(false)
+    }
   }
 
   return (
@@ -1303,8 +1332,9 @@ function EditorSection() {
             {text('当前章的定稿和后处理全部完成后，自动打开已有蓝图的下一章创作窗口；不会自动生成正文或覆盖已有草稿。', 'After finalization and post-processing finish, opens the next planned chapter. It never starts generation or overwrites an existing draft.')}
           </p>
         </div>
-        <Switch checked={autoOpenNextChapterAfterFinalize} onCheckedChange={setAutoOpenNext} aria-label={text('定稿后打开下一章', 'Open next chapter after finalizing')} />
+        <Switch checked={autoOpenNextChapterAfterFinalize} onCheckedChange={(checked) => void setAutoOpenNext(checked)} disabled={autoOpenNextSaving} aria-label={text('定稿后打开下一章', 'Open next chapter after finalizing')} />
       </div>
+      {autoOpenNextError && <p role="alert" className="text-xs" style={{ color: 'var(--color-error-text)' }}>{autoOpenNextError}</p>}
 
       {/* 说明 */}
       <div

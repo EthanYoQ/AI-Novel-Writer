@@ -36,13 +36,14 @@ export const writeFileTool = buildAgentTool({
     const content = args.content as string
 
     if (!filePath || content === undefined) {
-      return { success: false, content: '', error: text('缺少 file_path 或 content 参数', 'The file_path and content arguments are required') }
+      return { success: false, commitState: 'not_committed', content: '', error: text('缺少 file_path 或 content 参数', 'The file_path and content arguments are required') }
     }
 
     const reservedWorkflow = projectFactWorkflowForFilePath(filePath)
     if (reservedWorkflow) {
       return {
         success: false,
+        commitState: 'not_committed',
         content: '',
         error: text(
           `“${filePath}”是项目事实的保留语义目标；普通文件不会改变结构化项目。请改用 ${reservedWorkflow} 工作流。`,
@@ -56,7 +57,7 @@ export const writeFileTool = buildAgentTool({
     // 路径安全校验
     const pathCheck = validatePath(project.path, filePath)
     if (!pathCheck.valid) {
-      return { success: false, content: '', error: text(
+      return { success: false, commitState: 'not_committed', content: '', error: text(
         pathCheck.error,
         `The path "${filePath}" is outside the project directory. Only project files can be written.`,
       ) }
@@ -71,10 +72,30 @@ export const writeFileTool = buildAgentTool({
       content,
       project.path,
     )
+    const artifact = createToolArtifact({
+      type: 'file_modified',
+      path: pathCheck.fullPath,
+      name: filePath,
+      projectPath: project.path,
+      projectSession,
+    })
     if (!result.success) {
+      const commitState = result.commitState ?? 'unknown'
+      if (commitState === 'committed') {
+        return {
+          success: true,
+          commitState,
+          content: text(
+            `文件已写入原项目，但项目会话随后失效：${filePath}`,
+            `The file was written to the original project, but that project session then expired: ${filePath}`,
+          ),
+          artifacts: [artifact],
+        }
+      }
       const detail = result.error
       return {
         success: false,
+        commitState,
         content: '',
         error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail ?? '')
           ? text('写入失败', 'Could not write the file')
@@ -84,14 +105,9 @@ export const writeFileTool = buildAgentTool({
 
     return {
       success: true,
+      commitState: 'committed',
       content: text(`✅ 文件已写入：${filePath}（${content.length} 字符）`, `✅ File written: ${filePath} (${content.length} characters)`),
-      artifacts: [createToolArtifact({
-        type: 'file_modified',
-        path: pathCheck.fullPath,
-        name: filePath,
-        projectPath: project.path,
-        projectSession,
-      })],
+      artifacts: [artifact],
     }
   },
 })

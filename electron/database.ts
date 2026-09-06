@@ -171,6 +171,32 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_drafts_chapter_version
       ON drafts(chapter_number, version);
 
+    -- Failed generation output is a recoverable candidate, never a draft or
+    -- finalized fact. It remains project-local and requires an explicit user
+    -- action before entering an unsaved editor buffer.
+    CREATE TABLE IF NOT EXISTS recovery_candidates (
+      candidate_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      chapter_number INTEGER NOT NULL CHECK(chapter_number > 0),
+      chapter_title TEXT NOT NULL DEFAULT '',
+      source_snapshot TEXT NOT NULL,
+      source_hash TEXT NOT NULL,
+      visible_text TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      failure_code TEXT NOT NULL DEFAULT '',
+      failure_reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'continued', 'discarded')),
+      replaces_candidate_id TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT DEFAULT NULL,
+      FOREIGN KEY (replaces_candidate_id) REFERENCES recovery_candidates(candidate_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_recovery_candidates_pending
+      ON recovery_candidates(status, created_at);
+
     -- ============================================================
     -- 5b. finalization_outbox — 定稿实体稿发布投影
     -- SQLite 中的正文与定稿状态先在同一事务提交；根目录实体稿由此 outbox

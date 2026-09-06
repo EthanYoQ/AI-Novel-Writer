@@ -37,6 +37,7 @@ import {
   preventRendererNavigation,
 } from './services/official-homepage-navigation'
 import { configureSingleInstanceRuntime } from './services/single-instance-runtime'
+import { installWindowCloseGuard } from './controllers/window-controller'
 
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -138,6 +139,7 @@ function createWindow() {
       contextIsolation: true,
     },
   })
+  installWindowCloseGuard(win)
 
   if (process.platform === 'darwin') {
     app.dock?.setIcon(path.join(process.env.APP_ROOT!, 'build', 'icon.png'))

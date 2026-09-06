@@ -14,6 +14,9 @@ import { GenerationAttemptError, PromptBudgetExceededError } from '../../generat
 import { BoundedCompletionFailure } from '../bounded-completion'
 import {
   GENERATED_GLOBAL_GUIDANCE_MAX_CHARS,
+  GENERATED_GLOBAL_GUIDANCE_MAX_RULES,
+  GENERATED_GLOBAL_GUIDANCE_MIN_RULES,
+  isGeneratedGlobalGuidanceValid,
   preserveAuthorText,
 } from '../novel-config-expansion'
 
@@ -94,55 +97,67 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
     }, writingLanguage)
     const systemPrompt = composePromptSystemRole(template, writingLanguage)
 
-    let result: string
-    try {
-      result = await this.callLLM(
-        prompt,
-        systemPrompt,
-        callbacks,
-        {
-          purpose: `generate-field-${this.fieldKey}`,
-          reasoningStage: 'planning',
-          writingSkillStage: 'planning',
-        },
-        context,
-      )
-    } catch (error) {
-      if (context.cancelled) this.assertNotCancelled(context)
-      if (error instanceof BoundedCompletionFailure || error instanceof PromptBudgetExceededError) {
-        throw error
+    const requestFieldCompletion = async (requestPrompt: string, purpose: string): Promise<string> => {
+      try {
+        return await this.callLLM(
+          requestPrompt,
+          systemPrompt,
+          callbacks,
+          { purpose, reasoningStage: 'planning', writingSkillStage: 'planning' },
+          context,
+        )
+      } catch (error) {
+        if (context.cancelled) this.assertNotCancelled(context)
+        if (error instanceof BoundedCompletionFailure || error instanceof PromptBudgetExceededError) {
+          throw error
+        }
+        const safeMessage = workflowUiText(
+          context,
+          '字段生成失败，请重试。',
+          'Field generation failed. Please try again.',
+        )
+        if (error instanceof GenerationAttemptError) {
+          const code = error.code === 'CANCELLED'
+            || error.code === 'DEADLINE_EXHAUSTED'
+            || error.code === 'PROVIDER_REQUEST_FAILED'
+            ? error.code
+            : 'PROVIDER_REQUEST_FAILED'
+          throw new GenerationAttemptError(code, safeMessage, error.receipt)
+        }
+        throw new Error(safeMessage)
       }
-      const safeMessage = workflowUiText(
-        context,
-        '字段生成失败，请重试。',
-        'Field generation failed. Please try again.',
-      )
-      if (error instanceof GenerationAttemptError) {
-        const code = error.code === 'CANCELLED'
-          || error.code === 'DEADLINE_EXHAUSTED'
-          || error.code === 'PROVIDER_REQUEST_FAILED'
-          ? error.code
-          : 'PROVIDER_REQUEST_FAILED'
-        throw new GenerationAttemptError(code, safeMessage, error.receipt)
-      }
-      throw new Error(safeMessage)
     }
+    let result = await requestFieldCompletion(prompt, `generate-field-${this.fieldKey}`)
     this.assertNotCancelled(context)
-    const cleanResult = this.stripThinkingTags(result).trim()
+    let cleanResult = this.stripThinkingTags(result).trim()
 
-    if (!cleanResult) {
+    if (!cleanResult && this.fieldKey !== 'globalGuidance') {
       callbacks.log(workflowUiText(context, `「${label}」生成返回空结果`, `Generation returned no content for “${label}”.`))
       return ''
     }
-    if (
-      this.fieldKey === 'globalGuidance'
-      && cleanResult.length > GENERATED_GLOBAL_GUIDANCE_MAX_CHARS
-    ) {
-      throw new Error(workflowUiText(
+    if (this.fieldKey === 'globalGuidance' && !isGeneratedGlobalGuidanceValid(cleanResult)) {
+      callbacks.log(workflowUiText(
         context,
-        `AI 生成的全局写作要求超过 ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} 字符，结果未保存。`,
-        `The generated global writing guidance exceeds ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} characters and was not saved.`,
+        '首轮全局写作要求不符合 4–8 条简短规则合同，正在执行唯一一次字段级完整替代。',
+        'The first global-guidance candidate did not satisfy the 4–8 short-rule contract; requesting the single field-level replacement.',
       ))
+      result = await requestFieldCompletion(
+        `${prompt}\n\n${promptLanguageText(
+          writingLanguage,
+          `【纠正规则】上一轮候选无效且已丢弃。只重新生成“全局写作要求”字段：${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} 条，每条独占一行，总计不超过 ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} 字符。只输出规则正文，不要标题、解释、Markdown 或逐章大纲。`,
+          `[Correction contract] The previous candidate was invalid and discarded. Regenerate only the Global writing guidance field: ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} rules, one rule per line, within ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} characters total. Output only the rules, with no title, explanation, Markdown, or chapter-by-chapter outline.`,
+        )}`,
+        'generate-field-globalGuidance-replacement',
+      )
+      this.assertNotCancelled(context)
+      cleanResult = this.stripThinkingTags(result).trim()
+      if (!isGeneratedGlobalGuidanceValid(cleanResult)) {
+        throw new Error(workflowUiText(
+          context,
+          `全局写作要求仍不符合 ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} 条且不超过 ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} 字符的合同，结果未保存。`,
+          `The global writing guidance still does not satisfy the ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES}-rule, ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS}-character contract, so it was not saved.`,
+        ))
+      }
     }
 
     // LLM 返回后再次核对冻结项目，禁止把旧项目上下文写入后来切换的项目。

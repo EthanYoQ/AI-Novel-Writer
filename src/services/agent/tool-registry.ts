@@ -10,7 +10,7 @@
  * 3. source 字段标识来源 — 方便 UI 渲染不同的视觉标记
  */
 
-import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { FileWriteCommitState, ProjectSessionContext } from '../../shared/ipc-channels'
 import type { WritingLanguage } from '../../shared/writing-language'
 import type { WorkflowStatus } from '../../stores/workflow-store'
 
@@ -74,6 +74,8 @@ export interface ToolResult {
   artifacts?: ToolArtifact[]
   /** 错误信息（失败时） */
   error?: string
+  /** Persistent write outcome; orthogonal to transport/UI success. */
+  commitState?: FileWriteCommitState
 }
 
 /**

@@ -394,6 +394,46 @@ describe('GenerationRuntime renderer lease adapter', () => {
     await expect(execution).resolves.toMatchObject({ content: '林岚推开门。' })
   })
 
+  it('returns a damaged provider stream as an incomplete recoverable candidate', async () => {
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'llm:begin-execution-lease') return { success: true, lease: LEASE }
+      if (channel === 'llm:close-execution-lease') return { success: true }
+      if (channel === 'llm:generate-stream') {
+        const requestId = String(args[0])
+        queueMicrotask(() => {
+          mocks.listeners.get('llm:stream-chunk')?.({ requestId, chunk: 'HEAD' } as never)
+          mocks.listeners.get('llm:stream-done')?.({
+            requestId,
+            fullText: 'HEAD',
+            finishReason: 'error',
+          } as never)
+        })
+        return { requestId, started: true }
+      }
+      throw new Error(`unexpected channel: ${channel}`)
+    })
+    const runtime = await createGenerationRuntime({
+      budget: {
+        maxAttempts: 1,
+        maxRequestedOutputTokens: 4096,
+        maxRequestedOutputTokensPerAttempt: 4096,
+        deadlineMs: 60_000,
+      },
+    })
+    const streamed = vi.fn()
+
+    await expect(runtime.execute(({ session }) => session.complete({
+      purpose: 'damaged-provider-candidate',
+      output: 'visible-text',
+      messages: [{ role: 'user', content: 'write' }],
+    }, { onChunk: streamed }))).resolves.toMatchObject({
+      status: 'incomplete',
+      content: 'HEAD',
+      finishReason: 'error',
+    })
+    expect(streamed).toHaveBeenCalledWith('HEAD')
+  })
+
   it('ignores stream chunks that arrive after cancellation', async () => {
     let streamRequestId = ''
     mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {

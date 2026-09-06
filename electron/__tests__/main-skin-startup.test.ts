@@ -6,13 +6,16 @@ const mocks = vi.hoisted(() => {
   const BrowserWindow = vi.fn(function MockBrowserWindow(this: Record<string, unknown>) {
     calls.push('create-window')
     windows.push(this)
+    this.id = windows.length
     this.webContents = {
       isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
       send: vi.fn(),
       setWindowOpenHandler: vi.fn(),
       on: vi.fn(),
     }
     this.isDestroyed = () => false
+    this.on = vi.fn()
     this.setMenuBarVisibility = vi.fn()
     this.loadURL = vi.fn()
     this.loadFile = vi.fn()
@@ -116,6 +119,7 @@ describe('interactive Electron startup', () => {
 
     expect(mocks.calls.indexOf('ipc')).toBeLessThan(mocks.calls.indexOf('create-window'))
     expect(mocks.calls.indexOf('mcp')).toBeLessThan(mocks.calls.indexOf('create-window'))
+    expect(mocks.windows[0]?.on).toHaveBeenCalledWith('close', expect.any(Function))
   })
 
   it('keeps the already-created window available when update startup fails', async () => {

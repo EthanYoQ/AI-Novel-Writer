@@ -9,6 +9,7 @@ import { useWorkflowStore } from '../workflow-store'
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   alertError: vi.fn(),
+  confirm: vi.fn(async () => true),
   onProjectOpening: vi.fn(),
   onProjectOpened: vi.fn(async (): Promise<{ warnings: string[] } | undefined> => undefined),
   disableProjectBindingsPreservingDrafts: vi.fn(),
@@ -30,6 +31,10 @@ vi.mock('../../services/ipc-client', () => ({
 
 vi.mock('../../components/ui/AlertDialog', () => ({
   alertError: mocks.alertError,
+}))
+
+vi.mock('../../components/ui/Confirm', () => ({
+  confirm: mocks.confirm,
 }))
 
 vi.mock('../../services/project-service', () => ({
@@ -117,6 +122,59 @@ beforeEach(() => {
 })
 
 describe('project close lifecycle', () => {
+  it('does not cancel an active workflow or switch projects when confirmation is declined', async () => {
+    useWorkflowStore.setState({
+      activeRuns: [{ projectPath: project('A').path, status: 'running' }] as never,
+    })
+    mocks.confirm.mockResolvedValueOnce(false)
+    const cancelSpy = vi.spyOn(
+      useWorkflowStore.getState(),
+      'cancelProjectWorkflowsAndWait',
+    ).mockResolvedValue()
+
+    await expect(useProjectStore.getState().openProject(project('B').path)).resolves.toBe(false)
+
+    expect(mocks.confirm).toHaveBeenCalledOnce()
+    expect(cancelSpy).not.toHaveBeenCalled()
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      'project:open',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(useProjectStore.getState().currentProject?.path).toBe(project('A').path)
+    cancelSpy.mockRestore()
+  })
+
+  it.each(['create', 'close'] as const)(
+    'does not cancel an active workflow when %s confirmation is declined',
+    async (operation) => {
+      useWorkflowStore.setState({
+        activeRuns: [{ projectPath: project('A').path, status: 'running' }] as never,
+      })
+      mocks.confirm.mockResolvedValueOnce(false)
+      const cancelSpy = vi.spyOn(
+        useWorkflowStore.getState(),
+        'cancelProjectWorkflowsAndWait',
+      ).mockResolvedValue()
+
+      const result = operation === 'create'
+        ? useProjectStore.getState().createProject({
+            name: 'B',
+            path: 'C:\\novels',
+            genre: '玄幻',
+            targetAudience: '全龄',
+          })
+        : useProjectStore.getState().closeProject()
+
+      await expect(result).resolves.toBe(false)
+      expect(mocks.confirm).toHaveBeenCalledOnce()
+      expect(cancelSpy).not.toHaveBeenCalled()
+      expect(useProjectStore.getState().currentProject?.path).toBe(project('A').path)
+      cancelSpy.mockRestore()
+    },
+  )
+
   it('increments the project session epoch for every successful open, including the same path', async () => {
     mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
       if (channel === 'project:open') {

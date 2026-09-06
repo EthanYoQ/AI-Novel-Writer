@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import fsPromises from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecureFileCapability, WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
@@ -33,6 +33,11 @@ vi.mock('../../services/project-access', () => ({
 }))
 
 import { registerFSController } from '../fs-controller'
+import { runAgentLoop } from '../../../src/services/agent/agent-engine'
+import { toolRegistry } from '../../../src/services/agent/tool-registry'
+import { createAgentExecutionContext } from '../../../src/services/agent/tools/project-context'
+import { writeFileTool } from '../../../src/services/agent/tools/write-file.tool'
+import { useProjectStore } from '../../../src/stores/project-store'
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-fs-controller-'))
 const projectAPath = path.join(temporaryRoot, 'A')
@@ -132,6 +137,7 @@ beforeAll(() => {
 beforeEach(() => {
   mocks.currentProjectPath = projectAPath
   mocks.activeLeaseId = 'lease-A'
+  vi.restoreAllMocks()
   vi.clearAllMocks()
   mocks.assertCurrentProjectContext.mockImplementation((context: { projectPath?: string; leaseId?: string } | undefined, currentProjectPath: string) => {
     if (!context?.projectPath) throw new Error('缺少项目会话上下文，已拒绝操作')
@@ -147,6 +153,12 @@ beforeEach(() => {
 
 afterAll(() => {
   fs.rmSync(temporaryRoot, { recursive: true, force: true })
+})
+
+afterEach(() => {
+  toolRegistry.unregister('write_file')
+  vi.unstubAllGlobals()
+  useProjectStore.setState({ currentProject: null })
 })
 
 describe('project-scoped filesystem boundary', () => {
@@ -290,8 +302,133 @@ describe('project-scoped filesystem boundary', () => {
       '项目租约已失效，已拒绝操作。',
       'The project lease has expired; the operation was rejected.',
     ])
+    await expect(resultPromise).resolves.toMatchObject({ commitState: 'not_committed' })
     expect(mkdirSpy).toHaveBeenCalledOnce()
     expect(renameSpy).not.toHaveBeenCalled()
     expect(fs.readFileSync(target, 'utf8')).toBe('original')
+  })
+
+  it('reports committed when the file was replaced before the old project lease became stale', async () => {
+    const target = path.join(projectAPath, 'chapter.md')
+    fs.writeFileSync(target, 'original', 'utf8')
+    const writeSpy = vi.spyOn(testFileSystem, 'writeTextAtomically').mockImplementationOnce(async (capability, content, beforeReplace) => {
+      await beforeReplace?.()
+      fs.writeFileSync(capabilityPath(capability), content, 'utf8')
+      mocks.activeLeaseId = 'lease-B'
+    })
+
+    const result = await handlerWithLease('fs:write-file', 'lease-A')(
+      {},
+      target,
+      'committed content',
+      projectAPath,
+    )
+
+    expect(result).toMatchObject({ success: false, commitState: 'committed' })
+    expect(writeSpy).toHaveBeenCalledOnce()
+    expect(fs.readFileSync(target, 'utf8')).toBe('committed content')
+  })
+
+  it('reports unknown when the atomic helper loses its receipt after the commit command', async () => {
+    const target = path.join(projectAPath, 'chapter.md')
+    fs.writeFileSync(target, 'original', 'utf8')
+    vi.spyOn(testFileSystem, 'writeTextAtomically').mockRejectedValueOnce(Object.assign(
+      new Error('SECURE_FS_HELPER_TIMEOUT'),
+      { commitState: 'unknown' as const },
+    ))
+
+    const result = await handler('fs:write-file')(
+      {},
+      target,
+      'possibly committed content',
+      projectAPath,
+    )
+
+    expect(result).toMatchObject({ success: false, commitState: 'unknown' })
+  })
+})
+
+describe('Agent write_file commit result integration', () => {
+  function agentCallbacks() {
+    return {
+      onTextChunk: vi.fn(),
+      onToolCallStart: vi.fn(),
+      onToolCallComplete: vi.fn(),
+      onToolCallConfirmRequired: vi.fn(async () => true),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+  }
+
+  function prepareAgentBoundary() {
+    useProjectStore.setState({
+      currentProject: {
+        id: 'project-A',
+        sessionLease: 'lease-A',
+        name: 'A',
+        path: projectAPath,
+        novelConfig: { writingLanguage: 'en-US' },
+      } as never,
+    })
+    vi.stubGlobal('window', {
+      velaAPI: {
+        invoke: (channel: string, ...args: unknown[]) => rawHandler(channel)({}, ...args),
+        on: vi.fn(),
+        once: vi.fn(),
+        send: vi.fn(),
+      },
+    })
+    toolRegistry.register(writeFileTool)
+  }
+
+  it('writes once through controller and reports the committed receipt to the confirmed Agent call', async () => {
+    prepareAgentBoundary()
+    const callbacks = agentCallbacks()
+    const target = path.join(projectAPath, 'agent-output.md')
+    const writeSpy = vi.spyOn(testFileSystem, 'writeTextAtomically')
+    const generate = vi.fn()
+      .mockResolvedValueOnce('<tool_call>{"name":"write_file","arguments":{"file_path":"agent-output.md","content":"committed once"}}</tool_call>')
+      .mockResolvedValueOnce('done')
+
+    await runAgentLoop(
+      'system', [], 'write', 'model', generate, callbacks, undefined,
+      createAgentExecutionContext(),
+    )
+
+    expect(callbacks.onToolCallConfirmRequired).toHaveBeenCalledOnce()
+    expect(writeSpy).toHaveBeenCalledOnce()
+    expect(fs.readFileSync(target, 'utf8')).toBe('committed once')
+    expect(callbacks.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'completed',
+      commitState: 'committed',
+    }))
+  })
+
+  it('stops without replay when controller returns an unknown helper receipt', async () => {
+    prepareAgentBoundary()
+    const callbacks = agentCallbacks()
+    const writeSpy = vi.spyOn(testFileSystem, 'writeTextAtomically').mockRejectedValueOnce(Object.assign(
+      new Error('SECURE_FS_HELPER_TIMEOUT'),
+      { commitState: 'unknown' as const },
+    ))
+    const generate = vi.fn()
+      .mockResolvedValue('<tool_call>{"name":"write_file","arguments":{"file_path":"agent-unknown.md","content":"maybe"}}</tool_call>')
+
+    await runAgentLoop(
+      'system', [], 'write', 'model', generate, callbacks, undefined,
+      createAgentExecutionContext(),
+    )
+
+    expect(writeSpy).toHaveBeenCalledOnce()
+    expect(generate).toHaveBeenCalledOnce()
+    expect(callbacks.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'result_unknown',
+      commitState: 'unknown',
+    }))
+    expect(callbacks.onDone).toHaveBeenCalledWith(
+      expect.stringMatching(/stopped to avoid a duplicate write|避免重复写入/u),
+      expect.anything(),
+      expect.anything(),
+    )
   })
 })

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { page } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -78,13 +79,16 @@ function installIpc(steps: Array<Record<string, unknown>>, sourceLabel = '第1�
   })
 }
 
-async function renderPanel(onStatusLoad: (hasFailure: boolean) => void) {
+async function renderPanel(
+  onStatusLoad: (hasFailure: boolean) => void,
+  onRetry: (stepKey?: string) => void = vi.fn(),
+) {
   await act(async () => {
     root?.render(
       <PostProcessStatusPanel
         scope="chapter_1_finalize"
         defaultExpanded
-        onRetry={vi.fn()}
+        onRetry={onRetry}
         onStatusLoad={onStatusLoad}
       />,
     )
@@ -164,6 +168,23 @@ describe('PostProcessStatusPanel', () => {
     expect(container?.textContent).toContain('模型响应超时')
     expect(container?.textContent).toContain('重试失败步骤')
     expect(onStatusLoad).toHaveBeenLastCalledWith(true)
+  })
+
+  it('distinguishes one-step retry from retrying all failed steps', async () => {
+    installIpc([{
+      id: 1, runId: 'run-1', stepKey: 'character_cards', label: '角色状态更新', critical: false,
+      ok: false, errorMsg: '结构错误', attemptCount: 1,
+      completedAt: '', lastAttemptAt: '2026-08-22T09:59:42.000Z',
+    }])
+    const onRetry = vi.fn()
+    await renderPanel(vi.fn(), onRetry)
+    await vi.waitFor(() => expect(container?.querySelector('button[title="重试此步骤"]')).not.toBeNull())
+
+    await act(async () => (container?.querySelector('button[title="重试此步骤"]') as HTMLButtonElement).click())
+    expect(onRetry).toHaveBeenLastCalledWith('character_cards')
+
+    await act(async () => page.getByRole('button', { name: '重试失败步骤' }).click())
+    expect(onRetry).toHaveBeenLastCalledWith()
   })
 
   it('localizes a persisted post-processing failure summary in English', async () => {

@@ -1,4 +1,8 @@
-import { BaseWorkflowCommand, CommandExecuteParams } from './base-command'
+import {
+  BaseWorkflowCommand,
+  type CommandExecuteParams,
+  type WorkflowGenerationRuntimeDependencies,
+} from './base-command'
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { resolvePromptTemplate } from '../../prompt-templates'
@@ -30,7 +34,11 @@ import {
   workflowUiText,
   workflowWritingLanguage,
 } from '../workflow-project-session'
-import type { CharacterRosterEntry } from '../../../shared/character-roster'
+import {
+  characterRosterIdentityKey,
+  type CharacterRosterCharacterState,
+  type CharacterRosterEntry,
+} from '../../../shared/character-roster'
 import { writingLanguageText } from '../../../shared/writing-language'
 import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
@@ -71,21 +79,82 @@ function parseJSON<T>(text: string): T {
 const CONTINUITY_FACT_LIMIT = 12
 const CONTINUITY_STATEMENT_LIMIT = 280
 const CONTINUITY_EVIDENCE_LIMIT = 240
-const CHARACTER_EXTRACTION_SAMPLE_MAX_CHARS = 10_000
+const CHARACTER_STATE_TEXT_FIELDS = [
+  'location',
+  'powerLevel',
+  'physicalState',
+  'mentalState',
+  'keyItems',
+  'recentEvents',
+] as const satisfies ReadonlyArray<keyof Omit<CharacterRosterCharacterState, 'updatedAtChapter'>>
 
-function characterExtractionSample(content: string, writingLanguage: 'zh-CN' | 'en-US'): string {
-  const trimmed = content.trim()
-  if (trimmed.length <= CHARACTER_EXTRACTION_SAMPLE_MAX_CHARS) return trimmed
+type CharacterStatePatch = Partial<Pick<CharacterRosterCharacterState, typeof CHARACTER_STATE_TEXT_FIELDS[number]>>
 
-  const omission = writingLanguageText(
-    writingLanguage,
-    '\n\n【中段已按角色提取上下文预算省略】\n\n',
-    '\n\n[Middle omitted to fit the character-extraction context budget]\n\n',
-  )
-  const sampledChars = CHARACTER_EXTRACTION_SAMPLE_MAX_CHARS - omission.length
-  const headChars = Math.ceil(sampledChars / 2)
-  const tailChars = Math.floor(sampledChars / 2)
-  return `${trimmed.slice(0, headChars).trimEnd()}${omission}${trimmed.slice(-tailChars).trimStart()}`
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Missing state fields preserve the existing fact; an explicitly supplied
+ * string (including an empty string) replaces it. Chapter identity is always
+ * supplied by the frozen finalization input, never trusted from the model.
+ */
+function parseCharacterStateUpdates(
+  content: string,
+  roster: readonly CharacterRosterEntry[],
+  chapterNumber: number,
+): Map<string, CharacterStatePatch> {
+  const parsed = parseJSON<unknown>(content)
+  if (!isRecord(parsed)) throw new Error('角色状态响应必须是 JSON 对象')
+  if (!Object.hasOwn(parsed, 'updates')) throw new Error('角色状态响应缺少 updates 列表')
+  if (!Array.isArray(parsed.updates)) throw new Error('角色状态响应的 updates 必须是列表')
+
+  const rosterByIdentity = new Map<string, CharacterRosterEntry>()
+  for (const character of roster) {
+    const identity = characterRosterIdentityKey(character.name)
+    if (!identity || rosterByIdentity.has(identity)) {
+      throw new Error(`角色名单存在同名冲突：「${character.name}」`)
+    }
+    rosterByIdentity.set(identity, character)
+  }
+
+  const updatesByName = new Map<string, CharacterStatePatch>()
+  for (const [index, rawUpdate] of parsed.updates.entries()) {
+    if (!isRecord(rawUpdate)) throw new Error(`角色状态 updates[${index}] 格式无效`)
+    if (typeof rawUpdate.name !== 'string' || !rawUpdate.name.trim()) {
+      throw new Error(`角色状态 updates[${index}].name 必须是非空文本`)
+    }
+    const identity = characterRosterIdentityKey(rawUpdate.name)
+    const character = rosterByIdentity.get(identity)
+    if (!character) throw new Error(`角色状态更新引用了未知角色：「${rawUpdate.name.trim()}」`)
+    if (updatesByName.has(character.name)) {
+      throw new Error(`角色状态响应包含同名冲突：「${rawUpdate.name.trim()}」`)
+    }
+    if (!isRecord(rawUpdate.currentState)) {
+      throw new Error(`角色状态 updates[${index}].currentState 必须是对象`)
+    }
+
+    const patch: CharacterStatePatch = {}
+    for (const field of CHARACTER_STATE_TEXT_FIELDS) {
+      if (!Object.hasOwn(rawUpdate.currentState, field)) continue
+      const value = rawUpdate.currentState[field]
+      if (typeof value !== 'string') {
+        throw new Error(`角色状态 updates[${index}].currentState.${field} 必须是文本`)
+      }
+      patch[field] = value.trim()
+    }
+    if (Object.keys(patch).length === 0) {
+      throw new Error(`角色状态 updates[${index}].currentState 没有可更新字段`)
+    }
+    if (
+      Object.hasOwn(rawUpdate.currentState, 'updatedAtChapter')
+      && rawUpdate.currentState.updatedAtChapter !== chapterNumber
+    ) {
+      throw new Error(`角色状态 updates[${index}].currentState.updatedAtChapter 与定稿章节不一致`)
+    }
+    updatesByName.set(character.name, patch)
+  }
+  return updatesByName
 }
 
 function factCategory(statement: string): FinalizedContinuityFactCategory {
@@ -359,7 +428,7 @@ export function buildFinalizePostProcessSteps(
         const simpleCards = allChars.map((c) => ({ name: c.name, role: c.role }))
 
         const cardBuilder = new PostProcessPromptBuilder(cardTemplate, writingLanguage)
-          .withChapterContent(characterExtractionSample(draftContent, writingLanguage))
+          .withChapterContent(draftContent.trim())
           .withChapterNumber(chapterNumber)
           .withExistingCardsJson(simpleCards)
 
@@ -370,26 +439,7 @@ export function buildFinalizePostProcessSteps(
           context,
         )
         if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
-        type LLMUpdateState = {
-          location?: string
-          powerLevel?: string
-          physicalState?: string
-          mentalState?: string
-          keyItems?: string
-          recentEvents?: string
-        }
-
-        const cardUpdates = parseJSON<{
-          updates?: Array<{ name: string; currentState: LLMUpdateState }>
-        }>(cardsResult)
-
-        const updatesByName = new Map(
-          Array.isArray(cardUpdates.updates)
-            ? cardUpdates.updates
-                .filter(update => typeof update.name === 'string' && update.name.trim() && update.currentState)
-                .map(update => [update.name.trim(), update.currentState])
-            : [],
-        )
+        const updatesByName = parseCharacterStateUpdates(cardsResult, allChars, chapterNumber)
         let updatedCount = 0
         const changedEntries: CharacterRosterEntry[] = []
         for (const character of allChars) {
@@ -402,12 +452,12 @@ export function buildFinalizePostProcessSteps(
           changedEntries.push({
             ...structuredCharacter,
             currentState: {
-              location: patch.location || currentState?.location || '',
-              powerLevel: patch.powerLevel || currentState?.powerLevel || '',
-              physicalState: patch.physicalState || currentState?.physicalState || '',
-              mentalState: patch.mentalState || currentState?.mentalState || '',
-              keyItems: patch.keyItems || currentState?.keyItems || '',
-              recentEvents: patch.recentEvents || currentState?.recentEvents || '',
+              location: patch.location ?? currentState?.location ?? '',
+              powerLevel: patch.powerLevel ?? currentState?.powerLevel ?? '',
+              physicalState: patch.physicalState ?? currentState?.physicalState ?? '',
+              mentalState: patch.mentalState ?? currentState?.mentalState ?? '',
+              keyItems: patch.keyItems ?? currentState?.keyItems ?? '',
+              recentEvents: patch.recentEvents ?? currentState?.recentEvents ?? '',
               updatedAtChapter: chapterNumber,
             },
           })
@@ -423,8 +473,8 @@ export function buildFinalizePostProcessSteps(
               expectedRevision: roster.revision,
               schemaVersion: 1,
               intent: 'chapter_progress',
-              // incremental intent only carries changed state/new cards. It
-              // never echoes untouched legacy free-text relationship notes.
+              // chapter_progress only carries changed state for confirmed
+              // characters; it never echoes untouched legacy relationship notes.
               entries: changedEntries,
             },
             _project.path,
@@ -486,13 +536,17 @@ export interface RunFinalizePostProcessParams {
   sourceLabel: string
   stopOnFailure?: boolean
   onlyFailed?: boolean
+  stepKey?: string
   chapterEntities?: readonly string[]
 }
 
 /** One post-process run freezes one model and one budget across notes/cards. */
 export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProcessStatus> {
-  constructor(private readonly params: RunFinalizePostProcessParams) {
-    super()
+  constructor(
+    private readonly params: RunFinalizePostProcessParams,
+    generationDependencies?: WorkflowGenerationRuntimeDependencies,
+  ) {
+    super(generationDependencies)
   }
 
   async execute(params: CommandExecuteParams): Promise<PostProcessStatus> {
@@ -516,7 +570,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         generationContext,
       ),
     }
-    const steps = buildFinalizePostProcessSteps(
+    const allSteps = buildFinalizePostProcessSteps(
       this.params.project,
       this.params.chapterNumber,
       this.params.chapterTitle,
@@ -526,6 +580,16 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       this.params.chapterEntities,
       workflowUiLocale(context),
     )
+    const steps = this.params.stepKey
+      ? allSteps.filter(step => step.key === this.params.stepKey)
+      : allSteps
+    if (this.params.stepKey && steps.length === 0) {
+      throw new Error(workflowUiText(
+        context,
+        `未知的后处理步骤：${this.params.stepKey}`,
+        `Unknown post-processing step: ${this.params.stepKey}`,
+      ))
+    }
     return runPostProcessPipeline(
       this.params.project.path,
       getChapterFinalizeScope(this.params.chapterNumber),

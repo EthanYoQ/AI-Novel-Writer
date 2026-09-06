@@ -14,6 +14,7 @@ import {
   PlotTreeGenerationError,
   PlotTreeIncompleteError,
   PlotTreeResponseError,
+  PlotTreeSourceLimitError,
 } from '../../../services/plot-tree-generator'
 import NarrativeThreadEditor from '../NarrativeThreadEditor'
 
@@ -346,6 +347,37 @@ describe('NarrativeThreadEditor', () => {
 
     await vi.waitFor(() => expect(container?.textContent).toContain('剧情树生成失败。'))
     expect(container?.textContent).not.toContain('模型连接失败，请稍后重试。')
+    expect(container?.textContent).toContain('旧航海日志')
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:plot-tree-save')).toBe(false)
+  })
+
+  it.each([
+    [
+      'zh-CN',
+      '刷新剧情树',
+      '剧情树完整来源上限为 200 个章节；本次未调用模型，旧快照保持不变。',
+    ],
+    [
+      'en-US',
+      'Refresh plot tree',
+      'The complete plot-tree source limit is 200 chapters; the model was not called and the previous snapshot remains unchanged.',
+    ],
+  ] as const)('explains the complete source limit in %s without replacing the snapshot', async (locale, buttonText, expected) => {
+    useLocaleStore.setState({ locale })
+    const plotTreeGenerator = vi.fn().mockRejectedValue(new PlotTreeSourceLimitError(200))
+
+    await act(async () => root?.render(
+      <NarrativeThreadEditor
+        projectKey={PROJECT_PATH}
+        initialView="plot-tree"
+        plotTreeGenerator={plotTreeGenerator}
+      />,
+    ))
+    await vi.waitFor(() => expect(container?.textContent).toContain('旧航海日志'))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.includes(buttonText))?.click())
+
+    await vi.waitFor(() => expect(container?.textContent).toContain(expected))
     expect(container?.textContent).toContain('旧航海日志')
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:plot-tree-save')).toBe(false)
   })

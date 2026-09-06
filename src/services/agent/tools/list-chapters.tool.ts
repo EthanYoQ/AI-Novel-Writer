@@ -23,23 +23,21 @@ export const listChaptersTool = buildAgentTool({
     try {
       const blueprints = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get-all', project.path)
       assertAgentProjectCurrent(context)
-      const bpNums = new Set<number>((Array.isArray(blueprints) ? blueprints : []).map((b: unknown) => (b as { chapterNumber?: number }).chapterNumber).filter((n): n is number => n !== undefined))
-      const { useDraftStore } = await import('../../../stores/draft-store')
+      const drafts = await ipc.invokeWithProjectSession(projectSession, 'db:draft-list-all', project.path)
       assertAgentProjectCurrent(context)
-      const draftState = useDraftStore.getState()
-      const draftsByChapter = (
-        draftState.dataProjectKey === project.path
-        && draftState.loadingProjectKey !== project.path
-      ) ? draftState.draftsByChapter : {}
-      const draftNums = new Set<number>(Object.keys(draftsByChapter).map(k => parseInt(k, 10)))
-
-      // 定稿状态从 DB 查询而非 FS 扫描
-      const msNums = new Set<number>()
-      for (const bp of (Array.isArray(blueprints) ? blueprints : [])) {
-        const finalized = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-finalized', bp.chapterNumber, project.path)
-        assertAgentProjectCurrent(context)
-        if (finalized) msNums.add(bp.chapterNumber)
-      }
+      const blueprintRows = Array.isArray(blueprints) ? blueprints : []
+      const draftRows = Array.isArray(drafts) ? drafts : []
+      const chapterNumber = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0
+      const bpNums = new Set<number>(blueprintRows
+        .map((row: unknown) => (row as { chapterNumber?: unknown }).chapterNumber)
+        .filter(chapterNumber))
+      const draftNums = new Set<number>(draftRows
+        .map((row: unknown) => (row as { chapterNumber?: unknown }).chapterNumber)
+        .filter(chapterNumber))
+      const msNums = new Set<number>(draftRows
+        .filter((row: unknown) => (row as { status?: unknown }).status === 'finalized')
+        .map((row: unknown) => (row as { chapterNumber?: unknown }).chapterNumber)
+        .filter(chapterNumber))
 
       // 合并所有出现过的章节号
       const allNums = new Set([...bpNums, ...draftNums, ...msNums])

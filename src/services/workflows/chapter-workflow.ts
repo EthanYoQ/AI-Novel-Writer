@@ -470,6 +470,7 @@ export function createRepairFinalizeWorkflow(
   chapterNumber: number,
   projectPath: string,
   sourceProjectSession: ProjectSessionContext,
+  stepKey?: string,
 ): WorkflowDefinition {
   const uiLocale = chapterWorkflowLocale()
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
@@ -543,7 +544,8 @@ export function createRepairFinalizeWorkflow(
               `第${chapterNumber}章定稿`,
               `Chapter ${chapterNumber} finalized manuscript`,
             ),
-            onlyFailed: false,
+            onlyFailed: true,
+            stepKey,
             chapterEntities,
           }).execute({ step: {}, context, callbacks })
 

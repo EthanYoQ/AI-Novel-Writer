@@ -152,7 +152,12 @@ describe('GenerateFieldCommand project identity', () => {
     const callLlm = vi.spyOn(
       command as unknown as { callLLM: (...args: unknown[]) => Promise<string> },
       'callLLM',
-    ).mockResolvedValue('Keep each scene grounded in a concrete emotional choice.')
+    ).mockResolvedValue([
+      'Keep each scene grounded in a concrete emotional choice.',
+      'Advance conflict through character action.',
+      'Preserve established facts across chapters.',
+      'End scenes on a meaningful change.',
+    ].join('\n'))
 
     await command.execute({
       step: {},
@@ -167,7 +172,7 @@ describe('GenerateFieldCommand project identity', () => {
     expect(String(prompt)).toContain('must not enumerate chapters')
   })
 
-  it('rejects generated global guidance over 600 characters before saving', async () => {
+  it('rejects generated global guidance after the single field-level replacement is still invalid', async () => {
     const updateNovelConfig = vi.fn()
     const saveProject = vi.fn(async () => true)
     useProjectStore.setState({
@@ -189,6 +194,61 @@ describe('GenerateFieldCommand project identity', () => {
 
     expect(updateNovelConfig).not.toHaveBeenCalled()
     expect(saveProject).not.toHaveBeenCalled()
+  })
+
+  it('replaces only an invalid generated global-guidance field once before saving', async () => {
+    const updateNovelConfig = vi.fn()
+    const saveProject = vi.fn(async () => true)
+    useProjectStore.setState({
+      currentProject: {
+        ...project(projectAPath),
+        novelConfig: { genre: '玄幻', globalGuidance: '作者原有长篇要求，不受生成规则条数限制。' },
+      } as never,
+      updateNovelConfig,
+      saveProject,
+    })
+    const replacement = ['保持因果推进。', '保留既有事实。', '用行动制造冲突。', '场景结束必须产生变化。'].join('\n')
+    const command = new GenerateFieldCommand('globalGuidance')
+    const callLlm = vi.spyOn(
+      command as unknown as { callLLM: (...args: unknown[]) => Promise<string> },
+      'callLLM',
+    )
+      .mockResolvedValueOnce('这不是四到八条规则。')
+      .mockResolvedValueOnce(replacement)
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .resolves.toContain(replacement)
+
+    expect(callLlm).toHaveBeenCalledTimes(2)
+    expect(String(callLlm.mock.calls[1]?.[0])).toContain('只重新生成“全局写作要求”字段')
+    expect(updateNovelConfig).toHaveBeenCalledWith({
+      globalGuidance: `作者原有长篇要求，不受生成规则条数限制。\n\n${replacement}`,
+    }, context.projectSession)
+    expect(saveProject).toHaveBeenCalledOnce()
+  })
+
+  it('uses the same single replacement path when generated global guidance is empty', async () => {
+    const updateNovelConfig = vi.fn()
+    const saveProject = vi.fn(async () => true)
+    useProjectStore.setState({
+      currentProject: project(projectAPath) as never,
+      updateNovelConfig,
+      saveProject,
+    })
+    const replacement = ['保持因果推进。', '保留既有事实。', '用行动制造冲突。', '场景结束必须产生变化。'].join('\n')
+    const command = new GenerateFieldCommand('globalGuidance')
+    const callLlm = vi.spyOn(
+      command as unknown as { callLLM: (...args: unknown[]) => Promise<string> },
+      'callLLM',
+    )
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce(replacement)
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain(replacement)
+
+    expect(callLlm).toHaveBeenCalledTimes(2)
+    expect(updateNovelConfig).toHaveBeenCalledWith({ globalGuidance: replacement }, context.projectSession)
+    expect(saveProject).toHaveBeenCalledOnce()
   })
 
   it('does not mutate the newly selected project when the LLM returns after a switch', async () => {

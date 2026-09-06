@@ -2,7 +2,7 @@
 
 本目录保存可随代码审查、发布和长期维护的项目文档。不同 Worktree 是独立的代码与文档快照；只有当前分支中已跟踪的文件能作为该分支的文档证据，不能把其他 Worktree 的未提交材料当成当前事实。
 
-当前 `codex/plot-tree-update-reminder` 分支的无上下文审查入口是 [`handoffs/2026-09-05-astra-code-review.md`](handoffs/2026-09-05-astra-code-review.md)。该文件固定比较基线、实现提交、两批开发历史、Bug 台账、真实验收和审查顺序；现有 README、ADR 与旧 handoff 只能在代码核验后引用。
+[`handoffs/2026-09-05-astra-code-review.md`](handoffs/2026-09-05-astra-code-review.md) 是固定到提交 `7ea4d96` 的历史审查快照，记录当时的比较基线、实现提交、两批开发历史、Bug 台账、真实验收和审查顺序；后续审查必须以当前分支代码和测试为准，不能把该快照或其他 README、ADR、旧 handoff 单独当作当前行为证据。
 
 ## 文档权威层级
 

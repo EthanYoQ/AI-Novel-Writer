@@ -118,4 +118,34 @@ describe('tool artifact project ownership', () => {
     })
     expect(commits).toBe(1)
   })
+
+  it.each([
+    ['not_committed', false],
+    ['unknown', false],
+    ['committed', true],
+  ] as const)('preserves a %s write result returned by the filesystem controller', async (commitState, expectedSuccess) => {
+    const invoke = vi.fn(async () => ({
+      success: false,
+      commitState,
+      error: 'write receipt detail',
+    }))
+    vi.stubGlobal('window', {
+      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+    })
+
+    const result = await writeFileTool.execute({
+      file_path: 'chapters/1.md',
+      content: 'chapter one',
+    }, createAgentExecutionContext())
+
+    expect(result).toMatchObject({ success: expectedSuccess, commitState })
+    if (commitState === 'committed') {
+      expect(result.artifacts).toEqual([expect.objectContaining({
+        type: 'file_modified',
+        projectPath: projectAPath,
+      })])
+    } else {
+      expect(result.artifacts).toBeUndefined()
+    }
+  })
 })

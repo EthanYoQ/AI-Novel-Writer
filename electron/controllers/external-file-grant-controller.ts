@@ -7,6 +7,7 @@ import {
 } from '../services/external-file-grant-service'
 import { mainText } from '../i18n'
 import {
+  atomicWriteFailureCommitState,
   windowsSafeFileSystem,
   type WindowsSafeFileSystem,
 } from '../security/windows-safe-file-system'
@@ -135,7 +136,11 @@ export function registerExternalFileGrantController(
         }, { mustAlreadyExist: !canCreate })
         return { success: true }
       } catch (error) {
-        return { success: false, error: grantErrorText(error) }
+        return {
+          success: false,
+          commitState: atomicWriteFailureCommitState(error) ?? 'not_committed',
+          error: grantErrorText(error),
+        }
       }
     },
   )
