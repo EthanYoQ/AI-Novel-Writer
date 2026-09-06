@@ -482,31 +482,6 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expectNoDraftPersistence(invoke)
   })
 
-  it('persists the original and failed length-replacement candidates with lineage', async () => {
-    const original = '原始章节内容。'.repeat(120)
-    const replacement = '替代版本仍被截断。'.repeat(20)
-    const runtime = fakeOutcomes(
-      outcome(original, 'stop', 1),
-      outcome(replacement, 'length', 2),
-    )
-    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500 })
-
-    await expect(command.execute({ step: { id: 'draft-step' }, context, callbacks }))
-      .rejects.toThrow(/长度修复未完整结束/u)
-
-    const records = invoke.mock.calls.filter(([channel]) => channel === 'db:recovery-candidate-record')
-    expect(records).toHaveLength(2)
-    expect(records[0]?.[1]).toMatchObject({
-      stepId: 'draft-step',
-      visibleText: original,
-    })
-    expect(records[1]?.[1]).toMatchObject({
-      stepId: 'chapter-draft-length-repair',
-      visibleText: replacement,
-      replacesCandidateId: 'candidate-1',
-    })
-  })
-
   it('keeps the in-memory text and reports when candidate persistence fails', async () => {
     const runtime = fakeRuntime(() => outcome('正文太短。', 'stop'))
     const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500 })
@@ -1438,6 +1413,30 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
+  it.each([1604, 2285])(
+    'persists a complete %i-unit result above a 1000-unit target without length repair',
+    async visibleUnits => {
+      const draft = '正'.repeat(visibleUnits)
+      const runtime = fakeOutcomes(outcome(draft, 'stop'))
+      const { invoke, context, callbacks, command } = setup({
+        runtime,
+        wordsPerChapter: 1000,
+        wordsTarget: 1000,
+      })
+
+      await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(draft)
+
+      expect(runtime.complete).toHaveBeenCalledOnce()
+      expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft'])
+      expect(invoke).toHaveBeenCalledWith(
+        'db:draft-create',
+        expect.objectContaining({ content: draft, wordCount: visibleUnits }),
+        expect.anything(),
+        expect.anything(),
+      )
+    },
+  )
+
   it('continues a length result even after it has crossed 82%', async () => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(5000), 'length', 1),
@@ -1449,12 +1448,12 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(runtime.complete).toHaveBeenCalledTimes(2)
   })
 
-  it('routes an over-target length candidate into the bounded full-chapter replacement', async () => {
+  it('continues an over-target length candidate and commits only after a stop result', async () => {
     const initialCandidate = `${'甲'.repeat(4000)}。`
-    const replacement = `${'乙'.repeat(2800)}。`
+    const continuation = `${'乙'.repeat(2800)}。`
     const runtime = fakeOutcomes(
       outcome(initialCandidate, 'length', 1),
-      outcome(replacement, 'stop', 2),
+      outcome(continuation, 'stop', 2),
     )
     const { invoke, context, callbacks, command } = setup({
       runtime,
@@ -1462,24 +1461,22 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       wordsTarget: 3000,
     })
 
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(replacement)
+    const completedDraft = `${initialCandidate}\n\n${continuation}`
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(completedDraft)
 
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
       'chapter-draft',
-      'chapter-draft-length-repair',
+      'chapter-draft-continuation',
     ])
-    const repairPrompt = runtime.complete.mock.calls[1]?.[0].messages
-      .find(message => message.role === 'user')?.content ?? ''
-    expect(repairPrompt).toContain(initialCandidate)
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
-      expect.objectContaining({ content: replacement }),
+      expect.objectContaining({ content: completedDraft }),
       expect.anything(),
       expect.anything(),
     )
   })
 
-  it('keeps an over-target length candidate visible when the shared budget cannot replace it', async () => {
+  it('keeps an over-target length candidate visible when the shared budget cannot continue it', async () => {
     const initialCandidate = `${'甲'.repeat(4000)}。`
     const runtime = fakeRuntime((attempt) => {
       if (attempt === 1) return outcome(initialCandidate, 'length', 1)
@@ -1497,14 +1494,14 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
       'chapter-draft',
-      'chapter-draft-length-repair',
+      'chapter-draft-continuation',
     ])
     expect(replaceText).toHaveBeenLastCalledWith(initialCandidate)
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('已保存为项目恢复候选'))
     expectNoDraftPersistence(setupResult.invoke)
   })
 
-  it('keeps frozen relevant state, continuity, and selected references in continuation and compression', async () => {
+  it('keeps frozen relevant state, continuity, and selected references in continuations', async () => {
     const characterStateSentinel = 'UNIQUE_ROLE_STATE_MIDDLE_SENTINEL'
     const continuitySentinel = 'UNIQUE_FINALIZED_FACT_MIDDLE_SENTINEL'
     const referenceSentinel = 'UNIQUE_SELECTED_REFERENCE_MIDDLE_SENTINEL'
@@ -1571,25 +1568,29 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const continuationPrompt = continuationRuntime.complete.mock.calls[1]?.[0].messages
       .find(message => message.role === 'user')?.content ?? ''
 
-    const compressionRuntime = fakeOutcomes(
+    const overTargetContinuationRuntime = fakeOutcomes(
       outcome(`${'甲'.repeat(4000)}。`, 'length', 1),
       outcome(`${'乙'.repeat(2800)}。`, 'stop', 2),
     )
-    const compression = setup({
-      runtime: compressionRuntime,
+    const overTargetContinuation = setup({
+      runtime: overTargetContinuationRuntime,
       wordsPerChapter: 3000,
       wordsTarget: 3000,
       ...sharedSetup,
     })
-    await compression.command.execute({ step: {}, context: compression.context, callbacks: compression.callbacks })
-    const compressionPrompt = compressionRuntime.complete.mock.calls[1]?.[0].messages
+    await overTargetContinuation.command.execute({
+      step: {},
+      context: overTargetContinuation.context,
+      callbacks: overTargetContinuation.callbacks,
+    })
+    const overTargetContinuationPrompt = overTargetContinuationRuntime.complete.mock.calls[1]?.[0].messages
       .find(message => message.role === 'user')?.content ?? ''
 
-    for (const prompt of [initialPrompt, continuationPrompt, compressionPrompt]) {
+    for (const prompt of [initialPrompt, continuationPrompt, overTargetContinuationPrompt]) {
       expect(prompt).toContain(characterStateSentinel)
       expect(prompt).not.toContain('IRRELEVANT_ROLE_STATE_SENTINEL')
     }
-    for (const prompt of [continuationPrompt, compressionPrompt]) {
+    for (const prompt of [continuationPrompt, overTargetContinuationPrompt]) {
       expect(prompt).toContain(continuitySentinel)
       expect(prompt).toContain(referenceSentinel)
     }
@@ -1704,273 +1705,6 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompt).not.toMatch(/\{\{(?:chapter_info|future_blueprints|user_guidance)\}\}/u)
     expect(prompt).toContain('第2章 蓝门回声：追查蓝色漆屑与撞击声')
     expect(prompt).toContain('第一章必须以潮湿灯塔开场')
-  })
-
-  it('uses the bounded final rewrite when the first English length repair underfills', async () => {
-    const initialSource = `ORIGINAL_SOURCE_HEAD ${'alpha '.repeat(900)} ORIGINAL_SOURCE_MIDDLE ${'alpha '.repeat(929)}`
-    const continuationSource = `${'beta '.repeat(1031)} ORIGINAL_SOURCE_TAIL`
-    const acceptedDraft = 'delta '.repeat(2250)
-    const repairDraft = [
-      'REPAIR_SOURCE_HEAD',
-      'gamma '.repeat(900),
-      'REPAIR_SOURCE_MIDDLE',
-      'gamma '.repeat(932),
-      'REPAIR_SOURCE_TAIL',
-    ].join(' ')
-    const runtime = fakeOutcomes(
-      outcome(initialSource, 'stop', 1),
-      outcome(continuationSource, 'stop', 2),
-      outcome(repairDraft, 'stop', 3),
-      outcome(acceptedDraft, 'stop', 4),
-    )
-    const { invoke, context, callbacks, command } = setup({
-      runtime,
-      writingLanguage: 'en-US',
-      wordsPerChapter: 6000,
-      wordsTarget: 2500,
-      globalGuidance: 'FROZEN_GLOBAL_RULE',
-      coreOutline: 'FROZEN_CORE_FACT',
-    })
-
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(acceptedDraft.trim())
-
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-continuation',
-      'chapter-draft-length-repair',
-      'chapter-draft-length-final-rewrite',
-    ])
-    const repairPrompt = runtime.complete.mock.calls[2]?.[0].messages
-      .find(message => message.role === 'user')?.content ?? ''
-    expect(repairPrompt).toContain('locally counted prose units')
-    const finalRewriteRequest = runtime.complete.mock.calls[3]?.[0].messages
-      .map(message => message.content).join('\n') ?? ''
-    expect(finalRewriteRequest).toContain('ORIGINAL_SOURCE_HEAD')
-    expect(finalRewriteRequest).toContain('ORIGINAL_SOURCE_MIDDLE')
-    expect(finalRewriteRequest).toContain('ORIGINAL_SOURCE_TAIL')
-    expect(finalRewriteRequest).not.toContain('REPAIR_SOURCE_MIDDLE')
-    expect(finalRewriteRequest).toContain('FROZEN_GLOBAL_RULE')
-    expect(finalRewriteRequest).toContain('FROZEN_CORE_FACT')
-    expect(invoke).toHaveBeenCalledWith(
-      'db:draft-create',
-      expect.objectContaining({ content: acceptedDraft.trim() }),
-      expect.anything(),
-      expect.anything(),
-    )
-  })
-
-  it('repairs an overlong complete result once in the same session instead of truncating it', async () => {
-    const overlongDraft = Array.from(
-      { length: 20 },
-      (_, index) => `第${index + 1}段${'甲'.repeat(195)}。`,
-    ).join('\n\n') + '\n\n原稿最终事件：警报解除，林岚带着证据走出机房。'
-    const repairedDraft = `${'乙'.repeat(2750)}。林岚发现密钥，切断警报，带着证据走出机房。`
-    const runtime = fakeOutcomes(
-      outcome(overlongDraft, 'stop'),
-      outcome(repairedDraft, 'stop', 2),
-    )
-    const { invoke, context, callbacks, command } = setup({
-      runtime,
-      wordsPerChapter: 6000,
-      wordsTarget: 3000,
-      keyEvents: '发现密钥；切断警报；带着证据离开机房',
-    })
-
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(repairedDraft)
-
-    expect(runtime.execute).toHaveBeenCalledOnce()
-    expect(runtime.complete).toHaveBeenCalledTimes(2)
-    expect(runtime.complete.mock.calls[1]?.[0]).toMatchObject({
-      purpose: 'chapter-draft-length-repair',
-      output: 'visible-text',
-    })
-    const repairPrompt = runtime.complete.mock.calls[1]?.[0].messages
-      .find(message => message.role === 'user')?.content ?? ''
-    expect(repairPrompt).toContain('发现密钥；切断警报；带着证据离开机房')
-    expect(repairPrompt).toContain(overlongDraft)
-    const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
-    const content = (persisted?.[1] as { content: string }).content
-    expect(content).toBe(repairedDraft)
-  })
-
-  it.each([
-    { writingLanguage: 'zh-CN' as const, wordsTarget: 100, finalTarget: 90, paragraphs: 4, paragraphUnits: 23 },
-    { writingLanguage: 'zh-CN' as const, wordsTarget: 500, finalTarget: 450, paragraphs: 5, paragraphUnits: 90 },
-    { writingLanguage: 'zh-CN' as const, wordsTarget: 2500, finalTarget: 2250, paragraphs: 23, paragraphUnits: 98 },
-    { writingLanguage: 'en-US' as const, wordsTarget: 2500, finalTarget: 2250, paragraphs: 23, paragraphUnits: 98 },
-    { writingLanguage: 'en-US' as const, wordsTarget: 20_000, finalTarget: 18_000, paragraphs: 80, paragraphUnits: 225 },
-  ])('uses a satisfiable scaled final-rewrite contract for $writingLanguage target $wordsTarget', async ({
-    writingLanguage,
-    wordsTarget,
-    finalTarget,
-    paragraphs,
-    paragraphUnits,
-  }) => {
-    const endingFact = 'ENDING_SENTINEL。林岚发现密钥，切断警报，带着证据离开机房。'
-    const fixedText = `FRONT_SENTINEL。MIDDLE_SENTINEL。尾段结束。${endingFact}`
-    const firstRepairUnits = Math.max(1200, Math.floor(wordsTarget * 1.12) + 100)
-    const sourceFiller = '甲'.repeat(firstRepairUnits + 100 - countDraftUnits(fixedText))
-    const originalSource = `FRONT_SENTINEL。MIDDLE_SENTINEL。${sourceFiller}尾段结束。\n\n${endingFact}`
-    const firstRepair = '乙'.repeat(firstRepairUnits)
-    expect(countDraftUnits(firstRepair)).toBe(firstRepairUnits)
-    const finalDraft = '丙'.repeat(finalTarget)
-    const runtime = fakeOutcomes(
-      outcome(originalSource, 'stop'),
-      outcome(firstRepair, 'stop', 2),
-      outcome(finalDraft, 'stop', 3),
-    )
-    const { invoke, context, callbacks, command } = setup({
-      runtime,
-      wordsPerChapter: 6000,
-      wordsTarget,
-      keyEvents: '发现密钥；切断警报；带着证据离开机房',
-      writingLanguage,
-    })
-
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(finalDraft)
-
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-length-repair',
-      'chapter-draft-length-final-rewrite',
-    ])
-    const finalPrompt = runtime.complete.mock.calls[2]?.[0].messages
-      .find(message => message.role === 'user')?.content ?? ''
-    expect(finalPrompt).not.toContain(String(firstRepairUnits))
-    expect(finalPrompt).toContain(writingLanguage === 'zh-CN'
-      ? '从空白页重新写作'
-      : 'rewrite it from a blank page')
-    expect(finalPrompt).toContain(writingLanguage === 'zh-CN'
-      ? `本次兜底写作目标为 ${finalTarget} 个正文单位，不得超过 ${finalTarget} 个正文单位`
-      : `The fallback writing target is ${finalTarget} prose units; do not exceed ${finalTarget} prose units`)
-    expect(finalPrompt).toContain(writingLanguage === 'zh-CN'
-      ? `全章绝对不得超过 ${paragraphs} 个自然段，每段不得超过约 ${paragraphUnits} 个正文单位`
-      : `Use no more than ${paragraphs} natural paragraphs, with each paragraph no longer than about ${paragraphUnits} prose units`)
-    expect(finalPrompt).toContain(writingLanguage === 'zh-CN'
-      ? '交付前自行核对段落数与正文单位预算，不要输出核对过程'
-      : 'Before delivery, silently verify the paragraph count and prose-unit budget; do not output the verification')
-    expect(finalPrompt).toContain(writingLanguage === 'zh-CN'
-      ? '对白必须并入人物动作、反应或环境描写所在的段落'
-      : 'Fold dialogue into the paragraph containing character action, reaction, or setting')
-    expect(finalPrompt).toContain(writingLanguage === 'zh-CN'
-      ? '【待重写的完整章节草稿】'
-      : '[Complete chapter draft to rewrite]')
-    expect(finalPrompt).toContain(`"wordsTarget": ${finalTarget}`)
-    expect(finalPrompt).not.toContain(`"wordsTarget": ${wordsTarget}`)
-    expect(finalPrompt).toContain('发现密钥；切断警报；带着证据离开机房')
-    expect(finalPrompt).toContain('ENDING_SENTINEL')
-    expect(finalPrompt).toContain('FRONT_SENTINEL')
-    expect(finalPrompt).toContain('MIDDLE_SENTINEL')
-    expect(finalPrompt).toContain('甲'.repeat(80))
-    const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
-    expect((persisted?.[1] as { content: string }).content).toBe(finalDraft)
-  })
-
-  it('accepts a noncompliant 2700-unit final rewrite that remains inside the local boundary', async () => {
-    const finalDraft = '丙'.repeat(2700)
-    const runtime = fakeOutcomes(
-      outcome('甲'.repeat(3100), 'stop'),
-      outcome('乙'.repeat(3000), 'stop', 2),
-      outcome(finalDraft, 'stop', 3),
-    )
-    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 2500 })
-
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(finalDraft)
-
-    expect(runtime.complete).toHaveBeenCalledTimes(3)
-    const finalPrompt = runtime.complete.mock.calls[2]?.[0].messages
-      .find(message => message.role === 'user')?.content ?? ''
-    expect(finalPrompt).toContain('本次兜底写作目标为 2250 个正文单位，不得超过 2250 个正文单位')
-    const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
-    expect((persisted?.[1] as { content: string }).content).toBe(finalDraft)
-  })
-
-  it.each([
-    { writingLanguage: 'zh-CN' as const, finalUnits: 3075, boundary: 'above the local maximum' },
-    { writingLanguage: 'en-US' as const, finalUnits: 2000, boundary: 'below the local minimum' },
-  ])(
-    'allows one last-chance rewrite after a stopped final rewrite $boundary in $writingLanguage',
-    async ({ writingLanguage, finalUnits }) => {
-      const originalSourceDraft = [
-        'ORIGINAL_SOURCE_HEAD',
-        '甲'.repeat(2_400),
-        'ORIGINAL_SOURCE_MIDDLE',
-        '乙'.repeat(2_400),
-        'ORIGINAL_SOURCE_TAIL',
-      ].join('\n')
-      const acceptedDraft = '丁'.repeat(2200)
-      const runtime = fakeOutcomes(
-        outcome(originalSourceDraft, 'stop'),
-        outcome(`${'乙'.repeat(4276)}。`, 'stop', 2),
-        outcome(`${'丙'.repeat(finalUnits)}。`, 'stop', 3),
-        outcome(acceptedDraft, 'stop', 4),
-      )
-      const { invoke, context, callbacks, command } = setup({
-        runtime,
-        wordsPerChapter: 6000,
-        wordsTarget: 2500,
-        writingLanguage,
-      })
-
-      await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(acceptedDraft)
-
-      expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-        'chapter-draft',
-        'chapter-draft-length-repair',
-        'chapter-draft-length-final-rewrite',
-        'chapter-draft-length-final-rewrite-retry',
-      ])
-      const retryPrompt = runtime.complete.mock.calls[3]?.[0].messages
-        .find(message => message.role === 'user')?.content ?? ''
-      expect(retryPrompt).toContain(writingLanguage === 'zh-CN'
-        ? '本次兜底写作目标为 2250 个正文单位，不得超过 2250 个正文单位'
-        : 'The fallback writing target is 2250 prose units; do not exceed 2250 prose units')
-      expect(retryPrompt).toContain(writingLanguage === 'zh-CN'
-        ? '全章绝对不得超过 23 个自然段，每段不得超过约 98 个正文单位'
-        : 'Use no more than 23 natural paragraphs, with each paragraph no longer than about 98 prose units')
-      for (const [task] of runtime.complete.mock.calls.slice(1)) {
-        const recoveryPrompt = task.messages.find(message => message.role === 'user')?.content ?? ''
-        expect(recoveryPrompt).toContain('ORIGINAL_SOURCE_HEAD')
-        expect(recoveryPrompt).toContain('ORIGINAL_SOURCE_MIDDLE')
-        expect(recoveryPrompt).toContain('ORIGINAL_SOURCE_TAIL')
-      }
-      const persisted = invoke.mock.calls.find(([channel]) => channel === 'db:draft-create')
-      expect((persisted?.[1] as { content: string }).content).toBe(acceptedDraft)
-    },
-  )
-
-  it.each([
-    { finishReason: 'stop' as const, content: `${'丁'.repeat(2900)}。`, expectedError: '仍超过 2800' },
-    { finishReason: 'stop' as const, content: `${'丁'.repeat(2000)}。`, expectedError: '删减过多' },
-    { finishReason: 'length' as const, content: `${'丁'.repeat(2200)}。`, expectedError: '重试未完整结束' },
-  ])('rejects a $finishReason last-chance rewrite without persistence', async ({
-    finishReason,
-    content,
-    expectedError,
-  }) => {
-    const runtime = fakeOutcomes(
-      outcome(`${'甲'.repeat(3100)}。`, 'stop'),
-      outcome(`${'乙'.repeat(3000)}。`, 'stop', 2),
-      outcome(`${'丙'.repeat(2900)}。`, 'stop', 3),
-      outcome(content, finishReason, 4),
-    )
-    const { invoke, context, callbacks, command } = setup({
-      runtime,
-      wordsPerChapter: 6000,
-      wordsTarget: 2500,
-    })
-
-    await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow(expectedError)
-
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-length-repair',
-      'chapter-draft-length-final-rewrite',
-      'chapter-draft-length-final-rewrite-retry',
-    ])
-    expectNoDraftPersistence(invoke)
-    expect(context.data).not.toHaveProperty('draft')
   })
 
   it.each(['content_filter', 'error', 'unknown', 'cancelled'] as const)(

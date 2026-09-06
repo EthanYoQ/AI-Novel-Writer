@@ -45,7 +45,6 @@ export { countDraftUnits } from '../../../shared/draft-units'
 const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MIN_TARGET_COMPLETION_RATIO = 0.82
 const MAX_AUTO_CONTINUE_ROUNDS = 7
-const MAX_TARGET_OVERAGE_RATIO = 0.12
 const PREVIOUS_ENDING_MAX_CHARS = 1000
 const NEXT_CHAPTER_HEAD_MAX_CHARS = 1200
 const CROSS_CHAPTER_REUSE_CJK_NGRAM_CHARS = 8
@@ -134,10 +133,6 @@ function createDraftStreamPreview(
       timer = undefined
     },
   }
-}
-
-function maxDraftCharsForTarget(targetChars: number): number {
-  return Math.floor(targetChars * (1 + MAX_TARGET_OVERAGE_RATIO))
 }
 
 export const DRAFT_GENERATION_BUDGET = Object.freeze({
@@ -501,7 +496,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       ),
     ].join('\n\n')
     const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
-    const maxDraftChars = maxDraftCharsForTarget(targetChars)
 
     callbacks.log(uiText(
       '调用 AI 生成章节草稿...',
@@ -509,19 +503,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     ))
     let draftPersisted = false
     let recoverableDraftCandidate = ''
-    const recoveryAlternatives: Array<{ stepId: string; visibleText: string }> = []
     const workflowStepId = step && typeof step === 'object' && 'id' in step && typeof step.id === 'string'
       ? step.id
       : 'generate-draft'
-    const rememberAlternative = (stepId: string, text: string) => {
-      const visibleText = sanitizeDraftText(text)
-      if (
-        !visibleText
-        || visibleText === recoverableDraftCandidate
-        || recoveryAlternatives.at(-1)?.visibleText === visibleText
-      ) return
-      recoveryAlternatives.push({ stepId, visibleText })
-    }
     try {
       this.assertNotCancelled(context)
       const cancellation = observeWorkflowCancellation(context)
@@ -612,220 +596,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             onRecoverableCandidate: candidate => { recoverableDraftCandidate = candidate },
           })
           recoverableDraftCandidate = completedDraft
-          const completedUnits = countDraftUnits(completedDraft)
-          if (completedUnits <= maxDraftChars) return completedDraft
-
-          callbacks.log(uiText(
-            `  草稿超过目标容差，将在当前模型会话中压缩至不超过 ${maxDraftChars} 个正文单位`,
-            `  Draft exceeded the target tolerance; compressing it in the current model session to at most ${maxDraftChars} prose units`,
-          ))
-          const minimumDraftChars = Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
-          const originalSourceDraft = completedDraft
-          const lengthRewritePrompt = (currentUnits: number, final: boolean) => {
-            const rewriteMaxDraftChars = final ? Math.floor(targetChars * 0.9) : maxDraftChars
-            const paragraphCount = Math.max(4, Math.min(80, Math.round(rewriteMaxDraftChars / 100)))
-            const paragraphUnits = Math.round(rewriteMaxDraftChars / paragraphCount)
-            const rewriteChapterInfo = final
-              ? { ...this.chapterInfo, wordsTarget: rewriteMaxDraftChars }
-              : this.chapterInfo
-            return promptLanguageText(
-              writingLanguage,
-              `${final
-                ? '上一轮完整重写结果未落入本地长度范围；这是最终压缩阶段的有界完整重写。不要继续逐句删改上一稿；请从空白页重新写作。'
-                : `当前完整章节经本地计数有 ${currentUnits} 个正文单位，需要压缩并完整重写。`}
-
-【硬性要求】
-- 只输出重写后的完整章节正文，不要解释、总结、Markdown 或思考过程。
-${final
-  ? `- 本次兜底写作目标为 ${rewriteMaxDraftChars} 个正文单位，不得超过 ${rewriteMaxDraftChars} 个正文单位；中文汉字与英文单词计数，标点和空白不计。`
-  : `- 本地计数结果不得少于 ${minimumDraftChars} 个正文单位，也不得超过 ${rewriteMaxDraftChars} 个正文单位；中文汉字与英文单词计数，标点和空白不计。`}
-${final ? `- 全章绝对不得超过 ${paragraphCount} 个自然段，每段不得超过约 ${paragraphUnits} 个正文单位；总计不得超过上述兜底目标。
-- 对白必须并入人物动作、反应或环境描写所在的段落，不得让一句对白或单个动作独占一段。
-- 交付前自行核对段落数与正文单位预算，不要输出核对过程。` : ''}
-- 完整保留本章蓝图中的每一个事件、角色行动、因果关系与关键结果。
-- 保留原稿结尾的最终事件与结果，并以完整、自然的句子或段落收束。
-- 优先删除重复说明、复述、冗余对话和装饰性描写，不得用删除蓝图事件或结尾来满足长度。
-- 不得只输出节选，不得提前写后续章节。
-
-【本章蓝图】
-${JSON.stringify(rewriteChapterInfo, null, 2)}
-
-【冻结的作者约束】
-全局写作要求：
-${mergedGuidance}
-
-文风要求：
-${writingStyle}
-
-作者小说配置事实：
-${novelConfigFactsJson}
-
-【冻结的相关角色状态】
-${characterState}
-
-【冻结的已定稿连续性与活跃线索】
-${frozenContinuityContext}
-
-【冻结的本章相关规划资料（仅作参考，不代表已经发生）】
-${filteredContext}
-
-【待重写的完整章节草稿】
-${originalSourceDraft}`,
-              `${final
-                ? 'The previous full rewrite fell outside the local length range. This is a bounded full rewrite in the final compression stage. Do not keep line-editing the prior draft; rewrite it from a blank page.'
-                : `The complete chapter currently contains ${currentUnits} locally counted prose units and must be compressed and rewritten in full.`}
-
-[Requirements]
-- Output only the complete rewritten chapter prose; do not include explanations, summaries, Markdown, or reasoning.
-${final
-  ? `- The fallback writing target is ${rewriteMaxDraftChars} prose units; do not exceed ${rewriteMaxDraftChars} prose units. Chinese Han characters and English words count, while punctuation and whitespace do not.`
-  : `- The local count must be at least ${minimumDraftChars} prose units and no more than ${rewriteMaxDraftChars}; Chinese Han characters and English words count, while punctuation and whitespace do not.`}
-${final ? `- Use no more than ${paragraphCount} natural paragraphs, with each paragraph no longer than about ${paragraphUnits} prose units; the total must not exceed the fallback target above.
-- Fold dialogue into the paragraph containing character action, reaction, or setting; do not give one line of dialogue or one action its own paragraph.
-- Before delivery, silently verify the paragraph count and prose-unit budget; do not output the verification.` : ''}
-- Preserve every blueprint event, character action, causal link, and key outcome.
-- Preserve the final event and outcome from the original ending, and finish with a complete, natural sentence or paragraph.
-- Remove repeated explanation, recap, redundant dialogue, and decorative description first; never remove blueprint events or the ending to meet the limit.
-- Do not output an excerpt and do not advance into later chapters.
-
-[Current chapter blueprint]
-${JSON.stringify(rewriteChapterInfo, null, 2)}
-
-[Frozen author constraints]
-Global writing guidance:
-${mergedGuidance}
-
-Writing style:
-${writingStyle}
-
-Author novel-configuration facts:
-${novelConfigFactsJson}
-
-[Frozen relevant character states]
-${characterState}
-
-[Frozen finalized continuity and active threads]
-${frozenContinuityContext}
-
-[Frozen planning material relevant to this chapter (reference only; not established history)]
-${filteredContext}
-
-[Complete chapter draft to rewrite]
-${originalSourceDraft}`,
-            )
-          }
-          const repairPrompt = lengthRewritePrompt(
-            completedUnits,
-            false,
-          )
-          const completeLengthRewrite = async (purpose: string, userPrompt: string) => {
-            let streamedText = ''
-            try {
-              return await draftingSession.complete({
-                purpose,
-                reasoningStage: 'drafting',
-                output: 'visible-text',
-                messages: [
-                  { role: 'system', content: promptBuilder.getSystemRole() },
-                  { role: 'user', content: userPrompt },
-                ],
-              }, {
-                signal: cancellation.signal,
-                onChunk: chunk => { streamedText += chunk },
-              })
-            } catch (error) {
-              rememberAlternative(purpose, visibleDraftStreamText(streamedText))
-              throw error
-            }
-          }
-          const repairOutcome = await completeLengthRewrite('chapter-draft-length-repair', repairPrompt)
-          const repairCompletion = completionFromOutcome(repairOutcome)
-          logDraftAttempt(
-            callbacks,
-            context,
-            { zhCN: '章节长度修复', enUS: 'Chapter length repair' },
-            repairOutcome.receipt,
-          )
-          this.assertNotCancelled(context)
-          const repairedDraft = sanitizeDraftText(this.stripThinkingTags(repairCompletion.content))
-          rememberAlternative('chapter-draft-length-repair', repairedDraft)
-          if (repairCompletion.finishReason !== 'stop') {
-            throw new Error(uiText(
-              '章节长度修复未完整结束，结果未保存。',
-              'The chapter length repair did not complete, so the result was not saved.',
-            ))
-          }
-          const repairedUnits = countDraftUnits(repairedDraft)
-          if (repairedUnits > maxDraftChars || repairedUnits < minimumDraftChars) {
-            callbacks.log(uiText(
-              `  首次长度修复结果为 ${repairedUnits} 个正文单位，超出本地长度范围，将执行最后一次完整重写`,
-              `  The first length repair has ${repairedUnits} prose units, outside the local length range; running one final full rewrite`,
-            ))
-            const finalOutcome = await completeLengthRewrite(
-              'chapter-draft-length-final-rewrite',
-              lengthRewritePrompt(repairedUnits, true),
-            )
-            const finalCompletion = completionFromOutcome(finalOutcome)
-            logDraftAttempt(
-              callbacks,
-              context,
-              { zhCN: '最终完整重写', enUS: 'Final full rewrite' },
-              finalOutcome.receipt,
-            )
-            this.assertNotCancelled(context)
-            let finalDraft = sanitizeDraftText(this.stripThinkingTags(finalCompletion.content))
-            rememberAlternative('chapter-draft-length-final-rewrite', finalDraft)
-            if (finalCompletion.finishReason !== 'stop') {
-              throw new Error(uiText(
-                '最终完整重写未完整结束，结果未保存。',
-                'The final full rewrite did not complete, so the result was not saved.',
-              ))
-            }
-            let finalUnits = countDraftUnits(finalDraft)
-            if (finalUnits > maxDraftChars || finalUnits < minimumDraftChars) {
-              callbacks.log(uiText(
-                `  最终完整重写结果为 ${finalUnits} 个正文单位，超出本地长度范围，将执行唯一一次重写重试`,
-                `  The final full rewrite has ${finalUnits} prose units, outside the local length range; running the single rewrite retry`,
-              ))
-              const retryOutcome = await completeLengthRewrite(
-                'chapter-draft-length-final-rewrite-retry',
-                lengthRewritePrompt(finalUnits, true),
-              )
-              const retryCompletion = completionFromOutcome(retryOutcome)
-              logDraftAttempt(
-                callbacks,
-                context,
-                { zhCN: '最终完整重写重试', enUS: 'Final full rewrite retry' },
-                retryOutcome.receipt,
-              )
-              this.assertNotCancelled(context)
-              if (retryCompletion.finishReason !== 'stop') {
-                throw new Error(uiText(
-                  '最终完整重写重试未完整结束，结果未保存。',
-                  'The final full rewrite retry did not complete, so the result was not saved.',
-                ))
-              }
-              finalDraft = sanitizeDraftText(this.stripThinkingTags(retryCompletion.content))
-              rememberAlternative('chapter-draft-length-final-rewrite-retry', finalDraft)
-              finalUnits = countDraftUnits(finalDraft)
-              if (finalUnits > maxDraftChars) {
-                throw new Error(uiText(
-                  `最终完整重写后仍超过 ${maxDraftChars} 个正文单位，结果未保存。`,
-                  `The final full rewrite still exceeds ${maxDraftChars} prose units, so the result was not saved.`,
-                ))
-              }
-            }
-            if (finalUnits < minimumDraftChars) {
-              throw new Error(uiText(
-                '最终完整重写删减过多，结果未保存。',
-                'The final full rewrite removed too much prose, so the result was not saved.',
-              ))
-            }
-            callbacks.replaceText?.(finalDraft)
-            return finalDraft
-          }
-          callbacks.replaceText?.(repairedDraft)
-          return repairedDraft
+          return completedDraft
         })
       } catch (error) {
         if (context.cancelled) throw new Error(uiText('工作流已取消', 'Workflow was cancelled.'))
@@ -927,7 +698,6 @@ ${originalSourceDraft}`,
         const failureReason = error instanceof Error ? error.message : String(error)
         const candidates = [
           { stepId: workflowStepId, visibleText: recoverableDraftCandidate },
-          ...recoveryAlternatives,
         ]
         let replacesCandidateId: string | undefined
         try {
@@ -989,8 +759,7 @@ ${originalSourceDraft}`,
     if (finishReason === 'stop') {
       return currentChars < Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
     }
-    if (finishReason !== 'length') return false
-    return currentChars < maxDraftCharsForTarget(targetChars)
+    return finishReason === 'length'
   }
 
   private async extendDraftIfNeeded(params: {
@@ -1220,17 +989,6 @@ ${visibleTail}`,
     }
 
     this.assertNotCancelled(params.context)
-    // A length finish is always an incomplete physical response. Reaching a
-    // word-count threshold is not proof that the model completed its sentence
-    // or scene, so never persist it as a successful chapter.
-    if (
-      lastFinishReason === 'length'
-      && countDraftUnits(draft) > maxDraftCharsForTarget(params.targetChars)
-    ) {
-      // This is still an incomplete candidate; the caller must run the bounded
-      // full-chapter length replacement before it can be persisted.
-      return draft
-    }
     if (lastFinishReason !== 'stop') {
       const error = this.createIncompleteCompletionError(lastFinishReason)
       error.message = uiText(error.message, (() => {
