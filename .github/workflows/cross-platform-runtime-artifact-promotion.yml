@@ -117,6 +117,8 @@ jobs:
     permissions:
       actions: read
       contents: write
+    outputs:
+      provenance_artifact_id: ${{ steps.upload-provenance.outcome == 'success' && steps.upload-provenance.outputs.artifact-id || '' }}
     steps:
       - name: Checkout the same trusted promotion code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -155,4 +157,71 @@ jobs:
             --version "$RELEASE_VERSION" \
             --profile "$PROFILE_PATH" \
             --verified-package verified-package-download \
-            --outer-artifact-digest "$VERIFIED_ARTIFACT_DIGEST"
+            --outer-artifact-digest "$VERIFIED_ARTIFACT_DIGEST" | tee publication-receipt.json
+
+      - name: Record compact release provenance after publication
+        id: record-provenance
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          VERIFIED_ARTIFACT_ID: ${{ needs.plan-and-verify.outputs.verified_artifact_id }}
+          VERIFIED_ARTIFACT_DIGEST: ${{ needs.plan-and-verify.outputs.verified_artifact_digest }}
+        run: node .release/scripts/release-artifact-retention.mjs prepare verified-package-download
+
+      - name: Preserve provenance before any large artifact is deleted
+        id: upload-provenance
+        if: steps.record-provenance.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-provenance-${{ inputs.expected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-provenance/release-provenance.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Report retained intermediates when provenance could not be saved
+        if: success() && steps.upload-provenance.outcome != 'success'
+        shell: bash
+        run: echo '::warning::Release publication completed, but compact provenance was not saved. No large artifacts will be deleted; their existing retention remains in effect.'
+
+  cleanup-published-artifacts:
+    needs: [plan-and-verify, publish]
+    if: needs.publish.outputs.provenance_artifact_id != ''
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      VERIFIED_ARTIFACT_ID: ${{ needs.plan-and-verify.outputs.verified_artifact_id }}
+      VERIFIED_ARTIFACT_DIGEST: ${{ needs.plan-and-verify.outputs.verified_artifact_digest }}
+    steps:
+      - name: Checkout trusted housekeeping code without publisher permissions
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up fixed verifier runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.1'
+
+      - name: Download only this publication's saved provenance
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.publish.outputs.provenance_artifact_id }}
+          path: release-provenance
+          merge-multiple: true
+
+      - name: Check destructive cleanup safety boundaries
+        run: node --test .release/scripts/release-artifact-retention.test.mjs
+
+      - name: Delete only published source artifacts after fresh readback
+        run: node .release/scripts/release-artifact-retention.mjs cleanup release-provenance/release-provenance.json
