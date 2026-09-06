@@ -3484,7 +3484,7 @@ try {
           }
         }
         elseif (
-          $activeStep -in @('build:win:artifacts', 'smoke:win-installer') -and
+          $activeStep -in @('build:win:artifacts', 'smoke:win-installer', 'smoke:win-v025-upgrade') -and
           $isCapturedNonzeroDescendantExit
         ) {
           $exitClassification = 'ignored-result-owned-descendant-nonzero'
@@ -3518,7 +3518,7 @@ try {
       }
       elseif ([string]$processEvent.Kind -eq 'process-exit') {
         # The armed root and its durable result own final success for selected
-        # build/installer steps. Their identified descendants remain evidence;
+        # build/installer/upgrade steps. Their identified descendants remain evidence;
         # other steps still fail closed on every abnormal descendant exit.
         if ($exitClassification -in @(
           'expected-legacy-bridge-old-uninstaller-powershell-probe',

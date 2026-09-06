@@ -49,6 +49,7 @@ let rejectFirstLease: ((error: Error) => void) | null
 let leaseRequestCount: number
 
 beforeEach(() => {
+  window.getSelection()?.removeAllRanges()
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
