@@ -22,6 +22,7 @@ import {
   sameProjectSessionContext,
 } from '../shared/project-session-context'
 import type { WritingLanguage } from '../shared/writing-language'
+import { randomUUID } from '../utils/id'
 
 
 export type ExportFormat = 'merged-md' | 'split-md' | 'txt'
@@ -334,7 +335,7 @@ export async function exportNovel(
 
       case 'split-md': {
         // 每章一个 Markdown
-        const splitDir = projectFileStem
+        const splitDir = `${projectFileStem}-${randomUUID()}`
         const authorityCurrent = await ipc.invokeWithProjectSession(
           projectSession,
           'db:draft-export-authority-current',
