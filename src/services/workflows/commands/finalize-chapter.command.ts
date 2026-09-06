@@ -262,6 +262,8 @@ export function buildFinalizePostProcessSteps(
 ): PostProcessStep[] {
   const steps: PostProcessStep[] = []
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
+  let generatedChapterNotes: string | undefined
+  let generatedCharacterCards: string | undefined
 
   // ─── 步骤 1: 导入知识库 ───────────────────────────────────────────
   steps.push({
@@ -335,7 +337,8 @@ export function buildFinalizePostProcessSteps(
           .withChapterNumber(chapterNumber)
           .withChapterTitle(chapterTitle)
 
-        const cleanNotes = await generation.complete(notesBuilder, callbacks, 'visible-text', context)
+        generatedChapterNotes ??= await generation.complete(notesBuilder, callbacks, 'visible-text', context)
+        const cleanNotes = generatedChapterNotes
         if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
 
         if (finalizedDraftId !== undefined) {
@@ -432,7 +435,7 @@ export function buildFinalizePostProcessSteps(
           .withChapterNumber(chapterNumber)
           .withExistingCardsJson(simpleCards)
 
-        const cardsResult = await generation.complete(
+        const cardsResult = generatedCharacterCards ?? await generation.complete(
           cardBuilder,
           callbacks,
           'structured-data',
@@ -440,6 +443,7 @@ export function buildFinalizePostProcessSteps(
         )
         if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         const updatesByName = parseCharacterStateUpdates(cardsResult, allChars, chapterNumber)
+        generatedCharacterCards = cardsResult
         let updatedCount = 0
         const changedEntries: CharacterRosterEntry[] = []
         for (const character of allChars) {

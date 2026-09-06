@@ -162,10 +162,10 @@ describe('plot tree AI boundary', () => {
     }), sources())).toThrow(/章节范围|chapter range/u)
   })
 
-  it('allows one initial request plus one replacement in the ten-minute planning window', () => {
+  it('allows exactly one request in the ten-minute planning window', () => {
     expect(PLOT_TREE_GENERATION_BUDGET).toMatchObject({
-      maxAttempts: 2,
-      maxRequestedOutputTokens: 16_384,
+      maxAttempts: 1,
+      maxRequestedOutputTokens: 8192,
       deadlineMs: 10 * 60_000,
     })
   })
@@ -301,7 +301,113 @@ describe('plot tree AI boundary', () => {
     })
     expect(task?.messages[0]?.content).not.toMatch(/[\u3400-\u9fff]/u)
     expect(result.generatedAt).toBe('2026-09-02T03:04:05.000Z')
+    expect(result.tracks).toEqual(modelResponse.tracks)
     expect(runtime.close).toHaveBeenCalledOnce()
+  })
+
+  it('removes an incompatible blueprint citation from an occurred event without a second request', async () => {
+    const plotSources = sources()
+    plotSources.writingLanguage = 'zh-CN'
+    plotSources.narrativeThreads = []
+    plotSources.blueprints = [1, 2, 3].map(chapterNumber => ({
+      chapterNumber,
+      title: `第${chapterNumber}章`,
+      purpose: `推进第${chapterNumber}章`,
+      keyEvents: `第${chapterNumber}章计划事件`,
+    }))
+    plotSources.finalizedChapters = [1, 2, 3].map(chapterNumber => ({
+      draftId: 40 + chapterNumber,
+      chapterNumber,
+      title: `第${chapterNumber}章`,
+      summary: `第${chapterNumber}章真实定稿摘要`,
+    }))
+    const mixed = {
+      tracks: [{
+        ...modelResponse.tracks[0],
+        events: [{
+          status: 'occurred',
+          chapterNumber: 3,
+          summary: '第三章事件已经发生。',
+          sources: [
+            { type: 'blueprint', chapterNumber: 3 },
+            { type: 'finalized-chapter', draftId: 43, chapterNumber: 3 },
+          ],
+        }],
+      }],
+    }
+    const complete = vi.fn<GenerationSession['complete']>().mockResolvedValue({
+      status: 'completed',
+      content: JSON.stringify(mixed),
+      finishReason: 'stop',
+      receipt: {} as never,
+    })
+    const runtime = {
+      execute: vi.fn(async operation => operation({ session: { budget: {}, complete } })),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as GenerationRuntime
+
+    const result = await generatePlotTree({
+      modelId: 'grok-frozen',
+      projectSession: PROJECT_SESSION,
+      sources: plotSources,
+      signal: new AbortController().signal,
+    }, {
+      createRuntime: vi.fn().mockResolvedValue(runtime),
+      now: () => '2026-09-02T03:04:05.000Z',
+    })
+
+    expect(complete).toHaveBeenCalledOnce()
+    expect(result.tracks[0]).toMatchObject({
+      startChapter: 3,
+      endChapter: 3,
+      events: [{
+        status: 'occurred',
+        sources: [{ type: 'finalized-chapter', draftId: 43, chapterNumber: 3 }],
+      }],
+    })
+  })
+
+  it('builds a deterministic snapshot from narrative sources after invalid JSON', async () => {
+    const threadSources = sources()
+    threadSources.blueprints = []
+    threadSources.finalizedChapters = []
+    threadSources.narrativeThreads[0]!.targetEndChapter = 3
+    threadSources.narrativeThreads[0]!.events[0]!.chapterNumber = 4
+    const complete = vi.fn<GenerationSession['complete']>().mockResolvedValue({
+      status: 'completed',
+      content: 'not JSON',
+      finishReason: 'stop',
+      receipt: {} as never,
+    })
+    const runtime = {
+      execute: vi.fn(async operation => operation({ session: { budget: {}, complete } })),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as GenerationRuntime
+
+    const result = await generatePlotTree({
+      modelId: 'grok-frozen',
+      projectSession: PROJECT_SESSION,
+      sources: threadSources,
+      signal: new AbortController().signal,
+    }, {
+      createRuntime: vi.fn().mockResolvedValue(runtime),
+      now: () => '2026-09-02T03:04:05.000Z',
+    })
+
+    expect(complete).toHaveBeenCalledOnce()
+    expect(result.tracks).toHaveLength(1)
+    expect(result.tracks[0]?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        status: 'planned',
+        sources: [{ type: 'narrative-thread', planId: 7 }],
+      }),
+      expect.objectContaining({
+        status: 'occurred',
+        chapterNumber: 4,
+        sources: [{ type: 'narrative-thread', planId: 7, eventId: 11, chapterNumber: 4 }],
+      }),
+    ]))
+    expect(result.tracks[0]?.endChapter).toBe(4)
   })
 
   it.each(['DEADLINE_EXHAUSTED', 'PROVIDER_REQUEST_FAILED'] as const)(
@@ -372,8 +478,8 @@ describe('plot tree AI boundary', () => {
       execute: vi.fn(async operation => operation({
         session: {
           budget: {
-            maxAttempts: 2,
-            maxRequestedOutputTokens: 16_384,
+            maxAttempts: 1,
+            maxRequestedOutputTokens: 8192,
             maxRequestedOutputTokensPerAttempt: 8192,
             deadlineAt: Date.now() + 10 * 60_000,
           },
@@ -481,12 +587,6 @@ describe('plot tree AI boundary', () => {
   })
 
   it.each([
-    ['length', {
-      status: 'incomplete',
-      content: 'PRIVATE_TRUNCATED_OUTPUT',
-      finishReason: 'length',
-      receipt: {} as never,
-    }],
     ['invalid_json', {
       status: 'completed',
       content: 'PRIVATE_MODEL_OUTPUT is not JSON',
@@ -509,21 +609,14 @@ describe('plot tree AI boundary', () => {
       finishReason: 'stop',
       receipt: {} as never,
     }],
-  ] satisfies Array<[string, GenerationOutcome]>)('requests one clean full replacement after %s', async (_reason, firstOutcome) => {
-    const complete = vi.fn<GenerationSession['complete']>()
-      .mockResolvedValueOnce(firstOutcome)
-      .mockResolvedValueOnce({
-        status: 'completed',
-        content: JSON.stringify(modelResponse),
-        finishReason: 'stop',
-        receipt: {} as never,
-      })
+  ] satisfies Array<[string, GenerationOutcome]>)('uses one source-backed fallback after %s', async (_reason, firstOutcome) => {
+    const complete = vi.fn<GenerationSession['complete']>().mockResolvedValue(firstOutcome)
     const runtime = {
       execute: vi.fn(async operation => operation({
         session: {
           budget: {
-            maxAttempts: 2,
-            maxRequestedOutputTokens: 16_384,
+            maxAttempts: 1,
+            maxRequestedOutputTokens: 8192,
             maxRequestedOutputTokensPerAttempt: 8192,
             deadlineAt: Date.now() + 10 * 60_000,
           },
@@ -535,7 +628,7 @@ describe('plot tree AI boundary', () => {
     const plotSources = sources()
     plotSources.writingLanguage = 'zh-CN'
 
-    await expect(generatePlotTree({
+    const result = await generatePlotTree({
       modelId: 'grok-frozen',
       projectSession: PROJECT_SESSION,
       sources: plotSources,
@@ -543,23 +636,35 @@ describe('plot tree AI boundary', () => {
     }, {
       createRuntime: vi.fn().mockResolvedValue(runtime),
       now: () => '2026-09-02T03:04:05.000Z',
-    })).resolves.toMatchObject({ tracks: modelResponse.tracks })
+    })
 
-    expect(complete).toHaveBeenCalledTimes(2)
+    expect(result.tracks).toHaveLength(1)
+    expect(result.tracks[0]?.id).toBe('source-backed-progress')
+    expect(complete).toHaveBeenCalledOnce()
     const initial = complete.mock.calls[0]?.[0]
-    const replacement = complete.mock.calls[1]?.[0]
-    expect(replacement?.purpose).toBe('plot-tree-snapshot-replacement')
-    expect(replacement?.messages.map(message => message.content).join('\n'))
-      .toContain('完整替代')
-    for (const request of [initial, replacement]) {
-      expect(request?.messages.map(message => message.content).join('\n'))
-        .toContain('绝不能输出 source.type="synopsis"')
-    }
-    expect(replacement?.messages.map(message => message.content).join('\n'))
-      .not.toMatch(/PRIVATE_(?:TRUNCATED_)?MODEL_OUTPUT|PRIVATE_TRUNCATED_OUTPUT/u)
+    expect(initial?.purpose).toBe('plot-tree-snapshot')
+    expect(initial?.messages.map(message => message.content).join('\n'))
+      .toContain('绝不能输出 source.type="synopsis"')
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_MODEL_OUTPUT')
   })
 
-  it('reports malformed model output as JSON syntax failure without echoing it', async () => {
+  it('does not rebind a wrong source ID and falls back to exact source facts', async () => {
+    const complete = vi.fn().mockResolvedValue({
+      status: 'completed',
+      content: JSON.stringify({
+        tracks: [{
+          ...modelResponse.tracks[0],
+          events: [{
+            status: 'occurred',
+            chapterNumber: 1,
+            summary: 'PRIVATE_MODEL_OUTPUT',
+            sources: [{ type: 'finalized-chapter', draftId: 999, chapterNumber: 1 }],
+          }],
+        }],
+      }),
+      finishReason: 'stop',
+      receipt: {},
+    })
     const runtime = {
       execute: vi.fn(async operation => operation({
         session: {
@@ -569,84 +674,29 @@ describe('plot tree AI boundary', () => {
             maxRequestedOutputTokensPerAttempt: 8192,
             deadlineAt: Date.now() + 10 * 60_000,
           },
-          complete: vi.fn().mockResolvedValue({
-            status: 'completed',
-            content: 'PRIVATE_MODEL_OUTPUT is not JSON',
-            finishReason: 'stop',
-            receipt: {},
-          }),
+          complete,
         },
       })),
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as GenerationRuntime
 
-    try {
-      await generatePlotTree({
-        modelId: 'grok-frozen',
-        projectSession: PROJECT_SESSION,
-        sources: sources(),
-        signal: new AbortController().signal,
-      }, {
-        createRuntime: vi.fn().mockResolvedValue(runtime),
-        now: () => '2026-09-02T03:04:05.000Z',
-      })
-      expect.fail('Expected malformed output to be rejected')
-    } catch (error) {
-      expect(error).toBeInstanceOf(Error)
-      expect(error).toMatchObject({ code: 'invalid_json' })
-      expect((error as Error).message).toContain('parseable plot-tree JSON')
-      expect((error as Error).message).not.toContain('PRIVATE_MODEL_OUTPUT')
-    }
-  })
+    const result = await generatePlotTree({
+      modelId: 'grok-frozen',
+      projectSession: PROJECT_SESSION,
+      sources: sources(),
+      signal: new AbortController().signal,
+    }, {
+      createRuntime: vi.fn().mockResolvedValue(runtime),
+      now: () => '2026-09-02T03:04:05.000Z',
+    })
 
-  it('reports a source-contract violation separately from invalid JSON', async () => {
-    const runtime = {
-      execute: vi.fn(async operation => operation({
-        session: {
-          budget: {
-            maxAttempts: 1,
-            maxRequestedOutputTokens: 8192,
-            maxRequestedOutputTokensPerAttempt: 8192,
-            deadlineAt: Date.now() + 10 * 60_000,
-          },
-          complete: vi.fn().mockResolvedValue({
-            status: 'completed',
-            content: JSON.stringify({
-              tracks: [{
-                ...modelResponse.tracks[0],
-                events: [{
-                  status: 'planned',
-                  chapterNumber: 99,
-                  summary: 'PRIVATE_MODEL_OUTPUT',
-                  sources: [{ type: 'blueprint', chapterNumber: 99 }],
-                }],
-              }],
-            }),
-            finishReason: 'stop',
-            receipt: {},
-          }),
-        },
-      })),
-      close: vi.fn().mockResolvedValue(undefined),
-    } as unknown as GenerationRuntime
-
-    try {
-      await generatePlotTree({
-        modelId: 'grok-frozen',
-        projectSession: PROJECT_SESSION,
-        sources: sources(),
-        signal: new AbortController().signal,
-      }, {
-        createRuntime: vi.fn().mockResolvedValue(runtime),
-        now: () => '2026-09-02T03:04:05.000Z',
-      })
-      expect.fail('Expected the source-contract violation to be rejected')
-    } catch (error) {
-      expect(error).toBeInstanceOf(Error)
-      expect(error).toMatchObject({ code: 'invalid_contract' })
-      expect((error as Error).message).toContain('invalid plot-tree structure')
-      expect((error as Error).message).not.toContain('PRIVATE_MODEL_OUTPUT')
-    }
+    expect(complete).toHaveBeenCalledOnce()
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_MODEL_OUTPUT|999/u)
+    expect(result.tracks[0]?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sources: [{ type: 'finalized-chapter', draftId: 41, chapterNumber: 1 }],
+      }),
+    ]))
   })
 
   it.each([

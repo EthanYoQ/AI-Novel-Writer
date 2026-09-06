@@ -58,7 +58,14 @@ export class PlotTreeRepository {
       LEFT JOIN summary_snapshots ON summary_snapshots.draft_id = drafts.id
       LEFT JOIN blueprints ON blueprints.chapter_number = drafts.chapter_number
       WHERE drafts.status = 'finalized'
-      ORDER BY drafts.chapter_number ASC, drafts.id ASC
+        AND NOT EXISTS (
+          SELECT 1 FROM drafts newer
+          WHERE newer.chapter_number = drafts.chapter_number
+            AND newer.status = 'finalized'
+            AND (newer.version > drafts.version
+              OR (newer.version = drafts.version AND newer.id > drafts.id))
+        )
+      ORDER BY drafts.chapter_number ASC
     `).all() as Array<{
       draft_id: number
       chapter_number: number

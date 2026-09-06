@@ -362,12 +362,6 @@ function normalizeBoundedDetailText(value: unknown, maxChars: number): unknown {
   return Array.from(value.trim()).slice(0, maxChars).join('')
 }
 
-function normalizeUpdatedAtChapter(value: unknown): unknown {
-  if (typeof value !== 'string' || !/^\d+$/u.test(value)) return value
-  const chapter = Number(value)
-  return Number.isSafeInteger(chapter) ? chapter : value
-}
-
 export interface ArchitectureProjectSnapshot {
   expectedProjectPath: string
   novelConfig: Readonly<NovelConfig>
@@ -967,7 +961,9 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
               ...candidate.currentState,
               keyItems: normalizeDetailStringList(candidate.currentState.keyItems, '、'),
               recentEvents: normalizeDetailStringList(candidate.currentState.recentEvents, '；'),
-              updatedAtChapter: normalizeUpdatedAtChapter(candidate.currentState.updatedAtChapter),
+              // Architecture generation describes the pre-chapter baseline. A
+              // model-supplied future chapter must never become persisted fact.
+              updatedAtChapter: 0,
             }
             for (const field of CHARACTER_STATE_TEXT_FIELDS) {
               normalizedState[field] = normalizeBoundedDetailText(

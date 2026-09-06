@@ -148,6 +148,15 @@ function plotTreeSourceChapterBounds(
       && validChapterRange(thread.targetStartChapter, thread.targetEndChapter)
       && [thread.title, thread.type, thread.authorIntent].every(nonEmptyString)) {
       ranges.push([thread.targetStartChapter, thread.targetEndChapter])
+      for (const event of Array.isArray(thread.events) ? thread.events : []) {
+        if (Number.isSafeInteger(event?.id)
+          && event.id >= 1
+          && validChapterNumber(event.chapterNumber)
+          && ['planted', 'progressing', 'resolved', 'abandoned'].includes(event.type)
+          && [event.evidence, event.reason].every(nonEmptyString)) {
+          ranges.push([event.chapterNumber, event.chapterNumber])
+        }
+      }
     }
   }
   if (ranges.length === 0) return null
