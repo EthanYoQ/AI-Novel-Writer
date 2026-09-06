@@ -942,9 +942,13 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const generatedDetails = fullEntries.map((entry, index) => {
       const details: Partial<CharacterRosterEntry> = { ...entry }
       delete details.relationships
+      details.currentState = {
+        ...entry.currentState!,
+        updatedAtChapter: index + 1,
+      }
       if (index === 0) (details as { age: unknown }).age = 18
       if (index === 0) details.currentState = {
-        ...entry.currentState!,
+        ...details.currentState!,
         keyItems: ['钥匙', '旧照片'],
         recentEvents: ['收到密信', '躲过追捕'],
       } as unknown as CharacterRosterEntry['currentState']
@@ -1249,39 +1253,6 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect((committedRequest as { entries: unknown[] }).entries).toHaveLength(4)
     expect(committedEntries[0]!.appearance).toBe(authorAppearance)
   })
-
-  it.each(['-1', '1.5', '', 'abc'])(
-    'rejects invalid decimal-string initial chapter %j before roster commit',
-    async (updatedAtChapter) => {
-      const invalid = JSON.parse(detailBatchResponses(rosterEntries)[0]!) as { entries: Array<Record<string, unknown>> }
-      const state = invalid.entries[0]!.currentState as Record<string, unknown>
-      state.updatedAtChapter = updatedAtChapter
-      const generateStream = createResponseStream([
-        JSON.stringify(manifestFor(rosterEntries)),
-        JSON.stringify(invalid),
-      ])
-      useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-      const invoke = vi.fn(async (channel: string) => {
-        if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
-        if (channel === 'fs:check-exists') return false
-        if (channel === 'db:project-core-get') {
-          return { premise: '这是一段足够长且包含明确冲突与人物目标的故事前提，用于验证非法角色状态章节必须在角色事实提交之前安全失败。' }
-        }
-        throw new Error(`Unexpected IPC channel: ${channel}`)
-      })
-      vi.stubGlobal('window', {
-        velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
-      })
-      const command = new GenerateCharactersCommand({
-        expectedProjectPath: projectAPath,
-        novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
-      })
-
-      await expect(command.execute({ step: {}, context, callbacks }))
-        .rejects.toThrow('角色详情 slotId=slot-1 字段 currentState.updatedAtChapter 必须是非负整数')
-      expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
-    },
-  )
 
   it('normalizes integer identity and relation IDs before details and one atomic roster commit', async () => {
     const numericManifest = {

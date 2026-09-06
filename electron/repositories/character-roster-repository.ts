@@ -422,6 +422,7 @@ function mergeGeneratedEntriesWithExisting(
 }
 
 function mergeIncrementalEntriesWithExisting(
+  db: BetterSqlite3.Database,
   candidates: CharacterRosterEntry[],
   existingEntries: CharacterRosterEntry[],
   intent: Extract<CharacterRosterCommitIntent, 'blueprint_sync' | 'chapter_progress'>,
@@ -435,6 +436,20 @@ function mergeIncrementalEntriesWithExisting(
       && candidate.currentState
       && existing.currentState
       && candidate.currentState.updatedAtChapter < existing.currentState.updatedAtChapter
+      && (
+        db.prepare(`
+          SELECT 1
+          FROM drafts
+          WHERE chapter_number = ? AND status = 'finalized'
+          LIMIT 1
+        `).get(existing.currentState.updatedAtChapter)
+        || !db.prepare(`
+          SELECT 1
+          FROM drafts
+          WHERE chapter_number = ? AND status = 'finalized'
+          LIMIT 1
+        `).get(candidate.currentState.updatedAtChapter)
+      )
     ) {
       throw new Error(`角色「${existing.name}」已由较新章节更新，已拒绝旧章节后处理覆盖`)
     }
@@ -830,6 +845,7 @@ export class CharacterRosterRepository {
             ? mergeGeneratedEntriesWithExisting(request.entries, existingEntries)
             : isIncremental
               ? mergeIncrementalEntriesWithExisting(
+                  db,
                   request.entries,
                   existingEntries,
                   intent as Extract<CharacterRosterCommitIntent, 'blueprint_sync' | 'chapter_progress'>,

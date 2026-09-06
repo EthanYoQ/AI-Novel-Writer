@@ -366,6 +366,30 @@ describe('workflow mutation failure boundaries', () => {
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('剧情要点提取完成'))
   })
 
+  it('reuses generated chapter notes when an executor retry only repairs persistence', async () => {
+    let persistenceAttempts = 0
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:blueprint-update-notes') {
+        persistenceAttempts += 1
+        return persistenceAttempts === 1
+          ? { success: false, error: 'transient notes failure' }
+          : { success: true }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const complete = vi.fn(async () => '一次生成的章节要点')
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete },
+    ).find(candidate => candidate.key === 'chapter_notes')!
+
+    await expect(step.executor(callbacks(), context())).rejects.toThrow('transient notes failure')
+    await expect(step.executor(callbacks(), context())).resolves.toBeUndefined()
+
+    expect(complete).toHaveBeenCalledOnce()
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-update-notes')).toHaveLength(2)
+  })
+
   it('persists notes but omits unsupported facts when the author chapter has no blueprint', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'db:continuity-save-finalized') return { success: true }
@@ -859,6 +883,36 @@ describe('workflow mutation failure boundaries', () => {
       'db:character-roster-read',
       'db:character-roster-commit',
     ])
+  })
+
+  it('reuses generated character state when an executor retry only repairs persistence', async () => {
+    const allCharacters = [{ name: '林岚', role: 'protagonist', relationships: [], currentState: {} }]
+    let persistenceAttempts = 0
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:character-roster-read') {
+        return { status: 'ready', revision: 4, entries: allCharacters }
+      }
+      if (channel === 'db:character-roster-commit') {
+        persistenceAttempts += 1
+        return persistenceAttempts === 1
+          ? { success: false, error: 'transient roster failure' }
+          : { success: true, receipt: { revision: 5 } }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const complete = vi.fn(async () => JSON.stringify({
+      updates: [{ name: '林岚', currentState: { location: '车站' } }],
+    }))
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete },
+    ).find(candidate => candidate.key === 'character_cards')!
+
+    await expect(step.executor(callbacks(), context())).rejects.toThrow('transient roster failure')
+    await expect(step.executor(callbacks(), context())).resolves.toBeUndefined()
+
+    expect(complete).toHaveBeenCalledOnce()
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(2)
   })
 
   it('does not persist post-process output when the stream omits terminal evidence', async () => {

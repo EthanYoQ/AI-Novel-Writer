@@ -96,6 +96,11 @@ beforeEach(() => {
       characters TEXT NOT NULL DEFAULT '[]',
       updated_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE drafts (
+      id INTEGER PRIMARY KEY,
+      chapter_number INTEGER NOT NULL,
+      status TEXT NOT NULL
+    );
   `)
   ensureCharacterRosterSchema(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
@@ -970,5 +975,75 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       ],
     })).toThrow(/角色名必须唯一/)
     expect(CharacterRosterRepository.read()).toEqual(initial.snapshot)
+  })
+
+  it('rejects chapter progress older than a genuinely finalized character state', () => {
+    const base = commitRequest()
+    const initial = CharacterRosterRepository.commit({
+      ...base,
+      entries: base.entries.map(entry => ({
+        ...entry,
+        currentState: {
+          location: '第三章现场',
+          powerLevel: '',
+          physicalState: '',
+          mentalState: '',
+          keyItems: '',
+          recentEvents: '',
+          updatedAtChapter: 3,
+        },
+      })),
+    })
+    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(2, 2, 'finalized')
+    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(3, 3, 'finalized')
+    const existing = initial.snapshot.entries[0]
+
+    expect(() => CharacterRosterRepository.commit({
+      operationId: 'older-finalized-chapter-progress',
+      expectedRevision: initial.revision,
+      schemaVersion: 1,
+      intent: 'chapter_progress',
+      entries: [{
+        ...existing,
+        relationships: [],
+        currentState: { ...existing.currentState!, location: '第二章现场', updatedAtChapter: 2 },
+      }],
+    })).toThrow(/较新章节更新/)
+  })
+
+  it('repairs a future character-state chapter when no such finalized draft exists', () => {
+    const base = commitRequest()
+    const initial = CharacterRosterRepository.commit({
+      ...base,
+      entries: base.entries.map(entry => ({
+        ...entry,
+        currentState: {
+          location: '受污染的未来状态',
+          powerLevel: '',
+          physicalState: '',
+          mentalState: '',
+          keyItems: '',
+          recentEvents: '',
+          updatedAtChapter: 3,
+        },
+      })),
+    })
+    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(2, 2, 'finalized')
+    const existing = initial.snapshot.entries[0]
+
+    const receipt = CharacterRosterRepository.commit({
+      operationId: 'repair-future-chapter-progress',
+      expectedRevision: initial.revision,
+      schemaVersion: 1,
+      intent: 'chapter_progress',
+      entries: [{
+        ...existing,
+        relationships: [],
+        currentState: { ...existing.currentState!, location: '第二章现场', updatedAtChapter: 2 },
+      }],
+    })
+
+    expect(receipt.snapshot.entries.find(entry => entry.name === existing.name)?.currentState)
+      .toMatchObject({ location: '第二章现场', updatedAtChapter: 2 })
   })
 })
