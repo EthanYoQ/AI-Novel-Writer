@@ -61,6 +61,16 @@ function initialRosterRequest(): CharacterRosterCommitRequest {
   }
 }
 
+function insertFinalizedDraft(draftId: number, chapterNumber: number): void {
+  const db = getProjectDb()!
+  db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)')
+    .run(draftId, `Chapter ${chapterNumber} finalized content`)
+  db.prepare(`
+    INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
+    VALUES (?, ?, 1, 'finalized', ?, 0)
+  `).run(draftId, chapterNumber, draftId)
+}
+
 function installRealRepositoryIpc(): void {
   vi.stubGlobal('window', {
     velaAPI: {
@@ -229,6 +239,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
   })
 
   it('covers the full finalized source and atomically persists one valid state change', async () => {
+    insertFinalizedDraft(7, 2)
     const draftContent = Array.from({ length: 2350 }, (_, index) => {
       if (index === 0) return 'HEAD_FACT'
       if (index === 1175) return 'MIDDLE_ONLY_HANDOFF_FACT_LIN_LAN_GIVES_BRASS_KEY_TO_ZHOU_YAN'
@@ -305,6 +316,8 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
 
   it('rejects an older Chinese chapter retry after a newer character state is committed', async () => {
     workflowContext.writingLanguage = 'zh-CN'
+    insertFinalizedDraft(7, 2)
+    insertFinalizedDraft(8, 3)
     const beforeChapterThree = CharacterRosterRepository.read()
     const existing = beforeChapterThree.entries[0]
     const chapterThree = CharacterRosterRepository.commit({
@@ -373,6 +386,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
   })
 
   it('cancels before commit and safely retries only the unfinished post-process step', async () => {
+    insertFinalizedDraft(7, 2)
     let cancelledOnce = false
     useLLMStore.setState({
       defaultModelId: 'test-model',
@@ -422,6 +436,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
   })
 
   it('retries one selected failed step without invoking successful steps again', async () => {
+    insertFinalizedDraft(7, 2)
     cardResponse = '{}'
     const initial = await command('The brass key changes hands.').execute({
       step: {}, context: workflowContext, callbacks: callbacks(),
