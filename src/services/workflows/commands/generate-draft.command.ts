@@ -696,33 +696,25 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         callbacks.replaceText?.(recoverableDraftCandidate)
         const failureCode = recoveryFailureCode(error, context.cancelled)
         const failureReason = error instanceof Error ? error.message : String(error)
-        const candidates = [
-          { stepId: workflowStepId, visibleText: recoverableDraftCandidate },
-        ]
-        let replacesCandidateId: string | undefined
         try {
-          for (const candidate of candidates) {
-            const result = await ipc.invokeWithProjectSession(
-              projectSession,
-              'db:recovery-candidate-record',
-              {
-                runId: context.runId,
-                stepId: candidate.stepId,
-                chapterNumber: this.chapterInfo.chapterNumber,
-                chapterTitle: this.chapterInfo.title,
-                source: recoveryChapterSource(this.chapterInfo),
-                sourceDraft: sourceDraft ? { id: sourceDraft.id, version: sourceDraft.version } : null,
-                visibleText: candidate.visibleText,
-                failureCode,
-                failureReason,
-                ...(replacesCandidateId ? { replacesCandidateId } : {}),
-              },
-              expectedProjectPath,
-            )
-            if (!result.success || !result.candidate) {
-              throw new Error(result.error || uiText('未知存储错误', 'Unknown storage error.'))
-            }
-            replacesCandidateId = result.candidate.candidateId
+          const result = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:recovery-candidate-record',
+            {
+              runId: context.runId,
+              stepId: workflowStepId,
+              chapterNumber: this.chapterInfo.chapterNumber,
+              chapterTitle: this.chapterInfo.title,
+              source: recoveryChapterSource(this.chapterInfo),
+              sourceDraft: sourceDraft ? { id: sourceDraft.id, version: sourceDraft.version } : null,
+              visibleText: recoverableDraftCandidate,
+              failureCode,
+              failureReason,
+            },
+            expectedProjectPath,
+          )
+          if (!result.success || !result.candidate) {
+            throw new Error(result.error || uiText('未知存储错误', 'Unknown storage error.'))
           }
           callbacks.log(uiText(
             '生成未能安全完成；已收到的可见正文已保存为项目恢复候选，未进入草稿库。',
