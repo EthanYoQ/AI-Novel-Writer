@@ -371,6 +371,8 @@ describe('plot tree AI boundary', () => {
     const threadSources = sources()
     threadSources.blueprints = []
     threadSources.finalizedChapters = []
+    threadSources.narrativeThreads[0]!.targetEndChapter = 3
+    threadSources.narrativeThreads[0]!.events[0]!.chapterNumber = 4
     const complete = vi.fn<GenerationSession['complete']>().mockResolvedValue({
       status: 'completed',
       content: 'not JSON',
@@ -401,9 +403,11 @@ describe('plot tree AI boundary', () => {
       }),
       expect.objectContaining({
         status: 'occurred',
-        sources: [{ type: 'narrative-thread', planId: 7, eventId: 11, chapterNumber: 1 }],
+        chapterNumber: 4,
+        sources: [{ type: 'narrative-thread', planId: 7, eventId: 11, chapterNumber: 4 }],
       }),
     ]))
+    expect(result.tracks[0]?.endChapter).toBe(4)
   })
 
   it.each(['DEADLINE_EXHAUSTED', 'PROVIDER_REQUEST_FAILED'] as const)(

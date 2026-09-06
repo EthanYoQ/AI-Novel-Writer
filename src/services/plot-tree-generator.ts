@@ -221,25 +221,21 @@ function deterministicPlotTreeSnapshot(
   sources: PlotTreeSourceBundle,
   generatedAt: string,
 ): PlotTreeSnapshot {
-  const finalizedByChapter = new Map<number, typeof sources.finalizedChapters[number]>()
-  for (const chapter of sources.finalizedChapters) {
-    const current = finalizedByChapter.get(chapter.chapterNumber)
-    if ((chapter.summary.trim() || chapter.title.trim())
-      && exactEventSource(
-        { type: 'finalized-chapter', draftId: chapter.draftId, chapterNumber: chapter.chapterNumber },
-        'occurred', chapter.chapterNumber, sources, generatedAt,
-      )
-      && (!current || chapter.draftId > current.draftId)) {
-      finalizedByChapter.set(chapter.chapterNumber, chapter)
-    }
-  }
+  const finalizedChapters = sources.finalizedChapters.filter(chapter => (
+    (chapter.summary.trim() || chapter.title.trim())
+    && exactEventSource(
+      { type: 'finalized-chapter', draftId: chapter.draftId, chapterNumber: chapter.chapterNumber },
+      'occurred', chapter.chapterNumber, sources, generatedAt,
+    )
+  ))
+  const finalizedChapterNumbers = new Set(finalizedChapters.map(chapter => chapter.chapterNumber))
   const candidates: PlotTreeEvent[] = [
-    ...[...finalizedByChapter.values()].map(chapter => ({
+    ...finalizedChapters.map(chapter => ({
       status: 'occurred', chapterNumber: chapter.chapterNumber,
       summary: chapter.summary.trim() || chapter.title.trim(),
       sources: [{ type: 'finalized-chapter', draftId: chapter.draftId, chapterNumber: chapter.chapterNumber }],
     } as PlotTreeEvent)),
-    ...sources.blueprints.filter(blueprint => !finalizedByChapter.has(blueprint.chapterNumber)).map(blueprint => ({
+    ...sources.blueprints.filter(blueprint => !finalizedChapterNumbers.has(blueprint.chapterNumber)).map(blueprint => ({
       status: 'planned', chapterNumber: blueprint.chapterNumber,
       summary: blueprint.keyEvents.trim() || blueprint.purpose.trim() || blueprint.title.trim(),
       sources: [{ type: 'blueprint', chapterNumber: blueprint.chapterNumber }],
@@ -248,9 +244,7 @@ function deterministicPlotTreeSnapshot(
       status: 'planned', chapterNumber: thread.targetStartChapter,
       summary: thread.authorIntent.trim() || thread.title.trim(),
       sources: [{ type: 'narrative-thread', planId: thread.id }],
-    } as PlotTreeEvent, ...thread.events.filter(event => (
-      event.chapterNumber >= thread.targetStartChapter && event.chapterNumber <= thread.targetEndChapter
-    )).map(event => ({
+    } as PlotTreeEvent, ...thread.events.map(event => ({
       status: 'occurred', chapterNumber: event.chapterNumber,
       summary: event.evidence.trim() || event.reason.trim(),
       sources: [{ type: 'narrative-thread', planId: thread.id, eventId: event.id, chapterNumber: event.chapterNumber }],
