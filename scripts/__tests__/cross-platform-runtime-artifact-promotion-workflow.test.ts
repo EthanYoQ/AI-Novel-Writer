@@ -33,13 +33,14 @@ describe('cross-platform runtime artifact promotion workflow contract', () => {
 
     expect(workflow).toContain('workflow_dispatch:')
     expect(workflow).not.toMatch(/^\s*(push|pull_request|schedule):/m)
-    for (const input of ['expected_sha', 'release_tag', 'release_version', 'profile_path', 'qualification_runs_json', 'confirmation']) {
+    for (const input of ['expected_sha', 'release_tag', 'release_version', 'profile_path', 'release_notes_path', 'qualification_runs_json', 'confirmation']) {
       expect(workflow).toContain(`      ${input}:`)
     }
     expect(workflow).toContain('PROMOTE_QUALIFIED_DESKTOP_RELEASE')
     expect(workflow).toContain('group: promote-qualified-desktop-${{ inputs.release_tag }}')
     expect(workflow).toContain('cancel-in-progress: false')
     expect(workflow).toContain('--qualification-runs-json "$QUALIFICATION_RUNS_JSON"')
+    expect(workflow).toContain('--release-notes "$RELEASE_NOTES_PATH"')
     expect(workflow).toContain('node .release/scripts/github-desktop-promotion.mjs verify')
     expect(workflow).toContain('node .release/scripts/github-desktop-promotion.mjs publish')
     expect(workflow).toContain('artifact-ids: ${{ needs.plan-and-verify.outputs.verified_artifact_id }}')

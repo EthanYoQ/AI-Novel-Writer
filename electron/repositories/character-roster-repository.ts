@@ -430,6 +430,14 @@ function mergeIncrementalEntriesWithExisting(
   const mergedExisting = existingEntries.map((existing) => {
     const candidate = candidateByName.get(characterRosterIdentityKey(existing.name))
     if (!candidate) return { ...existing }
+    if (
+      intent === 'chapter_progress'
+      && candidate.currentState
+      && existing.currentState
+      && candidate.currentState.updatedAtChapter < existing.currentState.updatedAtChapter
+    ) {
+      throw new Error(`角色「${existing.name}」已由较新章节更新，已拒绝旧章节后处理覆盖`)
+    }
 
     // 蓝图同步只附加结构化关系；章节定稿则以本轮已验证的状态补丁推进
     // currentState。其他资料保留已有事实，避免工作流重写人工档案。

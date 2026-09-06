@@ -303,6 +303,58 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(nextChapterPrompt).toContain('handed the brass key to Zhou Yan')
   })
 
+  it('rejects an older Chinese chapter retry after a newer character state is committed', async () => {
+    workflowContext.writingLanguage = 'zh-CN'
+    const beforeChapterThree = CharacterRosterRepository.read()
+    const existing = beforeChapterThree.entries[0]
+    const chapterThree = CharacterRosterRepository.commit({
+      operationId: '第三章角色进度',
+      expectedRevision: beforeChapterThree.revision,
+      schemaVersion: 1,
+      intent: 'chapter_progress',
+      entries: [{
+        ...existing,
+        currentState: {
+          location: '新港',
+          powerLevel: '普通人',
+          physicalState: '疲惫',
+          mentalState: '警觉',
+          keyItems: '',
+          recentEvents: '第三章已经交出黄铜钥匙',
+          updatedAtChapter: 3,
+        },
+      }],
+    })
+    cardResponse = JSON.stringify({
+      updates: [{
+        name: 'Lin Lan',
+        currentState: {
+          location: '旧站',
+          keyItems: '黄铜钥匙',
+          recentEvents: '第二章准备交出钥匙',
+          updatedAtChapter: 2,
+        },
+      }],
+    })
+
+    const status = await command('第二章定稿：林岚准备交出黄铜钥匙。', {
+      onlyFailed: true,
+      stepKey: 'character_cards',
+    }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+
+    expect(status.steps.character_cards).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('较新章节'),
+    })
+    expect(CharacterRosterRepository.read()).toEqual(chapterThree.snapshot)
+    expect(CharacterRepository.getByName('Lin Lan')?.currentState).toMatchObject({
+      location: '新港',
+      keyItems: '',
+      recentEvents: '第三章已经交出黄铜钥匙',
+      updatedAtChapter: 3,
+    })
+  })
+
   it('keeps a legal empty update successful without creating a roster revision', async () => {
     const chineseChapter = [
       '头部事实：林岚抵达旧站。',
