@@ -236,9 +236,12 @@ describe('Windows cloud build workflow contract', () => {
     expect(upload).toContain('windows-qualified')
     expect(diagnostics).not.toContain('Copy-Item -LiteralPath $_.FullName')
     expect(diagnostics).not.toMatch(/-Recurse\b/)
-    expect(diagnostics).not.toContain('monitor-control-log.jsonl')
     expect(diagnostics).toContain('orchestrator-failures.jsonl')
     expect(diagnostics).toContain('monitor-status.json')
+    expect(diagnostics).toContain('process-events.jsonl')
+    expect(diagnostics).toContain("-Filter 'process-tree*.json'")
+    expect(diagnostics).toContain('monitor-control-log.jsonl')
+    expect(diagnostics).not.toContain('commandLine')
   })
 
   windowsIt('executes pnpm through the explicit trusted command processor and records the sanitized result', () => {

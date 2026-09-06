@@ -673,6 +673,11 @@ export function registerDatabaseController() {
     return FinalizationRepository.listAuthoritativeForExport()
   })
 
+  ipcMain.handle('db:draft-export-authority-current', async (_event, receipt, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)
+  })
+
   ipcMain.handle('db:continuity-save-finalized', async (_event, request, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)

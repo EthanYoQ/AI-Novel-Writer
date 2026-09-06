@@ -316,6 +316,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     }
     const novelConfig = Object.freeze({ ...project.novelConfig })
     const writingLanguage = workflowWritingLanguage(context)
+    const sourceDraft = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-get-latest',
+      this.chapterInfo.chapterNumber,
+      expectedProjectPath,
+    )
 
     callbacks.log(uiText(
       '拼装章节上下文 (强类型注入中)...',
@@ -935,6 +941,7 @@ ${originalSourceDraft}`,
                 chapterNumber: this.chapterInfo.chapterNumber,
                 chapterTitle: this.chapterInfo.title,
                 source: recoveryChapterSource(this.chapterInfo),
+                sourceDraft: sourceDraft ? { id: sourceDraft.id, version: sourceDraft.version } : null,
                 visibleText: candidate.visibleText,
                 failureCode,
                 failureReason,

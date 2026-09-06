@@ -4,7 +4,7 @@ import { page } from 'vitest/browser'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
-import { useEditorStore } from '../../../stores/editor-store'
+import { saveDirtyEditorChangesForExit, useEditorStore } from '../../../stores/editor-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import DraftEditor from '../DraftEditor'
@@ -155,6 +155,7 @@ afterEach(async () => {
   container.remove()
   Reflect.deleteProperty(window, 'velaAPI')
   setActiveProjectSessionContext(null)
+  useEditorStore.getState().clearTabs()
   useEditorStore.setState(originalEditorState)
   useProjectStore.setState(originalProjectState)
   useWorkflowStore.setState(originalWorkflowState)
@@ -174,5 +175,66 @@ describe('DraftEditor revision source binding', () => {
 
     await act(async () => page.getByRole('button', { name: '完成合并' }).click())
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:revision-merge')).toBe(false)
+  })
+
+  it('saves each dirty draft through its own retained handler after switching the active tab', async () => {
+    await act(async () => root.unmount())
+    root = createRoot(container)
+
+    const firstContent = '第一章后台修改。'
+    const secondContent = '第二章当前修改。'
+    const tabs = [
+      {
+        id: 'draft-7', name: 'Chapter 1', type: 'chapter' as const,
+        filePath: 'vela://draft/7', content: firstContent, savedContent: SOURCE,
+        dirty: true, draftId: 7, draftStatus: 'draft' as const, chapterNumber: 1,
+        projectKey: PROJECT_PATH, projectSessionLease: PROJECT_SESSION.leaseId, contentRevision: 1,
+      },
+      {
+        id: 'draft-8', name: 'Chapter 2', type: 'chapter' as const,
+        filePath: 'vela://draft/8', content: secondContent, savedContent: '第二章旧稿。',
+        dirty: true, draftId: 8, draftStatus: 'draft' as const, chapterNumber: 2,
+        projectKey: PROJECT_PATH, projectSessionLease: PROJECT_SESSION.leaseId, contentRevision: 1,
+      },
+    ]
+    useEditorStore.setState({ tabs, activeTabId: 'draft-7', draftLedgers: {} })
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:draft-get-meta') {
+        const id = Number(args[0])
+        return {
+          id,
+          chapterNumber: id === 7 ? 1 : 2,
+          version: 1,
+          status: 'draft',
+          source: 'write',
+          contentId: id * 10,
+          wordCount: id === 7 ? firstContent.length : secondContent.length,
+          createdAt: '',
+          updatedAt: '',
+        }
+      }
+      if (channel === 'db:draft-list') return [{ id: 7, version: 1 }, { id: 8, version: 1 }]
+      if (channel === 'db:blueprint-get-all' || channel === 'db:review-list' || channel === 'db:revision-get-pending') return []
+      if (channel === 'db:draft-update-content') return { success: true }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+
+    await act(async () => root.render(
+      <DraftEditor key="draft-7" tabId="draft-7" filePath="vela://draft/7" content={firstContent} projectKey={PROJECT_PATH} />,
+    ))
+    useEditorStore.getState().setActiveTab('draft-8')
+    await act(async () => root.render(
+      <DraftEditor key="draft-8" tabId="draft-8" filePath="vela://draft/8" content={secondContent} projectKey={PROJECT_PATH} />,
+    ))
+
+    await act(async () => saveDirtyEditorChangesForExit(PROJECT_PATH))
+
+    const writes = invoke.mock.calls.filter(([channel]) => channel === 'db:draft-update-content')
+    expect(writes.map(([, id, content]) => [id, content])).toEqual([
+      [7, firstContent],
+      [8, secondContent],
+    ])
+    expect(useEditorStore.getState().activeTabId).toBe('draft-8')
+    expect(useEditorStore.getState().tabs.every(tab => !tab.dirty)).toBe(true)
   })
 })

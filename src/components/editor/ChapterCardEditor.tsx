@@ -443,11 +443,13 @@ export default function ChapterCardEditor({
   useEffect(() => {
     exitSaveRef.current = handleSaveAll
   })
-  useEffect(() => registerEditorExitSaveHandler({
+  useEffect(() => {
+    registerEditorExitSaveHandler({
       type: 'chapter-card',
       projectKey,
       save: () => exitSaveRef.current(),
-    }), [projectKey])
+    })
+  }, [projectKey])
 
   /** 新建空章节 */
   const handleAddChapter = () => {

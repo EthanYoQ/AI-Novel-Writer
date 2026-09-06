@@ -160,6 +160,8 @@ export function registerEditorExitSaveHandler(handler: EditorExitSaveHandler): (
   }
 }
 
+// Editor components keep their registrations across active-tab unmounts.
+// These store-owned removal paths are the handler lifetime boundary.
 function removeEditorExitSaveHandlers(tab: EditorTab): void {
   exitSaveHandlers.delete(`tab:${tab.id}`)
   if (tab.projectKey && BACKGROUND_LEDGER_BY_EDITOR_TYPE[tab.type]) {

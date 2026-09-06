@@ -162,6 +162,8 @@ describe('FinalizationRepository transaction seam', () => {
         version: 1,
         title: '第一章',
         content: 'Finalized snapshot shown to the user',
+        finalizationId: 'finalization-1',
+        contentHash: hash('Finalized snapshot shown to the user'),
       },
       {
         draftId: 19,
@@ -169,8 +171,49 @@ describe('FinalizationRepository transaction seam', () => {
         version: 4,
         title: '',
         content: '第三章定稿',
+        finalizationId: null,
+        contentHash: hash('第三章定稿'),
       },
     ])
+  })
+
+  it('revalidates the exact finalized draft, outbox identity, and body integrity frozen for export', () => {
+    commitSnapshot()
+    const receipt = FinalizationRepository.listAuthoritativeForExport()
+      .map(({ draftId, chapterNumber, version, finalizationId, contentHash }) => ({
+        draftId,
+        chapterNumber,
+        version,
+        finalizationId,
+        contentHash,
+      }))
+
+    expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(true)
+
+    db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(12, 'conflicting final')
+    db.prepare(`
+      INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(18, 1, 1, 'finalized', 12, 17)
+    expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
+    db.prepare('DELETE FROM drafts WHERE id = 18').run()
+    db.prepare('DELETE FROM contents WHERE id = 12').run()
+
+    db.prepare("UPDATE finalization_outbox SET content_snapshot = 'other body' WHERE draft_id = 17").run()
+    expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
+    db.prepare(`
+      UPDATE finalization_outbox SET content_snapshot = ?, content_hash = 'bad-hash' WHERE draft_id = 17
+    `).run('Finalized snapshot shown to the user')
+    expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
+    db.prepare('UPDATE finalization_outbox SET content_hash = ?, finalization_id = ? WHERE draft_id = 17')
+      .run(hash('Finalized snapshot shown to the user'), 'replacement-finalization')
+    expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
+    db.prepare('UPDATE finalization_outbox SET finalization_id = ? WHERE draft_id = 17')
+      .run('finalization-1')
+    db.prepare('UPDATE drafts SET version = 2 WHERE id = 17').run()
+    expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
+    db.prepare('UPDATE drafts SET version = 1, id = 18 WHERE id = 17').run()
+    expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
   })
 
   it('rejects a finalized export snapshot whose outbox identity or body disagrees with the draft fact', () => {

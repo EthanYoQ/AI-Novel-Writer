@@ -17,21 +17,34 @@ describeWithChrome('locale shell browser regression', () => {
   let page: Page
 
   beforeAll(async () => {
+    const startedAt = Date.now()
+    const logStage = (stage: string) => console.info(`[locale-shell] ${stage} +${Date.now() - startedAt}ms`)
+
+    logStage('server:start')
     server = await createServer({
       root: repositoryRoot,
       configFile: false,
+      cacheDir: 'node_modules/.vite/locale-shell-interaction',
       plugins: [tailwindcss(), react()],
       define: { __APP_VERSION__: JSON.stringify('0.9.2') },
+      optimizeDeps: { entries: ['scripts/browser-fixtures/locale-shell-harness.html'] },
       server: { host: '127.0.0.1', port: 0, strictPort: false },
       appType: 'spa',
     })
     await server.listen()
+    logStage('server:ready')
     const address = server.httpServer?.address()
     if (!address || typeof address === 'string') throw new Error('Unable to determine browser harness address')
+    logStage('browser:start')
     browser = await chromium.launch({ executablePath: chromeExecutable, headless: true })
     page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+    logStage('browser:ready')
+    logStage('navigation:start')
     await page.goto(`http://127.0.0.1:${address.port}/scripts/browser-fixtures/locale-shell-harness.html`)
+    logStage('navigation:ready')
+    logStage('DOM-ready:start')
     await page.getByText('欢迎使用 AI小说作家').waitFor()
+    logStage('DOM-ready:ready')
   }, 30_000)
 
   afterAll(async () => {

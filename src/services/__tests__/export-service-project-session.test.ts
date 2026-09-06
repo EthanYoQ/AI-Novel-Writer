@@ -31,6 +31,10 @@ const projectSnapshot = {
     writingLanguage: 'zh-CN' as const,
   },
 }
+const authority = (draftId: number) => ({
+  finalizationId: `finalization-${draftId}`,
+  contentHash: 'a'.repeat(64),
+})
 
 vi.mock('../../stores/project-store', () => ({
   useProjectStore: {
@@ -56,7 +60,10 @@ beforeEach(() => {
       version: 1,
       title: '',
       content: 'Final chapter',
+      finalizationId: 'finalization-1',
+      contentHash: 'a'.repeat(64),
     }] as never
+    if (channel === 'db:draft-export-authority-current') return true as never
     if (channel === 'db:project-core-get') return { synopsis: 'Synopsis' } as never
     throw new Error(`Unexpected channel: ${channel}`)
   }) as never)
@@ -155,7 +162,9 @@ describe('exportNovel project session ownership', () => {
     vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (_session: ProjectSessionContext, channel: string) => {
       if (channel === 'db:draft-export-snapshot') return [{
         draftId: 1, chapterNumber: 1, version: 1, title: '', content: finalizedContent,
+        finalizationId: 'finalization-1', contentHash: 'a'.repeat(64),
       }] as never
+      if (channel === 'db:draft-export-authority-current') return true as never
       throw new Error(`Unexpected channel: ${channel}`)
     }) as never)
 
@@ -194,7 +203,9 @@ describe('exportNovel project session ownership', () => {
     vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (_session: ProjectSessionContext, channel: string) => {
       if (channel === 'db:draft-export-snapshot') return [{
         draftId: 1, chapterNumber: 1, version: 1, title, content: 'Final chapter',
+        finalizationId: 'finalization-1', contentHash: 'a'.repeat(64),
       }] as never
+      if (channel === 'db:draft-export-authority-current') return true as never
       throw new Error(`Unexpected channel: ${channel}`)
     }) as never)
 
@@ -232,6 +243,7 @@ describe('exportNovel project session ownership', () => {
       version: 1,
       title,
       content: '风从海上来',
+      ...authority(1),
     }] as never)
 
     await expect(exportNovel(
@@ -257,6 +269,7 @@ describe('exportNovel project session ownership', () => {
         version: 1,
         title: '起航',
         content: `${expectedHeading}\n\n风从海上来`,
+        ...authority(1),
       }] as never)
 
       await expect(exportNovel(
@@ -280,6 +293,7 @@ describe('exportNovel project session ownership', () => {
         version: 1,
         title: '起航',
         content: '# 船员日志\n\n风从海上来',
+        ...authority(1),
       }] as never)
 
       await expect(exportNovel(
@@ -320,8 +334,8 @@ describe('exportNovel project session ownership', () => {
     'exports sparse finalized snapshots in %s without consulting blueprints',
     async (format) => {
       vi.mocked(ipc.invokeWithProjectSession).mockResolvedValueOnce([
-        { draftId: 7, chapterNumber: 1, version: 2, title: '起航', content: '第一章权威定稿' },
-        { draftId: 19, chapterNumber: 4, version: 3, title: '归来', content: '第四章权威定稿' },
+        { draftId: 7, chapterNumber: 1, version: 2, title: '起航', content: '第一章权威定稿', ...authority(7) },
+        { draftId: 19, chapterNumber: 4, version: 3, title: '归来', content: '第四章权威定稿', ...authority(19) },
       ] as never)
 
       await expect(exportNovel(
@@ -347,9 +361,9 @@ describe('exportNovel project session ownership', () => {
   )
 
   it.each([
-    { label: 'missing body', row: { draftId: 7, chapterNumber: 1, version: 2, title: '', content: '' } },
-    { label: 'wrong draft id', row: { draftId: 0, chapterNumber: 1, version: 2, title: '', content: '正文' } },
-    { label: 'wrong version', row: { draftId: 7, chapterNumber: 1, version: 0, title: '', content: '正文' } },
+    { label: 'missing body', row: { draftId: 7, chapterNumber: 1, version: 2, title: '', content: '', ...authority(7) } },
+    { label: 'wrong draft id', row: { draftId: 0, chapterNumber: 1, version: 2, title: '', content: '正文', ...authority(7) } },
+    { label: 'wrong version', row: { draftId: 7, chapterNumber: 1, version: 0, title: '', content: '正文', ...authority(7) } },
   ])('rejects an invalid authoritative snapshot: $label', async ({ row }) => {
     vi.mocked(ipc.invokeWithProjectSession).mockResolvedValueOnce([row] as never)
 
@@ -361,11 +375,59 @@ describe('exportNovel project session ownership', () => {
     expect(ipc.invoke).not.toHaveBeenCalled()
   })
 
+  it('requires reconfirmation when finalized authority changes before a single-file write', async () => {
+    vi.mocked(ipc.invokeWithProjectSession)
+      .mockResolvedValueOnce([{
+        draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one',
+        ...authority(1),
+      }] as never)
+      .mockResolvedValueOnce(false as never)
+
+    await expect(exportNovel(
+      { format: 'merged-md', grantId: 'export-grant' },
+      projectSnapshot,
+      projectSession,
+    )).resolves.toEqual({
+      success: false,
+      error: expect.stringMatching(/定稿章节已变化.*重新确认导出/u),
+    })
+    expect(ipc.invoke).not.toHaveBeenCalledWith(
+      'fs:grant-write-file',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
+  it('reports confirmed split files when finalized authority changes before the next write', async () => {
+    vi.mocked(ipc.invokeWithProjectSession)
+      .mockResolvedValueOnce([
+        { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one', ...authority(1) },
+        { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two', ...authority(2) },
+      ] as never)
+      .mockResolvedValueOnce(true as never)
+      .mockResolvedValueOnce(true as never)
+      .mockResolvedValueOnce(false as never)
+
+    await expect(exportNovel(
+      { format: 'split-md', grantId: 'export-grant' },
+      projectSnapshot,
+      projectSession,
+    )).resolves.toEqual({
+      success: false,
+      error: expect.stringMatching(/重新确认导出.*已确认写入: Project A\/chapter_1\.md.*可能已写入: 无/u),
+    })
+    expect(vi.mocked(ipc.invoke).mock.calls
+      .filter(([channel]) => channel === 'fs:grant-write-file')
+      .map(call => call[2]))
+      .toEqual(['Project A/chapter_1.md'])
+  })
+
   it('reports files already written when a split export fails partway through', async () => {
     vi.mocked(ipc.invokeWithProjectSession).mockResolvedValueOnce([
-      { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one' },
-      { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two' },
-      { draftId: 3, chapterNumber: 3, version: 1, title: '', content: 'three' },
+      { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one', ...authority(1) },
+      { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two', ...authority(2) },
+      { draftId: 3, chapterNumber: 3, version: 1, title: '', content: 'three', ...authority(3) },
     ] as never)
     vi.mocked(ipc.invoke)
       .mockResolvedValueOnce({ success: true } as never)
@@ -392,9 +454,9 @@ describe('exportNovel project session ownership', () => {
 
   it('分章导出把未知回执与已确认写入、确定失败分开，并停止后续写入', async () => {
     vi.mocked(ipc.invokeWithProjectSession).mockResolvedValueOnce([
-      { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one' },
-      { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two' },
-      { draftId: 3, chapterNumber: 3, version: 1, title: '', content: 'three' },
+      { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one', ...authority(1) },
+      { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two', ...authority(2) },
+      { draftId: 3, chapterNumber: 3, version: 1, title: '', content: 'three', ...authority(3) },
     ] as never)
     vi.mocked(ipc.invoke)
       .mockResolvedValueOnce({ success: true } as never)
@@ -422,8 +484,8 @@ describe('exportNovel project session ownership', () => {
 
   it('reports the committed split file when the project session expires after its write receipt', async () => {
     vi.mocked(ipc.invokeWithProjectSession).mockResolvedValueOnce([
-      { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one' },
-      { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two' },
+      { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one', ...authority(1) },
+      { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two', ...authority(2) },
     ] as never)
     vi.mocked(ipc.invoke)
       .mockResolvedValueOnce({ success: true } as never)
@@ -447,8 +509,8 @@ describe('exportNovel project session ownership', () => {
 
   it('keeps the partial-write list when a later split write fails as the session expires', async () => {
     vi.mocked(ipc.invokeWithProjectSession).mockResolvedValueOnce([
-      { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one' },
-      { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two' },
+      { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one', ...authority(1) },
+      { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two', ...authority(2) },
     ] as never)
     vi.mocked(ipc.invoke)
       .mockResolvedValueOnce({ success: true } as never)

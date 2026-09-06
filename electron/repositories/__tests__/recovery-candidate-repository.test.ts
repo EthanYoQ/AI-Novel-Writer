@@ -49,6 +49,7 @@ describe('RecoveryCandidateRepository project-local seam', () => {
       chapterNumber: 3,
       chapterTitle: source.title,
       source,
+      sourceDraft: null,
       visibleText: 'reasoning: private chain</think>林岚推开驾驶室的门。',
       failureCode: 'PROVIDER_REQUEST_FAILED',
       failureReason: 'connection reset',
@@ -94,6 +95,7 @@ describe('RecoveryCandidateRepository project-local seam', () => {
       chapterNumber: 3,
       chapterTitle: source.title,
       source,
+      sourceDraft: null,
       visibleText: 'Let me inspect the scene constraints first.</think>林岚推开驾驶室的门。',
       failureCode: 'PROVIDER_REQUEST_FAILED',
       failureReason: 'connection reset',
@@ -110,6 +112,7 @@ describe('RecoveryCandidateRepository project-local seam', () => {
       chapterNumber: 3,
       chapterTitle: source.title,
       source,
+      sourceDraft: null,
       visibleText: '初始恢复正文',
       failureCode: 'PROVIDER_REQUEST_FAILED',
       failureReason: 'connection reset',
@@ -146,6 +149,7 @@ describe('RecoveryCandidateRepository project-local seam', () => {
       chapterNumber: 3,
       chapterTitle: source.title,
       source,
+      sourceDraft: null,
       visibleText: '候选正文',
       failureCode: 'INCOMPLETE_LENGTH',
       failureReason: 'length',
@@ -164,6 +168,41 @@ describe('RecoveryCandidateRepository project-local seam', () => {
       .not.toThrow()
   })
 
+  it('rejects update and continue after the generation-start draft changes', () => {
+    const sourceDraftId = DraftRepository.create({
+      chapterNumber: 3,
+      source: 'write',
+      content: '生成开始时的草稿',
+      wordCount: 8,
+    })
+    const recorded = RecoveryCandidateRepository.record({
+      runId: 'run-draft-stale',
+      stepId: 'generate-draft',
+      projectId: 'project-recovery',
+      chapterNumber: 3,
+      chapterTitle: source.title,
+      source,
+      sourceDraft: { id: sourceDraftId, version: 1 },
+      visibleText: '候选正文',
+      failureCode: 'INCOMPLETE_LENGTH',
+      failureReason: 'length',
+    })
+
+    expect(recorded.sourceCurrent).toBe(true)
+    DraftRepository.create({
+      chapterNumber: 3,
+      source: 'rewrite',
+      content: '后来保存的新版本',
+      wordCount: 8,
+    })
+
+    expect(RecoveryCandidateRepository.listPending()[0]?.sourceCurrent).toBe(false)
+    expect(() => RecoveryCandidateRepository.updatePending(recorded.candidateId, '编辑后的候选'))
+      .toThrow(/源章节已变化/u)
+    expect(() => RecoveryCandidateRepository.resolve(recorded.candidateId, 'continued'))
+      .toThrow(/源章节已变化/u)
+  })
+
   it('keeps the original-to-replacement relation and resolves explicitly', () => {
     const original = RecoveryCandidateRepository.record({
       runId: 'run-rewrite',
@@ -172,6 +211,7 @@ describe('RecoveryCandidateRepository project-local seam', () => {
       chapterNumber: 3,
       chapterTitle: source.title,
       source,
+      sourceDraft: null,
       visibleText: '原始候选',
       failureCode: 'LENGTH_REPAIR_FAILED',
       failureReason: 'replacement failed',
@@ -183,6 +223,7 @@ describe('RecoveryCandidateRepository project-local seam', () => {
       chapterNumber: 3,
       chapterTitle: source.title,
       source,
+      sourceDraft: null,
       visibleText: '替代候选',
       failureCode: 'LENGTH_REPAIR_FAILED',
       failureReason: 'replacement failed',

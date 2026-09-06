@@ -183,6 +183,10 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       chapter_title TEXT NOT NULL DEFAULT '',
       source_snapshot TEXT NOT NULL,
       source_hash TEXT NOT NULL,
+      source_draft_id INTEGER DEFAULT NULL,
+      source_draft_version INTEGER DEFAULT NULL,
+      source_draft_identity_captured INTEGER NOT NULL DEFAULT 0
+        CHECK(source_draft_identity_captured IN (0, 1)),
       visible_text TEXT NOT NULL,
       content_hash TEXT NOT NULL,
       failure_code TEXT NOT NULL DEFAULT '',
@@ -577,6 +581,21 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `)
+
+  // Legacy candidates did not freeze the draft identity. Keep them marked
+  // unknown so update/continue fails closed instead of rebinding to today's draft.
+  const recoveryCandidateColumns = new Set(
+    (db.prepare('PRAGMA table_info(recovery_candidates)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!recoveryCandidateColumns.has('source_draft_id')) {
+    db.exec('ALTER TABLE recovery_candidates ADD COLUMN source_draft_id INTEGER')
+  }
+  if (!recoveryCandidateColumns.has('source_draft_version')) {
+    db.exec('ALTER TABLE recovery_candidates ADD COLUMN source_draft_version INTEGER')
+  }
+  if (!recoveryCandidateColumns.has('source_draft_identity_captured')) {
+    db.exec('ALTER TABLE recovery_candidates ADD COLUMN source_draft_identity_captured INTEGER NOT NULL DEFAULT 0')
+  }
 
   // Legacy rows cannot be safely rebound to today's mutable draft body. Add
   // nullable columns and leave old source identity unknown so merge/refine can fail closed.

@@ -11,6 +11,11 @@ export interface RecoveryChapterSource {
   userGuidance?: string
 }
 
+export interface RecoveryDraftSource {
+  id: number
+  version: number
+}
+
 export interface RecoveryCandidateRecordRequest {
   runId: string
   stepId: string
@@ -18,6 +23,7 @@ export interface RecoveryCandidateRecordRequest {
   chapterNumber: number
   chapterTitle: string
   source: RecoveryChapterSource
+  sourceDraft: RecoveryDraftSource | null
   visibleText: string
   failureCode: string
   failureReason: string

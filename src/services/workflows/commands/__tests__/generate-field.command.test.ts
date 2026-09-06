@@ -155,7 +155,7 @@ describe('GenerateFieldCommand project identity', () => {
     ).mockResolvedValue([
       'Keep each scene grounded in a concrete emotional choice.',
       'Advance conflict through character action.',
-      'Preserve established facts across chapters.',
+      'Before Chapter 3, ground every reveal in established facts.',
       'End scenes on a meaningful change.',
     ].join('\n'))
 
@@ -213,7 +213,12 @@ describe('GenerateFieldCommand project identity', () => {
       command as unknown as { callLLM: (...args: unknown[]) => Promise<string> },
       'callLLM',
     )
-      .mockResolvedValueOnce('这不是四到八条规则。')
+      .mockResolvedValueOnce([
+        '第1章：主角收到密信。',
+        '第2章：主角潜入港口。',
+        '第3章：盟友暴露身份。',
+        '第4章：双方正面对决。',
+      ].join('\n'))
       .mockResolvedValueOnce(replacement)
 
     await expect(command.execute({ step: {}, context, callbacks }))

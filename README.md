@@ -43,7 +43,7 @@
 > - **模型配置更顺畅**：模型高级设置提供推理强度、温度等可用选项；填写 API Key 与 Base URL 后即可获取模型列表，不再陷入“未保存就不能获取”的循环。
 > - **更准确的失败提示**：内容限制、模型调用和重复任务等失败会尽量显示具体原因，失败结果不会冒充成功内容写入项目。
 >
-> 同一个 Release 使用七项资产合同：`ai-novel-writer-setup-0.9.0.exe`、`ai-novel-writer-setup-0.9.0.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.9.0-installer.dmg`、`ai-novel-writer-mac-arm64-0.9.0-installer.dmg.sha256`、`ai-novel-writer-mac-x64-0.9.0-installer.dmg` 与 `ai-novel-writer-mac-x64-0.9.0-installer.dmg.sha256`。Windows 安装包未代码签名；两种 macOS 安装包为 ad-hoc 或未签名且未公证，首次打开可能需要按平台安全提示手动确认。
+> 同一个 Release 使用七项资产合同：`ai-novel-writer-setup-0.9.0.exe`、`ai-novel-writer-setup-0.9.0.exe.blockmap`、`latest.yml`、`ai-novel-writer-mac-arm64-0.9.0-installer.dmg`、`ai-novel-writer-mac-arm64-0.9.0-installer.dmg.sha256`、`ai-novel-writer-mac-x64-0.9.0-installer.dmg` 与 `ai-novel-writer-mac-x64-0.9.0-installer.dmg.sha256`。Windows 安装包未代码签名；两种 macOS 安装包均为 ad-hoc 签名，未使用 Developer ID 且未公证，首次打开可能需要按平台安全提示手动确认。
 
 
 ## DeepSeek Harness 插件（早期 MVP）
@@ -91,6 +91,7 @@ flowchart LR
 | --- | --- |
 | 结构化创作流程 | 从前提、角色、世界观到章节蓝图、草稿、审稿、修稿和定稿，按阶段组织创作资产。 |
 | 章节级生成 | 生成时围绕当前章节的蓝图和相关资料组织上下文，减少跨章跑题。 |
+| 生成失败恢复 | 章节生成失败但已有可见正文时，会把正文保存在当前项目的恢复候选中；候选不是正式草稿，源蓝图或草稿变化后不可继续，但可丢弃。 |
 | 审稿与修稿 | 为草稿生成结构化审稿信息，并以报告作为修稿输入。 |
 | 角色卡与项目资料 | 在项目内维护角色、世界观、蓝图、草稿和定稿；项目会话机制避免旧窗口向重新打开的项目写入数据。 |
 | 剧情树与叙事线索 | 以章节轨道展示主线、支线和来源进度；剧情树是可重建的只读快照，不会取代作者事实。 |
@@ -133,6 +134,7 @@ Model:     你的 Ollama 模型名，例如 qwen3:14b
 | 数据或行为 | 默认位置 / 去向 |
 | --- | --- |
 | 小说项目、角色、蓝图、草稿和定稿 | 你的项目目录与本地 SQLite 数据库。 |
+| 生成失败的恢复候选 | 只保存在当前项目的本地 SQLite 数据库；不会自动成为草稿、定稿或连续性事实。 |
 | 导入的参考资料 | 保留在本地项目范围内，除非你自行把内容发送给云端模型。 |
 | 本地模型请求 | 发送给你配置的本机或局域网推理服务。 |
 | 云端模型请求 | 当你选择 OpenAI、DeepSeek、Gemini 或其他云端端点时，提示词和上下文会发送给该服务商。 |
@@ -169,7 +171,7 @@ ai-novel-writer-mac-x64-<版本号>-installer.dmg
 
 1. `arm64` 适用于 Apple Silicon Mac（M1、M2、M3、M4 等）；`x64` 适用于 Intel Mac。
 2. 将 DMG 中的应用拖入“应用程序”文件夹后启动。应用可以检查 GitHub 最新正式版并显示提醒，但不会在 macOS 内下载或替换程序；更新操作只打开官方 Release 页面，由用户手动下载对应架构的后续版本。
-3. 两个安装包均未使用 Developer ID 签名且未公证（ARM64 为 ad-hoc 签名，x64 为未签名）。若 Gatekeeper 阻止打开，请确认来源是本项目的官方 GitHub Release，然后在 Finder 中按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。
+3. 两个安装包均为 ad-hoc 签名，且均未使用 Developer ID 签名或公证。若 Gatekeeper 阻止打开，请确认来源是本项目的官方 GitHub Release，然后在 Finder 中按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。
 
 ## 当前限制
 

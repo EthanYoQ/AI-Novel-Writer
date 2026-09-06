@@ -4,6 +4,8 @@ export const GENERATED_GLOBAL_GUIDANCE_MAX_CHARS = 600
 export const GENERATED_GLOBAL_GUIDANCE_MIN_RULES = 4
 export const GENERATED_GLOBAL_GUIDANCE_MAX_RULES = 8
 
+const CHAPTER_OUTLINE_LINE = /^(?:[-*+]\s*|\d+[.)、]\s*)?(?:第\s*[0-9一二三四五六七八九十百零〇两]+\s*(?:[-–—~～至到]\s*[0-9一二三四五六七八九十百零〇两]+\s*)?章|chapters?\s+\d+(?:\s*[-–—~]\s*\d+)?)/iu
+
 export function generatedGlobalGuidanceRuleCount(content: string): number {
   return content
     .split(/\r?\n/u)
@@ -14,9 +16,14 @@ export function generatedGlobalGuidanceRuleCount(content: string): number {
 
 export function isGeneratedGlobalGuidanceValid(content: string): boolean {
   const ruleCount = generatedGlobalGuidanceRuleCount(content)
+  const chapterOutlineLines = content
+    .split(/\r?\n/u)
+    .filter(line => CHAPTER_OUTLINE_LINE.test(line.trim()))
+    .length
   return Array.from(content.trim()).length <= GENERATED_GLOBAL_GUIDANCE_MAX_CHARS
     && ruleCount >= GENERATED_GLOBAL_GUIDANCE_MIN_RULES
     && ruleCount <= GENERATED_GLOBAL_GUIDANCE_MAX_RULES
+    && chapterOutlineLines < 2
 }
 
 export const EXPANDABLE_NOVEL_CONFIG_FIELDS = [

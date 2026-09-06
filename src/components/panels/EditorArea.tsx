@@ -66,7 +66,7 @@ function ProseEditorWrapper({
 
   useEffect(() => {
     if (!onSave) return
-    return registerEditorExitSaveHandler({
+    registerEditorExitSaveHandler({
       tabId: tab.id,
       type: tab.type,
       projectKey: tab.projectKey,

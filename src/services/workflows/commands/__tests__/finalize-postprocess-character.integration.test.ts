@@ -70,6 +70,8 @@ function installRealRepositoryIpc(): void {
             return { templates: [], diagnostics: [] }
           case 'fs:check-exists':
             return false
+          case 'db:draft-get-latest':
+            return null
           case 'kb:import-text':
             return { success: true, chunkCount: 1, docId: 'doc-1' }
           case 'db:finalization-link-knowledge-document':

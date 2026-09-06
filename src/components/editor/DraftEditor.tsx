@@ -240,12 +240,14 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   useEffect(() => {
     exitSaveRef.current = doSave
   })
-  useEffect(() => registerEditorExitSaveHandler({
+  useEffect(() => {
+    registerEditorExitSaveHandler({
       tabId,
       type: 'chapter',
       projectKey,
       save: () => exitSaveRef.current(currentBodyRef.current),
-    }), [projectKey, tabId])
+    })
+  }, [projectKey, tabId])
 
   const freezeDraftSourceForAI = async (projectSession: NonNullable<ReturnType<typeof captureProjectSession>>) => {
     if (!meta) return null

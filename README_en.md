@@ -43,7 +43,7 @@
 > - **Smoother model setup** — Advanced model settings expose supported reasoning effort and temperature controls. After entering an API key and Base URL, fetch the model list directly without first saving an incomplete configuration.
 > - **More precise failure messages** — Content restrictions, provider failures, and duplicate jobs report a more specific cause, and incomplete output is not saved as successful project content.
 >
-> One Release uses the exact seven-asset contract: `ai-novel-writer-setup-0.9.0.exe`, `ai-novel-writer-setup-0.9.0.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.9.0-installer.dmg`, `ai-novel-writer-mac-arm64-0.9.0-installer.dmg.sha256`, `ai-novel-writer-mac-x64-0.9.0-installer.dmg`, and `ai-novel-writer-mac-x64-0.9.0-installer.dmg.sha256`. The Windows installer is not code-signed; both macOS installers are ad-hoc or unsigned and not notarized, so their platform security prompts may require manual confirmation on first launch.
+> One Release uses the exact seven-asset contract: `ai-novel-writer-setup-0.9.0.exe`, `ai-novel-writer-setup-0.9.0.exe.blockmap`, `latest.yml`, `ai-novel-writer-mac-arm64-0.9.0-installer.dmg`, `ai-novel-writer-mac-arm64-0.9.0-installer.dmg.sha256`, `ai-novel-writer-mac-x64-0.9.0-installer.dmg`, and `ai-novel-writer-mac-x64-0.9.0-installer.dmg.sha256`. The Windows installer is not code-signed; both macOS installers use ad-hoc signing, have no Developer ID signature, and are not notarized, so their platform security prompts may require manual confirmation on first launch.
 
 
 
@@ -92,6 +92,7 @@ flowchart LR
 | --- | --- |
 | Structured writing workflow | Organizes premises, characters, worldbuilding, blueprints, drafts, reviews, revisions, and finals by stage. |
 | Chapter-level generation | Builds context around the current chapter blueprint and related material to reduce cross-chapter drift. |
+| Failed-generation recovery | If chapter generation fails after producing visible prose, the app saves it as a project-local recovery candidate; it is not a formal draft and cannot be continued after its source blueprint or draft changes, but it can be discarded. |
 | Review and revision | Produces structured review information for a draft and uses that report as revision input. |
 | Character cards and project material | Maintains characters, worldbuilding, blueprints, drafts, and finals in the project. Project sessions prevent an old window from writing into a newly reopened project. |
 | Plot tree and narrative threads | Shows main plots, subplots, and source progress on chapter tracks. The plot tree is a rebuildable read-only snapshot, not a replacement for author facts. |
@@ -134,6 +135,7 @@ The preset applies minimal parameter compatibility: it does not send standard `r
 | Data or behavior | Default location / destination |
 | --- | --- |
 | Novel projects, characters, blueprints, drafts, and finals | Your project folder and local SQLite database. |
+| Failed-generation recovery candidates | Stored only in the current project's local SQLite database; they do not automatically become drafts, finals, or continuity facts. |
 | Imported reference material | Remains within the local project scope unless you choose to send it to a cloud model. |
 | Local-model requests | Sent to the local or LAN inference service you configure. |
 | Cloud-model requests | Prompts and context go to the provider you choose, such as OpenAI, DeepSeek, Gemini, or another cloud endpoint. |
@@ -170,7 +172,7 @@ ai-novel-writer-mac-x64-<version>-installer.dmg
 
 1. `arm64` supports Apple Silicon Macs (M1, M2, M3, M4, and later); `x64` supports Intel Macs.
 2. Drag the app from the DMG to Applications. The app can check the latest formal GitHub Release and display a reminder, but it does not download or replace the macOS app. The update action opens the official Release page so the user can download the installer for the correct architecture.
-3. Neither installer has a Developer ID signature or notarization (ARM64 is ad-hoc signed; x64 is unsigned). If Gatekeeper blocks it, confirm that the source is this repository's official GitHub Release, then Control-click the app in Finder and choose **Open**, or allow it in **System Settings → Privacy & Security**.
+3. Both installers are ad-hoc signed, have no Developer ID signature, and are not notarized. If Gatekeeper blocks it, confirm that the source is this repository's official GitHub Release, then Control-click the app in Finder and choose **Open**, or allow it in **System Settings → Privacy & Security**.
 
 ## Current limits
 

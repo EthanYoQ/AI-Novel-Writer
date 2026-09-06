@@ -25,6 +25,8 @@
     "target": ["dmg"],
     "artifactName": "ai-novel-writer-mac-${arch}-${version}-installer.${ext}",
     "category": "public.app-category.productivity",
+    "identity": "-",
+    "hardenedRuntime": false,
     "extraResources": [
       {
         "from": "electron/security/darwin-safe-file-system",

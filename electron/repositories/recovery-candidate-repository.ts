@@ -8,6 +8,7 @@ import type {
 } from '../../src/shared/recovery-candidate'
 import { getProjectDb } from '../database'
 import { BlueprintRepository } from './blueprint-repository'
+import { DraftRepository } from './draft-repository'
 
 interface RecoveryCandidateRow {
   candidate_id: string
@@ -18,6 +19,9 @@ interface RecoveryCandidateRow {
   chapter_title: string
   source_snapshot: string
   source_hash: string
+  source_draft_id: number | null
+  source_draft_version: number | null
+  source_draft_identity_captured: number
   visible_text: string
   content_hash: string
   failure_code: string
@@ -74,9 +78,10 @@ function assertText(value: string, label: string, max: number): string {
 }
 
 function sourceIsCurrent(row: RecoveryCandidateRow): boolean {
+  if (row.source_draft_identity_captured !== 1) return false
   const current = BlueprintRepository.getByChapter(row.chapter_number)
   if (!current) return false
-  return sha256(serializedSource({
+  const blueprintCurrent = sha256(serializedSource({
     chapterNumber: current.chapterNumber,
     title: current.title,
     role: current.role,
@@ -86,6 +91,13 @@ function sourceIsCurrent(row: RecoveryCandidateRow): boolean {
     suspenseHook: current.suspenseHook,
     userGuidance: current.userGuidance,
   })) === row.source_hash
+  if (!blueprintCurrent) return false
+
+  const currentDraft = DraftRepository.getLatestByChapter(row.chapter_number)
+  if (row.source_draft_id === null || row.source_draft_version === null) {
+    return row.source_draft_id === null && row.source_draft_version === null && currentDraft === null
+  }
+  return currentDraft?.id === row.source_draft_id && currentDraft.version === row.source_draft_version
 }
 
 function toCandidate(row: RecoveryCandidateRow): RecoveryCandidate {
@@ -124,6 +136,13 @@ export class RecoveryCandidateRepository {
     if (request.source.chapterNumber !== request.chapterNumber) {
       throw new Error('候选源章节身份不一致')
     }
+    if (request.sourceDraft !== null && (
+      !request.sourceDraft
+      || !Number.isSafeInteger(request.sourceDraft.id)
+      || request.sourceDraft.id < 1
+      || !Number.isSafeInteger(request.sourceDraft.version)
+      || request.sourceDraft.version < 1
+    )) throw new Error('候选源草稿身份无效')
     const visibleText = visibleOnly(request.visibleText)
     if (!visibleText) throw new Error('恢复候选没有可见正文')
     const serialized = serializedSource(request.source)
@@ -150,9 +169,10 @@ export class RecoveryCandidateRepository {
     db.prepare(`
       INSERT INTO recovery_candidates (
         candidate_id, run_id, step_id, project_id, chapter_number,
-        chapter_title, source_snapshot, source_hash, visible_text,
+        chapter_title, source_snapshot, source_hash, source_draft_id,
+        source_draft_version, source_draft_identity_captured, visible_text,
         content_hash, failure_code, failure_reason, replaces_candidate_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
     `).run(
       candidateId,
       runId,
@@ -162,6 +182,8 @@ export class RecoveryCandidateRepository {
       request.chapterTitle.trim(),
       serialized,
       sha256(serialized),
+      request.sourceDraft?.id ?? null,
+      request.sourceDraft?.version ?? null,
       visibleText,
       sha256(visibleText),
       request.failureCode.trim().slice(0, 160),

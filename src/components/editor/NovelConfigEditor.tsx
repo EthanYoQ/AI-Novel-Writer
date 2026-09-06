@@ -63,11 +63,13 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
   const projectMatches = currentProject?.path === projectKey
   const config = projectMatches ? currentProject.novelConfig : null
   const exitSaveRef = useRef<() => Promise<void>>(async () => undefined)
-  useEffect(() => registerEditorExitSaveHandler({
+  useEffect(() => {
+    registerEditorExitSaveHandler({
       type: 'config',
       projectKey,
       save: () => exitSaveRef.current(),
-    }), [projectKey])
+    })
+  }, [projectKey])
 
   // 直接写 Store — 消除双向同步风险
   const update = <K extends keyof NovelConfig>(key: K, value: NovelConfig[K]) => {

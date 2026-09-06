@@ -68,6 +68,8 @@ const evidencePath = join(monitorRoot, 'evidence')
 const monitorProcessPath = join(monitorRoot, 'monitor-process.json')
 const monitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const launchGateScript = resolve('scripts/release-win-launch-gate.mjs')
+// The monitor can spend five seconds draining live processes, then requires five quiet seconds.
+const MONITOR_STEP_COMPLETION_TIMEOUT_MS = 15_000
 const packageVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version
 const acceptancePath = process.env.AI_NOVEL_RELEASE_EVIDENCE_ROOT
   ? resolve(process.env.AI_NOVEL_RELEASE_EVIDENCE_ROOT, 'acceptance')
@@ -500,7 +502,7 @@ async function runMonitoredNodeProcess(step, args) {
   }
   if (result.code !== 0) {
     sendMonitorControl({ state: 'step-complete', step })
-    await waitForMonitorState(['step-completed'], 10_000, step)
+    await waitForMonitorState(['step-completed'], MONITOR_STEP_COMPLETION_TIMEOUT_MS, step)
     throw new Error(
       `Node finalization step "${step}" exited with code ${result.code ?? 'null'}${result.signal ? ` (${result.signal})` : ''}`,
     )
@@ -512,7 +514,7 @@ async function runMonitoredNodeProcess(step, args) {
   }
 
   sendMonitorControl({ state: 'step-complete', step })
-  await waitForMonitorState(['step-completed'], 10_000, step)
+  await waitForMonitorState(['step-completed'], MONITOR_STEP_COMPLETION_TIMEOUT_MS, step)
 }
 
 async function restoreAndVerifyNodeNativeAbi({ monitored }) {
@@ -538,7 +540,7 @@ async function waitForFinalQuietPeriod() {
   const step = 'final:quiet'
   sendMonitorControl({ state: 'quiet', step, quietSeconds: 5 })
   await waitForMonitorState(['monitoring'], 10_000, step)
-  return await waitForMonitorState(['step-completed'], 10_000, step)
+  return await waitForMonitorState(['step-completed'], MONITOR_STEP_COMPLETION_TIMEOUT_MS, step)
 }
 
 async function runPreMonitorSteps() {
@@ -653,7 +655,7 @@ async function main() {
     }
     if (result.code !== 0) {
       sendMonitorControl({ state: 'step-complete', step })
-      await waitForMonitorState(['step-completed'], 10_000, step)
+      await waitForMonitorState(['step-completed'], MONITOR_STEP_COMPLETION_TIMEOUT_MS, step)
       throw new Error(
         `Release verification step "${step}" exited with code ${result.code ?? 'null'}${result.signal ? ` (${result.signal})` : ''}`,
       )
@@ -665,7 +667,7 @@ async function main() {
     }
 
     sendMonitorControl({ state: 'step-complete', step })
-    await waitForMonitorState(['step-completed'], 10_000, step)
+    await waitForMonitorState(['step-completed'], MONITOR_STEP_COMPLETION_TIMEOUT_MS, step)
   }
 
   gateSucceeded = true

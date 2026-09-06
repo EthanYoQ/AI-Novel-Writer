@@ -12,7 +12,10 @@ import { useWorkflowStore } from '../stores/workflow-store'
 import { useLocaleStore } from '../stores/locale-store'
 import type { Locale } from '../i18n/types'
 import type { FileWriteCommitState, ProjectSessionContext } from '../shared/ipc-channels'
-import type { FinalizedDraftExportSnapshot } from '../../electron/repositories/finalization-repository'
+import type {
+  FinalizedDraftExportAuthorityReceipt,
+  FinalizedDraftExportSnapshot,
+} from '../../electron/repositories/finalization-repository'
 import {
   getActiveProjectSessionContext,
   sameProjectPathKey,
@@ -143,13 +146,28 @@ function staleCommittedSingleExportResult(locale: Locale, relativePath: string):
   }
 }
 
+function changedFinalizationResult(
+  locale: Locale,
+  confirmedWritten: readonly string[] = [],
+): { success: false; error: string } {
+  const error = locale === 'en-US'
+    ? 'The finalized chapters changed. Review the latest versions and confirm the export again.'
+    : '定稿章节已变化，请检查最新版本并重新确认导出'
+  return {
+    success: false,
+    error: confirmedWritten.length > 0
+      ? `${error}${splitWriteDetail(locale, confirmedWritten, [])}`
+      : error,
+  }
+}
+
 function requireFinalizedExportSnapshot(value: unknown): FinalizedDraftExportSnapshot[] {
   if (!Array.isArray(value)) throw new Error('定稿导出快照无效')
   const seenChapters = new Set<number>()
   const rows = value.map((candidate) => {
     if (!candidate || typeof candidate !== 'object') throw new Error('定稿导出快照无效')
     const row = candidate as Partial<FinalizedDraftExportSnapshot>
-    const { draftId, chapterNumber, version, title, content } = row
+    const { draftId, chapterNumber, version, title, content, finalizationId, contentHash } = row
     if (
       typeof draftId !== 'number' || !Number.isSafeInteger(draftId) || draftId < 1
       || typeof chapterNumber !== 'number' || !Number.isSafeInteger(chapterNumber) || chapterNumber < 1
@@ -157,12 +175,35 @@ function requireFinalizedExportSnapshot(value: unknown): FinalizedDraftExportSna
       || typeof title !== 'string'
       || typeof content !== 'string'
       || content.trim().length === 0
+      || !(finalizationId === null
+        || (typeof finalizationId === 'string' && finalizationId.trim().length > 0))
+      || typeof contentHash !== 'string' || !/^[a-f0-9]{64}$/u.test(contentHash)
     ) throw new Error('定稿导出快照身份或正文无效')
     if (seenChapters.has(chapterNumber)) throw new Error(`第 ${chapterNumber} 章存在重复定稿`)
     seenChapters.add(chapterNumber)
-    return Object.freeze({ draftId, chapterNumber, version, title, content })
+    return Object.freeze({
+      draftId,
+      chapterNumber,
+      version,
+      title,
+      content,
+      finalizationId,
+      contentHash,
+    })
   })
   return rows.sort((left, right) => left.chapterNumber - right.chapterNumber)
+}
+
+function exportAuthorityReceipt(
+  drafts: readonly FinalizedDraftExportSnapshot[],
+): FinalizedDraftExportAuthorityReceipt {
+  return drafts.map(({
+    draftId,
+    chapterNumber,
+    version,
+    finalizationId,
+    contentHash,
+  }) => ({ draftId, chapterNumber, version, finalizationId, contentHash }))
 }
 
 function renderMarkdownChapter(
@@ -213,6 +254,7 @@ export async function exportNovel(
       'db:draft-export-snapshot',
       projectSession.projectPath,
     ))
+    const authorityReceipt = exportAuthorityReceipt(frozenDrafts)
     if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
     const chapterContents = frozenDrafts.map(draft => ({
       chapterNumber: draft.chapterNumber,
@@ -268,6 +310,14 @@ export async function exportNovel(
         }
 
         outputPath = `${projectFileStem}.md`
+        const authorityCurrent = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:draft-export-authority-current',
+          authorityReceipt,
+          projectSession.projectPath,
+        )
+        if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+        if (!authorityCurrent) return changedFinalizationResult(uiLocale)
         activeWritePath = outputPath
         const writeResult = await ipc.invoke('fs:grant-write-file', options.grantId, outputPath, content)
         requireExportWriteSuccess(
@@ -285,6 +335,14 @@ export async function exportNovel(
       case 'split-md': {
         // 每章一个 Markdown
         const splitDir = projectFileStem
+        const authorityCurrent = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:draft-export-authority-current',
+          authorityReceipt,
+          projectSession.projectPath,
+        )
+        if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+        if (!authorityCurrent) return changedFinalizationResult(uiLocale)
         const mkdirResult = await ipc.invoke('fs:grant-mkdir', options.grantId, splitDir)
         if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
         requireIpcSuccess(
@@ -294,6 +352,16 @@ export async function exportNovel(
         )
 
         for (const ch of chapterContents) {
+          const stillCurrent = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:draft-export-authority-current',
+            authorityReceipt,
+            projectSession.projectPath,
+          )
+          if (!isProjectSessionCurrent(projectSession)) {
+            return staleSplitExportResult(uiLocale, writtenSplitFiles)
+          }
+          if (!stillCurrent) return changedFinalizationResult(uiLocale, writtenSplitFiles)
           activeWritePath = `${splitDir}/${ch.name}`
           const writeResult = await ipc.invoke('fs:grant-write-file', options.grantId, activeWritePath, ch.markdownContent)
           requireExportWriteSuccess(
@@ -333,6 +401,14 @@ export async function exportNovel(
         }
 
         outputPath = `${projectFileStem}.txt`
+        const authorityCurrent = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:draft-export-authority-current',
+          authorityReceipt,
+          projectSession.projectPath,
+        )
+        if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
+        if (!authorityCurrent) return changedFinalizationResult(uiLocale)
         activeWritePath = outputPath
         const writeResult = await ipc.invoke('fs:grant-write-file', options.grantId, outputPath, content)
         requireExportWriteSuccess(
@@ -375,7 +451,7 @@ export async function exportNovel(
         ? { ...stale, error: `${stale.error}${unknownSingleWriteDetail(uiLocale, activeWritePath)}` }
         : stale
     }
-    const partialWriteDetail = options.format === 'split-md' && activeWritePath
+    const partialWriteDetail = options.format === 'split-md' && (writtenSplitFiles.length > 0 || activeWritePath)
       ? splitWriteDetail(uiLocale, writtenSplitFiles, possiblyWritten, definitelyFailed)
       : activeWritePath && commitState === 'unknown'
         ? unknownSingleWriteDetail(uiLocale, activeWritePath)

@@ -412,6 +412,15 @@ describe('GenerateConfigCommand error boundaries', () => {
       case: 'without splitting a Unicode code point',
       generatedGuidance: `${'A'.repeat(599)}😀${'B'.repeat(10)}`,
     },
+    {
+      case: 'when four short rules are actually a chapter-by-chapter outline',
+      generatedGuidance: [
+        '第1章：主角收到密信。',
+        '第2章：主角潜入港口。',
+        '第3章：盟友暴露身份。',
+        '第4章：双方正面对决。',
+      ].join('\n'),
+    },
   ])('replaces invalid generated global guidance $case before applying config', async ({
     generatedGuidance,
   }) => {

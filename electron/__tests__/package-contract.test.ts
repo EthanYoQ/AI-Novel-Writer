@@ -32,6 +32,9 @@ describe('release dependency contract', () => {
     expect(pkg.scripts?.['smoke:win-app']).toContain('scripts/smoke-win-app.ps1')
 
     const builder = readFileSync('electron-builder.json5', 'utf8')
+    const macConfig = builder.slice(builder.indexOf('"mac":'), builder.indexOf('"win":'))
+    expect(macConfig).toContain('"identity": "-"')
+    expect(macConfig).toContain('"hardenedRuntime": false')
     const macArtifactTemplate = 'ai-novel-writer-mac-${arch}-${version}-installer.${ext}'
     expect(builder).toContain(macArtifactTemplate)
     const resolveMacArtifactName = (architecture: 'arm64' | 'x64') => macArtifactTemplate
@@ -191,7 +194,7 @@ describe('release dependency contract', () => {
 
     expect(
       createHash('sha256').update(releaseMonitor).digest('hex'),
-    ).toBe('3bf3920e060c3989716b6c97c7b5079c65c6de057ea87db3e04c95b54a476041')
+    ).toBe('21fcf94d1b7911fe1e80933f2177ba32ae86bffabf98c433633d697e1609ca76')
   })
 
   it('blocks direct Windows artifact builds outside the release gate', () => {

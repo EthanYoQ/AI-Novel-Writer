@@ -112,6 +112,10 @@ describe('authoritative finalized export integration', () => {
             expect(args).toEqual([projectPath, projectSession])
             return FinalizationRepository.listAuthoritativeForExport()
           }
+          if (channel === 'db:draft-export-authority-current') {
+            expect(args.slice(1)).toEqual([projectPath, projectSession])
+            return FinalizationRepository.matchesAuthoritativeExportReceipt(args[0] as never)
+          }
           const ipcHandler = electronMocks.handlers.get(channel)
           if (!ipcHandler) throw new Error(`Missing IPC handler: ${channel}`)
           return ipcHandler(event, ...args)

@@ -52,7 +52,17 @@ export interface FinalizedDraftExportSnapshot {
   version: number
   title: string
   content: string
+  finalizationId: string | null
+  contentHash: string
 }
+
+export type FinalizedDraftExportAuthorityReceipt = ReadonlyArray<Readonly<{
+  draftId: number
+  chapterNumber: number
+  version: number
+  finalizationId: string | null
+  contentHash: string
+}>>
 
 interface FinalizedDraftExportRow {
   draft_id: number
@@ -64,6 +74,11 @@ interface FinalizedDraftExportRow {
   chapter_title: string | null
   content_hash: string | null
   content_snapshot: string | null
+}
+
+interface AuthoritativeFinalizedDraftExport {
+  snapshot: FinalizedDraftExportSnapshot
+  receipt: FinalizedDraftExportAuthorityReceipt[number]
 }
 
 function rowToRecord(row: FinalizationRow): FinalizationRecord {
@@ -101,6 +116,80 @@ function hasSameFinalizationInput(
     && existing.content_snapshot === input.content
 }
 
+function selectAuthoritativeExportRows(
+  rows: readonly FinalizedDraftExportRow[],
+): AuthoritativeFinalizedDraftExport[] {
+  const selected: AuthoritativeFinalizedDraftExport[] = []
+  const selectedVersions = new Map<number, number>()
+  for (const row of rows) {
+    const selectedVersion = selectedVersions.get(row.chapter_number)
+    if (selectedVersion !== undefined) {
+      if (selectedVersion === row.version) {
+        throw new Error(`第 ${row.chapter_number} 章存在重复定稿版本，无法确定导出正文`)
+      }
+      continue
+    }
+    if (
+      !Number.isSafeInteger(row.draft_id) || row.draft_id < 1
+      || !Number.isSafeInteger(row.chapter_number) || row.chapter_number < 1
+      || !Number.isSafeInteger(row.version) || row.version < 1
+    ) throw new Error('定稿导出快照身份无效')
+    if (typeof row.body !== 'string' || row.body.trim().length === 0) {
+      throw new Error(`第 ${row.chapter_number} 章定稿正文为空`)
+    }
+
+    const contentHash = createHash('sha256').update(row.body, 'utf8').digest('hex')
+    if (row.finalization_id !== null) {
+      if (typeof row.finalization_id !== 'string' || row.finalization_id.trim().length === 0) {
+        throw new Error('定稿导出快照身份无效')
+      }
+      if (row.outbox_chapter_number !== row.chapter_number) {
+        throw new Error('定稿导出快照身份不一致')
+      }
+      if (row.content_snapshot !== row.body) {
+        throw new Error('定稿导出快照正文不一致')
+      }
+      if (row.content_hash !== contentHash) {
+        throw new Error('定稿导出快照摘要不一致')
+      }
+    }
+
+    selectedVersions.set(row.chapter_number, row.version)
+    const authority = {
+      draftId: row.draft_id,
+      chapterNumber: row.chapter_number,
+      version: row.version,
+      finalizationId: row.finalization_id,
+      contentHash,
+    }
+    selected.push({
+      receipt: authority,
+      snapshot: {
+        ...authority,
+        title: row.chapter_title?.trim() ?? '',
+        content: row.body,
+      },
+    })
+  }
+  return selected
+}
+
+function readAuthoritativeExportRows(): AuthoritativeFinalizedDraftExport[] {
+  const db = requireDatabase()
+  return db.transaction(() => selectAuthoritativeExportRows(db.prepare(`
+    SELECT drafts.id AS draft_id, drafts.chapter_number, drafts.version,
+           contents.body, finalization_outbox.finalization_id,
+           finalization_outbox.chapter_number AS outbox_chapter_number,
+           finalization_outbox.chapter_title, finalization_outbox.content_hash,
+           finalization_outbox.content_snapshot
+    FROM drafts
+    JOIN contents ON contents.id = drafts.content_id
+    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    WHERE drafts.status = 'finalized'
+    ORDER BY drafts.chapter_number ASC, drafts.version DESC, drafts.id DESC
+  `).all() as FinalizedDraftExportRow[]))()
+}
+
 /**
  * 定稿的数据库事实源。正文、字数、定稿状态与发布 outbox 必须由同一个 SQLite
  * transaction 共同提交；任何一个 statement 失败都会回滚其余变化。
@@ -108,62 +197,38 @@ function hasSameFinalizationInput(
 export class FinalizationRepository {
   /** One transactionally frozen, highest-version finalized fact per chapter. */
   static listAuthoritativeForExport(): FinalizedDraftExportSnapshot[] {
-    const db = requireDatabase()
-    return db.transaction(() => {
-      const rows = db.prepare(`
-        SELECT drafts.id AS draft_id, drafts.chapter_number, drafts.version,
-               contents.body, finalization_outbox.finalization_id,
-               finalization_outbox.chapter_number AS outbox_chapter_number,
-               finalization_outbox.chapter_title, finalization_outbox.content_hash,
-               finalization_outbox.content_snapshot
-        FROM drafts
-        JOIN contents ON contents.id = drafts.content_id
-        LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
-        WHERE drafts.status = 'finalized'
-        ORDER BY drafts.chapter_number ASC, drafts.version DESC, drafts.id DESC
-      `).all() as FinalizedDraftExportRow[]
+    return readAuthoritativeExportRows().map(({ snapshot }) => snapshot)
+  }
 
-      const snapshots: FinalizedDraftExportSnapshot[] = []
-      const selectedVersions = new Map<number, number>()
-      for (const row of rows) {
-        const selectedVersion = selectedVersions.get(row.chapter_number)
-        if (selectedVersion !== undefined) {
-          if (selectedVersion === row.version) {
-            throw new Error(`第 ${row.chapter_number} 章存在重复定稿版本，无法确定导出正文`)
-          }
-          continue
-        }
-        if (
-          !Number.isSafeInteger(row.draft_id) || row.draft_id < 1
-          || !Number.isSafeInteger(row.chapter_number) || row.chapter_number < 1
-          || !Number.isSafeInteger(row.version) || row.version < 1
-        ) throw new Error('定稿导出快照身份无效')
-        if (typeof row.body !== 'string' || row.body.trim().length === 0) {
-          throw new Error(`第 ${row.chapter_number} 章定稿正文为空`)
-        }
-        if (row.finalization_id !== null) {
-          if (row.outbox_chapter_number !== row.chapter_number) {
-            throw new Error('定稿导出快照身份不一致')
-          }
-          if (row.content_snapshot !== row.body) {
-            throw new Error('定稿导出快照正文不一致')
-          }
-          const actualHash = createHash('sha256').update(row.body, 'utf8').digest('hex')
-          if (row.content_hash !== actualHash) {
-            throw new Error('定稿导出快照摘要不一致')
-          }
-        }
-        selectedVersions.set(row.chapter_number, row.version)
-        snapshots.push({
-          draftId: row.draft_id,
-          chapterNumber: row.chapter_number,
-          version: row.version,
-          title: row.chapter_title?.trim() ?? '',
-          content: row.body,
-        })
-      }
-      return snapshots
-    })()
+  static matchesAuthoritativeExportReceipt(receipt: FinalizedDraftExportAuthorityReceipt): boolean {
+    if (!Array.isArray(receipt)) return false
+    const seenChapters = new Set<number>()
+    for (const item of receipt) {
+      if (
+        !item || typeof item !== 'object'
+        || !Number.isSafeInteger(item.draftId) || item.draftId < 1
+        || !Number.isSafeInteger(item.chapterNumber) || item.chapterNumber < 1
+        || !Number.isSafeInteger(item.version) || item.version < 1
+        || !(item.finalizationId === null
+          || (typeof item.finalizationId === 'string' && item.finalizationId.trim().length > 0))
+        || typeof item.contentHash !== 'string' || !/^[a-f0-9]{64}$/u.test(item.contentHash)
+        || seenChapters.has(item.chapterNumber)
+      ) return false
+      seenChapters.add(item.chapterNumber)
+    }
+
+    try {
+      const current = readAuthoritativeExportRows().map(({ receipt: item }) => item)
+      return current.length === receipt.length && current.every((item, index) => (
+        item.draftId === receipt[index]?.draftId
+        && item.chapterNumber === receipt[index]?.chapterNumber
+        && item.version === receipt[index]?.version
+        && item.finalizationId === receipt[index]?.finalizationId
+        && item.contentHash === receipt[index]?.contentHash
+      ))
+    } catch {
+      return false
+    }
   }
 
   static commit(input: FinalizationCommitInput): FinalizationRecord {

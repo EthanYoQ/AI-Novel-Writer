@@ -698,7 +698,10 @@ import type {
   CharacterData,
 } from '../../electron/repositories/character-repository'
 import type { DraftMeta, DraftFull } from '../../electron/repositories/draft-repository'
-import type { FinalizedDraftExportSnapshot } from '../../electron/repositories/finalization-repository'
+import type {
+  FinalizedDraftExportAuthorityReceipt,
+  FinalizedDraftExportSnapshot,
+} from '../../electron/repositories/finalization-repository'
 import type { RevisionMeta, RevisionFull } from '../../electron/repositories/revision-repository'
 import type { ReviewMeta, ReviewFull } from '../../electron/repositories/review-repository'
 import type { PostProcessRunData, PostProcessStepData } from '../../electron/repositories/post-process-repository'
@@ -845,6 +848,10 @@ export interface DatabaseChannels {
   'db:draft-get-max-finalized-chapter': { args: [expectedProjectPath: string]; return: number }
   'db:draft-authority-sequence': { args: [expectedProjectPath: string]; return: AuthoritativeChapterSequence }
   'db:draft-export-snapshot': { args: [expectedProjectPath: string]; return: FinalizedDraftExportSnapshot[] }
+  'db:draft-export-authority-current': {
+    args: [receipt: FinalizedDraftExportAuthorityReceipt, expectedProjectPath: string]
+    return: boolean
+  }
   'db:continuity-save-finalized': {
     args: [request: SaveFinalizedContinuityRequest, expectedProjectPath: string]
     return: { success: boolean; error?: string }

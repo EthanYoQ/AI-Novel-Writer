@@ -228,7 +228,7 @@ function ArchFileViewerSession({
 
   useEffect(() => {
     if (isCharacterProjection) return
-    return registerEditorExitSaveHandler({
+    registerEditorExitSaveHandler({
       tabId,
       type: 'arch-file',
       projectKey,

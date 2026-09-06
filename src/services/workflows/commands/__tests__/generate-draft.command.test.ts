@@ -273,6 +273,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       role: string
       currentState: Record<string, unknown>
     }>
+    sourceDraft?: { id: number; version: number }
   }) {
     let recoveryCandidateSequence = 0
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
@@ -302,6 +303,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       }
       if (channel === 'kb:search-writing-context') return options.knowledgeResults ?? []
       if (channel === 'db:character-get-all') return options.characterCards ?? []
+      if (channel === 'db:draft-get-latest') return options.sourceDraft ?? null
       if (channel === 'fs:list-dir') return []
       if (channel === 'db:draft-next-version') return 1
       if (channel === 'db:draft-create') return { success: true, id: 'draft-1' }
@@ -406,6 +408,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         runId: context.runId,
         stepId: 'draft-step',
         chapterNumber: 1,
+        sourceDraft: null,
         visibleText: '林岚推开驾驶室的门。',
         failureCode: 'PROVIDER_REQUEST_FAILED',
       }),
@@ -413,6 +416,27 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       context.projectSession,
     )
     expectNoDraftPersistence(invoke)
+  })
+
+  it('freezes the generation-start draft identity in a recovery candidate', async () => {
+    const runtime = fakeRuntime((_attempt, _task, options) => {
+      options?.onChunk?.('已有草稿之上的候选正文。')
+      throw new Error('connection reset')
+    })
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      sourceDraft: { id: 42, version: 3 },
+    })
+
+    await expect(command.execute({ step: { id: 'draft-step' }, context, callbacks }))
+      .rejects.toThrow('connection reset')
+
+    expect(invoke).toHaveBeenCalledWith(
+      'db:recovery-candidate-record',
+      expect.objectContaining({ sourceDraft: { id: 42, version: 3 } }),
+      projectPath,
+      context.projectSession,
+    )
   })
 
   it('persists received prose when cancellation wins the generation race', async () => {

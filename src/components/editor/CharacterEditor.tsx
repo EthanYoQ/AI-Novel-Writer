@@ -110,11 +110,13 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   useEffect(() => {
     exitSaveRef.current = handleSave
   })
-  useEffect(() => registerEditorExitSaveHandler({
+  useEffect(() => {
+    registerEditorExitSaveHandler({
       type: 'character',
       projectKey,
       save: () => exitSaveRef.current(),
-    }), [projectKey])
+    })
+  }, [projectKey])
 
   const handleDeleteAllCharacters = async () => {
     const projectSession = captureProjectSession(currentProject)

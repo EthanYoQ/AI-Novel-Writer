@@ -3361,6 +3361,21 @@ try {
           # Missing parent metadata remains fail-closed in the classifier.
         }
         $exitFailure = Get-AiNovelGateProcessExitFailure -Step $activeStep -Event $processEvent
+        $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $processIdentity
+        $armedRootIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $armedRootIdentity
+        $isCapturedNonzeroDescendantExit = (
+          $null -ne $processIdentityKey -and
+          $null -ne $armedRootIdentityKey -and
+          [bool]$processEvent.ExitCodeCaptured -and
+          [uint32]$processEvent.JobMessage -eq 7 -and
+          $null -ne $processEvent.ExitCode -and
+          [int]$processEvent.ExitCode -ne 0 -and
+          -not [string]::Equals(
+            $processIdentityKey,
+            $armedRootIdentityKey,
+            [System.StringComparison]::OrdinalIgnoreCase
+          )
+        )
         if (Test-AiNovelGateLegacyBridgeTermination `
           -Step $activeStep `
           -LegacyBridge $legacyBridge `
@@ -3468,6 +3483,12 @@ try {
             $exitClassification = 'failure'
           }
         }
+        elseif (
+          $activeStep -in @('build:win:artifacts', 'smoke:win-installer') -and
+          $isCapturedNonzeroDescendantExit
+        ) {
+          $exitClassification = 'ignored-result-owned-descendant-nonzero'
+        }
         else {
           $exitClassification = 'failure'
         }
@@ -3496,13 +3517,9 @@ try {
         continue
       }
       elseif ([string]$processEvent.Kind -eq 'process-exit') {
-        # Job Object membership is the atomic boundary. A nonzero or abnormal
-        # exit from any descendant is still a release-gate failure, even when
-        # the launcher's own command record reports success. Do not terminate
-        # the Job Object here: the armed launcher must first get the chance to
-        # write its durable result.json. The failure is finalized on the
-        # explicit step-complete acknowledgement, or after a bounded drain
-        # deadline if the launcher never completes.
+        # The armed root and its durable result own final success for selected
+        # build/installer steps. Their identified descendants remain evidence;
+        # other steps still fail closed on every abnormal descendant exit.
         if ($exitClassification -in @(
           'expected-legacy-bridge-old-uninstaller-powershell-probe',
           'expected-nsis-powershell-probe',
@@ -3511,7 +3528,8 @@ try {
           'pending-nsis-cmd-process-check',
           'legacy-bridge-terminated',
           'legacy-bridge-old-application-breakpoint',
-          'native-updater-old-application-breakpoint'
+          'native-updater-old-application-breakpoint',
+          'ignored-result-owned-descendant-nonzero'
         )) {
           continue
         }

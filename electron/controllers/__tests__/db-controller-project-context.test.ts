@@ -891,6 +891,7 @@ describe('database controller project context guard', () => {
       chapterNumber: 1,
       chapterTitle: '第一章',
       source: blueprint(),
+      sourceDraft: null,
       visibleText: '候选正文',
       failureCode: 'PROVIDER_REQUEST_FAILED',
       failureReason: 'connection reset',
