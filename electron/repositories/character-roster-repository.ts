@@ -421,12 +421,31 @@ function mergeGeneratedEntriesWithExisting(
   return merged
 }
 
+function hasFinalizedDraft(db: BetterSqlite3.Database, chapterNumber: number): boolean {
+  return db.prepare(`
+    SELECT 1
+    FROM drafts
+    WHERE chapter_number = ? AND status = 'finalized'
+    LIMIT 1
+  `).get(chapterNumber) !== undefined
+}
+
 function mergeIncrementalEntriesWithExisting(
   db: BetterSqlite3.Database,
   candidates: CharacterRosterEntry[],
   existingEntries: CharacterRosterEntry[],
   intent: Extract<CharacterRosterCommitIntent, 'blueprint_sync' | 'chapter_progress'>,
 ): CharacterRosterEntry[] {
+  if (intent === 'chapter_progress') {
+    for (const candidate of candidates) {
+      if (
+        !candidate.currentState
+        || !hasFinalizedDraft(db, candidate.currentState.updatedAtChapter)
+      ) {
+        throw new Error(`角色「${candidate.name}」的章节状态尚未定稿，已拒绝后处理写入`)
+      }
+    }
+  }
   const candidateByName = new Map(candidates.map(entry => [characterRosterIdentityKey(entry.name), entry]))
   const mergedExisting = existingEntries.map((existing) => {
     const candidate = candidateByName.get(characterRosterIdentityKey(existing.name))
@@ -436,20 +455,7 @@ function mergeIncrementalEntriesWithExisting(
       && candidate.currentState
       && existing.currentState
       && candidate.currentState.updatedAtChapter < existing.currentState.updatedAtChapter
-      && (
-        db.prepare(`
-          SELECT 1
-          FROM drafts
-          WHERE chapter_number = ? AND status = 'finalized'
-          LIMIT 1
-        `).get(existing.currentState.updatedAtChapter)
-        || !db.prepare(`
-          SELECT 1
-          FROM drafts
-          WHERE chapter_number = ? AND status = 'finalized'
-          LIMIT 1
-        `).get(candidate.currentState.updatedAtChapter)
-      )
+      && hasFinalizedDraft(db, existing.currentState.updatedAtChapter)
     ) {
       throw new Error(`角色「${existing.name}」已由较新章节更新，已拒绝旧章节后处理覆盖`)
     }

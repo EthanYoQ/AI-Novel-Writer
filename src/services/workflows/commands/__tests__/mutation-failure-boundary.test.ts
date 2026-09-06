@@ -915,6 +915,34 @@ describe('workflow mutation failure boundaries', () => {
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(2)
   })
 
+  it('regenerates character state after malformed model output fails parsing', async () => {
+    const allCharacters = [{ name: '林岚', role: 'protagonist', relationships: [], currentState: {} }]
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:character-roster-read') {
+        return { status: 'ready', revision: 4, entries: allCharacters }
+      }
+      if (channel === 'db:character-roster-commit') {
+        return { success: true, receipt: { revision: 5 } }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const complete = vi.fn()
+      .mockResolvedValueOnce('{"updates":{}}')
+      .mockResolvedValueOnce(JSON.stringify({
+        updates: [{ name: '林岚', currentState: { location: '车站' } }],
+      }))
+    const step = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete },
+    ).find(candidate => candidate.key === 'character_cards')!
+
+    await expect(step.executor(callbacks(), context())).rejects.toThrow('updates 必须是列表')
+    await expect(step.executor(callbacks(), context())).resolves.toBeUndefined()
+
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
+  })
+
   it('does not persist post-process output when the stream omits terminal evidence', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'db:blueprint-update-notes') return { success: true }

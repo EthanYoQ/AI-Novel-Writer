@@ -435,15 +435,15 @@ export function buildFinalizePostProcessSteps(
           .withChapterNumber(chapterNumber)
           .withExistingCardsJson(simpleCards)
 
-        generatedCharacterCards ??= await generation.complete(
+        const cardsResult = generatedCharacterCards ?? await generation.complete(
           cardBuilder,
           callbacks,
           'structured-data',
           context,
         )
-        const cardsResult = generatedCharacterCards
         if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         const updatesByName = parseCharacterStateUpdates(cardsResult, allChars, chapterNumber)
+        generatedCharacterCards = cardsResult
         let updatedCount = 0
         const changedEntries: CharacterRosterEntry[] = []
         for (const character of allChars) {

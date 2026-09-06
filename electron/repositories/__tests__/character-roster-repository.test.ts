@@ -939,6 +939,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
 
   it('rejects chapter-progress additions and canonical duplicate names at the repository boundary', () => {
     const initial = CharacterRosterRepository.commit(commitRequest())
+    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(2, 2, 'finalized')
     const existing = initial.snapshot.entries[0]
     const unknown = {
       ...existing,
@@ -1045,5 +1046,38 @@ describe('CharacterRosterRepository public read/commit seam', () => {
 
     expect(receipt.snapshot.entries.find(entry => entry.name === existing.name)?.currentState)
       .toMatchObject({ location: '第二章现场', updatedAtChapter: 2 })
+  })
+
+  it('rejects chapter progress whose candidate chapter is not finalized', () => {
+    const base = commitRequest()
+    const initial = CharacterRosterRepository.commit({
+      ...base,
+      entries: base.entries.map(entry => ({
+        ...entry,
+        currentState: {
+          location: '第一章现场',
+          powerLevel: '',
+          physicalState: '',
+          mentalState: '',
+          keyItems: '',
+          recentEvents: '',
+          updatedAtChapter: 1,
+        },
+      })),
+    })
+    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(2, 2, 'draft')
+    const existing = initial.snapshot.entries[0]
+
+    expect(() => CharacterRosterRepository.commit({
+      operationId: 'unfinalized-chapter-progress',
+      expectedRevision: initial.revision,
+      schemaVersion: 1,
+      intent: 'chapter_progress',
+      entries: [{
+        ...existing,
+        relationships: [],
+        currentState: { ...existing.currentState!, location: '第二章现场', updatedAtChapter: 2 },
+      }],
+    })).toThrow(/尚未定稿/)
   })
 })
