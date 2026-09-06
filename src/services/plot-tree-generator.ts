@@ -1,7 +1,10 @@
 import {
   assertPlotTreeSnapshot,
   hasUsablePlotTreeEventSource,
+  type PlotTreeEvent,
+  type PlotTreeEventStatus,
   type PlotTreeSnapshot,
+  type PlotTreeSourceReference,
   type PlotTreeSourceBundle,
 } from '../shared/plot-tree'
 import type { LLMFinishReason, ProjectSessionContext } from '../shared/ipc-channels'
@@ -15,8 +18,8 @@ import {
 } from './generation/generation-runtime'
 
 export const PLOT_TREE_GENERATION_BUDGET = Object.freeze({
-  maxAttempts: 2,
-  maxRequestedOutputTokens: 16_384,
+  maxAttempts: 1,
+  maxRequestedOutputTokens: 8192,
   maxRequestedOutputTokensPerAttempt: 8192,
   deadlineMs: 10 * 60_000,
 })
@@ -136,16 +139,152 @@ export function parsePlotTreeSnapshot(
   sources: PlotTreeSourceBundle,
   generatedAt = new Date().toISOString(),
 ): PlotTreeSnapshot {
-  const trimmed = content.trim()
-  const fenced = /^```json\s*([\s\S]*?)\s*```$/iu.exec(trimmed)
-  const parsed = JSON.parse(fenced ? fenced[1].trim() : trimmed) as Record<string, unknown>
+  return strictSnapshot(parsePlotTreeJSON(content).tracks, sources, generatedAt)
+}
+
+function strictSnapshot(
+  tracks: unknown,
+  sources: PlotTreeSourceBundle,
+  generatedAt: string,
+): PlotTreeSnapshot {
   return assertPlotTreeSnapshot({
     version: 1,
     generatedAt,
     writingLanguage: sources.writingLanguage,
     sourceRevision: sources.sourceRevision,
-    tracks: parsed.tracks,
+    tracks,
   }, sources)
+}
+
+function parsePlotTreeJSON(content: string): Record<string, unknown> {
+  const trimmed = content.trim()
+  const fenced = /^```json\s*([\s\S]*?)\s*```$/iu.exec(trimmed)
+  return JSON.parse(fenced ? fenced[1].trim() : trimmed) as Record<string, unknown>
+}
+
+function object(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function exactEventSource(
+  value: unknown,
+  status: PlotTreeEventStatus,
+  chapterNumber: number,
+  sources: PlotTreeSourceBundle,
+  generatedAt: string,
+): PlotTreeSourceReference | null {
+  try {
+    return strictSnapshot([{
+      id: 'source-check', title: 'source-check', role: 'main',
+      startChapter: chapterNumber, endChapter: chapterNumber, summary: 'source-check',
+      events: [{ status, chapterNumber, summary: 'source-check', sources: [value] }],
+    }], sources, generatedAt).tracks[0]!.events[0]!.sources[0]!
+  } catch {
+    return null
+  }
+}
+
+function normalizePlotTreeSnapshot(
+  parsed: Record<string, unknown>,
+  sources: PlotTreeSourceBundle,
+  generatedAt: string,
+): PlotTreeSnapshot {
+  const tracks = (Array.isArray(parsed.tracks) ? parsed.tracks : []).flatMap((candidate) => {
+    const track = object(candidate)
+    if (!track || !Array.isArray(track.events)) return []
+    const events = track.events.flatMap((candidateEvent) => {
+      const event = object(candidateEvent)
+      if (!event || !['planned', 'occurred'].includes(String(event.status))
+        || !Number.isSafeInteger(event.chapterNumber) || !Array.isArray(event.sources)) return []
+      const status = event.status as PlotTreeEventStatus
+      const chapterNumber = event.chapterNumber as number
+      const seen = new Set<string>()
+      const eventSources = event.sources.flatMap((value) => {
+        const source = exactEventSource(value, status, chapterNumber, sources, generatedAt)
+        const key = JSON.stringify(source)
+        if (!source || seen.has(key)) return []
+        seen.add(key)
+        return [source]
+      })
+      return eventSources.length > 0 ? [{ ...event, status, chapterNumber, sources: eventSources }] : []
+    })
+    if (events.length === 0) return []
+    const chapters = events.map(event => event.chapterNumber)
+    return [{ ...track, startChapter: Math.min(...chapters), endChapter: Math.max(...chapters), events }]
+  })
+  return strictSnapshot(tracks, sources, generatedAt)
+}
+
+function deterministicPlotTreeSnapshot(
+  sources: PlotTreeSourceBundle,
+  generatedAt: string,
+): PlotTreeSnapshot {
+  const finalizedByChapter = new Map<number, typeof sources.finalizedChapters[number]>()
+  for (const chapter of sources.finalizedChapters) {
+    const current = finalizedByChapter.get(chapter.chapterNumber)
+    if ((chapter.summary.trim() || chapter.title.trim())
+      && exactEventSource(
+        { type: 'finalized-chapter', draftId: chapter.draftId, chapterNumber: chapter.chapterNumber },
+        'occurred', chapter.chapterNumber, sources, generatedAt,
+      )
+      && (!current || chapter.draftId > current.draftId)) {
+      finalizedByChapter.set(chapter.chapterNumber, chapter)
+    }
+  }
+  const candidates: PlotTreeEvent[] = [
+    ...[...finalizedByChapter.values()].map(chapter => ({
+      status: 'occurred', chapterNumber: chapter.chapterNumber,
+      summary: chapter.summary.trim() || chapter.title.trim(),
+      sources: [{ type: 'finalized-chapter', draftId: chapter.draftId, chapterNumber: chapter.chapterNumber }],
+    } as PlotTreeEvent)),
+    ...sources.blueprints.filter(blueprint => !finalizedByChapter.has(blueprint.chapterNumber)).map(blueprint => ({
+      status: 'planned', chapterNumber: blueprint.chapterNumber,
+      summary: blueprint.keyEvents.trim() || blueprint.purpose.trim() || blueprint.title.trim(),
+      sources: [{ type: 'blueprint', chapterNumber: blueprint.chapterNumber }],
+    } as PlotTreeEvent)),
+    ...sources.narrativeThreads.flatMap(thread => [{
+      status: 'planned', chapterNumber: thread.targetStartChapter,
+      summary: thread.authorIntent.trim() || thread.title.trim(),
+      sources: [{ type: 'narrative-thread', planId: thread.id }],
+    } as PlotTreeEvent, ...thread.events.filter(event => (
+      event.chapterNumber >= thread.targetStartChapter && event.chapterNumber <= thread.targetEndChapter
+    )).map(event => ({
+      status: 'occurred', chapterNumber: event.chapterNumber,
+      summary: event.evidence.trim() || event.reason.trim(),
+      sources: [{ type: 'narrative-thread', planId: thread.id, eventId: event.id, chapterNumber: event.chapterNumber }],
+    } as PlotTreeEvent)),
+    ]),
+  ]
+
+  const seen = new Set<string>()
+  const sortedEvents = candidates.filter((event) => {
+    const source = exactEventSource(event.sources[0], event.status, event.chapterNumber, sources, generatedAt)
+    const key = JSON.stringify(source)
+    if (!event.summary || !source || seen.has(key)) return false
+    event.sources = [source]
+    seen.add(key)
+    return true
+  }).sort((left, right) => (
+    left.chapterNumber - right.chapterNumber
+    || left.status.localeCompare(right.status)
+    || JSON.stringify(left.sources[0]).localeCompare(JSON.stringify(right.sources[0]))
+  ))
+  if (sortedEvents.length === 0) throw new PlotTreeSourceError()
+  return strictSnapshot([{
+    id: 'source-backed-progress',
+    title: promptLanguageText(sources.writingLanguage, '剧情进展', 'Plot progress'),
+    role: 'main',
+    startChapter: sortedEvents[0].chapterNumber,
+    endChapter: sortedEvents.at(-1)!.chapterNumber,
+    summary: promptLanguageText(
+      sources.writingLanguage,
+      '基于当前章节与叙事线索的只读进展。',
+      'Read-only progress from current chapters and narrative threads.',
+    ),
+    events: sortedEvents,
+  }], sources, generatedAt)
 }
 
 function boundedText(value: string, maximum: number): string {
@@ -195,28 +334,6 @@ function generationFacts(sources: PlotTreeSourceBundle) {
   }
 }
 
-function responseError(
-  error: unknown,
-  writingLanguage: WritingLanguage,
-): PlotTreeResponseError {
-  const invalidJson = error instanceof SyntaxError
-  const message = promptLanguageText(
-    writingLanguage,
-    invalidJson
-      ? '模型未返回可解析的剧情树 JSON，旧快照保持不变。'
-      : '模型返回的剧情树结构或来源引用无效，旧快照保持不变。',
-    invalidJson
-      ? 'The model did not return parseable plot-tree JSON; the previous snapshot remains unchanged.'
-      : 'The model returned an invalid plot-tree structure or source reference; the previous snapshot remains unchanged.',
-  )
-  return new PlotTreeResponseError(invalidJson ? 'invalid_json' : 'invalid_contract', message)
-}
-
-function shouldRequestReplacement(error: unknown): boolean {
-  return error instanceof PlotTreeResponseError
-    || (error instanceof PlotTreeIncompleteError && error.finishReason === 'length')
-}
-
 export async function generatePlotTree(
   input: GeneratePlotTreeInput,
   dependencies: PlotTreeGeneratorDependencies = {
@@ -240,8 +357,8 @@ export async function generatePlotTree(
   })
   try {
     return await runtime.execute(async ({ session }) => {
-      const task = (replacement: boolean) => ({
-        purpose: replacement ? 'plot-tree-snapshot-replacement' : 'plot-tree-snapshot',
+      const task = {
+        purpose: 'plot-tree-snapshot',
         reasoningStage: 'planning' as const,
         output: 'structured-data' as const,
         messages: [
@@ -254,37 +371,37 @@ export async function generatePlotTree(
                 '区分 main 主线与 subplot 支线；每条支线必须用 parentTrackId 关联一条主线，主线不能有 parentTrackId。planned 只能来自章节蓝图或人工叙事计划，occurred 只能来自已定稿章节或已确认叙事事件。',
                 '情节总大纲只用于归纳轨道和摘要，不是可引用来源；绝不能在事件 sources 中引用它，也绝不能输出 source.type="synopsis"。每个事件必须至少引用一个同章节的真实来源，且只能使用以下格式：{"type":"blueprint","chapterNumber":1}、{"type":"finalized-chapter","draftId":1,"chapterNumber":1}、{"type":"narrative-thread","planId":1}、{"type":"narrative-thread","planId":1,"eventId":1,"chapterNumber":1}。不得编造 ID 或章节。',
                 '只输出 JSON 对象：{"tracks":[{"id":"stable-id","title":"","role":"main","startChapter":1,"endChapter":1,"summary":"","events":[{"status":"planned|occurred","chapterNumber":1,"summary":"","sources":[]}]}]}。仅 subplot 轨道增加 parentTrackId。不要输出解释或 Markdown。',
-                ...(replacement ? ['上一轮结果已完全丢弃。请从给定资料重新生成一个完整替代 JSON，不得续写或引用上一轮结果。'] : []),
               ].join('\n'),
               [
                 'You are a fiction plot-structure editor. Derive a read-only plot tree from the supplied synopsis, chapter blueprints, finalized chapter summaries, and author-confirmed narrative threads.',
                 'Separate main tracks from subplot tracks. Every subplot must reference one main track with parentTrackId; main tracks must not have parentTrackId. planned must be supported by a chapter blueprint or human narrative plan; occurred must be supported by a finalized chapter or confirmed narrative event.',
                 'The synopsis is context for synthesizing tracks and summaries, not a citable source. Never cite it in event sources and never emit source.type="synopsis". Every event must cite at least one real source for the same chapter using only these forms: {"type":"blueprint","chapterNumber":1}, {"type":"finalized-chapter","draftId":1,"chapterNumber":1}, {"type":"narrative-thread","planId":1}, or {"type":"narrative-thread","planId":1,"eventId":1,"chapterNumber":1}. Never invent an ID or chapter.',
                 'Return only one JSON object: {"tracks":[{"id":"stable-id","title":"","role":"main","startChapter":1,"endChapter":1,"summary":"","events":[{"status":"planned|occurred","chapterNumber":1,"summary":"","sources":[]}]}]}. Add parentTrackId only to subplot tracks. Do not return explanations or Markdown.',
-                ...(replacement ? ['The previous result was discarded in full. Generate one complete replacement JSON from the supplied facts; do not continue or quote the previous result.'] : []),
               ].join('\n'),
             ),
           },
           { role: 'user' as const, content: facts },
         ],
-      })
-      const complete = async (replacement: boolean): Promise<PlotTreeSnapshot> => {
-        const outcome = await session.complete(task(replacement), { signal: input.signal })
-        if (outcome.status !== 'completed') {
-          throw new PlotTreeIncompleteError(input.sources.writingLanguage, outcome.finishReason)
-        }
-        try {
-          return parsePlotTreeSnapshot(outcome.content, input.sources, dependencies.now())
-        } catch (error) {
-          throw responseError(error, input.sources.writingLanguage)
-        }
       }
-
+      const outcome = await session.complete(task, { signal: input.signal })
+      if (outcome.status !== 'completed') {
+        throw new PlotTreeIncompleteError(input.sources.writingLanguage, outcome.finishReason)
+      }
+      const generatedAt = dependencies.now()
+      let parsed: Record<string, unknown>
       try {
-        return await complete(false)
-      } catch (error) {
-        if (!shouldRequestReplacement(error)) throw error
-        return complete(true)
+        parsed = parsePlotTreeJSON(outcome.content)
+      } catch {
+        return deterministicPlotTreeSnapshot(input.sources, generatedAt)
+      }
+      try {
+        return strictSnapshot(parsed.tracks, input.sources, generatedAt)
+      } catch {
+        try {
+          return normalizePlotTreeSnapshot(parsed, input.sources, generatedAt)
+        } catch {
+          return deterministicPlotTreeSnapshot(input.sources, generatedAt)
+        }
       }
     })
   } catch (error) {
