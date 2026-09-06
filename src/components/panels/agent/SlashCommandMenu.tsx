@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Sparkles, Zap } from 'lucide-react'
 import { searchSlashCommands, type SlashCommand } from '../../../services/agent/intent-router'
+import { useLocaleStore } from '../../../stores/locale-store'
 
 interface Props {
   /** 搜索关键词（/ 后面的文字） */
@@ -19,10 +20,12 @@ interface Props {
 }
 
 export default function SlashCommandMenu({ query, onSelect, onClose, position }: Props) {
+  const locale = useLocaleStore(state => state.locale)
+  const text = useLocaleStore(state => state.text)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  const results = searchSlashCommands(query)
+  const results = searchSlashCommands(query, locale)
 
   const [prevQuery, setPrevQuery] = useState(query)
 
@@ -74,7 +77,7 @@ export default function SlashCommandMenu({ query, onSelect, onClose, position }:
       }}
     >
       <div className="text-[0.68rem] px-3 py-1" style={{ color: 'var(--color-text-muted)' }}>
-        命令
+        {text('命令', 'Commands')}
       </div>
       {results.map((cmd, i) => (
         <button

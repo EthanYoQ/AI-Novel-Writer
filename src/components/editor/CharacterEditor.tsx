@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Save, Trash2, Users, Network, ClipboardList } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
+import { registerEditorExitSaveHandler } from '../../stores/editor-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { confirm } from '../ui/Confirm'
 import {
@@ -104,6 +105,18 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
       addLog('error', text(`角色卡保存失败：${error}`, 'Could not save character cards.'))
     }
   }
+
+  const exitSaveRef = useRef(handleSave)
+  useEffect(() => {
+    exitSaveRef.current = handleSave
+  })
+  useEffect(() => {
+    registerEditorExitSaveHandler({
+      type: 'character',
+      projectKey,
+      save: () => exitSaveRef.current(),
+    })
+  }, [projectKey])
 
   const handleDeleteAllCharacters = async () => {
     const projectSession = captureProjectSession(currentProject)

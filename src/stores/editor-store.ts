@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 
 import type { DraftStatus } from '../shared/draft-status'
+import { sameProjectPathKey } from '../shared/project-session-context'
+import { countUnsavedEditorItems } from './editor-unsaved'
 
 export interface EditorTabSaveSnapshot {
   content: string
@@ -52,6 +54,10 @@ export interface EditorTab {
   reportPath?: string
   /** 原始 AI 审稿报告的数据库标识；人工确认快照与审稿修稿均以此为来源。 */
   reviewId?: number
+  /** 叙事线编辑器本次打开的视图。 */
+  narrativeThreadView?: 'plot-tree' | 'plans'
+  /** 重复打开同一叙事线 Tab 时递增，确保本次视图请求生效。 */
+  narrativeThreadViewRequest?: number
 }
 
 interface EditorState {
@@ -98,6 +104,12 @@ interface EditorState {
   markTabSaved: (tabId: string, savedContent?: string) => void
   /** 按保存开始时的快照结算；期间有新输入时只更新已保存基准。 */
   settleTabSave: (tabId: string, snapshot: EditorTabSaveSnapshot) => void
+  /** 结算修订合并；期间有新输入时保留当前正文与未保存状态。 */
+  settleMergedRevision: (
+    tabId: string,
+    snapshot: EditorTabSaveSnapshot,
+    mergedContent: string,
+  ) => void
   /** 清空所有 Tab */
   clearTabs: () => void
   /** 只清理指定项目的 Tab 与后台草稿，保留其他项目的未保存内容。 */
@@ -120,6 +132,42 @@ const PROJECT_SCOPED_BUILTIN_TYPES = new Set<EditorTab['type']>([
   'diff',
   'narrative-thread',
 ])
+
+export interface EditorExitSaveHandler {
+  tabId?: string
+  type: EditorTab['type']
+  projectKey?: string
+  save: () => Promise<void>
+}
+
+const exitSaveHandlers = new Map<string, EditorExitSaveHandler>()
+
+function exitSaveTypeKey(type: EditorTab['type'], projectKey: string): string {
+  return `type:${type}:${projectKey}`
+}
+
+export function registerEditorExitSaveHandler(handler: EditorExitSaveHandler): () => void {
+  const keys: string[] = []
+  if (handler.tabId) keys.push(`tab:${handler.tabId}`)
+  if (handler.projectKey && BACKGROUND_LEDGER_BY_EDITOR_TYPE[handler.type]) {
+    keys.push(exitSaveTypeKey(handler.type, handler.projectKey))
+  }
+  for (const key of keys) exitSaveHandlers.set(key, handler)
+  return () => {
+    for (const key of keys) {
+      if (exitSaveHandlers.get(key) === handler) exitSaveHandlers.delete(key)
+    }
+  }
+}
+
+// Editor components keep their registrations across active-tab unmounts.
+// These store-owned removal paths are the handler lifetime boundary.
+function removeEditorExitSaveHandlers(tab: EditorTab): void {
+  exitSaveHandlers.delete(`tab:${tab.id}`)
+  if (tab.projectKey && BACKGROUND_LEDGER_BY_EDITOR_TYPE[tab.type]) {
+    exitSaveHandlers.delete(exitSaveTypeKey(tab.type, tab.projectKey))
+  }
+}
 
 export function createProjectScopedEditorTabId(
   baseId: string,
@@ -194,6 +242,12 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
                 ...(tabWithDraftState.draftStatus === undefined
                   ? {}
                   : { draftStatus: tabWithDraftState.draftStatus }),
+                ...(tabWithDraftState.narrativeThreadView === undefined
+                  ? {}
+                  : {
+                      narrativeThreadView: tabWithDraftState.narrativeThreadView,
+                      narrativeThreadViewRequest: (t.narrativeThreadViewRequest ?? 0) + 1,
+                    }),
               }
             : t),
           activeTabId: existing.id,
@@ -202,7 +256,13 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     } else {
       // 新开 Tab
       set((s) => ({
-        tabs: [...s.tabs, tabWithDraftState],
+        tabs: [
+          ...s.tabs,
+          tabWithDraftState.type === 'narrative-thread'
+            && tabWithDraftState.narrativeThreadView !== undefined
+            ? { ...tabWithDraftState, narrativeThreadViewRequest: 1 }
+            : tabWithDraftState,
+        ],
         activeTabId: tabWithDraftState.id,
       }))
     }
@@ -232,6 +292,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     // pinned Tab 不可关闭
     const target = tabs.find((t) => t.id === tabId)
     if (target?.pinned) return
+    if (target) removeEditorExitSaveHandlers(target)
     const newTabs = tabs.filter((t) => t.id !== tabId)
     set({
       tabs: newTabs,
@@ -303,11 +364,41 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     }))
   },
 
+  settleMergedRevision: (tabId, snapshot, mergedContent) => {
+    set((state) => ({
+      tabs: state.tabs.map(tab => {
+        if (tab.id !== tabId) return tab
+        const snapshotStillCurrent = (
+          (tab.contentRevision ?? 0) === snapshot.contentRevision
+          && tab.content === snapshot.content
+        )
+        if (!snapshotStillCurrent) {
+          return {
+            ...tab,
+            savedContent: mergedContent,
+            dirty: true,
+          }
+        }
+        return {
+          ...tab,
+          content: mergedContent,
+          savedContent: mergedContent,
+          contentRevision: (tab.contentRevision ?? 0) + (tab.content === mergedContent ? 0 : 1),
+          dirty: false,
+        }
+      }),
+    }))
+  },
+
   clearTabs: () => {
+    exitSaveHandlers.clear()
     set({ tabs: [], activeTabId: null })
   },
 
   clearProjectTabs: (projectKey) => {
+    for (const tab of get().tabs) {
+      if (tab.projectKey === projectKey) removeEditorExitSaveHandlers(tab)
+    }
     set((state) => {
       const tabs = state.tabs.filter(tab => tab.projectKey !== projectKey)
       const draftLedgers = Object.fromEntries(
@@ -334,3 +425,50 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     })
   },
 }))
+
+export async function saveDirtyEditorChangesForExit(currentProjectKey: string | undefined): Promise<void> {
+  const initial = useEditorStore.getState()
+  if (countUnsavedEditorItems(initial.tabs, initial.draftLedgers) === 0) return
+
+  const handlers = new Set<EditorExitSaveHandler>()
+  for (const tab of initial.tabs) {
+    if (!tab.dirty) continue
+    if (!tab.projectKey || !currentProjectKey || !sameProjectPathKey(tab.projectKey, currentProjectKey)) {
+      throw new Error('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出')
+    }
+    const handler = exitSaveHandlers.get(`tab:${tab.id}`)
+      ?? exitSaveHandlers.get(exitSaveTypeKey(tab.type, tab.projectKey))
+    if (!handler) throw new Error(`“${tab.name}”当前无法安全保存，请取消退出并在编辑器中保存`)
+    handlers.add(handler)
+  }
+
+  for (const [ledgerKey, content] of Object.entries(initial.draftLedgers)) {
+    const type = Object.entries(BACKGROUND_LEDGER_BY_EDITOR_TYPE)
+      .find(([, key]) => key === ledgerKey)?.[0] as EditorTab['type'] | undefined
+    if (!type || !content) continue
+    let projects: Array<{ projectKey?: unknown }>
+    try {
+      const parsed = JSON.parse(content) as { projects?: unknown }
+      if (!Array.isArray(parsed.projects)) throw new Error('invalid ledger')
+      projects = parsed.projects
+    } catch {
+      throw new Error('存在无法识别的未保存编辑内容，请取消退出并恢复该编辑器')
+    }
+    for (const project of projects) {
+      if (typeof project.projectKey !== 'string') continue
+      if (!currentProjectKey || !sameProjectPathKey(project.projectKey, currentProjectKey)) {
+        throw new Error('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出')
+      }
+      const handler = exitSaveHandlers.get(exitSaveTypeKey(type, project.projectKey))
+      if (!handler) throw new Error('当前编辑内容无法安全保存，请取消退出并在对应编辑器中保存')
+      handlers.add(handler)
+    }
+  }
+
+  for (const handler of handlers) await handler.save()
+
+  const settled = useEditorStore.getState()
+  if (countUnsavedEditorItems(settled.tabs, settled.draftLedgers) !== 0) {
+    throw new Error('保存期间仍有未保存修改，已取消退出')
+  }
+}

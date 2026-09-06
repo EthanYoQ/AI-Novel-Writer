@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Clock3, Download, LoaderCircle, RotateCcw, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Clock3, Download, ExternalLink, LoaderCircle, RotateCcw, X } from 'lucide-react'
 
 import type { UpdateError, UpdatePresentation, UpdateState } from '../../services/update-presentation'
 import { Button } from '../ui/Button'
@@ -15,6 +15,8 @@ interface UpdateStatusCardProps {
   lastReminderDays: 7 | 30
   onCheck(): void
   onDefer(days: 7 | 30): void
+  onDownload(): void
+  onOpenRelease(): void
   onInstall(): void
 }
 
@@ -36,7 +38,7 @@ function ReminderActions({ isDeferring, onDefer, text, includeSevenDays }: Pick<
   </>
 }
 
-function UpdateActions({ presentation, manualActionError, isDeferring, lastReminderDays, onCheck, onDefer, onInstall, text }: Pick<UpdateStatusCardProps, 'presentation' | 'manualActionError' | 'isDeferring' | 'lastReminderDays' | 'onCheck' | 'onDefer' | 'onInstall' | 'text'>) {
+function UpdateActions({ presentation, manualActionError, isDeferring, lastReminderDays, onCheck, onDefer, onDownload, onOpenRelease, onInstall, text }: Pick<UpdateStatusCardProps, 'presentation' | 'manualActionError' | 'isDeferring' | 'lastReminderDays' | 'onCheck' | 'onDefer' | 'onDownload' | 'onOpenRelease' | 'onInstall' | 'text'>) {
   if (presentation.kind === 'manual-error') {
     if (manualActionError && !manualActionError.retryable) return null
     const retryAction = getUpdateRetryAction(manualActionError?.code)
@@ -50,13 +52,24 @@ function UpdateActions({ presentation, manualActionError, isDeferring, lastRemin
         <Button type="button" variant="ghost" size="sm" onClick={() => onDefer(lastReminderDays)} disabled={isDeferring}><RotateCcw size={14} />{text('重试保存提醒时间', 'Retry saving the reminder')}</Button>
       </div>
     }
+    if (retryAction === 'download') {
+      return <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onDownload}><RotateCcw size={14} />{text('重试下载更新', 'Retry download')}</Button>
+      </div>
+    }
+    if (retryAction === 'open-release') {
+      return <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onOpenRelease}><ExternalLink size={14} />{text('重试打开下载页', 'Retry opening download page')}</Button>
+      </div>
+    }
     return <div className="mt-3 flex flex-wrap items-center gap-2">
       <Button type="button" variant="ghost" size="sm" onClick={onCheck}><RotateCcw size={14} />{text('重试检查', 'Retry check')}</Button>
     </div>
   }
 
   return <div className="mt-3 flex flex-wrap items-center gap-2">
-    {presentation.kind === 'available' && <Button type="button" variant="ghost" size="sm" onClick={onCheck} disabled={!presentation.canCheck}><Download size={14} />{text('继续准备更新', 'Continue preparing update')}</Button>}
+    {presentation.canDownload && <Button type="button" size="sm" onClick={onDownload}><Download size={14} />{text('下载更新', 'Download update')}</Button>}
+    {presentation.canOpenRelease && <Button type="button" size="sm" onClick={onOpenRelease}><ExternalLink size={14} />{text('打开下载页', 'Open download page')}</Button>}
     {presentation.canInstall && <Button type="button" size="sm" onClick={onInstall}><Download size={14} />{text('立即重启更新', 'Restart and update now')}</Button>}
     {presentation.canInstall && presentation.canDefer && <Button type="button" variant="ghost" size="sm" onClick={() => onDefer(7)} disabled={isDeferring}><Clock3 size={14} />{text('稍后（7天后提醒）', 'Later (remind me in 7 days)')}</Button>}
     {presentation.canDefer && <ReminderActions isDeferring={isDeferring} onDefer={onDefer} text={text} includeSevenDays={!presentation.canInstall} />}
@@ -65,7 +78,7 @@ function UpdateActions({ presentation, manualActionError, isDeferring, lastRemin
 
 /** 已发现更新后的非阻断状态卡。 */
 export function UpdateStatusCard(props: UpdateStatusCardProps) {
-  const { presentation, state, text, manualActionError, isDeferring, lastReminderDays, onCheck, onDefer, onInstall } = props
+  const { presentation, state, text, manualActionError, isDeferring, lastReminderDays, onCheck, onDefer, onDownload, onOpenRelease, onInstall } = props
   const cardCopy = getUpdateCardCopy(presentation, state, text, manualActionError)
   const error = manualActionError ?? state.error
   const progress = Math.round(state.downloadProgress?.percent ?? 0)
@@ -78,7 +91,7 @@ export function UpdateStatusCard(props: UpdateStatusCardProps) {
         <h2 className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>{cardCopy.title}</h2>
         <p className="mt-1 text-xs leading-5" style={{ color: 'var(--color-text-secondary)' }}>{cardCopy.description}</p>
         {presentation.showProgress && <div className="mt-3"><div className="mb-1 flex items-center justify-between text-xs" style={{ color: 'var(--color-text-muted)' }}><span>{text('下载进度', 'Download progress')}</span><span>{progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full" style={{ backgroundColor: 'var(--color-hover)' }}><div className="h-full rounded-full transition-[width] duration-300" style={{ width: `${Math.min(100, Math.max(0, progress))}%`, backgroundColor: 'var(--color-accent)' }} /></div></div>}
-        <UpdateActions presentation={presentation} manualActionError={error} isDeferring={isDeferring} lastReminderDays={lastReminderDays} onCheck={onCheck} onDefer={onDefer} onInstall={onInstall} text={text} />
+        <UpdateActions presentation={presentation} manualActionError={error} isDeferring={isDeferring} lastReminderDays={lastReminderDays} onCheck={onCheck} onDefer={onDefer} onDownload={onDownload} onOpenRelease={onOpenRelease} onInstall={onInstall} text={text} />
       </div>
     </div>
   </div>

@@ -497,14 +497,25 @@ async function findRelease(api, repository, tag) {
   return matches[0] || null;
 }
 
-function expectedReleaseProvenance(tag, expectedSha, assets, qualifications) {
+export function expectedReleaseProvenance(tag, expectedSha, assets, qualifications, releaseNotes) {
+  if (typeof releaseNotes !== "string" || releaseNotes.trim().length === 0) throw new Error("release notes must not be empty");
   const lines = [...assets.values()].sort((a, b) => a.name.localeCompare(b.name)).map((asset) => `- ${asset.name}: sha256:${asset.sha256}`);
   const signingLines = [...qualifications].sort((a, b) => a.platform.localeCompare(b.platform)).map((qualification) =>
     `- ${qualification.platform}: ${qualification.signing.status}; validation=${qualification.signing.validationResult}; unsigned-impact=${qualification.signing.unsignedDistributionImpact}`);
   return {
     title: tag,
-    body: [`Qualified desktop release ${tag}`, "", `Source: ${expectedSha}`, "", "Verified assets:", ...lines, "", "Signing and notarization disclosure:", ...signingLines].join("\n"),
+    body: [releaseNotes.trim(), "", "---", "", `Qualified desktop release ${tag}`, "", `Source: ${expectedSha}`, "", "Verified assets:", ...lines, "", "Signing and notarization disclosure:", ...signingLines].join("\n"),
   };
+}
+
+async function readReleaseNotes(candidate) {
+  if (candidate.includes(":")) throw new Error("release notes path must be repository-relative");
+  const relativePath = normalizeRelativePath(candidate);
+  if (!relativePath.toLowerCase().endsWith(".md")) throw new Error("release notes must be a Markdown file");
+  const bytes = await readFile(resolve(relativePath));
+  if (bytes.length > 64 * 1024) throw new Error("release notes exceed 64 KiB");
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) throw new Error("release notes must not contain a BOM");
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 async function uploadAsset(api, repository, releaseId, asset) {
@@ -598,6 +609,7 @@ async function verifyCommand(options) {
   const tag = requireOption(options, "tag");
   const version = requireOption(options, "version");
   const profilePath = resolve(requireOption(options, "profile"));
+  const releaseNotes = await readReleaseNotes(requireOption(options, "release-notes"));
   const output = resolve(requireOption(options, "output"));
   validateIdentity({ repository: releaseRepository, expectedSha, tag, version });
   const profile = validatePromotionProfile(await readJsonFile(profilePath));
@@ -642,7 +654,7 @@ async function verifyCommand(options) {
     await rm(output, { recursive: true, force: true });
     await mkdir(output, { recursive: true });
     for (const asset of releaseAssets.values()) await copyFile(asset.source, join(output, asset.name));
-    const provenance = expectedReleaseProvenance(tag, expectedSha, releaseAssets, qualifications);
+    const provenance = expectedReleaseProvenance(tag, expectedSha, releaseAssets, qualifications, releaseNotes);
     const plan = {
       schemaVersion: 1,
       qualificationRepository,

@@ -10,6 +10,12 @@ describe('prepare native dependencies for Electron development', () => {
     expect(packageJson.scripts.predev).toBe('node scripts/prepare-native-for-electron.mjs')
   })
 
+  it('uses the verified Electron ABI preparation for release rebuilds', () => {
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
+
+    expect(packageJson.scripts['rebuild:electron']).toBe('node scripts/prepare-native-for-electron.mjs')
+  })
+
   it('returns immediately when better-sqlite3 already loads in Electron', async () => {
     const probe = vi.fn().mockReturnValue({ ok: true, diagnostic: '' })
     const rebuild = vi.fn()

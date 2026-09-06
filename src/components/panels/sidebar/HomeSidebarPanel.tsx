@@ -15,6 +15,7 @@ export default function HomeSidebarPanel() {
   const currentProject = useProjectStore(s => s.currentProject)
   const recentProjects = useProjectStore(s => s.recentProjects)
   const openProject = useProjectStore(s => s.openProject)
+  const removeRecentProject = useProjectStore(s => s.removeRecentProject)
   const deleteProject = useProjectStore(s => s.deleteProject)
   const text = useLocaleStore(s => s.text)
 
@@ -32,6 +33,25 @@ export default function HomeSidebarPanel() {
     const success = await deleteProject(project.path)
     if (success) {
       toast.success(text(`项目「${project.name}」已删除`, `Project “${project.name}” deleted`))
+    }
+  }
+
+  const handleRemoveRecentProject = async (project: { name: string; path: string }) => {
+    const ok = await confirm(
+      text(
+        `确认从最近项目中移除「${project.name}」？\n这只会移除列表记录，不会删除项目文件。`,
+        `Remove “${project.name}” from recent projects?\nThis only removes the list entry and does not delete project files.`,
+      ),
+      {
+        title: text('从最近项目移除', 'Remove from recent projects'),
+        confirmText: text('移除记录', 'Remove entry'),
+      },
+    )
+    if (!ok) return
+
+    const success = await removeRecentProject(project.path)
+    if (success) {
+      toast.success(text(`已从最近项目移除「${project.name}」`, `Removed “${project.name}” from recent projects`))
     }
   }
 
@@ -130,12 +150,12 @@ export default function HomeSidebarPanel() {
                   </div>
                   <button
                     type="button"
-                  title={text('删除项目', 'Delete project')}
+                    title={text('从最近项目移除', 'Remove from recent projects')}
                     className="writer-command-button opacity-70 hover:opacity-100"
                     style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-error)' }}
                     onClick={(e) => {
                       e.stopPropagation()
-                      handleDeleteProject(p)
+                      handleRemoveRecentProject(p)
                     }}
                   >
                     <Trash2 size={13} />

@@ -6,7 +6,16 @@
  */
 
 import { ipc } from './ipc-client'
-import type { AppErrorCode, AppFailure } from '../shared/ipc-channels'
+import type {
+  AppErrorCode,
+  AppFailure,
+  ProjectSessionContext,
+} from '../shared/ipc-channels'
+
+export interface PlanningMaterial {
+  fileName: string
+  text: string
+}
 
 export class KnowledgeBaseServiceError extends Error {
   constructor(public readonly code: AppErrorCode, message?: string) {
@@ -121,4 +130,31 @@ export async function importKnowledgeFolder(grantId: string, expectedProjectPath
 
 export async function removeKnowledgeDocument(docId: string, expectedProjectPath: string) {
   return ipc.invoke('kb:remove-document', docId, expectedProjectPath)
+}
+
+/** 读取用户通过系统文件选择器明确授权的创作资料。 */
+export async function selectPlanningMaterials(): Promise<PlanningMaterial[]> {
+  const grants = await ipc.invoke('dialog:select-knowledge-files')
+  if (!grants) return []
+  const materials: PlanningMaterial[] = []
+  for (const grant of grants) {
+    const result = await ipc.invoke('fs:grant-read-file', grant.grantId)
+    if (!result.success) throw new Error(result.error || `Could not read ${grant.displayName}`)
+    materials.push({ fileName: grant.displayName, text: result.content })
+  }
+  return materials
+}
+
+/** 将普通创作资料写入当前冻结项目的 project-knowledge 语料。 */
+export async function importPlanningMaterial(
+  projectSession: ProjectSessionContext,
+  material: PlanningMaterial,
+) {
+  return ipc.invokeWithProjectSession(
+    projectSession,
+    'kb:import-planning-text',
+    material.text,
+    material.fileName,
+    projectSession.projectPath,
+  )
 }

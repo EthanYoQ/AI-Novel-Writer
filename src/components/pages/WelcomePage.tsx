@@ -36,7 +36,7 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
             {currentProject ? currentProject.name : text(`欢迎使用 ${APP_BRAND.zhName}`, `Welcome to ${APP_BRAND.enName}`)}
           </h1>
           <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-            {currentProject ? currentProject.path : APP_BRAND.tagline}
+            {currentProject ? currentProject.path : text(APP_BRAND.tagline, APP_BRAND.taglineEn)}
           </p>
         </div>
 

@@ -14,7 +14,6 @@ import { useLayoutStore, type SidebarView } from '../../stores/layout-store'
 import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore } from '../../stores/editor-store'
 import { countUnsavedEditorItemsForProject } from '../../stores/editor-unsaved'
-import { useWorkflowStore } from '../../stores/workflow-store'
 import { ipc } from '../../services/ipc-client'
 import { confirm } from '../../components/ui/Confirm'
 import { MenuItem } from '../../components/ui/MenuItem'
@@ -89,25 +88,13 @@ export default function ActivityBar() {
       draftLedgers,
       currentProject.path,
     )
-    const projectWorkflows = useWorkflowStore.getState().activeRuns.filter(run => (
-      run.projectPath === currentProject.path
-    ))
-    if (unsavedCount > 0 || projectWorkflows.length > 0) {
+    if (unsavedCount > 0) {
       const names = dirtyTabs.map(tab => tab.name).join('、')
-      const unsavedMessage = unsavedCount > 0
-        ? text(
-            `当前项目有 ${unsavedCount} 项未保存修改${names ? `：${names}` : ''}，关闭后将丢失。`,
-            `This project has ${unsavedCount} unsaved item${unsavedCount === 1 ? '' : 's'}${names ? `: ${names}` : ''}; closing will discard them.`,
-          )
-        : ''
-      const workflowMessage = projectWorkflows.length > 0
-        ? text(
-            `当前项目有 ${projectWorkflows.length} 个创作任务，关闭时将取消并等待其停止。`,
-            `This project has ${projectWorkflows.length} creative task${projectWorkflows.length === 1 ? '' : 's'}; closing will cancel them and wait for them to stop.`,
-          )
-        : ''
       const ok = await confirm(
-        `${[unsavedMessage, workflowMessage].filter(Boolean).join('\n')}\n\n${text('确定要关闭当前项目吗？', 'Close the current project?')}`,
+        `${text(
+          `当前项目有 ${unsavedCount} 项未保存修改${names ? `：${names}` : ''}，关闭后将丢失。`,
+          `This project has ${unsavedCount} unsaved item${unsavedCount === 1 ? '' : 's'}${names ? `: ${names}` : ''}; closing will discard them.`,
+        )}\n\n${text('确定要关闭当前项目吗？', 'Close the current project?')}`,
         { title: text('关闭项目', 'Close project'), confirmText: text('放弃并关闭', 'Discard and close'), danger: true }
       )
       if (!ok) return

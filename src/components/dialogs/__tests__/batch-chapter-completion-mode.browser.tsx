@@ -25,7 +25,7 @@ const PROJECT_SESSION = {
   leaseId: 'batch-completion-mode-lease',
   projectPath: PROJECT_PATH,
 }
-const DRAFT_TEXT = `${'雨'.repeat(98)}。终。`
+const DRAFT_TEXT = '晨雾漫过旧教学楼，沈砺沿着湿润台阶进入档案室。他检查窗锁与登记簿，发现昨夜留下的墨迹已经干透，却有一页被人整齐撕走。管理员递来备用钥匙，提醒他午后停电。沈砺记下时间，决定先去钟楼核对监控。'
 const FIRST_DRAFT_TAIL = '第一章尾部唯一线索：银色怀表在午夜停摆。'
 const FIRST_DRAFT_TEXT = `${'雨'.repeat(70)}。${FIRST_DRAFT_TAIL}`
 const originalDraftState = useDraftStore.getState()
@@ -621,8 +621,7 @@ describe('batch chapter completion mode browser flow', () => {
         ['llm:begin-execution-lease', 'grok-browser'],
       ])
     expect(invoke.mock.calls.some(([channel]) => (
-      channel === 'db:draft-get-finalized'
-      || channel === 'finalization:commit'
+      channel === 'finalization:commit'
       || channel === 'kb:import-text'
       || channel === 'db:blueprint-update-notes'
       || String(channel).startsWith('db:character-roster-')

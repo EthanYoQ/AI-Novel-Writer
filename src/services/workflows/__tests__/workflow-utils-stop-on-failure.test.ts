@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { WorkflowContext } from '../../../stores/workflow-store'
 import { runPostProcessPipeline } from '../workflow-utils'
 
 const projectSession = {
@@ -7,6 +8,18 @@ const projectSession = {
   leaseId: 'lease-1',
   projectPath: 'C:/novel',
 } as const
+
+function englishContext(): WorkflowContext {
+  return {
+    runId: 'post-process-en',
+    projectPath: projectSession.projectPath,
+    projectSession,
+    writingLanguage: 'zh-CN',
+    uiLocale: 'en-US',
+    data: {},
+    cancelled: false,
+  }
+}
 
 function stubIpcInvoke() {
   const invoke = vi.fn(async (channel: string) => {
@@ -51,20 +64,24 @@ describe('runPostProcessPipeline stopOnFailure', () => {
     await expect(runPostProcessPipeline(
       'C:/novel',
       'chapter_2_finalize',
-      '第2章定稿',
+      'Chapter 2 finalization',
       [
-        { key: 'first', label: '第一步', critical: true, executor: async () => { throw new Error('模型超时') } },
-        { key: 'second', label: '第二步', critical: false, executor: secondStep },
+        { key: 'first', label: 'First step', critical: true, executor: async () => { throw new Error('provider timeout') } },
+        { key: 'second', label: 'Second step', critical: false, executor: secondStep },
       ],
       callbacks,
-      { retryCount: 0, stopOnFailure: true, projectSession },
-    )).rejects.toThrow('后处理步骤失败：第一步 — 模型超时')
+      { retryCount: 1, stopOnFailure: true, cancellation: englishContext(), projectSession },
+    )).rejects.toThrow('Post-processing step failed: First step — provider timeout')
+
+    const logs = vi.mocked(callbacks.log).mock.calls.flat().join('\n')
+    expect(logs).toContain('First step failed on attempt 1; retrying')
+    expect(logs).not.toMatch(/⚠️|✅|❌|⏭️|💡/u)
 
     expect(invoke).toHaveBeenCalledWith(
       'db:post-process-mark-step-failed',
       'run-1',
       'first',
-      '模型超时',
+      'provider timeout',
       'C:/novel',
       projectSession,
     )
@@ -89,7 +106,7 @@ describe('runPostProcessPipeline stopOnFailure', () => {
                 id: 1,
                 runId: createdRunId,
                 stepKey: 'only',
-                label: '唯一步骤',
+                label: 'Only step',
                 critical: true,
                 ok: false,
                 errorMsg: '',
@@ -101,7 +118,7 @@ describe('runPostProcessPipeline stopOnFailure', () => {
                 id: 1,
                 runId: createdRunId,
                 stepKey: 'only',
-                label: '唯一步骤',
+                label: 'Only step',
                 critical: true,
                 ok: true,
                 errorMsg: '',
@@ -127,13 +144,14 @@ describe('runPostProcessPipeline stopOnFailure', () => {
       },
     })
 
+    const callbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
     const status = await runPostProcessPipeline(
       'C:/novel',
       'chapter_2_finalize',
-      '第2章定稿',
-      [{ key: 'only', label: '唯一步骤', critical: true, executor: async () => undefined }],
-      { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
-      { retryCount: 0, projectSession },
+      'Chapter 2 finalization',
+      [{ key: 'only', label: 'Only step', critical: true, executor: async () => undefined }],
+      callbacks,
+      { retryCount: 0, cancellation: englishContext(), projectSession },
     )
 
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:post-process-get-latest-run'))
@@ -151,6 +169,11 @@ describe('runPostProcessPipeline stopOnFailure', () => {
     expect(invoke.mock.calls.some(([, runId]) => runId === unrelatedLatestRunId)).toBe(false)
     expect(status.allCriticalPassed).toBe(true)
     expect(status.steps.only.ok).toBe(true)
+    const logs = vi.mocked(callbacks.log).mock.calls.flat().join('\n')
+    expect(logs).toContain('Initializing post-processing run')
+    expect(logs).toContain('Chapter 2 finalization post-processing summary')
+    expect(logs).toContain('1/1 succeeded')
+    expect(logs).not.toMatch(/初始化后处理跑批|后处理汇总|成功|⚠️|✅|❌|⏭️|💡/u)
   })
 
   it('fails closed before IPC when no frozen project session is supplied', async () => {

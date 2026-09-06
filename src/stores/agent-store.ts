@@ -9,12 +9,22 @@ import {
   type ToolConfirmationDecision,
 } from '../services/agent/agent-engine'
 import { registerBuiltinTools } from '../services/agent/tools'
-import { skillRegistry } from '../services/agent/skill-registry'
-import { parseSlashCommand, parseMentions, mentionsToToolCalls } from '../services/agent/intent-router'
+import { skillRegistry, type LoadedSkill } from '../services/agent/skill-registry'
+import {
+  getAllMentionTargets,
+  getAllSlashCommands,
+  parseSlashCommand,
+  parseMentions,
+  mentionsToToolCalls,
+} from '../services/agent/intent-router'
 import { toolRegistry } from '../services/agent/tool-registry'
 import type { ToolArtifact } from '../services/agent/tool-registry'
 import { createAgentExecutionContext } from '../services/agent/tools/project-context'
 import { createGenerationRuntime } from '../services/generation/generation-runtime'
+import { writingLanguageText } from '../shared/writing-language'
+import { useLocaleStore } from './locale-store'
+import { useProjectStore } from './project-store'
+import type { Locale } from '../i18n/types'
 
 export const AGENT_GENERATION_BUDGET = Object.freeze({
   maxAttempts: 8,
@@ -121,30 +131,37 @@ const generateTitle = (content: string): string => {
 }
 
 /** 生成 /help 命令的帮助文本 */
-const generateHelpText = (): string => {
+const generateHelpText = (locale: Locale): string => {
+  const text = (zhCN: string, enUS: string) => locale === 'en-US' ? enUS : zhCN
   const toolCount = toolRegistry.listAll().length
   const skillCount = skillRegistry.listAll().length
+  const commands = getAllSlashCommands(locale)
   const lines: string[] = [
-    '## AI小说作家 AI 助手 — 帮助',
+    text('## AI小说作家 AI 助手 — 帮助', '## AI Novel Writer Assistant — Help'),
     '',
-    '### 可用命令',
-    '- `/clear` — 清空当前对话',
-    '- `/new` — 开始新对话',
-    '- `/help` — 显示此帮助信息',
-    '- `/status` — 查看项目状态',
+    text('### 可用命令', '### Available commands'),
+    ...commands
+      .filter(command => command.source === 'builtin_command')
+      .map(command => `- \`/${command.name}\` — ${command.description}`),
     '',
-    '### @ 提及',
-    '输入 `@` 可引用项目上下文：故事架构、角色卡、蓝图、知识库等。',
+    text('### @ 提及', '### @ mentions'),
+    text(
+      '输入 `@` 可引用项目上下文：故事架构、角色卡、蓝图、知识库等。',
+      `Type \`@\` to reference project context: ${getAllMentionTargets(locale).map(target => target.displayName).join(', ')}.`,
+    ),
     '',
-    '### 可用工具',
-    '当前已加载 **' + toolCount + '** 个工具、**' + skillCount + '** 个 Skill。',
+    text('### 可用工具', '### Available tools'),
+    text(
+      `当前已加载 **${toolCount}** 个工具、**${skillCount}** 个 Skill。`,
+      `Currently loaded: **${toolCount}** tools and **${skillCount}** skills.`,
+    ),
     '',
-    '### Skill 命令',
+    text('### Skill 命令', '### Skill commands'),
   ]
-  for (const s of skillRegistry.listAll()) {
-    lines.push('- `/' + s.metadata.name + '` — ' + s.metadata.description)
+  for (const command of commands.filter(command => command.source === 'skill')) {
+    lines.push(`- \`/${command.name}\` — ${command.description}`)
   }
-  lines.push('', '有任何创作问题，直接问我即可！')
+  lines.push('', text('有任何创作问题，直接问我即可！', 'Ask me whenever you need help with your story.'))
   return lines.join('\n')
 }
 
@@ -156,6 +173,7 @@ const pendingConfirmations = new Map<string, {
 
 /** 当前活跃的 AbortController（用于取消 ReAct 循环） */
 let activeAbortController: AbortController | null = null
+let activeRequestUiLocale: Locale | null = null
 
 // ===== Zustand Store =====
 
@@ -187,7 +205,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
     const newConv: AgentConversation = {
       id: genId(),
-      title: '新对话',
+      title: useLocaleStore.getState().locale === 'en-US' ? 'New conversation' : '新对话',
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -257,6 +275,9 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   sendMessage: async (content) => {
     if (!content.trim() || get().generating) return
+    const requestLocale = useLocaleStore.getState().locale
+    const text = (zhCNText: string, enUSText: string) => requestLocale === 'en-US' ? enUSText : zhCNText
+    let skillInvocation: { skill: LoadedSkill; input: string } | null = null
 
     // 确保 Tool 已初始化
     get().initializeTools()
@@ -264,7 +285,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     // ===== P0-4: / 命令拦截 =====
     const trimmedContent = content.trim()
     if (trimmedContent.startsWith('/')) {
-      const { command, args } = parseSlashCommand(trimmedContent)
+      const { command, args } = parseSlashCommand(trimmedContent, requestLocale)
       if (command) {
         switch (command.name) {
           case 'clear': {
@@ -285,7 +306,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             // 构造帮助信息作为系统消息
             const helpConv = get().getActiveConversation() ?? get().createConversation()
             const helpMsg: AgentMessage = {
-              id: genId(), role: 'assistant', content: generateHelpText(), createdAt: Date.now(),
+              id: genId(), role: 'assistant', content: generateHelpText(requestLocale), createdAt: Date.now(),
             }
             set(state => ({
               conversations: state.conversations.map(c =>
@@ -302,12 +323,10 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           default:
             // Skill 命令：把 Skill 内容注入到用户消息中
             if (command.source === 'skill' && command.skill) {
-              let skillContent = command.skill.content
-              if (args) {
-                skillContent = skillContent.replace(/\$\{args\}/g, args).replace(/\$1/g, args)
+              skillInvocation = {
+                skill: command.skill,
+                input: args,
               }
-              // 改写 content：用户意图 + Skill 指令拼接
-              content = `[用户使用了 Skill: ${command.skill.metadata.displayName ?? command.name}]\n\n用户输入: ${args || '(无额外参数)'}\n\n---\n\n${skillContent}`
             }
             break
         }
@@ -320,6 +339,32 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       conv = get().createConversation()
     }
     const convId = conv.id
+    const modelId = conv.modelId ?? undefined
+    const executionContext = createAgentExecutionContext(modelId, requestLocale)
+    const runtimeProject = executionContext.projectSession
+      ? {
+          projectSession: executionContext.projectSession,
+          creativeStrategy: useProjectStore.getState().currentProject?.novelConfig.creativeStrategy ?? 'auto',
+        }
+      : {}
+    const modelText = (zhCNText: string, enUSText: string) => writingLanguageText(
+      executionContext.writingLanguage,
+      zhCNText,
+      enUSText,
+    )
+    if (skillInvocation) {
+      const skill = skillInvocation.skill
+      const displayName = executionContext.writingLanguage === 'en-US'
+        ? (skill.writingSkill.metadata.displayName ?? skill.metadata.name)
+        : (skill.metadata.displayName ?? skill.metadata.name)
+      let skillContent = skill.localizedContent?.[executionContext.writingLanguage] ?? skill.content
+      if (skillInvocation.input) {
+        skillContent = skillContent
+          .replace(/\$\{args\}/g, skillInvocation.input)
+          .replace(/\$1/g, skillInvocation.input)
+      }
+      content = `${modelText('[用户使用了 Skill:', '[The user invoked Skill:')} ${displayName}]\n\n${modelText('用户输入:', 'User input:')} ${skillInvocation.input || modelText('(无额外参数)', '(no additional arguments)')}\n\n---\n\n${skillContent}`
+    }
 
     // 构建用户消息
     const userMsg: AgentMessage = {
@@ -358,6 +403,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           : c
       ),
     }))
+    activeRequestUiLocale = requestLocale
 
     // 辅助函数：更新助手消息
     const updateAssistantMsg = (updater: (msg: AgentMessage) => AgentMessage) => {
@@ -377,16 +423,13 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
     try {
       const currentConv = get().conversations.find(c => c.id === convId)!
-      const modelId = currentConv.modelId ?? undefined
 
-      // @ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
-      const executionContext = createAgentExecutionContext(modelId)
       // 系统提示词、@ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
       const systemPrompt = await buildAgentSystemPrompt(currentConv.mode, executionContext)
 
       // ===== P1-5: @ 提及预取 =====
       let enrichedUserMessage = content.trim()
-      const mentions = parseMentions(enrichedUserMessage)
+      const mentions = parseMentions(enrichedUserMessage, requestLocale)
       if (mentions.length > 0) {
         const prefetchCalls = mentionsToToolCalls(mentions)
         const prefetchResults: string[] = []
@@ -396,7 +439,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             try {
               const result = await tool.execute(call.args, executionContext)
               if (result.success && result.content) {
-                prefetchResults.push(`[预加载上下文 @${call.toolName}]\n${result.content}`)
+                prefetchResults.push(`${modelText('[预加载上下文', '[Prefetched context')} @${call.toolName}]\n${result.content}`)
               }
             } catch {
               // 预取失败不阻塞主流程
@@ -404,7 +447,10 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           }
         }
         if (prefetchResults.length > 0) {
-          enrichedUserMessage = `${enrichedUserMessage}\n\n---\n以下是用户 @ 引用的上下文数据（已自动获取）：\n\n${prefetchResults.join('\n\n---\n\n')}`
+          enrichedUserMessage = `${enrichedUserMessage}\n\n---\n${modelText(
+            '以下是用户 @ 引用的上下文数据（已自动获取）：',
+            'The following context was requested with @ and fetched automatically:',
+          )}\n\n${prefetchResults.join('\n\n---\n\n')}`
         }
       }
 
@@ -422,6 +468,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       // 整个 ReAct 循环只冻结一个模型租约和一份调用/token/deadline预算。
       const runtime = await createGenerationRuntime({
         ...(modelId ? { modelId } : {}),
+        ...runtimeProject,
         budget: AGENT_GENERATION_BUDGET,
       })
       await runtime.execute(async ({ session }) => runAgentLoop(
@@ -442,11 +489,20 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           if (outcome.status !== 'completed') {
             switch (outcome.finishReason) {
               case 'length':
-                throw new Error('AI 输出达到模型最大长度，未将不完整内容写入对话或执行工具。请提高模型最大输出 Tokens 或缩短任务后重试。')
+                throw new Error(text(
+                  'AI 输出达到模型最大长度，未将不完整内容写入对话或执行工具。请提高模型最大输出 Tokens 或缩短任务后重试。',
+                  'The AI response reached the model output limit. Incomplete content was not added to the conversation and no tool was run. Increase the model output-token limit or shorten the task, then try again.',
+                ))
               case 'content_filter':
-                throw new Error('AI 输出因内容限制而未完成，未将不完整内容写入对话或执行工具。')
+                throw new Error(text(
+                  'AI 输出因内容限制而未完成，未将不完整内容写入对话或执行工具。',
+                  'The AI response was stopped by a content restriction. Incomplete content was not added to the conversation and no tool was run.',
+                ))
               default:
-                throw new Error('AI 未正常完成生成，未将不完整内容写入对话或执行工具。')
+                throw new Error(text(
+                  'AI 未正常完成生成，未将不完整内容写入对话或执行工具。',
+                  'The AI did not complete the response normally. Incomplete content was not added to the conversation and no tool was run.',
+                ))
             }
           }
           return outcome.content
@@ -489,6 +545,8 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             })
           },
           onDone: (fullText, toolCalls, artifacts) => {
+            activeAbortController = null
+            activeRequestUiLocale = null
             const cleanedText = cleanAgentVisibleText(fullText)
             updateAssistantMsg(m => ({
               ...m,
@@ -505,10 +563,12 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
               ),
             }))
           },
-          onError: (error) => {
+          onError: () => {
+            activeAbortController = null
+            activeRequestUiLocale = null
             updateAssistantMsg(m => ({
               ...m,
-              content: `❌ 生成失败：${error}`,
+              content: text('生成失败，请重试。', 'Generation failed. Please try again.'),
               streaming: false,
             }))
             set({ generating: false, activeRequestId: null })
@@ -517,10 +577,12 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         abortController.signal,
         executionContext,
       ))
-    } catch (error) {
+    } catch {
+      activeAbortController = null
+      activeRequestUiLocale = null
       updateAssistantMsg(m => ({
         ...m,
-        content: `❌ 发生异常：${String(error)}`,
+        content: text('生成失败，请重试。', 'Generation failed. Please try again.'),
         streaming: false,
       }))
       set({ generating: false, activeRequestId: null })
@@ -528,6 +590,10 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
   },
 
   cancelGeneration: async () => {
+    const cancelledUiLocale = activeRequestUiLocale ?? useLocaleStore.getState().locale
+    const stoppedText = cancelledUiLocale === 'en-US'
+      ? '\n\n_(Generation stopped)_'
+      : '\n\n_（已停止生成）_'
     // P1-7: 触发 AbortSignal，使 ReAct 循环真正中止
     if (activeAbortController) {
       activeAbortController.abort()
@@ -547,7 +613,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       conversations: state.conversations.map(c => ({
         ...c,
         messages: c.messages.map(m =>
-          m.streaming ? { ...m, streaming: false, content: m.content + '\n\n_（已停止生成）_' } : m
+          m.streaming ? { ...m, streaming: false, content: m.content + stoppedText } : m
         ),
       })),
     }))

@@ -41,6 +41,7 @@ tailwind.config.js.bak
 .pnpm-store/
 .workbuddy/
 .release-gate*.txt
+/.vitest-attachments/
 
 # 本地工具索引与会话
 .codegraph/

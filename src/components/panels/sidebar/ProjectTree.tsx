@@ -39,6 +39,8 @@ import {
   captureProjectSession,
   isProjectSessionCurrent,
 } from '../../project-session-gate'
+import { globalEventBus } from '../../../shared/event-bus'
+import { shouldRefreshBlueprints } from '../../editor/blueprint-refresh'
 
 const ARCH_FILE_EN: Record<string, { label: string; desc: string }> = {
   premise: { label: 'Premise', desc: 'Core premise and conflict' },
@@ -143,6 +145,17 @@ export default function ProjectTree() {
     })
   }, [currentProject?.path, projectSessionEpoch, refreshAll]) // eslint-disable-line react-hooks/exhaustive-deps -- currentProject 对象引用变化不每次都需重跑
 
+  useEffect(() => globalEventBus.on('ARCH_FILE_UPDATED', (payload) => {
+    if (!isProjectSessionCurrent(payload.projectSession)) return
+    void refreshAll()
+  }), [refreshAll])
+
+  useEffect(() => globalEventBus.on('REFRESH_RESOURCE', (payload) => {
+    if (!isProjectSessionCurrent(payload.projectSession)) return
+    if (!shouldRefreshBlueprints(payload.resources)) return
+    void refreshAll()
+  }), [refreshAll])
+
   // 工作流步骤状态或整体状态变化时刷新侧边栏（适配多任务）
   // 合并为单一 effect + 防抖，避免一次步骤完成同时触发多次刷新
   const workflowKey = activeRuns.map(r => `${r.id}:${r.status}|${r.steps.map(s => s.status).join(',')}`).join(';')
@@ -222,6 +235,12 @@ export default function ProjectTree() {
   // 故事架构进度
   const archDone = ARCH_FILES.filter(f => archStatus[f.key]).length
   const clearDisabled = activeRuns.length > 0
+  const openConfigEditor = () => useEditorStore.getState().openFile({
+    id: 'config',
+    name: text('小说配置', 'Novel configuration'),
+    type: 'config',
+    projectKey: currentProject.path,
+  })
 
   return (
     <div className="writer-project-tree min-h-full text-sm py-1">
@@ -268,40 +287,13 @@ export default function ProjectTree() {
         desc={text('基础参数与写作要求', 'Core parameters and writing guidance')}
         badge={configDone ? text('已完成', 'Complete') : text('待配置', 'Pending')}
         badgeDone={configDone}
-        onClick={() => {
-          const state = useEditorStore.getState()
-          const configTab = state.tabs.find(t => (
-            t.type === 'config' && t.projectKey === currentProject?.path
-          ))
-          if (configTab) {
-            state.setActiveTab(configTab.id)
-          } else {
-            state.openFile({
-              id: 'config',
-              name: '小说配置',
-              type: 'config',
-              projectKey: currentProject?.path,
-            })
-          }
-        }}
+        onClick={openConfigEditor}
         onContextMenu={e => showSidebarMenu([
           {
             key: 'open',
-            label: '打开小说配置',
+            label: text('打开小说配置', 'Open novel configuration'),
             icon: <FolderOpen size={13} />,
-            onClick: () => {
-              const state = useEditorStore.getState()
-              const configTab = state.tabs.find(t => (
-                t.type === 'config' && t.projectKey === currentProject?.path
-              ))
-              if (configTab) state.setActiveTab(configTab.id)
-              else state.openFile({
-                id: 'config',
-                name: '小说配置',
-                type: 'config',
-                projectKey: currentProject?.path,
-              })
-            },
+            onClick: openConfigEditor,
           },
         ], e)}
       />
@@ -323,13 +315,13 @@ export default function ProjectTree() {
               : undefined
         }
         badgeDone={blueprintCount >= nc.totalChapters}
-        onClick={() => openBuiltinEditor('chapter-card-editor', '章节蓝图', 'chapter-card')}
+        onClick={() => openBuiltinEditor('chapter-card-editor', text('章节蓝图', 'Chapter blueprints'), 'chapter-card')}
         onContextMenu={e => showSidebarMenu([
           {
             key: 'open',
-            label: '打开章节蓝图',
+            label: text('打开章节蓝图', 'Open chapter blueprints'),
             icon: <FolderOpen size={13} />,
-            onClick: () => openBuiltinEditor('chapter-card-editor', '章节蓝图', 'chapter-card'),
+            onClick: () => openBuiltinEditor('chapter-card-editor', text('章节蓝图', 'Chapter blueprints'), 'chapter-card'),
           },
         ], e)}
       />

@@ -14,6 +14,7 @@ import {
 } from '../workflow-project-session'
 import { assertMateriallyCompleteRevision } from './refinement-completeness'
 import { countDraftUnits } from '../../../shared/draft-units'
+import { throwIfSourceDraftChanged } from '../source-draft-changed'
 import {
   hasIncludedReviewItems,
   parseHumanConfirmedReviewSnapshot,
@@ -126,6 +127,21 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
         'The human-confirmed review snapshot does not match the saved record. Confirm it again and retry.',
       ))
     }
+    const sourceDraft = persistedSnapshot.sourceDraft
+    if (
+      !sourceDraft
+      || !persistedReview.sourceDraft
+      || persistedReview.sourceDraft.id !== sourceDraft.id
+      || persistedReview.sourceDraft.chapterNumber !== sourceDraft.chapterNumber
+      || persistedReview.sourceDraft.version !== sourceDraft.version
+      || persistedReview.sourceDraft.status !== sourceDraft.status
+      || persistedReview.sourceDraft.content !== sourceDraft.content
+    ) {
+      throw new Error(text(
+        '人工确认快照缺少可信的冻结源稿，未调用模型；请重新运行 AI 审稿。',
+        'The confirmed review has no trusted frozen source draft. The model was not called; run AI review again.',
+      ))
+    }
 
     const baseDraft = await readWorkflowDraftMeta(
       this.params.draftPath,
@@ -143,6 +159,27 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
       throw new Error(text(
         '人工确认快照不属于当前草稿版本，未调用模型。',
         'The human-confirmed review snapshot does not belong to the current draft version. The model was not called.',
+      ))
+    }
+    const currentDraft = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-get-full',
+      baseDraft.id,
+      context.projectPath,
+    )
+    this.assertNotCancelled(context)
+    if (
+      !currentDraft
+      || baseDraft.id !== sourceDraft.id
+      || baseDraft.chapterNumber !== sourceDraft.chapterNumber
+      || baseDraft.version !== sourceDraft.version
+      || baseDraft.status !== sourceDraft.status
+      || currentDraft.content !== sourceDraft.content
+      || this.params.draftContent !== sourceDraft.content
+    ) {
+      throw new Error(text(
+        '源草稿已变化，未调用模型；请重新运行 AI 审稿并确认清单。',
+        'The source draft changed. The model was not called; run AI review and confirm the checklist again.',
       ))
     }
     if (!hasIncludedReviewItems(persistedSnapshot)) {
@@ -188,6 +225,31 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
       // a transient UI field bypass the persisted confirmation snapshot.
       .withUserRefinePrompt('')
 
+    const sourceDraft = confirmedReview.sourceDraft
+    const currentDraft = sourceDraft
+      ? await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:draft-get-full',
+          sourceDraft.id,
+          context.projectPath,
+        )
+      : null
+    this.assertNotCancelled(context)
+    if (
+      !sourceDraft
+      || !currentDraft
+      || currentDraft.id !== sourceDraft.id
+      || currentDraft.chapterNumber !== sourceDraft.chapterNumber
+      || currentDraft.version !== sourceDraft.version
+      || currentDraft.status !== sourceDraft.status
+      || currentDraft.content !== sourceDraft.content
+    ) {
+      throw new Error(text(
+        '源草稿已变化，未调用模型；请重新运行 AI 审稿并确认清单。',
+        'The source draft changed. The model was not called; run AI review and confirm the checklist again.',
+      ))
+    }
+
     const refined = await this.callLLMWithBoundedCompletion(
       promptBuilder.build(),
       promptBuilder.getSystemRole(),
@@ -221,7 +283,9 @@ export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
       wordCount: countDraftUnits(cleanRefined),
       userPrompt: confirmedReview.authorGuidance || undefined,
       reviewSourceId,
+      expectedSource: confirmedReview.sourceDraft,
     }, context.projectPath)
+    throwIfSourceDraftChanged(createRes, workflowUiLocale(context), 'refine')
     requireIpcSuccess(createRes, text('创建审稿修订稿', 'Create review-based revision'))
     if (createRes.id === undefined) throw new Error(text(
       '创建审稿修订稿失败：未返回修订稿编号',

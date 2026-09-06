@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-describe('v0.9.2 release metadata', () => {
+describe('v1.0.0 release metadata', () => {
   it('uses the release version in package metadata', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }
-    expect(pkg.version).toBe('0.9.2')
+    expect(pkg.version).toBe('1.0.0')
   })
 
   it('resolves the release tag and exact seven-asset contract from the package version', () => {
@@ -13,15 +13,15 @@ describe('v0.9.2 release metadata', () => {
       releaseAssets: Array<{ name: string }>
     }
 
-    expect(`v${pkg.version}`).toBe('v0.9.2')
+    expect(`v${pkg.version}`).toBe('v1.0.0')
     expect(profile.releaseAssets.map(({ name }) => name.replaceAll('{version}', pkg.version))).toEqual([
-      'ai-novel-writer-setup-0.9.2.exe',
-      'ai-novel-writer-setup-0.9.2.exe.blockmap',
+      'ai-novel-writer-setup-1.0.0.exe',
+      'ai-novel-writer-setup-1.0.0.exe.blockmap',
       'latest.yml',
-      'ai-novel-writer-mac-arm64-0.9.2-installer.dmg',
-      'ai-novel-writer-mac-arm64-0.9.2-installer.dmg.sha256',
-      'ai-novel-writer-mac-x64-0.9.2-installer.dmg',
-      'ai-novel-writer-mac-x64-0.9.2-installer.dmg.sha256',
+      'ai-novel-writer-mac-arm64-1.0.0-installer.dmg',
+      'ai-novel-writer-mac-arm64-1.0.0-installer.dmg.sha256',
+      'ai-novel-writer-mac-x64-1.0.0-installer.dmg',
+      'ai-novel-writer-mac-x64-1.0.0-installer.dmg.sha256',
     ])
   })
 

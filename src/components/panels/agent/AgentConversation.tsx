@@ -6,6 +6,7 @@ import { APP_BRAND } from '../../../shared/brand'
 import AgentMessage from './AgentMessage'
 import AgentInputBox from './AgentInputBox'
 import { formatRelativeTime } from '../../../utils/time'
+import { useLocaleStore } from '../../../stores/locale-store'
 
 /**
  * 对话区域主组件
@@ -33,6 +34,7 @@ export default function AgentConversation() {
 // ===== 空状态视图 =====
 
 function EmptyState() {
+  const text = useLocaleStore(s => s.text)
   const { conversations, selectConversation } = useAgentStore()
   // 取最近 3 条历史会话（不包含当前空会话）
   const recentConvs = conversations
@@ -49,11 +51,11 @@ function EmptyState() {
       >
         {/* 标题 */}
         <div className="mb-1 pl-1 text-base font-semibold" style={{ color: 'var(--color-text)' }}>
-          {APP_BRAND.zhName}
+          {text(APP_BRAND.zhName, APP_BRAND.enName)}
         </div>
         {/* 副标题 */}
         <div className="mb-3 pl-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-          你的 AI 创作助手 — 支持 <code className="px-1 py-0.5 rounded text-[0.68rem]" style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-accent)' }}>/</code> 命令和 <code className="px-1 py-0.5 rounded text-[0.68rem]" style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-accent)' }}>@</code> 引用
+          {text('你的 AI 创作助手 — 支持', 'Your AI creative assistant — use')} <code className="px-1 py-0.5 rounded text-[0.68rem]" style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-accent)' }}>/</code> {text('命令和', 'commands and')} <code className="px-1 py-0.5 rounded text-[0.68rem]" style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-accent)' }}>@</code> {text('引用', 'mentions')}
         </div>
 
         {/* 输入框 */}
@@ -83,7 +85,7 @@ function EmptyState() {
                 onMouseEnter={e => (e.currentTarget.style.opacity = '0.8')}
                 onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
               >
-                查看全部对话
+                {text('查看全部对话', 'View all conversations')}
               </button>
             )}
           </div>
@@ -91,7 +93,7 @@ function EmptyState() {
 
         {/* 底部提示 */}
         <div className="pt-8 text-xs font-medium" style={{ color: 'var(--color-text-muted)' }}>
-          AI 生成内容仅供参考，重要信息请自行核实。
+          {text('AI 生成内容仅供参考，重要信息请自行核实。', 'AI-generated content is for reference only. Verify important information.')}
         </div>
       </div>
     </div>
@@ -101,6 +103,7 @@ function EmptyState() {
 // ===== 活跃对话视图 =====
 
 function ActiveConversation() {
+  const text = useLocaleStore(s => s.text)
   const { getActiveConversation, generating } = useAgentStore()
   const activeConv = getActiveConversation()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -165,7 +168,7 @@ function ActiveConversation() {
             border: '1px solid var(--color-border)',
             color: 'var(--color-text-secondary)',
           }}
-          title="回到底部"
+          title={text('回到底部', 'Back to bottom')}
           onMouseEnter={e => {
             e.currentTarget.style.borderColor = 'var(--color-accent)'
             e.currentTarget.style.color = 'var(--color-accent)'
@@ -199,6 +202,7 @@ function ActiveConversation() {
  * 右侧：打开 AI 输出面板按钮
  */
 function AgentToolbar() {
+  const text = useLocaleStore(s => s.text)
   const openRightPanel = useLayoutStore(s => s.openRightPanel)
 
   return (
@@ -212,7 +216,7 @@ function AgentToolbar() {
           color: 'var(--color-text-muted)',
           border: '1px solid var(--color-border)',
         }}
-        title="切换到 AI 输出面板"
+        title={text('切换到 AI 输出面板', 'Switch to AI output panel')}
         onMouseEnter={e => {
           e.currentTarget.style.backgroundColor = 'var(--color-hover)'
           e.currentTarget.style.color = 'var(--color-text)'
@@ -223,7 +227,7 @@ function AgentToolbar() {
         }}
       >
         <Workflow size={12} strokeWidth={1.75} />
-        AI 工作流
+        {text('AI 工作流', 'AI workflow')}
       </button>
     </div>
   )
@@ -232,6 +236,7 @@ function AgentToolbar() {
 // ===== 历史面板 =====
 
 function AgentHistoryPanel() {
+  const text = useLocaleStore(s => s.text)
   const { conversations, activeConversationId, selectConversation, deleteConversation, setShowHistory } = useAgentStore()
 
   // 按更新时间倒序排列
@@ -245,7 +250,7 @@ function AgentHistoryPanel() {
         style={{ borderBottom: '1px solid var(--color-border)' }}
       >
         <span className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-          全部对话
+          {text('全部对话', 'All conversations')}
         </span>
         <button
           onClick={() => setShowHistory(false)}
@@ -254,7 +259,7 @@ function AgentHistoryPanel() {
           onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-hover)')}
           onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
-          关闭
+          {text('关闭', 'Close')}
         </button>
       </div>
 
@@ -262,7 +267,7 @@ function AgentHistoryPanel() {
       <div className="flex-1 overflow-y-auto px-2 py-2">
         {sorted.length === 0 ? (
           <div className="flex items-center justify-center h-24 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            暂无对话记录
+            {text('暂无对话记录', 'No conversation history')}
           </div>
         ) : (
           sorted.map(conv => (
@@ -296,6 +301,8 @@ function RecentConversationItem({
   onClick: () => void
   onDelete: () => void
 }) {
+  const locale = useLocaleStore(s => s.locale)
+  const text = useLocaleStore(s => s.text)
   return (
     <button
       onClick={onClick}
@@ -323,7 +330,7 @@ function RecentConversationItem({
           }}
           className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded opacity-50 hover:opacity-100 transition-opacity"
           style={{ color: 'var(--color-text-secondary)' }}
-          title="删除对话"
+          title={text('删除对话', 'Delete conversation')}
         >
           <Trash2 size={12} />
         </button>
@@ -331,7 +338,7 @@ function RecentConversationItem({
           className="group-hover:hidden text-[0.7rem] whitespace-nowrap"
           style={{ color: 'var(--color-text-muted)', opacity: 0.6 }}
         >
-          {formatRelativeTime(updatedAt)}
+          {formatRelativeTime(updatedAt, locale)}
         </span>
       </div>
     </button>

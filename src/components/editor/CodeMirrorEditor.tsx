@@ -57,6 +57,7 @@ export default function CodeMirrorEditor({
   onChange,
   onSave,
   onCharCountChange,
+  placeholder,
   mode = 'document',
 }: CodeMirrorEditorProps) {
   const uiText = useLocaleStore(s => s.text)
@@ -92,6 +93,19 @@ export default function CodeMirrorEditor({
   const [activeAIAction, setActiveAIAction] = useState<string | null>(null)
   const [loadingDots, setLoadingDots] = useState('.')
   const [selectionRange, setSelectionRange] = useState<{ from: number, to: number } | null>(null)
+  const aiRequestSequenceRef = useRef(0)
+  const aiTargetRef = useRef<{
+    requestSequence: number
+    from: number
+    to: number
+    selectedText: string
+    documentText: string
+  } | null>(null)
+
+  useEffect(() => () => {
+    aiRequestSequenceRef.current += 1
+    aiTargetRef.current = null
+  }, [])
 
   useEffect(() => {
     if (aiResult === '') {
@@ -271,10 +285,19 @@ export default function CodeMirrorEditor({
   // AI 菜单处理（流式调用，实时显示生成内容）
   const handleAIAction = async (action: EditorAIAction) => {
     let runtime: Awaited<ReturnType<typeof createGenerationRuntime>> | null = null
+    let requestSequence: number | null = null
     try {
       if (!selectionRange || !editorRef.current?.view) return
       const view = editorRef.current.view
       const selectedText = view.state.sliceDoc(selectionRange.from, selectionRange.to)
+      requestSequence = ++aiRequestSequenceRef.current
+      aiTargetRef.current = {
+        requestSequence,
+        from: selectionRange.from,
+        to: selectionRange.to,
+        selectedText,
+        documentText: view.state.doc.toString(),
+      }
       const writingLanguage = resolveWritingLanguage(
         useProjectStore.getState().currentProject?.novelConfig.writingLanguage,
       )
@@ -303,13 +326,16 @@ export default function CodeMirrorEditor({
         ],
       }))
       if (outcome.status !== 'completed' || outcome.finishReason !== 'stop') {
+        if (requestSequence !== aiRequestSequenceRef.current) return
         setAiResult('')
         setAiError(uiText('生成未完整完成，结果不可应用', 'Generation did not complete; the result cannot be applied.'))
         return
       }
+      if (requestSequence !== aiRequestSequenceRef.current) return
       setAiResult(outcome.content)
     } catch (e) {
       console.error(e)
+      if (requestSequence !== aiRequestSequenceRef.current) return
       setAiResult('')
       setAiError(uiText('生成失败，结果不可应用', 'Generation failed; the result cannot be applied.'))
     } finally {
@@ -318,17 +344,40 @@ export default function CodeMirrorEditor({
   }
 
   const handleAcceptAI = () => {
-    if (selectionRange && aiResult && editorRef.current?.view) {
+    const target = aiTargetRef.current
+    if (target && aiResult && editorRef.current?.view) {
       const view = editorRef.current.view
+      if (!editable) {
+        setAiError(uiText(
+          '正文已变为只读，结果未应用；你仍可复制预览内容',
+          'The document is now read-only. The result was not applied; you can still copy the preview.',
+        ))
+        return
+      }
+      const targetStillCurrent = (
+        target.requestSequence === aiRequestSequenceRef.current
+        && view.state.doc.toString() === target.documentText
+        && view.state.sliceDoc(target.from, target.to) === target.selectedText
+      )
+      if (!targetStillCurrent) {
+        setAiError(uiText(
+          '正文或原目标已变化，结果未应用；你仍可复制预览内容',
+          'The document or original target changed. The result was not applied; you can still copy the preview.',
+        ))
+        return
+      }
       view.dispatch({
-        changes: { from: selectionRange.from, to: selectionRange.to, insert: aiResult }
+        changes: { from: target.from, to: target.to, insert: aiResult }
       })
     }
+    aiTargetRef.current = null
     setAiResult(null)
     setBubbleOpen(false)
   }
 
   const handleRejectAI = () => {
+    aiRequestSequenceRef.current += 1
+    aiTargetRef.current = null
     setAiResult(null)
     setAiError(null)
     setBubbleOpen(false)
@@ -382,6 +431,7 @@ export default function CodeMirrorEditor({
           <CodeMirror
             ref={editorRef}
             value={editorContent}
+            placeholder={placeholder}
             height="100%"
             className="h-full"
             theme={cmTheme}
@@ -417,12 +467,22 @@ export default function CodeMirrorEditor({
               </div>
               {/* 流式输入中显示动态内容 */}
               {aiError ? (
-                <div
-                  className="text-xs leading-relaxed mb-3"
-                  style={{ color: 'var(--color-error-text)' }}
-                >
-                  {aiError}
-                </div>
+                <>
+                  <div
+                    className="text-xs leading-relaxed mb-3"
+                    style={{ color: 'var(--color-error-text)' }}
+                  >
+                    {aiError}
+                  </div>
+                  {aiResult && (
+                    <div
+                      className="text-xs whitespace-pre-wrap leading-relaxed mb-3"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                    >
+                      {aiResult}
+                    </div>
+                  )}
+                </>
               ) : aiResult === '' ? (
                 <div
                   className="text-xs leading-relaxed mb-3"

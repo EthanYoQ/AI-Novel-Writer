@@ -23,14 +23,15 @@ import {
 } from '../../services/safe-call-diagnostic'
 
 /** 底部面板 Tab 名称映射 */
-const TAB_LABELS: Record<string, string> = {
-  tasks:  '任务',
-  log:    '日志',
-  models: '模型调用',
+const TAB_LABELS: Record<string, readonly [string, string]> = {
+  tasks:  ['任务', 'Tasks'],
+  log:    ['日志', 'Logs'],
+  models: ['模型调用', 'Model calls'],
 }
 
 /** 下方工具窗口 */
 export default function BottomPanel() {
+  const text = useLocaleStore(s => s.text)
   const bottomPanelOpen = useLayoutStore(s => s.bottomPanelOpen)
   const bottomTab = useLayoutStore(s => s.bottomTab)
   const toggleBottomPanel = useLayoutStore(s => s.toggleBottomPanel)
@@ -53,7 +54,8 @@ export default function BottomPanel() {
   if (!visible) return null
 
   const activeTab = bottomTab || 'tasks'
-  const label = TAB_LABELS[activeTab] ?? activeTab
+  const tabLabel = TAB_LABELS[activeTab]
+  const label = tabLabel ? text(...tabLabel) : activeTab
   // 任何活跃任务运行中
   const hasRunning = activeRuns.some(r => r.status === 'running')
   const hasWaiting = activeRuns.some(r => r.status === 'waiting')
@@ -108,7 +110,7 @@ export default function BottomPanel() {
         </div>
 
         {/* 右侧：关闭按钮 */}
-        <button onClick={toggleBottomPanel} title="关闭面板" className="icon-btn" style={{ width: 18, height: 18 }}>
+        <button onClick={toggleBottomPanel} title={text('关闭面板', 'Close panel')} className="icon-btn" style={{ width: 18, height: 18 }}>
           <X size={12} strokeWidth={1.5} />
         </button>
       </div>
@@ -127,6 +129,8 @@ export default function BottomPanel() {
 // ===== 任务视图（工作流进度主视图）— 支持多任务 =====
 
 function TaskRunView() {
+  const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
   const activeRuns = useWorkflowStore(s => s.activeRuns)
   const history = useWorkflowStore(s => s.history)
   const waitingRuns = useWorkflowStore(s => s.waitingRuns)
@@ -141,7 +145,7 @@ function TaskRunView() {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: 'var(--color-text-muted)' }}>
         <Zap size={24} style={{ opacity: 0.5 }} />
-        <span className="text-xs">暂无任务，AI 工作流启动后会在这里展示进度</span>
+        <span className="text-xs">{text('暂无任务，AI 工作流启动后会在这里展示进度', 'No tasks. AI workflow progress will appear here.')}</span>
       </div>
     )
   }
@@ -174,7 +178,7 @@ function TaskRunView() {
       {history.length > 0 && (
         <div className="flex-shrink-0">
           <div className="px-4 pt-3 pb-1 text-[0.68rem] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
-            历史任务
+            {text('历史任务', 'Task history')}
           </div>
           <div className="px-2 pb-2">
             {history.map((run) => (
@@ -197,7 +201,7 @@ function TaskRunView() {
                 </span>
                 {/* 时间 */}
                 <span className="text-[0.68rem] flex-shrink-0 w-14 text-right" style={{ color: 'var(--color-text-muted)' }}>
-                  {new Date(run.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                  {new Date(run.createdAt).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })}
                 </span>
               </div>
             ))}
@@ -227,7 +231,7 @@ function ActiveRunPanel({
   onPause: () => void
   onResume: () => void
 }) {
-  const text = useLocaleStore(s => s.text)
+  const text = (zhCNText: string, enUSText: string) => run.uiLocale === 'en-US' ? enUSText : zhCNText
   const [expanded, setExpanded] = useState(true)
 
   // 需要确认时自动展开
@@ -246,6 +250,7 @@ function ActiveRunPanel({
   const totalCount = run.steps.length
   const progress = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0
   const nextStepName = run.steps[waitingAfterStepIndex + 1]?.name
+  const confirmationPreview = run.steps[waitingAfterStepIndex]?.result
   const isActive = run.status === 'running' || run.status === 'waiting' || run.status === 'paused' || run.status === 'cancelling'
   const isBatchTask = run.type === 'batch_generate'
 
@@ -349,30 +354,51 @@ function ActiveRunPanel({
           {/* 步骤列表——扁平连接器风格 */}
           <div className="px-4">
             {run.steps.map((step, i) => (
-              <WorkflowStepItem key={step.id} step={step} index={i} isLast={i === run.steps.length - 1} />
+              <WorkflowStepItem key={step.id} step={step} index={i} isLast={i === run.steps.length - 1} uiLocale={run.uiLocale} />
             ))}
           </div>
 
           {/* ── 等待确认操作区 ── */}
           {waitingForConfirm && nextStepName && (
             <div
-              className="mx-4 mt-2 px-3 py-2 rounded flex items-center gap-2"
+              data-testid="workflow-confirmation-panel"
+              className="mx-4 mt-2 px-3 py-2 rounded flex flex-col gap-2"
               style={{
                 backgroundColor: 'rgba(var(--color-accent-rgb), 0.07)',
                 border: '1px solid rgba(var(--color-accent-rgb), 0.25)',
               }}
             >
-              <Clock size={11} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
-              <span className="text-xs flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
-                下一步：{nextStepName}
-              </span>
-              <button
-                onClick={onConfirm}
-                className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium flex-shrink-0"
-                style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
-              >
-                <Play size={10} /> 继续
-              </button>
+              {confirmationPreview && (
+                <pre
+                  data-testid="workflow-confirmation-preview"
+                  className="max-h-48 w-full overflow-auto whitespace-pre-wrap text-xs font-sans"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  {confirmationPreview}
+                </pre>
+              )}
+              <div className="flex w-full items-center gap-2">
+                <Clock size={11} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
+                <span className="text-xs flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
+                  {text('下一步：', 'Next: ')}{nextStepName}
+                </span>
+                <button
+                  data-testid="workflow-confirmation-cancel"
+                  onClick={onCancel}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium flex-shrink-0"
+                  style={{ color: 'var(--color-text-secondary)', border: '1px solid var(--color-border)' }}
+                >
+                  <X size={10} /> {text('取消工作流', 'Cancel workflow')}
+                </button>
+                <button
+                  data-testid="workflow-confirmation-confirm"
+                  onClick={onConfirm}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium flex-shrink-0"
+                  style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
+                >
+                  <Play size={10} /> {nextStepName}
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -389,14 +415,14 @@ function ActiveRunPanel({
         >
           <Clock size={11} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
           <span className="text-xs flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
-            下一步：{nextStepName}
+            {text('下一步：', 'Next: ')}{nextStepName}
           </span>
           <button
             onClick={(e) => { e.stopPropagation(); onConfirm() }}
             className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium flex-shrink-0"
             style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
           >
-            <Play size={10} /> 继续
+            <Play size={10} /> {text('继续', 'Continue')}
           </button>
         </div>
       )}
@@ -410,11 +436,14 @@ function WorkflowStepItem({
   step,
   index,
   isLast,
+  uiLocale,
 }: {
   step: WorkflowStep
   index: number
   isLast: boolean
+  uiLocale: WorkflowRun['uiLocale']
 }) {
+  const text = (zhCNText: string, enUSText: string) => uiLocale === 'en-US' ? enUSText : zhCNText
   const [expanded, setExpanded] = useState(false)
   const hasDetail = !!step.error || step.logs.length > 0
 
@@ -488,7 +517,7 @@ function WorkflowStepItem({
           )}
           {/* 完成耗时（若有时间戳）或简单标记 */}
           {step.status === 'skipped' && (
-            <span className="text-[0.68rem] flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>已跳过</span>
+            <span className="text-[0.68rem] flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>{text('已跳过', 'Skipped')}</span>
           )}
         </div>
 
@@ -550,6 +579,7 @@ function StepStatusIcon({ status }: { status: WorkflowStep['status'] }) {
 // ===== 日志视图 =====
 
 function LogsView() {
+  const text = useLocaleStore(s => s.text)
   const globalLogs = useWorkflowStore(s => s.globalLogs)
   const clearLogs = useWorkflowStore(s => s.clearLogs)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -571,23 +601,26 @@ function LogsView() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-end gap-1 px-2 py-1 flex-shrink-0">
-        <Button
-          variant="ghost" size="icon"
-          onClick={() => setAutoScroll(!autoScroll)}
-          title={autoScroll ? '自动滚动: 开' : '自动滚动: 关'}
-          className={autoScroll ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}
-        >
-          <ChevronsDown size={13} />
-        </Button>
-        <Button variant="ghost" size="icon" onClick={clearLogs} title="清空日志">
-          <Trash2 size={13} />
-        </Button>
+      <div className="flex items-center justify-between gap-1 px-2 py-1 flex-shrink-0">
+        <span className="text-[0.68rem] text-[var(--color-text-muted)]">AI Novel Writer v{__APP_VERSION__}</span>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost" size="icon"
+            onClick={() => setAutoScroll(!autoScroll)}
+            title={autoScroll ? text('自动滚动：开', 'Auto-scroll: on') : text('自动滚动：关', 'Auto-scroll: off')}
+            className={autoScroll ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}
+          >
+            <ChevronsDown size={13} />
+          </Button>
+          <Button variant="ghost" size="icon" onClick={clearLogs} title={text('清空日志', 'Clear logs')}>
+            <Trash2 size={13} />
+          </Button>
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 pb-2 font-mono text-xs leading-5">
         {globalLogs.length === 0 && (
-          <div className="text-center py-8 opacity-30">暂无日志</div>
+          <div className="text-center py-8 opacity-30">{text('暂无日志', 'No logs')}</div>
         )}
         {globalLogs.map((log, i) => (
           <div key={i} className="flex gap-2">
@@ -647,6 +680,7 @@ export function SafeDiagnosticCopyButton({
 
 function ModelsView() {
   const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
   const projectSession = useMemo(
     () => projectSessionContextFromProject(currentProject),
@@ -715,25 +749,25 @@ function ModelsView() {
           style={{ borderBottom: '1px solid var(--color-border)' }}
         >
           <div className="text-[0.7rem] text-[var(--color-text-muted)]">
-            <span className="font-bold text-sm text-[var(--color-text)]">{stats.totalCalls}</span> 次调用
+            <span className="font-bold text-sm text-[var(--color-text)]">{stats.totalCalls}</span> {text('次调用', 'calls')}
           </div>
           <div className="text-[0.7rem] text-[var(--color-text-muted)]">
-            <span className="font-bold text-sm text-[var(--color-text)]">{stats.totalTokens == null ? '未知' : `${(stats.totalTokens / 1000).toFixed(1)}k`}</span> Tokens
+            <span className="font-bold text-sm text-[var(--color-text)]">{stats.totalTokens == null ? text('未知', 'Unknown') : `${(stats.totalTokens / 1000).toFixed(1)}k`}</span> Tokens
             {stats.knownUsageCalls < stats.totalCalls && (
-              <span>（{stats.knownUsageCalls}/{stats.totalCalls} 次已报告）</span>
+              <span>{text(`（${stats.knownUsageCalls}/${stats.totalCalls} 次已报告）`, ` (${stats.knownUsageCalls}/${stats.totalCalls} reported)`)}</span>
             )}
           </div>
           <div className="text-[0.7rem] text-[var(--color-text-muted)]">
-            输入 <span className="font-mono text-[var(--color-text-secondary)]">{stats.totalPromptTokens == null ? '未知' : `${(stats.totalPromptTokens / 1000).toFixed(1)}k`}</span>
+            {text('输入', 'Input')} <span className="font-mono text-[var(--color-text-secondary)]">{stats.totalPromptTokens == null ? text('未知', 'Unknown') : `${(stats.totalPromptTokens / 1000).toFixed(1)}k`}</span>
           </div>
           <div className="text-[0.7rem] text-[var(--color-text-muted)]">
-            输出 <span className="font-mono text-[var(--color-text-secondary)]">{stats.totalCompletionTokens == null ? '未知' : `${(stats.totalCompletionTokens / 1000).toFixed(1)}k`}</span>
+            {text('输出', 'Output')} <span className="font-mono text-[var(--color-text-secondary)]">{stats.totalCompletionTokens == null ? text('未知', 'Unknown') : `${(stats.totalCompletionTokens / 1000).toFixed(1)}k`}</span>
           </div>
         </div>
       )}
       <div className="flex-1 overflow-y-auto font-mono text-xs">
         {history.length === 0 ? (
-          <div className="flex items-center justify-center h-full opacity-30 text-sm">暂无调用记录</div>
+          <div className="flex items-center justify-center h-full opacity-30 text-sm">{text('暂无调用记录', 'No model calls')}</div>
         ) : (
           <table className="w-full">
             <thead>
@@ -741,12 +775,12 @@ function ModelsView() {
                 className="text-[0.7rem] text-[var(--color-text-muted)]"
                 style={{ borderBottom: '1px solid var(--color-border)' }}
               >
-                <th className="text-left px-4 py-1 font-medium">时间</th>
-                <th className="text-left px-2 py-1 font-medium">模型</th>
-                <th className="text-left px-2 py-1 font-medium">用途</th>
+                <th className="text-left px-4 py-1 font-medium">{text('时间', 'Time')}</th>
+                <th className="text-left px-2 py-1 font-medium">{text('模型', 'Model')}</th>
+                <th className="text-left px-2 py-1 font-medium">{text('用途', 'Purpose')}</th>
                 <th className="text-right px-2 py-1 font-medium">Tokens</th>
-                <th className="text-right px-2 py-1 font-medium">耗时</th>
-                <th className="text-center px-2 py-1 font-medium">状态</th>
+                <th className="text-right px-2 py-1 font-medium">{text('耗时', 'Duration')}</th>
+                <th className="text-center px-2 py-1 font-medium">{text('状态', 'Status')}</th>
                 <th className="text-center px-2 py-1 font-medium">{text('诊断', 'Diagnostics')}</th>
               </tr>
             </thead>
@@ -758,11 +792,11 @@ function ModelsView() {
                   style={{ borderBottom: '1px solid var(--color-border)' }}
                 >
                   <td className="px-4 py-1 text-[var(--color-text-muted)]">
-                    {new Date(row.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    {new Date(row.createdAt).toLocaleString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                   </td>
                   <td className="px-2 py-1 text-[var(--color-text-secondary)]">{row.modelName || '-'}</td>
                   <td className="px-2 py-1 text-[var(--color-text-secondary)]">{row.purpose || '-'}</td>
-                  <td className="px-2 py-1 text-right text-[var(--color-text)]">{row.totalTokens == null ? '未知' : row.totalTokens.toLocaleString()}</td>
+                  <td className="px-2 py-1 text-right text-[var(--color-text)]">{row.totalTokens == null ? text('未知', 'Unknown') : row.totalTokens.toLocaleString(locale)}</td>
                   <td className="px-2 py-1 text-right text-[var(--color-text-muted)]">{(row.durationMs / 1000).toFixed(1)}s</td>
                   <td className="px-2 py-1 text-center">{row.success ? <CheckCircle2 size={12} style={{ color: 'var(--color-success)', display: 'inline' }} /> : <XCircle size={12} style={{ color: 'var(--color-error)', display: 'inline' }} />}</td>
                   <td className="px-2 py-0.5 text-center">

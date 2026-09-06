@@ -19,6 +19,7 @@ import {
 import { useProjectStore } from './project-store'
 import { requireIpcSuccess } from '../services/ipc-result'
 import { countDraftUnits } from '../shared/draft-units'
+import { useEditorStore } from './editor-store'
 
 let loadAllDraftsRequestSequence = 0
 
@@ -100,6 +101,7 @@ interface DraftState {
     filePath: string,
     revPath: string,
     mergedText: string,
+    expectedDraftContent: string,
     expectedProjectPath: string,
     expectedProjectSession?: ProjectSessionContext,
   ) => Promise<{ success: boolean; error?: string }>
@@ -296,6 +298,7 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
     filePath,
     revPath,
     mergedText,
+    expectedDraftContent,
     expectedProjectPath,
     expectedProjectSession,
   ) => {
@@ -304,29 +307,27 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
       if (!projectSession) {
         return { success: false, error: '项目已切换，已拒绝跨项目合并' }
       }
+      // 必须在第一次 await 前冻结标签；否则动态导入/身份解析期间的新输入
+      // 会被误当成提交基准，并在完成回执到达时被覆盖。
+      const editorState = useEditorStore.getState()
+      const targetTab = editorState.tabs.find(t =>
+        t.projectKey === expectedProjectPath && t.filePath === filePath
+      )
+      const editorSnapshot = targetTab
+        ? {
+            content: targetTab.content ?? expectedDraftContent,
+            contentRevision: targetTab.contentRevision ?? 0,
+          }
+        : undefined
 
       const versionMatch = filePath.match(/v(\d+)/)
       const version = versionMatch ? parseInt(versionMatch[1]) : 1
 
       let targetDraftId: number | undefined
-      // 统一通过 DB 更新草稿内容
       if (filePath.startsWith('vela://draft/') || filePath.startsWith('vela://manuscript/')) {
         const prefix = filePath.startsWith('vela://draft/') ? 'vela://draft/' : 'vela://manuscript/'
         targetDraftId = parseInt(filePath.replace(prefix, ''))
-        requireIpcSuccess(
-          await ipc.invokeWithProjectSession(
-            projectSession,
-            'db:draft-update-content',
-            targetDraftId,
-            mergedText,
-            countDraftUnits(mergedText),
-            expectedProjectPath,
-          ),
-          '保存合并后的草稿',
-        )
-        if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
       } else {
-        // 从 filePath 解析 chapterNumber 和 version，查出 draftId 再更新
         const chMatch = filePath.match(/ch(\d+)/)
         const chNum = chMatch ? parseInt(chMatch[1]) : chapterNumber
         if (chNum !== undefined) {
@@ -335,52 +336,14 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
           const target = drafts.find((draft) => draft.version === version)
           if (target) {
             targetDraftId = target.id
-            requireIpcSuccess(
-              await ipc.invokeWithProjectSession(
-                projectSession,
-                'db:draft-update-content',
-                targetDraftId,
-                mergedText,
-                countDraftUnits(mergedText),
-                expectedProjectPath,
-              ),
-              '保存合并后的草稿',
-            )
-            if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
           }
         }
       }
 
-      // 更新草稿状态为 revised（直接调用 DB，不走 legacy index）
-      if (targetDraftId && version) {
-        requireIpcSuccess(
-          await ipc.invokeWithProjectSession(
-            projectSession,
-            'db:draft-update-status',
-            targetDraftId,
-            'revised',
-            countDraftUnits(mergedText),
-            expectedProjectPath,
-          ),
-          '更新合并后的草稿状态',
-        )
-        if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
-      }
-
-      // 标记修稿为已合并
+      let revisionId: number | undefined
       const directRevisionId = /^vela:\/\/revision\/(\d+)$/.exec(revPath)?.[1]
       if (targetDraftId && directRevisionId) {
-        requireIpcSuccess(
-          await ipc.invokeWithProjectSession(
-            projectSession,
-            'db:revision-mark-merged',
-            Number(directRevisionId),
-            targetDraftId,
-            expectedProjectPath,
-          ),
-          '标记修订稿已合并',
-        )
-        if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
+        revisionId = Number(directRevisionId)
       } else if (targetDraftId) {
         const revisionMatch = revPath.match(/v(\d+)_r(\d+)/)
         const chapterMatch = chapterDir.match(/ch(\d+)$/)
@@ -402,44 +365,39 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
             )
             if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
             const revision = revisions.find(item => item.revisionIndex === Number(revisionMatch[2]))
-            if (revision) {
-              requireIpcSuccess(
-                await ipc.invokeWithProjectSession(
-                  projectSession,
-                  'db:revision-mark-merged',
-                  revision.id,
-                  targetDraftId,
-                  expectedProjectPath,
-                ),
-                '标记修订稿已合并',
-              )
-              if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
-            }
+            revisionId = revision?.id
           }
         }
       }
 
-      // 同步到编辑器（需通过 filePath 查找对应 tab 的 id）
-      const { useEditorStore } = await import('./editor-store')
-      if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
-      const editorState = useEditorStore.getState()
-      const targetTab = editorState.tabs.find(t =>
-        t.projectKey === expectedProjectPath && t.filePath === filePath
+      if (!targetDraftId || !revisionId) {
+        return { success: false, error: '无法确定待合并的草稿或修订身份' }
+      }
+
+      requireIpcSuccess(
+        await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:revision-merge',
+          {
+            revisionId,
+            targetDraftId,
+            expectedDraftContent,
+            mergedContent: mergedText,
+            wordCount: countDraftUnits(mergedText),
+          },
+          expectedProjectPath,
+        ),
+        '提交合并后的修订稿',
       )
-      if (targetTab) {
-        editorState.syncTabContent(targetTab.id, mergedText)
-        editorState.markTabSaved(targetTab.id)
+      if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
+
+      if (targetTab && editorSnapshot) {
+        editorState.settleMergedRevision(targetTab.id, editorSnapshot, mergedText)
       }
 
       if (chapterNumber !== undefined) {
         await get().loadChapterDrafts(chapterNumber, expectedProjectPath, projectSession)
       }
-      if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
-      await useProjectStore.getState().refreshFileTree(
-        expectedProjectPath,
-        undefined,
-        projectSession,
-      )
       if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
 
       return { success: true }

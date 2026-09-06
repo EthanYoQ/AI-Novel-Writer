@@ -25,6 +25,7 @@ type BlueprintData = DatabaseChannels['db:blueprint-get-all']['return'][number]
 export interface GenerateNarrativeThreadPlanCandidateInput {
   modelId: string
   writingLanguage: WritingLanguage
+  totalChapters: number
   blueprint: BlueprintData
   signal: AbortSignal
 }
@@ -75,7 +76,10 @@ function boundedText(value: unknown, maxLength: number): string | null {
   return text && text.length <= maxLength ? text : null
 }
 
-export function parseNarrativeThreadPlanCandidates(content: string): NarrativeThreadPlanCandidate[] {
+export function parseNarrativeThreadPlanCandidates(
+  content: string,
+  totalChapters: number,
+): NarrativeThreadPlanCandidate[] {
   return candidatesFromJson(content, MAX_PLAN_CANDIDATES).flatMap((candidate) => {
     const value = record(candidate)
     if (!value) return []
@@ -86,7 +90,9 @@ export function parseNarrativeThreadPlanCandidates(content: string): NarrativeTh
     const targetEndChapter = value.targetEndChapter
     if (!title || !type || !authorIntent
       || !Number.isSafeInteger(targetStartChapter) || (targetStartChapter as number) < 1
-      || !Number.isSafeInteger(targetEndChapter) || (targetEndChapter as number) < (targetStartChapter as number)) {
+      || (targetStartChapter as number) > totalChapters
+      || !Number.isSafeInteger(targetEndChapter) || (targetEndChapter as number) < (targetStartChapter as number)
+      || (targetEndChapter as number) > totalChapters) {
       return []
     }
     return [{
@@ -135,21 +141,32 @@ export function createNarrativeThreadCandidateGenerator(
               role: 'system',
               content: promptLanguageText(
                 input.writingLanguage,
-                '你是小说结构编辑。只从章节蓝图提出可供作者确认的伏笔与叙事线索计划，不得声称正文事件已经发生。优先提出 3–8 条真正有用的候选；不足 3 条时不要凑数。只输出 JSON 对象：{"candidates":[{"title":"","type":"","targetStartChapter":1,"targetEndChapter":1,"authorIntent":""}]}。最多 8 项。',
-                'You are a fiction structure editor. Propose foreshadowing and narrative-thread plans from the chapter blueprint for author confirmation. Never claim that a manuscript event has occurred. Prefer 3–8 genuinely useful candidates; do not pad the list when fewer than three are justified. Return only one JSON object: {"candidates":[{"title":"","type":"","targetStartChapter":1,"targetEndChapter":1,"authorIntent":""}]}. Maximum 8 items.',
+                `你是小说结构编辑。只从章节蓝图提出可供作者确认的伏笔与叙事线索计划，不得声称正文事件已经发生。所有章节号必须是 1..${input.totalChapters} 范围内的整数。优先提出 3–8 条真正有用的候选；不足 3 条时不要凑数。只输出 JSON 对象：{"candidates":[{"title":"","type":"","targetStartChapter":1,"targetEndChapter":1,"authorIntent":""}]}。最多 8 项。`,
+                `You are a fiction structure editor. Propose foreshadowing and narrative-thread plans from the chapter blueprint for author confirmation. Never claim that a manuscript event has occurred. Every chapter number must be an integer within 1..${input.totalChapters}. Prefer 3–8 genuinely useful candidates; do not pad the list when fewer than three are justified. Return only one JSON object: {"candidates":[{"title":"","type":"","targetStartChapter":1,"targetEndChapter":1,"authorIntent":""}]}. Maximum 8 items.`,
               ),
             },
             {
               role: 'user',
-              content: JSON.stringify(input.blueprint),
+              content: JSON.stringify({
+                totalChapters: input.totalChapters,
+                blueprint: input.blueprint,
+              }),
             },
           ],
         }, { signal: input.signal }))
         if (outcome.status !== 'completed' || outcome.finishReason !== 'stop') {
-          throw new Error('叙事线索计划候选生成未完整完成')
+          throw new Error(promptLanguageText(
+            input.writingLanguage,
+            '叙事线索计划候选生成未完整完成',
+            'Narrative-thread plan candidate generation did not complete.',
+          ))
         }
-        const candidates = parseNarrativeThreadPlanCandidates(outcome.content)
-        if (candidates.length === 0) throw new Error('模型未返回有效的叙事线索计划候选')
+        const candidates = parseNarrativeThreadPlanCandidates(outcome.content, input.totalChapters)
+        if (candidates.length === 0) throw new Error(promptLanguageText(
+          input.writingLanguage,
+          '模型未返回有效的叙事线索计划候选',
+          'The model did not return any valid narrative-thread plan candidates.',
+        ))
         return candidates
       } finally {
         await runtime.close().catch(() => {})
@@ -192,10 +209,18 @@ export function createNarrativeThreadCandidateGenerator(
           ],
         }, { signal: input.signal }))
         if (outcome.status !== 'completed' || outcome.finishReason !== 'stop') {
-          throw new Error('叙事线索事件候选生成未完整完成')
+          throw new Error(promptLanguageText(
+            input.writingLanguage,
+            '叙事线索事件候选生成未完整完成',
+            'Narrative-thread event candidate generation did not complete.',
+          ))
         }
         const candidates = parseNarrativeThreadEventCandidates(outcome.content, input.finalizedContent)
-        if (candidates.length === 0) throw new Error('模型未返回带有效定稿证据的事件候选')
+        if (candidates.length === 0) throw new Error(promptLanguageText(
+          input.writingLanguage,
+          '模型未返回带有效定稿证据的事件候选',
+          'The model did not return any event candidates with valid finalized-manuscript evidence.',
+        ))
         return candidates
       } finally {
         await runtime.close().catch(() => {})

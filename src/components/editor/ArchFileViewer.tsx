@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { Save, RefreshCw, Sparkles, Loader2, AlertTriangle, FileText } from 'lucide-react'
 import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
-import { useEditorStore } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
@@ -41,11 +41,11 @@ import {
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
 /** 与 Sidebar / WorldBuildingEditor 保持一致的架构文件元信息 */
-const ARCH_META: Record<ArchStepKey, { iconName: string; label: string; desc: string }> = {
-  premise: { iconName: 'target', label: '故事前提', desc: 'Logline、核心冲突、金手指定位' },
-  characters: { iconName: 'users', label: '角色图谱', desc: '角色弧光、关系网、矛盾交织' },
-  worldbuilding: { iconName: 'globe', label: '世界观', desc: '核心规则、阶层断层、深层危机' },
-  synopsis: { iconName: 'map', label: '情节大纲', desc: '三幕式情节骨架' },
+const ARCH_META: Record<ArchStepKey, { iconName: string; label: string; labelEn: string; desc: string; descEn: string }> = {
+  premise: { iconName: 'target', label: '故事前提', labelEn: 'Premise', desc: 'Logline、核心冲突、金手指定位', descEn: 'Logline, central conflict, and story hook' },
+  characters: { iconName: 'users', label: '角色图谱', labelEn: 'Character graph', desc: '角色弧光、关系网、矛盾交织', descEn: 'Character arcs, relationships, and conflicts' },
+  worldbuilding: { iconName: 'globe', label: '世界观', labelEn: 'Worldbuilding', desc: '核心规则、阶层断层、深层危机', descEn: 'Core rules, social divides, and deeper crises' },
+  synopsis: { iconName: 'map', label: '情节大纲', labelEn: 'Synopsis', desc: '三幕式情节骨架', descEn: 'Three-act story structure' },
 }
 
 /** 从文件路径推断出 ArchStepKey */
@@ -225,6 +225,16 @@ function ArchFileViewerSession({
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
   }, [filePath, isCharacterProjection, projectKey, tabId])
+
+  useEffect(() => {
+    if (isCharacterProjection) return
+    registerEditorExitSaveHandler({
+      tabId,
+      type: 'arch-file',
+      projectKey,
+      save: () => handleSave(currentContentRef.current),
+    })
+  }, [handleSave, isCharacterProjection, projectKey, tabId])
 
   /** 从 DB 重新加载（AI 生成后刷新用） */
   const handleReload = useCallback(async () => {
@@ -418,11 +428,11 @@ function ArchFileViewerSession({
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="flex-shrink-0" style={{ color: 'var(--color-text-muted)', opacity: 0.6 }}>{meta ? renderIcon(meta.iconName, 14) : <FileText size={14} />}</span>
           <span className="text-xs font-medium flex-shrink-0" style={{ color: 'var(--color-text-secondary)' }}>
-            {meta?.label ?? text('架构文档', 'Architecture document')}
+            {meta ? text(meta.label, meta.labelEn) : text('架构文档', 'Architecture document')}
           </span>
           {meta && (
             <span className="text-xs truncate hidden sm:inline" style={{ color: 'var(--color-text-muted)' }}>
-              — {meta.desc}
+              — {text(meta.desc, meta.descEn)}
             </span>
           )}
         </div>
@@ -433,16 +443,16 @@ function ArchFileViewerSession({
           {/* 字数 */}
           {charCount > 0 && (
             <span className="text-xs tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
-              {charCount.toLocaleString()} 字
+              {charCount.toLocaleString()} {text('字', 'characters')}
             </span>
           )}
 
           {/* 保存状态 */}
           {saving && (
-            <span className="text-xs" style={{ color: 'var(--color-accent)' }}>保存中...</span>
+            <span className="text-xs" style={{ color: 'var(--color-accent)' }}>{text('保存中...', 'Saving...')}</span>
           )}
           {isDirty && !saving && (
-            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: 'var(--color-warning)' }} title="有未保存的修改" />
+            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: 'var(--color-warning)' }} title={text('有未保存的修改', 'Unsaved changes')} />
           )}
 
           {/* 刷新按钮 */}
@@ -463,10 +473,10 @@ function ArchFileViewerSession({
               size="sm"
               onClick={() => handleSave(currentContentRef.current)}
               disabled={saving || !projectMatches}
-              title="保存（Cmd+S）"
+              title={text('保存（Cmd+S）', 'Save (Cmd+S)')}
             >
               <Save size={12} />
-              保存
+              {text('保存', 'Save')}
             </Button>
           )}
 
@@ -488,16 +498,18 @@ function ArchFileViewerSession({
           )}
 
           {/* AI 生成按钮 */}
-          {stepKey && (
+          {stepKey && meta && (
             <Button
               variant="ai"
               size="sm"
               onClick={handleOpenDialog}
               disabled={checkingArch || !projectMatches}
-              title={`AI ${generated ? '重新生成' : '生成'}「${meta?.label}」`}
+              title={generated
+                ? text(`AI 重新生成「${meta.label}」`, `AI Regenerate “${meta.labelEn}”`)
+                : text(`AI 生成「${meta.label}」`, `AI Generate “${meta.labelEn}”`)}
             >
               {checkingArch ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-              {generated ? 'AI 重新生成' : 'AI 生成'}
+              {generated ? text('AI 重新生成', 'AI Regenerate') : text('AI 生成', 'AI Generate')}
             </Button>
           )}
         </div>
@@ -575,7 +587,10 @@ function ArchFileViewerSession({
           onSave={isCharacterProjection ? undefined : handleSave}
           onCharCountChange={setCharCount}
           hideStatusBar
-          placeholder="尚未生成内容，点击右上角「AI 生成」或直接在此编辑..."
+          placeholder={text(
+            '尚未生成内容，点击右上角「AI 生成」或直接在此编辑...',
+            'No content yet. Click “AI Generate” in the top-right or start editing here...',
+          )}
         />
       </div>
 

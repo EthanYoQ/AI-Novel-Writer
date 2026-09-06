@@ -270,4 +270,48 @@ describe('external file grant IPC contract', () => {
     )
     expect(targetExists).toBe(true)
   })
+
+  it.each(['not_committed', 'unknown'] as const)(
+    '外部原子写异常保留 $commitState，且不泄露底层错误',
+    async (commitState) => {
+      const exportDirectory = path.join(temporaryRoot, `exports-${commitState}`)
+      fs.mkdirSync(exportDirectory, { recursive: true })
+      const grants = new ExternalFileGrantService({
+        now: () => 1_000,
+        newGrantId: () => `${commitState}-grant`,
+      })
+      const grant = grants.issueDirectory({
+        webContentsId: 17,
+        directoryPath: exportDirectory,
+        operations: ['write', 'create'],
+        ttlMs: 60_000,
+        maxUses: 10,
+      })
+      const fileSystem = {
+        readText: vi.fn(),
+        writeTextAtomically: vi.fn(async () => {
+          throw Object.assign(new Error('SENSITIVE C:\\authors\\private.txt'), { commitState })
+        }),
+        mkdir: vi.fn(),
+        exists: vi.fn(async () => false),
+        listDirectory: vi.fn(),
+      } as unknown as WindowsSafeFileSystem
+      mocks.handlers.clear()
+      registerExternalFileGrantController(grants, fileSystem)
+
+      const result = await handler('fs:grant-write-file')(
+        event(),
+        grant.grantId,
+        'chapter.txt',
+        'new content',
+      )
+
+      expect(result).toEqual({
+        success: false,
+        commitState,
+        error: '外部文件授权操作失败。',
+      })
+      expect(JSON.stringify(result)).not.toContain('SENSITIVE')
+    },
+  )
 })

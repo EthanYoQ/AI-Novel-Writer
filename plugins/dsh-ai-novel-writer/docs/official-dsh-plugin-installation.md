@@ -83,22 +83,21 @@ dsh --profile web --dump-config
 
 所以本地源码链接表达的是“插件代码来自这个项目 checkout”，不是“插件只对这个项目可见”。若需要隔离，应创建单独命名 profile，而不是依赖 workspace 路径。
 
-## Windows 含空格 checkout：文档与当前实现不一致
+## Windows 含空格 checkout：固定版本观察
 
 官方 reference 明确称相对 path spec 会相对于调用目录锚定，仓库测试也断言从 checkout 执行 `dsh plugin --profile <name> add .` 能安装并激活 bundle。[实现](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/apps/cli/src/plugin.ts#L93-L157) 确实先把 `.` 解析为绝对路径，但 Windows 分支随后以 `shell: true` 把参数交给 pnpm；当前测试使用的临时 checkout 路径不含空格，未覆盖重新分词风险。[对应 built-bin 测试](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/apps/cli/tests/built-bin.e2e.ts#L625-L657)。
 
-在固定版本上，从 `C:\Vibe Coding Project\...\dsh-ai-novel-writer` 运行以下命令进行了隔离复现：
+在上文固定的 DeepSeek Harness 版本上，从路径含空格的 checkout 运行以下命令进行了隔离复现：
 
 ```powershell
 dsh plugin --profile web add . --ignore-scripts
 ```
 
-命令失败：pnpm 把绝对路径拆成 `C:/Vibe`、`Coding` 等多个参数，并尝试从 registry 获取名为 `Coding` 的包。结论是：**当前 Windows 实现不能可靠满足文档对含空格 checkout 的 `add .` 承诺。** 在修复参数边界并增加含空格 built-bin 测试前，可使用 registry/Git spec，或把已构建 tarball 放到不含空格的临时路径后安装。后者是本次调研给出的规避方式，不是官方文档承诺。本次为了验证开发期源码链接，使用了与资格 runner 相同的程序化 argv 包装：传给 DSH CLI 的 path argument 自身保留一层字面双引号，安装后 profile 记录为 `link:` 依赖。该做法证明了二次 shell 解析是失败点，但不应替代上游修复或作为普通用户命令发布。
+命令失败：pnpm 把绝对路径按空格拆成多个参数，并尝试从 registry 获取其中的片段。该固定版本的 Windows 实现因此不能可靠满足文档对含空格 checkout 的 `add .` 承诺。在上游修复参数边界并增加含空格 built-bin 测试前，可使用 registry/Git spec，或把已构建 tarball 放到不含空格的临时路径后安装。后者是观察时的规避方式，不是官方文档承诺。资格 runner 使用程序化 argv 包装验证了 `link:` 依赖可以加载，但该包装不应作为普通用户命令发布。
 
-## 本机验证事实
+## 历史验证边界
 
-- 当前 `web` profile 的 `@ethanyoq/dsh-ai-novel-writer` 依赖实际链接到 `C:/Vibe Coding Project/AI Novel/.worktrees/codex-dsh-ai-novel-plugin/plugins/dsh-ai-novel-writer`，且 bundle 列表包含该插件。这证明 profile 可以从含空格的本地链接加载插件，也记录了本次程序化 argv 规避方式的结果；它不证明普通 shell 中的 `add .` 路径可用。
-- 配置过的本机 DSH 已用 GLM-5.2 完成一次真实小说插件会话，说明模型、会话与已加载插件的运行链路能够工作。本事实不记录 API key、环境变量值或其他凭据。
+2026-08-24 的隔离验证证明，程序化 argv 包装可以从含空格路径加载本地 `link:` 插件，并可完成一次配置在线模型的小说插件会话。该结果只证明当时固定版本和隔离 profile 的链路，不代表当前本机 profile、Worktree 路径或上游 CLI 行为；普通 shell 的 `add .` 仍须按上一节单独验证。
 
 ## 一手来源
 

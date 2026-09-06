@@ -1,6 +1,10 @@
+import type { BlueprintNewCharacterCandidate } from './blueprint-semantic-contract'
+import { characterRosterIdentityKey } from './character-roster'
+
 export interface BlueprintCharacterSyncFactSource {
   chapterNumber: number
   characters: readonly string[]
+  newCharacterCandidates?: readonly BlueprintNewCharacterCandidate[]
   relationshipHints?: unknown
 }
 
@@ -19,10 +23,6 @@ interface RelationshipFact {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function nameKey(value: string): string {
-  return value.trim().toLocaleLowerCase('en-US')
 }
 
 function relationshipFacts(hints: unknown): RelationshipFact[] {
@@ -49,26 +49,31 @@ function relationshipSatisfied(
   targetName: string,
   relation: string,
 ): boolean {
-  const targetKey = nameKey(targetName)
+  const targetKey = characterRosterIdentityKey(targetName)
   return source.relationships.some(edge => (
-    nameKey(edge.target) === targetKey && edge.relation.trim() === relation
+    characterRosterIdentityKey(edge.target) === targetKey && edge.relation.trim() === relation
   ))
 }
 
 /**
- * Verifies relationship enrichment for characters that already exist in the
- * authoritative roster. Blueprint-only names are planning references and are
- * deliberately not required to become character cards.
+ * Verifies declared reusable candidates and relationship enrichment. Ordinary
+ * blueprint-only names remain chapter-scoped planning references and are not
+ * required to become character cards.
  */
 export function blueprintCharacterSyncFactError(
   blueprints: readonly BlueprintCharacterSyncFactSource[],
   roster: readonly BlueprintCharacterSyncRosterFact[],
 ): string | undefined {
-  const rosterByName = new Map(roster.map(entry => [nameKey(entry.name), entry] as const))
+  const rosterByName = new Map(roster.map(entry => [characterRosterIdentityKey(entry.name), entry] as const))
   for (const blueprint of blueprints) {
+    for (const candidate of blueprint.newCharacterCandidates ?? []) {
+      if (!rosterByName.has(characterRosterIdentityKey(candidate.name))) {
+        return `角色名单缺少第${blueprint.chapterNumber}章蓝图声明的新角色候选「${candidate.name}」`
+      }
+    }
     for (const fact of relationshipFacts(blueprint.relationshipHints)) {
-      const from = rosterByName.get(nameKey(fact.from))
-      const to = rosterByName.get(nameKey(fact.to))
+      const from = rosterByName.get(characterRosterIdentityKey(fact.from))
+      const to = rosterByName.get(characterRosterIdentityKey(fact.to))
       if (!from || !to) continue
       // Legacy relationship prose remains authoritative read-only evidence.
       // Blueprint sync must not force a lossy conversion merely to close its

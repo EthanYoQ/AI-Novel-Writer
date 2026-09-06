@@ -6,7 +6,10 @@
  * - 助手消息：左侧 Markdown 风格渲染
  * - Tool 调用：ToolCallBlock / ConfirmCard / ArtifactCard
  */
+import { useState } from 'react'
+import { Check, Copy } from 'lucide-react'
 import type { AgentMessage as AgentMessageType } from '../../../stores/agent-store'
+import { useLocaleStore } from '../../../stores/locale-store'
 import MarkdownContent, { StreamingCursor } from '../../ui/MarkdownContent'
 import ToolCallBlock from './ToolCallBlock'
 import ConfirmCard from './ConfirmCard'
@@ -19,10 +22,38 @@ interface Props {
 
 export default function AgentMessage({ message }: Props) {
   const { role, content, streaming, toolCalls, artifacts } = message
+  const text = useLocaleStore(state => state.text)
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const copyMessage = async () => {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopyState('copied')
+    } catch {
+      setCopyState('failed')
+    }
+  }
+  const copyButton = (
+    <>
+      <button
+        type="button"
+        aria-label={text('复制消息', 'Copy message')}
+        title={copyState === 'copied'
+          ? text('已复制', 'Copied')
+          : text('复制消息', 'Copy message')}
+        disabled={!content || streaming}
+        onClick={() => void copyMessage()}
+        className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-0"
+        style={{ color: 'var(--color-text-muted)', background: 'var(--color-hover)' }}
+      >
+        {copyState === 'copied' ? <Check size={13} /> : <Copy size={13} />}
+      </button>
+      {copyState === 'failed' && <span role="alert" className="sr-only">{text('无法复制这条消息', 'Could not copy this message')}</span>}
+    </>
+  )
 
   if (role === 'user') {
     return (
-      <div className="flex justify-end mb-2">
+      <div className="group relative flex justify-end mb-2">
         <div
           className="max-w-[88%] px-3 py-2 rounded-2xl text-xs leading-relaxed break-words whitespace-pre-wrap"
           style={{
@@ -33,13 +64,14 @@ export default function AgentMessage({ message }: Props) {
         >
           {content}
         </div>
+        {copyButton}
       </div>
     )
   }
 
   // 助手消息
   return (
-    <div className="flex justify-start mb-2">
+    <div className="group relative flex justify-start mb-2">
       <div
         className="max-w-full text-xs leading-relaxed break-words w-full"
         style={{ color: 'var(--color-text)' }}
@@ -75,6 +107,7 @@ export default function AgentMessage({ message }: Props) {
           </div>
         )}
       </div>
+      {copyButton}
     </div>
   )
 }

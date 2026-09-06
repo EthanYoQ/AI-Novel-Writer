@@ -1,10 +1,17 @@
 import { StructuredContractDiagnostic } from './structured-contract-diagnostic'
+import { CHARACTER_ROLES, type CharacterRole } from './character-role'
 import type { WritingLanguage } from './writing-language'
 
 export interface BlueprintRelationshipFact {
   from: string
   to: string
   relation: string
+}
+
+/** A recurring named character first introduced by this blueprint. */
+export interface BlueprintNewCharacterCandidate {
+  name: string
+  role: CharacterRole
 }
 
 /** Stable provenance input; validation code and qualification hash this same manifest. */
@@ -29,9 +36,9 @@ export const BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST = Object.freeze({
   } as const),
   outputLimits: Object.freeze({
     titleCharacters: 60,
-    roleCharacters: 80,
-    purposeCharacters: 160,
-    keyEventsCharacters: 400,
+    roleCharacters: 120,
+    purposeCharacters: 240,
+    keyEventsCharacters: 1_200,
     suspenseHookCharacters: 160,
     characterItems: 12,
     characterNameCharacters: 32,
@@ -46,19 +53,25 @@ export function blueprintSemanticGenerationContract(writingLanguage: WritingLang
     return `[Immutable blueprint JSON contract]
 Output {"blueprints":[...]} only. Every item must contain all of these fields: ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.requiredFields.join(', ')}.
 chapterNumber must cover every target chapter exactly once, without duplicates or out-of-range values. title, role, purpose, keyEvents, and suspenseHook must be non-empty strings.
+suspenseHook is always required; even without a mystery, state one concrete unresolved decision, threat, revelation, or consequence that creates forward pressure.
 characters must be an array containing at least one unique, non-empty full character name.
+newCharacterCandidates is optional. When present, include only important named characters first introduced by this blueprint and expected to recur. Every item must contain name and role, name must exactly copy one entry from characters, and role must be protagonist, antagonist, supporting, or minor. Omit it or use [] when there are no candidates; never include incidental figures.
 relationships is required and may be []; every item must contain non-empty from, to, and relation fields. from and to must exactly copy full names from the same item's characters array and may not self-reference.
+Keep keyEvents concise; aim for no more than 900 characters and never exceed the hard maximum of 1,200.
 Limits: title ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters} characters; role ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.roleCharacters}; purpose ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.purposeCharacters}; keyEvents ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters}; suspenseHook ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters}; characters at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems} items with names at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} characters; relationships at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipItems} items with relation at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} characters.
-Do not omit fields, combine chapters, rename fields, explain, or output Markdown or code fences.`
+Do not omit required fields, combine chapters, rename fields, explain, or output Markdown or code fences.`
   }
   return `【不可变蓝图 JSON 合同】
 只输出 {"blueprints":[...]}，每项必须完整包含：${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.requiredFields.join('、')}。
 chapterNumber 必须覆盖本批每个目标章节且不得重复或越界；title、role、purpose、keyEvents、suspenseHook 必须是非空字符串。
+suspenseHook 始终必填；即使本章没有谜团，也要写明一个制造推进压力的具体未决决定、威胁、揭示或后果。
 characters 必须是至少含一个唯一非空角色名的字符串数组。
+newCharacterCandidates 可选；提供时只声明由本章首次引入且预计后续复用的重要具名角色，每项必须包含 name、role，name 必须逐字复制 characters 中的一个完整姓名，role 只能是 protagonist、antagonist、supporting、minor。无候选时可省略或传 []，一次性路人不得声明为候选。
 relationships 必须是数组，无关系时传 []；每项必须含非空 from、to、relation，from/to 必须精确出现在同项 characters 中且不能自指。
 from/to 必须逐字复制同一项 characters 中的完整字符串；任一端点不在 characters 时，删除该关系或使用 []，不得发明别名、简称或补写角色。
+keyEvents 保持精炼，目标为 100–150 字符，绝不得超过 1200 字符硬上限。
 每项长度上限：title ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters} 字符、role ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.roleCharacters} 字符、purpose ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.purposeCharacters} 字符、keyEvents ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters} 字符、suspenseHook ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters} 字符；characters 最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems} 项且姓名最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} 字符；relationships 最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipItems} 项且 relation 最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} 字符。
-不得省略字段、合并章节、输出近义字段、解释、Markdown 或代码围栏。`
+不得省略必填字段、合并章节、输出近义字段、解释、Markdown 或代码围栏。`
 }
 
 /**
@@ -72,6 +85,7 @@ export interface BlueprintSemanticItem {
   purpose: string
   keyEvents: string
   characters: string[]
+  newCharacterCandidates: BlueprintNewCharacterCandidate[]
   relationshipHints: BlueprintRelationshipFact[]
   suspenseHook: string
 }
@@ -99,10 +113,11 @@ function characterCount(value: string): number {
 function requiredText(value: unknown, path: string, maxCharacters?: number): string {
   if (value === undefined) throw new StructuredContractDiagnostic('missing_field', path)
   if (typeof value !== 'string') throw new StructuredContractDiagnostic('invalid_type', path)
-  if (!value.trim()) throw new StructuredContractDiagnostic('invalid_value', path)
+  if (!value.trim()) throw new StructuredContractDiagnostic('empty_value', path)
   const normalized = value.trim()
-  if (maxCharacters !== undefined && characterCount(normalized) > maxCharacters) {
-    throw new StructuredContractDiagnostic('invalid_value', path)
+  const actualCharacters = characterCount(normalized)
+  if (maxCharacters !== undefined && actualCharacters > maxCharacters) {
+    throw new StructuredContractDiagnostic('value_too_long', path, actualCharacters, maxCharacters)
   }
   return normalized
 }
@@ -177,6 +192,39 @@ function normalizedRelationships(
   })
 }
 
+function normalizedNewCharacterCandidates(
+  value: unknown,
+  path: string,
+  characters: readonly string[],
+): BlueprintNewCharacterCandidate[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new StructuredContractDiagnostic('invalid_type', path)
+  if (value.length > BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems) {
+    throw new StructuredContractDiagnostic('invalid_value', path)
+  }
+  const characterSet = new Set(characters)
+  const seen = new Set<string>()
+  return value.map((candidate, index) => {
+    const candidatePath = `${path}[${index}]`
+    if (!isRecord(candidate)) throw new StructuredContractDiagnostic('invalid_type', candidatePath)
+    const name = requiredText(
+      candidate.name,
+      `${candidatePath}.name`,
+      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters,
+    )
+    if (!characterSet.has(name)) {
+      throw new StructuredContractDiagnostic('invalid_value', `${candidatePath}.name`)
+    }
+    if (seen.has(name)) throw new StructuredContractDiagnostic('duplicate_item', path)
+    seen.add(name)
+    const role = requiredText(candidate.role, `${candidatePath}.role`)
+    if (!CHARACTER_ROLES.includes(role as CharacterRole)) {
+      throw new StructuredContractDiagnostic('invalid_value', `${candidatePath}.role`)
+    }
+    return { name, role: role as CharacterRole }
+  })
+}
+
 export function validateBlueprintSemanticItem(value: unknown): string | undefined {
   try {
     normalizeBlueprintSemanticItem(value)
@@ -190,6 +238,11 @@ export function normalizeBlueprintSemanticItem(value: unknown, path = 'blueprint
   if (!isRecord(value)) throw new StructuredContractDiagnostic('invalid_type', path)
   const chapterNumber = normalizedChapterNumber(value, path)
   const characters = normalizedCharacters(value.characters, `${path}.characters`)
+  const newCharacterCandidates = normalizedNewCharacterCandidates(
+    fieldValue(value, 'newCharacterCandidates', ['new_character_candidates']),
+    `${path}.newCharacterCandidates`,
+    characters,
+  )
   const relationshipHints = normalizedRelationships(
     fieldValue(value, 'relationships', ['relationshipHints', 'relations']),
     `${path}.relationships`,
@@ -206,6 +259,7 @@ export function normalizeBlueprintSemanticItem(value: unknown, path = 'blueprint
       BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters,
     ),
     characters,
+    newCharacterCandidates,
     relationshipHints,
     suspenseHook: requiredText(
       fieldValue(value, 'suspenseHook', ['suspense_hook']),

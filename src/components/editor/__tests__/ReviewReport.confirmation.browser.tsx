@@ -41,6 +41,13 @@ const RAW_AI_REPORT = JSON.stringify({
     },
   ],
 })
+const REVIEW_SOURCE_DRAFT = Object.freeze({
+  id: 1,
+  chapterNumber: 1,
+  version: 1,
+  status: 'draft' as const,
+  content: '这是尚未合并的原始草稿正文。',
+})
 
 const originalLLMState = useLLMStore.getState()
 const originalLocaleState = useLocaleStore.getState()
@@ -98,7 +105,8 @@ function model(overrides: Partial<ModelProfile>): ModelProfile {
   }
 }
 
-function installIpc(confirmationId: number) {
+function installIpc(confirmationId: number, currentDraftContent: string = REVIEW_SOURCE_DRAFT.content) {
+  let draftContent = currentDraftContent
   let latestReview: {
     id: number
     baseDraftId: number
@@ -118,9 +126,20 @@ function installIpc(confirmationId: number) {
         source: 'write',
       }
     }
-    if (channel === 'db:draft-get-full') return { id: 1, content: '这是尚未合并的原始草稿正文。' }
+    if (channel === 'db:draft-get-full') return { id: 1, content: draftContent }
     if (channel === 'db:review-next-index') return 2
     if (channel === 'db:review-create') return { success: true, id: confirmationId }
+    if (channel === 'db:review-get-full') {
+      return {
+        id: 41,
+        baseDraftId: 1,
+        reviewIndex: 1,
+        contentId: 100,
+        createdAt: '2026-08-28T00:00:00.000Z',
+        content: RAW_AI_REPORT,
+        sourceDraft: REVIEW_SOURCE_DRAFT,
+      }
+    }
     if (channel === 'db:review-get-latest') return latestReview
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
@@ -137,6 +156,9 @@ function installIpc(confirmationId: number) {
     },
   })
   return {
+    setDraftContent(content: string) {
+      draftContent = content
+    },
     setLatestReview(content: string) {
       latestReview = {
         id: confirmationId,
@@ -153,7 +175,12 @@ function installIpc(confirmationId: number) {
 function confirmationCreateParams() {
   const call = invoke.mock.calls.find(([channel]) => channel === 'db:review-create')
   if (!call) throw new Error('Expected the confirmed review snapshot to be persisted')
-  return call[1] as { baseDraftId: number; reviewIndex: number; content: string }
+  return call[1] as {
+    baseDraftId: number
+    reviewIndex: number
+    content: string
+    expectedSource: typeof REVIEW_SOURCE_DRAFT
+  }
 }
 
 function selectedModel(): HTMLSelectElement {
@@ -269,8 +296,10 @@ describe('ReviewReport human-confirmed revision flow', () => {
     const confirmation = confirmationCreateParams()
     const snapshot = parseHumanConfirmedReviewSnapshot(confirmation.content)
     expect(confirmation).toMatchObject({ baseDraftId: 1, reviewIndex: 2 })
+    expect(confirmation.expectedSource).toEqual(REVIEW_SOURCE_DRAFT)
     expect(snapshot).toMatchObject({
       sourceReviewId: 41,
+      sourceDraft: REVIEW_SOURCE_DRAFT,
       authorGuidance: '保留第一段的悬念，不要扩写背景设定。',
     })
     expect(snapshot?.items).toEqual(expect.arrayContaining([
@@ -311,6 +340,32 @@ describe('ReviewReport human-confirmed revision flow', () => {
     expect(useLLMStore.getState().defaultModelId).toBe('glm')
     expect(setDefaultModel).not.toHaveBeenCalled()
     expect(container?.textContent).toContain(RAW_AI_REPORT)
+  })
+
+  it('rejects confirmation when the draft no longer matches the AI review generation source', async () => {
+    installIpc(96, `${REVIEW_SOURCE_DRAFT.content}作者后来新增的正文。`)
+    await renderReport()
+
+    await act(async () => page.getByRole('button', { name: '确认审稿清单' }).click())
+
+    await expect.element(page.getByRole('alert')).toHaveTextContent('源草稿已变化')
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(false)
+  })
+
+  it('rejects starting review refinement when the draft changes after confirmation', async () => {
+    const ipc = installIpc(97)
+    await renderReport()
+    await act(async () => {
+      await page.getByRole('button', { name: '确认审稿清单' }).click()
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+    })
+    ipc.setDraftContent(`${REVIEW_SOURCE_DRAFT.content}确认后保存的新正文。`)
+
+    await act(async () => page.getByRole('button', { name: '按确认意见修稿' }).click())
+    await act(async () => page.getByRole('button', { name: '开始修稿' }).click())
+
+    await expect.element(page.getByRole('alert')).toHaveTextContent('源草稿已变化')
+    expect(startWorkflow).not.toHaveBeenCalled()
   })
 
   it('previews the confirmed checklist in the project writing language before starting revision', async () => {

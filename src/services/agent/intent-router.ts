@@ -8,6 +8,7 @@
  */
 
 import { skillRegistry, type LoadedSkill } from './skill-registry'
+import type { Locale } from '../../i18n/types'
 
 // ===== 类型定义 =====
 
@@ -46,46 +47,53 @@ export interface ParsedMention {
 // ===== / 命令管理 =====
 
 /** 内置 / 命令列表 */
-const BUILTIN_COMMANDS: SlashCommand[] = [
-  {
-    name: 'clear',
-    displayName: '清空对话',
-    description: '清空当前对话历史',
-    source: 'builtin_command',
-  },
-  {
-    name: 'new',
-    displayName: '新对话',
-    description: '开始一个新的对话',
-    source: 'builtin_command',
-  },
-  {
-    name: 'help',
-    displayName: '帮助',
-    description: '显示可用的命令和功能列表',
-    source: 'builtin_command',
-  },
-  {
-    name: 'status',
-    displayName: '项目状态',
-    description: '查看当前项目的状态和进度',
-    source: 'builtin_command',
-  },
-]
+function builtinCommands(locale: Locale): SlashCommand[] {
+  const text = (zhCN: string, enUS: string) => locale === 'en-US' ? enUS : zhCN
+  return [
+    {
+      name: 'clear',
+      displayName: text('清空对话', 'Clear conversation'),
+      description: text('清空当前对话历史', 'Clear the current conversation history'),
+      source: 'builtin_command',
+    },
+    {
+      name: 'new',
+      displayName: text('新对话', 'New conversation'),
+      description: text('开始一个新的对话', 'Start a new conversation'),
+      source: 'builtin_command',
+    },
+    {
+      name: 'help',
+      displayName: text('帮助', 'Help'),
+      description: text('显示可用的命令和功能列表', 'Show available commands and features'),
+      source: 'builtin_command',
+    },
+    {
+      name: 'status',
+      displayName: text('项目状态', 'Project status'),
+      description: text('查看当前项目的状态和进度', 'View the current project status and progress'),
+      source: 'builtin_command',
+    },
+  ]
+}
 
 /**
  * 获取所有可用的 / 命令（内置 + Skill）
  */
-export function getAllSlashCommands(): SlashCommand[] {
-  const commands: SlashCommand[] = [...BUILTIN_COMMANDS]
+export function getAllSlashCommands(locale: Locale = 'zh-CN'): SlashCommand[] {
+  const commands = builtinCommands(locale)
 
   // 把所有 Skill 也注册为 / 命令
   for (const skill of skillRegistry.listAll()) {
     if (skill.metadata.userInvocable !== false) {
       commands.push({
         name: skill.metadata.name,
-        displayName: skill.metadata.displayName ?? skill.metadata.name,
-        description: skill.metadata.description,
+        displayName: locale === 'en-US'
+          ? (skill.writingSkill.metadata.displayName ?? skill.metadata.name)
+          : (skill.metadata.displayName ?? skill.metadata.name),
+        description: locale === 'en-US'
+          ? skill.writingSkill.metadata.description
+          : skill.metadata.description,
         source: 'skill',
         skill,
       })
@@ -98,9 +106,9 @@ export function getAllSlashCommands(): SlashCommand[] {
 /**
  * 模糊搜索 / 命令
  */
-export function searchSlashCommands(query: string): SlashCommand[] {
+export function searchSlashCommands(query: string, locale: Locale = 'zh-CN'): SlashCommand[] {
   const q = query.toLowerCase()
-  return getAllSlashCommands().filter(cmd =>
+  return getAllSlashCommands(locale).filter(cmd =>
     cmd.name.toLowerCase().includes(q) ||
     cmd.displayName.toLowerCase().includes(q) ||
     cmd.description.toLowerCase().includes(q)
@@ -117,7 +125,7 @@ export function isSlashCommand(input: string): boolean {
 /**
  * 解析 / 命令
  */
-export function parseSlashCommand(input: string): {
+export function parseSlashCommand(input: string, locale: Locale = 'zh-CN'): {
   command: SlashCommand | null
   args: string
 } {
@@ -131,7 +139,7 @@ export function parseSlashCommand(input: string): {
   const cmdName = spaceIndex > -1 ? withoutSlash.slice(0, spaceIndex) : withoutSlash
   const args = spaceIndex > -1 ? withoutSlash.slice(spaceIndex + 1).trim() : ''
 
-  const command = getAllSlashCommands().find(c => c.name === cmdName) ?? null
+  const command = getAllSlashCommands(locale).find(c => c.name === cmdName) ?? null
 
   return { command, args }
 }
@@ -141,23 +149,24 @@ export function parseSlashCommand(input: string): {
 /**
  * 获取所有可 @ 提及的目标
  */
-export function getAllMentionTargets(): MentionTarget[] {
+export function getAllMentionTargets(locale: Locale = 'zh-CN'): MentionTarget[] {
+  const text = (zhCN: string, enUS: string) => locale === 'en-US' ? enUS : zhCN
   return [
-    { type: 'architecture', displayName: '故事架构', value: 'architecture' },
-    { type: 'character', displayName: '角色卡', value: 'characters' },
-    { type: 'blueprint', displayName: '章节蓝图', value: 'blueprints' },
-    { type: 'knowledge', displayName: '知识库', value: 'knowledge' },
-    { type: 'chapter', displayName: '当前章节', value: 'current_chapter' },
-    { type: 'file', displayName: '项目文件', value: 'file' },
+    { type: 'architecture', displayName: text('故事架构', 'Story architecture'), value: 'architecture' },
+    { type: 'character', displayName: text('角色卡', 'Character cards'), value: 'characters' },
+    { type: 'blueprint', displayName: text('章节蓝图', 'Chapter blueprints'), value: 'blueprints' },
+    { type: 'knowledge', displayName: text('知识库', 'Knowledge base'), value: 'knowledge' },
+    { type: 'chapter', displayName: text('当前章节', 'Current chapter'), value: 'current_chapter' },
+    { type: 'file', displayName: text('项目文件', 'Project file'), value: 'file' },
   ]
 }
 
 /**
  * 模糊搜索 @ 提及目标
  */
-export function searchMentionTargets(query: string): MentionTarget[] {
+export function searchMentionTargets(query: string, locale: Locale = 'zh-CN'): MentionTarget[] {
   const q = query.toLowerCase()
-  return getAllMentionTargets().filter(t =>
+  return getAllMentionTargets(locale).filter(t =>
     t.displayName.toLowerCase().includes(q) ||
     t.value.toLowerCase().includes(q)
   )
@@ -166,14 +175,14 @@ export function searchMentionTargets(query: string): MentionTarget[] {
 /**
  * 解析输入中的 @ 提及
  */
-export function parseMentions(input: string): ParsedMention[] {
+export function parseMentions(input: string, locale: Locale = 'zh-CN'): ParsedMention[] {
   const mentions: ParsedMention[] = []
   const regex = /@(\S+)/g
   let match: RegExpExecArray | null = null
 
   while ((match = regex.exec(input)) !== null) {
     const value = match[1]
-    const target = getAllMentionTargets().find(t =>
+    const target = getAllMentionTargets(locale).find(t =>
       t.value === value || t.displayName === value
     )
     if (target) {

@@ -6,6 +6,8 @@
  */
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
+import type { ExpectedDraftSource } from '../../src/shared/ipc-channels'
+import { assertExpectedDraftSource, SourceDraftChangedError } from './draft-source-guard'
 
 /** 修稿元数据（不含正文） */
 export interface RevisionMeta {
@@ -26,6 +28,39 @@ export interface RevisionMeta {
 /** 修稿完整数据（含正文） */
 export interface RevisionFull extends RevisionMeta {
     content: string
+    sourceDraft: ExpectedDraftSource | null
+}
+
+export interface MergeRevisionRequest {
+    revisionId: number
+    targetDraftId: number
+    expectedDraftContent: string
+    mergedContent: string
+    wordCount: number
+}
+
+export interface MergeRevisionReceipt {
+    revisionId: number
+    targetDraftId: number
+    status: 'revised'
+    wordCount: number
+    idempotent: boolean
+}
+
+function rowToSourceDraft(row: Record<string, unknown>): ExpectedDraftSource | null {
+    if (
+        typeof row.source_draft_chapter_number !== 'number'
+        || typeof row.source_draft_version !== 'number'
+        || typeof row.source_draft_status !== 'string'
+        || typeof row.source_content !== 'string'
+    ) return null
+    return {
+        id: row.base_draft_id as number,
+        chapterNumber: row.source_draft_chapter_number,
+        version: row.source_draft_version,
+        status: row.source_draft_status as ExpectedDraftSource['status'],
+        content: row.source_content,
+    }
 }
 
 function rowToMeta(row: Record<string, unknown>): RevisionMeta {
@@ -57,11 +92,14 @@ export class RevisionRepository {
         reviewSourceId?: number
         content: string
         wordCount: number
+        expectedSource?: ExpectedDraftSource
     }): { id: number; revisionIndex: number } {
         const db = getProjectDb()
         if (!db) throw new Error('[RevisionRepository] 数据库未连接')
 
         const tx = db.transaction(() => {
+            if (!params.expectedSource) throw new SourceDraftChangedError()
+            assertExpectedDraftSource(db, params.baseDraftId, params.expectedSource)
             const row = db.prepare(`
         SELECT MAX(revision_index) as maxIdx FROM revisions WHERE base_draft_id = ?
       `).get(params.baseDraftId) as { maxIdx: number | null }
@@ -71,14 +109,20 @@ export class RevisionRepository {
             const result = db.prepare(`
         INSERT INTO revisions (
           base_draft_id, revision_index, revision_type,
-          user_prompt, review_source_id, content_id, word_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          user_prompt, review_source_id,
+          source_draft_chapter_number, source_draft_version, source_draft_status, source_content,
+          content_id, word_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
                 params.baseDraftId,
                 revisionIndex,
                 params.revisionType,
                 params.userPrompt ?? '',
                 params.reviewSourceId ?? null,
+                params.expectedSource?.chapterNumber ?? null,
+                params.expectedSource?.version ?? null,
+                params.expectedSource?.status ?? null,
+                params.expectedSource?.content ?? null,
                 contentId,
                 params.wordCount,
             )
@@ -99,11 +143,14 @@ export class RevisionRepository {
         reviewSourceId?: number
         content: string
         wordCount: number
+        expectedSource?: ExpectedDraftSource
     }): { id: number; revisionIndex: number } {
         const db = getProjectDb()
         if (!db) throw new Error('[RevisionRepository] 数据库未连接')
 
         return db.transaction(() => {
+            if (!params.expectedSource) throw new SourceDraftChangedError()
+            assertExpectedDraftSource(db, params.baseDraftId, params.expectedSource)
             const row = db.prepare(`
         SELECT MAX(revision_index) as maxIdx FROM revisions WHERE base_draft_id = ?
       `).get(params.baseDraftId) as { maxIdx: number | null }
@@ -112,14 +159,20 @@ export class RevisionRepository {
             const result = db.prepare(`
         INSERT INTO revisions (
           base_draft_id, revision_index, revision_type,
-          user_prompt, review_source_id, content_id, word_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          user_prompt, review_source_id,
+          source_draft_chapter_number, source_draft_version, source_draft_status, source_content,
+          content_id, word_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
                 params.baseDraftId,
                 revisionIndex,
                 params.revisionType,
                 params.userPrompt ?? '',
                 params.reviewSourceId ?? null,
+                params.expectedSource?.chapterNumber ?? null,
+                params.expectedSource?.version ?? null,
+                params.expectedSource?.status ?? null,
+                params.expectedSource?.content ?? null,
                 contentId,
                 params.wordCount,
             )
@@ -172,7 +225,7 @@ export class RevisionRepository {
         if (!row) return null
         const meta = rowToMeta(row)
         const body = ContentRepository.getBody(meta.contentId)
-        return { ...meta, content: body ?? '' }
+        return { ...meta, content: body ?? '', sourceDraft: rowToSourceDraft(row) }
     }
 
     /** 获取下一个修稿序号 */
@@ -185,6 +238,122 @@ export class RevisionRepository {
     `).get(baseDraftId) as { maxIdx: number | null }
 
         return (row.maxIdx ?? 0) + 1
+    }
+
+    /**
+     * 将人工确认的合并正文、草稿状态和修订关系作为一个 SQLite 提交写入。
+     * revisionId 同时是天然的幂等身份：已完成的同一合并只返回读回结果，
+     * 不会再次覆盖之后产生的正文。
+     */
+    static mergeIntoDraft(request: MergeRevisionRequest): MergeRevisionReceipt {
+        const db = getProjectDb()
+        if (!db) throw new Error('[RevisionRepository] 数据库未连接')
+
+        return db.transaction((): MergeRevisionReceipt => {
+            const target = db.prepare(`
+              SELECT drafts.chapter_number, drafts.version, drafts.status,
+                     drafts.word_count, drafts.content_id, contents.body
+              FROM drafts
+              JOIN contents ON contents.id = drafts.content_id
+              WHERE drafts.id = ?
+            `).get(request.targetDraftId) as {
+                status: string
+                chapter_number: number
+                version: number
+                word_count: number
+                content_id: number
+                body: string
+            } | undefined
+            if (!target) throw new Error(`草稿不存在：${request.targetDraftId}`)
+
+            const revision = db.prepare(`
+              SELECT base_draft_id, status, merged_to_draft_id,
+                     source_draft_chapter_number, source_draft_version,
+                     source_draft_status, source_content
+              FROM revisions WHERE id = ?
+            `).get(request.revisionId) as {
+                base_draft_id: number
+                status: string
+                merged_to_draft_id: number | null
+                source_draft_chapter_number: number | null
+                source_draft_version: number | null
+                source_draft_status: string | null
+                source_content: string | null
+            } | undefined
+            if (!revision) throw new Error(`修订稿不存在：${request.revisionId}`)
+            if (revision.base_draft_id !== request.targetDraftId) {
+                throw new Error('修订稿不属于目标草稿，已拒绝合并')
+            }
+
+            if (revision.status === 'merged') {
+                if (
+                    revision.merged_to_draft_id !== request.targetDraftId
+                    || target.body !== request.mergedContent
+                    || target.status !== 'revised'
+                    || target.word_count !== request.wordCount
+                ) {
+                    throw new Error('修订稿已经合并，但目标草稿随后发生变化；已拒绝再次覆盖')
+                }
+                return {
+                    revisionId: request.revisionId,
+                    targetDraftId: request.targetDraftId,
+                    status: 'revised',
+                    wordCount: request.wordCount,
+                    idempotent: true,
+                }
+            }
+            if (revision.status !== 'pending') {
+                throw new Error('修订稿已失效，不能继续合并')
+            }
+            if (!['draft', 'revised', 'reviewed'].includes(target.status)) {
+                throw new Error('目标草稿不是可修改状态，已拒绝合并')
+            }
+            if (target.body !== request.expectedDraftContent) {
+                throw new Error('目标草稿正文已变化，请重新打开修订对比')
+            }
+            if (
+                revision.source_draft_chapter_number === null
+                || revision.source_draft_version === null
+                || revision.source_draft_status === null
+                || revision.source_content === null
+            ) {
+                throw new Error('旧修订稿缺少生成时源稿，仍可查看但不能合并；请重新生成修订稿')
+            }
+            if (
+                target.chapter_number !== revision.source_draft_chapter_number
+                || target.version !== revision.source_draft_version
+                || target.status !== revision.source_draft_status
+                || target.body !== revision.source_content
+            ) {
+                throw new Error('当前草稿与修订稿的生成时源稿不一致，已拒绝合并；请重新生成修订稿')
+            }
+            db.prepare('UPDATE contents SET body = ? WHERE id = ?')
+                .run(request.mergedContent, target.content_id)
+            const draftUpdate = db.prepare(`
+              UPDATE drafts
+              SET status = 'revised', word_count = ?, updated_at = datetime('now')
+              WHERE id = ? AND status IN ('draft', 'revised', 'reviewed')
+            `).run(request.wordCount, request.targetDraftId)
+            if (draftUpdate.changes !== 1) {
+                throw new Error('目标草稿状态已变化，已拒绝合并')
+            }
+            const revisionUpdate = db.prepare(`
+              UPDATE revisions
+              SET status = 'merged', merged_to_draft_id = ?, updated_at = datetime('now')
+              WHERE id = ? AND base_draft_id = ? AND status = 'pending'
+            `).run(request.targetDraftId, request.revisionId, request.targetDraftId)
+            if (revisionUpdate.changes !== 1) {
+                throw new Error('修订稿状态已变化，已拒绝合并')
+            }
+
+            return {
+                revisionId: request.revisionId,
+                targetDraftId: request.targetDraftId,
+                status: 'revised',
+                wordCount: request.wordCount,
+                idempotent: false,
+            }
+        })()
     }
 
     /** 标记为已合并（仅 pending → merged） */

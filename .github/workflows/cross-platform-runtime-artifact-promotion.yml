@@ -26,6 +26,11 @@ on:
         required: true
         default: .release/release-profile.json
         type: string
+      release_notes_path:
+        description: Repository-relative bilingual Markdown release notes
+        required: true
+        default: .release/notes/v1.0.0.md
+        type: string
       qualification_runs_json:
         description: JSON object mapping each platform to runId, attempt, and artifactId
         required: true
@@ -77,12 +82,14 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_VERSION: ${{ inputs.release_version }}
           PROFILE_PATH: ${{ inputs.profile_path }}
+          RELEASE_NOTES_PATH: ${{ inputs.release_notes_path }}
           QUALIFICATION_RUNS_JSON: ${{ inputs.qualification_runs_json }}
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           test "$CONFIRMATION" = "PROMOTE_QUALIFIED_DESKTOP_RELEASE"
           test "$(node --version)" = "v22.23.1"
           test -f "$PROFILE_PATH"
+          test -f "$RELEASE_NOTES_PATH"
           test -f .release/scripts/github-desktop-promotion.mjs
           test -f .release/scripts/validate-release-profile.mjs
           node .release/scripts/github-desktop-promotion.mjs verify \
@@ -91,6 +98,7 @@ jobs:
             --tag "$RELEASE_TAG" \
             --version "$RELEASE_VERSION" \
             --profile "$PROFILE_PATH" \
+            --release-notes "$RELEASE_NOTES_PATH" \
             --qualification-runs-json "$QUALIFICATION_RUNS_JSON" \
             --output verified-package
 

@@ -4,6 +4,7 @@ import type BetterSqlite3 from 'better-sqlite3'
 import {
   CHARACTER_ROSTER_ROLES,
   CHARACTER_ROSTER_SCHEMA_VERSION,
+  characterRosterIdentityKey,
   type CharacterRosterCharacterState,
   type CharacterRosterCommitReceipt,
   type CharacterRosterCommitIntent,
@@ -211,7 +212,7 @@ function normalizeRequest(value: unknown): CharacterRosterCommitRequest {
   }
 
   const entries = value.entries.map(entry => normalizeEntry(entry, isManualEditIntent(intent)))
-  const names = new Set(entries.map(entry => entry.name))
+  const names = new Set(entries.map(entry => characterRosterIdentityKey(entry.name)))
   if (names.size !== entries.length) throw new Error('角色名必须唯一')
   // 批量生成/导入/蓝图/定稿的增量候选可以引用“本次没有变化”的既有角色；
   // 手工候选还可能带着改名前或刚删除的目标。它们都必须先由深 module 与
@@ -220,7 +221,7 @@ function normalizeRequest(value: unknown): CharacterRosterCommitRequest {
   if (intent === 'initialize' || intent === 'legacy_repair') {
     for (const entry of entries) {
       for (const relationship of entry.relationships) {
-        if (!names.has(relationship.target)) {
+        if (!names.has(characterRosterIdentityKey(relationship.target))) {
           throw new Error(`角色「${entry.name}」引用了不存在的关系目标「${relationship.target}」`)
         }
       }
@@ -378,14 +379,19 @@ function mergeExistingEntryManualWins(
 }
 
 function assertRelationshipClosure(entries: readonly CharacterRosterEntry[]): void {
-  const names = new Set(entries.map(entry => entry.name))
+  const names = new Set(entries.map(entry => characterRosterIdentityKey(entry.name)))
   if (names.size !== entries.length || entries.some(entry => !entry.name.trim())) {
     throw new Error('已有角色身份不安全，已拒绝合并')
   }
   for (const entry of entries) {
     const relationshipKeys = new Set<string>()
     for (const relationship of entry.relationships) {
-      if (!relationship.target.trim() || !relationship.relation.trim() || relationship.target === entry.name || !names.has(relationship.target)) {
+      if (
+        !relationship.target.trim()
+        || !relationship.relation.trim()
+        || characterRosterIdentityKey(relationship.target) === characterRosterIdentityKey(entry.name)
+        || !names.has(characterRosterIdentityKey(relationship.target))
+      ) {
         throw new Error('已有角色关系不完整，已拒绝合并')
       }
       const key = `${relationship.target}\u0000${relationship.relation}`
@@ -403,13 +409,13 @@ function mergeGeneratedEntriesWithExisting(
   generatedEntries: CharacterRosterEntry[],
   existingEntries: CharacterRosterEntry[],
 ): CharacterRosterEntry[] {
-  const generatedByName = new Map(generatedEntries.map(entry => [entry.name, entry]))
+  const generatedByName = new Map(generatedEntries.map(entry => [characterRosterIdentityKey(entry.name), entry]))
   const mergedExisting = existingEntries.map((existing) => {
-    const generated = generatedByName.get(existing.name)
+    const generated = generatedByName.get(characterRosterIdentityKey(existing.name))
     return generated ? mergeExistingEntryManualWins(existing, generated) : { ...existing }
   })
-  const existingNames = new Set(existingEntries.map(entry => entry.name))
-  const additions = generatedEntries.filter(entry => !existingNames.has(entry.name))
+  const existingNames = new Set(existingEntries.map(entry => characterRosterIdentityKey(entry.name)))
+  const additions = generatedEntries.filter(entry => !existingNames.has(characterRosterIdentityKey(entry.name)))
   const merged = [...mergedExisting, ...additions]
   assertRelationshipClosure(merged)
   return merged
@@ -420,10 +426,18 @@ function mergeIncrementalEntriesWithExisting(
   existingEntries: CharacterRosterEntry[],
   intent: Extract<CharacterRosterCommitIntent, 'blueprint_sync' | 'chapter_progress'>,
 ): CharacterRosterEntry[] {
-  const candidateByName = new Map(candidates.map(entry => [entry.name, entry]))
+  const candidateByName = new Map(candidates.map(entry => [characterRosterIdentityKey(entry.name), entry]))
   const mergedExisting = existingEntries.map((existing) => {
-    const candidate = candidateByName.get(existing.name)
+    const candidate = candidateByName.get(characterRosterIdentityKey(existing.name))
     if (!candidate) return { ...existing }
+    if (
+      intent === 'chapter_progress'
+      && candidate.currentState
+      && existing.currentState
+      && candidate.currentState.updatedAtChapter < existing.currentState.updatedAtChapter
+    ) {
+      throw new Error(`角色「${existing.name}」已由较新章节更新，已拒绝旧章节后处理覆盖`)
+    }
 
     // 蓝图同步只附加结构化关系；章节定稿则以本轮已验证的状态补丁推进
     // currentState。其他资料保留已有事实，避免工作流重写人工档案。
@@ -438,8 +452,11 @@ function mergeIncrementalEntriesWithExisting(
     }
     return merged
   })
-  const existingNames = new Set(existingEntries.map(entry => entry.name))
-  const additions = candidates.filter(candidate => !existingNames.has(candidate.name))
+  const existingNames = new Set(existingEntries.map(entry => characterRosterIdentityKey(entry.name)))
+  const additions = candidates.filter(candidate => !existingNames.has(characterRosterIdentityKey(candidate.name)))
+  if (intent === 'chapter_progress' && additions.length > 0) {
+    throw new Error(`章节定稿后处理不能创建未知角色「${additions[0].name}」`)
+  }
   const merged = [...mergedExisting, ...additions]
   assertRelationshipClosure(merged)
   return merged

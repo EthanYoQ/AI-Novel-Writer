@@ -2,16 +2,19 @@
  * CharactersView — 角色管理列表视图
  */
 
-import { Users, RefreshCw, Plus } from 'lucide-react'
+import { useState } from 'react'
+import { Users, RefreshCw, Plus, Search } from 'lucide-react'
 import { useProjectStore } from '../../../stores/project-store'
 import { useCharacterStore } from '../../../stores/character-store'
 import { Button } from '../../ui/Button'
+import { Input } from '../../ui/Input'
 import { EmptyState } from '../../ui/EmptyState'
 import { cn } from '../../../lib/utils'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { getCharacterRoleLabels } from '../../../shared/character-role'
 
 export default function CharactersView() {
+  const [searchQuery, setSearchQuery] = useState('')
   const currentProject = useProjectStore(s => s.currentProject)
   const characters = useCharacterStore(s => s.characters)
   const dataProjectKey = useCharacterStore(s => s.dataProjectKey)
@@ -34,6 +37,10 @@ export default function CharactersView() {
     && lastError === null,
   )
   const visibleCharacters = dataReady ? characters : []
+  const normalizedQuery = searchQuery.trim().toLocaleLowerCase()
+  const filteredCharacters = normalizedQuery
+    ? visibleCharacters.filter(character => character.name.toLocaleLowerCase().includes(normalizedQuery))
+    : visibleCharacters
 
   // 角色数据由 ProjectService 统一加载，组件只消费 store 数据
 
@@ -65,9 +72,19 @@ export default function CharactersView() {
           </Button>
         </div>
       </div>
+      <div className="relative px-2 py-1.5 border-b border-[var(--color-border)]">
+        <Search size={12} className="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
+        <Input
+          value={searchQuery}
+          onChange={event => setSearchQuery(event.target.value)}
+          aria-label={text('搜索角色', 'Search characters')}
+          placeholder={text('搜索角色名称', 'Search character names')}
+          className="h-7 pl-7 text-xs"
+        />
+      </div>
       {/* 角色列表 */}
       <div className="flex-1 overflow-y-auto p-1">
-        {visibleCharacters.map((c) => (
+        {filteredCharacters.map((c) => (
           <div
             key={c.name}
             className={cn(
@@ -92,6 +109,11 @@ export default function CharactersView() {
             {lastError
                 ? text(`角色列表读取失败：${lastError}`, 'Could not load character list.')
               : text('暂无角色', 'No characters')}
+          </div>
+        )}
+        {visibleCharacters.length > 0 && filteredCharacters.length === 0 && (
+          <div className="text-center py-6 opacity-50 text-xs">
+            {text('没有匹配的角色', 'No matching characters')}
           </div>
         )}
       </div>

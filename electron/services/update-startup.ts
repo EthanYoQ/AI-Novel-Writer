@@ -8,6 +8,8 @@ import {
 export interface UpdateStartupDependencies {
   updateRuntimeEnabled: boolean
   updateConfiguration?: UpdateServiceOptions['updateConfiguration']
+  updateAction?: UpdateServiceOptions['updateAction']
+  openRelease?: UpdateServiceOptions['openRelease']
   currentVersion: string
   createBackend(): UpdateBackend
   createPreferences(): UpdatePreferencesStore
@@ -56,6 +58,8 @@ export function startUpdateRuntime(dependencies: UpdateStartupDependencies): voi
       isPackaged: isPackagedRuntime,
       updateConfiguration,
       preferences: dependencies.createPreferences(),
+      ...(dependencies.updateAction ? { updateAction: dependencies.updateAction } : {}),
+      ...(dependencies.openRelease ? { openRelease: dependencies.openRelease } : {}),
     }
     service = dependencies.createService?.(options) ?? new UpdateService(options)
     dependencies.registerController(service)

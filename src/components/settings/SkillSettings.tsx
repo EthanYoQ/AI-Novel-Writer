@@ -42,12 +42,53 @@ const REASON_COPY: Record<string, readonly [string, string]> = {
   'content-too-large': ['内容超过 64 KiB', 'Content exceeds 64 KiB'],
 }
 
+const BUILTIN_SKILL_COPY_EN: Record<string, readonly [string, string]> = {
+  'builtin:long-form-continuity': [
+    'Long-form Continuity and Scene Progression',
+    'Preserves author facts, causal chains, character state, and foreshadowing progress during planning and drafting.',
+  ],
+  'builtin:natural-prose-refinement': [
+    'Natural Prose Refinement',
+    'Reduces formulaic phrasing during revision so actions, sensory details, and sentence rhythm serve the characters and scene.',
+  ],
+  'builtin:review-chapter': [
+    'Chapter Review',
+    'Reviews a chapter for plot logic, character consistency, pacing, foreshadowing, and prose quality.',
+  ],
+  'builtin:brainstorm': [
+    'Creative Brainstorming',
+    'Generates multiple creative directions and ideas for a chosen topic.',
+  ],
+  'builtin:character-analysis': [
+    'Character Analysis',
+    'Analyzes a character\'s personality, motivation, arc, and relationships in depth.',
+  ],
+  'builtin:continuity-check': [
+    'Continuity Check',
+    'Checks the novel for continuity and setting inconsistencies, contradictions, and omissions.',
+  ],
+  'builtin:writing-coach': [
+    'Writing Coach',
+    'Provides professional writing guidance and suggestions for improving prose.',
+  ],
+}
+
 function formatBytes(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`
 }
 
 function skillLabel(skill: LoadedSkill): string {
   return skill.metadata.displayName ?? skill.metadata.name
+}
+
+function localizedSkillLabel(skill: LoadedSkill, text: (zhCN: string, enUS: string) => string): string {
+  const copy = BUILTIN_SKILL_COPY_EN[skill.skillId]
+  return copy ? text(skillLabel(skill), copy[0]) : skillLabel(skill)
+}
+
+function localizedSkillDescription(skill: LoadedSkill, text: (zhCN: string, enUS: string) => string): string {
+  const copy = BUILTIN_SKILL_COPY_EN[skill.skillId]
+  return copy ? text(skill.metadata.description, copy[1]) : skill.metadata.description
 }
 
 function stageCopy(text: (zhCN: string, enUS: string) => string, stage: WritingSkillStage): string {
@@ -259,7 +300,7 @@ export default function SkillSettings() {
               >
                 <option value="">{text('不启用', 'Disabled')}</option>
                 {compatibleSkills.map(skill => (
-                  <option key={skill.skillId} value={skill.skillId}>{skillLabel(skill)}</option>
+                  <option key={skill.skillId} value={skill.skillId}>{localizedSkillLabel(skill, text)}</option>
                 ))}
               </NativeSelect>
             </label>
@@ -281,7 +322,7 @@ export default function SkillSettings() {
             <div key={skill.skillId} className="flex items-start gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-3">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium text-[var(--color-text)]">{skillLabel(skill)}</span>
+                  <span className="text-sm font-medium text-[var(--color-text)]">{localizedSkillLabel(skill, text)}</span>
                   <span className="rounded-full bg-[var(--color-hover)] px-2 py-0.5 text-[0.68rem] text-[var(--color-text-muted)]">
                     {text(SOURCE_COPY[skill.source][0], SOURCE_COPY[skill.source][1])}
                   </span>
@@ -289,12 +330,12 @@ export default function SkillSettings() {
                     {skill.writingSkill.compatible ? text('兼容', 'Compatible') : text('不兼容', 'Incompatible')}
                   </span>
                 </div>
-                <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">{skill.metadata.description}</p>
+                <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">{localizedSkillDescription(skill, text)}</p>
                 <div className="mt-1 flex flex-wrap gap-x-4 text-[0.7rem] text-[var(--color-text-secondary)]">
                   <span>{text('版本', 'Version')}: {skill.metadata.version ?? '—'}</span>
                   <span>{text('语言', 'Language')}: {skill.writingSkill.metadata.language}</span>
                   <span>{text('大小', 'Size')}: {formatBytes(skill.writingSkill.utf8Bytes)}</span>
-                  <span>{text('启用阶段', 'Enabled stage')}: {activeStages.length ? activeStages.map(stage => stageCopy(text, stage)).join('、') : text('未启用', 'None')}</span>
+                  <span>{text('启用阶段', 'Enabled stage')}: {activeStages.length ? activeStages.map(stage => stageCopy(text, stage)).join(text('、', ', ')) : text('未启用', 'None')}</span>
                 </div>
               </div>
               {skill.source === 'user' && (

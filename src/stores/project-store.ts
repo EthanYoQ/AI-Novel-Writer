@@ -9,6 +9,7 @@ import type {
   FileNode,
 } from '../shared/ipc-channels'
 import { alertError } from '../components/ui/AlertDialog'
+import { confirm } from '../components/ui/Confirm'
 import { appErrorMessage } from '../i18n/app-errors'
 import { useEditorStore } from './editor-store'
 import { useLocaleStore } from './locale-store'
@@ -90,6 +91,39 @@ function projectOperationCopy(operation: 'create' | 'open'): LocalizedProjectCop
   return operation === 'create'
     ? projectCopy('创建', 'create')
     : projectCopy('打开', 'open')
+}
+
+async function confirmAndCancelProjectWorkflows(
+  projectPath: string,
+  operation: 'create' | 'open' | 'close',
+  shouldContinue: () => boolean = () => true,
+): Promise<boolean> {
+  const { useWorkflowStore } = await import('./workflow-store')
+  const activeCount = useWorkflowStore.getState().activeRuns.filter(run => (
+    sameProjectPathKey(run.projectPath, projectPath)
+  )).length
+  if (activeCount > 0) {
+    const operationCopy = operation === 'create'
+      ? projectCopy('新建项目', 'create a project')
+      : operation === 'open'
+        ? projectCopy('打开其他项目', 'open another project')
+        : projectCopy('关闭项目', 'close the project')
+    const approved = await confirm(
+      projectText(
+        `当前项目有 ${activeCount} 个创作任务。继续${operationCopy.zhCNText}将取消并等待这些任务停止。`,
+        `This project has ${activeCount} active creative task${activeCount === 1 ? '' : 's'}. Continuing to ${operationCopy.enUSText} will cancel and wait for them to stop.`,
+      ),
+      {
+        title: projectText('创作任务仍在运行', 'Creative tasks are still running'),
+        confirmText: projectText('取消任务并继续', 'Cancel tasks and continue'),
+        danger: true,
+      },
+    )
+    if (!approved) return false
+  }
+  if (!shouldContinue()) return false
+  await useWorkflowStore.getState().cancelProjectWorkflowsAndWait(projectPath)
+  return shouldContinue()
 }
 
 function readConfigDraftLedger() {
@@ -298,6 +332,8 @@ interface ProjectState {
   ) => Promise<void>
   /** 加载最近项目 */
   loadRecentProjects: () => Promise<void>
+  /** 只移除最近项目记录，不删除项目目录或数据 */
+  removeRecentProject: (projectPath: string) => Promise<boolean>
   /** 删除项目目录和项目数据 */
   deleteProject: (projectPath: string) => Promise<boolean>
   /** 关闭项目 */
@@ -329,10 +365,11 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       }
       const rendererProject = get().currentProject
       const rendererProjectPath = rendererProject?.path ?? null
-      if (rendererProjectPath) {
-        const { useWorkflowStore } = await import('./workflow-store')
-        await useWorkflowStore.getState().cancelProjectWorkflowsAndWait(rendererProjectPath)
-      }
+      if (rendererProjectPath && !await confirmAndCancelProjectWorkflows(
+        rendererProjectPath,
+        'create',
+        isLatestRequest,
+      )) return false
       // 创建与打开共享同一渲染进程请求序列。若等待工作流退出期间已有更新的
       // 打开/创建请求提交，或当前项目已经变化，旧创建请求不得再切换主进程数据库。
       if (
@@ -433,8 +470,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       const activeProjectPath = get().currentProject?.path
       // 同一路径重开同样会签发新 lease；旧工作流必须先退出，不能因路径相同而漏掉。
       if (activeProjectPath) {
-        const { useWorkflowStore } = await import('./workflow-store')
-        await useWorkflowStore.getState().cancelProjectWorkflowsAndWait(activeProjectPath)
+        if (!await confirmAndCancelProjectWorkflows(activeProjectPath, 'open', isLatestRequest)) return false
         if (!isLatestRequest() || !sameRendererProject(rendererProject, get().currentProject)) return false
       }
       const result = await ipc.invoke('project:open', projectPath, requestToken, rendererProjectPath)
@@ -740,6 +776,31 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     set({ recentProjects })
   },
 
+  removeRecentProject: async (projectPath) => {
+    try {
+      const result = await ipc.invoke('project:recent-remove', projectPath)
+      if (!result.success) {
+        alertError(
+          projectError(result.error),
+          { title: projectText('移除最近项目失败', 'Failed to remove recent project') },
+        )
+        return false
+      }
+      set(state => ({
+        recentProjects: state.recentProjects.filter(project => (
+          !sameProjectPathKey(project.path, projectPath)
+        )),
+      }))
+      return true
+    } catch (error) {
+      alertError(
+        projectError(error),
+        { title: projectText('移除最近项目异常', 'Unexpected recent-project removal error') },
+      )
+      return false
+    }
+  },
+
   deleteProject: async (projectPath) => {
     const activeProject = get().currentProject
     const projectSession = projectSessionContextFromProject(activeProject)
@@ -879,8 +940,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     const closeOperation = (async () => {
       set({ loading: true })
       try {
-        const { useWorkflowStore } = await import('./workflow-store')
-        await useWorkflowStore.getState().cancelProjectWorkflowsAndWait(projectPath)
+        if (!await confirmAndCancelProjectWorkflows(projectPath, 'close')) return false
         if (!sameProjectSessionContext(
           projectSession,
           projectSessionContextFromProject(get().currentProject),

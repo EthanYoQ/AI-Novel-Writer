@@ -1,4 +1,4 @@
-import { useEffect, type CSSProperties, type MouseEvent } from 'react'
+import { useEffect, useState, type CSSProperties, type MouseEvent } from 'react'
 import {
   Archive,
   CheckCircle2,
@@ -20,13 +20,23 @@ import {
   ZoomOut,
 } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
+import { useWorkflowStore } from '../../stores/workflow-store'
 import { useThemeStore, type Theme } from '../../stores/theme-store'
 import { useEditorStore } from '../../stores/editor-store'
+import { saveDirtyEditorChangesForExit } from '../../stores/editor-store'
+import { countUnsavedEditorItems } from '../../stores/editor-unsaved'
+import { discardAllEditorChanges } from '../../stores/editor-discard'
 import { useLayoutStore } from '../../stores/layout-store'
 import { APP_BRAND } from '../../shared/brand'
 import { ipc } from '../../services/ipc-client'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { MessageKey } from '../../i18n/core'
+import { sameProjectPathKey } from '../../shared/project-session-context'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '../ui/Dialog'
+import { Button } from '../ui/Button'
+import { alertError } from '../ui/AlertDialog'
 
 const isMac = navigator.userAgent.includes('Mac')
 
@@ -49,12 +59,92 @@ export default function TitleBar() {
   const openProject = useProjectStore((s) => s.openProject)
   const { theme, setTheme } = useThemeStore()
   const { zoom, zoomIn, zoomOut, zoomReset } = useThemeStore()
-  const hasDirty = useEditorStore((s) => s.tabs.some((t) => t.dirty))
+  const hasDirty = useEditorStore((s) => countUnsavedEditorItems(s.tabs, s.draftLedgers) > 0)
   const openSettings = useLayoutStore(s => s.openSettings)
   const openNewProject = useLayoutStore(s => s.openNewProject)
   const openExport = useLayoutStore(s => s.openExport)
   const openImportNovel = useLayoutStore(s => s.openImportNovel)
-  const { locale, toggleLocale, t } = useLocaleStore()
+  const { locale, toggleLocale, t, text } = useLocaleStore()
+  const [exitRequest, setExitRequest] = useState<{ requestId: string; workflowBlocked?: boolean } | null>(null)
+  const [exitBusy, setExitBusy] = useState(false)
+  const [exitError, setExitError] = useState<string | null>(null)
+
+  useEffect(() => ipc.on('window:close-requested', ({ requestId }) => {
+    const projectPath = useProjectStore.getState().currentProject?.path
+    const hasActiveWorkflow = !!projectPath && useWorkflowStore.getState().activeRuns.some(
+      run => sameProjectPathKey(run.projectPath, projectPath),
+    )
+    if (hasActiveWorkflow) {
+      setExitError(null)
+      setExitRequest({ requestId, workflowBlocked: true })
+      return
+    }
+    const editor = useEditorStore.getState()
+    if (countUnsavedEditorItems(editor.tabs, editor.draftLedgers) === 0) {
+      void ipc.invoke('window:resolve-close', requestId, 'proceed').then(result => {
+        if (!result.success) console.error('[TitleBar] 退出请求已失效')
+      }).catch(error => console.error('[TitleBar] 退出请求失败:', error))
+      return
+    }
+    setExitError(null)
+    setExitRequest({ requestId })
+  }), [])
+
+  const cancelExit = async () => {
+    const request = exitRequest
+    if (!request || exitBusy) return
+    setExitBusy(true)
+    try {
+      const result = await ipc.invoke('window:resolve-close', request.requestId, 'cancel')
+      if (!result.success) throw new Error(text('退出请求已失效，请重试', 'The exit request expired. Try again.'))
+      setExitRequest(null)
+      setExitError(null)
+    } catch (error) {
+      setExitError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setExitBusy(false)
+    }
+  }
+
+  const discardAndExit = async () => {
+    const request = exitRequest
+    if (!request || request.workflowBlocked || exitBusy) return
+    setExitBusy(true)
+    setExitError(null)
+    try {
+      const result = await ipc.invoke('window:resolve-close', request.requestId, 'cancel')
+      if (!result.success) throw new Error(text('退出请求已失效，请重试', 'The exit request expired. Try again.'))
+      discardAllEditorChanges()
+      setExitRequest(null)
+      const closeResult = await ipc.invoke('window:close')
+      if (!closeResult.success) {
+        await alertError(
+          text('未保存修改已放弃，但无法再次发起退出。请手动重试退出。', 'Unsaved changes were discarded, but exit could not be requested again. Try exiting again.'),
+          { title: text('退出失败', 'Could not exit') },
+        )
+      }
+    } catch (error) {
+      setExitError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setExitBusy(false)
+    }
+  }
+
+  const saveAndExit = async () => {
+    const request = exitRequest
+    if (!request || request.workflowBlocked || exitBusy) return
+    setExitBusy(true)
+    setExitError(null)
+    try {
+      await saveDirtyEditorChangesForExit(useProjectStore.getState().currentProject?.path)
+      const result = await ipc.invoke('window:resolve-close', request.requestId, 'proceed')
+      if (!result.success) throw new Error(text('退出请求已失效，请重试', 'The exit request expired. Try again.'))
+    } catch (error) {
+      setExitError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setExitBusy(false)
+    }
+  }
 
   const ThemeIcon = themeIcons[theme] || Sun
   const cycleTheme = (e: MouseEvent) => {
@@ -125,7 +215,8 @@ export default function TitleBar() {
   const zoomLabel = `${Math.round(zoom * 100)}%`
 
   return (
-    <div
+    <>
+      <div
       className="writer-topbar no-select flex items-center gap-2"
       style={{
         height: 'var(--height-titlebar)',
@@ -139,8 +230,12 @@ export default function TitleBar() {
           <ScrollText size={18} strokeWidth={1.7} />
         </div>
         <div className="leading-tight min-w-[112px]">
-          <div className="text-sm font-semibold brand-gradient">{APP_BRAND.zhName}</div>
-          <div className="text-[0.68rem] opacity-75">{APP_BRAND.enName}</div>
+          <div className="text-sm font-semibold brand-gradient">
+            {locale === 'zh-CN' ? APP_BRAND.zhName : APP_BRAND.enName}
+          </div>
+          {locale === 'zh-CN' && (
+            <div className="text-[0.68rem] opacity-75">{APP_BRAND.enName}</div>
+          )}
         </div>
       </div>
 
@@ -267,6 +362,44 @@ export default function TitleBar() {
           <X size={14} />
         </button>
       </div>
-    </div>
+      </div>
+      <Dialog open={exitRequest !== null} onOpenChange={(open) => {
+        if (!open) void cancelExit()
+      }}>
+        <DialogContent className="max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>{exitRequest?.workflowBlocked
+              ? text('创作任务仍在运行', 'Creative task still running')
+              : text('退出前处理未保存内容', 'Handle unsaved changes before exiting')}</DialogTitle>
+            <DialogDescription>
+              {exitRequest?.workflowBlocked
+                ? text('请先等待当前创作任务完成，或在任务面板中取消任务后再退出。', 'Wait for the current creative task to finish, or cancel it in the task panel before exiting.')
+                : text(
+                    '保存会使用每个编辑器现有的项目会话；无法安全保存或保存期间又有输入时，应用不会退出。',
+                    'Each editor saves through its existing project session. The app stays open if a save is unsafe or new input arrives while saving.',
+                  )}
+            </DialogDescription>
+          </DialogHeader>
+          {exitError && (
+            <p className="text-sm" style={{ color: 'var(--color-error-text)' }}>{exitError}</p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => void cancelExit()} disabled={exitBusy}>
+              {exitRequest?.workflowBlocked ? text('知道了', 'OK') : text('取消', 'Cancel')}
+            </Button>
+            {!exitRequest?.workflowBlocked && (
+              <>
+                <Button variant="destructive" onClick={() => void discardAndExit()} disabled={exitBusy}>
+                  {text('放弃并退出', 'Discard and exit')}
+                </Button>
+                <Button onClick={() => void saveAndExit()} disabled={exitBusy}>
+                  {exitBusy ? text('处理中...', 'Working...') : text('保存并退出', 'Save and exit')}
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

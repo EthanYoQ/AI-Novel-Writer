@@ -58,6 +58,8 @@ export interface WorkflowStep {
   progress?: number
   result?: string
   error?: string
+  /** Non-empty machine-readable code supplied by the thrown error. */
+  errorCode?: string
   /** Structured failure cause when a bounded model completion stopped early. */
   failureCode?: WorkflowFailureCode
   /** Safe structured byte attribution for a prompt-budget preflight failure. */
@@ -102,6 +104,8 @@ export interface WorkflowRun {
   createdAt: string
   completedAt?: string
   error?: string
+  /** Machine-readable error code mirrored from the failed current step. */
+  errorCode?: string
   /** Structured terminal cause mirrored from the failed current step. */
   failureCode?: WorkflowFailureCode
   /** Safe structured byte attribution mirrored from the failed current step. */
@@ -346,6 +350,12 @@ function computeCompat(activeRuns: WorkflowRun[], waitingRuns: Record<string, { 
 
 function prependRunHistory(history: WorkflowRun[], run: WorkflowRun): WorkflowRun[] {
   return [run, ...history.filter(previous => previous.id !== run.id)].slice(0, 50)
+}
+
+function errorCodeFromUnknown(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' && code.trim().length > 0 ? code : undefined
 }
 
 export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
@@ -785,9 +795,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           ?? (error instanceof Error ? error.message : String(error))
         const failureCode = getBoundedCompletionFailureCode(error)
           ?? promptBudgetFailure?.failureCode
+        const errorCode = errorCodeFromUnknown(error)
         updateStepById(set, run.id, i, {
           status: 'failed',
           error: errorMsg,
+          ...(errorCode ? { errorCode } : {}),
           ...(failureCode ? { failureCode } : {}),
           ...(promptBudgetFailure ? { promptBudgetReport: promptBudgetFailure.report } : {}),
           completedAt: new Date().toISOString(),
@@ -795,6 +807,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         updateRunById(set, run.id, {
           status: 'failed',
           error: errorMsg,
+          ...(errorCode ? { errorCode } : {}),
           ...(failureCode ? { failureCode } : {}),
           ...(promptBudgetFailure ? { promptBudgetReport: promptBudgetFailure.report } : {}),
         })

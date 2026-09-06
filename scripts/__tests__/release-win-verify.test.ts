@@ -307,7 +307,17 @@ async function startArmedCommand(root: string, targetSource: string, environment
   return await startArmedExecutable(root, process.execPath, ['-e', targetSource], environment)
 }
 
-async function runShortLivedDescendantFaultScenario(): Promise<Record<string, unknown>> {
+async function runShortLivedProcessExitScenario({
+  step,
+  descendantExitCode,
+  rootExitCode,
+  expectedState,
+}: {
+  step: string
+  descendantExitCode: number | null
+  rootExitCode: number
+  expectedState: 'failed' | 'step-completed'
+}): Promise<Record<string, unknown>> {
   const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-short-child-'))
   const controlPath = join(root, 'control.jsonl')
   const statusPath = join(root, 'status.json')
@@ -339,8 +349,9 @@ async function runShortLivedDescendantFaultScenario(): Promise<Record<string, un
         '-NoProfile',
         '-Command',
         `while (-not (Test-Path -LiteralPath ${quotePowerShell(releasePath)})) { Start-Sleep -Milliseconds 5 }
-Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Milliseconds 60; exit 37') | Out-Null
-Start-Sleep -Milliseconds 180`,
+${descendantExitCode == null ? '' : `Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Milliseconds 60; exit ${descendantExitCode}') | Out-Null`}
+Start-Sleep -Milliseconds 180
+exit ${rootExitCode}`,
       ],
       { windowsHide: true, stdio: 'ignore' },
     )
@@ -350,7 +361,7 @@ Start-Sleep -Milliseconds 180`,
       `${JSON.stringify({
         sequence: 1,
         state: 'running',
-        step: 'short-lived-descendant-fault',
+        step,
         rootProcessId: launcher.pid,
         rootProcessStartTimeTicks: windowsProcessStartTimeTicks(launcher.pid),
         relatedTargetNames: ['powershell'],
@@ -362,13 +373,14 @@ Start-Sleep -Milliseconds 180`,
     await settle(launcher)
     appendFileSync(
       controlPath,
-      `${JSON.stringify({ sequence: 2, state: 'step-complete', step: 'short-lived-descendant-fault' })}\n`,
+      `${JSON.stringify({ sequence: 2, state: 'step-complete', step })}\n`,
       'utf8',
     )
-    const failed = await waitForGateStatus(statusPath, 'failed', 30_000)
+    const terminalStatus = await waitForGateStatus(statusPath, expectedState, 30_000)
     const eventPath = join(evidencePath, 'process-events.jsonl')
     return {
-      ...failed,
+      ...terminalStatus,
+      rootProcessId: launcher.pid,
       processEvents: existsSync(eventPath)
         ? readFileSync(eventPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
         : [],
@@ -840,6 +852,24 @@ describe('Windows release verification orchestration', () => {
     expect(release).toBeGreaterThan(monitorAcknowledgement)
   })
 
+  it('gives step completion headroom beyond both monitor safety windows without hiding failures', () => {
+    const script = readFileSync(releaseScript, 'utf8')
+    const monitor = readFileSync(releaseMonitorScript, 'utf8')
+    const timeoutLiteral = script.match(/const MONITOR_STEP_COMPLETION_TIMEOUT_MS = ([\d_]+)/)?.[1]
+    const waitStart = script.indexOf('async function waitForMonitorState')
+    const failureCheck = script.indexOf("if (status?.state === 'failed')", waitStart)
+    const successCheck = script.indexOf('if (status && states.includes(status.state)', waitStart)
+
+    expect(monitor).toContain('$completionDeadline = [DateTime]::UtcNow.AddSeconds(5)')
+    expect(monitor).toContain('New-AiNovelGateQuietDeadline -NowUtc $NowUtc -QuietSeconds 5')
+    expect(timeoutLiteral).toBeDefined()
+    expect(Number(timeoutLiteral?.replaceAll('_', ''))).toBeGreaterThan(10_000)
+    expect(script.match(/waitForMonitorState\(\['step-completed'\], MONITOR_STEP_COMPLETION_TIMEOUT_MS/g)).toHaveLength(5)
+    expect(script).not.toContain("waitForMonitorState(['step-completed'], 10_000")
+    expect(failureCheck).toBeGreaterThan(waitStart)
+    expect(successCheck).toBeGreaterThan(failureCheck)
+  })
+
   it('implements the final quiet gate as a continuously monitored five-second interval', () => {
     const monitor = readFileSync(
       'scripts/monitor-win-release-gate.ps1',
@@ -1013,7 +1043,12 @@ finally {
   }, 10_000)
 
   windowsIt('fails closed when a 60ms descendant exits nonzero after its root launcher succeeds', async () => {
-    const result = await runShortLivedDescendantFaultScenario()
+    const result = await runShortLivedProcessExitScenario({
+      step: 'short-lived-descendant-fault',
+      descendantExitCode: 37,
+      rootExitCode: 0,
+      expectedState: 'failed',
+    })
     const events = result.processEvents as Array<Record<string, unknown>>
 
     expect(result.state).toBe('failed')
@@ -1030,6 +1065,77 @@ finally {
       }),
     ]))
   }, 60_000)
+
+  windowsIt.each(['build:win:artifacts', 'smoke:win-installer', 'smoke:win-v025-upgrade'])(
+    'records but ignores a nonzero descendant during result-owned step %s',
+    async (step) => {
+      const result = await runShortLivedProcessExitScenario({
+        step,
+        descendantExitCode: 1,
+        rootExitCode: 0,
+        expectedState: 'step-completed',
+      })
+      const events = result.processEvents as Array<Record<string, unknown>>
+
+      expect(result.state).toBe('step-completed')
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'process-exit',
+          step,
+          exitCode: 1,
+          exitClassification: 'ignored-result-owned-descendant-nonzero',
+        }),
+      ]))
+    },
+    60_000,
+  )
+
+  windowsIt('rejects JobMessage 8 before the result-owned descendant exemption', () => {
+    const monitor = readFileSync(releaseMonitorScript, 'utf8')
+    const exemptionStart = monitor.indexOf('$isCapturedNonzeroDescendantExit = (')
+    const exemptionEnd = monitor.indexOf('if (Test-AiNovelGateLegacyBridgeTermination', exemptionStart)
+    const output = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `. ${quotePowerShell(releaseMonitorScript)} -LoadMonitorLibrary
+$event = [pscustomobject]@{ ProcessId = 42; ExitCodeCaptured = $true; ExitCode = 1; JobMessage = [uint32]8 }
+[pscustomobject]@{ Failure = Get-AiNovelGateProcessExitFailure -Step 'build:win:artifacts' -Event $event } | ConvertTo-Json -Compress`,
+      ],
+      { encoding: 'utf8' },
+    )
+    const result = JSON.parse(output.trim().split(/\r?\n/).at(-1) ?? '{}')
+
+    expect(monitor.slice(exemptionStart, exemptionEnd)).toContain('[uint32]$processEvent.JobMessage -eq 7')
+    expect(result.Failure).toContain('abnormal exit')
+  }, 15_000)
+
+  windowsIt.each(['build:win:artifacts', 'smoke:win-installer', 'smoke:win-v025-upgrade'])(
+    'still fails result-owned step %s when the armed root exits nonzero',
+    async (step) => {
+      const result = await runShortLivedProcessExitScenario({
+        step,
+        descendantExitCode: null,
+        rootExitCode: 1,
+        expectedState: 'failed',
+      })
+      const events = result.processEvents as Array<Record<string, unknown>>
+
+      expect(result.failure).toContain('nonzero exit code 1')
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'process-exit',
+          processId: result.rootProcessId,
+          exitCode: 1,
+          exitClassification: 'failure',
+        }),
+      ]))
+    },
+    60_000,
+  )
 
   windowsIt('preserves an armed launch result before failing closed for a nonzero PowerShell descendant', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-preserve-result-'))

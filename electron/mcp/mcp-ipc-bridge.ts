@@ -14,22 +14,28 @@ import { mcpManager } from './mcp-manager'
  */
 export function registerMCPHandlers(): void {
   // 加载配置文件
-  ipcMain.handle('mcp:load-config', async (_event, configPath?: string) => {
+  ipcMain.handle('mcp:load-config', async () => {
     try {
-      const configs = await mcpManager.loadConfig(configPath)
-      return { success: true, configs }
-    } catch (error) {
-      return { success: false, configs: [], error: String(error) }
+      const result = await mcpManager.loadConfig()
+      if (result.status === 'error') return { success: false, ...result }
+      return { success: true, ...result }
+    } catch {
+      return {
+        success: false,
+        status: 'error' as const,
+        servers: [],
+        error: 'MCP 配置加载失败',
+      }
     }
   })
 
   // 连接服务器
-  ipcMain.handle('mcp:connect', async (_event, config) => {
+  ipcMain.handle('mcp:connect', async (_event, serverId: string) => {
     try {
-      await mcpManager.connect(config)
+      await mcpManager.connect(serverId)
       return { success: true }
-    } catch (error) {
-      return { success: false, error: String(error) }
+    } catch {
+      return { success: false, error: 'MCP 服务器连接失败' }
     }
   })
 

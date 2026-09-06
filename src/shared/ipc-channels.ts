@@ -12,6 +12,11 @@ import type { EmbeddingOptions } from './embedding-options'
 import type { ModelCapabilities } from './provider-presets'
 import type { ModelProviderResourceId } from './model-provider-resources'
 import type { WritingLanguage } from './writing-language'
+import type { DraftStatus } from './draft-status'
+import type {
+  RecoveryCandidate,
+  RecoveryCandidateRecordInput,
+} from './recovery-candidate'
 import type {
   FinalizedContinuityProjection,
   SaveFinalizedContinuityRequest,
@@ -25,6 +30,7 @@ import type {
   NarrativeThreadPlanRecord,
   NarrativeThreadView,
 } from './narrative-thread'
+import type { PlotTreeSnapshot, PlotTreeSourceBundle } from './plot-tree'
 import type {
   UpdateActionResponse,
   UpdateCheckResponse,
@@ -83,6 +89,14 @@ export interface UpdateChannels {
     args: []
     return: UpdateCheckResponse
   }
+  'update:download': {
+    args: []
+    return: UpdateActionResponse
+  }
+  'update:open-release': {
+    args: []
+    return: UpdateActionResponse
+  }
   'update:defer-reminder': {
     args: [days: UpdateReminderDelay]
     return: UpdateActionResponse
@@ -127,6 +141,14 @@ export interface WindowChannels {
     args: []
     return: { success: boolean }
   }
+  'window:resolve-close': {
+    args: [requestId: string, decision: 'proceed' | 'cancel']
+    return: { success: boolean }
+  }
+}
+
+export interface WindowEvents {
+  'window:close-requested': { requestId: string }
 }
 
 // ===== 固定官方主页 =====
@@ -192,6 +214,17 @@ export interface ProjectSessionContext {
   projectPath: string
 }
 
+/** Renderer-captured source draft contract revalidated by the main-process write transaction. */
+export interface ExpectedDraftSource {
+  id: number
+  chapterNumber: number
+  version: number
+  status: DraftStatus
+  content: string
+}
+
+export type SourceDraftGuardErrorCode = 'SOURCE_DRAFT_CHANGED'
+
 // ===== 项目管理 =====
 export interface CreateProjectConfig {
   name: string
@@ -254,6 +287,10 @@ export interface ProjectChannels {
     args: []
     return: Array<{ name: string; path: string; updatedAt: string }>
   }
+  'project:recent-remove': {
+    args: [projectPath: string]
+    return: { success: boolean; error?: string }
+  }
   'project:delete': {
     args: [projectPath: string, projectId: string, sessionLease: string]
     return: {
@@ -279,6 +316,8 @@ export interface ProjectChannels {
 }
 
 // ===== 文件系统 =====
+export type FileWriteCommitState = 'not_committed' | 'committed' | 'unknown'
+
 export interface FileChannels {
   'fs:read-file': {
     args: [filePath: string, expectedProjectPath: string]
@@ -286,7 +325,7 @@ export interface FileChannels {
   }
   'fs:write-file': {
     args: [filePath: string, content: string, expectedProjectPath: string]
-    return: { success: boolean; error?: string }
+    return: { success: boolean; commitState: FileWriteCommitState; error?: string }
   }
   'fs:list-dir': {
     args: [dirPath: string, expectedProjectPath: string]
@@ -315,7 +354,9 @@ export interface FileChannels {
   }
   'fs:grant-write-file': {
     args: [grantId: string, relativePath: string, content: string]
-    return: { success: boolean; error?: string }
+    return:
+      | { success: true }
+      | { success: false; commitState: Exclude<FileWriteCommitState, 'committed'>; error?: string }
   }
   'fs:grant-mkdir': {
     args: [grantId: string, relativePath: string]
@@ -657,6 +698,10 @@ import type {
   CharacterData,
 } from '../../electron/repositories/character-repository'
 import type { DraftMeta, DraftFull } from '../../electron/repositories/draft-repository'
+import type {
+  FinalizedDraftExportAuthorityReceipt,
+  FinalizedDraftExportSnapshot,
+} from '../../electron/repositories/finalization-repository'
 import type { RevisionMeta, RevisionFull } from '../../electron/repositories/revision-repository'
 import type { ReviewMeta, ReviewFull } from '../../electron/repositories/review-repository'
 import type { PostProcessRunData, PostProcessStepData } from '../../electron/repositories/post-process-repository'
@@ -802,6 +847,11 @@ export interface DatabaseChannels {
   'db:draft-get-finalized': { args: [chapterNumber: number, expectedProjectPath: string]; return: DraftMeta | null }
   'db:draft-get-max-finalized-chapter': { args: [expectedProjectPath: string]; return: number }
   'db:draft-authority-sequence': { args: [expectedProjectPath: string]; return: AuthoritativeChapterSequence }
+  'db:draft-export-snapshot': { args: [expectedProjectPath: string]; return: FinalizedDraftExportSnapshot[] }
+  'db:draft-export-authority-current': {
+    args: [receipt: FinalizedDraftExportAuthorityReceipt, expectedProjectPath: string]
+    return: boolean
+  }
   'db:continuity-save-finalized': {
     args: [request: SaveFinalizedContinuityRequest, expectedProjectPath: string]
     return: { success: boolean; error?: string }
@@ -843,27 +893,82 @@ export interface DatabaseChannels {
     args: [input: NarrativeThreadEventInput, expectedProjectPath: string]
     return: { success: boolean; event?: NarrativeThreadEvent; error?: string }
   }
+  'db:plot-tree-read': {
+    args: [expectedProjectPath: string]
+    return: PlotTreeSourceBundle
+  }
+  'db:plot-tree-save': {
+    args: [snapshot: PlotTreeSnapshot, expectedSourceRevision: string, expectedProjectPath: string]
+    return: { success: boolean; snapshot?: PlotTreeSnapshot; errorCode?: 'sources-changed'; error?: string }
+  }
+  'db:plot-tree-clear': {
+    args: [expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
   'db:draft-next-version': { args: [chapterNumber: number, expectedProjectPath: string]; return: number }
   'db:draft-update-status': { args: [id: number, status: string, wordCount: number | undefined, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:draft-update-content': { args: [id: number, content: string, wordCount: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
-  'db:draft-delete': { args: [id: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
+  'db:draft-delete': {
+    args: [id: number, expectedProjectPath: string]
+    return: {
+      success: boolean
+      errorCode?: 'FINALIZED_DRAFT_DELETE_REQUIRED'
+      error?: string
+    }
+  }
+  'db:recovery-candidate-record': {
+    args: [request: RecoveryCandidateRecordInput, expectedProjectPath: string]
+    return: { success: boolean; candidate?: RecoveryCandidate; error?: string }
+  }
+  'db:recovery-candidate-list': {
+    args: [expectedProjectPath: string]
+    return: RecoveryCandidate[]
+  }
+  'db:recovery-candidate-update': {
+    args: [candidateId: string, visibleText: string, expectedProjectPath: string]
+    return: { success: boolean; candidate?: RecoveryCandidate; error?: string }
+  }
+  'db:recovery-candidate-resolve': {
+    args: [candidateId: string, status: 'continued' | 'discarded', expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
   'db:finalization-link-knowledge-document': {
     args: [draftId: number, documentId: string, expectedProjectPath: string]
     return: { success: boolean; finalization?: { knowledgeDocumentId: string }; error?: string }
   }
 
   // 5. revisions
-  'db:revision-create': { args: [params: { baseDraftId: number; revisionType: 'refine' | 'review-fix'; userPrompt?: string; reviewSourceId?: number; content: string; wordCount: number }, expectedProjectPath: string]; return: { success: boolean; id?: number; revisionIndex?: number; error?: string } }
-  'db:revision-replace-pending': { args: [params: { baseDraftId: number; revisionType: 'refine' | 'review-fix'; userPrompt?: string; reviewSourceId?: number; content: string; wordCount: number }, expectedProjectPath: string]; return: { success: boolean; id?: number; revisionIndex?: number; error?: string } }
+  'db:revision-create': { args: [params: { baseDraftId: number; revisionType: 'refine' | 'review-fix'; userPrompt?: string; reviewSourceId?: number; content: string; wordCount: number; expectedSource?: ExpectedDraftSource }, expectedProjectPath: string]; return: { success: boolean; id?: number; revisionIndex?: number; errorCode?: SourceDraftGuardErrorCode; error?: string } }
+  'db:revision-replace-pending': { args: [params: { baseDraftId: number; revisionType: 'refine' | 'review-fix'; userPrompt?: string; reviewSourceId?: number; content: string; wordCount: number; expectedSource?: ExpectedDraftSource }, expectedProjectPath: string]; return: { success: boolean; id?: number; revisionIndex?: number; errorCode?: SourceDraftGuardErrorCode; error?: string } }
   'db:revision-list': { args: [baseDraftId: number, expectedProjectPath: string]; return: RevisionMeta[] }
   'db:revision-get-pending': { args: [baseDraftId: number, expectedProjectPath: string]; return: RevisionMeta[] }
   'db:revision-get-full': { args: [id: number, expectedProjectPath: string]; return: RevisionFull | null }
   'db:revision-next-index': { args: [baseDraftId: number, expectedProjectPath: string]; return: number }
+  'db:revision-merge': {
+    args: [request: {
+      revisionId: number
+      targetDraftId: number
+      expectedDraftContent: string
+      mergedContent: string
+      wordCount: number
+    }, expectedProjectPath: string]
+    return: {
+      success: boolean
+      receipt?: {
+        revisionId: number
+        targetDraftId: number
+        status: 'revised'
+        wordCount: number
+        idempotent: boolean
+      }
+      error?: string
+    }
+  }
   'db:revision-mark-merged': { args: [id: number, mergedToDraftId: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'db:revision-mark-discarded': { args: [id: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
 
   // 6. reviews
-  'db:review-create': { args: [params: { baseDraftId: number; reviewIndex: number; content: string }, expectedProjectPath: string]; return: { success: boolean; id?: number; error?: string } }
+  'db:review-create': { args: [params: { baseDraftId: number; reviewIndex?: number; content: string; expectedSource?: ExpectedDraftSource }, expectedProjectPath: string]; return: { success: boolean; id?: number; reviewIndex?: number; errorCode?: SourceDraftGuardErrorCode; error?: string } }
   'db:review-list': { args: [baseDraftId: number, expectedProjectPath: string]; return: ReviewMeta[] }
   'db:review-get-latest': { args: [baseDraftId: number, expectedProjectPath: string]; return: ReviewFull | null }
   'db:review-get-full': { args: [id: number, expectedProjectPath: string]; return: ReviewFull | null }
@@ -901,6 +1006,7 @@ export interface KnowledgeBaseChannels {
   'kb:import-document': { args: [grantId: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
   'kb:import-folder': { args: [grantId: string, expectedProjectPath: string]; return: { success: boolean; importedCount: number; failedFiles: string[]; error?: string; errorCode?: AppErrorCode } }
   'kb:import-text': { args: [text: string, fileName: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
+  'kb:import-planning-text': { args: [text: string, fileName: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
   'kb:import-reference-text': {
     args: [
       chapterNumber: number,
@@ -970,21 +1076,62 @@ export interface ChapterLifecycleChannels {
 }
 
 // ===== MCP =====
+export type MCPConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+
+export interface MCPServerSummary {
+  id: string
+  name: string
+  transport: 'stdio' | 'sse'
+}
+
+export interface MCPServerStatus {
+  id: string
+  name: string
+  status: MCPConnectionStatus
+  toolCount: number
+  error?: string
+}
+
+export interface MCPToolDescription {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+  serverId: string
+}
+
+export interface MCPResourceDescription {
+  uri: string
+  name: string
+  description?: string
+  mimeType?: string
+  serverId: string
+}
+
+export type MCPConfigLoadResult =
+  | { status: 'missing'; servers: [] }
+  | { status: 'loaded'; servers: MCPServerSummary[] }
+  | { status: 'error'; servers: []; error: string }
+
+export type MCPConfigLoadResponse =
+  | ({ status: 'missing'; servers: [] } & { success: true })
+  | ({ status: 'loaded'; servers: MCPServerSummary[] } & { success: true })
+  | ({ status: 'error'; servers: []; error: string } & { success: false })
+
 export interface MCPChannels {
-  'mcp:load-config': { args: [configPath?: string]; return: { success: boolean; configs: unknown[]; error?: string } }
-  'mcp:connect': { args: [config: Record<string, unknown>]; return: { success: boolean; error?: string } }
+  'mcp:load-config': { args: []; return: MCPConfigLoadResponse }
+  'mcp:connect': { args: [serverId: string]; return: { success: boolean; error?: string } }
   'mcp:disconnect': { args: [serverId: string]; return: { success: boolean; error?: string } }
   'mcp:disconnect-all': { args: []; return: { success: boolean; error?: string } }
-  'mcp:list-tools': { args: []; return: unknown[] }
-  'mcp:list-resources': { args: []; return: unknown[] }
+  'mcp:list-tools': { args: []; return: MCPToolDescription[] }
+  'mcp:list-resources': { args: []; return: MCPResourceDescription[] }
   'mcp:call-tool': { args: [serverId: string, toolName: string, args: Record<string, unknown>]; return: { success: boolean; content: string; error?: string } }
-  'mcp:get-servers-status': { args: []; return: unknown[] }
+  'mcp:get-servers-status': { args: []; return: MCPServerStatus[] }
   'mcp:get-config-path': { args: []; return: string }
 }
 
 // ===== 合并所有频道 =====
 export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
-export type AllEventChannels = LLMStreamEvents & UpdateStateEvents
+export type AllEventChannels = LLMStreamEvents & UpdateStateEvents & WindowEvents
 
 /** 提取 invoke 频道名 */
 export type InvokeChannel = keyof AllInvokeChannels

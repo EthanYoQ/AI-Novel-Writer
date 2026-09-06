@@ -114,12 +114,12 @@ export const WORKFLOW_GENERATION_BUDGETS = Object.freeze({
     deadlineMs: 20 * 60_000,
   }),
   'character-architecture': Object.freeze({
-    // Worst recoverable path: manifest initial + 2 replacements, eight
-    // individual details, and one global syntax-only repair.
+    // Worst recoverable path: manifest replacements, bounded detail batches,
+    // and one syntax-only repair on a slow provider.
     maxAttempts: 12,
-    maxRequestedOutputTokens: 147_456,
-    maxRequestedOutputTokensPerAttempt: 12_288,
-    deadlineMs: 10 * 60_000,
+    maxRequestedOutputTokens: 98_304,
+    maxRequestedOutputTokensPerAttempt: 8192,
+    deadlineMs: 20 * 60_000,
   }),
 })
 
@@ -259,6 +259,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       maxContinuations: continuation.maxContinuations,
       originalPrompt: prompt,
       writingLanguage: workflowWritingLanguage(context),
+      uiLocale: context.uiLocale ?? 'zh-CN',
       promptBudget: {
         contextWindowTokens: completion.receipt.capabilities.contextWindowTokens,
         maxOutputTokens: completion.receipt.budget.requestedOutputTokens,
@@ -368,7 +369,10 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   }
 
   protected createIncompleteCompletionError(finishReason: LLMFinishReason): Error {
-    return createBoundedCompletionError(finishReason)
+    return createBoundedCompletionError(
+      finishReason,
+      this.activeGenerationExecution?.context.uiLocale ?? 'zh-CN',
+    )
   }
 
   /**

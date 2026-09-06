@@ -233,14 +233,14 @@ describe('llm generation parameter policy controller integration', () => {
       reasoning: {
         adapter: 'deepseek-v4-thinking',
         thinking: 'enabled',
-        reasoningEffort: 'high',
+        reasoningEffort: 'low',
       },
     })
     expect(mocks.generate.mock.calls.at(-1)?.[2]).toMatchObject({
       reasoning: {
         adapter: 'deepseek-v4-thinking',
         thinking: 'enabled',
-        reasoningEffort: 'high',
+        reasoningEffort: 'low',
       },
     })
     await handler('llm:cancel')({}, 'deepseek-v4-stream')
@@ -612,6 +612,43 @@ describe('llm project statistics', () => {
     expect(mocks.logCall).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
       errorMessage: 'finish:unknown',
+    }))
+  })
+
+  it('forwards a damaged stream candidate as an incomplete terminal result', async () => {
+    const handler = mocks.handlers.get('llm:generate-stream')
+    if (!handler) throw new Error('Missing llm:generate-stream handler')
+    mocks.generateStream.mockImplementationOnce((
+      _model: ModelProfile,
+      _messages: unknown,
+      options: {
+        onError: (error: string, content?: string, usage?: unknown) => void
+      },
+    ) => {
+      options.onError('响应流包含损坏的 JSON 数据', 'HEAD', {
+        promptTokens: 1,
+        completionTokens: 2,
+        totalTokens: 3,
+      })
+    })
+
+    await expect(handler({ sender: {} }, 'damaged-stream', {
+      modelId: deepSeekModel.id,
+      messages: [{ role: 'user', content: 'write' }],
+      purpose: 'draft',
+      projectSession,
+    })).resolves.toEqual({ requestId: 'damaged-stream', started: true })
+
+    expect(mocks.send).toHaveBeenCalledWith('llm:stream-done', {
+      requestId: 'damaged-stream',
+      fullText: 'HEAD',
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+      finishReason: 'error',
+    })
+    expect(mocks.send).not.toHaveBeenCalledWith('llm:stream-error', expect.anything())
+    expect(mocks.logCall).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      errorMessage: '响应流包含损坏的 JSON 数据',
     }))
   })
 })

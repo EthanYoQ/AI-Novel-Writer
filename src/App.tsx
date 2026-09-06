@@ -26,6 +26,7 @@ import SettingsModal from './components/settings/SettingsModal'
 import { ANIME_SKIN_URL } from './components/settings/AppearanceSettings'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { actionToast } from './components/ui/ActionToast'
+import { UpdateNotifier } from './components/updates/UpdateNotifier'
 import { globalEventBus } from './shared/event-bus'
 import {
   projectSessionContextFromProject,
@@ -252,6 +253,7 @@ export default function App() {
         backgroundUrl={skinBackgroundUrl}
         onImageError={() => void recoverFromImageFailure()}
       />
+      <UpdateNotifier />
       {/* 标题栏 */}
       <TitleBar />
 

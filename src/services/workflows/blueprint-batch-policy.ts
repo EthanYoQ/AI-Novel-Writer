@@ -8,8 +8,8 @@ const DIRECTORY_SYNTAX_REPAIR_RESERVE_CALLS = 1
 export const MAX_BLUEPRINT_CHAPTERS_PER_TASK = 50
 const DIRECTORY_MAX_REQUESTED_TOKENS_PER_ATTEMPT = 4_096
 const DIRECTORY_MIN_DEADLINE_MS = 10 * 60_000
-const DIRECTORY_MAX_DEADLINE_MS = 10 * 60_000
-const DIRECTORY_DEADLINE_PER_SEMANTIC_BATCH_MS = 60_000
+const DIRECTORY_MAX_DEADLINE_MS = 30 * 60_000
+const DIRECTORY_DEADLINE_PER_ATTEMPT_MS = 2 * 60_000
 
 export interface BlueprintGenerationCostPlan {
   chapterCount: number
@@ -38,11 +38,11 @@ export function planBlueprintGenerationCost(chapterCount: number): BlueprintGene
     ? Math.max(0, Math.floor(chapterCount))
     : 0
   const semanticBatchCount = Math.ceil(normalizedChapterCount / MAX_BLUEPRINT_ITEMS_PER_BATCH)
-  const maxCompactSingleFallbacks = Math.min(normalizedChapterCount, semanticBatchCount)
+  const maxCompactSingleFallbacks = normalizedChapterCount
   // For a semantic batch of n items, recursively splitting every non-single
   // length result creates a full binary tree with 2n-1 physical calls. Across
   // B initial batches this is 2N-B. The executor additionally permits one
-  // compact fallback per semantic batch (at most once per item key) and one
+  // compact fallback per item key and one
   // global syntax repair.
   const uncappedMaxCalls = normalizedChapterCount === 0
     ? 0
@@ -70,7 +70,7 @@ export function planBlueprintGenerationCost(chapterCount: number): BlueprintGene
         DIRECTORY_MAX_DEADLINE_MS,
         Math.max(
           DIRECTORY_MIN_DEADLINE_MS,
-          semanticBatchCount * DIRECTORY_DEADLINE_PER_SEMANTIC_BATCH_MS,
+          maxCalls * DIRECTORY_DEADLINE_PER_ATTEMPT_MS,
         ),
       ),
     },

@@ -1,4 +1,5 @@
 import { writingLanguageText, type WritingLanguage } from './writing-language'
+import type { ExpectedDraftSource } from './ipc-channels'
 
 /**
  * Immutable, user-confirmed review snapshot persisted in the existing
@@ -27,6 +28,8 @@ export interface HumanConfirmedReviewSnapshot {
   schemaVersion: typeof HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION
   /** The immutable original AI-review row; never the confirmation row itself. */
   sourceReviewId: number
+  /** AI review generation source. Missing only on legacy confirmations, which must fail closed. */
+  sourceDraft?: Readonly<ExpectedDraftSource>
   summary: string
   authorGuidance: string
   items: readonly HumanConfirmedReviewItem[]
@@ -34,6 +37,7 @@ export interface HumanConfirmedReviewSnapshot {
 
 export interface HumanConfirmedReviewSnapshotInput {
   sourceReviewId: number
+  sourceDraft: Readonly<ExpectedDraftSource>
   summary: string
   authorGuidance: string
   items: readonly HumanConfirmedReviewItem[]
@@ -49,6 +53,25 @@ function stringValue(value: unknown): string | null {
 
 function positiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function parseSourceDraft(value: unknown): Readonly<ExpectedDraftSource> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const source = value as Record<string, unknown>
+  if (
+    !positiveSafeInteger(source.id)
+    || !positiveSafeInteger(source.chapterNumber)
+    || !positiveSafeInteger(source.version)
+    || !['draft', 'revised', 'reviewed', 'finalized', 'archived'].includes(String(source.status))
+    || typeof source.content !== 'string'
+  ) return null
+  return Object.freeze({
+    id: source.id,
+    chapterNumber: source.chapterNumber,
+    version: source.version,
+    status: source.status as ExpectedDraftSource['status'],
+    content: source.content,
+  })
 }
 
 function parseItem(value: unknown): HumanConfirmedReviewItem | null {
@@ -105,6 +128,8 @@ export function validateHumanConfirmedReviewSnapshot(
   const summary = stringValue(record.summary)
   const authorGuidance = stringValue(record.authorGuidance)
   if (summary === null || authorGuidance === null) return null
+  const sourceDraft = record.sourceDraft === undefined ? undefined : parseSourceDraft(record.sourceDraft)
+  if (sourceDraft === null) return null
 
   const items = record.items.map(parseItem)
   if (items.some(item => item === null)) return null
@@ -113,6 +138,7 @@ export function validateHumanConfirmedReviewSnapshot(
     kind: HUMAN_CONFIRMED_REVIEW_KIND,
     schemaVersion: HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION,
     sourceReviewId: record.sourceReviewId,
+    ...(sourceDraft ? { sourceDraft } : {}),
     summary,
     authorGuidance,
     items: Object.freeze(items as HumanConfirmedReviewItem[]),

@@ -1,9 +1,5 @@
 # AI 小说作家
 
-## 当前版本：v0.9.0
+中文 README 以 [README.md](README.md) 为唯一维护入口；本文件只保留兼容链接，避免版本说明和安装指引出现两份相互漂移的副本。
 
-本次更新强化长篇一致性上下文继承，并加入伏笔与叙事线索系统、EPUB 导入、角色图谱缩放/平移/清空，以及单章和连续写作的模型与目标字数控制。
-
-AI 审稿现可由作者调整和确认，再按确认意见修稿并通过差异视图合并；模型高级设置与模型列表获取流程也得到完善。相同生成目标的重复任务会被阻止，失败提示则会更准确地说明原因。
-
-中文 README 现为仓库默认入口：[README.md](README.md)。英文说明请见 [README_en.md](README_en.md)。
+英文说明请见 [README_en.md](README_en.md)，正式版本与安装包请以 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 为准。

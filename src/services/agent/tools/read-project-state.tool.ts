@@ -33,7 +33,8 @@ export const readProjectStateTool = buildAgentTool({
   requiresConfirmation: false,
   execute: async (args, context) => {
     const { project, projectSession } = requireAgentProject(context)
-    const writingLanguage = resolveWritingLanguage(project.novelConfig.writingLanguage)
+    const writingLanguage = context?.writingLanguage
+      ?? resolveWritingLanguage(project.novelConfig.writingLanguage)
     const english = writingLanguage === 'en-US'
 
     const includeConfig = (args.include_config as boolean) !== false

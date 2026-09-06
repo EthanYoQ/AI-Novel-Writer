@@ -242,17 +242,26 @@ export class DraftRepository {
         const db = getProjectDb()
         if (!db) return
 
-        // 先获取 contentId 以便清理
-        const meta = DraftRepository.getMeta(id)
-        db.prepare('DELETE FROM drafts WHERE id = ?').run(id)
+        db.transaction(() => {
+            // 状态必须与 DELETE 位于同一权威事务；菜单打开时的 renderer 状态
+            // 不能授权删除在确认期间已经定稿的事实。
+            const target = db.prepare(`
+              SELECT status, content_id FROM drafts WHERE id = ?
+            `).get(id) as { status: string; content_id: number } | undefined
+            if (!target) return
+            if (target.status === 'finalized') {
+                throw Object.assign(
+                    new Error('草稿已定稿，请通过定稿删除入口清理正文及派生投影'),
+                    { code: 'FINALIZED_DRAFT_DELETE_REQUIRED' as const },
+                )
+            }
 
-        // 清理孤立的 content 记录
-        if (meta) {
-            // 【DB 迁移备注】：如果 contents。id 仍被 revision 或 review 引用，
-            // SQLite外键约束会阻止删除（抛出异常）。捕获并吞掉异常是预期的，
-            // 这会导致少量不再被草稿引用的内容记录残留，但长期风险极低。
-            try { ContentRepository.delete(meta.contentId) } catch { /* 被外键保护 */ }
-        }
+            db.prepare('DELETE FROM drafts WHERE id = ?').run(id)
+
+            // 【DB 迁移备注】：如果 contents.id 仍被 revision 或 review 引用，
+            // SQLite 外键约束会阻止删除；此处保留原有孤立内容兼容策略。
+            try { ContentRepository.delete(target.content_id) } catch { /* 被外键保护 */ }
+        })()
     }
 
     /** 清空所有生成正文与派生产物，不删除角色卡或项目配置 */

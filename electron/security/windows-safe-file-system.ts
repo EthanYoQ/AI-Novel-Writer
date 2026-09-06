@@ -101,8 +101,23 @@ const MAX_UINT64 = BigInt('18446744073709551615')
 const windowsReservedNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 const unsignedDecimal = /^(?:0|[1-9]\d*)$/
 
+export type AtomicWriteFailureCommitState = 'not_committed' | 'unknown'
+
+export function atomicWriteFailureCommitState(error: unknown): AtomicWriteFailureCommitState | undefined {
+  if (!error || typeof error !== 'object' || !('commitState' in error)) return undefined
+  const value = (error as { commitState?: unknown }).commitState
+  return value === 'not_committed' || value === 'unknown' ? value : undefined
+}
+
 function secureError(code: string): Error {
   return new Error(code)
+}
+
+function atomicWriteError(error: unknown, commitState: AtomicWriteFailureCommitState): Error {
+  return Object.assign(
+    error instanceof Error ? error : secureError('SECURE_FS_HELPER_FAILED'),
+    { commitState },
+  )
 }
 
 function normalizeReadByteLimit(maxBytes: number | undefined): number {
@@ -379,6 +394,7 @@ async function invokeBundledAtomicWrite(
     let ready = false
     let settled = false
     let beforeReplaceError: unknown
+    let commitSent = false
     const finish = (callback: () => void) => {
       if (settled) return
       settled = true
@@ -387,10 +403,16 @@ async function invokeBundledAtomicWrite(
     }
     const timeout = setTimeout(() => {
       child.kill()
-      finish(() => reject(secureError('SECURE_FS_HELPER_TIMEOUT')))
+      finish(() => reject(atomicWriteError(
+        secureError('SECURE_FS_HELPER_TIMEOUT'),
+        commitSent ? 'unknown' : 'not_committed',
+      )))
     }, timeoutMs)
     const sendCommand = (command: 'commit' | 'cancel') => {
-      if (!child.stdin.destroyed) child.stdin.end(`${JSON.stringify({ command })}\n`, 'utf8')
+      if (!child.stdin.destroyed) {
+        if (command === 'commit') commitSent = true
+        child.stdin.end(`${JSON.stringify({ command })}\n`, 'utf8')
+      }
     }
     const handleLine = (line: string) => {
       if (!line) return
@@ -414,13 +436,19 @@ async function invokeBundledAtomicWrite(
       finalResponse = response
     }
 
-    child.once('error', () => finish(() => reject(secureError('SECURE_FS_HELPER_UNAVAILABLE'))))
+    child.once('error', () => finish(() => reject(atomicWriteError(
+      secureError('SECURE_FS_HELPER_UNAVAILABLE'),
+      commitSent ? 'unknown' : 'not_committed',
+    ))))
     child.stdout.on('data', (chunk: Buffer) => {
       if (settled) return
       outputBuffer += chunk.toString('utf8')
       if (Buffer.byteLength(outputBuffer, 'utf8') > MAX_HELPER_RESPONSE_BYTES) {
         child.kill()
-        finish(() => reject(secureError('SECURE_FS_HELPER_INVALID_RESPONSE')))
+        finish(() => reject(atomicWriteError(
+          secureError('SECURE_FS_HELPER_INVALID_RESPONSE'),
+          commitSent ? 'unknown' : 'not_committed',
+        )))
         return
       }
       try {
@@ -433,7 +461,7 @@ async function invokeBundledAtomicWrite(
         }
       } catch (error) {
         child.kill()
-        finish(() => reject(error))
+        finish(() => reject(atomicWriteError(error, commitSent ? 'unknown' : 'not_committed')))
       }
     })
     child.stderr.resume()
@@ -444,10 +472,13 @@ async function invokeBundledAtomicWrite(
       }
       try {
         if (outputBuffer.trim()) handleLine(outputBuffer.trim())
-        if (!finalResponse) throw secureError('SECURE_FS_HELPER_INVALID_RESPONSE')
+        if (!finalResponse) throw atomicWriteError(
+          secureError('SECURE_FS_HELPER_INVALID_RESPONSE'),
+          commitSent ? 'unknown' : 'not_committed',
+        )
         resolve(finalResponse)
       } catch (error) {
-        reject(error)
+        reject(atomicWriteError(error, commitSent ? 'unknown' : 'not_committed'))
       }
     }))
     child.stdin.write(`${input}\n`, 'utf8')

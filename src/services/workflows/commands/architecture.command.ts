@@ -31,6 +31,13 @@ import {
 } from '../../../shared/character-roster'
 import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
 import { localizeNovelConfigFacts } from '../../../shared/novel-config-localization'
+import {
+  GENERATED_GLOBAL_GUIDANCE_MAX_CHARS,
+  GENERATED_GLOBAL_GUIDANCE_MAX_RULES,
+  GENERATED_GLOBAL_GUIDANCE_MIN_RULES,
+  isGeneratedGlobalGuidanceValid,
+  mergeExpandedNovelConfig,
+} from '../novel-config-expansion'
 
 // --- 基础工具库 ---
 
@@ -80,12 +87,14 @@ function buildNovelConfigJSONContract(
 - plotStructure 必填，且值必须严格为以下英文枚举之一：three_act | heros_journey | save_the_cat | kishotenketsu | multi_thread | freeform。
 - narrativePOV 必填，且值必须严格为以下英文枚举之一：third_limited | first_person | third_omniscient | multi_pov。
 - totalChapters 与 wordsPerChapter 是作者权威设置，可以省略；totalChapters 若输出必须严格等于 ${totalChapters}；wordsPerChapter 若输出必须严格等于 ${wordsPerChapter}。
+- globalGuidance 必须是 4–8 条跨章节长期有效的简短规则，总计不得超过 ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} 字符；禁止逐章列大纲或分配章节区间。
 - referenceWorks 可省略；若输出必须是字符串。
 - 只输出一个完整 JSON 对象。枚举只允许上述英文值，不得输出中文枚举、近义词、说明文字、Markdown、代码围栏或思考过程。`, `[Immutable novel-configuration JSON contract]
 - The following nine fields are required non-empty strings: genre, targetAudience, subGenre, coreOutline, worldSetting, goldenFinger, protagonistProfile, globalGuidance, writingStyle.
 - plotStructure is required and must be exactly one of: three_act | heros_journey | save_the_cat | kishotenketsu | multi_thread | freeform.
 - narrativePOV is required and must be exactly one of: third_limited | first_person | third_omniscient | multi_pov.
 - totalChapters and wordsPerChapter are authoritative author settings and may be omitted. If present, they must equal ${totalChapters} and ${wordsPerChapter} respectively.
+- globalGuidance must contain 4–8 short, stable cross-chapter rules within ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} characters. Do not enumerate chapters or allocate chapter ranges.
 - referenceWorks may be omitted; if present, it must be a string.
 - Output one complete JSON object only. Do not emit aliases, explanatory prose, Markdown, code fences, or reasoning.`)
 }
@@ -101,7 +110,9 @@ function decodeCompleteNovelConfig(
 ): NovelConfig {
   let value: unknown
   try {
-    value = JSON.parse(content.trim())
+    const trimmed = content.trim()
+    const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
+    value = JSON.parse(fenced?.[1].trim() ?? trimmed)
   } catch {
     throw new Error('AI 返回的小说配置不是完整 JSON 对象')
   }
@@ -175,8 +186,16 @@ interface CharacterDetailOutput extends Omit<CharacterRosterEntry, 'relationship
 
 const MIN_CHARACTER_SLOTS = 3
 const MAX_CHARACTER_SLOTS = 8
-const CHARACTER_DETAIL_BATCH_SIZE = 1
-const MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES = 24_000
+const CHARACTER_DETAIL_BATCH_SIZE = 3
+const CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS = 120
+const CHARACTER_STATE_TEXT_MAX_CHARS = 80
+const CHARACTER_DETAIL_DESCRIPTION_FIELDS = [
+  'appearance', 'personality', 'background', 'abilities', 'motivation', 'arc', 'notes',
+] as const
+const CHARACTER_STATE_TEXT_FIELDS = [
+  'location', 'powerLevel', 'physicalState', 'mentalState', 'keyItems', 'recentEvents',
+] as const
+const MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES = 32_768
 
 function promptUtf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength
@@ -275,7 +294,7 @@ function decodeCharacterIdentityManifest(content: string): CharacterIdentitySlot
   const slotIds = new Set(slots.map(slot => slot.slotId))
   const names = new Set(slots.map(slot => slot.name))
   if (slotIds.size !== slots.length || names.size !== slots.length) throw new Error('角色身份清单包含重复 slotId 或姓名')
-  if (slots.filter(slot => slot.role === 'protagonist').length !== 1) throw new Error('角色身份清单必须恰好包含一个主角')
+  if (!slots.some(slot => slot.role === 'protagonist')) throw new Error('角色身份清单必须至少包含一个主角')
   for (const slot of slots) {
     for (const relation of slot.relations) {
       if (!slotIds.has(relation.targetSlotId) || relation.targetSlotId === slot.slotId) {
@@ -303,14 +322,22 @@ function validateCharacterDetail(output: CharacterDetailOutput): string | undefi
     const value = output[field]
     if (typeof value !== 'string' || !value.trim()) return invalid(field, '必须是非空文本')
   }
+  for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) {
+    if (Array.from(output[field].trim()).length > CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS) {
+      return invalid(field, `不得超过 ${CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS} 字符`)
+    }
+  }
   if (!CHARACTER_ROSTER_ROLES.includes(output.role)) return invalid('role', '不是允许的定位')
   if (output.relationships !== undefined) return invalid('relationships', '不得出现')
   if (output.currentState === undefined) return invalid('currentState', '必填')
   {
     if (!isRecord(output.currentState)) return invalid('currentState', '必须是对象')
-    for (const field of ['location', 'powerLevel', 'physicalState', 'mentalState', 'keyItems', 'recentEvents'] as const) {
+    for (const field of CHARACTER_STATE_TEXT_FIELDS) {
       const value = output.currentState[field]
       if (typeof value !== 'string' || !value.trim()) return invalid(`currentState.${field}`, '必须是非空文本')
+      if (Array.from(value.trim()).length > CHARACTER_STATE_TEXT_MAX_CHARS) {
+        return invalid(`currentState.${field}`, `不得超过 ${CHARACTER_STATE_TEXT_MAX_CHARS} 字符`)
+      }
     }
     if (!Number.isSafeInteger(output.currentState.updatedAtChapter) || output.currentState.updatedAtChapter < 0) {
       return invalid('currentState.updatedAtChapter', '必须是非负整数')
@@ -328,6 +355,17 @@ function normalizeDetailStringList(value: unknown, separator: string): unknown {
     normalized.push(item.trim())
   }
   return normalized.join(separator)
+}
+
+function normalizeBoundedDetailText(value: unknown, maxChars: number): unknown {
+  if (typeof value !== 'string') return value
+  return Array.from(value.trim()).slice(0, maxChars).join('')
+}
+
+function normalizeUpdatedAtChapter(value: unknown): unknown {
+  if (typeof value !== 'string' || !/^\d+$/u.test(value)) return value
+  const chapter = Number(value)
+  return Number.isSafeInteger(chapter) ? chapter : value
 }
 
 export interface ArchitectureProjectSnapshot {
@@ -434,6 +472,7 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
     const projectSession = requireWorkflowProjectSession(context)
     const writingLanguage = workflowWritingLanguage(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
+    const existingConfig = { ...(useProjectStore.getState().currentProject?.novelConfig ?? {}) }
     callbacks.log(text(
       '正在调度配置专家 AI，准备解析您的脑洞...',
       'Preparing the configuration model to structure your story idea...',
@@ -454,7 +493,16 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
       this.wordsPerChapter,
       writingLanguage,
     )
-    const originalTask = `${promptBuilder.build()}\n\n${configJSONContract}`
+    const authorConfigContext = Object.keys(existingConfig).length > 0
+      ? promptLanguageText(
+          writingLanguage,
+          `【作者已有配置】\n以下非空内容和选择是作者权威输入：长文本只能在保留原文的基础上补充，类型、受众、结构与视角选择不得改写。\n${JSON.stringify(existingConfig, null, 2)}`,
+          `[Existing author configuration]\nThe following non-empty content and choices are authoritative. Preserve long-form text and only add useful details; do not change the author's genre, audience, structure, or point-of-view choices.\n${JSON.stringify(existingConfig, null, 2)}`,
+        )
+      : ''
+    const originalTask = [promptBuilder.build(), authorConfigContext, configJSONContract]
+      .filter(Boolean)
+      .join('\n\n')
 
     const initial = await this.callLLMResult(
       originalTask,
@@ -518,6 +566,35 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
         'The AI novel configuration was incomplete or invalid, so the result was not applied.',
       ))
     }
+    if (!isGeneratedGlobalGuidanceValid(parsed.globalGuidance)) {
+      callbacks.log(text(
+        '生成的全局写作要求不符合 4–8 条简短规则合同，正在执行唯一一次字段级完整替代。',
+        'The generated global guidance did not satisfy the 4–8 short-rule contract; requesting the single field-level replacement.',
+      ))
+      const replacement = await this.callLLM(
+        promptLanguageText(
+          writingLanguage,
+          `只纠正小说配置中的 globalGuidance 字段。写 ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} 条跨章节长期有效的简短规则，每条独占一行，总计不超过 ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} 字符。不得逐章列大纲、分配章节区间或复述核心大纲。只输出规则正文，不要标题、解释、Markdown 或 JSON。\n\n【已验证的其余小说配置，仅作上下文】\n${JSON.stringify({ ...parsed, globalGuidance: undefined }, null, 2)}`,
+          `Correct only the globalGuidance field in the novel configuration. Write ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} short, stable cross-chapter rules, one per line, within ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} characters total. Do not enumerate chapters, allocate chapter ranges, or restate the core outline. Output only the rules, with no title, explanation, Markdown, or JSON.\n\n[Validated remaining novel configuration — context only]\n${JSON.stringify({ ...parsed, globalGuidance: undefined }, null, 2)}`,
+        ),
+        promptBuilder.getSystemRole(),
+        callbacks,
+        {
+          purpose: 'generate-global-guidance-replacement',
+          reasoningStage: 'planning',
+          writingSkillStage: 'planning',
+        },
+        context,
+      )
+      const replacementGuidance = this.stripThinkingTags(replacement).trim()
+      if (!isGeneratedGlobalGuidanceValid(replacementGuidance)) {
+        throw new Error(text(
+          `全局写作要求仍不符合 ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} 条且不超过 ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} 字符的合同，配置未应用。`,
+          `The global guidance still does not satisfy the ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES}-rule, ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS}-character contract, so the configuration was not applied.`,
+        ))
+      }
+      parsed = { ...parsed, globalGuidance: replacementGuidance }
+    }
 
     this.assertNotCancelled(context)
     if (!sameProjectSessionContext(
@@ -529,7 +606,7 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
         'The current project changed, so the generated configuration was not applied.',
       ))
     }
-    this.onGenerated(parsed)
+    this.onGenerated(mergeExpandedNovelConfig(existingConfig, parsed))
     this.assertNotCancelled(context)
     if (!sameProjectSessionContext(
       projectSession,
@@ -877,15 +954,31 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         return parsed.entries.map((candidate) => {
           if (!isRecord(candidate)) return candidate as unknown as CharacterDetailOutput
           const age = candidate.age
-          const currentState = isRecord(candidate.currentState)
-            ? {
-                ...candidate.currentState,
-                keyItems: normalizeDetailStringList(candidate.currentState.keyItems, '、'),
-                recentEvents: normalizeDetailStringList(candidate.currentState.recentEvents, '；'),
-              }
-            : candidate.currentState
+          const normalizedCandidate = { ...candidate }
+          for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) {
+            normalizedCandidate[field] = normalizeBoundedDetailText(
+              candidate[field],
+              CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS,
+            )
+          }
+          let currentState: unknown = candidate.currentState
+          if (isRecord(candidate.currentState)) {
+            const normalizedState: Record<string, unknown> = {
+              ...candidate.currentState,
+              keyItems: normalizeDetailStringList(candidate.currentState.keyItems, '、'),
+              recentEvents: normalizeDetailStringList(candidate.currentState.recentEvents, '；'),
+              updatedAtChapter: normalizeUpdatedAtChapter(candidate.currentState.updatedAtChapter),
+            }
+            for (const field of CHARACTER_STATE_TEXT_FIELDS) {
+              normalizedState[field] = normalizeBoundedDetailText(
+                normalizedState[field],
+                CHARACTER_STATE_TEXT_MAX_CHARS,
+              )
+            }
+            currentState = normalizedState
+          }
           return {
-            ...candidate,
+            ...normalizedCandidate,
             ...(typeof age === 'number' && Number.isFinite(age) ? { age: String(age) } : {}),
             currentState,
           } as unknown as CharacterDetailOutput
@@ -910,10 +1003,26 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       limits: { maxBatchItems: CHARACTER_DETAIL_BATCH_SIZE },
       signal: generationExecution.signal,
     })
-    if (!detailExecution.ok) throw new Error(text(
-      detailExecution.failure.message,
-      'Character details failed structural validation and were not saved.',
-    ))
+    if (!detailExecution.ok) {
+      const diagnostic = detailExecution.failure.diagnostic
+      const attempts = detailExecution.receipt.attempts.length > 0
+        ? detailExecution.receipt.attempts
+            .map(attempt => `purpose=${attempt.purpose ?? 'unknown'} finishReason=${attempt.finishReason}`)
+            .join('; ')
+        : 'none'
+      const failureReceipt = [
+        `code=${detailExecution.failure.code}`,
+        `reason=${detailExecution.failure.reason ?? 'unknown'}`,
+        ...(diagnostic
+          ? [`diagnosticCode=${diagnostic.code} diagnosticPath=${diagnostic.path} diagnosticField=${diagnostic.field}`]
+          : []),
+        `attempts=${attempts}`,
+      ].join(' ')
+      throw new Error(text(
+        `${detailExecution.failure.message}；角色详情失败收据：${failureReceipt}`,
+        `Character details failed structural validation and were not saved. Receipt: ${failureReceipt}`,
+      ))
+    }
     if (detailExecution.items.length !== manifest.length) {
       throw new Error(text(
         '角色详情未完整覆盖冻结身份清单',

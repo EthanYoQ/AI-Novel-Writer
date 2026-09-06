@@ -105,6 +105,8 @@ export async function saveWritingSkillBinding(
   projectSession: ProjectSessionContext,
   stage: WritingSkillStage,
   skillId: string | null,
+  signal?: AbortSignal,
+  markSideEffectStarted?: () => void,
 ): Promise<void> {
   if (!WRITING_SKILL_STAGES.includes(stage)) throw new Error('Invalid writing skill stage')
   if (skillId !== null) {
@@ -117,9 +119,11 @@ export async function saveWritingSkillBinding(
     }
   }
   const current = await loadWritingSkillBindings(projectSession)
+  if (signal?.aborted) throw new Error('Writing skill binding was cancelled before commit')
   const bindings = { ...current.bindings }
   if (skillId) bindings[stage] = skillId
   else delete bindings[stage]
+  markSideEffectStarted?.()
   const result = await ipc.invokeWithProjectSession(
     projectSession,
     'fs:write-file',

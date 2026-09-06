@@ -29,7 +29,7 @@ const validGeneratedConfig = {
   worldSetting: '灵脉决定城邦兴衰，宗门垄断修炼资源，边境正在发生无法逆转的异变。',
   goldenFinger: '主角可以解析残缺功法，但每次使用都会付出记忆损耗的代价。',
   protagonistProfile: '外表克制谨慎，内心执着于守护家人，在利益与承诺之间不断作出选择。',
-  globalGuidance: '前期建立危机与成长目标，中期扩大阵营冲突，后期收束伏笔并完成终局对决。',
+  globalGuidance: '保持因果推进。\n维持角色动机一致。\n控制场景节奏。\n及时回收伏笔。',
   writingStyle: '节奏紧凑，场景切换清晰，对话简洁有张力，战斗描写强调行动因果与人物选择。',
 }
 
@@ -148,6 +148,36 @@ describe('architecture workflow project context', () => {
     expect(workflow.onComplete?.message).toBe(
       'Story architecture is ready. Open Story Architecture from the sidebar.',
     )
+  })
+
+  it('uses the caller-frozen locale after the live locale changes', () => {
+    useProjectStore.setState({
+      currentProject: {
+        id: 'project-A',
+        sessionLease: 'lease-A',
+        name: 'A',
+        path: 'C:/projects/A',
+        novelConfig: {},
+        characterStates: '',
+        createdAt: '',
+        updatedAt: '',
+      } as never,
+    })
+    useLocaleStore.setState({ locale: 'en-US' })
+    const frozenLocale = useLocaleStore.getState().locale
+    useLocaleStore.setState({ locale: 'zh-CN' })
+
+    const workflow = createArchitectureWorkflow({
+      projectPath: 'C:/projects/A',
+      projectSession: { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
+      selectedSteps: ['premise'],
+    }, frozenLocale)
+
+    expect(workflow).toMatchObject({
+      uiLocale: 'en-US',
+      title: 'Generate story architecture',
+      steps: [expect.objectContaining({ name: 'Story premise' })],
+    })
   })
 
   it('stops a later step when the user switches projects between workflow steps', async () => {

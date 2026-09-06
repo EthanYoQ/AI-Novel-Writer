@@ -271,6 +271,24 @@ function DraftItem({
       projectKey,
     )
     if (!isProjectSessionCurrent(projectSession)) return
+    if (result.errorCode === 'FINALIZED_DRAFT_DELETE_REQUIRED') {
+      await useDraftStore.getState().loadChapterDrafts(
+        draft.chapterNumber,
+        projectKey,
+        projectSession,
+      )
+      if (!isProjectSessionCurrent(projectSession)) return
+      await deleteFinalizedChapter({
+        project: currentProject,
+        projectPath: projectKey,
+        draftId: draft.id,
+        chapterNumber: draft.chapterNumber,
+        displayName: `${chapterTitleText} v${draft.version}`,
+        tabFilePath: draft.filePath,
+        surface: 'draft',
+      })
+      return
+    }
     if (!result.success) {
       toast.error(text(`删除失败\n\n${result.error ?? '未知错误'}`, `Delete failed\n\n${result.error ?? 'Unknown error'}`))
       return

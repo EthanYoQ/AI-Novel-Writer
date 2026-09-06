@@ -19,13 +19,14 @@ import ThreeWayMerge from '../editor/ThreeWayMerge'  // 保留引用以防其他
 import WelcomePage from '../pages/WelcomePage'
 import KnowledgeOverview from '../pages/KnowledgeOverview'
 import { useProjectStore } from '../../stores/project-store'
-import { useEditorStore, type EditorTab } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore, type EditorTab } from '../../stores/editor-store'
 import { discardAndCloseEditorTab } from '../../stores/editor-discard'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
 
 
 import { ipc } from '../../services/ipc-client'
+import { requireIpcSuccess } from '../../services/ipc-result'
 import { toast } from '../ui/Toast'
 import {
   captureProjectSession,
@@ -40,9 +41,11 @@ import '../editor/novel-editor.css'
 function ProseEditorWrapper({
   tab,
   onSave,
+  unsavedOnly = false,
 }: {
   tab: EditorTab
-  onSave: (text: string) => Promise<void>
+  onSave?: (text: string) => Promise<void>
+  unsavedOnly?: boolean
 }) {
   const [wordCount, setWordCount] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -51,14 +54,25 @@ function ProseEditorWrapper({
   const currentContentRef = useRef(tab.content ?? '')
   const text = useLocaleStore(s => s.text)
 
-  const handleSave = async (text: string) => {
+  const handleSave = useCallback(async (text: string) => {
+    if (!onSave) return
     setSaving(true)
     try {
       await onSave(text)
     } finally {
       setSaving(false)
     }
-  }
+  }, [onSave])
+
+  useEffect(() => {
+    if (!onSave) return
+    registerEditorExitSaveHandler({
+      tabId: tab.id,
+      type: tab.type,
+      projectKey: tab.projectKey,
+      save: () => handleSave(currentContentRef.current),
+    })
+  }, [handleSave, onSave, tab.id, tab.projectKey, tab.type])
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -71,9 +85,16 @@ function ProseEditorWrapper({
         }}
       >
         {/* 左侧：文件名 */}
-        <span className="text-xs truncate" style={{ color: 'var(--color-text-muted)' }}>
-          {fileName}
-        </span>
+        <div className="min-w-0">
+          <span className="block text-xs truncate" style={{ color: 'var(--color-text-muted)' }}>
+            {fileName}
+          </span>
+          {unsavedOnly && (
+            <span className="block text-[10px]" style={{ color: 'var(--color-warning)' }}>
+              {text('项目恢复候选；不会自动写入正式草稿', 'Project recovery candidate; it is not written to the formal draft automatically')}
+            </span>
+          )}
+        </div>
 
         {/* 右侧：字数 + dirty 指示灯 + 保存按钮 */}
         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -91,7 +112,7 @@ function ProseEditorWrapper({
             />
           )}
           {/* 保存按钮（有改动时显示） */}
-          {tab.dirty && (
+          {tab.dirty && onSave && (
             <button
               className="icon-btn"
               style={{ width: 24, height: 22 }}
@@ -120,7 +141,7 @@ function ProseEditorWrapper({
             // 标记 tab.dirty
             useEditorStore.getState().updateTabContent(tab.id, text)
           }}
-          onSave={(text) => handleSave(text)}
+          onSave={onSave ? (text) => handleSave(text) : undefined}
         />
       </div>
     </div>
@@ -620,8 +641,39 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           />
         )}
         {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path
+          && activeTab.filePath?.startsWith('vela://recovery/') && (
+          <ProseEditorWrapper
+            key={activeTab.id}
+            tab={activeTab}
+            onSave={async content => {
+              const projectSession = captureProjectSession(currentProject)
+              const candidateId = activeTab.filePath?.slice('vela://recovery/'.length)
+              if (
+                !projectSession
+                || !candidateId
+                || !isProjectSessionPath(projectSession, activeTab.projectKey)
+              ) return
+              const tab = useEditorStore.getState().tabs.find(candidate => candidate.id === activeTab.id)
+              if (!tab) return
+              const snapshot = { content, contentRevision: tab.contentRevision ?? 0 }
+              const result = await ipc.invokeWithProjectSession(
+                projectSession,
+                'db:recovery-candidate-update',
+                candidateId,
+                content,
+                projectSession.projectPath,
+              )
+              requireIpcSuccess(result, '保存恢复候选')
+              if (!isProjectSessionCurrent(projectSession)) return
+              useEditorStore.getState().settleTabSave(activeTab.id, snapshot)
+            }}
+            unsavedOnly
+          />
+        )}
+        {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path
           && !activeTab.filePath?.startsWith('vela://draft/')
-          && !activeTab.filePath?.startsWith('vela://manuscript/') && (
+          && !activeTab.filePath?.startsWith('vela://manuscript/')
+          && !activeTab.filePath?.startsWith('vela://recovery/') && (
           // 【DB 迁移备注】：终稿目前作为物理文件保存在 manuscript/ 目录是合理的（用于外部阅读器或最终打包编译导出）
           // 终稿文件（manuscript/）：用 ProseEditorWrapper（含字数信息栏）
           <ProseEditorWrapper
@@ -660,13 +712,22 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           <CharacterEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
         {activeTab?.type === 'chapter-card' && activeTab.projectKey && (
-          <ChapterCardEditor key={activeTab.id} projectKey={activeTab.projectKey} />
+          <ChapterCardEditor
+            key={activeTab.id}
+            projectKey={activeTab.projectKey}
+            initialChapterNumber={activeTab.chapterNumber}
+          />
         )}
         {activeTab?.type === 'world-building' && activeTab.projectKey && (
           <WorldBuildingEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
         {activeTab?.type === 'narrative-thread' && activeTab.projectKey === currentProject.path && (
-          <NarrativeThreadEditor key={activeTab.id} projectKey={activeTab.projectKey} />
+          <NarrativeThreadEditor
+            key={activeTab.id}
+            projectKey={activeTab.projectKey}
+            initialView={activeTab.narrativeThreadView ?? 'plans'}
+            viewRequest={activeTab.narrativeThreadViewRequest}
+          />
         )}
         {activeTab?.type === 'arch-file' && activeTab.filePath && activeTab.projectKey && (
           <ArchFileViewer
@@ -738,13 +799,30 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                       return
                     }
 
+                    let mergeCommitted = false
                     try {
                       const chapterDir = mergeTab.chapterDir
                       const filePath = mergeTab.filePath
                       const revPath = mergeTab.revisionPath
                       const chapterNum = mergeTab.chapterNumber
+                      const expectedDraftContent = mergeTab.originalContent
 
-                      if (chapterDir && filePath && revPath) {
+                      if (chapterDir && filePath && revPath && expectedDraftContent !== undefined) {
+                        const targetTab = useEditorStore.getState().tabs.find(tab => (
+                          tab.type === 'chapter'
+                          && tab.projectKey === mergeTab.projectKey
+                          && tab.filePath === filePath
+                        ))
+                        if (targetTab && (
+                          targetTab.dirty
+                          || targetTab.content !== expectedDraftContent
+                        )) {
+                          toast.warning(text(
+                            '打开对比后正文已变化，未提交修订；请保存后重新打开',
+                            'The draft changed after the comparison opened. The revision was not committed; save and reopen it.',
+                          ))
+                          return
+                        }
                         const { useDraftStore } = await import('../../stores/draft-store')
                         if (!isProjectSessionCurrent(projectSession)) return
 
@@ -754,12 +832,14 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                           filePath,
                           revPath,
                           mergedText,
+                          expectedDraftContent,
                           projectSession.projectPath,
                           projectSession,
                         )
                         if (!isProjectSessionCurrent(projectSession)) return
 
                         if (result.success) {
+                          mergeCommitted = true
                           toast.success(text('合并完成，草稿已更新', 'Merge complete; draft updated'))
                         } else {
                           toast.error(text(`合并失败：${result.error}`, `Merge failed: ${result.error}`))
@@ -769,7 +849,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                       if (!isProjectSessionCurrent(projectSession)) return
                       toast.error(text(`合并出错：${e}`, `Merge error: ${e}`))
                     } finally {
-                      if (isProjectSessionCurrent(projectSession)) {
+                      if (mergeCommitted && isProjectSessionCurrent(projectSession)) {
                         useEditorStore.getState().closeTab(mergeTab.id)
                       }
                     }

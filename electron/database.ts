@@ -93,6 +93,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       synopsis TEXT DEFAULT '',                   -- 情节总大纲
       -- [系统缓存]
       character_states TEXT DEFAULT '',           -- 全书角色动态快照
+      plot_tree_snapshot TEXT NOT NULL DEFAULT '',-- 可重建的剧情树派生快照
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -169,6 +170,36 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     CREATE INDEX IF NOT EXISTS idx_drafts_chapter ON drafts(chapter_number);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_drafts_chapter_version
       ON drafts(chapter_number, version);
+
+    -- Failed generation output is a recoverable candidate, never a draft or
+    -- finalized fact. It remains project-local and requires an explicit user
+    -- action before entering an unsaved editor buffer.
+    CREATE TABLE IF NOT EXISTS recovery_candidates (
+      candidate_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      chapter_number INTEGER NOT NULL CHECK(chapter_number > 0),
+      chapter_title TEXT NOT NULL DEFAULT '',
+      source_snapshot TEXT NOT NULL,
+      source_hash TEXT NOT NULL,
+      source_draft_id INTEGER DEFAULT NULL,
+      source_draft_version INTEGER DEFAULT NULL,
+      source_draft_identity_captured INTEGER NOT NULL DEFAULT 0
+        CHECK(source_draft_identity_captured IN (0, 1)),
+      visible_text TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      failure_code TEXT NOT NULL DEFAULT '',
+      failure_reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'continued', 'discarded')),
+      replaces_candidate_id TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT DEFAULT NULL,
+      FOREIGN KEY (replaces_candidate_id) REFERENCES recovery_candidates(candidate_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_recovery_candidates_pending
+      ON recovery_candidates(status, created_at);
 
     -- ============================================================
     -- 5b. finalization_outbox — 定稿实体稿发布投影
@@ -252,6 +283,10 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       merged_to_draft_id INTEGER,                 -- 合并产出的新 draft
       user_prompt TEXT DEFAULT '',                -- 用户指导
       review_source_id INTEGER,                   -- 关联审稿 ID
+      source_draft_chapter_number INTEGER,        -- 生成时冻结源稿章节
+      source_draft_version INTEGER,               -- 生成时冻结源稿版本
+      source_draft_status TEXT,                   -- 生成时冻结源稿状态
+      source_content TEXT,                        -- 生成时冻结源稿正文
       content_id INTEGER NOT NULL,                -- FK -> contents
       word_count INTEGER DEFAULT 0,               -- 字数缓存
       created_at TEXT DEFAULT (datetime('now')),
@@ -269,6 +304,10 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       base_draft_id INTEGER NOT NULL,             -- 审查对象 FK
       review_index INTEGER NOT NULL,              -- 审阅顺位
+      source_draft_chapter_number INTEGER,        -- 审稿时冻结源稿章节
+      source_draft_version INTEGER,               -- 审稿时冻结源稿版本
+      source_draft_status TEXT,                   -- 审稿时冻结源稿状态
+      source_content TEXT,                        -- 审稿时冻结源稿正文
       content_id INTEGER NOT NULL,                -- FK -> contents
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (base_draft_id) REFERENCES drafts(id) ON DELETE CASCADE,
@@ -542,6 +581,36 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `)
+
+  // Legacy candidates did not freeze the draft identity. Keep them marked
+  // unknown so update/continue fails closed instead of rebinding to today's draft.
+  const recoveryCandidateColumns = new Set(
+    (db.prepare('PRAGMA table_info(recovery_candidates)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!recoveryCandidateColumns.has('source_draft_id')) {
+    db.exec('ALTER TABLE recovery_candidates ADD COLUMN source_draft_id INTEGER')
+  }
+  if (!recoveryCandidateColumns.has('source_draft_version')) {
+    db.exec('ALTER TABLE recovery_candidates ADD COLUMN source_draft_version INTEGER')
+  }
+  if (!recoveryCandidateColumns.has('source_draft_identity_captured')) {
+    db.exec('ALTER TABLE recovery_candidates ADD COLUMN source_draft_identity_captured INTEGER NOT NULL DEFAULT 0')
+  }
+
+  // Legacy rows cannot be safely rebound to today's mutable draft body. Add
+  // nullable columns and leave old source identity unknown so merge/refine can fail closed.
+  for (const table of ['revisions', 'reviews'] as const) {
+    const columns = new Set(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(column => column.name),
+    )
+    const addSourceColumn = (name: string, type: string) => {
+      if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`)
+    }
+    addSourceColumn('source_draft_chapter_number', 'INTEGER')
+    addSourceColumn('source_draft_version', 'INTEGER')
+    addSourceColumn('source_draft_status', 'TEXT')
+    addSourceColumn('source_content', 'TEXT')
+  }
 
   // Durable continuity facts were added to the existing summary projection so
   // older projects keep their legacy snapshots while new rows bind to a
@@ -918,6 +987,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   addProjectCoreTextColumn('core_outline', 'synopsis')
   addProjectCoreTextColumn('world_setting', 'worldbuilding')
   addProjectCoreTextColumn('protagonist_profile')
+  addProjectCoreTextColumn('plot_tree_snapshot')
   if (!projectCoreColumns.has('writing_language')) {
     db.exec("ALTER TABLE project_core ADD COLUMN writing_language TEXT NOT NULL DEFAULT 'zh-CN'")
     projectCoreColumns.add('writing_language')

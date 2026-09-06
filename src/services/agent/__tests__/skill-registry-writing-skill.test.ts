@@ -88,4 +88,32 @@ describe('writing skill registry identity and tool exposure', () => {
     expect(skillRegistry.get('writing-coach')?.source).toBe('builtin')
     expect(toolRegistry.get('skill__scene-craft')).toBeUndefined()
   })
+
+  it('keeps every real built-in Skill in the English tool catalog and execution without Chinese copy', async () => {
+    invoke.mockResolvedValue([])
+    const { skillRegistry } = await import('../skill-registry')
+    const { toolRegistry } = await import('../tool-registry')
+    await skillRegistry.loadAll()
+
+    const builtins = skillRegistry.listBySource('builtin')
+    const prompt = toolRegistry.generateToolPrompt('en-US', tool => tool.source === 'skill')
+
+    expect(builtins.length).toBeGreaterThan(2)
+    expect(prompt).toContain('Reviews a chapter for plot logic')
+    for (const skill of builtins) {
+      const tool = toolRegistry.get(`skill__${skill.metadata.name}`)
+      expect(prompt).toContain(`skill__${skill.metadata.name}`)
+      expect(tool, skill.metadata.name).toBeDefined()
+      const result = await tool!.execute({ args: 'Chapter 1' }, {
+        projectSession: null,
+        selectedModelId: 'model-a',
+        uiLocale: 'zh-CN',
+        writingLanguage: 'en-US',
+      })
+      expect(`${result.content}\n${result.error ?? ''}`, skill.metadata.name)
+        .not.toMatch(/[\u3400-\u9fff]/u)
+    }
+    expect(prompt).not.toMatch(/[\u3400-\u9fff]/u)
+  })
+
 })

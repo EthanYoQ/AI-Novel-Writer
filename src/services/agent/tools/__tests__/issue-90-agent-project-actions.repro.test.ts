@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useProjectStore } from '../../../../stores/project-store'
+import { useLocaleStore } from '../../../../stores/locale-store'
 import { useWorkflowStore } from '../../../../stores/workflow-store'
 import { runAgentLoop } from '../../agent-engine'
 import { toolRegistry } from '../../tool-registry'
@@ -73,6 +74,7 @@ function stubWorkflowIpc(overrides: Partial<Record<string, unknown>> = {}): Retu
 }
 
 beforeEach(() => {
+  useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: project as never })
   useWorkflowStore.setState({
     activeRuns: [],
@@ -86,6 +88,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   toolRegistry.unregister('start_workflow')
   vi.unstubAllGlobals()
   useProjectStore.setState({ currentProject: null })
@@ -176,6 +179,109 @@ describe('Issue #90 AI assistant project actions', () => {
     }))
   })
 
+  it('marks the write boundary when the Agent registers a real workflow run', async () => {
+    stubWorkflowIpc()
+    const markSideEffectStarted = vi.fn()
+
+    const result = await startWorkflowTool.execute(
+      { workflow: 'generate_draft', chapter_number: 1 },
+      { ...createAgentExecutionContext(), markSideEffectStarted },
+    )
+
+    expect(result.success).toBe(true)
+    expect(markSideEffectStarted).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not register a workflow when the Agent is stopped during an asynchronous guard', async () => {
+    let finishGuard: ((core: { premise: string; charactersArch: string; worldbuilding: string; synopsis: string }) => void) | undefined
+    const guardResult = new Promise<{ premise: string; charactersArch: string; worldbuilding: string; synopsis: string }>((resolve) => {
+      finishGuard = resolve
+    })
+    const invoke = stubWorkflowIpc({ 'db:project-core-get': guardResult })
+    const controller = new AbortController()
+    const markSideEffectStarted = vi.fn()
+    const launched = startWorkflowTool.execute(
+      { workflow: 'generate_blueprint' },
+      { ...createAgentExecutionContext(), abortSignal: controller.signal, markSideEffectStarted },
+    )
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      'db:project-core-get',
+      projectPath,
+      expect.anything(),
+    ))
+
+    controller.abort()
+    const complete = '完整架构信息'.repeat(20)
+    finishGuard?.({ premise: complete, charactersArch: complete, worldbuilding: complete, synopsis: complete })
+    const result = await launched
+
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/取消|cancel/u) })
+    expect(markSideEffectStarted).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().activeRuns).toEqual([])
+    expect(useWorkflowStore.getState().history).toEqual([])
+  })
+
+  it('does not register a late workflow after an asynchronous guard exceeds the Agent tool timeout', async () => {
+    vi.useFakeTimers()
+    let finishGuard: ((core: { premise: string; charactersArch: string; worldbuilding: string; synopsis: string }) => void) | undefined
+    const guardResult = new Promise<{ premise: string; charactersArch: string; worldbuilding: string; synopsis: string }>((resolve) => {
+      finishGuard = resolve
+    })
+    stubWorkflowIpc({ 'db:project-core-get': guardResult })
+    toolRegistry.register(startWorkflowTool)
+    const callbacks = {
+      onTextChunk: vi.fn(),
+      onToolCallStart: vi.fn(),
+      onToolCallComplete: vi.fn(),
+      onToolCallConfirmRequired: vi.fn(async () => true),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+    const run = runAgentLoop(
+      'system',
+      [],
+      '生成章节蓝图',
+      'model',
+      vi.fn()
+        .mockResolvedValueOnce('start_workflow\n{"workflow":"generate_blueprint"}')
+        .mockResolvedValueOnce('已停止。'),
+      callbacks,
+      undefined,
+      createAgentExecutionContext(),
+    )
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    await run
+    const complete = '完整架构信息'.repeat(20)
+    finishGuard?.({ premise: complete, charactersArch: complete, worldbuilding: complete, synopsis: complete })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(callbacks.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      error: expect.stringContaining('超时'),
+    }))
+    expect(useWorkflowStore.getState().activeRuns).toEqual([])
+    expect(useWorkflowStore.getState().history).toEqual([])
+  })
+
+  it('freezes the English locale before asynchronous draft guards complete', async () => {
+    stubWorkflowIpc()
+    useLocaleStore.setState({ locale: 'en-US' })
+    const projectSession = createAgentExecutionContext().projectSession
+    if (!projectSession) throw new Error('test project session missing')
+
+    const launched = launchCreativeWorkflow({ workflow: 'generate_draft', chapterNumber: 1 }, projectSession)
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    const receipt = await launched
+
+    expect(useWorkflowStore.getState().activeRuns).toContainEqual(expect.objectContaining({
+      id: receipt.runId,
+      uiLocale: 'en-US',
+      title: 'Draft — Chapter 1 · 最后的灯',
+      steps: [expect.objectContaining({ name: 'Draft chapter' })],
+    }))
+  })
+
   it.each([
     { workflow: 'generate_draft', chapter_number: 1 },
     { workflow: 'generate_architecture' },
@@ -200,6 +306,33 @@ describe('Issue #90 AI assistant project actions', () => {
       projectPath,
       status: 'running',
     }))
+  })
+
+  it('returns an English start receipt from the frozen project writing language', async () => {
+    stubWorkflowIpc()
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    useProjectStore.setState({
+      currentProject: {
+        ...project,
+        novelConfig: { ...project.novelConfig, writingLanguage: 'en-US' },
+      } as never,
+    })
+
+    const context = createAgentExecutionContext()
+    const result = await startWorkflowTool.execute(
+      { workflow: 'generate_draft', chapter_number: 1 },
+      context,
+    )
+
+    expect(result.success).toBe(true)
+    expect(result.content).toMatch(/^Started the draft \(Chapter 1\) workflow/)
+    expect(result.content).not.toMatch(/[\u3400-\u9fff]/u)
+
+    const failure = await startWorkflowTool.execute(
+      { workflow: 'review', chapter_number: 1 },
+      context,
+    )
+    expect(failure.error).toBe('Could not start the review (Chapter 1) workflow.')
   })
 
   it('executes a confirmed raw start_workflow response through the real draft launcher', async () => {

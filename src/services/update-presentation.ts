@@ -19,6 +19,8 @@ export interface UpdatePresentation {
   visible: boolean
   canCheck: boolean
   canDefer: boolean
+  canDownload: boolean
+  canOpenRelease: boolean
   canInstall: boolean
   showProgress: boolean
 }
@@ -34,13 +36,15 @@ const hiddenPresentation: UpdatePresentation = {
   visible: false,
   canCheck: true,
   canDefer: false,
+  canDownload: false,
+  canOpenRelease: false,
   canInstall: false,
   showProgress: false,
 }
 
 function visiblePresentation(
   kind: Exclude<UpdatePresentationKind, 'hidden' | 'disabled'>,
-  controls: Partial<Pick<UpdatePresentation, 'canCheck' | 'canDefer' | 'canInstall' | 'showProgress'>> = {},
+  controls: Partial<Pick<UpdatePresentation, 'canCheck' | 'canDefer' | 'canDownload' | 'canOpenRelease' | 'canInstall' | 'showProgress'>> = {},
 ): UpdatePresentation {
   return {
     ...hiddenPresentation,
@@ -74,6 +78,8 @@ export function getUpdatePresentation(input: UpdatePresentationInput): UpdatePre
   if (input.manualActionError || (input.manualCheckRequested && state.status === 'error')) {
     return visiblePresentation('manual-error', {
       canDefer: Boolean(state.availableVersion) && !state.isReminderDeferred,
+      canDownload: state.status === 'available' && state.updateAction === 'download',
+      canOpenRelease: state.status === 'available' && state.updateAction === 'open-release',
       canInstall: state.status === 'downloaded',
     })
   }
@@ -88,7 +94,11 @@ export function getUpdatePresentation(input: UpdatePresentationInput): UpdatePre
 
   const canDefer = Boolean(state.availableVersion)
   if (state.status === 'available') {
-    return visiblePresentation('available', { canDefer })
+    return visiblePresentation('available', {
+      canDefer,
+      canDownload: state.updateAction === 'download',
+      canOpenRelease: state.updateAction === 'open-release',
+    })
   }
 
   if (state.status === 'downloading') {

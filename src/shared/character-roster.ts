@@ -12,6 +12,11 @@ export const CHARACTER_ROSTER_ROLES = CHARACTER_ROLES
 
 export type CharacterRosterRole = CharacterRole
 
+/** Canonical identity key shared by roster mutation boundaries. */
+export function characterRosterIdentityKey(name: string): string {
+  return name.trim().toLocaleLowerCase('en-US')
+}
+
 export type CharacterRosterMigrationState =
   | 'empty'
   | 'legacy_cards_preserved'
@@ -99,7 +104,7 @@ export type CharacterRosterCommitIntent =
   | 'novel_import'
   /** 已落盘的一批蓝图发现角色或结构化关系后的增量同步。 */
   | 'blueprint_sync'
-  /** 章节定稿后角色状态与新出场角色的原子推进。 */
+  /** 章节定稿后仅推进已确认角色的动态状态。 */
   | 'chapter_progress'
 
 export interface CharacterRosterRename {

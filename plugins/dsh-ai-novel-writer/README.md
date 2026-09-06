@@ -1,5 +1,7 @@
 # AI Novel Writer for DeepSeek Harness
 
+> **Maintenance status:** the `0.1.0` preview is frozen, with no short-term feature work planned. Existing documentation remains for current users and maintainers; resuming development requires a new, explicitly scoped plan. The desktop application remains active.
+
 This out-of-tree bundle adds a revisioned, local-first novel project format to DeepSeek Harness. The legacy V1 dedicated agent sees only `novel_read` and `novel_apply_change`; every V1 mutation is presented as a one-file diff and passes through Harness native one-shot approval before execution.
 
 > **Early V2 MVP.** The DeepSeek Harness V2 workbench is an intentionally narrow proof of the authoring chain. It currently offers less than 10% of the desktop application's capabilities and is not a replacement for the desktop product, its project workspace, batch workflows, mature editor, or automated review features.
@@ -121,6 +123,6 @@ pnpm run qualify -- --harness-root '<path-to-deepseek-harness>'
 
 This maintainer-only command packs the plugin, installs those bytes into an isolated Web profile, and verifies the derived user-preset root without overwriting shipped presets. It then uses Chrome to prove the V2 workbench: `novel_read` and `novel_propose_change` are the exact model-tool set (order is not a contract), a user applies the Proposal and sees its partial status on the same page, and restart reads durable state back. A browser skipped result is not qualified.
 
-The precise runtime gates, evidence order, and failure triage live in [V2 development gates](docs/v2-development-gates.md). Logs, screenshots, and the machine-readable receipt live under `.runtime/.cache/dsh-ai-novel-qualification-128` with `.vibe-owner.json` ownership and expiry. This keyless snapshot does not replace native gpt-5.6-terra manual qualification.
+The precise runtime gates, evidence order, and failure triage live in [V2 development gates](docs/v2-development-gates.md). Each qualification run writes logs, screenshots, and its machine-readable receipt to a task-owned `.runtime/.cache/` directory with `.vibe-owner.json` ownership and expiry; these files are temporary evidence, not repository documentation. The keyless snapshot does not replace manual qualification with a configured online model.
 
 The package does not modify DeepSeek Harness upstream or its agent loop.

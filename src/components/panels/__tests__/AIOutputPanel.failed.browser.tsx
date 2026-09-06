@@ -30,6 +30,7 @@ function failedChapterDraft(): WorkflowRun {
     },
     writingLanguage: 'zh-CN',
     uiLocale: 'zh-CN',
+    chapterWordsTarget: 2500,
     type: 'chapter_creation',
     title: '写稿 - 第 1 章：初入魔窟',
     status: 'failed',
@@ -104,6 +105,32 @@ function failedPromptBudget(
   }
 }
 
+function activeEnglishBlueprintRun(): WorkflowRun {
+  return {
+    id: 'active-english-blueprint',
+    projectPath: 'C:\\novels\\prompt-budget',
+    projectSession: {
+      projectId: 'prompt-budget',
+      leaseId: 'prompt-budget-lease',
+      projectPath: 'C:\\novels\\prompt-budget',
+    },
+    writingLanguage: 'en-US',
+    uiLocale: 'en-US',
+    type: 'directory',
+    title: 'Generate chapter blueprints (all)',
+    status: 'running',
+    currentStepIndex: 0,
+    createdAt: '2026-09-04T00:00:00.000Z',
+    steps: [{
+      id: 'read-architecture',
+      name: 'Read architecture',
+      description: 'Load the project architecture from SQLite',
+      status: 'running',
+      logs: [],
+    }],
+  }
+}
+
 beforeEach(() => {
   useWorkflowStore.setState({
     activeRuns: [],
@@ -141,6 +168,61 @@ afterEach(async () => {
 })
 
 describe('AIOutputPanel failed chapter draft', () => {
+  it('renders active workflow chrome in the run locale', async () => {
+    const run = activeEnglishBlueprintRun()
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    useWorkflowStore.setState({ activeRuns: [run], history: [], currentRun: run })
+
+    await act(async () => {
+      root?.render(<AIOutputPanel />)
+    })
+
+    expect(container?.textContent).toContain('AI output')
+    expect(container?.textContent).toContain('Waiting for the workflow step...')
+    expect(container?.textContent).toContain('Stop generation')
+    expect(container?.textContent).not.toMatch(/AI 输出|等待指令响应|中止生成/u)
+  })
+
+  it('renders English history chrome and timestamps from the frozen run locale', async () => {
+    const run: WorkflowRun = {
+      ...activeEnglishBlueprintRun(),
+      id: 'completed-english-draft',
+      type: 'chapter_creation',
+      title: 'Draft — Chapter 1 First Day',
+      status: 'completed',
+      createdAt: '2026-09-04T13:05:00.000Z',
+      completedAt: '2026-09-04T13:06:00.000Z',
+      steps: [{
+        id: 'draft-chapter',
+        name: 'Draft chapter',
+        description: 'Generate the draft',
+        status: 'completed',
+        result: '<think>Checked continuity.</think>The opening scene.',
+        logs: [],
+      }],
+    }
+    useLocaleStore.setState({ locale: 'en-US' })
+    useWorkflowStore.setState({ activeRuns: [], history: [run], currentRun: null })
+
+    await act(async () => {
+      root?.render(<AIOutputPanel />)
+    })
+
+    const expectedTime = new Date(run.createdAt).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+    expect(container?.textContent).toContain('History')
+    expect(container?.textContent).toContain(expectedTime)
+    expect(container?.textContent).not.toContain('历史')
+
+    const historyItem = Array.from(container?.querySelectorAll('button') ?? [])
+      .find(button => button.textContent?.includes('Chapter 1 First Day'))
+    await act(async () => historyItem?.click())
+    expect(container?.textContent).toContain('Thinking process')
+    expect(container?.textContent).not.toMatch(/思考中|思考过程/u)
+  })
+
   it('explains a failed generation and confirms that no draft or manuscript was saved', async () => {
     await act(async () => {
       root?.render(<AIOutputPanel />)
@@ -154,6 +236,35 @@ describe('AIOutputPanel failed chapter draft', () => {
 
     expect(container?.textContent).toContain('模型的内容安全策略拦截了这次输出。')
     expect(container?.textContent).toContain('本次未保存草稿或正文章节')
+  })
+
+  it('uses the draft run structure to explain an unsaved English generation failure', async () => {
+    const run = failedChapterDraft()
+    run.id = 'failed-english-chapter-draft'
+    run.writingLanguage = 'en-US'
+    run.uiLocale = 'en-US'
+    run.title = 'Draft — Chapter 1 · First Day'
+    run.error = 'Generation stopped before the draft completed.'
+    run.failureCode = undefined
+    run.steps = [{
+      ...run.steps[0],
+      name: 'Draft chapter',
+      description: 'Generate the chapter draft',
+      error: run.error,
+      failureCode: undefined,
+    }]
+    useLocaleStore.setState({ locale: 'en-US' })
+    useWorkflowStore.setState({ history: [run] })
+
+    await act(async () => {
+      root?.render(<AIOutputPanel />)
+    })
+
+    const failedRun = Array.from(container?.querySelectorAll('button') ?? [])
+      .find(button => button.textContent?.includes('Chapter 1 · First Day'))
+    await act(async () => failedRun?.click())
+
+    expect(container?.textContent).toContain('This attempt did not save a draft or manuscript chapter.')
   })
 })
 

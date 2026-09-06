@@ -28,7 +28,8 @@ describe('Agent completion boundary', () => {
       callbacks,
     )
 
-    expect(callbacks.onError).toHaveBeenCalledWith(expect.stringContaining('输出达到模型最大长度'))
+    expect(callbacks.onError).toHaveBeenCalledWith('AI 请求失败，请重试。')
+    expect(JSON.stringify(callbacks.onError.mock.calls)).not.toContain('输出达到模型最大长度')
     expect(callbacks.onTextChunk).not.toHaveBeenCalled()
     expect(callbacks.onToolCallStart).not.toHaveBeenCalled()
     expect(callbacks.onDone).not.toHaveBeenCalled()
@@ -78,7 +79,8 @@ describe('Agent completion boundary', () => {
 
     expect(execute).toHaveBeenCalledOnce()
     expect(generate).toHaveBeenCalledTimes(2)
-    expect(callbacks.onError).toHaveBeenCalledWith(expect.stringContaining('agent budget exhausted'))
+    expect(callbacks.onError).toHaveBeenCalledWith('AI 请求失败，请重试。')
+    expect(JSON.stringify(callbacks.onError.mock.calls)).not.toContain('agent budget exhausted')
     expect(callbacks.onDone).not.toHaveBeenCalled()
     toolRegistry.unregister('budget_probe_write')
   })

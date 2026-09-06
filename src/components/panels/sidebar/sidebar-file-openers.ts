@@ -99,12 +99,22 @@ export async function openArchFile(filePath: string, name: string): Promise<void
 }
 
 /** 打开内置编辑器 */
-export function openBuiltinEditor(id: string, name: string, type: 'chapter-card' | 'character' | 'world-building' | 'narrative-thread'): void {
+export function openBuiltinEditor(
+  id: string,
+  name: string,
+  type: 'chapter-card' | 'character' | 'world-building' | 'narrative-thread',
+  narrativeThreadView?: 'plot-tree' | 'plans',
+  chapterNumber?: number,
+): void {
   const projectKey = useProjectStore.getState().currentProject?.path
   useEditorStore.getState().openFile({
     id,
     name,
     type,
+    ...(type === 'narrative-thread'
+      ? { narrativeThreadView: narrativeThreadView ?? 'plans' }
+      : {}),
+    ...(type === 'chapter-card' && chapterNumber !== undefined ? { chapterNumber } : {}),
     ...(projectKey ? { projectKey } : {}),
   })
 }

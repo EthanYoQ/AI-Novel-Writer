@@ -96,6 +96,27 @@ describe('bounded completion', () => {
     expect(requestContinuation).toHaveBeenCalledTimes(2)
   })
 
+  it('localizes terminal errors by UI locale without changing the writing-language prompt', async () => {
+    const requestContinuation = vi.fn().mockResolvedValue({
+      content: '{"chapters":[',
+      finishReason: 'length',
+    })
+
+    await expect(completeBoundedCompletion({
+      initial: { content: '{"chapters":[', finishReason: 'length' },
+      mode: 'replace-structured-output',
+      maxContinuations: 1,
+      originalPrompt: '返回章节 JSON',
+      writingLanguage: 'zh-CN',
+      uiLocale: 'en-US',
+      requestContinuation,
+    })).rejects.toThrow('Automatic continuation ran 1 time but the output is still incomplete')
+
+    expect(requestContinuation).toHaveBeenCalledOnce()
+    expect(requestContinuation.mock.calls[0]?.[0]).toContain('上一轮结构化输出因长度限制而中断')
+    expect(requestContinuation.mock.calls[0]?.[0]).not.toContain('The previous structured output')
+  })
+
   it.each(['content_filter', 'cancelled', 'error', 'unknown'] as const)(
     'fails closed without continuing a %s completion',
     async (finishReason) => {
@@ -265,7 +286,7 @@ describe('bounded completion', () => {
   it.each([
     { label: 'declared 8k context', contextWindowTokens: 8_192 },
     { label: 'unknown context', contextWindowTokens: null },
-  ])('bounds $label continuation prompts while preserving the task contract and visible reference', async ({ contextWindowTokens }) => {
+  ])('preserves the complete structured task and visible reference for $label', async ({ contextWindowTokens }) => {
     const originalPrompt = `任务合同开头：必须返回完整章节 JSON。\n${'原始任务内容'.repeat(1_500)}\n任务合同结尾：不得只补后缀。`
     const partial = `上一轮输出开头：{"chapters":[\n${'不完整可见 JSON'.repeat(1_500)}\n上一轮输出结尾：{"number":1}`
     const requestContinuation = vi.fn().mockResolvedValue({
@@ -288,31 +309,35 @@ describe('bounded completion', () => {
     })).resolves.toBe('{"chapters":[{"number":1}]}')
 
     const continuationPrompt = requestContinuation.mock.calls[0]?.[0] as string
-    // 8,192 context - 4,096 output - 512 reserve, estimated at 1.5 chars/token.
-    expect(continuationPrompt.length).toBeLessThanOrEqual(5_376)
-    expect(continuationPrompt).toContain('任务合同开头')
-    expect(continuationPrompt).toContain('任务合同结尾')
-    expect(continuationPrompt).toContain('上一轮输出开头')
-    expect(continuationPrompt).toContain('上一轮输出结尾')
+    expect(continuationPrompt).toContain(originalPrompt)
+    expect(continuationPrompt).toContain(partial)
+    expect(continuationPrompt).not.toContain('内容已按上下文预算截断')
   })
 
-  it('fails closed before requesting continuation when the reserved context cannot hold a safe contract', async () => {
-    const requestContinuation = vi.fn()
+  it('delegates structured replacement fit to the generation session without truncating the contract', async () => {
+    const originalPrompt = '返回完整 JSON'
+    const partial = '{"half":'
+    const requestContinuation = vi.fn().mockResolvedValue({
+      content: '{"complete":true}',
+      finishReason: 'stop',
+    })
 
     await expect(completeBoundedCompletion({
-      initial: { content: '{"half":', finishReason: 'length' },
+      initial: { content: partial, finishReason: 'length' },
       mode: 'replace-structured-output',
       maxContinuations: 1,
-      originalPrompt: '返回完整 JSON',
+      originalPrompt,
       writingLanguage: 'zh-CN',
       promptBudget: {
         contextWindowTokens: 4_096,
         maxOutputTokens: 4_096,
       },
       requestContinuation,
-    })).rejects.toThrow('当前模型上下文预算不足以安全续写')
+    })).resolves.toBe('{"complete":true}')
 
-    expect(requestContinuation).not.toHaveBeenCalled()
+    const continuationPrompt = requestContinuation.mock.calls[0]?.[0] as string
+    expect(continuationPrompt).toContain(originalPrompt)
+    expect(continuationPrompt).toContain(partial)
   })
 
   it('does not fabricate an 8192 context window and pre-reject an unknown model with an 8192 output cap', async () => {

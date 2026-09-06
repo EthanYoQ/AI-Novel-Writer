@@ -130,6 +130,9 @@ describe('workflow launch language seams', () => {
                 return { templates: [], diagnostics: [] }
               case 'fs:check-exists':
                 return false
+              case 'fs:list-dir':
+                if (args[0] === `${currentProject.path}/.vela/skills`) return []
+                throw new Error(`Unexpected IPC channel: ${channel}`)
               case 'db:project-core-update':
                 persistedPremise = String((args[0] as { premise?: string }).premise ?? '')
                 return { success: true }
@@ -200,9 +203,6 @@ describe('workflow launch language seams', () => {
       await expect.element(page.getByText(textForLocale(uiLocale, '全龄', 'All ages'), { exact: true })).toBeVisible()
       const stepLabels = Array.from(dialog.querySelectorAll('label'))
       expect(stepLabels).toHaveLength(4)
-      await act(async () => {
-        for (const label of stepLabels.slice(1)) label.click()
-      })
       await act(async () => page.getByRole('button', { name: button }).click())
       await act(async () => {
         await vi.waitFor(() => expect(useWorkflowStore.getState().history).toHaveLength(1))

@@ -1,9 +1,11 @@
 import { createRoot } from 'react-dom/client'
 
 import { UpdateSection } from '../../src/components/updates/UpdateSection'
+import { UpdateNotifier } from '../../src/components/updates/UpdateNotifier'
 import { useEditorStore } from '../../src/stores/editor-store'
 import { useLocaleStore } from '../../src/stores/locale-store'
 import { useWorkflowStore, type WorkflowStatus } from '../../src/stores/workflow-store'
+import { useLayoutStore } from '../../src/stores/layout-store'
 import type { UpdateState } from '../../src/services/update-presentation'
 
 type StateListener = (state: UpdateState) => void
@@ -20,12 +22,16 @@ interface HarnessApi {
 
 interface UpdateHarness {
   installCalls: number
+  downloadCalls: number
+  openReleaseCalls: number
   deferCalls: number[]
   checkCalls: number
   officialHomepageRequests: Array<{ channel: string; args: unknown[] }>
   setActiveWorkflowStatuses(statuses: WorkflowStatus[]): void
   setLocale(locale: 'zh-CN' | 'en-US'): void
   setOfficialHomepageFailure(shouldFail: boolean): void
+  setUpdateState(state: UpdateState): void
+  getSidebarView(): string
 }
 
 declare global {
@@ -38,12 +44,15 @@ let state: UpdateState = {
   status: 'downloaded',
   currentVersion: '0.2.5',
   availableVersion: '0.2.6',
+  updateAction: 'download',
   isReminderDeferred: false,
 }
 const listeners = new Set<StateListener>()
 let officialHomepageShouldFail = false
 const harness: UpdateHarness = {
   installCalls: 0,
+  downloadCalls: 0,
+  openReleaseCalls: 0,
   deferCalls: [],
   checkCalls: 0,
   officialHomepageRequests: [],
@@ -74,6 +83,12 @@ const harness: UpdateHarness = {
   setOfficialHomepageFailure(shouldFail) {
     officialHomepageShouldFail = shouldFail
   },
+  setUpdateState(nextState) {
+    publish(nextState)
+  },
+  getSidebarView() {
+    return useLayoutStore.getState().sidebarView
+  },
 }
 
 function publish(nextState: UpdateState): void {
@@ -90,6 +105,13 @@ const api: HarnessApi = {
         harness.checkCalls += 1
         publish(state)
         return { success: true, checked: true, updateAvailable: true, state }
+      case 'update:download':
+        harness.downloadCalls += 1
+        publish({ ...state, status: 'downloaded' })
+        return { success: true, state }
+      case 'update:open-release':
+        harness.openReleaseCalls += 1
+        return { success: true, state }
       case 'update:defer-reminder': {
         const days = args[0]
         if (days === 7 || days === 30) harness.deferCalls.push(days)
@@ -134,4 +156,4 @@ useEditorStore.setState({
 
 const root = document.getElementById('root')
 if (!root) throw new Error('Missing test root')
-createRoot(root).render(<UpdateSection />)
+createRoot(root).render(<><UpdateNotifier /><UpdateSection /></>)

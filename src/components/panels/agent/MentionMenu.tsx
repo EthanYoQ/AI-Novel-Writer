@@ -14,6 +14,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { searchMentionTargets, type MentionTarget } from '../../../services/agent/intent-router'
+import { useLocaleStore } from '../../../stores/locale-store'
 
 const mentionTargetIcons = {
   architecture: Map,
@@ -36,10 +37,12 @@ interface Props {
 }
 
 export default function MentionMenu({ query, onSelect, onClose, position }: Props) {
+  const locale = useLocaleStore(state => state.locale)
+  const text = useLocaleStore(state => state.text)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  const results = searchMentionTargets(query)
+  const results = searchMentionTargets(query, locale)
 
   const [prevQuery, setPrevQuery] = useState(query)
 
@@ -89,7 +92,7 @@ export default function MentionMenu({ query, onSelect, onClose, position }: Prop
       }}
     >
       <div className="text-[0.68rem] px-3 py-1" style={{ color: 'var(--color-text-muted)' }}>
-        引用上下文
+        {text('引用上下文', 'Reference context')}
       </div>
       {results.map((target, i) => {
         const TargetIcon = mentionTargetIcons[target.type]

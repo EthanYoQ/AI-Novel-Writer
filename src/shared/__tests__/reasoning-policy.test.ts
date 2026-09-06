@@ -165,6 +165,20 @@ describe('reasoning policy', () => {
       stage: 'drafting',
     })).toMatchObject({
       requested: 'low',
+      effective: 'low',
+      status: 'mapped',
+      providerDirective: {
+        adapter: 'deepseek-v4-thinking',
+        thinking: 'enabled',
+        reasoningEffort: 'low',
+      },
+    })
+
+    expect(resolveReasoningPolicy({
+      model: { ...legacyDeepSeek, reasoningOverride: 'medium' },
+      stage: 'planning',
+    })).toMatchObject({
+      requested: 'medium',
       effective: 'high',
       status: 'mapped',
       providerDirective: {
@@ -187,6 +201,28 @@ describe('reasoning policy', () => {
         reasoningEffort: 'max',
       },
     })
+  })
+
+  it.each([
+    ['siliconflow', 'https://api.siliconflow.cn/v1', 'deepseek-ai/DeepSeek-V3.2'],
+    ['custom', 'https://qwen-proxy.example.test/v1', 'qwen-long'],
+    ['deepseek', 'https://deepseek-proxy.example.test/v1', 'deepseek-v4-flash'],
+  ] as const)('does not inject official DeepSeek V4 fields for %s/%s/%s', (
+    provider,
+    baseUrl,
+    modelName,
+  ) => {
+    expect(resolveReasoningPolicy({
+      model: {
+        ...geminiFlashLite,
+        provider,
+        protocol: 'openai',
+        baseUrl,
+        modelName,
+        reasoningOverride: 'low',
+      },
+      stage: 'drafting',
+    })).not.toHaveProperty('providerDirective')
   })
 
   it('normalizes stale persisted policy values instead of sending an unverified parameter', () => {

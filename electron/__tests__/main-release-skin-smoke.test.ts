@@ -50,11 +50,16 @@ vi.mock('../mcp/mcp-ipc-bridge', () => ({ registerMCPHandlers: mocks.registerMCP
 vi.mock('../i18n', () => ({ mainT: () => 'AI Novel Writer' }))
 vi.mock('../controllers/update-controller', () => ({ registerUpdateController: vi.fn() }))
 vi.mock('../services/electron-updater-adapter', () => ({ createElectronUpdaterBackend: vi.fn() }))
+vi.mock('../services/github-release-update-backend', () => ({
+  GITHUB_LATEST_RELEASE_PAGE: 'https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest',
+  createGitHubReleaseUpdateBackend: vi.fn(),
+}))
 vi.mock('../services/update-preferences-store', () => ({
   GlobalConfigUpdatePreferencesStore: class MockUpdatePreferencesStore {},
 }))
 vi.mock('../services/update-runtime', () => ({
   hasWindowsUpdateConfiguration: () => true,
+  isMacUpdateReminderEnabled: () => false,
   isWindowsUpdateRuntimeEnabled: () => false,
 }))
 vi.mock('../services/update-startup', () => ({ startUpdateRuntime: vi.fn() }))

@@ -1,6 +1,9 @@
 import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
+import { useLocaleStore } from '../../stores/locale-store'
+import type { Locale } from '../../i18n/types'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import { globalEventBus } from '../../shared/event-bus'
 import {
   decodeBlueprintSemanticPayload,
   parseBlueprintSemanticResponseText,
@@ -13,6 +16,7 @@ import {
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
+import { PromptBudgetExceededError } from '../generation/generation-harness'
 import type {
   BlueprintData,
   BlueprintRangeCommitMode,
@@ -187,6 +191,11 @@ export async function commitDirectoryBlueprintRange(
   if (!result.success || !result.receipt) {
     throw new Error(result.error || '提交章节蓝图失败')
   }
+  globalEventBus.emit('REFRESH_RESOURCE', {
+    resources: ['blueprints'],
+    projectPath: expectedProjectPath,
+    projectSession,
+  })
   return result.receipt
 }
 
@@ -238,7 +247,9 @@ export function createDirectoryWorkflow(
   params: DirectoryWorkflowParams,
   expectedProjectPath: string,
   sourceProjectSession: ProjectSessionContext,
+  frozenUiLocale: Locale = useLocaleStore.getState().locale,
 ): WorkflowDefinition {
+  const text = (zhCNText: string, enUSText: string) => frozenUiLocale === 'en-US' ? enUSText : zhCNText
   const projectAtStart = useProjectStore.getState().currentProject
   const currentProjectSession = projectSessionContextFromProject(projectAtStart)
   if (
@@ -247,7 +258,10 @@ export function createDirectoryWorkflow(
     || !sameProjectPathKey(projectAtStart.path, expectedProjectPath)
     || !sameProjectSessionContext(sourceProjectSession, currentProjectSession)
   ) {
-    throw new Error('项目已切换，无法启动章节蓝图生成')
+    throw new Error(text(
+      '项目已切换，无法启动章节蓝图生成',
+      'The project changed, so chapter-blueprint generation could not start.',
+    ))
   }
   const projectSession = Object.freeze({ ...sourceProjectSession })
   const projectSnapshot: DirectoryWorkflowProjectSnapshot = {
@@ -261,7 +275,13 @@ export function createDirectoryWorkflow(
 
   return {
     type: 'directory',
-      title: params.mode === 'append' ? `续写章节蓝图${params.startChapter ? `（从第 ${params.startChapter} 章）` : ''}` : '生成章节蓝图（全量）',
+    uiLocale: frozenUiLocale,
+    title: params.mode === 'append'
+      ? text(
+        `续写章节蓝图${params.startChapter ? `（从第 ${params.startChapter} 章）` : ''}`,
+        `Continue chapter blueprints${params.startChapter ? ` (from chapter ${params.startChapter})` : ''}`,
+      )
+      : text('生成章节蓝图（全量）', 'Generate chapter blueprints (all)'),
     projectPath: expectedProjectPath,
     projectSession,
     resourceKeys: [
@@ -274,17 +294,20 @@ export function createDirectoryWorkflow(
     ],
     steps: [
       {
-        name: '读取架构',
-        description: `从 SQLite 加载项目架构信息`,
+        name: text('读取架构', 'Read architecture'),
+        description: text('从 SQLite 加载项目架构信息', 'Load the project architecture from SQLite'),
         executor: async (_step, context, callbacks) => {
-          callbacks.log('读取项目架构信息...')
+          callbacks.log(text('读取项目架构信息...', 'Loading project architecture...'))
           const projectSession = requireWorkflowProjectSession(context)
           const core = await ipc.invokeWithProjectSession(
             projectSession,
             'db:project-core-get',
             expectedProjectPath,
           )
-          if (!core) throw new Error('项目核心数据未初始化')
+          if (!core) throw new Error(text(
+            '项目核心数据未初始化',
+            'Project core data has not been initialized.',
+          ))
 
           const parts: string[] = []
           if (core.premise && core.premise.length > 50) parts.push(core.premise)
@@ -292,7 +315,10 @@ export function createDirectoryWorkflow(
           if (core.worldbuilding && core.worldbuilding.length > 50) parts.push(core.worldbuilding)
           if (core.synopsis && core.synopsis.length > 50) parts.push(core.synopsis)
 
-          if (parts.length === 0) throw new Error('项目主要架构均未生成')
+          if (parts.length === 0) throw new Error(text(
+            '项目主要架构均未生成',
+            'The main story architecture has not been generated yet.',
+          ))
 
           context.data.architecture = parts.join('\n\n---\n\n')
           // 注入节奏指导到 context，供 Command 读取
@@ -300,26 +326,70 @@ export function createDirectoryWorkflow(
           if (params.mode === 'append') {
             const existing = await loadDirectoryBlueprints(expectedProjectPath, projectSession)
             context.data.existingBlueprints = existing
-            callbacks.log(`已加载 ${existing.length} 章已有蓝图`)
+            callbacks.log(text(
+              `已加载 ${existing.length} 章已有蓝图`,
+              `Loaded ${existing.length} existing chapter blueprint${existing.length === 1 ? '' : 's'}`,
+            ))
           }
-          return `架构加载完成（${parts.length} 段）`
+          return text(
+            `架构加载完成（${parts.length} 段）`,
+            `Architecture loaded (${parts.length} section${parts.length === 1 ? '' : 's'})`,
+          )
         },
       },
       {
-        name: '生成蓝图',
-        description: '基于架构文件生成、完整验证并原子提交章节蓝图',
+        name: text('生成蓝图', 'Generate blueprints'),
+        description: text(
+          '基于架构文件生成、完整验证并原子提交章节蓝图',
+          'Generate, fully validate, and atomically commit chapter blueprints from the architecture',
+        ),
         executor: async (_step, context, callbacks) => {
-          const { GenerateDirectoryCommand } = await import('./commands/directory.command')
-          const cmd = new GenerateDirectoryCommand(params, projectSnapshot)
-          const blueprints = await cmd.execute({ step: _step, context, callbacks })
+          const directoryCommand = await import('./commands/directory.command')
+          const cmd = new directoryCommand.GenerateDirectoryCommand(params, projectSnapshot)
+          let blueprints: ChapterBlueprint[]
+          try {
+            blueprints = await cmd.execute({ step: _step, context, callbacks })
+          } catch (error) {
+            if (error instanceof PromptBudgetExceededError) throw error
+            if (error instanceof directoryCommand.DirectoryPostCommitSyncError) {
+              throw new Error(text(
+                '章节蓝图已保存，但角色同步失败。请重试角色同步。',
+                'Chapter blueprints were saved, but character synchronization failed. Retry character synchronization.',
+              ))
+            }
+            if (error instanceof directoryCommand.DirectoryPostCommitCancellationError) {
+              throw new Error(text(
+                '章节蓝图已保存，但任务取消后角色同步可能未完成。',
+                'Chapter blueprints were saved, but character synchronization may be incomplete because the workflow was cancelled.',
+              ))
+            }
+            if (error instanceof directoryCommand.DirectoryCostLimitError) {
+              throw new Error(text(
+                '本次章节范围过大，请拆分为更小的范围生成。',
+                'The requested chapter range is too large. Generate a smaller range.',
+              ))
+            }
+            if (context.cancelled) {
+              throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+            }
+            throw new Error(text(
+              '章节蓝图生成失败，请重试。',
+              'Chapter-blueprint generation failed. Please try again.',
+            ))
+          }
           // 返回可读摘要字符串（step.result 必须是 string，否则 AIOutputPanel 渲染会崩溃）
-          return `已生成 ${blueprints.length} 章蓝图`
+          return text(
+            `已生成 ${blueprints.length} 章蓝图`,
+            `Generated ${blueprints.length} chapter blueprint${blueprints.length === 1 ? '' : 's'}`,
+          )
         },
       },
     ],
     onComplete: {
       mode: 'silent',
-      message: params.mode === 'append' ? '续写蓝图生成完成' : '全书章节蓝图已生成完成。',
+      message: params.mode === 'append'
+        ? text('续写蓝图生成完成', 'Chapter blueprint continuation completed')
+        : text('全书章节蓝图已生成完成。', 'All chapter blueprints have been generated.'),
     },
   }
 }

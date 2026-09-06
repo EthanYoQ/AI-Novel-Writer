@@ -99,11 +99,20 @@ function embeddingSpaceFor(
   }
 }
 
+async function canWriteIncrementalVectors(projectPath: string): Promise<boolean> {
+  // A vector generation must cover every canonical chunk before it can become
+  // active. If an FTS-only corpus already exists, keep incremental imports in
+  // FTS until the user runs the existing explicit full rebuild.
+  if (!fs.existsSync(path.join(projectPath, '.vela', 'lancedb'))) return true
+  const stats = await storeGetStats(projectPath)
+  return stats.totalChunks === 0 || stats.hasVectors
+}
+
 // ===== 导出函数（保持旧签名，IPC 层零改动） =====
 
 /**
  * 导入文档到知识库（单文件，从磁盘读取）
- * 始终建立 FTS 索引；有 Embedding 配置时额外生成向量
+ * 始终建立 FTS 索引；空库或已有 active 空间时可增量生成向量
  */
 export async function importDocument(
   filePath: string,
@@ -136,7 +145,7 @@ export async function importDocument(
 
     // 3. 可选：生成向量（如果有 Embedding 配置）
     let vectors: number[][] | undefined
-    if (model.apiKey) {
+    if (model.apiKey && await canWriteIncrementalVectors(projectPath)) {
       try {
         onProgress?.(20, `正在向量化 ${chunks.length} 个块...`)
         vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
@@ -345,6 +354,7 @@ async function importTextInternal(
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+  options?: { mode: 'fts-only' },
 ): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
   try {
     if (!text.trim()) return { success: false, error: '文本内容为空' }
@@ -361,7 +371,11 @@ async function importTextInternal(
 
     // 可选：生成向量
     let vectors: number[][] | undefined
-    if (model.apiKey) {
+    if (
+      model.apiKey
+      && options?.mode !== 'fts-only'
+      && await canWriteIncrementalVectors(projectPath)
+    ) {
       try {
         vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
       } catch (e) {
@@ -382,7 +396,7 @@ async function importTextInternal(
       chunks,
       vectors,
       undefined,
-      chapterMeta,
+      { ...(chapterMeta ?? {}), corpusKind: 'project-knowledge' },
       embeddingSpaceFor(protocol, model),
     )
     if (!result.success) {
@@ -404,6 +418,7 @@ export async function importText(
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+  options?: { mode: 'fts-only' },
 ): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
   return importTextInternal(
     text,
@@ -411,6 +426,7 @@ export async function importText(
     projectPath,
     protocol,
     model,
+    options,
   )
 }
 

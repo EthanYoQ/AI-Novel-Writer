@@ -7,6 +7,7 @@ describe('update retry action', () => {
     expect(getUpdateRetryAction('INSTALL_FAILED')).toBe('install')
     expect(getUpdateRetryAction('REMINDER_SAVE_FAILED')).toBe('defer')
     expect(getUpdateRetryAction('CHECK_FAILED')).toBe('check')
-    expect(getUpdateRetryAction('DOWNLOAD_FAILED')).toBe('check')
+    expect(getUpdateRetryAction('DOWNLOAD_FAILED')).toBe('download')
+    expect(getUpdateRetryAction('OPEN_RELEASE_FAILED')).toBe('open-release')
   })
 })

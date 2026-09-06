@@ -14,10 +14,12 @@ export interface FontOption {
   label: string
   labelEn: string
   desc: string
+  descEn: string
   /** 实际 CSS font-family 字符串 */
   family: string
   /** 预览文字（用该字体渲染，展示中英文效果） */
   preview: string
+  previewEn: string
 }
 
 /** 所有内置字体（界面 + 写作共用） */
@@ -27,40 +29,50 @@ export const FONT_OPTIONS: FontOption[] = [
     label: 'Inter',
     labelEn: 'Inter',
     desc: '精心设计的现代 UI 字体，英文排版优秀，界面首选',
+    descEn: 'A modern UI font designed for clear English interfaces',
     family: "'Inter', system-ui, sans-serif",
     preview: 'Aa Bb 文字 123',
+    previewEn: 'Aa Bb Text 123',
   },
   {
     id: 'noto-sans-sc',
     label: '思源黑体',
     labelEn: 'Noto Sans SC',
     desc: '黑体风格，中英文兼顾，简洁现代，科幻都市题材适用',
+    descEn: 'A clean modern sans serif for Chinese and English text',
     family: "'Noto Sans SC', sans-serif",
     preview: '思源黑体 Sans',
+    previewEn: 'Noto Sans',
   },
   {
     id: 'lxgw-wenkai',
     label: '霞鹜文楷',
     labelEn: 'LXGW WenKai',
     desc: '楷体风格，温润典雅，最适合中文小说写作',
+    descEn: 'A warm, elegant typeface suited to literary writing',
     family: "'LXGW WenKai', serif",
     preview: '春花秋月何时了',
+    previewEn: 'Once upon a time',
   },
   {
     id: 'noto-serif-sc',
     label: '思源宋体',
     labelEn: 'Noto Serif SC',
     desc: '宋体风格，字形端正，印刷质感强，正式文稿首选',
+    descEn: 'A formal serif with a print-like reading experience',
     family: "'Noto Serif SC', serif",
     preview: '往事如云烟，归零',
+    previewEn: 'A story in print',
   },
   {
     id: 'system',
     label: '系统默认',
     labelEn: 'System UI',
     desc: 'macOS 使用苹方/SF Pro，原生手感，无需字体文件',
+    descEn: 'Uses the operating system interface font with no extra files',
     family: 'system-ui, -apple-system, sans-serif',
     preview: 'Aa Bb 苹方 123',
+    previewEn: 'Aa Bb System 123',
   },
 ]
 

@@ -158,11 +158,16 @@ jobs:
             }
           }
           Get-ChildItem -Path ([System.IO.Path]::GetTempPath()) -Directory -Filter 'ai-novel-release-gate-*' -ErrorAction SilentlyContinue | ForEach-Object {
-            foreach ($name in @('orchestrator-failures.jsonl', 'monitor-status.json')) {
-              $source = Join-Path $_.FullName "evidence\$name"
+            $gateRoot = $_
+            foreach ($name in @('orchestrator-failures.jsonl', 'monitor-status.json', 'process-events.jsonl', 'monitor-control-log.jsonl')) {
+              $source = Join-Path $gateRoot.FullName "evidence\$name"
               if (Test-Path -LiteralPath $source -PathType Leaf) {
-                Copy-Item -LiteralPath $source -Destination (Join-Path $diagnosticsRoot "$($_.Name)-$name") -Force -ErrorAction Continue
+                Copy-Item -LiteralPath $source -Destination (Join-Path $diagnosticsRoot "$($gateRoot.Name)-$name") -Force -ErrorAction Continue
               }
+            }
+            Get-ChildItem -LiteralPath (Join-Path $gateRoot.FullName 'evidence') -File -Filter 'process-tree*.json' -ErrorAction SilentlyContinue | ForEach-Object {
+              $processTree = $_
+              Copy-Item -LiteralPath $processTree.FullName -Destination (Join-Path $diagnosticsRoot "$($gateRoot.Name)-$($processTree.Name)") -Force -ErrorAction Continue
             }
           }
 

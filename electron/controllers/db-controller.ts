@@ -38,6 +38,11 @@ import { importInspectionStore } from '../services/import-inspection-store'
 import { loadApplicationImportSourceSecret } from '../services/import-source-identity-secret'
 import { RevisionRepository } from '../repositories/revision-repository'
 import { ReviewRepository } from '../repositories/review-repository'
+import {
+  isSourceDraftChangedError,
+  SOURCE_DRAFT_CHANGED,
+} from '../repositories/draft-source-guard'
+import type { ExpectedDraftSource } from '../../src/shared/ipc-channels'
 import { PostProcessRepository } from '../repositories/post-process-repository'
 
 // 沿用的旧表
@@ -45,6 +50,10 @@ import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { SummaryRepository } from '../repositories/summary-repository'
 import { ConsistencyExemptionRepository } from '../repositories/consistency-exemption-repository'
 import { NarrativeThreadRepository } from '../repositories/narrative-thread-repository'
+import { PlotTreeRepository } from '../repositories/plot-tree-repository'
+import { isPlotTreeSourceRevision } from '../../src/shared/plot-tree'
+import { RecoveryCandidateRepository } from '../repositories/recovery-candidate-repository'
+import type { RecoveryCandidateRecordInput } from '../../src/shared/recovery-candidate'
 
 type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 
@@ -79,6 +88,9 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:draft-update-status',
   'db:draft-update-content',
   'db:draft-delete',
+  'db:recovery-candidate-record',
+  'db:recovery-candidate-update',
+  'db:recovery-candidate-resolve',
   'db:finalization-link-knowledge-document',
   'db:revision-create',
   'db:revision-replace-pending',
@@ -96,6 +108,8 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:narrative-thread-plan-update',
   'db:narrative-thread-plan-delete',
   'db:narrative-thread-event-confirm',
+  'db:plot-tree-save',
+  'db:plot-tree-clear',
 ])
 
 function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabaseHandler): void {
@@ -654,6 +668,16 @@ export function registerDatabaseController() {
     return FinalizedDraftImportRepository.authoritySequence()
   })
 
+  ipcMain.handle('db:draft-export-snapshot', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return FinalizationRepository.listAuthoritativeForExport()
+  })
+
+  ipcMain.handle('db:draft-export-authority-current', async (_event, receipt, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)
+  })
+
   ipcMain.handle('db:continuity-save-finalized', async (_event, request, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
@@ -725,6 +749,44 @@ export function registerDatabaseController() {
     return { success: true, event: NarrativeThreadRepository.confirmEvent(input) }
   })
 
+  ipcMain.handle('db:plot-tree-read', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return PlotTreeRepository.read()
+  })
+
+  ipcMain.handle('db:plot-tree-save', async (
+    _event,
+    snapshot,
+    expectedSourceRevision: string,
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      if (!isPlotTreeSourceRevision(expectedSourceRevision)) {
+        throw new Error('剧情树来源版本无效')
+      }
+      return {
+        success: true,
+        snapshot: PlotTreeRepository.save(snapshot, expectedSourceRevision),
+      }
+    } catch (error) {
+      const message = String(error)
+      return {
+        success: false,
+        ...(message.includes('剧情资料在生成期间已更新')
+          ? { errorCode: 'sources-changed' as const }
+          : {}),
+        error: message,
+      }
+    }
+  })
+
+  ipcMain.handle('db:plot-tree-clear', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    PlotTreeRepository.clear()
+    return { success: true }
+  })
+
   ipcMain.handle('db:draft-next-version', async (_event, chapterNumber: number, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return DraftRepository.getNextVersion(chapterNumber)
@@ -761,7 +823,66 @@ export function registerDatabaseController() {
       DraftRepository.delete(id)
       return { success: true }
     } catch (err) {
+      if (
+        err
+        && typeof err === 'object'
+        && 'code' in err
+        && err.code === 'FINALIZED_DRAFT_DELETE_REQUIRED'
+      ) {
+        return { success: false, errorCode: 'FINALIZED_DRAFT_DELETE_REQUIRED' as const }
+      }
       return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:recovery-candidate-record', async (
+    _event,
+    request: RecoveryCandidateRecordInput,
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      const active = projectAccess.captureCurrentSession()
+      if (!active) throw new Error('缺少当前项目会话，已拒绝保存恢复候选')
+      const candidate = RecoveryCandidateRepository.record({ ...request, projectId: active.projectId })
+      return { success: true, candidate }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('db:recovery-candidate-list', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return RecoveryCandidateRepository.listPending()
+  })
+
+  ipcMain.handle('db:recovery-candidate-update', async (
+    _event,
+    candidateId: string,
+    visibleText: string,
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      const candidate = RecoveryCandidateRepository.updatePending(candidateId, visibleText)
+      return { success: true, candidate }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('db:recovery-candidate-resolve', async (
+    _event,
+    candidateId: string,
+    status: 'continued' | 'discarded',
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      RecoveryCandidateRepository.resolve(candidateId, status)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: String(error) }
     }
   })
 
@@ -785,20 +906,25 @@ export function registerDatabaseController() {
   // ============================================================
   // 5. revisions — 修稿
   // ============================================================
-ipcMain.handle('db:revision-create', async (_event, params: {
+  ipcMain.handle('db:revision-create', async (_event, params: {
     baseDraftId: number
     revisionType: 'refine' | 'review-fix'
     userPrompt?: string
     reviewSourceId?: number
     content: string
     wordCount: number
+    expectedSource?: ExpectedDraftSource
   }, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const created = RevisionRepository.create(params)
       return { success: true, id: created.id, revisionIndex: created.revisionIndex }
     } catch (err) {
-      return { success: false, error: String(err) }
+      return {
+        success: false,
+        ...(isSourceDraftChangedError(err) ? { errorCode: SOURCE_DRAFT_CHANGED } : {}),
+        error: String(err),
+      }
     }
   })
 
@@ -809,13 +935,18 @@ ipcMain.handle('db:revision-create', async (_event, params: {
     reviewSourceId?: number
     content: string
     wordCount: number
+    expectedSource?: ExpectedDraftSource
   }, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const created = RevisionRepository.replacePending(params)
       return { success: true, id: created.id, revisionIndex: created.revisionIndex }
     } catch (err) {
-      return { success: false, error: String(err) }
+      return {
+        success: false,
+        ...(isSourceDraftChangedError(err) ? { errorCode: SOURCE_DRAFT_CHANGED } : {}),
+        error: String(err),
+      }
     }
   })
 
@@ -837,6 +968,15 @@ ipcMain.handle('db:revision-create', async (_event, params: {
   ipcMain.handle('db:revision-next-index', async (_event, baseDraftId: number, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return RevisionRepository.getNextIndex(baseDraftId)
+  })
+
+  ipcMain.handle('db:revision-merge', async (_event, request: Parameters<typeof RevisionRepository.mergeIntoDraft>[0], expectedProjectPath: string) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      return { success: true, receipt: RevisionRepository.mergeIntoDraft(request) }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
   })
 
   ipcMain.handle('db:revision-mark-merged', async (_event, id: number, mergedToDraftId: number, expectedProjectPath: string) => {
@@ -864,15 +1004,20 @@ ipcMain.handle('db:revision-create', async (_event, params: {
   // ============================================================
   ipcMain.handle('db:review-create', async (_event, params: {
     baseDraftId: number
-    reviewIndex: number
+    reviewIndex?: number
     content: string
+    expectedSource?: ExpectedDraftSource
   }, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      const id = ReviewRepository.create(params)
-      return { success: true, id }
+      const created = ReviewRepository.create(params)
+      return { success: true, id: created.id, reviewIndex: created.reviewIndex }
     } catch (err) {
-      return { success: false, error: String(err) }
+      return {
+        success: false,
+        ...(isSourceDraftChangedError(err) ? { errorCode: SOURCE_DRAFT_CHANGED } : {}),
+        error: String(err),
+      }
     }
   })
 

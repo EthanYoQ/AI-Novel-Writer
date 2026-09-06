@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Sparkles, Search, BadgeCheck, Save, FileStack, FileText, Wrench, Check } from 'lucide-react'
 
 import { useProjectStore } from '../../stores/project-store'
-import { useEditorStore } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import CodeMirrorEditor from './CodeMirrorEditor'
@@ -17,6 +17,7 @@ import {
   parseDraftMeta,
   type DraftMeta,
   type DraftStatus,
+  type FrozenDraftSourceIdentity,
 } from '../../services/workflows/chapter-workflow'
 import { getPendingRevisions, getReviewsForVersion, type RevisionEntry } from '../../services/draft-index'
 import { readDraftBody } from '../../stores/draft-store'
@@ -86,6 +87,8 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     originalContent: string
     modifiedContent: string
     revisionPath: string
+    targetSnapshot: { content: string; contentRevision: number }
+    staleReason: string | null
   } | null>(null)
 
   // 后处理失败状态（用于控制是否展示修复按钮）
@@ -233,24 +236,88 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     }
   }
 
+  const exitSaveRef = useRef(doSave)
+  useEffect(() => {
+    exitSaveRef.current = doSave
+  })
+  useEffect(() => {
+    registerEditorExitSaveHandler({
+      tabId,
+      type: 'chapter',
+      projectKey,
+      save: () => exitSaveRef.current(currentBodyRef.current),
+    })
+  }, [projectKey, tabId])
+
+  const freezeDraftSourceForAI = async (projectSession: NonNullable<ReturnType<typeof captureProjectSession>>) => {
+    if (!meta) return null
+    const targetTab = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )
+    if (!targetTab || (targetTab.draftId !== undefined && targetTab.draftId !== meta.id)) {
+      toast.warning(text(
+        '当前草稿身份已变化，请重新打开后再执行 AI 操作',
+        'The current draft identity changed. Reopen it before running the AI action.',
+      ))
+      return null
+    }
+    const body = targetTab.content ?? currentBodyRef.current
+    const sourceDraft = Object.freeze({
+      id: meta.id,
+      chapterNumber: meta.chapterNumber,
+      version: meta.version,
+      status: targetTab.draftStatus ?? meta.status,
+      contentRevision: targetTab.contentRevision ?? 0,
+    })
+
+    if (targetTab.dirty) await doSave(body)
+    if (!isProjectSessionCurrent(projectSession)) return null
+    return Object.freeze({ body, sourceDraft })
+  }
+
+  const isFrozenAISourceCurrent = (
+    body: string,
+    sourceDraft: FrozenDraftSourceIdentity,
+  ): boolean => {
+    const currentTab = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )
+    if (
+      !currentTab
+      || currentTab.content !== body
+      || (currentTab.contentRevision ?? 0) !== sourceDraft.contentRevision
+      || (currentTab.draftId !== undefined && currentTab.draftId !== sourceDraft.id)
+      || (currentTab.chapterNumber !== undefined && currentTab.chapterNumber !== sourceDraft.chapterNumber)
+      || (currentTab.draftStatus !== undefined && currentTab.draftStatus !== sourceDraft.status)
+    ) {
+      toast.warning(text(
+        '确认后正文已变化，本次 AI 操作未启动',
+        'The draft changed after confirmation, so the AI action was not started.',
+      ))
+      return false
+    }
+    return true
+  }
+
   /** 执行 AI 修稿（含用户自定义提示词） */
   const doRefine = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     try {
+      const source = await freezeDraftSourceForAI(projectSession)
+      if (!source || !isProjectSessionCurrent(projectSession)) return
       const { useWorkflowStore } = await import('../../stores/workflow-store')
       const { createRefineOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
-
-      const body = await readDraftBody(filePath, projectKey, projectSession)
-      if (!isProjectSessionCurrent(projectSession)) return
+      if (!isFrozenAISourceCurrent(source.body, source.sourceDraft)) return
 
       useWorkflowStore.getState().startWorkflow(createRefineOnlyWorkflow({
         projectPath: projectSession.projectPath,
         chapterNumber: meta.chapterNumber,
         chapterTitle: meta.chapterTitle ?? '未知标题',
         draftPath: filePath,
-        draftContent: body,
+        draftContent: source.body,
+        sourceDraft: source.sourceDraft,
         userRefinePrompt: userRefinePrompt.trim() || undefined,
       }, projectSession), false)
     } catch (e) {
@@ -264,19 +331,20 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     try {
+      const source = await freezeDraftSourceForAI(projectSession)
+      if (!source || !isProjectSessionCurrent(projectSession)) return
       const { useWorkflowStore } = await import('../../stores/workflow-store')
       const { createReviewOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
-
-      const body = await readDraftBody(filePath, projectKey, projectSession)
-      if (!isProjectSessionCurrent(projectSession)) return
+      if (!isFrozenAISourceCurrent(source.body, source.sourceDraft)) return
 
       useWorkflowStore.getState().startWorkflow(createReviewOnlyWorkflow({
         projectPath: projectSession.projectPath,
         chapterNumber: meta.chapterNumber,
         chapterTitle: meta.chapterTitle ?? '未知标题',
         draftPath: filePath,
-        draftContent: body,
+        draftContent: source.body,
+        sourceDraft: source.sourceDraft,
         reviewFocus: REVIEW_DIMS.filter(d => reviewDims[d.key]).map(d => d.promptLabel).join('、') || undefined,
       }, projectSession), false)
     } catch (e) {
@@ -379,7 +447,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   }, [currentProject, projectKey, tabId, text])
 
   /** 修复定稿后处理 — 只重跑失败的步骤 */
-  const doRepairFinalize = useCallback(async () => {
+  const doRepairFinalize = useCallback(async (stepKey?: string) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || isChapterBusy || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     try {
@@ -395,7 +463,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       const { createRepairFinalizeWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
       useWorkflowStore.getState().startWorkflow(
-        createRepairFinalizeWorkflow(meta.chapterNumber, projectSession.projectPath, projectSession),
+        createRepairFinalizeWorkflow(meta.chapterNumber, projectSession.projectPath, projectSession, stepKey),
         false,
       )
     } catch (e) {
@@ -408,22 +476,70 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const openPendingRevision = async (rev: RevisionEntry) => {
     const projectSession = captureProjectSession(currentProject)
     if (!meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    const targetTab = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )
+    if (!targetTab || targetTab.dirty) {
+      toast.warning(text(
+        '当前正文有未保存修改，请先保存并重新打开修订对比',
+        'The draft has unsaved changes. Save it and reopen the revision comparison.',
+      ))
+      return
+    }
+    const targetSnapshot = {
+      content: targetTab.content ?? content,
+      contentRevision: targetTab.contentRevision ?? 0,
+    }
     // 使用 vela://revision/{id} 协议路径读取修稿内容
     const revPath = `vela://revision/${rev.id}`
 
     // 读取原稿和修稿
-    const [origContent, revContent] = await Promise.all([
+    const [currentSavedContent, revision] = await Promise.all([
       readDraftBody(filePath, projectKey, projectSession),
-      readDraftBody(revPath, projectKey, projectSession),
+      ipc.invokeWithProjectSession(projectSession, 'db:revision-get-full', rev.id, projectKey),
     ])
     if (!isProjectSessionCurrent(projectSession)) return
-    if (!origContent && !revContent) return
+    if (!revision) return
+    const currentTarget = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )
+    if (
+      !currentTarget
+      || currentTarget.dirty
+      || currentTarget.content !== targetSnapshot.content
+      || (currentTarget.contentRevision ?? 0) !== targetSnapshot.contentRevision
+    ) {
+      toast.warning(text(
+        '读取修订期间正文已变化，请保存后重新打开修订对比',
+        'The draft changed while the revision was loading. Save it and reopen the comparison.',
+      ))
+      return
+    }
 
-    // 设置弹窗数据，不再打开新 Tab
+    const source = revision.sourceDraft
+    const staleReason = !source
+      ? text(
+          '旧修订稿缺少生成时源稿，修订仍可查看但不能合并。',
+          'This legacy revision has no generation source. It remains viewable but cannot be merged.',
+        )
+      : source.id !== meta.id
+        || source.chapterNumber !== meta.chapterNumber
+        || source.version !== meta.version
+        || source.status !== (currentTarget.draftStatus ?? meta.status)
+        || source.content !== currentSavedContent
+        ? text(
+            '当前草稿已不是该修订稿的生成时源稿，修订仍可查看但不能合并。',
+            'The current draft no longer matches this revision’s generation source. It remains viewable but cannot be merged.',
+          )
+        : null
+
+    // 始终展示修订与其真实冻结源；旧行或 stale 源只读，不用当前正文重基。
     setMergeData({
-      originalContent: origContent,
-      modifiedContent: revContent,
+      originalContent: source?.content ?? '',
+      modifiedContent: revision.content,
       revisionPath: revPath,
+      targetSnapshot,
+      staleReason,
     })
   }
 
@@ -431,7 +547,26 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const handleMergeComplete = async (mergedText: string) => {
     const projectSession = captureProjectSession(currentProject)
     if (!meta || !mergeData || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    if (mergeData.staleReason) {
+      toast.warning(mergeData.staleReason)
+      return
+    }
     const chapterDir = `vela://draft/ch${meta.chapterNumber}`
+    const currentTarget = useEditorStore.getState().tabs.find(
+      tab => tab.id === tabId && tab.projectKey === projectKey,
+    )
+    if (
+      !currentTarget
+      || currentTarget.dirty
+      || currentTarget.content !== mergeData.targetSnapshot.content
+      || (currentTarget.contentRevision ?? 0) !== mergeData.targetSnapshot.contentRevision
+    ) {
+      toast.warning(text(
+        '打开对比后正文已变化，未提交修订；请保存后重新打开',
+        'The draft changed after the comparison opened. The revision was not committed; save and reopen it.',
+      ))
+      return
+    }
 
     try {
       const { useDraftStore } = await import('../../stores/draft-store')
@@ -441,6 +576,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         filePath,
         mergeData.revisionPath,
         mergedText,
+        mergeData.originalContent,
         projectKey,
         projectSession,
       )
@@ -524,7 +660,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
             {/* 字数 */}
             {charCount > 0 && (
               <span className="text-xs tabular-nums mr-1" style={{ color: 'var(--color-text-muted)' }}>
-                {text(`${charCount.toLocaleString(locale)} 字`, `${charCount.toLocaleString(locale)} characters`)}
+                {text(`${charCount.toLocaleString(locale)} 字`, `${charCount.toLocaleString(locale)} words`)}
               </span>
             )}
 
@@ -656,7 +792,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           <div className="flex items-center gap-2 flex-shrink-0">
             {charCount > 0 && (
               <span className="text-xs tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
-                {text(`${charCount.toLocaleString(locale)} 字`, `${charCount.toLocaleString(locale)} characters`)}
+                {text(`${charCount.toLocaleString(locale)} 字`, `${charCount.toLocaleString(locale)} words`)}
               </span>
             )}
             <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
@@ -680,7 +816,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={doRepairFinalize}
+                onClick={() => void doRepairFinalize()}
                 disabled={isChapterBusy}
                 title={text('重新执行失败的后处理步骤（角色卡、知识库等）', 'Retry failed post-processing steps such as character cards and knowledge indexing')}
               >
@@ -697,7 +833,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         <div className="px-3 py-1.5" style={{ borderBottom: '1px solid var(--color-border)' }}>
           <PostProcessStatusPanel
             scope={getChapterFinalizeScope(meta.chapterNumber)}
-            onRetry={() => doRepairFinalize()}
+            onRetry={doRepairFinalize}
             onStatusLoad={setHasProcessFailure}
           />
         </div>
@@ -851,12 +987,21 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           {/* 合并视图主体 */}
           <div className="flex-1 overflow-hidden" style={{ height: 'calc(85vh - 38px - 1px)' }}>
             {mergeData && (
-              <ThreeWayMerge
-                originalContent={mergeData.originalContent}
-                modifiedContent={mergeData.modifiedContent}
-                onComplete={handleMergeComplete}
-                onCancel={() => setMergeData(null)}
-              />
+              <div className="flex h-full flex-col">
+                {mergeData.staleReason && (
+                  <div role="alert" className="border-b border-[var(--color-border)] px-4 py-2 text-sm text-[var(--color-warning-text)]">
+                    {mergeData.staleReason}
+                  </div>
+                )}
+                <div className="min-h-0 flex-1">
+                  <ThreeWayMerge
+                    originalContent={mergeData.originalContent}
+                    modifiedContent={mergeData.modifiedContent}
+                    onComplete={handleMergeComplete}
+                    onCancel={() => setMergeData(null)}
+                  />
+                </div>
+              </div>
             )}
           </div>
         </DialogContent>

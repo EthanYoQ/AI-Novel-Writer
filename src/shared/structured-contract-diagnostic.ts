@@ -4,6 +4,8 @@ export type StructuredContractDiagnosticCode =
   | 'missing_field'
   | 'invalid_type'
   | 'invalid_value'
+  | 'empty_value'
+  | 'value_too_long'
   | 'duplicate_item'
   | 'unexpected_item'
   | 'missing_item'
@@ -26,9 +28,14 @@ export class StructuredContractDiagnostic extends Error {
   constructor(
     readonly code: StructuredContractDiagnosticCode,
     readonly path: string,
+    readonly actualCharacters?: number,
+    readonly maxCharacters?: number,
   ) {
     const field = fieldFromPath(path)
-    super(`结构化合同诊断 code=${code} path=${path} field=${field}`)
+    const characterCounts = actualCharacters !== undefined && maxCharacters !== undefined
+      ? ` actualCharacters=${actualCharacters} maxCharacters=${maxCharacters}`
+      : ''
+    super(`结构化合同诊断 code=${code} path=${path} field=${field}${characterCounts}`)
     this.name = 'StructuredContractDiagnostic'
     this.field = field
   }

@@ -67,6 +67,7 @@ function createRealProjectDb(): BetterSqlite3.Database {
       characters_arch TEXT DEFAULT '',
       synopsis TEXT DEFAULT '',
       character_states TEXT DEFAULT '',
+      plot_tree_snapshot TEXT NOT NULL DEFAULT '',
       updated_at TEXT DEFAULT (datetime('now'))
     );
     INSERT INTO project_core (id, writing_style, premise, characters_arch)
@@ -175,15 +176,18 @@ describe('project clear repositories', () => {
       'DELETE FROM characters',
       expect.stringContaining('UPDATE project_core') as unknown as string,
     ]))
+    expect(statements).not.toContain("UPDATE project_core SET plot_tree_snapshot = '' WHERE id = 'main'")
     expect(result.cleared).toEqual(['blueprints', 'creativeFields'])
   })
 
-  it('clears creative roster facts and receipts through the public clear seam so a fresh generation cannot inherit ready state or old cards', () => {
+  it('clears creative roster facts while preserving the previous plot tree as a stale snapshot', () => {
     const db = createRealProjectDb()
     vi.mocked(getProjectDb).mockReturnValue(db as never)
     vi.mocked(getCurrentProjectPath).mockReturnValue(null)
 
     try {
+      const previousPlotTree = JSON.stringify({ schemaVersion: 1, sourceRevision: 'before-clear' })
+      db.prepare("UPDATE project_core SET plot_tree_snapshot = ? WHERE id = 'main'").run(previousPlotTree)
       const beforeClear = CharacterRosterRepository.commit(rosterCommitRequest('roster-before-clear', 0))
       expect(beforeClear.snapshot).toMatchObject({ status: 'ready', entries: [expect.objectContaining({ name: '清除前角色' })] })
       expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_operations').get()).toEqual({ count: 1 })
@@ -193,6 +197,8 @@ describe('project clear repositories', () => {
       })
 
       expect(db.prepare('SELECT characters_arch FROM project_core WHERE id = ?').get('main')).toEqual({ characters_arch: '' })
+      expect(db.prepare('SELECT plot_tree_snapshot FROM project_core WHERE id = ?').get('main'))
+        .toEqual({ plot_tree_snapshot: previousPlotTree })
       expect(db.prepare('SELECT COUNT(*) AS count FROM characters').get()).toEqual({ count: 0 })
       expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_meta').get()).toEqual({ count: 0 })
       expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_operations').get()).toEqual({ count: 0 })

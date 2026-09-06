@@ -12,9 +12,12 @@ import {
   type ChapterBlueprint,
 } from '../directory-workflow'
 import { useProjectStore } from '../../../stores/project-store'
+import { useLocaleStore } from '../../../stores/locale-store'
+import { useWorkflowStore } from '../../../stores/workflow-store'
 import type { ProjectData } from '../../../shared/ipc-channels'
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
+import { globalEventBus } from '../../../shared/event-bus'
 
 const blueprint: ChapterBlueprint = {
   chapterNumber: 1,
@@ -50,6 +53,16 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   useProjectStore.setState({ currentProject: null })
+  useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
+  useWorkflowStore.setState({
+    activeRuns: [],
+    history: [],
+    globalLogs: [],
+    waitingRuns: {},
+    currentRun: null,
+    waitingForConfirm: false,
+    waitingAfterStepIndex: -1,
+  })
 })
 
 function project(path: string): ProjectData {
@@ -307,6 +320,8 @@ describe('blueprint persistence helpers', () => {
       characterSyncInput: [blueprint],
     }
     const invoke = stubIpcInvoke({ success: true, receipt })
+    const refreshEvents: unknown[] = []
+    const unsubscribe = globalEventBus.on('REFRESH_RESOURCE', payload => refreshEvents.push(payload))
 
     await expect(commitDirectoryBlueprintRange(
       [blueprint],
@@ -327,10 +342,164 @@ describe('blueprint persistence helpers', () => {
       'C:/NovelA',
       session,
     )
+    unsubscribe()
+    expect(refreshEvents).toEqual([{
+      resources: ['blueprints'],
+      projectPath: 'C:/NovelA',
+      projectSession: session,
+    }])
+  })
+
+  it.each([
+    [{ success: false, error: '写入失败' }],
+    [{ success: true }],
+  ])('does not announce blueprint refresh without a committed receipt', async (result) => {
+    stubIpcInvoke(result)
+    const refreshEvents: unknown[] = []
+    const unsubscribe = globalEventBus.on('REFRESH_RESOURCE', payload => refreshEvents.push(payload))
+
+    await expect(commitDirectoryBlueprintRange(
+      [blueprint],
+      'C:/NovelA',
+      { mode: 'replace-range', startChapter: 1, endChapter: 1 },
+      'directory-run-1',
+      session,
+    )).rejects.toThrow()
+    unsubscribe()
+
+    expect(refreshEvents).toEqual([])
   })
 })
 
 describe('directory workflow project context', () => {
+  it('uses the requested English locale when launch validation fails', () => {
+    useProjectStore.setState({ currentProject: project('C:\\novels\\Other') })
+
+    expect(() => createDirectoryWorkflow(
+      { mode: 'full' },
+      'C:\\novels\\Expected',
+      {
+        projectId: 'C:\\novels\\Expected',
+        leaseId: 'lease-C:\\novels\\Expected',
+        projectPath: 'C:\\novels\\Expected',
+      },
+      'en-US',
+    )).toThrow('The project changed, so chapter-blueprint generation could not start.')
+  })
+
+  it('keeps architecture validation errors in the locale frozen at launch', async () => {
+    const projectA = project('C:\\novels\\English-errors')
+    const projectSession = {
+      projectId: projectA.id,
+      leaseId: projectA.sessionLease!,
+      projectPath: projectA.path,
+    }
+    useProjectStore.setState({ currentProject: projectA })
+    useLocaleStore.setState({ locale: 'en-US', initialized: true })
+    const invoke = stubIpcInvoke(null)
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:project-core-get') return null
+      return []
+    })
+    const workflow = createDirectoryWorkflow({ mode: 'full' }, projectA.path, projectSession)
+    useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
+
+    await expect(workflow.steps[0].executor(
+      workflowStep('Read architecture'),
+      {
+        runId: 'english-error-run',
+        projectPath: projectA.path,
+        projectSession,
+        writingLanguage: 'zh-CN',
+        uiLocale: 'en-US',
+        data: {},
+        cancelled: false,
+      },
+      { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
+    )).rejects.toThrow('Project core data has not been initialized.')
+  })
+
+  it('does not expose a directory command failure through the frozen English workflow UI', async () => {
+    const projectA = project('C:\\novels\\English-command-error')
+    const projectSession = {
+      projectId: projectA.id,
+      leaseId: projectA.sessionLease!,
+      projectPath: projectA.path,
+    }
+    useProjectStore.setState({ currentProject: projectA })
+    const directoryCommand = await import('../commands/directory.command')
+    vi.spyOn(directoryCommand.GenerateDirectoryCommand.prototype, 'execute')
+      .mockRejectedValue(new Error('provider-secret-directory-failure'))
+    const workflow = createDirectoryWorkflow(
+      { mode: 'full' },
+      projectA.path,
+      projectSession,
+      'en-US',
+    )
+
+    let failure: unknown
+    try {
+      await workflow.steps[1].executor(
+        workflowStep('Generate blueprints'),
+        {
+          runId: 'english-command-error-run',
+          projectPath: projectA.path,
+          projectSession,
+          writingLanguage: 'zh-CN',
+          uiLocale: 'en-US',
+          data: {},
+          cancelled: false,
+        },
+        { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
+      )
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toBe('Chapter-blueprint generation failed. Please try again.')
+    expect((failure as Error).message).not.toContain('provider-secret-directory-failure')
+  })
+
+  it('freezes English workflow labels and user-visible logs at launch', async () => {
+    const projectA = project('C:\\novels\\English')
+    const projectSession = {
+      projectId: projectA.id,
+      leaseId: projectA.sessionLease!,
+      projectPath: projectA.path,
+    }
+    useProjectStore.setState({ currentProject: projectA })
+    useLocaleStore.setState({ locale: 'en-US', initialized: true })
+    const invoke = stubIpcInvoke([])
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:project-core-get') {
+        return { premise: 'Story premise. '.repeat(12), charactersArch: '', worldbuilding: '', synopsis: '' }
+      }
+      return []
+    })
+
+    const definition = createDirectoryWorkflow({ mode: 'full' }, projectA.path, projectSession)
+    await useWorkflowStore.getState().startWorkflow({ ...definition, steps: [definition.steps[0]] })
+
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({
+      uiLocale: 'en-US',
+      title: 'Generate chapter blueprints (all)',
+      status: 'completed',
+      steps: [{
+        name: 'Read architecture',
+        description: 'Load the project architecture from SQLite',
+        status: 'completed',
+        result: 'Architecture loaded (1 section)',
+        logs: [expect.stringContaining('Loading project architecture...')],
+      }],
+    })
+    const messages = useWorkflowStore.getState().globalLogs.map(entry => entry.message).join('\n')
+    expect(messages).toContain('[Started] Workflow "Generate chapter blueprints (all)" started')
+    expect(messages).toContain('  Loading project architecture...')
+    expect(messages).not.toMatch(/读取架构|生成蓝图|读取项目架构/u)
+  })
+
   it('freezes the launch project and does not schedule a duplicate post-command save step', async () => {
     const projectA = project('C:\\novels\\A')
     useProjectStore.setState({ currentProject: projectA })

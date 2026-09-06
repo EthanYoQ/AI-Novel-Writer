@@ -9,6 +9,7 @@
  */
 
 import { useProjectStore } from '../stores/project-store'
+import { useLocaleStore } from '../stores/locale-store'
 import { ipc } from './ipc-client'
 import type { ProjectData, ProjectSessionContext } from '../shared/ipc-channels'
 import {
@@ -16,6 +17,8 @@ import {
   sameProjectPathKey,
   sameProjectSessionContext,
 } from '../shared/project-session-context'
+import { localize } from '../i18n/core'
+import type { Locale } from '../i18n/types'
 
 import { readPostProcessStatus, getChapterFinalizeScope, getFailedStepLabels } from './workflows/workflow-utils'
 
@@ -51,10 +54,14 @@ function captureGuardProject(
 export function guardArchitectureGeneration(
   expectedProjectPath?: string,
   expectedProjectSession?: ProjectSessionContext,
+  uiLocale: Locale = useLocaleStore.getState().locale,
 ): GuardResult {
   const captured = captureGuardProject(expectedProjectPath, expectedProjectSession)
   if (!captured) {
-    return { ok: false, message: '请先打开或新建一个项目。' }
+    return {
+      ok: false,
+      message: localize(uiLocale, '请先打开或新建一个项目。', 'Open or create a project first.'),
+    }
   }
 
   const { project } = captured
@@ -70,7 +77,11 @@ export function guardArchitectureGeneration(
   if (!hasConfig) {
     return {
       ok: false,
-      message: `请先填写「小说配置」中的核心大纲或主角人设，AI 才能据此生成故事架构。\n\n当前类型：${genre || '未设置'}`,
+      message: localize(
+        uiLocale,
+        `请先填写「小说配置」中的核心大纲或主角人设，AI 才能据此生成故事架构。\n\n当前类型：${genre || '未设置'}`,
+        `Fill in the core outline or protagonist profile in Novel Configuration before generating the story architecture.\n\nCurrent genre: ${genre || 'Not set'}`,
+      ),
       action: 'open-config',
     }
   }
@@ -88,10 +99,14 @@ export function guardArchitectureGeneration(
 export async function guardDirectoryGeneration(
   expectedProjectPath?: string,
   expectedProjectSession?: ProjectSessionContext,
+  uiLocale: Locale = useLocaleStore.getState().locale,
 ): Promise<GuardResult> {
   const captured = captureGuardProject(expectedProjectPath, expectedProjectSession)
   if (!captured) {
-    return { ok: false, message: '请先打开或新建一个项目。' }
+    return {
+      ok: false,
+      message: localize(uiLocale, '请先打开或新建一个项目。', 'Open or create a project first.'),
+    }
   }
 
   const { projectPath, projectSession } = captured
@@ -100,25 +115,28 @@ export async function guardDirectoryGeneration(
 
   const checkHasContent = (text: string | null | undefined) => text && text.length > 50 && !text.includes('> 待生成')
 
-  if (!core || !checkHasContent(core.premise)) missing.push('故事前提')
-  if (!core || !checkHasContent(core.charactersArch)) missing.push('角色图谱')
-  if (!core || !checkHasContent(core.worldbuilding)) missing.push('世界观')
-  if (!core || !checkHasContent(core.synopsis)) missing.push('情节大纲')
-
-  // 故事前提是必须的（第一个大块）
-  if (missing.includes('故事前提')) {
-    return {
-      ok: false,
-      message: `「故事前提」尚未生成，它是章节蓝图的基础。\n\n请先在「故事架构」中点击「AI 生成架构」，生成故事前提后再来生成章节蓝图。`,
-      action: 'open-world-building',
-    }
+  const premiseLabel = localize(uiLocale, '故事前提', 'Story premise')
+  if (!core || !checkHasContent(core.premise)) missing.push(premiseLabel)
+  if (!core || !checkHasContent(core.charactersArch)) {
+    missing.push(localize(uiLocale, '角色图谱', 'Character graph'))
+  }
+  if (!core || !checkHasContent(core.worldbuilding)) {
+    missing.push(localize(uiLocale, '世界观', 'Worldbuilding'))
+  }
+  if (!core || !checkHasContent(core.synopsis)) {
+    missing.push(localize(uiLocale, '情节大纲', 'Plot outline'))
   }
 
-  // 其他部分缺失：警告但允许继续
-  if (missing.length > 0) {
+  // 故事前提是必须的（第一个大块）
+  if (missing.includes(premiseLabel)) {
     return {
-      ok: true, // 允许继续，但携带警告信息
-      message: `注意：以下架构信息尚未生成，蓝图质量可能受影响：\n${missing.map(m => `• ${m}`).join('\n')}\n\n建议先生成完整架构，或继续使用现有内容。`,
+      ok: false,
+      message: localize(
+        uiLocale,
+        '「故事前提」尚未生成，它是章节蓝图的基础。\n\n请先在「故事架构」中点击「AI 生成架构」，生成故事前提后再来生成章节蓝图。',
+        'The story premise has not been generated, and chapter blueprints depend on it.\n\nGenerate the story premise in Story Architecture before generating chapter blueprints.',
+      ),
+      action: 'open-world-building',
     }
   }
 
@@ -127,7 +145,23 @@ export async function guardDirectoryGeneration(
   if (chars.length === 0) {
     return {
       ok: false,
-      message: `角色卡不存在（数据库中没有角色记录）。\n\n请先在「故事架构」中生成角色图谱（会自动创建角色卡），或在「角色管理」中手动创建角色卡。`,
+      message: localize(
+        uiLocale,
+        '角色卡不存在（数据库中没有角色记录）。\n\n请先在「故事架构」中生成角色图谱（会自动创建角色卡），或在「角色管理」中手动创建角色卡。',
+        'No character cards exist (the database has no character records).\n\nGenerate the character graph in Story Architecture, or create character cards manually.',
+      ),
+    }
+  }
+
+  // 其他部分缺失：警告但允许继续
+  if (missing.length > 0) {
+    return {
+      ok: true, // 允许继续，但携带警告信息
+      message: localize(
+        uiLocale,
+        `注意：以下架构信息尚未生成，蓝图质量可能受影响：\n${missing.map(m => `• ${m}`).join('\n')}\n\n建议先生成完整架构，或继续使用现有内容。`,
+        `The following architecture sections have not been generated, which may affect blueprint quality:\n${missing.map(m => `• ${m}`).join('\n')}\n\nGenerate the complete architecture first, or continue with the available content.`,
+      ),
     }
   }
 
@@ -145,10 +179,14 @@ export async function guardChapterWriting(
   targetChapterNumber?: number,
   expectedProjectPath?: string,
   expectedProjectSession?: ProjectSessionContext,
+  uiLocale: Locale = useLocaleStore.getState().locale,
 ): Promise<GuardResult> {
   const captured = captureGuardProject(expectedProjectPath, expectedProjectSession)
   if (!captured) {
-    return { ok: false, message: '请先打开或新建一个项目。' }
+    return {
+      ok: false,
+      message: localize(uiLocale, '请先打开或新建一个项目。', 'Open or create a project first.'),
+    }
   }
 
   const { projectPath, projectSession } = captured
@@ -156,7 +194,11 @@ export async function guardChapterWriting(
   if (blueprints.length === 0) {
     return {
       ok: false,
-      message: `尚未生成章节蓝图（数据库为空）。\n\n请先在「章节蓝图」中点击「AI 生成蓝图」，让 AI 规划每章内容后，再回来写稿。`,
+      message: localize(
+        uiLocale,
+        '尚未生成章节蓝图（数据库为空）。\n\n请先在「章节蓝图」中点击「AI 生成蓝图」，让 AI 规划每章内容后，再回来写稿。',
+        'No chapter blueprints have been generated (the database is empty).\n\nGenerate chapter blueprints first, then return to draft the chapter.',
+      ),
       action: 'open-blueprint',
     }
   }
@@ -166,7 +208,11 @@ export async function guardChapterWriting(
   if (chars.length === 0) {
     return {
       ok: false,
-      message: `角色卡不存在（数据库中没有角色记录）。\n\nAI 写稿需要角色状态作为上下文，请先在「故事架构」中生成角色图谱，或在「角色管理」中手动创建角色卡。`,
+      message: localize(
+        uiLocale,
+        '角色卡不存在（数据库中没有角色记录）。\n\nAI 写稿需要角色状态作为上下文，请先在「故事架构」中生成角色图谱，或在「角色管理」中手动创建角色卡。',
+        'No character cards exist (the database has no character records).\n\nAI drafting needs character state as context. Generate the character graph in Story Architecture or create character cards manually.',
+      ),
     }
   }
 
@@ -177,7 +223,11 @@ export async function guardChapterWriting(
     if (!prevDraftMeta) {
       return {
         ok: false,
-        message: `上下文缺失：第 ${prevChapter} 章尚未定稿！\n\n为了保证 AI 写稿时能读取到连贯的上下文（前章结尾和剧情要点），请必须先前往草稿箱完成第 ${prevChapter} 章的定稿操作。`,
+        message: localize(
+          uiLocale,
+          `上下文缺失：第 ${prevChapter} 章尚未定稿！\n\n为了保证 AI 写稿时能读取到连贯的上下文（前章结尾和剧情要点），请必须先前往草稿箱完成第 ${prevChapter} 章的定稿操作。`,
+          `Missing context: Chapter ${prevChapter} has not been finalized.\n\nFinalize Chapter ${prevChapter} first so AI drafting can read a continuous context, including the previous ending and plot notes.`,
+        ),
       }
     }
 
@@ -188,7 +238,11 @@ export async function guardChapterWriting(
       const failedLabels = getFailedStepLabels(prevStatus)
       return {
         ok: false,
-        message: `第 ${prevChapter} 章的定稿后处理未完成！\n\n以下关键步骤失败：\n${failedLabels.map(f => `• ${f}`).join('\n')}\n\n请先在草稿箱中点击「修复定稿」按钮补全数据，否则后续章节的 AI 上下文将不完整。`,
+        message: localize(
+          uiLocale,
+          `第 ${prevChapter} 章的定稿后处理未完成！\n\n以下关键步骤失败：\n${failedLabels.map(f => `• ${f}`).join('\n')}\n\n请先在草稿箱中点击「修复定稿」按钮补全数据，否则后续章节的 AI 上下文将不完整。`,
+          `Chapter ${prevChapter} finalization post-processing is incomplete.\n\nFailed critical steps:\n${failedLabels.map(f => `• ${f}`).join('\n')}\n\nRepair the finalization from Drafts first, or later chapters will have incomplete AI context.`,
+        ),
       }
     }
     // 如果状态文件不存在（旧版定稿）→ 兼容放行
@@ -206,10 +260,14 @@ export async function guardChapterWriting(
  */
 export async function guardCharacterRegeneration(
   expectedProjectSession?: ProjectSessionContext,
+  uiLocale: Locale = useLocaleStore.getState().locale,
 ): Promise<GuardResult> {
   const captured = captureGuardProject(undefined, expectedProjectSession)
   if (!captured) {
-    return { ok: false, message: '请先打开或新建一个项目。' }
+    return {
+      ok: false,
+      message: localize(uiLocale, '请先打开或新建一个项目。', 'Open or create a project first.'),
+    }
   }
 
   const blueprints = await ipc.invokeWithProjectSession(
@@ -220,7 +278,11 @@ export async function guardCharacterRegeneration(
   if (blueprints.length > 0) {
     return {
       ok: false,
-      message: `已有章节蓝图，角色卡不可重新生成。\n\n蓝图生成已依赖角色数据，重新生成角色卡会导致现有蓝图和已写章节全部失效。\n如需修改角色，请手动编辑现有角色卡。`,
+      message: localize(
+        uiLocale,
+        '已有章节蓝图，角色卡不可重新生成。\n\n蓝图生成已依赖角色数据，重新生成角色卡会导致现有蓝图和已写章节全部失效。\n如需修改角色，请手动编辑现有角色卡。',
+        'Character cards cannot be regenerated while chapter blueprints exist.\n\nThe blueprints already depend on character data. Regenerating the cards would invalidate existing blueprints and drafted chapters. Edit the existing character cards manually instead.',
+      ),
     }
   }
 

@@ -9,23 +9,13 @@ import { create } from 'zustand'
 import { ipc } from '../services/ipc-client'
 import { toolRegistry } from '../services/agent/tool-registry'
 import type {
-  MCPServerConfig,
-  MCPConnectionStatus,
-  MCPToolDesc,
-  MCPResourceDesc,
-} from '../../electron/mcp/mcp-manager'
+  MCPResourceDescription,
+  MCPServerStatus,
+  MCPToolDescription,
+} from '../shared/ipc-channels'
 
-interface MCPServerStatus {
-  id: string
-  name: string
-  status: MCPConnectionStatus
-  toolCount: number
-  error?: string
-}
-
-type MCPServerConfigData = MCPServerConfig
-type MCPToolData = MCPToolDesc
-type MCPResourceData = MCPResourceDesc
+type MCPToolData = MCPToolDescription
+type MCPResourceData = MCPResourceDescription
 import type { AgentTool } from '../services/agent/tool-registry'
 
 // ===== Store 状态 =====
@@ -50,7 +40,7 @@ interface MCPState {
   /** 刷新服务器状态 */
   refreshStatus: () => Promise<void>
   /** 连接单个服务器 */
-  connectServer: (config: MCPServerConfigData) => Promise<void>
+  connectServer: (serverId: string) => Promise<void>
   /** 断开单个服务器 */
   disconnectServer: (serverId: string) => Promise<void>
   /** 断开所有服务器 */
@@ -79,16 +69,20 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
       // 加载配置
       const result = await ipc.invoke('mcp:load-config')
       if (!result.success) {
-        set({ loading: false })
-        return // 配置文件不存在不是错误
+        set({ loading: false, error: result.error ?? 'MCP 配置加载失败' })
+        return
       }
 
       // 自动连接所有配置的服务器
-      for (const config of result.configs as Array<Record<string, unknown>>) {
+      for (const server of result.servers) {
         try {
-          await ipc.invoke('mcp:connect', config)
+          const connection = await ipc.invoke('mcp:connect', server.id)
+          if (!connection.success) {
+            set({ error: connection.error ?? '连接失败' })
+          }
         } catch (e) {
-          console.warn(`[MCP] 连接 ${config.id} 失败:`, e)
+          console.warn(`[MCP] 连接 ${server.id} 失败:`, e)
+          set({ error: 'MCP 服务器连接失败' })
         }
       }
 
@@ -114,8 +108,8 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
     }
   },
 
-  connectServer: async (config) => {
-    const result = await ipc.invoke('mcp:connect', config as unknown as Record<string, unknown>)
+  connectServer: async (serverId) => {
+    const result = await ipc.invoke('mcp:connect', serverId)
     if (!result.success) {
       set({ error: result.error ?? '连接失败' })
       return

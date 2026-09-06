@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import MentionMenu from '../agent/MentionMenu'
 import { getAllMentionTargets } from '../../../services/agent/intent-router'
+import { useLocaleStore } from '../../../stores/locale-store'
 
 const pseudoIconPattern = new RegExp([
   '[\\u2600-\\u27BF]',
@@ -50,7 +51,7 @@ describe('data-driven menu icon contract', () => {
   })
 
   it('renders every @ mention target with shared icons instead of Unicode glyphs', () => {
-    const targets = getAllMentionTargets()
+    const targets = getAllMentionTargets(useLocaleStore.getInitialState().locale)
     const markup = renderToStaticMarkup(createElement(MentionMenu, {
       query: '',
       onSelect: () => undefined,

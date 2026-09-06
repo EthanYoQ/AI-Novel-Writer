@@ -74,6 +74,15 @@ export interface LoadedSkill {
 
 // ===== Skill Registry =====
 
+function isMissingProjectSkillDirectory(error: unknown): boolean {
+  const code = error && typeof error === 'object' && 'code' in error
+    ? error.code
+    : undefined
+  if (code === 'ENOENT' || code === 'SECURE_FS_NOT_FOUND') return true
+  const message = error instanceof Error ? error.message : ''
+  return /(?:^|:\s)(?:SECURE_FS_NOT_FOUND|ENOENT: no such file or directory(?:,|$))/.test(message)
+}
+
 class SkillRegistryImpl {
   private skills: Map<string, LoadedSkill> = new Map()
   private loadTail: Promise<void> = Promise.resolve()
@@ -141,62 +150,78 @@ class SkillRegistryImpl {
     target: Map<string, LoadedSkill>,
   ): Promise<number> {
     let count = 0
+    const exists = await ipc.invokeWithProjectSession(
+      projectSession,
+      'fs:check-exists',
+      dir,
+      projectPath,
+    )
+    if (
+      !sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(useProjectStore.getState().currentProject),
+      )
+    ) return count
+    if (!exists) return count
+
+    let entries
     try {
-      const entries = await ipc.invokeWithProjectSession(
+      entries = await ipc.invokeWithProjectSession(
         projectSession,
         'fs:list-dir',
         dir,
         projectPath,
       )
+    } catch (error) {
+      if (isMissingProjectSkillDirectory(error)) return count
+      throw error
+    }
+    if (
+      !sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(useProjectStore.getState().currentProject),
+      )
+    ) return count
+    for (const entry of entries) {
       if (
         !sameProjectSessionContext(
           projectSession,
           projectSessionContextFromProject(useProjectStore.getState().currentProject),
         )
       ) return count
-      for (const entry of entries) {
+      if (!entry.isDir) continue
+
+      const skillFile = `${entry.path}/SKILL.md`
+      try {
+        const result = await ipc.invokeWithProjectSession(
+          projectSession,
+          'fs:read-file',
+          skillFile,
+          projectPath,
+        )
         if (
           !sameProjectSessionContext(
             projectSession,
             projectSessionContextFromProject(useProjectStore.getState().currentProject),
           )
         ) return count
-        if (!entry.isDir) continue
+        if (!result.success) continue
 
-        const skillFile = `${entry.path}/SKILL.md`
-        try {
-          const result = await ipc.invokeWithProjectSession(
-            projectSession,
-            'fs:read-file',
-            skillFile,
-            projectPath,
-          )
-          if (
-            !sameProjectSessionContext(
-              projectSession,
-              projectSessionContextFromProject(useProjectStore.getState().currentProject),
-            )
-          ) return count
-          if (!result.success) continue
-
-          const skill = parseSkillMd(
-            result.content,
-            entry.name,
-            'project',
-            entry.path,
-            skillFile,
-            projectSession,
-          )
-          if (skill) {
-            target.set(skill.skillId, skill)
-            count++
-          }
-        } catch {
-          // 单个 Skill 加载失败不影响整体
+        const skill = parseSkillMd(
+          result.content,
+          entry.name,
+          'project',
+          entry.path,
+          skillFile,
+          projectSession,
+        )
+        if (skill) {
+          target.set(skill.skillId, skill)
+          count++
         }
+      } catch {
+        // 单个 Skill 加载失败不影响整体
       }
-    } catch {
-      // 目录不存在等情况，静默处理
     }
     return count
   }
@@ -227,7 +252,8 @@ class SkillRegistryImpl {
 
     // 加载项目 Skill（项目/.vela/skills/）
     if (
-      projectSession
+      ipc.isElectron
+      && projectSession
       && sameProjectSessionContext(
         projectSession,
         projectSessionContextFromProject(useProjectStore.getState().currentProject),
@@ -264,6 +290,7 @@ class SkillRegistryImpl {
       const agentTool: AgentTool = {
         name: `skill__${skill.metadata.name}`,
         description: skill.metadata.description + (skill.metadata.whenToUse ? ` — ${skill.metadata.whenToUse}` : ''),
+        descriptionEn: skill.writingSkill.metadata.description,
         source: 'skill',
         inputSchema: {
           type: 'object',
@@ -271,6 +298,7 @@ class SkillRegistryImpl {
             args: {
               type: 'string',
               description: skill.metadata.argumentHint ?? '可选的参数',
+              descriptionEn: 'Optional arguments',
             },
           },
         },
@@ -290,7 +318,8 @@ class SkillRegistryImpl {
           }
           const userArgs = (toolArgs.args as string) ?? ''
           // 变量替换
-          let content = skill.content
+          const writingLanguage = context?.writingLanguage ?? 'zh-CN'
+          let content = skill.localizedContent?.[writingLanguage] ?? skill.content
           if (userArgs) {
             content = content.replace(/\$\{args\}/g, userArgs)
             content = content.replace(/\$1/g, userArgs)
@@ -299,7 +328,9 @@ class SkillRegistryImpl {
 
           return {
             success: true,
-            content: `[Skill: ${skill.metadata.displayName ?? skill.metadata.name}]\n\n${content}`,
+            content: `[Skill: ${writingLanguage === 'en-US'
+              ? (skill.writingSkill.metadata.displayName ?? skill.metadata.name)
+              : (skill.metadata.displayName ?? skill.metadata.name)}]\n\n${content}`,
           }
         },
       }
@@ -383,7 +414,7 @@ function registerBuiltinSkills(registry: Pick<SkillRegistryImpl, 'register'>): v
         'zh-CN': '以作者已经确认的事实为最高依据。持续核对因果链、角色状态和未回收的叙事线索。每个场景围绕角色的主动选择、选择的代价，以及故事状态发生的具体变化展开。',
         'en-US': 'Treat established author facts as authoritative. Track causality, character state, and unresolved narrative threads. Build each scene around a character choice, its cost, and a concrete change in the story state.',
       },
-      writingSkill: inspectWritingSkillMarkdown(`---\nname: long-form-continuity\ndescription: Long-form continuity and scene progression\nversion: 1.0.0\nlanguage: bilingual\nstage: planning\n---\nTreat established author facts as authoritative. Track causality, character state, and unresolved narrative threads.`),
+      writingSkill: inspectWritingSkillMarkdown(`---\nname: long-form-continuity\ndisplay_name: Long-form Continuity and Scene Progression\ndescription: Long-form continuity and scene progression\nversion: 1.0.0\nlanguage: bilingual\nstage: planning\n---\nTreat established author facts as authoritative. Track causality, character state, and unresolved narrative threads.`),
     },
     {
       metadata: {
@@ -397,7 +428,7 @@ function registerBuiltinSkills(registry: Pick<SkillRegistryImpl, 'register'>): v
         'zh-CN': '在不改变作者事实和情节结果的前提下润色正文。用有选择的具体动作替代空泛概述，调整句式节奏，保持视角人物的语言质感，并删除元话术和重复的过渡表达。',
         'en-US': 'Revise the prose without changing author facts or plot outcomes. Replace generic summaries with selective concrete action, vary sentence rhythm, preserve the viewpoint voice, and remove meta commentary and repetitive transitions.',
       },
-      writingSkill: inspectWritingSkillMarkdown(`---\nname: natural-prose-refinement\ndescription: Natural prose refinement\nversion: 1.0.0\nlanguage: bilingual\nstage: refinement\n---\nRevise the prose without changing author facts or plot outcomes.`),
+      writingSkill: inspectWritingSkillMarkdown(`---\nname: natural-prose-refinement\ndisplay_name: Natural Prose Refinement\ndescription: Natural prose refinement\nversion: 1.0.0\nlanguage: bilingual\nstage: refinement\n---\nRevise the prose without changing author facts or plot outcomes.`),
     },
     {
       metadata: {
@@ -432,6 +463,35 @@ function registerBuiltinSkills(registry: Pick<SkillRegistryImpl, 'register'>): v
 
 请先使用 read_drafts 工具读取目标章节，再使用 read_architecture 读取故事架构进行对比评估。
 输出格式：每个维度评分（1-5星）+ 详细说明 + 修改建议。`,
+      localizedContent: {
+        'en-US': `# Chapter Review
+
+Review the target chapter as a fiction editor. Check each dimension in order:
+
+## 1. Plot logic
+- Is the plot coherent and free of logical contradictions?
+- Are cause and effect convincing?
+
+## 2. Character consistency
+- Do actions match established characterization?
+- Does each character keep a consistent voice?
+
+## 3. Pacing
+- Is tension balanced with release?
+- Are any passages needlessly slow or any turns too abrupt?
+
+## 4. Foreshadowing and payoff
+- Are established clues paid off where appropriate?
+- Do new clues arise naturally?
+
+## 5. Prose and style
+- Is the description vivid and purposeful?
+- Does it match the project's established style?
+
+Use read_drafts to load the target chapter and read_architecture to compare it with the story plan.
+For each dimension, provide a 1-5 rating, a concise explanation, and actionable revision suggestions.`,
+      },
+      writingSkill: inspectWritingSkillMarkdown(`---\nname: review-chapter\ndisplay_name: Chapter Review\ndescription: Reviews a chapter for plot logic, character consistency, pacing, foreshadowing, and prose quality.\nlanguage: bilingual\nstage: review\n---\nUse the read_drafts and read_architecture tools before reviewing the chapter.`),
     },
     {
       metadata: {
@@ -453,6 +513,22 @@ function registerBuiltinSkills(registry: Pick<SkillRegistryImpl, 'register'>): v
 
 请先使用 read_architecture 和 read_project_state 了解项目背景，确保创意与现有设定不矛盾。
 至少提供 5 个不同方向的创意。`,
+      localizedContent: {
+        'en-US': `# Creative Brainstorming
+
+Brainstorm professionally around the user's topic.
+
+## Output format
+For every direction, provide:
+1. **Concept** in one sentence
+2. **Development** in 100-200 words
+3. **Feasibility** as high, medium, or low
+4. **Fit with the existing plot**
+
+Use read_architecture and read_project_state first so the ideas do not contradict established project facts.
+Provide at least five distinct directions.`,
+      },
+      writingSkill: inspectWritingSkillMarkdown(`---\nname: brainstorm\ndisplay_name: Creative Brainstorming\ndescription: Generates multiple creative directions and ideas for a chosen topic.\nlanguage: bilingual\nstage: planning\n---\nUse the read_architecture and read_project_state tools before brainstorming.`),
     },
     {
       metadata: {
@@ -474,6 +550,22 @@ function registerBuiltinSkills(registry: Pick<SkillRegistryImpl, 'register'>): v
 6. **独特标识** — 口头禅、习惯动作、标志性特征
 
 请先使用 read_characters 读取角色卡，以及 read_architecture 了解故事结构。`,
+      localizedContent: {
+        'en-US': `# Character Analysis
+
+Analyze the target character in depth.
+
+## Dimensions
+1. **Core traits** — including useful personality-framework tendencies
+2. **Deep motivation** — the need that drives action
+3. **Character arc** — likely development based on established facts
+4. **Relationship network** — ties to other characters
+5. **Sources of conflict** — central pressures and dilemmas
+6. **Distinctive markers** — speech patterns, habits, and recognizable traits
+
+Use read_characters for the character cards and read_architecture for the story structure before analyzing.`,
+      },
+      writingSkill: inspectWritingSkillMarkdown(`---\nname: character-analysis\ndisplay_name: Character Analysis\ndescription: Analyzes a character's personality, motivation, arc, and relationships in depth.\nlanguage: bilingual\nstage: planning\n---\nUse the read_characters and read_architecture tools before analyzing the character.`),
     },
     {
       metadata: {
@@ -495,6 +587,22 @@ function registerBuiltinSkills(registry: Pick<SkillRegistryImpl, 'register'>): v
 
 请使用 list_chapters 了解进度，使用 read_architecture 获取设定，逐章检查关键节点。
 输出为表格形式，标注问题严重程度（🔴严重 / 🟡注意 / 🟢正常）。`,
+      localizedContent: {
+        'en-US': `# Continuity Check
+
+Run a comprehensive continuity check on the project.
+
+## Checks
+1. **Timeline** — whether events occur in a plausible order
+2. **Geography** — whether locations remain consistent
+3. **Character state** — injuries, equipment, abilities, and other tracked state
+4. **Setting rules** — conflicts with established worldbuilding
+5. **Foreshadowing** — clues already resolved and clues still open
+
+Use list_chapters to understand progress and read_architecture for established facts, then inspect the key points chapter by chapter.
+Return a table and label each finding as critical, warning, or clear.`,
+      },
+      writingSkill: inspectWritingSkillMarkdown(`---\nname: continuity-check\ndisplay_name: Continuity Check\ndescription: Checks the novel for continuity and setting inconsistencies, contradictions, and omissions.\nlanguage: bilingual\nstage: review\n---\nUse the list_chapters and read_architecture tools for a chapter-by-chapter continuity check.`),
     },
     {
       metadata: {
@@ -516,6 +624,21 @@ function registerBuiltinSkills(registry: Pick<SkillRegistryImpl, 'register'>): v
 
 请先使用 read_project_state 了解项目的写作风格设定，
 再根据用户的具体问题提供定制化建议，并附上示例对比。`,
+      localizedContent: {
+        'en-US': `# Writing Coach
+
+Act as a professional writing coach and give guidance tailored to the user's question.
+
+## Areas
+- Narrative technique, including viewpoint and timeline
+- Description, including atmosphere and characterization
+- Dialogue, including individual voice and subtext
+- Pacing, including scene transitions and deliberate omission
+- Suspense, including hooks, reversals, and hidden threads
+
+Use read_project_state first to understand the project's established style. Then give focused advice with a short before-and-after example.`,
+      },
+      writingSkill: inspectWritingSkillMarkdown(`---\nname: writing-coach\ndisplay_name: Writing Coach\ndescription: Provides professional writing guidance and suggestions for improving prose.\nlanguage: bilingual\nstage: refinement\n---\nUse the read_project_state tool before giving tailored writing advice.`),
     },
   ]
 

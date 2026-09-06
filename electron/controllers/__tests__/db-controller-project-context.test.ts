@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   closeProjectDatabase: vi.fn(),
   invalidateCurrentSession: vi.fn(),
   assertCurrentProjectContext: vi.fn(),
+  captureCurrentSession: vi.fn(),
   projectCoreGet: vi.fn(),
   projectCoreUpdate: vi.fn(),
   projectClearGeneratedData: vi.fn(() => ({ cleared: [] })),
@@ -47,12 +48,17 @@ const mocks = vi.hoisted(() => ({
   draftGetMeta: vi.fn(),
   draftListAll: vi.fn((): Array<Record<string, unknown>> => []),
   draftUpdateContent: vi.fn(),
+  draftDelete: vi.fn(),
   postProcessCreateRun: vi.fn(() => 'run-1'),
   postProcessGetLatestRun: vi.fn(),
   postProcessGetSteps: vi.fn(() => []),
   postProcessMarkStepOk: vi.fn(),
   postProcessMarkStepFailed: vi.fn(),
   postProcessIsAllCriticalPassed: vi.fn(() => true),
+  recoveryRecord: vi.fn(),
+  recoveryListPending: vi.fn((): unknown[] => []),
+  recoveryUpdatePending: vi.fn(),
+  recoveryResolve: vi.fn(),
 }))
 
 vi.mock('electron', () => ({
@@ -73,6 +79,7 @@ vi.mock('../../services/project-access', () => ({
   projectAccess: {
     invalidateCurrentSession: mocks.invalidateCurrentSession,
     assertCurrentProjectContext: mocks.assertCurrentProjectContext,
+    captureCurrentSession: mocks.captureCurrentSession,
   },
 }))
 
@@ -127,6 +134,15 @@ vi.mock('../../repositories/post-process-repository', () => ({
   },
 }))
 
+vi.mock('../../repositories/recovery-candidate-repository', () => ({
+  RecoveryCandidateRepository: {
+    record: mocks.recoveryRecord,
+    listPending: mocks.recoveryListPending,
+    updatePending: mocks.recoveryUpdatePending,
+    resolve: mocks.recoveryResolve,
+  },
+}))
+
 vi.mock('../../repositories/draft-repository', () => ({
   DraftRepository: {
     create: vi.fn(() => 1),
@@ -140,7 +156,7 @@ vi.mock('../../repositories/draft-repository', () => ({
     getNextVersion: vi.fn(() => 1),
     updateStatus: vi.fn(),
     updateContent: mocks.draftUpdateContent,
-    delete: vi.fn(),
+    delete: mocks.draftDelete,
   },
 }))
 
@@ -233,6 +249,11 @@ beforeEach(() => {
     }
     return { rootPath: currentProjectPath }
   })
+  mocks.captureCurrentSession.mockImplementation(() => ({
+    projectId: `project-${mocks.currentProjectPath.split('/').at(-1)}`,
+    leaseId: `lease-${mocks.currentProjectPath.split('/').at(-1)}`,
+    rootPath: mocks.currentProjectPath,
+  }))
 })
 
 describe('database controller project context guard', () => {
@@ -839,10 +860,82 @@ describe('database controller project context guard', () => {
     expect(mocks.draftUpdateContent).not.toHaveBeenCalled()
   })
 
+  it('returns a stable redirect code when generic deletion races with finalization', async () => {
+    mocks.draftDelete.mockImplementationOnce(() => {
+      throw Object.assign(new Error('草稿已定稿，请通过定稿删除入口'), {
+        code: 'FINALIZED_DRAFT_DELETE_REQUIRED',
+      })
+    })
+
+    await expect(handler('db:draft-delete')(
+      {},
+      1,
+      'C:/projects/A',
+    )).resolves.toEqual({
+      success: false,
+      errorCode: 'FINALIZED_DRAFT_DELETE_REQUIRED',
+    })
+    expect(mocks.draftDelete).toHaveBeenCalledWith(1)
+  })
+
   it('rejects draft access that omits the required project identity', async () => {
     await expect(rawHandler('db:draft-get-full')({}, 1))
       .rejects.toThrow(/缺少项目会话上下文/)
     expect(mocks.draftGetFull).not.toHaveBeenCalled()
+  })
+
+  it('guards recovery candidate record, list, update, and resolve with the current project session', async () => {
+    const request = {
+      runId: 'run-recovery',
+      stepId: 'generate-draft',
+      chapterNumber: 1,
+      chapterTitle: '第一章',
+      source: blueprint(),
+      sourceDraft: null,
+      visibleText: '候选正文',
+      failureCode: 'PROVIDER_REQUEST_FAILED',
+      failureReason: 'connection reset',
+    }
+    const candidate = {
+      ...request,
+      candidateId: 'candidate-1',
+      sourceHash: 'a'.repeat(64),
+      contentHash: 'b'.repeat(64),
+      status: 'pending',
+      replacesCandidateId: null,
+      sourceCurrent: true,
+      createdAt: '2026-09-06T00:00:00.000Z',
+      resolvedAt: null,
+    }
+    mocks.recoveryRecord.mockReturnValueOnce(candidate)
+    mocks.recoveryListPending.mockReturnValueOnce([candidate])
+    mocks.recoveryUpdatePending.mockReturnValueOnce(candidate)
+
+    await expect(handler('db:recovery-candidate-record')({}, request, 'C:/projects/A'))
+      .resolves.toEqual({ success: true, candidate })
+    await expect(handler('db:recovery-candidate-list')({}, 'C:/projects/A'))
+      .resolves.toEqual([candidate])
+    await expect(handler('db:recovery-candidate-update')({}, 'candidate-1', '候选正文', 'C:/projects/A'))
+      .resolves.toEqual({ success: true, candidate })
+    await expect(handler('db:recovery-candidate-resolve')({}, 'candidate-1', 'continued', 'C:/projects/A'))
+      .resolves.toEqual({ success: true })
+
+    mocks.currentProjectPath = 'C:/projects/B'
+    await expect(handler('db:recovery-candidate-record')({}, request, 'C:/projects/A'))
+      .resolves.toMatchObject({ success: false })
+    await expect(handler('db:recovery-candidate-list')({}, 'C:/projects/A'))
+      .rejects.toThrow(/项目上下文已切换/)
+    await expect(handler('db:recovery-candidate-update')({}, 'candidate-1', '候选正文', 'C:/projects/A'))
+      .resolves.toMatchObject({ success: false })
+    await expect(handler('db:recovery-candidate-resolve')({}, 'candidate-1', 'discarded', 'C:/projects/A'))
+      .resolves.toMatchObject({ success: false })
+
+    expect(mocks.recoveryRecord).toHaveBeenCalledOnce()
+    expect(mocks.recoveryRecord).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project-A' }))
+    expect(mocks.recoveryListPending).toHaveBeenCalledOnce()
+    expect(mocks.recoveryUpdatePending).toHaveBeenCalledOnce()
+    expect(mocks.recoveryUpdatePending).toHaveBeenCalledWith('candidate-1', '候选正文')
+    expect(mocks.recoveryResolve).toHaveBeenCalledOnce()
   })
 
   it('closes only the explicitly matched project database', async () => {

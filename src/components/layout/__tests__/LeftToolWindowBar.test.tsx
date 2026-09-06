@@ -16,7 +16,7 @@ describe('LeftToolWindowBar', () => {
   it('renders visible Chinese labels for every left navigation item', () => {
     const html = renderToString(<LeftToolWindowBar />)
 
-    for (const label of ['首页', '项目', '小说', '蓝图', '角色', '世界', 'AI', '任务', '设置']) {
+    for (const label of ['首页', '项目', '小说', '蓝图', '角色', '世界', '剧情', '任务', '设置']) {
       expect(html).toContain(label)
     }
   })
@@ -38,15 +38,15 @@ describe('LeftToolWindowBar', () => {
       bottomPanelOpen: true,
       bottomTab: 'models',
     })
-
     const html = renderToString(<LeftToolWindowBar />)
 
     expect(countActiveRailButtons(html)).toBe(1)
   })
 
-  it('uses the AI rail entry to open model API configuration', () => {
+  it('replaces the duplicate AI settings entry with the plot tree', () => {
     const source = renderToString(<LeftToolWindowBar />)
 
-    expect(source).toContain('配置模型 API')
+    expect(source).toContain('剧情树')
+    expect(source).not.toContain('配置模型 API')
   })
 })

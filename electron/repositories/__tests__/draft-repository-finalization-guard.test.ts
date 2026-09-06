@@ -104,4 +104,20 @@ describe('DraftRepository finalized immutability guard', () => {
     expect(db.prepare('SELECT status FROM drafts WHERE id = 1').get())
       .toEqual({ status: 'finalized' })
   })
+
+  it('rechecks authoritative status and refuses generic deletion after finalization', () => {
+    db.prepare(`
+      INSERT INTO finalization_outbox (finalization_id, draft_id, chapter_number, chapter_title)
+      VALUES (?, ?, ?, ?)
+    `).run('finalization-1', 1, 1, '蓝镜初亮')
+
+    expect(() => DraftRepository.delete(1)).toThrow('定稿删除入口')
+    expect(DraftRepository.getFull(1)).toMatchObject({
+      id: 1,
+      status: 'finalized',
+      content: '定稿快照正文',
+    })
+    expect(db.prepare('SELECT finalization_id FROM finalization_outbox WHERE draft_id = 1').get())
+      .toEqual({ finalization_id: 'finalization-1' })
+  })
 })

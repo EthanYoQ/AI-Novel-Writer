@@ -20,6 +20,7 @@ function ipcResult(channel: string) {
   if (channel === 'fs:check-exists') return false
   if (channel === 'fs:read-file') return { success: false, content: '', error: 'missing' }
   if (channel === 'fs:write-file') return { success: true }
+  if (channel === 'config:set') return { success: true }
   if (channel === 'skills:inspect-github') return {
     success: true,
     inspection: {
@@ -55,7 +56,9 @@ beforeEach(async () => {
   document.body.append(container)
   root = createRoot(container)
   await act(async () => root?.render(<SkillSettings />))
-  await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('skills:list-user'))
+  await act(async () => {
+    await vi.waitFor(() => expect(container?.querySelector('option[value^="builtin:"]')).not.toBeNull())
+  })
 })
 
 afterEach(async () => {
@@ -108,5 +111,34 @@ describe('writing skill settings', () => {
       'C:/novels/skill-project',
       expect.objectContaining({ projectId: 'skill-project', leaseId: 'skill-project-lease' }),
     ))
+  })
+
+  it('uses an English separator when one skill is enabled for multiple stages', async () => {
+    await act(async () => {
+      await page.getByLabelText('Planning skill').selectOptions('builtin:long-form-continuity')
+    })
+    await expect.element(page.getByLabelText('Chapter drafting skill')).toBeEnabled()
+    await act(async () => {
+      await page.getByLabelText('Chapter drafting skill').selectOptions('builtin:long-form-continuity')
+    })
+
+    const library = container?.querySelector('section[aria-labelledby="writing-skill-library-title"]')
+    await vi.waitFor(() => expect(library?.textContent).toContain('Planning, Chapter drafting'))
+    expect(library?.textContent).not.toContain('Planning、Chapter drafting')
+  })
+
+  it('localizes bundled skill metadata while preserving its Chinese copy', async () => {
+    const library = container?.querySelector('section[aria-labelledby="writing-skill-library-title"]')
+    const builtinOptions = () => [...(container?.querySelectorAll('select option') ?? [])]
+      .filter(option => (option as HTMLOptionElement).value.startsWith('builtin:'))
+      .map(option => option.textContent ?? '')
+
+    expect(library?.textContent).not.toMatch(/[\u3400-\u9fff]/u)
+    expect(builtinOptions().join(' ')).not.toMatch(/[\u3400-\u9fff]/u)
+
+    await act(async () => useLocaleStore.getState().setLocale('zh-CN'))
+
+    expect(library?.textContent).toContain('长篇连续性与场景推进')
+    expect(builtinOptions()).toContain('自然语言润色')
   })
 })

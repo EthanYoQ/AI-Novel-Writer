@@ -13,6 +13,8 @@ import {
 import { randomUUID } from '../../utils/id'
 import { requireWorkflowProjectSession } from './workflow-project-session'
 import type { ArchitectureProjectSnapshot } from './commands/architecture.command'
+import { localize } from '../../i18n/core'
+import type { Locale } from '../../i18n/types'
 
 // ==========================================
 // 1. 类型定义
@@ -50,8 +52,11 @@ export interface ConfigGenerationWorkflowParams {
 // 2. 工作流定义
 // ==========================================
 
-export function createArchitectureWorkflow(params: ArchitectureWorkflowParams): WorkflowDefinition {
-  const text = useLocaleStore.getState().text
+export function createArchitectureWorkflow(
+  params: ArchitectureWorkflowParams,
+  uiLocale: Locale = useLocaleStore.getState().locale,
+): WorkflowDefinition {
+  const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   const sel = params.selectedSteps ?? ['premise', 'characters', 'worldbuilding', 'synopsis']
   const expectedProjectPath = params.projectPath
   const project = useProjectStore.getState().currentProject
@@ -126,6 +131,7 @@ export function createArchitectureWorkflow(params: ArchitectureWorkflowParams): 
     title: text('生成故事架构', 'Generate story architecture'),
     projectPath: expectedProjectPath,
     projectSession,
+    uiLocale,
     resourceKeys: [
       workflowResourceKey('architecture'),
       ...(sel.includes('characters') ? [workflowResourceKey('character-roster')] : []),

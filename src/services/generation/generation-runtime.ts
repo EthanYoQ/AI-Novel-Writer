@@ -1,8 +1,10 @@
 import type {
   ModelExecutionCapabilityEvidence,
   ModelExecutionLeaseReceipt,
+  ProjectSessionContext,
 } from '../../shared/ipc-channels'
 import type { CreativeStrategy, GenerationReasoningStage } from '../../shared/reasoning-types'
+import { projectSessionContextFromProject } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
 import { useLLMStore } from '../../stores/llm-store'
 import { useProjectStore } from '../../stores/project-store'
@@ -22,6 +24,7 @@ export type GenerationRuntimeBudget = GenerationHarnessPolicy
 
 export interface LeaseCompletionRequest {
   leaseId: string
+  projectSession?: ProjectSessionContext
   purpose: string
   creativeStrategy: CreativeStrategy
   reasoningStage: GenerationReasoningStage
@@ -53,6 +56,10 @@ export interface CreateGenerationRuntimeOptions {
   budget: GenerationRuntimeBudget
   /** Optional semantic model identity; omitted means snapshot the renderer default once. */
   modelId?: string
+  /** Project identity captured by the caller before any asynchronous lease work. */
+  projectSession?: ProjectSessionContext
+  /** Project writing policy captured by the caller before asynchronous preparation. */
+  creativeStrategy?: CreativeStrategy
   /** Alternate physical budget inputs are forbidden; one budget owns both consumers. */
   policy?: never
   structuredLimits?: never
@@ -192,6 +199,7 @@ function createDefaultEnvironment(): GenerationRuntimeEnvironment {
           frozenModelId,
           {
             modelExecutionLeaseId: request.leaseId,
+            projectSession: request.projectSession,
             purpose: request.purpose,
             creativeStrategy: request.creativeStrategy,
             reasoningStage: request.reasoningStage,
@@ -236,6 +244,11 @@ export async function createGenerationRuntime(
     )
   }
   const budget = freezeBudget(options.budget)
+  const sessionCandidate = options.projectSession
+    ?? projectSessionContextFromProject(useProjectStore.getState().currentProject)
+  const projectSession = sessionCandidate
+    ? Object.freeze({ ...sessionCandidate })
+    : undefined
   // Validate before reading mutable renderer state or opening a billable model
   // lease. Oversized plans therefore fail without any provider-side effect.
   assertGenerationHarnessPolicy(budget)
@@ -247,7 +260,9 @@ export async function createGenerationRuntime(
   if (!frozenModelId) {
     throw new GenerationRuntimeError('NO_DEFAULT_MODEL', '未配置默认生成模型。')
   }
-  const frozenCreativeStrategy = environment.snapshotCreativeStrategy?.() ?? 'auto'
+  const frozenCreativeStrategy = options.creativeStrategy
+    ?? environment.snapshotCreativeStrategy?.()
+    ?? 'auto'
 
   let lease: ModelExecutionLeaseReceipt
   try {
@@ -321,6 +336,7 @@ export async function createGenerationRuntime(
         }
         return environment.completeWithLease({
           leaseId: request.modelExecutionLeaseId,
+          projectSession,
           purpose: request.purpose,
           creativeStrategy: request.creativeStrategy,
           reasoningStage: request.reasoningStage,

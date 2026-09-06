@@ -114,6 +114,9 @@ function installVela(invoke: (channel: string, ...args: unknown[]) => unknown) {
       invoke: vi.fn((channel: string, ...args: unknown[]) => {
         if (channel === 'llm:begin-execution-lease') return Promise.resolve({ success: true, lease })
         if (channel === 'llm:close-execution-lease') return Promise.resolve({ success: true })
+        if (channel === 'fs:list-dir' && args[0] === `${projectPath}/.vela/skills`) {
+          return Promise.resolve([])
+        }
         if (channel === 'fs:check-exists') return Promise.resolve(false)
         return invoke(channel, ...args)
       }),

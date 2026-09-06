@@ -1,3 +1,5 @@
+import { useLocaleStore } from '../../stores/locale-store'
+
 /**
  * 通用菜单项按钮
  * 统一替换 AgentHeader.MoreMenuItem 和 ActivityBar.MenuAction
@@ -12,6 +14,7 @@ export interface MenuItemProps {
 }
 
 export function MenuItem({ label, onClick, icon, shortcut, disabled, danger }: MenuItemProps) {
+  const text = useLocaleStore(state => state.text)
   return (
     <button
       onClick={!disabled ? onClick : undefined}
@@ -46,7 +49,7 @@ export function MenuItem({ label, onClick, icon, shortcut, disabled, danger }: M
         <span className="text-[0.7rem] opacity-40 font-mono ml-2 flex-shrink-0">{shortcut}</span>
       )}
       {disabled && (
-        <span className="ml-auto text-[0.7rem] opacity-40">即将推出</span>
+        <span className="ml-auto text-[0.7rem] opacity-40">{text('即将推出', 'Coming soon')}</span>
       )}
     </button>
   )

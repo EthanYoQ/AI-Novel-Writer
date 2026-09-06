@@ -7,6 +7,7 @@ import ImportNovelDialog from '../ImportNovelDialog'
 import ProjectTree from '../../panels/sidebar/ProjectTree'
 import BottomPanel from '../../panels/BottomPanel'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { useEditorStore } from '../../../stores/editor-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore, type WorkflowDefinition, type WorkflowRun } from '../../../stores/workflow-store'
 import { useLayoutStore } from '../../../stores/layout-store'
@@ -92,6 +93,7 @@ async function chooseCurrentSource() {
 
 beforeEach(async () => {
   useLocaleStore.setState({ locale: 'zh-CN' })
+  useEditorStore.getState().clearTabs()
   useLayoutStore.setState({ bottomPanelOpen: true, bottomTab: 'tasks' })
   useProjectStore.setState({
     currentProject: project as never,
@@ -169,12 +171,39 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
+  useEditorStore.getState().clearTabs()
   useProjectStore.setState({ currentProject: null })
   useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [] })
   Reflect.deleteProperty(window, 'velaAPI')
 })
 
 describe('current-project reference import', () => {
+  it('updates existing configuration and blueprint tab names to the current interface language', async () => {
+    const clickProjectItem = (label: string) => {
+      const row = [...container.querySelectorAll<HTMLElement>('.tree-item')]
+        .find(element => element.textContent?.includes(label))
+      expect(row).toBeDefined()
+      row?.click()
+    }
+
+    await act(async () => {
+      clickProjectItem('小说配置')
+      clickProjectItem('章节蓝图')
+    })
+    expect(useEditorStore.getState().tabs.find(tab => tab.type === 'config')?.name).toBe('小说配置')
+    expect(useEditorStore.getState().tabs.find(tab => tab.type === 'chapter-card')?.name).toBe('章节蓝图')
+
+    await act(async () => useLocaleStore.getState().setLocale('en-US'))
+    await act(async () => {
+      clickProjectItem('Novel configuration')
+      clickProjectItem('Chapter blueprints')
+    })
+    expect(useEditorStore.getState().tabs.filter(tab => tab.type === 'config')).toHaveLength(1)
+    expect(useEditorStore.getState().tabs.filter(tab => tab.type === 'chapter-card')).toHaveLength(1)
+    expect(useEditorStore.getState().tabs.find(tab => tab.type === 'config')?.name).toBe('Novel configuration')
+    expect(useEditorStore.getState().tabs.find(tab => tab.type === 'chapter-card')?.name).toBe('Chapter blueprints')
+  })
+
   it('advertises EPUB reference import in both UI languages', async () => {
     await expect.element(page.getByText('支持 .txt / .md / .epub 文件（单个或多个）', { exact: true }))
       .toBeVisible()

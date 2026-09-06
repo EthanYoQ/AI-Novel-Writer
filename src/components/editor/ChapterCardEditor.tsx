@@ -36,7 +36,7 @@ import { confirm } from '../ui/Confirm'
 import { globalEventBus } from '../../shared/event-bus'
 import { shouldRefreshBlueprints } from './blueprint-refresh'
 import { useLocaleStore } from '../../stores/locale-store'
-import { useEditorStore } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import {
   CHAPTER_CARD_TAB_ID,
   captureBlueprintSnapshots,
@@ -91,7 +91,13 @@ function isCurrentProjectSession(projectSession: ProjectSessionContext): boolean
 }
 
 /** 章节蓝图编辑器 — 读写 directory.json */
-export default function ChapterCardEditor({ projectKey }: { projectKey: string }) {
+export default function ChapterCardEditor({
+  projectKey,
+  initialChapterNumber,
+}: {
+  projectKey: string
+  initialChapterNumber?: number
+}) {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
@@ -127,6 +133,15 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
   const [showBlueprintDialog, setShowBlueprintDialog] = useState(false)
   const [showBatchCreationDialog, setShowBatchCreationDialog] = useState(false)
   const [recoveringLegacyImportedText, setRecoveringLegacyImportedText] = useState(false)
+
+  useEffect(() => {
+    if (loading || initialChapterNumber === undefined) return
+    const targetIndex = blueprintsRef.current.findIndex(
+      blueprint => blueprint.chapterNumber === initialChapterNumber,
+    )
+    if (targetIndex >= 0) setSelectedIdx(targetIndex)
+  }, [initialChapterNumber, loading])
+
   const roleLabel = (role: string) => text(role, ({
     建置: 'Setup',
     铺垫: 'Foreshadowing',
@@ -423,6 +438,18 @@ export default function ChapterCardEditor({ projectKey }: { projectKey: string }
       if (isCurrentProjectSession(projectSession)) setSaving(false)
     }
   }
+
+  const exitSaveRef = useRef(handleSaveAll)
+  useEffect(() => {
+    exitSaveRef.current = handleSaveAll
+  })
+  useEffect(() => {
+    registerEditorExitSaveHandler({
+      type: 'chapter-card',
+      projectKey,
+      save: () => exitSaveRef.current(),
+    })
+  }, [projectKey])
 
   /** 新建空章节 */
   const handleAddChapter = () => {

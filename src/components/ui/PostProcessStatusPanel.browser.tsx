@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { page } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 import type { ProjectData } from '../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../shared/project-session-context'
 import { useProjectStore } from '../../stores/project-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import { PostProcessStatusPanel } from './PostProcessStatusPanel'
 
 const PROJECT_PATH = 'C:\\novels\\post-process-status'
@@ -15,6 +17,7 @@ const PROJECT_SESSION = Object.freeze({
 })
 
 const originalProjectState = useProjectStore.getState()
+const originalLocaleState = useLocaleStore.getState()
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -48,12 +51,12 @@ function project(): ProjectData {
   }
 }
 
-function installIpc(steps: Array<Record<string, unknown>>) {
+function installIpc(steps: Array<Record<string, unknown>>, sourceLabel = '第1章定稿') {
   invoke = vi.fn(async (channel: string) => {
     if (channel === 'db:post-process-get-latest-run') {
       return {
         id: 'run-1',
-        sourceLabel: '第1章定稿',
+        sourceLabel,
         allCriticalPassed: false,
         createdAt: '2026-08-22T09:59:35.000Z',
         updatedAt: '2026-08-22T09:59:36.000Z',
@@ -76,13 +79,16 @@ function installIpc(steps: Array<Record<string, unknown>>) {
   })
 }
 
-async function renderPanel(onStatusLoad: (hasFailure: boolean) => void) {
+async function renderPanel(
+  onStatusLoad: (hasFailure: boolean) => void,
+  onRetry: (stepKey?: string) => void = vi.fn(),
+) {
   await act(async () => {
     root?.render(
       <PostProcessStatusPanel
         scope="chapter_1_finalize"
         defaultExpanded
-        onRetry={vi.fn()}
+        onRetry={onRetry}
         onStatusLoad={onStatusLoad}
       />,
     )
@@ -91,6 +97,7 @@ async function renderPanel(onStatusLoad: (hasFailure: boolean) => void) {
 
 beforeEach(() => {
   useProjectStore.setState({ currentProject: project() })
+  useLocaleStore.setState({ locale: 'zh-CN' })
   setActiveProjectSessionContext(PROJECT_SESSION)
   container = document.createElement('div')
   document.body.append(container)
@@ -105,6 +112,7 @@ afterEach(async () => {
   Reflect.deleteProperty(window, 'velaAPI')
   setActiveProjectSessionContext(null)
   useProjectStore.setState(originalProjectState)
+  useLocaleStore.setState(originalLocaleState)
 })
 
 describe('PostProcessStatusPanel', () => {
@@ -160,5 +168,39 @@ describe('PostProcessStatusPanel', () => {
     expect(container?.textContent).toContain('模型响应超时')
     expect(container?.textContent).toContain('重试失败步骤')
     expect(onStatusLoad).toHaveBeenLastCalledWith(true)
+  })
+
+  it('distinguishes one-step retry from retrying all failed steps', async () => {
+    installIpc([{
+      id: 1, runId: 'run-1', stepKey: 'character_cards', label: '角色状态更新', critical: false,
+      ok: false, errorMsg: '结构错误', attemptCount: 1,
+      completedAt: '', lastAttemptAt: '2026-08-22T09:59:42.000Z',
+    }])
+    const onRetry = vi.fn()
+    await renderPanel(vi.fn(), onRetry)
+    await vi.waitFor(() => expect(container?.querySelector('button[title="重试此步骤"]')).not.toBeNull())
+
+    await act(async () => (container?.querySelector('button[title="重试此步骤"]') as HTMLButtonElement).click())
+    expect(onRetry).toHaveBeenLastCalledWith('character_cards')
+
+    await act(async () => page.getByRole('button', { name: '重试失败步骤' }).click())
+    expect(onRetry).toHaveBeenLastCalledWith()
+  })
+
+  it('localizes a persisted post-processing failure summary in English', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    installIpc([
+      {
+        id: 1, runId: 'run-1', stepKey: 'chapter_notes', label: 'Chapter plot notes', critical: true,
+        ok: false, errorMsg: 'The model timed out', attemptCount: 1,
+        completedAt: '', lastAttemptAt: '2026-08-22T09:59:42.000Z',
+      },
+    ], 'Chapter 1 finalization')
+
+    await renderPanel(vi.fn())
+    await vi.waitFor(() => expect(container?.textContent).toContain('Chapter 1 finalization — 1 step failed'))
+
+    expect(container?.textContent).toContain('Last attempt')
+    expect(container?.textContent).not.toMatch(/个步骤失败|上次尝试/u)
   })
 })

@@ -12,6 +12,7 @@
 import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore } from '../../stores/editor-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import type { AgentMode } from '../../stores/agent-store'
 import { toolRegistry, type AgentExecutionContext } from './tool-registry'
 import {
@@ -41,9 +42,17 @@ export async function buildAgentSystemPrompt(
   executionContext?: AgentExecutionContext,
 ): Promise<string> {
   const sections: string[] = []
-  const writingLanguage = resolveWritingLanguage(
-    useProjectStore.getState().currentProject?.novelConfig.writingLanguage,
-  )
+  const currentProject = useProjectStore.getState().currentProject
+  const writingLanguage = executionContext?.writingLanguage
+    ?? (currentProject
+      ? resolveWritingLanguage(currentProject.novelConfig.writingLanguage)
+      : useLocaleStore.getState().locale)
+  const canUseProjectTools = executionContext
+    ? sameProjectSessionContext(
+        executionContext.projectSession,
+        projectSessionContextFromProject(currentProject),
+      )
+    : !!currentProject
 
   // 1. Agent 身份与行为指导
   sections.push(await buildIdentityPrompt(mode, writingLanguage, executionContext))
@@ -57,7 +66,14 @@ export async function buildAgentSystemPrompt(
   if (l1) sections.push(l1)
 
   // 4. Tool 系统提示词
-  const toolPrompt = toolRegistry.generateToolPrompt(writingLanguage)
+  const toolPrompt = toolRegistry.generateToolPrompt(
+    writingLanguage,
+    tool => canUseProjectTools
+      || tool.source === 'mcp'
+      || tool.source === 'skill'
+      || tool.name === 'inspect_writing_skill'
+      || tool.name === 'install_writing_skill',
+  )
   if (toolPrompt) sections.push(toolPrompt)
 
   return sections.join('\n\n---\n\n')
@@ -100,7 +116,7 @@ function buildL0ProjectContext(
   const project = useProjectStore.getState().currentProject
   if (
     !project
-    || (executionContext?.projectSession && !sameProjectSessionContext(
+    || (executionContext && !sameProjectSessionContext(
       executionContext.projectSession,
       projectSessionContextFromProject(project),
     ))
@@ -161,7 +177,7 @@ function buildL1EditorContext(
   const editorState = useEditorStore.getState()
   const currentProject = useProjectStore.getState().currentProject
   if (
-    executionContext?.projectSession
+    executionContext
     && !sameProjectSessionContext(
       executionContext.projectSession,
       projectSessionContextFromProject(currentProject),

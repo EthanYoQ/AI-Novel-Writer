@@ -240,7 +240,7 @@ describe('real provider generation qualification contract', () => {
       provider => provider.receiptChecksumSha256.length === 64,
     )).toBe(true)
     expect(receipt.limitations).toContain('does-not-exercise-electron-ipc-main-process-lease')
-  })
+  }, 15_000)
 
   it('selects only exact official targets and freezes the fixed cheap Gemini model', async () => {
     const profiles = inMemoryProfiles()

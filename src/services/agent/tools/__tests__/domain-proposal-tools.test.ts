@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '../../../../stores/project-store'
 import { createAgentExecutionContext } from '../project-context'
 import { proposeNovelConfigTool } from '../propose-novel-config.tool'
-import { proposeChapterBlueprintTool } from '../propose-chapter-blueprint.tool'
+import {
+  buildChapterBlueprintProposal,
+  proposeChapterBlueprintTool,
+} from '../propose-chapter-blueprint.tool'
 import { builtinTools } from '..'
 import { runAgentLoop } from '../../agent-engine'
 import { toolRegistry } from '../../tool-registry'
@@ -150,11 +153,12 @@ describe('explicit Agent domain proposals', () => {
       [
         expect.objectContaining({ toolName: 'propose_novel_config', status: 'completed' }),
         expect.objectContaining({
-          toolName: 'propose_chapter_blueprint', status: 'failed', error: 'blueprint storage unavailable',
+          toolName: 'propose_chapter_blueprint', status: 'failed', error: '工具执行失败，请重试。',
         }),
       ],
       [],
     )
+    expect(JSON.stringify(callbacks.onDone.mock.calls)).not.toContain('blueprint storage unavailable')
   })
 
   it('commits an approved novel-config proposal through the existing project adapter', async () => {
@@ -249,6 +253,40 @@ describe('explicit Agent domain proposals', () => {
       project.path,
     )
   })
+
+  it.each(['作者微操指导', '用户指引'])(
+    'normalizes the product blueprint field alias %s to userGuidance',
+    async (field) => {
+      const guidance = '加强第二章结尾的压迫感'
+      const proposal = buildChapterBlueprintProposal({
+        chapter_number: 2,
+        changes: { [field]: guidance },
+      }, blueprint)
+
+      expect(proposal).toMatchObject({
+        valid: true,
+        changes: { userGuidance: guidance },
+        diffs: [{ field: 'userGuidance', current: '', proposed: guidance }],
+      })
+
+      invoke
+        .mockResolvedValueOnce(blueprint)
+        .mockResolvedValueOnce({ success: true })
+      const result = await proposeChapterBlueprintTool.execute({
+        chapter_number: 2,
+        changes: { [field]: guidance },
+      }, createAgentExecutionContext())
+
+      expect(proposeChapterBlueprintTool.requiresConfirmation).toBe(true)
+      expect(result).toMatchObject({ success: true })
+      expect(invoke).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({ projectId: 'project-A', leaseId: 'lease-A' }),
+        'db:blueprint-upsert',
+        { ...blueprint, userGuidance: guidance },
+        project.path,
+      )
+    },
+  )
 
   it('rejects missing targets, unknown fields, and stale sessions without writing', async () => {
     invoke.mockResolvedValue(null)

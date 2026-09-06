@@ -194,6 +194,7 @@ describe('knowledge-base controller project context guard', () => {
     ['kb:import-document', ['book.txt']],
     ['kb:import-folder', ['folder']],
     ['kb:import-text', ['text', 'book.txt']],
+    ['kb:import-planning-text', ['text', 'planning.md']],
     ['kb:search', ['query', 5]],
     ['kb:search-with-scope', ['query', 1, 3, 5]],
     ['kb:list-documents', []],
@@ -211,6 +212,24 @@ describe('knowledge-base controller project context guard', () => {
     await expect(rawHandler(channel)({}, ...args))
       .rejects.toThrow(/缺少项目(?:上下文|会话)/)
     expect(mocks.run).not.toHaveBeenCalled()
+  })
+
+  it('forces planning material imports through the FTS-only knowledge path', async () => {
+    const importText = vi.fn().mockResolvedValue({ success: true, docId: 'planning-doc' })
+    mocks.run.mockImplementation(async operation => operation({ importText }))
+
+    await expect(handler('kb:import-planning-text')(
+      {}, '作者设定', 'planning.md', 'C:/projects/A',
+    )).resolves.toEqual({ success: true, docId: 'planning-doc' })
+
+    expect(importText).toHaveBeenCalledWith(
+      '作者设定',
+      'planning.md',
+      'C:/projects/A',
+      'openai',
+      expect.any(Object),
+      { mode: 'fts-only' },
+    )
   })
 
   it('reports no rebuild action and makes no knowledge-base call without a usable embedding configuration', async () => {

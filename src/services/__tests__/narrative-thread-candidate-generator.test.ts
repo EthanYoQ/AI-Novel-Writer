@@ -10,6 +10,57 @@ import {
 } from '../narrative-thread-candidate-generator'
 
 describe('narrative thread AI candidate boundary', () => {
+  it.each([
+    ['generatePlanCandidates', 'zh-CN', { status: 'failed', content: '', finishReason: 'error' }, '叙事线索计划候选生成未完整完成'],
+    ['generatePlanCandidates', 'en-US', { status: 'failed', content: '', finishReason: 'error' }, 'Narrative-thread plan candidate generation did not complete.'],
+    ['generatePlanCandidates', 'zh-CN', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, '模型未返回有效的叙事线索计划候选'],
+    ['generatePlanCandidates', 'en-US', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, 'The model did not return any valid narrative-thread plan candidates.'],
+    ['generateEventCandidates', 'zh-CN', { status: 'failed', content: '', finishReason: 'error' }, '叙事线索事件候选生成未完整完成'],
+    ['generateEventCandidates', 'en-US', { status: 'failed', content: '', finishReason: 'error' }, 'Narrative-thread event candidate generation did not complete.'],
+    ['generateEventCandidates', 'zh-CN', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, '模型未返回带有效定稿证据的事件候选'],
+    ['generateEventCandidates', 'en-US', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, 'The model did not return any event candidates with valid finalized-manuscript evidence.'],
+  ] as const)('localizes %s failures for %s', async (method, writingLanguage, outcome, expected) => {
+    const runtime = {
+      execute: vi.fn(async (operation) => operation({
+        session: {
+          budget: {
+            maxAttempts: 1, maxRequestedOutputTokens: 4096,
+            maxRequestedOutputTokensPerAttempt: 4096, deadlineAt: Date.now() + 120_000,
+          },
+          complete: vi.fn().mockResolvedValue({ ...outcome, receipt: {} }),
+        },
+      })),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as GenerationRuntime
+    const generator = createNarrativeThreadCandidateGenerator({
+      createRuntime: vi.fn().mockResolvedValue(runtime),
+    })
+    const signal = new AbortController().signal
+
+    const generation = method === 'generatePlanCandidates'
+      ? generator.generatePlanCandidates({
+        modelId: 'test-model', writingLanguage,
+        totalChapters: 4,
+        blueprint: {
+          chapterNumber: 1, title: 'Opening', role: 'setup', purpose: 'begin',
+          keyEvents: '', characters: [], suspenseHook: '', userGuidance: '',
+          notes: '', notesUpdatedAt: '',
+        },
+        signal,
+      })
+      : generator.generateEventCandidates({
+        modelId: 'test-model', writingLanguage,
+        plan: {
+          id: 1, title: 'Thread', type: 'foreshadowing', targetStartChapter: 1,
+          targetEndChapter: 2, authorIntent: 'Resolve later.', status: 'planned',
+          dormantChapters: 0, overdue: false, events: [], createdAt: '', updatedAt: '',
+        },
+        draftId: 1, chapterNumber: 1, finalizedContent: 'Final text.', signal,
+      })
+
+    await expect(generation).rejects.toThrow(expected)
+  })
+
   it('accepts up to eight useful foreshadowing plan candidates', () => {
     const candidates = parseNarrativeThreadPlanCandidates(JSON.stringify({
       candidates: Array.from({ length: 9 }, (_, index) => ({
@@ -19,7 +70,7 @@ describe('narrative thread AI candidate boundary', () => {
         targetEndChapter: index + 2,
         authorIntent: `在第 ${index + 2} 章回收`,
       })),
-    }))
+    }), 20)
 
     expect(candidates).toHaveLength(8)
   })
@@ -35,7 +86,7 @@ describe('narrative thread AI candidate boundary', () => {
         eventType: 'planted',
         evidence: '门框已有三道刻痕。',
       }],
-    }))
+    }), 12)
 
     expect(candidates).toEqual([{
       title: '门框上的刻痕',
@@ -46,6 +97,17 @@ describe('narrative thread AI candidate boundary', () => {
     }])
     expect(candidates[0]).not.toHaveProperty('eventType')
     expect(candidates[0]).not.toHaveProperty('evidence')
+  })
+
+  it('filters plan candidates outside the frozen project chapter range', () => {
+    const candidates = parseNarrativeThreadPlanCandidates(JSON.stringify({
+      candidates: [
+        { title: '校庆直播', type: '主线', targetStartChapter: 2, targetEndChapter: 4, authorIntent: '第四章回收。' },
+        { title: '毕业后重逢', type: '伏笔', targetStartChapter: 2, targetEndChapter: 18, authorIntent: '远期回收。' },
+      ],
+    }), 4)
+
+    expect(candidates.map(candidate => candidate.title)).toEqual(['校庆直播'])
   })
 
   it('accepts only bounded event candidates whose short evidence appears in the frozen finalized text', () => {
@@ -98,6 +160,7 @@ describe('narrative thread AI candidate boundary', () => {
     await expect(generator.generatePlanCandidates({
       modelId: 'grok-frozen',
       writingLanguage: 'zh-CN',
+      totalChapters: 12,
       blueprint: {
         chapterNumber: 2, title: '日志失踪', role: '发展', purpose: '引出伪造者',
         keyEvents: '航海日志从保险柜消失。', characters: ['林岚'], suspenseHook: '',
@@ -115,6 +178,9 @@ describe('narrative thread AI candidate boundary', () => {
       reasoningStage: 'planning',
       output: 'structured-data',
     })
+    expect(observedTask?.messages.find(message => message.role === 'system')?.content).toContain('1..12')
+    expect(JSON.parse(observedTask?.messages.find(message => message.role === 'user')?.content ?? '{}'))
+      .toMatchObject({ totalChapters: 12 })
   })
 
   it('binds an event candidate to the supplied finalized source instead of trusting model identity fields', async () => {

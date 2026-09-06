@@ -8,7 +8,7 @@ import {
 
 describe('draft unit counting', () => {
   it('versions the persisted count contract', () => {
-    expect(DRAFT_UNIT_ALGORITHM_VERSION).toBe(2)
+    expect(DRAFT_UNIT_ALGORITHM_VERSION).toBe(3)
   })
 
   it('counts mixed Chinese and English with one shared generation metric', () => {
