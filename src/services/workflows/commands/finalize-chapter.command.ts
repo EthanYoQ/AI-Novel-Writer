@@ -26,6 +26,7 @@ import type { ChapterInfo } from '../chapter-workflow'
 import type {
   FinalizedContinuityFact,
   FinalizedContinuityFactCategory,
+  FinalizedSourceIdentity,
 } from '../../../shared/finalized-continuity'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import {
@@ -35,6 +36,7 @@ import {
   workflowWritingLanguage,
 } from '../workflow-project-session'
 import {
+  CHARACTER_STATE_TEXT_FIELDS,
   characterRosterIdentityKey,
   type CharacterRosterCharacterState,
   type CharacterRosterEntry,
@@ -79,15 +81,6 @@ function parseJSON<T>(text: string): T {
 const CONTINUITY_FACT_LIMIT = 12
 const CONTINUITY_STATEMENT_LIMIT = 280
 const CONTINUITY_EVIDENCE_LIMIT = 240
-const CHARACTER_STATE_TEXT_FIELDS = [
-  'location',
-  'powerLevel',
-  'physicalState',
-  'mentalState',
-  'keyItems',
-  'recentEvents',
-] as const satisfies ReadonlyArray<keyof Omit<CharacterRosterCharacterState, 'updatedAtChapter'>>
-
 type CharacterStatePatch = Partial<Pick<CharacterRosterCharacterState, typeof CHARACTER_STATE_TEXT_FIELDS[number]>>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -258,6 +251,7 @@ export function buildFinalizePostProcessSteps(
   finalizedDraftId?: number,
   chapterEntities: readonly string[] = [],
   uiLocale: Locale = 'zh-CN',
+  finalizedSource?: FinalizedSourceIdentity,
 ): PostProcessStep[] {
   const steps: PostProcessStep[] = []
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
@@ -341,6 +335,13 @@ export function buildFinalizePostProcessSteps(
         if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
 
         if (finalizedDraftId !== undefined) {
+          if (!finalizedSource || finalizedSource.draftId !== finalizedDraftId) {
+            throw new Error(workflowUiText(
+              context,
+              '定稿连续性投影缺少冻结来源收据',
+              'The finalized continuity projection is missing its frozen source receipt.',
+            ))
+          }
           const facts = buildFinalizedContinuityFacts(
             chapterNumber,
             cleanNotes,
@@ -355,6 +356,7 @@ export function buildFinalizePostProcessSteps(
               chapterNumber,
               chapterNotes: cleanNotes,
               facts,
+              source: finalizedSource,
             },
             _project.path,
           )
@@ -450,6 +452,18 @@ export function buildFinalizePostProcessSteps(
           if (!patch) continue
           updatedCount += 1
           const currentState = character.currentState
+          if (!finalizedSource || finalizedSource.draftId !== finalizedDraftId) {
+            throw new Error(workflowUiText(
+              context,
+              '角色状态更新缺少冻结定稿来源收据',
+              'The character-state update is missing its frozen finalization receipt.',
+            ))
+          }
+          // Only fields actually returned by this model call carry this derived receipt.
+          const provenance: NonNullable<CharacterRosterCharacterState['provenance']> = {}
+          for (const field of CHARACTER_STATE_TEXT_FIELDS) {
+            if (Object.hasOwn(patch, field)) provenance[field] = { kind: 'derived', source: finalizedSource }
+          }
           const structuredCharacter = { ...character }
           delete structuredCharacter.legacyRelationshipNotes
           changedEntries.push({
@@ -462,6 +476,7 @@ export function buildFinalizePostProcessSteps(
               keyItems: patch.keyItems ?? currentState?.keyItems ?? '',
               recentEvents: patch.recentEvents ?? currentState?.recentEvents ?? '',
               updatedAtChapter: chapterNumber,
+              provenance,
             },
           })
         }
@@ -476,6 +491,7 @@ export function buildFinalizePostProcessSteps(
               expectedRevision: roster.revision,
               schemaVersion: 1,
               intent: 'chapter_progress',
+              source: finalizedSource,
               // chapter_progress only carries changed state for confirmed
               // characters; it never echoes untouched legacy relationship notes.
               entries: changedEntries,
@@ -537,6 +553,7 @@ export interface RunFinalizePostProcessParams {
   draftContent: string
   draftId: number
   sourceLabel: string
+  finalizedSource: FinalizedSourceIdentity
   stopOnFailure?: boolean
   onlyFailed?: boolean
   stepKey?: string
@@ -582,6 +599,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       this.params.draftId,
       this.params.chapterEntities,
       workflowUiLocale(context),
+      this.params.finalizedSource,
     )
     const steps = this.params.stepKey
       ? allSteps.filter(step => step.key === this.params.stepKey)
@@ -711,6 +729,12 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
       chapterTitle: snapshot.chapterTitle,
       draftContent: refinedDraftText,
       draftId: commit.draftId,
+      finalizedSource: {
+        draftId: commit.draftId,
+        finalizationId: commit.finalizationId,
+        chapterNumber: snapshot.chapterNumber,
+        contentHash: commit.contentHash,
+      },
       sourceLabel,
       stopOnFailure: this.params.stopOnPostProcessFailure,
       chapterEntities,

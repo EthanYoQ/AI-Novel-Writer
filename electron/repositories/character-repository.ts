@@ -8,16 +8,25 @@ import {
     normalizeCharacterRole,
     type CharacterRole,
 } from '../../src/shared/character-role'
+import type {
+    CharacterRosterCharacterState,
+    CharacterStateFieldProvenance,
+    CharacterStateTextField,
+} from '../../src/shared/character-roster'
 
 /** 角色卡动态状态 */
-export interface CharacterStateData {
-    location: string
-    powerLevel: string
-    physicalState: string
-    mentalState: string
-    keyItems: string
-    recentEvents: string
-    updatedAtChapter: number
+export type CharacterStateData = CharacterRosterCharacterState
+
+function parseProvenance(value: unknown): Partial<Record<CharacterStateTextField, CharacterStateFieldProvenance>> {
+    if (typeof value !== 'string' || !value.trim()) return {}
+    try {
+        const parsed = JSON.parse(value) as unknown
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Partial<Record<CharacterStateTextField, CharacterStateFieldProvenance>>
+            : {}
+    } catch {
+        return {}
+    }
 }
 
 /** 角色卡完整数据（前端驼峰接口） */
@@ -69,6 +78,7 @@ function rowToData(row: Record<string, unknown>): CharacterData {
             keyItems: (row.cs_key_items as string) || '',
             recentEvents: (row.cs_recent_events as string) || '',
             updatedAtChapter: updatedChapter,
+            provenance: parseProvenance(row.cs_provenance),
         }
     }
 
@@ -132,7 +142,8 @@ export class CharacterRepository {
         abilities, motivation, relationships, arc, notes,
         cs_location, cs_power_level, cs_physical_state, cs_mental_state,
         cs_key_items, cs_recent_events, cs_updated_at_chapter
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        , cs_provenance
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(name) DO UPDATE SET
         role = excluded.role,
         gender = excluded.gender,
@@ -152,6 +163,7 @@ export class CharacterRepository {
         cs_key_items = excluded.cs_key_items,
         cs_recent_events = excluded.cs_recent_events,
         cs_updated_at_chapter = excluded.cs_updated_at_chapter,
+        cs_provenance = excluded.cs_provenance,
         updated_at = datetime('now')
     `).run(
             data.name,
@@ -173,6 +185,7 @@ export class CharacterRepository {
             cs?.keyItems ?? '',
             cs?.recentEvents ?? '',
             cs?.updatedAtChapter ?? null,
+            JSON.stringify(cs?.provenance ?? {}),
         )
     }
 
@@ -305,6 +318,7 @@ export class CharacterRepository {
         cs_location = ?, cs_power_level = ?, cs_physical_state = ?,
         cs_mental_state = ?, cs_key_items = ?, cs_recent_events = ?,
         cs_updated_at_chapter = ?, updated_at = datetime('now')
+        , cs_provenance = ?
       WHERE name = ?
     `).run(
             state.location,
@@ -314,6 +328,7 @@ export class CharacterRepository {
             state.keyItems,
             state.recentEvents,
             state.updatedAtChapter,
+            JSON.stringify(state.provenance ?? {}),
             name,
         )
     }

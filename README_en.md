@@ -31,6 +31,15 @@
   <img src="docs/assets/readme/hero-en-v2.png" alt="AI Novel Writer — a local-first desktop workspace for long-form fiction" width="100%" />
 </p>
 
+> ## v1.1.0
+>
+> - **Source-grounded continuity material** — Author-provided character information, model-derived progress, and legacy data with unknown provenance are no longer presented as the same kind of fact; later writing prefers finalized source prose with an identifiable origin.
+> - **Layered chapter materials** — The current task, future plans, finalized history, and candidate drafts are shown separately, with adjacent source paragraphs retained when they carry causality, negation, or item transfers across sentences.
+> - **Reliable candidate context** — Review-draft batches continue from the exact saved draft versions and prose in the current run and label them as unfinalized.
+> - **Update, export, and notification fixes** — Update checks no longer repeat during a download, split Markdown exports use independent directories, and workflow-completion notifications keep the full title.
+>
+> These changes reduce the risk that a mistaken summary or outdated state affects later chapters, but they do not replace author review or guarantee drift-free prose or perfect target-length compliance.
+
 > ## v0.9.0 feature baseline (historical release)
 >
 > [v0.9.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v0.9.0) makes continuity, chapter control, and review-driven revision more complete for long-form fiction while continuing to ship Windows, macOS Apple Silicon, and macOS Intel installers:

@@ -352,7 +352,7 @@ function applyExpectedDraftUnitMigration(projectRoot: string) {
     process.execPath,
     [
       '-e',
-      "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.env.AI_NOVEL_FIXTURE_DB);db.exec('UPDATE drafts SET word_count = CASE id WHEN 71 THEN 32 WHEN 72 THEN 31 ELSE word_count END; UPDATE revisions SET word_count = CASE id WHEN 91 THEN 22 ELSE word_count END');db.close()",
+      "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.env.AI_NOVEL_FIXTURE_DB);db.exec(`UPDATE drafts SET word_count = CASE id WHEN 71 THEN 32 WHEN 72 THEN 31 ELSE word_count END; UPDATE revisions SET word_count = CASE id WHEN 91 THEN 22 ELSE word_count END; ALTER TABLE characters ADD COLUMN cs_provenance TEXT NOT NULL DEFAULT '{}'; ALTER TABLE summary_snapshots ADD COLUMN source_finalization_id TEXT NOT NULL DEFAULT ''; ALTER TABLE summary_snapshots ADD COLUMN source_content_hash TEXT NOT NULL DEFAULT ''; ALTER TABLE summary_snapshots ADD COLUMN projection_generation INTEGER NOT NULL DEFAULT 0; CREATE TABLE continuity_projection_meta (id TEXT PRIMARY KEY CHECK (id = 'main'), generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0), stale_from_chapter INTEGER DEFAULT NULL CHECK (stale_from_chapter IS NULL OR stale_from_chapter > 0)); INSERT INTO continuity_projection_meta (id) VALUES ('main');`);db.close()",
     ],
     {
       env: {

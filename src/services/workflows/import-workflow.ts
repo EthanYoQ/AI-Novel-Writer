@@ -356,6 +356,12 @@ function productionDependencies(
         chapterTitle: chapter.title,
         draftContent: chapter.content,
         draftId: draft.draftId,
+        finalizedSource: {
+          draftId: draft.draftId,
+          finalizationId: draft.finalizationId,
+          chapterNumber: chapter.number,
+          contentHash: draft.contentHash,
+        },
         sourceLabel: textForLocale(
           run.locale,
           `第${chapter.number}章作者原稿定稿`,

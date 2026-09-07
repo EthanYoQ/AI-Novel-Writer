@@ -254,6 +254,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     wordsPerChapter?: number
     wordsTarget?: number
     premise?: string
+    charactersArch?: string
     blueprints?: Array<{ chapterNumber: number; title: string; keyEvents: string }>
     userGuidance?: string
     globalGuidance?: string
@@ -271,6 +272,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: number
       chapterTitle: string
       chapterNotes: string
+      sourceStatus?: 'current' | 'stale' | 'legacy'
       facts?: Array<{
         category: 'character-state' | 'timeline' | 'open-thread' | 'plot'
         entities: string[]
@@ -279,9 +281,15 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         evidence: string
       }>
     }>
+    continuitySourceContents?: Record<number, string>
     narrativeThreads?: NarrativeThreadView[]
     previousFinalizedContent?: string
-    previousDraftEnding?: string
+    selectedCandidateDrafts?: Array<{
+      chapterNumber: number
+      draftId: number
+      version: number
+      content: string
+    }>
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
     keyEvents?: string
     knowledgeQueryHint?: string
@@ -289,6 +297,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       name: string
       role: string
       currentState: Record<string, unknown>
+      [key: string]: unknown
     }>
     sourceDraft?: { id: number; version: number }
   }) {
@@ -299,7 +308,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       if (channel === 'db:project-core-get') {
         return {
           premise: options.premise ?? '故事前提',
-          charactersArch: '',
+          charactersArch: options.charactersArch ?? '',
           worldbuilding: '',
           synopsis: '',
         }
@@ -309,17 +318,36 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         return options.blueprints?.find(blueprint => blueprint.chapterNumber === args[0]) ?? null
       }
       if (channel === 'db:continuity-list-before') return options.continuity ?? []
+      if (channel === 'db:continuity-read-source') {
+        const draftId = Number(args[0])
+        const content = options.continuitySourceContents?.[draftId]
+        return content ? { content } : null
+      }
       if (channel === 'db:narrative-thread-list-relevant') return options.narrativeThreads ?? []
       if (channel === 'db:draft-get-finalized') {
         return options.previousFinalizedContent ? { id: 77 } : null
       }
       if (channel === 'db:draft-get-full') {
-        return options.previousFinalizedContent
+        const draftId = Number(args[0])
+        const projection = options.continuity?.find(item => item.draftId === draftId)
+        if (projection) {
+          return {
+            id: draftId,
+            content: options.previousFinalizedContent && projection.chapterNumber === (options.chapterNumber ?? 1) - 1
+              ? options.previousFinalizedContent
+              : projection.facts?.map(fact => fact.evidence).join('\n\n') ?? '',
+          }
+        }
+        return options.previousFinalizedContent && draftId === 77
           ? { id: 77, content: options.previousFinalizedContent }
           : null
       }
       if (channel === 'kb:search-writing-context') return options.knowledgeResults ?? []
       if (channel === 'db:character-get-all') return options.characterCards ?? []
+      if (channel === 'db:character-roster-read') return {
+        status: 'ready',
+        entries: options.characterCards ?? [],
+      }
       if (channel === 'db:draft-get-latest') return options.sourceDraft ?? null
       if (channel === 'fs:list-dir') return []
       if (channel === 'db:draft-next-version') return 1
@@ -399,7 +427,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       knowledgeQueryHint: options.knowledgeQueryHint,
     }, {
       dependencies: { createRuntime: options.runtime.createRuntime },
-      previousDraftEnding: options.previousDraftEnding,
+      selectedCandidateDrafts: options.selectedCandidateDrafts,
     })
     return { invoke, context, callbacks, command }
   }
@@ -665,7 +693,12 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       observedTask = task
       return outcome('新章正文。'.repeat(125), 'stop')
     })
-    const previousFinalizedContent = `${'旧章正文。'.repeat(300)}上一章定稿结尾哨兵。`
+    const previousFinalizedContent = [
+      '林岚拖着受伤的脚踝走进仓库。',
+      '林岚把红色钥匙收进口袋。',
+      '守门人要求她交出钥匙，她明确拒绝。',
+      '上一章定稿结尾哨兵。',
+    ].join('\n\n')
     const { invoke, context, callbacks, command } = setup({
       runtime,
       chapterNumber: 2,
@@ -675,7 +708,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         draftId: 41,
         chapterNumber: 1,
         chapterTitle: '作者第一章',
-        chapterNotes: '作者事实哨兵：林岚已经拿到红色钥匙。',
+        chapterNotes: 'OLD_DERIVED_SUMMARY_MUST_NOT_REACH_PROVIDER',
         facts: [{
           category: 'character-state',
           entities: ['林岚'],
@@ -691,17 +724,14 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).toContain('作者事实哨兵：林岚已经拿到红色钥匙。')
+    expect(prompt).not.toContain('OLD_DERIVED_SUMMARY_MUST_NOT_REACH_PROVIDER')
     expect(prompt).not.toContain('林岚脚踝韧带受损，始终持有红色钥匙。')
     expect(prompt).not.toContain('[character-state]')
-    expect(prompt).toContain('来源第1章')
+    expect(prompt).toContain('定稿原文 · 第1章 · draft 41 · 定位索引')
     expect(prompt).toContain('林岚把红色钥匙收进口袋。')
-    expect(prompt).toContain('不得改写作者明确的硬性约束')
-    expect(prompt).toContain('按章节时序承接正文中已发生的状态变更')
-    expect(prompt).toContain('不得将角色重置为初始状态')
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
+    expect(prompt).toContain('索引、摘要和 currentState 都不是作者事实')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('定稿连续性原文（1 条候选）'))
     expect(prompt).toContain('上一章定稿结尾哨兵。')
-    expect(prompt).toContain('上一章已完成的结尾状态（只作边界，不可重演）')
     expect(prompt).not.toContain('批内候选稿结尾')
     expect(prompt).toContain('项目知识哨兵')
     expect(invoke).toHaveBeenCalledWith(
@@ -711,6 +741,113 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       projectPath,
       expect.anything(),
     )
+  })
+
+  it('captures final provider requests without legacy characters_arch, currentState, or chapter summaries', async () => {
+    const runtime = fakeOutcomes(
+      outcome('初'.repeat(100), 'length', 1),
+      outcome(`${'续'.repeat(400)}。`, 'stop', 2),
+    )
+    const authorTask = '本章必须查明伤口原因，但不得交出钥匙。'
+    const original = [
+      '林岚扶住墙，左腿仍在发抖。',
+      '她说伤口不是坠落造成的，而是昨夜被铁钩划开。',
+      '周砚索要钥匙，她回答：“我不会交给你。”',
+      '门外的脚步声突然停住。',
+    ].join('\n\n')
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      characters: ['林岚'],
+      keyEvents: authorTask,
+      charactersArch: 'LEGACY_CHARACTERS_ARCH_SENTINEL',
+      characterCards: [{
+        name: '林岚',
+        role: 'protagonist',
+        personality: 'AUTHOR_PROFILE_SENTINEL',
+        currentState: {
+          location: '作者指定的码头',
+          recentEvents: 'OLD_CURRENT_STATE_SENTINEL',
+          provenance: {
+            location: { kind: 'author', chapterNumber: 1 },
+            recentEvents: { kind: 'legacy' },
+          },
+        },
+      }],
+      continuity: [{
+        draftId: 41,
+        chapterNumber: 1,
+        chapterTitle: '伤口',
+        chapterNotes: 'OLD_CHAPTER_SUMMARY_SENTINEL',
+        facts: [{
+          category: 'character-state',
+          entities: ['林岚'],
+          statement: 'DERIVED_STATEMENT_SENTINEL',
+          sourceChapter: 1,
+          evidence: '伤口不是坠落造成的',
+        }],
+      }],
+      previousFinalizedContent: original,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const providerPrompts = runtime.complete.mock.calls.map(([task]) => (
+      task.messages.find(message => message.role === 'user')?.content ?? ''
+    ))
+    expect(providerPrompts).toHaveLength(2)
+    for (const prompt of providerPrompts) {
+      expect(prompt).toContain(authorTask)
+      expect(prompt).toContain('AUTHOR_PROFILE_SENTINEL')
+      expect(prompt).toContain('location@chapter1: 作者指定的码头')
+      expect(prompt).toContain('林岚扶住墙')
+      expect(prompt).toContain('我不会交给你')
+      expect(prompt).not.toContain('LEGACY_CHARACTERS_ARCH_SENTINEL')
+      expect(prompt).not.toContain('OLD_CURRENT_STATE_SENTINEL')
+      expect(prompt).not.toContain('OLD_CHAPTER_SUMMARY_SENTINEL')
+      expect(prompt).not.toContain('DERIVED_STATEMENT_SENTINEL')
+    }
+  })
+
+  it('rebuilds a stale locator from immutable finalized prose without injecting its statement', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 3,
+      characters: ['林岚'],
+      wordsTarget: 500,
+      continuity: [{
+        draftId: 51,
+        chapterNumber: 1,
+        chapterTitle: '旧伤',
+        chapterNotes: 'STALE_SUMMARY_SENTINEL',
+        sourceStatus: 'stale',
+        facts: [{
+          category: 'character-state',
+          entities: ['林岚'],
+          statement: 'STALE_STATEMENT_SENTINEL',
+          sourceChapter: 1,
+          evidence: '铁钩划开了她的左腿',
+        }],
+      }],
+      continuitySourceContents: {
+        51: '林岚扶墙停下。\n\n铁钩划开了她的左腿。\n\n她拒绝把钥匙交给周砚。',
+      },
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('定位索引stale')
+    expect(prompt).toContain('林岚扶墙停下')
+    expect(prompt).toContain('她拒绝把钥匙交给周砚')
+    expect(prompt).not.toContain('STALE_SUMMARY_SENTINEL')
+    expect(prompt).not.toContain('STALE_STATEMENT_SENTINEL')
   })
 
   it('marks an injected batch draft ending as unconfirmed continuity context', async () => {
@@ -723,21 +860,21 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       runtime,
       chapterNumber: 2,
       wordsTarget: 500,
-      previousDraftEnding: '批内上一章候选稿结尾哨兵。',
+      selectedCandidateDrafts: [{
+        chapterNumber: 1,
+        draftId: 31,
+        version: 3,
+        content: '批内上一章候选稿结尾哨兵。',
+      }],
     })
 
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).toContain('批内候选稿结尾，尚未作者确认')
-    expect(prompt).toContain('仅供叙事衔接，不得据此推翻作者硬性约束或已确认事实')
+    expect(prompt).toContain('未定稿候选 · 第1章 · draft 31 · v3')
+    expect(prompt).toContain('候选正文尚未确认，不得冒充定稿')
     expect(prompt).toContain('批内上一章候选稿结尾哨兵。')
-    expect(invoke).not.toHaveBeenCalledWith(
-      'db:draft-get-finalized',
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-    )
+    expect(invoke).toHaveBeenCalledWith('db:draft-get-finalized', 1, projectPath, expect.anything())
   })
 
   it('distinguishes author hard constraints from finalized state changes in English', async () => {
@@ -769,9 +906,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).toContain('Do not rewrite explicit hard constraints from the author')
-    expect(prompt).toContain('carry forward state changes already established in chapter order')
-    expect(prompt).toContain('instead of resetting characters to their initial state')
+    expect(prompt).toContain('Finalized excerpts establish only their exact text')
+    expect(prompt).toContain('summaries, and currentState are not author facts')
   })
 
   it('puts an explicit knowledge hint before more than eight generated query terms', async () => {
@@ -1211,8 +1347,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(prompt).toContain('她在河边承认自己不会游泳。')
     expect(prompt).not.toContain('早期事实哨兵')
-    expect(prompt).not.toContain('周远穿上新鞋。')
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
+    // Complete adjacent paragraphs are preserved even when only the hit drove retrieval.
+    expect(prompt).toContain('周远穿上新鞋。')
+    expect(prompt).not.toContain('无关事实哨兵')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('定稿连续性原文（1 条候选）'))
   })
 
   it('keeps an older relevant fact when newer chapter notes exhaust the context budget', async () => {
@@ -1246,8 +1384,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(prompt).toContain('林岚在旧码头拒绝登船。')
-    expect(prompt).toContain('来源第1章')
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
+    expect(prompt).toContain('定稿原文 · 第1章 · draft 41 · 定位索引')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('定稿连续性原文（1 条候选）'))
   })
 
   it('injects a bounded set of relevant active narrative threads into the next chapter prompt', async () => {
@@ -1624,12 +1762,15 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
   it('keeps frozen relevant state, continuity, and selected references in continuations', async () => {
     const characterStateSentinel = 'UNIQUE_ROLE_STATE_MIDDLE_SENTINEL'
-    const continuitySentinel = 'UNIQUE_FINALIZED_FACT_MIDDLE_SENTINEL'
+    const characterProfileSentinel = 'UNIQUE_AUTHOR_PROFILE_SENTINEL'
+    const continuitySentinel = 'UNIQUE_DERIVED_SUMMARY_MUST_NOT_REACH_PROVIDER'
+    const finalizedEvidenceSentinel = 'UNIQUE_FINALIZED_ORIGINAL_MIDDLE_SENTINEL'
     const referenceSentinel = 'UNIQUE_SELECTED_REFERENCE_MIDDLE_SENTINEL'
     const characterCards = [
       {
         name: '林岚',
         role: 'protagonist',
+        personality: characterProfileSentinel,
         currentState: {
           powerLevel: '普通人',
           location: '旧档案馆',
@@ -1660,7 +1801,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           entities: ['林岚'],
           statement: continuitySentinel,
           sourceChapter: 1,
-          evidence: '第一章定稿中段',
+          evidence: finalizedEvidenceSentinel,
         }],
       }],
       knowledgeResults: [{ fileName: 'author-notes.md', score: 0.99, text: referenceSentinel }],
@@ -1708,11 +1849,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       .find(message => message.role === 'user')?.content ?? ''
 
     for (const prompt of [initialPrompt, continuationPrompt, overTargetContinuationPrompt]) {
-      expect(prompt).toContain(characterStateSentinel)
+      expect(prompt).toContain(characterProfileSentinel)
+      expect(prompt).not.toContain(characterStateSentinel)
       expect(prompt).not.toContain('IRRELEVANT_ROLE_STATE_SENTINEL')
+      expect(prompt).not.toContain(continuitySentinel)
     }
     for (const prompt of [continuationPrompt, overTargetContinuationPrompt]) {
-      expect(prompt).toContain(continuitySentinel)
+      expect(prompt).toContain(finalizedEvidenceSentinel)
       expect(prompt).toContain(referenceSentinel)
     }
   })
@@ -1769,10 +1912,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompts).toHaveLength(3)
     expect(prompts[0]).toContain(authorGuidance)
     expect(prompts[0]).toContain('(no future chapter blueprints)')
-    expect(prompts[0]).toContain('(no chapter notes)')
-    expect(prompts[0]).toContain('(no previous manuscript)')
+    expect(prompts[0]).toContain('[Sourced history and candidates]')
     expect(prompts[0]).toContain('(no relevant knowledge-base context)')
-    expect(prompts[0]).toContain('(no character state records)')
+    expect(prompts[0]).toContain('(no additional author material)')
     expect(prompts[1]).toContain('Continue the current chapter seamlessly')
     expect(prompts[2]).toContain('This is the only no-progress recovery attempt')
     expect(prompts.join('\n')).not.toMatch(/【(?:硬性要求|本章蓝图|后续章节大纲预告|角色状态档案|第\d+章)/u)

@@ -20,6 +20,7 @@ import { mergeConsistencyFindingsIntoReview, type ReviewLike } from '../../../sh
 import type { ChapterBlueprint } from '../directory-workflow'
 import type { FrozenDraftSourceIdentity } from '../chapter-workflow'
 import { throwIfSourceDraftChanged } from '../source-draft-changed'
+import { CHARACTER_STATE_TEXT_FIELDS } from '../../../shared/character-roster'
 
 
 export interface ReviewChapterParams {
@@ -394,10 +395,17 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       for (const card of allChars) {
         if (card.name && card.currentState) {
           const cs = card.currentState
+          const authorState = Object.fromEntries(CHARACTER_STATE_TEXT_FIELDS.flatMap((field) => {
+            const provenance = cs.provenance?.[field]
+            return provenance?.kind === 'author' && cs[field]
+              ? [[field, `${cs[field]} @ch${provenance.chapterNumber}`]]
+              : []
+          }))
+          if (Object.keys(authorState).length === 0) continue
           states.push(promptLanguageText(
             writingLanguage,
-            `${card.name}（${card.role || '未知'}）: ${cs.powerLevel || ''}, ${cs.location || ''}, ${cs.physicalState || ''}, ${cs.mentalState || ''}, 最近：${cs.recentEvents || ''}`,
-            `${card.name} (${card.role || 'unknown'}): power ${cs.powerLevel || ''}; location ${cs.location || ''}; physical ${cs.physicalState || ''}; mental ${cs.mentalState || ''}; recent ${cs.recentEvents || ''}`,
+            `${card.name}（${card.role || '未知'}）作者状态（按标注章节理解，非永久约束）: ${JSON.stringify(authorState)}`,
+            `${card.name} (${card.role || 'unknown'}) author state (time-bound to the annotated chapter, not permanent): ${JSON.stringify(authorState)}`,
           ))
         }
       }

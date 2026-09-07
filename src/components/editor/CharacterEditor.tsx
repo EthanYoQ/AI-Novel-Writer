@@ -276,13 +276,29 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                 ['recentEvents', text('最近重要事件', 'Recent important events')],
               ] as const).map(([field, label]) => (
                 <div key={field}>
-                  <Label>{label}</Label>
+                  <Label>
+                    {label}
+                    <span className="ml-2 text-[0.65rem] font-normal text-[var(--color-text-secondary)]">
+                      {selectedCard.currentState?.provenance?.[field]?.kind === 'author'
+                        ? text('作者输入', 'Author input')
+                        : selectedCard.currentState?.provenance?.[field]?.kind === 'derived'
+                          ? text('定稿派生', 'Derived from finalized prose')
+                          : text('来源未知', 'Unknown source')}
+                    </span>
+                  </Label>
                   <Textarea
                     value={selectedCard.currentState?.[field]?.toString() ?? ''}
                     onChange={(e) => {
                       const cs: CharacterCurrentState = {
                         ...(selectedCard.currentState ?? EMPTY_STATE),
                         [field]: e.target.value,
+                        provenance: {
+                          ...selectedCard.currentState?.provenance,
+                          [field]: {
+                            kind: 'author',
+                            chapterNumber: selectedCard.currentState?.updatedAtChapter ?? 0,
+                          },
+                        },
                       }
                       updateCurrentField(selectedCard.name, 'currentState', cs)
                     }}

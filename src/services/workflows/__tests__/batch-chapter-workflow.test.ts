@@ -18,6 +18,7 @@ const doubles = vi.hoisted(() => ({
   finalizeChapterExecute: vi.fn(),
   finalizeChapterParams: [] as unknown[],
   generateDraftChapterInfos: [] as Array<{ chapterNumber: number; wordsTarget?: number }>,
+  generateDraftOptions: [] as Array<{ selectedCandidateDrafts?: Array<Record<string, unknown>> }>,
 }))
 
 vi.mock('../../workflow-guards', () => ({
@@ -37,8 +38,12 @@ vi.mock('../../ipc-client', () => ({
 vi.mock('../commands/generate-draft.command', () => ({
   previousChapterEnding: (content: string) => content.slice(-1000),
   GenerateDraftCommand: class {
-    constructor(chapterInfo: { chapterNumber: number; wordsTarget?: number }) {
+    constructor(
+      chapterInfo: { chapterNumber: number; wordsTarget?: number },
+      options: { selectedCandidateDrafts?: Array<Record<string, unknown>> },
+    ) {
       doubles.generateDraftChapterInfos.push(chapterInfo)
+      doubles.generateDraftOptions.push(options)
     }
 
     execute = doubles.generateDraftExecute
@@ -90,6 +95,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   doubles.finalizeChapterParams.length = 0
   doubles.generateDraftChapterInfos.length = 0
+  doubles.generateDraftOptions.length = 0
   resetWorkflowState()
   doubles.guardChapterWriting.mockResolvedValue({ ok: true })
   doubles.invokeWithProjectSession.mockImplementation(async (
@@ -110,6 +116,8 @@ beforeEach(() => {
   })
   doubles.generateDraftExecute.mockImplementation(async ({ context }: { context: WorkflowContext }) => {
     context.data.draftPath = `draft-${context.runId}`
+    context.data.draftId = 100 + doubles.generateDraftExecute.mock.calls.length
+    context.data.draftVersion = 1
     return 'generated draft'
   })
   doubles.finalizeChapterExecute.mockResolvedValue(undefined)
@@ -252,6 +260,8 @@ describe('batch chapter workflow completion mode', () => {
 
     doubles.generateDraftExecute.mockImplementation(async ({ context }: { context: WorkflowContext }) => {
       context.data.draftPath = `draft-${context.runId}`
+      context.data.draftId = 100 + doubles.generateDraftExecute.mock.calls.length
+      context.data.draftVersion = 1
       callerSettings.completionMode = 'auto_finalize'
       callerSettings.locale = 'zh-CN'
       return 'generated draft'
@@ -327,6 +337,17 @@ describe('batch chapter workflow completion mode', () => {
 
     expect(useWorkflowStore.getState().history[0]).toMatchObject({ status: 'completed' })
     expect(doubles.generateDraftExecute).toHaveBeenCalledTimes(2)
+    expect(doubles.generateDraftOptions).toEqual([
+      { selectedCandidateDrafts: [] },
+      {
+        selectedCandidateDrafts: [{
+          chapterNumber: 1,
+          draftId: 101,
+          version: 1,
+          content: 'generated draft',
+        }],
+      },
+    ])
     expect(doubles.finalizeChapterExecute).not.toHaveBeenCalled()
   })
 

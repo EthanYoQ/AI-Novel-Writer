@@ -693,6 +693,11 @@ export function registerDatabaseController() {
     return SummaryRepository.listFinalizedContinuityBefore(chapterNumber)
   })
 
+  ipcMain.handle('db:continuity-read-source', async (_event, draftId: number, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return SummaryRepository.readFinalizedSource(draftId)
+  })
+
   ipcMain.handle('db:consistency-exemption-list', async (_event, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return ConsistencyExemptionRepository.list()

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { getProjectDb } from '../database'
 import { countDraftUnits } from '../../src/shared/draft-units'
+import { invalidateContinuityProjectionFrom } from './summary-repository'
 
 export type PublicationStatus = 'pending' | 'published'
 
@@ -261,6 +262,13 @@ export class FinalizationRepository {
       if (draft.status === 'finalized') {
         throw new Error('草稿已定稿但缺少可恢复发布记录')
       }
+
+      const replacesFinalized = db.prepare(`
+        SELECT 1 FROM drafts
+        WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
+        LIMIT 1
+      `).get(input.chapterNumber, input.draftId)
+      if (replacesFinalized) invalidateContinuityProjectionFrom(db, input.chapterNumber)
 
       db.prepare('UPDATE contents SET body = ? WHERE id = ?')
         .run(input.content, draft.content_id)

@@ -4,6 +4,7 @@ import type BetterSqlite3 from 'better-sqlite3'
 import {
   CHARACTER_ROSTER_ROLES,
   CHARACTER_ROSTER_SCHEMA_VERSION,
+  CHARACTER_STATE_TEXT_FIELDS,
   characterRosterIdentityKey,
   type CharacterRosterCharacterState,
   type CharacterRosterCommitReceipt,
@@ -16,7 +17,9 @@ import {
   type CharacterRosterRelationship,
   type CharacterRosterRole,
   type CharacterRosterSnapshot,
+  type CharacterStateFieldProvenance,
 } from '../../src/shared/character-roster'
+import type { FinalizedSourceIdentity } from '../../src/shared/finalized-continuity'
 import { getProjectDb } from '../database'
 import { CharacterRepository, type CharacterData } from './character-repository'
 import { ensureCharacterRosterSchema } from './character-roster-schema'
@@ -77,12 +80,57 @@ function isRosterRole(value: unknown): value is CharacterRosterRole {
     && (CHARACTER_ROSTER_ROLES as readonly string[]).includes(value)
 }
 
+function normalizeFinalizedSource(value: unknown): FinalizedSourceIdentity {
+  if (!isObject(value)) throw new Error('定稿来源收据格式无效')
+  const finalizationId = requiredText(value.finalizationId, '定稿来源 ID')
+  const contentHash = requiredText(value.contentHash, '定稿正文哈希')
+  if (
+    !Number.isSafeInteger(value.draftId) || (value.draftId as number) < 1
+    || !Number.isSafeInteger(value.chapterNumber) || (value.chapterNumber as number) < 1
+    || !finalizationId
+    || !/^[a-f0-9]{64}$/u.test(contentHash)
+  ) throw new Error('定稿来源收据格式无效')
+  return {
+    draftId: value.draftId as number,
+    finalizationId,
+    chapterNumber: value.chapterNumber as number,
+    contentHash,
+  }
+}
+
+function normalizeFieldProvenance(value: unknown): CharacterStateFieldProvenance {
+  if (!isObject(value)) throw new Error('角色状态来源格式无效')
+  if (value.kind === 'legacy') return { kind: 'legacy' }
+  if (value.kind === 'author') {
+    if (!Number.isSafeInteger(value.chapterNumber) || (value.chapterNumber as number) < 0) {
+      throw new Error('作者角色状态章节无效')
+    }
+    return { kind: 'author', chapterNumber: value.chapterNumber as number }
+  }
+  if (value.kind === 'derived') {
+    return { kind: 'derived', source: normalizeFinalizedSource(value.source) }
+  }
+  throw new Error('角色状态来源类型无效')
+}
+
 function normalizeState(value: unknown): CharacterRosterCharacterState | undefined {
   if (value === undefined) return undefined
   if (!isObject(value)) throw new Error('角色动态状态格式无效')
   const updatedAtChapter = value.updatedAtChapter
   if (!Number.isSafeInteger(updatedAtChapter) || (updatedAtChapter as number) < 0) {
     throw new Error('角色动态状态章节号无效')
+  }
+  const rawProvenance = value.provenance === undefined ? {} : value.provenance
+  if (!isObject(rawProvenance)) throw new Error('角色状态来源格式无效')
+  const provenance: NonNullable<CharacterRosterCharacterState['provenance']> = {}
+  for (const field of CHARACTER_STATE_TEXT_FIELDS) {
+    const normalizedValue = requiredText(value[field], `角色状态 ${field}`)
+    if (Object.hasOwn(rawProvenance, field)) {
+      provenance[field] = normalizeFieldProvenance(rawProvenance[field])
+    } else if (normalizedValue) {
+      // Pre-v2 and non-manual generation values stay visible but never become author facts.
+      provenance[field] = { kind: 'legacy' }
+    }
   }
   return {
     location: requiredText(value.location, '角色当前位置'),
@@ -92,6 +140,7 @@ function normalizeState(value: unknown): CharacterRosterCharacterState | undefin
     keyItems: requiredText(value.keyItems, '角色关键道具'),
     recentEvents: requiredText(value.recentEvents, '角色最近事件'),
     updatedAtChapter: updatedAtChapter as number,
+    ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
   }
 }
 
@@ -211,6 +260,9 @@ function normalizeRequest(value: unknown): CharacterRosterCommitRequest {
     throw new Error('角色名单不能为空')
   }
 
+  const source = value.source === undefined ? undefined : normalizeFinalizedSource(value.source)
+  if (intent === 'chapter_progress' && !source) throw new Error('章节状态更新缺少定稿来源收据')
+  if (intent !== 'chapter_progress' && source) throw new Error('只有章节状态更新可携带定稿来源收据')
   const entries = value.entries.map(entry => normalizeEntry(entry, isManualEditIntent(intent)))
   const names = new Set(entries.map(entry => characterRosterIdentityKey(entry.name)))
   if (names.size !== entries.length) throw new Error('角色名必须唯一')
@@ -241,6 +293,7 @@ function normalizeRequest(value: unknown): CharacterRosterCommitRequest {
     expectedRevision: value.expectedRevision as number,
     schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION,
     entries,
+    ...(source ? { source } : {}),
     intent,
     ...(renames?.length ? { renames } : {}),
     ...(isLegacyEvidenceIntent(intent)
@@ -272,6 +325,7 @@ function payloadHash(request: CharacterRosterCommitRequest): string {
       ? { expectedLegacyMarkdown: request.expectedLegacyMarkdown }
       : {}),
     ...(request.intent === 'manual_edit' ? { renames: request.renames ?? [] } : {}),
+    ...(request.source ? { source: request.source } : {}),
     entries: canonicalEntries(request.entries),
   }))
 }
@@ -430,17 +484,83 @@ function hasFinalizedDraft(db: BetterSqlite3.Database, chapterNumber: number): b
   `).get(chapterNumber) !== undefined
 }
 
+function assertCurrentFinalizedSource(
+  db: BetterSqlite3.Database,
+  source: FinalizedSourceIdentity,
+): void {
+  const row = db.prepare(`
+    SELECT drafts.chapter_number AS chapterNumber, drafts.status,
+           finalization_outbox.finalization_id AS finalizationId,
+           finalization_outbox.content_hash AS contentHash
+    FROM drafts
+    JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    WHERE drafts.id = ?
+  `).get(source.draftId) as {
+    chapterNumber: number
+    status: string
+    finalizationId: string
+    contentHash: string
+  } | undefined
+  if (
+    !row
+    || row.status !== 'finalized'
+    || row.chapterNumber !== source.chapterNumber
+    || row.finalizationId !== source.finalizationId
+    || row.contentHash !== source.contentHash
+  ) throw new Error('角色状态来源已失效，已拒绝过期后处理写入')
+}
+
+function mergeDerivedCurrentState(
+  existing: CharacterRosterCharacterState | undefined,
+  candidate: CharacterRosterCharacterState,
+  source: FinalizedSourceIdentity,
+): CharacterRosterCharacterState | undefined {
+  const merged: CharacterRosterCharacterState = existing
+    ? { ...existing, provenance: { ...existing.provenance } }
+    : {
+        location: '', powerLevel: '', physicalState: '', mentalState: '',
+        keyItems: '', recentEvents: '', updatedAtChapter: source.chapterNumber,
+      }
+  let changed = false
+  for (const field of CHARACTER_STATE_TEXT_FIELDS) {
+    const provenance = candidate.provenance?.[field]
+    if (provenance?.kind !== 'derived') continue
+    if (
+      provenance.source.draftId !== source.draftId
+      || provenance.source.finalizationId !== source.finalizationId
+      || provenance.source.chapterNumber !== source.chapterNumber
+      || provenance.source.contentHash !== source.contentHash
+    ) throw new Error('角色状态字段与定稿来源不一致')
+
+    const previousSource = existing?.provenance?.[field]
+    const previousValue = existing?.[field] ?? ''
+    // Unknown legacy and explicit author values are never silently reclassified or overwritten.
+    if (previousValue && previousSource?.kind !== 'derived') continue
+    if (previousSource?.kind === 'author' || previousSource?.kind === 'legacy') continue
+    merged[field] = candidate[field]
+    merged.provenance ??= {}
+    merged.provenance[field] = provenance
+    changed = true
+  }
+  if (!changed) return existing
+  merged.updatedAtChapter = source.chapterNumber
+  return merged
+}
+
 function mergeIncrementalEntriesWithExisting(
   db: BetterSqlite3.Database,
   candidates: CharacterRosterEntry[],
   existingEntries: CharacterRosterEntry[],
   intent: Extract<CharacterRosterCommitIntent, 'blueprint_sync' | 'chapter_progress'>,
+  source?: FinalizedSourceIdentity,
 ): CharacterRosterEntry[] {
   if (intent === 'chapter_progress') {
+    if (!source) throw new Error('章节状态更新缺少定稿来源收据')
+    assertCurrentFinalizedSource(db, source)
     for (const candidate of candidates) {
       if (
         !candidate.currentState
-        || !hasFinalizedDraft(db, candidate.currentState.updatedAtChapter)
+        || candidate.currentState.updatedAtChapter !== source.chapterNumber
       ) {
         throw new Error(`角色「${candidate.name}」的章节状态尚未定稿，已拒绝后处理写入`)
       }
@@ -467,8 +587,8 @@ function mergeIncrementalEntriesWithExisting(
       relationships: candidate.relationships.length > 0
         ? candidate.relationships
         : existing.relationships,
-      ...(intent === 'chapter_progress' && candidate.currentState
-        ? { currentState: candidate.currentState }
+      ...(intent === 'chapter_progress' && candidate.currentState && source
+        ? { currentState: mergeDerivedCurrentState(existing.currentState, candidate.currentState, source) }
         : {}),
     }
     return merged
@@ -531,9 +651,25 @@ function resolveManualEntries(
     const originalName = renameByNew.get(candidate.name) ?? candidate.name
     const existing = existingByName.get(originalName)
     const mapped = mapManualRelationshipTargets(candidate, renameByOriginal, finalNames)
-    return existing?.legacyRelationshipNotes && !mapped.legacyRelationshipNotes
+    const withLegacyNotes = existing?.legacyRelationshipNotes && !mapped.legacyRelationshipNotes
       ? { ...mapped, legacyRelationshipNotes: existing.legacyRelationshipNotes }
       : mapped
+    if (!withLegacyNotes.currentState) return withLegacyNotes
+    const provenance = { ...withLegacyNotes.currentState.provenance }
+    for (const field of CHARACTER_STATE_TEXT_FIELDS) {
+      if ((existing?.currentState?.[field] ?? '') !== withLegacyNotes.currentState[field]) {
+        provenance[field] = {
+          kind: 'author',
+          chapterNumber: withLegacyNotes.currentState.updatedAtChapter,
+        }
+      } else if (existing?.currentState?.provenance?.[field]) {
+        provenance[field] = existing.currentState.provenance[field]
+      }
+    }
+    return {
+      ...withLegacyNotes,
+      currentState: { ...withLegacyNotes.currentState, provenance },
+    }
   })
   assertRelationshipClosure(entries)
   return { entries, renameByOriginal }
@@ -850,12 +986,13 @@ export class CharacterRosterRepository {
           : maySafelyRegenerate || isNovelImport
             ? mergeGeneratedEntriesWithExisting(request.entries, existingEntries)
             : isIncremental
-              ? mergeIncrementalEntriesWithExisting(
+                ? mergeIncrementalEntriesWithExisting(
                   db,
                   request.entries,
                   existingEntries,
-                  intent as Extract<CharacterRosterCommitIntent, 'blueprint_sync' | 'chapter_progress'>,
-                )
+                   intent as Extract<CharacterRosterCommitIntent, 'blueprint_sync' | 'chapter_progress'>,
+                   request.source,
+                 )
               : request.entries
       const writingLanguage = ProjectCoreRepository.get()?.writingLanguage ?? DEFAULT_WRITING_LANGUAGE
       const projection = renderCharacterRosterMarkdown(committedEntries, writingLanguage)

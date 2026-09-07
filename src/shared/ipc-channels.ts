@@ -19,6 +19,7 @@ import type {
 } from './recovery-candidate'
 import type {
   FinalizedContinuityProjection,
+  FinalizedSourceSnapshot,
   SaveFinalizedContinuityRequest,
 } from './finalized-continuity'
 import type { ConsistencyExemption } from './consistency-preflight'
@@ -859,6 +860,10 @@ export interface DatabaseChannels {
   'db:continuity-list-before': {
     args: [chapterNumber: number, expectedProjectPath: string]
     return: FinalizedContinuityProjection[]
+  }
+  'db:continuity-read-source': {
+    args: [draftId: number, expectedProjectPath: string]
+    return: FinalizedSourceSnapshot | null
   }
   'db:consistency-exemption-list': { args: [expectedProjectPath: string]; return: ConsistencyExemption[] }
   'db:consistency-exemption-save': {

@@ -3,7 +3,8 @@ import { ipc } from '../ipc-client'
 import { guardChapterWriting } from '../workflow-guards'
 import type { ChapterInfo } from './chapter-workflow'
 import type { ChapterBlueprint } from './directory-workflow'
-import { GenerateDraftCommand, previousChapterEnding } from './commands/generate-draft.command'
+import { GenerateDraftCommand } from './commands/generate-draft.command'
+import type { SelectedCandidateDraft } from './chapter-materials'
 import { FinalizeChapterCommand } from './commands/finalize-chapter.command'
 import type { Locale } from '../../i18n/types'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
@@ -158,7 +159,7 @@ async function runOneBatchChapter(
   step: WorkflowStep,
   context: WorkflowContext,
   callbacks: StepCallbacks,
-  draftReviewContinuity: Map<number, string>,
+  draftReviewCandidates: Map<number, SelectedCandidateDraft>,
 ): Promise<string> {
   const projectSession = requireWorkflowProjectSession(context)
   // 草稿待审模式不会把本批次前一章变成定稿事实；首章仍遵守外部连续性门禁，
@@ -206,18 +207,29 @@ async function runOneBatchChapter(
     ))
   callbacks.setProgress(5)
 
-  const previousDraftEnding = completionMode === 'draft_review'
-    ? draftReviewContinuity.get(chapterNumber - 1)
-    : undefined
   const draftContent = await new GenerateDraftCommand(chapterInfo, {
-    ...(previousDraftEnding ? { previousDraftEnding } : {}),
+    selectedCandidateDrafts: completionMode === 'draft_review'
+      ? [...draftReviewCandidates.values()]
+      : [],
   }).execute({ step, context, callbacks })
   throwIfCancelled(context, uiLocale)
 
   if (completionMode === 'draft_review') {
-    // This prompt-only context exists only inside this workflow definition. It
-    // deliberately bypasses finalized/manuscript/fact projections.
-    draftReviewContinuity.set(chapterNumber, previousChapterEnding(draftContent))
+    const draftId = Number(context.data.draftId)
+    const version = Number(context.data.draftVersion)
+    if (!Number.isSafeInteger(draftId) || !Number.isSafeInteger(version)) {
+      throw new Error(localeText(
+        uiLocale,
+        `第${chapterNumber}章草稿已保存，但缺少可冻结的草稿身份，批量创作已停止`,
+        `Chapter ${chapterNumber} was saved, but its draft identity could not be frozen. Batch writing stopped.`,
+      ))
+    }
+    draftReviewCandidates.set(chapterNumber, Object.freeze({
+      chapterNumber,
+      draftId,
+      version,
+      content: draftContent,
+    }))
     callbacks.setProgress(100)
     return localeText(
       uiLocale,
@@ -290,7 +302,7 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
   const completionMode = normalizeCompletionMode(params.completionMode)
   const chapterWordsTarget = normalizeChapterWordsTarget(params.chapterWordsTarget)
   const endChapterNumber = startChapterNumber + chapterCount - 1
-  const draftReviewContinuity = new Map<number, string>()
+  const draftReviewCandidates = new Map<number, SelectedCandidateDraft>()
   const chapterResourceKeys = Array.from({ length: chapterCount }, (_, index) => (
     workflowResourceKey('chapter', startChapterNumber + index)
   ))
@@ -359,7 +371,7 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
           step,
           context,
           callbacks,
-          draftReviewContinuity,
+          draftReviewCandidates,
         ),
       }
     }),

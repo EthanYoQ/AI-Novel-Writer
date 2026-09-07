@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -57,6 +58,27 @@ function initialRosterRequest(): CharacterRosterCommitRequest {
         keyItems: 'brass key',
         recentEvents: 'found the sealed map',
         updatedAtChapter: 1,
+        provenance: {
+          location: {
+            kind: 'derived',
+            source: {
+              draftId: 1,
+              finalizationId: 'finalization-1',
+              chapterNumber: 1,
+              contentHash: '1'.repeat(64),
+            },
+          },
+          recentEvents: {
+            kind: 'derived',
+            source: {
+              draftId: 1,
+              finalizationId: 'finalization-1',
+              chapterNumber: 1,
+              contentHash: '1'.repeat(64),
+            },
+          },
+          keyItems: { kind: 'author', chapterNumber: 1 },
+        },
       },
     }],
   }
@@ -64,12 +86,20 @@ function initialRosterRequest(): CharacterRosterCommitRequest {
 
 function insertFinalizedDraft(draftId: number, chapterNumber: number): void {
   const db = getProjectDb()!
+  const content = `Chapter ${chapterNumber} finalized content`
+  const contentHash = createHash('sha256').update(content, 'utf8').digest('hex')
   db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)')
-    .run(draftId, `Chapter ${chapterNumber} finalized content`)
+    .run(draftId, content)
   db.prepare(`
     INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
     VALUES (?, ?, 1, 'finalized', ?, 0)
   `).run(draftId, chapterNumber, draftId)
+  db.prepare(`
+    INSERT INTO finalization_outbox (
+      finalization_id, draft_id, chapter_number, chapter_title, content_hash,
+      content_revision, content_snapshot, target_file_name, publication_status
+    ) VALUES (?, ?, ?, '', ?, 0, ?, ?, 'published')
+  `).run(`finalization-${draftId}`, draftId, chapterNumber, contentHash, content, `chapter-${chapterNumber}.txt`)
 }
 
 function installRealRepositoryIpc(): void {
@@ -162,6 +192,12 @@ function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKe
     chapterTitle: 'The Handoff',
     draftContent,
     draftId: 7,
+    finalizedSource: {
+      draftId: 7,
+      finalizationId: 'finalization-7',
+      chapterNumber: 2,
+      contentHash: createHash('sha256').update('Chapter 2 finalized content', 'utf8').digest('hex'),
+    },
     sourceLabel: 'Chapter 2 finalization',
     ...overrides,
   }, workflowRuntimeDependencies)
@@ -282,7 +318,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
         powerLevel: 'ordinary',
         physicalState: 'tired',
         mentalState: 'alert',
-        keyItems: '',
+        keyItems: 'brass key',
         recentEvents: 'handed the brass key to Zhou Yan',
         updatedAtChapter: 2,
       },
@@ -320,8 +356,8 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       callbacks: { ...callbacks(), replaceText: vi.fn() },
     })).rejects.toThrow('next-chapter-prompt-captured')
     expect(nextChapterPrompt).toContain('Lin Lan (protagonist)')
-    expect(nextChapterPrompt).toContain('key items: none')
-    expect(nextChapterPrompt).toContain('handed the brass key to Zhou Yan')
+    expect(nextChapterPrompt).toContain('keyItems@chapter1: brass key')
+    expect(nextChapterPrompt).not.toContain('handed the brass key to Zhou Yan')
   })
 
   it('rejects an older Chinese chapter retry after a newer character state is committed', async () => {
@@ -335,6 +371,12 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       expectedRevision: beforeChapterThree.revision,
       schemaVersion: 1,
       intent: 'chapter_progress',
+      source: {
+        draftId: 8,
+        finalizationId: 'finalization-8',
+        chapterNumber: 3,
+        contentHash: createHash('sha256').update('Chapter 3 finalized content', 'utf8').digest('hex'),
+      },
       entries: [{
         ...existing,
         currentState: {
@@ -345,6 +387,20 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
           keyItems: '',
           recentEvents: '第三章已经交出黄铜钥匙',
           updatedAtChapter: 3,
+          provenance: {
+            location: { kind: 'derived', source: {
+              draftId: 8,
+              finalizationId: 'finalization-8',
+              chapterNumber: 3,
+              contentHash: createHash('sha256').update('Chapter 3 finalized content', 'utf8').digest('hex'),
+            } },
+            recentEvents: { kind: 'derived', source: {
+              draftId: 8,
+              finalizationId: 'finalization-8',
+              chapterNumber: 3,
+              contentHash: createHash('sha256').update('Chapter 3 finalized content', 'utf8').digest('hex'),
+            } },
+          },
         },
       }],
     })
@@ -372,7 +428,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(CharacterRosterRepository.read()).toEqual(chapterThree.snapshot)
     expect(CharacterRepository.getByName('Lin Lan')?.currentState).toMatchObject({
       location: '新港',
-      keyItems: '',
+      keyItems: 'brass key',
       recentEvents: '第三章已经交出黄铜钥匙',
       updatedAtChapter: 3,
     })

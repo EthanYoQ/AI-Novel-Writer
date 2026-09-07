@@ -91,7 +91,9 @@ export function findBlueprintContinuityRisks(
   )
   const characters = new Set(blueprint.characters.map(normalizedKeyPart))
 
-  return projections.flatMap(projection => (projection.facts ?? []).flatMap((fact) => {
+  return projections.flatMap(projection => (
+    projection.sourceStatus === 'current' ? (projection.facts ?? []) : []
+  ).flatMap((fact) => {
     if (fact.category !== 'character-state') return []
     const stableFactKey = continuityStableFactKey(fact)
     if (activeExemptions.has(stableFactKey)) return []
@@ -105,8 +107,8 @@ export function findBlueprintContinuityRisks(
       sourceChapter: fact.sourceChapter,
       evidence: fact.evidence,
       issue: {
-        zhCN: `已定稿事实记录“${subject}”处于死亡终态，但当前蓝图仍将其列为出场角色。`,
-        enUS: `Finalized facts record “${subject}” as dead, but the current blueprint still schedules the character to appear.`,
+        zhCN: `定稿正文绑定的派生索引提示“${subject}”处于死亡终态，但当前蓝图仍将其列为出场角色。请对照原文确认语义。`,
+        enUS: `A derived index bound to finalized prose marks “${subject}” as dead, but the current blueprint still schedules the character to appear. Confirm the meaning against the prose.`,
       },
       suggestion: {
         zhCN: '调整蓝图，或说明这是回忆、幻象等刻意安排。',

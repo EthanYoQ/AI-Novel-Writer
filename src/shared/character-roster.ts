@@ -5,6 +5,7 @@
  * seam 的数据形状，不引入第二份 roster JSON 事实源。
  */
 import { CHARACTER_ROLES, type CharacterRole } from './character-role'
+import type { FinalizedSourceIdentity } from './finalized-continuity'
 
 export const CHARACTER_ROSTER_SCHEMA_VERSION = 1 as const
 
@@ -38,6 +39,22 @@ export interface CharacterRosterRelationship {
   relation: string
 }
 
+export const CHARACTER_STATE_TEXT_FIELDS = [
+  'location',
+  'powerLevel',
+  'physicalState',
+  'mentalState',
+  'keyItems',
+  'recentEvents',
+] as const
+
+export type CharacterStateTextField = typeof CHARACTER_STATE_TEXT_FIELDS[number]
+
+export type CharacterStateFieldProvenance =
+  | { kind: 'author'; chapterNumber: number }
+  | { kind: 'derived'; source: FinalizedSourceIdentity }
+  | { kind: 'legacy' }
+
 export interface CharacterRosterCharacterState {
   location: string
   powerLevel: string
@@ -46,6 +63,8 @@ export interface CharacterRosterCharacterState {
   keyItems: string
   recentEvents: string
   updatedAtChapter: number
+  /** Field-level because one state object may contain author and derived values. */
+  provenance?: Partial<Record<CharacterStateTextField, CharacterStateFieldProvenance>>
 }
 
 /**
@@ -118,6 +137,8 @@ export interface CharacterRosterCommitRequest {
   schemaVersion: typeof CHARACTER_ROSTER_SCHEMA_VERSION
   entries: CharacterRosterEntry[]
   intent?: CharacterRosterCommitIntent
+  /** Required for chapter_progress; validated against the immutable outbox receipt. */
+  source?: FinalizedSourceIdentity
   /** 仅 manual_edit 使用；由角色管理的草稿账本明确给出身份映射。 */
   renames?: CharacterRosterRename[]
   /**

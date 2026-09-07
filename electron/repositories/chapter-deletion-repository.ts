@@ -1,4 +1,5 @@
 import { getProjectDb } from '../database'
+import { invalidateContinuityProjectionFrom } from './summary-repository'
 import type {
   ChapterDeletionOperation,
   ChapterDeletionProjectionStatus,
@@ -96,6 +97,7 @@ function deleteChapterFacts(
   target: FinalizedChapterTarget,
   postProcessRunIds: readonly string[],
 ): void {
+  invalidateContinuityProjectionFrom(db, target.chapter_number)
   const contentIds = new Set<number>([target.content_id])
   const revisionContents = db.prepare(`
     SELECT content_id FROM revisions WHERE base_draft_id = ?

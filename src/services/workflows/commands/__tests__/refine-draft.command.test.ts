@@ -1134,6 +1134,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
         chapterNumber: 1,
         chapterTitle: '离港',
         chapterNotes: '顾舟仍留在月桂港。',
+        sourceStatus: 'current',
         facts: [{
           category: 'character-state',
           entities: ['顾舟'],
@@ -1209,7 +1210,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
       }
       if (channel === 'db:consistency-exemption-list') return []
       if (channel === 'db:continuity-list-before') return [{
-        draftId: 9, chapterNumber: 1, chapterTitle: '终局', chapterNotes: '顾舟死亡',
+        draftId: 9, chapterNumber: 1, chapterTitle: '终局', chapterNotes: '顾舟死亡', sourceStatus: 'current',
         facts: [{ category: 'character-state', entities: ['顾舟'], statement: '顾舟已经死亡。', sourceChapter: 1, evidence: '顾舟停止了呼吸。' }],
       }]
       if (channel === 'db:review-create') {
