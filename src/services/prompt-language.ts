@@ -676,7 +676,7 @@ Use these only to understand later turning points. Do not reveal or advance them
 [Opening-chapter requirements]
 1. Begin inside an immediate action, confrontation, pursuit, or sharp reversal instead of explaining the world at length.
 2. Introduce the protagonist's special advantage only when the chapter brief explicitly requires it; do not invent an event to satisfy a generic opening convention.
-3. Drive the scene through action, dialogue, expression, and physical interaction rather than detached summary.
+3. Advance through viewpoint-consistent action, sensory detail, interiority, and dialogue. Do not turn private perception into public dialogue merely to expose information.
 4. Follow the project-wide guidance and avoid every listed failure mode.
 
 [Writing style]
