@@ -30,6 +30,11 @@ import {
 } from '../project-session-gate'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectSessionContext } from '../../shared/project-session-context'
+import {
+  hasVisiblePartialSynopsisMarker,
+  isRecoverableSynopsisCheckpoint,
+  isUsableSynopsisCheckpoint,
+} from '../../services/workflows/commands/architecture.command'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -49,7 +54,7 @@ const ARCH_FILES: Array<{
   ]
 
 /** 续批按钮默认的每批章数上限（可在弹窗内调整，避免一次请求剩余全部章节）。 */
-const CONTINUATION_BATCH_SPAN = 30
+const CONTINUATION_BATCH_SPAN = 20
 
 /** 故事架构编辑器 — 显示四个架构文件状态，并提供 AI 生成入口 */
 export default function WorldBuildingEditor({ projectKey }: { projectKey: string }) {
@@ -60,6 +65,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
   const [synopsisIncomplete, setSynopsisIncomplete] = useState(false)
+  const [synopsisRecoveryFailed, setSynopsisRecoveryFailed] = useState(false)
   const [synopsisCoveredTo, setSynopsisCoveredTo] = useState<number>(0)
   const [synopsisTotalChapters, setSynopsisTotalChapters] = useState<number>(0)
   const [synopsisBusy, setSynopsisBusy] = useState(false)
@@ -85,6 +91,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       setArchStatus({})
       setWordCounts({})
       setSynopsisIncomplete(false)
+      setSynopsisRecoveryFailed(false)
       setSynopsisCoveredTo(0)
       setSynopsisTotalChapters(0)
       setLoading(false)
@@ -100,7 +107,14 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     )
     // 情节大纲状态：中断可断点续写；或部分覆盖可分批续写（covered_to < total）
     let interrupted = false
+    let recoveryFailed = false
     let coveredTo = 0
+    const dbSynopsis = core?.synopsis || ''
+    const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
+    const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US'
+      ? 'en-US'
+      : 'zh-CN'
+    const visiblyPartial = hasVisiblePartialSynopsisMarker(dbSynopsis)
     try {
       const partialResult = await ipc.invokeWithProjectSession(
         projectSession,
@@ -108,14 +122,28 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
         `${projectPath}/.vela/partial_arch.json`,
         projectPath,
       )
-      const partial = (partialResult?.success === true
-        ? (partialResult as { data?: { synopsis_incomplete?: boolean; synopsis_result?: string; synopsis_covered_to?: number } }).data
-        : undefined) || {}
-      interrupted = partial.synopsis_incomplete === true
-        && (partial.synopsis_result?.length ?? 0) > 50
-      coveredTo = Number(partial.synopsis_covered_to) > 0 ? Number(partial.synopsis_covered_to) : 0
+      const partial = partialResult?.success === true
+        ? (partialResult as { data?: Record<string, unknown> }).data
+        : undefined
+      const checkpointUsable = isUsableSynopsisCheckpoint(
+        partial,
+        dbSynopsis,
+        writingLanguage,
+        totalChapters,
+      )
+      interrupted = checkpointUsable && isRecoverableSynopsisCheckpoint(
+        partial,
+        dbSynopsis,
+        writingLanguage,
+        totalChapters,
+      )
+      recoveryFailed = visiblyPartial && !checkpointUsable
+      coveredTo = checkpointUsable && Number(partial?.synopsis_covered_to) > 0
+        ? Number(partial?.synopsis_covered_to)
+        : 0
     } catch {
       interrupted = false
+      recoveryFailed = visiblyPartial
       coveredTo = 0
     }
     const status: Record<string, boolean> = {
@@ -137,10 +165,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     setArchStatus(status)
     setWordCounts(counts)
     setSynopsisIncomplete(interrupted && Boolean(status.synopsis))
+    setSynopsisRecoveryFailed(recoveryFailed && Boolean(status.synopsis))
     setSynopsisCoveredTo(coveredTo)
-    setSynopsisTotalChapters(Number(currentProject?.novelConfig?.totalChapters) > 0
-      ? Number(currentProject?.novelConfig?.totalChapters)
-      : 0)
+    setSynopsisTotalChapters(totalChapters)
     setLoading(false)
     // ✅ 只依赖 path 字符串，避免 novelConfig 等变化导致 loadStatus 重建
   }, [currentProject, projectKey, projectMatches, rosterSnapshot])
@@ -317,7 +344,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     )
   }
 
-  const generatedCount = ARCH_FILES.filter(f => archStatus[f.key]).length
+  const generatedCount = ARCH_FILES.filter(f => (
+    archStatus[f.key] && !(f.key === 'synopsis' && synopsisRecoveryFailed)
+  )).length
   const rosterPresentation = getCharacterRosterRepairPresentation(
     rosterSnapshot,
     text,
@@ -367,6 +396,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {ARCH_FILES.map(f => {
           const generated = archStatus[f.key]
+          const synopsisNeedsRecovery = f.key === 'synopsis' && synopsisRecoveryFailed
           const words = wordCounts[f.key] ?? 0
           const isCharacters = f.key === 'characters'
           const rosterNeedsAttention = isCharacters && rosterPresentation
@@ -378,7 +408,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
             ? 'var(--color-error, #ef4444)'
             : rosterNeedsAttention
               ? 'var(--color-warning)'
-            : generated
+            : synopsisNeedsRecovery
+              ? 'var(--color-warning)'
+              : generated
               ? 'var(--color-success)'
               : 'var(--color-border)'
           return (
@@ -400,7 +432,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
               >
                 {/* 状态图标 */}
                 {generated
-                  ? <CheckCircle2 size={18} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
+                  ? synopsisNeedsRecovery
+                    ? <AlertTriangle size={18} style={{ flexShrink: 0, color: 'var(--color-warning)' }} />
+                    : <CheckCircle2 size={18} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
                   : <Circle size={18} style={{ flexShrink: 0, color: 'var(--color-text-muted)' }} />
                 }
 
@@ -455,7 +489,11 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                     </>
                   ) : generated ? (
                     <>
-                      {f.key === 'synopsis' && synopsisIncomplete ? (
+                      {f.key === 'synopsis' && synopsisRecoveryFailed ? (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                          {text('不完整 · 检查点不可恢复', 'Incomplete · checkpoint unavailable')}
+                        </span>
+                      ) : f.key === 'synopsis' && synopsisIncomplete ? (
                         <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
                           {text('不完整 · 已存部分', 'Incomplete · partial saved')}
                         </span>
@@ -494,7 +532,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                             : text('断点续写大纲', 'Continue outline')}
                         </Button>
                       )}
-                      {f.key === 'synopsis' && !synopsisIncomplete
+                      {f.key === 'synopsis' && !synopsisIncomplete && !synopsisRecoveryFailed
                         && synopsisCoveredTo > 0 && synopsisCoveredTo < synopsisTotalChapters && !loading && (
                         <Button
                           size="sm"

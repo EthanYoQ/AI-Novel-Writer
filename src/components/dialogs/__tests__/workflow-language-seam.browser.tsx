@@ -10,6 +10,10 @@ import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
+import {
+  isUsableSynopsisCheckpoint,
+  synopsisFactsFingerprint,
+} from '../../../services/workflows/commands/architecture.command'
 import WorldBuildingEditor from '../../editor/WorldBuildingEditor'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -65,6 +69,93 @@ afterEach(async () => {
 })
 
 describe('workflow launch language seams', () => {
+  it('shows a DB-partial synopsis with a missing checkpoint as unavailable, not completed or resumable', async () => {
+    const currentProject = project('zh-CN')
+    const projectSession = {
+      projectId: currentProject.id,
+      leaseId: currentProject.sessionLease!,
+      projectPath: currentProject.path,
+    }
+    let dbSynopsis = [
+      '# Plot Outline',
+      '',
+      'Chapters 1-3: the crew traces the signal but has not completed this batch.',
+      '',
+      '> ⚠ **This outline is incomplete**: generation stopped at the output length limit; the completed part above was saved automatically.',
+      '> Click “Continue plot outline” in the AI output notice to resume this batch.',
+    ].join('\n')
+    const checkpointState: { current?: Record<string, unknown> } = {}
+    useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
+    useProjectStore.setState({ currentProject })
+    useWorkflowStore.setState({
+      activeRuns: [], history: [], globalLogs: [], waitingRuns: {}, currentRun: null,
+      waitingForConfirm: false, waitingAfterStepIndex: -1,
+    })
+    setActiveProjectSessionContext(projectSession)
+    Object.defineProperty(window, 'velaAPI', {
+      configurable: true,
+      value: {
+        invoke: vi.fn(async (channel: string) => {
+          if (channel === 'db:project-core-get') {
+            return {
+              premise: 'Existing premise. '.repeat(5),
+              worldbuilding: 'Existing worldbuilding. '.repeat(5),
+              synopsis: dbSynopsis,
+              totalChapters: 100,
+              writingLanguage: 'en-US',
+            }
+          }
+          if (channel === 'db:character-roster-read') {
+            return {
+              schemaVersion: 1,
+              revision: 1,
+              migrationState: 'ready',
+              status: 'ready',
+              entries: [],
+              renderedMarkdown: '# Characters\n\nExisting roster',
+              projectionHash: 'projection',
+              factHash: 'facts',
+            }
+          }
+          if (channel === 'fs:read-json') {
+            return checkpointState.current
+              ? { success: true, data: checkpointState.current }
+              : { success: false, error: 'not found' }
+          }
+          throw new Error(`Unexpected IPC channel: ${channel}`)
+        }),
+        on: vi.fn(() => () => {}),
+        once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn(),
+      },
+    })
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => root?.render(<WorldBuildingEditor projectKey={currentProject.path} />))
+
+    await expect.element(page.getByText('不完整 · 检查点不可恢复', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('3/4 已生成', { exact: true })).toBeVisible()
+    expect(container.textContent).not.toContain('断点续写大纲')
+
+    const confirmedBody = `Chapters 1-20: ${'The crew follows each clue and preserves cause and effect. '.repeat(4)}`.trim()
+    dbSynopsis = `# Plot Outline\n\n${confirmedBody}\n\n> This outline covers chapters 1-20 of 100; the remaining chapters will be generated in later batches.`
+    checkpointState.current = {
+      synopsis_result: confirmedBody,
+      synopsis_incomplete: false,
+      synopsis_covered_to: 20,
+      synopsis_range: { from: 1, to: 20 },
+      synopsis_facts_fingerprint: 'stored-inputs',
+      synopsis_db_hash: synopsisFactsFingerprint([dbSynopsis]),
+    }
+    expect(isUsableSynopsisCheckpoint(checkpointState.current, dbSynopsis, 'en-US', 100)).toBe(true)
+    await act(async () => page.getByRole('button', { name: '刷新状态' }).click())
+    await expect.element(page.getByText('已覆盖至第 20 章 · 待续批', { exact: true })).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '续批（第 21 章起）' }).click())
+
+    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的起始章' })).toHaveValue(21)
+    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(40)
+  })
+
   it.each([
     { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', heading: '故事架构', status: '3/4 已生成', refresh: '刷新状态', generate: 'AI 生成架构', generateTitle: 'AI 生成故事架构（选择要生成的步骤）', title: 'AI 生成故事架构', button: /确认生成/, expectedLog: '生成故事前提...', expectedPrompt: '你是一位经验丰富的故事架构师', unexpectedPrompt: 'Build a compact story premise' },
     { uiLocale: 'zh-CN', writingLanguage: 'en-US', heading: '故事架构', status: '3/4 已生成', refresh: '刷新状态', generate: 'AI 生成架构', generateTitle: 'AI 生成故事架构（选择要生成的步骤）', title: 'AI 生成故事架构', button: /确认生成/, expectedLog: '生成故事前提...', expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位经验丰富的故事架构师' },

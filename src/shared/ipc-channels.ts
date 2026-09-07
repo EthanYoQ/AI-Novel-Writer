@@ -687,7 +687,10 @@ export interface ProjectClearOptions {
 export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText'
 
 // ===== 引入 DB 类型 =====
-import type { ProjectCoreData } from '../../electron/repositories/project-core-repository'
+import type {
+  ProjectCoreData,
+  ProjectCoreSynopsisCommitRequest,
+} from '../../electron/repositories/project-core-repository'
 import type {
   BlueprintCharacterSyncOperation,
   BlueprintData,
@@ -734,6 +737,10 @@ export interface DatabaseChannels {
   }
   'db:project-core-update': {
     args: [data: Partial<ProjectCoreData>, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
+  'db:project-core-synopsis-commit': {
+    args: [request: ProjectCoreSynopsisCommitRequest, expectedProjectPath: string]
     return: { success: boolean; error?: string }
   }
   'db:import-global-facts-commit': {

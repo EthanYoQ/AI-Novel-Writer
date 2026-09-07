@@ -23,6 +23,7 @@ import { characterArchitecturePrompts, promptLanguageText } from '../../prompt-l
 import { stripThinkingTags } from '../workflow-utils'
 import type { WorkflowContext } from '../../../stores/workflow-store'
 import type { NovelConfig, ProjectSessionContext } from '../../../shared/ipc-channels'
+import type { ProjectCoreSynopsisExpected } from '../../../../electron/repositories/project-core-repository'
 import type { WritingLanguage } from '../../../shared/writing-language'
 import {
   CHARACTER_ROSTER_SCHEMA_VERSION,
@@ -59,6 +60,41 @@ interface PartialArchData {
   synopsis_facts_fingerprint?: string
   /** 上次写入 DB 的大纲全文指纹；用于检测大纲是否被手动编辑（防续批覆盖用户修改）。 */
   synopsis_db_hash?: string
+  /** 与 synopsis_result 精确绑定；旧检查点缺失时由 DB 逐字等价校验兼容。 */
+  synopsis_body_hash?: string
+  /** 本批实际使用的作者步骤指导；恢复必须沿用，不读取新输入。 */
+  synopsis_step_guidance?: string
+}
+
+const SYNOPSIS_CHECKPOINT_FIELDS = [
+  'synopsis_result',
+  'synopsis_incomplete',
+  'synopsis_covered_to',
+  'synopsis_range',
+  'synopsis_facts_fingerprint',
+  'synopsis_db_hash',
+  'synopsis_body_hash',
+  'synopsis_step_guidance',
+] as const satisfies readonly (keyof PartialArchData)[]
+
+function sameSynopsisCheckpoint(
+  left: PartialArchData,
+  right: PartialArchData,
+): boolean {
+  return SYNOPSIS_CHECKPOINT_FIELDS.every(field => (
+    JSON.stringify(left[field]) === JSON.stringify(right[field])
+  ))
+}
+
+function restoreSynopsisCheckpoint(
+  current: PartialArchData,
+  previous: PartialArchData,
+): PartialArchData {
+  const restored = { ...current }
+  for (const field of SYNOPSIS_CHECKPOINT_FIELDS) {
+    Object.assign(restored, { [field]: previous[field] })
+  }
+  return restored
 }
 
 /** 大纲章节范围。 */
@@ -157,6 +193,100 @@ function stripPlotOutlineProgressLine(text: string): string {
     .trim()
 }
 
+interface PlotOutlineTitleRange {
+  from: number
+  to: number
+}
+
+const CHINESE_CHAPTER_DIGITS: Readonly<Record<string, number>> = Object.freeze({
+  零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
+  六: 6, 七: 7, 八: 8, 九: 9,
+})
+const CHINESE_CHAPTER_UNITS: Readonly<Record<string, number>> = Object.freeze({ 十: 10, 百: 100, 千: 1000 })
+const CHAPTER_NUMBER_TOKEN = '[0-9零〇一二两三四五六七八九十百千]+'
+const ZH_CHAPTER_TITLE_RE = new RegExp(
+  `^[\\t ]*(?:#{1,6}[\\t ]+|[-*+][\\t ]+)?第(${CHAPTER_NUMBER_TOKEN})(?:[–—-](${CHAPTER_NUMBER_TOKEN}))?章(?=[\\t ]*(?:[:：.．—-]|$))`,
+  'gmu',
+)
+const EN_CHAPTER_TITLE_RE = /^[\t ]*(?:#{1,6}[\t ]+|[-*+][\t ]+)?Chapters?[\t ]+(\d+)(?:[\t ]*[–—-][\t ]*(\d+))?(?=[\t ]*(?:[:.：—-]|$))/gimu
+
+function parseChapterNumberToken(token: string): number | null {
+  if (/^\d+$/u.test(token)) {
+    const value = Number(token)
+    return Number.isSafeInteger(value) ? value : null
+  }
+  let result = 0
+  let digit = 0
+  for (const char of token) {
+    if (char in CHINESE_CHAPTER_DIGITS) {
+      digit = CHINESE_CHAPTER_DIGITS[char]!
+      continue
+    }
+    const unit = CHINESE_CHAPTER_UNITS[char]
+    if (!unit) return null
+    result += (digit || 1) * unit
+    digit = 0
+  }
+  return result + digit
+}
+
+function findPlotOutlineTitleRanges(text: string): PlotOutlineTitleRange[] {
+  const ranges: PlotOutlineTitleRange[] = []
+  for (const regex of [ZH_CHAPTER_TITLE_RE, EN_CHAPTER_TITLE_RE]) {
+    regex.lastIndex = 0
+    for (const match of text.matchAll(regex)) {
+      const from = parseChapterNumberToken(match[1]!)
+      const to = parseChapterNumberToken(match[2] ?? match[1]!)
+      if (from !== null && to !== null) ranges.push({ from, to })
+    }
+  }
+  return ranges
+}
+
+function assertPlotOutlineTitleCoverage(
+  merged: string,
+  seedText: string,
+  from: number,
+  to: number,
+  uiText: UiText,
+): void {
+  const seedPriorCounts = new Map<string, number>()
+  for (const range of findPlotOutlineTitleRanges(seedText)) {
+    if (range.to >= from) continue
+    const key = `${range.from}:${range.to}`
+    seedPriorCounts.set(key, (seedPriorCounts.get(key) ?? 0) + 1)
+  }
+  const covered = new Set<number>()
+  const invalid: string[] = []
+  for (const range of findPlotOutlineTitleRanges(merged)) {
+    const key = `${range.from}:${range.to}`
+    if (range.to < from) {
+      const remaining = seedPriorCounts.get(key) ?? 0
+      if (remaining > 0) seedPriorCounts.set(key, remaining - 1)
+      else invalid.push(`${range.from}-${range.to}`)
+      continue
+    }
+    if (range.from < from || range.to > to || range.from > range.to) {
+      invalid.push(`${range.from}-${range.to}`)
+      continue
+    }
+    for (let chapter = range.from; chapter <= range.to; chapter += 1) {
+      if (covered.has(chapter)) invalid.push(String(chapter))
+      covered.add(chapter)
+    }
+  }
+  const missing: number[] = []
+  for (let chapter = from; chapter <= to; chapter += 1) {
+    if (!covered.has(chapter)) missing.push(chapter)
+  }
+  if (invalid.length > 0 || missing.length > 0) {
+    throw new Error(uiText(
+      `大纲正文的章节标题未精确覆盖本批第 ${from}–${to} 章（缺失 ${missing.length} 章，重复或越界 ${invalid.length} 处），结果未按完成保存。`,
+      `The outline headings do not exactly cover batch chapters ${from}-${to} (${missing.length} missing; ${invalid.length} duplicate or out of range), so the result was not saved as complete.`,
+    ))
+  }
+}
+
 /** 轻量确定性指纹：绑定大纲赖以生成的源事实，防止旧检查点被续到新上下文。 */
 export function synopsisFactsFingerprint(facts: readonly string[]): string {
   const joined = facts.join('\u0001')
@@ -165,6 +295,69 @@ export function synopsisFactsFingerprint(facts: readonly string[]): string {
     hash = ((hash << 5) + hash + joined.charCodeAt(index)) | 0
   }
   return (hash >>> 0).toString(36)
+}
+
+function renderSynopsisDbText(
+  body: string,
+  writingLanguage: WritingLanguage,
+  totalChapters: number,
+  checkpoint: Pick<PartialArchData, 'synopsis_incomplete' | 'synopsis_covered_to'>,
+): string {
+  const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
+  if (checkpoint.synopsis_incomplete === true) {
+    const marker = promptLanguageText(
+      writingLanguage,
+      SYNOPSIS_INCOMPLETE_MARKER_ZH,
+      SYNOPSIS_INCOMPLETE_MARKER_EN,
+    )
+    return `# ${heading}\n\n${body}\n${marker}`.trim()
+  }
+  const coveredTo = checkpoint.synopsis_covered_to ?? totalChapters
+  const visibleBody = coveredTo < totalChapters
+    ? `${body}\n\n${promptLanguageText(
+        writingLanguage,
+        `> 本大纲已覆盖至第 ${coveredTo} 章（全书 ${totalChapters} 章），其余章节将在后续批次继续生成。`,
+        `> This outline covers chapters 1-${coveredTo} of ${totalChapters}; the remaining chapters will be generated in later batches.`,
+      )}`
+    : body
+  return `# ${heading}\n\n${visibleBody}`.trim()
+}
+
+function synopsisInputsFingerprint(
+  expected: ProjectCoreSynopsisExpected,
+  stepGuidance: string,
+  range: PlotOutlineChapterRange,
+  template: unknown,
+): string {
+  const sourceInputs = {
+    premise: expected.premise,
+    charactersArch: expected.charactersArch,
+    worldbuilding: expected.worldbuilding,
+    genre: expected.genre,
+    totalChapters: expected.totalChapters,
+    wordsPerChapter: expected.wordsPerChapter,
+    writingLanguage: expected.writingLanguage,
+    plotStructure: expected.plotStructure,
+    narrativePov: expected.narrativePov,
+    globalGuidance: expected.globalGuidance,
+  }
+  return synopsisFactsFingerprint([
+    JSON.stringify(sourceInputs),
+    stepGuidance,
+    `${range.from}:${range.to}`,
+    JSON.stringify(template),
+  ])
+}
+
+function legacySynopsisFactsFingerprint(expected: ProjectCoreSynopsisExpected): string {
+  return synopsisFactsFingerprint([
+    expected.premise,
+    expected.charactersArch,
+    expected.worldbuilding,
+    String(expected.totalChapters),
+    String(expected.wordsPerChapter),
+    expected.plotStructure,
+  ])
 }
 
 /**
@@ -188,16 +381,16 @@ function synopsisBatchInstruction(
   const trailing = to < totalChapters
     ? promptLanguageText(
         writingLanguage,
-        `第 ${to + 1}–${totalChapters} 章本次不展开细写：只以一行占位句概览整段走向（不超过 200 字），等待后续批次继续生成。`,
-        `Chapters ${to + 1}-${totalChapters} must not be expanded in this batch: collapse them into one short placeholder line (200 characters or fewer) to be generated in later batches.`,
+        `第 ${to + 1}–${totalChapters} 章本次不展开细写：只写一行“后续概览：……”概览整段走向（不超过 200 字），等待后续批次继续生成。该行不得使用“第N章”或“第N–M章”标题，也不计入本批覆盖。`,
+        `Chapters ${to + 1}-${totalChapters} must not be expanded in this batch: write one short “Later overview: ...” line (200 characters or fewer) for that future span. Do not title it “Chapter N” or “Chapters N-M”; it does not count toward this batch's coverage.`,
       )
     : ''
   const contract = [
     leading,
     promptLanguageText(
       writingLanguage,
-      `【本次生成范围（重要）】\n本次必须对第 ${from}–${to} 章输出完整详细的情节大纲（全书共 ${totalChapters} 章）。`,
-      `[Generation scope for this batch (important)]\nDetail complete plot outline entries for chapters ${from}-${to} of ${totalChapters}.`,
+      `【本次生成范围（重要）】\n本次必须对第 ${from}–${to} 章输出完整详细的情节大纲（全书共 ${totalChapters} 章）。每章或连续章组必须以独立行标题开头，严格使用“第N章：标题”或“第N–M章：标题”格式。`,
+      `[Generation scope for this batch (important)]\nDetail complete plot outline entries for chapters ${from}-${to} of ${totalChapters}. Start every chapter or consecutive chapter group with its own heading, strictly formatted as “Chapter N: Title” or “Chapters N-M: Title”.`,
     ),
     trailing,
     promptLanguageText(
@@ -209,7 +402,7 @@ function synopsisBatchInstruction(
   return contract
 }
 
-/** 校验合并文本是否带与本批范围完全一致的完成进度行；缺失或范围不符视为未完成。 */
+/** 校验进度行与本批一致；正文标题覆盖由独立校验器证明。 */
 function assertPlotOutlineBatchComplete(
   merged: string,
   from: number,
@@ -239,9 +432,35 @@ function assertPlotOutlineBatchComplete(
  */
 function assertCheckpointDbMirrorCurrent(
   partial: PartialArchData,
-  dbOutlineHash: string,
+  dbOutlineText: string,
+  writingLanguage: WritingLanguage,
+  totalChapters: number,
   uiText: UiText,
-): void {
+): string {
+  const range = partial.synopsis_range
+  const coveredTo = partial.synopsis_covered_to ?? 0
+  if (!range
+    || !Number.isSafeInteger(range.from) || !Number.isSafeInteger(range.to)
+    || range.from < 1 || range.from > range.to || range.to > totalChapters
+    || !Number.isSafeInteger(coveredTo) || coveredTo < 0 || coveredTo > totalChapters
+    || (partial.synopsis_incomplete !== true && coveredTo !== range.to)
+    || (partial.synopsis_incomplete === true && coveredTo >= range.to)
+  ) {
+    throw new Error(uiText(
+      '情节大纲检查点的章节范围或进度已损坏，无法安全续写。请从第 1 章重新生成。',
+      'The plot-outline checkpoint has a damaged range or progress value and cannot be continued safely. Regenerate from chapter 1.',
+    ))
+  }
+  const checkpointBody = typeof partial.synopsis_result === 'string'
+    ? partial.synopsis_result.trim()
+    : ''
+  if (!checkpointBody) {
+    throw new Error(uiText(
+      '情节大纲检查点缺少正文，无法安全续写。请从第 1 章重新生成。',
+      'The plot-outline checkpoint has no body and cannot be continued safely. Regenerate from chapter 1.',
+    ))
+  }
+  const dbOutlineHash = synopsisFactsFingerprint([dbOutlineText])
   const recordedHash = partial.synopsis_db_hash
   if (recordedHash === undefined) {
     throw new Error(uiText(
@@ -257,6 +476,58 @@ function assertCheckpointDbMirrorCurrent(
         + 'To keep the edits, regenerate from chapter 1 on top of them; if the edit was a mistake, revert it before continuing.',
     ))
   }
+  if (renderSynopsisDbText(checkpointBody, writingLanguage, totalChapters, partial) !== dbOutlineText
+    || (partial.synopsis_body_hash !== undefined
+      && partial.synopsis_body_hash !== synopsisFactsFingerprint([checkpointBody]))
+  ) {
+    throw new Error(uiText(
+      '情节大纲检查点正文与数据库原文不一致，无法安全续写。数据库正文未被覆盖。',
+      'The plot-outline checkpoint body does not exactly match the database source. The database outline was not overwritten.',
+    ))
+  }
+  return checkpointBody
+}
+
+export function hasVisibleIncompleteSynopsisMarker(dbOutlineText: string): boolean {
+  return dbOutlineText.includes('本大纲未完成')
+    || dbOutlineText.includes('This outline is incomplete')
+}
+
+export function hasVisiblePartialSynopsisMarker(dbOutlineText: string): boolean {
+  return hasVisibleIncompleteSynopsisMarker(dbOutlineText)
+    || dbOutlineText.includes('本大纲已覆盖至第')
+    || dbOutlineText.includes('This outline covers chapters')
+}
+
+export function isUsableSynopsisCheckpoint(
+  value: unknown,
+  dbOutlineText: string,
+  writingLanguage: WritingLanguage,
+  totalChapters: number,
+): boolean {
+  if (!value || typeof value !== 'object') return false
+  const partial = value as PartialArchData
+  try {
+    return assertCheckpointDbMirrorCurrent(
+      partial,
+      dbOutlineText,
+      writingLanguage,
+      totalChapters,
+      (zhCNText) => zhCNText,
+    ).length >= MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS
+  } catch {
+    return false
+  }
+}
+
+export function isRecoverableSynopsisCheckpoint(
+  value: unknown,
+  dbOutlineText: string,
+  writingLanguage: WritingLanguage,
+  totalChapters: number,
+): boolean {
+  return Boolean((value as PartialArchData | null)?.synopsis_incomplete)
+    && isUsableSynopsisCheckpoint(value, dbOutlineText, writingLanguage, totalChapters)
 }
 const PLOT_STRUCTURES = new Set<NovelConfig['plotStructure']>([
   'three_act',
@@ -1466,15 +1737,21 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       'The total chapter count in the novel configuration is invalid; the plot outline cannot be generated.',
     ))
 
-    // 大纲赖以生成的源事实指纹：源事实变化后禁止把旧检查点续到新上下文。
-    const factsFingerprint = synopsisFactsFingerprint([
+    const sourceExpected: ProjectCoreSynopsisExpected = {
+      synopsis: core?.synopsis || '',
       premise,
-      char_dyn,
-      world_b,
-      String(totalChapters),
-      String(config.wordsPerChapter ?? 0),
-      String(config.plotStructure ?? ''),
-    ])
+      charactersArch: char_dyn,
+      worldbuilding: world_b,
+      genre: config.genre || '',
+      totalChapters,
+      wordsPerChapter: Number(config.wordsPerChapter) || 0,
+      writingLanguage,
+      plotStructure: config.plotStructure || '',
+      narrativePov: config.narrativePOV || '',
+      globalGuidance: config.globalGuidance || '',
+    }
+    const legacyFactsFingerprint = legacySynopsisFactsFingerprint(sourceExpected)
+    const requestedStepGuidance = ((context.data.stepGuidance as Record<string, string>) || {}).synopsis || ''
 
     const resumeRequested = this.options.resumeSynopsis === true
     callbacks.log(text(
@@ -1500,22 +1777,9 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     )
     const pov = getNarrativePOVLabel(config.narrativePOV || 'third_limited', writingLanguage)
 
-    const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
-      .withCoreSeed(premise)
-      .withCharacterDynamics(char_dyn)
-      .withWorldBuilding(world_b)
-      .withGenre(modelFacts.genre)
-      .withNumberOfChapters(totalChapters)
-      .withWordNumber(config.wordsPerChapter)
-      .withPlotStructureGuide(guide)
-      .withNarrativePov(pov)
-      .withGlobalGuidance(config.globalGuidance || promptLanguageText(writingLanguage, '（未填写）', '(not provided)'))
-      .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).synopsis || '')
-
     // ===== 状态机：解析本次批次模式与检查点 =====
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
     context.data.partial = partial
-    const confirmedPrefix = (partial.synopsis_result || '').trim()
     const coveredTo = partial.synopsis_covered_to ?? 0
     const interrupted = partial.synopsis_incomplete === true
     const checkpointFingerprint = partial.synopsis_facts_fingerprint
@@ -1524,6 +1788,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     let from: number
     let to: number
     let seedText = ''
+    let effectiveStepGuidance = requestedStepGuidance
 
     if (resumeRequested) {
       // ---- 断点续写：无有效检查点必须 fail-closed，绝不退化为覆盖生成 ----
@@ -1533,27 +1798,37 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
           'No interrupted plot-outline checkpoint was found (no batch is incomplete). Regenerate from “Generate story architecture” instead.',
         ))
       }
-      if (confirmedPrefix.length < MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS) {
-        throw new Error(text(
-          '中断检查点内容过短，无法安全续写。请从「AI 生成故事架构」重新生成。',
-          'The interrupted checkpoint is too short to resume safely. Regenerate from “Generate story architecture” instead.',
-        ))
-      }
       if (!partial.synopsis_range) {
         throw new Error(text(
           '中断检查点缺少批次范围，无法续写。请从「AI 生成故事架构」重新生成。',
           'The interrupted checkpoint is missing its batch range. Regenerate from “Generate story architecture” instead.',
         ))
       }
-      if (checkpointFingerprint !== factsFingerprint) {
+      from = partial.synopsis_range.from
+      to = partial.synopsis_range.to
+      effectiveStepGuidance = partial.synopsis_step_guidance ?? ''
+      const expectedCheckpointFingerprint = partial.synopsis_step_guidance === undefined
+        ? legacyFactsFingerprint
+        : synopsisInputsFingerprint(sourceExpected, effectiveStepGuidance, { from, to }, template)
+      if (checkpointFingerprint !== expectedCheckpointFingerprint) {
         throw new Error(text(
           '项目源事实（故事前提/角色/世界观/总章数等）自上次中断后已变化，旧检查点不能续到新上下文。请从「AI 生成故事架构」重新生成情节大纲。',
           'The source facts (premise / characters / worldbuilding / chapter count, etc.) changed after the interruption, so the old checkpoint cannot be continued into the new context. Regenerate the plot outline from “Generate story architecture”.',
         ))
       }
-      from = partial.synopsis_range!.from
-      to = partial.synopsis_range!.to
-      seedText = confirmedPrefix
+      seedText = assertCheckpointDbMirrorCurrent(
+        partial,
+        sourceExpected.synopsis,
+        writingLanguage,
+        totalChapters,
+        text,
+      )
+      if (seedText.length < MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS) {
+        throw new Error(text(
+          '中断检查点内容过短，无法安全续写。请从「AI 生成故事架构」重新生成。',
+          'The interrupted checkpoint is too short to resume safely. Regenerate from “Generate story architecture” instead.',
+        ))
+      }
       mode = 'resume'
     } else {
       const requested = this.options.synopsisRange ?? null
@@ -1598,23 +1873,55 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
               : `The outline must grow contiguously: chapters up to ${coveredTo} are confirmed, so this batch must start at chapter ${coveredTo + 1}.`,
           ))
         }
-        if (checkpointFingerprint !== factsFingerprint) {
+        if (!partial.synopsis_range) {
+          throw new Error(text(
+            '续批检查点缺少上一批范围，无法确认连续覆盖。请从第 1 章重新生成。',
+            'The continuation checkpoint is missing the previous batch range. Regenerate from chapter 1.',
+          ))
+        }
+        const checkpointStepGuidance = partial.synopsis_step_guidance ?? ''
+        const expectedCheckpointFingerprint = partial.synopsis_step_guidance === undefined
+          ? legacyFactsFingerprint
+          : synopsisInputsFingerprint(
+              sourceExpected,
+              checkpointStepGuidance,
+              partial.synopsis_range,
+              template,
+            )
+        if (checkpointFingerprint !== expectedCheckpointFingerprint) {
           throw new Error(text(
             '项目源事实自上次生成后已变化，既有大纲不能与新的源事实拼接。请从「AI 生成故事架构」从第 1 章重新生成。',
             'The source facts changed since the previous generation, so the existing outline cannot be joined with the new facts. Regenerate from chapter 1 in “Generate story architecture”.',
           ))
         }
-        seedText = confirmedPrefix
+        seedText = assertCheckpointDbMirrorCurrent(
+          partial,
+          sourceExpected.synopsis,
+          writingLanguage,
+          totalChapters,
+          text,
+        )
         mode = 'batch'
       }
     }
 
-    // 续批/恢复会沿用检查点前缀：确认 DB 中的大纲仍是上次生成写入的内容，
-    // 防止用户在编辑器手动保存的修改被默默覆盖（详见 #201 review）。
-    if (mode === 'resume' || mode === 'batch') {
-      const dbOutlineHash = synopsisFactsFingerprint([core?.synopsis || ''])
-      assertCheckpointDbMirrorCurrent(partial, dbOutlineHash, text)
-    }
+    const factsFingerprint = synopsisInputsFingerprint(
+      sourceExpected,
+      effectiveStepGuidance,
+      { from, to },
+      template,
+    )
+    const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
+      .withCoreSeed(premise)
+      .withCharacterDynamics(char_dyn)
+      .withWorldBuilding(world_b)
+      .withGenre(modelFacts.genre)
+      .withNumberOfChapters(totalChapters)
+      .withWordNumber(config.wordsPerChapter)
+      .withPlotStructureGuide(guide)
+      .withNarrativePov(pov)
+      .withGlobalGuidance(config.globalGuidance || promptLanguageText(writingLanguage, '（未填写）', '(not provided)'))
+      .withStepGuidance(effectiveStepGuidance)
 
     if (mode === 'resume') {
       callbacks.log(text(
@@ -1669,24 +1976,23 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
 
     // 中断/机械校验失败时：落盘已完成部分并抛出可续写错误
     const persistAndRaiseResume = async (partialBody: string, cause: Error): Promise<never> => {
+      if (partialBody.length < MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS) throw cause
       this.assertNotCancelled(context)
       assertArchitectureProjectSessionCurrent(projectSession, context)
-      try {
-        await this.persistInterruptedSynopsis(
-          projectSession,
-          expectedProjectPath,
-          context,
-          partialBody,
-          { from, to },
-          factsFingerprint,
-        )
-        callbacks.log(text(
-          `已完成部分（约 ${partialBody.length} 字）已保存，可点击「继续生成情节大纲」从断点续写`,
-          `The completed part (about ${partialBody.length} characters) was saved. Click “Continue plot outline” to resume from the break point.`,
-        ))
-      } catch (persistError) {
-        throw persistError
-      }
+      await this.persistInterruptedSynopsis(
+        projectSession,
+        expectedProjectPath,
+        context,
+        partialBody,
+        { from, to },
+        factsFingerprint,
+        effectiveStepGuidance,
+        sourceExpected,
+      )
+      callbacks.log(text(
+        `已完成部分（约 ${partialBody.length} 字）已保存，可点击「继续生成情节大纲」从断点续写`,
+        `The completed part (about ${partialBody.length} characters) was saved. Click “Continue plot outline” to resume from the break point.`,
+      ))
       throw new PlotOutlineResumeAvailableError(text(
         `情节大纲生成在完成前中断：${cause instanceof Error ? cause.message : String(cause)}。已完成部分（约 ${partialBody.length} 字）已自动保存为不完整状态，没有白费。\n点击「继续生成情节大纲」可续写本批（第 ${from}–${to} 章）；如本批范围仍偏大，可先在「AI 生成架构」缩小每批章节数后重试。`,
         `Plot-outline generation stopped before completing this batch: ${cause instanceof Error ? cause.message : String(cause)}. The finished part (about ${partialBody.length} characters) was saved automatically.\nClick “Continue plot outline” to finish batch chapters ${from}-${to}; if the batch is still too large, choose a smaller per-batch range in “Generate story architecture” and retry.`,
@@ -1717,6 +2023,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     // ===== 完成校验：必须带与本次范围一致的批次进度行（截断误报 stop 时不会误判成功） =====
     let confirmedBody = ''
     try {
+      assertPlotOutlineTitleCoverage(merged, seedText, from, to, text)
       assertPlotOutlineBatchComplete(merged, from, to, totalChapters, text)
       confirmedBody = stripPlotOutlineProgressLine(merged)
     } catch (error) {
@@ -1731,16 +2038,15 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     assertArchitectureProjectSessionCurrent(projectSession, context)
 
     // ===== 落盘：先写检查点（权威进度 + DB 镜像指纹），再镜像到 DB 正文 =====
-    const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
-    const dbBody = to < totalChapters
-      ? `${confirmedBody}\n\n> 本大纲已覆盖至第 ${to} 章（全书 ${totalChapters} 章），其余章节将在后续批次继续生成。`
-      : confirmedBody
-    const dbOutlineText = `# ${heading}\n\n${dbBody}\n`
+    const previousPartial = { ...partial }
     partial.synopsis_result = confirmedBody
     partial.synopsis_incomplete = false
     partial.synopsis_covered_to = to
     partial.synopsis_range = { from, to }
     partial.synopsis_facts_fingerprint = factsFingerprint
+    partial.synopsis_body_hash = synopsisFactsFingerprint([confirmedBody])
+    partial.synopsis_step_guidance = effectiveStepGuidance
+    const dbOutlineText = renderSynopsisDbText(confirmedBody, writingLanguage, totalChapters, partial)
     partial.synopsis_db_hash = synopsisFactsFingerprint([dbOutlineText])
     context.data.partial = partial
     this.assertNotCancelled(context)
@@ -1754,12 +2060,15 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
 
-    await writeArchToDb(
-      'synopsis',
+    await this.commitSynopsisWithCheckpointRollback(
       dbOutlineText,
       expectedProjectPath,
       context.runId,
       projectSession,
+      context,
+      sourceExpected,
+      previousPartial,
+      partial,
       text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
     )
     this.assertNotCancelled(context)
@@ -1798,6 +2107,77 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     return confirmedBody
   }
 
+  private async commitSynopsisWithCheckpointRollback(
+    synopsis: string,
+    expectedProjectPath: string,
+    runId: string,
+    projectSession: ProjectSessionContext,
+    context: WorkflowContext,
+    expected: ProjectCoreSynopsisExpected,
+    previousPartial: PartialArchData,
+    writtenPartial: PartialArchData,
+    fallbackError: string,
+  ): Promise<void> {
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
+    const result = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:project-core-synopsis-commit',
+      { synopsis: stripThinkingTags(synopsis), expected },
+      expectedProjectPath,
+    )
+    if (!result.success) {
+      const commitError = result.error === '项目数据已变化，已拒绝覆盖情节大纲'
+        ? text(
+            '项目数据已变化，已拒绝覆盖情节大纲。',
+            'Project data changed while the outline was being generated, so overwriting it was refused.',
+          )
+        : result.error || fallbackError
+      try {
+        const readResult = await ipc.invokeWithProjectSession(
+          projectSession,
+          'fs:read-json',
+          `${expectedProjectPath}/.vela/partial_arch.json`,
+          expectedProjectPath,
+        )
+        if (!readResult.success || !readResult.data) {
+          throw new Error(text(
+            '无法回读当前架构检查点',
+            'The current architecture checkpoint could not be read back.',
+          ))
+        }
+        const currentPartial = readResult.data as PartialArchData
+        if (sameSynopsisCheckpoint(currentPartial, writtenPartial)) {
+          const restored = restoreSynopsisCheckpoint(currentPartial, previousPartial)
+          await savePartialData(
+            expectedProjectPath,
+            restored,
+            projectSession,
+            text('恢复旧情节大纲检查点', 'Restore the previous plot-outline checkpoint'),
+            text('恢复旧情节大纲检查点失败', 'Failed to restore the previous plot-outline checkpoint.'),
+          )
+          context.data.partial = restored
+        } else {
+          context.data.partial = currentPartial
+        }
+      } catch (rollbackError) {
+        const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+        throw new Error(text(
+          `${commitError} 同时无法安全恢复旧检查点：${detail}`,
+          `${commitError} The previous checkpoint also could not be restored safely: ${detail}`,
+        ))
+      }
+      throw new Error(commitError)
+    }
+
+    const { globalEventBus } = await import('../../../shared/event-bus')
+    globalEventBus.emit('ARCH_FILE_UPDATED', {
+      fileName: 'synopsis.md',
+      projectPath: expectedProjectPath,
+      projectSession,
+      runId,
+    })
+  }
+
   /**
    * 中断时落盘：先写检查点（权威：正文 + 批次范围 + 源事实指纹 + 未完成标记），
    * 再镜像 DB 正文并附加「未完成」说明。检查点写入失败时不提供续写入口。
@@ -1809,21 +2189,26 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     partialText: string,
     range: PlotOutlineChapterRange,
     factsFingerprint: string,
+    stepGuidance: string,
+    sourceExpected: ProjectCoreSynopsisExpected,
   ): Promise<void> {
     const writingLanguage = workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
-    const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
-    const marker = promptLanguageText(
-      writingLanguage,
-      SYNOPSIS_INCOMPLETE_MARKER_ZH,
-      SYNOPSIS_INCOMPLETE_MARKER_EN,
-    )
-    const dbOutlineText = `# ${heading}\n\n${partialText}\n${marker}\n`
+    const previousPartial = { ...partial }
     partial.synopsis_result = partialText
     partial.synopsis_incomplete = true
+    partial.synopsis_covered_to = range.from - 1
     partial.synopsis_range = { from: range.from, to: range.to }
     partial.synopsis_facts_fingerprint = factsFingerprint
+    partial.synopsis_body_hash = synopsisFactsFingerprint([partialText])
+    partial.synopsis_step_guidance = stepGuidance
+    const dbOutlineText = renderSynopsisDbText(
+      partialText,
+      writingLanguage,
+      sourceExpected.totalChapters,
+      partial,
+    )
     partial.synopsis_db_hash = synopsisFactsFingerprint([dbOutlineText])
     context.data.partial = partial
     this.assertNotCancelled(context)
@@ -1837,12 +2222,15 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
 
-    await writeArchToDb(
-      'synopsis',
+    await this.commitSynopsisWithCheckpointRollback(
       dbOutlineText,
       expectedProjectPath,
       context.runId,
       projectSession,
+      context,
+      sourceExpected,
+      previousPartial,
+      partial,
       text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
     )
   }

@@ -544,13 +544,14 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const englishCallbacks = callbacks
     // synopsis 批次契约：完成输出必须携带英文批次进度行（1–20/20）
     const enProgressMark = '[Outline batch progress: covered chapters 1-20 of 20]'
+    const outlineOutput = `Chapters 1-20: ${modelOutput}`
     let englishCallCount = 0
     useLLMStore.setState({
       defaultModelId: 'model-1',
       generateStream: vi.fn(async (_messages, streamCallbacks) => {
         englishCallCount += 1
         streamCallbacks.onDone?.(
-          englishCallCount === 3 ? `${modelOutput}\n\n${enProgressMark}` : modelOutput,
+          englishCallCount === 3 ? `${outlineOutput}\n\n${enProgressMark}` : modelOutput,
           undefined,
           'stop',
         )
@@ -571,6 +572,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
           }
         case 'db:project-core-update':
         case 'fs:write-json':
+          return { success: true }
+        case 'db:project-core-synopsis-commit':
           return { success: true }
         case 'fs:read-json':
           return { success: true, data: {} }
@@ -593,11 +596,15 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const persistedUpdates = (invoke.mock.calls as unknown as Array<[string, unknown]>)
       .filter(([channel]) => channel === 'db:project-core-update')
       .map(([, update]) => update)
+    const synopsisCommit = (invoke.mock.calls as unknown as Array<[string, { synopsis?: string }]> )
+      .find(([channel]) => channel === 'db:project-core-synopsis-commit')?.[1]
     expect(persistedUpdates).toEqual([
       { premise: `# Story Premise\n\n${modelOutput}` },
       { worldbuilding: `# Worldbuilding\n\n${modelOutput}` },
-      { synopsis: `# Plot Outline\n\n${modelOutput}` },
     ])
+    expect(synopsisCommit).toEqual(expect.objectContaining({
+      synopsis: `# Plot Outline\n\n${outlineOutput}`,
+    }))
     for (const update of persistedUpdates) {
       expect(JSON.stringify(update)).not.toContain('# 故事前提')
       expect(JSON.stringify(update)).not.toContain('# 世界观')

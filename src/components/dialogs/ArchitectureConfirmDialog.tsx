@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Wand2, AlertCircle, AlertTriangle, Check, ChevronDown, ChevronRight } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { guardArchitectureGeneration, guardCharacterRegeneration } from '../../services/workflow-guards'
@@ -71,25 +71,26 @@ export default function ArchitectureConfirmDialog({
   const [synopsisTo, setSynopsisTo] = useState('')
 
   // 每次弹窗打开时重置选中状态；续批入口会预填起止章并勾选情节大纲
-  const resetChecked = () => {
+  const resetChecked = useCallback(() => {
     const defaults = createDefaultArchitectureSelection(archStatus, initialSelectedSteps)
     if (initialSynopsisRange) {
       defaults.synopsis = true
       setSynopsisFrom(String(initialSynopsisRange.from))
       setSynopsisTo(String(initialSynopsisRange.to))
     } else {
-      setSynopsisFrom('')
-      setSynopsisTo('')
+      const total = Number(currentProject?.novelConfig.totalChapters) || 0
+      setSynopsisFrom(total > SCOPE_WARNING_THRESHOLD ? '1' : '')
+      setSynopsisTo(total > SCOPE_WARNING_THRESHOLD ? String(SCOPE_WARNING_THRESHOLD) : '')
     }
     setChecked(defaults)
-  }
+  }, [archStatus, currentProject?.novelConfig.totalChapters, initialSelectedSteps, initialSynopsisRange])
 
   useEffect(() => {
     if (isOpen && !wasOpen.current) {
       resetChecked()
     }
     wasOpen.current = isOpen
-  }, [archStatus, initialSelectedSteps, isOpen, initialSynopsisRange])
+  }, [isOpen, resetChecked])
 
   const [isConfirming, setIsConfirming] = useState(false)
   const [guardError, setGuardError] = useState<string | null>(null)
@@ -107,17 +108,20 @@ export default function ArchitectureConfirmDialog({
   const selectedSteps = (Object.keys(checked) as ArchStepKey[]).filter(k => checked[k])
   const noneSelected = selectedSteps.length === 0
 
-  // 情节大纲本次生成范围：空值回落到 1 / totalChapters（全书）。
+  // 情节大纲本次生成范围：大项目默认 1–20；非空非法值不得回落为全书。
   const totalChapters = Number(config.totalChapters) > 0 ? Number(config.totalChapters) : 0
   const resolveSynopsisRange = (): { ok: true; range?: { from: number; to: number } } | { ok: false } => {
     if (!checked.synopsis || totalChapters <= 0) return { ok: true }
-    const parseBound = (value: string): number | null => {
-      if (!value.trim()) return null
+    const parseBound = (value: string): { empty: true } | { empty: false; value: number } | null => {
+      if (!value.trim()) return { empty: true }
       const parsed = Number(value)
-      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+      return Number.isSafeInteger(parsed) && parsed > 0 ? { empty: false, value: parsed } : null
     }
-    const from = parseBound(synopsisFrom) ?? 1
-    const to = parseBound(synopsisTo) ?? totalChapters
+    const parsedFrom = parseBound(synopsisFrom)
+    const parsedTo = parseBound(synopsisTo)
+    if (!parsedFrom || !parsedTo) return { ok: false }
+    const from = parsedFrom.empty ? 1 : parsedFrom.value
+    const to = parsedTo.empty ? totalChapters : parsedTo.value
     if (from > totalChapters || to > totalChapters || from > to) return { ok: false }
     return from === 1 && to === totalChapters
       ? { ok: true }
@@ -280,8 +284,8 @@ export default function ArchitectureConfirmDialog({
             })}
           </div>
 
-          {/* 情节大纲 —— 本次生成范围（警示 + 起止章输入；仅总章数较多时提示分批） */}
-          {checked.synopsis && totalChapters > SCOPE_WARNING_THRESHOLD && (
+          {/* 情节大纲 —— 所有项目都可选范围；大项目默认首批 1–20。 */}
+          {checked.synopsis && totalChapters > 0 && (
             <div
               className="rounded-lg p-3 space-y-2"
               style={{ backgroundColor: 'var(--color-panel)', border: '1px solid var(--color-border)' }}
@@ -295,10 +299,15 @@ export default function ArchitectureConfirmDialog({
                 className="text-xs leading-relaxed m-0"
                 style={{ color: 'var(--color-text-secondary)' }}
               >
-                  {text(
-                    `全书共 ${totalChapters} 章。若一口气生成全部章节大纲，等待时间会明显变长，且单次输出过长容易被模型输出上限截断、导致大纲质量下降。建议分块：本次只填写一个较小的范围（如第 1–20 章）；本批完成后，可在架构页点击「续写剩余章节」或再次打开本框生成下一批（第 21 章起），已生成的部分不会被覆盖。`,
-                    `The book spans ${totalChapters} chapters. Generating the full outline in one pass takes much longer, and an oversized single output tends to be cut off by the model output limit and lose quality. Generate it in blocks: fill a smaller range for this batch (e.g. chapters 1-20); after the batch completes, use “Continue remaining chapters” on the architecture page or reopen this dialog for the next batch (from chapter 21) — confirmed parts are never overwritten.`,
-                  )}
+                  {totalChapters > SCOPE_WARNING_THRESHOLD
+                    ? text(
+                        `全书共 ${totalChapters} 章，已默认本次生成第 1–20 章；完成后可从下一章续批，已确认部分不会被覆盖。`,
+                        `The book spans ${totalChapters} chapters, so this batch defaults to chapters 1-20. Continue from the next chapter afterward; confirmed content will not be overwritten.`,
+                      )
+                    : text(
+                        `全书共 ${totalChapters} 章；可按需缩小本次生成范围。`,
+                        `The book spans ${totalChapters} chapters; narrow this batch if needed.`,
+                      )}
                 </p>
                 <div className="flex items-center gap-1.5 text-xs">
                   <span style={{ color: 'var(--color-text-muted)' }}>{text('第', 'From ch.')}</span>
