@@ -351,19 +351,26 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           if (!Array.isArray(decoded)) throw new TypeError('decoder did not return an array')
         } catch (error) {
           const diagnostic = structuredContractDiagnostic(error)
-          if (diagnostic && items.length > 1) {
+          // JSON 无法解码通常意味着输出被模型输出上限截断（截断不总是携带
+          // 可提取的结构化诊断）。只要批次含多章就拆半重试：让每一半在更小
+          // 的输出预算内完整生成；拆到单章仍未通过时，再回退到紧凑单项重建。
+          if (items.length > 1) {
             const midpoint = Math.floor(items.length / 2)
             receipt.splitCount += 1
             await executeBatch(items.slice(0, midpoint))
             await executeBatch(items.slice(midpoint))
             return
           }
-          if (diagnostic && canUseCompactFallback) {
-            await runCompactFallback({
-              code: diagnostic.code,
-              path: diagnostic.path,
-              field: diagnostic.field,
-            })
+          if (canUseCompactFallback) {
+            await runCompactFallback(
+              diagnostic
+                ? {
+                    code: diagnostic.code,
+                    path: diagnostic.path,
+                    field: diagnostic.field,
+                  }
+                : undefined,
+            )
             return
           }
           throw new ExecutionFailure({
@@ -371,13 +378,13 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
             reason: diagnostic
               ? 'invalid_item'
               : syntaxRepairApplied
-              ? 'malformed_output'
-              : 'invalid_item',
+                ? 'malformed_output'
+                : 'invalid_item',
             message: diagnostic
               ? diagnostic.message
               : syntaxRepairApplied
-              ? '结构化输出经一次语法修复后仍无法按合同解码'
-              : '结构化输出无法按合同解码',
+                ? '结构化输出经一次语法修复后仍无法按合同解码'
+                : '结构化输出无法按合同解码',
             ...(diagnostic
               ? {
                   diagnostic: {
