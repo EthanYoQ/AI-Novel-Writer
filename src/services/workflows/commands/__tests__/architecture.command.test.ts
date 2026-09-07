@@ -544,7 +544,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const englishCallbacks = callbacks
     // synopsis 批次契约：完成输出必须携带英文批次进度行（1–20/20）
     const enProgressMark = '[Outline batch progress: covered chapters 1-20 of 20]'
-    const outlineOutput = `Chapters 1-20: ${modelOutput}`
+    const outlineOutput = `Chapters 1-20: Shared threshold\n${modelOutput}`
     let englishCallCount = 0
     useLLMStore.setState({
       defaultModelId: 'model-1',

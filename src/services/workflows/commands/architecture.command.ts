@@ -196,7 +196,11 @@ function stripPlotOutlineProgressLine(text: string): string {
 interface PlotOutlineTitleRange {
   from: number
   to: number
+  index: number
+  headingLineEnd: number
 }
+
+class NonRecoverablePlotOutlineError extends Error {}
 
 const CHINESE_CHAPTER_DIGITS: Readonly<Record<string, number>> = Object.freeze({
   零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
@@ -237,10 +241,19 @@ function findPlotOutlineTitleRanges(text: string): PlotOutlineTitleRange[] {
     for (const match of text.matchAll(regex)) {
       const from = parseChapterNumberToken(match[1]!)
       const to = parseChapterNumberToken(match[2] ?? match[1]!)
-      if (from !== null && to !== null) ranges.push({ from, to })
+      if (from !== null && to !== null) {
+        const index = match.index ?? 0
+        const lineEnd = text.indexOf('\n', index)
+        ranges.push({
+          from,
+          to,
+          index,
+          headingLineEnd: lineEnd < 0 ? text.length : lineEnd,
+        })
+      }
     }
   }
-  return ranges
+  return ranges.sort((left, right) => left.index - right.index)
 }
 
 function assertPlotOutlineTitleCoverage(
@@ -258,7 +271,9 @@ function assertPlotOutlineTitleCoverage(
   }
   const covered = new Set<number>()
   const invalid: string[] = []
-  for (const range of findPlotOutlineTitleRanges(merged)) {
+  const entries = findPlotOutlineTitleRanges(merged)
+  let nextExpectedChapter = from
+  for (const [index, range] of entries.entries()) {
     const key = `${range.from}:${range.to}`
     if (range.to < from) {
       const remaining = seedPriorCounts.get(key) ?? 0
@@ -270,6 +285,13 @@ function assertPlotOutlineTitleCoverage(
       invalid.push(`${range.from}-${range.to}`)
       continue
     }
+    if (range.from !== nextExpectedChapter) invalid.push(`${range.from}-${range.to}`)
+    nextExpectedChapter = Math.max(nextExpectedChapter, range.to + 1)
+    const nextHeadingIndex = entries[index + 1]?.index ?? merged.length
+    const entryBody = stripPlotOutlineProgressLine(
+      merged.slice(Math.min(range.headingLineEnd + 1, merged.length), nextHeadingIndex),
+    ).trim()
+    if (!entryBody) invalid.push(`${range.from}-${range.to}:empty`)
     for (let chapter = range.from; chapter <= range.to; chapter += 1) {
       if (covered.has(chapter)) invalid.push(String(chapter))
       covered.add(chapter)
@@ -280,10 +302,17 @@ function assertPlotOutlineTitleCoverage(
     if (!covered.has(chapter)) missing.push(chapter)
   }
   if (invalid.length > 0 || missing.length > 0) {
-    throw new Error(uiText(
-      `大纲正文的章节标题未精确覆盖本批第 ${from}–${to} 章（缺失 ${missing.length} 章，重复或越界 ${invalid.length} 处），结果未按完成保存。`,
-      `The outline headings do not exactly cover batch chapters ${from}-${to} (${missing.length} missing; ${invalid.length} duplicate or out of range), so the result was not saved as complete.`,
-    ))
+    const message = uiText(
+      `大纲正文未按顺序提供本批第 ${from}–${to} 章的非空条目（缺失 ${missing.length} 章，空白、重复、乱序或越界 ${invalid.length} 处），结果未按完成保存。`,
+      `The outline body does not provide non-empty entries in order for batch chapters ${from}-${to} (${missing.length} missing; ${invalid.length} empty, duplicate, out of order, or out of range), so the result was not saved as complete.`,
+    )
+    if (invalid.length > 0) {
+      throw new NonRecoverablePlotOutlineError(uiText(
+        `${message} 完整模型输出仍保留在 AI 输出中，但这种结构错误不能自动续写；请修正范围后重新生成。`,
+        `${message} The complete model output remains visible in AI output, but this structural error cannot be continued automatically; correct the range and regenerate.`,
+      ))
+    }
+    throw new Error(message)
   }
 }
 
@@ -349,17 +378,6 @@ function synopsisInputsFingerprint(
   ])
 }
 
-function legacySynopsisFactsFingerprint(expected: ProjectCoreSynopsisExpected): string {
-  return synopsisFactsFingerprint([
-    expected.premise,
-    expected.charactersArch,
-    expected.worldbuilding,
-    String(expected.totalChapters),
-    String(expected.wordsPerChapter),
-    expected.plotStructure,
-  ])
-}
-
 /**
  * 「本批生成范围」指令：批次可任意处于第 from–to 章。当 from > 1 时模型
  * 必须从已有前缀（seed）末尾自然衔接继续写；to < total 时剩余章节只允许
@@ -389,8 +407,8 @@ function synopsisBatchInstruction(
     leading,
     promptLanguageText(
       writingLanguage,
-      `【本次生成范围（重要）】\n本次必须对第 ${from}–${to} 章输出完整详细的情节大纲（全书共 ${totalChapters} 章）。每章或连续章组必须以独立行标题开头，严格使用“第N章：标题”或“第N–M章：标题”格式。`,
-      `[Generation scope for this batch (important)]\nDetail complete plot outline entries for chapters ${from}-${to} of ${totalChapters}. Start every chapter or consecutive chapter group with its own heading, strictly formatted as “Chapter N: Title” or “Chapters N-M: Title”.`,
+      `【本次生成范围（重要）】\n本次必须对第 ${from}–${to} 章输出完整详细的情节大纲（全书共 ${totalChapters} 章）。每章或连续章组必须以独立行标题开头，严格使用“第N章：标题”或“第N–M章：标题”格式，并在标题下一行起写非空正文。`,
+      `[Generation scope for this batch (important)]\nDetail complete plot outline entries for chapters ${from}-${to} of ${totalChapters}. Start every chapter or consecutive chapter group with its own heading, strictly formatted as “Chapter N: Title” or “Chapters N-M: Title”, then write a non-empty body beginning on the next line.`,
     ),
     trailing,
     promptLanguageText(
@@ -1750,7 +1768,6 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       narrativePov: config.narrativePOV || '',
       globalGuidance: config.globalGuidance || '',
     }
-    const legacyFactsFingerprint = legacySynopsisFactsFingerprint(sourceExpected)
     const requestedStepGuidance = ((context.data.stepGuidance as Record<string, string>) || {}).synopsis || ''
 
     const resumeRequested = this.options.resumeSynopsis === true
@@ -1806,10 +1823,19 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       }
       from = partial.synopsis_range.from
       to = partial.synopsis_range.to
-      effectiveStepGuidance = partial.synopsis_step_guidance ?? ''
-      const expectedCheckpointFingerprint = partial.synopsis_step_guidance === undefined
-        ? legacyFactsFingerprint
-        : synopsisInputsFingerprint(sourceExpected, effectiveStepGuidance, { from, to }, template)
+      if (partial.synopsis_step_guidance === undefined) {
+        throw new Error(text(
+          '旧情节大纲检查点缺少完整输入绑定，无法证明其来源事实与当前一致，不能自动续写。检查点与数据库正文均已保留；请从第 1 章重新生成。',
+          'This legacy plot-outline checkpoint lacks complete input binding, so its source facts cannot be proven to match the current project and it cannot be continued automatically. The checkpoint and database prose remain preserved; regenerate from chapter 1.',
+        ))
+      }
+      effectiveStepGuidance = partial.synopsis_step_guidance
+      const expectedCheckpointFingerprint = synopsisInputsFingerprint(
+        sourceExpected,
+        effectiveStepGuidance,
+        { from, to },
+        template,
+      )
       if (checkpointFingerprint !== expectedCheckpointFingerprint) {
         throw new Error(text(
           '项目源事实（故事前提/角色/世界观/总章数等）自上次中断后已变化，旧检查点不能续到新上下文。请从「AI 生成故事架构」重新生成情节大纲。',
@@ -1879,15 +1905,19 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
             'The continuation checkpoint is missing the previous batch range. Regenerate from chapter 1.',
           ))
         }
-        const checkpointStepGuidance = partial.synopsis_step_guidance ?? ''
-        const expectedCheckpointFingerprint = partial.synopsis_step_guidance === undefined
-          ? legacyFactsFingerprint
-          : synopsisInputsFingerprint(
-              sourceExpected,
-              checkpointStepGuidance,
-              partial.synopsis_range,
-              template,
-            )
+        if (partial.synopsis_step_guidance === undefined) {
+          throw new Error(text(
+            '旧情节大纲检查点缺少完整输入绑定，无法证明其来源事实与当前一致，不能自动续批。检查点与数据库正文均已保留；请从第 1 章重新生成。',
+            'This legacy plot-outline checkpoint lacks complete input binding, so its source facts cannot be proven to match the current project and it cannot be extended automatically. The checkpoint and database prose remain preserved; regenerate from chapter 1.',
+          ))
+        }
+        const checkpointStepGuidance = partial.synopsis_step_guidance
+        const expectedCheckpointFingerprint = synopsisInputsFingerprint(
+          sourceExpected,
+          checkpointStepGuidance,
+          partial.synopsis_range,
+          template,
+        )
         if (checkpointFingerprint !== expectedCheckpointFingerprint) {
           throw new Error(text(
             '项目源事实自上次生成后已变化，既有大纲不能与新的源事实拼接。请从「AI 生成故事架构」从第 1 章重新生成。',
@@ -2027,6 +2057,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       assertPlotOutlineBatchComplete(merged, from, to, totalChapters, text)
       confirmedBody = stripPlotOutlineProgressLine(merged)
     } catch (error) {
+      if (error instanceof NonRecoverablePlotOutlineError) throw error
       await persistAndRaiseResume(stripPlotOutlineProgressLine(merged), error as Error)
     }
     if (!confirmedBody) {
@@ -2057,6 +2088,15 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       text('保存情节大纲批次检查点', 'Save the plot-outline batch checkpoint'),
       text('保存情节大纲批次检查点失败', 'Failed to save the plot-outline batch checkpoint.'),
     )
+    if (context.cancelled) {
+      await this.rollbackSynopsisCheckpoint(
+        expectedProjectPath,
+        projectSession,
+        context,
+        previousPartial,
+        partial,
+      )
+    }
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
 
@@ -2107,6 +2147,42 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     return confirmedBody
   }
 
+  private async rollbackSynopsisCheckpoint(
+    expectedProjectPath: string,
+    projectSession: ProjectSessionContext,
+    context: WorkflowContext,
+    previousPartial: PartialArchData,
+    writtenPartial: PartialArchData,
+  ): Promise<void> {
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
+    const readResult = await ipc.invokeWithProjectSession(
+      projectSession,
+      'fs:read-json',
+      `${expectedProjectPath}/.vela/partial_arch.json`,
+      expectedProjectPath,
+    )
+    if (!readResult.success || !readResult.data) {
+      throw new Error(text(
+        '无法回读当前架构检查点',
+        'The current architecture checkpoint could not be read back.',
+      ))
+    }
+    const currentPartial = readResult.data as PartialArchData
+    if (!sameSynopsisCheckpoint(currentPartial, writtenPartial)) {
+      context.data.partial = currentPartial
+      return
+    }
+    const restored = restoreSynopsisCheckpoint(currentPartial, previousPartial)
+    await savePartialData(
+      expectedProjectPath,
+      restored,
+      projectSession,
+      text('恢复旧情节大纲检查点', 'Restore the previous plot-outline checkpoint'),
+      text('恢复旧情节大纲检查点失败', 'Failed to restore the previous plot-outline checkpoint.'),
+    )
+    context.data.partial = restored
+  }
+
   private async commitSynopsisWithCheckpointRollback(
     synopsis: string,
     expectedProjectPath: string,
@@ -2133,32 +2209,13 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
           )
         : result.error || fallbackError
       try {
-        const readResult = await ipc.invokeWithProjectSession(
-          projectSession,
-          'fs:read-json',
-          `${expectedProjectPath}/.vela/partial_arch.json`,
+        await this.rollbackSynopsisCheckpoint(
           expectedProjectPath,
+          projectSession,
+          context,
+          previousPartial,
+          writtenPartial,
         )
-        if (!readResult.success || !readResult.data) {
-          throw new Error(text(
-            '无法回读当前架构检查点',
-            'The current architecture checkpoint could not be read back.',
-          ))
-        }
-        const currentPartial = readResult.data as PartialArchData
-        if (sameSynopsisCheckpoint(currentPartial, writtenPartial)) {
-          const restored = restoreSynopsisCheckpoint(currentPartial, previousPartial)
-          await savePartialData(
-            expectedProjectPath,
-            restored,
-            projectSession,
-            text('恢复旧情节大纲检查点', 'Restore the previous plot-outline checkpoint'),
-            text('恢复旧情节大纲检查点失败', 'Failed to restore the previous plot-outline checkpoint.'),
-          )
-          context.data.partial = restored
-        } else {
-          context.data.partial = currentPartial
-        }
       } catch (rollbackError) {
         const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
         throw new Error(text(
@@ -2219,6 +2276,15 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       text('保存中断的情节大纲检查点', 'Save the interrupted plot-outline checkpoint'),
       text('保存中断的情节大纲检查点失败', 'Failed to save the interrupted plot-outline checkpoint.'),
     )
+    if (context.cancelled) {
+      await this.rollbackSynopsisCheckpoint(
+        expectedProjectPath,
+        projectSession,
+        context,
+        previousPartial,
+        partial,
+      )
+    }
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
 
