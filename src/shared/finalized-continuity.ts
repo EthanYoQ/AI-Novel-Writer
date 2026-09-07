@@ -20,6 +20,17 @@ export interface FinalizedSourceSnapshot {
   content: string
 }
 
+export type FinalizedSourceReadResult =
+  | { status: 'valid'; snapshot: FinalizedSourceSnapshot }
+  | {
+      status: 'legacy'
+      draftId: number
+      chapterNumber: number
+      chapterTitle: string
+      content: string
+    }
+  | { status: 'invalid' }
+
 export interface FinalizedContinuityFact {
   category: FinalizedContinuityFactCategory
   entities: string[]

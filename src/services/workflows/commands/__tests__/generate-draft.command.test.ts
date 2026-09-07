@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import { useProjectStore } from '../../../../stores/project-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
@@ -282,6 +283,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       }>
     }>
     continuitySourceContents?: Record<number, string>
+    invalidContinuitySourceIds?: number[]
     narrativeThreads?: NarrativeThreadView[]
     previousFinalizedContent?: string
     selectedCandidateDrafts?: Array<{
@@ -320,8 +322,36 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       if (channel === 'db:continuity-list-before') return options.continuity ?? []
       if (channel === 'db:continuity-read-source') {
         const draftId = Number(args[0])
+        if (options.invalidContinuitySourceIds?.includes(draftId)) return { status: 'invalid' }
         const content = options.continuitySourceContents?.[draftId]
-        return content ? { content } : null
+        if (content) {
+          const projection = options.continuity?.find(item => item.draftId === draftId)
+          return {
+            status: 'valid',
+            snapshot: {
+              source: {
+                draftId,
+                finalizationId: `finalization-${draftId}`,
+                chapterNumber: projection?.chapterNumber ?? 1,
+                contentHash: createHash('sha256').update(content, 'utf8').digest('hex'),
+              },
+              chapterTitle: projection?.chapterTitle ?? '',
+              content,
+            },
+          }
+        }
+        const projection = options.continuity?.find(item => item.draftId === draftId)
+        if (!projection) return { status: 'invalid' }
+        return {
+          status: 'legacy',
+          draftId,
+          chapterNumber: projection.chapterNumber,
+          chapterTitle: projection.chapterTitle,
+          content: options.previousFinalizedContent
+            && projection.chapterNumber === (options.chapterNumber ?? 1) - 1
+            ? options.previousFinalizedContent
+            : projection.facts?.map(fact => fact.evidence).join('\n\n') ?? '',
+        }
       }
       if (channel === 'db:narrative-thread-list-relevant') return options.narrativeThreads ?? []
       if (channel === 'db:draft-get-finalized') {
@@ -766,6 +796,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         name: '林岚',
         role: 'protagonist',
         personality: 'AUTHOR_PROFILE_SENTINEL',
+        relationships: [{ target: '周砚', relation: '父子' }],
+        legacyRelationshipNotes: '旧纸档记载两人曾是师徒',
         currentState: {
           location: '作者指定的码头',
           recentEvents: 'OLD_CURRENT_STATE_SENTINEL',
@@ -801,6 +833,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       expect(prompt).toContain(authorTask)
       expect(prompt).toContain('AUTHOR_PROFILE_SENTINEL')
       expect(prompt).toContain('location@chapter1: 作者指定的码头')
+      expect(prompt).toContain('relationship: 周砚 (父子)')
+      expect(prompt).toContain('relationship（legacy 来源未知）: 旧纸档记载两人曾是师徒')
       expect(prompt).toContain('林岚扶住墙')
       expect(prompt).toContain('我不会交给你')
       expect(prompt).not.toContain('LEGACY_CHARACTERS_ARCH_SENTINEL')
@@ -850,6 +884,42 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompt).not.toContain('STALE_STATEMENT_SENTINEL')
   })
 
+  it('does not fall back to an ordinary draft body after finalized-source validation fails', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 3,
+      wordsTarget: 500,
+      characters: ['林岚'],
+      invalidContinuitySourceIds: [51],
+      continuity: [{
+        draftId: 51,
+        chapterNumber: 1,
+        chapterTitle: '损坏收据',
+        chapterNotes: '',
+        facts: [{
+          category: 'character-state',
+          entities: ['林岚'],
+          statement: 'UNVERIFIED_STATEMENT_SENTINEL',
+          sourceChapter: 1,
+          evidence: 'UNVERIFIED_BODY_SENTINEL',
+        }],
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).not.toContain('UNVERIFIED_BODY_SENTINEL')
+    expect(prompt).not.toContain('UNVERIFIED_STATEMENT_SENTINEL')
+    expect(prompt).toContain('finalized#1:source-invalid')
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 51, projectPath, expect.anything())
+  })
+
   it('marks an injected batch draft ending as unconfirmed continuity context', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
@@ -874,7 +944,53 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompt).toContain('未定稿候选 · 第1章 · draft 31 · v3')
     expect(prompt).toContain('候选正文尚未确认，不得冒充定稿')
     expect(prompt).toContain('批内上一章候选稿结尾哨兵。')
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({
+        sourceDependencies: [{
+          draftId: 31,
+          contentHash: createHash('sha256').update('批内上一章候选稿结尾哨兵。', 'utf8').digest('hex'),
+        }],
+      }),
+      projectPath,
+      expect.anything(),
+    )
     expect(invoke).toHaveBeenCalledWith('db:draft-get-finalized', 1, projectPath, expect.anything())
+  })
+
+  it('persists the exact candidate dependency chain in chapter order', async () => {
+    const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'))
+    const chapterOne = '林岚把钥匙藏进钟楼。'
+    const chapterTwo = '周砚抵达码头，林岚仍未交出钥匙。'
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 3,
+      wordsTarget: 500,
+      selectedCandidateDrafts: [
+        { chapterNumber: 2, draftId: 32, version: 4, content: chapterTwo },
+        { chapterNumber: 1, draftId: 31, version: 2, content: chapterOne },
+      ],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({
+        sourceDependencies: [
+          {
+            draftId: 31,
+            contentHash: createHash('sha256').update(chapterOne, 'utf8').digest('hex'),
+          },
+          {
+            draftId: 32,
+            contentHash: createHash('sha256').update(chapterTwo, 'utf8').digest('hex'),
+          },
+        ],
+      }),
+      projectPath,
+      expect.anything(),
+    )
   })
 
   it('distinguishes author hard constraints from finalized state changes in English', async () => {

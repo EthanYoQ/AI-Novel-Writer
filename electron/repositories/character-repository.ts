@@ -70,6 +70,7 @@ function rowToData(row: Record<string, unknown>): CharacterData {
     // currentState 存在与否由列是否为 NULL 决定（chapter 0 为合法状态）
     const updatedChapter = row.cs_updated_at_chapter as number | null
     if (updatedChapter !== null && updatedChapter !== undefined) {
+        const provenance = parseProvenance(row.cs_provenance)
         data.currentState = {
             location: (row.cs_location as string) || '',
             powerLevel: (row.cs_power_level as string) || '',
@@ -78,7 +79,9 @@ function rowToData(row: Record<string, unknown>): CharacterData {
             keyItems: (row.cs_key_items as string) || '',
             recentEvents: (row.cs_recent_events as string) || '',
             updatedAtChapter: updatedChapter,
-            provenance: parseProvenance(row.cs_provenance),
+            // Pre-provenance ready rosters hashed the state without this key.
+            // Keep an empty migrated column serialized in that legacy shape.
+            ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
         }
     }
 

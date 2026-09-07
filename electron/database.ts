@@ -164,6 +164,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       source TEXT DEFAULT 'write',                -- write/rewrite
       content_id INTEGER NOT NULL,                -- FK -> contents
       word_count INTEGER DEFAULT 0,               -- 字数缓存
+      source_dependencies TEXT NOT NULL DEFAULT '[]', -- ordered draft ids + frozen prose hashes
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE RESTRICT
@@ -585,6 +586,11 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `)
+
+  const draftColumns = db.prepare('PRAGMA table_info(drafts)').all() as Array<{ name: string }>
+  if (!draftColumns.some(column => column.name === 'source_dependencies')) {
+    db.exec("ALTER TABLE drafts ADD COLUMN source_dependencies TEXT NOT NULL DEFAULT '[]'")
+  }
 
   // Legacy candidates did not freeze the draft identity. Keep them marked
   // unknown so update/continue fails closed instead of rebinding to today's draft.

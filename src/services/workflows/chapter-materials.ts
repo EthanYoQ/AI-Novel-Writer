@@ -15,13 +15,13 @@ export interface FinalizedMaterialSource {
   content: string
   evidence: readonly string[]
   includeEnding?: boolean
-  sourceStatus?: 'current' | 'stale' | 'legacy'
+  sourceStatus?: 'current' | 'stale' | 'legacy' | 'invalid'
 }
 
 export interface ChapterMaterialOmission {
   source: 'finalized' | 'candidate' | 'reference'
   chapterNumber?: number
-  reason: 'evidence-not-locatable' | 'no-relevant-passage' | 'budget'
+  reason: 'evidence-not-locatable' | 'source-invalid' | 'no-relevant-passage' | 'budget'
 }
 
 export interface ChapterMaterialBundle {
@@ -86,7 +86,7 @@ export function previousChapterEnding(content: string): string {
     : tail.trim()
 }
 
-function relevantCandidatePassages(content: string, terms: readonly string[]): string[] {
+function relevantPassages(content: string, terms: readonly string[]): string[] {
   const sourceParagraphs = paragraphs(content)
   const normalizedTerms = terms.map(term => term.trim().toLocaleLowerCase()).filter(term => term.length >= 2)
   const windows: Array<[number, number]> = []
@@ -116,31 +116,49 @@ export function assembleChapterMaterials(input: {
   let includedFinalizedFacts = 0
 
   const includeOptional = (block: string, omission: ChapterMaterialOmission) => {
-    if (!block) return
+    if (!block) return false
     if (block.length > remaining) {
       omissions.push({ ...omission, reason: 'budget' })
-      return
+      return false
     }
     optionalBlocks.push(block)
     remaining -= block.length
+    return true
   }
 
   for (const source of [...input.finalized].sort((left, right) => right.chapterNumber - left.chapterNumber)) {
+    if (source.sourceStatus === 'invalid') {
+      omissions.push({
+        source: 'finalized',
+        chapterNumber: source.chapterNumber,
+        reason: 'source-invalid',
+      })
+      continue
+    }
     const passages = adjacentEvidencePassages(source.content, source.evidence, source.includeEnding)
-    includedFinalizedFacts += passages.locatedEvidence
-    if (passages.locatedEvidence < source.evidence.filter(value => value.trim()).length) {
+    const expectedEvidence = source.evidence.filter(value => value.trim()).length
+    let selectedPassages = passages.passages
+    if (passages.locatedEvidence < expectedEvidence) {
       omissions.push({
         source: 'finalized',
         chapterNumber: source.chapterNumber,
         reason: 'evidence-not-locatable',
       })
+      // A stale locator is only an index failure. Recover nearby immutable prose
+      // from the same readable source using the existing deterministic term
+      // matcher, while keeping the warning and never injecting the old statement.
+      selectedPassages = [...new Set([
+        ...selectedPassages,
+        ...relevantPassages(source.content, input.relevanceTerms),
+      ])]
     }
-    if (passages.passages.length === 0) continue
-    includeOptional(promptLanguageText(
+    if (selectedPassages.length === 0) continue
+    const included = includeOptional(promptLanguageText(
       input.writingLanguage,
-      `【定稿原文 · 第${source.chapterNumber}章 · draft ${source.draftId} · 定位索引${source.sourceStatus ?? 'legacy'}】\n${passages.passages.join('\n\n')}`,
-      `[Finalized manuscript · Chapter ${source.chapterNumber} · draft ${source.draftId} · locator ${source.sourceStatus ?? 'legacy'}]\n${passages.passages.join('\n\n')}`,
+      `【定稿原文 · 第${source.chapterNumber}章 · draft ${source.draftId} · 定位索引${source.sourceStatus ?? 'legacy'}】\n${selectedPassages.join('\n\n')}`,
+      `[Finalized manuscript · Chapter ${source.chapterNumber} · draft ${source.draftId} · locator ${source.sourceStatus ?? 'legacy'}]\n${selectedPassages.join('\n\n')}`,
     ), { source: 'finalized', chapterNumber: source.chapterNumber, reason: 'budget' })
+    if (included) includedFinalizedFacts += passages.locatedEvidence
   }
 
   const orderedCandidates = [...input.candidates].sort((left, right) => left.chapterNumber - right.chapterNumber)
@@ -148,7 +166,7 @@ export function assembleChapterMaterials(input: {
   for (const candidate of orderedCandidates) {
     const passages = candidate === latestCandidate
       ? [previousChapterEnding(candidate.content)]
-      : relevantCandidatePassages(candidate.content, input.relevanceTerms)
+      : relevantPassages(candidate.content, input.relevanceTerms)
     if (passages.length === 0) {
       omissions.push({ source: 'candidate', chapterNumber: candidate.chapterNumber, reason: 'no-relevant-passage' })
       continue

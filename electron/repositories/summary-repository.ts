@@ -5,6 +5,7 @@ import type {
   FinalizedContinuityFact,
   FinalizedContinuityProjection,
   FinalizedSourceIdentity,
+  FinalizedSourceReadResult,
   FinalizedSourceSnapshot,
   SaveFinalizedContinuityRequest,
 } from '../../src/shared/finalized-continuity'
@@ -87,6 +88,8 @@ function readFinalizedSourceFromDb(
   if (
     !row
     || row.status !== 'finalized'
+    || !row.finalizationId.trim()
+    || !/^[a-f0-9]{64}$/u.test(row.contentHash)
     || row.content !== row.contentSnapshot
     || sha256(row.contentSnapshot) !== row.contentHash
   ) return null
@@ -259,11 +262,42 @@ export class SummaryRepository {
   }
 
   /** Raw immutable prose is the deterministic fallback when a derived projection is stale. */
-  static readFinalizedSource(draftId: number): FinalizedSourceSnapshot | null {
+  static readFinalizedSource(draftId: number): FinalizedSourceReadResult {
     const db = getProjectDb()
-    if (!db) return null
+    if (!db) return { status: 'invalid' }
     if (!Number.isSafeInteger(draftId) || draftId < 1) throw new Error('定稿来源身份无效')
-    return readFinalizedSourceFromDb(db, draftId)
+    const row = db.prepare(`
+      SELECT drafts.id AS draftId, drafts.chapter_number AS chapterNumber, drafts.status,
+             contents.body AS content,
+             COALESCE(finalization_outbox.chapter_title, blueprints.title, '') AS chapterTitle,
+             finalization_outbox.draft_id AS receiptDraftId,
+             finalization_outbox.finalization_id AS finalizationId
+      FROM drafts
+      JOIN contents ON contents.id = drafts.content_id
+      LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+      LEFT JOIN blueprints ON blueprints.chapter_number = drafts.chapter_number
+      WHERE drafts.id = ?
+    `).get(draftId) as {
+      draftId: number
+      chapterNumber: number
+      status: string
+      content: string
+      chapterTitle: string
+      receiptDraftId: number | null
+      finalizationId: string | null
+    } | undefined
+    if (!row || row.status !== 'finalized') return { status: 'invalid' }
+    if (row.receiptDraftId === null) {
+      return {
+        status: 'legacy',
+        draftId: row.draftId,
+        chapterNumber: row.chapterNumber,
+        chapterTitle: row.chapterTitle,
+        content: row.content,
+      }
+    }
+    const snapshot = readFinalizedSourceFromDb(db, draftId)
+    return snapshot ? { status: 'valid', snapshot } : { status: 'invalid' }
   }
 
   /** 保存角色状态快照 */

@@ -26,6 +26,7 @@ export interface VersionRecord {
   type: string
   word_count: number
   created_at: string
+  dependencies_stale: boolean
 }
 
 /** 获取项目的所有章节 (现在从蓝图获取) */
@@ -52,6 +53,7 @@ export async function getChapterVersions(chapterId: string, expectedProjectPath:
     type: d.status === 'finalized' ? 'final' : (d.status === 'revised' ? 'refined' : 'draft'),
     word_count: (d.wordCount as number) || 0,
     created_at: String(d.createdAt),
+    dependencies_stale: d.dependenciesStale === true,
   }))
 }
 

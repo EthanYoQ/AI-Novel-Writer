@@ -291,6 +291,11 @@ function recoveryChapterSource(chapter: ChapterInfo): RecoveryChapterSource {
   }
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
 export function appendVisibleDraftContinuation(draft: string, continuation: string): string {
   return appendVisibleTextContinuation(draft, continuation, sanitizeDraftText)
@@ -387,15 +392,18 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     // 以最大化 LLM 上下文缓存命中率
     // ==========================================
     const writingStyle = novelConfig.writingStyle?.trim() || ''
-    const {
-      globalGuidance: _globalGuidance,
-      writingStyle: _writingStyle,
-      coreOutline,
-      worldSetting,
-      goldenFinger,
-      protagonistProfile,
-      ...novelConfigFacts
-    } = novelConfig
+    const { coreOutline, worldSetting, goldenFinger, protagonistProfile } = novelConfig
+    const promptOnlyConfigKeys = new Set([
+      'globalGuidance',
+      'writingStyle',
+      'coreOutline',
+      'worldSetting',
+      'goldenFinger',
+      'protagonistProfile',
+    ])
+    const novelConfigFacts = Object.fromEntries(
+      Object.entries(novelConfig).filter(([key]) => !promptOnlyConfigKeys.has(key)),
+    )
     const novelConfigFactsJson = JSON.stringify(novelConfigFacts, null, 2)
     let filteredContext = ''
     try {
@@ -484,6 +492,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         .withShortSummary('')
     }
 
+    const selectedCandidateDrafts = this.selectedCandidateDrafts
+      .filter(candidate => candidate.chapterNumber < this.chapterInfo.chapterNumber)
+      .sort((left, right) => left.chapterNumber - right.chapterNumber)
     const chapterMaterials = assembleChapterMaterials({
       writingLanguage,
       authorProjectFacts: [coreOutline, worldSetting, goldenFinger, protagonistProfile]
@@ -492,9 +503,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       futurePlans: futureBlueprintsStr,
       references: [activeThreadContext, filteredContext].filter(Boolean),
       finalized: finalizedSources,
-      candidates: this.selectedCandidateDrafts.filter(candidate => (
-        candidate.chapterNumber < this.chapterInfo.chapterNumber
-      )),
+      candidates: selectedCandidateDrafts,
       relevanceTerms: [
         this.chapterInfo.title,
         this.chapterInfo.keyEvents,
@@ -650,6 +659,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         source: 'write',
         content: cleanDraftText,
         wordCount: countDraftUnits(cleanDraftText),
+        sourceDependencies: await Promise.all(selectedCandidateDrafts.map(async candidate => ({
+          draftId: candidate.draftId,
+          contentHash: await sha256Hex(candidate.content),
+        }))),
       }, expectedProjectPath)
       if (!createResult.success || !createResult.id) {
         throw new Error(createResult.error || uiText('章节草稿保存失败', 'Failed to save the chapter draft.'))
@@ -1072,6 +1085,19 @@ ${visibleTail}`,
           card.arc && `arc: ${card.arc}`,
           card.notes && `notes: ${card.notes}`,
         ].filter(Boolean)
+        for (const relationship of card.relationships ?? []) {
+          const target = relationship.target?.trim()
+          const relation = relationship.relation?.trim()
+          if (target && relation) facts.push(`relationship: ${target} (${relation})`)
+        }
+        const legacyRelationshipNotes = card.legacyRelationshipNotes?.trim()
+        if (legacyRelationshipNotes) {
+          facts.push(promptLanguageText(
+            writingLanguage,
+            `relationship（legacy 来源未知）: ${legacyRelationshipNotes}`,
+            `relationship (legacy provenance unknown): ${legacyRelationshipNotes}`,
+          ))
+        }
         for (const field of CHARACTER_STATE_TEXT_FIELDS) {
           const provenance = card.currentState?.provenance?.[field]
           const value = card.currentState?.[field]?.trim()
@@ -1123,16 +1149,17 @@ ${visibleTail}`,
     const sources: FinalizedMaterialSource[] = []
     for (const { projection, evidence } of selected) {
       try {
-        const frozenSource = await ipc.invokeWithProjectSession(
+        const sourceRead = await ipc.invokeWithProjectSession(
           projectSession,
           'db:continuity-read-source',
           projection.draftId,
           projectPath,
         )
-        const fallback = frozenSource
-          ? null
-          : await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', projection.draftId, projectPath)
-        const content = frozenSource?.content ?? fallback?.content ?? ''
+        const content = sourceRead.status === 'valid'
+          ? sourceRead.snapshot.content
+          : sourceRead.status === 'legacy'
+            ? sourceRead.content
+            : ''
         sources.push({
           chapterNumber: projection.chapterNumber,
           draftId: projection.draftId,
@@ -1140,7 +1167,11 @@ ${visibleTail}`,
           content,
           evidence,
           includeEnding: projection.chapterNumber === currentChapter - 1,
-          sourceStatus: projection.sourceStatus ?? 'legacy',
+          sourceStatus: sourceRead.status === 'invalid'
+            ? 'invalid'
+            : sourceRead.status === 'legacy'
+              ? 'legacy'
+              : projection.sourceStatus ?? 'current',
         })
       } catch {
         sources.push({

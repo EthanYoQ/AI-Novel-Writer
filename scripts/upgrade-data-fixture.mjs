@@ -1029,6 +1029,8 @@ function validateDatabase(projectRoot, migratedDraftUnitCounts) {
     if (migratedDraftUnitCounts) {
       const characterColumns = db.prepare('PRAGMA table_info(characters)').all().map(column => column.name)
       assert(characterColumns.includes('cs_provenance'), 'characters.cs_provenance was not added during upgrade')
+      const draftColumns = db.prepare('PRAGMA table_info(drafts)').all().map(column => column.name)
+      assert(draftColumns.includes('source_dependencies'), 'drafts.source_dependencies was not added during upgrade')
       const summaryColumns = db.prepare('PRAGMA table_info(summary_snapshots)').all().map(column => column.name)
       for (const column of ['source_finalization_id', 'source_content_hash', 'projection_generation']) {
         assert(summaryColumns.includes(column), `summary_snapshots.${column} was not added during upgrade`)
@@ -1040,6 +1042,12 @@ function validateDatabase(projectRoot, migratedDraftUnitCounts) {
           .sort((left, right) => left.name.localeCompare(right.name))
           .map(character => ({ name: character.name, cs_provenance: '{}' })),
         'legacy character state provenance was not preserved as unknown during upgrade',
+      )
+      assert.deepEqual(
+        db.prepare('SELECT id, source_dependencies FROM drafts ORDER BY id').all()
+          .map(row => ({ id: row.id, source_dependencies: row.source_dependencies })),
+        DRAFT_ROWS.map(draft => ({ id: draft.id, source_dependencies: '[]' })),
+        'legacy drafts must remain source-unknown after dependency migration',
       )
       assert.deepEqual(
         normalizeRow(

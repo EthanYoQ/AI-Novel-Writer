@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import { useEditorStore } from '../../../../stores/editor-store'
@@ -17,6 +18,7 @@ import { runPostProcessPipeline } from '../../workflow-utils'
 import { createBoundedCompletionError } from '../../bounded-completion'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 import type { CharacterRosterEntry } from '../../../../shared/character-roster'
+import type { FinalizedSourceIdentity } from '../../../../shared/finalized-continuity'
 
 class RefineDraftCommand extends RuntimeRefineDraftCommand {
   constructor(...args: ConstructorParameters<typeof RuntimeRefineDraftCommand>) {
@@ -122,6 +124,19 @@ function chapterInfo() {
     purpose: '建立冲突',
     keyEvents: '事件',
     characters: [],
+  }
+}
+
+function finalizedSource(
+  draftId: number,
+  chapterNumber: number,
+  content: string,
+): FinalizedSourceIdentity {
+  return {
+    draftId,
+    finalizationId: `finalization-${draftId}`,
+    chapterNumber,
+    contentHash: createHash('sha256').update(content, 'utf8').digest('hex'),
   }
 }
 
@@ -411,6 +426,9 @@ describe('workflow mutation failure boundaries', () => {
       '作者正文',
       testPostProcessGeneration(),
       41,
+      [],
+      'zh-CN',
+      finalizedSource(41, 1, '作者正文'),
     ).find(candidate => candidate.key === 'chapter_notes')
 
     const stepCallbacks = callbacks()
@@ -422,6 +440,7 @@ describe('workflow mutation failure boundaries', () => {
         chapterNumber: 1,
         chapterNotes: '作者原稿的连续性事实',
         facts: [],
+        source: finalizedSource(41, 1, '作者正文'),
       },
       PROJECT_PATH,
       expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
@@ -822,8 +841,10 @@ describe('workflow mutation failure boundaries', () => {
       })),
     }
     const workflowContext = { ...context(), runId: 'field-semantics' }
+    const sourceReceipt = finalizedSource(42, 2, '正文')
     const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 2, '第二章', '正文', generation,
+      { path: PROJECT_PATH }, 2, '第二章', '正文', generation, 42, [], 'zh-CN',
+      sourceReceipt,
     ).find(candidate => candidate.key === 'character_cards')
 
     await expect(step!.executor(callbacks(), workflowContext)).resolves.toBeUndefined()
@@ -839,6 +860,10 @@ describe('workflow mutation failure boundaries', () => {
         keyItems: '',
         recentEvents: '发现密信',
         updatedAtChapter: 2,
+        provenance: {
+          location: { kind: 'derived', source: sourceReceipt },
+          keyItems: { kind: 'derived', source: sourceReceipt },
+        },
       },
     })])
   })
@@ -866,12 +891,17 @@ describe('workflow mutation failure boundaries', () => {
         return 'request-1'
       }),
     })
+    const sourceReceipt = finalizedSource(41, 1, '正文')
     const step = buildFinalizePostProcessSteps(
       { path: PROJECT_PATH },
       1,
       '第一章',
       '正文',
       testPostProcessGeneration(),
+      41,
+      [],
+      'zh-CN',
+      sourceReceipt,
     ).find(candidate => candidate.key === 'character_cards')
     expect(step).toBeDefined()
     const stepCallbacks = callbacks()
@@ -883,6 +913,12 @@ describe('workflow mutation failure boundaries', () => {
       'db:character-roster-read',
       'db:character-roster-commit',
     ])
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({ source: sourceReceipt }),
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+    )
   })
 
   it('reuses generated character state when an executor retry only repairs persistence', async () => {
@@ -904,8 +940,10 @@ describe('workflow mutation failure boundaries', () => {
     const complete = vi.fn(async () => JSON.stringify({
       updates: [{ name: '林岚', currentState: { location: '车站' } }],
     }))
+    const sourceReceipt = finalizedSource(41, 1, '正文')
     const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete },
+      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete }, 41, [], 'zh-CN',
+      sourceReceipt,
     ).find(candidate => candidate.key === 'character_cards')!
 
     await expect(step.executor(callbacks(), context())).rejects.toThrow('transient roster failure')
@@ -913,6 +951,12 @@ describe('workflow mutation failure boundaries', () => {
 
     expect(complete).toHaveBeenCalledOnce()
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(2)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({ source: sourceReceipt }),
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+    )
   })
 
   it('regenerates character state after malformed model output fails parsing', async () => {
@@ -932,8 +976,10 @@ describe('workflow mutation failure boundaries', () => {
       .mockResolvedValueOnce(JSON.stringify({
         updates: [{ name: '林岚', currentState: { location: '车站' } }],
       }))
+    const sourceReceipt = finalizedSource(41, 1, '正文')
     const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete },
+      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete }, 41, [], 'zh-CN',
+      sourceReceipt,
     ).find(candidate => candidate.key === 'character_cards')!
 
     await expect(step.executor(callbacks(), context())).rejects.toThrow('updates 必须是列表')
@@ -941,6 +987,12 @@ describe('workflow mutation failure boundaries', () => {
 
     expect(complete).toHaveBeenCalledTimes(2)
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({ source: sourceReceipt }),
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+    )
   })
 
   it('does not persist post-process output when the stream omits terminal evidence', async () => {

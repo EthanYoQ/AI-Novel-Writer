@@ -528,7 +528,10 @@ export function createRepairFinalizeWorkflow(
             draftMeta.id,
             projectPath,
           )
-          if (!finalizedSource || finalizedSource.content !== full.content) throw new Error(text(
+          if (
+            finalizedSource.status !== 'valid'
+            || finalizedSource.snapshot.content !== full.content
+          ) throw new Error(text(
             '定稿正文来源收据已失效',
             'The finalized manuscript source receipt is stale.',
           ))
@@ -550,7 +553,7 @@ export function createRepairFinalizeWorkflow(
             chapterTitle,
             draftContent: full.content,
             draftId: draftMeta.id,
-            finalizedSource: finalizedSource.source,
+            finalizedSource: finalizedSource.snapshot.source,
             sourceLabel: text(
               `第${chapterNumber}章定稿`,
               `Chapter ${chapterNumber} finalized manuscript`,

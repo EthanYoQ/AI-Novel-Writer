@@ -4,8 +4,11 @@
  * 草稿是创作栈的主线。status='finalized' 代表定稿。
  * 正文统一存储在 contents 表中，drafts 只持有 content_id 外键。
  */
+import { createHash } from 'node:crypto'
+import type BetterSqlite3 from 'better-sqlite3'
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
+import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 
 const DRAFT_META_SELECT = `
   SELECT drafts.*, finalization_outbox.chapter_title
@@ -24,6 +27,8 @@ export interface DraftMeta {
     source: string
     contentId: number
     wordCount: number
+    sourceDependencies: DraftSourceDependency[]
+    dependenciesStale: boolean
     createdAt: string
     updatedAt: string
 }
@@ -33,8 +38,76 @@ export interface DraftFull extends DraftMeta {
     content: string
 }
 
+function sha256(value: string): string {
+    return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function parseDependencies(value: unknown): { dependencies: DraftSourceDependency[]; valid: boolean } {
+    if (typeof value !== 'string') return { dependencies: [], valid: false }
+    try {
+        const parsed = JSON.parse(value) as unknown
+        if (!Array.isArray(parsed) || parsed.length > 500) return { dependencies: [], valid: false }
+        const dependencies: DraftSourceDependency[] = []
+        const seen = new Set<number>()
+        for (const raw of parsed) {
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { dependencies: [], valid: false }
+            const dependency = raw as Record<string, unknown>
+            if (
+                !Number.isSafeInteger(dependency.draftId)
+                || (dependency.draftId as number) < 1
+                || typeof dependency.contentHash !== 'string'
+                || !/^[a-f0-9]{64}$/u.test(dependency.contentHash)
+                || seen.has(dependency.draftId as number)
+            ) return { dependencies: [], valid: false }
+            seen.add(dependency.draftId as number)
+            dependencies.push({
+                draftId: dependency.draftId as number,
+                contentHash: dependency.contentHash,
+            })
+        }
+        return { dependencies, valid: true }
+    } catch {
+        return { dependencies: [], valid: false }
+    }
+}
+
+function dependencyHashes(
+    db: BetterSqlite3.Database,
+    dependencyIds: readonly number[],
+): Map<number, string> {
+    const hashes = new Map<number, string>()
+    const uniqueIds = [...new Set(dependencyIds)]
+    for (let offset = 0; offset < uniqueIds.length; offset += 500) {
+        const chunk = uniqueIds.slice(offset, offset + 500)
+        if (chunk.length === 0) continue
+        const placeholders = chunk.map(() => '?').join(', ')
+        const rows = db.prepare(`
+          SELECT drafts.id, contents.body
+          FROM drafts
+          JOIN contents ON contents.id = drafts.content_id
+          WHERE drafts.id IN (${placeholders})
+        `).all(...chunk) as Array<{ id: number; body: string }>
+        for (const row of rows) hashes.set(row.id, sha256(row.body))
+    }
+    return hashes
+}
+
+function rowsToMeta(db: BetterSqlite3.Database, rows: Record<string, unknown>[]): DraftMeta[] {
+    const parsed = rows.map(row => ({ row, ...parseDependencies(row.source_dependencies) }))
+    const hashes = dependencyHashes(
+        db,
+        parsed.flatMap(item => item.dependencies.map(dependency => dependency.draftId)),
+    )
+    return parsed.map(({ row, dependencies, valid }) => rowToMeta(row, dependencies, valid, hashes))
+}
+
 /** DB 行 → DraftMeta */
-function rowToMeta(row: Record<string, unknown>): DraftMeta {
+function rowToMeta(
+    row: Record<string, unknown>,
+    sourceDependencies: DraftSourceDependency[],
+    dependenciesValid: boolean,
+    hashes: ReadonlyMap<number, string>,
+): DraftMeta {
     const chapterTitle = typeof row.chapter_title === 'string' && row.chapter_title.trim()
         ? row.chapter_title
         : undefined
@@ -47,6 +120,10 @@ function rowToMeta(row: Record<string, unknown>): DraftMeta {
         source: row.source as string,
         contentId: row.content_id as number,
         wordCount: row.word_count as number,
+        sourceDependencies,
+        dependenciesStale: !dependenciesValid || sourceDependencies.some(dependency => (
+            hashes.get(dependency.draftId) !== dependency.contentHash
+        )),
         createdAt: row.created_at as string,
         updatedAt: row.updated_at as string,
     }
@@ -63,12 +140,24 @@ export class DraftRepository {
         source: 'write' | 'rewrite'
         content: string
         wordCount: number
+        sourceDependencies?: DraftSourceDependency[]
     }): number {
         const db = getProjectDb()
         if (!db) throw new Error('[DraftRepository] 数据库未连接')
 
         // 事务内原子分配 version，避免 getNextVersion + create 竞态
         const tx = db.transaction(() => {
+            const serializedDependencies = JSON.stringify(params.sourceDependencies ?? [])
+            const parsedDependencies = parseDependencies(serializedDependencies)
+            if (!parsedDependencies.valid) throw new Error('草稿来源依赖无效')
+            const hashes = dependencyHashes(
+                db,
+                parsedDependencies.dependencies.map(dependency => dependency.draftId),
+            )
+            if (parsedDependencies.dependencies.some(dependency => (
+                hashes.get(dependency.draftId) !== dependency.contentHash
+            ))) throw new Error('草稿来源依赖已变化，已拒绝保存')
+
             const row = db.prepare(`
         SELECT MAX(version) as maxVer FROM drafts WHERE chapter_number = ?
       `).get(params.chapterNumber) as { maxVer: number | null }
@@ -76,14 +165,16 @@ export class DraftRepository {
 
             const contentId = ContentRepository.create(params.content)
             const result = db.prepare(`
-        INSERT INTO drafts (chapter_number, version, source, content_id, word_count)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO drafts (
+          chapter_number, version, source, content_id, word_count, source_dependencies
+        ) VALUES (?, ?, ?, ?, ?, ?)
       `).run(
                 params.chapterNumber,
                 version,
                 params.source,
                 contentId,
                 params.wordCount,
+                serializedDependencies,
             )
             return Number(result.lastInsertRowid)
         })
@@ -102,7 +193,7 @@ export class DraftRepository {
       ORDER BY drafts.version ASC
     `).all(chapterNumber) as Record<string, unknown>[]
 
-        return rows.map(rowToMeta)
+        return rowsToMeta(db, rows)
     }
 
     /** 列出全部章节的草稿元数据（按章节、版本升序） */
@@ -115,7 +206,7 @@ export class DraftRepository {
       ORDER BY drafts.chapter_number ASC, drafts.version ASC
     `).all() as Record<string, unknown>[]
 
-        return rows.map(rowToMeta)
+        return rowsToMeta(db, rows)
     }
 
     /** 获取草稿元数据 */
@@ -128,7 +219,7 @@ export class DraftRepository {
           WHERE drafts.id = ?
         `).get(id) as Record<string, unknown> | undefined
 
-        return row ? rowToMeta(row) : null
+        return row ? rowsToMeta(db, [row])[0] ?? null : null
     }
 
     /** 获取草稿完整数据（含正文） */
@@ -151,7 +242,7 @@ export class DraftRepository {
       ORDER BY drafts.version DESC LIMIT 1
     `).get(chapterNumber) as Record<string, unknown> | undefined
 
-        return row ? rowToMeta(row) : null
+        return row ? rowsToMeta(db, [row])[0] ?? null : null
     }
 
     /** 获取章节已定稿的草稿 */
@@ -165,7 +256,7 @@ export class DraftRepository {
       ORDER BY drafts.version DESC LIMIT 1
     `).get(chapterNumber) as Record<string, unknown> | undefined
 
-        return row ? rowToMeta(row) : null
+        return row ? rowsToMeta(db, [row])[0] ?? null : null
     }
 
     /** 获取下一个可用版本号 */

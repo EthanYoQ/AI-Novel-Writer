@@ -84,6 +84,7 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
         type: draft.status === 'finalized' ? 'final' : (draft.status === 'revised' ? 'refined' : 'draft'),
         word_count: draft.wordCount || 0,
         created_at: draft.createdAt,
+        dependencies_stale: draft.dependenciesStale,
       })))
     } catch {
       if (isProjectSessionCurrent(projectSession)) setVersions([])
@@ -273,6 +274,17 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
                       <span className="text-xs text-[var(--color-text)]">
                         v{ver.version}
                       </span>
+                      {ver.dependencies_stale && (
+                        <span
+                          className="text-[0.7rem] px-1.5 py-0.5 rounded bg-amber-500/20 text-[var(--color-warning-text)]"
+                          title={text(
+                            '此草稿依赖的前序候选正文已变化；草稿会保留，但连续性需要复核。',
+                            'A source candidate changed. This draft is preserved but its continuity needs review.',
+                          )}
+                        >
+                          {text('来源已过期', 'Source changed')}
+                        </span>
+                      )}
                       <span className="text-[0.7rem] text-[var(--color-text-muted)]">
                         {text(
                           `${ver.word_count.toLocaleString(locale)} 字`,

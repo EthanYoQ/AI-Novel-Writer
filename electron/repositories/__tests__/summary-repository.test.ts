@@ -219,16 +219,56 @@ describe('finalized continuity projection', () => {
     SummaryRepository.saveFinalizedContinuity(request)
 
     expect(SummaryRepository.readFinalizedSource(draft.draftId)).toEqual({
-      source: request.source,
-      chapterTitle: '码头',
-      content,
+      status: 'valid',
+      snapshot: {
+        source: request.source,
+        chapterTitle: '码头',
+        content,
+      },
     })
     invalidateContinuityProjectionFrom(getProjectDb()!, 1)
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]?.sourceStatus).toBe('stale')
-    expect(SummaryRepository.readFinalizedSource(draft.draftId)?.content).toBe(content)
+    expect(SummaryRepository.readFinalizedSource(draft.draftId)).toMatchObject({
+      status: 'valid',
+      snapshot: { content },
+    })
 
     SummaryRepository.saveFinalizedContinuity(request)
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]?.sourceStatus).toBe('current')
+  })
+
+  it('distinguishes locatable legacy prose from invalid receipt-bound sources', () => {
+    const legacyContentId = getProjectDb()!.prepare(
+      "INSERT INTO contents (body) VALUES ('旧定稿正文仍可定位。')",
+    ).run().lastInsertRowid
+    const legacyDraftId = Number(getProjectDb()!.prepare(`
+      INSERT INTO drafts (chapter_number, version, status, source, content_id, word_count)
+      VALUES (9, 1, 'finalized', 'write', ?, 10)
+    `).run(legacyContentId).lastInsertRowid)
+
+    expect(SummaryRepository.readFinalizedSource(legacyDraftId)).toEqual({
+      status: 'legacy',
+      draftId: legacyDraftId,
+      chapterNumber: 9,
+      chapterTitle: '',
+      content: '旧定稿正文仍可定位。',
+    })
+
+    const receiptContent = '原始定稿正文。'
+    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'continuity-invalid-source-read',
+      chapters: [{
+        chapterNumber: 10,
+        title: '损坏收据',
+        content: receiptContent,
+        wordCount: countDraftUnits(receiptContent),
+      }],
+    })
+    getProjectDb()!.prepare(`
+      UPDATE finalization_outbox SET content_hash = ? WHERE draft_id = ?
+    `).run('0'.repeat(64), receipt.drafts[0]!.draftId)
+    expect(SummaryRepository.readFinalizedSource(receipt.drafts[0]!.draftId))
+      .toEqual({ status: 'invalid' })
   })
 
   it('rejects a precise quote that is not present in the frozen finalized source', () => {

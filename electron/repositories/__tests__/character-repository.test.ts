@@ -73,6 +73,7 @@ beforeEach(() => {
       cs_key_items TEXT DEFAULT '',
       cs_recent_events TEXT DEFAULT '',
       cs_updated_at_chapter INTEGER DEFAULT NULL,
+      cs_provenance TEXT NOT NULL DEFAULT '{}',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );

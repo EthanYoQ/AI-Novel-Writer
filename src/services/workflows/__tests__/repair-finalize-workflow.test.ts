@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -29,6 +30,22 @@ const PROJECT_SESSION = Object.freeze({
   projectPath: PROJECT_PATH,
 })
 const originalLocale = useLocaleStore.getState().locale
+
+function finalizedSource(content: string) {
+  return {
+    status: 'valid' as const,
+    snapshot: {
+      source: {
+        draftId: 17,
+        finalizationId: 'finalization-17',
+        chapterNumber: 3,
+        contentHash: createHash('sha256').update(content, 'utf8').digest('hex'),
+      },
+      chapterTitle: '定稿标题',
+      content,
+    },
+  }
+}
 
 function context(): WorkflowContext {
   return {
@@ -102,6 +119,8 @@ describe('createRepairFinalizeWorkflow', () => {
           return { id: 17 }
         case 'db:draft-get-full':
           return { content: '已定稿正文' }
+        case 'db:continuity-read-source':
+          return finalizedSource('已定稿正文')
         case 'db:blueprint-get':
           return { title: '定稿标题', characters: ['林舟'] }
         default:
@@ -144,6 +163,8 @@ describe('createRepairFinalizeWorkflow', () => {
           return { id: 17 }
         case 'db:draft-get-full':
           return { content: 'Finalized manuscript' }
+        case 'db:continuity-read-source':
+          return finalizedSource('Finalized manuscript')
         case 'db:blueprint-get':
           return null
         default:

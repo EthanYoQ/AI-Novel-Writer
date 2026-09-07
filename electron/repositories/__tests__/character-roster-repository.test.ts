@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 
 import { getProjectDb } from '../../database'
@@ -155,6 +156,43 @@ function rawRosterStorage() {
 }
 
 describe('CharacterRosterRepository public read/commit seam', () => {
+  it('keeps a pre-provenance ready roster ready after adding the empty provenance column', () => {
+    const request = commitRequest({
+      entries: commitRequest().entries.map((entry, index) => index === 0
+        ? {
+            ...entry,
+            currentState: {
+              location: '旧港口',
+              powerLevel: '学徒',
+              physicalState: '轻伤',
+              mentalState: '警觉',
+              keyItems: '旧剑',
+              recentEvents: '刚抵达港口',
+              updatedAtChapter: 1,
+            },
+          }
+        : entry),
+    })
+    const committed = CharacterRosterRepository.commit(request)
+    const legacyEntries = committed.snapshot.entries.map((entry) => {
+      if (!entry.currentState) return entry
+      const currentState = { ...entry.currentState }
+      delete currentState.provenance
+      return { ...entry, currentState }
+    })
+    const legacyFactHash = createHash('sha256')
+      .update(JSON.stringify(legacyEntries), 'utf8')
+      .digest('hex')
+    db.prepare("UPDATE character_roster_meta SET fact_hash = ? WHERE id = 'main'").run(legacyFactHash)
+    db.exec('ALTER TABLE characters DROP COLUMN cs_provenance')
+
+    ensureCharacterRosterSchema(db)
+
+    const upgraded = CharacterRosterRepository.read()
+    expect(upgraded).toMatchObject({ status: 'ready', factHash: legacyFactHash })
+    expect(upgraded.entries[0]?.currentState).not.toHaveProperty('provenance')
+  })
+
   it('normalizes a finite numeric model age without widening other roster fields', () => {
     const base = commitRequest()
     const numericAge = {
