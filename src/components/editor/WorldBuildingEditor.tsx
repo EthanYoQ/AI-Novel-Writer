@@ -48,6 +48,9 @@ const ARCH_FILES: Array<{
     { key: 'synopsis', fileName: 'synopsis.md', labelZh: '情节大纲', labelEn: 'Plot outline', iconName: 'map', descZh: '结构推进 · 转折节奏 · 伏笔闭环', descEn: 'Story progression · turning points · setup and payoff' },
   ]
 
+/** 续批按钮默认的每批章数上限（可在弹窗内调整，避免一次请求剩余全部章节）。 */
+const CONTINUATION_BATCH_SPAN = 30
+
 /** 故事架构编辑器 — 显示四个架构文件状态，并提供 AI 生成入口 */
 export default function WorldBuildingEditor({ projectKey }: { projectKey: string }) {
   // ✅ 精确订阅，避免 novelConfig 等变化导致不必要的 loadStatus 重建
@@ -60,6 +63,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const [synopsisCoveredTo, setSynopsisCoveredTo] = useState<number>(0)
   const [synopsisTotalChapters, setSynopsisTotalChapters] = useState<number>(0)
   const [synopsisBusy, setSynopsisBusy] = useState(false)
+  const [pendingSynopsisRange, setPendingSynopsisRange] = useState<{ from: number; to: number } | null>(null)
   const [loading, setLoading] = useState(true)
   const [showArchDialog, setShowArchDialog] = useState(false)
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
@@ -269,28 +273,25 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     }
   }
 
-  /** 分批续写剩余章节：从已确认覆盖的下一章（coveredTo+1）连续生成到全书。 */
+  /** 续批入口：打开生成弹窗并预填下一批范围（从 coveredTo+1 起，默认带本批上限，
+   * 上限可在弹窗内调整）。避免一次请求剩余全部章节再次触发超长输出。 */
   const handleContinueOutlineBatch = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    if (!isProjectSessionCurrent(projectSession) || synopsisBusy) return
+    if (!isProjectSessionCurrent(projectSession)) return
     const from = synopsisCoveredTo + 1
-    const to = synopsisTotalChapters
-    if (from > to || to <= 0) return
-    setSynopsisBusy(true)
-    try {
-      await launchCreativeWorkflow({
-        workflow: 'generate_architecture',
-        selectedSteps: ['synopsis'],
-        synopsisRange: { from, to },
-      }, projectSession)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      const { toast } = await import('../ui/Toast')
-      toast.error(text(`续批启动失败：${detail}`, `Failed to start the batch: ${detail}`))
-    } finally {
-      setSynopsisBusy(false)
-    }
+    if (from > synopsisTotalChapters || synopsisTotalChapters <= 0) return
+    setPendingSynopsisRange({
+      from,
+      to: Math.min(synopsisTotalChapters, from + CONTINUATION_BATCH_SPAN - 1),
+    })
+    setShowArchDialog(true)
+  }
+
+  /** 打开普通「AI 生成架构」入口（不携带续批预填）。 */
+  const openGenerateDialog = () => {
+    setPendingSynopsisRange(null)
+    setShowArchDialog(true)
   }
 
   if (!projectMatches) {
@@ -353,7 +354,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
           <Button
             variant="ai"
             size="sm"
-            onClick={() => setShowArchDialog(true)}
+            onClick={openGenerateDialog}
             title={text('AI 生成故事架构（选择要生成的步骤）', 'Generate story architecture (choose steps to generate)')}
           >
             <Sparkles size={12} />
@@ -563,6 +564,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
         isOpen={showArchDialog}
         onClose={() => setShowArchDialog(false)}
         archStatus={archStatus}
+        initialSynopsisRange={pendingSynopsisRange}
         onConfirm={handleConfirm}
       />
     </div>

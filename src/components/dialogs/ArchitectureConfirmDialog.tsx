@@ -36,6 +36,8 @@ interface Props {
   archStatus: Record<string, boolean>
   /** 预先选中的步骤（单文件生成时传入） */
   initialSelectedSteps?: ArchStepKey[]
+  /** 打开时预填的情节大纲续批范围（从已确认的下一章开始；to 可在弹窗内调整）。 */
+  initialSynopsisRange?: { from: number; to: number } | null
   onConfirm: (
     selectedSteps: ArchStepKey[],
     stepGuidance: Record<string, string>,
@@ -48,7 +50,7 @@ const SCOPE_WARNING_THRESHOLD = 20
 
 /** 生成架构确认弹框（含步骤勾选） */
 export default function ArchitectureConfirmDialog({
-  isOpen, onClose, archStatus, initialSelectedSteps, onConfirm,
+  isOpen, onClose, archStatus, initialSelectedSteps, initialSynopsisRange = null, onConfirm,
 }: Props) {
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
@@ -60,13 +62,6 @@ export default function ArchitectureConfirmDialog({
   })
   const wasOpen = useRef(false)
 
-  useEffect(() => {
-    if (isOpen && !wasOpen.current) {
-      setChecked(createDefaultArchitectureSelection(archStatus, initialSelectedSteps))
-    }
-    wasOpen.current = isOpen
-  }, [archStatus, initialSelectedSteps, isOpen])
-
   // 每步的补充指导
   const [stepGuidance, setStepGuidance] = useState<Record<string, string>>({})
   // 是否展开指导输入区
@@ -75,12 +70,26 @@ export default function ArchitectureConfirmDialog({
   const [synopsisFrom, setSynopsisFrom] = useState('')
   const [synopsisTo, setSynopsisTo] = useState('')
 
-  // 每次弹窗打开时重置选中状态
+  // 每次弹窗打开时重置选中状态；续批入口会预填起止章并勾选情节大纲
   const resetChecked = () => {
-    setChecked(createDefaultArchitectureSelection(archStatus, initialSelectedSteps))
-    setSynopsisFrom('')
-    setSynopsisTo('')
+    const defaults = createDefaultArchitectureSelection(archStatus, initialSelectedSteps)
+    if (initialSynopsisRange) {
+      defaults.synopsis = true
+      setSynopsisFrom(String(initialSynopsisRange.from))
+      setSynopsisTo(String(initialSynopsisRange.to))
+    } else {
+      setSynopsisFrom('')
+      setSynopsisTo('')
+    }
+    setChecked(defaults)
   }
+
+  useEffect(() => {
+    if (isOpen && !wasOpen.current) {
+      resetChecked()
+    }
+    wasOpen.current = isOpen
+  }, [archStatus, initialSelectedSteps, isOpen, initialSynopsisRange])
 
   const [isConfirming, setIsConfirming] = useState(false)
   const [guardError, setGuardError] = useState<string | null>(null)

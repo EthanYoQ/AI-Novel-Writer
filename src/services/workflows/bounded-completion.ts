@@ -482,21 +482,31 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
       throw continuationLimitExceededError(request.maxContinuations, uiLocale)
     }
 
-    const continuationPrompt = request.mode === 'replace-structured-output'
-      ? buildStructuredReplacementPrompt(
-          request.originalPrompt,
-          content,
-          request.writingLanguage,
-        )
-      : buildContinuationPrompt(
-          request.mode,
-          request.originalPrompt,
-          content,
-          continuationPromptCharBudget(uiLocale, request.promptBudget),
-          request.writingLanguage,
-          uiLocale,
-        )
-    const next = await request.requestContinuation(continuationPrompt)
+    // 构建续写提示或等待续写响应期间失败时，上一轮已收到的可见内容仍然
+    // 是可恢复的部分成果：先交给 onInterrupted 再抛出，避免调用方把
+    // 「首轮有效、续写请求失败」误判为零成果。
+    let continuationPrompt: string
+    let next: BoundedCompletion
+    try {
+      continuationPrompt = request.mode === 'replace-structured-output'
+        ? buildStructuredReplacementPrompt(
+            request.originalPrompt,
+            content,
+            request.writingLanguage,
+          )
+        : buildContinuationPrompt(
+            request.mode,
+            request.originalPrompt,
+            content,
+            continuationPromptCharBudget(uiLocale, request.promptBudget),
+            request.writingLanguage,
+            uiLocale,
+          )
+      next = await request.requestContinuation(continuationPrompt)
+    } catch (error) {
+      request.onInterrupted?.(content)
+      throw error
+    }
     assertNotCancelled(uiLocale, request.isCancelled)
     continuationCount += 1
     const nextVisible = redact(next.content)

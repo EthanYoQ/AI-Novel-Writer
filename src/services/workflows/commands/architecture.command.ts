@@ -57,6 +57,8 @@ interface PartialArchData {
   synopsis_range?: { from: number; to: number }
   /** 大纲赖以生成的源事实指纹；源事实变化后禁止续写旧检查点。 */
   synopsis_facts_fingerprint?: string
+  /** 上次写入 DB 的大纲全文指纹；用于检测大纲是否被手动编辑（防续批覆盖用户修改）。 */
+  synopsis_db_hash?: string
 }
 
 /** 大纲章节范围。 */
@@ -207,7 +209,7 @@ function synopsisBatchInstruction(
   return contract
 }
 
-/** 校验合并文本是否带与本批范围一致的完成进度行；缺失或范围不符视为未完成。 */
+/** 校验合并文本是否带与本批范围完全一致的完成进度行；缺失或范围不符视为未完成。 */
 function assertPlotOutlineBatchComplete(
   merged: string,
   from: number,
@@ -216,16 +218,46 @@ function assertPlotOutlineBatchComplete(
   uiText: UiText,
 ): void {
   const mark = findPlotOutlineProgressMark(merged)
-  if (!mark || mark.to < to || mark.totalChapters !== totalChapters) {
+  if (!mark
+    || mark.from !== from
+    || mark.to !== to
+    || mark.totalChapters !== totalChapters
+  ) {
     throw new Error(uiText(
-      `大纲输出未包含有效的批次完成标记（需要覆盖第 ${from}–${to} 章、全书 ${totalChapters} 章的进度行），`
-        + '可能仍被模型输出上限截断，结果未按完成保存。',
-      `The outline output lacks a valid batch-completion marker (expected coverage of chapters ${from}-${to} of ${totalChapters}); `
-        + 'it may still be truncated by the model output limit, so it was not saved as complete.',
+      `大纲输出未包含有效的批次完成标记（需要与本批范围完全一致：第 ${from}–${to} 章、全书 ${totalChapters} 章），`
+        + '可能仍被模型输出上限截断或批次范围错位，结果未按完成保存。',
+      `The outline output lacks a batch-completion marker that exactly matches this batch (chapters ${from}-${to} of ${totalChapters}); `
+        + 'it may still be truncated by the model output limit or misreport its range, so it was not saved as complete.',
     ))
   }
 }
 
+/**
+ * 续批/恢复前校验 DB 中的大纲是否仍是上次生成写入的内容。用户可能直接在
+ * 编辑器手动修改大纲（保存只更新 DB）：此时若按检查点前缀拼接会覆盖用户的
+ * 修改，必须 fail-closed 并引导显式重新生成。
+ */
+function assertCheckpointDbMirrorCurrent(
+  partial: PartialArchData,
+  dbOutlineHash: string,
+  uiText: UiText,
+): void {
+  const recordedHash = partial.synopsis_db_hash
+  if (recordedHash === undefined) {
+    throw new Error(uiText(
+      '续批检查点没有数据库镜像指纹，无法确认大纲未被手动修改。请从「AI 生成故事架构」从第 1 章重新生成大纲。',
+      'The continuation checkpoint has no database-mirror fingerprint, so we cannot confirm the outline was not edited by hand. Regenerate the outline from chapter 1 in “Generate story architecture”.',
+    ))
+  }
+  if (recordedHash !== dbOutlineHash) {
+    throw new Error(uiText(
+      '情节大纲正文在上次生成后已被手动修改，续批会覆盖这些修改，已拒绝。'
+        + '如需保留修改，请基于修改后的正文从第 1 章重新生成；若该修改有误，请先撤销后再续批。',
+      'The outline body was manually edited after the last generation; continuing would overwrite those edits, so it was rejected. '
+        + 'To keep the edits, regenerate from chapter 1 on top of them; if the edit was a mistake, revert it before continuing.',
+    ))
+  }
+}
 const PLOT_STRUCTURES = new Set<NovelConfig['plotStructure']>([
   'three_act',
   'heros_journey',
@@ -1577,6 +1609,13 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       }
     }
 
+    // 续批/恢复会沿用检查点前缀：确认 DB 中的大纲仍是上次生成写入的内容，
+    // 防止用户在编辑器手动保存的修改被默默覆盖（详见 #201 review）。
+    if (mode === 'resume' || mode === 'batch') {
+      const dbOutlineHash = synopsisFactsFingerprint([core?.synopsis || ''])
+      assertCheckpointDbMirrorCurrent(partial, dbOutlineHash, text)
+    }
+
     if (mode === 'resume') {
       callbacks.log(text(
         `检测到中断检查点，正在续写第 ${from}–${to} 章（全书 ${totalChapters} 章）...`,
@@ -1691,12 +1730,18 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
 
-    // ===== 落盘：先写检查点（权威进度），再镜像到 DB 正文 =====
+    // ===== 落盘：先写检查点（权威进度 + DB 镜像指纹），再镜像到 DB 正文 =====
+    const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
+    const dbBody = to < totalChapters
+      ? `${confirmedBody}\n\n> 本大纲已覆盖至第 ${to} 章（全书 ${totalChapters} 章），其余章节将在后续批次继续生成。`
+      : confirmedBody
+    const dbOutlineText = `# ${heading}\n\n${dbBody}\n`
     partial.synopsis_result = confirmedBody
     partial.synopsis_incomplete = false
     partial.synopsis_covered_to = to
     partial.synopsis_range = { from, to }
     partial.synopsis_facts_fingerprint = factsFingerprint
+    partial.synopsis_db_hash = synopsisFactsFingerprint([dbOutlineText])
     context.data.partial = partial
     this.assertNotCancelled(context)
     await savePartialData(
@@ -1709,13 +1754,9 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
 
-    const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
-    const dbBody = to < totalChapters
-      ? `${confirmedBody}\n\n> 本大纲已覆盖至第 ${to} 章（全书 ${totalChapters} 章），其余章节将在后续批次继续生成。`
-      : confirmedBody
     await writeArchToDb(
       'synopsis',
-      `# ${heading}\n\n${dbBody}\n`,
+      dbOutlineText,
       expectedProjectPath,
       context.runId,
       projectSession,
@@ -1772,10 +1813,18 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     const writingLanguage = workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
+    const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
+    const marker = promptLanguageText(
+      writingLanguage,
+      SYNOPSIS_INCOMPLETE_MARKER_ZH,
+      SYNOPSIS_INCOMPLETE_MARKER_EN,
+    )
+    const dbOutlineText = `# ${heading}\n\n${partialText}\n${marker}\n`
     partial.synopsis_result = partialText
     partial.synopsis_incomplete = true
     partial.synopsis_range = { from: range.from, to: range.to }
     partial.synopsis_facts_fingerprint = factsFingerprint
+    partial.synopsis_db_hash = synopsisFactsFingerprint([dbOutlineText])
     context.data.partial = partial
     this.assertNotCancelled(context)
     await savePartialData(
@@ -1788,15 +1837,9 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
 
-    const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
-    const marker = promptLanguageText(
-      writingLanguage,
-      SYNOPSIS_INCOMPLETE_MARKER_ZH,
-      SYNOPSIS_INCOMPLETE_MARKER_EN,
-    )
     await writeArchToDb(
       'synopsis',
-      `# ${heading}\n\n${partialText}\n${marker}\n`,
+      dbOutlineText,
       expectedProjectPath,
       context.runId,
       projectSession,
