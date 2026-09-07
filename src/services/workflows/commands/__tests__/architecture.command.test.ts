@@ -542,9 +542,20 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       data: {},
     }
     const englishCallbacks = callbacks
+    // synopsis 批次契约：完成输出必须携带英文批次进度行（1–20/20）
+    const enProgressMark = '[Outline batch progress: covered chapters 1-20 of 20]'
+    let englishCallCount = 0
     useLLMStore.setState({
       defaultModelId: 'model-1',
-      generateStream: createResponseStream([modelOutput, modelOutput, modelOutput]),
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        englishCallCount += 1
+        streamCallbacks.onDone?.(
+          englishCallCount === 3 ? `${modelOutput}\n\n${enProgressMark}` : modelOutput,
+          undefined,
+          'stop',
+        )
+        return `architecture-english-request-${englishCallCount}`
+      }),
     })
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
@@ -598,7 +609,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(englishCallbacks.log).toHaveBeenCalledWith('Generating worldbuilding...')
     expect(englishCallbacks.log).toHaveBeenCalledWith('Worldbuilding generated and saved to the database.')
     expect(englishCallbacks.log).toHaveBeenCalledWith('Generating plot outline...')
-    expect(englishCallbacks.log).toHaveBeenCalledWith('Plot outline generated and saved to the database.')
+    expect(englishCallbacks.log).toHaveBeenCalledWith('Plot outline generated; the full outline is ready.')
   })
 
   it('uses the frozen English UI locale for premise logs and an empty-result error', async () => {
@@ -718,6 +729,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
+      if (channel === 'fs:read-json') return { success: true, data: {} }
       if (channel === 'db:project-core-get') {
         return {
           premise: 'A sufficiently detailed premise for the language contract and character planning request.',
