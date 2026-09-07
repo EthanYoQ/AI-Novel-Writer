@@ -190,25 +190,10 @@ function fakeRuntime(
     task: GenerationTask,
     options?: { signal?: AbortSignal; onChunk?: (chunk: string) => void },
   ) => GenerationOutcome | Promise<GenerationOutcome>,
-  completeCorrection?: (
-    attempt: number,
-    task: GenerationTask,
-    options?: { signal?: AbortSignal; onChunk?: (chunk: string) => void },
-  ) => GenerationOutcome | Promise<GenerationOutcome>,
 ) {
   let attempt = 0
-  const complete = vi.fn(async (
-    task: GenerationTask,
-    options?: { signal?: AbortSignal; onChunk?: (chunk: string) => void },
-  ) => {
+  const complete = vi.fn(async (task: GenerationTask, options?: { signal?: AbortSignal }) => {
     attempt += 1
-    if (task.purpose === 'chapter-draft-continuity-correction') {
-      if (completeCorrection) return completeCorrection(attempt, task, options)
-      const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
-      const match = /(?:【尚未保存的完整正文】|\[Complete manuscript not yet saved\])\n([\s\S]*)$/u.exec(prompt)
-      if (!match?.[1]) throw new Error('correction prompt omitted the complete draft')
-      return outcome(match[1], 'stop', attempt)
-    }
     return completeAttempt(attempt, task, options)
   })
   const execute = vi.fn(async (operation: (scope: GenerationRuntimeScope) => Promise<unknown>) => operation({
@@ -701,11 +686,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(user).toContain(`用户目标 ${target} 字；可接受范围 ${lowerBound}–${upperBound} 字（±20%）`)
     expect(user).toContain('在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件')
     expect(user).toContain(requiredEvent)
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-continuity-correction',
-    ])
-    expect(callbacks.log).toHaveBeenCalledWith('正在校正章节连续性（最多一次）…')
+    expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
   it('orders sourced history before the current author task and length contract in the final provider request', async () => {
@@ -738,10 +719,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(user).toContain('【后续计划边界（只约束当前章，不是当前章任务）】')
     expect(user).toContain(futurePlan)
     expect(user).toContain('用户目标 900 字；可接受范围 720–1080 字（±20%）')
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-continuity-correction',
-    ])
+    expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
   it.each([
@@ -794,10 +772,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         ? 'Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.'
         : '后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。',
     )
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-continuity-correction',
-    ])
+    expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
   it('omits the execution card when all three author fields are empty', async () => {
@@ -820,10 +795,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(user).not.toContain('【本章执行卡（作者原文重列）】')
     expect(user).toContain('【本章篇幅合同】')
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-continuity-correction',
-    ])
+    expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
   it('sends English continuation-stage instructions for an English project', async () => {
@@ -877,14 +849,12 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(environment.snapshotDefaultModelId).toHaveBeenCalledOnce()
     expect(environment.beginModelExecution).toHaveBeenCalledOnce()
     expect(environment.beginModelExecution).toHaveBeenCalledWith('model-a')
-    expect(completeWithLease).toHaveBeenCalledTimes(3)
+    expect(completeWithLease).toHaveBeenCalledTimes(2)
     expect(completeWithLease.mock.calls.map(([request]) => request.leaseId)).toEqual([
-      'draft-lease-a',
       'draft-lease-a',
       'draft-lease-a',
     ])
     expect(completeWithLease.mock.calls.map(([request]) => request.plan.maxOutputTokens)).toEqual([
-      8192,
       8192,
       8192,
     ])
@@ -1026,7 +996,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const providerPrompts = runtime.complete.mock.calls.map(([task]) => (
       task.messages.find(message => message.role === 'user')?.content ?? ''
     ))
-    expect(providerPrompts).toHaveLength(3)
+    expect(providerPrompts).toHaveLength(2)
     for (const prompt of providerPrompts) {
       expect(prompt).toContain(authorTask)
       expect(prompt).toContain('AUTHOR_PROFILE_SENTINEL')
@@ -1486,7 +1456,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const prompts = runtime.complete.mock.calls.map(([task]) => (
       task.messages.find(message => message.role === 'user')?.content ?? ''
     ))
-    expect(prompts).toHaveLength(3)
+    expect(prompts).toHaveLength(2)
     for (const prompt of prompts) {
       expect(prompt).toContain(keyEvents)
       expect(prompt).toContain(userGuidance)
@@ -1544,7 +1514,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const requestPrompts = runtime.complete.mock.calls.map(([task]) => (
       task.messages.find(message => message.role === 'user')?.content ?? ''
     ))
-    expect(requestPrompts).toHaveLength(4)
+    expect(requestPrompts).toHaveLength(3)
     for (const prompt of requestPrompts) {
       expect(prompt).toContain('AUTHOR_RULE_BEGIN')
       expect(prompt).toContain('PARTIAL_RULE_SHOULD_NOT_APPEAR')
@@ -1585,7 +1555,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const requestPrompts = runtime.complete.mock.calls.map(([task]) => (
       task.messages.find(message => message.role === 'user')?.content ?? ''
     ))
-    expect(requestPrompts).toHaveLength(4)
+    expect(requestPrompts).toHaveLength(3)
     for (const prompt of requestPrompts) {
       for (const name of ['GUIDANCE', 'STYLE', 'OUTLINE', 'WORLD', 'ADVANTAGE', 'PROTAGONIST']) {
         expect(prompt).toContain(`${name}_BEGIN`)
@@ -2106,7 +2076,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('正文')
 
-    expect(completeWithLease).toHaveBeenCalledTimes(2)
+    expect(completeWithLease).toHaveBeenCalledOnce()
     const physicalRequest = completeWithLease.mock.calls[0]![0]
     const promptChars = physicalRequest.messages.reduce((sum, message) => sum + message.content.length, 0)
     expect(promptChars).toBeGreaterThan(30_000)
@@ -2123,10 +2093,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toHaveLength(720)
 
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-continuity-correction',
-    ])
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft'])
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
       expect.objectContaining({ content: '正'.repeat(720), wordCount: 720 }),
@@ -2135,7 +2102,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
-  it('continues a 719-unit result before the one final correction request', async () => {
+  it('continues a 719-unit result before persisting the completed draft', async () => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(719), 'stop', 1),
       outcome('续', 'stop', 2),
@@ -2149,164 +2116,14 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('续')
 
     expect(runtime.execute).toHaveBeenCalledOnce()
-    expect(runtime.complete).toHaveBeenCalledTimes(3)
+    expect(runtime.complete).toHaveBeenCalledTimes(2)
     expect(runtime.complete.mock.calls[1]?.[0]).toMatchObject({
       purpose: 'chapter-draft-continuation',
-      output: 'visible-text',
-    })
-    expect(runtime.complete.mock.calls[2]?.[0]).toMatchObject({
-      purpose: 'chapter-draft-continuity-correction',
       output: 'visible-text',
     })
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
       expect.objectContaining({ content: expect.stringContaining('续') }),
-      expect.anything(),
-      expect.anything(),
-    )
-  })
-
-  it('uses one non-streaming correction request and persists only its complete result', async () => {
-    const originalDraft = '原'.repeat(900)
-    const correctedDraft = '校'.repeat(880)
-    let correctionTask: GenerationTask | undefined
-    const runtime = fakeRuntime(
-      attempt => outcome(originalDraft, 'stop', attempt),
-      (attempt, task, options) => {
-        correctionTask = task
-        expect(options?.onChunk).toBeUndefined()
-        return outcome(correctedDraft, 'stop', attempt)
-      },
-    )
-    const keyEvents = '顾弦把潮印实际交给陆霁。'
-    const { invoke, context, callbacks, command } = setup({
-      runtime,
-      wordsPerChapter: 900,
-      wordsTarget: 900,
-      keyEvents,
-      previousFinalizedContent: '上一章由沈砺持有潮印。',
-      chapterNumber: 2,
-    })
-
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(correctedDraft)
-
-    const initialTask = runtime.complete.mock.calls[0]?.[0]
-    expect(correctionTask?.messages[0]?.content).toBe(initialTask?.messages[0]?.content)
-    const initialPrompt = initialTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    const correctionPrompt = correctionTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(correctionPrompt).toContain(initialPrompt)
-    expect(correctionPrompt).toContain(originalDraft)
-    expect(correctionPrompt).toContain(keyEvents)
-    expect(correctionPrompt).toContain('当前正文实测 900 字；目标 900 字，可接受范围 720–1080 字')
-    expect(correctionPrompt).toContain('允许无害遗漏和文学歧义')
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-continuity-correction',
-    ])
-    expect(invoke).toHaveBeenCalledWith(
-      'db:draft-create',
-      expect.objectContaining({ content: correctedDraft, wordCount: 880 }),
-      expect.anything(),
-      expect.anything(),
-    )
-    expect(callbacks.replaceText).toHaveBeenLastCalledWith(correctedDraft)
-  })
-
-  it.each([
-    ['truncated', outcome('截断校正稿', 'length', 2)],
-    ['empty', outcome('  ', 'stop', 2)],
-  ])('keeps the complete original as a recovery candidate after a %s correction', async (_case, correction) => {
-    const originalDraft = '原'.repeat(900)
-    const runtime = fakeRuntime(
-      attempt => outcome(originalDraft, 'stop', attempt),
-      () => correction,
-    )
-    const { invoke, context, callbacks, command } = setup({
-      runtime,
-      wordsPerChapter: 900,
-      wordsTarget: 900,
-      uiLocale: _case === 'truncated' ? 'en-US' : 'zh-CN',
-    })
-
-    const execution = command.execute({ step: {}, context, callbacks })
-    if (_case === 'truncated') {
-      await expect(execution).rejects.toThrow(
-        'The continuity correction did not finish normally. The complete pre-correction candidate was preserved.',
-      )
-    } else {
-      await expect(execution).rejects.toThrow()
-    }
-
-    expect(invoke).toHaveBeenCalledWith(
-      'db:recovery-candidate-record',
-      expect.objectContaining({ visibleText: originalDraft }),
-      expect.anything(),
-      expect.anything(),
-    )
-    expect(callbacks.replaceText).toHaveBeenLastCalledWith(originalDraft)
-    expectNoDraftPersistence(invoke)
-  })
-
-  it('keeps the complete original as a recovery candidate when correction fails', async () => {
-    const originalDraft = '原'.repeat(900)
-    const runtime = fakeRuntime(
-      attempt => outcome(originalDraft, 'stop', attempt),
-      () => { throw new Error('correction unavailable') },
-    )
-    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 900 })
-
-    await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('correction unavailable')
-    expect(invoke).toHaveBeenCalledWith(
-      'db:recovery-candidate-record',
-      expect.objectContaining({ visibleText: originalDraft }),
-      expect.anything(),
-      expect.anything(),
-    )
-    expect(callbacks.replaceText).toHaveBeenLastCalledWith(originalDraft)
-    expectNoDraftPersistence(invoke)
-  })
-
-  it('keeps the complete original when cancellation wins the correction request', async () => {
-    const originalDraft = '原'.repeat(900)
-    const activeContext: { value?: WorkflowContext } = {}
-    const runtime = fakeRuntime(
-      attempt => outcome(originalDraft, 'stop', attempt),
-      () => {
-        if (activeContext.value) activeContext.value.cancelled = true
-        throw Object.assign(new Error('aborted'), { code: 'CANCELLED' })
-      },
-    )
-    const prepared = setup({ runtime, wordsTarget: 900 })
-    activeContext.value = prepared.context
-
-    await expect(prepared.command.execute({
-      step: {},
-      context: prepared.context,
-      callbacks: prepared.callbacks,
-    })).rejects.toThrow('工作流已取消')
-    expect(prepared.invoke).toHaveBeenCalledWith(
-      'db:recovery-candidate-record',
-      expect.objectContaining({ visibleText: originalDraft, failureCode: 'CANCELLED' }),
-      expect.anything(),
-      expect.anything(),
-    )
-    expect(prepared.callbacks.replaceText).toHaveBeenLastCalledWith(originalDraft)
-    expectNoDraftPersistence(prepared.invoke)
-  })
-
-  it('accepts a non-empty stopped correction without a new post-correction length gate', async () => {
-    const correctedDraft = '短章自然收束。'
-    const runtime = fakeRuntime(
-      attempt => outcome('原'.repeat(900), 'stop', attempt),
-      attempt => outcome(correctedDraft, 'stop', attempt),
-    )
-    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 900 })
-
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(correctedDraft)
-    expect(runtime.complete).toHaveBeenCalledTimes(2)
-    expect(invoke).toHaveBeenCalledWith(
-      'db:draft-create',
-      expect.objectContaining({ content: correctedDraft }),
       expect.anything(),
       expect.anything(),
     )
@@ -2327,10 +2144,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(persisted?.[1]).toMatchObject({
       wordCount: countDraftUnits((persisted?.[1] as { content: string }).content),
     })
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-continuity-correction',
-    ])
+    expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
   it.each([1604, 2285])(
@@ -2346,10 +2160,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
       await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(draft)
 
-      expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-        'chapter-draft',
-        'chapter-draft-continuity-correction',
-      ])
+      expect(runtime.complete).toHaveBeenCalledOnce()
+      expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft'])
       expect(invoke).toHaveBeenCalledWith(
         'db:draft-create',
         expect.objectContaining({ content: draft, wordCount: visibleUnits }),
@@ -2367,7 +2179,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const { context, callbacks, command } = setup({ runtime, wordsPerChapter: 6000 })
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('续')
-    expect(runtime.complete).toHaveBeenCalledTimes(3)
+    expect(runtime.complete).toHaveBeenCalledTimes(2)
   })
 
   it('continues an over-target length candidate and commits only after a stop result', async () => {
@@ -2389,7 +2201,6 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
       'chapter-draft',
       'chapter-draft-continuation',
-      'chapter-draft-continuity-correction',
     ])
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
@@ -2541,7 +2352,6 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       'chapter-draft',
       'chapter-draft-continuation',
       'chapter-draft-no-progress-recovery',
-      'chapter-draft-continuity-correction',
     ])
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(
       /visibleUnitsBefore=4000 candidateVisibleUnits=200 mergedDelta=0 accepted=false/u,
@@ -2575,7 +2385,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const prompts = runtime.complete.mock.calls.map(([task]) => (
       task.messages.find(message => message.role === 'user')?.content ?? ''
     ))
-    expect(prompts).toHaveLength(4)
+    expect(prompts).toHaveLength(3)
     expect(prompts[0]).toContain(authorGuidance)
     expect(prompts[0]).toContain('(no future chapter blueprints)')
     expect(prompts[0]).toContain('[Sourced history and candidates]')
@@ -2658,7 +2468,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expectNoDraftPersistence(invoke)
   })
 
-  it('reserves one full correction request and leaves a still-truncated chapter uncommitted', async () => {
+  it('uses at most seven continuations and leaves a still-truncated chapter uncommitted', async () => {
     const results = [outcome('初'.repeat(1000), 'length', 1)]
     for (let attempt = 2; attempt <= 8; attempt += 1) {
       results.push(outcome(`第${attempt}段${'续'.repeat(1000)}。`, 'length', attempt))
@@ -2672,12 +2482,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     await expect(command.execute({ step: {}, context, callbacks }))
       .rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
-    expect(runtime.complete).toHaveBeenCalledTimes(3)
-    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
-      'chapter-draft',
-      'chapter-draft-continuation',
-      'chapter-draft-continuation',
-    ])
+    expect(runtime.complete).toHaveBeenCalledTimes(8)
     expectNoDraftPersistence(invoke)
   })
 

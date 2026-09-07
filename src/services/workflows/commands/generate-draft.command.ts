@@ -268,14 +268,6 @@ function completionFromOutcome(outcome: GenerationOutcome): LLMCompletion {
   return { content: outcome.content, finishReason: outcome.finishReason, receipt: outcome.receipt }
 }
 
-function continuationRoundsWithCorrectionReserve(session: GenerationSession): number {
-  const attemptBound = session.budget.maxAttempts - 2
-  const tokenBound = Math.floor(
-    session.budget.maxRequestedOutputTokens / session.budget.maxRequestedOutputTokensPerAttempt,
-  ) - 2
-  return Math.max(0, Math.min(MAX_AUTO_CONTINUE_ROUNDS, attemptBound, tokenBound))
-}
-
 function workflowGenerationModelId(context: CommandExecuteParams['context']): string | undefined {
   return context.generationModelId?.trim() || undefined
 }
@@ -660,7 +652,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             initialDraft: initialVisibleDraft,
             initialFinishReason: initialCompletion.finishReason,
             targetChars,
-            maxRounds: continuationRoundsWithCorrectionReserve(draftingSession),
             callbacks,
             context,
             systemRole: promptBuilder.getSystemRole(),
@@ -674,74 +665,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             onRecoverableCandidate: candidate => { recoverableDraftCandidate = candidate },
           })
           recoverableDraftCandidate = completedDraft
-          const completedDraftUnits = countDraftUnits(completedDraft)
-          const correctionPrompt = promptLanguageText(
-            writingLanguage,
-            `请对以下尚未保存的章节正文执行一次有界连续性校正，并只输出校正后的完整正文。不得输出审校意见、修改说明、标题、Markdown 或思考过程。
-
-【校正范围】
-- 优先修正核心因果：物品实际持有与转交、人物亲历或明确转述后的知情、条件触发，以及计划与完成状态。
-- 允许无害遗漏和文学歧义；不要追求每个细节百分之百出现，也不要新增作者未要求的事实。
-- 当前正文实测 ${completedDraftUnits} 字；目标 ${targetChars} 字，可接受范围 ${lowerTargetChars}–${upperTargetChars} 字。长度是次要目标：可在本次校正中删去重复描写和冗余动作以靠近范围，但不得删除关键因果或独有信息，也不得仅为长度重新布局全章。
-- 如果没有核心连续性问题且无需精简，请逐字返回原正文。
-
-【原始冻结写作请求】
-${prompt}
-
-【尚未保存的完整正文】
-${completedDraft}`,
-            `Perform one bounded continuity correction on the complete, unsaved chapter below, and output only the corrected complete prose. Do not output review notes, explanations, a title, Markdown, or reasoning.
-
-[Correction scope]
-- Prioritize core causality: actual item possession and transfer, knowledge gained through direct experience or explicit relay, condition triggers, and plan-versus-completion state.
-- Allow harmless omissions and literary ambiguity. Do not demand that every detail appear, and do not invent facts the author did not request.
-- The complete draft currently measures ${completedDraftUnits} units; the target is ${targetChars}, with an acceptable range of ${lowerTargetChars}–${upperTargetChars}. Length is secondary: you may remove repetitive description or redundant actions in this correction to approach the range, but never remove core causality or unique information, and never restructure the whole chapter solely for length.
-- If there is no core continuity issue and no tightening is needed, return the original prose verbatim.
-
-[Original frozen writing request]
-${prompt}
-
-[Complete manuscript not yet saved]
-${completedDraft}`,
-          )
-          callbacks.log(uiText(
-            '正在校正章节连续性（最多一次）…',
-            'Correcting chapter continuity (one attempt at most)…',
-          ))
-          const correctionOutcome = await draftingSession.complete({
-            purpose: 'chapter-draft-continuity-correction',
-            reasoningStage: 'drafting',
-            output: 'visible-text',
-            messages: [
-              { role: 'system', content: promptBuilder.getSystemRole() },
-              { role: 'user', content: correctionPrompt },
-            ],
-          }, { signal: cancellation.signal })
-          logDraftAttempt(
-            callbacks,
-            context,
-            { zhCN: '连续性校正', enUS: 'Continuity correction' },
-            correctionOutcome.receipt,
-          )
-          if (correctionOutcome.finishReason !== 'stop') {
-            const error = this.createIncompleteCompletionError(correctionOutcome.finishReason)
-            error.message = uiText(
-              '连续性校正未完整结束，已保留校正前的完整候选稿。',
-              'The continuity correction did not finish normally. The complete pre-correction candidate was preserved.',
-            )
-            throw error
-          }
-          this.assertNotCancelled(context)
-          const correctedDraft = sanitizeDraftText(this.stripThinkingTags(correctionOutcome.content))
-          if (!correctedDraft) {
-            throw new Error(uiText(
-              '连续性校正未返回完整正文，已保留校正前的候选稿。',
-              'The continuity correction returned no complete prose. The pre-correction candidate was preserved.',
-            ))
-          }
-          recoverableDraftCandidate = correctedDraft
-          callbacks.replaceText?.(correctedDraft)
-          return correctedDraft
+          return completedDraft
         })
       } catch (error) {
         if (context.cancelled) throw new Error(uiText('工作流已取消', 'Workflow was cancelled.'))
@@ -918,9 +842,8 @@ ${completedDraft}`,
     targetChars: number,
     rounds: number,
     finishReason: LLMCompletion['finishReason'],
-    maxRounds: number,
   ): boolean {
-    if (rounds >= maxRounds) return false
+    if (rounds >= MAX_AUTO_CONTINUE_ROUNDS) return false
     const currentChars = countDraftUnits(currentText)
     if (finishReason === 'stop') {
       return currentChars < Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
@@ -934,7 +857,6 @@ ${completedDraft}`,
     initialDraft: string
     initialFinishReason: LLMCompletion['finishReason']
     targetChars: number
-    maxRounds: number
     callbacks: CommandExecuteParams['callbacks']
     context: CommandExecuteParams['context']
     systemRole: string
@@ -973,13 +895,7 @@ ${completedDraft}`,
       )
     }
 
-    while (this.shouldAutoContinue(
-      draft,
-      params.targetChars,
-      rounds,
-      lastFinishReason,
-      params.maxRounds,
-    )) {
+    while (this.shouldAutoContinue(draft, params.targetChars, rounds, lastFinishReason)) {
       if (params.context.cancelled) break
       rounds += 1
       const currentChars = countDraftUnits(draft)

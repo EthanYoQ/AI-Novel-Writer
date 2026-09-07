@@ -185,6 +185,8 @@ export function assembleChapterMaterials(input: {
       includedFinalizedPassages.push(...selectedPassages)
     }
   }
+  // Keep newest-first budget selection, then present only the selected finalized blocks chronologically.
+  optionalBlocks.reverse()
 
   const orderedCandidates = [...input.candidates].sort((left, right) => left.chapterNumber - right.chapterNumber)
   const latestCandidate = orderedCandidates.at(-1)

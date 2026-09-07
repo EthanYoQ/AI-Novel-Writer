@@ -352,6 +352,51 @@ describe('chapter materials', () => {
     expect(bundle.text).toContain('finalized#2:source-invalid')
   })
 
+  it('selects recent finalized blocks first but presents the selected history chronologically', () => {
+    const bundle = assembleChapterMaterials({
+      writingLanguage: 'zh-CN',
+      authorProjectFacts: [],
+      characterProfiles: '',
+      futurePlans: '（无）',
+      references: [
+        { text: 'REFERENCE_A', rendered: 'REFERENCE_A' },
+        { text: 'REFERENCE_B', rendered: 'REFERENCE_B' },
+      ],
+      finalized: [1, 4, 2, 3].map(chapterNumber => ({
+        chapterNumber,
+        draftId: chapterNumber,
+        title: `第${chapterNumber}章`,
+        content: chapterNumber >= 3
+          ? [`CH${chapterNumber}_FIRST`, `CH${chapterNumber}_EVIDENCE`, `CH${chapterNumber}_LAST`].join('\n\n')
+          : `CH${chapterNumber}_EVIDENCE_${'TOO_LARGE'.repeat(700)}`,
+        evidence: [`CH${chapterNumber}_EVIDENCE`],
+        sourceStatus: 'current' as const,
+      })),
+      candidates: [{
+        chapterNumber: 5,
+        draftId: 50,
+        version: 2,
+        content: 'CANDIDATE_FIRST\n\nCANDIDATE_SECOND',
+      }],
+      relevanceTerms: [],
+      budgetChars: 6_000,
+    })
+
+    expect(bundle.consumedFinalizedSources.map(source => source.chapterNumber)).toEqual([4, 3])
+    expect(bundle.omissions).toEqual([
+      { source: 'finalized', chapterNumber: 2, reason: 'budget' },
+      { source: 'finalized', chapterNumber: 1, reason: 'budget' },
+    ])
+    expect(bundle.includedFinalizedFacts).toBe(2)
+    const markers = ['第3章 · draft 3', '第4章 · draft 4', 'CANDIDATE_FIRST', 'REFERENCE_A', 'REFERENCE_B']
+    const positions = markers.map(marker => bundle.text.indexOf(marker))
+    expect(positions.every(position => position >= 0)).toBe(true)
+    expect(positions).toEqual([...positions].sort((left, right) => left - right))
+    expect(bundle.text).toContain('CH3_FIRST\n\nCH3_EVIDENCE\n\nCH3_LAST')
+    expect(bundle.text).toContain('CH4_FIRST\n\nCH4_EVIDENCE\n\nCH4_LAST')
+    expect(bundle.text).toContain('CANDIDATE_FIRST\n\nCANDIDATE_SECOND')
+  })
+
   it('labels every selected candidate with the exact saved id and version', () => {
     const bundle = assembleChapterMaterials({
       writingLanguage: 'zh-CN',
