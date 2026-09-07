@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用问题 / General question
+    url: https://github.com/EthanYoQ/AI-Novel-Writer/discussions
+    about: 不确定是否为 Bug 或只需要使用帮助时，请在 Discussions 提问。
