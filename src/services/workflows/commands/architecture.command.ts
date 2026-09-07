@@ -262,6 +262,7 @@ function assertPlotOutlineTitleCoverage(
   from: number,
   to: number,
   uiText: UiText,
+  allowIncompleteLastEntry = false,
 ): void {
   const seedPriorCounts = new Map<string, number>()
   for (const range of findPlotOutlineTitleRanges(seedText)) {
@@ -291,7 +292,9 @@ function assertPlotOutlineTitleCoverage(
     const entryBody = stripPlotOutlineProgressLine(
       merged.slice(Math.min(range.headingLineEnd + 1, merged.length), nextHeadingIndex),
     ).trim()
-    if (!entryBody) invalid.push(`${range.from}-${range.to}:empty`)
+    if (!entryBody && !(allowIncompleteLastEntry && index === entries.length - 1)) {
+      invalid.push(`${range.from}-${range.to}:empty`)
+    }
     for (let chapter = range.from; chapter <= range.to; chapter += 1) {
       if (covered.has(chapter)) invalid.push(String(chapter))
       covered.add(chapter)
@@ -2005,8 +2008,24 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     }
 
     // 中断/机械校验失败时：落盘已完成部分并抛出可续写错误
-    const persistAndRaiseResume = async (partialBody: string, cause: Error): Promise<never> => {
+    const persistAndRaiseResume = async (
+      partialBody: string,
+      cause: Error,
+      allowIncompleteLastEntry = false,
+    ): Promise<never> => {
       if (partialBody.length < MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS) throw cause
+      try {
+        assertPlotOutlineTitleCoverage(
+          partialBody,
+          seedText,
+          from,
+          to,
+          text,
+          allowIncompleteLastEntry,
+        )
+      } catch (error) {
+        if (error instanceof NonRecoverablePlotOutlineError) throw error
+      }
       this.assertNotCancelled(context)
       assertArchitectureProjectSessionCurrent(projectSession, context)
       await this.persistInterruptedSynopsis(
@@ -2040,7 +2059,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
         && madeProgress
         && partialText.length >= MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS
       ) {
-        await persistAndRaiseResume(partialText, error as Error)
+        await persistAndRaiseResume(partialText, error as Error, true)
       }
       throw error
     }

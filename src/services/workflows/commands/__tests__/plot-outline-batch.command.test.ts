@@ -125,6 +125,22 @@ function responseStream(
   })
 }
 
+function lengthThenNetworkFailure(firstBody: string) {
+  let callIndex = 0
+  return vi.fn((
+    _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
+    streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
+  ) => {
+    callIndex += 1
+    if (callIndex === 1) {
+      streamCallbacks.onDone?.(firstBody, undefined, 'length')
+    } else {
+      streamCallbacks.onError?.('模拟网络中断')
+    }
+    return Promise.resolve(`outline-request-${callIndex}`)
+  })
+}
+
 interface CheckpointSnapshot {
   [key: string]: unknown
   synopsis_result?: string
@@ -767,23 +783,31 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
     expect(harness.synopsisCommits).toHaveLength(2)
   })
 
+  it.each([
+    ['duplicate chapter', `第1章：铁砧镇\n${'林舟沿灵脉追查宗门封锁的原因。'.repeat(10)}\n第1章：重复开章\n同一章被再次输出。`],
+    ['out-of-range chapter', `第1–100章：完整范围\n${'林舟沿灵脉追查宗门封锁的原因。'.repeat(10)}\n第101章：越界\n模型越过了全书范围。`],
+  ])('does not persist a resumable checkpoint when a length continuation fails with a %s partial', async (
+    _caseName,
+    malformedPartial,
+  ) => {
+    const generateStream = lengthThenNetworkFailure(malformedPartial)
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const harness = harnessWith()
+
+    const failure = await makeCommand().execute({ step: {}, context, callbacks }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure).not.toBeInstanceOf(PlotOutlineResumeAvailableError)
+    expect(String((failure as Error).message)).toContain('不能自动续写')
+    expect(harness.partialWrites).toHaveLength(0)
+    expect(harness.synopsisCommits).toHaveLength(0)
+  })
+
   it('P1：续写请求本身失败时，首轮收到的超限正文仍被保存为检查点', async () => {
     // 第一轮返回了超过阈值的有效正文且 finishReason=length；第二轮（自动续写）
     // 请求抛网络错误。此前会丢掉首轮内容，现在应保存并可断点续写。
-    const firstBody = `## 第一卷\n\n第一章：铁砧镇的学徒\n${'宗门封锁前夜，林舟发现了旧铁锤里的秘密。'.repeat(8)}`
-    let callIndex = 0
-    const generateStream = vi.fn((
-      _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
-      streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
-    ) => {
-      callIndex += 1
-      if (callIndex === 1) {
-        streamCallbacks.onDone?.(firstBody, undefined, 'length')
-      } else {
-        streamCallbacks.onError?.('模拟网络中断')
-      }
-      return Promise.resolve(`outline-request-${callIndex}`)
-    })
+    const firstBody = `## 第一卷\n\n第一章：铁砧镇的学徒\n${'宗门封锁前夜，林舟发现了旧铁锤里的秘密。'.repeat(8)}\n\n第二章：被长度上限截断`
+    const generateStream = lengthThenNetworkFailure(firstBody)
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const harness = harnessWith()
     const command = makeCommand()
