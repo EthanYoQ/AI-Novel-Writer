@@ -731,6 +731,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       writingLanguage: 'en-US',
       chapterNumber: 2,
       wordsTarget: 500,
+      previousFinalizedContent: 'The previous chapter is finalized.',
     })
 
     await command.execute({ step: {}, context, callbacks })
@@ -944,6 +945,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: 3,
       characters: ['林岚'],
       wordsTarget: 500,
+      previousFinalizedContent: '第二章定稿原文。',
       continuity: [{
         draftId: 51,
         chapterNumber: 1,
@@ -973,7 +975,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompt).not.toContain('STALE_STATEMENT_SENTINEL')
   })
 
-  it('does not fall back to an ordinary draft body after finalized-source validation fails', async () => {
+  it('keeps a distant invalid source optional when the previous legacy source is readable', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
       observedTask = task
@@ -984,6 +986,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: 3,
       wordsTarget: 500,
       characters: ['林岚'],
+      previousFinalizedContent: '第二章可读的 legacy 定稿原文。',
       invalidContinuitySourceIds: [51],
       continuity: [{
         draftId: 51,
@@ -1005,6 +1008,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(prompt).not.toContain('UNVERIFIED_BODY_SENTINEL')
     expect(prompt).not.toContain('UNVERIFIED_STATEMENT_SENTINEL')
+    expect(prompt).toContain('第二章可读的 legacy 定稿原文。')
     expect(prompt).toContain('finalized#1:source-invalid')
     expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 51, projectPath, expect.anything())
   })
@@ -1012,7 +1016,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   it.each([
     ['without a continuity projection', false],
     ['with an empty continuity fact index', true],
-  ])('validates the previous finalized source %s before sending it to the provider', async (_label, withProjection) => {
+  ])('stops before the provider when the previous finalized source is invalid %s', async (_label, withProjection) => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
       observedTask = task
@@ -1036,13 +1040,68 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         : [],
     })
 
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow(/无法固定第 1 章的必需定稿来源/u)
+
+    expect(observedTask).toBeUndefined()
+    expect(runtime.complete).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything(), expect.anything())
+    expect(invoke).toHaveBeenCalledWith('db:continuity-read-source', 77, projectPath, expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 77, projectPath, expect.anything())
+  })
+
+  it('stops before the provider when the required previous finalized source is missing', async () => {
+    const runtime = fakeOutcomes(outcome('不应生成。'.repeat(125), 'stop'))
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow(/无法固定第 1 章的必需定稿来源/u)
+
+    expect(runtime.complete).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything(), expect.anything())
+  })
+
+  it('recovers the previous canonical source when a derived projection points at an invalid receipt', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const canonicalBody = '当前第 1 章定稿原文哨兵。'
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      invalidContinuitySourceIds: [51],
+      previousFinalizedContent: canonicalBody,
+      continuitySourceContents: { 77: canonicalBody },
+      continuity: [{
+        draftId: 51,
+        chapterNumber: 1,
+        chapterTitle: '损坏派生定位',
+        chapterNotes: '',
+        facts: [{
+          category: 'plot',
+          entities: [],
+          statement: '损坏派生事实',
+          sourceChapter: 1,
+          evidence: '损坏派生引文',
+        }],
+      }],
+    })
+
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).not.toContain(unverifiedBody)
-    expect(prompt).toContain('finalized#1:source-invalid')
+    expect(prompt).toContain(canonicalBody)
+    expect(prompt).not.toContain('损坏派生引文')
+    expect(invoke).toHaveBeenCalledWith('db:continuity-read-source', 51, projectPath, expect.anything())
     expect(invoke).toHaveBeenCalledWith('db:continuity-read-source', 77, projectPath, expect.anything())
-    expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 77, projectPath, expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 51, projectPath, expect.anything())
   })
 
   it('marks an injected batch draft ending as unconfirmed continuity context', async () => {
@@ -1228,6 +1287,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       keyEvents: '数据 对峙 异常 标签 旧实验室 陆星辰 系统 警报 第七章',
       characters: ['林晓'],
       knowledgeQueryHint: '作者检索哨兵',
+      previousFinalizedContent: '第一章定稿原文。',
     })
 
     await command.execute({ step: {}, context, callbacks })
@@ -1248,6 +1308,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       runtime,
       chapterNumber,
       wordsTarget: 500,
+      previousFinalizedContent: chapterNumber === 1 ? undefined : '第一章定稿原文。',
       knowledgeResults: [{
         text: '规划资料唯一事实：月桂港的潮汐钟每天倒走十三分钟。',
         score: 0.99,
@@ -1309,6 +1370,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       keyEvents,
       userGuidance,
       knowledgeQueryHint,
+      previousFinalizedContent: '第一章定稿原文。',
     })
 
     await command.execute({ step: {}, context, callbacks })
@@ -1627,6 +1689,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: 8,
       characters: ['林岚'],
       wordsTarget: 500,
+      previousFinalizedContent: '第七章定稿原文。',
       continuity: [{
         draftId: 41,
         chapterNumber: 1,
@@ -1686,6 +1749,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: 8,
       characters: ['林岚'],
       wordsTarget: 500,
+      previousFinalizedContent: '第七章定稿原文。',
       continuity,
     })
 
@@ -1724,6 +1788,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: 5,
       characters: ['林岚'],
       wordsTarget: 500,
+      previousFinalizedContent: '第四章定稿原文。',
       narrativeThreads,
     })
 
@@ -2211,6 +2276,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       writingLanguage: 'en-US',
       chapterNumber: 2,
       userGuidance: authorGuidance,
+      previousFinalizedContent: 'The previous chapter is finalized.',
     })
 
     await command.execute({ step: {}, context, callbacks })

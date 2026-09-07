@@ -100,6 +100,8 @@ interface DraftDependencyState {
     contentHash: string
     chapterNumber: number
     status: string
+    sourceDependencies: DraftSourceDependency[]
+    sourceDependenciesValid: boolean
     authoritativeFinalized: boolean
     finalizationId: string | null
     receiptContentHash: string | null
@@ -111,13 +113,16 @@ function dependencyStates(
     dependencyIds: readonly number[],
 ): Map<number, DraftDependencyState> {
     const states = new Map<number, DraftDependencyState>()
-    const uniqueIds = [...new Set(dependencyIds)]
-    for (let offset = 0; offset < uniqueIds.length; offset += 500) {
-        const chunk = uniqueIds.slice(offset, offset + 500)
+    const pendingIds = [...new Set(dependencyIds)]
+    const queuedIds = new Set(pendingIds)
+    for (let offset = 0; offset < pendingIds.length;) {
+        const chunk = pendingIds.slice(offset, offset + 500)
+        offset += chunk.length
         if (chunk.length === 0) continue
         const placeholders = chunk.map(() => '?').join(', ')
         const rows = db.prepare(`
-          SELECT drafts.id, drafts.chapter_number, drafts.status, contents.body,
+          SELECT drafts.id, drafts.chapter_number, drafts.status, drafts.source_dependencies,
+                 contents.body,
                  finalization_outbox.finalization_id,
                  finalization_outbox.content_hash AS receipt_content_hash,
                  finalization_outbox.content_snapshot,
@@ -135,21 +140,33 @@ function dependencyStates(
             id: number
             chapter_number: number
             status: string
+            source_dependencies: string
             body: string
             finalization_id: string | null
             receipt_content_hash: string | null
             content_snapshot: string | null
             authoritative_finalized: number
         }>
-        for (const row of rows) states.set(row.id, {
-            contentHash: sha256(row.body),
-            chapterNumber: row.chapter_number,
-            status: row.status,
-            authoritativeFinalized: row.authoritative_finalized === 1,
-            finalizationId: row.finalization_id,
-            receiptContentHash: row.receipt_content_hash,
-            receiptContentMatches: row.content_snapshot === null || row.content_snapshot === row.body,
-        })
+        for (const row of rows) {
+            const parsedDependencies = parseDependencies(row.source_dependencies)
+            states.set(row.id, {
+                contentHash: sha256(row.body),
+                chapterNumber: row.chapter_number,
+                status: row.status,
+                sourceDependencies: parsedDependencies.dependencies,
+                sourceDependenciesValid: parsedDependencies.valid,
+                authoritativeFinalized: row.authoritative_finalized === 1,
+                finalizationId: row.finalization_id,
+                receiptContentHash: row.receipt_content_hash,
+                receiptContentMatches: row.content_snapshot === null || row.content_snapshot === row.body,
+            })
+            if (!parsedDependencies.valid) continue
+            for (const dependency of parsedDependencies.dependencies) {
+                if (queuedIds.has(dependency.draftId)) continue
+                queuedIds.add(dependency.draftId)
+                pendingIds.push(dependency.draftId)
+            }
+        }
     }
     return states
 }
@@ -172,13 +189,82 @@ function dependencyIsCurrent(
         && state.receiptContentMatches
 }
 
+function dependencyLineageIsCurrent(
+    rootId: number,
+    states: ReadonlyMap<number, DraftDependencyState>,
+    memo: Map<number, boolean>,
+): boolean {
+    const cached = memo.get(rootId)
+    if (cached !== undefined) return cached
+
+    const visiting = new Set<number>([rootId])
+    const stack: Array<{ draftId: number; nextDependencyIndex: number }> = [
+        { draftId: rootId, nextDependencyIndex: 0 },
+    ]
+    while (stack.length > 0) {
+        const frame = stack[stack.length - 1]
+        if (!frame) break
+        if (memo.has(frame.draftId)) {
+            visiting.delete(frame.draftId)
+            stack.pop()
+            continue
+        }
+
+        const state = states.get(frame.draftId)
+        if (!state || !state.sourceDependenciesValid) {
+            memo.set(frame.draftId, false)
+            visiting.delete(frame.draftId)
+            stack.pop()
+            continue
+        }
+
+        const dependency = state.sourceDependencies[frame.nextDependencyIndex]
+        if (!dependency) {
+            memo.set(frame.draftId, state.sourceDependencies.every(source => (
+                dependencyIsCurrent(source, states.get(source.draftId))
+                && memo.get(source.draftId) === true
+            )))
+            visiting.delete(frame.draftId)
+            stack.pop()
+            continue
+        }
+        frame.nextDependencyIndex += 1
+
+        if (!dependencyIsCurrent(dependency, states.get(dependency.draftId))) {
+            memo.set(frame.draftId, false)
+            continue
+        }
+        if (memo.has(dependency.draftId)) continue
+        if (visiting.has(dependency.draftId)) {
+            memo.set(frame.draftId, false)
+            continue
+        }
+
+        visiting.add(dependency.draftId)
+        stack.push({ draftId: dependency.draftId, nextDependencyIndex: 0 })
+    }
+    return memo.get(rootId) === true
+}
+
+function dependenciesAreCurrent(
+    dependencies: readonly DraftSourceDependency[],
+    states: ReadonlyMap<number, DraftDependencyState>,
+    memo: Map<number, boolean>,
+): boolean {
+    return dependencies.every(dependency => (
+        dependencyIsCurrent(dependency, states.get(dependency.draftId))
+        && dependencyLineageIsCurrent(dependency.draftId, states, memo)
+    ))
+}
+
 function rowsToMeta(db: BetterSqlite3.Database, rows: Record<string, unknown>[]): DraftMeta[] {
     const parsed = rows.map(row => ({ row, ...parseDependencies(row.source_dependencies) }))
     const states = dependencyStates(
         db,
         parsed.flatMap(item => item.dependencies.map(dependency => dependency.draftId)),
     )
-    return parsed.map(({ row, dependencies, valid }) => rowToMeta(row, dependencies, valid, states))
+    const memo = new Map<number, boolean>()
+    return parsed.map(({ row, dependencies, valid }) => rowToMeta(row, dependencies, valid, states, memo))
 }
 
 /** DB 行 → DraftMeta */
@@ -187,6 +273,7 @@ function rowToMeta(
     sourceDependencies: DraftSourceDependency[],
     dependenciesValid: boolean,
     states: ReadonlyMap<number, DraftDependencyState>,
+    memo: Map<number, boolean>,
 ): DraftMeta {
     const chapterTitle = typeof row.chapter_title === 'string' && row.chapter_title.trim()
         ? row.chapter_title
@@ -201,9 +288,7 @@ function rowToMeta(
         contentId: row.content_id as number,
         wordCount: row.word_count as number,
         sourceDependencies,
-        dependenciesStale: !dependenciesValid || sourceDependencies.some(dependency => (
-            !dependencyIsCurrent(dependency, states.get(dependency.draftId))
-        )),
+        dependenciesStale: !dependenciesValid || !dependenciesAreCurrent(sourceDependencies, states, memo),
         createdAt: row.created_at as string,
         updatedAt: row.updated_at as string,
     }
@@ -234,9 +319,9 @@ export class DraftRepository {
                 db,
                 parsedDependencies.dependencies.map(dependency => dependency.draftId),
             )
-            if (parsedDependencies.dependencies.some(dependency => (
-                !dependencyIsCurrent(dependency, states.get(dependency.draftId))
-            ))) throw new Error('草稿来源依赖已变化或不再是当前定稿，已拒绝保存')
+            if (!dependenciesAreCurrent(parsedDependencies.dependencies, states, new Map())) {
+                throw new Error('草稿来源依赖已变化或不再是当前定稿，已拒绝保存')
+            }
 
             const row = db.prepare(`
         SELECT MAX(version) as maxVer FROM drafts WHERE chapter_number = ?

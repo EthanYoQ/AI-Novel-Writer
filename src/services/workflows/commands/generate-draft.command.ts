@@ -508,6 +508,21 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const selectedCandidateDrafts = this.selectedCandidateDrafts
       .filter(candidate => candidate.chapterNumber < this.chapterInfo.chapterNumber)
       .sort((left, right) => left.chapterNumber - right.chapterNumber)
+    const previousChapterNumber = this.chapterInfo.chapterNumber - 1
+    const hasRequiredPreviousCandidate = selectedCandidateDrafts.some(candidate => (
+      candidate.chapterNumber === previousChapterNumber && Boolean(candidate.content.trim())
+    ))
+    const hasRequiredFinalizedSource = finalizedSources.some(source => (
+      source.chapterNumber === previousChapterNumber
+      && source.sourceStatus !== 'invalid'
+      && Boolean(source.content.trim())
+    ))
+    if (!isFirstChapter && !hasRequiredPreviousCandidate && !hasRequiredFinalizedSource) {
+      throw new Error(uiText(
+        `无法固定第 ${previousChapterNumber} 章的必需定稿来源，已停止生成。请修复或重新定稿该章后再试。`,
+        `The required finalized source for Chapter ${previousChapterNumber} could not be fixed, so generation stopped. Repair or re-finalize that chapter and try again.`,
+      ))
+    }
     const chapterMaterials = assembleChapterMaterials({
       writingLanguage,
       authorProjectFacts: [coreOutline, worldSetting, goldenFinger, protagonistProfile]
@@ -1207,6 +1222,7 @@ ${visibleTail}`,
           : sourceRead.status === 'legacy'
             ? sourceRead.content
             : ''
+        if (projection.chapterNumber === currentChapter - 1 && !content.trim()) continue
         sources.push({
           chapterNumber: projection.chapterNumber,
           draftId: projection.draftId,
@@ -1232,6 +1248,7 @@ ${visibleTail}`,
               : {}),
         })
       } catch {
+        if (projection.chapterNumber === currentChapter - 1) continue
         sources.push({
           chapterNumber: projection.chapterNumber,
           draftId: projection.draftId,
@@ -1244,7 +1261,11 @@ ${visibleTail}`,
       }
     }
 
-    if (!sources.some(source => source.chapterNumber === currentChapter - 1)) {
+    if (!sources.some(source => (
+      source.chapterNumber === currentChapter - 1
+      && source.sourceStatus !== 'invalid'
+      && Boolean(source.content.trim())
+    ))) {
       try {
         const meta = await ipc.invokeWithProjectSession(
           projectSession,

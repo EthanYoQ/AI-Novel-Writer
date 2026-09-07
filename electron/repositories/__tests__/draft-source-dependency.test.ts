@@ -111,6 +111,73 @@ describe('draft source dependencies', () => {
     expect(DraftRepository.listByChapter(2)).toEqual([])
   })
 
+  it('marks transitive dependents stale and rejects extending a stale lineage', () => {
+    const firstContent = '第一章候选原文。'
+    const secondContent = '第二章候选原文。'
+    const thirdContent = '第三章候选原文。'
+    const firstId = DraftRepository.create({
+      chapterNumber: 1, source: 'write', content: firstContent, wordCount: 8,
+    })
+    const secondId = DraftRepository.create({
+      chapterNumber: 2,
+      source: 'write',
+      content: secondContent,
+      wordCount: 8,
+      sourceDependencies: [{ draftId: firstId, contentHash: sha256(firstContent) }],
+    })
+    const thirdId = DraftRepository.create({
+      chapterNumber: 3,
+      source: 'write',
+      content: thirdContent,
+      wordCount: 8,
+      sourceDependencies: [{ draftId: secondId, contentHash: sha256(secondContent) }],
+    })
+
+    expect(DraftRepository.getMeta(thirdId)?.dependenciesStale).toBe(false)
+
+    DraftRepository.updateContent(firstId, '第一章候选正文已变化。', 11)
+
+    expect(DraftRepository.getMeta(secondId)?.dependenciesStale).toBe(true)
+    expect(DraftRepository.getMeta(thirdId)?.dependenciesStale).toBe(true)
+    expect(() => DraftRepository.create({
+      chapterNumber: 4,
+      source: 'write',
+      content: '不应继承过期前史的第四章。',
+      wordCount: 13,
+      sourceDependencies: [{ draftId: thirdId, contentHash: sha256(thirdContent) }],
+    })).toThrow(/来源依赖已变化/u)
+    expect(DraftRepository.listByChapter(4)).toEqual([])
+  })
+
+  it('fails closed for cyclic dependency metadata without recursing forever', () => {
+    const firstContent = '第一章候选原文。'
+    const secondContent = '第二章候选原文。'
+    const firstId = DraftRepository.create({
+      chapterNumber: 1, source: 'write', content: firstContent, wordCount: 8,
+    })
+    const secondId = DraftRepository.create({
+      chapterNumber: 2,
+      source: 'write',
+      content: secondContent,
+      wordCount: 8,
+      sourceDependencies: [{ draftId: firstId, contentHash: sha256(firstContent) }],
+    })
+    getProjectDb()!.prepare('UPDATE drafts SET source_dependencies = ? WHERE id = ?').run(
+      JSON.stringify([{ draftId: secondId, contentHash: sha256(secondContent) }]),
+      firstId,
+    )
+
+    expect(DraftRepository.getMeta(firstId)?.dependenciesStale).toBe(true)
+    expect(DraftRepository.getMeta(secondId)?.dependenciesStale).toBe(true)
+    expect(() => DraftRepository.create({
+      chapterNumber: 3,
+      source: 'write',
+      content: '不应继承环形前史的第三章。',
+      wordCount: 13,
+      sourceDependencies: [{ draftId: secondId, contentHash: sha256(secondContent) }],
+    })).toThrow(/来源依赖已变化/u)
+  })
+
   it('migrates legacy drafts as source-unknown without claiming stale evidence', () => {
     const sourceId = DraftRepository.create({
       chapterNumber: 1, source: 'write', content: '旧草稿。', wordCount: 4,
@@ -123,6 +190,15 @@ describe('draft source dependencies', () => {
       sourceDependencies: [],
       dependenciesStale: false,
     })
+
+    const downstreamId = DraftRepository.create({
+      chapterNumber: 2,
+      source: 'write',
+      content: '基于旧草稿的新草稿。',
+      wordCount: 10,
+      sourceDependencies: [{ draftId: sourceId, contentHash: sha256('旧草稿。') }],
+    })
+    expect(DraftRepository.getMeta(downstreamId)?.dependenciesStale).toBe(false)
   })
 
   it('rejects an in-flight save after the frozen finalized source is replaced with identical prose', () => {
