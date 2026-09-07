@@ -443,13 +443,16 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       filteredContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
     }
     const writerChapterInfo = toWriterChapterInfo(this.chapterInfo)
+    const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
+    const lowerTargetChars = Math.round(targetChars * 0.8)
+    const upperTargetChars = Math.round(targetChars * 1.2)
     const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       // ---- 缓存命中区（跨章稳定，前缀对齐）----
       .withArchitecture(architecture)
       .withGlobalGuidance(mergedGuidance)
       .withWritingStyle(writingStyle)
       .withNovelConfig(novelConfigFactsJson)
-      .withWordNumber(normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter))
+      .withWordNumber(targetChars)
       // ---- 章节公共区（首章与后续章都必须完整注入）----
       .withChapterInfo(writerChapterInfo)
       .withCharacterStates('')
@@ -517,9 +520,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `  Optional material coverage gaps: ${chapterMaterials.omissions.length}`,
       ))
     }
-    const prompt = [promptBuilder.build(), chapterMaterials.text].join('\n\n')
+    const chapterLengthContract = promptLanguageText(
+      writingLanguage,
+      `【本章篇幅合同】\n用户目标 ${targetChars} 字；可接受范围 ${lowerTargetChars}–${upperTargetChars} 字（±20%）。在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件；不得为满足篇幅而删除、改写或截断这些要求，不要为凑字数增加无关内容。`,
+      `[Chapter length contract]\nThe user's target is ${targetChars} words; the acceptable range is ${lowerTargetChars}-${upperTargetChars} words (±20%). Within this length, fully realize every author task and required event in the chapter blueprint; do not delete, rewrite, or truncate those requirements to meet the range, and do not add unrelated content just to fill space.`,
+    )
+    const prompt = [promptBuilder.build(), chapterLengthContract, chapterMaterials.text].join('\n\n')
     const previousEnding = chapterMaterials.previousEnding
-    const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
 
     callbacks.log(uiText(
       '调用 AI 生成章节草稿...',

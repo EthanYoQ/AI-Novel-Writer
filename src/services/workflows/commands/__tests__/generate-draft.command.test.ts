@@ -647,6 +647,37 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     },
   )
 
+  it.each([
+    { target: 900, lowerBound: 720, upperBound: 1080 },
+    { target: 1400, lowerBound: 1120, upperBound: 1680 },
+  ])('sends the dynamic $target-unit ±20% length contract in the final provider request', async ({
+    target,
+    lowerBound,
+    upperBound,
+  }) => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('正'.repeat(target), 'stop')
+    })
+    const requiredEvent = '作者指定的必需事件必须完整发生'
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage: 'zh-CN',
+      wordsTarget: target,
+      keyEvents: requiredEvent,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(user).toContain('【本章篇幅合同】')
+    expect(user).toContain(`用户目标 ${target} 字；可接受范围 ${lowerBound}–${upperBound} 字（±20%）`)
+    expect(user).toContain('在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件')
+    expect(user).toContain(requiredEvent)
+    expect(runtime.complete).toHaveBeenCalledOnce()
+  })
+
   it('sends English continuation-stage instructions for an English project', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
