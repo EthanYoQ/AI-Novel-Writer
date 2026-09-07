@@ -678,6 +678,35 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
+  it('orders sourced history before the current author task and length contract in the final provider request', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('正'.repeat(900), 'stop')
+    })
+    const historyMarker = '上一章唯一历史哨兵'
+    const authorTask = '当前章唯一作者任务哨兵'
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 900,
+      keyEvents: authorTask,
+      previousFinalizedContent: `${historyMarker}。`.repeat(100),
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    const historyIndex = user.indexOf(historyMarker)
+    const authorTaskIndex = user.indexOf(authorTask)
+    const lengthContractIndex = user.indexOf('【本章篇幅合同】')
+    expect(historyIndex).toBeGreaterThanOrEqual(0)
+    expect(authorTaskIndex).toBeGreaterThan(historyIndex)
+    expect(lengthContractIndex).toBeGreaterThan(authorTaskIndex)
+    expect(user).toContain('用户目标 900 字；可接受范围 720–1080 字（±20%）')
+    expect(runtime.complete).toHaveBeenCalledOnce()
+  })
+
   it('sends English continuation-stage instructions for an English project', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {

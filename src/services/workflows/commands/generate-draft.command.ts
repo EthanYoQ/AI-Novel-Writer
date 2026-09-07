@@ -525,7 +525,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       `【本章篇幅合同】\n用户目标 ${targetChars} 字；可接受范围 ${lowerTargetChars}–${upperTargetChars} 字（±20%）。在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件；不得为满足篇幅而删除、改写或截断这些要求，不要为凑字数增加无关内容。`,
       `[Chapter length contract]\nThe user's target is ${targetChars} words; the acceptable range is ${lowerTargetChars}-${upperTargetChars} words (±20%). Within this length, fully realize every author task and required event in the chapter blueprint; do not delete, rewrite, or truncate those requirements to meet the range, and do not add unrelated content just to fill space.`,
     )
-    const prompt = [promptBuilder.build(), chapterLengthContract, chapterMaterials.text].join('\n\n')
+    const prompt = [chapterMaterials.text, promptBuilder.build(), chapterLengthContract].join('\n\n')
     const previousEnding = chapterMaterials.previousEnding
 
     callbacks.log(uiText(
