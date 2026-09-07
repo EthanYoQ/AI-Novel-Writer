@@ -36,8 +36,15 @@ interface Props {
   archStatus: Record<string, boolean>
   /** 预先选中的步骤（单文件生成时传入） */
   initialSelectedSteps?: ArchStepKey[]
-  onConfirm: (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => Promise<void>
+  onConfirm: (
+    selectedSteps: ArchStepKey[],
+    stepGuidance: Record<string, string>,
+    synopsisRange?: { from: number; to: number },
+  ) => Promise<void>
 }
+
+/** 默认视作「全书一口气生成」的章数阈值，超过时提示分批。 */
+const SCOPE_WARNING_THRESHOLD = 20
 
 /** 生成架构确认弹框（含步骤勾选） */
 export default function ArchitectureConfirmDialog({
@@ -64,10 +71,15 @@ export default function ArchitectureConfirmDialog({
   const [stepGuidance, setStepGuidance] = useState<Record<string, string>>({})
   // 是否展开指导输入区
   const [showGuidance, setShowGuidance] = useState(false)
+  // 情节大纲本次生成范围（起章/止章；空 = 1..total 全书）
+  const [synopsisFrom, setSynopsisFrom] = useState('')
+  const [synopsisTo, setSynopsisTo] = useState('')
 
   // 每次弹窗打开时重置选中状态
   const resetChecked = () => {
     setChecked(createDefaultArchitectureSelection(archStatus, initialSelectedSteps))
+    setSynopsisFrom('')
+    setSynopsisTo('')
   }
 
   const [isConfirming, setIsConfirming] = useState(false)
@@ -86,6 +98,23 @@ export default function ArchitectureConfirmDialog({
   const selectedSteps = (Object.keys(checked) as ArchStepKey[]).filter(k => checked[k])
   const noneSelected = selectedSteps.length === 0
 
+  // 情节大纲本次生成范围：空值回落到 1 / totalChapters（全书）。
+  const totalChapters = Number(config.totalChapters) > 0 ? Number(config.totalChapters) : 0
+  const resolveSynopsisRange = (): { ok: true; range?: { from: number; to: number } } | { ok: false } => {
+    if (!checked.synopsis || totalChapters <= 0) return { ok: true }
+    const parseBound = (value: string): number | null => {
+      if (!value.trim()) return null
+      const parsed = Number(value)
+      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+    }
+    const from = parseBound(synopsisFrom) ?? 1
+    const to = parseBound(synopsisTo) ?? totalChapters
+    if (from > totalChapters || to > totalChapters || from > to) return { ok: false }
+    return from === 1 && to === totalChapters
+      ? { ok: true }
+      : { ok: true, range: { from, to } }
+  }
+
   const handleConfirm = async () => {
     if (noneSelected) return
     setIsConfirming(true)
@@ -94,6 +123,16 @@ export default function ArchitectureConfirmDialog({
       const configGuard = guardArchitectureGeneration()
       if (!configGuard.ok) {
         setGuardError(configGuard.message || text('配置校验失败', 'Configuration validation failed.'))
+        return
+      }
+
+      // 范围合法性（超出总章数或起大于止）
+      const resolution = resolveSynopsisRange()
+      if (!resolution.ok) {
+        setGuardError(text(
+          `情节大纲范围无效：应在第 1–${totalChapters} 章之间且起始章 ≤ 结束章。`,
+          `Invalid plot-outline range: it must stay within chapters 1-${totalChapters} with from ≤ to.`,
+        ))
         return
       }
 
@@ -107,7 +146,7 @@ export default function ArchitectureConfirmDialog({
       }
 
       setGuardError(null)
-      await onConfirm(selectedSteps, stepGuidance)
+      await onConfirm(selectedSteps, stepGuidance, resolution.range)
       onClose()
       const stepNames = selectedSteps.map(k => {
         const item = ARCH_FILES.find(f => f.key === k)
@@ -231,6 +270,66 @@ export default function ArchitectureConfirmDialog({
               )
             })}
           </div>
+
+          {/* 情节大纲 —— 本次生成范围（警示 + 起止章输入；仅总章数较多时提示分批） */}
+          {checked.synopsis && totalChapters > SCOPE_WARNING_THRESHOLD && (
+            <div
+              className="rounded-lg p-3 space-y-2"
+              style={{ backgroundColor: 'var(--color-panel)', border: '1px solid var(--color-border)' }}
+            >
+              <div className="flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--color-warning-text)' }}>
+                <AlertTriangle size={13} />
+                {text('情节大纲 · 本次生成范围', 'Plot outline · batch scope')}
+              </div>
+              <p
+                role="note"
+                className="text-xs leading-relaxed m-0"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                  {text(
+                    `全书共 ${totalChapters} 章。若一口气生成全部章节大纲，等待时间会明显变长，且单次输出过长容易被模型输出上限截断、导致大纲质量下降。建议分块：本次只填写一个较小的范围（如第 1–20 章）；本批完成后，可在架构页点击「续写剩余章节」或再次打开本框生成下一批（第 21 章起），已生成的部分不会被覆盖。`,
+                    `The book spans ${totalChapters} chapters. Generating the full outline in one pass takes much longer, and an oversized single output tends to be cut off by the model output limit and lose quality. Generate it in blocks: fill a smaller range for this batch (e.g. chapters 1-20); after the batch completes, use “Continue remaining chapters” on the architecture page or reopen this dialog for the next batch (from chapter 21) — confirmed parts are never overwritten.`,
+                  )}
+                </p>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span style={{ color: 'var(--color-text-muted)' }}>{text('第', 'From ch.')}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalChapters}
+                    value={synopsisFrom}
+                    onChange={e => setSynopsisFrom(e.target.value)}
+                    placeholder="1"
+                    aria-label={text('本次生成范围的起始章', 'First chapter of this batch')}
+                    className="w-16 rounded-md px-2 py-1.5 text-xs outline-none transition-colors"
+                    style={{
+                      color: 'var(--color-text)',
+                      backgroundColor: 'var(--color-bg)',
+                      border: '1px solid var(--color-border)',
+                    }}
+                  />
+                  <span style={{ color: 'var(--color-text-muted)' }}>{text('章 到第', 'to ch.')}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalChapters}
+                    value={synopsisTo}
+                    onChange={e => setSynopsisTo(e.target.value)}
+                    placeholder={String(totalChapters)}
+                    aria-label={text('本次生成范围的结束章', 'Last chapter of this batch')}
+                    className="w-16 rounded-md px-2 py-1.5 text-xs outline-none transition-colors"
+                    style={{
+                      color: 'var(--color-text)',
+                      backgroundColor: 'var(--color-bg)',
+                      border: '1px solid var(--color-border)',
+                    }}
+                  />
+                  <span className="text-xs flex-1" style={{ color: 'var(--color-text-muted)' }}>
+                    {text('章（留空起始=1、结束=全书）', 'chapter (leave empty: from 1 / to the whole book)')}
+                  </span>
+                </div>
+            </div>
+          )}
 
           {/* 逐步指导区域（可折叠） */}
           {selectedSteps.length > 0 && (

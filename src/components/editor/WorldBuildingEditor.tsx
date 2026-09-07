@@ -56,6 +56,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const projectMatches = currentProject?.path === projectKey
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
+  const [synopsisIncomplete, setSynopsisIncomplete] = useState(false)
+  const [synopsisCoveredTo, setSynopsisCoveredTo] = useState<number>(0)
+  const [synopsisTotalChapters, setSynopsisTotalChapters] = useState<number>(0)
+  const [synopsisBusy, setSynopsisBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showArchDialog, setShowArchDialog] = useState(false)
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
@@ -76,6 +80,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       archStatusRequestGate.current.begin()
       setArchStatus({})
       setWordCounts({})
+      setSynopsisIncomplete(false)
+      setSynopsisCoveredTo(0)
+      setSynopsisTotalChapters(0)
       setLoading(false)
       return
     }
@@ -87,6 +94,26 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       'db:project-core-get',
       projectPath,
     )
+    // 情节大纲状态：中断可断点续写；或部分覆盖可分批续写（covered_to < total）
+    let interrupted = false
+    let coveredTo = 0
+    try {
+      const partialResult = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:read-json',
+        `${projectPath}/.vela/partial_arch.json`,
+        projectPath,
+      )
+      const partial = (partialResult?.success === true
+        ? (partialResult as { data?: { synopsis_incomplete?: boolean; synopsis_result?: string; synopsis_covered_to?: number } }).data
+        : undefined) || {}
+      interrupted = partial.synopsis_incomplete === true
+        && (partial.synopsis_result?.length ?? 0) > 50
+      coveredTo = Number(partial.synopsis_covered_to) > 0 ? Number(partial.synopsis_covered_to) : 0
+    } catch {
+      interrupted = false
+      coveredTo = 0
+    }
     const status: Record<string, boolean> = {
       premise: (core?.premise?.length ?? 0) > 50,
       characters: rosterSnapshot?.status === 'ready',
@@ -105,6 +132,11 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     ) return
     setArchStatus(status)
     setWordCounts(counts)
+    setSynopsisIncomplete(interrupted && Boolean(status.synopsis))
+    setSynopsisCoveredTo(coveredTo)
+    setSynopsisTotalChapters(Number(currentProject?.novelConfig?.totalChapters) > 0
+      ? Number(currentProject?.novelConfig?.totalChapters)
+      : 0)
     setLoading(false)
     // ✅ 只依赖 path 字符串，避免 novelConfig 等变化导致 loadStatus 重建
   }, [currentProject, projectKey, projectMatches, rosterSnapshot])
@@ -200,7 +232,11 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   }
 
   /** 确认后启动架构工作流 */
-  const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
+  const handleConfirm = async (
+    selectedSteps: ArchStepKey[],
+    stepGuidance: Record<string, string>,
+    synopsisRange?: { from: number; to: number },
+  ) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation was not started.'))
     if (!isProjectSessionCurrent(projectSession)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation was not started.'))
@@ -208,7 +244,53 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       workflow: 'generate_architecture',
       selectedSteps,
       stepGuidance,
+      synopsisRange,
     }, projectSession)
+  }
+
+  /** 从上次输出长度中断的检查点继续生成情节大纲（断点续写当前批） */
+  const handleResumeSynopsis = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    if (!isProjectSessionCurrent(projectSession) || synopsisBusy) return
+    setSynopsisBusy(true)
+    try {
+      await launchCreativeWorkflow({
+        workflow: 'generate_architecture',
+        selectedSteps: ['synopsis'],
+        resumeSynopsis: true,
+      }, projectSession)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const { toast } = await import('../ui/Toast')
+      toast.error(text(`续写启动失败：${detail}`, `Failed to start the continuation: ${detail}`))
+    } finally {
+      setSynopsisBusy(false)
+    }
+  }
+
+  /** 分批续写剩余章节：从已确认覆盖的下一章（coveredTo+1）连续生成到全书。 */
+  const handleContinueOutlineBatch = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    if (!isProjectSessionCurrent(projectSession) || synopsisBusy) return
+    const from = synopsisCoveredTo + 1
+    const to = synopsisTotalChapters
+    if (from > to || to <= 0) return
+    setSynopsisBusy(true)
+    try {
+      await launchCreativeWorkflow({
+        workflow: 'generate_architecture',
+        selectedSteps: ['synopsis'],
+        synopsisRange: { from, to },
+      }, projectSession)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const { toast } = await import('../ui/Toast')
+      toast.error(text(`续批启动失败：${detail}`, `Failed to start the batch: ${detail}`))
+    } finally {
+      setSynopsisBusy(false)
+    }
   }
 
   if (!projectMatches) {
@@ -372,12 +454,69 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                     </>
                   ) : generated ? (
                     <>
-                      <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-[var(--color-success-text)]">
-                        {text('已生成', 'Generated')}
-                      </span>
+                      {f.key === 'synopsis' && synopsisIncomplete ? (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                          {text('不完整 · 已存部分', 'Incomplete · partial saved')}
+                        </span>
+                      ) : f.key === 'synopsis' && synopsisCoveredTo > 0 && synopsisCoveredTo < synopsisTotalChapters ? (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                          {text(`已覆盖至第 ${synopsisCoveredTo} 章 · 待续批`, `Covered to ch. ${synopsisCoveredTo} · pending`)}
+                        </span>
+                      ) : (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-[var(--color-success-text)]">
+                          {text('已生成', 'Generated')}
+                        </span>
+                      )}
                       <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
                         {words.toLocaleString()} {text('字符', 'characters')}
                       </span>
+                      {f.key === 'synopsis' && synopsisIncomplete && !loading && (
+                        <Button
+                          size="sm"
+                          disabled={synopsisBusy}
+                          className="gap-1.5 mt-0.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm hover:from-amber-600 hover:to-orange-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleResumeSynopsis()
+                          }}
+                          title={text(
+                            '上次生成被输出长度中断，已完成部分已保存。点击后 AI 从断点继续生成当前批次。',
+                            'The previous run stopped at the output length limit and the completed part was saved. Click to continue the current batch from the break point.',
+                          )}
+                        >
+                          {synopsisBusy
+                            ? <RefreshCw size={12} className="animate-spin opacity-90" />
+                            : <RefreshCw size={12} className="opacity-90" />
+                          }
+                          {synopsisBusy
+                            ? text('续写中...', 'Resuming...')
+                            : text('断点续写大纲', 'Continue outline')}
+                        </Button>
+                      )}
+                      {f.key === 'synopsis' && !synopsisIncomplete
+                        && synopsisCoveredTo > 0 && synopsisCoveredTo < synopsisTotalChapters && !loading && (
+                        <Button
+                          size="sm"
+                          disabled={synopsisBusy}
+                          className="gap-1.5 mt-0.5 bg-gradient-to-r from-indigo-500 to-blue-500 text-white shadow-sm hover:from-indigo-600 hover:to-blue-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleContinueOutlineBatch()
+                          }}
+                          title={text(
+                            `从第 ${synopsisCoveredTo + 1} 章起继续生成剩余章节（已确认的第 1–${synopsisCoveredTo} 章保持不变）。`,
+                            `Continue generating the remaining chapters from chapter ${synopsisCoveredTo + 1} (confirmed chapters 1-${synopsisCoveredTo} stay unchanged).`,
+                          )}
+                        >
+                          {synopsisBusy
+                            ? <RefreshCw size={12} className="animate-spin opacity-90" />
+                            : <RefreshCw size={12} className="opacity-90" />
+                          }
+                          {synopsisBusy
+                            ? text('生成中...', 'Generating...')
+                            : text(`续批（第 ${synopsisCoveredTo + 1} 章起）`, `Continue (ch. ${synopsisCoveredTo + 1}+)`)}
+                        </Button>
+                      )}
                     </>
                   ) : (
                     <span
