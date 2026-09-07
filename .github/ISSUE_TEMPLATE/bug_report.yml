@@ -1,0 +1,174 @@
+name: Bug 报告
+description: 报告可复现的异常、错误或行为偏差
+title: "[Bug] "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请描述你实际看到的现象，不需要判断内部原因。
+
+        **这是公开页面。请先脱敏：禁止粘贴 API Key、Token、完整小说、未公开创作资料、私人本机路径、个人信息、完整项目数据库或整包日志。** 使用虚构占位内容、最小复现片段和问题发生前后的必要日志。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issues，没有找到相同问题。
+          required: true
+        - label: 我已移除凭据、完整小说、私人路径和其他敏感信息。
+          required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: 应用版本
+      description: 在应用“关于”页面或安装包名称中查看；不确定时填写“未知”。
+      placeholder: 例如 1.0.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: system-install
+    attributes:
+      label: 系统与安装方式
+      description: 请写操作系统及版本、CPU 架构，以及安装方式（正式安装包、便携版或源码运行）。
+      placeholder: |
+        操作系统：Windows 11 24H2
+        CPU 架构：x64
+        安装方式：正式安装包
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operation
+    attributes:
+      label: 出现问题的操作场景
+      description: 选择最接近的一项；细节可写在复现步骤中。
+      options:
+        - 创建或打开项目
+        - 配置或测试模型
+        - 设定、角色或大纲
+        - 章节蓝图
+        - 草稿生成
+        - 审稿、修稿或定稿
+        - 连续性、叙事线索或剧情树
+        - 导入、导出或文件操作
+        - 安装或更新
+        - 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: 是否可以再次复现
+      options:
+        - 每次都能复现
+        - 经常复现
+        - 偶尔复现
+        - 只发生过一次
+        - 暂时无法重试或不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从打开应用或项目开始，按顺序写出最少步骤；请使用虚构或脱敏内容。
+      placeholder: |
+        1. 打开……
+        2. 选择……
+        3. 点击……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+      description: 你认为完成上述操作后应该发生什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 实际发生了什么？请描述界面现象、是否卡住、数据是否保存等可观察事实。
+    validations:
+      required: true
+
+  - type: textarea
+    id: model-config
+    attributes:
+      label: 模型配置
+      description: 从应用设置中抄录即可，不要填写 API Key。问题未调用模型或不确定的项目请写“未涉及”或“未知”。
+      placeholder: |
+        模型供应商：
+        模型名称：
+        API 兼容类型（例如 OpenAI-compatible 或 Gemini）：
+        创作策略：
+        推理设置或强度：
+    validations:
+      required: true
+
+  - type: textarea
+    id: generation-params
+    attributes:
+      label: 生成参数
+      description: 填写问题发生时的值；界面未显示或不确定时填写“未知”。
+      placeholder: |
+        Max output tokens：
+        Context window：
+        Temperature：
+        Top_p：
+    validations:
+      required: true
+
+  - type: textarea
+    id: project-scope
+    attributes:
+      label: 项目规模与本次范围
+      description: 只填写数量和章节范围，不要粘贴小说正文或项目文件。
+      placeholder: |
+        项目总章节数（已有或计划）：
+        本次操作范围（例如第 8 章或第 8-10 章）：
+        目标字数：
+    validations:
+      required: true
+
+  - type: textarea
+    id: full-error
+    attributes:
+      label: 完整报错
+      description: 从第一行到最后一行复制报错文字并脱敏；没有报错时填写“无”。
+      placeholder: 请粘贴脱敏后的完整报错文字
+    validations:
+      required: true
+
+  - type: textarea
+    id: minimal-logs
+    attributes:
+      label: 最小必要日志
+      description: 仅粘贴问题发生前后的相关日志并脱敏，不要上传整个日志目录；没有可用日志时填写“无”。
+      placeholder: 请粘贴最小、脱敏后的相关日志
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或录屏
+      description: 可将脱敏后的图片或录屏拖到这里。请遮盖小说正文、项目名、用户名、路径和凭据；无法提供时说明原因。
+      placeholder: 拖入脱敏后的截图或录屏，或填写“无法提供”
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 其他补充
+      description: 可补充最近一次正常版本、临时解决办法或与本问题直接相关的信息。
