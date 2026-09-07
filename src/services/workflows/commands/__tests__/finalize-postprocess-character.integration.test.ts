@@ -463,7 +463,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
 
   it('keeps protected author and legacy state while retaining source-only lookup candidates', async () => {
     const draftContent = [
-      'Lin Lan wakes in New Harbor carrying an iron compass.',
+      'Lin Lan places the brass key in Zhou Yan\'s palm at New Harbor.',
       '',
       'She checks the tide ledger before dawn.',
     ].join('\n')
@@ -471,10 +471,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       updates: [{
         name: 'Lin Lan',
         currentState: {
-          powerLevel: 'veteran',
-          physicalState: 'rested',
-          mentalState: 'calm',
-          keyItems: 'iron compass',
+          keyItems: '',
           updatedAtChapter: 2,
         },
       }],
@@ -486,9 +483,6 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
 
     expect(status.steps.character_cards).toMatchObject({ ok: true })
     expect(CharacterRepository.getByName('Lin Lan')?.currentState).toMatchObject({
-      powerLevel: 'ordinary',
-      physicalState: 'tired',
-      mentalState: 'alert',
       keyItems: 'brass key',
     })
     expect(CharacterRosterRepository.read().revision).toBe(2)
@@ -508,7 +502,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       expect.objectContaining({
         characterName: 'Lin Lan',
         field: 'keyItems',
-        value: 'iron compass',
+        value: '',
       }),
     ]))
 
@@ -529,11 +523,11 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     }
     await expect(new GenerateDraftCommand({
       projectPath,
-      chapterNumber: 3,
+      chapterNumber: 4,
       title: 'Before Dawn',
       role: 'development',
       purpose: 'continue the tide investigation',
-      keyEvents: 'Lin Lan reads the ledger',
+      keyEvents: 'Lin Lan reads the ledger two chapters after the handoff',
       characters: ['Lin Lan'],
       userGuidance: '',
       wordsTarget: 100,
@@ -542,9 +536,10 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       context: { ...workflowContext, runId: 'candidate-source-probe' },
       callbacks: { ...callbacks(), replaceText: vi.fn() },
     })).rejects.toThrow('candidate-source-prompt-captured')
-    expect(nextChapterPrompt).toContain('Lin Lan wakes in New Harbor carrying an iron compass.')
+    expect(nextChapterPrompt).toContain('Lin Lan places the brass key in Zhou Yan\'s palm at New Harbor.')
     expect(nextChapterPrompt).toContain('keyItems@chapter1: brass key')
     expect(nextChapterPrompt).not.toContain('"field":"keyItems"')
+    expect(nextChapterPrompt).not.toContain('finalized#2:evidence-not-locatable')
   })
 
   it('rejects an older Chinese chapter retry after a newer character state is committed', async () => {

@@ -1168,7 +1168,7 @@ ${visibleTail}`,
       }).map(fact => fact.evidence).filter(Boolean)
       const candidateEvidence = (projection.characterStateCandidates ?? [])
         .filter(candidate => isRecent || currentEntities.includes(candidate.characterName))
-        .map(candidate => candidate.value)
+        .map(candidate => candidate.value || candidate.characterName)
         .filter(Boolean)
       const evidence = [...new Set([...factEvidence, ...candidateEvidence])]
       return evidence.length > 0 ? [{ projection, evidence }] : []
