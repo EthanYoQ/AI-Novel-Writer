@@ -27,6 +27,12 @@ export interface ChapterMaterialOmission {
   reason: 'evidence-not-locatable' | 'source-invalid' | 'no-relevant-passage' | 'budget'
 }
 
+export interface ChapterMaterialReference {
+  readonly text: string
+  readonly rendered: string
+  readonly deduplicateAgainstFinalized?: boolean
+}
+
 export interface ChapterMaterialBundle {
   text: string
   previousEnding: string
@@ -103,12 +109,20 @@ function relevantPassages(content: string, terms: readonly string[]): string[] {
   return mergeWindows(windows).slice(-2).map(([start, end]) => sourceParagraphs.slice(start, end + 1).join('\n\n'))
 }
 
+function removeContainedPassages(passages: readonly string[]): string[] {
+  return passages.filter((passage, index) => !passages.some((other, otherIndex) => (
+    otherIndex !== index
+    && other.includes(passage)
+    && (other.length > passage.length || otherIndex < index)
+  )))
+}
+
 export function assembleChapterMaterials(input: {
   writingLanguage: WritingLanguage
   authorProjectFacts: readonly string[]
   characterProfiles: string
   futurePlans: string
-  references: readonly string[]
+  references: readonly ChapterMaterialReference[]
   finalized: readonly FinalizedMaterialSource[]
   candidates: readonly SelectedCandidateDraft[]
   relevanceTerms: readonly string[]
@@ -117,6 +131,7 @@ export function assembleChapterMaterials(input: {
   const omissions: ChapterMaterialOmission[] = []
   const optionalBlocks: string[] = []
   const consumedFinalizedSources: FinalizedMaterialSource[] = []
+  const includedFinalizedPassages: string[] = []
   let remaining = input.budgetChars ?? MATERIAL_BUDGET_CHARS
   let includedFinalizedFacts = 0
 
@@ -152,11 +167,12 @@ export function assembleChapterMaterials(input: {
       // A stale locator is only an index failure. Recover nearby immutable prose
       // from the same readable source using the existing deterministic term
       // matcher, while keeping the warning and never injecting the old statement.
-      selectedPassages = [...new Set([
+      selectedPassages = [
         ...selectedPassages,
         ...relevantPassages(source.content, input.relevanceTerms),
-      ])]
+      ]
     }
+    selectedPassages = removeContainedPassages(selectedPassages)
     if (selectedPassages.length === 0) continue
     const included = includeOptional(promptLanguageText(
       input.writingLanguage,
@@ -166,6 +182,7 @@ export function assembleChapterMaterials(input: {
     if (included) {
       includedFinalizedFacts += passages.locatedEvidence
       consumedFinalizedSources.push(source)
+      includedFinalizedPassages.push(...selectedPassages)
     }
   }
 
@@ -187,7 +204,12 @@ export function assembleChapterMaterials(input: {
   }
 
   for (const reference of input.references) {
-    includeOptional(reference, { source: 'reference', reason: 'budget' })
+    if (
+      reference.deduplicateAgainstFinalized
+      && reference.text.length > 0
+      && includedFinalizedPassages.some(passage => passage.includes(reference.text))
+    ) continue
+    includeOptional(reference.rendered, { source: 'reference', reason: 'budget' })
   }
 
   const authorFacts = [...new Set(input.authorProjectFacts.map(value => value.trim()).filter(Boolean))]

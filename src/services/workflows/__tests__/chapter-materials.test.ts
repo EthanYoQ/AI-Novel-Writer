@@ -71,7 +71,10 @@ describe('chapter materials', () => {
       authorProjectFacts: ['AUTHOR_REQUIRED_SENTINEL'],
       characterProfiles: '林岚 (protagonist)',
       futurePlans: '第3章才允许交出钥匙。',
-      references: ['过长可选资料'.repeat(30)],
+      references: [{
+        text: '过长可选资料'.repeat(30),
+        rendered: '过长可选资料'.repeat(30),
+      }],
       finalized: [{
         chapterNumber: 1,
         draftId: 11,
@@ -179,6 +182,127 @@ describe('chapter materials', () => {
       source: 'finalized',
       chapterNumber: 2,
       reason: 'evidence-not-locatable',
+    })
+  })
+
+  it('keeps only the containing passage when fallback prose contains a same-source evidence window', () => {
+    const source = {
+      chapterNumber: 2,
+      draftId: 22,
+      title: '交接',
+      content: [
+        '仓门刚刚打开。',
+        '林岚把铜钥匙交给周砚。',
+        '周砚当面收好钥匙。',
+        '林岚随后检查门锁。',
+        '雨声重新盖住脚步。',
+      ].join('\n\n'),
+      evidence: ['把铜钥匙交给周砚', '无法定位的旧摘要'],
+      sourceStatus: 'current' as const,
+      sourceIdentity: { kind: 'finalized' as const, finalizationId: 'finalization-22', contentHash: 'b'.repeat(64) },
+    }
+    const bundle = assembleChapterMaterials({
+      writingLanguage: 'zh-CN',
+      authorProjectFacts: ['AUTHOR_TEXT_MUST_STAY'],
+      characterProfiles: '',
+      futurePlans: '（无）',
+      references: [],
+      finalized: [source],
+      candidates: [],
+      relevanceTerms: ['林岚'],
+    })
+
+    expect(bundle.text.split('仓门刚刚打开。')).toHaveLength(2)
+    expect(bundle.text).toContain(source.content)
+    expect(bundle.text).toContain('AUTHOR_TEXT_MUST_STAY')
+    expect(bundle.text).toContain('第2章 · draft 22 · 定位索引current')
+    expect(bundle.consumedFinalizedSources).toEqual([source])
+    expect(bundle.omissions).toContainEqual({
+      source: 'finalized',
+      chapterNumber: 2,
+      reason: 'evidence-not-locatable',
+    })
+  })
+
+  it('keeps partially overlapping same-source passages', () => {
+    const bundle = assembleChapterMaterials({
+      writingLanguage: 'zh-CN',
+      authorProjectFacts: [],
+      characterProfiles: '',
+      futurePlans: '（无）',
+      references: [],
+      finalized: [{
+        chapterNumber: 2,
+        draftId: 22,
+        title: '交叠',
+        content: [
+          '左侧独有段。',
+          '命中的事实段。',
+          '林岚检查门锁。',
+          '右侧独有段。',
+          '无关尾段。',
+        ].join('\n\n'),
+        evidence: ['命中的事实段', '无法定位的旧摘要'],
+        sourceStatus: 'current',
+      }],
+      candidates: [],
+      relevanceTerms: ['林岚'],
+    })
+
+    expect(bundle.text).toContain('左侧独有段。')
+    expect(bundle.text).toContain('右侧独有段。')
+    expect(bundle.text.split('命中的事实段。')).toHaveLength(3)
+  })
+
+  it('drops a KB result only when an actually included finalized passage contains its full text', () => {
+    const included = assembleChapterMaterials({
+      writingLanguage: 'zh-CN',
+      authorProjectFacts: [],
+      characterProfiles: '',
+      futurePlans: '（无）',
+      references: [
+        { text: '铜钥匙交给周砚', rendered: '[KB重复] 铜钥匙交给周砚', deduplicateAgainstFinalized: true },
+        { text: '铜钥匙交给周砚后门外亮灯', rendered: '[KB独有] 铜钥匙交给周砚后门外亮灯', deduplicateAgainstFinalized: true },
+      ],
+      finalized: [{
+        chapterNumber: 2,
+        draftId: 22,
+        title: '交接',
+        content: '林岚把铜钥匙交给周砚。',
+        evidence: ['铜钥匙交给周砚'],
+        sourceStatus: 'current',
+      }],
+      candidates: [],
+      relevanceTerms: [],
+    })
+
+    expect(included.text).not.toContain('[KB重复]')
+    expect(included.text).toContain('[KB独有] 铜钥匙交给周砚后门外亮灯')
+
+    const finalizedOverBudget = assembleChapterMaterials({
+      writingLanguage: 'zh-CN',
+      authorProjectFacts: [],
+      characterProfiles: '',
+      futurePlans: '（无）',
+      references: [{ text: '铜钥匙', rendered: '[KB保留] 铜钥匙', deduplicateAgainstFinalized: true }],
+      finalized: [{
+        chapterNumber: 2,
+        draftId: 22,
+        title: '超预算',
+        content: `铜钥匙${'很长的定稿原文'.repeat(20)}`,
+        evidence: ['铜钥匙'],
+        sourceStatus: 'current',
+      }],
+      candidates: [],
+      relevanceTerms: [],
+      budgetChars: 20,
+    })
+
+    expect(finalizedOverBudget.text).toContain('[KB保留] 铜钥匙')
+    expect(finalizedOverBudget.omissions).toContainEqual({
+      source: 'finalized',
+      chapterNumber: 2,
+      reason: 'budget',
     })
   })
 

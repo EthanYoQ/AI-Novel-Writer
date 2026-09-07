@@ -42,6 +42,7 @@ import type { RecoveryChapterSource } from '../../../shared/recovery-candidate'
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../../shared/character-roster'
 import {
   assembleChapterMaterials,
+  type ChapterMaterialReference,
   type FinalizedMaterialSource,
   type SelectedCandidateDraft,
 } from '../chapter-materials'
@@ -406,7 +407,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       Object.entries(novelConfig).filter(([key]) => !promptOnlyConfigKeys.has(key)),
     )
     const novelConfigFactsJson = JSON.stringify(novelConfigFacts, null, 2)
-    let filteredContext = ''
+    let knowledgeReferences: ChapterMaterialReference[] = []
     try {
       callbacks.log(uiText(
         '  检索知识库相关片段...',
@@ -432,15 +433,23 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         5,
         expectedProjectPath,
       ))
-      filteredContext = results.length > 0
-        ? results.map((r: { fileName: string; score: number; text: string }, i: number) => promptLanguageText(
+      if (results.length > 0) {
+        knowledgeReferences = results.map((result: { fileName: string; score: number; text: string }, index: number) => ({
+          text: result.text,
+          rendered: promptLanguageText(
             writingLanguage,
-            `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
-            `[${i + 1}] (${r.fileName}, relevance ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
-          )).join('\n\n')
-        : promptLanguageText(writingLanguage, '（知识库中无相关内容）', '(no relevant knowledge-base context)')
+            `[${index + 1}] (${result.fileName}, 相关度 ${(result.score * 100).toFixed(0)}%)\n${result.text}`,
+            `[${index + 1}] (${result.fileName}, relevance ${(result.score * 100).toFixed(0)}%)\n${result.text}`,
+          ),
+          deduplicateAgainstFinalized: true,
+        }))
+      } else {
+        const emptyContext = promptLanguageText(writingLanguage, '（知识库中无相关内容）', '(no relevant knowledge-base context)')
+        knowledgeReferences = [{ text: emptyContext, rendered: emptyContext }]
+      }
     } catch {
-      filteredContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
+      const unavailableContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
+      knowledgeReferences = [{ text: unavailableContext, rendered: unavailableContext }]
     }
     const writerChapterInfo = toWriterChapterInfo(this.chapterInfo)
     const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
@@ -505,7 +514,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         .filter((value): value is string => typeof value === 'string' && Boolean(value.trim())),
       characterProfiles,
       futurePlans: futureBlueprintsStr,
-      references: [activeThreadContext, filteredContext].filter(Boolean),
+      references: [
+        ...(activeThreadContext ? [{ text: activeThreadContext, rendered: activeThreadContext }] : []),
+        ...knowledgeReferences,
+      ],
       finalized: finalizedSources,
       candidates: selectedCandidateDrafts,
       relevanceTerms: [

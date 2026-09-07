@@ -832,7 +832,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         }],
       }],
       previousFinalizedContent,
-      knowledgeResults: [{ text: '项目知识哨兵', score: 0.9, fileName: '世界观' }],
+      knowledgeResults: [
+        { text: '林岚把红色钥匙收进口袋。', score: 0.95, fileName: '重复定稿块' },
+        { text: '项目知识哨兵', score: 0.9, fileName: '世界观' },
+      ],
     })
 
     await command.execute({ step: {}, context, callbacks })
@@ -847,6 +850,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('定稿连续性原文（1 条候选）'))
     expect(prompt).toContain('上一章定稿结尾哨兵。')
     expect(prompt).not.toContain('批内候选稿结尾')
+    expect(prompt).not.toContain('重复定稿块')
+    expect(prompt.split('林岚把红色钥匙收进口袋。')).toHaveLength(2)
     expect(prompt).toContain('项目知识哨兵')
     expect(invoke).toHaveBeenCalledWith(
       'kb:search-writing-context',
