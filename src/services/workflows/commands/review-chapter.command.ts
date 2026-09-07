@@ -322,8 +322,8 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       const rebuildHeading = promptLanguageText(writingLanguage, '【原始审稿任务】', '[Original review task]')
       const rebuildContract = promptLanguageText(
         writingLanguage,
-        '【硬性要求】只重新输出一个完整审稿 JSON：summary 不超过 120 字符；items 为 1–10 条，每条含 category、severity(error|warning|pass)、description(≤200 字符)、可选 quote(≤160 字符)；不得输出额外字段、Markdown、解释或思考过程。',
-        '[Hard requirement] Output one complete review JSON only: summary within 120 characters; items 1–10 entries, each with category, severity(error|warning|pass), description(≤200 characters), optional quote(≤160 characters); no extra fields, Markdown, explanation, or reasoning.',
+        '【硬性要求】只重新输出一个完整审稿 JSON：summary 不超过 120 字符；items 为 1–10 条，每条含 category、severity(error|warning|pass)、description(≤200 字符)；quote 仅 pass 可省略，error/warning 必须提供且不超过 160 字符；不得输出额外字段、Markdown、解释或思考过程。',
+        '[Hard requirement] Output one complete review JSON only: summary within 120 characters; items 1–10 entries, each with category, severity(error|warning|pass), description(≤200 characters); quote is optional only for pass items and required (≤160 characters) for error/warning items; no extra fields, Markdown, explanation, or reasoning.',
       )
       reviewResultRaw = await this.callLLMWithBoundedCompletion(
         [rebuildInstruction, rebuildHeading, reviewPrompt, rebuildContract].join('\n\n'),
