@@ -341,7 +341,17 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           }
         }
         const projection = options.continuity?.find(item => item.draftId === draftId)
-        if (!projection) return { status: 'invalid' }
+        if (!projection) {
+          return options.previousFinalizedContent && draftId === 77
+            ? {
+                status: 'legacy',
+                draftId,
+                chapterNumber: (options.chapterNumber ?? 1) - 1,
+                chapterTitle: '',
+                content: options.previousFinalizedContent,
+              }
+            : { status: 'invalid' }
+        }
         return {
           status: 'legacy',
           draftId,
@@ -918,6 +928,42 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompt).not.toContain('UNVERIFIED_STATEMENT_SENTINEL')
     expect(prompt).toContain('finalized#1:source-invalid')
     expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 51, projectPath, expect.anything())
+  })
+
+  it.each([
+    ['without a continuity projection', false],
+    ['with an empty continuity fact index', true],
+  ])('validates the previous finalized source %s before sending it to the provider', async (_label, withProjection) => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const unverifiedBody = 'UNVERIFIED_PREVIOUS_FINALIZED_BODY_SENTINEL'
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      invalidContinuitySourceIds: [77],
+      previousFinalizedContent: unverifiedBody,
+      continuity: withProjection
+        ? [{
+            draftId: 77,
+            chapterNumber: 1,
+            chapterTitle: '损坏收据',
+            chapterNotes: '',
+            facts: [],
+          }]
+        : [],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).not.toContain(unverifiedBody)
+    expect(prompt).toContain('finalized#1:source-invalid')
+    expect(invoke).toHaveBeenCalledWith('db:continuity-read-source', 77, projectPath, expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 77, projectPath, expect.anything())
   })
 
   it('marks an injected batch draft ending as unconfirmed continuity context', async () => {

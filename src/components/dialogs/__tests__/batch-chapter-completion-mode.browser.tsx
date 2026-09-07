@@ -624,7 +624,7 @@ describe('batch chapter completion mode browser flow', () => {
       channel === 'finalization:commit'
       || channel === 'kb:import-text'
       || channel === 'db:blueprint-update-notes'
-      || String(channel).startsWith('db:character-roster-')
+      || channel === 'db:character-roster-commit'
       || String(channel).startsWith('db:post-process-')
     ))).toBe(false)
   })

@@ -1181,7 +1181,7 @@ ${visibleTail}`,
           content: '',
           evidence,
           includeEnding: projection.chapterNumber === currentChapter - 1,
-          sourceStatus: projection.sourceStatus ?? 'legacy',
+          sourceStatus: 'invalid',
         })
       }
     }
@@ -1195,17 +1195,41 @@ ${visibleTail}`,
           projectPath,
         )
         if (meta) {
-          const full = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', meta.id, projectPath)
-          if (!full?.content) throw new Error('finalized source body unavailable')
-          sources.push({
-            chapterNumber: currentChapter - 1,
-            draftId: meta.id,
-            title: meta.chapterTitle ?? '',
-            content: full.content,
-            evidence: [],
-            includeEnding: true,
-            sourceStatus: 'legacy',
-          })
+          try {
+            const sourceRead = await ipc.invokeWithProjectSession(
+              projectSession,
+              'db:continuity-read-source',
+              meta.id,
+              projectPath,
+            )
+            sources.push({
+              chapterNumber: currentChapter - 1,
+              draftId: meta.id,
+              title: sourceRead.status === 'valid'
+                ? sourceRead.snapshot.chapterTitle
+                : sourceRead.status === 'legacy'
+                  ? sourceRead.chapterTitle
+                  : meta.chapterTitle ?? '',
+              content: sourceRead.status === 'valid'
+                ? sourceRead.snapshot.content
+                : sourceRead.status === 'legacy'
+                  ? sourceRead.content
+                  : '',
+              evidence: [],
+              includeEnding: true,
+              sourceStatus: sourceRead.status === 'valid' ? 'current' : sourceRead.status,
+            })
+          } catch {
+            sources.push({
+              chapterNumber: currentChapter - 1,
+              draftId: meta.id,
+              title: meta.chapterTitle ?? '',
+              content: '',
+              evidence: [],
+              includeEnding: true,
+              sourceStatus: 'invalid',
+            })
+          }
         }
       } catch { /* Existing guard owns absence; do not invent a source identity. */ }
     }
