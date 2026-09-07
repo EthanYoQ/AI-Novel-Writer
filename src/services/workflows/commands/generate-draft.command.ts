@@ -159,6 +159,31 @@ const DEFAULT_DEPENDENCIES: GenerateDraftCommandDependencies = {
   createRuntime: options => createGenerationRuntime(options),
 }
 
+type WriterChapterInfo = Pick<ChapterInfo,
+  | 'chapterNumber'
+  | 'title'
+  | 'role'
+  | 'purpose'
+  | 'characters'
+  | 'keyEvents'
+  | 'suspenseHook'
+  | 'userGuidance'
+>
+
+/** Keep workflow metadata out of both initial and continuation writer prompts. */
+function toWriterChapterInfo(chapterInfo: ChapterInfo): WriterChapterInfo {
+  return {
+    chapterNumber: chapterInfo.chapterNumber,
+    title: chapterInfo.title,
+    role: chapterInfo.role,
+    purpose: chapterInfo.purpose,
+    characters: chapterInfo.characters,
+    keyEvents: chapterInfo.keyEvents,
+    suspenseHook: chapterInfo.suspenseHook,
+    userGuidance: chapterInfo.userGuidance,
+  }
+}
+
 /** Use the same bounded previous-ending window for finalized and in-batch prose. */
 export function previousChapterEnding(content: string): string {
   const trimmed = content.trim()
@@ -415,6 +440,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     } catch {
       filteredContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
     }
+    const writerChapterInfo = toWriterChapterInfo(this.chapterInfo)
     const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       // ---- 缓存命中区（跨章稳定，前缀对齐）----
       .withArchitecture(architecture)
@@ -423,7 +449,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       .withNovelConfig(novelConfigFactsJson)
       .withWordNumber(normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter))
       // ---- 章节公共区（首章与后续章都必须完整注入）----
-      .withChapterInfo(this.chapterInfo)
+      .withChapterInfo(writerChapterInfo)
       .withCharacterStates('')
       .withFutureBlueprints(futureBlueprintsStr)
       .withFilteredContext('')
@@ -583,7 +609,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             callbacks,
             context,
             systemRole: promptBuilder.getSystemRole(),
-            chapterInfo: this.chapterInfo,
+            chapterInfo: writerChapterInfo,
             futureBlueprints: futureBlueprintsStr,
             globalGuidance: mergedGuidance,
             writingStyle,
@@ -763,7 +789,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     callbacks: CommandExecuteParams['callbacks']
     context: CommandExecuteParams['context']
     systemRole: string
-    chapterInfo: ChapterInfo
+    chapterInfo: WriterChapterInfo
     futureBlueprints: string
     globalGuidance: string
     writingStyle: string

@@ -107,6 +107,22 @@ describe('built-in author-guidance prompt boundaries', () => {
     expect(en.content).toContain('no more than 600 characters')
     expect(enField.systemSuffix).toMatch(/globalGuidance[\s\S]*must not enumerate chapters/i)
   })
+
+  it('keeps generic draft conventions subordinate to the current chapter brief', () => {
+    const zhFirst = BUILTIN_PROMPTS.find(template => template.key === 'first_chapter_draft')
+    const zhNext = BUILTIN_PROMPTS.find(template => template.key === 'next_chapter_draft')
+    const enFirst = EN_US_BUILTIN_PROMPTS.first_chapter_draft
+    const enNext = EN_US_BUILTIN_PROMPTS.next_chapter_draft
+
+    expect(`${zhFirst?.content}\n${zhFirst?.systemSuffix}`).toContain('仅当【本章信息】明确要求时才展现主角的金手指')
+    expect(`${zhFirst?.content}\n${zhFirst?.systemSuffix}`).not.toContain('留置一个强力钩子')
+    expect(`${zhNext?.content}\n${zhNext?.systemSuffix}`).toContain('不因此成为已发生事件')
+    expect(`${zhNext?.content}\n${zhNext?.systemSuffix}`).not.toContain('上述事件已经发生完毕')
+    expect(`${zhNext?.content}\n${zhNext?.systemSuffix}`).not.toContain('必须卡在一个剧情的小高潮点或突发变故上')
+    expect(`${enFirst.content}\n${enFirst.systemSuffix}`).toContain('only when the chapter brief explicitly requires it')
+    expect(`${enNext.content}\n${enNext.systemSuffix}`).toContain('do not thereby become completed events')
+    expect(`${enNext.content}\n${enNext.systemSuffix}`).not.toContain('Those events have already happened')
+  })
 })
 
 function attemptReceipt(
@@ -731,8 +747,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   })
 
   it.each([
-    { writingLanguage: 'zh-CN' as const, completedBoundary: '已经发生完毕', forbiddenReplay: '不得引用、摘要、回放或重演' },
-    { writingLanguage: 'en-US' as const, completedBoundary: 'have already happened', forbiddenReplay: 'Do not quote, summarize, replay, or restage' },
+    { writingLanguage: 'zh-CN' as const, completedBoundary: '记录的是已发生历史', forbiddenReplay: '不得引用、摘要、回放或重演' },
+    { writingLanguage: 'en-US' as const, completedBoundary: 'records completed history', forbiddenReplay: 'Do not quote, summarize, replay, or restage' },
   ])('marks previous prose as completed history in $writingLanguage', async ({
     writingLanguage,
     completedBoundary,
@@ -760,6 +776,38 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(prompt).toContain(completedBoundary)
     expect(prompt).toContain(forbiddenReplay)
+  })
+
+  it('keeps workflow metadata out of both initial and continuation writer chapter briefs', async () => {
+    const runtime = fakeOutcomes(
+      outcome('初'.repeat(100), 'length', 1),
+      outcome(`${'续'.repeat(400)}。`, 'stop', 2),
+    )
+    const keyEvents = '必须保留的创作事件'
+    const userGuidance = '必须保留的作者指导'
+    const knowledgeQueryHint = 'PRIVATE_QUERY_SENTINEL'
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      keyEvents,
+      userGuidance,
+      knowledgeQueryHint,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompts = runtime.complete.mock.calls.map(([task]) => (
+      task.messages.find(message => message.role === 'user')?.content ?? ''
+    ))
+    expect(prompts).toHaveLength(2)
+    for (const prompt of prompts) {
+      expect(prompt).toContain(keyEvents)
+      expect(prompt).toContain(userGuidance)
+      expect(prompt).not.toContain(projectPath)
+      expect(prompt).not.toContain(knowledgeQueryHint)
+      expect(prompt).not.toContain('"wordsTarget"')
+    }
   })
 
   it('injects guidance and style once while retaining the remaining author configuration', async () => {

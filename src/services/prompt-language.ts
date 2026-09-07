@@ -673,7 +673,7 @@ Use these only to understand later turning points. Do not reveal or advance them
 
 [Opening-chapter requirements]
 1. Begin inside an immediate action, confrontation, pursuit, or sharp reversal instead of explaining the world at length.
-2. Introduce the protagonist's special advantage only when the immediate predicament makes it dramatically relevant.
+2. Introduce the protagonist's special advantage only when the chapter brief explicitly requires it; do not invent an event to satisfy a generic opening convention.
 3. Drive the scene through action, dialogue, expression, and physical interaction rather than detached summary.
 4. Follow the project-wide guidance and avoid every listed failure mode.
 
@@ -687,7 +687,7 @@ Use these only to understand later turning points. Do not reveal or advance them
 {{user_guidance}}
 
 [Output contract]
-- Write approximately {{word_number}} words and cover only the chapter brief. Stop on a strong hook once the chapter goal is complete; do not advance later blueprints or add filler.
+- Write approximately {{word_number}} words and cover only the chapter brief. End at the state or hook specified there; when none is specified, end naturally without advancing later blueprints or adding filler.
 - Output plain manuscript prose only. Do not use Markdown, headings, analysis, plans, or screenplay formatting.
 - Separate every paragraph with one blank line. Use standard quotation marks consistently for dialogue.
 - If the target length cannot fit in one response, stop at a natural paragraph boundary without asking the user to continue.
@@ -714,10 +714,10 @@ Use these only to understand later turning points. Do not reveal or advance them
 {{filtered_context}}
 
 [Serialization requirements]
-1. Those events have already happened. Begin after their final state and advance a new event from this chapter brief. Do not quote, summarize, replay, or restage any sentence, action, or image from the excerpt; also avoid teleporting the scene or abruptly changing viewpoint.
+1. [Story memory and previous stopping point] records completed history. [Chapter brief], [Upcoming chapter blueprints], and [Knowledge-base context] do not thereby become completed events. Begin after the previous chapter's final state and advance a new event from this chapter brief. Do not quote, summarize, replay, or restage any sentence, action, or image from the previous ending; also avoid teleporting the scene or abruptly changing viewpoint.
 2. Drive the scene through action, expression, sensory detail, and dialogue rather than detached summary.
 3. Use approximately {{word_number}} words to complete this chapter's conflict without filler.
-4. End on a concrete escalation, revelation, or interruption that creates forward pressure.
+4. Use only the ending state or hook explicitly required by the chapter brief. When none is specified, end naturally without inventing an escalation, interruption, or later event.
 5. Follow the project-wide guidance: {{global_guidance}}
 
 [Writing style]
