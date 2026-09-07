@@ -1276,7 +1276,7 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: { ...context(), uiLocale: 'en-US', writingLanguage: 'en-US' },
       callbacks: callbacks(),
-    })).rejects.toThrow('The AI review response was invalid, so no report was saved.')
+    })).rejects.toThrow('The AI review response was invalid twice')
 
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:review-create')
     expect(useEditorStore.getState().tabs).toEqual([])
@@ -1327,6 +1327,61 @@ describe('workflow mutation failure boundaries', () => {
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(generateStream.mock.calls[1]?.[0][1]?.content).toContain('上一轮结构化输出因长度限制而中断')
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:review-create')).toHaveLength(1)
+  })
+
+  it('recovers a stop-reported truncated review with one complete replacement before persistence', async () => {
+    // 模型/网关在输出上限截断时把 finishReason 报成 stop（而非 length）：
+    // 坏 JSON 直接进入解析 → 命令应自动补一次完整替代输出并成功保存。
+    const completeReview = JSON.stringify({
+      items: [{ category: '剧情连贯性', severity: 'pass', description: '未发现矛盾' }],
+      summary: '审稿完成',
+    })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'kb:search') return []
+      if (channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:draft-get-meta') {
+        return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: true, id: 10 }
+      if (channel === 'db:blueprint-get') return null
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const rebuildPrompts: string[] = []
+    const generateStream = vi.fn(async (
+      messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
+      streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
+    ) => {
+      const firstAttempt = generateStream.mock.calls.length === 1
+      if (!firstAttempt) {
+        rebuildPrompts.push(messages.map(message => message.content).join('\n'))
+      }
+      streamCallbacks.onDone?.(
+        firstAttempt ? '{"summary":"审稿","items":[' : completeReview,
+        undefined,
+        'stop',
+      )
+      return `review-request-${generateStream.mock.calls.length}`
+    })
+    useLLMStore.setState({ defaultModelId: 'model', generateStream })
+    const command = new ReviewChapterCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: '待审正文',
+      chapterNumber: 1,
+    })
+
+    await expect(command.execute({
+      step: {},
+      context: context(),
+      callbacks: callbacks(),
+    })).resolves.toBe(completeReview)
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(rebuildPrompts[0]).toContain('上一轮审稿输出未通过合同校验')
+    expect(rebuildPrompts[0]).toContain('完整审稿 JSON')
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:review-create')).toHaveLength(1)
   })
 
