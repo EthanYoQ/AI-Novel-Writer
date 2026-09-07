@@ -6,9 +6,38 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { DraftRepository } from '../draft-repository'
+import { FinalizationRepository } from '../finalization-repository'
 
 function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function finalize(draftId: number, chapterNumber: number, content: string, finalizationId: string): void {
+  FinalizationRepository.commit({
+    finalizationId,
+    draftId,
+    chapterNumber,
+    chapterTitle: `第${chapterNumber}章`,
+    content,
+    contentHash: sha256(content),
+    contentRevision: 1,
+    targetFileName: `chapter-${chapterNumber}.md`,
+  })
+}
+
+function finalizedDependency(
+  draftId: number,
+  chapterNumber: number,
+  content: string,
+  finalizationId: string,
+) {
+  return {
+    kind: 'finalized' as const,
+    draftId,
+    chapterNumber,
+    finalizationId,
+    contentHash: sha256(content),
+  }
 }
 
 let projectRoot = ''
@@ -92,6 +121,129 @@ describe('draft source dependencies', () => {
 
     expect(DraftRepository.getMeta(sourceId)).toMatchObject({
       sourceDependencies: [],
+      dependenciesStale: false,
+    })
+  })
+
+  it('rejects an in-flight save after the frozen finalized source is replaced with identical prose', () => {
+    const content = '不可变的第一章正文。'
+    const sourceId = DraftRepository.create({
+      chapterNumber: 1, source: 'write', content, wordCount: 10,
+    })
+    finalize(sourceId, 1, content, 'finalization-1')
+    const dependency = finalizedDependency(sourceId, 1, content, 'finalization-1')
+
+    const replacementId = DraftRepository.create({
+      chapterNumber: 1, source: 'rewrite', content, wordCount: 10,
+    })
+    finalize(replacementId, 1, content, 'finalization-2')
+
+    expect(() => DraftRepository.create({
+      chapterNumber: 2,
+      source: 'write',
+      content: '不应落盘的第二章。',
+      wordCount: 9,
+      sourceDependencies: [dependency],
+    })).toThrow(/不再是当前定稿/u)
+    expect(DraftRepository.listByChapter(2)).toEqual([])
+  })
+
+  it('keeps a saved downstream draft but marks it stale when the source loses finalized identity', () => {
+    const content = '第一章定稿正文保持不变。'
+    const sourceId = DraftRepository.create({
+      chapterNumber: 1, source: 'write', content, wordCount: 12,
+    })
+    finalize(sourceId, 1, content, 'finalization-1')
+    const downstreamId = DraftRepository.create({
+      chapterNumber: 2,
+      source: 'write',
+      content: '第二章正文。',
+      wordCount: 6,
+      sourceDependencies: [finalizedDependency(sourceId, 1, content, 'finalization-1')],
+    })
+
+    getProjectDb()!.prepare("UPDATE drafts SET status = 'archived' WHERE id = ?").run(sourceId)
+
+    expect(DraftRepository.getMeta(downstreamId)).toMatchObject({
+      id: downstreamId,
+      dependenciesStale: true,
+    })
+  })
+
+  it('keeps a saved downstream draft but marks it stale when finalized prose changes', () => {
+    const content = '第一章定稿正文。'
+    const sourceId = DraftRepository.create({
+      chapterNumber: 1, source: 'write', content, wordCount: 9,
+    })
+    finalize(sourceId, 1, content, 'finalization-1')
+    const downstreamId = DraftRepository.create({
+      chapterNumber: 2,
+      source: 'write',
+      content: '第二章正文。',
+      wordCount: 6,
+      sourceDependencies: [finalizedDependency(sourceId, 1, content, 'finalization-1')],
+    })
+    const sourceContentId = getProjectDb()!.prepare('SELECT content_id AS contentId FROM drafts WHERE id = ?')
+      .get(sourceId) as { contentId: number }
+
+    getProjectDb()!.prepare('UPDATE contents SET body = ? WHERE id = ?')
+      .run('第一章定稿正文已变更。', sourceContentId.contentId)
+
+    expect(DraftRepository.getMeta(downstreamId)).toMatchObject({
+      id: downstreamId,
+      dependenciesStale: true,
+    })
+  })
+
+  it('marks a saved downstream draft stale after same-prose replacement or source deletion', () => {
+    const content = '第一章定稿正文。'
+    const sourceId = DraftRepository.create({
+      chapterNumber: 1, source: 'write', content, wordCount: 9,
+    })
+    finalize(sourceId, 1, content, 'finalization-1')
+    const downstreamId = DraftRepository.create({
+      chapterNumber: 2,
+      source: 'write',
+      content: '第二章正文。',
+      wordCount: 6,
+      sourceDependencies: [finalizedDependency(sourceId, 1, content, 'finalization-1')],
+    })
+
+    const replacementId = DraftRepository.create({
+      chapterNumber: 1, source: 'rewrite', content, wordCount: 9,
+    })
+    finalize(replacementId, 1, content, 'finalization-2')
+    expect(DraftRepository.getMeta(downstreamId)?.dependenciesStale).toBe(true)
+
+    getProjectDb()!.prepare('DELETE FROM drafts WHERE id = ?').run(sourceId)
+    expect(DraftRepository.getFull(downstreamId)).toMatchObject({
+      content: '第二章正文。',
+      dependenciesStale: true,
+    })
+  })
+
+  it('records receipt-less legacy finalized identity without inventing a receipt', () => {
+    const content = '旧项目定稿正文。'
+    const sourceId = DraftRepository.create({
+      chapterNumber: 1, source: 'write', content, wordCount: 8,
+    })
+    getProjectDb()!.prepare("UPDATE drafts SET status = 'finalized' WHERE id = ?").run(sourceId)
+    const dependency = {
+      kind: 'legacy-finalized' as const,
+      draftId: sourceId,
+      chapterNumber: 1,
+      contentHash: sha256(content),
+    }
+    const downstreamId = DraftRepository.create({
+      chapterNumber: 2,
+      source: 'write',
+      content: '第二章正文。',
+      wordCount: 6,
+      sourceDependencies: [dependency],
+    })
+
+    expect(DraftRepository.getMeta(downstreamId)).toMatchObject({
+      sourceDependencies: [dependency],
       dependenciesStale: false,
     })
   })

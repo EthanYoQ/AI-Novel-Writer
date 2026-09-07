@@ -76,11 +76,39 @@ describe('chapter materials', () => {
     })
 
     expect(bundle.includedFinalizedFacts).toBe(0)
+    expect(bundle.consumedFinalizedSources).toEqual([])
     expect(bundle.omissions).toContainEqual({
       source: 'finalized',
       chapterNumber: 1,
       reason: 'budget',
     })
+  })
+
+  it('keeps the previous finalized ending dependency when its prompt block exceeds the budget', () => {
+    const source = {
+      chapterNumber: 1,
+      draftId: 11,
+      title: '拒绝',
+      content: '林岚拒绝交出钥匙。',
+      evidence: ['拒绝交出钥匙'],
+      includeEnding: true,
+      sourceIdentity: { kind: 'finalized' as const, finalizationId: 'finalization-11', contentHash: 'a'.repeat(64) },
+    }
+    const bundle = assembleChapterMaterials({
+      writingLanguage: 'zh-CN',
+      authorProjectFacts: [],
+      characterProfiles: '',
+      futurePlans: '（无）',
+      references: [],
+      finalized: [source],
+      candidates: [],
+      relevanceTerms: ['林岚'],
+      budgetChars: 10,
+    })
+
+    expect(bundle.text).not.toContain(source.content)
+    expect(bundle.previousEnding).toBe(source.content)
+    expect(bundle.consumedFinalizedSources).toEqual([source])
   })
 
   it('falls back to relevant neighbouring finalized prose when a far-chapter locator is stale', () => {

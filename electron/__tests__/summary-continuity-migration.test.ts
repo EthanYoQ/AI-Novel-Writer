@@ -88,6 +88,7 @@ describe('summary continuity migration', () => {
       draftId,
       chapterNumber: 1,
       chapterNotes: 'The opening establishes the continuity facts.',
+      projectionGeneration: 0,
       source: {
         draftId,
         finalizationId: receipt.drafts[0]!.finalizationId,

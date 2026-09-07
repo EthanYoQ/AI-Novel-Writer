@@ -138,6 +138,21 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
           return { success: true }
         case 'db:continuity-save-finalized':
           return { success: true }
+        case 'db:continuity-read-source':
+          return {
+            status: 'valid',
+            snapshot: {
+              source: {
+                draftId: 33,
+                finalizationId: 'finalization-3',
+                chapterNumber: 3,
+                contentHash: 'content-hash-3',
+              },
+              chapterTitle: '钟楼真相',
+              content: '韩峥被洪水卷入排水井，当场死亡。',
+              projectionGeneration: 0,
+            },
+          }
         case 'db:blueprint-update-notes':
           return { success: true, updated: true }
         case 'db:character-roster-read':

@@ -43,6 +43,7 @@ function finalizedSource(content: string) {
       },
       chapterTitle: '定稿标题',
       content,
+      projectionGeneration: 0,
     },
   }
 }

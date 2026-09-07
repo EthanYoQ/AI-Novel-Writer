@@ -429,6 +429,7 @@ describe('workflow mutation failure boundaries', () => {
       [],
       'zh-CN',
       finalizedSource(41, 1, '作者正文'),
+      7,
     ).find(candidate => candidate.key === 'chapter_notes')
 
     const stepCallbacks = callbacks()
@@ -440,6 +441,7 @@ describe('workflow mutation failure boundaries', () => {
         chapterNumber: 1,
         chapterNotes: '作者原稿的连续性事实',
         facts: [],
+        projectionGeneration: 7,
         source: finalizedSource(41, 1, '作者正文'),
       },
       PROJECT_PATH,

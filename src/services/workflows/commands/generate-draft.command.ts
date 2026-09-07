@@ -45,6 +45,7 @@ import {
   type FinalizedMaterialSource,
   type SelectedCandidateDraft,
 } from '../chapter-materials'
+import type { DraftSourceDependency } from '../../../shared/draft-source-dependency'
 
 export { countDraftUnits } from '../../../shared/draft-units'
 export { previousChapterEnding } from '../chapter-materials'
@@ -653,16 +654,38 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         expectedProjectPath,
       )
       this.assertNotCancelled(context)
+      const finalizedDependencies: DraftSourceDependency[] = await Promise.all(
+        chapterMaterials.consumedFinalizedSources.map(async source => source.sourceIdentity?.kind === 'finalized'
+          ? {
+              kind: 'finalized' as const,
+              draftId: source.draftId,
+              chapterNumber: source.chapterNumber,
+              finalizationId: source.sourceIdentity.finalizationId,
+              contentHash: source.sourceIdentity.contentHash,
+            }
+          : {
+              kind: 'legacy-finalized' as const,
+              draftId: source.draftId,
+              chapterNumber: source.chapterNumber,
+              contentHash: await sha256Hex(source.content),
+            }),
+      )
+      const finalizedDraftIds = new Set(finalizedDependencies.map(dependency => dependency.draftId))
+      const candidateDependencies: DraftSourceDependency[] = await Promise.all(
+        selectedCandidateDrafts
+          .filter(candidate => !finalizedDraftIds.has(candidate.draftId))
+          .map(async candidate => ({
+            draftId: candidate.draftId,
+            contentHash: await sha256Hex(candidate.content),
+          })),
+      )
       const createResult = await ipc.invokeWithProjectSession(projectSession, 'db:draft-create', {
         chapterNumber: this.chapterInfo.chapterNumber,
         version: nextVersion,
         source: 'write',
         content: cleanDraftText,
         wordCount: countDraftUnits(cleanDraftText),
-        sourceDependencies: await Promise.all(selectedCandidateDrafts.map(async candidate => ({
-          draftId: candidate.draftId,
-          contentHash: await sha256Hex(candidate.content),
-        }))),
+        sourceDependencies: [...candidateDependencies, ...finalizedDependencies],
       }, expectedProjectPath)
       if (!createResult.success || !createResult.id) {
         throw new Error(createResult.error || uiText('章节草稿保存失败', 'Failed to save the chapter draft.'))
@@ -1172,6 +1195,17 @@ ${visibleTail}`,
             : sourceRead.status === 'legacy'
               ? 'legacy'
               : projection.sourceStatus ?? 'current',
+          ...(sourceRead.status === 'valid'
+            ? {
+                sourceIdentity: {
+                  kind: 'finalized' as const,
+                  finalizationId: sourceRead.snapshot.source.finalizationId,
+                  contentHash: sourceRead.snapshot.source.contentHash,
+                },
+              }
+            : sourceRead.status === 'legacy'
+              ? { sourceIdentity: { kind: 'legacy-finalized' as const } }
+              : {}),
         })
       } catch {
         sources.push({
@@ -1218,6 +1252,17 @@ ${visibleTail}`,
               evidence: [],
               includeEnding: true,
               sourceStatus: sourceRead.status === 'valid' ? 'current' : sourceRead.status,
+              ...(sourceRead.status === 'valid'
+                ? {
+                    sourceIdentity: {
+                      kind: 'finalized' as const,
+                      finalizationId: sourceRead.snapshot.source.finalizationId,
+                      contentHash: sourceRead.snapshot.source.contentHash,
+                    },
+                  }
+                : sourceRead.status === 'legacy'
+                  ? { sourceIdentity: { kind: 'legacy-finalized' as const } }
+                  : {}),
             })
           } catch {
             sources.push({

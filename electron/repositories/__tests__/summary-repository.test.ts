@@ -10,6 +10,12 @@ import { invalidateContinuityProjectionFrom, SummaryRepository } from '../summar
 
 let projectRoot = ''
 
+function projectionGeneration(): number {
+  return (getProjectDb()!.prepare(`
+    SELECT generation FROM continuity_projection_meta WHERE id = 'main'
+  `).get() as { generation: number }).generation
+}
+
 beforeEach(() => {
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-continuity-'))
   initProjectDatabase(projectRoot)
@@ -38,6 +44,7 @@ describe('finalized continuity projection', () => {
       draftId: draft.draftId,
       chapterNumber: 1,
       chapterNotes: '情节：怀表停摆；伏笔：表盖内侧刻着陌生坐标。',
+      projectionGeneration: projectionGeneration(),
       source: {
         draftId: draft.draftId,
         finalizationId: draft.finalizationId,
@@ -87,6 +94,7 @@ describe('finalized continuity projection', () => {
       draftId: receipt.drafts[0]!.draftId,
       chapterNumber: 1,
       chapterNotes: '林岚已经拿到红色钥匙。',
+      projectionGeneration: projectionGeneration(),
       facts: [{
         category: 'character-state' as const,
         entities: ['林岚'],
@@ -123,6 +131,7 @@ describe('finalized continuity projection', () => {
       draftId,
       chapterNumber: 1,
       chapterNotes: '连续性要点',
+      projectionGeneration: projectionGeneration(),
       source: {
         draftId,
         finalizationId: receipt.drafts[0]!.finalizationId,
@@ -152,6 +161,7 @@ describe('finalized continuity projection', () => {
       draftId: Number(created.lastInsertRowid),
       chapterNumber: 1,
       chapterNotes: '不能持久化',
+      projectionGeneration: projectionGeneration(),
       source: {
         draftId: Number(created.lastInsertRowid),
         finalizationId: 'missing-finalization',
@@ -177,6 +187,7 @@ describe('finalized continuity projection', () => {
       draftId: receipt.drafts[0]!.draftId,
       chapterNumber: 1,
       chapterNotes: '连续性事实',
+      projectionGeneration: projectionGeneration(),
       source: {
         draftId: receipt.drafts[0]!.draftId,
         finalizationId: receipt.drafts[0]!.finalizationId,
@@ -198,10 +209,14 @@ describe('finalized continuity projection', () => {
       chapters: [{ chapterNumber: 2, title: '码头', content, wordCount: countDraftUnits(content) }],
     })
     const draft = receipt.drafts[0]!
+    const frozenSource = SummaryRepository.readFinalizedSource(draft.draftId)
+    expect(frozenSource.status).toBe('valid')
+    if (frozenSource.status !== 'valid') throw new Error('expected valid finalized source')
     const request = {
       draftId: draft.draftId,
       chapterNumber: 2,
       chapterNotes: '派生摘要：铜钥匙未交出。',
+      projectionGeneration: frozenSource.snapshot.projectionGeneration,
       facts: [{
         category: 'character-state' as const,
         entities: ['林岚', '铜钥匙'],
@@ -224,6 +239,7 @@ describe('finalized continuity projection', () => {
         source: request.source,
         chapterTitle: '码头',
         content,
+        projectionGeneration: 0,
       },
     })
     invalidateContinuityProjectionFrom(getProjectDb()!, 1)
@@ -233,8 +249,27 @@ describe('finalized continuity projection', () => {
       snapshot: { content },
     })
 
-    SummaryRepository.saveFinalizedContinuity(request)
-    expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]?.sourceStatus).toBe('current')
+    expect(() => SummaryRepository.saveFinalizedContinuity({
+      ...request,
+      chapterNotes: '旧在途结果不应复活。',
+    })).toThrow(/失效水位已推进/u)
+    expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
+      chapterNotes: '派生摘要：铜钥匙未交出。',
+      sourceStatus: 'stale',
+    })
+
+    const refreshedSource = SummaryRepository.readFinalizedSource(draft.draftId)
+    expect(refreshedSource.status).toBe('valid')
+    if (refreshedSource.status !== 'valid') throw new Error('expected refreshed finalized source')
+    SummaryRepository.saveFinalizedContinuity({
+      ...request,
+      chapterNotes: '新水位重新提炼：铜钥匙未交出。',
+      projectionGeneration: refreshedSource.snapshot.projectionGeneration,
+    })
+    expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
+      chapterNotes: '新水位重新提炼：铜钥匙未交出。',
+      sourceStatus: 'current',
+    })
   })
 
   it('distinguishes locatable legacy prose from invalid receipt-bound sources', () => {
@@ -282,6 +317,7 @@ describe('finalized continuity projection', () => {
       draftId: draft.draftId,
       chapterNumber: 1,
       chapterNotes: '摘要可能误读了正文。',
+      projectionGeneration: projectionGeneration(),
       facts: [{
         category: 'character-state',
         entities: ['林岚'],

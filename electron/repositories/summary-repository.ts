@@ -70,10 +70,12 @@ function readFinalizedSourceFromDb(
            contents.body AS content, finalization_outbox.finalization_id AS finalizationId,
            finalization_outbox.chapter_title AS chapterTitle,
            finalization_outbox.content_hash AS contentHash,
-           finalization_outbox.content_snapshot AS contentSnapshot
+           finalization_outbox.content_snapshot AS contentSnapshot,
+           continuity_projection_meta.generation AS projectionGeneration
     FROM drafts
     JOIN contents ON contents.id = drafts.content_id
     JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    JOIN continuity_projection_meta ON continuity_projection_meta.id = 'main'
     WHERE drafts.id = ?
   `).get(draftId) as {
     draftId: number
@@ -84,6 +86,7 @@ function readFinalizedSourceFromDb(
     chapterTitle: string
     contentHash: string
     contentSnapshot: string
+    projectionGeneration: number
   } | undefined
   if (
     !row
@@ -102,6 +105,7 @@ function readFinalizedSourceFromDb(
     },
     chapterTitle: row.chapterTitle,
     content: row.contentSnapshot,
+    projectionGeneration: row.projectionGeneration,
   }
 }
 
@@ -135,6 +139,8 @@ export class SummaryRepository {
       || input.draftId < 1
       || !Number.isSafeInteger(input.chapterNumber)
       || input.chapterNumber < 1
+      || !Number.isSafeInteger(input.projectionGeneration)
+      || input.projectionGeneration < 0
       || !chapterNotes
     ) throw new Error('连续性投影参数无效')
 
@@ -149,6 +155,9 @@ export class SummaryRepository {
       const generation = (db.prepare(`
         SELECT generation FROM continuity_projection_meta WHERE id = 'main'
       `).get() as { generation: number }).generation
+      if (input.projectionGeneration !== generation) {
+        throw new Error('连续性投影失效水位已推进，已拒绝过期结果')
+      }
       const updated = db.prepare(`
         UPDATE summary_snapshots
         SET chapter_number = ?, chapter_notes = ?, continuity_facts = ?,
@@ -161,7 +170,7 @@ export class SummaryRepository {
         facts,
         input.source.finalizationId,
         input.source.contentHash,
-        generation,
+        input.projectionGeneration,
         input.draftId,
       )
       if (updated.changes === 0) {
@@ -177,7 +186,7 @@ export class SummaryRepository {
           facts,
           input.source.finalizationId,
           input.source.contentHash,
-          generation,
+          input.projectionGeneration,
         )
       }
     })()

@@ -18,6 +18,8 @@ export interface FinalizedSourceSnapshot {
   source: FinalizedSourceIdentity
   chapterTitle: string
   content: string
+  /** Project continuity watermark frozen before semantic extraction starts. */
+  projectionGeneration: number
 }
 
 export type FinalizedSourceReadResult =
@@ -56,6 +58,8 @@ export interface SaveFinalizedContinuityRequest {
   chapterNumber: number
   chapterNotes: string
   facts?: FinalizedContinuityFact[]
+  /** Watermark frozen before extraction; stale in-flight results must not advance it. */
+  projectionGeneration: number
   /** Frozen before extraction; the main process revalidates it at commit time. */
   source: FinalizedSourceIdentity
 }

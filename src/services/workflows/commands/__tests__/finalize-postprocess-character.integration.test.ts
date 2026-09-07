@@ -10,6 +10,11 @@ import { CharacterRepository } from '../../../../../electron/repositories/charac
 import { CharacterRosterRepository } from '../../../../../electron/repositories/character-roster-repository'
 import { PostProcessRepository } from '../../../../../electron/repositories/post-process-repository'
 import { ProjectCoreRepository } from '../../../../../electron/repositories/project-core-repository'
+import {
+  invalidateContinuityProjectionFrom,
+  SummaryRepository,
+} from '../../../../../electron/repositories/summary-repository'
+import type { SaveFinalizedContinuityRequest } from '../../../../shared/finalized-continuity'
 import type { CharacterRosterCommitRequest } from '../../../../shared/character-roster'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import { useLLMStore } from '../../../../stores/llm-store'
@@ -84,10 +89,24 @@ function initialRosterRequest(): CharacterRosterCommitRequest {
   }
 }
 
-function insertFinalizedDraft(draftId: number, chapterNumber: number): void {
+function insertFinalizedDraft(
+  draftId: number,
+  chapterNumber: number,
+  content = `Chapter ${chapterNumber} finalized content`,
+): void {
   const db = getProjectDb()!
-  const content = `Chapter ${chapterNumber} finalized content`
   const contentHash = createHash('sha256').update(content, 'utf8').digest('hex')
+  const existing = db.prepare('SELECT content_id AS contentId FROM drafts WHERE id = ?')
+    .get(draftId) as { contentId: number } | undefined
+  if (existing) {
+    db.prepare('UPDATE contents SET body = ? WHERE id = ?').run(content, existing.contentId)
+    db.prepare(`
+      UPDATE finalization_outbox
+      SET content_hash = ?, content_snapshot = ?
+      WHERE draft_id = ?
+    `).run(contentHash, content, draftId)
+    return
+  }
   db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)')
     .run(draftId, content)
   db.prepare(`
@@ -116,8 +135,16 @@ function installRealRepositoryIpc(): void {
           case 'kb:import-text':
             return { success: true, chunkCount: 1, docId: 'doc-1' }
           case 'db:finalization-link-knowledge-document':
-          case 'db:continuity-save-finalized':
             return { success: true }
+          case 'db:continuity-save-finalized':
+            try {
+              SummaryRepository.saveFinalizedContinuity(args[0] as SaveFinalizedContinuityRequest)
+              return { success: true }
+            } catch (error) {
+              return { success: false, error: String(error) }
+            }
+          case 'db:continuity-read-source':
+            return SummaryRepository.readFinalizedSource(Number(args[0]))
           case 'db:blueprint-update-notes':
             return { success: true, updated: false }
           case 'db:project-core-get':
@@ -186,6 +213,7 @@ function installModel(): void {
 }
 
 function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKey?: string } = {}) {
+  insertFinalizedDraft(7, 2, draftContent)
   return new RunFinalizePostProcessCommand({
     project: { path: projectPath },
     chapterNumber: 2,
@@ -196,7 +224,7 @@ function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKe
       draftId: 7,
       finalizationId: 'finalization-7',
       chapterNumber: 2,
-      contentHash: createHash('sha256').update('Chapter 2 finalized content', 'utf8').digest('hex'),
+      contentHash: createHash('sha256').update(draftContent, 'utf8').digest('hex'),
     },
     sourceLabel: 'Chapter 2 finalization',
     ...overrides,
@@ -246,6 +274,66 @@ afterEach(() => {
 })
 
 describe('RunFinalizePostProcessCommand character-state persistence', () => {
+  it('rejects a later-chapter summary whose frozen generation changed during the model call', async () => {
+    const content = 'Chapter 2 finalized content'
+    insertFinalizedDraft(7, 2, content)
+    const initialSource = SummaryRepository.readFinalizedSource(7)
+    if (initialSource.status !== 'valid') throw new Error('expected valid finalized source')
+    SummaryRepository.saveFinalizedContinuity({
+      draftId: 7,
+      chapterNumber: 2,
+      chapterNotes: 'Existing projection remains available only as stale material.',
+      facts: [],
+      projectionGeneration: initialSource.snapshot.projectionGeneration,
+      source: initialSource.snapshot.source,
+    })
+
+    let invalidatedDuringNotes = false
+    useLLMStore.setState({
+      defaultModelId: 'test-model',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        if (!invalidatedDuringNotes) {
+          invalidateContinuityProjectionFrom(getProjectDb()!, 1)
+          invalidatedDuringNotes = true
+          streamCallbacks.onDone?.('Stale in-flight notes must not be saved.', undefined, 'stop')
+        } else {
+          streamCallbacks.onDone?.('{"updates":[]}', undefined, 'stop')
+        }
+        return 'request-stale-generation'
+      }),
+    })
+
+    const staleRun = await command(content).execute({
+      step: {}, context: workflowContext, callbacks: callbacks(),
+    })
+    expect(invalidatedDuringNotes).toBe(true)
+    expect(staleRun.steps.chapter_notes).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('失效水位已推进'),
+    })
+    expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
+      chapterNotes: 'Existing projection remains available only as stale material.',
+      sourceStatus: 'stale',
+    })
+
+    useLLMStore.setState({
+      defaultModelId: 'test-model',
+      generateStream: vi.fn(async (_messages, streamCallbacks) => {
+        streamCallbacks.onDone?.('Fresh notes use the advanced generation.', undefined, 'stop')
+        return 'request-fresh-generation'
+      }),
+    })
+    const freshRun = await command(content, {
+      onlyFailed: true,
+      stepKey: 'chapter_notes',
+    }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    expect(freshRun.steps.chapter_notes).toMatchObject({ ok: true })
+    expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
+      chapterNotes: 'Fresh notes use the advanced generation.',
+      sourceStatus: 'current',
+    })
+  })
+
   it.each([
     ['missing updates', '{}', 'updates'],
     ['non-array updates', '{"updates":{}}', 'updates'],

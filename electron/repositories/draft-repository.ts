@@ -52,18 +52,43 @@ function parseDependencies(value: unknown): { dependencies: DraftSourceDependenc
         for (const raw of parsed) {
             if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { dependencies: [], valid: false }
             const dependency = raw as Record<string, unknown>
+            const kind = dependency.kind
             if (
                 !Number.isSafeInteger(dependency.draftId)
                 || (dependency.draftId as number) < 1
                 || typeof dependency.contentHash !== 'string'
                 || !/^[a-f0-9]{64}$/u.test(dependency.contentHash)
                 || seen.has(dependency.draftId as number)
+                || !(kind === undefined || kind === 'candidate' || kind === 'finalized' || kind === 'legacy-finalized')
+                || ((kind === 'finalized' || kind === 'legacy-finalized') && (
+                    !Number.isSafeInteger(dependency.chapterNumber)
+                    || (dependency.chapterNumber as number) < 1
+                ))
+                || (kind === 'finalized' && (
+                    typeof dependency.finalizationId !== 'string'
+                    || !dependency.finalizationId.trim()
+                    || dependency.finalizationId.length > 500
+                ))
+                || (kind !== 'finalized' && dependency.finalizationId !== undefined)
+                || ((kind === undefined || kind === 'candidate') && dependency.chapterNumber !== undefined)
             ) return { dependencies: [], valid: false }
             seen.add(dependency.draftId as number)
-            dependencies.push({
+            const base = {
                 draftId: dependency.draftId as number,
                 contentHash: dependency.contentHash,
-            })
+            }
+            dependencies.push(kind === 'finalized'
+                ? {
+                    ...base,
+                    kind,
+                    chapterNumber: dependency.chapterNumber as number,
+                    finalizationId: dependency.finalizationId as string,
+                }
+                : kind === 'legacy-finalized'
+                    ? { ...base, kind, chapterNumber: dependency.chapterNumber as number }
+                    : kind === 'candidate'
+                        ? { ...base, kind }
+                        : base)
         }
         return { dependencies, valid: true }
     } catch {
@@ -71,34 +96,89 @@ function parseDependencies(value: unknown): { dependencies: DraftSourceDependenc
     }
 }
 
-function dependencyHashes(
+interface DraftDependencyState {
+    contentHash: string
+    chapterNumber: number
+    status: string
+    authoritativeFinalized: boolean
+    finalizationId: string | null
+    receiptContentHash: string | null
+    receiptContentMatches: boolean
+}
+
+function dependencyStates(
     db: BetterSqlite3.Database,
     dependencyIds: readonly number[],
-): Map<number, string> {
-    const hashes = new Map<number, string>()
+): Map<number, DraftDependencyState> {
+    const states = new Map<number, DraftDependencyState>()
     const uniqueIds = [...new Set(dependencyIds)]
     for (let offset = 0; offset < uniqueIds.length; offset += 500) {
         const chunk = uniqueIds.slice(offset, offset + 500)
         if (chunk.length === 0) continue
         const placeholders = chunk.map(() => '?').join(', ')
         const rows = db.prepare(`
-          SELECT drafts.id, contents.body
+          SELECT drafts.id, drafts.chapter_number, drafts.status, contents.body,
+                 finalization_outbox.finalization_id,
+                 finalization_outbox.content_hash AS receipt_content_hash,
+                 finalization_outbox.content_snapshot,
+                 NOT EXISTS (
+                   SELECT 1 FROM drafts newer
+                   WHERE newer.chapter_number = drafts.chapter_number
+                     AND newer.status = 'finalized'
+                     AND (newer.version > drafts.version OR (newer.version = drafts.version AND newer.id > drafts.id))
+                 ) AS authoritative_finalized
           FROM drafts
           JOIN contents ON contents.id = drafts.content_id
+          LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
           WHERE drafts.id IN (${placeholders})
-        `).all(...chunk) as Array<{ id: number; body: string }>
-        for (const row of rows) hashes.set(row.id, sha256(row.body))
+        `).all(...chunk) as Array<{
+            id: number
+            chapter_number: number
+            status: string
+            body: string
+            finalization_id: string | null
+            receipt_content_hash: string | null
+            content_snapshot: string | null
+            authoritative_finalized: number
+        }>
+        for (const row of rows) states.set(row.id, {
+            contentHash: sha256(row.body),
+            chapterNumber: row.chapter_number,
+            status: row.status,
+            authoritativeFinalized: row.authoritative_finalized === 1,
+            finalizationId: row.finalization_id,
+            receiptContentHash: row.receipt_content_hash,
+            receiptContentMatches: row.content_snapshot === null || row.content_snapshot === row.body,
+        })
     }
-    return hashes
+    return states
+}
+
+function dependencyIsCurrent(
+    dependency: DraftSourceDependency,
+    state: DraftDependencyState | undefined,
+): boolean {
+    if (!state || state.contentHash !== dependency.contentHash) return false
+    if (!('chapterNumber' in dependency)) return true
+    if (
+        state.status !== 'finalized'
+        || !state.authoritativeFinalized
+        || state.chapterNumber !== dependency.chapterNumber
+    ) return false
+    if (dependency.kind === 'legacy-finalized') return state.finalizationId === null
+    return 'finalizationId' in dependency
+        && state.finalizationId === dependency.finalizationId
+        && state.receiptContentHash === dependency.contentHash
+        && state.receiptContentMatches
 }
 
 function rowsToMeta(db: BetterSqlite3.Database, rows: Record<string, unknown>[]): DraftMeta[] {
     const parsed = rows.map(row => ({ row, ...parseDependencies(row.source_dependencies) }))
-    const hashes = dependencyHashes(
+    const states = dependencyStates(
         db,
         parsed.flatMap(item => item.dependencies.map(dependency => dependency.draftId)),
     )
-    return parsed.map(({ row, dependencies, valid }) => rowToMeta(row, dependencies, valid, hashes))
+    return parsed.map(({ row, dependencies, valid }) => rowToMeta(row, dependencies, valid, states))
 }
 
 /** DB 行 → DraftMeta */
@@ -106,7 +186,7 @@ function rowToMeta(
     row: Record<string, unknown>,
     sourceDependencies: DraftSourceDependency[],
     dependenciesValid: boolean,
-    hashes: ReadonlyMap<number, string>,
+    states: ReadonlyMap<number, DraftDependencyState>,
 ): DraftMeta {
     const chapterTitle = typeof row.chapter_title === 'string' && row.chapter_title.trim()
         ? row.chapter_title
@@ -122,7 +202,7 @@ function rowToMeta(
         wordCount: row.word_count as number,
         sourceDependencies,
         dependenciesStale: !dependenciesValid || sourceDependencies.some(dependency => (
-            hashes.get(dependency.draftId) !== dependency.contentHash
+            !dependencyIsCurrent(dependency, states.get(dependency.draftId))
         )),
         createdAt: row.created_at as string,
         updatedAt: row.updated_at as string,
@@ -150,13 +230,13 @@ export class DraftRepository {
             const serializedDependencies = JSON.stringify(params.sourceDependencies ?? [])
             const parsedDependencies = parseDependencies(serializedDependencies)
             if (!parsedDependencies.valid) throw new Error('草稿来源依赖无效')
-            const hashes = dependencyHashes(
+            const states = dependencyStates(
                 db,
                 parsedDependencies.dependencies.map(dependency => dependency.draftId),
             )
             if (parsedDependencies.dependencies.some(dependency => (
-                hashes.get(dependency.draftId) !== dependency.contentHash
-            ))) throw new Error('草稿来源依赖已变化，已拒绝保存')
+                !dependencyIsCurrent(dependency, states.get(dependency.draftId))
+            ))) throw new Error('草稿来源依赖已变化或不再是当前定稿，已拒绝保存')
 
             const row = db.prepare(`
         SELECT MAX(version) as maxVer FROM drafts WHERE chapter_number = ?

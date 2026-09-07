@@ -252,6 +252,7 @@ export function buildFinalizePostProcessSteps(
   chapterEntities: readonly string[] = [],
   uiLocale: Locale = 'zh-CN',
   finalizedSource?: FinalizedSourceIdentity,
+  projectionGeneration?: number,
 ): PostProcessStep[] {
   const steps: PostProcessStep[] = []
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
@@ -317,6 +318,21 @@ export function buildFinalizePostProcessSteps(
       executor: async (callbacks, context) => {
         if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
         if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+        if (
+          finalizedDraftId !== undefined
+          && (
+            !finalizedSource
+            || finalizedSource.draftId !== finalizedDraftId
+            || !Number.isSafeInteger(projectionGeneration)
+            || projectionGeneration! < 0
+          )
+        ) {
+          throw new Error(workflowUiText(
+            context,
+            '定稿连续性投影缺少模型调用前冻结的来源水位',
+            'The finalized continuity projection is missing the source watermark frozen before the model call.',
+          ))
+        }
         const projectSession = requireWorkflowProjectSession(context)
         const writingLanguage = workflowWritingLanguage(context)
         const notesTemplate = await resolvePromptTemplate('generate_chapter_notes', projectSession, writingLanguage)
@@ -335,13 +351,6 @@ export function buildFinalizePostProcessSteps(
         if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
 
         if (finalizedDraftId !== undefined) {
-          if (!finalizedSource || finalizedSource.draftId !== finalizedDraftId) {
-            throw new Error(workflowUiText(
-              context,
-              '定稿连续性投影缺少冻结来源收据',
-              'The finalized continuity projection is missing its frozen source receipt.',
-            ))
-          }
           const facts = buildFinalizedContinuityFacts(
             chapterNumber,
             cleanNotes,
@@ -356,7 +365,8 @@ export function buildFinalizePostProcessSteps(
               chapterNumber,
               chapterNotes: cleanNotes,
               facts,
-              source: finalizedSource,
+              projectionGeneration: projectionGeneration!,
+              source: finalizedSource!,
             },
             _project.path,
           )
@@ -575,6 +585,26 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<PostProcessStatus> {
     const projectSession = requireWorkflowProjectSession(context)
+    const finalizedSource = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:continuity-read-source',
+      this.params.draftId,
+      this.params.project.path,
+    )
+    const frozen = finalizedSource.status === 'valid' ? finalizedSource.snapshot : null
+    if (
+      !frozen
+      || frozen.source.draftId !== this.params.finalizedSource.draftId
+      || frozen.source.finalizationId !== this.params.finalizedSource.finalizationId
+      || frozen.source.chapterNumber !== this.params.finalizedSource.chapterNumber
+      || frozen.source.contentHash !== this.params.finalizedSource.contentHash
+    ) {
+      throw new Error(workflowUiText(
+        context,
+        '定稿正文来源收据已失效，后处理未启动',
+        'The finalized manuscript source receipt is stale, so post-processing was not started.',
+      ))
+    }
     const generation: FinalizePostProcessGeneration = {
       complete: async (builder, stepCallbacks, output, generationContext) => this.callLLM(
         builder.build(),
@@ -594,12 +624,13 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       this.params.project,
       this.params.chapterNumber,
       this.params.chapterTitle,
-      this.params.draftContent,
+      frozen.content,
       generation,
       this.params.draftId,
       this.params.chapterEntities,
       workflowUiLocale(context),
       this.params.finalizedSource,
+      frozen.projectionGeneration,
     )
     const steps = this.params.stepKey
       ? allSteps.filter(step => step.key === this.params.stepKey)

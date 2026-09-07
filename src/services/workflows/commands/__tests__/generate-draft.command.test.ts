@@ -335,6 +335,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
                 chapterNumber: projection?.chapterNumber ?? 1,
                 contentHash: createHash('sha256').update(content, 'utf8').digest('hex'),
               },
+              projectionGeneration: 0,
               chapterTitle: projection?.chapterTitle ?? '',
               content,
             },
@@ -1033,6 +1034,74 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
             contentHash: createHash('sha256').update(chapterTwo, 'utf8').digest('hex'),
           },
         ],
+      }),
+      projectPath,
+      expect.anything(),
+    )
+  })
+
+  it('binds the final provider request to only the finalized prose that reached that request', async () => {
+    const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'))
+    const overBudget = `林岚把钥匙藏进钟楼。${'过长段落'.repeat(2_000)}`
+    const included = '周砚守住码头，林岚折返仓库。'
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 3,
+      wordsTarget: 500,
+      characters: ['林岚'],
+      continuity: [
+        {
+          draftId: 41,
+          chapterNumber: 1,
+          chapterTitle: '钟楼',
+          chapterNotes: '',
+          facts: [{
+            category: 'plot',
+            entities: ['林岚'],
+            statement: '钥匙在钟楼。',
+            sourceChapter: 1,
+            evidence: '林岚把钥匙藏进钟楼。',
+          }],
+        },
+        {
+          draftId: 42,
+          chapterNumber: 2,
+          chapterTitle: '码头',
+          chapterNotes: '',
+          facts: [{
+            category: 'plot',
+            entities: ['林岚'],
+            statement: '码头被守住。',
+            sourceChapter: 2,
+            evidence: included,
+          }],
+        },
+      ],
+      continuitySourceContents: { 41: overBudget, 42: included },
+      selectedCandidateDrafts: [{
+        chapterNumber: 2,
+        draftId: 42,
+        version: 1,
+        content: included,
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const request = runtime.complete.mock.calls[0]?.[0]
+    const prompt = request?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain(included)
+    expect(prompt).not.toContain(overBudget)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({
+        sourceDependencies: [{
+          kind: 'finalized',
+          draftId: 42,
+          chapterNumber: 2,
+          finalizationId: 'finalization-42',
+          contentHash: createHash('sha256').update(included, 'utf8').digest('hex'),
+        }],
       }),
       projectPath,
       expect.anything(),

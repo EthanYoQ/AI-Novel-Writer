@@ -16,6 +16,9 @@ export interface FinalizedMaterialSource {
   evidence: readonly string[]
   includeEnding?: boolean
   sourceStatus?: 'current' | 'stale' | 'legacy' | 'invalid'
+  sourceIdentity?:
+    | { kind: 'finalized'; finalizationId: string; contentHash: string }
+    | { kind: 'legacy-finalized' }
 }
 
 export interface ChapterMaterialOmission {
@@ -28,6 +31,7 @@ export interface ChapterMaterialBundle {
   text: string
   previousEnding: string
   includedFinalizedFacts: number
+  consumedFinalizedSources: FinalizedMaterialSource[]
   omissions: ChapterMaterialOmission[]
 }
 
@@ -112,6 +116,7 @@ export function assembleChapterMaterials(input: {
 }): ChapterMaterialBundle {
   const omissions: ChapterMaterialOmission[] = []
   const optionalBlocks: string[] = []
+  const consumedFinalizedSources: FinalizedMaterialSource[] = []
   let remaining = input.budgetChars ?? MATERIAL_BUDGET_CHARS
   let includedFinalizedFacts = 0
 
@@ -158,7 +163,10 @@ export function assembleChapterMaterials(input: {
       `【定稿原文 · 第${source.chapterNumber}章 · draft ${source.draftId} · 定位索引${source.sourceStatus ?? 'legacy'}】\n${selectedPassages.join('\n\n')}`,
       `[Finalized manuscript · Chapter ${source.chapterNumber} · draft ${source.draftId} · locator ${source.sourceStatus ?? 'legacy'}]\n${selectedPassages.join('\n\n')}`,
     ), { source: 'finalized', chapterNumber: source.chapterNumber, reason: 'budget' })
-    if (included) includedFinalizedFacts += passages.locatedEvidence
+    if (included) {
+      includedFinalizedFacts += passages.locatedEvidence
+      consumedFinalizedSources.push(source)
+    }
   }
 
   const orderedCandidates = [...input.candidates].sort((left, right) => left.chapterNumber - right.chapterNumber)
@@ -201,12 +209,21 @@ export function assembleChapterMaterials(input: {
       )
     : ''
 
+  const endingSource = latestCandidate
+    ? undefined
+    : input.finalized.find(source => source.includeEnding && source.content.trim())
+  if (endingSource && !consumedFinalizedSources.some(source => source.draftId === endingSource.draftId)) {
+    // The ending also affects replay rejection even when its prompt block exceeded the budget.
+    consumedFinalizedSources.push(endingSource)
+  }
+
   return {
     text: [required, sourced, ...optionalBlocks, gap].filter(Boolean).join('\n\n'),
     previousEnding: latestCandidate
       ? previousChapterEnding(latestCandidate.content)
       : previousChapterEnding(input.finalized.find(source => source.includeEnding)?.content ?? ''),
     includedFinalizedFacts,
+    consumedFinalizedSources,
     omissions,
   }
 }

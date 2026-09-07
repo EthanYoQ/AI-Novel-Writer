@@ -278,8 +278,8 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
                         <span
                           className="text-[0.7rem] px-1.5 py-0.5 rounded bg-amber-500/20 text-[var(--color-warning-text)]"
                           title={text(
-                            '此草稿依赖的前序候选正文已变化；草稿会保留，但连续性需要复核。',
-                            'A source candidate changed. This draft is preserved but its continuity needs review.',
+                            '此草稿生成时使用的前文来源已变化或不再是当前定稿；草稿会保留，但连续性需要复核。',
+                            'A prior source used to generate this draft changed or is no longer the current final. The draft is preserved, but its continuity needs review.',
                           )}
                         >
                           {text('来源已过期', 'Source changed')}
