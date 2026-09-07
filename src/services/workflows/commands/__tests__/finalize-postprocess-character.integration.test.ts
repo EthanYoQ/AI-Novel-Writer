@@ -172,8 +172,13 @@ function installRealRepositoryIpc(): void {
           case 'kb:search-writing-context':
             return { success: true, value: [] }
           case 'db:blueprint-get':
-          case 'db:draft-get-finalized':
             return null
+          case 'db:draft-get-finalized':
+            return getProjectDb()?.prepare(`
+              SELECT id FROM drafts
+              WHERE chapter_number = ? AND status = 'finalized'
+              ORDER BY version DESC, id DESC LIMIT 1
+            `).get(Number(args[0])) ?? null
           case 'db:character-roster-read':
             return CharacterRosterRepository.read()
           case 'db:character-roster-commit':
@@ -505,6 +510,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
         value: '',
       }),
     ]))
+    insertFinalizedDraft(8, 3, 'Chapter 3 ends with Lin Lan opening the tide ledger before dawn.')
 
     let nextChapterPrompt = ''
     const draftDependencies = {
