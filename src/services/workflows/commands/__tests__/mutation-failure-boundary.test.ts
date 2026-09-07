@@ -1282,6 +1282,61 @@ describe('workflow mutation failure boundaries', () => {
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
+  it.each([
+    {
+      name: 'English UI with Chinese writing',
+      uiLocale: 'en-US' as const,
+      writingLanguage: 'zh-CN' as const,
+      response: 'not-json',
+      expectedLog: 'The review result failed validation (the output is not complete JSON (it may be truncated by the model output limit)); requesting one complete replacement...',
+      expectedError: 'The AI review response was invalid twice (the replacement output is still not complete JSON)',
+      expectedPrompt: '上一轮审稿输出未通过合同校验',
+    },
+    {
+      name: 'Chinese UI with English writing',
+      uiLocale: 'zh-CN' as const,
+      writingLanguage: 'en-US' as const,
+      response: '{}',
+      expectedLog: '审稿结果未通过校验（输出不符合审稿报告合同（字段缺失、越界或多余）），正在请求一次完整替代输出...',
+      expectedError: 'AI 返回的审稿结果两次均无效（替代输出仍不符合审稿报告合同）',
+      expectedPrompt: 'The previous review output failed contract validation',
+    },
+  ])('keeps $name diagnostics in the UI language while rebuilding in the writing language', async ({
+    uiLocale,
+    writingLanguage,
+    response,
+    expectedLog,
+    expectedError,
+    expectedPrompt,
+  }) => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'kb:search') return []
+      if (channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const command = new ReviewChapterCommand({
+      draftPath: 'vela://draft/1',
+      draftContent: writingLanguage === 'en-US' ? 'Draft awaiting review.' : '待审正文',
+      chapterNumber: 1,
+    })
+    const llm = vi.spyOn(command as unknown as {
+      callLLMWithBoundedCompletion: (...args: unknown[]) => Promise<string>
+    }, 'callLLMWithBoundedCompletion').mockResolvedValue(response)
+    const stepCallbacks = callbacks()
+
+    await expect(command.execute({
+      step: {},
+      context: { ...context(), uiLocale, writingLanguage },
+      callbacks: stepCallbacks,
+    })).rejects.toThrow(expectedError)
+
+    expect(stepCallbacks.log).toHaveBeenCalledWith(expectedLog)
+    expect(llm.mock.calls[1]?.[0]).toContain(expectedPrompt)
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:review-create')
+  })
+
   it('replaces one length-truncated review with complete JSON before persistence', async () => {
     const completeReview = JSON.stringify({
       items: [{ category: '剧情连贯性', severity: 'pass', description: '未发现矛盾' }],

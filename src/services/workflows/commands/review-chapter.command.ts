@@ -299,13 +299,11 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       parsedResult = parseAttempt()
     } catch (parseError) {
       const detail = parseError instanceof SyntaxError
-        ? promptLanguageText(
-          writingLanguage,
+        ? text(
           '输出不是完整 JSON（可能被模型输出上限截断）',
           'the output is not complete JSON (it may be truncated by the model output limit)',
         )
-        : promptLanguageText(
-          writingLanguage,
+        : text(
           '输出不符合审稿报告合同（字段缺失、越界或多余）',
           'the output does not match the review-report contract (missing, oversized, or extra fields)',
         )
@@ -343,13 +341,11 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
         parsedResult = parseAttempt()
       } catch (rebuildError) {
         const rebuildDetail = rebuildError instanceof SyntaxError
-          ? promptLanguageText(
-            writingLanguage,
+          ? text(
             '替代输出仍不是完整 JSON',
             'the replacement output is still not complete JSON',
           )
-          : promptLanguageText(
-            writingLanguage,
+          : text(
             '替代输出仍不符合审稿报告合同',
             'the replacement output still does not match the review-report contract',
           )
