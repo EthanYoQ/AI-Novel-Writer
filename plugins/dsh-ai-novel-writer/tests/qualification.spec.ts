@@ -95,13 +95,16 @@ describe('release qualification runner', () => {
   it('documents the V2 installed keyless qualification snapshot and its native-model limit', async () => {
     const readme = await readFile(join(packageRoot, 'README.md'), 'utf8')
     const start = readme.indexOf('## Release qualification')
+    expect(start).toBeGreaterThanOrEqual(0)
     const section = readme.slice(start)
 
     expect(section).toContain('novel_read')
     expect(section).toContain('novel_propose_change')
-    expect(section).toContain('dsh-ai-novel-qualification-128')
+    expect(section).toContain('docs/v2-development-gates.md')
+    expect(section).toContain('task-owned `.runtime/.cache/` directory')
+    expect(section).toContain('`.vibe-owner.json` ownership and expiry')
     expect(section).toContain('A browser skipped result is not qualified')
-    expect(section).toContain('gpt-5.6-terra manual qualification')
+    expect(section).toContain('The keyless snapshot does not replace manual qualification with a configured online model')
     expect(section).not.toContain('novel_apply_change')
     expect(section).not.toContain('story-blueprint')
     expect(section).not.toContain('dsh-ai-novel-qualification-113')
