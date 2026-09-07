@@ -502,6 +502,8 @@ List world, power-system, or rule facts first established or confirmed here. Omi
 ## Foreshadowing and Hooks
 Mark planted clues with [Plant] and the chapter-ending hook with [Hook]. Omit this section when empty.
 
+For an irreversible change relevant to later continuity, preserve an explicitly stated cause, location, witness, or source of knowledge in the same note as the subject and change. Do not infer missing details or require every note to contain all of these elements.
+
 Keep every item concise and grounded in the manuscript.`,
   },
   update_character_cards: {

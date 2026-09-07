@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import { EN_US_BUILTIN_PROMPTS } from '../../../prompt-language'
+import { BUILTIN_PROMPTS } from '../../../prompt-templates'
 import { buildFinalizedContinuityFacts } from '../finalize-chapter.command'
 
 describe('buildFinalizedContinuityFacts', () => {
@@ -66,5 +68,40 @@ describe('buildFinalizedContinuityFacts', () => {
     )
 
     expect(facts).toEqual([])
+  })
+
+  it('applies the fact limit after rejecting unsupported note statements', () => {
+    const supportedFact = '林岚在北塔因爆炸碎片受伤，顾砚亲眼看见。'
+    const unsupportedNotes = Array.from(
+      { length: 12 },
+      (_, index) => `无正文证据的摘要陈述${index + 1}。`,
+    )
+
+    const facts = buildFinalizedContinuityFacts(
+      6,
+      [...unsupportedNotes, supportedFact].join('\n'),
+      supportedFact,
+      ['林岚', '顾砚'],
+    )
+
+    expect(facts).toEqual([{
+      category: 'character-state',
+      entities: ['林岚', '顾砚'],
+      statement: supportedFact,
+      sourceChapter: 6,
+      evidence: supportedFact,
+    }])
+  })
+
+  it('asks chapter notes to preserve only explicit continuity context without filling every field', () => {
+    const zh = BUILTIN_PROMPTS.find(template => template.key === 'generate_chapter_notes')
+    const en = EN_US_BUILTIN_PROMPTS.generate_chapter_notes
+
+    expect(zh?.content).toContain('若正文明确写出其原因、发生地点、知情者或获知来源')
+    expect(zh?.content).toContain('不要求每条凑齐这些要素')
+    expect(zh?.content).toContain('正文未明确的信息不得补全或推测')
+    expect(zh?.content).not.toContain('每项不超过 30 字')
+    expect(en.content).toContain('an explicitly stated cause, location, witness, or source of knowledge')
+    expect(en.content).toContain('Do not infer missing details or require every note to contain all of these elements')
   })
 })

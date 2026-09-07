@@ -220,7 +220,6 @@ export function buildFinalizedContinuityFacts(
     .split(/\n+|(?<=[。！？.!?])\s*/u)
     .map(statement => statement.replace(/^\s*(?:[-*•]|\d+[.)、])\s*/u, '').trim())
     .filter(Boolean)
-    .slice(0, CONTINUITY_FACT_LIMIT)
   return statements.flatMap(statement => {
     const factEntities = entities.filter(entity => statement.includes(entity))
     const evidence = evidenceExcerpt(finalizedContent, statement, factEntities)
@@ -233,7 +232,7 @@ export function buildFinalizedContinuityFacts(
           evidence,
         }]
       : []
-  })
+  }).slice(0, CONTINUITY_FACT_LIMIT)
 }
 
 // ===== 后处理步骤构建器 =====

@@ -21,6 +21,7 @@ let projectPath = ''
 let cardResponse = '{"updates":[]}'
 let workflowContext: WorkflowContext
 let observedCharacterPrompt = ''
+let observedChapterNotesPrompt = ''
 
 function callbacks(): StepCallbacks {
   return {
@@ -146,6 +147,7 @@ function installModel(): void {
         observedCharacterPrompt = messages.find((message: { role: string; content: string }) => message.role === 'user')?.content ?? ''
         streamCallbacks.onDone?.(cardResponse, undefined, 'stop')
       } else {
+        observedChapterNotesPrompt = messages.find((message: { role: string; content: string }) => message.role === 'user')?.content ?? ''
         streamCallbacks.onDone?.('Lin Lan hands the brass key to Zhou Yan.', undefined, 'stop')
       }
       return `request-${Date.now()}`
@@ -193,6 +195,7 @@ beforeEach(() => {
   })
   cardResponse = '{"updates":[]}'
   observedCharacterPrompt = ''
+  observedChapterNotesPrompt = ''
   installRealRepositoryIpc()
   installModel()
 })
@@ -263,6 +266,13 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     })
 
     expect(observedCharacterPrompt).toContain(draftContent)
+    expect(observedChapterNotesPrompt).toContain(draftContent)
+    expect(observedChapterNotesPrompt).toContain(
+      'an explicitly stated cause, location, witness, or source of knowledge',
+    )
+    expect(observedChapterNotesPrompt).toContain(
+      'Do not infer missing details or require every note to contain all of these elements',
+    )
     expect(status.steps.character_cards).toMatchObject({ ok: true, attemptCount: 1 })
     expect(CharacterRepository.getByName('Lin Lan')).toMatchObject({
       appearance: 'author-written silver coat',
