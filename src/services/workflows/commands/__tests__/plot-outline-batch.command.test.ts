@@ -108,6 +108,7 @@ interface CheckpointSnapshot {
   synopsis_covered_to?: number
   synopsis_range?: { from: number; to: number }
   synopsis_facts_fingerprint?: string
+  synopsis_db_hash?: string
 }
 
 interface IpcHarness {
@@ -116,14 +117,18 @@ interface IpcHarness {
   partialWrites: Array<Record<string, unknown>>
 }
 
-function harnessWith(checkpoint: CheckpointSnapshot = {}): IpcHarness {
+function dbHashOf(dbOutlineText: string): string {
+  return synopsisFactsFingerprint([dbOutlineText])
+}
+
+function harnessWith(checkpoint: CheckpointSnapshot = {}, dbSynopsis = ''): IpcHarness {
   const coreUpdates: Array<Record<string, unknown>> = []
   const partialWrites: Array<Record<string, unknown>> = []
   const invoke = vi.fn(async (_channel: string, ...rest: unknown[]) => {
     const channel = String(_channel)
     if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
     if (channel === 'fs:check-exists') return false
-    if (channel === 'db:project-core-get') return { ...coreSeed }
+    if (channel === 'db:project-core-get') return dbSynopsis ? { ...coreSeed, synopsis: dbSynopsis } : { ...coreSeed }
     if (channel === 'db:project-core-update') {
       coreUpdates.push(rest[0] as Record<string, unknown>)
       return { success: true }
@@ -241,12 +246,14 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
       defaultModelId: 'model-1',
       generateStream: responseStream([addition]),
     })
+    const dbOutline = `# 情节大纲\n\n${partialBody}\n\n> ⚠️ **本大纲未完成**：生成被输出长度中断，以上为已自动保存的已完成部分。\n`
     const harness = harnessWith({
       synopsis_result: partialBody,
       synopsis_incomplete: true,
       synopsis_range: { from: 1, to: 100 },
       synopsis_facts_fingerprint: fingerprint,
-    })
+      synopsis_db_hash: dbHashOf(dbOutline),
+    }, dbOutline)
     const command = makeCommand({ resumeSynopsis: true })
 
     const result = await command.execute({ step: {}, context, callbacks })
@@ -304,12 +311,14 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
       defaultModelId: 'model-1',
       generateStream: responseStream([nextSegment]),
     })
+    const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。\n`
     const harness = harnessWith({
       synopsis_result: prefixBody,
       synopsis_covered_to: 20,
       synopsis_range: { from: 1, to: 20 },
       synopsis_facts_fingerprint: fingerprint,
-    })
+      synopsis_db_hash: dbHashOf(dbOutline),
+    }, dbOutline)
     const command = makeCommand({ synopsisRange: { from: 21, to: 100 } })
 
     const result = await command.execute({ step: {}, context, callbacks })
@@ -388,5 +397,80 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
     const synopsisUpdate = harness.coreUpdates.find(update => typeof update.synopsis === 'string')
     expect(String(synopsisUpdate!.synopsis)).toContain('已覆盖至第 20 章')
     expect(String(synopsisUpdate!.synopsis)).not.toContain('大纲批次进度')
+  })
+
+  it('P1：续批时 DB 大纲已被手动修改 → 拒绝续批（不覆盖用户修改）', async () => {
+    const prefixBody = '## 第一卷\n\n第一章至第二十章已确认大纲内容（长度足够的已确认前缀）。'.repeat(3)
+    const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。\n`
+    // 用户随后在编辑器里手动改写了第 5 章的内容并保存（DB 与镜像指纹不一致）
+    const editedDbOutline = dbOutline.replace('第一章', '第一章（手动修订后的新表述）')
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream: responseStream(['should never run']),
+    })
+    const harness = harnessWith({
+      synopsis_result: prefixBody,
+      synopsis_covered_to: 20,
+      synopsis_range: { from: 1, to: 20 },
+      synopsis_facts_fingerprint: fingerprint,
+      synopsis_db_hash: dbHashOf(dbOutline),
+    }, editedDbOutline)
+    const command = makeCommand({ synopsisRange: { from: 21, to: 100 } })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('已被手动修改')
+    expect(useLLMStore.getState().generateStream).not.toHaveBeenCalled()
+    expect(harness.coreUpdates).toHaveLength(0)
+  })
+
+  it('P1：完成进度行的 from 与本批不一致 → 视为未完成并保存为可续写检查点', async () => {
+    // 请求 1–100 章，模型正文只写了一小段却谎报 80–100：严格校验 from/to 后必须拒绝。
+    const shortBody = '## 第一卷\n\n第一章：铁砧镇的学徒。\n\n第二章：宗门封锁。'
+    const wrongMarkBody = `${shortBody}\n\n${progressLine(80, 100, 100)}`
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream: responseStream([wrongMarkBody]),
+    })
+    const harness = harnessWith()
+    const command = makeCommand()
+
+    const failure = await command.execute({ step: {}, context, callbacks }).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(PlotOutlineResumeAvailableError)
+    const checkpointWrite = harness.partialWrites[harness.partialWrites.length - 1]
+    expect(checkpointWrite).toEqual(expect.objectContaining({
+      synopsis_incomplete: true,
+      synopsis_range: { from: 1, to: 100 },
+    }))
+  })
+
+  it('P1：续写请求本身失败时，首轮收到的超限正文仍被保存为检查点', async () => {
+    // 第一轮返回了超过阈值的有效正文且 finishReason=length；第二轮（自动续写）
+    // 请求抛网络错误。此前会丢掉首轮内容，现在应保存并可断点续写。
+    const firstBody = '## 第一卷\n\n第一章：铁砧镇的学徒。宗门封锁前夜，林舟发现了旧铁锤里的秘密。'.repeat(4)
+    let callIndex = 0
+    const generateStream = vi.fn((
+      _messages: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0],
+      streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
+    ) => {
+      callIndex += 1
+      if (callIndex === 1) {
+        streamCallbacks.onDone?.(firstBody, undefined, 'length')
+      } else {
+        streamCallbacks.onError?.('模拟网络中断')
+      }
+      return Promise.resolve(`outline-request-${callIndex}`)
+    })
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    const harness = harnessWith()
+    const command = makeCommand()
+
+    const failure = await command.execute({ step: {}, context, callbacks }).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(PlotOutlineResumeAvailableError)
+    const checkpointWrite = harness.partialWrites[harness.partialWrites.length - 1]
+    expect(checkpointWrite).toEqual(expect.objectContaining({
+      synopsis_incomplete: true,
+      synopsis_range: { from: 1, to: 100 },
+      synopsis_result: expect.stringContaining('第一章：铁砧镇的学徒') as never,
+    }))
   })
 })
