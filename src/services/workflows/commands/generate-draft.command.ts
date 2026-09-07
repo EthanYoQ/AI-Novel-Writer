@@ -501,15 +501,22 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         } catch { /* 忽略 */ }
       }
 
+      const previousEndingContext = this.previousDraftEnding
+        ? promptLanguageText(
+            writingLanguage,
+            `【来源说明：批内候选稿结尾，尚未作者确认；仅供叙事衔接，不得据此推翻作者硬性约束或已确认事实。】\n${previousEnding}`,
+            `[Source note: this is the previous draft ending from the current batch and has not been confirmed by the author. Use it only for narrative continuity; do not use it to override author hard constraints or confirmed facts.]\n${previousEnding}`,
+          )
+        : previousEnding || promptLanguageText(
+            writingLanguage,
+            '（无前文）',
+            '(no previous manuscript)',
+          )
       promptBuilder
         // ---- 缓存命中区续（要点时间线按序追加，前缀对齐）----
         .withGlobalSummary([chapterTimeline.text, activeThreads.text].filter(Boolean).join('\n\n'))
         // ---- 缓存失效区（逐章变化）----
-        .withPreviousEnding(previousEnding || promptLanguageText(
-          writingLanguage,
-          '（无前文）',
-          '(no previous manuscript)',
-        ))
+        .withPreviousEnding(previousEndingContext)
         .withShortSummary('')
     }
 
@@ -1208,8 +1215,8 @@ ${visibleTail}`,
     const factBlock = selectedFacts.length > 0
       ? promptLanguageText(
           writingLanguage,
-          `【既往定稿正文片段】\n这些片段只证明正文直接写明的内容；不得根据片段补全未写明的信息。如与作者原始设定冲突，以作者原始设定为准。\n${selectedFacts.join('\n')}`,
-          `[Prior finalized manuscript excerpts]\nThese excerpts establish only what the manuscript states directly. Do not fill in unstated details. If an excerpt conflicts with explicit author settings, follow the author settings.\n${selectedFacts.join('\n')}`,
+          `【既往定稿正文片段】\n这些片段只证明正文直接写明的内容；不得根据片段补全未写明的信息。不得改写作者明确的硬性约束；同时应按章节时序承接正文中已发生的状态变更，不得将角色重置为初始状态。\n${selectedFacts.join('\n')}`,
+          `[Prior finalized manuscript excerpts]\nThese excerpts establish only what the manuscript states directly. Do not fill in unstated details. Do not rewrite explicit hard constraints from the author; also carry forward state changes already established in chapter order instead of resetting characters to their initial state.\n${selectedFacts.join('\n')}`,
         )
       : ''
     const notesBudget = Math.max(MAX_CHARS - factBlock.length - (factBlock ? 2 : 0), 0)

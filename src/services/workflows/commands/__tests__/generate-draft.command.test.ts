@@ -281,6 +281,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     }>
     narrativeThreads?: NarrativeThreadView[]
     previousFinalizedContent?: string
+    previousDraftEnding?: string
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
     keyEvents?: string
     knowledgeQueryHint?: string
@@ -396,7 +397,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       wordsTarget: options.wordsTarget,
       userGuidance: options.userGuidance,
       knowledgeQueryHint: options.knowledgeQueryHint,
-    }, { dependencies: { createRuntime: options.runtime.createRuntime } })
+    }, {
+      dependencies: { createRuntime: options.runtime.createRuntime },
+      previousDraftEnding: options.previousDraftEnding,
+    })
     return { invoke, context, callbacks, command }
   }
 
@@ -692,9 +696,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompt).not.toContain('[character-state]')
     expect(prompt).toContain('来源第1章')
     expect(prompt).toContain('林岚把红色钥匙收进口袋。')
-    expect(prompt).toContain('不得根据片段补全未写明的信息')
+    expect(prompt).toContain('不得改写作者明确的硬性约束')
+    expect(prompt).toContain('按章节时序承接正文中已发生的状态变更')
+    expect(prompt).toContain('不得将角色重置为初始状态')
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
     expect(prompt).toContain('上一章定稿结尾哨兵。')
+    expect(prompt).toContain('上一章已完成的结尾状态（只作边界，不可重演）')
+    expect(prompt).not.toContain('批内候选稿结尾')
     expect(prompt).toContain('项目知识哨兵')
     expect(invoke).toHaveBeenCalledWith(
       'kb:search-writing-context',
@@ -703,6 +711,67 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       projectPath,
       expect.anything(),
     )
+  })
+
+  it('marks an injected batch draft ending as unconfirmed continuity context', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      previousDraftEnding: '批内上一章候选稿结尾哨兵。',
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('批内候选稿结尾，尚未作者确认')
+    expect(prompt).toContain('仅供叙事衔接，不得据此推翻作者硬性约束或已确认事实')
+    expect(prompt).toContain('批内上一章候选稿结尾哨兵。')
+    expect(invoke).not.toHaveBeenCalledWith(
+      'db:draft-get-finalized',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
+  it('distinguishes author hard constraints from finalized state changes in English', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('New chapter prose. '.repeat(200), 'stop')
+    })
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage: 'en-US',
+      chapterNumber: 2,
+      wordsTarget: 500,
+      continuity: [{
+        draftId: 41,
+        chapterNumber: 1,
+        chapterTitle: 'Transfer',
+        chapterNotes: '',
+        facts: [{
+          category: 'character-state',
+          entities: ['Maya'],
+          statement: 'Maya transferred the key.',
+          sourceChapter: 1,
+          evidence: 'Maya put the key in Eli’s hand.',
+        }],
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('Do not rewrite explicit hard constraints from the author')
+    expect(prompt).toContain('carry forward state changes already established in chapter order')
+    expect(prompt).toContain('instead of resetting characters to their initial state')
   })
 
   it('puts an explicit knowledge hint before more than eight generated query terms', async () => {
