@@ -56,6 +56,8 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const projectMatches = currentProject?.path === projectKey
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
+  const [synopsisIncomplete, setSynopsisIncomplete] = useState(false)
+  const [resumingSynopsis, setResumingSynopsis] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showArchDialog, setShowArchDialog] = useState(false)
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
@@ -76,6 +78,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       archStatusRequestGate.current.begin()
       setArchStatus({})
       setWordCounts({})
+      setSynopsisIncomplete(false)
       setLoading(false)
       return
     }
@@ -87,6 +90,21 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       'db:project-core-get',
       projectPath,
     )
+    // 情节大纲可能处于「输出长度中断、已完成部分已保存」状态 → 提供断点续写
+    let interrupted = false
+    try {
+      const partialResult = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:read-json',
+        `${projectPath}/.vela/partial_arch.json`,
+        projectPath,
+      )
+      interrupted = partialResult?.success === true
+        && (partialResult as { data?: { synopsis_incomplete?: boolean; synopsis_result?: string } }).data?.synopsis_incomplete === true
+        && ((partialResult as { data?: { synopsis_result?: string } }).data?.synopsis_result?.length ?? 0) > 50
+    } catch {
+      interrupted = false
+    }
     const status: Record<string, boolean> = {
       premise: (core?.premise?.length ?? 0) > 50,
       characters: rosterSnapshot?.status === 'ready',
@@ -105,6 +123,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     ) return
     setArchStatus(status)
     setWordCounts(counts)
+    setSynopsisIncomplete(interrupted && Boolean(status.synopsis))
     setLoading(false)
     // ✅ 只依赖 path 字符串，避免 novelConfig 等变化导致 loadStatus 重建
   }, [currentProject, projectKey, projectMatches, rosterSnapshot])
@@ -200,7 +219,11 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   }
 
   /** 确认后启动架构工作流 */
-  const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
+  const handleConfirm = async (
+    selectedSteps: ArchStepKey[],
+    stepGuidance: Record<string, string>,
+    synopsisChapters?: number,
+  ) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation was not started.'))
     if (!isProjectSessionCurrent(projectSession)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation was not started.'))
@@ -208,7 +231,29 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       workflow: 'generate_architecture',
       selectedSteps,
       stepGuidance,
+      synopsisChapters,
     }, projectSession)
+  }
+
+  /** 从上次输出长度中断的检查点继续生成情节大纲 */
+  const handleResumeSynopsis = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    if (!isProjectSessionCurrent(projectSession) || resumingSynopsis) return
+    setResumingSynopsis(true)
+    try {
+      await launchCreativeWorkflow({
+        workflow: 'generate_architecture',
+        selectedSteps: ['synopsis'],
+        resumeSynopsis: true,
+      }, projectSession)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const { toast } = await import('../ui/Toast')
+      toast.error(text(`续写启动失败：${detail}`, `Failed to start the continuation: ${detail}`))
+    } finally {
+      setResumingSynopsis(false)
+    }
   }
 
   if (!projectMatches) {
@@ -372,12 +417,41 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                     </>
                   ) : generated ? (
                     <>
-                      <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-[var(--color-success-text)]">
-                        {text('已生成', 'Generated')}
-                      </span>
+                      {f.key === 'synopsis' && synopsisIncomplete ? (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                          {text('不完整 · 已存部分', 'Incomplete · partial saved')}
+                        </span>
+                      ) : (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-[var(--color-success-text)]">
+                          {text('已生成', 'Generated')}
+                        </span>
+                      )}
                       <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
                         {words.toLocaleString()} {text('字符', 'characters')}
                       </span>
+                      {f.key === 'synopsis' && synopsisIncomplete && !loading && (
+                        <Button
+                          size="sm"
+                          disabled={resumingSynopsis}
+                          className="gap-1.5 mt-0.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm hover:from-amber-600 hover:to-orange-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleResumeSynopsis()
+                          }}
+                          title={text(
+                            '上次生成被输出长度中断，已完成部分已保存。点击后 AI 从断点继续生成剩余情节大纲。',
+                            'The previous run stopped at the output length limit and the completed part was saved. Click to continue the outline from the break point.',
+                          )}
+                        >
+                          {resumingSynopsis
+                            ? <RefreshCw size={12} className="animate-spin opacity-90" />
+                            : <RefreshCw size={12} className="opacity-90" />
+                          }
+                          {resumingSynopsis
+                            ? text('续写中...', 'Resuming...')
+                            : text('断点续写大纲', 'Continue outline')}
+                        </Button>
+                      )}
                     </>
                   ) : (
                     <span

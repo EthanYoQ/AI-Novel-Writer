@@ -21,6 +21,7 @@ import {
 } from '../workflow-project-session'
 import { characterArchitecturePrompts, promptLanguageText } from '../../prompt-language'
 import { stripThinkingTags } from '../workflow-utils'
+import type { WorkflowContext } from '../../../stores/workflow-store'
 import type { NovelConfig, ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { WritingLanguage } from '../../../shared/writing-language'
 import {
@@ -47,6 +48,67 @@ interface PartialArchData {
   character_state_result?: string
   world_building_result?: string
   synopsis_result?: string
+  /** 情节大纲在上一次生成中被输出长度中断；synopsis_result 为已完成部分。 */
+  synopsis_incomplete?: boolean
+}
+
+/**
+ * 情节大纲生成被输出长度中断、且已完成部分已自动保存时抛出的错误。
+ * errorCode 供前端识别并展示「继续生成情节大纲」断点续写按钮。
+ */
+export const PLOT_OUTLINE_RESUME_ERROR_CODE = 'architecture-synopsis-resume-available'
+
+export class PlotOutlineResumeAvailableError extends Error {
+  readonly code = PLOT_OUTLINE_RESUME_ERROR_CODE
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'PlotOutlineResumeAvailableError'
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
+/** 少于该字符数视为无保存价值的零碎输出，不落盘、不提供续写。 */
+const MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS = 120
+
+/** 落库时追加在未完成大纲末尾的可见标记（帮助用户识别与编辑器提示）。 */
+const SYNOPSIS_INCOMPLETE_MARKER_ZH = [
+  '',
+  '> ⚠️ **本大纲未完成**：生成被输出长度中断，以上为已自动保存的已完成部分。',
+  '> 可在「AI 输出」提示处点击「继续生成情节大纲」，从断点续写补齐剩余章节。',
+  '',
+].join('\n')
+
+const SYNOPSIS_INCOMPLETE_MARKER_EN = [
+  '',
+  '> ⚠ **This outline is incomplete**: generation stopped at the output length limit; the completed part above was saved automatically.',
+  '> Click “Continue plot outline” in the AI output notice to resume from this break point.',
+  '',
+].join('\n')
+
+/**
+ * 「本次只详写前 N 章」的分块指令：结构节点仍标全书区间，但具体展开
+ * 只到第 N 章；第 N+1 章起以一行占位句概览，避免单次输出超长。
+ */
+function synopsisScopeInstruction(
+  writingLanguage: WritingLanguage,
+  totalChapters: number,
+  scope: number,
+): string {
+  const next = scope + 1
+  return promptLanguageText(
+    writingLanguage,
+    `【本次生成范围（重要）】
+全书规划 ${totalChapters} 章。本次只对第 1–${scope} 章输出完整详细的情节大纲：
+1. 结构节点仍需标注全书章节区间，但“具体发生什么”只写到第 ${scope} 章为止。
+2. 第 ${next} 章及以后不展开细写：仅以一行占位句概览整段走向（不超过 300 字）。
+3. 大纲末尾单独一行注明：本批大纲仅细化至第 ${scope} 章，后续章节可继续分块生成。`,
+    `[Generation scope for this batch (important)]
+The book spans ${totalChapters} chapters, but this batch must detail only chapters 1–${scope}:
+1. Structure nodes may still cite full-book chapter ranges, but concrete "what happens" detail stops at chapter ${scope}.
+2. Chapters ${next}–${totalChapters} must not be expanded: collapse them into one short placeholder line (300 characters or fewer).
+3. End with a line noting that this batch details only up to chapter ${scope} and later chapters can be generated in further batches.`,
+  )
 }
 
 const PLOT_STRUCTURES = new Set<NovelConfig['plotStructure']>([
@@ -1209,6 +1271,12 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     private selectedSteps: string[],
     private snapshot: ArchitectureProjectSnapshot,
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
+    private readonly options: {
+      /** 从上次中断点续写情节大纲（需检查点 synopsis_incomplete=true）。 */
+      resumeSynopsis?: boolean
+      /** 本次只详写前 N 章（0/空 = 全书）。 */
+      synopsisChapters?: number | null
+    } = {},
   ) {
     super(generationDependencies)
   }
@@ -1245,7 +1313,17 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       'Worldbuilding has not been generated.',
     ))
 
-    callbacks.log(text('生成情节大纲...', 'Generating plot outline...'))
+    // 进度日志保持先于模板解析/检查点读取，失败时用户也能看到步骤已启动
+    const resumeRequested = this.options.resumeSynopsis === true
+    callbacks.log(text(
+      resumeRequested
+        ? '正在读取情节大纲中断检查点...'
+        : '生成情节大纲...',
+      resumeRequested
+        ? 'Reading the interrupted plot-outline checkpoint...'
+        : 'Generating plot outline...',
+    ))
+
     const template = await resolvePromptTemplate('synopsis', projectSession, writingLanguage)
     if (!template) throw new Error(text(
       '模板丢失',
@@ -1272,19 +1350,115 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       .withGlobalGuidance(config.globalGuidance || promptLanguageText(writingLanguage, '（未填写）', '(not provided)'))
       .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).synopsis || '')
 
-    const result = await this.callLLMWithBuilder(
-      promptBuilder,
-      callbacks,
-      { purpose: 'generate-plot-architecture', reasoningStage: 'planning', writingSkillStage: 'planning' },
-      context,
-    )
-    if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+    // ===== 断点续写：仅续写请求需要在生成前确认种子（普通生成保持原时序，
+    // 成功/中断落盘时才读取合并检查点文件，避免额外的启动 IPC） =====
+    const seedPartial = resumeRequested
+      ? (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
+      : (context.data.partial as PartialArchData | undefined)
+    if (seedPartial) context.data.partial = seedPartial
+    const existingSeed = ((seedPartial?.synopsis_result) || '').trim()
+    const resuming = resumeRequested
+      && seedPartial?.synopsis_incomplete === true
+      && existingSeed.length >= MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS
 
+    // ===== 分块指令：本次只详写前 N 章（仅全新生成时生效） =====
+    const scope = resuming
+      ? 0
+      : Number.isSafeInteger(this.options.synopsisChapters) && (this.options.synopsisChapters as number) > 0
+        ? this.options.synopsisChapters as number
+        : 0
+    const scoped = !resuming && scope > 0 && scope < config.totalChapters
+    const taskPrompt = [
+      promptBuilder.build(),
+      scoped ? synopsisScopeInstruction(writingLanguage, config.totalChapters, scope) : '',
+    ].filter(Boolean).join('\n\n')
+
+    if (resuming) {
+      callbacks.log(text(
+        '检测到上次中断的情节大纲检查点，正在从断点续写...',
+        'An interrupted plot-outline checkpoint was found; resuming from the break point...',
+      ))
+    } else if (scoped) {
+      callbacks.log(text(
+        `本次仅详细生成前 ${scope} 章（全书 ${config.totalChapters} 章），其余章节以占位概览；后续可继续分块生成`,
+        `This batch details only the first ${scope} of ${config.totalChapters} chapters; the rest is a placeholder overview for later batches`,
+      ))
+    } else if (resumeRequested) {
+      callbacks.log(text(
+        '未找到可续写的中断检查点，将从头生成情节大纲',
+        'No resumable interrupted checkpoint was found; generating the plot outline from scratch.',
+      ))
+    }
+
+    // ===== 有界生成：自动续写至 stop；失败时把已完成部分交给 onPartialAvailable =====
+    let interruptedContent = ''
+    let merged = ''
+    try {
+      merged = await this.callLLMWithAppendContinuation({
+        taskPrompt,
+        systemPrompt: promptBuilder.getSystemRole(),
+        callbacks,
+        context,
+        llmOptions: {
+          purpose: resuming ? 'generate-plot-architecture-resume' : 'generate-plot-architecture',
+          reasoningStage: 'planning',
+          writingSkillStage: 'planning',
+        },
+        seedText: resuming ? existingSeed : '',
+        maxContinuations: 3,
+        onPartialAvailable: content => { interruptedContent = content },
+      })
+    } catch (error) {
+      // 只有「确实新增了内容后才中断」的失败才值得落盘并允许断点续写；
+      // 无净增（no-progress）、取消与网络错误保持原样失败。
+      const partialText = stripThinkingTags(interruptedContent).trim()
+      const seedTrimmed = stripThinkingTags(resuming ? existingSeed : '').trim()
+      const madeProgress = partialText !== seedTrimmed
+      if (
+        !context.cancelled
+        && madeProgress
+        && partialText.length >= MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS
+      ) {
+        callbacks.log(text(
+          '情节大纲输出被模型长度上限中断，正在自动保存已完成部分...',
+          'Plot-outline output stopped at the model length limit; saving the completed part automatically...',
+        ))
+        this.assertNotCancelled(context)
+        assertArchitectureProjectSessionCurrent(projectSession, context)
+        try {
+          await this.persistInterruptedSynopsis(
+            projectSession,
+            expectedProjectPath,
+            context,
+            partialText,
+          )
+          callbacks.log(text(
+            `已完成部分（约 ${partialText.length} 字）已保存为不完整大纲，可点击「继续生成情节大纲」从断点续写`,
+            `The completed part (about ${partialText.length} characters) was saved as an incomplete outline. Click “Continue plot outline” to resume from the break point.`,
+          ))
+        } catch (persistError) {
+          // 检查点落盘失败时不得提供「继续生成」入口，避免续写时覆盖全文。
+          throw persistError
+        }
+        throw new PlotOutlineResumeAvailableError(text(
+          `情节大纲生成在完成前中断，AI 输出达到模型最大长度。已完成部分（约 ${partialText.length} 字）已自动保存为不完整大纲，没有白费。\n点击「继续生成情节大纲」可从断点续写；若整体内容仍偏长，也可在「AI 生成架构」中填写本次生成的章节数，分块生成。`,
+          `Plot-outline generation stopped before completion because the AI output reached the model maximum length. The finished part (about ${partialText.length} characters) was saved automatically as an incomplete outline.\nClick “Continue plot outline” to resume from the break point, or set a smaller per-batch chapter count in “Generate story architecture” to generate it in blocks.`,
+        ))
+      }
+      throw error
+    }
+
+    if (!merged.trim()) throw new Error(text(
+      '情节大纲生成失败，AI 返回空内容',
+      'Plot outline generation failed because the AI returned empty content.',
+    ))
     this.assertNotCancelled(context)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
+
     const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
     await writeArchToDb(
       'synopsis',
-      `# ${heading}\n\n${result}\n`,
+      `# ${heading}\n\n${merged.trim()}\n`,
       expectedProjectPath,
       context.runId,
       projectSession,
@@ -1292,9 +1466,28 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     )
     this.assertNotCancelled(context)
 
+    // 合并既有检查点文件：只更新 synopsis 字段，保留 premise 等其它步骤检查点
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
-    partial.synopsis_result = result
     context.data.partial = partial
+    partial.synopsis_result = merged.trim()
+    partial.synopsis_incomplete = false
+    try {
+      await savePartialData(
+        expectedProjectPath,
+        partial,
+        projectSession,
+        text('保存架构生成检查点', 'Save architecture-generation checkpoint'),
+        text('保存架构生成检查点失败', 'Failed to save the architecture-generation checkpoint.'),
+      )
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      callbacks.log(
+        text(
+          `[警告] 情节大纲已写入数据库，但检查点保存失败：${detail}。中断后将无法从此检查点续写。`,
+          `[Warning] The plot outline was saved to the database, but the checkpoint failed: ${detail}. It cannot resume from this checkpoint after an interruption.`,
+        ),
+      )
+    }
 
     if (this.selectedSteps.includes('premise') && this.selectedSteps.includes('characters') &&
       this.selectedSteps.includes('worldbuilding') && this.selectedSteps.includes('synopsis')) {
@@ -1313,9 +1506,45 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     }
 
     callbacks.log(text(
-      '情节大纲已生成并写入数据库',
-      'Plot outline generated and saved to the database.',
+      resuming ? '情节大纲续写完成并写入数据库' : '情节大纲已生成并写入数据库',
+      resuming ? 'Plot outline continuation completed and saved to the database.' : 'Plot outline generated and saved to the database.',
     ))
-    return result
+    return merged.trim()
+  }
+
+  /** 中断时落盘：DB 存带「未完成」标记的全文，partial 检查点保存纯内容供续写。 */
+  private async persistInterruptedSynopsis(
+    projectSession: ProjectSessionContext,
+    expectedProjectPath: string,
+    context: WorkflowContext,
+    partialText: string,
+  ): Promise<void> {
+    const writingLanguage = workflowWritingLanguage(context)
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
+    const heading = promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')
+    const marker = promptLanguageText(
+      writingLanguage,
+      SYNOPSIS_INCOMPLETE_MARKER_ZH,
+      SYNOPSIS_INCOMPLETE_MARKER_EN,
+    )
+    await writeArchToDb(
+      'synopsis',
+      `# ${heading}\n\n${partialText}\n${marker}\n`,
+      expectedProjectPath,
+      context.runId,
+      projectSession,
+      text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
+    )
+    const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
+    partial.synopsis_result = partialText
+    partial.synopsis_incomplete = true
+    context.data.partial = partial
+    await savePartialData(
+      expectedProjectPath,
+      partial,
+      projectSession,
+      text('保存中断的情节大纲检查点', 'Save the interrupted plot-outline checkpoint'),
+      text('保存中断的情节大纲检查点失败', 'Failed to save the interrupted plot-outline checkpoint.'),
+    )
   }
 }

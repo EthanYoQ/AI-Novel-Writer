@@ -347,7 +347,11 @@ function ArchFileViewerSession({
   }, [handleReload, loadCharacterRosterStatus, projectKey])
 
   /** 确认后启动架构生成工作流 */
-  const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
+  const handleConfirm = async (
+    selectedSteps: ArchStepKey[],
+    stepGuidance: Record<string, string>,
+    synopsisChapters?: number,
+  ) => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
       throw new Error('项目会话已切换，未启动架构生成')
@@ -357,6 +361,7 @@ function ArchFileViewerSession({
       workflow: 'generate_architecture',
       selectedSteps,
       stepGuidance,
+      synopsisChapters,
     }, projectSession)
   }
 

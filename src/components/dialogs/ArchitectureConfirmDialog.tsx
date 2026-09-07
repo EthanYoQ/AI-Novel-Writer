@@ -36,8 +36,15 @@ interface Props {
   archStatus: Record<string, boolean>
   /** 预先选中的步骤（单文件生成时传入） */
   initialSelectedSteps?: ArchStepKey[]
-  onConfirm: (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => Promise<void>
+  onConfirm: (
+    selectedSteps: ArchStepKey[],
+    stepGuidance: Record<string, string>,
+    synopsisChapters?: number,
+  ) => Promise<void>
 }
+
+/** 默认视作「全书一口气生成」的章数阈值，超过时提示分批。 */
+const SCOPE_WARNING_THRESHOLD = 20
 
 /** 生成架构确认弹框（含步骤勾选） */
 export default function ArchitectureConfirmDialog({
@@ -64,10 +71,13 @@ export default function ArchitectureConfirmDialog({
   const [stepGuidance, setStepGuidance] = useState<Record<string, string>>({})
   // 是否展开指导输入区
   const [showGuidance, setShowGuidance] = useState(false)
+  // 情节大纲本次详写章节数（前 N 章；空 = 全书）
+  const [synopsisScope, setSynopsisScope] = useState('')
 
   // 每次弹窗打开时重置选中状态
   const resetChecked = () => {
     setChecked(createDefaultArchitectureSelection(archStatus, initialSelectedSteps))
+    setSynopsisScope('')
   }
 
   const [isConfirming, setIsConfirming] = useState(false)
@@ -85,6 +95,15 @@ export default function ArchitectureConfirmDialog({
 
   const selectedSteps = (Object.keys(checked) as ArchStepKey[]).filter(k => checked[k])
   const noneSelected = selectedSteps.length === 0
+
+  // 情节大纲本次详写章节数：空/非法 = 全书；超过全书章数按全书处理。
+  const totalChapters = Number(config.totalChapters) > 0 ? Number(config.totalChapters) : 0
+  const synopsisScopeValue = (() => {
+    if (!checked.synopsis || !synopsisScope.trim() || totalChapters <= 0) return undefined
+    const parsed = Number(synopsisScope)
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) return undefined
+    return Math.min(parsed, totalChapters)
+  })()
 
   const handleConfirm = async () => {
     if (noneSelected) return
@@ -107,7 +126,7 @@ export default function ArchitectureConfirmDialog({
       }
 
       setGuardError(null)
-      await onConfirm(selectedSteps, stepGuidance)
+      await onConfirm(selectedSteps, stepGuidance, synopsisScopeValue)
       onClose()
       const stepNames = selectedSteps.map(k => {
         const item = ARCH_FILES.find(f => f.key === k)
@@ -231,6 +250,57 @@ export default function ArchitectureConfirmDialog({
               )
             })}
           </div>
+
+          {/* 情节大纲 —— 本次生成范围（警示 + 章节数量输入；仅总章数较多时提示分批） */}
+          {checked.synopsis && totalChapters > SCOPE_WARNING_THRESHOLD && (
+            <div
+              className="rounded-lg p-3 space-y-2"
+              style={{ backgroundColor: 'var(--color-panel)', border: '1px solid var(--color-border)' }}
+            >
+              <div className="flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--color-warning-text)' }}>
+                <AlertTriangle size={13} />
+                {text('情节大纲 · 本次生成范围', 'Plot outline · batch scope')}
+              </div>
+              <p
+                role="note"
+                className="text-xs leading-relaxed m-0"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                  {text(
+                    `全书共 ${totalChapters} 章。若一口气生成全部章节大纲，等待时间会明显变长，且单次输出过长容易被模型输出上限截断、导致大纲质量下降（AI 一次写不完时还会浪费已用额度）。建议分块：先填一个较小的数量（如 20），生成中断或完成后，可在提示处点击「继续生成情节大纲」补齐剩余章节。`,
+                    `The book spans ${totalChapters} chapters. Generating the full outline in one pass takes much longer, and an oversized single output tends to be cut off by the model output limit and lose quality (when the AI cannot finish in one pass, tokens are wasted). Generate it in blocks: enter a smaller number (e.g. 20); after an interruption or a completed batch, click “Continue plot outline” in the notice to finish the remaining chapters.`,
+                  )}
+                </p>
+                <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={totalChapters}
+                  value={synopsisScope}
+                  onChange={e => setSynopsisScope(e.target.value)}
+                  placeholder={String(totalChapters)}
+                  aria-label={text('本次详细生成的章节数（前 N 章）', 'Chapters detailed in this batch (first N)')}
+                  className="w-24 rounded-md px-2 py-1.5 text-xs outline-none transition-colors"
+                  style={{
+                    color: 'var(--color-text)',
+                    backgroundColor: 'var(--color-bg)',
+                    border: '1px solid var(--color-border)',
+                  }}
+                />
+                <span className="text-xs flex-1" style={{ color: 'var(--color-text-muted)' }}>
+                  {synopsisScopeValue && synopsisScopeValue < totalChapters
+                    ? text(
+                      `本次将详细生成前 ${synopsisScopeValue} 章；第 ${synopsisScopeValue + 1}–${totalChapters} 章以占位概览，之后可分批补齐`,
+                      `This batch details the first ${synopsisScopeValue} chapters; chapters ${synopsisScopeValue + 1}–${totalChapters} become a placeholder overview to finish in later batches`,
+                    )
+                    : text(
+                      `本次详写章节数（留空或填 ${totalChapters} = 生成全书 ${totalChapters} 章）`,
+                      `Chapters to detail in this batch (leave empty or enter ${totalChapters} to generate the whole ${totalChapters}-chapter outline)`,
+                    )}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* 逐步指导区域（可折叠） */}
           {selectedSteps.length > 0 && (

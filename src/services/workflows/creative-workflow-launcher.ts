@@ -32,7 +32,15 @@ export type CreativeWorkflowName =
 
 export type CreativeIntent =
   | { workflow: 'generate_draft'; chapterNumber: number }
-  | { workflow: 'generate_architecture'; selectedSteps?: ArchitectureWorkflowParams['selectedSteps']; stepGuidance?: Record<string, string> }
+  | {
+      workflow: 'generate_architecture'
+      selectedSteps?: ArchitectureWorkflowParams['selectedSteps']
+      stepGuidance?: Record<string, string>
+      /** 情节大纲本次只详写前 N 章（0/空 = 全书）。 */
+      synopsisChapters?: ArchitectureWorkflowParams['synopsisChapters']
+      /** 从输出长度中断的检查点续写情节大纲。 */
+      resumeSynopsis?: ArchitectureWorkflowParams['resumeSynopsis']
+    }
   | { workflow: 'generate_blueprint'; params?: DirectoryWorkflowParams }
   | { workflow: 'review' | 'refine' | 'finalize'; chapterNumber: number }
 
@@ -115,6 +123,8 @@ async function definitionFor(
       projectSession,
       selectedSteps: intent.selectedSteps,
       stepGuidance: intent.stepGuidance,
+      synopsisChapters: intent.synopsisChapters ?? null,
+      resumeSynopsis: intent.resumeSynopsis,
     }, uiLocale)
   }
   if (intent.workflow === 'generate_blueprint') {
