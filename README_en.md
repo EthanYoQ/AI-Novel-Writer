@@ -106,6 +106,7 @@ flowchart LR
 | Character cards and project material | Maintains characters, worldbuilding, blueprints, drafts, and finals in the project. Project sessions prevent an old window from writing into a newly reopened project. |
 | Plot tree and narrative threads | Shows main plots, subplots, and source progress on chapter tracks. The plot tree is a rebuildable read-only snapshot, not a replacement for author facts. |
 | Writing Skills and prompt templates | Binds supplemental methods by writing stage and customizes Chinese or English creative guidance while hidden contracts preserve language, output structure, and tool protocols. |
+| Writing-style control | Finalizing a chapter does not automatically rewrite the style in the novel configuration. You can still edit it manually, run writing-style analysis, or import a novel to build imitation guidance. |
 | Reference text and knowledge base | Imports common text formats as reference material. SQLite FTS remains available when no embedding model is configured. |
 | Batch writing task | A separate batch chapter task supports 1–10 chapters, pause, and cancel; downstream processing failure stops later chapters. |
 | Chinese and English UI | The first launch can follow the system locale; a manual choice is persisted. |

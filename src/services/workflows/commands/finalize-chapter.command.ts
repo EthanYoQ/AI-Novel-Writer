@@ -560,35 +560,6 @@ export function buildFinalizePostProcessSteps(
       },
     })
 
-  // ─── 步骤 4: 文风自动学习（每5章触发一次）─────────────────────────
-  if (chapterNumber % 5 === 0) {
-    steps.push({
-      key: 'style_analysis',
-      label: text('文风自动学习', 'Automatic style learning'),
-      critical: false,
-      executor: async (callbacks, context) => {
-        if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
-        if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
-        callbacks.log(workflowUiText(
-          context,
-          '触发文风自动学习（每5章一次）...',
-          'Starting automatic style learning (every five chapters)...',
-        ))
-        const { AnalyzeWritingStyleCommand } = await import('./analyze-style.command')
-        await new AnalyzeWritingStyleCommand().execute({
-          step: {} as unknown,
-          context,
-          callbacks,
-        })
-        callbacks.log(workflowUiText(
-          context,
-          '文风分析完成，已更新配置',
-          'Style analysis completed and the configuration was updated.',
-        ))
-      },
-    })
-  }
-
   return steps
 }
 

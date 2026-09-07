@@ -235,6 +235,47 @@ describe('workflow mutation failure boundaries', () => {
     expect(observedMessages[1]?.[1]?.content).not.toContain('【任务要求】')
   })
 
+  it.each([5, 10])('keeps author writing style unchanged after Chapter %i post-processing', async chapterNumber => {
+    const project = useProjectStore.getState().currentProject!
+    useProjectStore.setState({
+      currentProject: {
+        ...project,
+        novelConfig: { ...project.novelConfig, writingStyle: '作者手工文风' },
+      },
+    })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'kb:import-text') return { success: true, chunkCount: 1 }
+      if (channel === 'db:blueprint-update-notes') return { success: true }
+      if (channel === 'db:character-roster-read') return { status: 'empty', revision: 0, entries: [] }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const complete = vi.fn(async (
+      _builder: { build: () => string; getSystemRole: () => string },
+      _callbacks: StepCallbacks,
+      output: 'visible-text' | 'structured-data',
+    ) => output === 'structured-data' ? '{"updates":[]}' : '本章剧情要点')
+    const steps = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      chapterNumber,
+      `第${chapterNumber}章`,
+      '定稿正文',
+      { complete },
+    )
+
+    for (const step of steps) await step.executor(callbacks(), context())
+
+    expect(steps.map(step => step.key)).toEqual(['kb_import', 'chapter_notes', 'character_cards'])
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(expect.arrayContaining([
+      'kb:import-text',
+      'db:blueprint-update-notes',
+      'db:character-roster-read',
+    ]))
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:project-core-update')
+    expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('作者手工文风')
+  })
+
   it('treats committed-but-pending manuscript publication as a failed finalization step', async () => {
     finalizationClient.commitFinalizationSnapshot.mockResolvedValue({
       success: false,
