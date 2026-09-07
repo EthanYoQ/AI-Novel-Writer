@@ -408,7 +408,11 @@ Return JSON only, with no Markdown, preface, analysis, plan, code fence, or reas
 
 [Writing style]
 {{writing_style}}`,
-    systemSuffix: `[Author revision guidance — highest priority when present]
+    systemSuffix: `[Writing-style applicability]
+- Writing style selects expression only; it adds no facts or events, and not every item must be forced into the manuscript.
+- Explicit author facts and guidance, actual prior prose, the chapter's key causality, and its target length take priority. Do not use style guidance to rewrite them, relabel explicit author facts or requirements as guesses, or add scenes, actions, or events merely to satisfy style guidance.
+
+[Author revision guidance — highest priority when present]
 {{user_refine_prompt}}
 
 Output the complete revised manuscript as plain prose only. Do not include Markdown, a preface, an explanation, analysis, or screenplay formatting. Separate every paragraph with one blank line.`,
@@ -529,7 +533,7 @@ Return exactly one JSON object:
 If nothing changed and no important character was introduced, return {"updates":[],"newCharacters":[]}. Output JSON only, with no Markdown or explanation.`,
   },
   analyze_writing_style: {
-    systemRole: 'You are a rigorous fiction-style analyst. Convert a reference novel into executable craft constraints without retelling its plot. Use concise, actionable language.',
+    systemRole: 'You are a rigorous fiction-style analyst. Turn observable craft in a reference novel into a small set of concise, optional writing techniques without retelling its plot.',
     content: `Analyze the following fiction sample and produce a style profile and imitation guide for later drafting.
 
 [Fiction sample]
@@ -538,7 +542,9 @@ If nothing changed and no important character was introduced, return {"updates":
 [Boundaries]
 - Analyze craft only: narrative rhythm, structure, sentence patterns, descriptive balance, scene movement, and dialogue organization.
 - Do not repeat plot events, character names, place names, proprietary settings, signature scenes, or source sentences.
-- Use concise, executable observations instead of general literary commentary.
+- Extract only effective, transferable techniques; do not turn sample flaws or incidental patterns into drafting requirements.
+- Do not turn sample plot events, action or object quotas, per-scene allocations, or sample length into drafting requirements.
+- Use concise, specific, optional observations instead of general literary commentary.
 
 [Dimensions]
 1. Narrative rhythm and information release.
@@ -550,22 +556,17 @@ If nothing changed and no important character was introduced, return {"updates":
 7. Opening hooks, escalation, reversals, and chapter-end hooks.
 8. Likely imitation failures and concrete corrections.
 
-Output plain text with exactly these headings and two to four concise items per field:
+Output plain text with these headings. Give three to six concise suggestions in total and at most one per field; omit a field when there is no clear effective technique instead of inventing a rule.
 
 Style Profile:
-- Narrative rhythm:
-- Sentences and paragraphs:
-- Scene progression:
-- Descriptive density:
-- Dialogue style:
-- Emotional curve:
-- Structural patterns:
+- Rhythm and structure:
+- Sentences and scenes:
+- Dialogue and emotion:
 
 Imitation Guide:
-- Prioritize:
-- Avoid:
-- Hard constraints for drafting prompts:
-- How to recover from vague output:
+- Optional effective techniques:
+- Use with caution:
+- Applicability boundary:
 
 Add no preface, courtesy language, or unrelated explanation.`,
   },
@@ -685,6 +686,10 @@ Use these only to understand later turning points. Do not reveal or advance them
 - Author-confirmed novel configuration: {{novel_config}}
 - Treat both as immutable facts. Never omit, weaken, reverse, or replace an explicit author setting with a genre convention; if a fact is not foregrounded in this chapter, do not contradict it.
 
+[Writing-style applicability]
+- Writing style selects expression only; it adds no facts or events, and not every item must be forced into the manuscript.
+- Explicit author facts and guidance, actual prior prose, the chapter's key causality, and its target length take priority. Do not use style guidance to rewrite them, relabel explicit author facts or requirements as guesses, or add scenes, actions, or events merely to satisfy style guidance.
+
 [Author guidance for this step — highest priority when present]
 {{user_guidance}}
 
@@ -728,6 +733,10 @@ Use these only to understand later turning points. Do not reveal or advance them
 - Story architecture: {{architecture}}
 - Author-confirmed novel configuration: {{novel_config}}
 - Treat both as immutable facts. Never omit, weaken, reverse, or replace an explicit author setting with a genre convention; if a fact is not foregrounded in this chapter, do not contradict it.
+
+[Writing-style applicability]
+- Writing style selects expression only; it adds no facts or events, and not every item must be forced into the manuscript.
+- Explicit author facts and guidance, actual prior prose, the chapter's key causality, and its target length take priority. Do not use style guidance to rewrite them, relabel explicit author facts or requirements as guesses, or add scenes, actions, or events merely to satisfy style guidance.
 
 [Author guidance for this step — highest priority when present]
 {{user_guidance}}

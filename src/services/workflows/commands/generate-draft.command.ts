@@ -936,6 +936,10 @@ ${params.globalGuidance}
 【文风要求】
 ${params.writingStyle || '（无）'}
 
+【文风适用边界】
+- 文风仅用于选择表达方式，不是新增事实或事件要求；无需逐条强行兑现。
+- 作者明确事实与指导、实际前文、本章关键因果和本章篇幅优先。不得用文风改写这些内容或仅为兑现文风增加场景、动作或事件；不得把作者明确事实或要求降格为推测。
+
 【小说配置事实】
 ${params.novelConfigFacts}
 
@@ -961,6 +965,10 @@ ${params.globalGuidance}
 
 [Writing style]
 ${params.writingStyle || '(none)'}
+
+[Writing-style applicability]
+- Writing style selects expression only; it adds no facts or events, and not every item must be forced into the manuscript.
+- Explicit author facts and guidance, actual prior prose, the chapter's key causality, and its target length take priority. Do not use style guidance to rewrite them, relabel explicit author facts or requirements as guesses, or add scenes, actions, or events merely to satisfy style guidance.
 
 [Novel configuration facts]
 ${params.novelConfigFacts}

@@ -257,6 +257,48 @@ afterEach(() => {
 })
 
 describe('RefineDraftCommand bounded visible completion', () => {
+  it.each([
+    ['zh-CN', '文风仅用于选择表达方式', '作者明确事实与指导、实际前文、本章关键因果和本章篇幅优先'],
+    ['en-US', 'Writing style selects expression only', 'actual prior prose'],
+  ] as const)('keeps the complete style profile optional in the %s final refinement request', async (
+    writingLanguage,
+    applicabilityBoundary,
+    priorityBoundary,
+  ) => {
+    const style = 'STYLE_PROFILE_SENTINEL: 样本缺点；每幕两个动作；样本文长 900 字。'
+    useProjectStore.setState((state) => ({
+      currentProject: state.currentProject
+        ? {
+            ...state.currentProject,
+            novelConfig: {
+              ...state.currentProject.novelConfig,
+              writingLanguage,
+              writingStyle: style,
+            },
+          }
+        : null,
+    }))
+    const source = '原稿正文。'.repeat(250)
+    const revision = '修订正文。'.repeat(250)
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: revision, finishReason: 'stop' })
+    stubIpc(successfulRevisionIpc())
+
+    await command(completeWithLease, source).execute({
+      step: {},
+      context: { ...workflowContext(), writingLanguage },
+      callbacks: callbacks(),
+    })
+
+    expect(completeWithLease).toHaveBeenCalledTimes(1)
+    const request = completeWithLease.mock.calls[0]?.[0].messages
+      .map(message => message.content).join('\n') ?? ''
+    expect(request).toContain(style)
+    expect(request.match(/STYLE_PROFILE_SENTINEL/gu)).toHaveLength(1)
+    expect(request).toContain(applicabilityBoundary)
+    expect(request).toContain(priorityBoundary)
+  })
+
   it('uses the frozen English UI locale for visible refinement logs and the diff tab independently of Chinese writing', async () => {
     const source = 'Original chapter. '.repeat(120)
     const revision = 'Revised chapter. '.repeat(120)

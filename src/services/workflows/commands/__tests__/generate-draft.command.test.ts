@@ -1491,6 +1491,40 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(completePrompt).toContain(coreOutline)
   })
 
+  it.each([
+    ['zh-CN', '文风仅用于选择表达方式', '作者明确事实与指导、实际前文、本章关键因果和本章篇幅优先'],
+    ['en-US', 'Writing style selects expression only', 'actual prior prose'],
+  ] as const)('keeps the complete style profile optional in %s draft and continuation requests', async (
+    writingLanguage,
+    applicabilityBoundary,
+    priorityBoundary,
+  ) => {
+    const writingStyle = 'STYLE_PROFILE_SENTINEL: sample flaw; two actions per scene; sample length 900.'
+    const runtime = fakeOutcomes(
+      outcome('初'.repeat(100), 'length', 1),
+      outcome(`${'续'.repeat(400)}。`, 'stop', 2),
+    )
+    const { context, callbacks, command } = setup({
+      runtime,
+      wordsTarget: 500,
+      writingLanguage,
+      writingStyle,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(runtime.complete).toHaveBeenCalledTimes(2)
+    const prompts = runtime.complete.mock.calls.map(([task]) => (
+      task.messages.map(message => message.content).join('\n')
+    ))
+    for (const prompt of prompts) {
+      expect(prompt).toContain(writingStyle)
+      expect(prompt.match(/STYLE_PROFILE_SENTINEL/gu)).toHaveLength(1)
+      expect(prompt).toContain(applicabilityBoundary)
+      expect(prompt).toContain(priorityBoundary)
+    }
+  })
+
   it('keeps the head, middle, and tail of authored guidance in every draft request', async () => {
     const authorGuidance = [
       'AUTHOR_RULE_BEGIN。',
