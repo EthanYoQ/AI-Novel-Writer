@@ -552,7 +552,21 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       `【本章篇幅合同】\n用户目标 ${targetChars} 字；可接受范围 ${lowerTargetChars}–${upperTargetChars} 字（±20%）。在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件；不得为满足篇幅而删除、改写或截断这些要求，不要为凑字数增加无关内容。`,
       `[Chapter length contract]\nThe user's target is ${targetChars} words; the acceptable range is ${lowerTargetChars}-${upperTargetChars} words (±20%). Within this length, fully realize every author task and required event in the chapter blueprint; do not delete, rewrite, or truncate those requirements to meet the range, and do not add unrelated content just to fill space.`,
     )
-    const prompt = [chapterMaterials.text, promptBuilder.build(), chapterLengthContract].join('\n\n')
+    const executionItems = [
+      { zhCN: '必需事件', enUS: 'Required events', value: this.chapterInfo.keyEvents },
+      { zhCN: '章节钩子', enUS: 'Chapter hook', value: this.chapterInfo.suspenseHook },
+      { zhCN: '作者本章指导', enUS: 'Author guidance for this chapter', value: this.chapterInfo.userGuidance },
+    ]
+    const chapterExecutionCard = executionItems.some(item => item.value?.trim())
+      ? promptLanguageText(
+          writingLanguage,
+          `【本章执行卡（作者原文重列）】\n以下非空项是当前章应落实的动作和收束，不是新增事实。请在输出前核对各项已通过正文动作或结果落实；后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.zhCN}: ${item.value}`] : []).join('\n')}`,
+          `[Current-chapter execution card (author text repeated verbatim)]\nThe non-empty items below are current-chapter actions and end states, not new facts. Before output, check that each item is realized through manuscript action or outcome. Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.enUS}: ${item.value}`] : []).join('\n')}`,
+        )
+      : ''
+    const prompt = [chapterMaterials.text, promptBuilder.build(), chapterExecutionCard, chapterLengthContract]
+      .filter(Boolean)
+      .join('\n\n')
     const previousEnding = chapterMaterials.previousEnding
 
     callbacks.log(uiText(

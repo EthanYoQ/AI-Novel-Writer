@@ -303,6 +303,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     }>
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
     keyEvents?: string
+    suspenseHook?: string
     knowledgeQueryHint?: string
     characterCards?: Array<{
       name: string
@@ -471,6 +472,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       role: '开端',
       purpose: '建立冲突',
       keyEvents: options.keyEvents ?? '开端',
+      suspenseHook: options.suspenseHook,
       characters: options.characters ?? [],
       wordsTarget: options.wordsTarget,
       userGuidance: options.userGuidance,
@@ -717,6 +719,82 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(user).toContain('【后续计划边界（只约束当前章，不是当前章任务）】')
     expect(user).toContain(futurePlan)
     expect(user).toContain('用户目标 900 字；可接受范围 720–1080 字（±20%）')
+    expect(runtime.complete).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    {
+      writingLanguage: 'zh-CN' as const,
+      heading: '【本章执行卡（作者原文重列）】',
+      labels: ['必需事件', '章节钩子', '作者本章指导'],
+    },
+    {
+      writingLanguage: 'en-US' as const,
+      heading: '[Current-chapter execution card (author text repeated verbatim)]',
+      labels: ['Required events', 'Chapter hook', 'Author guidance for this chapter'],
+    },
+  ])('places a $writingLanguage verbatim execution card immediately before the length contract', async ({
+    writingLanguage,
+    heading,
+    labels,
+  }) => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('正'.repeat(900), 'stop')
+    })
+    const keyEvents = '顾弦把潮印实际交给陆霁。'
+    const suspenseHook = '门后传来记录机倒带声。'
+    const userGuidance = '四拍灯码暂时只有陆霁知道。'
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage,
+      wordsTarget: 900,
+      keyEvents,
+      suspenseHook,
+      userGuidance,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    const executionCardIndex = user.lastIndexOf(heading)
+    const lengthContractIndex = user.indexOf(
+      writingLanguage === 'en-US' ? '[Chapter length contract]' : '【本章篇幅合同】',
+    )
+    expect(executionCardIndex).toBeGreaterThanOrEqual(0)
+    expect(lengthContractIndex).toBeGreaterThan(executionCardIndex)
+    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[0]}: ${keyEvents}`)
+    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[1]}: ${suspenseHook}`)
+    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[2]}: ${userGuidance}`)
+    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(
+      writingLanguage === 'en-US'
+        ? 'Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.'
+        : '后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。',
+    )
+    expect(runtime.complete).toHaveBeenCalledOnce()
+  })
+
+  it('omits the execution card when all three author fields are empty', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('正'.repeat(900), 'stop')
+    })
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage: 'zh-CN',
+      wordsTarget: 900,
+      keyEvents: '',
+      suspenseHook: '  ',
+      userGuidance: '',
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(user).not.toContain('【本章执行卡（作者原文重列）】')
+    expect(user).toContain('【本章篇幅合同】')
     expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
