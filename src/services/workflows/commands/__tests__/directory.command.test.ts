@@ -369,6 +369,68 @@ describe('GenerateDirectoryCommand', () => {
     expect(createRuntime).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['author target', 900, false, 900],
+    ['compact fallback target', 1500, true, 1500],
+    ['existing default', undefined, false, 3000],
+  ] as const)('puts the %s chapter capacity at the end of every production request', async (
+    _label,
+    wordsPerChapter,
+    forceCompact,
+    expectedTarget,
+  ) => {
+    stubIpcInvoke(successfulCommitHandler())
+    const observedTasks: GenerationTask[] = []
+    const session = generationSession(async task => {
+      observedTasks.push(task)
+      const compact = task.purpose.includes(':compact-single:')
+      return {
+        status: 'completed',
+        content: JSON.stringify({
+          blueprints: [modelBlueprint(1, {
+            relationshipHints: forceCompact && !compact
+              ? [{ from: '主角', to: '未声明角色', relation: '对手' }]
+              : [],
+          })],
+        }),
+        finishReason: 'stop',
+        receipt: generationReceipt(observedTasks.length, 'stop', task.purpose),
+      }
+    })
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      {
+        ...projectSnapshot,
+        novelConfig: {
+          ...projectSnapshot.novelConfig,
+          totalChapters: 1,
+          wordsPerChapter,
+        },
+      },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+
+    await command.execute({ step: {}, context: workflowContext(), callbacks: stepCallbacks() })
+
+    expect(observedTasks).toHaveLength(forceCompact ? 2 : 1)
+    const lowerBound = Math.round(expectedTarget * 0.8)
+    const upperBound = Math.round(expectedTarget * 1.2)
+    for (const task of observedTasks) {
+      const user = task.messages.find(message => message.role === 'user')?.content ?? ''
+      expect(user).toContain(`每章正文目标约 ${expectedTarget} 字，可接受范围 ${lowerBound}–${upperBound} 字`)
+      expect(user).toContain('作者指定事件与字数目标均为权威事实，不得删除、改写或擅自调整')
+      expect(user).toContain('只计一个语义事件')
+      expect(user).toContain('不擅自增加独立事件')
+      expect(user).toContain('不得把全部背景逐项演成场景')
+      expect(user).toContain('容量冲突：…')
+      expect(user.trim().endsWith('不写章节正文。')).toBe(true)
+    }
+    if (forceCompact) {
+      const compactPrompt = observedTasks.at(-1)?.messages.find(message => message.role === 'user')?.content ?? ''
+      expect(compactPrompt).toContain(`"targetWordsPerChapter":${expectedTarget}`)
+    }
+  })
+
   it('sends English blueprint instructions through the provider request for an English project', async () => {
     stubIpcInvoke(successfulCommitHandler())
     const observedTasks: GenerationTask[] = []
@@ -741,12 +803,14 @@ describe('GenerateDirectoryCommand', () => {
   it('splits a five-chapter length outcome into ordered 2+3 batches and commits once', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const observedRanges: Array<[number, number]> = []
+    const observedPrompts: string[] = []
     const createRuntime = vi.fn(async () => testRuntime(session))
     let attempt = 0
     const session = generationSession(async (task) => {
       attempt += 1
       const range = taskRange(task)
       observedRanges.push(range)
+      observedPrompts.push(task.messages.find(message => message.role === 'user')?.content ?? '')
       if (attempt === 1) {
         return {
           status: 'incomplete',
@@ -768,7 +832,7 @@ describe('GenerateDirectoryCommand', () => {
     })
     const command = new GenerateDirectoryCommand(
       { mode: 'full', count: 5 },
-      projectSnapshot,
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, wordsPerChapter: 1200 } },
       { createRuntime },
     )
 
@@ -780,6 +844,10 @@ describe('GenerateDirectoryCommand', () => {
 
     expect(result.map(item => item.chapterNumber)).toEqual([1, 2, 3, 4, 5])
     expect(observedRanges).toEqual([[1, 5], [1, 2], [3, 5]])
+    expect(observedPrompts).toHaveLength(3)
+    expect(observedPrompts.every(prompt => (
+      prompt.includes('每章正文目标约 1200 字，可接受范围 960–1440 字')
+    ))).toBe(true)
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)
     expect(createRuntime).toHaveBeenCalledWith({

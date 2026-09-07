@@ -756,7 +756,6 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 【文风要求（如有，请严格遵循）】
 {{writing_style}}`,
     systemSuffix: `【不可偏离的作者事实】
-- 故事架构：{{architecture}}
 - 小说配置：{{novel_config}}
 - 上述内容是不可改写的事实源。不得删除、弱化、反转或用类型惯例替换作者明确设定；本章暂不展开的事实也不得写出相反内容。
 
@@ -1598,8 +1597,13 @@ export function appendRequiredPromptContext(
   writingLanguage: WritingLanguage,
 ): string {
   const builtinTemplate = getBuiltinPromptTemplate(template.key, writingLanguage)
+  const referencedSources = [
+    template.content,
+    template.taskGuidance ?? '',
+    builtinTemplate?.systemSuffix ?? '',
+  ]
   const requiredContext = (builtinTemplate?.requiredContextVariables ?? [])
-    .filter(key => !template.content.includes(`{{${key}}}`))
+    .filter(key => !referencedSources.some(source => source.includes(`{{${key}}}`)))
     .flatMap((key) => {
       const value = variables[key]?.trim()
       if (!value || !builtinTemplate) return []

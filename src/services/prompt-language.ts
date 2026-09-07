@@ -680,7 +680,6 @@ Use these only to understand later turning points. Do not reveal or advance them
 [Writing style]
 {{writing_style}}`,
     systemSuffix: `[Authoritative facts that must not drift]
-- Story architecture: {{architecture}}
 - Author-confirmed novel configuration: {{novel_config}}
 - Treat both as immutable facts. Never omit, weaken, reverse, or replace an explicit author setting with a genre convention; if a fact is not foregrounded in this chapter, do not contradict it.
 

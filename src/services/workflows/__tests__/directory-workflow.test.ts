@@ -387,6 +387,48 @@ describe('directory workflow project context', () => {
     )).toThrow('The project changed, so chapter-blueprint generation could not start.')
   })
 
+  it('freezes the chapter word target used by the directory command at launch', async () => {
+    const projectA = project('C:\\novels\\Frozen-capacity')
+    projectA.novelConfig.wordsPerChapter = 900
+    useProjectStore.setState({ currentProject: projectA })
+    const projectSession = {
+      projectId: projectA.id,
+      leaseId: projectA.sessionLease!,
+      projectPath: projectA.path,
+    }
+    const directoryCommand = await import('../commands/directory.command')
+    const execute = vi.spyOn(directoryCommand.GenerateDirectoryCommand.prototype, 'execute')
+      .mockImplementation(async function (this: unknown) {
+        const snapshot = (this as unknown as {
+          projectSnapshot: { novelConfig: { wordsPerChapter?: number } }
+        }).projectSnapshot
+        expect(snapshot.novelConfig.wordsPerChapter).toBe(900)
+        return []
+      })
+    const workflow = createDirectoryWorkflow({ mode: 'full' }, projectA.path, projectSession)
+    useProjectStore.setState({
+      currentProject: {
+        ...projectA,
+        novelConfig: { ...projectA.novelConfig, wordsPerChapter: 6000 },
+      },
+    })
+
+    await expect(workflow.steps[1].executor(
+      workflowStep('生成蓝图'),
+      {
+        runId: 'frozen-capacity-run',
+        projectPath: projectA.path,
+        projectSession,
+        writingLanguage: 'zh-CN',
+        uiLocale: 'zh-CN',
+        data: {},
+        cancelled: false,
+      },
+      { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
+    )).resolves.toBe('已生成 0 章蓝图')
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
   it('keeps architecture validation errors in the locale frozen at launch', async () => {
     const projectA = project('C:\\novels\\English-errors')
     const projectSession = {

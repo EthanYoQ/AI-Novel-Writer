@@ -43,6 +43,7 @@ export interface DirectoryWorkflowProjectSnapshot {
   expectedProjectPath: string
   novelConfig: Readonly<{
     totalChapters: number
+    wordsPerChapter?: number
     globalGuidance?: string
     genre?: string
   }>
@@ -268,6 +269,7 @@ export function createDirectoryWorkflow(
     expectedProjectPath,
     novelConfig: {
       totalChapters: projectAtStart.novelConfig.totalChapters,
+      wordsPerChapter: projectAtStart.novelConfig.wordsPerChapter,
       globalGuidance: projectAtStart.novelConfig.globalGuidance,
       genre: projectAtStart.novelConfig.genre,
     },
