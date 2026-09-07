@@ -686,11 +686,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     })
     const historyMarker = '上一章唯一历史哨兵'
     const authorTask = '当前章唯一作者任务哨兵'
+    const futurePlan = '后续章唯一作者计划哨兵'
     const { context, callbacks, command } = setup({
       runtime,
       chapterNumber: 2,
       wordsTarget: 900,
       keyEvents: authorTask,
+      blueprints: [{ chapterNumber: 3, title: '第三章', keyEvents: futurePlan }],
       previousFinalizedContent: `${historyMarker}。`.repeat(100),
     })
 
@@ -703,6 +705,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(historyIndex).toBeGreaterThanOrEqual(0)
     expect(authorTaskIndex).toBeGreaterThan(historyIndex)
     expect(lengthContractIndex).toBeGreaterThan(authorTaskIndex)
+    expect(user).toContain('【后续计划边界（只约束当前章，不是当前章任务）】')
+    expect(user).toContain(futurePlan)
     expect(user).toContain('用户目标 900 字；可接受范围 720–1080 字（±20%）')
     expect(runtime.complete).toHaveBeenCalledOnce()
   })

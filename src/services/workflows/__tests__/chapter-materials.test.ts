@@ -3,6 +3,43 @@ import { describe, expect, it } from 'vitest'
 import { adjacentEvidencePassages, assembleChapterMaterials } from '../chapter-materials'
 
 describe('chapter materials', () => {
+  it.each([
+    {
+      writingLanguage: 'zh-CN' as const,
+      expectedBoundary: '后续计划边界（只约束当前章，不是当前章任务）',
+      expectedTiming: '明确安排在后续章节的知情变化、物品转交、行动和完成状态不得前移',
+      expectedForeshadowing: '允许不改变这些时点的铺垫',
+    },
+    {
+      writingLanguage: 'en-US' as const,
+      expectedBoundary: 'Future-plan boundary (constrains the current chapter; not a current-chapter task)',
+      expectedTiming: 'Knowledge changes, item transfers, actions, and completed states explicitly assigned to later chapters must not be moved earlier',
+      expectedForeshadowing: 'foreshadowing that does not change those timings is allowed',
+    },
+  ])('keeps $writingLanguage future plans verbatim while making their timing role explicit', ({
+    writingLanguage,
+    expectedBoundary,
+    expectedTiming,
+    expectedForeshadowing,
+  }) => {
+    const futurePlans = '第8章：林岚把钥匙交给周砚。\n第9章：周砚才得知暗门口令。'
+    const bundle = assembleChapterMaterials({
+      writingLanguage,
+      authorProjectFacts: [],
+      characterProfiles: '',
+      futurePlans,
+      references: [],
+      finalized: [],
+      candidates: [],
+      relevanceTerms: [],
+    })
+
+    expect(bundle.text).toContain(expectedBoundary)
+    expect(bundle.text).toContain(expectedTiming)
+    expect(bundle.text).toContain(expectedForeshadowing)
+    expect(bundle.text.split(futurePlans)).toHaveLength(2)
+  })
+
   it('keeps the hit paragraph and one neighbour on both sides, merging overlapping windows', () => {
     const content = [
       '林岚冲进库房时仍拖着左腿。',
