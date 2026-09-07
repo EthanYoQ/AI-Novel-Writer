@@ -655,7 +655,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     })
   })
 
-  it('injects finalized author continuity and the previous finalized ending without a blueprint', async () => {
+  it('injects verbatim finalized excerpts without promoting mixed fact indexes to manuscript truth', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
       observedTask = task
@@ -675,7 +675,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         facts: [{
           category: 'character-state',
           entities: ['林岚'],
-          statement: '林岚持有红色钥匙。',
+          statement: '林岚脚踝韧带受损，始终持有红色钥匙。',
           sourceChapter: 1,
           evidence: '林岚把红色钥匙收进口袋。',
         }],
@@ -688,9 +688,11 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(prompt).toContain('作者事实哨兵：林岚已经拿到红色钥匙。')
-    expect(prompt).toContain('林岚持有红色钥匙。')
+    expect(prompt).not.toContain('林岚脚踝韧带受损，始终持有红色钥匙。')
+    expect(prompt).not.toContain('[character-state]')
     expect(prompt).toContain('来源第1章')
     expect(prompt).toContain('林岚把红色钥匙收进口袋。')
+    expect(prompt).toContain('不得根据片段补全未写明的信息')
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
     expect(prompt).toContain('上一章定稿结尾哨兵。')
     expect(prompt).toContain('项目知识哨兵')
@@ -1119,10 +1121,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         facts: [
           {
             category: 'character-state',
-            entities: ['林岚'],
+            entities: [],
             statement: '早期事实哨兵：林岚不会游泳。',
             sourceChapter: 1,
-            evidence: '林岚在河边承认自己不会游泳。',
+            evidence: '她在河边承认自己不会游泳。',
           },
           {
             category: 'plot',
@@ -1138,8 +1140,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).toContain('早期事实哨兵')
-    expect(prompt).not.toContain('无关事实哨兵')
+    expect(prompt).toContain('她在河边承认自己不会游泳。')
+    expect(prompt).not.toContain('早期事实哨兵')
+    expect(prompt).not.toContain('周远穿上新鞋。')
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
   })
 
@@ -1173,7 +1176,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).toContain('预算事实哨兵')
+    expect(prompt).toContain('林岚在旧码头拒绝登船。')
+    expect(prompt).toContain('来源第1章')
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
   })
 

@@ -1169,8 +1169,8 @@ ${visibleTail}`,
           factCandidates.push({
             text: promptLanguageText(
               writingLanguage,
-              `- [${fact.category}] ${fact.statement}（来源第${fact.sourceChapter}章；证据：${fact.evidence}）`,
-              `- [${fact.category}] ${fact.statement} (source: Chapter ${fact.sourceChapter}; evidence: ${fact.evidence})`,
+              `- 来源第${fact.sourceChapter}章：${fact.evidence}`,
+              `- Source Chapter ${fact.sourceChapter}: ${fact.evidence}`,
             ),
             entityRelevant,
             sourceChapter: fact.sourceChapter,
@@ -1208,8 +1208,8 @@ ${visibleTail}`,
     const factBlock = selectedFacts.length > 0
       ? promptLanguageText(
           writingLanguage,
-          `【已定稿连续性事实】\n${selectedFacts.join('\n')}`,
-          `[Finalized continuity facts]\n${selectedFacts.join('\n')}`,
+          `【既往定稿正文片段】\n这些片段只证明正文直接写明的内容；不得根据片段补全未写明的信息。如与作者原始设定冲突，以作者原始设定为准。\n${selectedFacts.join('\n')}`,
+          `[Prior finalized manuscript excerpts]\nThese excerpts establish only what the manuscript states directly. Do not fill in unstated details. If an excerpt conflicts with explicit author settings, follow the author settings.\n${selectedFacts.join('\n')}`,
         )
       : ''
     const notesBudget = Math.max(MAX_CHARS - factBlock.length - (factBlock ? 2 : 0), 0)
