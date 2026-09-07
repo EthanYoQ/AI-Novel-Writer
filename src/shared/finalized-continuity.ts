@@ -1,3 +1,5 @@
+import type { CharacterStateTextField } from './character-roster'
+
 export type FinalizedContinuityFactCategory =
   | 'character-state'
   | 'timeline'
@@ -41,12 +43,21 @@ export interface FinalizedContinuityFact {
   evidence: string
 }
 
+/** A machine-derived locator only; it never becomes an author-confirmed fact. */
+export interface FinalizedCharacterStateCandidate {
+  characterName: string
+  field: CharacterStateTextField
+  value: string
+}
+
 export interface FinalizedContinuityProjection {
   draftId: number
   chapterNumber: number
   chapterTitle: string
   chapterNotes: string
   facts?: FinalizedContinuityFact[]
+  /** Used only to locate the bound finalized prose, never rendered as a fact. */
+  characterStateCandidates?: FinalizedCharacterStateCandidate[]
   /** Missing only for pre-v2 rows whose source cannot be safely reconstructed. */
   source?: FinalizedSourceIdentity
   /** Missing legacy callers must be treated exactly like `legacy`, never current. */
@@ -58,6 +69,16 @@ export interface SaveFinalizedContinuityRequest {
   chapterNumber: number
   chapterNotes: string
   facts?: FinalizedContinuityFact[]
+  /** Watermark frozen before extraction; stale in-flight results must not advance it. */
+  projectionGeneration: number
+  /** Frozen before extraction; the main process revalidates it at commit time. */
+  source: FinalizedSourceIdentity
+}
+
+export interface SaveFinalizedCharacterStateCandidatesRequest {
+  draftId: number
+  chapterNumber: number
+  candidates: FinalizedCharacterStateCandidate[]
   /** Watermark frozen before extraction; stale in-flight results must not advance it. */
   projectionGeneration: number
   /** Frozen before extraction; the main process revalidates it at commit time. */

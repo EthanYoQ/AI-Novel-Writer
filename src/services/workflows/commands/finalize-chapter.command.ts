@@ -24,6 +24,7 @@ import {
 } from '../workflow-utils'
 import type { ChapterInfo } from '../chapter-workflow'
 import type {
+  FinalizedCharacterStateCandidate,
   FinalizedContinuityFact,
   FinalizedContinuityFactCategory,
   FinalizedSourceIdentity,
@@ -457,6 +458,7 @@ export function buildFinalizePostProcessSteps(
         generatedCharacterCards = cardsResult
         let updatedCount = 0
         const changedEntries: CharacterRosterEntry[] = []
+        const blockedCandidates: FinalizedCharacterStateCandidate[] = []
         for (const character of allChars) {
           const patch = updatesByName.get(character.name)
           if (!patch) continue
@@ -472,7 +474,16 @@ export function buildFinalizePostProcessSteps(
           // Only fields actually returned by this model call carry this derived receipt.
           const provenance: NonNullable<CharacterRosterCharacterState['provenance']> = {}
           for (const field of CHARACTER_STATE_TEXT_FIELDS) {
-            if (Object.hasOwn(patch, field)) provenance[field] = { kind: 'derived', source: finalizedSource }
+            if (!Object.hasOwn(patch, field)) continue
+            provenance[field] = { kind: 'derived', source: finalizedSource }
+            const previousValue = currentState?.[field] ?? ''
+            const previousSource = currentState?.provenance?.[field]
+            const protectedValue = previousSource?.kind === 'author'
+              || previousSource?.kind === 'legacy'
+              || Boolean(previousValue && previousSource?.kind !== 'derived')
+            if (protectedValue && patch[field] !== previousValue) {
+              blockedCandidates.push({ characterName: character.name, field, value: patch[field] ?? '' })
+            }
           }
           const structuredCharacter = { ...character }
           delete structuredCharacter.legacyRelationshipNotes
@@ -513,6 +524,31 @@ export function buildFinalizePostProcessSteps(
               context,
               '角色状态未能原子提交',
               'Character-state updates could not be committed atomically.',
+            ))
+          }
+          if (blockedCandidates.length > 0) {
+            if (projectionGeneration === undefined) {
+              throw new Error(workflowUiText(
+                context,
+                '角色状态候选缺少连续性投影水位',
+                'The character-state candidates are missing the continuity projection watermark.',
+              ))
+            }
+            const candidateResult = await ipc.invokeWithProjectSession(
+              projectSession,
+              'db:continuity-save-character-state-candidates',
+              {
+                draftId: finalizedDraftId!,
+                chapterNumber,
+                candidates: blockedCandidates,
+                projectionGeneration,
+                source: finalizedSource!,
+              },
+              _project.path,
+            )
+            requireIpcSuccess(candidateResult, text(
+              '保存角色状态原文定位候选',
+              'Save character-state prose locators',
             ))
           }
           if (updatedCount > 0) callbacks.log(workflowUiText(

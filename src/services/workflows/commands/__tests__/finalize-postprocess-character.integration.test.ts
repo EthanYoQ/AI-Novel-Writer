@@ -14,7 +14,10 @@ import {
   invalidateContinuityProjectionFrom,
   SummaryRepository,
 } from '../../../../../electron/repositories/summary-repository'
-import type { SaveFinalizedContinuityRequest } from '../../../../shared/finalized-continuity'
+import type {
+  SaveFinalizedCharacterStateCandidatesRequest,
+  SaveFinalizedContinuityRequest,
+} from '../../../../shared/finalized-continuity'
 import type { CharacterRosterCommitRequest } from '../../../../shared/character-roster'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import { useLLMStore } from '../../../../stores/llm-store'
@@ -143,6 +146,15 @@ function installRealRepositoryIpc(): void {
             } catch (error) {
               return { success: false, error: String(error) }
             }
+          case 'db:continuity-save-character-state-candidates':
+            try {
+              SummaryRepository.saveFinalizedCharacterStateCandidates(
+                args[0] as SaveFinalizedCharacterStateCandidatesRequest,
+              )
+              return { success: true }
+            } catch (error) {
+              return { success: false, error: String(error) }
+            }
           case 'db:continuity-read-source':
             return SummaryRepository.readFinalizedSource(Number(args[0]))
           case 'db:blueprint-update-notes':
@@ -153,9 +165,10 @@ function installRealRepositoryIpc(): void {
             return CharacterRepository.getAll()
           case 'fs:list-dir':
           case 'db:blueprint-get-all':
-          case 'db:continuity-list-before':
           case 'db:narrative-thread-list-relevant':
             return []
+          case 'db:continuity-list-before':
+            return SummaryRepository.listFinalizedContinuityBefore(Number(args[0]))
           case 'kb:search-writing-context':
             return { success: true, value: [] }
           case 'db:blueprint-get':
@@ -446,6 +459,92 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(nextChapterPrompt).toContain('Lin Lan (protagonist)')
     expect(nextChapterPrompt).toContain('keyItems@chapter1: brass key')
     expect(nextChapterPrompt).not.toContain('handed the brass key to Zhou Yan')
+  })
+
+  it('keeps protected author and legacy state while retaining source-only lookup candidates', async () => {
+    const draftContent = [
+      'Lin Lan wakes in New Harbor carrying an iron compass.',
+      '',
+      'She checks the tide ledger before dawn.',
+    ].join('\n')
+    cardResponse = JSON.stringify({
+      updates: [{
+        name: 'Lin Lan',
+        currentState: {
+          powerLevel: 'veteran',
+          physicalState: 'rested',
+          mentalState: 'calm',
+          keyItems: 'iron compass',
+          updatedAtChapter: 2,
+        },
+      }],
+    })
+
+    const status = await command(draftContent).execute({
+      step: {}, context: workflowContext, callbacks: callbacks(),
+    })
+
+    expect(status.steps.character_cards).toMatchObject({ ok: true })
+    expect(CharacterRepository.getByName('Lin Lan')?.currentState).toMatchObject({
+      powerLevel: 'ordinary',
+      physicalState: 'tired',
+      mentalState: 'alert',
+      keyItems: 'brass key',
+    })
+    expect(CharacterRosterRepository.read().revision).toBe(2)
+    const frozenSource = SummaryRepository.readFinalizedSource(7)
+    if (frozenSource.status !== 'valid') throw new Error('expected valid finalized source')
+    SummaryRepository.saveFinalizedContinuity({
+      draftId: 7,
+      chapterNumber: 2,
+      chapterNotes: 'The locator candidate remains separate from confirmed continuity facts.',
+      facts: [],
+      projectionGeneration: frozenSource.snapshot.projectionGeneration,
+      source: frozenSource.snapshot.source,
+    })
+    const projection = SummaryRepository.listFinalizedContinuityBefore(3)[0]!
+    expect(projection.facts).toEqual([])
+    expect(projection.characterStateCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        characterName: 'Lin Lan',
+        field: 'keyItems',
+        value: 'iron compass',
+      }),
+    ]))
+
+    let nextChapterPrompt = ''
+    const draftDependencies = {
+      createRuntime: async () => ({
+        execute: async (operation: (scope: { session: unknown }) => Promise<unknown>) => operation({
+          session: {
+            budget: {},
+            complete: async (task: { messages: Array<{ role: string; content: string }> }) => {
+              nextChapterPrompt = task.messages.find(message => message.role === 'user')?.content ?? ''
+              throw new Error('candidate-source-prompt-captured')
+            },
+          },
+        }),
+        close: async () => {},
+      }),
+    }
+    await expect(new GenerateDraftCommand({
+      projectPath,
+      chapterNumber: 3,
+      title: 'Before Dawn',
+      role: 'development',
+      purpose: 'continue the tide investigation',
+      keyEvents: 'Lin Lan reads the ledger',
+      characters: ['Lin Lan'],
+      userGuidance: '',
+      wordsTarget: 100,
+    }, { dependencies: draftDependencies as never }).execute({
+      step: {},
+      context: { ...workflowContext, runId: 'candidate-source-probe' },
+      callbacks: { ...callbacks(), replaceText: vi.fn() },
+    })).rejects.toThrow('candidate-source-prompt-captured')
+    expect(nextChapterPrompt).toContain('Lin Lan wakes in New Harbor carrying an iron compass.')
+    expect(nextChapterPrompt).toContain('keyItems@chapter1: brass key')
+    expect(nextChapterPrompt).not.toContain('"field":"keyItems"')
   })
 
   it('rejects an older Chinese chapter retry after a newer character state is committed', async () => {

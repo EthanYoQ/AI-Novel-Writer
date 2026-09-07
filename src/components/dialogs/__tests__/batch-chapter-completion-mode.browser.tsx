@@ -3,6 +3,7 @@ import { page } from 'vitest/browser'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
+import type { FinalizedSourceReadResult } from '../../../shared/finalized-continuity'
 import type { FileNode, ModelExecutionLeaseReceipt, ModelProfile, ProjectData } from '../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
 import { clearProjectCustomPrompts } from '../../../services/prompt-templates'
@@ -28,6 +29,8 @@ const PROJECT_SESSION = {
 const DRAFT_TEXT = '晨雾漫过旧教学楼，沈砺沿着湿润台阶进入档案室。他检查窗锁与登记簿，发现昨夜留下的墨迹已经干透，却有一页被人整齐撕走。管理员递来备用钥匙，提醒他午后停电。沈砺记下时间，决定先去钟楼核对监控。'
 const FIRST_DRAFT_TAIL = '第一章尾部唯一线索：银色怀表在午夜停摆。'
 const FIRST_DRAFT_TEXT = `${'雨'.repeat(70)}。${FIRST_DRAFT_TAIL}`
+const FINALIZATION_ID = 'finalization-browser-1'
+const FINALIZED_CONTENT_HASH = 'd'.repeat(64)
 const originalDraftState = useDraftStore.getState()
 const originalEditorState = useEditorStore.getState()
 const originalLayoutState = useLayoutStore.getState()
@@ -303,12 +306,32 @@ function installIpc() {
       return {
         success: true,
         committed: true,
-        finalizationId: 'finalization-browser-1',
-        contentHash: 'd'.repeat(64),
+        finalizationId: FINALIZATION_ID,
+        contentHash: FINALIZED_CONTENT_HASH,
         contentRevision: 0,
         draftId: draftRecord.id,
         publicationStatus: 'published',
       }
+    }
+    if (channel === 'db:continuity-read-source') {
+      const draftId = Number(args[0])
+      if (!draftRecord || draftRecord.status !== 'finalized' || draftRecord.id !== draftId) {
+        return { status: 'invalid' } satisfies FinalizedSourceReadResult
+      }
+      return {
+        status: 'valid',
+        snapshot: {
+          source: {
+            draftId: draftRecord.id,
+            finalizationId: FINALIZATION_ID,
+            chapterNumber: draftRecord.chapterNumber,
+            contentHash: FINALIZED_CONTENT_HASH,
+          },
+          chapterTitle: blueprint(draftRecord.chapterNumber).title,
+          content: draftRecord.content,
+          projectionGeneration: 0,
+        },
+      } satisfies FinalizedSourceReadResult
     }
     if (channel === 'kb:import-text') {
       return { success: true, chunkCount: 1, docId: 'knowledge-browser-1' }
@@ -714,5 +737,26 @@ describe('batch chapter completion mode browser flow', () => {
     expect(invoke.mock.calls.some(([channel]) => channel === 'finalization:commit')).toBe(true)
     expect(invoke.mock.calls.some(([channel]) => channel === 'kb:import-text')).toBe(true)
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:post-process-mark-step-ok')).toBe(true)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:continuity-read-source',
+      101,
+      PROJECT_PATH,
+      PROJECT_SESSION,
+    )
+    expect(invoke).toHaveBeenCalledWith(
+      'db:continuity-save-finalized',
+      expect.objectContaining({
+        draftId: 101,
+        projectionGeneration: 0,
+        source: {
+          draftId: 101,
+          finalizationId: FINALIZATION_ID,
+          chapterNumber: 1,
+          contentHash: FINALIZED_CONTENT_HASH,
+        },
+      }),
+      PROJECT_PATH,
+      PROJECT_SESSION,
+    )
   })
 })

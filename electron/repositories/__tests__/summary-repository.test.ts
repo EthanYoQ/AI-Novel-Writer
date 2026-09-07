@@ -119,6 +119,75 @@ describe('finalized continuity projection', () => {
     expect(SummaryRepository.listFinalizedContinuityBefore(2)[0]?.facts).toEqual(request.facts)
   })
 
+  it('keeps source-bound character locators idempotent through note retries and history invalidation', () => {
+    getProjectDb()!.prepare(
+      "INSERT INTO characters (name, role) VALUES ('林岚', 'protagonist')",
+    ).run()
+    const content = '第二章定稿：林岚抵达新港，随身带着铁罗盘。'
+    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'continuity-character-candidates',
+      chapters: [{ chapterNumber: 2, title: '新港', content, wordCount: countDraftUnits(content) }],
+    })
+    const draft = receipt.drafts[0]!
+    const source = {
+      draftId: draft.draftId,
+      finalizationId: draft.finalizationId,
+      chapterNumber: 2,
+      contentHash: draft.contentHash,
+    }
+    const summaryRequest = {
+      draftId: draft.draftId,
+      chapterNumber: 2,
+      chapterNotes: '本章正文保留角色状态变化原文。',
+      facts: [],
+      projectionGeneration: projectionGeneration(),
+      source,
+    }
+    const candidateRequest = {
+      draftId: draft.draftId,
+      chapterNumber: 2,
+      candidates: [{ characterName: '林岚', field: 'keyItems' as const, value: '铁罗盘' }],
+      projectionGeneration: projectionGeneration(),
+      source,
+    }
+
+    SummaryRepository.saveFinalizedContinuity(summaryRequest)
+    SummaryRepository.saveFinalizedCharacterStateCandidates(candidateRequest)
+    SummaryRepository.saveFinalizedCharacterStateCandidates(candidateRequest)
+    SummaryRepository.saveFinalizedContinuity(summaryRequest)
+
+    expect(JSON.parse((getProjectDb()!.prepare(
+      'SELECT character_state_candidates AS candidates FROM summary_snapshots WHERE draft_id = ?',
+    ).get(draft.draftId) as { candidates: string }).candidates)).toHaveLength(1)
+    expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
+      facts: [],
+      characterStateCandidates: [{
+        characterName: '林岚',
+        field: 'keyItems',
+        value: '铁罗盘',
+      }],
+      sourceStatus: 'current',
+    })
+
+    SummaryRepository.saveFinalizedCharacterStateCandidates({
+      ...candidateRequest,
+      candidates: [{ characterName: '林岚', field: 'keyItems', value: '铁制罗盘' }],
+    })
+    expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]?.characterStateCandidates).toEqual([{
+      characterName: '林岚',
+      field: 'keyItems',
+      value: '铁制罗盘',
+    }])
+
+    invalidateContinuityProjectionFrom(getProjectDb()!, 1)
+    expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
+      sourceStatus: 'stale',
+      characterStateCandidates: [expect.objectContaining({ characterName: '林岚', field: 'keyItems' })],
+    })
+    expect(() => SummaryRepository.saveFinalizedCharacterStateCandidates(candidateRequest))
+      .toThrow(/失效水位已推进/u)
+  })
+
   it('rejects unbounded or cross-chapter continuity facts', () => {
     const content = '定稿正文。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {

@@ -819,6 +819,7 @@ describe('workflow mutation failure boundaries', () => {
       },
     }
     let committedEntries: CharacterRosterEntry[] = []
+    let savedCandidates: unknown[] = []
     const invoke = vi.fn(async (channel: string, request?: unknown) => {
       if (channel === 'db:character-roster-read') {
         return { status: 'ready', revision: 4, entries: [existing] }
@@ -826,6 +827,10 @@ describe('workflow mutation failure boundaries', () => {
       if (channel === 'db:character-roster-commit') {
         committedEntries = (request as { entries: CharacterRosterEntry[] }).entries
         return { success: true, receipt: { revision: 5 } }
+      }
+      if (channel === 'db:continuity-save-character-state-candidates') {
+        savedCandidates = (request as { candidates: unknown[] }).candidates
+        return { success: true }
       }
       throw new Error(`unexpected IPC: ${channel}`)
     })
@@ -846,7 +851,7 @@ describe('workflow mutation failure boundaries', () => {
     const sourceReceipt = finalizedSource(42, 2, '正文')
     const step = buildFinalizePostProcessSteps(
       { path: PROJECT_PATH }, 2, '第二章', '正文', generation, 42, [], 'zh-CN',
-      sourceReceipt,
+      sourceReceipt, 0,
     ).find(candidate => candidate.key === 'character_cards')
 
     await expect(step!.executor(callbacks(), workflowContext)).resolves.toBeUndefined()
@@ -868,6 +873,10 @@ describe('workflow mutation failure boundaries', () => {
         },
       },
     })])
+    expect(savedCandidates).toEqual(expect.arrayContaining([
+      { characterName: '林岚', field: 'location', value: '码头' },
+      { characterName: '林岚', field: 'keyItems', value: '' },
+    ]))
   })
 
   it('stops character-card post-processing when its one roster receipt reports failure', async () => {

@@ -377,6 +377,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       character_states TEXT DEFAULT '',
       chapter_notes TEXT NOT NULL DEFAULT '',
       continuity_facts TEXT NOT NULL DEFAULT '[]',
+      character_state_candidates TEXT NOT NULL DEFAULT '[]',
       source_finalization_id TEXT NOT NULL DEFAULT '',
       source_content_hash TEXT NOT NULL DEFAULT '',
       projection_generation INTEGER NOT NULL DEFAULT 0,
@@ -639,6 +640,9 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   }
   if (!summaryColumns.has('continuity_facts')) {
     db.exec("ALTER TABLE summary_snapshots ADD COLUMN continuity_facts TEXT NOT NULL DEFAULT '[]'")
+  }
+  if (!summaryColumns.has('character_state_candidates')) {
+    db.exec("ALTER TABLE summary_snapshots ADD COLUMN character_state_candidates TEXT NOT NULL DEFAULT '[]'")
   }
   if (!summaryColumns.has('source_finalization_id')) {
     db.exec("ALTER TABLE summary_snapshots ADD COLUMN source_finalization_id TEXT NOT NULL DEFAULT ''")

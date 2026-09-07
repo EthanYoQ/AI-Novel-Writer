@@ -2,15 +2,23 @@ import { createHash } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 import { getProjectDb } from '../database'
 import type {
+  FinalizedCharacterStateCandidate,
   FinalizedContinuityFact,
   FinalizedContinuityProjection,
   FinalizedSourceIdentity,
   FinalizedSourceReadResult,
   FinalizedSourceSnapshot,
+  SaveFinalizedCharacterStateCandidatesRequest,
   SaveFinalizedContinuityRequest,
 } from '../../src/shared/finalized-continuity'
+import {
+  CHARACTER_STATE_TEXT_FIELDS,
+  characterRosterIdentityKey,
+  type CharacterStateTextField,
+} from '../../src/shared/character-roster'
 
 const FACT_CATEGORIES = new Set(['character-state', 'timeline', 'open-thread', 'plot'])
+const CHARACTER_STATE_FIELDS = new Set<string>(CHARACTER_STATE_TEXT_FIELDS)
 
 function normalizedFacts(value: unknown, chapterNumber: number): FinalizedContinuityFact[] {
   if (!Array.isArray(value) || value.length > 12) throw new Error('连续性事实参数无效')
@@ -48,6 +56,58 @@ function parseFacts(value: string, chapterNumber: number): FinalizedContinuityFa
   } catch {
     return []
   }
+}
+
+function parseCharacterStateCandidates(value: string): FinalizedCharacterStateCandidate[] {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((input) => {
+      if (!input || typeof input !== 'object') return []
+      const candidate = input as Record<string, unknown>
+      return typeof candidate.characterName === 'string'
+        && Boolean(candidate.characterName.trim())
+        && CHARACTER_STATE_FIELDS.has(String(candidate.field))
+        && typeof candidate.value === 'string'
+        ? [{
+            characterName: candidate.characterName.trim(),
+            field: candidate.field as CharacterStateTextField,
+            value: candidate.value.trim(),
+          }]
+        : []
+    })
+  } catch {
+    return []
+  }
+}
+
+function normalizeCharacterStateCandidates(
+  db: BetterSqlite3.Database,
+  value: unknown,
+): FinalizedCharacterStateCandidate[] {
+  if (!Array.isArray(value) || value.length > 1_000) throw new Error('角色状态候选参数无效')
+  const byIdentity = new Map<string, string>()
+  for (const { name } of db.prepare('SELECT name FROM characters').all() as Array<{ name: string }>) {
+    const identity = characterRosterIdentityKey(name)
+    if (!identity || byIdentity.has(identity)) throw new Error('角色名单存在同名冲突')
+    byIdentity.set(identity, name)
+  }
+  const normalized = new Map<string, FinalizedCharacterStateCandidate>()
+  for (const input of value as FinalizedCharacterStateCandidate[]) {
+    if (!input || typeof input !== 'object') throw new Error('角色状态候选参数无效')
+    const characterName = typeof input.characterName === 'string' ? input.characterName.trim() : ''
+    const storedName = byIdentity.get(characterRosterIdentityKey(characterName))
+    if (!storedName || !CHARACTER_STATE_FIELDS.has(String(input.field)) || typeof input.value !== 'string') {
+      throw new Error('角色状态候选参数无效')
+    }
+    const candidate = {
+      characterName: storedName,
+      field: input.field as CharacterStateTextField,
+      value: input.value.trim(),
+    }
+    normalized.set(`${characterRosterIdentityKey(candidate.characterName)}\u0000${candidate.field}`, candidate)
+  }
+  return [...normalized.values()]
 }
 
 function sha256(value: string): string {
@@ -192,6 +252,59 @@ export class SummaryRepository {
     })()
   }
 
+  static saveFinalizedCharacterStateCandidates(input: SaveFinalizedCharacterStateCandidatesRequest): void {
+    const db = getProjectDb()
+    if (!db) throw new Error('项目数据库未打开')
+    if (
+      !Number.isSafeInteger(input.draftId)
+      || input.draftId < 1
+      || !Number.isSafeInteger(input.chapterNumber)
+      || input.chapterNumber < 1
+      || !Number.isSafeInteger(input.projectionGeneration)
+      || input.projectionGeneration < 0
+    ) throw new Error('角色状态候选参数无效')
+
+    db.transaction(() => {
+      const snapshot = readFinalizedSourceFromDb(db, input.draftId)
+      if (!snapshot || !sameSource(snapshot.source, input.source) || input.chapterNumber !== snapshot.source.chapterNumber) {
+        throw new Error('角色状态候选来源已失效，已拒绝过期结果')
+      }
+      if (input.projectionGeneration !== snapshot.projectionGeneration) {
+        throw new Error('连续性投影失效水位已推进，已拒绝过期结果')
+      }
+      const row = db.prepare(`
+        SELECT character_state_candidates AS candidates,
+               source_finalization_id AS finalizationId,
+               source_content_hash AS contentHash,
+               projection_generation AS projectionGeneration
+        FROM summary_snapshots
+        WHERE draft_id = ?
+      `).get(input.draftId) as {
+        candidates: string
+        finalizationId: string
+        contentHash: string
+        projectionGeneration: number
+      } | undefined
+      if (
+        !row
+        || row.finalizationId !== input.source.finalizationId
+        || row.contentHash !== input.source.contentHash
+        || row.projectionGeneration !== input.projectionGeneration
+      ) throw new Error('角色状态候选缺少同代定稿连续性投影')
+
+      const merged = new Map<string, FinalizedCharacterStateCandidate>()
+      for (const candidate of [
+        ...parseCharacterStateCandidates(row.candidates),
+        ...normalizeCharacterStateCandidates(db, input.candidates),
+      ]) merged.set(`${characterRosterIdentityKey(candidate.characterName)}\u0000${candidate.field}`, candidate)
+      db.prepare(`
+        UPDATE summary_snapshots
+        SET character_state_candidates = ?, created_at = datetime('now')
+        WHERE draft_id = ?
+      `).run(JSON.stringify([...merged.values()]), input.draftId)
+    })()
+  }
+
   static listFinalizedContinuityBefore(chapterNumber: number): FinalizedContinuityProjection[] {
     const db = getProjectDb()
     if (!db) return []
@@ -204,6 +317,7 @@ export class SummaryRepository {
              COALESCE(finalization_outbox.chapter_title, '') AS chapterTitle,
              summary_snapshots.chapter_notes AS chapterNotes,
              summary_snapshots.continuity_facts AS continuityFacts,
+             summary_snapshots.character_state_candidates AS characterStateCandidates,
              summary_snapshots.source_finalization_id AS sourceFinalizationId,
              summary_snapshots.source_content_hash AS sourceContentHash,
              summary_snapshots.projection_generation AS projectionGeneration,
@@ -229,8 +343,9 @@ export class SummaryRepository {
             AND (newer.version > drafts.version OR (newer.version = drafts.version AND newer.id > drafts.id))
         )
       ORDER BY summary_snapshots.chapter_number ASC, summary_snapshots.draft_id ASC
-    `).all(chapterNumber) as Array<Omit<FinalizedContinuityProjection, 'facts' | 'source' | 'sourceStatus'> & {
+    `).all(chapterNumber) as Array<Omit<FinalizedContinuityProjection, 'facts' | 'characterStateCandidates' | 'source' | 'sourceStatus'> & {
       continuityFacts: string
+      characterStateCandidates: string
       sourceFinalizationId: string
       sourceContentHash: string
       projectionGeneration: number
@@ -257,6 +372,10 @@ export class SummaryRepository {
         chapterTitle: row.chapterTitle,
         chapterNotes: row.chapterNotes,
         facts: parseFacts(row.continuityFacts, row.chapterNumber),
+        ...(() => {
+          const candidates = parseCharacterStateCandidates(row.characterStateCandidates)
+          return candidates.length > 0 ? { characterStateCandidates: candidates } : {}
+        })(),
         ...(hasBoundSource ? {
           source: {
             draftId: row.draftId,

@@ -20,6 +20,7 @@ import type {
 import type {
   FinalizedContinuityProjection,
   FinalizedSourceReadResult,
+  SaveFinalizedCharacterStateCandidatesRequest,
   SaveFinalizedContinuityRequest,
 } from './finalized-continuity'
 import type { DraftSourceDependency } from './draft-source-dependency'
@@ -856,6 +857,10 @@ export interface DatabaseChannels {
   }
   'db:continuity-save-finalized': {
     args: [request: SaveFinalizedContinuityRequest, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
+  'db:continuity-save-character-state-candidates': {
+    args: [request: SaveFinalizedCharacterStateCandidatesRequest, expectedProjectPath: string]
     return: { success: boolean; error?: string }
   }
   'db:continuity-list-before': {

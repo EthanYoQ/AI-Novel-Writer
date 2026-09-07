@@ -43,6 +43,7 @@ describe('summary continuity migration', () => {
         expect.objectContaining({ name: 'draft_id' }),
         expect.objectContaining({ name: 'chapter_notes' }),
         expect.objectContaining({ name: 'continuity_facts' }),
+        expect.objectContaining({ name: 'character_state_candidates' }),
         expect.objectContaining({ name: 'source_finalization_id' }),
         expect.objectContaining({ name: 'source_content_hash' }),
         expect.objectContaining({ name: 'projection_generation' }),

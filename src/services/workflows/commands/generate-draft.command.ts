@@ -1159,13 +1159,18 @@ ${visibleTail}`,
 
     const selected = finalizedContinuity.flatMap(projection => {
       const isRecent = projection.chapterNumber >= currentChapter - FULL_WINDOW
-      const evidence = (projection.facts ?? []).filter(fact => {
+      const factEvidence = (projection.facts ?? []).filter(fact => {
         const entityRelevant = fact.entities.some(entity => currentEntities.includes(entity))
           || currentEntities.some(entity => (
             fact.statement.includes(entity) || fact.evidence.includes(entity)
           ))
         return isRecent || entityRelevant
       }).map(fact => fact.evidence).filter(Boolean)
+      const candidateEvidence = (projection.characterStateCandidates ?? [])
+        .filter(candidate => isRecent || currentEntities.includes(candidate.characterName))
+        .map(candidate => candidate.value)
+        .filter(Boolean)
+      const evidence = [...new Set([...factEvidence, ...candidateEvidence])]
       return evidence.length > 0 ? [{ projection, evidence }] : []
     }).sort((left, right) => right.projection.chapterNumber - left.projection.chapterNumber).slice(0, 12)
 
