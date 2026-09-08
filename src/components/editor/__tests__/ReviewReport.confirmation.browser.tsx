@@ -312,6 +312,7 @@ describe('ReviewReport human-confirmed revision flow', () => {
       { category: '本章目标', goalId: 'done', severity: 'pass', description: '双方已约定' },
       { category: '本章目标', goalId: 'uncertain', severity: 'unknown', description: '没有足够证据' },
       { category: '本章目标', goalId: 'unmet', severity: 'error', description: '明确延期' },
+      { category: '连续性', severity: 'error', description: '普通连续性错误' },
     ] })
     await renderReport(report)
     expect(container!.textContent).toContain('1 待核实')
@@ -326,8 +327,10 @@ describe('ReviewReport human-confirmed revision flow', () => {
     const ignored = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)!
     expect(ignored.items[1]).toMatchObject({ goalId: 'uncertain', severity: 'unknown', decision: 'ignore' })
     expect(ignored.goalReview).toEqual(goalReview)
-    expect(ignored.items[2]).toMatchObject({ goalId: 'unmet', severity: 'error', decision: 'apply' })
+    expect(ignored.items[2]).toMatchObject({ goalId: 'unmet', severity: 'error', decision: 'ignore' })
+    expect(ignored.items[3]).toMatchObject({ severity: 'error', decision: 'apply' })
     await act(async () => page.getByRole('button', { name: '编辑清单', exact: true }).click())
+    await act(async () => page.getByRole('button', { name: '明确纳入修稿', exact: true }).nth(0).click())
     await act(async () => page.getByRole('button', { name: '明确纳入修稿', exact: true }).click())
     invoke.mockClear()
     await act(async () => {
@@ -336,6 +339,8 @@ describe('ReviewReport human-confirmed revision flow', () => {
     })
     const applied = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)!
     expect(applied.items[1]).toMatchObject({ goalId: 'uncertain', severity: 'unknown', decision: 'apply' })
+    expect(applied.items[2]).toMatchObject({ goalId: 'unmet', severity: 'error', decision: 'apply' })
+    expect(ignored.items[2].decision).toBe('ignore')
     expect(ignored.items[1].decision).toBe('ignore')
     await renderReport(confirmationCreateParams().content)
     expect(container!.textContent).toContain('约好周三出发')

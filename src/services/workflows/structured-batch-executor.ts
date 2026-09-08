@@ -285,65 +285,63 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
               message: '结构化语法修复合同构建失败',
             })
           }
-          if (repairUsed) {
-            throw new ExecutionFailure({
-              code: 'invalid_output',
-              reason: 'malformed_output',
-              message: '结构化输出无法按合同解码，且本次执行已使用过唯一一次语法修复',
-            })
-          }
-          repairUsed = true
-          syntaxRepairApplied = true
-          const repaired = await session.complete(
-            buildStructuredSyntaxRepairTask(task, repairContract, outcome.content, writingLanguage),
-            { signal: input.signal },
-          )
-          recordAttempt(repaired.receipt)
-          if (input.signal?.aborted || repaired.finishReason === 'cancelled') {
-            throw new ExecutionFailure({
-              code: 'cancelled',
-              reason: 'cancelled',
-              message: '结构化语法修复已取消',
-            })
-          }
-          if (repaired.status === 'incomplete') {
-            if (repaired.finishReason === 'length') {
-              if (items.length > 1) {
-                const midpoint = Math.floor(items.length / 2)
-                receipt.splitCount += 1
-                await executeBatch(items.slice(0, midpoint))
-                await executeBatch(items.slice(midpoint))
-                return
-              }
-              if (canUseCompactFallback) {
-                await runCompactFallback()
-                return
-              }
+          if (!repairUsed) {
+            repairUsed = true
+            syntaxRepairApplied = true
+            const repaired = await session.complete(
+              buildStructuredSyntaxRepairTask(task, repairContract, outcome.content, writingLanguage),
+              { signal: input.signal },
+            )
+            recordAttempt(repaired.receipt)
+            if (input.signal?.aborted || repaired.finishReason === 'cancelled') {
               throw new ExecutionFailure({
-                code: 'limit_exceeded',
-                reason: 'output_limit',
-                message: '结构化语法修复达到模型输出上限',
+                code: 'cancelled',
+                reason: 'cancelled',
+                message: '结构化语法修复已取消',
               })
             }
-            const repairReason: StructuredGenerationFailureReason = repaired.finishReason === 'content_filter'
-              ? 'safety'
-              : repaired.finishReason === 'error'
-                ? 'server_error'
-                : 'unknown'
-            throw new ExecutionFailure({
-              code: 'generation_failed',
-              reason: repairReason,
-              message: `结构化语法修复未正常完成：${repaired.finishReason}`,
-            })
+            if (repaired.status === 'incomplete') {
+              if (repaired.finishReason === 'length') {
+                if (items.length > 1) {
+                  const midpoint = Math.floor(items.length / 2)
+                  receipt.splitCount += 1
+                  await executeBatch(items.slice(0, midpoint))
+                  await executeBatch(items.slice(midpoint))
+                  return
+                }
+                if (canUseCompactFallback) {
+                  await runCompactFallback()
+                  return
+                }
+                throw new ExecutionFailure({
+                  code: 'limit_exceeded',
+                  reason: 'output_limit',
+                  message: '结构化语法修复达到模型输出上限',
+                })
+              }
+              const repairReason: StructuredGenerationFailureReason = repaired.finishReason === 'content_filter'
+                ? 'safety'
+                : repaired.finishReason === 'error'
+                  ? 'server_error'
+                  : 'unknown'
+              throw new ExecutionFailure({
+                code: 'generation_failed',
+                reason: repairReason,
+                message: `结构化语法修复未正常完成：${repaired.finishReason}`,
+              })
+            }
+            if (!preservesStructuredJsonEvidence(candidateContent, repaired.content)) {
+              throw new ExecutionFailure({
+                code: 'invalid_output',
+                reason: 'malformed_output',
+                message: '结构化语法修复改变了候选中的非结构证据，已拒绝补造或改写事实',
+              })
+            }
+            candidateContent = repaired.content
           }
-          if (!preservesStructuredJsonEvidence(candidateContent, repaired.content)) {
-            throw new ExecutionFailure({
-              code: 'invalid_output',
-              reason: 'malformed_output',
-              message: '结构化语法修复改变了候选中的非结构证据，已拒绝补造或改写事实',
-            })
-          }
-          candidateContent = repaired.content
+          // 本次执行已使用过唯一一次语法修复：再次语法损坏时不再重复修复，
+          // 让坏文本直接进入下方解码；解码失败路径会在预算内拆半或回退
+          // 紧凑单项重建，而不是在解码前整体终止。
         }
         let decoded: readonly TOutput[]
         try {
@@ -351,19 +349,26 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           if (!Array.isArray(decoded)) throw new TypeError('decoder did not return an array')
         } catch (error) {
           const diagnostic = structuredContractDiagnostic(error)
-          if (diagnostic && items.length > 1) {
+          // JSON 无法解码通常意味着输出被模型输出上限截断（截断不总是携带
+          // 可提取的结构化诊断）。只要批次含多章就拆半重试：让每一半在更小
+          // 的输出预算内完整生成；拆到单章仍未通过时，再回退到紧凑单项重建。
+          if (items.length > 1) {
             const midpoint = Math.floor(items.length / 2)
             receipt.splitCount += 1
             await executeBatch(items.slice(0, midpoint))
             await executeBatch(items.slice(midpoint))
             return
           }
-          if (diagnostic && canUseCompactFallback) {
-            await runCompactFallback({
-              code: diagnostic.code,
-              path: diagnostic.path,
-              field: diagnostic.field,
-            })
+          if (canUseCompactFallback) {
+            await runCompactFallback(
+              diagnostic
+                ? {
+                    code: diagnostic.code,
+                    path: diagnostic.path,
+                    field: diagnostic.field,
+                  }
+                : undefined,
+            )
             return
           }
           throw new ExecutionFailure({
@@ -371,13 +376,13 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
             reason: diagnostic
               ? 'invalid_item'
               : syntaxRepairApplied
-              ? 'malformed_output'
-              : 'invalid_item',
+                ? 'malformed_output'
+                : 'invalid_item',
             message: diagnostic
               ? diagnostic.message
               : syntaxRepairApplied
-              ? '结构化输出经一次语法修复后仍无法按合同解码'
-              : '结构化输出无法按合同解码',
+                ? '结构化输出经一次语法修复后仍无法按合同解码'
+                : '结构化输出无法按合同解码',
             ...(diagnostic
               ? {
                   diagnostic: {
@@ -437,6 +442,21 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         const missingKeys = expectedKeys
           .filter(key => !outputKeys.has(key))
         if (missingKeys.length > 0) {
+          // 输出合法但缺少目标项。只有本批经历过语法修复（截断证据）时才值得
+          // 继续语义重试：语法修复只能闭合已写内容、不能补造尚未生成的章节，
+          // 因此在预算内把本批拆半或回退紧凑单项重建。普通漏写（模型 stop 且
+          // 无截断证据）保持 fail-closed，避免对偷懒输出无限重试。
+          if (syntaxRepairApplied && items.length > 1) {
+            const midpoint = Math.floor(items.length / 2)
+            receipt.splitCount += 1
+            await executeBatch(items.slice(0, midpoint))
+            await executeBatch(items.slice(midpoint))
+            return
+          }
+          if (syntaxRepairApplied && canUseCompactFallback) {
+            await runCompactFallback()
+            return
+          }
           throw new ExecutionFailure({
             code: 'invalid_output',
             reason: syntaxRepairApplied ? 'malformed_output' : 'missing_item',

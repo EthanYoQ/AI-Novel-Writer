@@ -36,17 +36,23 @@ export function buildChapterGoalReviewPrompt(goals: FrozenChapterGoals, language
   return writingLanguageText(language,
     `【本章目标逐项核对｜软件冻结清单】
 保留原有 summary 与 items 通用审稿格式，并在同一 JSON 根对象增加 goalReviews 数组（不受通用 items 的条数限制）。
-逐项返回 {"id":"清单中的原始id","status":"completed|unmet|unknown","description":"判断理由","evidence":[{"quote":"当前待审正文中的逐字引文"}]}。不得删除目标、改写目标或自创 id。
-逐项阅读整章，检查目标的每个明确到期动作；部分完成不等于整项目标完成。“本章完成”不能用准备、承诺、打算以后完成来代替。若有明确延期、拒绝或相反结果，用 unmet 并引用依据；若只因没有找到完成证据，使用 unknown，不把未提细节直接判为错误。
-按目标原意区分约定与执行：要求本章约定未来行动，只需本章达成约定，不要求提前执行。未来章节计划、叙事钩子、purpose 和人物说谎不自动成为本章必须兑现的事实。
-completed 与 unmet 均须提供当前正文的逐字证据，不能引用蓝图或把计划当已发生事实；unknown 可以 evidence:[]。引文能定位只说明引文存在，不证明语义判断正确。不要检查字数或要求补齐所有背景细节。
+逐项返回 {"id":"原始id","status":"completed|unmet|unknown","description":"判断理由","evidence":[{"quote":"当前正文逐字引文"}]}，不得删项、改写目标或自创 id。
+依次判断：
+1. 先按原意区分当章行动与背景/未来约束；仅当目标要求达成约定时，本章达成约定即可，不要求提前执行。背景、purpose、未来计划不是已发生事实，也不自动变成到期行动。
+2. 当章到期行动有明确延期、拒绝或相反结果的正文证据 → unmet。准备/承诺不能代替要求现在完成的行动；部分完成不等于整项目标完成。
+3. 全部到期动作有完成证据，或正文明确支持该项约束 → completed。
+4. 仅未提及、无法判断或证据不足 → unknown，不能以“没写到”断言“没发生”。例如要求归还借书，正文只写走进图书馆：应 unknown，不能判 unmet。
+completed/unmet 都须当前正文逐字证据；unknown 可 evidence:[]。不拼接或改写引文，不引用计划证明行动；引文存在不证明推断成立。不检查字数或强求背景细节。
 冻结清单：${JSON.stringify(goals)}`,
     `[Current chapter goal checklist | software-frozen]
 Keep the existing summary/items review contract and add goalReviews to the same JSON root (not subject to the general items limit).
-Return each {"id":"original checklist id","status":"completed|unmet|unknown","description":"reason","evidence":[{"quote":"verbatim current draft excerpt"}]} without deleting or rewriting goals or inventing IDs.
-Check every explicitly due action against the whole chapter. Preparation or a promise is not completion when execution is due now. Explicit postponement/refusal/opposite outcomes support unmet with evidence; absent completion evidence alone is unknown, not a proven error.
-Respect the goal's meaning: agreeing on a future action can complete an agreement goal without executing that action now. Future chapter plans, hooks, purpose and character lies are not automatically due facts.
-completed/unmet require verbatim current-draft evidence, never a plan quoted as an event. unknown may have empty evidence. Locatable quotations do not prove semantic correctness. Do not check length or demand every background detail.
+Return each {"id":"original id","status":"completed|unmet|unknown","description":"reason","evidence":[{"quote":"verbatim current draft excerpt"}]} without deleting/rewriting goals or inventing IDs.
+Decide in order:
+1. Distinguish actions due now from background/future constraints. An agreement goal only requires the agreement, not early execution. Background, purpose and future plans are not established events or automatically due actions.
+2. Explicit draft evidence of postponement, refusal or an opposite outcome for a due action → unmet. Preparation/promises cannot replace execution due now; partial completion is not whole-goal completion.
+3. Evidence completes every due action or explicitly supports the constraint → completed.
+4. Mere omission, ambiguity or insufficient evidence → unknown, not proof of non-occurrence. Example: a goal requires returning a library book, but the draft only describes entering the library: unknown, not unmet.
+completed/unmet require verbatim current-draft evidence; unknown may use evidence:[]. Do not combine/rewrite quotations or cite plans as proof. Locatable evidence does not prove an inference. Do not check length or demand background detail.
 Frozen checklist: ${JSON.stringify(goals)}`)
 }
 

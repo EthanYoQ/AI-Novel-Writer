@@ -319,7 +319,7 @@ function editableItemsFromReview(
     ...(issue.stableFactKey ? { stableFactKey: issue.stableFactKey } : {}),
     ...(issue.sourceChapter ? { sourceChapter: issue.sourceChapter } : {}),
     ...(issue.goalId ? { goalId: issue.goalId } : {}),
-    decision: issue.severity === 'error' || issue.severity === 'warning' ? 'apply' : 'ignore',
+    decision: !issue.goalId && (issue.severity === 'error' || issue.severity === 'warning') ? 'apply' : 'ignore',
     origin: 'ai',
   }))
 }
@@ -987,7 +987,7 @@ function ReviewReportSession({
                                       : <RotateCcw size={12} />}
                                     {item.decision === 'apply'
                                       ? text('忽略', 'Ignore')
-                                      : item.severity === 'unknown' ? text('明确纳入修稿', 'Explicitly include in revision') : text('恢复', 'Restore')}
+                                      : item.goalId || item.severity === 'unknown' ? text('明确纳入修稿', 'Explicitly include in revision') : text('恢复', 'Restore')}
                                   </Button>
                                   {item.origin === 'author' && (
                                     <Button
@@ -1036,7 +1036,7 @@ function ReviewReportSession({
               </h4>
               <p className="mt-1 text-xs text-[var(--color-text-muted)]">
                 {editingChecklist
-                  ? text('错误和建议默认纳入；待核实项默认忽略，只有明确选择才纳入；“通过”仅展示。', 'Issues and suggestions are included by default; unverified items require explicit inclusion; passed checks are display-only.')
+                  ? text('普通错误和建议默认纳入；本章目标与待核实项默认忽略，只有明确选择才纳入；“通过”仅展示。', 'General issues and suggestions are included by default; chapter goals and unverified items require explicit inclusion; passed checks are display-only.')
                   : text('已保存为新的不可变确认快照；原始 AI 审稿未被修改。', 'Saved as a new immutable confirmation snapshot; the original AI review was not modified.')}
               </p>
             </div>

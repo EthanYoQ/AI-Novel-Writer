@@ -1199,7 +1199,9 @@ describe('StructuredBatchExecutor seam', () => {
     diagnostic.mockRestore()
   })
 
-  it('allows at most one syntax repair across all batches in one executor run', async () => {
+  it('keeps one global syntax repair and recovers a later truncated batch via compact rebuild', async () => {
+    // 修复额度全局只有一次：批[1] 截断走语法修复；批[2] 再次截断时不重复修复，
+    // 而是按预算回退到紧凑单项重建（作者 #202 评审点：修复用尽后仍应能恢复）。
     let attempt = 0
     const complete = vi.fn<GenerationSession['complete']>(async (task) => {
       attempt += 1
@@ -1209,6 +1211,14 @@ describe('StructuredBatchExecutor seam', () => {
           content: blueprintJson([1]),
           finishReason: 'stop',
           receipt: attemptReceipt(2, 100, 200, 'stop'),
+        }
+      }
+      if (task.purpose.endsWith(':compact-single')) {
+        return {
+          status: 'completed',
+          content: blueprintJson([2]),
+          finishReason: 'stop',
+          receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
         }
       }
       expect(task.purpose).toBe('chapter-blueprints')
@@ -1223,15 +1233,16 @@ describe('StructuredBatchExecutor seam', () => {
     })
     const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
 
-    const result = await executor.execute({ items: [1, 2], limits: { maxBatchItems: 1 } })
+    const result = await executor.execute({
+      items: [1, 2],
+      limits: { maxBatchItems: 1, maxCompactSingleFallbacks: 1 },
+    })
 
     expect(result).toMatchObject({
-      ok: false,
-      failure: { code: 'invalid_output', reason: 'malformed_output' },
-      receipt: { calls: 3, requestedTokens: 300 },
+      ok: true,
+      items: [{ chapterNumber: 1 }, { chapterNumber: 2 }],
+      receipt: { calls: 4, compactSingleFallbackCount: 1, requestedTokens: 400 },
     })
-    expect(result).not.toHaveProperty('items')
-    expect(complete).toHaveBeenCalledTimes(3)
   })
 
   it('lets the contract decode a complete fenced JSON envelope without spending the syntax repair', async () => {
@@ -1595,5 +1606,98 @@ describe('StructuredBatchExecutor seam', () => {
       receipt: { calls: 4, requestedTokens: 400, compactSingleFallbackCount: 2 },
     })
     expect(complete).toHaveBeenCalledTimes(4)
+  })
+
+  it('recovers chapters missing after a syntax repair by splitting the batch instead of failing', async () => {
+    // 作者 probe：截断被报成 stop，语法修复只补闭合括号 → 得到合法但仅含
+    // 第一章的 JSON（修复不能补造尚未生成的章节）→ 执行器应拆半并请求小批次。
+    let attempt = 0
+    const complete = vi.fn<GenerationSession['complete']>(async (task) => {
+      attempt += 1
+      if (attempt === 1) {
+        return {
+          status: 'completed',
+          content: '{"blueprints":[{"chapterNumber":1,"title":"一"}',
+          finishReason: 'stop',
+          receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+        }
+      }
+      if (task.purpose.endsWith(':structured-syntax-repair')) {
+        // 修复只闭合结构，不得改动候选中的非结构证据（保留 title 原值）
+        return {
+          status: 'completed',
+          content: '{"blueprints":[{"chapterNumber":1,"title":"一"}]}',
+          finishReason: 'stop',
+          receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+        }
+      }
+      const items = taskPayload(task).items
+      return {
+        status: 'completed',
+        content: blueprintJson(items),
+        finishReason: 'stop',
+        receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+      }
+    })
+    const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+
+    const result = await executor.execute({ items: [1, 2, 3], limits: { maxBatchItems: 3 } })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: [{ chapterNumber: 1 }, { chapterNumber: 2 }, { chapterNumber: 3 }],
+      receipt: { calls: 4, splitCount: 1, requestedTokens: 400 },
+    })
+  })
+
+  it('keeps splitting when a truncated half-batch arrives after the one syntax repair was used', async () => {
+    // 作者 probe：一次执行已消耗唯一一次语法修复后，[2,3] 子批再次 stop 截断；
+    // 不应在解码前退出，而应按预算继续拆半到单项完成。
+    let attempt = 0
+    const complete = vi.fn<GenerationSession['complete']>(async (task) => {
+      attempt += 1
+      if (attempt === 1) {
+        return {
+          status: 'completed',
+          content: '{"blueprints":[{"chapterNumber":1,"title":"一"}',
+          finishReason: 'stop',
+          receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+        }
+      }
+      if (task.purpose.endsWith(':structured-syntax-repair')) {
+        // 修复只闭合结构，不得改动候选中的非结构证据（保留 title 原值）
+        return {
+          status: 'completed',
+          content: '{"blueprints":[{"chapterNumber":1,"title":"一"}]}',
+          finishReason: 'stop',
+          receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+        }
+      }
+      const items = taskPayload(task).items
+      if (attempt === 4) {
+        // [2,3] 子批再次被截断（语法修复已用尽，不得再次 repair）
+        return {
+          status: 'completed',
+          content: '{"blueprints":[{"chapterNumber":2,"title":"二"}',
+          finishReason: 'stop',
+          receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+        }
+      }
+      return {
+        status: 'completed',
+        content: blueprintJson(items),
+        finishReason: 'stop',
+        receipt: attemptReceipt(attempt, 100, attempt * 100, 'stop'),
+      }
+    })
+    const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+
+    const result = await executor.execute({ items: [1, 2, 3], limits: { maxBatchItems: 3 } })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: [{ chapterNumber: 1 }, { chapterNumber: 2 }, { chapterNumber: 3 }],
+      receipt: { calls: 6, splitCount: 2, requestedTokens: 600 },
+    })
   })
 })
