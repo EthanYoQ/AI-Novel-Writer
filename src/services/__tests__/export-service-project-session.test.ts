@@ -360,6 +360,42 @@ describe('exportNovel project session ownership', () => {
     },
   )
 
+  it('uses a fresh split directory so a later export cannot retain a withdrawn chapter', async () => {
+    let exportIndex = 0
+    vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (_session: ProjectSessionContext, channel: string) => {
+      if (channel === 'db:draft-export-snapshot') {
+        const snapshots = [
+          [
+            { draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one', ...authority(1) },
+            { draftId: 2, chapterNumber: 2, version: 1, title: '', content: 'two', ...authority(2) },
+          ],
+          [{ draftId: 1, chapterNumber: 1, version: 1, title: '', content: 'one', ...authority(1) }],
+        ]
+        return snapshots[exportIndex++] as never
+      }
+      if (channel === 'db:draft-export-authority-current') return true as never
+      throw new Error(`Unexpected channel: ${channel}`)
+    }) as never)
+
+    const first = await exportNovel(
+      { format: 'split-md', grantId: 'export-grant' }, projectSnapshot, projectSession,
+    )
+    const second = await exportNovel(
+      { format: 'split-md', grantId: 'export-grant' }, projectSnapshot, projectSession,
+    )
+
+    expect(first).toMatchObject({ success: true })
+    expect(second).toMatchObject({ success: true })
+    expect(second.path).not.toBe(first.path)
+    const writes = vi.mocked(ipc.invoke).mock.calls
+      .filter(([channel]) => channel === 'fs:grant-write-file')
+      .map(call => call[2] as string)
+    expect(writes.filter(file => file.startsWith(`${first.path}/`)).sort())
+      .toEqual([`${first.path}/chapter_1.md`, `${first.path}/chapter_2.md`])
+    expect(writes.filter(file => file.startsWith(`${second.path}/`)))
+      .toEqual([`${second.path}/chapter_1.md`])
+  })
+
   it.each([
     { label: 'missing body', row: { draftId: 7, chapterNumber: 1, version: 2, title: '', content: '', ...authority(7) } },
     { label: 'wrong draft id', row: { draftId: 0, chapterNumber: 1, version: 2, title: '', content: '正文', ...authority(7) } },
@@ -415,12 +451,12 @@ describe('exportNovel project session ownership', () => {
       projectSession,
     )).resolves.toEqual({
       success: false,
-      error: expect.stringMatching(/重新确认导出.*已确认写入: Project A\/chapter_1\.md.*可能已写入: 无/u),
+      error: expect.stringMatching(/重新确认导出.*已确认写入: Project A-[^/]+\/chapter_1\.md.*可能已写入: 无/u),
     })
     expect(vi.mocked(ipc.invoke).mock.calls
       .filter(([channel]) => channel === 'fs:grant-write-file')
       .map(call => call[2]))
-      .toEqual(['Project A/chapter_1.md'])
+      .toEqual([expect.stringMatching(/^Project A-[^/]+\/chapter_1\.md$/u)])
   })
 
   it('reports files already written when a split export fails partway through', async () => {
@@ -440,15 +476,15 @@ describe('exportNovel project session ownership', () => {
       projectSession,
     )).resolves.toEqual({
       success: false,
-      error: expect.stringMatching(/已确认写入: Project A\/chapter_1\.md.*可能已写入: 无.*确定写入失败: Project A\/chapter_2\.md/u),
+      error: expect.stringMatching(/已确认写入: Project A-[^/]+\/chapter_1\.md.*可能已写入: 无.*确定写入失败: Project A-[^/]+\/chapter_2\.md/u),
     })
 
     const writePaths = vi.mocked(ipc.invoke).mock.calls
       .filter(([channel]) => channel === 'fs:grant-write-file')
       .map(call => call[2])
     expect(writePaths).toEqual([
-      'Project A/chapter_1.md',
-      'Project A/chapter_2.md',
+      expect.stringMatching(/^Project A-[^/]+\/chapter_1\.md$/u),
+      expect.stringMatching(/^Project A-[^/]+\/chapter_2\.md$/u),
     ])
   })
 
@@ -473,13 +509,16 @@ describe('exportNovel project session ownership', () => {
       projectSession,
     )).resolves.toEqual({
       success: false,
-      error: expect.stringMatching(/已确认写入: Project A\/chapter_1\.md.*可能已写入: Project A\/chapter_2\.md.*确定写入失败: 无.*不要盲目重试/u),
+      error: expect.stringMatching(/已确认写入: Project A-[^/]+\/chapter_1\.md.*可能已写入: Project A-[^/]+\/chapter_2\.md.*确定写入失败: 无.*不要盲目重试/u),
     })
 
     expect(vi.mocked(ipc.invoke).mock.calls
       .filter(([channel]) => channel === 'fs:grant-write-file')
       .map(call => call[2]))
-      .toEqual(['Project A/chapter_1.md', 'Project A/chapter_2.md'])
+      .toEqual([
+        expect.stringMatching(/^Project A-[^/]+\/chapter_1\.md$/u),
+        expect.stringMatching(/^Project A-[^/]+\/chapter_2\.md$/u),
+      ])
   })
 
   it('reports the committed split file when the project session expires after its write receipt', async () => {

@@ -194,6 +194,7 @@ export class UpdateService {
   private state: UpdateState
   private reminder?: UpdateReminder
   private downloadedVersion?: string
+  private checkedAvailableVersion?: string
   private readonly listeners = new Set<(state: UpdateState) => void>()
   private checkQueue: Promise<void> = Promise.resolve()
 
@@ -311,8 +312,8 @@ export class UpdateService {
 
   private async performCheck(mode: 'automatic' | 'manual', now: Date): Promise<UpdateCheckResponse> {
     // Re-check inside the serialized queue: an earlier queued check may have
-    // completed the download after this operation passed its public guard.
-    if (this.downloadedVersion) {
+    // started or completed the download after this operation passed its public guard.
+    if (this.state.status === 'downloading' || this.downloadedVersion) {
       return this.response({ success: true, checked: false, updateAvailable: true })
     }
     this.setState({
@@ -331,6 +332,7 @@ export class UpdateService {
 
     const update = result?.updateInfo
     if (!update || !isHigherStableVersion(update.version, this.options.currentVersion)) {
+      this.checkedAvailableVersion = undefined
       this.forgetAvailableUpdate()
       this.setState({
         ...this.state,
@@ -347,6 +349,7 @@ export class UpdateService {
       return this.response({ success: true, checked: true })
     }
 
+    this.checkedAvailableVersion = update.version
     this.rememberAvailableUpdate(update)
     this.setState({
       ...this.state,
@@ -366,6 +369,7 @@ export class UpdateService {
   async downloadUpdate(): Promise<UpdateActionResponse> {
     if (
       !this.options.isPackaged
+      || this.options.updateConfiguration === 'missing'
       || this.state.updateAction !== 'download'
       || !this.state.availableVersion
     ) {
@@ -378,6 +382,21 @@ export class UpdateService {
       return this.actionResponse(false, makeUpdateError('DOWNLOAD_NOT_READY', 'download', 'not-ready', true, 'DOWNLOAD_NOT_READY'))
     }
 
+    const displayedVersion = this.state.availableVersion
+    if (this.checkedAvailableVersion !== displayedVersion) {
+      this.setState({ ...this.state, status: 'checking', error: undefined })
+      const checked = await this.enqueueCheck(() => this.performCheck('manual', this.now()))
+      if (!checked.success
+        || !this.checkedAvailableVersion
+        || (this.checkedAvailableVersion !== displayedVersion
+          && !isHigherStableVersion(this.checkedAvailableVersion, displayedVersion))) {
+        return this.actionResponse(false, checked.error
+          ?? makeUpdateError('DOWNLOAD_NOT_READY', 'download', 'not-ready', true, 'DOWNLOAD_NOT_READY'))
+      }
+    }
+    if (this.state.status !== 'available' || !this.state.availableVersion) {
+      return this.actionResponse(false, makeUpdateError('DOWNLOAD_NOT_READY', 'download', 'not-ready', true, 'DOWNLOAD_NOT_READY'))
+    }
     const version = this.state.availableVersion
     this.setState({ ...this.state, status: 'downloading', downloadProgress: undefined, error: undefined })
     try {

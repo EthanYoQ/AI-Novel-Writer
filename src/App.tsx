@@ -145,9 +145,8 @@ export default function App() {
       const completedRun = activeRuns.find(r => r.id === runId)
         ?? history.find(r => r.id === runId)
       if (!completedRun) return
-      const shortTitle = completedRun.title.replace(/^[^\s]+\s/, '')
       actionToast.workflowComplete(
-        text(`「${shortTitle}」已完成`, `“${shortTitle}” completed`),
+        text(`「${completedRun.title}」已完成`, `“${completedRun.title}” completed`),
         () => useLayoutStore.getState().openRightPanel('ai-output')
       )
     })

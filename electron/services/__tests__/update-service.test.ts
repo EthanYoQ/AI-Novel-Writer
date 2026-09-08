@@ -333,7 +333,7 @@ describe('UpdateService', () => {
   })
 
   it('recovers a remembered release without pretending the prior-process installer is ready', async () => {
-    const updater = new FakeUpdater({ updateInfo: { version: '0.2.6' } })
+    const updater = new FakeUpdater({ updateInfo: { version: '0.2.7' } })
     const preferences = createPreferencesStore({
       lastAutomaticCheckDate: '2026-07-25',
       availableUpdate: { version: '0.2.6', releaseName: 'v0.2.6' },
@@ -358,10 +358,114 @@ describe('UpdateService', () => {
     await service.checkAutomatically()
     expect(updater.checkCalls).toBe(0)
 
-    await service.checkManually()
-    expect(updater.checkCalls).toBe(1)
     await service.downloadUpdate()
-    expect(service.getState()).toMatchObject({ status: 'downloaded' })
+    expect(updater.checkCalls).toBe(1)
+    expect(updater.downloadCalls).toBe(1)
+    expect(service.getState()).toMatchObject({ status: 'downloaded', availableVersion: '0.2.7' })
+  })
+
+  it.each(['withdrawn', 'check-failed', 'lower-version'] as const)(
+    'does not download a remembered release when its recheck is %s',
+    async (failure) => {
+      const updater = new FakeUpdater(failure === 'lower-version'
+        ? { updateInfo: { version: '0.2.6' } }
+        : null)
+      if (failure === 'check-failed') updater.checkError = new Error('offline')
+      const service = new UpdateService({
+        updater,
+        currentVersion: '0.2.5',
+        isPackaged: true,
+        preferences: createPreferencesStore({
+          availableUpdate: { version: failure === 'lower-version' ? '0.2.7' : '0.2.6' },
+        }),
+      })
+
+      await expect(service.downloadUpdate()).resolves.toMatchObject({ success: false })
+      expect(updater.checkCalls).toBe(1)
+      expect(updater.downloadCalls).toBe(0)
+    },
+  )
+
+  it('does not duplicate the recheck or download after a remembered-release double click', async () => {
+    const recheck = deferred<UpdateCheckResult | null>()
+    const checkForUpdates = vi.fn(() => recheck.promise)
+    const downloadUpdate = vi.fn(async () => [])
+    const service = new UpdateService({
+      updater: { checkForUpdates, downloadUpdate, quitAndInstall: () => undefined },
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore({ availableUpdate: { version: '0.2.6' } }),
+    })
+
+    const first = service.downloadUpdate()
+    const second = service.downloadUpdate()
+    await vi.waitFor(() => expect(checkForUpdates).toHaveBeenCalledOnce())
+    await expect(second).resolves.toMatchObject({ success: false })
+    recheck.resolve({ updateInfo: { version: '0.2.6' } })
+    await expect(first).resolves.toMatchObject({ success: true })
+    expect(checkForUpdates).toHaveBeenCalledOnce()
+    expect(downloadUpdate).toHaveBeenCalledOnce()
+  })
+
+  it('skips a queued manual check after a remembered-release recheck starts downloading', async () => {
+    const recheck = deferred<UpdateCheckResult | null>()
+    const download = deferred<string[]>()
+    const checkForUpdates = vi.fn()
+      .mockImplementationOnce(() => recheck.promise)
+      .mockResolvedValue({ updateInfo: { version: '0.2.7' } })
+    const downloadUpdate = vi.fn(() => download.promise)
+    const service = new UpdateService({
+      updater: { checkForUpdates, downloadUpdate, quitAndInstall: () => undefined },
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore({ availableUpdate: { version: '0.2.6' } }),
+    })
+
+    const downloading = service.downloadUpdate()
+    await vi.waitFor(() => expect(checkForUpdates).toHaveBeenCalledOnce())
+    const manualCheck = service.checkManually()
+    recheck.resolve({ updateInfo: { version: '0.2.6' } })
+    await vi.waitFor(() => expect(downloadUpdate).toHaveBeenCalledOnce())
+
+    await expect(manualCheck).resolves.toMatchObject({
+      success: true,
+      checked: false,
+      updateAvailable: true,
+      state: { status: 'downloading', availableVersion: '0.2.6' },
+    })
+    expect(checkForUpdates).toHaveBeenCalledOnce()
+    download.resolve([])
+    await expect(downloading).resolves.toMatchObject({
+      success: true,
+      state: { status: 'downloaded', availableVersion: '0.2.6' },
+    })
+  })
+
+  it('skips a manual check while an already-confirmed update is downloading', async () => {
+    const updater = new FakeUpdater({ updateInfo: { version: '0.2.6' } })
+    const download = deferred<string[]>()
+    updater.downloadUpdate = vi.fn(() => download.promise)
+    const service = new UpdateService({
+      updater,
+      currentVersion: '0.2.5',
+      isPackaged: true,
+      preferences: createPreferencesStore(),
+    })
+    await service.checkManually()
+
+    const downloading = service.downloadUpdate()
+    await vi.waitFor(() => expect(updater.downloadUpdate).toHaveBeenCalledOnce())
+    await expect(service.checkManually()).resolves.toMatchObject({
+      success: true,
+      checked: false,
+      state: { status: 'downloading', availableVersion: '0.2.6' },
+    })
+    expect(updater.checkCalls).toBe(1)
+    download.resolve([])
+    await expect(downloading).resolves.toMatchObject({
+      success: true,
+      state: { status: 'downloaded', availableVersion: '0.2.6' },
+    })
   })
 
   it('keeps a remembered available update visible after an automatic network failure', async () => {
