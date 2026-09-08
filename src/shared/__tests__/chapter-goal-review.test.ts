@@ -68,6 +68,50 @@ describe('本章目标审稿合同', () => {
     expect(prompt.indexOf('2. 当章到期')).toBeLessThan(prompt.indexOf('3. 全部到期'))
     expect(prompt.indexOf('3. 全部到期')).toBeLessThan(prompt.indexOf('4. 仅未提及'))
     expect(prompt).toContain(JSON.stringify(goals))
+    expect(prompt).toContain('按 id、evidence、description、status 顺序')
+    expect(prompt).toContain('逐个列出目标原文中的每个当章子动作及其判断，再汇总')
+    expect(prompt).toContain('任一 unmet → unmet；否则任一 unknown → unknown；仅全部完成 → completed')
+  })
+
+  it.each(['“钟楼已经修好。”', '"钟楼已经修好。"', '“钟楼已经修好。”她说。”'])('只容忍一对外围引号：%s', quote => {
+    const source = '“钟楼已经修好。”她说。'
+    const frozen = freezeChapterGoals(1, '修好钟楼')
+    const result = normalizeChapterGoalReview([{ id: frozen.items[0]!.id, status: 'completed', description: '有完成证据。', evidence: [{ quote }] }], frozen, source, 'zh-CN')
+    expect(result.items[0]?.status).toBe('completed')
+    const evidence = result.items[0]!.evidence[0]!
+    expect(source.slice(evidence.start, evidence.end)).toBe(evidence.quote)
+    expect(evidence.quote).toBe(quote === '“钟楼已经修好。”' ? quote : quote.slice(1, -1))
+  })
+
+  it.each([
+    ['只多一个引号', '钟楼已经修好。”', '钟楼已经修好。'],
+    ['空白变化', '“钟楼 已经修好。”', '钟楼已经修好。'],
+    ['标点变化', '“钟楼已经修好！”', '钟楼已经修好。'],
+    ['跳句拼接', '“钟楼已经修好。工匠离开。”', '钟楼已经修好。他锁好大门。工匠离开。'],
+    ['外围剥离后重复', '“修好了”', '修好了。他又说修好了。'],
+    ['两层包装', '““修好了””', '修好了'],
+    ['空包装', '“”', '修好了'],
+  ])('%s 仍是未知，不做模糊匹配', (_case, quote, source) => {
+    const frozen = freezeChapterGoals(1, '修好钟楼')
+    const result = normalizeChapterGoalReview([{ id: frozen.items[0]!.id, status: 'completed', description: '声称完成。', evidence: [{ quote }] }], frozen, source, 'zh-CN')
+    expect(result.items[0]?.status).toBe('unknown')
+    expect(result.items[0]?.evidence).toEqual([])
+  })
+
+  it('不能丢弃一条坏证据后仅靠其他有效引文通过', () => {
+    const frozen = freezeChapterGoals(1, '修好钟楼')
+    const result = normalizeChapterGoalReview([{ id: frozen.items[0]!.id, status: 'completed', description: '声称完成。',
+      evidence: [{ quote: '钟楼修好了' }, { quote: '“工匠不在正文中的回答”' }] }], frozen, '钟楼修好了。', 'zh-CN')
+    expect(result.items[0]?.status).toBe('unknown')
+    expect(result.items[0]?.evidence).toEqual([])
+  })
+
+  it('完全逐字命中的重复引文保留原有首个偏移行为', () => {
+    const frozen = freezeChapterGoals(1, '修好钟楼')
+    const result = normalizeChapterGoalReview([{ id: frozen.items[0]!.id, status: 'completed', description: '正文有完成描述。',
+      evidence: [{ quote: '修好了' }] }], frozen, '修好了。他又说修好了。', 'zh-CN')
+    expect(result.items[0]?.status).toBe('completed')
+    expect(result.items[0]?.evidence).toEqual([{ quote: '修好了', start: 0, end: 3 }])
   })
 
   it('读取历史或损坏报告不假造有效目标合同', () => {
