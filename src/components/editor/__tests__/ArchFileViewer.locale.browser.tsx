@@ -129,6 +129,23 @@ describe('ArchFileViewer locale', () => {
     expect(useEditorStore.getState().tabs[0].dirty).toBe(true)
   })
 
+  it('keeps its exit-save handler while an inactive tab is unmounted', async () => {
+    useEditorStore.setState({ tabs: [{
+      id: 'arch-inactive', name: '故事前提', type: 'arch-file',
+      projectKey: PROJECT_PATH, filePath: 'vela://core/premise',
+      content: '待保存内容', savedContent: '', dirty: true,
+    }], draftLedgers: {} })
+    await act(async () => root.render(
+      <ArchFileViewer tabId="arch-inactive" filePath="vela://core/premise"
+        projectKey={PROJECT_PATH} content="待保存内容" savedContent="" />,
+    ))
+
+    await act(async () => root.unmount())
+    await expect(saveDirtyEditorChangesForExit(PROJECT_PATH)).resolves.toBeUndefined()
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({ dirty: false, savedContent: '待保存内容' })
+    root = createRoot(container)
+  })
+
   it('renders document controls and empty guidance in English', async () => {
     const generatedContent = 'A'.repeat(60)
     await act(async () => root.render(

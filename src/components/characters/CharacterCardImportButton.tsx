@@ -17,6 +17,35 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 
 interface Props { projectKey: string; compact?: boolean; disabled?: boolean }
 
+interface ImportDraft {
+  source: string
+  files: PlanningMaterial[]
+}
+
+const importDrafts = new Map<string, ImportDraft>()
+let activeImportSessionKey: string | null = null
+
+function importSessionKey(session: ProjectSessionContext): string {
+  return `${session.projectId}:${session.leaseId}:${session.projectPath}`
+}
+
+function readImportDraft(session: ProjectSessionContext): ImportDraft {
+  const key = importSessionKey(session)
+  if (activeImportSessionKey !== key) {
+    importDrafts.clear()
+    activeImportSessionKey = key
+  }
+  return importDrafts.get(key) ?? { source: '', files: [] }
+}
+
+function writeImportDraft(session: ProjectSessionContext, draft: ImportDraft): void {
+  importDrafts.set(importSessionKey(session), draft)
+}
+
+function clearImportDraft(session: ProjectSessionContext): void {
+  importDrafts.delete(importSessionKey(session))
+}
+
 export function CharacterCardImportButton(props: Props) {
   const project = useProjectStore(state => state.currentProject)
   const session = captureProjectSession(project)
@@ -26,9 +55,10 @@ export function CharacterCardImportButton(props: Props) {
 
 function SessionImportButton({ session, compact, disabled }: Props & { session: ProjectSessionContext }) {
   const { locale, text } = useLocaleStore()
+  const [initialDraft] = useState(() => readImportDraft(session))
   const [open, setOpen] = useState(false)
-  const [source, setSource] = useState('')
-  const [files, setFiles] = useState<PlanningMaterial[]>([])
+  const [source, setSource] = useState(initialDraft.source)
+  const [files, setFiles] = useState<PlanningMaterial[]>(initialDraft.files)
   const [busy, setBusy] = useState(false)
   const label = text('粘贴 / 导入角色卡', 'Paste / import character cards')
 
@@ -36,7 +66,10 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
     setBusy(true)
     try {
       const selected = await selectPlanningMaterials()
-      if (isProjectSessionCurrent(session) && selected.length) setFiles(selected)
+      if (isProjectSessionCurrent(session) && selected.length) {
+        writeImportDraft(session, { source, files: selected })
+        setFiles(selected)
+      }
     } catch (error) {
       if (isProjectSessionCurrent(session)) toast.error(appErrorMessage(locale, error))
     } finally {
@@ -85,6 +118,7 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
       if (run?.status === 'completed') {
         setSource('')
         setFiles([])
+        clearImportDraft(session)
         toast.success(text('角色卡已导入角色名单', 'Character cards imported into the roster'))
       } else {
         setOpen(true)
@@ -111,9 +145,16 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
           <DialogDescription>{text('粘贴完整角色卡，或选择资料文件。AI 提取后由你预览确认，不会自动保存。', 'Paste full character cards or choose files. Preview and confirm the AI extraction before saving.')}</DialogDescription>
         </DialogHeader>
         <div className="p-6 space-y-3">
-          <textarea aria-label={text('角色卡全文', 'Full character-card text')} value={source} onChange={event => setSource(event.target.value)} disabled={busy} rows={9} className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-sm" />
+          <textarea aria-label={text('角色卡全文', 'Full character-card text')} value={source} onChange={event => {
+            const nextSource = event.target.value
+            writeImportDraft(session, { source: nextSource, files })
+            setSource(nextSource)
+          }} disabled={busy} rows={9} className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-sm" />
           <Button variant="outline" size="sm" disabled={busy} onClick={() => void chooseFiles()}><FileUp size={14} />{text('选择文件', 'Choose files')}</Button>
-          {files.length > 0 && <div className="text-xs break-all">{files.map(file => file.fileName).join('、')} <Button variant="ghost" size="sm" disabled={busy} onClick={() => setFiles([])}>{text('清除文件', 'Clear files')}</Button></div>}
+          {files.length > 0 && <div className="text-xs break-all">{files.map(file => file.fileName).join('、')} <Button variant="ghost" size="sm" disabled={busy} onClick={() => {
+            writeImportDraft(session, { source, files: [] })
+            setFiles([])
+          }}>{text('清除文件', 'Clear files')}</Button></div>}
         </div>
         <DialogFooter>
           <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>{text('暂不导入', 'Not now')}</Button>

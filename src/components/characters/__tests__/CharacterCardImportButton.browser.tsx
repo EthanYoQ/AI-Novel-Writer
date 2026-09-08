@@ -18,6 +18,7 @@ let root: Root
 let container: HTMLDivElement
 let start: ReturnType<typeof vi.fn<ReturnType<typeof useWorkflowStore.getState>['startWorkflow']>>
 let invoke: ReturnType<typeof vi.fn>
+let testLease = 0
 
 function button(label: string) {
   const result = [...document.querySelectorAll('button')].find(node => node.textContent === label || node.getAttribute('aria-label') === label)
@@ -35,6 +36,7 @@ async function paste(value: string) {
 
 beforeEach(async () => {
   vi.clearAllMocks()
+  project.sessionLease = `lease-${++testLease}`
   invoke = vi.fn().mockResolvedValue(null)
   Object.defineProperty(window, 'velaAPI', { configurable: true, value: { invoke, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn() } })
   start = vi.fn<ReturnType<typeof useWorkflowStore.getState>['startWorkflow']>().mockResolvedValue('failed-run')
@@ -92,6 +94,22 @@ describe('角色卡导入入口', () => {
     expect(document.querySelector('textarea')?.value).toBe('姓名：林舟')
   })
 
+  it('导航离开后确认取消，仍恢复粘贴内容和已选文件', async () => {
+    invoke.mockImplementation((channel: string) => Promise.resolve(channel === 'dialog:select-knowledge-files'
+      ? [{ grantId: 'grant', displayName: '角色.txt' }]
+      : { success: true, content: '姓名：林舟' }))
+    await paste('姓名：江澜')
+    await click('选择文件')
+    await click('AI 提取并预览')
+    await act(async () => root.unmount())
+    await click('取消')
+    root = createRoot(container)
+    await act(async () => root.render(<CharacterCardImportButton projectKey={project.path} />))
+    await click('粘贴 / 导入角色卡')
+    expect(document.querySelector('textarea')?.value).toBe('姓名：江澜')
+    expect(document.body.textContent).toContain('角色.txt')
+  })
+
   it('文件读取期间同路径项目重新打开，不将旧文件带入新会话', async () => {
     let resolve!: (result: { success: true; content: string }) => void
     invoke.mockImplementation((channel: string) => channel === 'dialog:select-knowledge-files'
@@ -123,6 +141,9 @@ describe('角色卡导入入口', () => {
     await click('AI 提取并预览')
     await click('发送并提取')
     expect(start).toHaveBeenCalledOnce()
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await act(async () => root.render(<CharacterCardImportButton projectKey={project.path} />))
     await click('粘贴 / 导入角色卡')
     expect(document.body.textContent).not.toContain('角色.txt')
     expect(document.querySelector('textarea')?.value).toBe('')

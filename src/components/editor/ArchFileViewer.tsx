@@ -240,7 +240,10 @@ function ArchFileViewerSession({
 
   useEffect(() => {
     if (isCharacterProjection) return
-    return registerEditorExitSaveHandler({
+    // EditorArea unmounts the inactive tab. The store removes this handler only
+    // when the tab itself closes, so an inactive dirty document can still save
+    // during application exit.
+    registerEditorExitSaveHandler({
       tabId,
       type: 'arch-file',
       projectKey,
