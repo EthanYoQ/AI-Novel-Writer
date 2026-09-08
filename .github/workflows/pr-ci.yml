@@ -1,0 +1,78 @@
+name: PR CI
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+# Test untrusted PR code without repository write access or model credentials.
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: Desktop PR CI (Windows)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CI: 'true'
+
+    steps:
+      # Default PR checkout tests the proposed merge, not an unrelated branch.
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      # Keep the toolchain aligned with the existing Windows release workflow.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: 11.11.0
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.1
+
+      - name: Record tested commit
+        run: git rev-parse HEAD
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Check translation coverage
+        run: pnpm run check:i18n
+
+      - name: Prepare and verify Node native modules
+        run: pnpm run prepare:native-node
+
+      - name: Run complete desktop unit test suite
+        run: pnpm test
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install chromium
+
+      - name: Run renderer browser tests
+        run: pnpm run test:browser
+
+      # Compile only: do not rebuild for Electron, package installers, or publish.
+      - name: Compile renderer and Electron sources
+        run: pnpm run build
+
+      # Intentionally no artifact uploads or dependency cache: keep this daily
+      # gate separate from retained, release-qualified Windows/macOS packages.
