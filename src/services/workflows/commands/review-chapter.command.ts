@@ -21,6 +21,7 @@ import type { ChapterBlueprint } from '../directory-workflow'
 import type { FrozenDraftSourceIdentity } from '../chapter-workflow'
 import { throwIfSourceDraftChanged } from '../source-draft-changed'
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../../shared/character-roster'
+import { buildChapterGoalReviewPrompt, chapterGoalReviewItems, freezeChapterGoals, normalizeChapterGoalReview } from '../../../shared/chapter-goal-review'
 
 
 export interface ReviewChapterParams {
@@ -46,6 +47,7 @@ interface ReviewResultItem extends Record<string, unknown> {
 interface ReviewResult extends Record<string, unknown> {
   summary: string
   items: ReviewResultItem[]
+  goalReviews?: unknown
 }
 
 function isBoundedText(value: unknown, maxCharacters: number): value is string {
@@ -61,7 +63,7 @@ function boundText(value: string, maxCharacters: number): string {
 function isReviewShape(value: unknown): value is ReviewResult {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const review = value as Record<string, unknown>
-  if (Object.keys(review).some(key => key !== 'summary' && key !== 'items')
+  if (Object.keys(review).some(key => key !== 'summary' && key !== 'items' && key !== 'goalReviews')
     || typeof review.summary !== 'string'
     || !Array.isArray(review.items)
     || review.items.length < 1
@@ -101,6 +103,7 @@ function parseReviewResult(content: string): ReviewResult {
   const parsed: unknown = JSON.parse(fenced?.[1]?.trim() ?? trimmed)
   if (!isReviewShape(parsed)) throw new Error('invalid review contract')
   const bounded: ReviewResult = {
+    ...(parsed.goalReviews === undefined ? {} : { goalReviews: parsed.goalReviews }),
     summary: boundText(parsed.summary, REVIEW_SUMMARY_MAX_CHARACTERS),
     items: parsed.items.map(item => ({
       category: item.category,
@@ -241,6 +244,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       `[Author-confirmed project configuration | constraint, not established history]\n${JSON.stringify(novelConfig, null, 2)}`,
     )
     let planningMaterial = formatReviewPlanningMaterial([], writingLanguage)
+    let frozenGoals = freezeChapterGoals(this.params.chapterNumber, undefined)
     try {
       const { loadDirectoryBlueprints } = await import('../directory-workflow')
       const blueprints = (await loadDirectoryBlueprints(context.projectPath, projectSession))
@@ -249,6 +253,8 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
           && blueprint.chapterNumber <= this.params.chapterNumber + 5
         ))
       planningMaterial = formatReviewPlanningMaterial(blueprints, writingLanguage)
+      frozenGoals = freezeChapterGoals(this.params.chapterNumber,
+        blueprints.find(blueprint => blueprint.chapterNumber === this.params.chapterNumber)?.keyEvents ?? null)
     } catch {
       planningMaterial = promptLanguageText(
         writingLanguage,
@@ -271,6 +277,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       authorGuidanceSection,
       authorConfigSection,
       planningMaterial,
+      buildChapterGoalReviewPrompt(frozenGoals, writingLanguage),
     ].join('\n\n')
 
     callbacks.log(text('调用 AI 审查员对本章进行多维度扫描...', 'Running the AI continuity review...'))
@@ -301,6 +308,16 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
         'AI 返回的审稿结果无效，因此未保存报告。',
         'The AI review response was invalid, so no report was saved.',
       ))
+    }
+
+    const goalReview = normalizeChapterGoalReview(parsedResult.goalReviews, frozenGoals, draft, writingLanguage)
+    delete parsedResult.goalReviews
+    parsedResult.goalReview = goalReview
+    parsedResult.items = [...(parsedResult.items ?? []), ...chapterGoalReviewItems(goalReview, writingLanguage)]
+    if (parsedResult.items.some(item => item.severity === 'unknown')) {
+      parsedResult.summary = text('审稿包含待核实项目，不能视为全部通过。', 'The review contains unresolved items and is not an overall pass.')
+    } else if (goalReview.items.some(item => item.status === 'unmet')) {
+      parsedResult.summary = text('本章存在尚未完成的目标，请核对逐项证据。', 'Some chapter goals are unmet; check their evidence.')
     }
 
     const blueprint = await ipc.invokeWithProjectSession(

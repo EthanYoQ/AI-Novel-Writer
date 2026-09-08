@@ -36,9 +36,22 @@
 > - **Source-grounded continuity material** — Author-provided character information, model-derived progress, and legacy data with unknown provenance are no longer presented as the same kind of fact; later writing prefers finalized source prose with an identifiable origin.
 > - **Layered chapter materials** — The current task, future plans, finalized history, and candidate drafts are shown separately, with adjacent source paragraphs retained when they carry causality, negation, or item transfers across sentences.
 > - **Reliable candidate context** — Review-draft batches continue from the exact saved draft versions and prose in the current run and label them as unfinalized.
+> - **Goal-by-goal review** — Each chapter event shows whether it is completed, unmet, or needs verification, alongside source excerpts, so preparation or a promise is not automatically treated as completion.
+> - **Careful handling of uncertainty** — Unverified items are neither passed checks nor default revision tasks; they enter revision only when the author explicitly includes them.
 > - **Update, export, and notification fixes** — Update checks no longer repeat during a download, split Markdown exports use independent directories, and workflow-completion notifications keep the full title.
 >
 > These changes reduce the risk that a mistaken summary or outdated state affects later chapters, but they do not replace author review or guarantee drift-free prose or perfect target-length compliance.
+
+### Features retained from 1.0.0
+
+- Writing Skills can be installed independently and used for planning, drafting, review, or polishing.
+- The story map shows main and side-story progress and links to the supporting chapter.
+- Planning material can be imported so blueprints and later writing share the same settings.
+- The character roster adds explicitly confirmed blueprint characters and tracks their state.
+- The Chinese long-form workflow connects blueprints, drafts, reviews, revisions, and final chapters.
+- Windows and macOS users can view and start the update intended for their computer.
+
+The 1.0.0 fixes for multi-draft saves, stale requests, source recovery, exports, and installation checks remain included; see the [bilingual 1.1.0 notes](.release/notes/v1.1.0.md) for each change. Official installers are published through [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest).
 
 > ## v0.9.0 feature baseline (historical release)
 >

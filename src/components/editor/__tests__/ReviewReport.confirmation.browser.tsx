@@ -189,12 +189,12 @@ function selectedModel(): HTMLSelectElement {
   return select
 }
 
-async function renderReport() {
+async function renderReport(reportText = RAW_AI_REPORT) {
   await act(async () => {
     root?.render(
       <ReviewReport
         projectKey={PROJECT_PATH}
-        reportText={RAW_AI_REPORT}
+        reportText={reportText}
         draftPath="vela://draft/1"
         chapterNumber={1}
         chapterDir="vela://draft/ch1"
@@ -273,6 +273,50 @@ afterEach(async () => {
 })
 
 describe('ReviewReport human-confirmed revision flow', () => {
+  it('逐项目标展示完成证据，待核实不计通过且仅明确选择后纳入不可变确认', async () => {
+    installIpc(42)
+    const goalReview = {
+      version: 1, chapterNumber: 1, coverage: 'complete',
+      items: [
+        { id: 'done', text: '约定周三出发', status: 'completed', description: '双方已约定', evidence: [{ quote: '约好周三出发', start: 0, end: 6 }] },
+        { id: 'uncertain', text: '确认相册完成', status: 'unknown', description: '没有足够证据', evidence: [] },
+        { id: 'unmet', text: '本章装好相册封面', status: 'unmet', description: '明确延期', evidence: [{ quote: '明天糊封面', start: 0, end: 5 }] },
+      ],
+    }
+    const report = JSON.stringify({ summary: '', goalReview, items: [
+      { category: '本章目标', goalId: 'done', severity: 'pass', description: '双方已约定' },
+      { category: '本章目标', goalId: 'uncertain', severity: 'unknown', description: '没有足够证据' },
+      { category: '本章目标', goalId: 'unmet', severity: 'error', description: '明确延期' },
+    ] })
+    await renderReport(report)
+    expect(container!.textContent).toContain('1 待核实')
+    expect(container!.textContent).toContain('1 通过')
+    expect(container!.textContent).toContain('约定周三出发 — 已完成')
+    expect(container!.textContent).toContain('约好周三出发')
+    expect(container!.textContent).toContain('本章装好相册封面 — 未完成')
+    await act(async () => {
+      await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+    })
+    const ignored = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)!
+    expect(ignored.items[1]).toMatchObject({ goalId: 'uncertain', severity: 'unknown', decision: 'ignore' })
+    expect(ignored.goalReview).toEqual(goalReview)
+    expect(ignored.items[2]).toMatchObject({ goalId: 'unmet', severity: 'error', decision: 'apply' })
+    await act(async () => page.getByRole('button', { name: '编辑清单', exact: true }).click())
+    await act(async () => page.getByRole('button', { name: '明确纳入修稿', exact: true }).click())
+    invoke.mockClear()
+    await act(async () => {
+      await page.getByRole('button', { name: '重新确认审稿清单', exact: true }).click()
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+    })
+    const applied = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)!
+    expect(applied.items[1]).toMatchObject({ goalId: 'uncertain', severity: 'unknown', decision: 'apply' })
+    expect(ignored.items[1].decision).toBe('ignore')
+    await renderReport(confirmationCreateParams().content)
+    expect(container!.textContent).toContain('约好周三出发')
+    expect(container!.textContent).toContain('确认相册完成 — 待核实')
+  })
+
   it('preserves the raw AI report while an author edits, ignores, restores, adds, confirms, and routes a Grok revision without changing the global default', async () => {
     installIpc(91)
     await renderReport()

@@ -26,6 +26,45 @@ const sourceDraft = Object.freeze({
 })
 
 describe('human-confirmed review snapshot contract', () => {
+  it('待核实目标保留身份与证据，默认忽略不进入修稿，明确纳入仍保留不确定性', () => {
+    const input = {
+      sourceReviewId: 42, sourceDraft, summary: '', authorGuidance: '',
+      goalReview: {
+        version: 1 as const, chapterNumber: 1, coverage: 'complete' as const,
+        items: [{ id: 'goal-1', text: '完成相册', status: 'unknown' as const, description: '证据不足', evidence: [] }],
+      },
+      items: [{ category: '本章目标', goalId: 'goal-1', severity: 'unknown', description: '证据不足', decision: 'ignore' as const, origin: 'ai' as const }],
+    }
+    const snapshot = createHumanConfirmedReviewSnapshot(input)!
+    expect(snapshot.items[0]).toMatchObject({ goalId: 'goal-1', severity: 'unknown', decision: 'ignore' })
+    expect(renderHumanConfirmedReviewBrief(snapshot, 'zh-CN')).toBe('')
+    expect(Object.isFrozen(snapshot.goalReview!.items[0].evidence)).toBe(true)
+    input.goalReview.items[0].text = '已改变的输入'
+    expect(snapshot.goalReview!.items[0].text).toBe('完成相册')
+    expect(parseHumanConfirmedReviewSnapshot(serializeHumanConfirmedReviewSnapshot(snapshot))).toEqual(snapshot)
+    const selected = createHumanConfirmedReviewSnapshot({ ...input, items: [{ ...input.items[0], decision: 'apply' }] })!
+    expect(renderHumanConfirmedReviewBrief(selected, 'zh-CN')).toContain('unknown')
+    expect(renderHumanConfirmedReviewBrief(selected, 'zh-CN')).toContain('证据不足')
+  })
+
+  it('只有明确纳入的待核实项注入核实边界，不把不确定性升级为错误', () => {
+    const ignored = createHumanConfirmedReviewSnapshot({
+      sourceReviewId: 42, sourceDraft, summary: '', authorGuidance: '',
+      items: [{ category: '本章目标', severity: 'unknown', description: '相册是否完成尚待核实', decision: 'ignore', origin: 'ai' }],
+    })!
+    expect(renderHumanConfirmedReviewBrief(ignored, 'zh-CN')).not.toContain('待核实项处理边界')
+    const selected = createHumanConfirmedReviewSnapshot({
+      ...ignored, sourceDraft,
+      items: ignored.items.map(item => ({ ...item, decision: 'apply' })),
+    })!
+    const brief = renderHumanConfirmedReviewBrief(selected, 'zh-CN')
+    expect(brief).toContain('作者纳入待核实项不等于确认其为错误')
+    expect(brief).toContain('不得据此编造缺失前史或事实')
+    expect(brief).toContain('证据不足时保留不确定性')
+    expect(brief).toContain('[本章目标 / unknown]')
+    expect(brief).not.toContain('/ error]')
+  })
+
   it('keeps the raw AI report separate while ignore, restore, add, and confirm produce an immutable selected-work snapshot', () => {
     const sourceBeforeReview = rawAiReport
     const initiallyConfirmed = createHumanConfirmedReviewSnapshot({

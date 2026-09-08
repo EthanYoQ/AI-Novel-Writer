@@ -1128,6 +1128,57 @@ describe('workflow mutation failure boundaries', () => {
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
+  it.each([true, false])('同一次审稿冻结本章目标，漏项不能总体通过（返回到期目标：%s）', async (includeDueGoal) => {
+    const blueprint = {
+      chapterNumber: 1, title: '相册', role: '发展', purpose: '缓和关系',
+      keyEvents: '完成相册；约定周三搬设备', characters: [], suspenseHook: '', userGuidance: '', notes: '', notesUpdatedAt: '',
+    }
+    const draft = '她说，明天再装订相册。两人约定周三搬设备。'
+    let saved: Record<string, unknown> = {}
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:continuity-list-before' || channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:blueprint-get-all') return [blueprint, { ...blueprint, chapterNumber: 2, keyEvents: '搬运设备' }]
+      if (channel === 'db:blueprint-get') return null
+      if (channel === 'db:draft-get-meta') return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:review-create') {
+        saved = JSON.parse((args[0] as { content: string }).content)
+        return { success: true, id: 9 }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    let prompt = ''
+    const generateStream = vi.fn(async (messages, streamCallbacks) => {
+      prompt = messages.map((message: { content: string }) => message.content).join('\n')
+      // A late editor change must not replace the checklist sent with this draft.
+      blueprint.keyEvents = '仅准备相册'
+      streamCallbacks.onDone?.(JSON.stringify({
+        summary: '全部通过',
+        items: [{ category: '连续性', severity: 'pass', description: '未发现其他冲突。' }],
+        goalReviews: [
+          ...(includeDueGoal ? [{ id: 'ch1:keyEvents:1', status: 'unmet', description: '本章要求完成，相册装订却延期。', evidence: [{ quote: '明天再装订相册' }] }] : []),
+          { id: 'ch1:keyEvents:2', status: 'completed', description: '约定已达成，无需本章提前搬设备。', evidence: [{ quote: '两人约定周三搬设备。' }] },
+        ],
+      }), undefined, 'stop')
+      return 'single-review-request'
+    })
+    useLLMStore.setState({ defaultModelId: 'model', generateStream })
+    await new ReviewChapterCommand({ draftPath: 'vela://draft/1', draftContent: draft, chapterNumber: 1 })
+      .execute({ step: {}, context: context(), callbacks: callbacks() })
+    expect(generateStream).toHaveBeenCalledTimes(1)
+    expect(prompt).toContain('ch1:keyEvents:1')
+    expect(prompt).not.toContain('ch2:keyEvents:1')
+    expect(saved.summary).not.toBe('全部通过')
+    expect(saved.goalReview).toMatchObject({ items: [
+      { id: 'ch1:keyEvents:1', text: '完成相册', status: includeDueGoal ? 'unmet' : 'unknown' },
+      { id: 'ch1:keyEvents:2', text: '约定周三搬设备', status: 'completed' },
+    ] })
+    expect(saved.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ goalId: 'ch1:keyEvents:1', severity: includeDueGoal ? 'error' : 'unknown' }),
+    ]))
+  })
+
   it('does not open a review report when review persistence fails', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'kb:search') return []
@@ -1229,9 +1280,10 @@ describe('workflow mutation failure boundaries', () => {
       summary: string
       items: Array<{ description: string; quote?: string }>
     }
-    expect(Array.from(persisted.summary)).toHaveLength(120)
-    expect(persisted.items.map(item => Array.from(item.description).length)).toEqual([200, 200, 157, 200, 200])
-    expect(persisted.items.map(item => item.quote === undefined ? 0 : Array.from(item.quote).length)).toEqual([154, 147, 0, 0, 69])
+    expect(persisted.summary).toContain('待核实')
+    expect(persisted.items.slice(0, 5).map(item => Array.from(item.description).length)).toEqual([200, 200, 157, 200, 200])
+    expect(persisted.items.slice(0, 5).map(item => item.quote === undefined ? 0 : Array.from(item.quote).length)).toEqual([154, 147, 0, 0, 69])
+    expect(persisted.items[5]).toMatchObject({ severity: 'unknown' })
     expect(useEditorStore.getState().tabs).toHaveLength(1)
     expect(observedReviewPrompt).toContain('全部 items 必须为 1–10 条')
     expect(observedReviewPrompt).toContain('quote 不超过 160 字')
@@ -1281,7 +1333,8 @@ describe('workflow mutation failure boundaries', () => {
     })).resolves.toBe(response)
 
     const persisted = JSON.parse(persistedContent) as typeof review
-    expect(persisted.items).toHaveLength(4)
+    expect(persisted.items).toHaveLength(5)
+    expect(persisted.items[4]).toMatchObject({ severity: 'unknown' })
     expect(Array.from(persisted.items[1]!.quote!)).toHaveLength(160)
     expect(persisted.items[1]!.quote).toBe('潮'.repeat(160))
   })

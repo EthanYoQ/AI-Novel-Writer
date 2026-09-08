@@ -1,5 +1,6 @@
 import { writingLanguageText, type WritingLanguage } from './writing-language'
 import type { ExpectedDraftSource } from './ipc-channels'
+import { parseChapterGoalReview, type ChapterGoalReview } from './chapter-goal-review'
 
 /**
  * Immutable, user-confirmed review snapshot persisted in the existing
@@ -19,6 +20,7 @@ export interface HumanConfirmedReviewItem {
   quote?: string
   stableFactKey?: string
   sourceChapter?: number
+  goalId?: string
   decision: HumanConfirmedReviewDecision
   origin: HumanConfirmedReviewOrigin
 }
@@ -33,6 +35,7 @@ export interface HumanConfirmedReviewSnapshot {
   summary: string
   authorGuidance: string
   items: readonly HumanConfirmedReviewItem[]
+  goalReview?: ChapterGoalReview
 }
 
 export interface HumanConfirmedReviewSnapshotInput {
@@ -41,6 +44,7 @@ export interface HumanConfirmedReviewSnapshotInput {
   summary: string
   authorGuidance: string
   items: readonly HumanConfirmedReviewItem[]
+  goalReview?: ChapterGoalReview
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -83,6 +87,7 @@ function parseItem(value: unknown): HumanConfirmedReviewItem | null {
   const quote = record.quote === undefined ? undefined : stringValue(record.quote)
   const stableFactKey = record.stableFactKey === undefined ? undefined : nonEmptyString(record.stableFactKey)
   const sourceChapter = record.sourceChapter
+  const goalId = record.goalId === undefined ? undefined : nonEmptyString(record.goalId)
   const decision = record.decision
   const origin = record.origin
 
@@ -95,6 +100,7 @@ function parseItem(value: unknown): HumanConfirmedReviewItem | null {
   ) return null
   if (quote === null) return null
   if (stableFactKey === null) return null
+  if (goalId === null) return null
   if (sourceChapter !== undefined && !positiveSafeInteger(sourceChapter)) return null
 
   return Object.freeze({
@@ -104,6 +110,7 @@ function parseItem(value: unknown): HumanConfirmedReviewItem | null {
     ...(quote === undefined ? {} : { quote }),
     ...(stableFactKey === undefined ? {} : { stableFactKey }),
     ...(sourceChapter === undefined ? {} : { sourceChapter }),
+    ...(goalId === undefined ? {} : { goalId }),
     decision,
     origin,
   })
@@ -130,6 +137,8 @@ export function validateHumanConfirmedReviewSnapshot(
   if (summary === null || authorGuidance === null) return null
   const sourceDraft = record.sourceDraft === undefined ? undefined : parseSourceDraft(record.sourceDraft)
   if (sourceDraft === null) return null
+  const goalReview = record.goalReview === undefined ? undefined : parseChapterGoalReview(record.goalReview)
+  if (goalReview === null) return null
 
   const items = record.items.map(parseItem)
   if (items.some(item => item === null)) return null
@@ -139,6 +148,13 @@ export function validateHumanConfirmedReviewSnapshot(
     schemaVersion: HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION,
     sourceReviewId: record.sourceReviewId,
     ...(sourceDraft ? { sourceDraft } : {}),
+    ...(goalReview ? { goalReview: Object.freeze({
+      ...goalReview,
+      items: Object.freeze(goalReview.items.map(item => Object.freeze({
+        ...item,
+        evidence: Object.freeze(item.evidence.map(evidence => Object.freeze({ ...evidence }))),
+      }))),
+    }) } : {}),
     summary,
     authorGuidance,
     items: Object.freeze(items as HumanConfirmedReviewItem[]),
@@ -194,6 +210,14 @@ export function renderHumanConfirmedReviewBrief(
 ): string {
   const appliedItems = snapshot.items.filter(item => item.decision === 'apply')
   const sections: string[] = []
+
+  if (appliedItems.some(item => item.severity === 'unknown')) {
+    sections.push(writingLanguageText(
+      writingLanguage,
+      '【待核实项处理边界】作者纳入待核实项不等于确认其为错误。不得据此编造缺失前史或事实；仅按作者已有指导及正文证据处理，证据不足时保留不确定性。',
+      '[Unverified item boundary] Including an unverified item does not confirm an error. Do not invent missing history or facts; follow existing author guidance and draft evidence, retaining uncertainty when evidence is insufficient.',
+    ))
+  }
 
   if (appliedItems.length > 0) {
     sections.push([
