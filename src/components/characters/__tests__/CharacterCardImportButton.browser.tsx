@@ -112,13 +112,15 @@ describe('角色卡导入入口', () => {
 
   it('文件读取期间同路径项目重新打开，不将旧文件带入新会话', async () => {
     let resolve!: (result: { success: true; content: string }) => void
+    const reopenedLease = `${project.sessionLease}-reopened`
     invoke.mockImplementation((channel: string) => channel === 'dialog:select-knowledge-files'
       ? Promise.resolve([{ grantId: 'grant', displayName: '旧项目私有角色.txt' }])
       : new Promise(done => { resolve = done }))
+    await paste('姓名：旧项目角色')
     await click('选择文件')
     await act(async () => {
-      setActiveProjectSessionContext({ projectId: project.id, projectPath: project.path, leaseId: 'lease-2' })
-      useProjectStore.setState({ currentProject: { ...project, sessionLease: 'lease-2' } })
+      setActiveProjectSessionContext({ projectId: project.id, projectPath: project.path, leaseId: reopenedLease })
+      useProjectStore.setState({ currentProject: { ...project, sessionLease: reopenedLease } })
       resolve({ success: true, content: '旧项目内容' })
     })
     await click('粘贴 / 导入角色卡')
@@ -131,6 +133,7 @@ describe('角色卡导入入口', () => {
     invoke.mockImplementation((channel: string) => Promise.resolve(channel === 'dialog:select-knowledge-files'
       ? [{ grantId: 'grant', displayName: '角色.txt' }]
       : { success: true, content: '姓名：林舟' }))
+    await paste('姓名：林舟')
     await click('选择文件')
     expect(document.body.textContent).toContain('角色.txt')
     expect(start).not.toHaveBeenCalled()
@@ -147,5 +150,29 @@ describe('角色卡导入入口', () => {
     await click('粘贴 / 导入角色卡')
     expect(document.body.textContent).not.toContain('角色.txt')
     expect(document.querySelector('textarea')?.value).toBe('')
+  })
+
+  it('旧任务完成时不会清空重挂载后编辑的新草稿', async () => {
+    let resolveRun!: (runId: string) => void
+    start.mockImplementation(() => new Promise(resolve => { resolveRun = resolve }))
+    invoke.mockImplementation((channel: string) => Promise.resolve(channel === 'dialog:select-knowledge-files'
+      ? [{ grantId: 'grant', displayName: '新角色.txt' }]
+      : { success: true, content: '姓名：林舟' }))
+    await paste('姓名：旧角色')
+    await click('AI 提取并预览')
+    await click('发送并提取')
+    expect(start).toHaveBeenCalledOnce()
+
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await act(async () => root.render(<CharacterCardImportButton projectKey={project.path} />))
+    await click('粘贴 / 导入角色卡')
+    await paste('姓名：新角色')
+    await click('选择文件')
+
+    useWorkflowStore.setState({ history: [{ id: 'completed-run', status: 'completed' } as ReturnType<typeof useWorkflowStore.getState>['history'][number]] })
+    await act(async () => resolveRun('completed-run'))
+    await vi.waitFor(() => expect(document.querySelector('textarea')?.value).toBe('姓名：新角色'))
+    expect(document.body.textContent).toContain('新角色.txt')
   })
 })
