@@ -241,6 +241,7 @@ export default function CodeMirrorEditor({
         {
           key: 'Tab',
           run: (target) => {
+            if (target.state.readOnly) return false
             // 插入两个 em 空格（U+2003）= 2em = 标准中文首行缩进两字符宽
             // 使用 \u2003 而非 \u3000（全角空格），因为 em 空格在任何 Unicode 字体下
             // 都精确等于 1em，不依赖 CJK 字体加载
@@ -437,6 +438,7 @@ export default function CodeMirrorEditor({
             theme={cmTheme}
             extensions={extensions}
             readOnly={!editable}
+            editable={editable}
             basicSetup={cmBasicSetup}
             onUpdate={handleUpdate}
           />
@@ -444,7 +446,7 @@ export default function CodeMirrorEditor({
       </div>
 
       {/* Bubble Menu */}
-      {bubbleOpen && bubblePos.top !== 0 && (
+      {bubbleOpen && (editable || aiResult !== null) && bubblePos.top !== 0 && (
         <div
           className="fixed z-50 flex items-center gap-0.5 p-1 rounded-xl border select-none shadow-xl transform -translate-x-1/2 -translate-y-full"
           style={{
