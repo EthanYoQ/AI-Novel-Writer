@@ -30,6 +30,11 @@ import {
 } from '../project-session-gate'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectSessionContext } from '../../shared/project-session-context'
+import {
+  hasVisiblePartialSynopsisMarker,
+  isRecoverableSynopsisCheckpoint,
+  isUsableSynopsisCheckpoint,
+} from '../../services/workflows/commands/architecture.command'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -48,6 +53,9 @@ const ARCH_FILES: Array<{
     { key: 'synopsis', fileName: 'synopsis.md', labelZh: '情节大纲', labelEn: 'Plot outline', iconName: 'map', descZh: '结构推进 · 转折节奏 · 伏笔闭环', descEn: 'Story progression · turning points · setup and payoff' },
   ]
 
+/** 续批按钮默认的每批章数上限（可在弹窗内调整，避免一次请求剩余全部章节）。 */
+const CONTINUATION_BATCH_SPAN = 20
+
 /** 故事架构编辑器 — 显示四个架构文件状态，并提供 AI 生成入口 */
 export default function WorldBuildingEditor({ projectKey }: { projectKey: string }) {
   // ✅ 精确订阅，避免 novelConfig 等变化导致不必要的 loadStatus 重建
@@ -56,6 +64,12 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const projectMatches = currentProject?.path === projectKey
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
+  const [synopsisIncomplete, setSynopsisIncomplete] = useState(false)
+  const [synopsisRecoveryFailed, setSynopsisRecoveryFailed] = useState(false)
+  const [synopsisCoveredTo, setSynopsisCoveredTo] = useState<number>(0)
+  const [synopsisTotalChapters, setSynopsisTotalChapters] = useState<number>(0)
+  const [synopsisBusy, setSynopsisBusy] = useState(false)
+  const [pendingSynopsisRange, setPendingSynopsisRange] = useState<{ from: number; to: number } | null>(null)
   const [loading, setLoading] = useState(true)
   const [showArchDialog, setShowArchDialog] = useState(false)
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
@@ -76,6 +90,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       archStatusRequestGate.current.begin()
       setArchStatus({})
       setWordCounts({})
+      setSynopsisIncomplete(false)
+      setSynopsisRecoveryFailed(false)
+      setSynopsisCoveredTo(0)
+      setSynopsisTotalChapters(0)
       setLoading(false)
       return
     }
@@ -87,6 +105,47 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       'db:project-core-get',
       projectPath,
     )
+    // 情节大纲状态：中断可断点续写；或部分覆盖可分批续写（covered_to < total）
+    let interrupted = false
+    let recoveryFailed = false
+    let coveredTo = 0
+    const dbSynopsis = core?.synopsis || ''
+    const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
+    const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US'
+      ? 'en-US'
+      : 'zh-CN'
+    const visiblyPartial = hasVisiblePartialSynopsisMarker(dbSynopsis)
+    try {
+      const partialResult = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:read-json',
+        `${projectPath}/.vela/partial_arch.json`,
+        projectPath,
+      )
+      const partial = partialResult?.success === true
+        ? (partialResult as { data?: Record<string, unknown> }).data
+        : undefined
+      const checkpointUsable = isUsableSynopsisCheckpoint(
+        partial,
+        dbSynopsis,
+        writingLanguage,
+        totalChapters,
+      )
+      interrupted = checkpointUsable && isRecoverableSynopsisCheckpoint(
+        partial,
+        dbSynopsis,
+        writingLanguage,
+        totalChapters,
+      )
+      recoveryFailed = visiblyPartial && !checkpointUsable
+      coveredTo = checkpointUsable && Number(partial?.synopsis_covered_to) > 0
+        ? Number(partial?.synopsis_covered_to)
+        : 0
+    } catch {
+      interrupted = false
+      recoveryFailed = visiblyPartial
+      coveredTo = 0
+    }
     const status: Record<string, boolean> = {
       premise: (core?.premise?.length ?? 0) > 50,
       characters: rosterSnapshot?.status === 'ready',
@@ -105,6 +164,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     ) return
     setArchStatus(status)
     setWordCounts(counts)
+    setSynopsisIncomplete(interrupted && Boolean(status.synopsis))
+    setSynopsisRecoveryFailed(recoveryFailed && Boolean(status.synopsis))
+    setSynopsisCoveredTo(coveredTo)
+    setSynopsisTotalChapters(totalChapters)
     setLoading(false)
     // ✅ 只依赖 path 字符串，避免 novelConfig 等变化导致 loadStatus 重建
   }, [currentProject, projectKey, projectMatches, rosterSnapshot])
@@ -200,7 +263,11 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   }
 
   /** 确认后启动架构工作流 */
-  const handleConfirm = async (selectedSteps: ArchStepKey[], stepGuidance: Record<string, string>) => {
+  const handleConfirm = async (
+    selectedSteps: ArchStepKey[],
+    stepGuidance: Record<string, string>,
+    synopsisRange?: { from: number; to: number },
+  ) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation was not started.'))
     if (!isProjectSessionCurrent(projectSession)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation was not started.'))
@@ -208,7 +275,50 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       workflow: 'generate_architecture',
       selectedSteps,
       stepGuidance,
+      synopsisRange,
     }, projectSession)
+  }
+
+  /** 从上次输出长度中断的检查点继续生成情节大纲（断点续写当前批） */
+  const handleResumeSynopsis = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    if (!isProjectSessionCurrent(projectSession) || synopsisBusy) return
+    setSynopsisBusy(true)
+    try {
+      await launchCreativeWorkflow({
+        workflow: 'generate_architecture',
+        selectedSteps: ['synopsis'],
+        resumeSynopsis: true,
+      }, projectSession)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const { toast } = await import('../ui/Toast')
+      toast.error(text(`续写启动失败：${detail}`, `Failed to start the continuation: ${detail}`))
+    } finally {
+      setSynopsisBusy(false)
+    }
+  }
+
+  /** 续批入口：打开生成弹窗并预填下一批范围（从 coveredTo+1 起，默认带本批上限，
+   * 上限可在弹窗内调整）。避免一次请求剩余全部章节再次触发超长输出。 */
+  const handleContinueOutlineBatch = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    if (!isProjectSessionCurrent(projectSession)) return
+    const from = synopsisCoveredTo + 1
+    if (from > synopsisTotalChapters || synopsisTotalChapters <= 0) return
+    setPendingSynopsisRange({
+      from,
+      to: Math.min(synopsisTotalChapters, from + CONTINUATION_BATCH_SPAN - 1),
+    })
+    setShowArchDialog(true)
+  }
+
+  /** 打开普通「AI 生成架构」入口（不携带续批预填）。 */
+  const openGenerateDialog = () => {
+    setPendingSynopsisRange(null)
+    setShowArchDialog(true)
   }
 
   if (!projectMatches) {
@@ -234,7 +344,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     )
   }
 
-  const generatedCount = ARCH_FILES.filter(f => archStatus[f.key]).length
+  const generatedCount = ARCH_FILES.filter(f => (
+    archStatus[f.key] && !(f.key === 'synopsis' && synopsisRecoveryFailed)
+  )).length
   const rosterPresentation = getCharacterRosterRepairPresentation(
     rosterSnapshot,
     text,
@@ -271,7 +383,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
           <Button
             variant="ai"
             size="sm"
-            onClick={() => setShowArchDialog(true)}
+            onClick={openGenerateDialog}
             title={text('AI 生成故事架构（选择要生成的步骤）', 'Generate story architecture (choose steps to generate)')}
           >
             <Sparkles size={12} />
@@ -284,6 +396,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {ARCH_FILES.map(f => {
           const generated = archStatus[f.key]
+          const synopsisNeedsRecovery = f.key === 'synopsis' && synopsisRecoveryFailed
           const words = wordCounts[f.key] ?? 0
           const isCharacters = f.key === 'characters'
           const rosterNeedsAttention = isCharacters && rosterPresentation
@@ -295,7 +408,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
             ? 'var(--color-error, #ef4444)'
             : rosterNeedsAttention
               ? 'var(--color-warning)'
-            : generated
+            : synopsisNeedsRecovery
+              ? 'var(--color-warning)'
+              : generated
               ? 'var(--color-success)'
               : 'var(--color-border)'
           return (
@@ -317,7 +432,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
               >
                 {/* 状态图标 */}
                 {generated
-                  ? <CheckCircle2 size={18} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
+                  ? synopsisNeedsRecovery
+                    ? <AlertTriangle size={18} style={{ flexShrink: 0, color: 'var(--color-warning)' }} />
+                    : <CheckCircle2 size={18} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
                   : <Circle size={18} style={{ flexShrink: 0, color: 'var(--color-text-muted)' }} />
                 }
 
@@ -372,12 +489,73 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                     </>
                   ) : generated ? (
                     <>
-                      <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-[var(--color-success-text)]">
-                        {text('已生成', 'Generated')}
-                      </span>
+                      {f.key === 'synopsis' && synopsisRecoveryFailed ? (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                          {text('不完整 · 检查点不可恢复', 'Incomplete · checkpoint unavailable')}
+                        </span>
+                      ) : f.key === 'synopsis' && synopsisIncomplete ? (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                          {text('不完整 · 已存部分', 'Incomplete · partial saved')}
+                        </span>
+                      ) : f.key === 'synopsis' && synopsisCoveredTo > 0 && synopsisCoveredTo < synopsisTotalChapters ? (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                          {text(`已覆盖至第 ${synopsisCoveredTo} 章 · 待续批`, `Covered to ch. ${synopsisCoveredTo} · pending`)}
+                        </span>
+                      ) : (
+                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-[var(--color-success-text)]">
+                          {text('已生成', 'Generated')}
+                        </span>
+                      )}
                       <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
                         {words.toLocaleString()} {text('字符', 'characters')}
                       </span>
+                      {f.key === 'synopsis' && synopsisIncomplete && !loading && (
+                        <Button
+                          size="sm"
+                          disabled={synopsisBusy}
+                          className="gap-1.5 mt-0.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm hover:from-amber-600 hover:to-orange-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleResumeSynopsis()
+                          }}
+                          title={text(
+                            '上次生成被输出长度中断，已完成部分已保存。点击后 AI 从断点继续生成当前批次。',
+                            'The previous run stopped at the output length limit and the completed part was saved. Click to continue the current batch from the break point.',
+                          )}
+                        >
+                          {synopsisBusy
+                            ? <RefreshCw size={12} className="animate-spin opacity-90" />
+                            : <RefreshCw size={12} className="opacity-90" />
+                          }
+                          {synopsisBusy
+                            ? text('续写中...', 'Resuming...')
+                            : text('断点续写大纲', 'Continue outline')}
+                        </Button>
+                      )}
+                      {f.key === 'synopsis' && !synopsisIncomplete && !synopsisRecoveryFailed
+                        && synopsisCoveredTo > 0 && synopsisCoveredTo < synopsisTotalChapters && !loading && (
+                        <Button
+                          size="sm"
+                          disabled={synopsisBusy}
+                          className="gap-1.5 mt-0.5 bg-gradient-to-r from-indigo-500 to-blue-500 text-white shadow-sm hover:from-indigo-600 hover:to-blue-600 border-none hover:shadow hover:-translate-y-[0.5px] transition-all"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleContinueOutlineBatch()
+                          }}
+                          title={text(
+                            `从第 ${synopsisCoveredTo + 1} 章起继续生成剩余章节（已确认的第 1–${synopsisCoveredTo} 章保持不变）。`,
+                            `Continue generating the remaining chapters from chapter ${synopsisCoveredTo + 1} (confirmed chapters 1-${synopsisCoveredTo} stay unchanged).`,
+                          )}
+                        >
+                          {synopsisBusy
+                            ? <RefreshCw size={12} className="animate-spin opacity-90" />
+                            : <RefreshCw size={12} className="opacity-90" />
+                          }
+                          {synopsisBusy
+                            ? text('生成中...', 'Generating...')
+                            : text(`续批（第 ${synopsisCoveredTo + 1} 章起）`, `Continue (ch. ${synopsisCoveredTo + 1}+)`)}
+                        </Button>
+                      )}
                     </>
                   ) : (
                     <span
@@ -424,6 +602,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
         isOpen={showArchDialog}
         onClose={() => setShowArchDialog(false)}
         archStatus={archStatus}
+        initialSynopsisRange={pendingSynopsisRange}
         onConfirm={handleConfirm}
       />
     </div>

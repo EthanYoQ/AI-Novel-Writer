@@ -222,6 +222,84 @@ describe('workflow launch dialogs', () => {
     await expect.element(page.getByRole('dialog')).toBeVisible()
   })
 
+  it('defaults a large-book synopsis batch to chapters 1-20', async () => {
+    useProjectStore.setState({
+      currentProject: {
+        ...project,
+        novelConfig: { ...project.novelConfig, totalChapters: 100 },
+      } as never,
+    })
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    await act(async () => root.render(
+      <ArchitectureConfirmDialog
+        isOpen
+        onClose={vi.fn()}
+        archStatus={{ premise: true, characters: true, worldbuilding: true, synopsis: false }}
+        initialSelectedSteps={['synopsis']}
+        onConfirm={onConfirm}
+      />,
+    ))
+
+    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的起始章' })).toHaveValue(1)
+    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(20)
+    await act(async () => page.getByRole('button', { name: /确认生成/ }).click())
+
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledWith(
+      ['synopsis'],
+      {},
+      { from: 1, to: 20 },
+    ))
+  })
+
+  it('preserves the stored continuation range when reopening the synopsis dialog', async () => {
+    useProjectStore.setState({
+      currentProject: {
+        ...project,
+        novelConfig: { ...project.novelConfig, totalChapters: 100 },
+      } as never,
+    })
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    await act(async () => root.render(
+      <ArchitectureConfirmDialog
+        isOpen
+        onClose={vi.fn()}
+        archStatus={{ premise: true, characters: true, worldbuilding: true, synopsis: true }}
+        initialSelectedSteps={['synopsis']}
+        initialSynopsisRange={{ from: 21, to: 40 }}
+        onConfirm={onConfirm}
+      />,
+    ))
+
+    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的起始章' })).toHaveValue(21)
+    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(40)
+    await act(async () => page.getByRole('button', { name: /确认生成/ }).click())
+
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledWith(
+      ['synopsis'],
+      {},
+      { from: 21, to: 40 },
+    ))
+  })
+
+  it.each(['0', '-1', '1.5'])('rejects non-empty invalid synopsis range value %s', async invalidFrom => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    await act(async () => root.render(
+      <ArchitectureConfirmDialog
+        isOpen
+        onClose={vi.fn()}
+        archStatus={{ premise: true, characters: true, worldbuilding: true, synopsis: false }}
+        initialSelectedSteps={['synopsis']}
+        onConfirm={onConfirm}
+      />,
+    ))
+
+    await act(async () => page.getByRole('spinbutton', { name: '本次生成范围的起始章' }).fill(invalidFrom))
+    await act(async () => page.getByRole('button', { name: /确认生成/ }).click())
+
+    await expect.element(page.getByText(/情节大纲范围无效/)).toBeVisible()
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
   it('restores missing architecture steps after the controlled dialog closes and reopens', async () => {
     const onClose = vi.fn()
     const onConfirm = vi.fn().mockResolvedValue(undefined)

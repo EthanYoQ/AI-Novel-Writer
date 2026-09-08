@@ -70,6 +70,25 @@ export interface ProjectCoreData {
     characterStates: string
 }
 
+export type ProjectCoreSynopsisExpected = Pick<ProjectCoreData,
+    | 'synopsis'
+    | 'premise'
+    | 'charactersArch'
+    | 'worldbuilding'
+    | 'genre'
+    | 'totalChapters'
+    | 'wordsPerChapter'
+    | 'writingLanguage'
+    | 'plotStructure'
+    | 'narrativePov'
+    | 'globalGuidance'
+>
+
+export interface ProjectCoreSynopsisCommitRequest {
+    synopsis: string
+    expected: ProjectCoreSynopsisExpected
+}
+
 /** 数据库行 → 前端数据 */
 function rowToData(row: ProjectCoreRow): ProjectCoreData {
     return {
@@ -188,6 +207,42 @@ export class ProjectCoreRepository {
         db.prepare(`
       UPDATE project_core SET ${setClauses.join(', ')} WHERE id = ?
     `).run(...values)
+    }
+
+    static commitSynopsis(request: ProjectCoreSynopsisCommitRequest): boolean {
+        const db = getProjectDb()
+        if (!db) throw new Error('项目数据库未打开')
+        const { expected } = request
+        const result = db.prepare(`
+          UPDATE project_core
+          SET synopsis = ?, updated_at = datetime('now')
+          WHERE id = 'main'
+            AND synopsis = ?
+            AND premise = ?
+            AND characters_arch = ?
+            AND worldbuilding = ?
+            AND genre = ?
+            AND total_chapters = ?
+            AND words_per_chapter = ?
+            AND CASE WHEN writing_language = 'en-US' THEN 'en-US' ELSE 'zh-CN' END = ?
+            AND plot_structure = ?
+            AND narrative_pov = ?
+            AND global_guidance = ?
+        `).run(
+            request.synopsis,
+            expected.synopsis,
+            expected.premise,
+            expected.charactersArch,
+            expected.worldbuilding,
+            expected.genre,
+            expected.totalChapters,
+            expected.wordsPerChapter,
+            expected.writingLanguage,
+            expected.plotStructure,
+            expected.narrativePov,
+            expected.globalGuidance,
+        )
+        return result.changes === 1
     }
 
     /** 清空由架构/导入/AI 分析生成的创作字段，保留项目名、章节规模与基础偏好 */

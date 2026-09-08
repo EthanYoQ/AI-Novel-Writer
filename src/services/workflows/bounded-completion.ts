@@ -75,6 +75,16 @@ export interface BoundedCompletionRequest {
   isCancelled?: () => boolean
   redactVisibleText?: (text: string) => string
   mergeVisibleText?: (existing: string, addition: string) => string
+  /**
+   * Called with the latest merged visible content just before a failure that
+   * still leaves recoverable text behind (automatic continuations exhausted,
+   * no-progress stop, or a mechanically-incomplete stop). Callers may persist
+   * the partial result so a later user-initiated continuation can resume from
+   * where the output actually stopped. Not called for cancellations,
+   * content-filter stops, or unknown terminal states where the visible text is
+   * not trustworthy.
+   */
+  onInterrupted?: (content: string) => void
 }
 
 /** Remove hidden reasoning and malformed thinking-tag remnants before any continuation context is composed. */
@@ -468,24 +478,35 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
     assertNotCancelled(uiLocale, request.isCancelled)
     if (finishReason !== 'length') throw incompleteCompletionError(finishReason, uiLocale)
     if (continuationCount >= request.maxContinuations) {
+      request.onInterrupted?.(content)
       throw continuationLimitExceededError(request.maxContinuations, uiLocale)
     }
 
-    const continuationPrompt = request.mode === 'replace-structured-output'
-      ? buildStructuredReplacementPrompt(
-          request.originalPrompt,
-          content,
-          request.writingLanguage,
-        )
-      : buildContinuationPrompt(
-          request.mode,
-          request.originalPrompt,
-          content,
-          continuationPromptCharBudget(uiLocale, request.promptBudget),
-          request.writingLanguage,
-          uiLocale,
-        )
-    const next = await request.requestContinuation(continuationPrompt)
+    // 构建续写提示或等待续写响应期间失败时，上一轮已收到的可见内容仍然
+    // 是可恢复的部分成果：先交给 onInterrupted 再抛出，避免调用方把
+    // 「首轮有效、续写请求失败」误判为零成果。
+    let continuationPrompt: string
+    let next: BoundedCompletion
+    try {
+      continuationPrompt = request.mode === 'replace-structured-output'
+        ? buildStructuredReplacementPrompt(
+            request.originalPrompt,
+            content,
+            request.writingLanguage,
+          )
+        : buildContinuationPrompt(
+            request.mode,
+            request.originalPrompt,
+            content,
+            continuationPromptCharBudget(uiLocale, request.promptBudget),
+            request.writingLanguage,
+            uiLocale,
+          )
+      next = await request.requestContinuation(continuationPrompt)
+    } catch (error) {
+      request.onInterrupted?.(content)
+      throw error
+    }
     assertNotCancelled(uiLocale, request.isCancelled)
     continuationCount += 1
     const nextVisible = redact(next.content)
@@ -494,6 +515,7 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
     } else {
       const merged = merge(content, nextVisible)
       if (visibleProseUnitCount(merged) <= visibleProseUnitCount(content)) {
+        request.onInterrupted?.(content)
         throw noVisibleContinuationProgressError(uiLocale)
       }
       content = merged
@@ -502,6 +524,16 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
   }
 
   assertNotCancelled(uiLocale, request.isCancelled)
-  if (request.mode === 'append-visible-text') assertMechanicallyCompleteVisibleText(content, uiLocale)
+  if (request.mode === 'append-visible-text') {
+    try {
+      assertMechanicallyCompleteVisibleText(content, uiLocale)
+    } catch (error) {
+      // The merged text may be a usable partial document even when it cannot
+      // be mechanically confirmed as complete (e.g. a leftover truncation
+      // marker). Hand it back before failing closed.
+      request.onInterrupted?.(content)
+      throw error
+    }
+  }
   return content
 }

@@ -292,6 +292,93 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   }
 
   /**
+   * 追加型文本续写助手：以 seedText（可为空）为基线，在单个模型租约内反复
+   * 请求直到 stop 或自动续写耗尽。seedText 非空时等价于「断点续写」——
+   * 不重发已有内容，只让模型从种子末尾自然追加。自动续写耗尽、无进展或
+   * 机械不完整等仍可能产出可见文本的失败，会在抛出前调用
+   * onPartialAvailable(mergedText)，供调用方把已完成部分落盘后让用户从
+   * 断点手动续写。
+   */
+  protected async callLLMWithAppendContinuation(
+    options: {
+      taskPrompt: string
+      systemPrompt: string
+      callbacks: StepCallbacks
+      context: WorkflowContext
+      llmOptions?: WorkflowLLMOptions
+      /** 已完成可见文本种子；为空时先发起一次全新请求。 */
+      seedText?: string
+      /** 自动续写轮数上限（0–7）。 */
+      maxContinuations: number
+      /** 部分结果回调：在失败抛出前携带当前合并文本。 */
+      onPartialAvailable?: (mergedText: string) => void
+      /** 进度日志用的任务描述。 */
+      taskLabel?: string
+    },
+  ): Promise<string> {
+    const uiText = (zhCNText: string, enUSText: string) => workflowUiText(options.context, zhCNText, enUSText)
+    const seed = options.seedText?.trim() || ''
+    let continuationCount = 0
+    let initial: { content: string; finishReason: LLMFinishReason }
+    let initialReceipt: LLMCompletion['receipt'] | undefined
+    if (seed) {
+      initial = { content: seed, finishReason: 'length' }
+    } else {
+      const first = await this.callLLMResult(
+        options.taskPrompt,
+        options.systemPrompt,
+        options.callbacks,
+        options.llmOptions,
+        options.context,
+      )
+      initial = first
+      initialReceipt = first.receipt
+    }
+    const prefix = options.taskLabel ? `${options.taskLabel} ` : ''
+    options.callbacks.log(uiText(
+      `  ${prefix}初始响应：finishReason=${initial.finishReason}`,
+      `  ${prefix}initial response: finishReason=${initial.finishReason}`,
+    ))
+    return completeBoundedCompletion({
+      initial,
+      mode: 'append-visible-text',
+      maxContinuations: options.maxContinuations,
+      originalPrompt: options.taskPrompt,
+      writingLanguage: workflowWritingLanguage(options.context),
+      uiLocale: options.context.uiLocale ?? 'zh-CN',
+      promptBudget: seed
+        ? undefined
+        : {
+            contextWindowTokens: initialReceipt?.capabilities?.contextWindowTokens,
+            maxOutputTokens: initialReceipt?.budget?.requestedOutputTokens,
+            systemPromptChars: options.systemPrompt.length,
+          },
+      isCancelled: () => options.context.cancelled,
+      redactVisibleText: redactedText => this.stripThinkingTags(redactedText),
+      requestContinuation: async continuationPrompt => {
+        continuationCount += 1
+        options.callbacks.log(uiText(
+          `  自动续写第 ${continuationCount} 轮请求已发起`,
+          `  Automatic continuation request ${continuationCount} started`,
+        ))
+        const next = await this.callLLMResult(
+          continuationPrompt,
+          options.systemPrompt,
+          options.callbacks,
+          options.llmOptions,
+          options.context,
+        )
+        options.callbacks.log(uiText(
+          `  自动续写第 ${continuationCount} 轮响应：finishReason=${next.finishReason}`,
+          `  Automatic continuation response ${continuationCount}: finishReason=${next.finishReason}`,
+        ))
+        return next
+      },
+      onInterrupted: mergedText => options.onPartialAvailable?.(mergedText),
+    })
+  }
+
+  /**
    * Returns partial text together with the provider end state. Commands that
    * have a bounded continuation policy (draft generation) may consume a
    * `length` result; all other workflow commands should use callLLM instead.

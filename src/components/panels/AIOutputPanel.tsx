@@ -22,6 +22,9 @@ import { presentWorkflowFailure } from './ai-output-failure-presentation'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { Locale } from '../../i18n/types'
 import { ipc } from '../../services/ipc-client'
+import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
+import { PLOT_OUTLINE_RESUME_ERROR_CODE } from '../../services/workflows/commands/architecture.command'
+import { toast } from '../ui/Toast'
 
 function runText(locale: Locale, zhCNText: string, enUSText: string): string {
   return locale === 'en-US' ? enUSText : zhCNText
@@ -321,6 +324,33 @@ function ActiveRunView({
   const cancelWorkflow = useWorkflowStore.getState().cancelWorkflow
   const prevLenRef = useRef(0)
 
+  // 情节大纲断点续写：错误码匹配且有可用的项目会话
+  const failedStep = run.steps.find(s => s.status === 'failed')
+  const resumeSynopsisAvailable = run.errorCode === PLOT_OUTLINE_RESUME_ERROR_CODE
+    || failedStep?.errorCode === PLOT_OUTLINE_RESUME_ERROR_CODE
+  const [resumingSynopsis, setResumingSynopsis] = useState(false)
+  const resumePlotOutline = async () => {
+    if (resumingSynopsis || !resumeSynopsisAvailable || !run.projectSession) return
+    const project = useProjectStore.getState().currentProject
+    if (
+      !project
+      || !sameProjectSessionContext(run.projectSession, projectSessionContextFromProject(project))
+    ) return
+    setResumingSynopsis(true)
+    try {
+      await launchCreativeWorkflow({
+        workflow: 'generate_architecture',
+        selectedSteps: ['synopsis'],
+        resumeSynopsis: true,
+      }, run.projectSession)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      toast.error(runText(locale, `续写启动失败：${detail}`, `Failed to start the continuation: ${detail}`))
+    } finally {
+      setResumingSynopsis(false)
+    }
+  }
+
   // 提取当前步骤 + 内容
   const currentStep = run.steps[run.currentStepIndex] || run.steps[0]
   const rawText = currentStep?.result || ''
@@ -433,6 +463,9 @@ function ActiveRunView({
                 && !(currentStep?.result || '').trim()
               }
               locale={locale}
+              resumeSynopsisAvailable={resumeSynopsisAvailable}
+              resumingSynopsis={resumingSynopsis}
+              onResumeSynopsis={() => { void resumePlotOutline() }}
             />
           )}
 
@@ -620,6 +653,9 @@ function WorkflowFailureNotice({
   projectSession,
   isUnpersistedChapterDraft,
   locale,
+  resumeSynopsisAvailable = false,
+  resumingSynopsis = false,
+  onResumeSynopsis,
 }: {
   failureCode?: WorkflowFailureCode
   error?: string
@@ -628,6 +664,10 @@ function WorkflowFailureNotice({
   projectSession: ProjectSessionContext | null
   isUnpersistedChapterDraft: boolean
   locale: 'zh-CN' | 'en-US'
+  /** 情节大纲生成被截断且已完成部分已保存 → 可断点续写。 */
+  resumeSynopsisAvailable?: boolean
+  resumingSynopsis?: boolean
+  onResumeSynopsis?: () => void
 }) {
   const currentProject = useProjectStore(s => s.currentProject)
   const presentation = presentWorkflowFailure(
@@ -698,6 +738,48 @@ function WorkflowFailureNotice({
               ? '此结果属于另一项目会话。请切回该项目后再打开小说配置。'
               : 'This result belongs to another project session. Switch back to that project before opening Novel configuration.'}
           </p>
+        )}
+
+        {/* 断点续写：已完成部分已自动保存，点击后 AI 接着往下写 */}
+        {resumeSynopsisAvailable && (
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={onResumeSynopsis}
+              disabled={!matchesCurrentProject || resumingSynopsis}
+              className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium shadow-sm transition-colors"
+              style={{
+                color: '#fff',
+                backgroundColor: 'var(--color-accent)',
+                border: '1px solid var(--color-accent)',
+                opacity: matchesCurrentProject ? 1 : 0.5,
+                cursor: matchesCurrentProject ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {resumingSynopsis
+                ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+                : <Sparkles size={12} aria-hidden="true" />}
+              {resumingSynopsis
+                ? runText(locale, '正在从断点续写...', 'Resuming from the break point...')
+                : runText(locale, '继续生成情节大纲（断点续写）', 'Continue plot outline (resume)')}
+            </button>
+            <p className="m-0 mt-1.5" style={{ color: 'var(--color-text-muted)' }}>
+              {runText(
+                locale,
+                '已完成的部分已保存为不完整大纲，不会被覆盖；本次将让 AI 接着上次的末尾继续写。',
+                'The completed part is already saved as an incomplete outline and will not be lost; the AI will continue from where it stopped.',
+              )}
+            </p>
+            {!matchesCurrentProject && (
+              <p className="m-0 mt-1" style={{ color: 'var(--color-text-muted)' }}>
+                {runText(
+                  locale,
+                  '此结果属于另一项目会话。请切回该项目后再续写。',
+                  'This result belongs to another project session. Switch back to that project before continuing.',
+                )}
+              </p>
+            )}
+          </div>
         )}
       </div>
     </div>

@@ -5,7 +5,11 @@ import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 
 // 导入所有 Repository
-import { ProjectCoreRepository, ProjectCoreData } from '../repositories/project-core-repository'
+import {
+  ProjectCoreRepository,
+  ProjectCoreData,
+  type ProjectCoreSynopsisCommitRequest,
+} from '../repositories/project-core-repository'
 import { ProjectClearRepository, ProjectClearOptions } from '../repositories/project-clear-repository'
 import {
   BlueprintRepository,
@@ -60,6 +64,7 @@ type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 const MUTATING_DATABASE_CHANNELS = new Set([
   'db:close',
   'db:project-core-update',
+  'db:project-core-synopsis-commit',
   'db:import-global-facts-commit',
   'db:project-clear-generated-data',
   'db:import-run-prepare-inspection',
@@ -160,6 +165,18 @@ export function registerDatabaseController() {
       console.error('[db:project-core-update] 失败:', err)
       return { success: false, error: String(err) }
     }
+  })
+
+  ipcMain.handle('db:project-core-synopsis-commit', async (
+    _event,
+    request: ProjectCoreSynopsisCommitRequest,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    if (!ProjectCoreRepository.commitSynopsis(request)) {
+      return { success: false, error: '项目数据已变化，已拒绝覆盖情节大纲' }
+    }
+    return { success: true }
   })
 
   ipcMain.handle('db:import-global-facts-commit', async (

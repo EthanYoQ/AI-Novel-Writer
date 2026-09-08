@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   captureCurrentSession: vi.fn(),
   projectCoreGet: vi.fn(),
   projectCoreUpdate: vi.fn(),
+  projectCoreCommitSynopsis: vi.fn(),
   projectClearGeneratedData: vi.fn(() => ({ cleared: [] })),
   blueprintGetAll: vi.fn(() => []),
   blueprintUpsert: vi.fn(),
@@ -87,6 +88,7 @@ vi.mock('../../repositories/project-core-repository', () => ({
   ProjectCoreRepository: {
     get: mocks.projectCoreGet,
     update: mocks.projectCoreUpdate,
+    commitSynopsis: mocks.projectCoreCommitSynopsis,
   },
 }))
 
@@ -233,6 +235,25 @@ function blueprint() {
   }
 }
 
+function synopsisCommitRequest() {
+  return {
+    synopsis: 'Replacement outline',
+    expected: {
+      synopsis: 'Original outline',
+      premise: 'Premise v1',
+      charactersArch: 'Characters v1',
+      worldbuilding: 'World v1',
+      genre: 'mystery',
+      totalChapters: 80,
+      wordsPerChapter: 2500,
+      writingLanguage: 'zh-CN' as const,
+      plotStructure: 'three_act',
+      narrativePov: 'third_limited',
+      globalGuidance: 'Keep the reveal private.',
+    },
+  }
+}
+
 beforeAll(() => {
   registerDatabaseController()
 })
@@ -257,6 +278,42 @@ beforeEach(() => {
 })
 
 describe('database controller project context guard', () => {
+  it('commits a synopsis only through the active project session', async () => {
+    const request = synopsisCommitRequest()
+    mocks.projectCoreCommitSynopsis.mockReturnValueOnce(true)
+
+    await expect(handler('db:project-core-synopsis-commit')(
+      {},
+      request,
+      'C:/projects/A',
+    )).resolves.toEqual({ success: true })
+    expect(mocks.projectCoreCommitSynopsis).toHaveBeenCalledWith(request)
+  })
+
+  it('returns the existing structured failure shape when synopsis sources changed', async () => {
+    mocks.projectCoreCommitSynopsis.mockReturnValueOnce(false)
+
+    await expect(handler('db:project-core-synopsis-commit')(
+      {},
+      synopsisCommitRequest(),
+      'C:/projects/A',
+    )).resolves.toEqual({
+      success: false,
+      error: expect.stringContaining('项目数据已变化'),
+    })
+  })
+
+  it('rejects a synopsis commit after the project session switches', async () => {
+    mocks.currentProjectPath = 'C:/projects/B'
+
+    await expect(handler('db:project-core-synopsis-commit')(
+      {},
+      synopsisCommitRequest(),
+      'C:/projects/A',
+    )).resolves.toMatchObject({ success: false })
+    expect(mocks.projectCoreCommitSynopsis).not.toHaveBeenCalled()
+  })
+
   it.each(['zh-CN', 'en-US'] as const)(
     'returns a locale-independent error code for a stale %s author confirmation',
     async (locale) => {
