@@ -24,8 +24,10 @@ import {
 } from '../workflow-utils'
 import type { ChapterInfo } from '../chapter-workflow'
 import type {
+  FinalizedCharacterStateCandidate,
   FinalizedContinuityFact,
   FinalizedContinuityFactCategory,
+  FinalizedSourceIdentity,
 } from '../../../shared/finalized-continuity'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import {
@@ -35,6 +37,7 @@ import {
   workflowWritingLanguage,
 } from '../workflow-project-session'
 import {
+  CHARACTER_STATE_TEXT_FIELDS,
   characterRosterIdentityKey,
   type CharacterRosterCharacterState,
   type CharacterRosterEntry,
@@ -79,15 +82,6 @@ function parseJSON<T>(text: string): T {
 const CONTINUITY_FACT_LIMIT = 12
 const CONTINUITY_STATEMENT_LIMIT = 280
 const CONTINUITY_EVIDENCE_LIMIT = 240
-const CHARACTER_STATE_TEXT_FIELDS = [
-  'location',
-  'powerLevel',
-  'physicalState',
-  'mentalState',
-  'keyItems',
-  'recentEvents',
-] as const satisfies ReadonlyArray<keyof Omit<CharacterRosterCharacterState, 'updatedAtChapter'>>
-
 type CharacterStatePatch = Partial<Pick<CharacterRosterCharacterState, typeof CHARACTER_STATE_TEXT_FIELDS[number]>>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -220,7 +214,6 @@ export function buildFinalizedContinuityFacts(
     .split(/\n+|(?<=[。！？.!?])\s*/u)
     .map(statement => statement.replace(/^\s*(?:[-*•]|\d+[.)、])\s*/u, '').trim())
     .filter(Boolean)
-    .slice(0, CONTINUITY_FACT_LIMIT)
   return statements.flatMap(statement => {
     const factEntities = entities.filter(entity => statement.includes(entity))
     const evidence = evidenceExcerpt(finalizedContent, statement, factEntities)
@@ -233,7 +226,7 @@ export function buildFinalizedContinuityFacts(
           evidence,
         }]
       : []
-  })
+  }).slice(0, CONTINUITY_FACT_LIMIT)
 }
 
 // ===== 后处理步骤构建器 =====
@@ -259,6 +252,8 @@ export function buildFinalizePostProcessSteps(
   finalizedDraftId?: number,
   chapterEntities: readonly string[] = [],
   uiLocale: Locale = 'zh-CN',
+  finalizedSource?: FinalizedSourceIdentity,
+  projectionGeneration?: number,
 ): PostProcessStep[] {
   const steps: PostProcessStep[] = []
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
@@ -324,6 +319,21 @@ export function buildFinalizePostProcessSteps(
       executor: async (callbacks, context) => {
         if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
         if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+        if (
+          finalizedDraftId !== undefined
+          && (
+            !finalizedSource
+            || finalizedSource.draftId !== finalizedDraftId
+            || !Number.isSafeInteger(projectionGeneration)
+            || projectionGeneration! < 0
+          )
+        ) {
+          throw new Error(workflowUiText(
+            context,
+            '定稿连续性投影缺少模型调用前冻结的来源水位',
+            'The finalized continuity projection is missing the source watermark frozen before the model call.',
+          ))
+        }
         const projectSession = requireWorkflowProjectSession(context)
         const writingLanguage = workflowWritingLanguage(context)
         const notesTemplate = await resolvePromptTemplate('generate_chapter_notes', projectSession, writingLanguage)
@@ -356,6 +366,8 @@ export function buildFinalizePostProcessSteps(
               chapterNumber,
               chapterNotes: cleanNotes,
               facts,
+              projectionGeneration: projectionGeneration!,
+              source: finalizedSource!,
             },
             _project.path,
           )
@@ -446,11 +458,33 @@ export function buildFinalizePostProcessSteps(
         generatedCharacterCards = cardsResult
         let updatedCount = 0
         const changedEntries: CharacterRosterEntry[] = []
+        const blockedCandidates: FinalizedCharacterStateCandidate[] = []
         for (const character of allChars) {
           const patch = updatesByName.get(character.name)
           if (!patch) continue
           updatedCount += 1
           const currentState = character.currentState
+          if (!finalizedSource || finalizedSource.draftId !== finalizedDraftId) {
+            throw new Error(workflowUiText(
+              context,
+              '角色状态更新缺少冻结定稿来源收据',
+              'The character-state update is missing its frozen finalization receipt.',
+            ))
+          }
+          // Only fields actually returned by this model call carry this derived receipt.
+          const provenance: NonNullable<CharacterRosterCharacterState['provenance']> = {}
+          for (const field of CHARACTER_STATE_TEXT_FIELDS) {
+            if (!Object.hasOwn(patch, field)) continue
+            provenance[field] = { kind: 'derived', source: finalizedSource }
+            const previousValue = currentState?.[field] ?? ''
+            const previousSource = currentState?.provenance?.[field]
+            const protectedValue = previousSource?.kind === 'author'
+              || previousSource?.kind === 'legacy'
+              || Boolean(previousValue && previousSource?.kind !== 'derived')
+            if (protectedValue && patch[field] !== previousValue) {
+              blockedCandidates.push({ characterName: character.name, field, value: patch[field] ?? '' })
+            }
+          }
           const structuredCharacter = { ...character }
           delete structuredCharacter.legacyRelationshipNotes
           changedEntries.push({
@@ -463,6 +497,7 @@ export function buildFinalizePostProcessSteps(
               keyItems: patch.keyItems ?? currentState?.keyItems ?? '',
               recentEvents: patch.recentEvents ?? currentState?.recentEvents ?? '',
               updatedAtChapter: chapterNumber,
+              provenance,
             },
           })
         }
@@ -477,6 +512,7 @@ export function buildFinalizePostProcessSteps(
               expectedRevision: roster.revision,
               schemaVersion: 1,
               intent: 'chapter_progress',
+              source: finalizedSource,
               // chapter_progress only carries changed state for confirmed
               // characters; it never echoes untouched legacy relationship notes.
               entries: changedEntries,
@@ -490,6 +526,31 @@ export function buildFinalizePostProcessSteps(
               'Character-state updates could not be committed atomically.',
             ))
           }
+          if (blockedCandidates.length > 0) {
+            if (projectionGeneration === undefined) {
+              throw new Error(workflowUiText(
+                context,
+                '角色状态候选缺少连续性投影水位',
+                'The character-state candidates are missing the continuity projection watermark.',
+              ))
+            }
+            const candidateResult = await ipc.invokeWithProjectSession(
+              projectSession,
+              'db:continuity-save-character-state-candidates',
+              {
+                draftId: finalizedDraftId!,
+                chapterNumber,
+                candidates: blockedCandidates,
+                projectionGeneration,
+                source: finalizedSource!,
+              },
+              _project.path,
+            )
+            requireIpcSuccess(candidateResult, text(
+              '保存角色状态原文定位候选',
+              'Save character-state prose locators',
+            ))
+          }
           if (updatedCount > 0) callbacks.log(workflowUiText(
             context,
             `更新角色动态状态: ${updatedCount} 名`,
@@ -498,35 +559,6 @@ export function buildFinalizePostProcessSteps(
         }
       },
     })
-
-  // ─── 步骤 4: 文风自动学习（每5章触发一次）─────────────────────────
-  if (chapterNumber % 5 === 0) {
-    steps.push({
-      key: 'style_analysis',
-      label: text('文风自动学习', 'Automatic style learning'),
-      critical: false,
-      executor: async (callbacks, context) => {
-        if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
-        if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
-        callbacks.log(workflowUiText(
-          context,
-          '触发文风自动学习（每5章一次）...',
-          'Starting automatic style learning (every five chapters)...',
-        ))
-        const { AnalyzeWritingStyleCommand } = await import('./analyze-style.command')
-        await new AnalyzeWritingStyleCommand().execute({
-          step: {} as unknown,
-          context,
-          callbacks,
-        })
-        callbacks.log(workflowUiText(
-          context,
-          '文风分析完成，已更新配置',
-          'Style analysis completed and the configuration was updated.',
-        ))
-      },
-    })
-  }
 
   return steps
 }
@@ -538,6 +570,7 @@ export interface RunFinalizePostProcessParams {
   draftContent: string
   draftId: number
   sourceLabel: string
+  finalizedSource: FinalizedSourceIdentity
   stopOnFailure?: boolean
   onlyFailed?: boolean
   stepKey?: string
@@ -559,6 +592,26 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<PostProcessStatus> {
     const projectSession = requireWorkflowProjectSession(context)
+    const finalizedSource = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:continuity-read-source',
+      this.params.draftId,
+      this.params.project.path,
+    )
+    const frozen = finalizedSource.status === 'valid' ? finalizedSource.snapshot : null
+    if (
+      !frozen
+      || frozen.source.draftId !== this.params.finalizedSource.draftId
+      || frozen.source.finalizationId !== this.params.finalizedSource.finalizationId
+      || frozen.source.chapterNumber !== this.params.finalizedSource.chapterNumber
+      || frozen.source.contentHash !== this.params.finalizedSource.contentHash
+    ) {
+      throw new Error(workflowUiText(
+        context,
+        '定稿正文来源收据已失效，后处理未启动',
+        'The finalized manuscript source receipt is stale, so post-processing was not started.',
+      ))
+    }
     const generation: FinalizePostProcessGeneration = {
       complete: async (builder, stepCallbacks, output, generationContext) => this.callLLM(
         builder.build(),
@@ -578,11 +631,13 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       this.params.project,
       this.params.chapterNumber,
       this.params.chapterTitle,
-      this.params.draftContent,
+      frozen.content,
       generation,
       this.params.draftId,
       this.params.chapterEntities,
       workflowUiLocale(context),
+      this.params.finalizedSource,
+      frozen.projectionGeneration,
     )
     const steps = this.params.stepKey
       ? allSteps.filter(step => step.key === this.params.stepKey)
@@ -712,6 +767,12 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
       chapterTitle: snapshot.chapterTitle,
       draftContent: refinedDraftText,
       draftId: commit.draftId,
+      finalizedSource: {
+        draftId: commit.draftId,
+        finalizationId: commit.finalizationId,
+        chapterNumber: snapshot.chapterNumber,
+        contentHash: commit.contentHash,
+      },
       sourceLabel,
       stopOnFailure: this.params.stopOnPostProcessFailure,
       chapterEntities,

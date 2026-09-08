@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 
 import { getProjectDb } from '../../database'
@@ -101,6 +102,12 @@ beforeEach(() => {
       chapter_number INTEGER NOT NULL,
       status TEXT NOT NULL
     );
+    CREATE TABLE finalization_outbox (
+      finalization_id TEXT PRIMARY KEY,
+      draft_id INTEGER NOT NULL UNIQUE,
+      chapter_number INTEGER NOT NULL,
+      content_hash TEXT NOT NULL
+    );
   `)
   ensureCharacterRosterSchema(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
@@ -109,6 +116,27 @@ beforeEach(() => {
 afterEach(() => {
   db.close()
 })
+
+function finalizedSource(draftId: number, chapterNumber: number) {
+  return {
+    draftId,
+    finalizationId: `finalization-${draftId}`,
+    chapterNumber,
+    contentHash: String(draftId).padStart(64, '0'),
+  }
+}
+
+function insertDraft(draftId: number, chapterNumber: number, status: 'draft' | 'finalized'): void {
+  db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)')
+    .run(draftId, chapterNumber, status)
+  if (status === 'finalized') {
+    const source = finalizedSource(draftId, chapterNumber)
+    db.prepare(`
+      INSERT INTO finalization_outbox (finalization_id, draft_id, chapter_number, content_hash)
+      VALUES (?, ?, ?, ?)
+    `).run(source.finalizationId, source.draftId, source.chapterNumber, source.contentHash)
+  }
+}
 
 function rawRosterStorage() {
   return {
@@ -128,6 +156,43 @@ function rawRosterStorage() {
 }
 
 describe('CharacterRosterRepository public read/commit seam', () => {
+  it('keeps a pre-provenance ready roster ready after adding the empty provenance column', () => {
+    const request = commitRequest({
+      entries: commitRequest().entries.map((entry, index) => index === 0
+        ? {
+            ...entry,
+            currentState: {
+              location: '旧港口',
+              powerLevel: '学徒',
+              physicalState: '轻伤',
+              mentalState: '警觉',
+              keyItems: '旧剑',
+              recentEvents: '刚抵达港口',
+              updatedAtChapter: 1,
+            },
+          }
+        : entry),
+    })
+    const committed = CharacterRosterRepository.commit(request)
+    const legacyEntries = committed.snapshot.entries.map((entry) => {
+      if (!entry.currentState) return entry
+      const currentState = { ...entry.currentState }
+      delete currentState.provenance
+      return { ...entry, currentState }
+    })
+    const legacyFactHash = createHash('sha256')
+      .update(JSON.stringify(legacyEntries), 'utf8')
+      .digest('hex')
+    db.prepare("UPDATE character_roster_meta SET fact_hash = ? WHERE id = 'main'").run(legacyFactHash)
+    db.exec('ALTER TABLE characters DROP COLUMN cs_provenance')
+
+    ensureCharacterRosterSchema(db)
+
+    const upgraded = CharacterRosterRepository.read()
+    expect(upgraded).toMatchObject({ status: 'ready', factHash: legacyFactHash })
+    expect(upgraded.entries[0]?.currentState).not.toHaveProperty('provenance')
+  })
+
   it('normalizes a finite numeric model age without widening other roster fields', () => {
     const base = commitRequest()
     const numericAge = {
@@ -939,7 +1004,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
 
   it('rejects chapter-progress additions and canonical duplicate names at the repository boundary', () => {
     const initial = CharacterRosterRepository.commit(commitRequest())
-    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(2, 2, 'finalized')
+    insertDraft(2, 2, 'finalized')
     const existing = initial.snapshot.entries[0]
     const unknown = {
       ...existing,
@@ -961,6 +1026,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       expectedRevision: initial.revision,
       schemaVersion: 1,
       intent: 'chapter_progress',
+      source: finalizedSource(2, 2),
       entries: [unknown],
     })).toThrow(/不能创建未知角色/)
     expect(CharacterRosterRepository.read()).toEqual(initial.snapshot)
@@ -970,6 +1036,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       expectedRevision: initial.revision,
       schemaVersion: 1,
       intent: 'chapter_progress',
+      source: finalizedSource(2, 2),
       entries: [
         { ...existing, relationships: [] },
         { ...existing, name: ` ${existing.name.toLocaleUpperCase('en-US')} `, relationships: [] },
@@ -995,8 +1062,8 @@ describe('CharacterRosterRepository public read/commit seam', () => {
         },
       })),
     })
-    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(2, 2, 'finalized')
-    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(3, 3, 'finalized')
+    insertDraft(2, 2, 'finalized')
+    insertDraft(3, 3, 'finalized')
     const existing = initial.snapshot.entries[0]
 
     expect(() => CharacterRosterRepository.commit({
@@ -1004,6 +1071,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       expectedRevision: initial.revision,
       schemaVersion: 1,
       intent: 'chapter_progress',
+      source: finalizedSource(2, 2),
       entries: [{
         ...existing,
         relationships: [],
@@ -1012,7 +1080,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
     })).toThrow(/较新章节更新/)
   })
 
-  it('repairs a future character-state chapter when no such finalized draft exists', () => {
+  it('preserves a non-empty legacy state instead of reclassifying it as derived', () => {
     const base = commitRequest()
     const initial = CharacterRosterRepository.commit({
       ...base,
@@ -1029,7 +1097,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
         },
       })),
     })
-    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(2, 2, 'finalized')
+    insertDraft(2, 2, 'finalized')
     const existing = initial.snapshot.entries[0]
 
     const receipt = CharacterRosterRepository.commit({
@@ -1037,15 +1105,24 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       expectedRevision: initial.revision,
       schemaVersion: 1,
       intent: 'chapter_progress',
+      source: finalizedSource(2, 2),
       entries: [{
         ...existing,
         relationships: [],
-        currentState: { ...existing.currentState!, location: '第二章现场', updatedAtChapter: 2 },
+        currentState: {
+          ...existing.currentState!,
+          location: '第二章现场',
+          updatedAtChapter: 2,
+          provenance: {
+            ...existing.currentState!.provenance,
+            location: { kind: 'derived', source: finalizedSource(2, 2) },
+          },
+        },
       }],
     })
 
     expect(receipt.snapshot.entries.find(entry => entry.name === existing.name)?.currentState)
-      .toMatchObject({ location: '第二章现场', updatedAtChapter: 2 })
+      .toMatchObject({ location: '受污染的未来状态', updatedAtChapter: 3 })
   })
 
   it('rejects chapter progress whose candidate chapter is not finalized', () => {
@@ -1065,7 +1142,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
         },
       })),
     })
-    db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)').run(2, 2, 'draft')
+    insertDraft(2, 2, 'draft')
     const existing = initial.snapshot.entries[0]
 
     expect(() => CharacterRosterRepository.commit({
@@ -1073,11 +1150,68 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       expectedRevision: initial.revision,
       schemaVersion: 1,
       intent: 'chapter_progress',
+      source: finalizedSource(2, 2),
       entries: [{
         ...existing,
         relationships: [],
         currentState: { ...existing.currentState!, location: '第二章现场', updatedAtChapter: 2 },
       }],
-    })).toThrow(/尚未定稿/)
+    })).toThrow(/来源已失效/)
+  })
+
+  it('preserves an author field while accepting a derived patch for a different empty field', () => {
+    const initial = CharacterRosterRepository.commit(commitRequest())
+    const authored = CharacterRosterRepository.commit({
+      operationId: 'manual-state-source',
+      expectedRevision: initial.revision,
+      schemaVersion: 1,
+      intent: 'manual_edit',
+      entries: initial.snapshot.entries.map((entry, index) => index === 0 ? {
+        ...entry,
+        currentState: {
+          location: '作者设定的山庄',
+          powerLevel: '',
+          physicalState: '',
+          mentalState: '',
+          keyItems: '',
+          recentEvents: '',
+          updatedAtChapter: 1,
+        },
+      } : entry),
+    })
+    insertDraft(2, 2, 'finalized')
+    const existing = authored.snapshot.entries[0]!
+    const source = finalizedSource(2, 2)
+
+    const derived = CharacterRosterRepository.commit({
+      operationId: 'derived-state-source',
+      expectedRevision: authored.revision,
+      schemaVersion: 1,
+      intent: 'chapter_progress',
+      source,
+      entries: [{
+        ...existing,
+        currentState: {
+          ...existing.currentState!,
+          location: '模型试图覆盖的码头',
+          mentalState: '警觉',
+          updatedAtChapter: 2,
+          provenance: {
+            location: { kind: 'derived', source },
+            mentalState: { kind: 'derived', source },
+          },
+        },
+      }],
+    })
+
+    expect(derived.snapshot.entries[0]?.currentState).toMatchObject({
+      location: '作者设定的山庄',
+      mentalState: '警觉',
+      updatedAtChapter: 2,
+      provenance: {
+        location: { kind: 'author', chapterNumber: 1 },
+        mentalState: { kind: 'derived', source },
+      },
+    })
   })
 })

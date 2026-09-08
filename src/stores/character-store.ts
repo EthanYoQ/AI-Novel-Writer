@@ -58,6 +58,9 @@ function textField(record: Record<string, unknown>, key: string): string {
 function normalizeCharacterState(value: unknown): CharacterCurrentState | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const state = value as Record<string, unknown>
+  const provenance = state.provenance && typeof state.provenance === 'object' && !Array.isArray(state.provenance)
+    ? state.provenance as CharacterCurrentState['provenance']
+    : undefined
   return {
     location: textField(state, 'location'),
     powerLevel: textField(state, 'powerLevel'),
@@ -68,6 +71,7 @@ function normalizeCharacterState(value: unknown): CharacterCurrentState | undefi
     updatedAtChapter: Number.isInteger(state.updatedAtChapter) && Number(state.updatedAtChapter) >= 0
       ? Number(state.updatedAtChapter)
       : 0,
+    ...(provenance ? { provenance } : {}),
   }
 }
 

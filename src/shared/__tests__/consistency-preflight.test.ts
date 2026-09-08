@@ -8,6 +8,7 @@ describe('findBlueprintContinuityRisks', () => {
     chapterNumber: 1,
     chapterTitle: '午夜怀表',
     chapterNotes: '银色怀表仍待调查。',
+    sourceStatus: 'current' as const,
     facts: [{
       category: 'character-state' as const,
       entities: ['顾舟'],
@@ -16,6 +17,17 @@ describe('findBlueprintContinuityRisks', () => {
       evidence: '表盖内侧刻着一组陌生坐标。',
     }],
   }]
+
+  it.each(['stale', 'legacy', undefined] as const)(
+    'does not promote a %s projection to a deterministic finding',
+    (sourceStatus) => {
+      const findings = findBlueprintContinuityRisks([{ ...projection[0]!, sourceStatus }], {
+        chapterNumber: 2, title: '重逢', role: '发展', purpose: '顾舟归来', keyEvents: '顾舟敲门',
+        characters: ['顾舟'], suspenseHook: '', userGuidance: '', notes: '',
+      }, [])
+      expect(findings).toEqual([])
+    },
+  )
 
   it('returns a stable sourced finding when a terminal character is scheduled to appear', () => {
     const findings = findBlueprintContinuityRisks(projection, {

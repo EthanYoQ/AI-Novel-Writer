@@ -522,6 +522,19 @@ export function createRepairFinalizeWorkflow(
             `正文提取失败: ID=${draftMeta.id}`,
             `Could not read finalized manuscript content: ID=${draftMeta.id}`,
           ))
+          const finalizedSource = await ipc.invokeWithProjectSession(
+            projectSession,
+            'db:continuity-read-source',
+            draftMeta.id,
+            projectPath,
+          )
+          if (
+            finalizedSource.status !== 'valid'
+            || finalizedSource.snapshot.content !== full.content
+          ) throw new Error(text(
+            '定稿正文来源收据已失效',
+            'The finalized manuscript source receipt is stale.',
+          ))
 
           // 从数据库蓝图读取正式标题
           let chapterTitle = text(`第${chapterNumber}章`, `Chapter ${chapterNumber}`)
@@ -540,6 +553,7 @@ export function createRepairFinalizeWorkflow(
             chapterTitle,
             draftContent: full.content,
             draftId: draftMeta.id,
+            finalizedSource: finalizedSource.snapshot.source,
             sourceLabel: text(
               `第${chapterNumber}章定稿`,
               `Chapter ${chapterNumber} finalized manuscript`,

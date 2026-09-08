@@ -139,6 +139,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       cs_key_items TEXT DEFAULT '',               -- 关键道具
       cs_recent_events TEXT DEFAULT '',           -- 最近事件
       cs_updated_at_chapter INTEGER DEFAULT NULL, -- 状态更新于第几章；NULL = 无 currentState
+      cs_provenance TEXT NOT NULL DEFAULT '{}',   -- currentState 字段级来源
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -163,6 +164,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       source TEXT DEFAULT 'write',                -- write/rewrite
       content_id INTEGER NOT NULL,                -- FK -> contents
       word_count INTEGER DEFAULT 0,               -- 字数缓存
+      source_dependencies TEXT NOT NULL DEFAULT '[]', -- ordered draft ids + frozen prose hashes
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE RESTRICT
@@ -375,6 +377,10 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       character_states TEXT DEFAULT '',
       chapter_notes TEXT NOT NULL DEFAULT '',
       continuity_facts TEXT NOT NULL DEFAULT '[]',
+      character_state_candidates TEXT NOT NULL DEFAULT '[]',
+      source_finalization_id TEXT NOT NULL DEFAULT '',
+      source_content_hash TEXT NOT NULL DEFAULT '',
+      projection_generation INTEGER NOT NULL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (draft_id) REFERENCES drafts(id) ON DELETE CASCADE
     );
@@ -582,6 +588,11 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     );
   `)
 
+  const draftColumns = db.prepare('PRAGMA table_info(drafts)').all() as Array<{ name: string }>
+  if (!draftColumns.some(column => column.name === 'source_dependencies')) {
+    db.exec("ALTER TABLE drafts ADD COLUMN source_dependencies TEXT NOT NULL DEFAULT '[]'")
+  }
+
   // Legacy candidates did not freeze the draft identity. Keep them marked
   // unknown so update/continue fails closed instead of rebinding to today's draft.
   const recoveryCandidateColumns = new Set(
@@ -630,6 +641,26 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   if (!summaryColumns.has('continuity_facts')) {
     db.exec("ALTER TABLE summary_snapshots ADD COLUMN continuity_facts TEXT NOT NULL DEFAULT '[]'")
   }
+  if (!summaryColumns.has('character_state_candidates')) {
+    db.exec("ALTER TABLE summary_snapshots ADD COLUMN character_state_candidates TEXT NOT NULL DEFAULT '[]'")
+  }
+  if (!summaryColumns.has('source_finalization_id')) {
+    db.exec("ALTER TABLE summary_snapshots ADD COLUMN source_finalization_id TEXT NOT NULL DEFAULT ''")
+  }
+  if (!summaryColumns.has('source_content_hash')) {
+    db.exec("ALTER TABLE summary_snapshots ADD COLUMN source_content_hash TEXT NOT NULL DEFAULT ''")
+  }
+  if (!summaryColumns.has('projection_generation')) {
+    db.exec('ALTER TABLE summary_snapshots ADD COLUMN projection_generation INTEGER NOT NULL DEFAULT 0')
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS continuity_projection_meta (
+      id TEXT PRIMARY KEY CHECK (id = 'main'),
+      generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),
+      stale_from_chapter INTEGER DEFAULT NULL CHECK (stale_from_chapter IS NULL OR stale_from_chapter > 0)
+    );
+    INSERT OR IGNORE INTO continuity_projection_meta (id) VALUES ('main');
+  `)
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_summary_snapshots_draft
       ON summary_snapshots(draft_id) WHERE draft_id IS NOT NULL
@@ -999,6 +1030,13 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   if (!projectCoreColumns.has('narrative_thread_dormant_threshold')) {
     db.exec('ALTER TABLE project_core ADD COLUMN narrative_thread_dormant_threshold INTEGER NOT NULL DEFAULT 3')
     projectCoreColumns.add('narrative_thread_dormant_threshold')
+  }
+
+  const characterStateColumns = new Set(
+    (db.prepare('PRAGMA table_info(characters)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!characterStateColumns.has('cs_provenance')) {
+    db.exec("ALTER TABLE characters ADD COLUMN cs_provenance TEXT NOT NULL DEFAULT '{}'")
   }
 
   // 兼容旧库：将「无 currentState」的哨兵 0 迁移为 NULL（chapter 0 合法状态不受影响）

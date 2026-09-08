@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import { useProjectStore } from '../../../../stores/project-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
@@ -106,6 +107,31 @@ describe('built-in author-guidance prompt boundaries', () => {
     expect(`${en.content}\n${en.systemSuffix}`).toMatch(/globalGuidance[\s\S]*must not enumerate chapters/i)
     expect(en.content).toContain('no more than 600 characters')
     expect(enField.systemSuffix).toMatch(/globalGuidance[\s\S]*must not enumerate chapters/i)
+  })
+
+  it('keeps generic draft conventions subordinate to the current chapter brief', () => {
+    const zhFirst = BUILTIN_PROMPTS.find(template => template.key === 'first_chapter_draft')
+    const zhNext = BUILTIN_PROMPTS.find(template => template.key === 'next_chapter_draft')
+    const enFirst = EN_US_BUILTIN_PROMPTS.first_chapter_draft
+    const enNext = EN_US_BUILTIN_PROMPTS.next_chapter_draft
+
+    expect(`${zhFirst?.content}\n${zhFirst?.systemSuffix}`).toContain('仅当【本章信息】明确要求时才展现主角的金手指')
+    expect(zhFirst?.content).toContain('不得仅为展示信息而让角色公开说出只由其私下感知、尚未转述的内容')
+    expect(zhFirst?.content).not.toContain('全部改成"角色对话 + 神态描写 + 动作互动"')
+    expect(zhFirst?.content).toContain('{{chapter_info}}')
+    expect(zhFirst?.content).toContain('{{global_guidance}}')
+    expect(zhFirst?.systemSuffix).toContain('{{user_guidance}}')
+    expect(`${zhFirst?.content}\n${zhFirst?.systemSuffix}`).not.toContain('留置一个强力钩子')
+    expect(`${zhNext?.content}\n${zhNext?.systemSuffix}`).toContain('不因此成为已发生事件')
+    expect(`${zhNext?.content}\n${zhNext?.systemSuffix}`).not.toContain('上述事件已经发生完毕')
+    expect(`${zhNext?.content}\n${zhNext?.systemSuffix}`).not.toContain('必须卡在一个剧情的小高潮点或突发变故上')
+    expect(`${enFirst.content}\n${enFirst.systemSuffix}`).toContain('only when the chapter brief explicitly requires it')
+    expect(enFirst.content).toContain('Do not turn private perception into public dialogue merely to expose information')
+    expect(enFirst.content).toContain('{{chapter_info}}')
+    expect(enFirst.content).toContain('{{global_guidance}}')
+    expect(enFirst.systemSuffix).toContain('{{user_guidance}}')
+    expect(`${enNext.content}\n${enNext.systemSuffix}`).toContain('do not thereby become completed events')
+    expect(`${enNext.content}\n${enNext.systemSuffix}`).not.toContain('Those events have already happened')
   })
 })
 
@@ -238,6 +264,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     wordsPerChapter?: number
     wordsTarget?: number
     premise?: string
+    charactersArch?: string
     blueprints?: Array<{ chapterNumber: number; title: string; keyEvents: string }>
     userGuidance?: string
     globalGuidance?: string
@@ -255,6 +282,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: number
       chapterTitle: string
       chapterNotes: string
+      sourceStatus?: 'current' | 'stale' | 'legacy'
       facts?: Array<{
         category: 'character-state' | 'timeline' | 'open-thread' | 'plot'
         entities: string[]
@@ -263,15 +291,25 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         evidence: string
       }>
     }>
+    continuitySourceContents?: Record<number, string>
+    invalidContinuitySourceIds?: number[]
     narrativeThreads?: NarrativeThreadView[]
     previousFinalizedContent?: string
+    selectedCandidateDrafts?: Array<{
+      chapterNumber: number
+      draftId: number
+      version: number
+      content: string
+    }>
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
     keyEvents?: string
+    suspenseHook?: string
     knowledgeQueryHint?: string
     characterCards?: Array<{
       name: string
       role: string
       currentState: Record<string, unknown>
+      [key: string]: unknown
     }>
     sourceDraft?: { id: number; version: number }
   }) {
@@ -282,7 +320,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       if (channel === 'db:project-core-get') {
         return {
           premise: options.premise ?? '故事前提',
-          charactersArch: '',
+          charactersArch: options.charactersArch ?? '',
           worldbuilding: '',
           synopsis: '',
         }
@@ -292,17 +330,75 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         return options.blueprints?.find(blueprint => blueprint.chapterNumber === args[0]) ?? null
       }
       if (channel === 'db:continuity-list-before') return options.continuity ?? []
+      if (channel === 'db:continuity-read-source') {
+        const draftId = Number(args[0])
+        if (options.invalidContinuitySourceIds?.includes(draftId)) return { status: 'invalid' }
+        const content = options.continuitySourceContents?.[draftId]
+        if (content) {
+          const projection = options.continuity?.find(item => item.draftId === draftId)
+          return {
+            status: 'valid',
+            snapshot: {
+              source: {
+                draftId,
+                finalizationId: `finalization-${draftId}`,
+                chapterNumber: projection?.chapterNumber ?? 1,
+                contentHash: createHash('sha256').update(content, 'utf8').digest('hex'),
+              },
+              projectionGeneration: 0,
+              chapterTitle: projection?.chapterTitle ?? '',
+              content,
+            },
+          }
+        }
+        const projection = options.continuity?.find(item => item.draftId === draftId)
+        if (!projection) {
+          return options.previousFinalizedContent && draftId === 77
+            ? {
+                status: 'legacy',
+                draftId,
+                chapterNumber: (options.chapterNumber ?? 1) - 1,
+                chapterTitle: '',
+                content: options.previousFinalizedContent,
+              }
+            : { status: 'invalid' }
+        }
+        return {
+          status: 'legacy',
+          draftId,
+          chapterNumber: projection.chapterNumber,
+          chapterTitle: projection.chapterTitle,
+          content: options.previousFinalizedContent
+            && projection.chapterNumber === (options.chapterNumber ?? 1) - 1
+            ? options.previousFinalizedContent
+            : projection.facts?.map(fact => fact.evidence).join('\n\n') ?? '',
+        }
+      }
       if (channel === 'db:narrative-thread-list-relevant') return options.narrativeThreads ?? []
       if (channel === 'db:draft-get-finalized') {
         return options.previousFinalizedContent ? { id: 77 } : null
       }
       if (channel === 'db:draft-get-full') {
-        return options.previousFinalizedContent
+        const draftId = Number(args[0])
+        const projection = options.continuity?.find(item => item.draftId === draftId)
+        if (projection) {
+          return {
+            id: draftId,
+            content: options.previousFinalizedContent && projection.chapterNumber === (options.chapterNumber ?? 1) - 1
+              ? options.previousFinalizedContent
+              : projection.facts?.map(fact => fact.evidence).join('\n\n') ?? '',
+          }
+        }
+        return options.previousFinalizedContent && draftId === 77
           ? { id: 77, content: options.previousFinalizedContent }
           : null
       }
       if (channel === 'kb:search-writing-context') return options.knowledgeResults ?? []
       if (channel === 'db:character-get-all') return options.characterCards ?? []
+      if (channel === 'db:character-roster-read') return {
+        status: 'ready',
+        entries: options.characterCards ?? [],
+      }
       if (channel === 'db:draft-get-latest') return options.sourceDraft ?? null
       if (channel === 'fs:list-dir') return []
       if (channel === 'db:draft-next-version') return 1
@@ -376,11 +472,15 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       role: '开端',
       purpose: '建立冲突',
       keyEvents: options.keyEvents ?? '开端',
+      suspenseHook: options.suspenseHook,
       characters: options.characters ?? [],
       wordsTarget: options.wordsTarget,
       userGuidance: options.userGuidance,
       knowledgeQueryHint: options.knowledgeQueryHint,
-    }, { dependencies: { createRuntime: options.runtime.createRuntime } })
+    }, {
+      dependencies: { createRuntime: options.runtime.createRuntime },
+      selectedCandidateDrafts: options.selectedCandidateDrafts,
+    })
     return { invoke, context, callbacks, command }
   }
 
@@ -558,6 +658,146 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     },
   )
 
+  it.each([
+    { target: 900, lowerBound: 720, upperBound: 1080 },
+    { target: 1400, lowerBound: 1120, upperBound: 1680 },
+  ])('sends the dynamic $target-unit ±20% length contract in the final provider request', async ({
+    target,
+    lowerBound,
+    upperBound,
+  }) => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('正'.repeat(target), 'stop')
+    })
+    const requiredEvent = '作者指定的必需事件必须完整发生'
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage: 'zh-CN',
+      wordsTarget: target,
+      keyEvents: requiredEvent,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(user).toContain('【本章篇幅合同】')
+    expect(user).toContain(`用户目标 ${target} 字；可接受范围 ${lowerBound}–${upperBound} 字（±20%）`)
+    expect(user).toContain('在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件')
+    expect(user).toContain(requiredEvent)
+    expect(runtime.complete).toHaveBeenCalledOnce()
+  })
+
+  it('orders sourced history before the current author task and length contract in the final provider request', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('正'.repeat(900), 'stop')
+    })
+    const historyMarker = '上一章唯一历史哨兵'
+    const authorTask = '当前章唯一作者任务哨兵'
+    const futurePlan = '后续章唯一作者计划哨兵'
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 900,
+      keyEvents: authorTask,
+      blueprints: [{ chapterNumber: 3, title: '第三章', keyEvents: futurePlan }],
+      previousFinalizedContent: `${historyMarker}。`.repeat(100),
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    const historyIndex = user.indexOf(historyMarker)
+    const authorTaskIndex = user.indexOf(authorTask)
+    const lengthContractIndex = user.indexOf('【本章篇幅合同】')
+    expect(historyIndex).toBeGreaterThanOrEqual(0)
+    expect(authorTaskIndex).toBeGreaterThan(historyIndex)
+    expect(lengthContractIndex).toBeGreaterThan(authorTaskIndex)
+    expect(user).toContain('【后续计划边界（只约束当前章，不是当前章任务）】')
+    expect(user).toContain(futurePlan)
+    expect(user).toContain('用户目标 900 字；可接受范围 720–1080 字（±20%）')
+    expect(runtime.complete).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    {
+      writingLanguage: 'zh-CN' as const,
+      heading: '【本章执行卡（作者原文重列）】',
+      labels: ['必需事件', '章节钩子', '作者本章指导'],
+    },
+    {
+      writingLanguage: 'en-US' as const,
+      heading: '[Current-chapter execution card (author text repeated verbatim)]',
+      labels: ['Required events', 'Chapter hook', 'Author guidance for this chapter'],
+    },
+  ])('places a $writingLanguage verbatim execution card immediately before the length contract', async ({
+    writingLanguage,
+    heading,
+    labels,
+  }) => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('正'.repeat(900), 'stop')
+    })
+    const keyEvents = '顾弦把潮印实际交给陆霁。'
+    const suspenseHook = '门后传来记录机倒带声。'
+    const userGuidance = '四拍灯码暂时只有陆霁知道。'
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage,
+      wordsTarget: 900,
+      keyEvents,
+      suspenseHook,
+      userGuidance,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    const executionCardIndex = user.lastIndexOf(heading)
+    const lengthContractIndex = user.indexOf(
+      writingLanguage === 'en-US' ? '[Chapter length contract]' : '【本章篇幅合同】',
+    )
+    expect(executionCardIndex).toBeGreaterThanOrEqual(0)
+    expect(lengthContractIndex).toBeGreaterThan(executionCardIndex)
+    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[0]}: ${keyEvents}`)
+    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[1]}: ${suspenseHook}`)
+    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[2]}: ${userGuidance}`)
+    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(
+      writingLanguage === 'en-US'
+        ? 'Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.'
+        : '后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。',
+    )
+    expect(runtime.complete).toHaveBeenCalledOnce()
+  })
+
+  it('omits the execution card when all three author fields are empty', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('正'.repeat(900), 'stop')
+    })
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage: 'zh-CN',
+      wordsTarget: 900,
+      keyEvents: '',
+      suspenseHook: '  ',
+      userGuidance: '',
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(user).not.toContain('【本章执行卡（作者原文重列）】')
+    expect(user).toContain('【本章篇幅合同】')
+    expect(runtime.complete).toHaveBeenCalledOnce()
+  })
+
   it('sends English continuation-stage instructions for an English project', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
@@ -569,6 +809,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       writingLanguage: 'en-US',
       chapterNumber: 2,
       wordsTarget: 500,
+      previousFinalizedContent: 'The previous chapter is finalized.',
     })
 
     await command.execute({ step: {}, context, callbacks })
@@ -639,13 +880,18 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     })
   })
 
-  it('injects finalized author continuity and the previous finalized ending without a blueprint', async () => {
+  it('injects verbatim finalized excerpts without promoting mixed fact indexes to manuscript truth', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
       observedTask = task
       return outcome('新章正文。'.repeat(125), 'stop')
     })
-    const previousFinalizedContent = `${'旧章正文。'.repeat(300)}上一章定稿结尾哨兵。`
+    const previousFinalizedContent = [
+      '林岚拖着受伤的脚踝走进仓库。',
+      '林岚把红色钥匙收进口袋。',
+      '守门人要求她交出钥匙，她明确拒绝。',
+      '上一章定稿结尾哨兵。',
+    ].join('\n\n')
     const { invoke, context, callbacks, command } = setup({
       runtime,
       chapterNumber: 2,
@@ -655,28 +901,36 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         draftId: 41,
         chapterNumber: 1,
         chapterTitle: '作者第一章',
-        chapterNotes: '作者事实哨兵：林岚已经拿到红色钥匙。',
+        chapterNotes: 'OLD_DERIVED_SUMMARY_MUST_NOT_REACH_PROVIDER',
         facts: [{
           category: 'character-state',
           entities: ['林岚'],
-          statement: '林岚持有红色钥匙。',
+          statement: '林岚脚踝韧带受损，始终持有红色钥匙。',
           sourceChapter: 1,
           evidence: '林岚把红色钥匙收进口袋。',
         }],
       }],
       previousFinalizedContent,
-      knowledgeResults: [{ text: '项目知识哨兵', score: 0.9, fileName: '世界观' }],
+      knowledgeResults: [
+        { text: '林岚把红色钥匙收进口袋。', score: 0.95, fileName: '重复定稿块' },
+        { text: '项目知识哨兵', score: 0.9, fileName: '世界观' },
+      ],
     })
 
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).toContain('作者事实哨兵：林岚已经拿到红色钥匙。')
-    expect(prompt).toContain('林岚持有红色钥匙。')
-    expect(prompt).toContain('来源第1章')
+    expect(prompt).not.toContain('OLD_DERIVED_SUMMARY_MUST_NOT_REACH_PROVIDER')
+    expect(prompt).not.toContain('林岚脚踝韧带受损，始终持有红色钥匙。')
+    expect(prompt).not.toContain('[character-state]')
+    expect(prompt).toContain('定稿原文 · 第1章 · draft 41 · 定位索引')
     expect(prompt).toContain('林岚把红色钥匙收进口袋。')
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
+    expect(prompt).toContain('索引、摘要和 currentState 都不是作者事实')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('定稿连续性原文（1 条候选）'))
     expect(prompt).toContain('上一章定稿结尾哨兵。')
+    expect(prompt).not.toContain('批内候选稿结尾')
+    expect(prompt).not.toContain('重复定稿块')
+    expect(prompt.split('林岚把红色钥匙收进口袋。')).toHaveLength(2)
     expect(prompt).toContain('项目知识哨兵')
     expect(invoke).toHaveBeenCalledWith(
       'kb:search-writing-context',
@@ -685,6 +939,421 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       projectPath,
       expect.anything(),
     )
+  })
+
+  it('captures final provider requests without legacy characters_arch, currentState, or chapter summaries', async () => {
+    const runtime = fakeOutcomes(
+      outcome('初'.repeat(100), 'length', 1),
+      outcome(`${'续'.repeat(400)}。`, 'stop', 2),
+    )
+    const authorTask = '本章必须查明伤口原因，但不得交出钥匙。'
+    const original = [
+      '林岚扶住墙，左腿仍在发抖。',
+      '她说伤口不是坠落造成的，而是昨夜被铁钩划开。',
+      '周砚索要钥匙，她回答：“我不会交给你。”',
+      '门外的脚步声突然停住。',
+    ].join('\n\n')
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      characters: ['林岚'],
+      keyEvents: authorTask,
+      charactersArch: 'LEGACY_CHARACTERS_ARCH_SENTINEL',
+      characterCards: [{
+        name: '林岚',
+        role: 'protagonist',
+        personality: 'AUTHOR_PROFILE_SENTINEL',
+        relationships: [{ target: '周砚', relation: '父子' }],
+        legacyRelationshipNotes: '旧纸档记载两人曾是师徒',
+        currentState: {
+          location: '作者指定的码头',
+          recentEvents: 'OLD_CURRENT_STATE_SENTINEL',
+          provenance: {
+            location: { kind: 'author', chapterNumber: 1 },
+            recentEvents: { kind: 'legacy' },
+          },
+        },
+      }],
+      continuity: [{
+        draftId: 41,
+        chapterNumber: 1,
+        chapterTitle: '伤口',
+        chapterNotes: 'OLD_CHAPTER_SUMMARY_SENTINEL',
+        facts: [{
+          category: 'character-state',
+          entities: ['林岚'],
+          statement: 'DERIVED_STATEMENT_SENTINEL',
+          sourceChapter: 1,
+          evidence: '伤口不是坠落造成的',
+        }],
+      }],
+      previousFinalizedContent: original,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const providerPrompts = runtime.complete.mock.calls.map(([task]) => (
+      task.messages.find(message => message.role === 'user')?.content ?? ''
+    ))
+    expect(providerPrompts).toHaveLength(2)
+    for (const prompt of providerPrompts) {
+      expect(prompt).toContain(authorTask)
+      expect(prompt).toContain('AUTHOR_PROFILE_SENTINEL')
+      expect(prompt).toContain('location@chapter1: 作者指定的码头')
+      expect(prompt).toContain('relationship: 周砚 (父子)')
+      expect(prompt).toContain('relationship（legacy 来源未知）: 旧纸档记载两人曾是师徒')
+      expect(prompt).toContain('林岚扶住墙')
+      expect(prompt).toContain('我不会交给你')
+      expect(prompt).not.toContain('LEGACY_CHARACTERS_ARCH_SENTINEL')
+      expect(prompt).not.toContain('OLD_CURRENT_STATE_SENTINEL')
+      expect(prompt).not.toContain('OLD_CHAPTER_SUMMARY_SENTINEL')
+      expect(prompt).not.toContain('DERIVED_STATEMENT_SENTINEL')
+    }
+  })
+
+  it('rebuilds a stale locator from immutable finalized prose without injecting its statement', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 3,
+      characters: ['林岚'],
+      wordsTarget: 500,
+      previousFinalizedContent: '第二章定稿原文。',
+      continuity: [{
+        draftId: 51,
+        chapterNumber: 1,
+        chapterTitle: '旧伤',
+        chapterNotes: 'STALE_SUMMARY_SENTINEL',
+        sourceStatus: 'stale',
+        facts: [{
+          category: 'character-state',
+          entities: ['林岚'],
+          statement: 'STALE_STATEMENT_SENTINEL',
+          sourceChapter: 1,
+          evidence: '铁钩划开了她的左腿',
+        }],
+      }],
+      continuitySourceContents: {
+        51: '林岚扶墙停下。\n\n铁钩划开了她的左腿。\n\n她拒绝把钥匙交给周砚。',
+      },
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('定位索引stale')
+    expect(prompt).toContain('林岚扶墙停下')
+    expect(prompt).toContain('她拒绝把钥匙交给周砚')
+    expect(prompt).not.toContain('STALE_SUMMARY_SENTINEL')
+    expect(prompt).not.toContain('STALE_STATEMENT_SENTINEL')
+  })
+
+  it('keeps a distant invalid source optional when the previous legacy source is readable', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 3,
+      wordsTarget: 500,
+      characters: ['林岚'],
+      previousFinalizedContent: '第二章可读的 legacy 定稿原文。',
+      invalidContinuitySourceIds: [51],
+      continuity: [{
+        draftId: 51,
+        chapterNumber: 1,
+        chapterTitle: '损坏收据',
+        chapterNotes: '',
+        facts: [{
+          category: 'character-state',
+          entities: ['林岚'],
+          statement: 'UNVERIFIED_STATEMENT_SENTINEL',
+          sourceChapter: 1,
+          evidence: 'UNVERIFIED_BODY_SENTINEL',
+        }],
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).not.toContain('UNVERIFIED_BODY_SENTINEL')
+    expect(prompt).not.toContain('UNVERIFIED_STATEMENT_SENTINEL')
+    expect(prompt).toContain('第二章可读的 legacy 定稿原文。')
+    expect(prompt).toContain('finalized#1:source-invalid')
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 51, projectPath, expect.anything())
+  })
+
+  it.each([
+    ['without a continuity projection', false],
+    ['with an empty continuity fact index', true],
+  ])('stops before the provider when the previous finalized source is invalid %s', async (_label, withProjection) => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const unverifiedBody = 'UNVERIFIED_PREVIOUS_FINALIZED_BODY_SENTINEL'
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      invalidContinuitySourceIds: [77],
+      previousFinalizedContent: unverifiedBody,
+      continuity: withProjection
+        ? [{
+            draftId: 77,
+            chapterNumber: 1,
+            chapterTitle: '损坏收据',
+            chapterNotes: '',
+            facts: [],
+          }]
+        : [],
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow(/无法固定第 1 章的必需定稿来源/u)
+
+    expect(observedTask).toBeUndefined()
+    expect(runtime.complete).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything(), expect.anything())
+    expect(invoke).toHaveBeenCalledWith('db:continuity-read-source', 77, projectPath, expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 77, projectPath, expect.anything())
+  })
+
+  it('stops before the provider when the required previous finalized source is missing', async () => {
+    const runtime = fakeOutcomes(outcome('不应生成。'.repeat(125), 'stop'))
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow(/无法固定第 1 章的必需定稿来源/u)
+
+    expect(runtime.complete).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything(), expect.anything())
+  })
+
+  it('recovers the previous canonical source when a derived projection points at an invalid receipt', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const canonicalBody = '当前第 1 章定稿原文哨兵。'
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      invalidContinuitySourceIds: [51],
+      previousFinalizedContent: canonicalBody,
+      continuitySourceContents: { 77: canonicalBody },
+      continuity: [{
+        draftId: 51,
+        chapterNumber: 1,
+        chapterTitle: '损坏派生定位',
+        chapterNotes: '',
+        facts: [{
+          category: 'plot',
+          entities: [],
+          statement: '损坏派生事实',
+          sourceChapter: 1,
+          evidence: '损坏派生引文',
+        }],
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain(canonicalBody)
+    expect(prompt).not.toContain('损坏派生引文')
+    expect(invoke).toHaveBeenCalledWith('db:continuity-read-source', 51, projectPath, expect.anything())
+    expect(invoke).toHaveBeenCalledWith('db:continuity-read-source', 77, projectPath, expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('db:draft-get-full', 51, projectPath, expect.anything())
+  })
+
+  it('marks an injected batch draft ending as unconfirmed continuity context', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      selectedCandidateDrafts: [{
+        chapterNumber: 1,
+        draftId: 31,
+        version: 3,
+        content: '批内上一章候选稿结尾哨兵。',
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('未定稿候选 · 第1章 · draft 31 · v3')
+    expect(prompt).toContain('候选正文尚未确认，不得冒充定稿')
+    expect(prompt).toContain('批内上一章候选稿结尾哨兵。')
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({
+        sourceDependencies: [{
+          draftId: 31,
+          contentHash: createHash('sha256').update('批内上一章候选稿结尾哨兵。', 'utf8').digest('hex'),
+        }],
+      }),
+      projectPath,
+      expect.anything(),
+    )
+    expect(invoke).toHaveBeenCalledWith('db:draft-get-finalized', 1, projectPath, expect.anything())
+  })
+
+  it('persists the exact candidate dependency chain in chapter order', async () => {
+    const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'))
+    const chapterOne = '林岚把钥匙藏进钟楼。'
+    const chapterTwo = '周砚抵达码头，林岚仍未交出钥匙。'
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 3,
+      wordsTarget: 500,
+      selectedCandidateDrafts: [
+        { chapterNumber: 2, draftId: 32, version: 4, content: chapterTwo },
+        { chapterNumber: 1, draftId: 31, version: 2, content: chapterOne },
+      ],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({
+        sourceDependencies: [
+          {
+            draftId: 31,
+            contentHash: createHash('sha256').update(chapterOne, 'utf8').digest('hex'),
+          },
+          {
+            draftId: 32,
+            contentHash: createHash('sha256').update(chapterTwo, 'utf8').digest('hex'),
+          },
+        ],
+      }),
+      projectPath,
+      expect.anything(),
+    )
+  })
+
+  it('binds the final provider request to only the finalized prose that reached that request', async () => {
+    const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'))
+    const overBudget = `林岚把钥匙藏进钟楼。${'过长段落'.repeat(2_000)}`
+    const included = '周砚守住码头，林岚折返仓库。'
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 3,
+      wordsTarget: 500,
+      characters: ['林岚'],
+      continuity: [
+        {
+          draftId: 41,
+          chapterNumber: 1,
+          chapterTitle: '钟楼',
+          chapterNotes: '',
+          facts: [{
+            category: 'plot',
+            entities: ['林岚'],
+            statement: '钥匙在钟楼。',
+            sourceChapter: 1,
+            evidence: '林岚把钥匙藏进钟楼。',
+          }],
+        },
+        {
+          draftId: 42,
+          chapterNumber: 2,
+          chapterTitle: '码头',
+          chapterNotes: '',
+          facts: [{
+            category: 'plot',
+            entities: ['林岚'],
+            statement: '码头被守住。',
+            sourceChapter: 2,
+            evidence: included,
+          }],
+        },
+      ],
+      continuitySourceContents: { 41: overBudget, 42: included },
+      selectedCandidateDrafts: [{
+        chapterNumber: 2,
+        draftId: 42,
+        version: 1,
+        content: included,
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const request = runtime.complete.mock.calls[0]?.[0]
+    const prompt = request?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain(included)
+    expect(prompt).not.toContain(overBudget)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({
+        sourceDependencies: [{
+          kind: 'finalized',
+          draftId: 42,
+          chapterNumber: 2,
+          finalizationId: 'finalization-42',
+          contentHash: createHash('sha256').update(included, 'utf8').digest('hex'),
+        }],
+      }),
+      projectPath,
+      expect.anything(),
+    )
+  })
+
+  it('distinguishes author hard constraints from finalized state changes in English', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('New chapter prose. '.repeat(200), 'stop')
+    })
+    const { context, callbacks, command } = setup({
+      runtime,
+      writingLanguage: 'en-US',
+      chapterNumber: 2,
+      wordsTarget: 500,
+      continuity: [{
+        draftId: 41,
+        chapterNumber: 1,
+        chapterTitle: 'Transfer',
+        chapterNotes: '',
+        facts: [{
+          category: 'character-state',
+          entities: ['Maya'],
+          statement: 'Maya transferred the key.',
+          sourceChapter: 1,
+          evidence: 'Maya put the key in Eli’s hand.',
+        }],
+      }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('Finalized excerpts establish only their exact text')
+    expect(prompt).toContain('summaries, and currentState are not author facts')
   })
 
   it('puts an explicit knowledge hint before more than eight generated query terms', async () => {
@@ -696,6 +1365,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       keyEvents: '数据 对峙 异常 标签 旧实验室 陆星辰 系统 警报 第七章',
       characters: ['林晓'],
       knowledgeQueryHint: '作者检索哨兵',
+      previousFinalizedContent: '第一章定稿原文。',
     })
 
     await command.execute({ step: {}, context, callbacks })
@@ -716,6 +1386,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       runtime,
       chapterNumber,
       wordsTarget: 500,
+      previousFinalizedContent: chapterNumber === 1 ? undefined : '第一章定稿原文。',
       knowledgeResults: [{
         text: '规划资料唯一事实：月桂港的潮汐钟每天倒走十三分钟。',
         score: 0.99,
@@ -731,8 +1402,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   })
 
   it.each([
-    { writingLanguage: 'zh-CN' as const, completedBoundary: '已经发生完毕', forbiddenReplay: '不得引用、摘要、回放或重演' },
-    { writingLanguage: 'en-US' as const, completedBoundary: 'have already happened', forbiddenReplay: 'Do not quote, summarize, replay, or restage' },
+    { writingLanguage: 'zh-CN' as const, completedBoundary: '记录的是已发生历史', forbiddenReplay: '不得引用、摘要、回放或重演' },
+    { writingLanguage: 'en-US' as const, completedBoundary: 'records completed history', forbiddenReplay: 'Do not quote, summarize, replay, or restage' },
   ])('marks previous prose as completed history in $writingLanguage', async ({
     writingLanguage,
     completedBoundary,
@@ -762,6 +1433,39 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompt).toContain(forbiddenReplay)
   })
 
+  it('keeps workflow metadata out of both initial and continuation writer chapter briefs', async () => {
+    const runtime = fakeOutcomes(
+      outcome('初'.repeat(100), 'length', 1),
+      outcome(`${'续'.repeat(400)}。`, 'stop', 2),
+    )
+    const keyEvents = '必须保留的创作事件'
+    const userGuidance = '必须保留的作者指导'
+    const knowledgeQueryHint = 'PRIVATE_QUERY_SENTINEL'
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      keyEvents,
+      userGuidance,
+      knowledgeQueryHint,
+      previousFinalizedContent: '第一章定稿原文。',
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompts = runtime.complete.mock.calls.map(([task]) => (
+      task.messages.find(message => message.role === 'user')?.content ?? ''
+    ))
+    expect(prompts).toHaveLength(2)
+    for (const prompt of prompts) {
+      expect(prompt).toContain(keyEvents)
+      expect(prompt).toContain(userGuidance)
+      expect(prompt).not.toContain(projectPath)
+      expect(prompt).not.toContain(knowledgeQueryHint)
+      expect(prompt).not.toContain('"wordsTarget"')
+    }
+  })
+
   it('injects guidance and style once while retaining the remaining author configuration', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
@@ -785,6 +1489,40 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(completePrompt.match(new RegExp(globalGuidance, 'g'))).toHaveLength(1)
     expect(completePrompt.match(new RegExp(writingStyle, 'g'))).toHaveLength(1)
     expect(completePrompt).toContain(coreOutline)
+  })
+
+  it.each([
+    ['zh-CN', '文风仅用于选择表达方式', '作者明确事实与指导、实际前文、本章关键因果和本章篇幅优先'],
+    ['en-US', 'Writing style selects expression only', 'actual prior prose'],
+  ] as const)('keeps the complete style profile optional in %s draft and continuation requests', async (
+    writingLanguage,
+    applicabilityBoundary,
+    priorityBoundary,
+  ) => {
+    const writingStyle = 'STYLE_PROFILE_SENTINEL: sample flaw; two actions per scene; sample length 900.'
+    const runtime = fakeOutcomes(
+      outcome('初'.repeat(100), 'length', 1),
+      outcome(`${'续'.repeat(400)}。`, 'stop', 2),
+    )
+    const { context, callbacks, command } = setup({
+      runtime,
+      wordsTarget: 500,
+      writingLanguage,
+      writingStyle,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(runtime.complete).toHaveBeenCalledTimes(2)
+    const prompts = runtime.complete.mock.calls.map(([task]) => (
+      task.messages.map(message => message.content).join('\n')
+    ))
+    for (const prompt of prompts) {
+      expect(prompt).toContain(writingStyle)
+      expect(prompt.match(/STYLE_PROFILE_SENTINEL/gu)).toHaveLength(1)
+      expect(prompt).toContain(applicabilityBoundary)
+      expect(prompt).toContain(priorityBoundary)
+    }
   })
 
   it('keeps the head, middle, and tail of authored guidance in every draft request', async () => {
@@ -1063,6 +1801,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: 8,
       characters: ['林岚'],
       wordsTarget: 500,
+      previousFinalizedContent: '第七章定稿原文。',
       continuity: [{
         draftId: 41,
         chapterNumber: 1,
@@ -1071,10 +1810,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         facts: [
           {
             category: 'character-state',
-            entities: ['林岚'],
+            entities: [],
             statement: '早期事实哨兵：林岚不会游泳。',
             sourceChapter: 1,
-            evidence: '林岚在河边承认自己不会游泳。',
+            evidence: '她在河边承认自己不会游泳。',
           },
           {
             category: 'plot',
@@ -1090,9 +1829,12 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).toContain('早期事实哨兵')
+    expect(prompt).toContain('她在河边承认自己不会游泳。')
+    expect(prompt).not.toContain('早期事实哨兵')
+    // Complete adjacent paragraphs are preserved even when only the hit drove retrieval.
+    expect(prompt).toContain('周远穿上新鞋。')
     expect(prompt).not.toContain('无关事实哨兵')
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('定稿连续性原文（1 条候选）'))
   })
 
   it('keeps an older relevant fact when newer chapter notes exhaust the context budget', async () => {
@@ -1119,14 +1861,16 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: 8,
       characters: ['林岚'],
       wordsTarget: 500,
+      previousFinalizedContent: '第七章定稿原文。',
       continuity,
     })
 
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).toContain('预算事实哨兵')
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('连续性事实（1 条）'))
+    expect(prompt).toContain('林岚在旧码头拒绝登船。')
+    expect(prompt).toContain('定稿原文 · 第1章 · draft 41 · 定位索引')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('定稿连续性原文（1 条候选）'))
   })
 
   it('injects a bounded set of relevant active narrative threads into the next chapter prompt', async () => {
@@ -1156,6 +1900,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: 5,
       characters: ['林岚'],
       wordsTarget: 500,
+      previousFinalizedContent: '第四章定稿原文。',
       narrativeThreads,
     })
 
@@ -1372,12 +2117,35 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(8192)
   })
 
-  it('continues an explicit stop result below 82% and commits only after the same session reaches the target', async () => {
-    const runtime = fakeOutcomes(
-      outcome(`${'初'.repeat(3968)}。`, 'stop', 1),
-      outcome(`${'续'.repeat(300)}。`, 'stop', 2),
+  it('accepts exactly 80% of the target without requesting a continuation', async () => {
+    const runtime = fakeOutcomes(outcome('正'.repeat(720), 'stop', 1))
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      wordsPerChapter: 900,
+      wordsTarget: 900,
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toHaveLength(720)
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft'])
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({ content: '正'.repeat(720), wordCount: 720 }),
+      expect.anything(),
+      expect.anything(),
     )
-    const { invoke, context, callbacks, command } = setup({ runtime })
+  })
+
+  it('continues a 719-unit result before persisting the completed draft', async () => {
+    const runtime = fakeOutcomes(
+      outcome('初'.repeat(719), 'stop', 1),
+      outcome('续', 'stop', 2),
+    )
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      wordsPerChapter: 900,
+      wordsTarget: 900,
+    })
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('续')
 
@@ -1437,7 +2205,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     },
   )
 
-  it('continues a length result even after it has crossed 82%', async () => {
+  it('continues a length result even after it has crossed 80%', async () => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(5000), 'length', 1),
       outcome(`${'续'.repeat(800)}。`, 'stop', 2),
@@ -1503,12 +2271,15 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
   it('keeps frozen relevant state, continuity, and selected references in continuations', async () => {
     const characterStateSentinel = 'UNIQUE_ROLE_STATE_MIDDLE_SENTINEL'
-    const continuitySentinel = 'UNIQUE_FINALIZED_FACT_MIDDLE_SENTINEL'
+    const characterProfileSentinel = 'UNIQUE_AUTHOR_PROFILE_SENTINEL'
+    const continuitySentinel = 'UNIQUE_DERIVED_SUMMARY_MUST_NOT_REACH_PROVIDER'
+    const finalizedEvidenceSentinel = 'UNIQUE_FINALIZED_ORIGINAL_MIDDLE_SENTINEL'
     const referenceSentinel = 'UNIQUE_SELECTED_REFERENCE_MIDDLE_SENTINEL'
     const characterCards = [
       {
         name: '林岚',
         role: 'protagonist',
+        personality: characterProfileSentinel,
         currentState: {
           powerLevel: '普通人',
           location: '旧档案馆',
@@ -1539,7 +2310,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           entities: ['林岚'],
           statement: continuitySentinel,
           sourceChapter: 1,
-          evidence: '第一章定稿中段',
+          evidence: finalizedEvidenceSentinel,
         }],
       }],
       knowledgeResults: [{ fileName: 'author-notes.md', score: 0.99, text: referenceSentinel }],
@@ -1587,11 +2358,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       .find(message => message.role === 'user')?.content ?? ''
 
     for (const prompt of [initialPrompt, continuationPrompt, overTargetContinuationPrompt]) {
-      expect(prompt).toContain(characterStateSentinel)
+      expect(prompt).toContain(characterProfileSentinel)
+      expect(prompt).not.toContain(characterStateSentinel)
       expect(prompt).not.toContain('IRRELEVANT_ROLE_STATE_SENTINEL')
+      expect(prompt).not.toContain(continuitySentinel)
     }
     for (const prompt of [continuationPrompt, overTargetContinuationPrompt]) {
-      expect(prompt).toContain(continuitySentinel)
+      expect(prompt).toContain(finalizedEvidenceSentinel)
       expect(prompt).toContain(referenceSentinel)
     }
   })
@@ -1638,6 +2411,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       writingLanguage: 'en-US',
       chapterNumber: 2,
       userGuidance: authorGuidance,
+      previousFinalizedContent: 'The previous chapter is finalized.',
     })
 
     await command.execute({ step: {}, context, callbacks })
@@ -1648,10 +2422,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompts).toHaveLength(3)
     expect(prompts[0]).toContain(authorGuidance)
     expect(prompts[0]).toContain('(no future chapter blueprints)')
-    expect(prompts[0]).toContain('(no chapter notes)')
-    expect(prompts[0]).toContain('(no previous manuscript)')
+    expect(prompts[0]).toContain('[Sourced history and candidates]')
     expect(prompts[0]).toContain('(no relevant knowledge-base context)')
-    expect(prompts[0]).toContain('(no character state records)')
+    expect(prompts[0]).toContain('(no additional author material)')
     expect(prompts[1]).toContain('Continue the current chapter seamlessly')
     expect(prompts[2]).toContain('This is the only no-progress recovery attempt')
     expect(prompts.join('\n')).not.toMatch(/【(?:硬性要求|本章蓝图|后续章节大纲预告|角色状态档案|第\d+章)/u)

@@ -301,6 +301,8 @@ describe('chapter writing model selectors', () => {
   it('shows a continuable bilingual finding and ignores it for this run only', async () => {
     continuityProjections = [{
       draftId: 1, chapterNumber: 1, chapterTitle: '终局', chapterNotes: '顾舟死亡',
+      source: { draftId: 1, finalizationId: 'finalization-1', chapterNumber: 1, contentHash: 'a'.repeat(64) },
+      sourceStatus: 'current',
       facts: [{ category: 'character-state', entities: ['顾舟'], statement: '顾舟已经死亡。', sourceChapter: 1, evidence: '顾舟停止了呼吸。' }],
     }]
     await act(async () => {
@@ -310,7 +312,7 @@ describe('chapter writing model selectors', () => {
     })
     await act(async () => page.getByRole('button', { name: '开始创作' }).click())
     await expect.element(page.getByRole('region', { name: '一致性预检' })).toBeVisible()
-    await expect.element(page.getByText(/已定稿事实记录“顾舟”/)).toBeVisible()
+    await expect.element(page.getByText(/定稿正文绑定的派生索引提示“顾舟”处于死亡终态/)).toBeVisible()
     expect(startWorkflow).not.toHaveBeenCalled()
 
     await act(async () => page.getByRole('button', { name: '修改后重检' }).click())
@@ -339,6 +341,8 @@ describe('chapter writing model selectors', () => {
     useLocaleStore.setState({ locale: 'en-US' })
     continuityProjections = [{
       draftId: 1, chapterNumber: 1, chapterTitle: 'The End', chapterNotes: '沈砺 died',
+      source: { draftId: 1, finalizationId: 'finalization-1', chapterNumber: 1, contentHash: 'a'.repeat(64) },
+      sourceStatus: 'current',
       facts: [{ category: 'character-state', entities: ['沈砺'], statement: '沈砺 is dead.', sourceChapter: 1, evidence: 'His breathing stopped.' }],
     }]
     await act(async () => {
@@ -346,7 +350,7 @@ describe('chapter writing model selectors', () => {
     })
     await act(async () => page.getByRole('button', { name: 'Start batch writing' }).click())
     await expect.element(page.getByRole('region', { name: 'Consistency preflight' })).toBeVisible()
-    await expect.element(page.getByText(/Finalized facts record “沈砺” as dead/)).toBeVisible()
+    await expect.element(page.getByText(/A derived index bound to finalized prose marks “沈砺” as dead/)).toBeVisible()
     expect(startWorkflow).not.toHaveBeenCalled()
 
     await act(async () => page.getByRole('button', { name: 'Fix and rerun' }).click())

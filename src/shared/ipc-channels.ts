@@ -19,8 +19,11 @@ import type {
 } from './recovery-candidate'
 import type {
   FinalizedContinuityProjection,
+  FinalizedSourceReadResult,
+  SaveFinalizedCharacterStateCandidatesRequest,
   SaveFinalizedContinuityRequest,
 } from './finalized-continuity'
+import type { DraftSourceDependency } from './draft-source-dependency'
 import type { ConsistencyExemption } from './consistency-preflight'
 import type {
   NarrativeThreadEvent,
@@ -845,7 +848,7 @@ export interface DatabaseChannels {
     args: [request: FinalizedDraftImportRequest, expectedProjectPath: string]
     return: { success: boolean; receipt?: FinalizedDraftImportReceipt; error?: string }
   }
-  'db:draft-create': { args: [params: { chapterNumber: number; version: number; source: 'write' | 'rewrite'; content: string; wordCount: number }, expectedProjectPath: string]; return: { success: boolean; id?: number; error?: string } }
+  'db:draft-create': { args: [params: { chapterNumber: number; version: number; source: 'write' | 'rewrite'; content: string; wordCount: number; sourceDependencies?: DraftSourceDependency[] }, expectedProjectPath: string]; return: { success: boolean; id?: number; error?: string } }
   'db:draft-list': { args: [chapterNumber: number, expectedProjectPath: string]; return: DraftMeta[] }
   'db:draft-list-all': { args: [expectedProjectPath: string]; return: DraftMeta[] }
   'db:draft-get-meta': { args: [id: number, expectedProjectPath: string]; return: DraftMeta | null }
@@ -863,9 +866,17 @@ export interface DatabaseChannels {
     args: [request: SaveFinalizedContinuityRequest, expectedProjectPath: string]
     return: { success: boolean; error?: string }
   }
+  'db:continuity-save-character-state-candidates': {
+    args: [request: SaveFinalizedCharacterStateCandidatesRequest, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
   'db:continuity-list-before': {
     args: [chapterNumber: number, expectedProjectPath: string]
     return: FinalizedContinuityProjection[]
+  }
+  'db:continuity-read-source': {
+    args: [draftId: number, expectedProjectPath: string]
+    return: FinalizedSourceReadResult
   }
   'db:consistency-exemption-list': { args: [expectedProjectPath: string]; return: ConsistencyExemption[] }
   'db:consistency-exemption-save': {

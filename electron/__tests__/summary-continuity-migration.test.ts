@@ -43,7 +43,14 @@ describe('summary continuity migration', () => {
         expect.objectContaining({ name: 'draft_id' }),
         expect.objectContaining({ name: 'chapter_notes' }),
         expect.objectContaining({ name: 'continuity_facts' }),
+        expect.objectContaining({ name: 'character_state_candidates' }),
+        expect.objectContaining({ name: 'source_finalization_id' }),
+        expect.objectContaining({ name: 'source_content_hash' }),
+        expect.objectContaining({ name: 'projection_generation' }),
       ]))
+    expect(getProjectDb()!.prepare(
+      "SELECT generation, stale_from_chapter FROM continuity_projection_meta WHERE id = 'main'",
+    ).get()).toEqual({ generation: 0, stale_from_chapter: null })
     expect(SummaryRepository.getLatestSnapshot()).toEqual({
       chapterNumber: 3,
       characterStates: 'legacy character state',
@@ -82,6 +89,13 @@ describe('summary continuity migration', () => {
       draftId,
       chapterNumber: 1,
       chapterNotes: 'The opening establishes the continuity facts.',
+      projectionGeneration: 0,
+      source: {
+        draftId,
+        finalizationId: receipt.drafts[0]!.finalizationId,
+        chapterNumber: 1,
+        contentHash: receipt.drafts[0]!.contentHash,
+      },
     })
 
     expect(getProjectDb()!.prepare(

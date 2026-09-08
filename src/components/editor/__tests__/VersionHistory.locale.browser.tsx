@@ -73,7 +73,7 @@ describe('VersionHistory locale', () => {
         return args[0] === 2
           ? [
               { id: 21, version: 1, status: 'draft', wordCount: 1234, createdAt },
-              { id: 22, version: 2, status: 'revised', wordCount: 1250, createdAt },
+              { id: 22, version: 2, status: 'revised', wordCount: 1250, createdAt, dependenciesStale: true },
               { id: 23, version: 3, status: 'finalized', wordCount: 1300, createdAt },
             ]
           : []
@@ -99,6 +99,8 @@ describe('VersionHistory locale', () => {
     expect(container.textContent).toContain('Draft')
     expect(container.textContent).toContain('Revised')
     expect(container.textContent).toContain('Final')
+    expect(container.textContent).toContain('Source changed')
+    expect(container.querySelector('[title*="continuity needs review"]')).not.toBeNull()
     expect(container.textContent).toContain('1,234 words')
     expect(container.textContent).toContain(new Date(createdAt).toLocaleString('en-US', dateOptions))
     expect(container.querySelector('[title="Compare with current version"]')).not.toBeNull()

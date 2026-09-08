@@ -40,6 +40,7 @@ import {
 } from '../blueprint-batch-policy'
 import { readAuthoritativeNextChapter } from '../../authoritative-chapter-sequence'
 import { localizeNovelConfigFacts } from '../../../shared/novel-config-localization'
+import { normalizeChapterWordsTarget } from '../chapter-creation-parameters'
 
 type CreateDirectoryGenerationRuntime = typeof createGenerationRuntime
 
@@ -126,6 +127,19 @@ const COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES = 16_384
 const COMPACT_ARCHITECTURE_MAX_UTF8_BYTES = 4_800
 const COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES = 600
 const COMPACT_RECENT_BLUEPRINTS = 3
+
+function blueprintCapacityGenerationContract(
+  writingLanguage: NonNullable<CommandExecuteParams['context']['writingLanguage']>,
+  targetWords: number,
+): string {
+  const lowerBound = Math.round(targetWords * 0.8)
+  const upperBound = Math.round(targetWords * 1.2)
+  return promptLanguageText(
+    writingLanguage,
+    `【章节容量合同】\n每章正文目标约 ${targetWords} 字，可接受范围 ${lowerBound}–${upperBound} 字；据此控制情节点容量。作者指定事件与字数目标均为权威事实，不得删除、改写或擅自调整。合并 role、purpose、keyEvents、架构与前章列表中对同一事件的重复表述，只计一个语义事件；不擅自增加独立事件，也不为凑字数补事件。背景设定只作为约束和参考；除非作者指定事件明确要求，不得把全部背景逐项演成场景。JSON 输出合同不变；容量兼容时，keyEvents 只写能在上述范围内完整演绎的推进与结果。若语义去重后仍不兼容，保留作者指定事件，并在现有 keyEvents 字符串中简短指出“容量冲突：…”供作者调整；不新增字段、不代替作者取舍，也不写章节正文。`,
+    `[Chapter capacity contract]\nTarget about ${targetWords} words per chapter, with an acceptable range of ${lowerBound}-${upperBound}; size the plot-point load accordingly. Author-specified events and the word target are authoritative facts: do not delete, rewrite, or adjust them. Merge duplicate descriptions of the same event across role, purpose, keyEvents, architecture, and the preceding chapter list, counting them as one semantic event; do not invent independent events or add events to fill space. Background facts are constraints and references, not a requirement to dramatize every fact as a scene unless an author-specified event requires it. Keep the JSON output contract unchanged. When capacity is compatible, keyEvents should state only the progression and outcome that can be fully dramatized within this range. If semantic deduplication still leaves an incompatible load, preserve the author-specified events and briefly state "Capacity conflict: ..." in the existing keyEvents string for the author to adjust; add no field, make no choice for the author, and do not write chapter prose.`,
+  )
+}
 
 const GENERATED_BLUEPRINT_TEXT_LIMITS = [
   ['title', BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters],
@@ -226,6 +240,7 @@ function buildCompactBlueprintTask(input: {
   architecture: string
   previous: readonly ChapterBlueprint[]
   totalChapters: number
+  wordsPerChapter: number
   genre: string
   globalGuidance: string
   pacingGuidance: string
@@ -236,6 +251,7 @@ function buildCompactBlueprintTask(input: {
   const facts = {
     targetChapterNumber: input.chapterNumber,
     totalChapters: input.totalChapters,
+    targetWordsPerChapter: input.wordsPerChapter,
     genre: boundedFactText(input.genre, 240),
     architectureExcerpt: boundedFactText(input.architecture, COMPACT_ARCHITECTURE_MAX_UTF8_BYTES),
     recentBlueprints: input.previous.slice(-COMPACT_RECENT_BLUEPRINTS).map(chapter => ({
@@ -267,6 +283,7 @@ function buildCompactBlueprintTask(input: {
       : []),
     promptLanguageText(input.writingLanguage, `必须且只能返回 chapterNumber=${input.chapterNumber} 的一项。`, `Return exactly one item whose chapterNumber is ${input.chapterNumber}.`),
     promptLanguageText(input.writingLanguage, `严格执行字段和列表上限：${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}。`, `Enforce these field and list limits exactly: ${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}.`),
+    blueprintCapacityGenerationContract(input.writingLanguage, input.wordsPerChapter),
   ].join('\n')
   const systemRole = composePromptSystemRole({
     systemRole: boundedFactText(input.systemRole, COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES)
@@ -290,6 +307,7 @@ function buildCompactBlueprintTask(input: {
         { sectionName: 'system-instructions', messageIndex: 0, finalText: systemRole },
         factSection('target-chapter', 'targetChapterNumber'),
         factSection('project-chapter-count', 'totalChapters'),
+        factSection('chapter-word-target', 'targetWordsPerChapter'),
         factSection('genre', 'genre'),
         factSection('architecture', 'architectureExcerpt'),
         factSection('previous-blueprints', 'recentBlueprints'),
@@ -335,6 +353,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     const { expectedProjectPath, novelConfig } = this.projectSnapshot
     const modelFacts = localizeNovelConfigFacts(novelConfig, writingLanguage)
     const totalChapters = novelConfig.totalChapters
+    const wordsPerChapter = normalizeChapterWordsTarget(novelConfig.wordsPerChapter)
     const authoritativeNextChapter = await readAuthoritativeNextChapter(
       projectSession,
       writingLanguage,
@@ -388,6 +407,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         architecture,
         previous: [...existingBlueprints, ...validatedPrefix],
         totalChapters,
+        wordsPerChapter,
         genre: modelFacts.genre,
         globalGuidance: novelConfig.globalGuidance || '',
         pacingGuidance: (context.data.pacingGuidance as string) || '',
@@ -431,6 +451,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           .withPacingGuidance((context.data.pacingGuidance as string) || '')
           .build()
           + `\n\n${blueprintSemanticGenerationContract(writingLanguage)}`
+          + `\n\n${blueprintCapacityGenerationContract(writingLanguage, wordsPerChapter)}`
 
         return {
           purpose: 'chapter-blueprint-directory',

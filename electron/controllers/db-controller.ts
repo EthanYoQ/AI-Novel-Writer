@@ -20,6 +20,7 @@ import { CharacterRepository } from '../repositories/character-repository'
 import { CharacterRosterRepository } from '../repositories/character-roster-repository'
 import type { CharacterRosterCommitRequest } from '../../src/shared/character-roster'
 import { DraftRepository } from '../repositories/draft-repository'
+import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 import { FinalizedDraftImportRepository } from '../repositories/finalized-draft-import-repository'
 import { FinalizationRepository } from '../repositories/finalization-repository'
 import type { FinalizedDraftImportRequest } from '../../src/shared/finalized-draft-import'
@@ -635,6 +636,7 @@ export function registerDatabaseController() {
     source: 'write' | 'rewrite'
     content: string
     wordCount: number
+    sourceDependencies?: DraftSourceDependency[]
   }, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
@@ -705,9 +707,24 @@ export function registerDatabaseController() {
     }
   })
 
+  ipcMain.handle('db:continuity-save-character-state-candidates', async (_event, request, expectedProjectPath: string) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      SummaryRepository.saveFinalizedCharacterStateCandidates(request)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
   ipcMain.handle('db:continuity-list-before', async (_event, chapterNumber: number, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return SummaryRepository.listFinalizedContinuityBefore(chapterNumber)
+  })
+
+  ipcMain.handle('db:continuity-read-source', async (_event, draftId: number, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return SummaryRepository.readFinalizedSource(draftId)
   })
 
   ipcMain.handle('db:consistency-exemption-list', async (_event, expectedProjectPath: string) => {

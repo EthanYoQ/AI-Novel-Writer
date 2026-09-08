@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import { useEditorStore } from '../../../../stores/editor-store'
@@ -17,6 +18,7 @@ import { runPostProcessPipeline } from '../../workflow-utils'
 import { createBoundedCompletionError } from '../../bounded-completion'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 import type { CharacterRosterEntry } from '../../../../shared/character-roster'
+import type { FinalizedSourceIdentity } from '../../../../shared/finalized-continuity'
 
 class RefineDraftCommand extends RuntimeRefineDraftCommand {
   constructor(...args: ConstructorParameters<typeof RuntimeRefineDraftCommand>) {
@@ -125,6 +127,19 @@ function chapterInfo() {
   }
 }
 
+function finalizedSource(
+  draftId: number,
+  chapterNumber: number,
+  content: string,
+): FinalizedSourceIdentity {
+  return {
+    draftId,
+    finalizationId: `finalization-${draftId}`,
+    chapterNumber,
+    contentHash: createHash('sha256').update(content, 'utf8').digest('hex'),
+  }
+}
+
 function stubLlm(command: object, response: string): void {
   const target = command as {
     callLLMWithBuilder: () => Promise<string>
@@ -218,6 +233,47 @@ describe('workflow mutation failure boundaries', () => {
     expect(observedMessages[1]?.[0]?.content).toContain('You maintain rigorous character records')
     expect(observedMessages[1]?.[1]?.content).toContain('Existing character records')
     expect(observedMessages[1]?.[1]?.content).not.toContain('【任务要求】')
+  })
+
+  it.each([5, 10])('keeps author writing style unchanged after Chapter %i post-processing', async chapterNumber => {
+    const project = useProjectStore.getState().currentProject!
+    useProjectStore.setState({
+      currentProject: {
+        ...project,
+        novelConfig: { ...project.novelConfig, writingStyle: '作者手工文风' },
+      },
+    })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'kb:import-text') return { success: true, chunkCount: 1 }
+      if (channel === 'db:blueprint-update-notes') return { success: true }
+      if (channel === 'db:character-roster-read') return { status: 'empty', revision: 0, entries: [] }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    const complete = vi.fn(async (
+      _builder: { build: () => string; getSystemRole: () => string },
+      _callbacks: StepCallbacks,
+      output: 'visible-text' | 'structured-data',
+    ) => output === 'structured-data' ? '{"updates":[]}' : '本章剧情要点')
+    const steps = buildFinalizePostProcessSteps(
+      { path: PROJECT_PATH },
+      chapterNumber,
+      `第${chapterNumber}章`,
+      '定稿正文',
+      { complete },
+    )
+
+    for (const step of steps) await step.executor(callbacks(), context())
+
+    expect(steps.map(step => step.key)).toEqual(['kb_import', 'chapter_notes', 'character_cards'])
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(expect.arrayContaining([
+      'kb:import-text',
+      'db:blueprint-update-notes',
+      'db:character-roster-read',
+    ]))
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:project-core-update')
+    expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('作者手工文风')
   })
 
   it('treats committed-but-pending manuscript publication as a failed finalization step', async () => {
@@ -411,6 +467,10 @@ describe('workflow mutation failure boundaries', () => {
       '作者正文',
       testPostProcessGeneration(),
       41,
+      [],
+      'zh-CN',
+      finalizedSource(41, 1, '作者正文'),
+      7,
     ).find(candidate => candidate.key === 'chapter_notes')
 
     const stepCallbacks = callbacks()
@@ -422,6 +482,8 @@ describe('workflow mutation failure boundaries', () => {
         chapterNumber: 1,
         chapterNotes: '作者原稿的连续性事实',
         facts: [],
+        projectionGeneration: 7,
+        source: finalizedSource(41, 1, '作者正文'),
       },
       PROJECT_PATH,
       expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
@@ -798,6 +860,7 @@ describe('workflow mutation failure boundaries', () => {
       },
     }
     let committedEntries: CharacterRosterEntry[] = []
+    let savedCandidates: unknown[] = []
     const invoke = vi.fn(async (channel: string, request?: unknown) => {
       if (channel === 'db:character-roster-read') {
         return { status: 'ready', revision: 4, entries: [existing] }
@@ -805,6 +868,10 @@ describe('workflow mutation failure boundaries', () => {
       if (channel === 'db:character-roster-commit') {
         committedEntries = (request as { entries: CharacterRosterEntry[] }).entries
         return { success: true, receipt: { revision: 5 } }
+      }
+      if (channel === 'db:continuity-save-character-state-candidates') {
+        savedCandidates = (request as { candidates: unknown[] }).candidates
+        return { success: true }
       }
       throw new Error(`unexpected IPC: ${channel}`)
     })
@@ -822,8 +889,10 @@ describe('workflow mutation failure boundaries', () => {
       })),
     }
     const workflowContext = { ...context(), runId: 'field-semantics' }
+    const sourceReceipt = finalizedSource(42, 2, '正文')
     const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 2, '第二章', '正文', generation,
+      { path: PROJECT_PATH }, 2, '第二章', '正文', generation, 42, [], 'zh-CN',
+      sourceReceipt, 0,
     ).find(candidate => candidate.key === 'character_cards')
 
     await expect(step!.executor(callbacks(), workflowContext)).resolves.toBeUndefined()
@@ -839,8 +908,16 @@ describe('workflow mutation failure boundaries', () => {
         keyItems: '',
         recentEvents: '发现密信',
         updatedAtChapter: 2,
+        provenance: {
+          location: { kind: 'derived', source: sourceReceipt },
+          keyItems: { kind: 'derived', source: sourceReceipt },
+        },
       },
     })])
+    expect(savedCandidates).toEqual(expect.arrayContaining([
+      { characterName: '林岚', field: 'location', value: '码头' },
+      { characterName: '林岚', field: 'keyItems', value: '' },
+    ]))
   })
 
   it('stops character-card post-processing when its one roster receipt reports failure', async () => {
@@ -866,12 +943,17 @@ describe('workflow mutation failure boundaries', () => {
         return 'request-1'
       }),
     })
+    const sourceReceipt = finalizedSource(41, 1, '正文')
     const step = buildFinalizePostProcessSteps(
       { path: PROJECT_PATH },
       1,
       '第一章',
       '正文',
       testPostProcessGeneration(),
+      41,
+      [],
+      'zh-CN',
+      sourceReceipt,
     ).find(candidate => candidate.key === 'character_cards')
     expect(step).toBeDefined()
     const stepCallbacks = callbacks()
@@ -883,6 +965,12 @@ describe('workflow mutation failure boundaries', () => {
       'db:character-roster-read',
       'db:character-roster-commit',
     ])
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({ source: sourceReceipt }),
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+    )
   })
 
   it('reuses generated character state when an executor retry only repairs persistence', async () => {
@@ -904,8 +992,10 @@ describe('workflow mutation failure boundaries', () => {
     const complete = vi.fn(async () => JSON.stringify({
       updates: [{ name: '林岚', currentState: { location: '车站' } }],
     }))
+    const sourceReceipt = finalizedSource(41, 1, '正文')
     const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete },
+      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete }, 41, [], 'zh-CN',
+      sourceReceipt,
     ).find(candidate => candidate.key === 'character_cards')!
 
     await expect(step.executor(callbacks(), context())).rejects.toThrow('transient roster failure')
@@ -913,6 +1003,12 @@ describe('workflow mutation failure boundaries', () => {
 
     expect(complete).toHaveBeenCalledOnce()
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(2)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({ source: sourceReceipt }),
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+    )
   })
 
   it('regenerates character state after malformed model output fails parsing', async () => {
@@ -932,8 +1028,10 @@ describe('workflow mutation failure boundaries', () => {
       .mockResolvedValueOnce(JSON.stringify({
         updates: [{ name: '林岚', currentState: { location: '车站' } }],
       }))
+    const sourceReceipt = finalizedSource(41, 1, '正文')
     const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete },
+      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete }, 41, [], 'zh-CN',
+      sourceReceipt,
     ).find(candidate => candidate.key === 'character_cards')!
 
     await expect(step.executor(callbacks(), context())).rejects.toThrow('updates 必须是列表')
@@ -941,6 +1039,12 @@ describe('workflow mutation failure boundaries', () => {
 
     expect(complete).toHaveBeenCalledTimes(2)
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
+    expect(invoke).toHaveBeenCalledWith(
+      'db:character-roster-commit',
+      expect.objectContaining({ source: sourceReceipt }),
+      PROJECT_PATH,
+      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
+    )
   })
 
   it('does not persist post-process output when the stream omits terminal evidence', async () => {
@@ -1022,6 +1126,57 @@ describe('workflow mutation failure boundaries', () => {
       callbacks: callbacks(),
     })).rejects.toThrow('revision rejected')
     expect(useEditorStore.getState().tabs).toEqual([])
+  })
+
+  it.each([true, false, 'invalid-evidence'] as const)('同一次审稿冻结本章目标，漏项或无效证据不重试（返回到期目标：%s）', async (includeDueGoal) => {
+    const blueprint = {
+      chapterNumber: 1, title: '相册', role: '发展', purpose: '缓和关系',
+      keyEvents: '完成相册；约定周三搬设备', characters: [], suspenseHook: '', userGuidance: '', notes: '', notesUpdatedAt: '',
+    }
+    const draft = '她说，明天再装订相册。两人约定周三搬设备。'
+    let saved: Record<string, unknown> = {}
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:continuity-list-before' || channel === 'db:character-get-all') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:blueprint-get-all') return [blueprint, { ...blueprint, chapterNumber: 2, keyEvents: '搬运设备' }]
+      if (channel === 'db:blueprint-get') return null
+      if (channel === 'db:draft-get-meta') return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:review-create') {
+        saved = JSON.parse((args[0] as { content: string }).content)
+        return { success: true, id: 9 }
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    let prompt = ''
+    const generateStream = vi.fn(async (messages, streamCallbacks) => {
+      prompt = messages.map((message: { content: string }) => message.content).join('\n')
+      // A late editor change must not replace the checklist sent with this draft.
+      blueprint.keyEvents = '仅准备相册'
+      streamCallbacks.onDone?.(JSON.stringify({
+        summary: '全部通过',
+        items: [{ category: '连续性', severity: 'pass', description: '未发现其他冲突。' }],
+        goalReviews: [
+          ...(includeDueGoal ? [{ id: 'ch1:keyEvents:1', status: 'unmet', description: '本章要求完成，相册装订却延期。', evidence: [{ quote: includeDueGoal === 'invalid-evidence' ? '正文不存在的引文' : '明天再装订相册' }] }] : []),
+          { id: 'ch1:keyEvents:2', status: 'completed', description: '约定已达成，无需本章提前搬设备。', evidence: [{ quote: '两人约定周三搬设备。' }] },
+        ],
+      }), undefined, 'stop')
+      return 'single-review-request'
+    })
+    useLLMStore.setState({ defaultModelId: 'model', generateStream })
+    await new ReviewChapterCommand({ draftPath: 'vela://draft/1', draftContent: draft, chapterNumber: 1 })
+      .execute({ step: {}, context: context(), callbacks: callbacks() })
+    expect(generateStream).toHaveBeenCalledTimes(1)
+    expect(prompt).toContain('ch1:keyEvents:1')
+    expect(prompt).not.toContain('ch2:keyEvents:1')
+    expect(saved.summary).not.toBe('全部通过')
+    expect(saved.goalReview).toMatchObject({ items: [
+      { id: 'ch1:keyEvents:1', text: '完成相册', status: includeDueGoal === true ? 'unmet' : 'unknown' },
+      { id: 'ch1:keyEvents:2', text: '约定周三搬设备', status: 'completed' },
+    ] })
+    expect(saved.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ goalId: 'ch1:keyEvents:1', severity: includeDueGoal === true ? 'error' : 'unknown' }),
+    ]))
   })
 
   it('does not open a review report when review persistence fails', async () => {
@@ -1125,9 +1280,10 @@ describe('workflow mutation failure boundaries', () => {
       summary: string
       items: Array<{ description: string; quote?: string }>
     }
-    expect(Array.from(persisted.summary)).toHaveLength(120)
-    expect(persisted.items.map(item => Array.from(item.description).length)).toEqual([200, 200, 157, 200, 200])
-    expect(persisted.items.map(item => item.quote === undefined ? 0 : Array.from(item.quote).length)).toEqual([154, 147, 0, 0, 69])
+    expect(persisted.summary).toContain('待核实')
+    expect(persisted.items.slice(0, 5).map(item => Array.from(item.description).length)).toEqual([200, 200, 157, 200, 200])
+    expect(persisted.items.slice(0, 5).map(item => item.quote === undefined ? 0 : Array.from(item.quote).length)).toEqual([154, 147, 0, 0, 69])
+    expect(persisted.items[5]).toMatchObject({ severity: 'unknown' })
     expect(useEditorStore.getState().tabs).toHaveLength(1)
     expect(observedReviewPrompt).toContain('全部 items 必须为 1–10 条')
     expect(observedReviewPrompt).toContain('quote 不超过 160 字')
@@ -1177,7 +1333,8 @@ describe('workflow mutation failure boundaries', () => {
     })).resolves.toBe(response)
 
     const persisted = JSON.parse(persistedContent) as typeof review
-    expect(persisted.items).toHaveLength(4)
+    expect(persisted.items).toHaveLength(5)
+    expect(persisted.items[4]).toMatchObject({ severity: 'unknown' })
     expect(Array.from(persisted.items[1]!.quote!)).toHaveLength(160)
     expect(persisted.items[1]!.quote).toBe('潮'.repeat(160))
   })
@@ -1391,16 +1548,24 @@ describe('workflow mutation failure boundaries', () => {
     const completeReview = JSON.stringify({
       items: [{ category: '剧情连贯性', severity: 'pass', description: '未发现矛盾' }],
       summary: '审稿完成',
+      goalReviews: [{ id: 'ch1:keyEvents:1', status: 'completed', description: '借书已归还。', evidence: [{ quote: '她将借书交还管理员。' }] }],
     })
-    const invoke = vi.fn(async (channel: string) => {
+    const originalDraft = '她将借书交还管理员。'
+    const blueprint = { chapterNumber: 1, keyEvents: '归还借书' }
+    let saved: Record<string, unknown> = {}
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'kb:search') return []
       if (channel === 'db:character-get-all') return []
       if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:blueprint-get-all') return [blueprint]
       if (channel === 'db:draft-get-meta') {
         return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
       }
       if (channel === 'db:review-next-index') return 1
-      if (channel === 'db:review-create') return { success: true, id: 10 }
+      if (channel === 'db:review-create') {
+        saved = JSON.parse((args[0] as { content: string }).content)
+        return { success: true, id: 10 }
+      }
       if (channel === 'db:blueprint-get') return null
       throw new Error(`unexpected IPC: ${channel}`)
     })
@@ -1411,6 +1576,7 @@ describe('workflow mutation failure boundaries', () => {
       streamCallbacks: Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[1],
     ) => {
       const firstAttempt = generateStream.mock.calls.length === 1
+      if (firstAttempt) blueprint.keyEvents = '生成期间外部改写的目标'
       if (!firstAttempt) {
         rebuildPrompts.push(messages.map(message => message.content).join('\n'))
       }
@@ -1424,7 +1590,7 @@ describe('workflow mutation failure boundaries', () => {
     useLLMStore.setState({ defaultModelId: 'model', generateStream })
     const command = new ReviewChapterCommand({
       draftPath: 'vela://draft/1',
-      draftContent: '待审正文',
+      draftContent: originalDraft,
       chapterNumber: 1,
     })
 
@@ -1437,6 +1603,13 @@ describe('workflow mutation failure boundaries', () => {
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(rebuildPrompts[0]).toContain('上一轮审稿输出未通过合同校验')
     expect(rebuildPrompts[0]).toContain('完整审稿 JSON')
+    expect(rebuildPrompts[0]).toContain('根字段为 summary、items、goalReviews')
+    expect(rebuildPrompts[0]).toContain('【本章目标逐项核对｜软件冻结清单】')
+    expect(rebuildPrompts[0]).toContain('归还借书')
+    expect(rebuildPrompts[0]).toContain(originalDraft)
+    expect(rebuildPrompts[0]).not.toContain('生成期间外部改写的目标')
+    expect(saved.goalReview).toMatchObject({ coverage: 'complete', items: [{ text: '归还借书', status: 'completed' }] })
+    expect(saved.items).toHaveLength(2) // 通用项+目标项，只有最终有效响应被归一化一次。
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:review-create')).toHaveLength(1)
   })
 

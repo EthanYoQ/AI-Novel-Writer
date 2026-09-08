@@ -20,6 +20,8 @@ import { mergeConsistencyFindingsIntoReview, type ReviewLike } from '../../../sh
 import type { ChapterBlueprint } from '../directory-workflow'
 import type { FrozenDraftSourceIdentity } from '../chapter-workflow'
 import { throwIfSourceDraftChanged } from '../source-draft-changed'
+import { CHARACTER_STATE_TEXT_FIELDS } from '../../../shared/character-roster'
+import { buildChapterGoalReviewPrompt, chapterGoalReviewItems, freezeChapterGoals, normalizeChapterGoalReview } from '../../../shared/chapter-goal-review'
 
 
 export interface ReviewChapterParams {
@@ -45,6 +47,7 @@ interface ReviewResultItem extends Record<string, unknown> {
 interface ReviewResult extends Record<string, unknown> {
   summary: string
   items: ReviewResultItem[]
+  goalReviews?: unknown
 }
 
 function isBoundedText(value: unknown, maxCharacters: number): value is string {
@@ -60,7 +63,7 @@ function boundText(value: string, maxCharacters: number): string {
 function isReviewShape(value: unknown): value is ReviewResult {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const review = value as Record<string, unknown>
-  if (Object.keys(review).some(key => key !== 'summary' && key !== 'items')
+  if (Object.keys(review).some(key => key !== 'summary' && key !== 'items' && key !== 'goalReviews')
     || typeof review.summary !== 'string'
     || !Array.isArray(review.items)
     || review.items.length < 1
@@ -100,6 +103,7 @@ function parseReviewResult(content: string): ReviewResult {
   const parsed: unknown = JSON.parse(fenced?.[1]?.trim() ?? trimmed)
   if (!isReviewShape(parsed)) throw new Error('invalid review contract')
   const bounded: ReviewResult = {
+    ...(parsed.goalReviews === undefined ? {} : { goalReviews: parsed.goalReviews }),
     summary: boundText(parsed.summary, REVIEW_SUMMARY_MAX_CHARACTERS),
     items: parsed.items.map(item => ({
       category: item.category,
@@ -240,6 +244,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       `[Author-confirmed project configuration | constraint, not established history]\n${JSON.stringify(novelConfig, null, 2)}`,
     )
     let planningMaterial = formatReviewPlanningMaterial([], writingLanguage)
+    let frozenGoals = freezeChapterGoals(this.params.chapterNumber, undefined)
     try {
       const { loadDirectoryBlueprints } = await import('../directory-workflow')
       const blueprints = (await loadDirectoryBlueprints(context.projectPath, projectSession))
@@ -248,6 +253,8 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
           && blueprint.chapterNumber <= this.params.chapterNumber + 5
         ))
       planningMaterial = formatReviewPlanningMaterial(blueprints, writingLanguage)
+      frozenGoals = freezeChapterGoals(this.params.chapterNumber,
+        blueprints.find(blueprint => blueprint.chapterNumber === this.params.chapterNumber)?.keyEvents ?? null)
     } catch {
       planningMaterial = promptLanguageText(
         writingLanguage,
@@ -270,6 +277,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       authorGuidanceSection,
       authorConfigSection,
       planningMaterial,
+      buildChapterGoalReviewPrompt(frozenGoals, writingLanguage),
     ].join('\n\n')
 
     callbacks.log(text('调用 AI 审查员对本章进行多维度扫描...', 'Running the AI continuity review...'))
@@ -320,8 +328,8 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       const rebuildHeading = promptLanguageText(writingLanguage, '【原始审稿任务】', '[Original review task]')
       const rebuildContract = promptLanguageText(
         writingLanguage,
-        '【硬性要求】只重新输出一个完整审稿 JSON：summary 不超过 120 字符；items 为 1–10 条，每条含 category、severity(error|warning|pass)、description(≤200 字符)；quote 仅 pass 可省略，error/warning 必须提供且不超过 160 字符；不得输出额外字段、Markdown、解释或思考过程。',
-        '[Hard requirement] Output one complete review JSON only: summary within 120 characters; items 1–10 entries, each with category, severity(error|warning|pass), description(≤200 characters); quote is optional only for pass items and required (≤160 characters) for error/warning items; no extra fields, Markdown, explanation, or reasoning.',
+        '【硬性要求】只重新输出一个完整审稿 JSON，根字段为 summary、items、goalReviews：summary 不超过 120 字符；items 为 1–10 条，每条含 category、severity(error|warning|pass)、description(≤200 字符)；quote 仅 pass 可省略，error/warning 必须提供且不超过 160 字符。goalReviews 按上方最初冻结清单逐项返回 id、status、description、evidence，不受 items 条数限制；只用原始待审正文核对。不得输出这些约定以外的字段、Markdown、解释或思考过程。',
+        '[Hard requirement] Output one complete review JSON with root fields summary, items and goalReviews: summary within 120 characters; items 1–10 entries with category, severity(error|warning|pass), description(≤200 characters); quote is optional only for pass and required (≤160 characters) for error/warning. goalReviews must cover the original frozen checklist above with id, status, description and evidence, without the general items count limit; use only the original draft for evidence. No fields outside these contracts, Markdown, explanation, or reasoning.',
       )
       reviewResultRaw = await this.callLLMWithBoundedCompletion(
         [rebuildInstruction, rebuildHeading, reviewPrompt, rebuildContract].join('\n\n'),
@@ -358,6 +366,16 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       }
     }
     this.assertNotCancelled(context)
+
+    const goalReview = normalizeChapterGoalReview(parsedResult.goalReviews, frozenGoals, draft, writingLanguage)
+    delete parsedResult.goalReviews
+    parsedResult.goalReview = goalReview
+    parsedResult.items = [...(parsedResult.items ?? []), ...chapterGoalReviewItems(goalReview, writingLanguage)]
+    if (parsedResult.items.some(item => item.severity === 'unknown')) {
+      parsedResult.summary = text('审稿包含待核实项目，不能视为全部通过。', 'The review contains unresolved items and is not an overall pass.')
+    } else if (goalReview.items.some(item => item.status === 'unmet')) {
+      parsedResult.summary = text('本章存在尚未完成的目标，请核对逐项证据。', 'Some chapter goals are unmet; check their evidence.')
+    }
 
     const blueprint = await ipc.invokeWithProjectSession(
       projectSession, 'db:blueprint-get', this.params.chapterNumber, context.projectPath,
@@ -451,10 +469,17 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       for (const card of allChars) {
         if (card.name && card.currentState) {
           const cs = card.currentState
+          const authorState = Object.fromEntries(CHARACTER_STATE_TEXT_FIELDS.flatMap((field) => {
+            const provenance = cs.provenance?.[field]
+            return provenance?.kind === 'author' && cs[field]
+              ? [[field, `${cs[field]} @ch${provenance.chapterNumber}`]]
+              : []
+          }))
+          if (Object.keys(authorState).length === 0) continue
           states.push(promptLanguageText(
             writingLanguage,
-            `${card.name}（${card.role || '未知'}）: ${cs.powerLevel || ''}, ${cs.location || ''}, ${cs.physicalState || ''}, ${cs.mentalState || ''}, 最近：${cs.recentEvents || ''}`,
-            `${card.name} (${card.role || 'unknown'}): power ${cs.powerLevel || ''}; location ${cs.location || ''}; physical ${cs.physicalState || ''}; mental ${cs.mentalState || ''}; recent ${cs.recentEvents || ''}`,
+            `${card.name}（${card.role || '未知'}）作者状态（按标注章节理解，非永久约束）: ${JSON.stringify(authorState)}`,
+            `${card.name} (${card.role || 'unknown'}) author state (time-bound to the annotated chapter, not permanent): ${JSON.stringify(authorState)}`,
           ))
         }
       }

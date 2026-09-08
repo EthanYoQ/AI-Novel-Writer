@@ -68,6 +68,7 @@ export default defineConfig({
       '**/.workbuddy/**',
       '**/.runtime/**',
       '**/plugins/**',
+      '**/.release/scripts/release-artifact-retention.test.mjs',
     ],
   },
   build: {

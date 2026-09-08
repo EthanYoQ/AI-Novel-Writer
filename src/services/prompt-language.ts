@@ -408,7 +408,11 @@ Return JSON only, with no Markdown, preface, analysis, plan, code fence, or reas
 
 [Writing style]
 {{writing_style}}`,
-    systemSuffix: `[Author revision guidance — highest priority when present]
+    systemSuffix: `[Writing-style applicability]
+- Writing style selects expression only; it adds no facts or events, and not every item must be forced into the manuscript.
+- Explicit author facts and guidance, actual prior prose, the chapter's key causality, and its target length take priority. Do not use style guidance to rewrite them, relabel explicit author facts or requirements as guesses, or add scenes, actions, or events merely to satisfy style guidance.
+
+[Author revision guidance — highest priority when present]
 {{user_refine_prompt}}
 
 Output the complete revised manuscript as plain prose only. Do not include Markdown, a preface, an explanation, analysis, or screenplay formatting. Separate every paragraph with one blank line.`,
@@ -502,6 +506,8 @@ List world, power-system, or rule facts first established or confirmed here. Omi
 ## Foreshadowing and Hooks
 Mark planted clues with [Plant] and the chapter-ending hook with [Hook]. Omit this section when empty.
 
+For an irreversible change relevant to later continuity, preserve an explicitly stated cause, location, witness, or source of knowledge in the same note as the subject and change. Do not infer missing details or require every note to contain all of these elements.
+
 Keep every item concise and grounded in the manuscript.`,
   },
   update_character_cards: {
@@ -527,7 +533,7 @@ Return exactly one JSON object:
 If nothing changed and no important character was introduced, return {"updates":[],"newCharacters":[]}. Output JSON only, with no Markdown or explanation.`,
   },
   analyze_writing_style: {
-    systemRole: 'You are a rigorous fiction-style analyst. Convert a reference novel into executable craft constraints without retelling its plot. Use concise, actionable language.',
+    systemRole: 'You are a rigorous fiction-style analyst. Turn observable craft in a reference novel into a small set of concise, optional writing techniques without retelling its plot.',
     content: `Analyze the following fiction sample and produce a style profile and imitation guide for later drafting.
 
 [Fiction sample]
@@ -536,7 +542,9 @@ If nothing changed and no important character was introduced, return {"updates":
 [Boundaries]
 - Analyze craft only: narrative rhythm, structure, sentence patterns, descriptive balance, scene movement, and dialogue organization.
 - Do not repeat plot events, character names, place names, proprietary settings, signature scenes, or source sentences.
-- Use concise, executable observations instead of general literary commentary.
+- Extract only effective, transferable techniques; do not turn sample flaws or incidental patterns into drafting requirements.
+- Do not turn sample plot events, action or object quotas, per-scene allocations, or sample length into drafting requirements.
+- Use concise, specific, optional observations instead of general literary commentary.
 
 [Dimensions]
 1. Narrative rhythm and information release.
@@ -548,22 +556,17 @@ If nothing changed and no important character was introduced, return {"updates":
 7. Opening hooks, escalation, reversals, and chapter-end hooks.
 8. Likely imitation failures and concrete corrections.
 
-Output plain text with exactly these headings and two to four concise items per field:
+Output plain text with these headings. Give three to six concise suggestions in total and at most one per field; omit a field when there is no clear effective technique instead of inventing a rule.
 
 Style Profile:
-- Narrative rhythm:
-- Sentences and paragraphs:
-- Scene progression:
-- Descriptive density:
-- Dialogue style:
-- Emotional curve:
-- Structural patterns:
+- Rhythm and structure:
+- Sentences and scenes:
+- Dialogue and emotion:
 
 Imitation Guide:
-- Prioritize:
-- Avoid:
-- Hard constraints for drafting prompts:
-- How to recover from vague output:
+- Optional effective techniques:
+- Use with caution:
+- Applicability boundary:
 
 Add no preface, courtesy language, or unrelated explanation.`,
   },
@@ -673,22 +676,25 @@ Use these only to understand later turning points. Do not reveal or advance them
 
 [Opening-chapter requirements]
 1. Begin inside an immediate action, confrontation, pursuit, or sharp reversal instead of explaining the world at length.
-2. Introduce the protagonist's special advantage only when the immediate predicament makes it dramatically relevant.
-3. Drive the scene through action, dialogue, expression, and physical interaction rather than detached summary.
+2. Introduce the protagonist's special advantage only when the chapter brief explicitly requires it; do not invent an event to satisfy a generic opening convention.
+3. Advance through viewpoint-consistent action, sensory detail, interiority, and dialogue. Do not turn private perception into public dialogue merely to expose information.
 4. Follow the project-wide guidance and avoid every listed failure mode.
 
 [Writing style]
 {{writing_style}}`,
     systemSuffix: `[Authoritative facts that must not drift]
-- Story architecture: {{architecture}}
 - Author-confirmed novel configuration: {{novel_config}}
 - Treat both as immutable facts. Never omit, weaken, reverse, or replace an explicit author setting with a genre convention; if a fact is not foregrounded in this chapter, do not contradict it.
+
+[Writing-style applicability]
+- Writing style selects expression only; it adds no facts or events, and not every item must be forced into the manuscript.
+- Explicit author facts and guidance, actual prior prose, the chapter's key causality, and its target length take priority. Do not use style guidance to rewrite them, relabel explicit author facts or requirements as guesses, or add scenes, actions, or events merely to satisfy style guidance.
 
 [Author guidance for this step — highest priority when present]
 {{user_guidance}}
 
 [Output contract]
-- Write approximately {{word_number}} words and cover only the chapter brief. Stop on a strong hook once the chapter goal is complete; do not advance later blueprints or add filler.
+- Write approximately {{word_number}} words and cover only the chapter brief. End at the state or hook specified there; when none is specified, end naturally without advancing later blueprints or adding filler.
 - Output plain manuscript prose only. Do not use Markdown, headings, analysis, plans, or screenplay formatting.
 - Separate every paragraph with one blank line. Use standard quotation marks consistently for dialogue.
 - If the target length cannot fit in one response, stop at a natural paragraph boundary without asking the user to continue.
@@ -715,10 +721,10 @@ Use these only to understand later turning points. Do not reveal or advance them
 {{filtered_context}}
 
 [Serialization requirements]
-1. Those events have already happened. Begin after their final state and advance a new event from this chapter brief. Do not quote, summarize, replay, or restage any sentence, action, or image from the excerpt; also avoid teleporting the scene or abruptly changing viewpoint.
+1. [Story memory and previous stopping point] records completed history. [Chapter brief], [Upcoming chapter blueprints], and [Knowledge-base context] do not thereby become completed events. Begin after the previous chapter's final state and advance a new event from this chapter brief. Do not quote, summarize, replay, or restage any sentence, action, or image from the previous ending; also avoid teleporting the scene or abruptly changing viewpoint.
 2. Drive the scene through action, expression, sensory detail, and dialogue rather than detached summary.
 3. Use approximately {{word_number}} words to complete this chapter's conflict without filler.
-4. End on a concrete escalation, revelation, or interruption that creates forward pressure.
+4. Use only the ending state or hook explicitly required by the chapter brief. When none is specified, end naturally without inventing an escalation, interruption, or later event.
 5. Follow the project-wide guidance: {{global_guidance}}
 
 [Writing style]
@@ -727,6 +733,10 @@ Use these only to understand later turning points. Do not reveal or advance them
 - Story architecture: {{architecture}}
 - Author-confirmed novel configuration: {{novel_config}}
 - Treat both as immutable facts. Never omit, weaken, reverse, or replace an explicit author setting with a genre convention; if a fact is not foregrounded in this chapter, do not contradict it.
+
+[Writing-style applicability]
+- Writing style selects expression only; it adds no facts or events, and not every item must be forced into the manuscript.
+- Explicit author facts and guidance, actual prior prose, the chapter's key causality, and its target length take priority. Do not use style guidance to rewrite them, relabel explicit author facts or requirements as guesses, or add scenes, actions, or events merely to satisfy style guidance.
 
 [Author guidance for this step — highest priority when present]
 {{user_guidance}}

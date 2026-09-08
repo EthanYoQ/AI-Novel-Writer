@@ -63,6 +63,13 @@ function seedFacts() {
     chapterNumber: 1,
     chapterNotes: 'Mara keeps the altered map and begins investigating the erased street.',
     facts: [],
+    projectionGeneration: 0,
+    source: {
+      draftId,
+      finalizationId: finalized.drafts[0]!.finalizationId,
+      chapterNumber: 1,
+      contentHash: finalized.drafts[0]!.contentHash,
+    },
   })
 
   const plan = NarrativeThreadRepository.createPlan({
