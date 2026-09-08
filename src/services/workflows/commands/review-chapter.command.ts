@@ -274,8 +274,10 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
 
     callbacks.log(text('调用 AI 审查员对本章进行多维度扫描...', 'Running the AI continuity review...'))
 
-    // 期望 JSON 格式返回
-    const reviewResultRaw = await this.callLLMWithBoundedCompletion(
+    // 期望 JSON 格式返回；bounded 模式会在 length 时自动重建一次。
+    // 部分模型/网关在输出上限截断时会把 finishReason 报成 stop，导致
+    // 坏 JSON 直接进入解析 → 这里在合同校验失败时再补一次完整替代输出。
+    let reviewResultRaw = await this.callLLMWithBoundedCompletion(
       reviewPrompt,
       promptBuilder.getSystemRole(),
       callbacks,
@@ -290,17 +292,72 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     )
     this.assertNotCancelled(context)
 
-    const reviewResultClean = this.stripThinkingTags(reviewResultRaw)
+    const parseAttempt = (): ReviewLike => parseReviewResult(this.stripThinkingTags(reviewResultRaw))
 
     let parsedResult: ReviewLike
     try {
-      parsedResult = parseReviewResult(reviewResultClean)
-    } catch {
-      throw new Error(text(
-        'AI 返回的审稿结果无效，因此未保存报告。',
-        'The AI review response was invalid, so no report was saved.',
+      parsedResult = parseAttempt()
+    } catch (parseError) {
+      const detail = parseError instanceof SyntaxError
+        ? text(
+          '输出不是完整 JSON（可能被模型输出上限截断）',
+          'the output is not complete JSON (it may be truncated by the model output limit)',
+        )
+        : text(
+          '输出不符合审稿报告合同（字段缺失、越界或多余）',
+          'the output does not match the review-report contract (missing, oversized, or extra fields)',
+        )
+      callbacks.log(text(
+        `审稿结果未通过校验（${detail}），正在请求一次完整替代输出...`,
+        `The review result failed validation (${detail}); requesting one complete replacement...`,
       ))
+      this.assertNotCancelled(context)
+      const rebuildInstruction = promptLanguageText(
+        writingLanguage,
+        '上一轮审稿输出未通过合同校验，已被丢弃，不得引用或续接。请重新完成原始审稿任务。',
+        'The previous review output failed contract validation and was discarded. Do not quote or continue it; complete the original review task again.',
+      )
+      const rebuildHeading = promptLanguageText(writingLanguage, '【原始审稿任务】', '[Original review task]')
+      const rebuildContract = promptLanguageText(
+        writingLanguage,
+        '【硬性要求】只重新输出一个完整审稿 JSON：summary 不超过 120 字符；items 为 1–10 条，每条含 category、severity(error|warning|pass)、description(≤200 字符)；quote 仅 pass 可省略，error/warning 必须提供且不超过 160 字符；不得输出额外字段、Markdown、解释或思考过程。',
+        '[Hard requirement] Output one complete review JSON only: summary within 120 characters; items 1–10 entries, each with category, severity(error|warning|pass), description(≤200 characters); quote is optional only for pass items and required (≤160 characters) for error/warning items; no extra fields, Markdown, explanation, or reasoning.',
+      )
+      reviewResultRaw = await this.callLLMWithBoundedCompletion(
+        [rebuildInstruction, rebuildHeading, reviewPrompt, rebuildContract].join('\n\n'),
+        promptBuilder.getSystemRole(),
+        callbacks,
+        { mode: 'replace-structured-output', maxContinuations: 1 },
+        {
+          responseFormat: { type: 'json_object' },
+          purpose: 'review-chapter-rebuild',
+          reasoningStage: 'review',
+          writingSkillStage: 'review',
+        },
+        context,
+      )
+      this.assertNotCancelled(context)
+      try {
+        parsedResult = parseAttempt()
+      } catch (rebuildError) {
+        const rebuildDetail = rebuildError instanceof SyntaxError
+          ? text(
+            '替代输出仍不是完整 JSON',
+            'the replacement output is still not complete JSON',
+          )
+          : text(
+            '替代输出仍不符合审稿报告合同',
+            'the replacement output still does not match the review-report contract',
+          )
+        throw new Error(text(
+          `AI 返回的审稿结果两次均无效（${rebuildDetail}），因此未保存报告。`
+            + '若此问题反复出现，通常是审稿输出被模型最大长度截断：请提高模型的最大输出 Tokens 后重试。',
+          `The AI review response was invalid twice (${rebuildDetail}), so no report was saved. `
+            + 'If this keeps happening, the review output is usually truncated by the model maximum length: increase the model maximum output tokens and retry.',
+        ))
+      }
     }
+    this.assertNotCancelled(context)
 
     const blueprint = await ipc.invokeWithProjectSession(
       projectSession, 'db:blueprint-get', this.params.chapterNumber, context.projectPath,
@@ -380,7 +437,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       `审查完成，已生成审稿报告 r${revIndex}`,
       `Review complete; created review report r${revIndex}`,
     ))
-    return reviewResultClean
+    return this.stripThinkingTags(reviewResultRaw)
   }
 
   private async readCharacterStates(
