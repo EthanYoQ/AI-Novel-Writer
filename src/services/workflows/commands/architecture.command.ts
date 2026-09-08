@@ -138,9 +138,8 @@ const SYNOPSIS_INCOMPLETE_MARKER_EN = [
 ].join('\n')
 
 /**
- * 批次进度行的双语模板。模型只有在完整覆盖本批第 from–to 章之后，才允许
- * 以独立一行输出该进度行；机械校验以此区分「完整批次」与「被截断的半截
- * 输出」（许多网关把输出上限截断误报为 finishReason=stop）。
+ * 批次进度行的双语模板，仅辅助定位本批范围。完整覆盖本批后可附上该行；
+ * 缺少进度行不代表截断，附带时范围必须准确，完成判断仍以正文覆盖为准。
  */
 function plotOutlineProgressLine(
   writingLanguage: WritingLanguage,
@@ -416,14 +415,14 @@ function synopsisBatchInstruction(
     trailing,
     promptLanguageText(
       writingLanguage,
-      `【批次收尾（必须遵守）】当你已经完整覆盖第 ${from}–${to} 章时，最后一行输出（不要提前、不要缺失）：${plotOutlineProgressLine(writingLanguage, from, to, totalChapters)}`,
-      `[Batch completion line (required)] Only after fully covering chapters ${from}-${to}, end with exactly this line (never earlier, never missing): ${plotOutlineProgressLine(writingLanguage, from, to, totalChapters)}`,
+      `【批次收尾（辅助信息）】完整覆盖第 ${from}–${to} 章后，可在最后一行附上以下进度（如附上，范围必须准确）：${plotOutlineProgressLine(writingLanguage, from, to, totalChapters)}`,
+      `[Batch completion line (supporting information)] After fully covering chapters ${from}-${to}, you may append this progress line; if included, its range must be exact: ${plotOutlineProgressLine(writingLanguage, from, to, totalChapters)}`,
     ),
   ].filter(Boolean).join('\n\n')
   return contract
 }
 
-/** 校验进度行与本批一致；正文标题覆盖由独立校验器证明。 */
+/** 正常结束后以正文覆盖为准；可选自报进度不能与本批冲突。 */
 function assertPlotOutlineBatchComplete(
   merged: string,
   from: number,
@@ -432,16 +431,17 @@ function assertPlotOutlineBatchComplete(
   uiText: UiText,
 ): void {
   const mark = findPlotOutlineProgressMark(merged)
+  if (!mark && !merged.includes('大纲批次进度') && !merged.includes('[Outline batch progress:')) return
   if (!mark
     || mark.from !== from
     || mark.to !== to
     || mark.totalChapters !== totalChapters
   ) {
     throw new Error(uiText(
-      `大纲输出未包含有效的批次完成标记（需要与本批范围完全一致：第 ${from}–${to} 章、全书 ${totalChapters} 章），`
-        + '可能仍被模型输出上限截断或批次范围错位，结果未按完成保存。',
-      `The outline output lacks a batch-completion marker that exactly matches this batch (chapters ${from}-${to} of ${totalChapters}); `
-        + 'it may still be truncated by the model output limit or misreport its range, so it was not saved as complete.',
+      `大纲输出包含无效的批次完成标记（需要与本批范围完全一致：第 ${from}–${to} 章、全书 ${totalChapters} 章），`
+        + '批次范围可能错位，结果未按完成保存。',
+      `The outline output contains an invalid batch-completion marker (expected chapters ${from}-${to} of ${totalChapters}); `
+        + 'its range may be incorrect, so it was not saved as complete.',
     ))
   }
 }
@@ -2069,7 +2069,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       'Plot outline generation failed because the AI returned empty content.',
     ))
 
-    // ===== 完成校验：必须带与本次范围一致的批次进度行（截断误报 stop 时不会误判成功） =====
+    // ===== 完成校验：正文必须完整覆盖本批；附带进度行时也必须与范围一致 =====
     let confirmedBody = ''
     try {
       assertPlotOutlineTitleCoverage(merged, seedText, from, to, text)

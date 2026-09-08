@@ -14,7 +14,7 @@ import { clearProjectCustomPrompts, getBuiltinPromptTemplate } from '../../../pr
 
 /**
  * 情节大纲批次状态机：
- * - 完成必须携带与批次范围一致的进度行（截断误报 stop 时不误判成功）；
+ * - 完成必须有本批完整正文覆盖；可选进度行不得与本批冲突；
  * - 断点续写 fail-closed（无有效检查点 / 指纹不符绝不退化为覆盖生成）；
  * - 分批连续续写（from = coveredTo+1），已确认前缀永不覆盖；
  * - 检查点绑定源事实指纹。
@@ -265,7 +265,48 @@ afterEach(() => {
 })
 
 describe('GeneratePlotArchitectureCommand 批次状态机', () => {
-  it('首次全量成功：输出带完成进度行才按完整保存，正文剥离进度行', async () => {
+  it('完整非空的章节覆盖正常结束时不因缺少自报进度行而返工', async () => {
+    const body = Array.from({ length: 20 }, (_, index) =>
+      `第${index + 1}章：核对记录\n周岚核对记录并据此推进调查，确认本章线索的来源。`,
+    ).join('\n\n')
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream: responseStream([body]) })
+    const harness = harnessWith()
+
+    const result = await makeCommand({ synopsisRange: { from: 1, to: 20 } })
+      .execute({ step: {}, context, callbacks })
+
+    expect(result).toContain(body)
+    expect(harness.partialWrites.at(-1)).toMatchObject({
+      synopsis_incomplete: false,
+      synopsis_covered_to: 20,
+    })
+    expect(useLLMStore.getState().generateStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('length 后续写失败即使章节覆盖齐全也仍保存为未完成', async () => {
+    const body = `第1–20章：核对记录\n${'周岚核对记录并据此推进调查，确认各条线索的来源。'.repeat(6)}`
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream: lengthThenNetworkFailure(body) })
+    const harness = harnessWith()
+
+    await expect(makeCommand({ synopsisRange: { from: 1, to: 20 } })
+      .execute({ step: {}, context, callbacks })).rejects.toBeInstanceOf(PlotOutlineResumeAvailableError)
+    expect(harness.partialWrites.at(-1)).toMatchObject({ synopsis_incomplete: true })
+  })
+
+  it.each([progressLine(21, 40, 100), '大纲批次进度：本批结束'])('正文完整但显式进度行无效时仍拒绝完成：%s', async mark => {
+    const body = `第1–20章：核对记录\n${'周岚核对记录并据此推进调查，确认各条线索的来源。'.repeat(6)}`
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream: responseStream([`${body}\n${mark}`]),
+    })
+    const harness = harnessWith()
+
+    await expect(makeCommand({ synopsisRange: { from: 1, to: 20 } })
+      .execute({ step: {}, context, callbacks })).rejects.toBeInstanceOf(PlotOutlineResumeAvailableError)
+    expect(harness.partialWrites.at(-1)).toMatchObject({ synopsis_incomplete: true })
+  })
+
+  it('首次全量成功：完整正文带正确进度行时保存并剥离进度行', async () => {
     const body = '## 第一卷\n\n第1–100章：终局守门人\n林舟从铁砧镇学徒成长为终局守门人，每章均有独立推进。'
     const completed = `${body}\n\n${progressLine(1, 100, 100)}`
     useLLMStore.setState({
