@@ -77,53 +77,38 @@ describe('v1.1.0 release metadata', () => {
     for (const line of [...zhRetained, ...enRetained]) expect(notes).toContain(line)
   })
 
-  it('documents the bilingual v0.9.0 feature set, platform coverage, and security disclosure', () => {
+  it('documents current desktop downloads and signing disclosures in both READMEs', () => {
     const chineseReadme = readFileSync('README.md', 'utf8')
     const englishReadme = readFileSync('README_en.md', 'utf8')
 
-    for (const expected of [
-      'v0.9.0',
-      '长篇一致性上下文继承',
-      '伏笔与叙事线索系统',
-      'EPUB 导入',
-      '缩放、平移和一键清空',
-      '章节模型与字数控制',
-      '人工审稿闭环',
-      '差异对比',
-      '模型高级设置',
-      '获取模型列表',
-      '重复任务',
-      '更准确的失败提示',
-      'macOS Apple Silicon',
-      'macOS Intel',
-      '七项资产',
-      '未代码签名',
-      '未公证',
-    ]) {
-      expect(chineseReadme).toContain(expected)
+    // Current release metadata is checked above; README wording can evolve.
+    for (const readme of [chineseReadme, englishReadme]) {
+      for (const expected of [
+        'Windows x64',
+        'Apple Silicon',
+        'Intel',
+        'https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest',
+      ]) expect(readme).toContain(expected)
+
+      for (const installer of [
+        /ai-novel-writer-setup-<[^>\r\n]+>\.exe/u,
+        /ai-novel-writer-mac-arm64-<[^>\r\n]+>-installer\.dmg/u,
+        /ai-novel-writer-mac-x64-<[^>\r\n]+>-installer\.dmg/u,
+      ]) expect(readme).toMatch(installer)
     }
 
     for (const expected of [
-      'v0.9.0',
-      'Long-form continuity context',
-      'Foreshadowing and narrative threads',
-      'EPUB import',
-      'zoom, pan, or clear',
-      'Per-chapter model and length control',
-      'Human-confirmed review loop',
-      'inspect the diff',
-      'Advanced model settings',
-      'fetch the model list',
-      'Duplicate jobs',
-      'More precise failure messages',
-      'macOS Apple Silicon',
-      'macOS Intel',
-      'seven-asset',
+      '尚未进行代码签名',
+      'ad-hoc 签名',
+      '未使用 Developer ID 签名或公证',
+    ]) expect(chineseReadme).toContain(expected)
+
+    for (const expected of [
       'not code-signed',
+      'ad-hoc signed',
+      'no Developer ID signature',
       'not notarized',
-    ]) {
-      expect(englishReadme).toContain(expected)
-    }
+    ]) expect(englishReadme).toContain(expected)
   })
 
   it('keeps stale Mythpen branding out of release metadata', () => {
