@@ -12,6 +12,7 @@ import { EmptyState } from '../../ui/EmptyState'
 import { cn } from '../../../lib/utils'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { getCharacterRoleLabels } from '../../../shared/character-role'
+import { CharacterCardImportButton } from '../../characters/CharacterCardImportButton'
 
 export default function CharactersView() {
   const [searchQuery, setSearchQuery] = useState('')
@@ -64,6 +65,7 @@ export default function CharactersView() {
           {text(`角色列表（${visibleCharacters.length}）`, `Characters (${visibleCharacters.length})`)}
         </span>
         <div className="flex items-center gap-0.5">
+          <CharacterCardImportButton projectKey={currentProject.path} compact disabled={identityBusy || !dataReady} />
           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => load(currentProject.path)} disabled={identityBusy || loadingProjectKey !== null} title={text('刷新列表', 'Refresh list')}>
             <RefreshCw size={14} strokeWidth={2} />
           </Button>

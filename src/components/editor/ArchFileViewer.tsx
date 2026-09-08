@@ -7,7 +7,10 @@ import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
-import { parseCoreField } from '../../services/vela-protocol'
+import { CORE_FIELD_MAP, parseCoreField } from '../../services/vela-protocol'
+import { appErrorMessage } from '../../i18n/app-errors'
+import { toast } from '../ui/Toast'
+import { CharacterCardImportButton } from '../characters/CharacterCardImportButton'
 import CodeMirrorEditor from './CodeMirrorEditor'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -50,6 +53,9 @@ const ARCH_META: Record<ArchStepKey, { iconName: string; label: string; labelEn:
 
 /** 从文件路径推断出 ArchStepKey */
 function detectStepKey(filePath: string): ArchStepKey | null {
+  const field = parseCoreField(filePath)
+  const coreKey = Object.keys(CORE_FIELD_MAP).find(key => CORE_FIELD_MAP[key] === field)
+  if (coreKey) return coreKey as ArchStepKey
   if (filePath.endsWith('premise.md')) return 'premise'
   if (filePath.endsWith('characters.md')) return 'characters'
   if (filePath.endsWith('worldbuilding.md')) return 'worldbuilding'
@@ -175,7 +181,7 @@ function ArchFileViewerSession({
   }, [isCharacterProjection, tabId])
 
   /** 保存（统一走 vela://core/ DB 路径） */
-  const handleSave = useCallback(async (md: string) => {
+  const handleSave = useCallback(async (md: string, propagateFailure = false) => {
     if (isCharacterProjection) return
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
@@ -221,6 +227,12 @@ function ArchFileViewerSession({
           useEditorStore.getState().updateTabContent(tabId, currentContentRef.current)
         }
       }
+    } catch (error) {
+      if (isProjectSessionCurrent(projectSession)) {
+        toast.error(appErrorMessage(useLocaleStore.getState().locale, error))
+      }
+      // Exit-save must reject so the caller cannot close an unsaved document.
+      if (propagateFailure) throw error
     } finally {
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
@@ -228,11 +240,11 @@ function ArchFileViewerSession({
 
   useEffect(() => {
     if (isCharacterProjection) return
-    registerEditorExitSaveHandler({
+    return registerEditorExitSaveHandler({
       tabId,
       type: 'arch-file',
       projectKey,
-      save: () => handleSave(currentContentRef.current),
+      save: () => handleSave(currentContentRef.current, true),
     })
   }, [handleSave, isCharacterProjection, projectKey, tabId])
 
@@ -444,6 +456,9 @@ function ArchFileViewerSession({
 
         {/* 右侧：字数 + 状态 + 操作按钮 */}
         <div className="flex items-center gap-2 flex-shrink-0">
+          {isCharacterProjection && (
+            <CharacterCardImportButton projectKey={projectKey} disabled={!projectMatches} />
+          )}
 
           {/* 字数 */}
           {charCount > 0 && (
