@@ -273,6 +273,31 @@ afterEach(async () => {
 })
 
 describe('ReviewReport human-confirmed revision flow', () => {
+  it('错误降级为待核实时先忽略，确认后只有主动再次纳入才进入修稿', async () => {
+    installIpc(42)
+    await renderReport(JSON.stringify({ summary: '', items: [
+      { category: '连续性', severity: 'error', description: '角色是否已经离开尚需核实' },
+    ] }))
+    const severity = container!.querySelector<HTMLSelectElement>('select[aria-label="严重程度"]')!
+    await changeSelect(severity, 'unknown')
+    await act(async () => {
+      await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+    })
+    const ignored = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)!
+    expect(ignored.items[0]).toMatchObject({ severity: 'unknown', decision: 'ignore' })
+    await act(async () => page.getByRole('button', { name: '编辑清单', exact: true }).click())
+    await act(async () => page.getByRole('button', { name: '明确纳入修稿', exact: true }).click())
+    invoke.mockClear()
+    await act(async () => {
+      await page.getByRole('button', { name: '重新确认审稿清单', exact: true }).click()
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+    })
+    expect(parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)!.items[0])
+      .toMatchObject({ severity: 'unknown', decision: 'apply' })
+    expect(ignored.items[0].decision).toBe('ignore')
+  })
+
   it('逐项目标展示完成证据，待核实不计通过且仅明确选择后纳入不可变确认', async () => {
     installIpc(42)
     const goalReview = {

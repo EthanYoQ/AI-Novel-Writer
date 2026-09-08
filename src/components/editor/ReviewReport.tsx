@@ -909,9 +909,13 @@ function ReviewReportSession({
                                   <NativeSelect
                                     aria-label={text('严重程度', 'Severity')}
                                     value={item.severity}
-                                    onChange={(event) => updateItem(item.id, {
-                                      severity: normalizeSeverity(event.target.value),
-                                    })}
+                                    onChange={(event) => {
+                                      const severity = normalizeSeverity(event.target.value)
+                                      updateItem(item.id, {
+                                        severity,
+                                        ...(severity === 'unknown' ? { decision: 'ignore' } : {}),
+                                      })
+                                    }}
                                   >
                                     <option value="error">{text('严重问题', 'Critical issue')}</option>
                                     <option value="warning">{text('改进建议', 'Improvement')}</option>
