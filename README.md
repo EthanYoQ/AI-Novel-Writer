@@ -10,6 +10,12 @@
 
 <h1 align="center">AI 小说作家 / AI Novel Writer</h1>
 
+<div align="center">
+
+[English](README_en.md) | **中文**
+
+</div>
+
 <p align="center">
   面向长篇小说创作的本地优先桌面工作台。它把“前提 → 角色 → 世界观 → 章节蓝图 → 草稿 → 审稿 → 修稿 → 定稿”组织为一条可追溯的创作流程；模型由你自行配置，项目资料留在你的电脑上。
 </p>
