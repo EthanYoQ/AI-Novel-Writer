@@ -188,7 +188,7 @@ export default function LeftToolWindowBar() {
           icon={Settings}
           label={text('设置', 'Settings')}
           active={activeRailItem === 'settings'}
-          onClick={openSettings}
+          onClick={() => openSettings('appearance')}
         />
       </div>
     </div>
