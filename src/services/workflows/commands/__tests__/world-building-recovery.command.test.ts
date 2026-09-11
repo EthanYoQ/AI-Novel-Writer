@@ -92,6 +92,7 @@ function installResponses(items: readonly ResponseItem[], writesAtRequestStart: 
 }
 
 let partialFile: Record<string, unknown>
+let currentPremise: string
 let formalWorldbuilding: string
 let formalWrites: string[]
 let partialWriteCount: number
@@ -103,7 +104,7 @@ function installIpc(): void {
         if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
         if (channel === 'fs:check-exists') return false
         if (channel === 'db:project-core-get') {
-          return { premise, worldbuilding: formalWorldbuilding }
+          return { premise: currentPremise, worldbuilding: formalWorldbuilding }
         }
         if (channel === 'fs:read-json') {
           return { success: true, data: structuredClone(partialFile) }
@@ -136,6 +137,7 @@ function installIpc(): void {
 beforeEach(() => {
   vi.clearAllMocks()
   partialFile = {}
+  currentPremise = premise
   formalWorldbuilding = '# 世界观\n\n作者已经确认的完整世界观。'
   formalWrites = []
   partialWriteCount = 0
@@ -272,6 +274,35 @@ describe('GenerateWorldBuildingCommand 截断恢复', () => {
     expect(formalWorldbuilding).toBe(authorEdit)
     expect(formalWrites).toHaveLength(0)
     expect(recoverableWorldBuildingCandidate(partialFile)).toBe('模型生成的完整世界观候选。')
+  })
+
+  it('模型响应前故事前提与小说配置变化时只保留候选，不写正式世界观', async () => {
+    const original = formalWorldbuilding
+    installResponses([{
+      content: '基于旧前提与旧配置生成的世界观。',
+      finishReason: 'stop',
+      beforeResponse: () => {
+        currentPremise = '作者在生成期间改写后的故事前提。'.repeat(4)
+        const currentProject = useProjectStore.getState().currentProject!
+        useProjectStore.setState({
+          currentProject: {
+            ...currentProject,
+            novelConfig: {
+              ...currentProject.novelConfig,
+              worldSetting: '作者在生成期间修改后的世界底层规则。',
+            },
+          },
+        })
+      },
+    }])
+
+    await expect(new GenerateWorldBuildingCommand(snapshot, createWorkflowRuntimeDependencies())
+      .execute({ step: {}, context: context(), callbacks: callbacks() }))
+      .rejects.toThrow('故事前提、小说配置或模板已变化')
+
+    expect(formalWorldbuilding).toBe(original)
+    expect(formalWrites).toHaveLength(0)
+    expect(recoverableWorldBuildingCandidate(partialFile)).toBe('基于旧前提与旧配置生成的世界观。')
   })
 
   it('重新打开后源事实变化会拒绝续写，并保留候选供查看复制', async () => {

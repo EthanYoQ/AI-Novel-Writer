@@ -1823,6 +1823,9 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
 
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
+    const latestTemplate = await resolvePromptTemplate('world_building', projectSession, writingLanguage)
+    this.assertNotCancelled(context)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
     const latestCore = await ipc.invokeWithProjectSession(
       projectSession,
       'db:project-core-get',
@@ -1830,7 +1833,20 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     )
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
-    if (synopsisFactsFingerprint([latestCore?.worldbuilding || '']) !== expectedDbHash) {
+    const latestProject = useProjectStore.getState().currentProject
+    const latestFactsFingerprint = latestProject && latestTemplate
+      ? synopsisFactsFingerprint([
+          latestCore?.premise || '',
+          JSON.stringify(latestProject.novelConfig),
+          stepGuidance,
+          JSON.stringify(latestTemplate),
+        ])
+      : ''
+    const formalWorldBuildingChanged = synopsisFactsFingerprint([
+      latestCore?.worldbuilding || '',
+    ]) !== expectedDbHash
+    const sourceFactsChanged = latestFactsFingerprint !== factsFingerprint
+    if (formalWorldBuildingChanged || sourceFactsChanged) {
       await this.persistWorldBuildingCandidate(
         projectSession,
         expectedProjectPath,
@@ -1841,8 +1857,12 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
         stepGuidance,
       )
       throw new WorldBuildingResumeAvailableError(text(
-        '世界观生成期间正式内容已被修改，本次结果已保留为候选且未覆盖作者修改；可查看或复制候选。',
-        'The formal worldbuilding changed while generation was running. This result was kept as a candidate and did not overwrite the author edit; you can view or copy it.',
+        sourceFactsChanged
+          ? '世界观生成期间故事前提、小说配置或模板已变化，本次结果已保留为候选且未写入正式世界观；可查看或复制候选。'
+          : '世界观生成期间正式内容已被修改，本次结果已保留为候选且未覆盖作者修改；可查看或复制候选。',
+        sourceFactsChanged
+          ? 'The premise, novel configuration, or template changed while worldbuilding was being generated. This result was kept as a candidate and was not written to formal worldbuilding; you can view or copy it.'
+          : 'The formal worldbuilding changed while generation was running. This result was kept as a candidate and did not overwrite the author edit; you can view or copy it.',
       ))
     }
     const heading = promptLanguageText(writingLanguage, '世界观', 'Worldbuilding')
