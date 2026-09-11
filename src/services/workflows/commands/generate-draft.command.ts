@@ -61,6 +61,90 @@ const CROSS_CHAPTER_REUSE_LONG_RUN_CHARS = 80
 const ACTIVE_THREAD_CONTEXT_MAX_CHARS = 1200
 const ACTIVE_THREAD_CONTEXT_MAX_ITEMS = 6
 const STREAM_PREVIEW_INTERVAL_MS = 250
+
+type ChapterHeading = Readonly<{
+  lineIndex: number
+  from: number
+  to: number
+  markdownLevel: number
+}>
+
+function parseChapterHeading(line: string, lineIndex: number): ChapterHeading | null {
+  const match = /^\s*(?:(#{1,6})[\t ]+)?(?:第\s*([1-9]\d*)(?:\s*[–—-]\s*([1-9]\d*))?\s*章|Chapters?[\t ]+([1-9]\d*)(?:[\t ]*[–—-][\t ]*([1-9]\d*))?)(?=[\t ]*(?:[:：.．—-]|$))/iu.exec(line)
+  if (!match) return null
+  // Bare headings must use the production outline's explicit title separator.
+  if (!match[1] && !/^[\t ]*[:：]\s*\S/u.test(line.slice(match[0].length))) return null
+  const from = Number(match[2] ?? match[4])
+  const to = Number(match[3] ?? match[5] ?? from)
+  return {
+    lineIndex,
+    from,
+    to,
+    markdownLevel: match[1]?.length ?? 0,
+  }
+}
+
+/**
+ * Project an explicitly chapter-structured synopsis onto one chapter without
+ * cutting any selected section. Ambiguous or unlocatable structures stay
+ * verbatim so author facts are never discarded on a guess.
+ */
+export function synopsisForDraftChapter(synopsis: string, chapterNumber: number): string {
+  // Quoted examples can contain chapter-like headings; do not interpret them.
+  if (/^\s*(?:`{3,}|~{3,})/mu.test(synopsis)) return synopsis.trim()
+  const lines = synopsis.trim().split(/\r?\n/u)
+  const headings = lines
+    .map((line, lineIndex) => parseChapterHeading(line, lineIndex))
+    .filter((heading): heading is ChapterHeading => heading !== null)
+  if (headings.length < 2) return synopsis.trim()
+
+  const firstLevel = headings[0]!.markdownLevel
+  const hasConsistentHeadingStyle = headings.every(heading => heading.markdownLevel === firstLevel)
+  const hasStrictChapterOrder = headings.every((heading, index) => (
+    heading.from <= heading.to
+    && (index === 0 || heading.from > headings[index - 1]!.to)
+  ))
+  const currentHeadings = headings.filter(heading => heading.from <= chapterNumber && chapterNumber <= heading.to)
+  if (!hasConsistentHeadingStyle || !hasStrictChapterOrder || currentHeadings.length !== 1) {
+    return synopsis.trim()
+  }
+
+  const headingsByLine = new Map(headings.map(heading => [heading.lineIndex, heading]))
+  let activeRange: Pick<ChapterHeading, 'from' | 'to'> | null = null
+  const projected: string[] = []
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex]!
+    const chapterHeading = headingsByLine.get(lineIndex)
+    if (chapterHeading) {
+      activeRange = chapterHeading
+    } else {
+      const markdownHeading = /^\s*(#{1,6})\s+/u.exec(line)
+      if (markdownHeading && (firstLevel === 0 || markdownHeading[1]!.length <= firstLevel)) {
+        activeRange = null
+      }
+    }
+    if (
+      activeRange === null
+      || (activeRange.from <= chapterNumber && chapterNumber <= activeRange.to)
+    ) projected.push(line)
+  }
+  return projected.join('\n').trim()
+}
+
+function exactParagraphs(values: readonly string[]): ReadonlySet<string> {
+  return new Set(values.flatMap(value => (
+    value.split(/\r?\n\s*\r?\n/u).map(paragraph => paragraph.trim()).filter(Boolean)
+  )))
+}
+
+function withoutExactParagraphDuplicates(content: string, duplicates: ReadonlySet<string>): string {
+  return content
+    .split(/\r?\n\s*\r?\n/u)
+    .map(paragraph => paragraph.trim())
+    .filter(paragraph => paragraph && !duplicates.has(paragraph))
+    .join('\n\n')
+}
+
 export function sanitizeDraftText(text: string): string {
   const cleaned = stripThinkingTags(text)
     .replace(/^\s*(?:点我继续生成后续内容|继续生成后续内容|请点击继续|未完待续)\s*$/gmi, '')
@@ -344,7 +428,15 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       'Building chapter context...',
     ))
 
-    const architecture = await this.readArchitecture(expectedProjectPath, projectSession)
+    const { coreOutline, worldSetting, goldenFinger, protagonistProfile } = novelConfig
+    const authoredConfigFacts = [coreOutline, worldSetting, goldenFinger, protagonistProfile]
+      .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    const architecture = await this.readArchitecture(
+      expectedProjectPath,
+      projectSession,
+      this.chapterInfo.chapterNumber,
+      authoredConfigFacts,
+    )
     const projectPrompts = await this.readProjectPrompts(
       expectedProjectPath,
       projectSession,
@@ -394,7 +486,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     // 以最大化 LLM 上下文缓存命中率
     // ==========================================
     const writingStyle = novelConfig.writingStyle?.trim() || ''
-    const { coreOutline, worldSetting, goldenFinger, protagonistProfile } = novelConfig
     const promptOnlyConfigKeys = new Set([
       'globalGuidance',
       'writingStyle',
@@ -525,8 +616,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     }
     const chapterMaterials = assembleChapterMaterials({
       writingLanguage,
-      authorProjectFacts: [coreOutline, worldSetting, goldenFinger, protagonistProfile]
-        .filter((value): value is string => typeof value === 'string' && Boolean(value.trim())),
+      authorProjectFacts: authoredConfigFacts,
       characterProfiles,
       futurePlans: futureBlueprintsStr,
       references: [
@@ -1096,13 +1186,24 @@ ${visibleTail}`,
   }
 
   // --- 抽取自原文件的辅助方法 ---
-  private async readArchitecture(projectPath: string, projectSession: ProjectSessionContext): Promise<string> {
+  private async readArchitecture(
+    projectPath: string,
+    projectSession: ProjectSessionContext,
+    chapterNumber: number,
+    authoredConfigFacts: readonly string[],
+  ): Promise<string> {
     const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath)
+    const duplicates = exactParagraphs(authoredConfigFacts)
     const parts: string[] = []
-    if (core?.premise) parts.push(core.premise.trim())
-    if (core?.worldbuilding) parts.push(core.worldbuilding.trim())
-    if (core?.synopsis) parts.push(core.synopsis.trim())
-    return parts.join('\n\n---\n\n')
+    if (core?.premise) parts.push(withoutExactParagraphDuplicates(core.premise, duplicates))
+    if (core?.worldbuilding) parts.push(withoutExactParagraphDuplicates(core.worldbuilding, duplicates))
+    if (core?.synopsis) {
+      parts.push(withoutExactParagraphDuplicates(
+        synopsisForDraftChapter(core.synopsis, chapterNumber),
+        duplicates,
+      ))
+    }
+    return parts.filter(Boolean).join('\n\n---\n\n')
   }
 
   private async readProjectPrompts(

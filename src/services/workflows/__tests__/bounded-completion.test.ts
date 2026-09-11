@@ -4,6 +4,7 @@ import {
   appendVisibleTextContinuation,
   BoundedCompletionFailure,
   completeBoundedCompletion,
+  createBoundedCompletionError,
   redactVisibleCompletionText,
 } from '../bounded-completion'
 
@@ -84,16 +85,31 @@ describe('bounded completion', () => {
   it('fails closed after the configured structured continuation limit', async () => {
     const requestContinuation = vi.fn().mockResolvedValue({ content: '{"half":', finishReason: 'length' })
 
-    await expect(completeBoundedCompletion({
+    const completion = completeBoundedCompletion({
       initial: { content: '{"half":', finishReason: 'length' },
       mode: 'replace-structured-output',
       maxContinuations: 2,
       originalPrompt: '返回 JSON',
       writingLanguage: 'zh-CN',
       requestContinuation,
-    })).rejects.toThrow('已自动续写 2 次仍未完成')
+    })
+
+    await expect(completion).rejects.toThrow(
+      'AI 输出连续达到本次请求长度限制，已自动续写 2 次，尚未完整生成。',
+    )
+    await expect(completion).rejects.not.toThrow(/模型最大长度|结果未被保存/)
 
     expect(requestContinuation).toHaveBeenCalledTimes(2)
+  })
+
+  it('describes provider length as this request limit and retains the failure code', () => {
+    const error = createBoundedCompletionError('length')
+
+    expect(error).toMatchObject({
+      failureCode: 'length',
+      message: 'AI 输出达到本次请求长度限制，尚未完整生成。请缩短本次任务或拆分为更小批次后重试。',
+    })
+    expect(error.message).not.toMatch(/模型最大长度|结果未被保存/)
   })
 
   it('localizes terminal errors by UI locale without changing the writing-language prompt', async () => {
@@ -110,7 +126,9 @@ describe('bounded completion', () => {
       writingLanguage: 'zh-CN',
       uiLocale: 'en-US',
       requestContinuation,
-    })).rejects.toThrow('Automatic continuation ran 1 time but the output is still incomplete')
+    })).rejects.toThrow(
+      'Automatic continuation ran 1 time, but the output is not yet complete',
+    )
 
     expect(requestContinuation).toHaveBeenCalledOnce()
     expect(requestContinuation.mock.calls[0]?.[0]).toContain('上一轮结构化输出因长度限制而中断')

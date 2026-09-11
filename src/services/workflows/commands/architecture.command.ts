@@ -48,6 +48,15 @@ interface PartialArchData {
   character_dynamics_result?: string
   character_state_result?: string
   world_building_result?: string
+  /** 世界观输出达到长度上限时保存的未完成候选；不写入正式 worldbuilding。 */
+  world_building_partial_result?: string
+  world_building_incomplete?: boolean
+  /** 候选赖以生成的输入指纹；项目事实变化后禁止自动续写。 */
+  world_building_facts_fingerprint?: string
+  /** 候选创建时正式世界观的指纹；避免恢复时覆盖后来编辑的完整成果。 */
+  world_building_db_hash?: string
+  /** 候选实际使用的作者步骤指导；恢复时沿用，不读取新输入。 */
+  world_building_step_guidance?: string
   /** 情节大纲：已确认覆盖至 synopsis_covered_to 的纯正文（不含批次进度行）。 */
   synopsis_result?: string
   /** 上一次生成在本批范围内被输出长度中断；synopsis_result 为已完成部分。 */
@@ -117,6 +126,28 @@ export class PlotOutlineResumeAvailableError extends Error {
     this.name = 'PlotOutlineResumeAvailableError'
     Object.setPrototypeOf(this, new.target.prototype)
   }
+}
+
+export const WORLD_BUILDING_RESUME_ERROR_CODE = 'architecture-world-building-resume-available'
+
+export class WorldBuildingResumeAvailableError extends Error {
+  readonly code = WORLD_BUILDING_RESUME_ERROR_CODE
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'WorldBuildingResumeAvailableError'
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
+/** 返回可供查看、复制或续写的世界观候选；候选不是正式世界观。 */
+export function recoverableWorldBuildingCandidate(value: unknown): string {
+  if (!value || typeof value !== 'object') return ''
+  const partial = value as PartialArchData
+  if (partial.world_building_incomplete !== true) return ''
+  return typeof partial.world_building_partial_result === 'string'
+    ? partial.world_building_partial_result.trim()
+    : ''
 }
 
 /** 少于该字符数视为无保存价值的零碎输出，不落盘、不提供续写。 */
@@ -1620,6 +1651,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
   constructor(
     private snapshot: ArchitectureProjectSnapshot,
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
+    private readonly options: { resumeWorldBuilding?: boolean } = {},
   ) {
     super(generationDependencies)
   }
@@ -1648,7 +1680,11 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       ))
     }
 
-    callbacks.log(text('生成世界观...', 'Generating worldbuilding...'))
+    const resumeRequested = this.options.resumeWorldBuilding === true
+    callbacks.log(text(
+      resumeRequested ? '正在读取世界观未完成候选...' : '生成世界观...',
+      resumeRequested ? 'Reading the incomplete worldbuilding candidate...' : 'Generating worldbuilding...',
+    ))
     const template = await resolvePromptTemplate('world_building', projectSession, writingLanguage)
     if (!template) throw new Error(text(
       '模板丢失',
@@ -1656,6 +1692,48 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     ))
 
     const missingValue = promptLanguageText(writingLanguage, '（未填写）', '(not provided)')
+    const requestedStepGuidance = ((context.data.stepGuidance as Record<string, string>) || {}).worldbuilding || ''
+    const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
+    context.data.partial = partial
+    let stepGuidance = requestedStepGuidance
+    let seedText = ''
+    let expectedDbHash = synopsisFactsFingerprint([core?.worldbuilding || ''])
+
+    if (resumeRequested) {
+      seedText = recoverableWorldBuildingCandidate(partial)
+      if (!seedText
+        || partial.world_building_step_guidance === undefined
+        || !partial.world_building_facts_fingerprint
+        || !partial.world_building_db_hash
+      ) {
+        throw new Error(text(
+          '未找到可恢复的世界观候选；正式世界观保持不变，请重新生成。',
+          'No recoverable worldbuilding candidate was found. The formal worldbuilding remains unchanged; regenerate instead.',
+        ))
+      }
+      stepGuidance = partial.world_building_step_guidance
+      expectedDbHash = partial.world_building_db_hash
+      if (synopsisFactsFingerprint([core?.worldbuilding || '']) !== expectedDbHash) {
+        throw new Error(text(
+          '正式世界观自候选保存后已变化，旧候选不能自动覆盖新内容；候选仍可查看或复制。',
+          'The formal worldbuilding changed after the candidate was saved, so the old candidate cannot overwrite it. The candidate remains available to view or copy.',
+        ))
+      }
+    }
+
+    const factsFingerprint = synopsisFactsFingerprint([
+      premise_result,
+      JSON.stringify(config),
+      stepGuidance,
+      JSON.stringify(template),
+    ])
+    if (resumeRequested && partial.world_building_facts_fingerprint !== factsFingerprint) {
+      throw new Error(text(
+        '故事前提、小说配置或世界观模板自候选保存后已变化，旧候选不能续到新上下文；候选仍可查看或复制。',
+        'The premise, novel configuration, or worldbuilding template changed after the candidate was saved, so the old candidate cannot be continued into the new context. The candidate remains available to view or copy.',
+      ))
+    }
+
     const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
       .withCoreSeed(premise_result)
       .withGenre(modelFacts.genre)
@@ -1663,17 +1741,110 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       .withGoldenFinger(config.goldenFinger || missingValue)
       .withProtagonistProfile(config.protagonistProfile || missingValue)
       .withGlobalGuidance(config.globalGuidance || missingValue)
-      .withStepGuidance(((context.data.stepGuidance as Record<string, string>) || {}).worldbuilding || '')
-
-    const result = await this.callLLMWithBuilder(
-      promptBuilder,
-      callbacks,
-      { purpose: 'generate-world-building', reasoningStage: 'planning', writingSkillStage: 'planning' },
-      context,
-    )
-    if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+      .withStepGuidance(stepGuidance)
+    const taskPrompt = promptBuilder.build()
+    const systemPrompt = promptBuilder.getSystemRole()
+    const llmOptions = {
+      purpose: 'generate-world-building',
+      reasoningStage: 'planning' as const,
+      writingSkillStage: 'planning' as const,
+    }
+    let result: string
+    let persistedCandidate = seedText
+    try {
+      if (!seedText) {
+        const initial = await this.callLLMResult(
+          taskPrompt,
+          systemPrompt,
+          callbacks,
+          llmOptions,
+          context,
+        )
+        if (initial.finishReason === 'stop') {
+          result = initial.content
+        } else if (initial.finishReason === 'length' && initial.content.trim()) {
+          persistedCandidate = initial.content.trim()
+          await this.persistWorldBuildingCandidate(
+            projectSession,
+            expectedProjectPath,
+            context,
+            persistedCandidate,
+            factsFingerprint,
+            expectedDbHash,
+            stepGuidance,
+          )
+          result = await this.callLLMWithAppendContinuation({
+            taskPrompt,
+            systemPrompt,
+            callbacks,
+            context,
+            llmOptions,
+            seedText: persistedCandidate,
+            maxContinuations: 1,
+            taskLabel: text('世界观', 'Worldbuilding'),
+            onPartialAvailable: mergedText => { persistedCandidate = mergedText.trim() },
+          })
+        } else {
+          throw this.createIncompleteCompletionError(initial.finishReason)
+        }
+      } else {
+        result = await this.callLLMWithAppendContinuation({
+          taskPrompt,
+          systemPrompt,
+          callbacks,
+          context,
+          llmOptions,
+          seedText,
+          maxContinuations: 1,
+          taskLabel: text('世界观恢复', 'Worldbuilding recovery'),
+          onPartialAvailable: mergedText => { persistedCandidate = mergedText.trim() },
+        })
+      }
+    } catch (error) {
+      if (context.cancelled) throw error
+      if (persistedCandidate) {
+        await this.persistWorldBuildingCandidate(
+          projectSession,
+          expectedProjectPath,
+          context,
+          persistedCandidate,
+          factsFingerprint,
+          expectedDbHash,
+          stepGuidance,
+        )
+        const detail = error instanceof Error ? error.message : String(error)
+        throw new WorldBuildingResumeAvailableError(text(
+          `世界观未能完整生成，已保存未完成候选且未覆盖正式世界观。可查看、复制或稍后续写。原因：${detail}`,
+          `Worldbuilding did not complete. The incomplete candidate was saved without overwriting the formal worldbuilding; you can view, copy, or resume it later. Reason: ${detail}`,
+        ))
+      }
+      throw error
+    }
 
     this.assertNotCancelled(context)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
+    const latestCore = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:project-core-get',
+      expectedProjectPath,
+    )
+    this.assertNotCancelled(context)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
+    if (synopsisFactsFingerprint([latestCore?.worldbuilding || '']) !== expectedDbHash) {
+      await this.persistWorldBuildingCandidate(
+        projectSession,
+        expectedProjectPath,
+        context,
+        result,
+        factsFingerprint,
+        expectedDbHash,
+        stepGuidance,
+      )
+      throw new WorldBuildingResumeAvailableError(text(
+        '世界观生成期间正式内容已被修改，本次结果已保留为候选且未覆盖作者修改；可查看或复制候选。',
+        'The formal worldbuilding changed while generation was running. This result was kept as a candidate and did not overwrite the author edit; you can view or copy it.',
+      ))
+    }
     const heading = promptLanguageText(writingLanguage, '世界观', 'Worldbuilding')
     await writeArchToDb(
       'worldbuilding',
@@ -1685,8 +1856,12 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     )
     this.assertNotCancelled(context)
 
-    const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
     partial.world_building_result = result
+    delete partial.world_building_partial_result
+    delete partial.world_building_incomplete
+    delete partial.world_building_facts_fingerprint
+    delete partial.world_building_db_hash
+    delete partial.world_building_step_guidance
     this.assertNotCancelled(context)
     await savePartialData(
       expectedProjectPath,
@@ -1702,6 +1877,33 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       'Worldbuilding generated and saved to the database.',
     ))
     return result
+  }
+
+  private async persistWorldBuildingCandidate(
+    projectSession: ProjectSessionContext,
+    expectedProjectPath: string,
+    context: WorkflowContext,
+    candidate: string,
+    factsFingerprint: string,
+    dbHash: string,
+    stepGuidance: string,
+  ): Promise<void> {
+    this.assertNotCancelled(context)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
+    const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
+    partial.world_building_partial_result = candidate
+    partial.world_building_incomplete = true
+    partial.world_building_facts_fingerprint = factsFingerprint
+    partial.world_building_db_hash = dbHash
+    partial.world_building_step_guidance = stepGuidance
+    await savePartialData(
+      expectedProjectPath,
+      partial,
+      projectSession,
+      workflowUiText(context, '保存世界观未完成候选', 'Save the incomplete worldbuilding candidate'),
+      workflowUiText(context, '保存世界观未完成候选失败', 'Failed to save the incomplete worldbuilding candidate.'),
+    )
+    context.data.partial = partial
   }
 }
 

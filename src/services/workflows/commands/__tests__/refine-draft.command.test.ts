@@ -520,7 +520,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       step: {},
       context: workflowContext(),
       callbacks: callbacks(),
-    })).rejects.toThrow('已自动续写 3 次仍未完成')
+    })).rejects.toThrow('已自动续写 3 次，尚未完整生成')
 
     expect(completeWithLease).toHaveBeenCalledTimes(4)
     expect(invoke).not.toHaveBeenCalled()
