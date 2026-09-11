@@ -215,8 +215,8 @@ function incompleteCompletionError(
         failureCode,
         localize(
           uiLocale,
-          'AI 输出达到模型最大长度，结果不完整。请提高模型最大输出 Tokens 或缩短本次任务后重试。',
-          'AI output reached the model maximum length and is incomplete. Increase the maximum output tokens or shorten the task, then try again.',
+          'AI 输出达到本次请求长度限制，尚未完整生成。请缩短本次任务或拆分为更小批次后重试。',
+          'AI output reached this request length limit and is not yet complete. Shorten the task or split it into smaller batches, then try again.',
         ),
       )
     case 'content_filter':
@@ -251,11 +251,11 @@ function continuationLimitExceededError(maxContinuations: number, uiLocale: Loca
   return new Error(
     localize(
       uiLocale,
-      `AI 输出连续达到模型最大长度，已自动续写 ${maxContinuations} 次仍未完成，结果未被保存。` +
-        '请提高模型最大输出 Tokens、缩短本次任务，或拆分为更小批次后重试。',
-      `AI output repeatedly reached the model maximum length. Automatic continuation ran ${maxContinuations} ` +
-        `${maxContinuations === 1 ? 'time' : 'times'} but the output is still incomplete, so it was not saved. ` +
-        'Increase the maximum output tokens, shorten the task, or split it into smaller batches and try again.',
+      `AI 输出连续达到本次请求长度限制，已自动续写 ${maxContinuations} 次，尚未完整生成。` +
+        '请缩短本次任务，或拆分为更小批次后重试。',
+      `AI output repeatedly reached this request length limit. Automatic continuation ran ${maxContinuations} ` +
+        `${maxContinuations === 1 ? 'time' : 'times'}, but the output is not yet complete. ` +
+        'Shorten the task or split it into smaller batches, then try again.',
     ),
   )
 }

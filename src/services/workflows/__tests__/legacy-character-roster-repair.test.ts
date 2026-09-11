@@ -259,7 +259,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('已自动续写 2 次仍未完成')
+    await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('已自动续写 2 次，尚未完整生成')
     expect(generateStream).toHaveBeenCalledTimes(3)
     expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => channel.startsWith('db:character-roster'))).toEqual(['db:character-roster-read'])
   })

@@ -642,7 +642,7 @@ describe('workflow mutation failure boundaries', () => {
       'db:post-process-mark-step-failed',
       'run-1',
       'chapter_notes',
-      expect.stringContaining('输出达到模型最大长度'),
+      expect.stringContaining('输出达到本次请求长度限制'),
       PROJECT_PATH,
       workflowContext.projectSession,
     )
@@ -696,7 +696,7 @@ describe('workflow mutation failure boundaries', () => {
     expect(step).toBeDefined()
 
     await expect(step!.executor(callbacks(), context()))
-      .rejects.toThrow('AI 输出达到模型最大长度')
+      .rejects.toThrow('AI 输出达到本次请求长度限制')
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
   })
 
@@ -1639,7 +1639,7 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: { ...context(), uiLocale: 'en-US' },
       callbacks: callbacks(),
-    })).rejects.toThrow('Automatic continuation ran 1 time but the output is still incomplete')
+    })).rejects.toThrow('Automatic continuation ran 1 time, but the output is not yet complete')
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:review-create')
