@@ -1,4 +1,4 @@
-# S00 实施证据索引
+# Program v3 实施证据索引
 
 基线 SHA：`2264390d6fb8b052cc14736d544df0cc74516649`。现行规格为 Program v3；本目录是实际实施产物，不修改三份冻结规划包。S00 已通过 Astra/Medium 独立审查，无未关闭阻断；该裁决只覆盖 S00，不声明生产功能完成。
 
@@ -15,6 +15,9 @@
 | 实验入口 | `scripts/quality-modernization-run.mjs`、`scripts/quality-modernization-driver.mjs` | help、阶段选择、身份/parity/账本拒绝逻辑；正式 driver 待相关切片接线 |
 | 真实基线启动 | 私有 `baseline/execution-targets.json`、`baseline/probe.json`、`baseline/command-probe-vitest.json` | 固定旧实现的 runtime 和三个生产 command 注入完成结果探针；模型调用为 0 |
 | 独立代码审查 | 私有 `review-s00.json` | PASS-S00-scoped；9/9 独立测试、基线探针复跑、2714 项三方哈希匹配；三项 P2 修复已核验 |
+| S01 契约与迁移 lane | `s01-evidence.md`、`s01-storage-contract.json`、`docs/adr/0018-program-v3-domain-contracts.md` | 独立 36/36；现有 SQLite 实测 35 表/356 字段补全 S00 初扫；M00–M05 业务步骤尚未安装 |
+| 当前云端 CI | [运行 34711345619](https://github.com/EthanYoQ/AI-Novel-Writer/actions/runs/34711345619) | `1d561e1f0ff14527a65ecb625dfd618147f1df0c` Windows PR CI 成功；不代表后续未提交切片或安装资格 |
+| G01 原问题台账 | `g01-issue-ledger.md` | 10 项正文/评论与相关 PR/Release fresh-read；逐症状验收 owner；没有当前可关闭结论 |
 
 私有文件均位于本任务 `.runtime/.cache/novel-quality-modernization/`，不进入提交。绝对执行路径、依赖和产物哈希供本机重跑使用，公开材料只包含非秘密字段和合成作品。
 
