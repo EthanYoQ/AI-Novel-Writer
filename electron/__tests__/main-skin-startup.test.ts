@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => {
   return {
     calls,
     userData: '',
+    appData: '',
     windows,
     BrowserWindow,
     registerIPCHandlers: vi.fn(() => calls.push('ipc')),
@@ -42,7 +43,7 @@ const mocks = vi.hoisted(() => {
     skinSnapshot: vi.fn((generation: string) => ({ globalGeneration: generation, skinRevision: 0, backgroundSkin: 'classic' })),
     app: {
       commandLine: { appendSwitch: vi.fn(), getSwitchValue: vi.fn(() => '') },
-      getPath: vi.fn(() => mocks.userData),
+      getPath: vi.fn((name: string) => name === 'appData' ? mocks.appData : mocks.userData),
       setPath: vi.fn(),
       getLocale: () => 'zh-CN',
       getVersion: () => '0.7.0',
@@ -125,6 +126,7 @@ describe('interactive Electron startup', () => {
     fixtureRoot = fs.mkdtempSync(path.join(fixtureBase, 'run-'))
     legacy = path.join(fixtureRoot, 'legacy'); canonical = path.join(fixtureRoot, 'canonical')
     mocks.userData = path.join(fixtureRoot, 'userData')
+    mocks.appData = path.join(fixtureRoot, 'appData')
     fs.mkdirSync(legacy); fs.mkdirSync(mocks.userData)
     fs.writeFileSync(path.join(legacy, 'config.json'), '{}')
     fs.writeFileSync(path.join(mocks.userData, 'retained.json'), 'original Chromium profile')
@@ -149,6 +151,15 @@ describe('interactive Electron startup', () => {
     expect(fs.readFileSync(path.join(legacy, 'config.json'), 'utf8')).toBe('{}')
     expect(fs.readFileSync(path.join(mocks.userData, 'retained.json'), 'utf8')).toBe('original Chromium profile')
     expect(mocks.windows[0]?.on).toHaveBeenCalledWith('close', expect.any(Function))
+  })
+
+  it('passes Electron appData to migration when no canonical override is configured', async () => {
+    vi.stubEnv('AI_NOVEL_APP_DATA_HOME', '')
+    await import('../main')
+    await vi.waitFor(() => expect(mocks.calls).toContain('update-runtime'))
+    expect(JSON.parse(fs.readFileSync(path.join(mocks.appData, 'ai-novel-writer/.migration/receipt.json'), 'utf8')).completed).toBe(true)
+    expect(fs.existsSync(canonical)).toBe(false)
+    expect(fs.readFileSync(path.join(mocks.userData, 'retained.json'), 'utf8')).toBe('original Chromium profile')
   })
 
   it('shows only a diagnostic window when source JSON is corrupt', async () => {

@@ -4,14 +4,20 @@ import { STORAGE_ENVIRONMENT } from '../../src/shared/project-storage'
 
 export interface GlobalDataRoots { legacySource: string; canonicalTarget: string; userData: string }
 /** Resolving names never creates a directory or reads author configuration. */
-export function resolveGlobalDataRoots(userData: string, env: Record<string, string | undefined> = process.env, home = os.homedir()): GlobalDataRoots {
+export function resolveGlobalDataRoots(userData: string, appData: string, env: Record<string, string | undefined> = process.env, home = os.homedir()): GlobalDataRoots {
+  if (!path.isAbsolute(appData)) throw new Error('GLOBAL_APP_DATA_PATH_REQUIRED')
   return {
     legacySource: path.resolve(env[STORAGE_ENVIRONMENT.legacySource]?.trim() || env[STORAGE_ENVIRONMENT.legacySourceCompatibility]?.trim() || path.join(home, '.vela')),
-    canonicalTarget: path.resolve(env[STORAGE_ENVIRONMENT.canonicalTarget]?.trim() || path.join(home, '.ai-novel')),
+    canonicalTarget: path.resolve(env[STORAGE_ENVIRONMENT.canonicalTarget]?.trim() || path.join(appData, 'ai-novel-writer')),
     userData: path.resolve(userData),
   }
 }
-const initial = resolveGlobalDataRoots(path.join(os.homedir(), '.ai-novel-unused-user-data-locator'))
+// No production default can be resolved before Electron supplies appData. A NUL
+// sentinel also prevents an unguarded consumer from opening a pre-admission file.
+const initial = {
+  legacySource: path.resolve(process.env[STORAGE_ENVIRONMENT.legacySource]?.trim() || process.env[STORAGE_ENVIRONMENT.legacySourceCompatibility]?.trim() || path.join(os.homedir(), '.vela')),
+  canonicalTarget: path.join(os.homedir(), '\0ai-novel-global-data-not-ready'),
+}
 /** Compatibility export names; live bindings switch only after verified cutover. */
 export let VELA_HOME = initial.canonicalTarget
 export let GLOBAL_CONFIG_PATH = path.join(VELA_HOME, 'config.json')

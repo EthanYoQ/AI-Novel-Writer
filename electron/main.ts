@@ -319,7 +319,7 @@ app.whenReady().then(async () => {
 
 function prepareGlobalRuntime(): boolean {
   const migrated = runGlobalDataMigration({
-    ...resolveGlobalDataRoots(app.getPath('userData')),
+    ...resolveGlobalDataRoots(app.getPath('userData'), app.getPath('appData')),
     exclusiveAccess: ownsInstanceLock,
   })
   if (migrated.state !== 'ready') {

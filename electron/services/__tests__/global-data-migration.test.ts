@@ -45,8 +45,24 @@ afterEach(() => { vi.restoreAllMocks(); for (const root of created.splice(0)) if
 describe('single global generation cutover using synthetic roots only', () => {
   it('resolves distinct legacy/canonical environment roles without creating anything', () => {
     const roots = fixture()
-    expect(resolveGlobalDataRoots(roots.userData, { AI_NOVEL_VELA_HOME: roots.legacySource, AI_NOVEL_APP_DATA_HOME: roots.canonicalTarget })).toEqual({ legacySource: roots.legacySource, canonicalTarget: roots.canonicalTarget, userData: roots.userData })
+    expect(resolveGlobalDataRoots(roots.userData, path.join(roots.userData, '..', 'appData'), { AI_NOVEL_VELA_HOME: roots.legacySource, AI_NOVEL_APP_DATA_HOME: roots.canonicalTarget })).toEqual({ legacySource: roots.legacySource, canonicalTarget: roots.canonicalTarget, userData: roots.userData })
     expect(fs.existsSync(roots.canonicalTarget)).toBe(false)
+  })
+  it('uses Electron appData for the production default and keeps userData unchanged', () => {
+    const roots = fixture(), parent = path.dirname(roots.userData)
+    const home = path.join(parent, 'home'), appData = path.join(parent, 'electron-app-data')
+    expect(resolveGlobalDataRoots(roots.userData, appData, {}, home)).toEqual({
+      legacySource: path.join(home, '.vela'), canonicalTarget: path.join(appData, 'ai-novel-writer'), userData: roots.userData,
+    })
+    expect(fs.existsSync(home)).toBe(false)
+    expect(fs.existsSync(appData)).toBe(false)
+    expect(() => resolveGlobalDataRoots(roots.userData, 'relative', {}, home)).toThrow('GLOBAL_APP_DATA_PATH_REQUIRED')
+  })
+  it('refuses a default canonical root that overlaps Electron userData before creating files', () => {
+    const roots = fixture(), appData = path.dirname(roots.userData)
+    const userData = path.join(appData, 'ai-novel-writer')
+    expect(runGlobalDataMigration({ ...resolveGlobalDataRoots(userData, appData, {}, path.join(appData, 'home')), exclusiveAccess: true })).toMatchObject({ state: 'blocked', code: 'GLOBAL_ROOT_INTERSECTION' })
+    expect(fs.existsSync(userData)).toBe(false)
   })
   it('copies every global object byte-for-byte, retains unknown shared data and never touches userData', () => {
     const roots = fixture(); populate(roots.legacySource); put(roots.userData, 'sentinel', 'old renderer origin')
