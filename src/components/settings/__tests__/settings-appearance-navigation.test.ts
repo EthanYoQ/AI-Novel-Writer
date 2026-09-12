@@ -27,7 +27,7 @@ describe('settings appearance navigation seam', () => {
 
     // 模拟 React onClick 透传的合成事件对象
     const fakeSyntheticEvent = { nativeEvent: {}, target: {}, type: 'click' }
-    useLayoutStore.getState().openSettings(fakeSyntheticEvent as any)
+    useLayoutStore.getState().openSettings(fakeSyntheticEvent as unknown)
     expect(useLayoutStore.getState().settingsOpen).toBe(true)
     expect(useLayoutStore.getState().settingsSection).toBe('appearance')
   })
