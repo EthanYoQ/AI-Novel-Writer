@@ -55,7 +55,7 @@ export default function StatusBar() {
         {defaultModel ? (
           <StatusBarSegment
             title={text(`当前模型：${defaultModel.name}`, `Current model: ${defaultModel.name}`)}
-            onClick={openSettings}
+            onClick={() => openSettings('llm')}
           >
             <Wifi size={11} />
             <span className="opacity-80 max-w-[120px] truncate">{defaultModel.name}</span>
@@ -63,7 +63,7 @@ export default function StatusBar() {
         ) : (
           <StatusBarSegment
             title={text('点击配置模型', 'Click to configure a model')}
-            onClick={openSettings}
+            onClick={() => openSettings('llm')}
           >
             <span className="opacity-50">{text('未配置模型', 'No model configured')}</span>
           </StatusBarSegment>
