@@ -65,4 +65,8 @@ export interface PortableReceiptProjection {
   integrityScope: 'projection-only'
 }
 /** Imported history is not a model, formal-commit, outbox, import or publication capability. */
-export function mayReplayTransferredExecution(_history: PortableExecutionHistory): false { return false }
+export function mayReplayTransferredExecution(history: PortableExecutionHistory): false {
+  // Every imported execution remains non-replayable, regardless of its recorded status.
+  void history
+  return false
+}
