@@ -32,7 +32,7 @@ node scripts/quality-modernization-run.mjs early-budget --targets <双目标> --
 node scripts/quality-modernization-run.mjs early-context --targets <双目标> --milestone post-ui
 node scripts/quality-modernization-run.mjs early-review --targets <双目标> --milestone post-ui
 node scripts/quality-modernization-run.mjs full --targets <双目标> --milestone final
-node --test scripts/__tests__/quality-modernization-run.test.mjs
+pnpm exec vitest run scripts/__tests__/quality-modernization-run.test.mjs
 ```
 
 help不启动目标。baseline-probe实际运行独立冻结树的既有 `real-provider-generation-qualification.mjs --dry-run`，网络阻断且不传秘密环境；该driver以模拟completion触达生产generation runtime。`quality-modernization-driver.mjs`另外调用目标树已有三条测试，实际触达规划、正文、审稿command：精确范围提交、900目标80%边界、审稿仅定稿历史来源。其IPC是注入测试边界，不是数据库/Electron启动证据。三个入口fixture为中文，不跑英文产品用例。
