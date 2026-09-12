@@ -2,11 +2,24 @@ import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { ROOT, CAP, hash, buildFixtureExports, validatePair, selectPhase, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES } from '../quality-modernization-driver.mjs'
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+test('冻结规划脚本通过原Node入口执行全部合同反例', () => {
+  const result = spawnSync(process.execPath, [
+    path.join(ROOT, 'docs/plans/novel-quality-program-v3-2026-09-13/checks/feature-union-check.test.mjs'),
+  ], { cwd: ROOT, encoding: 'utf8', timeout: 30000, windowsHide: true })
+  assert.equal(result.status, 0, result.stderr || String(result.error || '规划合同检查失败'))
+  const receipt = JSON.parse(result.stdout)
+  assert.equal(receipt.status, 'PASS')
+  assert.equal(receipt.scope, 'plan-contract fixtures only; product checks NOT RUN')
+  assert.equal(receipt.groups, 16)
+  assert.equal(receipt.actions, 153)
+  assert.equal(receipt.negativeCases, 15)
+})
 function pair() {
   const exports = buildFixtureExports(source)
   return { targets: { baseline: { arm: 'baseline', codeSha: 'a'.repeat(40), fixture: exports.legacy }, candidate: { arm: 'candidate', codeSha: 'b'.repeat(40), subjectSha: 'b'.repeat(40), fixture: exports.canonical } }, observed: [{ sourceHash: 'a', repositoryRoot: '/甲', roots: ['/甲数据'] }, { sourceHash: 'b', repositoryRoot: '/乙', roots: ['/乙数据'] }] }
