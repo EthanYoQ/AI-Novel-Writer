@@ -1,3 +1,4 @@
+import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -41,7 +42,7 @@ describe('canonical project activation', () => {
       VALUES('fixture','fixture','fixture','source','manifest','zh-CN',1,1,'running','old-owner',5,12345)`)
     closeProjectDatabase()
     const before = probeProjectSqlite({ databasePath: f.file })
-    expect(before.schemaVersion).toBe(1)
+    expect(before.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     initProjectDatabase(f.root)
     expect(getProjectDb()!.prepare('SELECT word_count FROM drafts').pluck().get()).toBe(777)
     expect(getProjectDb()!.prepare('SELECT execution_owner,execution_epoch,lease_expires_at FROM import_runs').get()).toEqual({ execution_owner: '', execution_epoch: 6, lease_expires_at: 0 })

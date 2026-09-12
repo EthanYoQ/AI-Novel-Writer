@@ -393,4 +393,6 @@ export function registerLLMController() {
       return { success: false, error: String(error) }
     }
   })
+
+  return { modelExecutionLeases, loadModel: getModelConfig, applyProxyConfig }
 }

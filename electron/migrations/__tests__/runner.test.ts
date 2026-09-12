@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { getProjectDb, closeProjectDatabase } from '../../database'
-import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
-import { BlueprintRepository } from '../../repositories/blueprint-repository'
+import { createRequire } from 'node:module'
+import { initializeLegacyBaselineSchema } from '../baseline-schema'
+import { getDesktopMigrationRegistry } from '../desktop-registry'
+import { SqliteSchemaAdapter } from '../sqlite-schema-adapter'
 import storageContract from '../../../docs/research/novel-quality-modernization/s01-storage-contract.json'
 import {
   MIGRATION_LANE, createMigrationRegistry,
@@ -64,11 +65,13 @@ describe('desktop single schema lane', () => {
     const cache = path.resolve('.runtime/.cache/novel-quality-modernization')
     fs.mkdirSync(cache, { recursive: true })
     const root = fs.mkdtempSync(path.join(cache, 's01-schema-fixture-'))
+    const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+    const db = new Database(path.join(root, 'baseline.db'))
     try {
-      initProjectDatabase(root)
-      const db = getProjectDb()!
-      // The existing legacy read entry also creates two known blueprint ledgers lazily.
-      expect(BlueprintRepository.listPendingCharacterSyncOperations()).toEqual([])
+      initializeLegacyBaselineSchema(db)
+      // This signature is deliberately the frozen M00 domain, not the latest installed lane.
+      migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 1)
+      expect(db.prepare('SELECT * FROM blueprint_character_sync_operations').all()).toEqual([])
       expect(db.pragma('user_version', { simple: true })).toBe(1)
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[]
       const fields = tables.flatMap(({ name }) => {
@@ -78,7 +81,7 @@ describe('desktop single schema lane', () => {
       expect(fields).toEqual(storageContract.fieldDispositions.map(row => `${row.table}.${row.field}`).sort())
       expect(tables).toHaveLength(storageContract.baselineTableCount)
     } finally {
-      closeProjectDatabase()
+      db.close()
       fs.rmSync(root, { recursive: true, force: true })
     }
   })

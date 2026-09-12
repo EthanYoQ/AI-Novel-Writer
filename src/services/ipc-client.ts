@@ -37,7 +37,8 @@ function isCapabilityOrAppDataChannel(channel: string): boolean {
 
 function isProjectScopedChannel(channel: string): boolean {
   if (isCapabilityOrAppDataChannel(channel)) return false
-  return channel.startsWith('db:')
+  return channel.startsWith('generation:')
+    || channel.startsWith('db:')
     || channel.startsWith('kb:')
     || channel.startsWith('chapter:')
     || channel.startsWith('fs:')

@@ -196,6 +196,8 @@ export type GenerationOutcome =
     }
 
 export interface GenerationExecutionOptions {
+  /** Required by the S05 main-owner facade; repeated values read the same durable attempt. */
+  invocationNonce?: string
   signal?: AbortSignal
   /** Provisional provider text. It is never terminal or persistence evidence. */
   onChunk?: (chunk: string) => void

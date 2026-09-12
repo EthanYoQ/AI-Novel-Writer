@@ -25,6 +25,7 @@ vi.mock('../controllers/config-controller', () => ({ registerConfigController: v
 vi.mock('../controllers/project-controller', () => ({ registerProjectController: vi.fn() }))
 vi.mock('../controllers/fs-controller', () => ({ registerFSController: vi.fn() }))
 vi.mock('../controllers/llm-controller', () => ({ registerLLMController: vi.fn() }))
+vi.mock('../controllers/generation-controller', () => ({ registerGenerationController: vi.fn() }))
 vi.mock('../controllers/db-controller', () => ({ registerDatabaseController: vi.fn() }))
 vi.mock('../controllers/kb-controller', () => ({ registerKBController: vi.fn() }))
 vi.mock('../controllers/import-controller', () => ({ registerImportController: vi.fn() }))

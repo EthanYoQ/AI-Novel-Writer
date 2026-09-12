@@ -4,7 +4,7 @@ import os from 'node:os'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import type BetterSqlite3 from 'better-sqlite3'
-import { getDesktopMigrationRegistry } from '../migrations/desktop-registry'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
 import { migrateSchema, probeSchema, verifySchema } from '../migrations/runner'
 import type { MigrationRegistry } from '../migrations/registry'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
@@ -101,12 +101,12 @@ export function probeProjectSqlite(options: { databasePath: string; registry?: M
     } finally { db.close() }
   } finally { snapshot.close() }
 }
-export function verifyProjectSqlite(options: { databasePath: string; registry?: MigrationRegistry; targetVersion?: 1 }): ProjectSqliteEvidence {
+export function verifyProjectSqlite(options: { databasePath: string; registry?: MigrationRegistry; targetVersion?: number }): ProjectSqliteEvidence {
   const snapshot = physicalSnapshot(options.databasePath)
   try {
     const db = new Database(snapshot.file, { readonly: true, fileMustExist: true })
     try {
-      const result = inspect(db, options.registry ?? getDesktopMigrationRegistry(), options.targetVersion ?? 1); snapshot.unchanged(); return result
+      const result = inspect(db, options.registry ?? getDesktopMigrationRegistry(), options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION); snapshot.unchanged(); return result
     } finally { db.close() }
   } finally { snapshot.close() }
 }
@@ -114,7 +114,7 @@ export function verifyProjectSqlite(options: { databasePath: string; registry?: 
  * SQLite backup captures committed WAL pages. No business DB/session is exposed.
  */
 export async function backupProjectSqlite(options: {
-  sourceDatabasePath: string; targetDatabasePath: string; registry?: MigrationRegistry; targetVersion?: 1
+  sourceDatabasePath: string; targetDatabasePath: string; registry?: MigrationRegistry; targetVersion?: number
 }): Promise<ProjectSqliteEvidence> {
   const sourcePath = path.resolve(options.sourceDatabasePath), targetPath = path.resolve(options.targetDatabasePath)
   if (sourcePath === targetPath || fs.existsSync(targetPath)) throw new Error('PROJECT_MIGRATION_TARGET_EXISTS')
@@ -133,8 +133,8 @@ export async function backupProjectSqlite(options: {
     const staging = new Database(targetPath, { fileMustExist: true })
     try {
       staging.pragma('foreign_keys = ON')
-      migrateSchema(new SqliteSchemaAdapter(staging), registry, options.targetVersion ?? 1)
-      const after = inspect(staging, registry, options.targetVersion ?? 1)
+      migrateSchema(new SqliteSchemaAdapter(staging), registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
+      const after = inspect(staging, registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
       if (JSON.stringify(before.domain) !== JSON.stringify(after.domain)) throw new Error('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
       snapshot.unchanged()
       staging.pragma('wal_checkpoint(TRUNCATE)')
@@ -142,4 +142,29 @@ export async function backupProjectSqlite(options: {
       return after
     } finally { staging.close() }
   } finally { source?.close(); snapshot.close() }
+}
+
+
+/** Canonical-only upgrade seam. Caller validates its manifest and excludes business
+ * writers first. Probe never opens the source; the single lane owns the transaction.
+ */
+export function upgradeProjectSqlite(options: { databasePath: string; registry?: MigrationRegistry }): ProjectSqliteEvidence {
+  const registry = options.registry ?? getDesktopMigrationRegistry()
+  const before = probeProjectSqlite({ databasePath: options.databasePath, registry })
+  if (before.schemaVersion === CURRENT_DESKTOP_SCHEMA_VERSION) return verifyProjectSqlite({ ...options, registry })
+  if (before.schemaVersion !== 1) throw new Error('CANONICAL_SCHEMA_UPGRADE_UNSUPPORTED')
+  sourceFile(options.databasePath)
+  const database = new Database(options.databasePath, { fileMustExist: true })
+  try {
+    database.pragma('foreign_keys = ON')
+    // Revalidate the source identity after acquiring the writable connection.
+    const current = inspect(database, registry, 1)
+    if (current.fingerprint !== before.fingerprint || JSON.stringify(current.domain) !== JSON.stringify(before.domain)) throw new Error('PROJECT_MIGRATION_SOURCE_CHANGED')
+    return database.transaction(() => {
+      migrateSchema(new SqliteSchemaAdapter(database), registry, CURRENT_DESKTOP_SCHEMA_VERSION)
+      const after = inspect(database, registry, CURRENT_DESKTOP_SCHEMA_VERSION)
+      if (JSON.stringify(before.domain) !== JSON.stringify(after.domain)) throw new Error('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
+      return after
+    }).immediate()
+  } finally { database.close() }
 }

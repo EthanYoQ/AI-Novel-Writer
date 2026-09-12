@@ -1,3 +1,4 @@
+import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
 import { createRequire } from 'node:module'
 import * as lance from '@lancedb/lancedb'
 import { Field, Schema, Utf8, Int32 } from 'apache-arrow'
@@ -30,8 +31,8 @@ function fixture() {
   const dependencies: ProjectMigrationDependencies<{ empty: true }> = {
     databaseName: 'project.db', closeHandles: async () => {},
     probeSqlite: file => evidence(file, 0),
-    backupSqlite: async (source, target) => { fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL); return evidence(target, 1) },
-    verifySqlite: file => evidence(file, 1),
+    backupSqlite: async (source, target) => { fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL); return evidence(target, CURRENT_DESKTOP_SCHEMA_VERSION) },
+    verifySqlite: file => evidence(file, CURRENT_DESKTOP_SCHEMA_VERSION),
     exportVectors: async () => ({ empty: true }), importVectors: async () => {}, verifyVectors: async () => true,
     writeManifest: (storageRoot, id) => put(path.join(storageRoot, 'project.json'), JSON.stringify({ schemaVersion: 1, kind: 'ai-novel-project', projectId: id,
       createdAt: '2026-09-13T00:00:00.000Z', storageFormat: 'ai-novel', storageVersion: 1 })),
@@ -203,7 +204,7 @@ it('integrates real WAL SQLite and Lance text while preserving every source byte
   expect(fingerprints(path.join(options.projectRoot, '.ai-novel-migration', `${result.migrationId}.legacy`))).toEqual(before)
   const db = new Database(path.join(result.storageRoot, 'project.db'), { readonly: true })
   try {
-    expect(db.pragma('user_version', { simple: true })).toBe(1)
+    expect(db.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     expect(db.prepare('SELECT body FROM contents').pluck().get()).toBe('作者原文\r\n保留段落。')
     expect(db.prepare('SELECT word_count FROM drafts').pluck().get()).toBe(777)
   } finally { db.close() }

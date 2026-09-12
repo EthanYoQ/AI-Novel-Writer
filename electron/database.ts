@@ -7,10 +7,10 @@
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import { initializeLegacyBaselineSchema } from './migrations/baseline-schema'
-import { getDesktopMigrationRegistry } from './migrations/desktop-registry'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from './migrations/desktop-registry'
 import { migrateSchema, verifySchema } from './migrations/runner'
 import { SqliteSchemaAdapter } from './migrations/sqlite-schema-adapter'
-import { activateCanonicalProjectData, deactivateProjectData, getNewProjectDatabasePath, getProjectDatabasePath } from './services/project-data-locator'
+import { activateCanonicalProjectData, upgradeCanonicalProjectData, deactivateProjectData, getNewProjectDatabasePath, getProjectDatabasePath } from './services/project-data-locator'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -27,7 +27,7 @@ export function createProjectDatabase(projectPath: string, importSourceSecret?: 
   try {
     database.pragma('foreign_keys = ON')
     initializeLegacyBaselineSchema(database, importSourceSecret)
-    migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), 1)
+    migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
   } finally { database.close() }
 }
 
@@ -36,10 +36,11 @@ export function initProjectDatabase(projectPath: string): void {
   closeProjectDatabase()
   let database: BetterSqlite3.Database | undefined
   try {
+    upgradeCanonicalProjectData(projectPath)
     activateCanonicalProjectData(projectPath)
     database = new Database(getProjectDatabasePath(projectPath), { fileMustExist: true })
     const adapter = new SqliteSchemaAdapter(database)
-    verifySchema(adapter, getDesktopMigrationRegistry(), 1)
+    verifySchema(adapter, getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
     database.pragma('journal_mode = WAL')
     database.pragma('foreign_keys = ON')
     fenceProjectSession(database)
@@ -50,8 +51,32 @@ export function initProjectDatabase(projectPath: string): void {
   }
 }
 
+export interface ProjectDatabaseBeforeCloseContext { projectPath: string; database: BetterSqlite3.Database }
+const beforeCloseListeners = new Set<(context: ProjectDatabaseBeforeCloseContext) => void>()
+let notifyingBeforeClose = false
+/** Main owners must synchronously persist pause/cancel and stop new dispatch.
+ * Async work must be awaited by their own outer lifecycle before asking to close.
+ */
+export function onProjectDatabaseBeforeClose(listener: (context: ProjectDatabaseBeforeCloseContext) => void): () => void {
+  beforeCloseListeners.add(listener)
+  return () => { beforeCloseListeners.delete(listener) }
+}
+
 /** 关闭项目数据库 */
 export function closeProjectDatabase(): void {
+  if (notifyingBeforeClose) throw new Error('PROJECT_DATABASE_CLOSE_REENTRANT')
+  if (projectDb && currentProjectPath) {
+    notifyingBeforeClose = true
+    try {
+      for (const listener of beforeCloseListeners) {
+        const result: unknown = listener({ projectPath: currentProjectPath, database: projectDb })
+        if (result && typeof (result as { then?: unknown }).then === 'function') {
+          void Promise.resolve(result).catch(() => {})
+          throw new Error('PROJECT_DATABASE_BEFORE_CLOSE_MUST_BE_SYNCHRONOUS')
+        }
+      }
+    } finally { notifyingBeforeClose = false }
+  }
   // Clear the process-visible identity before closing the native handle. If
   // the close itself throws, callers still fail closed instead of treating a
   // half-closed database as the active project.

@@ -1,3 +1,4 @@
+import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../migrations/desktop-registry'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -199,7 +200,7 @@ export async function migrateProjectFormat<V>(options: {
       }
       fs.mkdirSync(staging); fs.mkdirSync(vectorCopy)
       const targetSchema = await deps.backupSqlite(path.join(source, 'vela.db'), path.join(staging, deps.databaseName))
-      if (targetSchema.schemaVersion !== 1 || !isDeepStrictEqual(targetSchema.domain, journal.sourceSchema.domain)) fail('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
+      if (targetSchema.schemaVersion !== CURRENT_DESKTOP_SCHEMA_VERSION || !isDeepStrictEqual(targetSchema.domain, journal.sourceSchema.domain)) fail('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
       checkpoint('sqlite-backed-up')
       for (const name of ASSETS) if (entryExists(path.join(source, name))) { copyAsset(path.join(source, name), path.join(staging, name)); checkpoint(`asset:${name}`) }
       for (const name of VECTOR_ASSETS) if (entryExists(path.join(source, name))) copyAsset(path.join(source, name), path.join(vectorCopy, name))

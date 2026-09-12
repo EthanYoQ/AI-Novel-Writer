@@ -4,6 +4,7 @@ import { registerConfigController } from './controllers/config-controller'
 import { registerProjectController } from './controllers/project-controller'
 import { registerFSController } from './controllers/fs-controller'
 import { registerLLMController } from './controllers/llm-controller'
+import { registerGenerationController } from './controllers/generation-controller'
 import { registerDatabaseController } from './controllers/db-controller'
 import { registerKBController } from './controllers/kb-controller'
 import { registerImportController } from './controllers/import-controller'
@@ -35,7 +36,7 @@ export function registerIPCHandlers() {
   registerProjectController()
   registerFSController()
   registerExternalFileGrantController()
-  registerLLMController()
+  registerGenerationController(registerLLMController())
   registerDatabaseController()
   registerFinalizationController()
   registerChapterLifecycleController()
