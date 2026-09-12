@@ -5,19 +5,8 @@ import {
   type AppearancePatch, type CanonicalAppearanceProfile, type Shell,
 } from '../shared/appearance-profile'
 import { mayHydrateAppearance, type MainReady } from '../shared/project-storage'
-import type { SkinId } from '../shared/skin-types'
-
-export interface AppearanceSkinSnapshot {
-  globalGeneration: string
-  skinRevision: number
-  backgroundSkin: SkinId
-}
-export interface AppearanceReadbackAck {
-  storageKey: typeof APPEARANCE_STORAGE_KEY
-  profileRevision: number
-  globalGeneration: string
-  skinRevision: number
-}
+import type { AppearanceSkinSnapshot, AppearanceReadbackAck } from '../shared/startup-contract'
+export type { AppearanceSkinSnapshot, AppearanceReadbackAck } from '../shared/startup-contract'
 export interface AppearanceBootstrapDependencies {
   /** Main's real startup coordinator. Renderer fallback must never manufacture ready. */
   waitForMainReady(): Promise<MainReady>

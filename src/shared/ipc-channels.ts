@@ -3,6 +3,7 @@
  * 所有 IPC 调用都通过此文件定义频道名和参数/返回值类型
  */
 import type { Locale } from '../i18n/types'
+import type { StartupChannels } from './startup-contract'
 import type {
   CreativeStrategy,
   GenerationReasoningStage,
@@ -1148,7 +1149,7 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
+export type AllInvokeChannels = StartupChannels & WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
 export type AllEventChannels = LLMStreamEvents & UpdateStateEvents & WindowEvents
 
 /** 提取 invoke 频道名 */

@@ -19,6 +19,7 @@ vi.mock('electron', () => ({
   },
 }))
 
+let fixtureRoot = ''
 let velaHome = ''
 
 function handler(channel: string): IpcHandler {
@@ -31,14 +32,16 @@ beforeEach(async () => {
   vi.resetModules()
   mocks.handlers.clear()
   velaHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-model-config-corrupt-'))
-  process.env.AI_NOVEL_VELA_HOME = velaHome
+  fixtureRoot = velaHome
+    velaHome = await (await import('../../services/__tests__/global-data-fixture')).prepareGlobalDataFixture(fixtureRoot)
   const { registerLLMController } = await import('../llm-controller')
   registerLLMController()
 })
 
 afterEach(() => {
   delete process.env.AI_NOVEL_VELA_HOME
-  fs.rmSync(velaHome, { recursive: true, force: true })
+    delete process.env.AI_NOVEL_APP_DATA_HOME
+  fs.rmSync(fixtureRoot, { recursive: true, force: true })
 })
 
 describe('model configuration corruption boundary', () => {

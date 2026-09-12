@@ -36,7 +36,7 @@ describe('renderer browser qualification contract', () => {
     expect(browserConfig).toContain("include: ['src/**/*.browser.tsx']")
     expect(browserConfig).not.toContain('.browser.test.tsx')
     expect(browserConfig).toContain(
-      'const browserApiPort = Number(process.env.AI_NOVEL_VITEST_BROWSER_API_PORT || 63450)',
+      'const browserApiPort = Number(process.env.AI_NOVEL_VITEST_BROWSER_API_PORT || 0)',
     )
     expect(browserConfig).toMatch(/api:\s*\{\s*host:\s*'127\.0\.0\.1',\s*port:\s*browserApiPort\s*\}/)
     expect(browserConfig).not.toMatch(/api:\s*\{[^}]*host:\s*['"](?:0\.0\.0\.0|::)['"]/s)

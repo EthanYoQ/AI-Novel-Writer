@@ -151,7 +151,7 @@ describe('ArchFileViewer locale', () => {
     await act(async () => root.render(
       <ArchFileViewer
         tabId="arch-premise"
-        filePath="C:\\novels\\premise.md"
+        filePath="ai-novel://core/premise"
         projectKey={PROJECT_PATH}
         content={generatedContent}
         savedContent=""
@@ -178,7 +178,7 @@ describe('ArchFileViewer locale', () => {
     await act(async () => root.render(
       <ArchFileViewer
         tabId="arch-empty-premise"
-        filePath="C:\\novels\\premise.md"
+        filePath="ai-novel://core/premise"
         projectKey={PROJECT_PATH}
         content=""
         savedContent=""

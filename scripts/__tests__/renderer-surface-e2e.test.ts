@@ -337,6 +337,8 @@ describe('renderer surface E2E runner contract', () => {
     expect(RENDERER_SURFACE_E2E_CONTRACT).toEqual({
       smokeEnvironment: [
         'AI_NOVEL_VELA_HOME',
+        'AI_NOVEL_LEGACY_SOURCE_HOME',
+        'AI_NOVEL_APP_DATA_HOME',
         'AI_NOVEL_SMOKE_OPEN_PROJECT',
         'AI_NOVEL_SMOKE_PROJECT_MARKER',
       ],
