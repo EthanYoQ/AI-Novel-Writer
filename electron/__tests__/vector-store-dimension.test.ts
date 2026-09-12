@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Schema as ArrowSchema, Utf8 } from 'apache-arrow'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   addChunks,
   closeConnection,
@@ -22,6 +22,8 @@ import {
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
 
 type VectorConnection = Awaited<ReturnType<typeof getConnection>>
+
+beforeAll(() => { fs.mkdirSync(path.join(process.cwd(), '.runtime', '.cache'), { recursive: true }) })
 
 function embeddingTableNames(tableNames: readonly string[]): string[] {
   return tableNames.filter(tableName => tableName.startsWith('chunks__space_')).sort()

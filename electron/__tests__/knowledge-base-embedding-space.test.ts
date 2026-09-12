@@ -1,7 +1,9 @@
 import { prepareCanonicalStorageFixture } from '../../test/helpers/canonical-project-fixture'
 import fs from 'node:fs'
 import path from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+
+beforeAll(() => { fs.mkdirSync(path.join(process.cwd(), '.runtime', '.cache'), { recursive: true }) })
 
 const { generateEmbeddingsMock } = vi.hoisted(() => ({
   generateEmbeddingsMock: vi.fn(),
