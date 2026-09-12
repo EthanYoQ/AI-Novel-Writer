@@ -62,7 +62,7 @@ jobs:
         run: pnpm run prepare:native-node
 
       - name: Run complete desktop unit test suite
-        run: pnpm test
+        run: pnpm test --reporter=default --reporter=./scripts/vitest-worker-diagnostics.cjs
 
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
