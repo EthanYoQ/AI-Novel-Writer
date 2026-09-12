@@ -1,0 +1,326 @@
+{
+  "version": "Program-v3",
+  "date": "2026-09-13",
+  "basePackage": "novel-quality-modernization Spec v3",
+  "status": "planning-not-implemented",
+  "nodes": [
+    {
+      "id": "S00",
+      "dependsOn": [],
+      "deliverable": "基线、三方差异、Issue与质量预注册"
+    },
+    {
+      "id": "S01",
+      "dependsOn": [
+        "S00"
+      ],
+      "deliverable": "契约、单一共享接线/schema owner"
+    },
+    {
+      "id": "G01",
+      "dependsOn": [
+        "S00",
+        "S01"
+      ],
+      "deliverable": "Issue逐症状修复/增强台账与已交付复核"
+    },
+    {
+      "id": "F01",
+      "dependsOn": [
+        "S01"
+      ],
+      "deliverable": "经典/写手与旧偏好兼容合同"
+    },
+    {
+      "id": "S02",
+      "dependsOn": [
+        "S01"
+      ],
+      "deliverable": "API/URI canonical接入"
+    },
+    {
+      "id": "S03",
+      "dependsOn": [
+        "S02",
+        "F01"
+      ],
+      "deliverable": "全局迁移，含外观偏好"
+    },
+    {
+      "id": "F02",
+      "dependsOn": [
+        "S02",
+        "F01"
+      ],
+      "deliverable": "纯外壳与CSS/素材选择性移植"
+    },
+    {
+      "id": "S04",
+      "dependsOn": [
+        "S03"
+      ],
+      "deliverable": "项目/资产迁移M00，识别donor变体"
+    },
+    {
+      "id": "S05",
+      "dependsOn": [
+        "S04"
+      ],
+      "deliverable": "持久Run/候选M01"
+    },
+    {
+      "id": "S06A",
+      "dependsOn": [
+        "S05"
+      ],
+      "deliverable": "规划入口"
+    },
+    {
+      "id": "S06B",
+      "dependsOn": [
+        "S06A"
+      ],
+      "deliverable": "正文/批量入口"
+    },
+    {
+      "id": "S06C",
+      "dependsOn": [
+        "S06B"
+      ],
+      "deliverable": "审修运行入口"
+    },
+    {
+      "id": "S06D",
+      "dependsOn": [
+        "S06C"
+      ],
+      "deliverable": "Agent入口"
+    },
+    {
+      "id": "S07",
+      "dependsOn": [
+        "S06D"
+      ],
+      "deliverable": "任务预算与early-budget"
+    },
+    {
+      "id": "S08",
+      "dependsOn": [
+        "S05"
+      ],
+      "deliverable": "角色ID M02"
+    },
+    {
+      "id": "S09A",
+      "dependsOn": [
+        "S08",
+        "S06A"
+      ],
+      "deliverable": "角色提议/批准"
+    },
+    {
+      "id": "S09B",
+      "dependsOn": [
+        "S09A",
+        "S06B"
+      ],
+      "deliverable": "连续性/导入ID与有出处的自动derived角色演进"
+    },
+    {
+      "id": "S09C",
+      "dependsOn": [
+        "S09B",
+        "S06D"
+      ],
+      "deliverable": "角色UI/Agent身份接缝"
+    },
+    {
+      "id": "S10A",
+      "dependsOn": [
+        "S07",
+        "S09C"
+      ],
+      "deliverable": "上下文选择纯合同"
+    },
+    {
+      "id": "S10B",
+      "dependsOn": [
+        "S10A"
+      ],
+      "deliverable": "生产上下文与early-context"
+    },
+    {
+      "id": "S11",
+      "dependsOn": [
+        "S10B"
+      ],
+      "deliverable": "审修闭环M03与early-review"
+    },
+    {
+      "id": "S12",
+      "dependsOn": [
+        "S11",
+        "S09C"
+      ],
+      "deliverable": "导入账本M04"
+    },
+    {
+      "id": "F03",
+      "dependsOn": [
+        "S12",
+        "F01"
+      ],
+      "deliverable": "角色头像/展示资产M05",
+      "gates": [
+        {
+          "id": "m05-integrated",
+          "requiresNodes": [
+            "S12",
+            "F01"
+          ],
+          "owner": "integration-owner + S04 owner",
+          "receipt": "m05-integrated.json",
+          "completionRequires": "Canonical registry target M05, avatar portable asset disposition and runnable S04 validator integrated at actual SHA before B01"
+        }
+      ]
+    },
+    {
+      "id": "B01",
+      "dependsOn": [
+        "F03",
+        "S12"
+      ],
+      "deliverable": "完整项目便携归档/新副本恢复与冻结历史",
+      "requiredGates": [
+        "F03.m05-integrated"
+      ]
+    },
+    {
+      "id": "B02",
+      "dependsOn": [
+        "B01",
+        "S03"
+      ],
+      "deliverable": "手动WebDAV不可变世代/分叉与本机安全绑定"
+    },
+    {
+      "id": "F04",
+      "dependsOn": [
+        "F02",
+        "F03",
+        "B02",
+        "S12"
+      ],
+      "deliverable": "Writer完整旧/新/增强功能接入与已知缺陷修复"
+    },
+    {
+      "id": "F05",
+      "dependsOn": [
+        "F04"
+      ],
+      "deliverable": "功能并集Preflight→Writer默认→同SHA Final/post-UI三门",
+      "gates": [
+        {
+          "id": "preflight",
+          "requiresNodes": [
+            "F04"
+          ],
+          "owner": "F05",
+          "receipt": "appearance-preflight.json",
+          "acceptance": "All requiredInWriter actions from feature-union.json pass via Writer production entry; Classic cannot substitute"
+        },
+        {
+          "id": "activate-release-default",
+          "requiresGates": [
+            "F05.preflight"
+          ],
+          "owner": "integration-owner",
+          "persistedShellPreferenceDefault": "unset",
+          "policyValue": "writer"
+        },
+        {
+          "id": "post-ui-requalification",
+          "requiresGates": [
+            "F05.activate-release-default"
+          ],
+          "owner": "integration-owner",
+          "completionRequires": "F05.Final + all three case receipts at identical postUiIntegrationSha",
+          "candidateSha": "postUiIntegrationSha",
+          "budget": "shared original 80 physical calls",
+          "milestone": "post-ui",
+          "cases": [
+            {
+              "selector": "early-budget",
+              "owner": "S07"
+            },
+            {
+              "selector": "early-context",
+              "owner": "S10B"
+            },
+            {
+              "selector": "early-review",
+              "owner": "S11"
+            }
+          ],
+          "execution": "actual dual targets, zero-model dry-run/parity then preregistered Chinese paired cases"
+        }
+      ]
+    },
+    {
+      "id": "S13",
+      "dependsOn": [
+        "S12",
+        "S07",
+        "F05"
+      ],
+      "deliverable": "消费F05 post-UI新receipt后Vela/无消费者退出",
+      "requiredGates": [
+        "F05.post-ui-requalification"
+      ]
+    },
+    {
+      "id": "S14A",
+      "dependsOn": [
+        "S13"
+      ],
+      "deliverable": "集成/review/工具和版本收口，冻结subjectSha"
+    },
+    {
+      "id": "S14B",
+      "dependsOn": [
+        "S14A"
+      ],
+      "deliverable": "同SHA中文18章双臂质量"
+    },
+    {
+      "id": "S14C",
+      "dependsOn": [
+        "S14A"
+      ],
+      "deliverable": "同SHA真实升级/旧版重开"
+    },
+    {
+      "id": "S14D",
+      "dependsOn": [
+        "S14B",
+        "S14C"
+      ],
+      "deliverable": "同SHA三个桌面目标资格"
+    },
+    {
+      "id": "R01",
+      "dependsOn": [
+        "S14D"
+      ],
+      "deliverable": "批准后的精确产物发布"
+    },
+    {
+      "id": "G02",
+      "dependsOn": [
+        "R01",
+        "G01"
+      ],
+      "deliverable": "按实际发布/原问题完整结果关闭并列阻塞"
+    }
+  ]
+}

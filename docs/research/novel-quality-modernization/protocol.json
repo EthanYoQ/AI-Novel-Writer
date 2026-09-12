@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "id": "novel-quality-program-v3-80-v1",
+  "status": "preregistered-no-model-results",
+  "language": "zh-CN",
+  "physicalCallCap": 80,
+  "phases": {
+    "early-budget": {
+      "caseIds": [
+        "场景1/1"
+      ],
+      "minimumCalls": 4,
+      "scope": "目标900单位与指定规划范围、预算",
+      "operations": [
+        {
+          "id": "指定范围生成",
+          "callsPerArm": 1,
+          "arms": 2,
+          "minimumCalls": 2
+        },
+        {
+          "id": "900单位正文",
+          "callsPerArm": 1,
+          "arms": 2,
+          "minimumCalls": 2
+        }
+      ]
+    },
+    "early-context": {
+      "caseIds": [
+        "场景2/2"
+      ],
+      "minimumCalls": 2,
+      "scope": "同名身份、长设定、合法前驱与事实计划",
+      "operations": [
+        {
+          "id": "长设定第二章正文",
+          "callsPerArm": 1,
+          "arms": 2,
+          "minimumCalls": 2
+        }
+      ]
+    },
+    "early-review": {
+      "caseIds": [
+        "场景3/2"
+      ],
+      "minimumCalls": 6,
+      "scope": "审稿、定向修稿、一次复核；no-op确定性拒绝",
+      "operations": [
+        {
+          "id": "审稿",
+          "callsPerArm": 1,
+          "arms": 2,
+          "minimumCalls": 2
+        },
+        {
+          "id": "定向修稿",
+          "callsPerArm": 1,
+          "arms": 2,
+          "minimumCalls": 2
+        },
+        {
+          "id": "一次复核",
+          "callsPerArm": 1,
+          "arms": 2,
+          "minimumCalls": 2
+        }
+      ]
+    },
+    "full": {
+      "caseIds": [
+        "场景1/1",
+        "场景1/2",
+        "场景1/3",
+        "场景2/1",
+        "场景2/2",
+        "场景2/3",
+        "场景3/1",
+        "场景3/2",
+        "场景3/3"
+      ],
+      "minimumCalls": 18,
+      "scope": "3×3×2=18章，臂内依赖独立"
+    }
+  },
+  "allocation": {
+    "S00": 0,
+    "earlyBudget": 4,
+    "earlyContext": 2,
+    "earlyReview": 6,
+    "postUiBudget": 4,
+    "postUiContext": 2,
+    "postUiReview": 6,
+    "finalChapters": 18,
+    "finalPlanning": 6,
+    "C16ExistingExtraction": 6,
+    "C17C18RestoreContinue": 4,
+    "failedRetryRepairReviewReserve": 22
+  },
+  "order": {
+    "seed": "program-v3-2026-09-13-fixed-v1",
+    "armsByChapter": [
+      "baseline,candidate",
+      "candidate,baseline",
+      "baseline,candidate",
+      "candidate,baseline",
+      "baseline,candidate",
+      "candidate,baseline",
+      "baseline,candidate",
+      "candidate,baseline",
+      "baseline,candidate"
+    ],
+    "blindLabels": "主集成者在看结果前生成并私存映射，评审者不接触arm/SHA"
+  },
+  "oracle": {
+    "units": "消费生产draft-units计数；±20%，不按byte或token代换",
+    "events": "每章全部必需事件；逐条标注原文span",
+    "facts": "身份、时间、知情、物品、计划历史零错误",
+    "recap": "非必要回顾重复前章完整事件且超过本章单位10%失败；附双章span",
+    "style": [
+      "自然度",
+      "节奏",
+      "人物动机"
+    ],
+    "reviewers": 2,
+    "reviewerEligibility": "未参与实现且不是生成器自评",
+    "nonInferiority": "两人逐章逐维均无劣",
+    "improvement": "至少两个场景各一章一维两人一致优，其余非劣",
+    "arbitration": "分歧一次独立仲裁；无条件或仍不明为inconclusive"
+  },
+  "evidence": {
+    "subject": "最终两臂同时间窗，candidate为S14A冻结subjectSha",
+    "postUi": "三early selector在同postUiIntegrationSha重跑，原80帽",
+    "failure": "保留全部失败/缺章/中断的意向分析；不挑优",
+    "runtimeProbe": "生产runtime模拟completion，不是18章或桌面资格",
+    "commandDriver": "当前未集成；S06 owners/S14A前完成；formal phases fail closed"
+  },
+  "fixturePath": "test/fixtures/novel-quality-modernization/semantic-source.json"
+}
