@@ -63,7 +63,7 @@ class VitestWorkerDiagnostics {
   boundary(event, task, isCase = false) {
     try {
       const file = relativeTestFile(this.root, isCase ? task.module.moduleId : task.moduleId)
-      if (!file) return
+      if (!file || isCase && file !== 'electron/services/__tests__/vector-migration-snapshot.test.ts') return
       const metadata = { file }
       if (isCase && typeof task.id === 'string') metadata.testId = createHash('sha256').update(task.id).digest('hex').slice(0, 16)
       if (Number.isSafeInteger(task.location?.line) && task.location.line > 0) metadata.line = task.location.line

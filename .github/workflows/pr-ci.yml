@@ -62,7 +62,17 @@ jobs:
         run: pnpm run prepare:native-node
 
       - name: Run complete desktop unit test suite
-        run: pnpm test --reporter=default --reporter=./scripts/vitest-worker-diagnostics.cjs
+        id: desktop-unit-tests
+        run: |
+          "started=$([DateTime]::UtcNow.ToString('o'))" >> $env:GITHUB_OUTPUT
+          pnpm test --reporter=default --reporter=./scripts/vitest-worker-diagnostics.cjs
+          exit $LASTEXITCODE
+
+      - name: Read Windows application failure metadata
+        if: ${{ always() && steps.desktop-unit-tests.outputs.started != '' }}
+        env:
+          TEST_STARTED_UTC: ${{ steps.desktop-unit-tests.outputs.started }}
+        run: ./scripts/windows-test-failure-metadata.ps1 -SinceUtc $env:TEST_STARTED_UTC
 
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
