@@ -1,3 +1,4 @@
+import { parseResourceUri } from '../../shared/project-paths'
 import { workflowResourceKey, type WorkflowContext, type WorkflowDefinition, type WorkflowStep, type StepCallbacks } from '../../stores/workflow-store'
 import { ipc } from '../ipc-client'
 import { guardChapterWriting } from '../workflow-guards'
@@ -105,9 +106,9 @@ async function captureBatchFinalizationSnapshot(
   projectPath: string,
   projectSession: ProjectSessionContext,
 ): Promise<FinalizationSnapshot | undefined> {
-  const draftIdMatch = draftPath.match(/^vela:\/\/draft\/(\d+)$/)
-  if (!draftIdMatch) return undefined
-  const draftId = Number.parseInt(draftIdMatch[1], 10)
+  const resource = parseResourceUri(draftPath)
+  if (resource?.kind !== 'draft' || resource.legacy) return undefined
+  const draftId = resource.id
 
   try {
     const { useEditorStore } = await import('../../stores/editor-store')

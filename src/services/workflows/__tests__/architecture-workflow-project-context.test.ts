@@ -95,7 +95,7 @@ function arrangeConfigGenerationJourney(responses: Array<{ content: string; fini
     throw new Error(`unexpected IPC ${channel}`)
   })
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),

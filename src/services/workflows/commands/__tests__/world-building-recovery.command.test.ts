@@ -99,7 +99,7 @@ let partialWriteCount: number
 
 function installIpc(): void {
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: vi.fn(async (channel: string, ...args: unknown[]) => {
         if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
         if (channel === 'fs:check-exists') return false

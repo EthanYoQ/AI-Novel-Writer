@@ -59,7 +59,7 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useLayoutStore.setState(originalLayoutState)
   useLLMStore.setState(originalLLMState)
@@ -92,7 +92,7 @@ describe('workflow launch language seams', () => {
       waitingForConfirm: false, waitingAfterStepIndex: -1,
     })
     setActiveProjectSessionContext(projectSession)
-    Object.defineProperty(window, 'velaAPI', {
+    Object.defineProperty(window, 'aiNovelAPI', {
       configurable: true,
       value: {
         invoke: vi.fn(async (channel: string) => {
@@ -195,7 +195,7 @@ describe('workflow launch language seams', () => {
         waitingAfterStepIndex: -1,
       })
       setActiveProjectSessionContext(projectSession)
-      Object.defineProperty(window, 'velaAPI', {
+      Object.defineProperty(window, 'aiNovelAPI', {
         configurable: true,
         value: {
           invoke: vi.fn(async (channel: string, ...args: unknown[]) => {

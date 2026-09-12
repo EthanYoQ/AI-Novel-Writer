@@ -18,7 +18,7 @@ function draftTab(overrides: Partial<EditorTab> = {}): EditorTab {
     id: 'draft-1',
     name: '第一章 v1',
     type: 'chapter',
-    filePath: 'vela://draft/17',
+    filePath: 'ai-novel://draft/17',
     projectKey: PROJECT_PATH,
     projectSessionLease: SESSION.leaseId,
     draftId: 17,

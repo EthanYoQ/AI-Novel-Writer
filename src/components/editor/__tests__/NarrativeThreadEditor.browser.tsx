@@ -83,7 +83,7 @@ function installIpc() {
     }
     throw new Error(`unexpected IPC ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: { invoke, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn() },
   })
@@ -146,7 +146,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root?.unmount())
   container?.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useProjectStore.setState(originalProjectState)
   useLocaleStore.setState(originalLocaleState)

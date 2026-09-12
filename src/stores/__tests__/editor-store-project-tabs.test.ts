@@ -86,7 +86,7 @@ describe('editor store project-scoped tabs', () => {
   )
 
   it('keeps the same numeric draft id in projects A and B as separate tabs', () => {
-    const filePath = 'vela://draft/1'
+    const filePath = 'ai-novel://draft/1'
     useEditorStore.getState().openFile({
       id: filePath,
       name: 'A draft',
@@ -119,7 +119,7 @@ describe('editor store project-scoped tabs', () => {
   })
 
   it('keeps dirty architecture drafts isolated when two projects use the same Vela path', () => {
-    const filePath = 'vela://core/premise'
+    const filePath = 'ai-novel://core/premise'
     const projectATabId = createProjectArchTabId(projectA, filePath)
     const projectBTabId = createProjectArchTabId(projectB, filePath)
     const store = useEditorStore.getState()

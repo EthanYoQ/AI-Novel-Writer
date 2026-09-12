@@ -106,7 +106,7 @@ describe('authoritative finalized export integration', () => {
     setActiveProjectSessionContext(projectSession)
     const event = { sender: { id: 17, once: vi.fn() } }
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke: async (channel: string, ...args: unknown[]) => {
           if (channel === 'db:draft-export-snapshot') {
             expect(args).toEqual([projectPath, projectSession])

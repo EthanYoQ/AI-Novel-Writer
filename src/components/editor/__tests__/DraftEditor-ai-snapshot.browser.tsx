@@ -21,7 +21,7 @@ const PROJECT_SESSION = Object.freeze({
   projectPath: PROJECT_PATH,
 })
 const TAB_ID = 'draft-ai-snapshot-tab'
-const FILE_PATH = 'vela://draft/7'
+const FILE_PATH = 'ai-novel://draft/7'
 const SAVED_BODY = '数据库中的旧稿正文'
 const SCREEN_BODY = '屏幕上的未保存正文'
 
@@ -62,7 +62,7 @@ beforeEach(async () => {
     if (channel === 'db:draft-update-content') return { success: true }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -155,7 +155,7 @@ afterEach(async () => {
   refineExecute.mockRestore()
   reviewExecute.mockRestore()
   setActiveProjectSessionContext(null)
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
 describe('DraftEditor AI source snapshot', () => {

@@ -17,7 +17,7 @@ import {
 
 describe('architecture file external refresh protection', () => {
   it('isolates the same architecture resource by project and preserves the original draft', () => {
-    const filePath = 'vela://core/premise'
+    const filePath = 'ai-novel://core/premise'
     const projectA = 'C:\\novels\\A'
     const projectB = 'C:\\novels\\B'
     const projectATab = {
@@ -198,12 +198,12 @@ describe('architecture file external refresh protection', () => {
       },
     }
 
-    writeArchEditState(writer, 'vela://core/premise.md', '外部生成内容', 'sync-saved')
+    writeArchEditState(writer, 'ai-novel://core/premise.md', '外部生成内容', 'sync-saved')
     expect(tab).toEqual({ content: '外部生成内容', dirty: false })
 
     reassertBlockedArchEdit(
       writer,
-      'vela://core/premise.md',
+      'ai-novel://core/premise.md',
       '用户尚未保存的本地修改',
     )
     expect(tab).toEqual({

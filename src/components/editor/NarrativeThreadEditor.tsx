@@ -1,3 +1,4 @@
+import { formatResourceUri } from '../../shared/project-paths'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Clock3, Loader2, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
 
@@ -459,7 +460,7 @@ export default function NarrativeThreadEditor({
     }
     if (source.type === 'finalized-chapter') {
       void openChapterFile(
-        `vela://manuscript/${source.draftId}`,
+        formatResourceUri({ kind: 'manuscript', id: source.draftId }),
         text(`第 ${source.chapterNumber} 章定稿`, `Chapter ${source.chapterNumber} finalized draft`),
       )
       return

@@ -60,7 +60,7 @@ function stubWorkflowIpc(overrides: Partial<Record<string, unknown>> = {}): Retu
     return new Promise(() => {})
   })
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),

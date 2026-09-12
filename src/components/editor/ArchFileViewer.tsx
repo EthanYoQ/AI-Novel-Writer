@@ -1,3 +1,4 @@
+import { resourceWriteAllowed } from '../../shared/project-paths'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Save, RefreshCw, Sparkles, Loader2, AlertTriangle, FileText } from 'lucide-react'
 import { renderIcon } from '../panels/sidebar/sidebar-icons'
@@ -7,7 +8,7 @@ import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
-import { CORE_FIELD_MAP, parseCoreField } from '../../services/vela-protocol'
+import { CORE_FIELD_MAP, parseCoreField } from '../../services/resource-protocol'
 import { appErrorMessage } from '../../i18n/app-errors'
 import { toast } from '../ui/Toast'
 import { CharacterCardImportButton } from '../characters/CharacterCardImportButton'
@@ -180,7 +181,7 @@ function ArchFileViewerSession({
     writeArchEditState(useEditorStore.getState(), tabId, md, storeAction)
   }, [isCharacterProjection, tabId])
 
-  /** 保存（统一走 vela://core/ DB 路径） */
+  /** 保存（统一走 ai-novel://core/ DB 路径） */
   const handleSave = useCallback(async (md: string, propagateFailure = false) => {
     if (isCharacterProjection) return
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
@@ -191,7 +192,8 @@ function ArchFileViewerSession({
     setLoading(false)
     setSaving(true)
     try {
-      if (filePath.startsWith('vela://core/')) {
+      if (!resourceWriteAllowed(filePath)) throw new Error('资源只读或无效')
+      if (filePath.startsWith('ai-novel://core/')) {
         const dbField = parseCoreField(filePath)
         if (!dbField) return
         requireIpcSuccess(await ipc.invokeWithProjectSession(
@@ -274,7 +276,7 @@ function ArchFileViewerSession({
     setLoading(true)
     try {
       let newContent = ''
-      if (filePath.startsWith('vela://core/')) {
+      if (filePath.startsWith('ai-novel://core/')) {
         const core = await ipc.invokeWithProjectSession(
           projectSession,
           'db:project-core-get',

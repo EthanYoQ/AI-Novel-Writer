@@ -1,3 +1,4 @@
+import { formatResourceUri } from '../../../shared/project-paths'
 /**
  * ManuscriptGroup — 正文章节折叠组（已定稿章节列表）
  */
@@ -74,9 +75,9 @@ async function readChapterTitle(
 
   // fallback: 读取正文首行
   let fileContent = ''
-  if (filePath.startsWith('vela://')) {
-    const { readVelaContent } = await import('../../../services/vela-protocol')
-    fileContent = await readVelaContent(filePath, projectSession)
+  if (filePath.startsWith('ai-novel://')) {
+    const { readResourceContent } = await import('../../../services/resource-protocol')
+    fileContent = await readResourceContent(filePath, projectSession)
   } else {
     const result = await ipc.invokeWithProjectSession(
       projectSession,
@@ -217,7 +218,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
     displayName: string,
     chapterNumber: number | undefined,
   ) => {
-    const match = filePath.match(/^vela:\/\/manuscript\/(\d+)$/)
+    const match = filePath.match(/^ai-novel:\/\/manuscript\/(\d+)$/)
     if (!match || chapterNumber === undefined) {
       toast.error(text('当前章节路径不支持直接删除', 'This chapter path cannot be deleted directly.'))
       return
@@ -269,7 +270,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
       draftId: operation.draftId,
       chapterNumber: operation.chapterNumber,
       displayName,
-      tabFilePath: `vela://manuscript/${operation.draftId}`,
+      tabFilePath: formatResourceUri({ kind: 'manuscript', id: operation.draftId }),
       surface: 'manuscript',
     }, operation.operationId)
   }

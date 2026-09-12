@@ -13,33 +13,13 @@ import type {
 } from '../shared/ipc-channels'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import { getActiveProjectSessionContext } from '../shared/project-session-context'
+import type { AiNovelAPI } from '../shared/desktop-api'
 
-/** 从 preload 暴露的 velaAPI */
-interface VelaAPI {
-  invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
-  on: (channel: string, callback: (...args: unknown[]) => void) => () => void
-  once: (channel: string, callback: (...args: unknown[]) => void) => void
-  send: (channel: string, ...args: unknown[]) => void
-  setZoomLevel: (level: number) => void
-  setZoomFactor: (factor: number) => void
-  getZoomLevel: () => number
-}
-
-/** 获取 velaAPI（由 preload 注入到 window） */
-function getAPI(): VelaAPI {
-  const api = (window as unknown as { velaAPI: VelaAPI }).velaAPI
+/** 获取唯一桌面接口；旧接口不是新运行时的写入后备通道。 */
+function getAPI(): AiNovelAPI {
+  const api = typeof window === 'undefined' ? undefined : window.aiNovelAPI
   if (!api) {
-    // 浏览器模式下的降级处理（开发时直接浏览器打开的情况）
-    console.warn('[Vela IPC] velaAPI 未注入，可能不在 Electron 环境中运行')
-    return {
-      invoke: async () => { throw new Error('不在 Electron 环境中') },
-      on: () => () => {},
-      once: () => {},
-      send: () => {},
-      setZoomLevel: () => {},
-      setZoomFactor: () => {},
-      getZoomLevel: () => 0,
-    }
+    throw new Error('桌面接口 aiNovelAPI 未就绪，请重新启动应用')
   }
   return api
 }
@@ -142,7 +122,7 @@ export const ipc = {
   /** 是否在 Electron 环境中 */
   get isElectron(): boolean {
     return typeof window !== 'undefined'
-      && !!(window as unknown as { velaAPI: VelaAPI }).velaAPI
+      && !!window.aiNovelAPI
   },
 
   /** 设置窗口缩放级别 */

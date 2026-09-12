@@ -433,7 +433,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
     )) throw new Error(text('当前项目已切换，已拒绝打开旧审稿报告', 'The project changed, so the stale review report was not opened.'))
     const { useEditorStore } = await import('../../../stores/editor-store')
-    const pseudoReviewPath = `vela://draft/ch${this.params.chapterNumber}/v${baseVersion}/review${revIndex}`
+    const pseudoReviewPath = `ai-novel://draft/ch${this.params.chapterNumber}/v${baseVersion}/review${revIndex}`
     useEditorStore.getState().openFile({
       id: `review-${this.params.draftPath}-${revIndex}`,
       name: text(
@@ -446,7 +446,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       reportPath: pseudoReviewPath,
       reviewReport: reportContent,
       chapterNumber: this.params.chapterNumber,
-      chapterDir: `vela://draft/ch${this.params.chapterNumber}`,
+      chapterDir: `ai-novel://draft/ch${this.params.chapterNumber}`,
       reviewId: createResult.id,
       projectKey: context.projectPath,
     })

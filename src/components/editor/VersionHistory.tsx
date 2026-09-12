@@ -141,7 +141,7 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
       type: 'diff',
       originalContent: oldContent,
       content: currentContent,
-      filePath: `vela://draft/ch${chapter.chapter_number}`, // 不再指向实体文件
+      filePath: `ai-novel://draft/ch${chapter.chapter_number}`, // 不再指向实体文件
       projectKey,
     })
   }

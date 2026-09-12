@@ -62,7 +62,7 @@ beforeEach(() => {
         }
     return { success: true }
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -80,7 +80,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   useProjectStore.setState({ currentProject: null })
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
 describe('workflow launch dialogs', () => {

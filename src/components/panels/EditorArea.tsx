@@ -628,8 +628,8 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
       {/* 编辑区主体 */}
       <div className="flex-1 overflow-hidden">
         {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path && (
-          activeTab.filePath?.startsWith('vela://draft/')
-          || activeTab.filePath?.startsWith('vela://manuscript/')
+          activeTab.filePath?.startsWith('ai-novel://draft/')
+          || activeTab.filePath?.startsWith('ai-novel://manuscript/')
         ) && (
           // 草稿文件：使用 DraftEditor（工具栏含修稿/审稿/定稿按鈕）
           <DraftEditor
@@ -641,13 +641,13 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           />
         )}
         {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path
-          && activeTab.filePath?.startsWith('vela://recovery/') && (
+          && activeTab.filePath?.startsWith('ai-novel://recovery/') && (
           <ProseEditorWrapper
             key={activeTab.id}
             tab={activeTab}
             onSave={async content => {
               const projectSession = captureProjectSession(currentProject)
-              const candidateId = activeTab.filePath?.slice('vela://recovery/'.length)
+              const candidateId = activeTab.filePath?.slice('ai-novel://recovery/'.length)
               if (
                 !projectSession
                 || !candidateId
@@ -671,9 +671,9 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           />
         )}
         {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path
-          && !activeTab.filePath?.startsWith('vela://draft/')
-          && !activeTab.filePath?.startsWith('vela://manuscript/')
-          && !activeTab.filePath?.startsWith('vela://recovery/') && (
+          && !activeTab.filePath?.startsWith('ai-novel://draft/')
+          && !activeTab.filePath?.startsWith('ai-novel://manuscript/')
+          && !activeTab.filePath?.startsWith('ai-novel://recovery/') && (
           // 【DB 迁移备注】：终稿目前作为物理文件保存在 manuscript/ 目录是合理的（用于外部阅读器或最终打包编译导出）
           // 终稿文件（manuscript/）：用 ProseEditorWrapper（含字数信息栏）
           <ProseEditorWrapper

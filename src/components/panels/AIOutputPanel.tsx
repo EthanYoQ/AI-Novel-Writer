@@ -116,7 +116,7 @@ export default function AIOutputPanel() {
         `Recovery candidate · Chapter ${currentCandidate.chapterNumber} ${currentCandidate.chapterTitle}`,
       ),
       type: 'chapter',
-      filePath: `vela://recovery/${currentCandidate.candidateId}`,
+      filePath: `ai-novel://recovery/${currentCandidate.candidateId}`,
       content: currentCandidate.visibleText,
       savedContent: currentCandidate.visibleText,
       dirty: false,

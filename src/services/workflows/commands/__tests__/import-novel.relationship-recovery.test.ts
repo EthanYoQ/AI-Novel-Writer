@@ -111,7 +111,7 @@ function stubIpcInvoke(handler: (channel: string, ...args: unknown[]) => unknown
         : handler(channel, ...args),
   ))
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),

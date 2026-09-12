@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { useWorkflowStore, type WorkflowDefinition } from '../workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
@@ -19,6 +19,18 @@ function frozenSession(leaseId = 'lease-test-project') {
 }
 
 beforeEach(() => {
+  // 工作流夹具显式提供桌面桥接；未知调用仍拒绝，避免掩盖真实 IPC 缺失。
+  vi.stubGlobal('window', {
+    aiNovelAPI: {
+      invoke: vi.fn(async (channel: string) => {
+        if (channel === 'skills:list-user') return []
+        if (channel === 'fs:check-exists') return false
+        throw new Error(`测试未配置桌面调用：${channel}`)
+      }),
+      on: vi.fn(() => () => {}),
+      once: vi.fn(),
+    },
+  })
   useWorkflowStore.setState({
     activeRuns: [],
     history: [],
@@ -731,4 +743,8 @@ describe('workflow pause at a safe step boundary', () => {
     })
     expect(openResult).not.toHaveBeenCalled()
   })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })

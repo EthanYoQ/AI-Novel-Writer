@@ -36,7 +36,7 @@ const blueprint: ChapterBlueprint = {
 function stubIpcInvoke(result: unknown) {
   const invoke = vi.fn().mockResolvedValue(result)
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),

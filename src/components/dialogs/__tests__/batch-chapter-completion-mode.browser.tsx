@@ -209,7 +209,7 @@ function fileTree(): FileNode[] {
     path: `${PROJECT_PATH}\\drafts`,
     isDir: true,
     children: draftRecord
-      ? [{ name: '第1章 雨夜来信 v1', path: `vela://draft/${draftRecord.id}`, isDir: false }]
+      ? [{ name: '第1章 雨夜来信 v1', path: `ai-novel://draft/${draftRecord.id}`, isDir: false }]
       : [],
   }]
 }
@@ -399,7 +399,7 @@ function installIpc() {
     throw new Error(`Unexpected IPC channel in batch completion browser test: ${channel}`)
   })
 
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -472,7 +472,7 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   disposeProjectService()
   setActiveProjectSessionContext(null)
   clearProjectCustomPrompts()
@@ -671,7 +671,7 @@ describe('batch chapter completion mode browser flow', () => {
     })
     expect(useEditorStore.getState().tabs).toEqual([
       expect.objectContaining({
-        filePath: 'vela://draft/101',
+        filePath: 'ai-novel://draft/101',
         type: 'chapter',
         content: DRAFT_TEXT,
         savedContent: DRAFT_TEXT,
@@ -721,7 +721,7 @@ describe('batch chapter completion mode browser flow', () => {
 
     expect(useProjectStore.getState().fileTree).toEqual(fileTree())
     expect(useEditorStore.getState().tabs.some(tab => (
-      tab.filePath === 'vela://draft/101' && tab.draftStatus !== 'finalized'
+      tab.filePath === 'ai-novel://draft/101' && tab.draftStatus !== 'finalized'
     ))).toBe(false)
     expect(useWorkflowStore.getState().history[0]).toMatchObject({
       title: '批量自动定稿 — 第1–1章',

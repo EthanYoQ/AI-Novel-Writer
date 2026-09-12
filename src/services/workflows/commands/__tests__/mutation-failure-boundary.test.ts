@@ -153,7 +153,7 @@ function stubLlm(command: object, response: string): void {
 
 function stubVelaIpc(invoke: (channel: string, ...args: unknown[]) => Promise<unknown>): void {
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: (channel: string, ...args: unknown[]) => (
         channel === 'prompt:load-global'
           ? Promise.resolve({ templates: [], diagnostics: [] })
@@ -288,7 +288,7 @@ describe('workflow mutation failure boundaries', () => {
       error: '定稿已提交、实体稿待发布：disk unavailable',
     })
     const command = new FinalizeChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '旧参数正文不得被读取',
       chapterNumber: 1,
       chapterInfo: chapterInfo(),
@@ -360,7 +360,7 @@ describe('workflow mutation failure boundaries', () => {
       error: 'atomic finalization rejected',
     })
     const command = new FinalizeChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '旧参数正文不得被读取',
       chapterNumber: 1,
       chapterInfo: chapterInfo(),
@@ -1076,13 +1076,13 @@ describe('workflow mutation failure boundaries', () => {
 
   it.each([
     ['ordinary refinement', () => new RefineDraftCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '原稿',
       chapterNumber: 1,
       chapterInfo: chapterInfo(),
     })],
     ['review refinement', () => new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '原稿',
       confirmedReviewContent: CONFIRMED_REVIEW_CONTENT,
       reviewSourceId: 7,
@@ -1164,7 +1164,7 @@ describe('workflow mutation failure boundaries', () => {
       return 'single-review-request'
     })
     useLLMStore.setState({ defaultModelId: 'model', generateStream })
-    await new ReviewChapterCommand({ draftPath: 'vela://draft/1', draftContent: draft, chapterNumber: 1 })
+    await new ReviewChapterCommand({ draftPath: 'ai-novel://draft/1', draftContent: draft, chapterNumber: 1 })
       .execute({ step: {}, context: context(), callbacks: callbacks() })
     expect(generateStream).toHaveBeenCalledTimes(1)
     expect(prompt).toContain('ch1:keyEvents:1')
@@ -1194,7 +1194,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     stubVelaIpc(invoke)
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })
@@ -1265,7 +1265,7 @@ describe('workflow mutation failure boundaries', () => {
       }),
     })
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })
@@ -1320,7 +1320,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     stubVelaIpc(invoke)
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })
@@ -1423,7 +1423,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     stubVelaIpc(invoke)
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: 'Draft awaiting review.',
       chapterNumber: 1,
     })
@@ -1474,7 +1474,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     stubVelaIpc(invoke)
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: writingLanguage === 'en-US' ? 'Draft awaiting review.' : '待审正文',
       chapterNumber: 1,
     })
@@ -1526,7 +1526,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     useLLMStore.setState({ defaultModelId: 'model', generateStream })
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })
@@ -1589,7 +1589,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     useLLMStore.setState({ defaultModelId: 'model', generateStream })
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: originalDraft,
       chapterNumber: 1,
     })
@@ -1630,7 +1630,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     useLLMStore.setState({ defaultModelId: 'model', generateStream })
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })

@@ -161,7 +161,7 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
           throw new Error(`unexpected IPC: ${channel}`)
       }
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
 
     let completionIndex = 0
     useLLMStore.setState({
@@ -180,7 +180,7 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
     })
 
     const command = new FinalizeChapterCommand({
-      draftPath: 'vela://draft/33',
+      draftPath: 'ai-novel://draft/33',
       draftContent: '旧参数正文不得被读取',
       chapterNumber: 3,
       chapterInfo: {

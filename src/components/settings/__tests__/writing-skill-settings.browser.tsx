@@ -38,7 +38,7 @@ function ipcResult(channel: string) {
 
 beforeEach(async () => {
   invoke.mockImplementation(async (channel: string) => ipcResult(channel))
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: { invoke, on: () => () => {}, once: () => {}, send: () => {} },
   })

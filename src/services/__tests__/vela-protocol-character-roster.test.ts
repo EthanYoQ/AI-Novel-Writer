@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { ipc } from '../ipc-client'
-import { readCoreContent, writeCoreContent } from '../vela-protocol'
+import { readCoreContent, writeCoreContent } from '../resource-protocol'
 
 vi.mock('../ipc-client', () => ({
   ipc: {
@@ -34,7 +34,7 @@ describe('vela core character roster seam', () => {
       legacyMarkdown: '不应读取的旧投影',
     } as never)
 
-    await expect(readCoreContent('vela://core/characters', projectSession))
+    await expect(readCoreContent('ai-novel://core/characters', projectSession))
       .resolves.toBe('# 角色图谱\n\n## 主角：陆舟')
     expect(ipc.invokeWithProjectSession).toHaveBeenCalledExactlyOnceWith(
       projectSession,
@@ -50,14 +50,14 @@ describe('vela core character roster seam', () => {
       legacyMarkdown: '旧角色图谱原文，供作者复制或显式修复。',
     } as never)
 
-    await expect(readCoreContent('vela://core/characters', projectSession))
+    await expect(readCoreContent('ai-novel://core/characters', projectSession))
       .resolves.toBe('旧角色图谱原文，供作者复制或显式修复。')
     expect(vi.mocked(ipc.invokeWithProjectSession).mock.calls.map(([, channel]) => channel))
       .toEqual(['db:character-roster-read'])
   })
 
   it('rejects direct character-projection writes without reaching project-core IPC', async () => {
-    await expect(writeCoreContent('vela://core/characters', '不能直接覆盖', projectSession))
+    await expect(writeCoreContent('ai-novel://core/characters', '不能直接覆盖', projectSession))
       .resolves.toBe(false)
     expect(ipc.invokeWithProjectSession).not.toHaveBeenCalled()
   })

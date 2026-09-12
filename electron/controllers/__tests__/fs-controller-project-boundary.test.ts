@@ -371,7 +371,7 @@ describe('Agent write_file commit result integration', () => {
       } as never,
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke: (channel: string, ...args: unknown[]) => rawHandler(channel)({}, ...args),
         on: vi.fn(),
         once: vi.fn(),

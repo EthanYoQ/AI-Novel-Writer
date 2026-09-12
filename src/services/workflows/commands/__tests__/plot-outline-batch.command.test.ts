@@ -217,7 +217,7 @@ function harnessWith(
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(),
       setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn(),
     },

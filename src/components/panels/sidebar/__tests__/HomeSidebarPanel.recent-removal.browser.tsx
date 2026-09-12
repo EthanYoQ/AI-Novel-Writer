@@ -26,7 +26,7 @@ beforeEach(async () => {
     if (channel === 'project:recent-remove') return { success: true }
     throw new Error(`unexpected channel ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -49,7 +49,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
 })

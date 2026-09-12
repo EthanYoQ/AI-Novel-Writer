@@ -208,7 +208,7 @@ function project(path: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: vi.fn(async (channel: string) => {
         if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
         if (channel === 'fs:check-exists') return false
@@ -582,7 +582,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
 
@@ -748,7 +748,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
     const commands = [
@@ -789,7 +789,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const runContext = {
       ...context,
@@ -845,7 +845,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -881,7 +881,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new RuntimeGenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -1017,7 +1017,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     await loadProjectCustomPrompts(context.projectSession!)
     const characterTemplate = getBuiltinPromptTemplate('character_dynamics', 'zh-CN')!
@@ -1117,7 +1117,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -1145,7 +1145,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -1172,7 +1172,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -1249,7 +1249,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -1331,7 +1331,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1411,7 +1411,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1479,7 +1479,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1537,7 +1537,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1603,7 +1603,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1663,7 +1663,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1738,7 +1738,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1807,7 +1807,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1868,7 +1868,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1964,7 +1964,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -2005,7 +2005,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -2084,7 +2084,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -2119,7 +2119,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         throw new Error(`Unexpected IPC channel: ${channel}`)
       })
       vi.stubGlobal('window', {
-        velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+        aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
       })
       const command = new GenerateCharactersCommand({
         expectedProjectPath: projectAPath,
@@ -2147,7 +2147,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
           throw new Error(`Unexpected IPC channel: ${channel}`)
         })
         vi.stubGlobal('window', {
-          velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+          aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
         })
         const command = new GenerateCharactersCommand({
           expectedProjectPath: projectAPath,
@@ -2173,7 +2173,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -2201,7 +2201,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -2243,7 +2243,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -2287,7 +2287,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),

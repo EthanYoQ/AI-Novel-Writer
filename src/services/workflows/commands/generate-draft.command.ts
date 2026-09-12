@@ -1,3 +1,4 @@
+import { formatResourceUri } from '../../../shared/project-paths'
 import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
@@ -832,7 +833,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       draftPersisted = true
       callbacks.replaceText?.(cleanDraftText)
 
-      const pseudoPath = createResult.id ? `vela://draft/${createResult.id}` : `vela://draft/ch${this.chapterInfo.chapterNumber}/v${nextVersion}`
+      const pseudoPath = createResult.id ? formatResourceUri({ kind: 'draft', id: createResult.id }) : `ai-novel://draft/ch${this.chapterInfo.chapterNumber}/v${nextVersion}`
 
       context.data.draft = cleanDraftText
       context.data.draftContent = cleanDraftText

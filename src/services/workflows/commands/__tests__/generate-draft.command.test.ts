@@ -453,7 +453,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       if (channel === 'db:draft-get-latest') return options.sourceDraft ?? null
       if (channel === 'fs:list-dir') return []
       if (channel === 'db:draft-next-version') return 1
-      if (channel === 'db:draft-create') return { success: true, id: 'draft-1' }
+      if (channel === 'db:draft-create') return { success: true, id: 1 }
       if (channel === 'db:recovery-candidate-record') {
         recoveryCandidateSequence += 1
         return {
@@ -467,7 +467,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       throw new Error(`unexpected IPC: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),

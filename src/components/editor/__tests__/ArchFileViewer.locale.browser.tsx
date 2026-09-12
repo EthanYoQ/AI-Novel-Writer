@@ -45,7 +45,7 @@ beforeEach(() => {
     projectPath: PROJECT_PATH,
   })
   invoke = vi.fn().mockResolvedValue({ success: true })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -62,7 +62,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
@@ -79,7 +79,7 @@ describe('ArchFileViewer locale', () => {
   ])('recognizes the actual core protocol %s and restores generation controls', async (key, label) => {
     useLocaleStore.setState({ locale: 'zh-CN' })
     await act(async () => root.render(
-      <ArchFileViewer tabId={`arch-${key}`} filePath={`vela://core/${key}`}
+      <ArchFileViewer tabId={`arch-${key}`} filePath={`ai-novel://core/${key}`}
         projectKey={PROJECT_PATH} content="" savedContent="" />,
     ))
     expect(container.textContent).toContain(label)
@@ -111,11 +111,11 @@ describe('ArchFileViewer locale', () => {
     invoke.mockResolvedValue({ success: false, error: '磁盘已满' })
     useEditorStore.setState({ tabs: [{
       id: 'arch-save-error', name: '故事前提', type: 'arch-file',
-      projectKey: PROJECT_PATH, filePath: 'vela://core/premise',
+      projectKey: PROJECT_PATH, filePath: 'ai-novel://core/premise',
       content: '未保存的故事前提', savedContent: '', dirty: true,
     }], draftLedgers: {} })
     await act(async () => root.render(
-      <ArchFileViewer tabId="arch-save-error" filePath="vela://core/premise"
+      <ArchFileViewer tabId="arch-save-error" filePath="ai-novel://core/premise"
         projectKey={PROJECT_PATH} content="未保存的故事前提" savedContent="" />,
     ))
     await act(async () => (container.querySelector('[title="保存（Cmd+S）"]') as HTMLButtonElement).click())
@@ -132,11 +132,11 @@ describe('ArchFileViewer locale', () => {
   it('keeps its exit-save handler while an inactive tab is unmounted', async () => {
     useEditorStore.setState({ tabs: [{
       id: 'arch-inactive', name: '故事前提', type: 'arch-file',
-      projectKey: PROJECT_PATH, filePath: 'vela://core/premise',
+      projectKey: PROJECT_PATH, filePath: 'ai-novel://core/premise',
       content: '待保存内容', savedContent: '', dirty: true,
     }], draftLedgers: {} })
     await act(async () => root.render(
-      <ArchFileViewer tabId="arch-inactive" filePath="vela://core/premise"
+      <ArchFileViewer tabId="arch-inactive" filePath="ai-novel://core/premise"
         projectKey={PROJECT_PATH} content="待保存内容" savedContent="" />,
     ))
 

@@ -126,7 +126,7 @@ function insertFinalizedDraft(
 
 function installRealRepositoryIpc(): void {
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: async (channel: string, ...args: unknown[]) => {
         switch (channel) {
           case 'prompt:load-global':

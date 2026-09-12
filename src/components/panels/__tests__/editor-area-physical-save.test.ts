@@ -48,7 +48,7 @@ describe('physical chapter save session settlement', () => {
     const delayedWrite = deferred<{ success: boolean }>()
     const invoke = vi.fn(async () => delayedWrite.promise)
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),

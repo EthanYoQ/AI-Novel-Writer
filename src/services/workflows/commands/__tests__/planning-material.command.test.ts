@@ -65,7 +65,7 @@ describe('planning material character extraction', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
     const generateStream = vi.fn(async (_messages, streamCallbacks) => {
       streamCallbacks.onDone?.(JSON.stringify({
@@ -119,7 +119,7 @@ describe('planning material character extraction', () => {
   it('does not commit extracted candidates after confirmation is cancelled', async () => {
     const invoke = vi.fn()
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
     const generateStream = vi.fn(async (_messages, streamCallbacks) => {
       streamCallbacks.onDone?.(JSON.stringify({
@@ -174,7 +174,7 @@ describe('planning material character extraction', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
     let observedPrompt = ''
     useLLMStore.setState({
@@ -294,7 +294,7 @@ describe('planning material character extraction', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
     const generateStream = vi.fn(async (_messages, streamCallbacks) => {
       streamCallbacks.onDone?.(JSON.stringify({
@@ -423,7 +423,7 @@ describe('planning material character extraction', () => {
   ] as const)('rejects a %s character role before committing the roster', async (_case, card) => {
     const invoke = vi.fn()
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
     useLLMStore.setState({
       defaultModelId: 'model-1',

@@ -231,7 +231,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const openArchFile = async (f: typeof ARCH_FILES[number]) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    const filePath = `vela://core/${f.key}`
+    const filePath = `ai-novel://core/${f.key}`
     const tabId = createProjectArchTabId(projectKey, filePath)
     let content = ''
     try {
